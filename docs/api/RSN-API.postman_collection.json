@@ -1,0 +1,723 @@
+{
+  "info": {
+    "name": "RSN Pod Engine – Full API",
+    "description": "Complete Postman collection for RSN Platform Milestone 1.\n\nQuick Start:\n1. Run 'Request Magic Link' with any email\n2. Copy token from server console log\n3. Run 'Verify Magic Link' — access token auto-saves\n4. All other requests auto-use the saved token",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3001", "type": "string" },
+    { "key": "accessToken", "value": "", "type": "string" },
+    { "key": "refreshToken", "value": "", "type": "string" },
+    { "key": "podId", "value": "", "type": "string" },
+    { "key": "sessionId", "value": "", "type": "string" },
+    { "key": "inviteCode", "value": "", "type": "string" },
+    { "key": "inviteId", "value": "", "type": "string" },
+    { "key": "userId", "value": "", "type": "string" },
+    { "key": "matchId", "value": "", "type": "string" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "🟢 Health Check",
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "GET",
+        "header": [],
+        "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }
+      }
+    },
+    {
+      "name": "🔐 Auth",
+      "item": [
+        {
+          "name": "1. Request Magic Link",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Magic link requested', () => {",
+                  "  pm.expect(res.success).to.be.true;",
+                  "});",
+                  "console.log('\\n✅ Magic link sent! Check your SERVER CONSOLE for the token.');",
+                  "console.log('Look for: magicLinkUrl with ?token=<64-char-hex>');",
+                  "console.log('Copy that hex token and paste it into the Verify request body.\\n');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"test@example.com\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/magic-link", "host": ["{{baseUrl}}"], "path": ["api", "auth", "magic-link"] }
+          }
+        },
+        {
+          "name": "2. Verify Magic Link ⬅️ Paste token here",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.success && res.data) {",
+                  "  if (res.data.accessToken) {",
+                  "    pm.collectionVariables.set('accessToken', res.data.accessToken);",
+                  "    console.log('✅ accessToken saved to collection variables');",
+                  "  }",
+                  "  if (res.data.refreshToken) {",
+                  "    pm.collectionVariables.set('refreshToken', res.data.refreshToken);",
+                  "    console.log('✅ refreshToken saved to collection variables');",
+                  "  }",
+                  "}",
+                  "pm.test('Token verified & JWT received', () => {",
+                  "  pm.expect(res.success).to.be.true;",
+                  "  pm.expect(res.data.accessToken).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"PASTE_64_CHAR_HEX_TOKEN_HERE\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/verify", "host": ["{{baseUrl}}"], "path": ["api", "auth", "verify"] }
+          }
+        },
+        {
+          "name": "3. Get Current Session",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Session retrieved', () => {",
+                  "  pm.expect(res.success).to.be.true;",
+                  "});",
+                  "if (res.data && res.data.user && res.data.user.id) {",
+                  "  pm.collectionVariables.set('userId', res.data.user.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/auth/session", "host": ["{{baseUrl}}"], "path": ["api", "auth", "session"] }
+          }
+        },
+        {
+          "name": "4. Refresh Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.success && res.data) {",
+                  "  if (res.data.accessToken) pm.collectionVariables.set('accessToken', res.data.accessToken);",
+                  "  if (res.data.refreshToken) pm.collectionVariables.set('refreshToken', res.data.refreshToken);",
+                  "  console.log('✅ Tokens refreshed and saved');",
+                  "}",
+                  "pm.test('Token refreshed', () => {",
+                  "  pm.expect(res.success).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/refresh", "host": ["{{baseUrl}}"], "path": ["api", "auth", "refresh"] }
+          }
+        },
+        {
+          "name": "5. Logout",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/auth/logout", "host": ["{{baseUrl}}"], "path": ["api", "auth", "logout"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "👤 Users",
+      "item": [
+        {
+          "name": "Get My Profile",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Profile retrieved', () => {",
+                  "  pm.expect(res.success).to.be.true;",
+                  "});",
+                  "if (res.data && res.data.id) {",
+                  "  pm.collectionVariables.set('userId', res.data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/users/me", "host": ["{{baseUrl}}"], "path": ["api", "users", "me"] }
+          }
+        },
+        {
+          "name": "Update My Profile",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"displayName\": \"Jane Doe\",\n  \"firstName\": \"Jane\",\n  \"lastName\": \"Doe\",\n  \"bio\": \"Product designer and speed networking enthusiast\",\n  \"company\": \"RSN Corp\",\n  \"jobTitle\": \"Lead Designer\",\n  \"industry\": \"Technology\",\n  \"location\": \"San Francisco, CA\",\n  \"linkedinUrl\": \"https://linkedin.com/in/janedoe\",\n  \"interests\": [\"design\", \"startups\", \"AI\"],\n  \"reasonsToConnect\": [\"hiring\", \"collaboration\"],\n  \"languages\": [\"English\", \"Spanish\"],\n  \"timezone\": \"America/Los_Angeles\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/users/me", "host": ["{{baseUrl}}"], "path": ["api", "users", "me"] }
+          }
+        },
+        {
+          "name": "Get User by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/users/{{userId}}", "host": ["{{baseUrl}}"], "path": ["api", "users", "{{userId}}"] }
+          }
+        },
+        {
+          "name": "List All Users (Admin Only)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/users?page=1&pageSize=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "users"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "pageSize", "value": "20" },
+                { "key": "role", "value": "member", "disabled": true },
+                { "key": "search", "value": "", "disabled": true }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🟣 Pods",
+      "item": [
+        {
+          "name": "Create Pod",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Pod created', () => {",
+                  "  pm.expect(res.success).to.be.true;",
+                  "});",
+                  "if (res.data && res.data.id) {",
+                  "  pm.collectionVariables.set('podId', res.data.id);",
+                  "  console.log('✅ podId saved:', res.data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Tech Founders Speed Networking\",\n  \"description\": \"Connect with fellow founders in fast-paced 5-min rounds\",\n  \"podType\": \"speed_networking\",\n  \"orchestrationMode\": \"timed_rounds\",\n  \"communicationMode\": \"video\",\n  \"visibility\": \"private\",\n  \"maxMembers\": 100,\n  \"rules\": \"Be respectful. Cameras on. No pitching.\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/pods", "host": ["{{baseUrl}}"], "path": ["api", "pods"] }
+          }
+        },
+        {
+          "name": "List My Pods",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pods?page=1&pageSize=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "pods"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "pageSize", "value": "20" },
+                { "key": "podType", "value": "speed_networking", "disabled": true },
+                { "key": "status", "value": "active", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Pod by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/pods/{{podId}}", "host": ["{{baseUrl}}"], "path": ["api", "pods", "{{podId}}"] }
+          }
+        },
+        {
+          "name": "Update Pod",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Tech Founders Networking (Updated)\",\n  \"description\": \"Now with 7-minute rounds!\",\n  \"visibility\": \"private\",\n  \"maxMembers\": 200,\n  \"rules\": \"Be respectful. Cameras on.\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/pods/{{podId}}", "host": ["{{baseUrl}}"], "path": ["api", "pods", "{{podId}}"] }
+          }
+        },
+        {
+          "name": "Get Pod Members",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/pods/{{podId}}/members", "host": ["{{baseUrl}}"], "path": ["api", "pods", "{{podId}}", "members"] }
+          }
+        },
+        {
+          "name": "Add Member to Pod",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"role\": \"member\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/pods/{{podId}}/members", "host": ["{{baseUrl}}"], "path": ["api", "pods", "{{podId}}", "members"] }
+          }
+        },
+        {
+          "name": "Remove Member from Pod",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/pods/{{podId}}/members/{{userId}}", "host": ["{{baseUrl}}"], "path": ["api", "pods", "{{podId}}", "members", "{{userId}}"] }
+          }
+        },
+        {
+          "name": "Leave Pod",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/pods/{{podId}}/leave", "host": ["{{baseUrl}}"], "path": ["api", "pods", "{{podId}}", "leave"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📅 Sessions",
+      "item": [
+        {
+          "name": "Create Session",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Session created', () => {",
+                  "  pm.expect(res.success).to.be.true;",
+                  "});",
+                  "if (res.data && res.data.id) {",
+                  "  pm.collectionVariables.set('sessionId', res.data.id);",
+                  "  console.log('✅ sessionId saved:', res.data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"podId\": \"{{podId}}\",\n  \"title\": \"Friday Evening Networking\",\n  \"description\": \"Weekly founder meetup — 5 rounds of 5-minute 1:1 conversations\",\n  \"scheduledAt\": \"2026-03-15T18:00:00Z\",\n  \"config\": {\n    \"numberOfRounds\": 5,\n    \"roundDurationSeconds\": 300,\n    \"lobbyDurationSeconds\": 120,\n    \"transitionDurationSeconds\": 15,\n    \"ratingWindowSeconds\": 30,\n    \"closingLobbyDurationSeconds\": 60,\n    \"noShowTimeoutSeconds\": 60,\n    \"maxParticipants\": 50\n  }\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/sessions", "host": ["{{baseUrl}}"], "path": ["api", "sessions"] }
+          }
+        },
+        {
+          "name": "List Sessions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/sessions?page=1&pageSize=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "sessions"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "pageSize", "value": "20" },
+                { "key": "podId", "value": "{{podId}}", "disabled": true },
+                { "key": "status", "value": "scheduled", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Session by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/sessions/{{sessionId}}", "host": ["{{baseUrl}}"], "path": ["api", "sessions", "{{sessionId}}"] }
+          }
+        },
+        {
+          "name": "Update Session",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Friday Evening Networking (Updated)\",\n  \"description\": \"Now with 7 rounds!\",\n  \"config\": {\n    \"numberOfRounds\": 7,\n    \"roundDurationSeconds\": 420\n  }\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/sessions/{{sessionId}}", "host": ["{{baseUrl}}"], "path": ["api", "sessions", "{{sessionId}}"] }
+          }
+        },
+        {
+          "name": "Register for Session",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/sessions/{{sessionId}}/register", "host": ["{{baseUrl}}"], "path": ["api", "sessions", "{{sessionId}}", "register"] }
+          }
+        },
+        {
+          "name": "Unregister from Session",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/sessions/{{sessionId}}/register", "host": ["{{baseUrl}}"], "path": ["api", "sessions", "{{sessionId}}", "register"] }
+          }
+        },
+        {
+          "name": "List Session Participants",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/sessions/{{sessionId}}/participants", "host": ["{{baseUrl}}"], "path": ["api", "sessions", "{{sessionId}}", "participants"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🎮 Host Controls",
+      "item": [
+        {
+          "name": "Start Session",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/sessions/{{sessionId}}/host/start", "host": ["{{baseUrl}}"], "path": ["api", "sessions", "{{sessionId}}", "host", "start"] }
+          }
+        },
+        {
+          "name": "Pause Session",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/sessions/{{sessionId}}/host/pause", "host": ["{{baseUrl}}"], "path": ["api", "sessions", "{{sessionId}}", "host", "pause"] }
+          }
+        },
+        {
+          "name": "Resume Session",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/sessions/{{sessionId}}/host/resume", "host": ["{{baseUrl}}"], "path": ["api", "sessions", "{{sessionId}}", "host", "resume"] }
+          }
+        },
+        {
+          "name": "End Session",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/sessions/{{sessionId}}/host/end", "host": ["{{baseUrl}}"], "path": ["api", "sessions", "{{sessionId}}", "host", "end"] }
+          }
+        },
+        {
+          "name": "Broadcast Message",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Welcome everyone! We're starting in 2 minutes. Please turn your cameras on.\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/sessions/{{sessionId}}/host/broadcast", "host": ["{{baseUrl}}"], "path": ["api", "sessions", "{{sessionId}}", "host", "broadcast"] }
+          }
+        },
+        {
+          "name": "Get Session State",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/sessions/{{sessionId}}/host/state", "host": ["{{baseUrl}}"], "path": ["api", "sessions", "{{sessionId}}", "host", "state"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "✉️ Invites",
+      "item": [
+        {
+          "name": "Create Invite (Pod)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Invite created', () => {",
+                  "  pm.expect(res.success).to.be.true;",
+                  "});",
+                  "if (res.data) {",
+                  "  if (res.data.code) {",
+                  "    pm.collectionVariables.set('inviteCode', res.data.code);",
+                  "    console.log('✅ inviteCode saved:', res.data.code);",
+                  "  }",
+                  "  if (res.data.id) {",
+                  "    pm.collectionVariables.set('inviteId', res.data.id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"pod\",\n  \"podId\": \"{{podId}}\",\n  \"maxUses\": 25,\n  \"expiresInHours\": 168\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/invites", "host": ["{{baseUrl}}"], "path": ["api", "invites"] }
+          }
+        },
+        {
+          "name": "Create Invite (Session)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.data) {",
+                  "  if (res.data.code) pm.collectionVariables.set('inviteCode', res.data.code);",
+                  "  if (res.data.id) pm.collectionVariables.set('inviteId', res.data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"session\",\n  \"sessionId\": \"{{sessionId}}\",\n  \"maxUses\": 50,\n  \"expiresInHours\": 48\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/invites", "host": ["{{baseUrl}}"], "path": ["api", "invites"] }
+          }
+        },
+        {
+          "name": "Create Invite (Direct Email)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.data) {",
+                  "  if (res.data.code) pm.collectionVariables.set('inviteCode', res.data.code);",
+                  "  if (res.data.id) pm.collectionVariables.set('inviteId', res.data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"direct\",\n  \"inviteeEmail\": \"friend@example.com\",\n  \"podId\": \"{{podId}}\",\n  \"maxUses\": 1,\n  \"expiresInHours\": 72\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/invites", "host": ["{{baseUrl}}"], "path": ["api", "invites"] }
+          }
+        },
+        {
+          "name": "List My Invites",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/invites?page=1&pageSize=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "invites"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "pageSize", "value": "20" },
+                { "key": "type", "value": "pod", "disabled": true },
+                { "key": "status", "value": "active", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Invite by Code (Public)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/invites/{{inviteCode}}", "host": ["{{baseUrl}}"], "path": ["api", "invites", "{{inviteCode}}"] }
+          }
+        },
+        {
+          "name": "Accept Invite",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/invites/{{inviteCode}}/accept", "host": ["{{baseUrl}}"], "path": ["api", "invites", "{{inviteCode}}", "accept"] }
+          }
+        },
+        {
+          "name": "Delete Invite",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/invites/{{inviteId}}", "host": ["{{baseUrl}}"], "path": ["api", "invites", "{{inviteId}}"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "⭐ Ratings & Encounters",
+      "item": [
+        {
+          "name": "Submit Rating",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"matchId\": \"{{matchId}}\",\n  \"qualityScore\": 5,\n  \"meetAgain\": true,\n  \"feedback\": \"Great conversation! We share a lot of interests.\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/ratings", "host": ["{{baseUrl}}"], "path": ["api", "ratings"] }
+          }
+        },
+        {
+          "name": "Get Ratings for Match",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/ratings/match/{{matchId}}", "host": ["{{baseUrl}}"], "path": ["api", "ratings", "match", "{{matchId}}"] }
+          }
+        },
+        {
+          "name": "My Ratings Given",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ratings/my",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ratings", "my"],
+              "query": [
+                { "key": "sessionId", "value": "{{sessionId}}", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "My Ratings Received",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ratings/received",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ratings", "received"],
+              "query": [
+                { "key": "sessionId", "value": "{{sessionId}}", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "People Met (Session)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/ratings/sessions/{{sessionId}}/people-met", "host": ["{{baseUrl}}"], "path": ["api", "ratings", "sessions", "{{sessionId}}", "people-met"] }
+          }
+        },
+        {
+          "name": "Session Stats",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/ratings/sessions/{{sessionId}}/stats", "host": ["{{baseUrl}}"], "path": ["api", "ratings", "sessions", "{{sessionId}}", "stats"] }
+          }
+        },
+        {
+          "name": "Export Session (Admin/Host)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/ratings/sessions/{{sessionId}}/export", "host": ["{{baseUrl}}"], "path": ["api", "ratings", "sessions", "{{sessionId}}", "export"] }
+          }
+        },
+        {
+          "name": "My Encounter History",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ratings/encounters",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ratings", "encounters"],
+              "query": [
+                { "key": "mutualOnly", "value": "true", "disabled": true }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
