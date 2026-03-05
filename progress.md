@@ -388,6 +388,120 @@ Purpose: Persistent execution history and current state, independent of chat mem
 
 ---
 
+### T-013: Milestone 2 Infrastructure Strategy Decision (Complete ✅)
+**Date:** 2026-03-05  
+**Status:** ✅ COMPLETE  
+**Objective:** Define infrastructure approach for Milestone 2 development - decide between external API services or local mocks
+
+**Context:**
+User inquired about required external services for M2 development:
+- Database credentials needed?
+- API keys required (email, video, Redis)?
+- Hosting strategy for frontend/backend/database
+- Cost optimization for MVP phase
+
+**Analysis Performed:**
+
+1. **External Services Assessment:**
+   - Email (magic links): Resend/SendGrid (~$0/month for 3K emails)
+   - Video (LiveKit Cloud): $0/month for 10K participant minutes
+   - Redis (Upstash): $0/month for 10K commands/day
+   - Database (Neon PostgreSQL): $0/month for 3GB
+   - Total cost estimate: $0-5/month for MVP
+
+2. **Local Mock Capabilities:**
+   - Email: Console logging or Ethereal.email (fake SMTP, view emails in browser)
+   - Video: Mock provider implementation (already have IVideoProvider interface)
+   - Redis: In-memory Map-based mock (no external dependency)
+   - Database: Local PostgreSQL already operational (D:\PostgreSQL\17)
+   - ✅ All 165 tests already use mocks
+   - ✅ E2E flows can run completely offline
+
+3. **Hosting Options Evaluated (Future Production):**
+   - Frontend: Vercel (free, 100GB/month)
+   - Backend: Railway ($5 credit/month) or Render (free tier)
+   - Database: Neon (3GB free) or Supabase (2GB free)
+   - Video: LiveKit Cloud (10K minutes free)
+   - Email: Resend (3K/month free)
+
+**Decision Made: Local Mock Setup for M2 Development** ⭐
+
+**Rationale:**
+- ✅ **Faster Development**: No signup/setup delays, no API rate limits
+- ✅ **Zero Dependencies**: Works completely offline
+- ✅ **Zero Cost**: No infrastructure costs during development
+- ✅ **Simpler Testing**: Deterministic behavior, no network flakiness
+- ✅ **Already Proven**: All M1 tests use mocks (165/165 passing)
+- ✅ **Easy Migration**: When deploying, just swap mock implementations for real providers
+- ✅ **Preserves Options**: Can add real services anytime without code changes (thanks to abstraction layer)
+
+**Mock Implementation Strategy:**
+
+1. **Email Service:**
+   - Use console logging for development
+   - Alternative: Ethereal.email (fake SMTP with web viewer)
+   - Already configured in .env.example
+   - No changes needed
+
+2. **Redis (Sessions/Cache):**
+   - Create in-memory Map-based mock
+   - Implements same interface as ioredis
+   - Fallback: if REDIS_URL empty, use mock
+   - File: server/src/db/redis-mock.ts
+
+3. **LiveKit Video:**
+   - Create MockVideoProvider implementing IVideoProvider
+   - Returns fake tokens and room IDs
+   - Logs actions to console
+   - File: server/src/services/video/mock.provider.ts
+   - Auto-detection: if LIVEKIT_API_KEY empty, use mock
+
+4. **PostgreSQL:**
+   - Already running locally (rsn_dev database)
+   - No changes needed
+
+**Implementation Plan:**
+- Create redis-mock.ts (in-memory key-value store)
+- Create mock.provider.ts (mock video provider)
+- Update video.service.ts (auto-detect and use mock if no credentials)
+- Update .env configuration comments
+- All mocks are transparent drop-in replacements
+
+**Migration Path to Production:**
+When ready to deploy:
+1. Sign up for services (15 minutes total)
+2. Add API keys to production .env
+3. Code automatically uses real providers
+4. No code changes required (abstraction layer handles it)
+
+**External Services:** NOT REQUIRED for M2 development
+
+**Files to Create:**
+- server/src/db/redis-mock.ts (in-memory Redis mock)
+- server/src/services/video/mock.provider.ts (mock video provider)
+
+**Files to Update:**
+- server/src/services/video/video.service.ts (auto-detect mock vs real)
+- server/.env.example (add comments about mocks)
+
+**Decisions Made:**
+- Use 100% local mocks for all external services during M2 development
+- Defer external service signup until production deployment
+- Leverage existing abstraction layer (IVideoProvider interface) for easy provider swapping
+- Keep development simple, fast, and cost-free
+- Real credentials only needed at deployment time
+
+**Benefits:**
+- 🚀 Start M2 development immediately (no waiting for API keys)
+- 💰 Zero infrastructure costs during development
+- 🔌 Work offline without internet dependencies
+- 🧪 Deterministic testing (no external API flakiness)
+- 🔄 Easy swap to production services later
+
+**Next Immediate Action:** User will create M2 plan, then begin M2 implementation with local mock setup
+
+---
+
 ## Milestone 1 Summary (COMPLETE ✅)
 
 **Deliverables:**
