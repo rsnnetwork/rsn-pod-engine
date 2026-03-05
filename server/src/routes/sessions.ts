@@ -187,5 +187,19 @@ router.get(
     }
   }
 );
+// ─── POST /sessions/:id/token (LiveKit access token) ─────────────────────────
 
+router.post(
+  '/:id/token',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await sessionService.generateLiveKitToken(req.params.id, req.user!.userId);
+      const response: ApiResponse = { success: true, data: result };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 export default router;

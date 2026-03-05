@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { connectSocket, disconnectSocket, getSocket } from '@/lib/socket';
 import { useSessionStore } from '@/stores/sessionStore';
+import api from '@/lib/api';
 
 export default function useSessionSocket(sessionId: string) {
   const store = useSessionStore();
@@ -49,11 +50,21 @@ export default function useSessionSocket(sessionId: string) {
       store.setByeRound(false);
       store.setMatch({ userId: data.partnerId, displayName: data.partnerId }, data.matchId);
       store.setPhase('matched');
+      // Fetch LiveKit token for video
+      api.post(`/sessions/${sessionId}/token`).then(res => {
+        const { token, livekitUrl } = res.data.data;
+        store.setLiveKitToken(token, livekitUrl);
+      }).catch(() => { /* token fetch failed — video won't load but session continues */ });
     });
 
     socket.on('match:reassigned', (data: any) => {
       store.setMatch({ userId: data.newPartnerId, displayName: data.newPartnerId }, data.matchId || null);
       store.setPhase('matched');
+      // Re-fetch token for new room
+      api.post(`/sessions/${sessionId}/token`).then(res => {
+        const { token, livekitUrl } = res.data.data;
+        store.setLiveKitToken(token, livekitUrl);
+      }).catch(() => {});
     });
 
     socket.on('match:bye_round', () => {

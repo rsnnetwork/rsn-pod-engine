@@ -23,6 +23,8 @@ interface SessionLiveState {
   error: string | null;
   isReconnecting: boolean;
   isByeRound: boolean;
+  liveKitToken: string | null;
+  livekitUrl: string | null;
 
   setPhase: (phase: SessionPhase) => void;
   setParticipants: (p: Participant[]) => void;
@@ -36,6 +38,7 @@ interface SessionLiveState {
   setError: (err: string | null) => void;
   setReconnecting: (v: boolean) => void;
   setByeRound: (v: boolean) => void;
+  setLiveKitToken: (token: string | null, url?: string | null) => void;
   reset: () => void;
 }
 
@@ -50,6 +53,8 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   error: null,
   isReconnecting: false,
   isByeRound: false,
+  liveKitToken: null,
+  livekitUrl: null,
 
   setPhase: (phase) => set({ phase }),
   setParticipants: (participants) => set({ participants }),
@@ -67,9 +72,10 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   setError: (error) => set({ error }),
   setReconnecting: (isReconnecting) => set({ isReconnecting }),
   setByeRound: (isByeRound) => set({ isByeRound }),
+  setLiveKitToken: (liveKitToken, livekitUrl = null) => set({ liveKitToken, livekitUrl }),
   reset: () => set({
     phase: 'lobby', participants: [], currentMatch: null, currentMatchId: null,
     timerSeconds: 0, currentRound: 1, broadcasts: [], error: null,
-    isReconnecting: false, isByeRound: false,
+    isReconnecting: false, isByeRound: false, liveKitToken: null, livekitUrl: null,
   }),
 }));

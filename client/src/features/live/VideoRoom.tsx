@@ -1,28 +1,19 @@
+import { useEffect, useState, useCallback } from 'react';
 import { useSessionStore } from '@/stores/sessionStore';
 import Card from '@/components/ui/Card';
-import Avatar from '@/components/ui/Avatar';
 import { formatTime } from '@/lib/utils';
-import { Video, Clock, Mic, Wifi } from 'lucide-react';
-
-function AudioBars({ active }: { active: boolean }) {
-  return (
-    <div className="flex items-end gap-0.5 h-4">
-      {[1, 2, 3, 4, 5].map(i => (
-        <div
-          key={i}
-          className={`w-1 rounded-full transition-all ${active ? 'bg-emerald-400' : 'bg-surface-700'}`}
-          style={active ? {
-            animation: `audioBar 0.8s ease-in-out ${i * 0.1}s infinite alternate`,
-            height: `${30 + Math.random() * 70}%`,
-          } : { height: '20%' }}
-        />
-      ))}
-      {active && (
-        <style>{`@keyframes audioBar { 0% { height: 20%; } 100% { height: ${60 + Math.random() * 40}%; } }`}</style>
-      )}
-    </div>
-  );
-}
+import { Video, Clock, Mic, MicOff, VideoOff, Wifi } from 'lucide-react';
+import {
+  LiveKitRoom,
+  VideoTrack,
+  useTracks,
+  useParticipants,
+  useLocalParticipant,
+  RoomAudioRenderer,
+} from '@livekit/components-react';
+import '@livekit/components-styles';
+import { Track } from 'livekit-client';
+import api from '@/lib/api';
 
 function ConnectionIndicator() {
   return (
@@ -33,8 +24,112 @@ function ConnectionIndicator() {
   );
 }
 
+function VideoStage() {
+  const tracks = useTracks(
+    [
+      { source: Track.Source.Camera, withPlaceholder: true },
+      { source: Track.Source.Microphone, withPlaceholder: false },
+    ],
+    { onlySubscribed: false },
+  );
+  const participants = useParticipants();
+  const { localParticipant } = useLocalParticipant();
+
+  const cameraTracks = tracks.filter(t => t.source === Track.Source.Camera);
+  const localTrack = cameraTracks.find(t => t.participant.sid === localParticipant.sid);
+  const remoteTrack = cameraTracks.find(t => t.participant.sid !== localParticipant.sid);
+
+  return (
+    <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
+      {/* Local video */}
+      <div className="relative rounded-xl overflow-hidden bg-surface-900 min-h-[300px] flex items-center justify-center border border-surface-800">
+        {localTrack?.publication?.track ? (
+          <VideoTrack trackRef={localTrack} className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex flex-col items-center gap-2">
+            <div className="h-20 w-20 rounded-full bg-surface-800 flex items-center justify-center">
+              <Video className="h-8 w-8 text-surface-500" />
+            </div>
+            <p className="text-surface-400 text-sm">Camera off</p>
+          </div>
+        )}
+        <div className="absolute bottom-2 left-2 bg-black/60 rounded px-2 py-1 text-xs text-white">
+          You
+        </div>
+      </div>
+
+      {/* Remote video */}
+      <div className="relative rounded-xl overflow-hidden bg-surface-900 min-h-[300px] flex items-center justify-center border border-surface-800">
+        {remoteTrack?.publication?.track ? (
+          <VideoTrack trackRef={remoteTrack} className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex flex-col items-center gap-2">
+            <div className="h-20 w-20 rounded-full bg-surface-800 flex items-center justify-center animate-pulse">
+              <Video className="h-8 w-8 text-surface-600" />
+            </div>
+            <p className="text-surface-500 text-sm">
+              {participants.length < 2 ? 'Waiting for partner...' : 'Partner camera off'}
+            </p>
+          </div>
+        )}
+        {participants.length >= 2 && (
+          <div className="absolute bottom-2 left-2 bg-black/60 rounded px-2 py-1 text-xs text-white">
+            Partner
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MediaControls() {
+  const { localParticipant } = useLocalParticipant();
+  const [micEnabled, setMicEnabled] = useState(true);
+  const [camEnabled, setCamEnabled] = useState(true);
+
+  const toggleMic = useCallback(async () => {
+    await localParticipant.setMicrophoneEnabled(!micEnabled);
+    setMicEnabled(!micEnabled);
+  }, [localParticipant, micEnabled]);
+
+  const toggleCam = useCallback(async () => {
+    await localParticipant.setCameraEnabled(!camEnabled);
+    setCamEnabled(!camEnabled);
+  }, [localParticipant, camEnabled]);
+
+  return (
+    <div className="flex items-center gap-3">
+      <button
+        onClick={toggleMic}
+        className={`p-2 rounded-full transition-colors ${micEnabled ? 'bg-surface-700 hover:bg-surface-600 text-surface-200' : 'bg-red-500/20 text-red-400 hover:bg-red-500/30'}`}
+      >
+        {micEnabled ? <Mic className="h-5 w-5" /> : <MicOff className="h-5 w-5" />}
+      </button>
+      <button
+        onClick={toggleCam}
+        className={`p-2 rounded-full transition-colors ${camEnabled ? 'bg-surface-700 hover:bg-surface-600 text-surface-200' : 'bg-red-500/20 text-red-400 hover:bg-red-500/30'}`}
+      >
+        {camEnabled ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
+      </button>
+    </div>
+  );
+}
+
 export default function VideoRoom() {
-  const { currentMatch, timerSeconds, currentRound, isByeRound } = useSessionStore();
+  const { timerSeconds, currentRound, isByeRound, liveKitToken, livekitUrl } = useSessionStore();
+  const { setLiveKitToken } = useSessionStore();
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+
+  // Also try fetching token if we don't have one yet (e.g. page refresh while matched)
+  const sessionId = window.location.pathname.split('/session/')[1]?.split('/')[0];
+  useEffect(() => {
+    if (!liveKitToken && sessionId) {
+      api.post(`/sessions/${sessionId}/token`).then(res => {
+        const { token, livekitUrl: url } = res.data.data;
+        setLiveKitToken(token, url);
+      }).catch(() => setConnectionError('Failed to get video room access'));
+    }
+  }, [liveKitToken, sessionId]);
 
   if (isByeRound) {
     return (
@@ -52,74 +147,64 @@ export default function VideoRoom() {
     );
   }
 
-  return (
-    <div className="flex-1 flex flex-col p-4 gap-4">
-      {/* Timer bar */}
-      <div className="flex items-center justify-between bg-surface-900/60 rounded-xl px-4 py-3 border border-surface-800">
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-surface-400">Round {currentRound}</span>
-          <ConnectionIndicator />
-        </div>
-        <div className="flex items-center gap-2 text-surface-200">
-          <Clock className="h-4 w-4" />
-          <span className={`font-mono text-lg ${timerSeconds <= 30 ? 'text-amber-400' : ''} ${timerSeconds <= 10 ? 'text-red-400 animate-pulse' : ''}`}>
-            {formatTime(timerSeconds)}
-          </span>
-        </div>
-      </div>
-
-      {/* Video area */}
-      <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Your video */}
-        <Card className="relative flex flex-col items-center justify-center min-h-[300px] overflow-hidden">
-          <div className="absolute inset-0 bg-gradient-to-b from-surface-800/30 to-surface-900/60" />
-          <div className="relative z-10 flex flex-col items-center">
-            <div className="relative">
-              <div className="h-32 w-32 rounded-full bg-gradient-to-br from-brand-500/20 to-brand-600/10 border-2 border-brand-500/30 flex items-center justify-center mb-4">
-                <Video className="h-12 w-12 text-brand-400" />
-              </div>
-              <div className="absolute -bottom-1 -right-1 bg-surface-900 rounded-full p-1">
-                <Mic className="h-4 w-4 text-emerald-400" />
-              </div>
-            </div>
-            <p className="text-surface-200 font-medium">You</p>
-            <div className="mt-2 flex items-center gap-2">
-              <AudioBars active />
-              <span className="text-xs text-surface-500">Live</span>
-            </div>
+  if (connectionError) {
+    return (
+      <div className="flex-1 flex items-center justify-center p-4">
+        <Card className="max-w-md w-full text-center">
+          <div className="h-20 w-20 rounded-full bg-red-500/20 flex items-center justify-center mx-auto mb-4">
+            <VideoOff className="h-8 w-8 text-red-400" />
           </div>
-        </Card>
-
-        {/* Partner video */}
-        <Card className="relative flex flex-col items-center justify-center min-h-[300px] overflow-hidden">
-          <div className="absolute inset-0 bg-gradient-to-b from-surface-800/30 to-surface-900/60" />
-          {currentMatch ? (
-            <div className="relative z-10 flex flex-col items-center">
-              <div className="relative">
-                <div className="ring-2 ring-emerald-500/30 rounded-full mb-4">
-                  <Avatar name={currentMatch.displayName || 'Partner'} size="xl" />
-                </div>
-                <div className="absolute -bottom-1 -right-1 bg-surface-900 rounded-full p-1">
-                  <Mic className="h-4 w-4 text-emerald-400" />
-                </div>
-              </div>
-              <p className="text-surface-200 font-medium">{currentMatch.displayName || 'Your Match'}</p>
-              <div className="mt-2 flex items-center gap-2">
-                <AudioBars active />
-                <span className="text-xs text-surface-500">Connected</span>
-              </div>
-            </div>
-          ) : (
-            <div className="relative z-10 flex flex-col items-center">
-              <div className="h-32 w-32 rounded-full bg-surface-800 flex items-center justify-center mb-4 animate-pulse border-2 border-surface-700">
-                <Video className="h-12 w-12 text-surface-600" />
-              </div>
-              <p className="text-surface-500">Waiting for match...</p>
-              <AudioBars active={false} />
-            </div>
-          )}
+          <h3 className="text-lg font-semibold text-surface-200 mb-2">Video Error</h3>
+          <p className="text-surface-400 text-sm">{connectionError}</p>
         </Card>
       </div>
-    </div>
+    );
+  }
+
+  if (!liveKitToken || !livekitUrl) {
+    return (
+      <div className="flex-1 flex items-center justify-center p-4">
+        <Card className="max-w-md w-full text-center">
+          <div className="h-16 w-16 rounded-full bg-surface-800 flex items-center justify-center mx-auto mb-4 animate-pulse">
+            <Video className="h-6 w-6 text-surface-500" />
+          </div>
+          <p className="text-surface-400 text-sm">Connecting to video room...</p>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <LiveKitRoom
+      token={liveKitToken}
+      serverUrl={livekitUrl}
+      connect={true}
+      video={true}
+      audio={true}
+      onDisconnected={() => setConnectionError('Disconnected from video room')}
+      onError={(err) => setConnectionError(err?.message || 'Video connection error')}
+      className="flex-1 flex flex-col"
+    >
+      <div className="flex-1 flex flex-col p-4 gap-4">
+        {/* Timer bar */}
+        <div className="flex items-center justify-between bg-surface-900/60 rounded-xl px-4 py-3 border border-surface-800">
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-surface-400">Round {currentRound}</span>
+            <ConnectionIndicator />
+            <MediaControls />
+          </div>
+          <div className="flex items-center gap-2 text-surface-200">
+            <Clock className="h-4 w-4" />
+            <span className={`font-mono text-lg ${timerSeconds <= 30 ? 'text-amber-400' : ''} ${timerSeconds <= 10 ? 'text-red-400 animate-pulse' : ''}`}>
+              {formatTime(timerSeconds)}
+            </span>
+          </div>
+        </div>
+
+        {/* Video area */}
+        <VideoStage />
+      </div>
+      <RoomAudioRenderer />
+    </LiveKitRoom>
   );
 }

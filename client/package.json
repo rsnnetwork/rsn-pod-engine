@@ -10,11 +10,14 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@livekit/components-react": "^2.9.20",
+    "@livekit/components-styles": "^1.2.0",
     "@rsn/shared": "1.0.0",
     "@tanstack/react-query": "^5.60.0",
     "axios": "^1.7.0",
     "clsx": "^2.1.0",
     "framer-motion": "^11.0.0",
+    "livekit-client": "^2.17.2",
     "lucide-react": "^0.460.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",

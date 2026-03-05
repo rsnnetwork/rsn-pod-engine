@@ -367,3 +367,43 @@ export async function incrementRoundsCompleted(sessionId: string, userId: string
     [sessionId, userId]
   );
 }
+
+// ─── LiveKit Token Generation ──────────────────────────────────────────────
+
+export async function generateLiveKitToken(sessionId: string, userId: string): Promise<{ token: string; livekitUrl: string }> {
+  const { AccessToken } = await import('livekit-server-sdk');
+  const config = (await import('../../config')).default;
+
+  // Verify session exists
+  const session = await getSessionById(sessionId);
+
+  // Verify user is a participant or host
+  const participant = await query<SessionParticipant>(
+    `SELECT * FROM session_participants WHERE session_id = $1 AND user_id = $2`,
+    [sessionId, userId]
+  );
+
+  if (!participant && session.hostUserId !== userId) {
+    throw new ForbiddenError('User is not a participant in this session');
+  }
+
+  try {
+    // Generate LiveKit access token
+    const at = new AccessToken(config.liveKitApiKey, config.liveKitApiSecret, {
+      identity: userId,
+      ttl: 3600,
+    });
+
+    // Room name is the lobby room for this session
+    const roomName = session.lobbyRoomId || `session-${sessionId}`;
+    at.addGrant({ room: roomName, roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: true });
+
+    const token = await at.toJwt();
+    logger.info(`Generated LiveKit token for user ${userId} in room ${roomName}`);
+
+    return { token, livekitUrl: config.livekitUrl };
+  } catch (err) {
+    logger.error('Failed to generate LiveKit token:', err);
+    throw new AppError('Failed to generate video room access token');
+  }
+}
