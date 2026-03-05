@@ -32,7 +32,7 @@ export default function HomePage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-surface-100">
-            Welcome{user?.display_name ? `, ${user.display_name}` : ''}
+            Welcome{user?.displayName ? `, ${user.displayName}` : ''}
           </h1>
           <p className="text-surface-400 mt-1">Here&apos;s your networking overview</p>
         </div>
@@ -75,8 +75,8 @@ export default function HomePage() {
               <Card key={s.id} hover onClick={() => navigate(`/sessions/${s.id}`)}>
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="font-medium text-surface-200">{new Date(s.scheduled_at).toLocaleDateString()}</p>
-                    <p className="text-sm text-surface-400">{s.topic || 'Open session'}</p>
+                    <p className="font-medium text-surface-200">{new Date(s.scheduledAt).toLocaleDateString()}</p>
+                    <p className="text-sm text-surface-400">{s.title || 'Open session'}</p>
                   </div>
                   <Badge variant="brand">{s.status}</Badge>
                 </div>
@@ -104,7 +104,7 @@ export default function HomePage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="font-medium text-surface-200">{p.name}</p>
-                    <p className="text-sm text-surface-400">{p.member_count || 0} members</p>
+                    <p className="text-sm text-surface-400">{p.memberCount || 0} members</p>
                   </div>
                   <Badge>{p.status}</Badge>
                 </div>

@@ -12,6 +12,7 @@ import {
   AuthTokenPair, JwtPayload,
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, UnauthorizedError, AppError } from '../../middleware/errors';
+import { sendMagicLinkEmail } from '../email/email.service';
 
 // ─── User Operations ────────────────────────────────────────────────────────
 
@@ -168,13 +169,18 @@ export async function sendMagicLink(email: string): Promise<{ sent: boolean; dev
   // Build the magic link URL
   const magicLinkUrl = `${config.clientUrl}/auth/verify?token=${token}`;
 
-  // In development, return the link directly; in production, send email
+  // In development, return the link directly (also send email if configured)
   if (config.isDev) {
     logger.info({ email: normalizedEmail, magicLinkUrl }, 'Magic link generated (dev mode)');
+    // Still try to send email in dev if Resend is configured
+    if (config.resendApiKey) {
+      await sendMagicLinkEmail(normalizedEmail, magicLinkUrl);
+    }
     return { sent: true, devLink: magicLinkUrl };
   }
 
-  // TODO: Send email via Nodemailer/Resend
+  // Production: send email via Resend
+  await sendMagicLinkEmail(normalizedEmail, magicLinkUrl);
   logger.info({ email: normalizedEmail }, 'Magic link email sent');
   return { sent: true };
 }

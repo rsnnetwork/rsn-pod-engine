@@ -33,10 +33,10 @@ export default function HostDashboardPage() {
       <Card>
         <h2 className="font-semibold text-surface-200 mb-3">Session Info</h2>
         <div className="grid grid-cols-2 gap-4 text-sm">
-          <div><span className="text-surface-500">Topic:</span> <span className="text-surface-200">{session.topic || 'Open'}</span></div>
+          <div><span className="text-surface-500">Title:</span> <span className="text-surface-200">{session.title || 'Open'}</span></div>
           <div><span className="text-surface-500">Status:</span> <span className="text-surface-200">{session.status}</span></div>
-          <div><span className="text-surface-500">Round Duration:</span> <span className="text-surface-200">{session.round_duration_seconds || 300}s</span></div>
-          <div><span className="text-surface-500">Participants:</span> <span className="text-surface-200">{session.participant_count || 0}</span></div>
+          <div><span className="text-surface-500">Round Duration:</span> <span className="text-surface-200">{session.config?.roundDurationSeconds || 300}s</span></div>
+          <div><span className="text-surface-500">Participants:</span> <span className="text-surface-200">{session.participantCount || 0}</span></div>
         </div>
       </Card>
 

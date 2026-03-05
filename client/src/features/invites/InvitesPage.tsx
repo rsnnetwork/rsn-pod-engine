@@ -39,7 +39,7 @@ export default function InvitesPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="font-medium text-surface-200 font-mono text-sm">{inv.code}</p>
-                  <p className="text-sm text-surface-400">{inv.pod_name || 'Pod'} · {inv.uses || 0} uses</p>
+                  <p className="text-sm text-surface-400">Uses: {inv.useCount || 0}{inv.maxUses ? ` / ${inv.maxUses}` : ''}</p>
                 </div>
                 <Badge variant={inv.status === 'active' ? 'success' : 'default'}>{inv.status}</Badge>
               </div>

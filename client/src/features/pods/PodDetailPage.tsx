@@ -30,14 +30,14 @@ export default function PodDetailPage() {
         <div className="flex items-start justify-between mb-4">
           <div>
             <h1 className="text-2xl font-bold text-surface-100">{pod.name}</h1>
-            <p className="text-surface-400 mt-1">{pod.focus_area || 'General focus'}</p>
+            <p className="text-surface-400 mt-1">{pod.description || 'General focus'}</p>
           </div>
           <Badge variant={pod.status === 'active' ? 'success' : 'default'}>{pod.status}</Badge>
         </div>
 
         <div className="flex gap-6 text-sm text-surface-400">
-          <span className="flex items-center gap-1"><Users className="h-4 w-4" /> {pod.member_count || 0} members</span>
-          <span className="flex items-center gap-1"><Calendar className="h-4 w-4" /> Created {new Date(pod.created_at).toLocaleDateString()}</span>
+          <span className="flex items-center gap-1"><Users className="h-4 w-4" /> {pod.memberCount || 0} members</span>
+          <span className="flex items-center gap-1"><Calendar className="h-4 w-4" /> Created {new Date(pod.createdAt).toLocaleDateString()}</span>
         </div>
       </Card>
 
@@ -46,11 +46,11 @@ export default function PodDetailPage() {
         <h2 className="text-lg font-semibold text-surface-100 mb-3">Members</h2>
         <div className="grid gap-3">
           {(pod.members || []).map((m: any) => (
-            <Card key={m.user_id || m.id}>
+            <Card key={m.userId || m.id}>
               <div className="flex items-center gap-3">
-                <Avatar name={m.display_name || m.email || 'User'} size="md" />
+                <Avatar name={m.displayName || m.email || 'User'} size="md" />
                 <div>
-                  <p className="font-medium text-surface-200">{m.display_name || m.email}</p>
+                  <p className="font-medium text-surface-200">{m.displayName || m.email}</p>
                   <p className="text-xs text-surface-500">{m.role || 'member'}</p>
                 </div>
               </div>

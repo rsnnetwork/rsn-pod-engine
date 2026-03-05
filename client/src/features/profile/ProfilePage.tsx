@@ -10,7 +10,7 @@ import { X } from 'lucide-react';
 import api from '@/lib/api';
 
 interface ProfileForm {
-  display_name: string;
+  displayName: string;
   bio: string;
 }
 
@@ -23,8 +23,8 @@ export default function ProfilePage() {
 
   useEffect(() => {
     if (user) {
-      reset({ display_name: user.display_name || '', bio: user.bio || '' });
-      setTags(user.expertise_tags || []);
+      reset({ displayName: user.displayName || '', bio: user.bio || '' });
+      setTags(user.interests || []);
     }
   }, [user]);
 
@@ -36,7 +36,7 @@ export default function ProfilePage() {
 
   const onSubmit = async (data: ProfileForm) => {
     try {
-      await api.patch('/users/me', { ...data, expertise_tags: tags });
+      await api.put('/users/me', { ...data, interests: tags });
       await checkSession();
       addToast('Profile updated!', 'success');
     } catch {
@@ -51,15 +51,15 @@ export default function ProfilePage() {
       <h1 className="text-2xl font-bold text-surface-100">Profile</h1>
       <Card>
         <div className="flex items-center gap-4 mb-6">
-          <Avatar name={user.display_name || user.email} size="xl" />
+          <Avatar name={user.displayName || user.email} size="xl" />
           <div>
-            <p className="text-lg font-semibold text-surface-100">{user.display_name || 'Set your name'}</p>
+            <p className="text-lg font-semibold text-surface-100">{user.displayName || 'Set your name'}</p>
             <p className="text-sm text-surface-400">{user.email}</p>
           </div>
         </div>
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          <Input label="Display Name" {...register('display_name')} placeholder="Your name" />
+          <Input label="Display Name" {...register('displayName')} placeholder="Your name" />
           <div>
             <label className="block text-sm font-medium text-surface-300 mb-1.5">Bio</label>
             <textarea

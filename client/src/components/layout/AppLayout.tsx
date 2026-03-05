@@ -49,9 +49,9 @@ export default function AppLayout() {
         {nav}
         {user && (
           <div className="p-4 border-t border-surface-800 flex items-center gap-3">
-            <Avatar name={user.display_name || user.email} size="sm" />
+            <Avatar name={user.displayName || user.email} size="sm" />
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-surface-200 truncate">{user.display_name || 'User'}</p>
+              <p className="text-sm font-medium text-surface-200 truncate">{user.displayName || 'User'}</p>
             </div>
             <button onClick={handleLogout} className="text-surface-500 hover:text-red-400 transition-colors"><LogOut className="h-4 w-4" /></button>
           </div>

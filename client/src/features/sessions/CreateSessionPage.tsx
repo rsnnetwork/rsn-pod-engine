@@ -8,10 +8,10 @@ import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
 
 interface SessionForm {
-  pod_id: string;
-  topic: string;
-  scheduled_at: string;
-  round_duration_seconds: number;
+  podId: string;
+  title: string;
+  scheduledAt: string;
+  roundDurationSeconds: number;
 }
 
 export default function CreateSessionPage() {
@@ -25,14 +25,22 @@ export default function CreateSessionPage() {
   });
 
   const { register, handleSubmit, formState: { errors } } = useForm<SessionForm>({
-    defaultValues: { pod_id: params.get('podId') || '', round_duration_seconds: 300 },
+    defaultValues: { podId: params.get('podId') || '', roundDurationSeconds: 300 },
   });
 
   const mutation = useMutation({
-    mutationFn: (data: SessionForm) => api.post('/sessions', data),
+    mutationFn: (data: SessionForm) => {
+      const body = {
+        podId: data.podId,
+        title: data.title,
+        scheduledAt: new Date(data.scheduledAt).toISOString(),
+        config: { roundDurationSeconds: data.roundDurationSeconds },
+      };
+      return api.post('/sessions', body);
+    },
     onSuccess: (res) => {
       addToast('Session scheduled!', 'success');
-      navigate(`/sessions/${res.data.session?.id || res.data.id}`);
+      navigate(`/sessions/${res.data.data?.id}`);
     },
     onError: () => addToast('Failed to create session', 'error'),
   });
@@ -45,7 +53,7 @@ export default function CreateSessionPage() {
           <div>
             <label className="block text-sm font-medium text-surface-300 mb-1.5">Pod</label>
             <select
-              {...register('pod_id', { required: 'Select a pod' })}
+              {...register('podId', { required: 'Select a pod' })}
               className="w-full rounded-xl border border-surface-700 bg-surface-800/50 px-4 py-2.5 text-sm text-surface-100 focus:outline-none focus:ring-2 focus:ring-brand-500"
             >
               <option value="">Select a pod</option>
@@ -53,11 +61,11 @@ export default function CreateSessionPage() {
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
-            {errors.pod_id && <p className="text-xs text-red-400 mt-1">{errors.pod_id.message}</p>}
+            {errors.podId && <p className="text-xs text-red-400 mt-1">{errors.podId.message}</p>}
           </div>
-          <Input label="Topic" {...register('topic')} placeholder="What will you discuss?" />
-          <Input label="Scheduled At" type="datetime-local" {...register('scheduled_at', { required: 'Required' })} error={errors.scheduled_at?.message} />
-          <Input label="Round Duration (seconds)" type="number" {...register('round_duration_seconds', { valueAsNumber: true })} />
+          <Input label="Title" {...register('title', { required: 'Required' })} placeholder="What will you discuss?" error={errors.title?.message} />
+          <Input label="Scheduled At" type="datetime-local" {...register('scheduledAt', { required: 'Required' })} error={errors.scheduledAt?.message} />
+          <Input label="Round Duration (seconds)" type="number" {...register('roundDurationSeconds', { valueAsNumber: true })} />
           <div className="flex gap-3 justify-end">
             <Button variant="ghost" type="button" onClick={() => navigate('/sessions')}>Cancel</Button>
             <Button type="submit" isLoading={mutation.isPending}>Schedule</Button>

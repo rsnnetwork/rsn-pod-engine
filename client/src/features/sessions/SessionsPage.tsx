@@ -45,9 +45,9 @@ export default function SessionsPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="font-medium text-surface-200">
-                    {s.scheduled_at ? new Date(s.scheduled_at).toLocaleString() : 'No date'}
+                    {s.scheduledAt ? new Date(s.scheduledAt).toLocaleString() : 'No date'}
                   </p>
-                  <p className="text-sm text-surface-400">{s.topic || 'Open session'} · {s.pod_name || 'Pod'}</p>
+                  <p className="text-sm text-surface-400">{s.title || 'Open session'}</p>
                 </div>
                 <Badge variant={statusVariant(s.status)}>{s.status}</Badge>
               </div>

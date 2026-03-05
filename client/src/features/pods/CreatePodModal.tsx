@@ -11,7 +11,7 @@ interface Props { open: boolean; onClose: () => void; }
 export default function CreatePodModal({ open, onClose }: Props) {
   const qc = useQueryClient();
   const { addToast } = useToastStore();
-  const { register, handleSubmit, reset, formState: { errors } } = useForm<{ name: string; focus_area: string; max_members: number }>();
+  const { register, handleSubmit, reset, formState: { errors } } = useForm<{ name: string; description: string; maxMembers: number }>();
 
   const mutation = useMutation({
     mutationFn: (data: any) => api.post('/pods', data),
@@ -28,8 +28,8 @@ export default function CreatePodModal({ open, onClose }: Props) {
     <Modal open={open} onClose={onClose} title="Create a Pod">
       <form onSubmit={handleSubmit(d => mutation.mutate(d))} className="space-y-4">
         <Input label="Pod Name" {...register('name', { required: 'Required' })} error={errors.name?.message} placeholder="e.g. Frontend Devs" />
-        <Input label="Focus Area" {...register('focus_area')} placeholder="e.g. React, Machine Learning" />
-        <Input label="Max Members" type="number" {...register('max_members', { valueAsNumber: true })} placeholder="6" />
+        <Input label="Description" {...register('description')} placeholder="e.g. React, Machine Learning" />
+        <Input label="Max Members" type="number" {...register('maxMembers', { valueAsNumber: true })} placeholder="6" />
         <div className="flex gap-3 justify-end">
           <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
           <Button type="submit" isLoading={mutation.isPending}>Create</Button>

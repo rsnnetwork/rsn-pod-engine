@@ -38,7 +38,12 @@ const server = http.createServer(app);
 
 const io = new SocketServer(server, {
   cors: {
-    origin: config.clientUrl,
+    origin: function(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
+      if (!origin) return callback(null, true);
+      const allowedOrigins = [config.clientUrl];
+      if (config.isDev) allowedOrigins.push('http://localhost:5173', 'http://localhost:3000');
+      callback(null, allowedOrigins.includes(origin));
+    },
     methods: ['GET', 'POST'],
     credentials: true,
   },
@@ -72,7 +77,17 @@ app.use(helmet({
 }));
 
 app.use(cors({
-  origin: config.clientUrl,
+  origin: function(origin, callback) {
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+    const allowedOrigins = [config.clientUrl];
+    if (config.isDev) allowedOrigins.push('http://localhost:5173', 'http://localhost:3000');
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(null, false);
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
@@ -131,10 +146,8 @@ async function start(): Promise<void> {
       process.exit(1);
     }
 
-    // Run migrations
-    if (config.isDev) {
-      await runMigrations();
-    }
+    // Run migrations (safe in production — skips already-applied ones)
+    await runMigrations();
 
     // Initialise orchestration with Socket.IO
     initOrchestration(io);

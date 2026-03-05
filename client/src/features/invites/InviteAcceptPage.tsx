@@ -41,7 +41,7 @@ export default function InviteAcceptPage() {
         {invite ? (
           <>
             <h2 className="text-xl font-bold text-surface-100 mb-2">You&apos;re invited!</h2>
-            <p className="text-surface-400 mb-6">Join the pod: <span className="text-surface-200 font-medium">{invite.pod_name || 'a pod'}</span></p>
+            <p className="text-surface-400 mb-6">You&apos;ve been invited to join a pod</p>
             {user ? (
               <Button onClick={accept} isLoading={accepting} className="w-full">Accept Invite</Button>
             ) : (

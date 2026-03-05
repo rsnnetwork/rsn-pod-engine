@@ -30,12 +30,13 @@ export const config = {
   magicLinkExpiryMinutes: parseInt(process.env.MAGIC_LINK_EXPIRY_MINUTES || '15', 10),
 
   // Email
-  emailProvider: process.env.EMAIL_PROVIDER || 'smtp',
+  emailProvider: process.env.EMAIL_PROVIDER || 'resend',
+  resendApiKey: process.env.RESEND_API_KEY || '',
   smtpHost: process.env.SMTP_HOST || 'smtp.ethereal.email',
   smtpPort: parseInt(process.env.SMTP_PORT || '587', 10),
   smtpUser: process.env.SMTP_USER || '',
   smtpPass: process.env.SMTP_PASS || '',
-  emailFrom: process.env.EMAIL_FROM || 'noreply@rsn.com',
+  emailFrom: process.env.EMAIL_FROM || 'onboarding@resend.dev',
 
   // LiveKit
   livekitApiKey: process.env.LIVEKIT_API_KEY || '',

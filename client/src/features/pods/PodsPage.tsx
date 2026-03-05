@@ -45,7 +45,7 @@ export default function PodsPage() {
                   </div>
                   <div>
                     <p className="font-medium text-surface-200">{pod.name}</p>
-                    <p className="text-sm text-surface-400">{pod.member_count || 0} members · {pod.focus_area || 'General'}</p>
+                    <p className="text-sm text-surface-400">{pod.memberCount || 0} members · {pod.description || 'General'}</p>
                   </div>
                 </div>
                 <Badge variant={pod.status === 'active' ? 'success' : 'default'}>{pod.status}</Badge>
