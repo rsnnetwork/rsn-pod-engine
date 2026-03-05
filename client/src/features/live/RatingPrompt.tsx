@@ -3,23 +3,27 @@ import Card from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useToastStore } from '@/stores/toastStore';
-import { Star } from 'lucide-react';
+import { Star, UserCheck } from 'lucide-react';
 import api from '@/lib/api';
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 interface Props { sessionId: string; }
 
-export default function RatingPrompt({ sessionId }: Props) {
-  const { currentMatch, setPhase } = useSessionStore();
+export default function RatingPrompt(_props: Props) {
+  const { currentMatch, currentMatchId, setPhase } = useSessionStore();
   const { addToast } = useToastStore();
   const [rating, setRating] = useState(0);
+  const [meetAgain, setMeetAgain] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const submit = async () => {
+    if (!currentMatchId || !currentMatch) return;
     setSubmitting(true);
     try {
-      await api.post(`/sessions/${sessionId}/ratings`, {
-        rated_user_id: currentMatch?.userId,
-        score: rating,
+      await api.post('/ratings', {
+        matchId: currentMatchId,
+        qualityScore: rating,
+        meetAgain,
       });
       addToast('Rating submitted', 'success');
       setPhase('lobby');
@@ -51,6 +55,16 @@ export default function RatingPrompt({ sessionId }: Props) {
             </button>
           ))}
         </div>
+
+        <button
+          onClick={() => setMeetAgain(!meetAgain)}
+          className={`flex items-center justify-center gap-2 w-full py-2 rounded-lg border transition-colors mb-4 ${
+            meetAgain ? 'border-emerald-500 bg-emerald-500/10 text-emerald-400' : 'border-surface-700 text-surface-400 hover:border-surface-600'
+          }`}
+        >
+          <UserCheck className="h-4 w-4" />
+          {meetAgain ? 'Would meet again!' : 'Would you meet again?'}
+        </button>
 
         <Button onClick={submit} isLoading={submitting} disabled={rating === 0} className="w-full">
           Submit Rating

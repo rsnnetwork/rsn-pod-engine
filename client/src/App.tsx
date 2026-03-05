@@ -16,6 +16,7 @@ import InvitesPage from '@/features/invites/InvitesPage';
 import InviteAcceptPage from '@/features/invites/InviteAcceptPage';
 import LiveSessionPage from '@/features/live/LiveSessionPage';
 import HostDashboardPage from '@/features/host/HostDashboardPage';
+import RecapPage from '@/features/sessions/RecapPage';
 import NotFoundPage from '@/features/misc/NotFoundPage';
 
 export default function App() {
@@ -41,6 +42,7 @@ export default function App() {
         <Route path="/sessions" element={<SessionsPage />} />
         <Route path="/sessions/new" element={<CreateSessionPage />} />
         <Route path="/sessions/:sessionId" element={<SessionDetailPage />} />
+        <Route path="/sessions/:sessionId/recap" element={<RecapPage />} />
         <Route path="/invites" element={<InvitesPage />} />
       </Route>
 

@@ -53,12 +53,14 @@ import * as identityService from '../../services/identity/identity.service';
 import * as podService from '../../services/pod/pod.service';
 import * as sessionService from '../../services/session/session.service';
 import * as inviteService from '../../services/invite/invite.service';
+import * as ratingService from '../../services/rating/rating.service';
 
 import authRoutes from '../../routes/auth';
 import userRoutes from '../../routes/users';
 import podRoutes from '../../routes/pods';
 import sessionRoutes from '../../routes/sessions';
 import inviteRoutes from '../../routes/invites';
+import ratingRoutes from '../../routes/ratings';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 
 // ─── App Factory ────────────────────────────────────────────────────────────
@@ -71,6 +73,7 @@ function createApp() {
   app.use('/pods', podRoutes);
   app.use('/sessions', sessionRoutes);
   app.use('/invites', inviteRoutes);
+  app.use('/ratings', ratingRoutes);
   app.use(notFoundHandler);
   app.use(errorHandler);
   return app;
@@ -512,5 +515,363 @@ describe('404 Handler', () => {
     const res = await request(app).delete('/auth/magic-link');
 
     expect(res.status).toBe(404);
+  });
+});
+
+// ─── Additional Pod Route Tests ─────────────────────────────────────────────
+
+describe('Pod Routes - Extended', () => {
+  const app = createApp();
+
+  describe('PUT /pods/:id', () => {
+    it('should update a pod', async () => {
+      (podService.updatePod as jest.Mock).mockResolvedValue({ ...mockPod, name: 'Updated' });
+
+      const token = makeToken();
+      const res = await request(app)
+        .put('/pods/pod-123')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Updated' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.name).toBe('Updated');
+    });
+  });
+
+  describe('GET /pods/:id/members', () => {
+    it('should return pod members', async () => {
+      (podService.getPodMembers as jest.Mock).mockResolvedValue([
+        { id: 'pm-1', podId: 'pod-123', userId: 'user-123', role: 'director', status: 'active' },
+      ]);
+
+      const token = makeToken();
+      const res = await request(app)
+        .get('/pods/pod-123/members')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(1);
+    });
+  });
+
+  describe('POST /pods/:id/members', () => {
+    it('should add a member', async () => {
+      (podService.addMember as jest.Mock).mockResolvedValue({
+        id: 'pm-2', podId: 'pod-123', userId: '00000000-0000-0000-0000-000000000002', role: 'member', status: 'active',
+      });
+
+      const token = makeToken();
+      const res = await request(app)
+        .post('/pods/pod-123/members')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ userId: '00000000-0000-0000-0000-000000000002' });
+
+      expect(res.status).toBe(201);
+    });
+
+    it('should reject without userId', async () => {
+      const token = makeToken();
+      const res = await request(app)
+        .post('/pods/pod-123/members')
+        .set('Authorization', `Bearer ${token}`)
+        .send({});
+
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('DELETE /pods/:id/members/:userId', () => {
+    it('should remove a member', async () => {
+      (podService.removeMember as jest.Mock).mockResolvedValue(undefined);
+
+      const token = makeToken();
+      const res = await request(app)
+        .delete('/pods/pod-123/members/user-456')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+    });
+  });
+
+  describe('POST /pods/:id/leave', () => {
+    it('should allow leaving a pod', async () => {
+      (podService.leavePod as jest.Mock).mockResolvedValue(undefined);
+
+      const token = makeToken();
+      const res = await request(app)
+        .post('/pods/pod-123/leave')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+    });
+  });
+});
+
+// ─── Extended Session Route Tests ───────────────────────────────────────────
+
+describe('Session Routes - Extended', () => {
+  const app = createApp();
+
+  describe('PUT /sessions/:id', () => {
+    it('should update a session', async () => {
+      (sessionService.updateSession as jest.Mock).mockResolvedValue({ ...mockSession, title: 'Updated' });
+
+      const token = makeToken();
+      const res = await request(app)
+        .put('/sessions/session-123')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ title: 'Updated' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.title).toBe('Updated');
+    });
+  });
+
+  describe('GET /sessions', () => {
+    it('should list sessions', async () => {
+      (sessionService.listSessions as jest.Mock).mockResolvedValue({
+        sessions: [mockSession],
+        total: 1,
+      });
+
+      const token = makeToken();
+      const res = await request(app)
+        .get('/sessions')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(1);
+    });
+  });
+
+  describe('POST /sessions/:id/register', () => {
+    it('should register participant', async () => {
+      (sessionService.registerParticipant as jest.Mock).mockResolvedValue({
+        id: 'sp-1', sessionId: 'session-123', userId: 'user-123', status: 'registered',
+      });
+
+      const token = makeToken();
+      const res = await request(app)
+        .post('/sessions/session-123/register')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(201);
+    });
+  });
+
+  describe('DELETE /sessions/:id/register', () => {
+    it('should unregister participant', async () => {
+      (sessionService.unregisterParticipant as jest.Mock).mockResolvedValue(undefined);
+
+      const token = makeToken();
+      const res = await request(app)
+        .delete('/sessions/session-123/register')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+    });
+  });
+
+  describe('GET /sessions/:id/participants', () => {
+    it('should return participants', async () => {
+      (sessionService.getSessionParticipants as jest.Mock).mockResolvedValue([
+        { id: 'sp-1', userId: 'user-123', status: 'registered' },
+      ]);
+
+      const token = makeToken();
+      const res = await request(app)
+        .get('/sessions/session-123/participants')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(1);
+    });
+  });
+});
+
+// ─── Extended Invite Route Tests ────────────────────────────────────────────
+
+describe('Invite Routes - Extended', () => {
+  const app = createApp();
+
+  const mockInviteData = {
+    id: 'invite-1', code: 'ABC123', type: InviteType.POD,
+    inviterId: 'user-123', inviteeEmail: null, podId: 'pod-123',
+    sessionId: null, status: InviteStatus.PENDING, maxUses: 1, useCount: 0,
+    expiresAt: null, acceptedByUserId: null, acceptedAt: null,
+    createdAt: new Date(), updatedAt: new Date(),
+  };
+
+  describe('GET /invites', () => {
+    it('should list user invites', async () => {
+      (inviteService.listInvitesByUser as jest.Mock).mockResolvedValue({
+        invites: [mockInviteData], total: 1,
+      });
+
+      const token = makeToken();
+      const res = await request(app)
+        .get('/invites')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(1);
+    });
+  });
+
+  describe('POST /invites/:code/accept', () => {
+    it('should accept an invite', async () => {
+      (inviteService.acceptInvite as jest.Mock).mockResolvedValue({
+        ...mockInviteData, status: InviteStatus.ACCEPTED,
+      });
+
+      const token = makeToken();
+      const res = await request(app)
+        .post('/invites/ABC123/accept')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+    });
+  });
+});
+
+// ─── Rating Route Tests ─────────────────────────────────────────────────────
+
+describe('Rating Routes', () => {
+  const app = createApp();
+
+  const mockRating = {
+    id: 'rating-1', matchId: 'match-1', fromUserId: 'user-123',
+    toUserId: 'user-456', qualityScore: 4, meetAgain: true,
+    feedback: null, createdAt: new Date(),
+  };
+
+  describe('POST /ratings', () => {
+    it('should submit a rating', async () => {
+      (ratingService.submitRating as jest.Mock).mockResolvedValue(mockRating);
+
+      const token = makeToken();
+      const res = await request(app)
+        .post('/ratings')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          matchId: '00000000-0000-0000-0000-000000000001',
+          qualityScore: 4,
+          meetAgain: true,
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body.data.qualityScore).toBe(4);
+    });
+
+    it('should reject invalid quality score', async () => {
+      const token = makeToken();
+      const res = await request(app)
+        .post('/ratings')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          matchId: '00000000-0000-0000-0000-000000000001',
+          qualityScore: 10,
+          meetAgain: true,
+        });
+
+      expect(res.status).toBe(400);
+    });
+
+    it('should reject missing matchId', async () => {
+      const token = makeToken();
+      const res = await request(app)
+        .post('/ratings')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ qualityScore: 4, meetAgain: true });
+
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('GET /ratings/match/:matchId', () => {
+    it('should return ratings for a match', async () => {
+      (ratingService.getRatingsByMatch as jest.Mock).mockResolvedValue([mockRating]);
+
+      const token = makeToken();
+      const res = await request(app)
+        .get('/ratings/match/match-1')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(1);
+    });
+  });
+
+  describe('GET /ratings/my', () => {
+    it('should return user ratings', async () => {
+      (ratingService.getRatingsByUser as jest.Mock).mockResolvedValue([mockRating]);
+
+      const token = makeToken();
+      const res = await request(app)
+        .get('/ratings/my')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(1);
+    });
+  });
+
+  describe('GET /ratings/received', () => {
+    it('should return user received ratings', async () => {
+      (ratingService.getRatingsReceived as jest.Mock).mockResolvedValue([mockRating]);
+
+      const token = makeToken();
+      const res = await request(app)
+        .get('/ratings/received')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(1);
+    });
+  });
+
+  describe('GET /ratings/sessions/:id/people-met', () => {
+    it('should return people met data', async () => {
+      (ratingService.getPeopleMet as jest.Mock).mockResolvedValue({
+        sessionId: 'session-1', sessionTitle: 'Test', sessionDate: new Date(),
+        connections: [], mutualConnections: [],
+      });
+
+      const token = makeToken();
+      const res = await request(app)
+        .get('/ratings/sessions/session-1/people-met')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+    });
+  });
+
+  describe('GET /ratings/sessions/:id/stats', () => {
+    it('should return session rating stats', async () => {
+      (ratingService.getSessionRatingStats as jest.Mock).mockResolvedValue({
+        totalRatings: 10, avgQualityScore: 3.5, meetAgainRate: 0.6, mutualMeetAgainCount: 2,
+      });
+
+      const token = makeToken();
+      const res = await request(app)
+        .get('/ratings/sessions/session-1/stats')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.totalRatings).toBe(10);
+    });
+  });
+
+  describe('GET /ratings/encounters', () => {
+    it('should return user encounters', async () => {
+      (ratingService.getUserEncounters as jest.Mock).mockResolvedValue([]);
+
+      const token = makeToken();
+      const res = await request(app)
+        .get('/ratings/encounters')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+    });
   });
 });

@@ -3,11 +3,12 @@ import { connectSocket, disconnectSocket, getSocket } from '@/lib/socket';
 import { useSessionStore } from '@/stores/sessionStore';
 
 export default function useSessionSocket(sessionId: string) {
-  const {
-    setPhase, addParticipant, removeParticipant,
-    setMatch, setTimer, tickTimer, setRound,
-  } = useSessionStore();
+  const store = useSessionStore();
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const clearTimer = () => {
+    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+  };
 
   useEffect(() => {
     const token = localStorage.getItem('rsn_access');
@@ -18,57 +19,88 @@ export default function useSessionSocket(sessionId: string) {
 
     socket.emit('session:join', { sessionId });
 
-    socket.on('participant:joined', (data) => addParticipant({ userId: data.userId, displayName: data.displayName }));
-    socket.on('participant:left', (data) => removeParticipant(data.userId));
-    socket.on('participant:count', () => {
-      // Update participant count — participants list managed via join/leave
+    // ── Participants ──
+    socket.on('participant:joined', (data: any) =>
+      store.addParticipant({ userId: data.userId, displayName: data.displayName }));
+    socket.on('participant:left', (data: any) => store.removeParticipant(data.userId));
+    socket.on('participant:count', () => { /* count managed via join/leave */ });
+
+    // ── Session lifecycle ──
+    socket.on('session:status_changed', (data: any) => {
+      if (data.status === 'completed') { clearTimer(); store.setPhase('complete'); }
+      if (data.currentRound) store.setRound(data.currentRound);
     });
 
-    socket.on('session:status_changed', (data) => {
-      if (data.status === 'completed') {
-        if (intervalRef.current) clearInterval(intervalRef.current);
-        setPhase('complete');
-      }
-      setRound(data.currentRound);
-    });
-
-    socket.on('session:round_started', (data) => {
-      setRound(data.roundNumber);
+    socket.on('session:round_started', (data: any) => {
+      store.setRound(data.roundNumber);
+      store.setByeRound(false);
       const duration = Math.floor((new Date(data.endsAt).getTime() - Date.now()) / 1000);
-      setTimer(Math.max(0, duration));
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      intervalRef.current = setInterval(() => tickTimer(), 1000);
+      store.setTimer(Math.max(0, duration));
+      clearTimer();
+      intervalRef.current = setInterval(() => store.tickTimer(), 1000);
     });
 
-    socket.on('session:round_ended', () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      setPhase('rating');
+    socket.on('session:round_ended', () => { clearTimer(); store.setPhase('rating'); });
+
+    socket.on('session:completed', () => { clearTimer(); store.setPhase('complete'); });
+
+    // ── Matching ──
+    socket.on('match:assigned', (data: any) => {
+      store.setByeRound(false);
+      store.setMatch({ userId: data.partnerId, displayName: data.partnerId }, data.matchId);
+      store.setPhase('matched');
     });
 
-    socket.on('session:completed', () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      setPhase('complete');
+    socket.on('match:reassigned', (data: any) => {
+      store.setMatch({ userId: data.newPartnerId, displayName: data.newPartnerId }, data.matchId || null);
+      store.setPhase('matched');
     });
 
-    socket.on('match:assigned', (data) => {
-      setMatch({ userId: data.partnerId, displayName: data.partnerId });
-      setPhase('matched');
+    socket.on('match:bye_round', () => {
+      store.setByeRound(true);
+      store.setMatch(null);
+      store.setPhase('lobby');
     });
 
-    socket.on('rating:window_open', () => {
-      setPhase('rating');
+    // ── Ratings ──
+    socket.on('rating:window_open', (data: any) => {
+      if (data.matchId) store.setMatch(store.currentMatch, data.matchId);
+      store.setTimer(data.durationSeconds || 30);
+      clearTimer();
+      intervalRef.current = setInterval(() => store.tickTimer(), 1000);
+      store.setPhase('rating');
     });
 
-    socket.on('rating:window_closed', () => {
-      setPhase('lobby');
+    socket.on('rating:window_closed', () => { clearTimer(); store.setPhase('lobby'); });
+
+    // ── Host broadcasts ──
+    socket.on('host:broadcast', (data: any) => store.addBroadcast(data.message));
+
+    socket.on('host:participant_removed', () => {
+      store.setError('You have been removed from this session.');
+      store.setPhase('complete');
     });
 
-    socket.on('timer:sync', (data) => {
-      setTimer(data.secondsRemaining);
+    // ── Sync & errors ──
+    socket.on('timer:sync', (data: any) => store.setTimer(data.secondsRemaining));
+
+    socket.on('error', (data: any) => store.setError(data.message || 'An error occurred'));
+
+    // ── Reconnection ──
+    socket.io.on('reconnect', () => {
+      store.setReconnecting(false);
+      store.setError(null);
+      socket.emit('session:join', { sessionId });
+    });
+
+    socket.io.on('reconnect_attempt', () => store.setReconnecting(true));
+    socket.io.on('reconnect_failed', () => {
+      store.setReconnecting(false);
+      store.setError('Connection lost. Please refresh the page.');
     });
 
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      clearTimer();
       socket.emit('session:leave', { sessionId });
       disconnectSocket();
     };

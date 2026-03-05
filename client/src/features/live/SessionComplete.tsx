@@ -1,20 +1,160 @@
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { CheckCircle } from 'lucide-react';
+import Avatar from '@/components/ui/Avatar';
+import { Spinner } from '@/components/ui/Spinner';
+import { CheckCircle, Users, Star, Heart, ArrowRight } from 'lucide-react';
+import api from '@/lib/api';
 
-export default function SessionComplete() {
+interface Connection {
+  userId: string;
+  displayName: string;
+  avatarUrl?: string;
+  company?: string;
+  jobTitle?: string;
+  qualityScore: number;
+  meetAgain: boolean;
+  mutualMeetAgain: boolean;
+  roundNumber: number;
+}
+
+interface Stats {
+  totalRatings: number;
+  avgQualityScore: number;
+  meetAgainRate: number;
+  mutualMeetAgainCount: number;
+}
+
+interface Props { sessionId: string; }
+
+export default function SessionComplete({ sessionId }: Props) {
   const navigate = useNavigate();
+  const [connections, setConnections] = useState<Connection[]>([]);
+  const [mutualConnections, setMutualConnections] = useState<Connection[]>([]);
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchRecap() {
+      try {
+        const [peopleRes, statsRes] = await Promise.all([
+          api.get(`/ratings/sessions/${sessionId}/people-met`),
+          api.get(`/ratings/sessions/${sessionId}/stats`),
+        ]);
+        setConnections(peopleRes.data.data?.connections || []);
+        setMutualConnections(peopleRes.data.data?.mutualConnections || []);
+        setStats(statsRes.data.data || null);
+      } catch { /* gracefully degrade — show basic completion */ }
+      setLoading(false);
+    }
+    fetchRecap();
+  }, [sessionId]);
+
   return (
-    <div className="flex-1 flex items-center justify-center p-4">
-      <Card className="max-w-md w-full text-center">
-        <div className="inline-flex items-center justify-center h-16 w-16 rounded-full bg-emerald-500/20 text-emerald-400 mb-4">
-          <CheckCircle className="h-8 w-8" />
+    <div className="flex-1 overflow-y-auto p-4">
+      <div className="max-w-2xl mx-auto space-y-6">
+        {/* Header */}
+        <Card className="text-center">
+          <div className="inline-flex items-center justify-center h-16 w-16 rounded-full bg-emerald-500/20 text-emerald-400 mb-4">
+            <CheckCircle className="h-8 w-8" />
+          </div>
+          <h2 className="text-xl font-bold text-surface-100 mb-2">Session Complete!</h2>
+          <p className="text-surface-400">Great networking! Here's your recap.</p>
+        </Card>
+
+        {loading ? (
+          <div className="flex justify-center py-8"><Spinner /></div>
+        ) : (
+          <>
+            {/* Stats summary */}
+            {stats && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <Card className="text-center py-3">
+                  <Users className="h-5 w-5 text-brand-400 mx-auto mb-1" />
+                  <p className="text-2xl font-bold text-surface-100">{connections.length}</p>
+                  <p className="text-xs text-surface-500">People Met</p>
+                </Card>
+                <Card className="text-center py-3">
+                  <Heart className="h-5 w-5 text-pink-400 mx-auto mb-1" />
+                  <p className="text-2xl font-bold text-surface-100">{stats.mutualMeetAgainCount}</p>
+                  <p className="text-xs text-surface-500">Mutual Matches</p>
+                </Card>
+                <Card className="text-center py-3">
+                  <Star className="h-5 w-5 text-amber-400 mx-auto mb-1" />
+                  <p className="text-2xl font-bold text-surface-100">{stats.avgQualityScore.toFixed(1)}</p>
+                  <p className="text-xs text-surface-500">Avg Rating</p>
+                </Card>
+                <Card className="text-center py-3">
+                  <p className="text-2xl font-bold text-surface-100">{Math.round(stats.meetAgainRate * 100)}%</p>
+                  <p className="text-xs text-surface-500">Meet Again Rate</p>
+                </Card>
+              </div>
+            )}
+
+            {/* Mutual connections */}
+            {mutualConnections.length > 0 && (
+              <Card>
+                <h3 className="text-sm font-semibold text-emerald-400 uppercase tracking-wider mb-3">
+                  Mutual Connections
+                </h3>
+                <div className="space-y-3">
+                  {mutualConnections.map(c => (
+                    <div key={c.userId} className="flex items-center gap-3 p-2 rounded-lg bg-emerald-500/5 border border-emerald-500/20">
+                      <Avatar name={c.displayName || 'User'} size="sm" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-surface-200 font-medium truncate">{c.displayName}</p>
+                        {(c.jobTitle || c.company) && (
+                          <p className="text-xs text-surface-500 truncate">
+                            {[c.jobTitle, c.company].filter(Boolean).join(' · ')}
+                          </p>
+                        )}
+                      </div>
+                      <Heart className="h-4 w-4 text-emerald-400 fill-emerald-400 shrink-0" />
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
+
+            {/* All people met */}
+            {connections.length > 0 && (
+              <Card>
+                <h3 className="text-sm font-semibold text-surface-400 uppercase tracking-wider mb-3">
+                  Everyone You Met
+                </h3>
+                <div className="space-y-2">
+                  {connections.map(c => (
+                    <div key={`${c.userId}-${c.roundNumber}`} className="flex items-center gap-3 p-2 rounded-lg hover:bg-surface-800/50">
+                      <Avatar name={c.displayName || 'User'} size="sm" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-surface-200 font-medium truncate">{c.displayName}</p>
+                        <p className="text-xs text-surface-500">Round {c.roundNumber}</p>
+                      </div>
+                      {c.qualityScore > 0 && (
+                        <div className="flex items-center gap-1 text-xs text-amber-400">
+                          <Star className="h-3 w-3 fill-amber-400" />
+                          {c.qualityScore}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
+          </>
+        )}
+
+        {/* Actions */}
+        <div className="flex gap-3">
+          <Button onClick={() => navigate(`/sessions/${sessionId}/recap`)} variant="secondary" className="flex-1">
+            Full Recap <ArrowRight className="h-4 w-4 ml-1" />
+          </Button>
+          <Button onClick={() => navigate('/sessions')} className="flex-1">
+            Back to Sessions
+          </Button>
         </div>
-        <h2 className="text-xl font-bold text-surface-100 mb-2">Session Complete!</h2>
-        <p className="text-surface-400 mb-6">Great networking! Check your session history for details.</p>
-        <Button onClick={() => navigate('/sessions')} className="w-full">Back to Sessions</Button>
-      </Card>
+      </div>
     </div>
   );
 }
