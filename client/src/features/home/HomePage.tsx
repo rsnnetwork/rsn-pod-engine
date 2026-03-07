@@ -29,14 +29,14 @@ export default function HomePage() {
   return (
     <div className="max-w-4xl mx-auto space-y-8">
       {/* Welcome */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between animate-fade-in">
         <div>
           <h1 className="text-2xl font-bold text-surface-100">
             Welcome{user?.displayName ? `, ${user.displayName}` : ''}
           </h1>
           <p className="text-surface-400 mt-1">Here&apos;s your networking overview</p>
         </div>
-        <Sparkles className="h-8 w-8 text-brand-400" />
+        <Sparkles className="h-8 w-8 text-brand-400 animate-pulse-slow" />
       </div>
 
       {/* Stats */}
@@ -45,9 +45,9 @@ export default function HomePage() {
           { label: 'My Pods', value: pods?.length || 0, icon: Users },
           { label: 'Sessions', value: sessions?.length || 0, icon: Calendar },
           { label: 'Upcoming', value: upcomingSessions.length, icon: ArrowRight },
-        ].map(s => (
-          <Card key={s.label} className="flex items-center gap-4">
-            <div className="h-12 w-12 rounded-xl bg-brand-500/20 flex items-center justify-center">
+        ].map((s, i) => (
+          <Card key={s.label} className={`flex items-center gap-4 animate-fade-in-up stagger-${i + 1}`}>
+            <div className="h-12 w-12 rounded-xl bg-brand-500/20 flex items-center justify-center group-hover:scale-110 transition-transform">
               <s.icon className="h-6 w-6 text-brand-400" />
             </div>
             <div>
@@ -59,7 +59,7 @@ export default function HomePage() {
       </div>
 
       {/* Upcoming Sessions */}
-      <div>
+      <div className="animate-fade-in-up stagger-4">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-surface-100">Upcoming Sessions</h2>
           <Button variant="ghost" size="sm" onClick={() => navigate('/sessions')}>View all <ArrowRight className="h-4 w-4 ml-1" /></Button>
@@ -87,7 +87,7 @@ export default function HomePage() {
       </div>
 
       {/* My Pods */}
-      <div>
+      <div className="animate-fade-in-up stagger-5">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-surface-100">My Pods</h2>
           <Button variant="ghost" size="sm" onClick={() => navigate('/pods')}>View all <ArrowRight className="h-4 w-4 ml-1" /></Button>

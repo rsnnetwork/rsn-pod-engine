@@ -1,4 +1,5 @@
 import { useParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
 import useSessionSocket from '@/hooks/useSessionSocket';
@@ -9,12 +10,20 @@ import SessionComplete from './SessionComplete';
 import HostControls from './HostControls';
 import { PageLoader } from '@/components/ui/Spinner';
 import { AlertCircle, X } from 'lucide-react';
+import api from '@/lib/api';
 
 export default function LiveSessionPage() {
   const { sessionId } = useParams();
   const { phase, broadcasts, error: sessionError, setError } = useSessionStore();
   const { user } = useAuthStore();
-  const isHost = user?.role === 'host' || user?.role === 'admin';
+
+  const { data: session } = useQuery({
+    queryKey: ['session', sessionId],
+    queryFn: () => api.get(`/sessions/${sessionId}`).then(r => r.data.data),
+    enabled: !!sessionId,
+  });
+
+  const isHost = session?.hostUserId === user?.id || user?.role === 'admin';
 
   useSessionSocket(sessionId!);
 

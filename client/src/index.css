@@ -39,4 +39,21 @@
   .glass-light {
     @apply bg-surface-800/60 backdrop-blur-lg border border-surface-700/30;
   }
+  .gradient-text {
+    @apply bg-gradient-to-r from-brand-400 to-purple-400 bg-clip-text text-transparent;
+  }
+  .card-hover {
+    @apply transition-all duration-300 hover:border-surface-600 hover:bg-surface-800/70 hover:shadow-lg hover:shadow-brand-500/5 hover:-translate-y-0.5;
+  }
+  .btn-glow {
+    @apply shadow-lg shadow-brand-500/20 hover:shadow-brand-500/40 transition-all duration-300;
+  }
+  .stagger-1 { animation-delay: 0.05s; }
+  .stagger-2 { animation-delay: 0.1s; }
+  .stagger-3 { animation-delay: 0.15s; }
+  .stagger-4 { animation-delay: 0.2s; }
+  .stagger-5 { animation-delay: 0.25s; }
+  .stagger-6 { animation-delay: 0.3s; }
+  .stagger-7 { animation-delay: 0.35s; }
+  .stagger-8 { animation-delay: 0.4s; }
 }

@@ -14,7 +14,7 @@ export default function Card({ children, className, hover, onClick }: CardProps)
       onClick={onClick}
       className={cn(
         'rounded-2xl border border-surface-800 bg-surface-900/60 backdrop-blur-sm p-6',
-        hover && 'hover:border-surface-700 hover:bg-surface-800/60 transition-colors cursor-pointer',
+        hover && 'hover:border-surface-700 hover:bg-surface-800/60 hover:shadow-lg hover:shadow-brand-500/5 hover:-translate-y-0.5 transition-all duration-300 cursor-pointer',
         className,
       )}
     >

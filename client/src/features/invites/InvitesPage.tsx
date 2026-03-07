@@ -20,9 +20,9 @@ export default function InvitesPage() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between animate-fade-in">
         <h1 className="text-2xl font-bold text-surface-100">Invites</h1>
-        <Button onClick={() => setShowCreate(true)}><Plus className="h-4 w-4 mr-2" /> Create Invite</Button>
+        <Button onClick={() => setShowCreate(true)} className="btn-glow"><Plus className="h-4 w-4 mr-2" /> Create Invite</Button>
       </div>
 
       {(!data || data.length === 0) ? (
@@ -33,7 +33,7 @@ export default function InvitesPage() {
           action={<Button onClick={() => setShowCreate(true)}>Create Invite</Button>}
         />
       ) : (
-        <div className="grid gap-4">
+        <div className="grid gap-4 animate-fade-in-up">
           {data.map((inv: any) => (
             <Card key={inv.id}>
               <div className="flex items-center justify-between">

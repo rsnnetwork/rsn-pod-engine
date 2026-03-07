@@ -26,9 +26,9 @@ export default function SessionsPage() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between animate-fade-in">
         <h1 className="text-2xl font-bold text-surface-100">Sessions</h1>
-        <Button onClick={() => navigate('/sessions/new')}><Plus className="h-4 w-4 mr-2" /> New Session</Button>
+        <Button onClick={() => navigate('/sessions/new')} className="btn-glow"><Plus className="h-4 w-4 mr-2" /> New Session</Button>
       </div>
 
       {(!data || data.length === 0) ? (
@@ -39,9 +39,9 @@ export default function SessionsPage() {
           action={<Button onClick={() => navigate('/sessions/new')}>Schedule Session</Button>}
         />
       ) : (
-        <div className="grid gap-4">
+        <div className="grid gap-4 animate-fade-in-up">
           {data.map((s: any) => (
-            <Card key={s.id} hover onClick={() => navigate(`/sessions/${s.id}`)}>
+            <Card key={s.id} hover onClick={() => navigate(`/sessions/${s.id}`)} className="card-hover">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="font-medium text-surface-200">

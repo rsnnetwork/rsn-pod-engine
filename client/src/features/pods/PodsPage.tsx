@@ -22,9 +22,9 @@ export default function PodsPage() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between animate-fade-in">
         <h1 className="text-2xl font-bold text-surface-100">My Pods</h1>
-        <Button onClick={() => setShowCreate(true)}><Plus className="h-4 w-4 mr-2" /> Create Pod</Button>
+        <Button onClick={() => setShowCreate(true)} className="btn-glow"><Plus className="h-4 w-4 mr-2" /> Create Pod</Button>
       </div>
 
       {(!data || data.length === 0) ? (
@@ -35,9 +35,9 @@ export default function PodsPage() {
           action={<Button onClick={() => setShowCreate(true)}>Create Pod</Button>}
         />
       ) : (
-        <div className="grid gap-4">
+        <div className="grid gap-4 animate-fade-in-up">
           {data.map((pod: any) => (
-            <Card key={pod.id} hover onClick={() => navigate(`/pods/${pod.id}`)}>
+            <Card key={pod.id} hover onClick={() => navigate(`/pods/${pod.id}`)} className="card-hover">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="h-10 w-10 rounded-xl bg-brand-500/20 flex items-center justify-center">

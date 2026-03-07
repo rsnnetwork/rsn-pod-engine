@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import Card from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import Avatar from '@/components/ui/Avatar';
@@ -39,7 +40,14 @@ export default function RecapPage() {
   const { sessionId } = useParams();
   const navigate = useNavigate();
   const { user } = useAuthStore();
-  const isHost = user?.role === 'host' || user?.role === 'admin';
+
+  const { data: session } = useQuery({
+    queryKey: ['session', sessionId],
+    queryFn: () => api.get(`/sessions/${sessionId}`).then(r => r.data.data),
+    enabled: !!sessionId,
+  });
+
+  const isHost = session?.hostUserId === user?.id || user?.role === 'admin';
 
   const [data, setData] = useState<PeopleMetData | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
