@@ -56,9 +56,17 @@ export default function useSessionSocket(sessionId: string) {
       intervalRef.current = setInterval(() => store.tickTimer(), 1000);
     });
 
-    socket.on('session:round_ended', () => { clearTimer(); store.setPhase('rating'); });
+    socket.on('session:round_ended', () => {
+      clearTimer();
+      // Preserve currentMatch/currentMatchId so RatingPrompt can use them
+      store.setPhase('rating');
+    });
 
-    socket.on('session:completed', () => { clearTimer(); store.setPhase('complete'); });
+    socket.on('session:completed', () => {
+      clearTimer();
+      // Small delay so in-progress rating submissions can finish
+      setTimeout(() => store.setPhase('complete'), 500);
+    });
 
     // ── Matching ──
     socket.on('match:assigned', (data: any) => {

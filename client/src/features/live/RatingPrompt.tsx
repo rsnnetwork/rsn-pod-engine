@@ -17,7 +17,12 @@ export default function RatingPrompt(_props: Props) {
   const [submitting, setSubmitting] = useState(false);
 
   const submit = async () => {
-    if (!currentMatchId || !currentMatch) return;
+    if (!currentMatchId || !currentMatch) {
+      addToast('No match data available to rate', 'error');
+      setPhase('lobby');
+      return;
+    }
+    if (rating === 0) return;
     setSubmitting(true);
     try {
       await api.post('/ratings', {
@@ -25,10 +30,11 @@ export default function RatingPrompt(_props: Props) {
         qualityScore: rating,
         meetAgain,
       });
-      addToast('Rating submitted', 'success');
+      addToast('Rating submitted!', 'success');
       setPhase('lobby');
-    } catch {
-      addToast('Failed to submit rating', 'error');
+    } catch (err: any) {
+      const msg = err?.response?.data?.error?.message || 'Failed to submit rating';
+      addToast(msg, 'error');
     } finally {
       setSubmitting(false);
     }

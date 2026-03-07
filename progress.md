@@ -1303,3 +1303,89 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
 - Client lint/type-check passed.
 - End-to-end auth API test passed: magic-link creation + verify token succeeded locally.
 - Local `devLink` now correctly points to `http://localhost:5173/auth/verify?...`.
+
+---
+
+### Task: Critical Bug Fixes + Design Overhaul (Reference Site Alignment)
+
+**Date:** 2026-03-08
+**Status:** COMPLETE
+
+#### Bug Fix 1: Rating Submission Failing Silently
+
+**Root Cause:** `RatingPrompt.tsx` `submit()` silently returned when `currentMatchId` or `currentMatch` was null, with no error shown to user. This happened because host ending session jumped straight to `session:completed`, clearing match state before users could rate.
+
+**Fixes Applied:**
+- `client/src/features/live/RatingPrompt.tsx`: `submit()` now shows toast error when match data is missing instead of silently returning. Also improved error messaging from API response.
+- `client/src/hooks/useSessionSocket.ts`: `session:round_ended` handler now preserves `currentMatch`/`currentMatchId` (doesn't clear them) when transitioning to rating phase.
+- `client/src/hooks/useSessionSocket.ts`: `session:completed` has a 500ms delay so in-progress rating submissions can finish.
+
+#### Bug Fix 2: Host End-Session Skipping Rating Window
+
+**Root Cause:** `handleHostEnd()` in orchestration.service.ts called `completeSession()` directly, bypassing the `endRound()` → rating window flow entirely. Users never got a chance to rate.
+
+**Fix Applied:**
+- `server/src/services/orchestration/orchestration.service.ts`: `handleHostEnd()` now detects if session is in `ROUND_ACTIVE` state. If so, it calls `endRound()` first (triggering the rating window), then auto-completes after a 15-second rating window.
+
+#### Bug Fix 3: Encounters Page Always Empty
+
+**Root Cause (dual):**
+1. Encounter history records only created when ratings are submitted. Since ratings were broken, no encounter data existed.
+2. `getUserEncounters()` in `rating.service.ts` only returned raw `encounter_history` columns (user UUIDs) without JOINing the `users` table. The frontend expected `displayName`, `company`, `jobTitle`, `sessionTitle`, `rating`, `mutual` fields.
+
+**Fix Applied:**
+- `server/src/services/rating/rating.service.ts`: `getUserEncounters()` now JOINs `users` and `sessions` tables, returning rich data including `displayName`, `avatarUrl`, `company`, `jobTitle`, `sessionTitle`, `sessionDate`, `rating`, `mutual`, and `connectIntent` fields that the `EncounterHistoryPage.tsx` frontend already expects.
+
+#### Design Overhaul: Reference Site Alignment (rsn.mister-raw.com)
+
+**Changes Applied:**
+
+1. **Sidebar Navigation (AppLayout.tsx):**
+   - Restructured to match reference: main links (Dashboard, Pods, Invite, Events) at top
+   - Bottom section with divider: Profile, Settings, Billing, Support
+   - Separate Log out button (not in nav links)
+   - RSN logo changed from gradient text to branded square icon + text
+   - Sidebar width adjusted from w-64 to w-60
+   - Mobile bottom nav updated to match new structure
+
+2. **Dashboard/Home Page (HomePage.tsx):**
+   - 4-column stats row: My Pods, Invites Sent, Upcoming Events, Unlock Level (matching reference exactly)
+   - 3-column quick actions: Create a Pod, Invite Someone, Browse Events
+   - Getting Started checklist with numbered steps: Complete profile, Invite someone, Join/create pod
+   - Each checklist item shows green checkmark when completed
+   - Unlock level calculates from accepted invites (Starter/Basic/Pro)
+
+3. **Settings Page (NEW):**
+   - Notification toggles: email, session reminders, match notifications
+   - Privacy toggle: profile visibility
+   - Account info display: email, role
+
+4. **Billing Page (NEW):**
+   - Current plan display card
+   - Side-by-side plan comparison: Starter (Free) vs Pro ($19/mo)
+   - Feature lists with checkmarks
+   - Stripe not-yet-active notice for beta period
+
+5. **Support Page (NEW):**
+   - FAQ section with expandable accordion (5 common questions)
+   - Contact form: subject + message + submit
+   - Email contact info
+
+**Files Modified:**
+- client/src/features/live/RatingPrompt.tsx
+- client/src/hooks/useSessionSocket.ts
+- server/src/services/orchestration/orchestration.service.ts
+- server/src/services/rating/rating.service.ts
+- client/src/components/layout/AppLayout.tsx
+- client/src/features/home/HomePage.tsx
+- client/src/App.tsx (added routes for /settings, /billing, /support)
+
+**Files Created:**
+- client/src/features/settings/SettingsPage.tsx
+- client/src/features/billing/BillingPage.tsx
+- client/src/features/support/SupportPage.tsx
+
+**Validation:**
+- All 25 rating service tests passing
+- Zero TypeScript compile errors
+- All new routes properly wired in App.tsx

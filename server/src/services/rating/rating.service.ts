@@ -305,18 +305,41 @@ export async function getEncounterHistory(
 export async function getUserEncounters(
   userId: string,
   mutualOnly: boolean = false
-): Promise<EncounterHistory[]> {
-  let sql = `SELECT ${ENCOUNTER_COLUMNS} FROM encounter_history
-             WHERE (user_a_id = $1 OR user_b_id = $1)`;
+): Promise<any[]> {
+  let sql = `
+    SELECT
+      eh.id, eh.times_met AS "timesMet", eh.last_met_at AS "lastMetAt",
+      eh.last_session_id AS "lastSessionId",
+      eh.last_quality_score AS "lastQualityScore",
+      eh.last_meet_again_a AS "lastMeetAgainA",
+      eh.last_meet_again_b AS "lastMeetAgainB",
+      eh.mutual_meet_again AS "mutualMeetAgain",
+      u.display_name AS "displayName",
+      u.avatar_url AS "avatarUrl",
+      u.company,
+      u.job_title AS "jobTitle",
+      s.title AS "sessionTitle",
+      s.scheduled_at AS "sessionDate",
+      CASE WHEN eh.user_a_id = $1 THEN eh.user_b_id ELSE eh.user_a_id END AS "otherUserId",
+      CASE WHEN eh.user_a_id = $1 THEN eh.last_meet_again_a ELSE eh.last_meet_again_b END AS "myMeetAgain",
+      eh.mutual_meet_again AS "mutual"
+    FROM encounter_history eh
+    JOIN users u ON u.id = CASE WHEN eh.user_a_id = $1 THEN eh.user_b_id ELSE eh.user_a_id END
+    LEFT JOIN sessions s ON s.id = eh.last_session_id
+    WHERE (eh.user_a_id = $1 OR eh.user_b_id = $1)`;
 
   if (mutualOnly) {
-    sql += ' AND mutual_meet_again = TRUE';
+    sql += ' AND eh.mutual_meet_again = TRUE';
   }
 
-  sql += ' ORDER BY last_met_at DESC';
+  sql += ' ORDER BY eh.last_met_at DESC';
 
-  const result = await query<EncounterHistory>(sql, [userId]);
-  return result.rows;
+  const result = await query<any>(sql, [userId]);
+  return result.rows.map(row => ({
+    ...row,
+    rating: row.lastQualityScore,
+    connectIntent: row.myMeetAgain,
+  }));
 }
 
 // ─── Finalize Round Ratings ─────────────────────────────────────────────────

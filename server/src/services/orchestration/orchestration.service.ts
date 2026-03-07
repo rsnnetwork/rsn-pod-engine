@@ -440,8 +440,27 @@ async function handleHostEnd(
   try {
     if (!await verifyHost(socket, data.sessionId)) return;
 
-    await completeSession(data.sessionId);
+    const activeSession = activeSessions.get(data.sessionId);
 
+    // If currently in an active round, end the round first so users get
+    // a rating window before the session completes.
+    if (activeSession && activeSession.status === SessionStatus.ROUND_ACTIVE) {
+      // Clear any existing timer
+      if (activeSession.timer) clearTimeout(activeSession.timer);
+
+      // End the current round (triggers rating window)
+      await endRound(data.sessionId, activeSession.currentRound);
+
+      // Override: after a short rating window (15s), auto-complete
+      if (activeSession.timer) clearTimeout(activeSession.timer);
+      startSegmentTimer(data.sessionId, 15, () => {
+        completeSession(data.sessionId);
+        logger.info({ sessionId: data.sessionId }, 'Session ended by host (after rating window)');
+      });
+      return;
+    }
+
+    await completeSession(data.sessionId);
     logger.info({ sessionId: data.sessionId }, 'Session ended by host');
   } catch (err: any) {
     socket.emit('error', { code: 'END_FAILED', message: err.message });

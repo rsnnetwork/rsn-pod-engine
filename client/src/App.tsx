@@ -19,6 +19,9 @@ import HostDashboardPage from '@/features/host/HostDashboardPage';
 import RecapPage from '@/features/sessions/RecapPage';
 import EncounterHistoryPage from '@/features/sessions/EncounterHistoryPage';
 import AdminUsersPage from '@/features/admin/AdminUsersPage';
+import SettingsPage from '@/features/settings/SettingsPage';
+import BillingPage from '@/features/billing/BillingPage';
+import SupportPage from '@/features/support/SupportPage';
 import NotFoundPage from '@/features/misc/NotFoundPage';
 
 export default function App() {
@@ -47,6 +50,9 @@ export default function App() {
         <Route path="/sessions/:sessionId/recap" element={<RecapPage />} />
         <Route path="/encounters" element={<EncounterHistoryPage />} />
         <Route path="/invites" element={<InvitesPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/billing" element={<BillingPage />} />
+        <Route path="/support" element={<SupportPage />} />
         <Route path="/admin/users" element={<AdminUsersPage />} />
       </Route>
 
