@@ -146,7 +146,23 @@ export async function updateLastActive(userId: string): Promise<void> {
 
 // ─── Magic Link Authentication ──────────────────────────────────────────────
 
-export async function sendMagicLink(email: string): Promise<{ sent: boolean; devLink?: string }> {
+function resolveClientBaseUrl(requestedClientUrl?: string): string {
+  if (!requestedClientUrl) return config.clientUrl.replace(/\/$/, '');
+
+  try {
+    const parsed = new URL(requestedClientUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return config.clientUrl.replace(/\/$/, '');
+    }
+
+    const basePath = parsed.pathname && parsed.pathname !== '/' ? parsed.pathname.replace(/\/$/, '') : '';
+    return `${parsed.origin}${basePath}`;
+  } catch {
+    return config.clientUrl.replace(/\/$/, '');
+  }
+}
+
+export async function sendMagicLink(email: string, requestedClientUrl?: string): Promise<{ sent: boolean; devLink?: string }> {
   const normalizedEmail = email.toLowerCase().trim();
 
   // Generate a secure random token
@@ -166,15 +182,20 @@ export async function sendMagicLink(email: string): Promise<{ sent: boolean; dev
     [normalizedEmail, tokenHash, expiresAt]
   );
 
-  // Build the magic link URL
-  const magicLinkUrl = `${config.clientUrl}/auth/verify?token=${token}`;
+  // Build the magic link URL using request origin when available.
+  const clientBaseUrl = resolveClientBaseUrl(requestedClientUrl);
+  const magicLinkUrl = `${clientBaseUrl}/auth/verify?token=${token}`;
 
   // In development, return the link directly (also send email if configured)
   if (config.isDev) {
     logger.info({ email: normalizedEmail, magicLinkUrl }, 'Magic link generated (dev mode)');
     // Still try to send email in dev if Resend is configured
     if (config.resendApiKey) {
-      await sendMagicLinkEmail(normalizedEmail, magicLinkUrl);
+      try {
+        await sendMagicLinkEmail(normalizedEmail, magicLinkUrl);
+      } catch (error) {
+        logger.warn({ error, email: normalizedEmail }, 'Email send failed in dev mode; returning devLink');
+      }
     }
     return { sent: true, devLink: magicLinkUrl };
   }

@@ -8,7 +8,7 @@ interface AuthState {
   isAuthenticated: boolean;
   isLoading: boolean;
 
-  login: (email: string) => Promise<any>;
+  login: (email: string, clientUrl?: string) => Promise<any>;
   verify: (token: string) => Promise<void>;
   checkSession: () => Promise<void>;
   refreshAccessToken: () => Promise<void>;
@@ -23,8 +23,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   isAuthenticated: !!localStorage.getItem('rsn_access'),
   isLoading: true,
 
-  login: async (email: string) => {
-    const { data } = await api.post('/auth/magic-link', { email });
+  login: async (email: string, clientUrl?: string) => {
+    const { data } = await api.post('/auth/magic-link', { email, clientUrl });
     return data;
   },
 

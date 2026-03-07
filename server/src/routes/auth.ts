@@ -13,6 +13,7 @@ const router = Router();
 
 const magicLinkSchema = z.object({
   email: z.string().email('Valid email is required').max(255),
+  clientUrl: z.string().url('Valid client URL is required').max(2048).optional(),
 });
 
 const verifySchema = z.object({
@@ -31,8 +32,8 @@ router.post(
   validate(magicLinkSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { email } = req.body;
-      const result = await identityService.sendMagicLink(email);
+      const { email, clientUrl } = req.body;
+      const result = await identityService.sendMagicLink(email, clientUrl);
 
       const response: ApiResponse = {
         success: true,

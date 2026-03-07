@@ -21,7 +21,7 @@ export default function LoginPage() {
 
   const onSubmit = async (data: { email: string }) => {
     try {
-      const res = await login(data.email);
+      const res = await login(data.email, window.location.origin);
       setSent(true);
       const link = res?.data?.devLink || res?.devLink;
       if (link) setDevLink(link);
