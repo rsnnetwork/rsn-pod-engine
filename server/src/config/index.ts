@@ -27,7 +27,7 @@ export const config = {
 
   // Magic Link
   magicLinkSecret: process.env.MAGIC_LINK_SECRET || 'dev-magic-link-secret-not-for-production',
-  magicLinkExpiryMinutes: parseInt(process.env.MAGIC_LINK_EXPIRY_MINUTES || '15', 10),
+  magicLinkExpiryMinutes: parseInt(process.env.MAGIC_LINK_EXPIRY_MINUTES || '60', 10),
 
   // Email
   emailProvider: process.env.EMAIL_PROVIDER || 'resend',

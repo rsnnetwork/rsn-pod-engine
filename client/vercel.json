@@ -4,6 +4,12 @@
   "buildCommand": "cd .. && npm install && npm run build:shared && cd client && npm run build",
   "outputDirectory": "dist",
   "installCommand": "cd .. && npm install",
+  "build": {
+    "env": {
+      "VITE_API_URL": "https://sussex-demonstrates-ottawa-kitty.trycloudflare.com/api",
+      "VITE_SERVER_URL": "https://sussex-demonstrates-ottawa-kitty.trycloudflare.com"
+    }
+  },
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
   ]

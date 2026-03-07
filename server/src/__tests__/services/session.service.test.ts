@@ -153,12 +153,12 @@ describe('Session Service', () => {
   describe('registerParticipant - edge cases', () => {
     it('should throw when session is not open for registration', async () => {
       mockQuery.mockResolvedValueOnce({
-        rows: [{ ...mockSession, status: SessionStatus.ROUND_ACTIVE }],
+        rows: [{ ...mockSession, status: SessionStatus.COMPLETED }],
         rowCount: 1,
       });
 
       await expect(sessionService.registerParticipant('session-123', 'user-new'))
-        .rejects.toThrow('not open for registration');
+        .rejects.toThrow('no longer accepting participants');
     });
 
     it('should throw ConflictError when already registered', async () => {

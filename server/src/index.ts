@@ -64,8 +64,8 @@ io.use((socket, next) => {
   }
 
   try {
-    const payload = jwt.verify(token, config.jwtSecret) as { userId: string; email: string; role: string; displayName?: string };
-    socket.data.userId = payload.userId;
+    const payload = jwt.verify(token, config.jwtSecret) as { sub: string; email: string; role: string; displayName?: string };
+    socket.data.userId = payload.sub;
     socket.data.email = payload.email;
     socket.data.role = payload.role;
     socket.data.displayName = payload.displayName || payload.email;
@@ -92,9 +92,12 @@ app.use(cors({
     }
 
     // Allow Vercel preview/production domains during no-card deployment setup.
-    const isVercelOrigin = /\.vercel\.app$/i.test(new URL(origin).hostname);
+    try {
+      const isVercelOrigin = /\.vercel\.app$/i.test(new URL(origin).hostname);
+      if (isVercelOrigin) return callback(null, true);
+    } catch {}
 
-    if (allowedOrigins.includes(origin) || isVercelOrigin) {
+    if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       callback(null, false);
