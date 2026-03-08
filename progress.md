@@ -90,6 +90,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 | T-024 | Add dev-mode magic link display for testing | Completed | Copilot | Shows clickable devLink in amber box when backend returns it |
 | T-025 | Fix bye round bug, video timeout, LiveKit rooms | Completed | Copilot | Create LiveKit rooms before match, notify bye participants, send totalRounds |
 | T-026 | Setup rsn.network domain for Resend email | Completed | Copilot | Updated EMAIL_FROM to noreply@rsn.network |
+| T-027 | Fix auth rate limiting causing login errors | Completed | Copilot | Increased production limit from 10 to 50 requests per 15min |
 
 ---
 
@@ -1897,3 +1898,24 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - Future pushes to main will automatically trigger Vercel production deployments
 - Next immediate action:
   - Continue normal development workflow - all pushes to main will auto-deploy
+
+---
+
+### 2026-03-09 02:49 AM - Entry [Latest]
+- Task ID: T-027
+- Task Title: Fix auth rate limiting causing "too many requests" errors on login
+- Status: Completed
+- What changed:
+  - Verified backend server running on port 3001 (Node.js PID 7012)
+  - Increased auth endpoint rate limit from 10 to 50 requests per 15 minutes in production
+  - Updated error message to clarify "wait 15 minutes" timeframe
+  - Restarted backend server to apply changes
+- Files touched:
+  - server/src/middleware/rateLimit.ts
+- Decisions made:
+  - 50 requests per 15 minutes allows ~3 attempts per minute without blocking legitimate users
+  - Maintained strict rate limiting for security while improving UX
+  - Development mode remains at 100 requests for testing convenience
+- Next immediate action:
+  - Monitor login success rates on live app
+  - Consider implementing exponential backoff on client side if issues persist

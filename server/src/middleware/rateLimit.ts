@@ -28,15 +28,16 @@ export const apiLimiter = rateLimit({
  */
 export const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: config.env === 'development' ? 100 : 10, // relaxed in dev
+  max: config.env === 'development' ? 100 : 50, // 50 requests per 15 min in production
   standardHeaders: true,
   legacyHeaders: false,
+  skipSuccessfulRequests: false, // count all requests
   handler: (_req, res) => {
     const response: ApiResponse = {
       success: false,
       error: {
         code: 'RATE_LIMIT_EXCEEDED',
-        message: 'Too many authentication attempts. Please wait before trying again.',
+        message: 'Too many authentication attempts. Please wait 15 minutes before trying again.',
       },
     };
     res.status(429).json(response);
