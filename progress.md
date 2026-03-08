@@ -83,6 +83,10 @@ Purpose: Persistent execution history and current state, independent of chat mem
 | T-017 | Remove dev mode magic link from login UI | Completed | Copilot | Stripped devLink state, logic, and amber dev-mode box from LoginPage |
 | T-018 | Fix invite code helper text | Completed | Copilot | Changed to "Only required for first-time sign up" |
 | T-019 | Add live session status messages & connection tracking | Completed | Copilot | Full UX status text system across all session phases |
+| T-020 | Fix Vercel build failure (unused Wifi import) | Completed | Copilot | Removed unused import causing TS6133 |
+| T-021 | Auto-route Vercel frontend to local tunnel | Completed | Copilot | runtimeEndpoints.ts with Vercel-host detection |
+| T-022 | Same-tab login redirect after magic-link verify | Completed | Copilot | Cross-tab localStorage sync + auto-redirect |
+| T-023 | Auto-close verify tab after magic-link auth | Completed | Copilot | window.close() with navigate fallback |
 
 ---
 
@@ -394,6 +398,25 @@ Purpose: Persistent execution history and current state, independent of chat mem
   - Preserve existing verify-page redirect behavior while making original tab auto-continue.
 - Next immediate action:
   - Push commit to `main` and test magic-link flow from Vercel app + Gmail link.
+
+### 2026-03-09 02:00 - Entry 015
+- Task ID: T-023
+- Task Title: Auto-close verify tab after magic-link authentication
+- Status: Completed
+- What changed:
+  - VerifyPage now calls `window.close()` after successful auth to close the email-opened tab automatically.
+  - If the browser blocks `window.close()` (some browsers restrict this for non-script-opened windows), it falls back to a normal in-page redirect.
+  - Combined with T-022's cross-tab sync, the flow is now: (1) user requests magic link on login tab, (2) clicks link in email → opens verify tab, (3) verify tab completes auth + signals original tab via localStorage, (4) verify tab auto-closes, (5) original login tab auto-redirects to dashboard.
+- Files touched:
+  - client/src/features/auth/VerifyPage.tsx
+  - progress.md
+- Decisions made:
+  - 500ms delay before window.close() to allow localStorage event propagation to original tab.
+  - navigate() called on same line as window.close() — if close succeeds, navigate never fires; if close is blocked, navigate acts as fallback.
+- Next immediate action:
+  - Push and test on Vercel. Address Resend email sender limitation (domain verification needed to send to non-owner emails).
+
+---
 
 ### T-011: Milestone 1 Live API Testing & Final Validation
 

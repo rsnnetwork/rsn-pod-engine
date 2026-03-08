@@ -19,10 +19,20 @@ export default function VerifyPage() {
     const refreshToken = params.get('refreshToken');
 
     const redirectAfterAuth = () => {
+      // Signal original login tab that auth is complete
       localStorage.setItem('rsn_auth_completed_at', String(Date.now()));
+
+      // Try to close this tab (works when opened via link from email)
+      // If the browser blocks window.close(), fall back to redirect
       const redirect = sessionStorage.getItem('rsn_redirect');
       sessionStorage.removeItem('rsn_redirect');
-      navigate(redirect || '/', { replace: true });
+
+      // Small delay to let localStorage event propagate to the original tab
+      setTimeout(() => {
+        window.close();
+        // If window.close() was blocked (some browsers), redirect normally
+        navigate(redirect || '/', { replace: true });
+      }, 500);
     };
 
     if (accessToken && refreshToken) {
