@@ -74,8 +74,9 @@ export default function LoginPage() {
       const response = await login(data.email, window.location.origin, data.inviteCode || undefined);
       setSent(true);
       // Capture devLink if returned (dev mode only)
-      if (response?.devLink) {
-        setDevLink(response.devLink);
+      // Backend returns { success, data: { devLink, sent, message } }
+      if (response?.data?.devLink) {
+        setDevLink(response.data.devLink);
       }
     } catch (err: any) {
       const msg = err?.response?.data?.error?.message || err?.response?.data?.data?.message || 'Failed to send magic link';
