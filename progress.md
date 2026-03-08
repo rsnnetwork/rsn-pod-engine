@@ -92,6 +92,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 | T-026 | Setup rsn.network domain for Resend email | Completed | Copilot | Updated EMAIL_FROM to noreply@rsn.network |
 | T-027 | Fix auth rate limiting causing login errors | Completed | Copilot | Increased production limit from 10 to 50 requests per 15min |
 | T-028 | Make invite codes optional for registration | Completed | Copilot | Removed mandatory invite requirement, updated UI messaging |
+| T-029 | Fix identity service tests after invite changes | Completed | Copilot | Updated 4 tests to reflect optional invite design, 248/248 passing |
 
 ---
 
@@ -1946,3 +1947,29 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
 - Next immediate action:
   - Test registration flow without invite code on live app
   - Monitor signup conversion rates
+
+---
+
+### 2026-03-09 03:00 AM - Entry [Latest]
+- Task ID: T-029
+- Task Title: Fix identity service tests after invite code changes
+- Status: Completed
+- What changed:
+  - Updated "should invalidate existing links and create a new one" test - removed getUserByEmail check, expects 2 calls instead of 3
+  - Updated "should normalize email to lowercase" test - adjusted mock calls for new flow
+  - Updated "should return devLink in dev mode" test - removed getUserByEmail mock
+  - Replaced "should require invite code for new users" test with two new tests:
+    * "should validate invite code when provided" - tests invite validation when code is provided
+    * "should allow registration without invite code" - tests open registration
+  - All 248 server tests now passing
+- Files touched:
+  - server/src/__tests__/services/identity.service.test.ts
+- Decisions made:
+  - Tests now reflect optional invite design
+  - Maintained test coverage for invite validation when codes are used
+- Test Results:
+  - ✅ Identity Service: 26/26 tests passing
+  - ✅ All Server Tests: 248/248 tests passing
+  - ✅ Zero errors in codebase
+- Next immediate action:
+  - Continue monitoring test coverage as features evolve
