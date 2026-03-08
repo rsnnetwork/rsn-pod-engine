@@ -87,6 +87,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 | T-021 | Auto-route Vercel frontend to local tunnel | Completed | Copilot | runtimeEndpoints.ts with Vercel-host detection |
 | T-022 | Same-tab login redirect after magic-link verify | Completed | Copilot | Cross-tab localStorage sync + auto-redirect |
 | T-023 | Auto-close verify tab after magic-link auth | Completed | Copilot | window.close() with navigate fallback |
+| T-024 | Add dev-mode magic link display for testing | Completed | Copilot | Shows clickable devLink in amber box when backend returns it |
 
 ---
 
@@ -415,6 +416,26 @@ Purpose: Persistent execution history and current state, independent of chat mem
   - navigate() called on same line as window.close() — if close succeeds, navigate never fires; if close is blocked, navigate acts as fallback.
 - Next immediate action:
   - Push and test on Vercel. Address Resend email sender limitation (domain verification needed to send to non-owner emails).
+
+### 2026-03-09 02:15 - Entry 016
+- Task ID: T-024
+- Task Title: Add dev-mode magic link display for testing
+- Status: Completed
+- What changed:
+  - Added temporary dev-mode feature to display the magic link directly on the "Check your email" screen when the backend returns `devLink` in the response.
+  - LoginPage now captures `devLink` from the API response and stores it in state.
+  - When `devLink` exists, displays an amber "DEV MODE — Direct Link" box with a clickable link labeled "Click here to verify".
+  - This allows testing with any email address without needing to verify a custom domain in Resend or check email inboxes.
+  - The devLink only appears when the backend is running with `NODE_ENV=development`, which returns the link in the API response.
+- Files touched:
+  - client/src/features/auth/LoginPage.tsx
+  - progress.md
+- Decisions made:
+  - Keep this as a temporary dev-only feature for testing. It will naturally disappear when the backend switches to `NODE_ENV=production` (no devLink in response).
+  - Styled with amber colors to clearly distinguish it as a development tool, not a production feature.
+  - Combined with T-022 and T-023, the full flow now works: click devLink → verify tab opens → auto-closes → original tab redirects.
+- Next immediate action:
+  - Test on live Vercel deployment. User can now enter any email, get the devLink displayed, click it, and log in instantly.
 
 ---
 
