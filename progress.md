@@ -102,6 +102,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 | T-036 | Comprehensive codebase audit & hardening | Completed | Copilot | Security fixes, race conditions, DB migration, reconnection, recap emails |
 | T-037 | Stabilize tests + flush DB to empty | Completed | Copilot | Updated mocks for hardened routes/transactions; reset+migrate DB without seeding |
 | T-038 | Make invite optional for Google OAuth signup | Completed | Copilot | Aligned Google OAuth with magic link flow — new users can sign up without invite |
+| T-039 | Fix Google OAuth first_name null crash | Completed | Copilot | Added first_name/last_name to Google OAuth INSERT, extract given_name/family_name from Google profile, sanitize error redirect |
 
 ---
 
@@ -2136,3 +2137,26 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
 - Commit: 7fd096c pushed to origin/main
 - Next immediate action:
   - Wait for Render auto-deploy, then test Google login with a new user (no invite code)
+
+### 2026-03-09 23:15 - Entry T-039
+- Task ID: T-039
+- Task Title: Fix Google OAuth first_name null crash (error 23502)
+- Status: Completed
+- What changed:
+  - **Root cause**: `findOrCreateGoogleUser()` INSERT was missing `first_name` and `last_name` columns. DB schema has `first_name VARCHAR(100) NOT NULL`, so inserting without it caused PostgreSQL error 23502.
+  - `identity.service.ts`: Updated `findOrCreateGoogleUser()` to accept `givenName`/`familyName` from Google profile, extract first/last name from `given_name`, `family_name`, or by splitting `name`, and include them in the INSERT statement.
+  - `auth.ts`: Updated Google callback to pass `given_name` and `family_name` from Google userinfo API. Fixed error redirect to always use `google_auth_failed` instead of leaking raw DB error codes (like `23502`) to the frontend URL.
+  - **Not related to Resend**: Google OAuth does not use email/Resend at all — it redirects with JWT tokens directly.
+- Files touched:
+  - server/src/services/identity/identity.service.ts
+  - server/src/routes/auth.ts
+  - progress.md
+- Decisions made:
+  - Extract `given_name`/`family_name` from Google OAuth v2 userinfo endpoint
+  - Fall back to splitting `name` field if given/family not provided
+  - Default to empty string if no name data at all (matches magic link behavior)
+  - Never expose raw PostgreSQL error codes in frontend redirect URLs
+- Test Results:
+  - ✅ 74/74 tests passing (identity + routes)
+- Next immediate action:
+  - Push to GitHub, Render auto-deploys, then test Google login with alihammza143@gmail.com

@@ -210,7 +210,7 @@ router.get(
       const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
         headers: { Authorization: `Bearer ${tokenData.access_token}` },
       });
-      const profile = await userInfoRes.json() as { email: string; name?: string; picture?: string };
+      const profile = await userInfoRes.json() as { email: string; name?: string; given_name?: string; family_name?: string; picture?: string };
 
       if (!profile.email) {
         res.redirect(`${config.clientUrl}/login?error=google_auth_failed`);
@@ -219,7 +219,7 @@ router.get(
 
       // Find or create user and generate JWT pair
       const tokens = await identityService.findOrCreateGoogleUser(
-        { email: profile.email, name: profile.name, picture: profile.picture },
+        { email: profile.email, name: profile.name, givenName: profile.given_name, familyName: profile.family_name, picture: profile.picture },
         inviteCode || undefined,
       );
 
@@ -230,9 +230,8 @@ router.get(
       });
       res.redirect(`${config.clientUrl}/auth/verify?${params}`);
     } catch (err: any) {
-      const errorCode = err?.code || 'google_auth_failed';
       logger.error({ err }, 'Google OAuth callback error');
-      res.redirect(`${config.clientUrl}/login?error=${encodeURIComponent(errorCode)}`);
+      res.redirect(`${config.clientUrl}/login?error=google_auth_failed`);
     }
   }
 );

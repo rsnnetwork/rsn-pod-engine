@@ -361,7 +361,7 @@ export async function refreshAccessToken(refreshToken: string): Promise<AuthToke
 // ─── Google OAuth ───────────────────────────────────────────────────────────
 
 export async function findOrCreateGoogleUser(
-  profile: { email: string; name?: string; picture?: string },
+  profile: { email: string; name?: string; givenName?: string; familyName?: string; picture?: string },
   inviteCode?: string,
 ): Promise<AuthTokenPair> {
   const normalizedEmail = profile.email.toLowerCase().trim();
@@ -397,10 +397,12 @@ export async function findOrCreateGoogleUser(
     // Create the user
     const id = uuid();
     const displayName = profile.name || normalizedEmail.split('@')[0];
+    const firstName = profile.givenName || (profile.name ? profile.name.split(' ')[0] : '');
+    const lastName = profile.familyName || (profile.name && profile.name.includes(' ') ? profile.name.split(' ').slice(1).join(' ') : '');
     await query(
-      `INSERT INTO users (id, email, display_name, avatar_url, role, status, email_verified)
-       VALUES ($1, $2, $3, $4, 'member', 'active', TRUE)`,
-      [id, normalizedEmail, displayName, profile.picture || null]
+      `INSERT INTO users (id, email, display_name, first_name, last_name, avatar_url, role, status, email_verified)
+       VALUES ($1, $2, $3, $4, $5, $6, 'member', 'active', TRUE)`,
+      [id, normalizedEmail, displayName, firstName, lastName, profile.picture || null]
     );
     await query(`INSERT INTO user_subscriptions (user_id, plan, status) VALUES ($1, 'free', 'active')`, [id]);
     await query(`INSERT INTO user_entitlements (user_id) VALUES ($1)`, [id]);
