@@ -13,7 +13,7 @@ interface AuthState {
   setTokensAndLoad: (accessToken: string, refreshToken: string) => Promise<void>;
   checkSession: () => Promise<void>;
   refreshAccessToken: () => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   setTokens: (access: string, refresh: string) => void;
 }
 
@@ -69,9 +69,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ accessToken, refreshToken: newRefresh });
   },
 
-  logout: () => {
+  logout: async () => {
+    // Prevent multiple simultaneous logout calls
+    const current = get();
+    if (!current.accessToken && !current.refreshToken) return;
+    
     // Call logout endpoint before clearing tokens so the auth header is still present
-    api.post('/auth/logout').catch(() => {});
+    // Use catch to silently ignore errors (e.g., if token is already invalid)
+    await api.post('/auth/logout').catch(() => {});
+    
     localStorage.removeItem('rsn_access');
     localStorage.removeItem('rsn_refresh');
     set({ user: null, accessToken: null, refreshToken: null, isAuthenticated: false, isLoading: false });

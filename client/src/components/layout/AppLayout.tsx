@@ -11,7 +11,10 @@ export default function AppLayout() {
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  const handleLogout = () => { logout(); navigate('/login'); };
+  const handleLogout = async () => { 
+    await logout(); 
+    navigate('/login'); 
+  };
 
   const mainLinks = [
     { to: '/', icon: LayoutDashboard, label: 'Dashboard' },

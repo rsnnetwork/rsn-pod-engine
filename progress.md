@@ -103,6 +103,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 | T-037 | Stabilize tests + flush DB to empty | Completed | Copilot | Updated mocks for hardened routes/transactions; reset+migrate DB without seeding |
 | T-038 | Make invite optional for Google OAuth signup | Completed | Copilot | Aligned Google OAuth with magic link flow — new users can sign up without invite |
 | T-039 | Fix Google OAuth first_name null crash | Completed | Copilot | Added first_name/last_name to Google OAuth INSERT, extract given_name/family_name from Google profile, sanitize error redirect |
+| T-040 | Fix logout 401 error loop | Completed | Copilot | Made logout async, skip retry for /auth/logout, prevent multiple simultaneous logout calls |
 
 ---
 
@@ -2160,3 +2161,27 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - ✅ 74/74 tests passing (identity + routes)
 - Next immediate action:
   - Push to GitHub, Render auto-deploys, then test Google login with alihammza143@gmail.com
+
+### 2026-03-09 23:25 - Entry T-040
+- Task ID: T-040
+- Task Title: Fix logout 401 error loop in frontend console
+- Status: Completed
+- What changed:
+  - **Root cause**: When user clicked logout, the old sync logout() cleared tokens immediately after firing the `/auth/logout` API call. If that call got a 401 or any pending requests existed, the API interceptor would try to refresh the token, fail (because tokens were already cleared), and call logout() again, creating a 401 loop visible in console and Render logs.
+  - `api.ts`: Updated response interceptor to skip auto-refresh retry logic for `/auth/logout` and `/auth/refresh` endpoints to prevent 401 loops. These endpoints should never trigger auto-retry.
+  - `authStore.ts`: Changed `logout()` from sync to async, added check to prevent multiple simultaneous logout calls (early return if tokens already cleared), and await the `/auth/logout` API call before clearing tokens so the auth header is present.
+  - `AppLayout.tsx`: Updated `handleLogout` to async to properly await the logout call.
+  - `authStore.ts` (type): Updated AuthState interface to reflect `logout: () => Promise<void>`
+- Files touched:
+  - client/src/lib/api.ts
+  - client/src/stores/authStore.ts
+  - client/src/components/layout/AppLayout.tsx
+  - progress.md
+- Decisions made:
+  - Logout must complete the API call before clearing tokens (await pattern)
+  - API interceptor should never retry logout or refresh requests to avoid loops
+  - Prevent duplicate logout calls with early-return guard
+- Test Results:
+  - ✅ No TypeScript errors
+- Next immediate action:
+  - Push to GitHub, test logout flow in browser (no 401 spam in console)

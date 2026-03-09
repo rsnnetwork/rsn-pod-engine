@@ -22,7 +22,11 @@ api.interceptors.response.use(
   (res) => res,
   async (err) => {
     const original = err.config;
-    if (err.response?.status === 401 && !original._retry) {
+    const isLogoutRequest = original?.url?.includes('/auth/logout');
+    const isRefreshRequest = original?.url?.includes('/auth/refresh');
+    
+    // Don't retry logout or refresh requests to avoid 401 loops
+    if (err.response?.status === 401 && !original._retry && !isLogoutRequest && !isRefreshRequest) {
       original._retry = true;
       try {
         await useAuthStore.getState().refreshAccessToken();
