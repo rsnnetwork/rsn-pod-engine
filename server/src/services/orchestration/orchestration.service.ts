@@ -168,6 +168,22 @@ async function handleJoinSession(
     const count = await sessionService.getParticipantCount(data.sessionId);
     io.to(sessionRoom(data.sessionId)).emit('participant:count', { count });
 
+    // If in lobby phase and session has a lobby room, send lobby token for video mosaic
+    if (session.lobbyRoomId && (session.status === SessionStatus.LOBBY_OPEN || (activeSession && activeSession.status === SessionStatus.LOBBY_OPEN))) {
+      try {
+        const displayName = (socket.data as any)?.displayName || 'User';
+        const lobbyToken = await videoService.issueJoinToken(userId, session.lobbyRoomId, displayName);
+        const { config: appConfig } = await import('../../config');
+        socket.emit('lobby:token', {
+          token: lobbyToken.token,
+          livekitUrl: appConfig.livekit.host,
+          roomId: session.lobbyRoomId,
+        });
+      } catch (tokenErr) {
+        logger.warn({ err: tokenErr }, 'Failed to issue lobby token');
+      }
+    }
+
     // If session is mid-round, restore user's match assignment
     if (activeSession && activeSession.status === SessionStatus.ROUND_ACTIVE) {
       const matches = await matchingService.getMatchesByRound(
@@ -370,6 +386,17 @@ async function handleHostStart(
     // Transition to lobby
     await sessionService.updateSessionStatus(data.sessionId, SessionStatus.LOBBY_OPEN);
     await query('UPDATE sessions SET started_at = NOW() WHERE id = $1', [data.sessionId]);
+
+    // Create LiveKit lobby room for the video mosaic
+    try {
+      const lobbyRoom = await videoService.createLobbyRoom(data.sessionId);
+      await sessionService.updateSessionStatus(data.sessionId, SessionStatus.LOBBY_OPEN, {
+        lobbyRoomId: lobbyRoom.roomId,
+      });
+      logger.info({ sessionId: data.sessionId, lobbyRoom: lobbyRoom.roomId }, 'Lobby LiveKit room created');
+    } catch (lobbyErr) {
+      logger.warn({ err: lobbyErr, sessionId: data.sessionId }, 'Failed to create lobby LiveKit room — continuing without video mosaic');
+    }
 
     const config = typeof session.config === 'string'
       ? JSON.parse(session.config as unknown as string)

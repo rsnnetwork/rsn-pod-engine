@@ -131,6 +131,11 @@ export default function useSessionSocket(sessionId: string) {
     // ── Host broadcasts ──
     socket.on('host:broadcast', (data: any) => store.addBroadcast(data.message));
 
+    // ── Lobby video ──
+    socket.on('lobby:token', (data: any) => {
+      store.setLobbyToken(data.token, data.livekitUrl, data.roomId);
+    });
+
     socket.on('host:participant_removed', () => {
       store.setError('You have been removed from this session.');
       store.setPhase('complete');

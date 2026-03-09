@@ -1,102 +1,220 @@
 import { useNavigate } from 'react-router-dom';
-import { Sparkles, Users, Zap, Shield, ArrowRight, Video, Star, ChevronRight } from 'lucide-react';
-import { Button } from '@/components/ui/Button';
+import { ArrowRight } from 'lucide-react';
+
+const TICKER_ITEMS = [
+  'Fast, focused, and human',
+  'Raw and Real',
+  '8 minutes with people who get it',
+  'No small talk',
+  'Built for founders',
+  'Quality over quantity',
+];
+
+const REASONS = [
+  { quote: '"I made more real connections in 8 minutes than I have in 8 months of networking events."', author: 'Founder, SaaS startup' },
+  { quote: '"It felt like meeting an old friend for the first time."', author: 'Agency owner' },
+  { quote: '"Finally — networking that doesn\'t feel like networking."', author: 'Executive coach' },
+];
+
+const WHO_ITS_FOR = [
+  { title: 'Founders', desc: 'who want real connections, not pitch competitions' },
+  { title: 'Leaders', desc: 'looking for peers who understand the weight of decisions' },
+  { title: 'Operators', desc: 'tired of networking events that waste their time' },
+];
+
+const HOW_STEPS = [
+  { num: '01', title: 'Sign up', desc: 'Create your profile in under a minute. No password needed.' },
+  { num: '02', title: 'Get matched', desc: 'Our engine pairs you 1-on-1 with another member via live video.' },
+  { num: '03', title: 'Connect', desc: '8 minutes of real conversation. Rate, match, follow up.' },
+];
+
+const AVOID = ['Awkward mixers', 'Cold outreach', 'Small talk with strangers', 'Events that waste your time'];
+const LEAVE_WITH = ['Clarity', 'Energy', 'Real connections', 'People who get it'];
 
 export default function LandingPage() {
   const navigate = useNavigate();
+  const tickerText = TICKER_ITEMS.map(t => `${t}  ·  `).join('');
 
   return (
-    <div className="min-h-screen bg-surface-950 text-surface-200">
+    <div className="light-theme min-h-screen font-display">
+      {/* Ticker bar */}
+      <div className="bg-[#1a1a2e] text-white/80 py-2 ticker-wrap">
+        <div className="ticker-content text-xs tracking-[0.2em] uppercase font-medium">
+          <span>{tickerText}</span>
+          <span>{tickerText}</span>
+        </div>
+      </div>
+
       {/* Nav */}
-      <header className="border-b border-surface-800/50 backdrop-blur-sm sticky top-0 z-50 bg-surface-950/80">
+      <header className="sticky top-0 z-50 bg-white/90 backdrop-blur-md border-b border-gray-100">
         <div className="max-w-6xl mx-auto flex items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-2">
-            <Sparkles className="h-6 w-6 text-brand-400" />
-            <span className="text-xl font-bold bg-gradient-to-r from-brand-400 to-purple-400 bg-clip-text text-transparent">RSN</span>
-          </div>
-          <nav className="hidden md:flex items-center gap-6 text-sm text-surface-400">
-            <button onClick={() => navigate('/how-it-works')} className="hover:text-surface-200 transition-colors">How It Works</button>
-            <button onClick={() => navigate('/login')} className="hover:text-surface-200 transition-colors">Login</button>
-            <Button size="sm" onClick={() => navigate('/login')}>
-              Get Started <ArrowRight className="h-4 w-4 ml-1" />
-            </Button>
+          <button onClick={() => navigate('/welcome')} className="text-2xl font-extrabold tracking-tight text-[#1a1a2e]">
+            RSN
+          </button>
+          <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-gray-600">
+            <button onClick={() => navigate('/how-it-works')} className="hover:text-[#1a1a2e] transition-colors">The Format</button>
+            <button onClick={() => navigate('/reasons')} className="hover:text-[#1a1a2e] transition-colors">Reasons To Join</button>
+            <button onClick={() => navigate('/about')} className="hover:text-[#1a1a2e] transition-colors">About</button>
+            <button onClick={() => navigate('/login')} className="hover:text-[#1a1a2e] transition-colors">Login</button>
+            <button onClick={() => navigate('/login')} className="bg-[#1a1a2e] text-white px-5 py-2.5 rounded-full text-sm font-semibold hover:bg-[#2d2d4e] transition-colors">
+              Get Started <ArrowRight className="h-4 w-4 inline ml-1" />
+            </button>
           </nav>
-          <Button size="sm" className="md:hidden" onClick={() => navigate('/login')}>Sign In</Button>
+          <button onClick={() => navigate('/login')} className="md:hidden bg-[#1a1a2e] text-white px-4 py-2 rounded-full text-sm font-semibold">
+            Join
+          </button>
         </div>
       </header>
 
       {/* Hero */}
-      <section className="relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-b from-brand-500/5 to-transparent" />
-        <div className="max-w-4xl mx-auto text-center px-6 pt-24 pb-20 relative">
-          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-brand-500/10 border border-brand-500/20 text-brand-400 text-sm mb-8 animate-fade-in">
-            <Sparkles className="h-4 w-4" /> Real-time peer networking
-          </div>
-          <h1 className="text-4xl md:text-6xl font-bold text-surface-50 leading-tight mb-6 animate-fade-in-up">
-            Meet founders who <br />
-            <span className="bg-gradient-to-r from-brand-400 to-purple-400 bg-clip-text text-transparent">actually get it</span>
+      <section className="py-24 md:py-36 text-center px-6">
+        <div className="max-w-4xl mx-auto">
+          <h1 className="text-5xl md:text-7xl font-extrabold text-[#1a1a2e] leading-[1.05] tracking-tight animate-fade-in-up">
+            8 MINUTES<br />WITH PEOPLE<br />WHO GET IT
           </h1>
-          <p className="text-lg text-surface-400 max-w-2xl mx-auto mb-10 animate-fade-in-up" style={{ animationDelay: '0.1s' }}>
-            RSN connects you with curated peers through fast, structured 1-on-1 video sessions.
-            No more awkward mixers — just meaningful conversations with the right people.
+          <p className="mt-8 text-lg md:text-xl text-gray-500 max-w-2xl mx-auto leading-relaxed animate-fade-in-up" style={{ animationDelay: '0.1s' }}>
+            Speed networking, stripped back to what actually works.<br />
+            Real conversations. Real people. No fluff.
           </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center animate-fade-in-up" style={{ animationDelay: '0.2s' }}>
-            <Button onClick={() => navigate('/login')} className="btn-glow text-base px-8 py-3">
-              Join RSN <ArrowRight className="h-5 w-5 ml-2" />
-            </Button>
-            <Button variant="secondary" onClick={() => navigate('/how-it-works')} className="text-base px-8 py-3">
-              How It Works <ChevronRight className="h-5 w-5 ml-1" />
-            </Button>
+          <div className="mt-10 animate-fade-in-up" style={{ animationDelay: '0.2s' }}>
+            <button onClick={() => navigate('/login')} className="bg-[#1a1a2e] text-white px-10 py-4 rounded-full text-lg font-semibold hover:bg-[#2d2d4e] transition-all hover:scale-[1.02] shadow-lg">
+              Request to Join <ArrowRight className="h-5 w-5 inline ml-2" />
+            </button>
           </div>
         </div>
       </section>
 
-      {/* Features */}
-      <section className="max-w-5xl mx-auto px-6 py-20">
-        <h2 className="text-2xl md:text-3xl font-bold text-surface-100 text-center mb-4">Why RSN?</h2>
-        <p className="text-surface-400 text-center mb-12 max-w-xl mx-auto">Purpose-built for founders, operators, and professionals who value their time.</p>
-        <div className="grid md:grid-cols-3 gap-6">
-          {[
-            { icon: Video, title: 'Live 1-on-1 Video', desc: 'Structured speed-networking rounds with built-in video calls. No downloads needed.' },
-            { icon: Users, title: 'Curated Pods', desc: 'Join invite-only pods of like-minded professionals. Quality over quantity.' },
-            { icon: Zap, title: 'Smart Matching', desc: 'Our engine pairs you optimally each round — no repeated matches, no wasted time.' },
-            { icon: Star, title: 'Rate & Remember', desc: 'Rate every conversation. See who wants to meet again. Build real connections.' },
-            { icon: Shield, title: 'Invite-Only Access', desc: 'Grow the network through trusted referrals. Each invite unlocks new features.' },
-            { icon: Sparkles, title: 'Pod-First Design', desc: 'Organize around topics, industries, or interests. Host sessions on your terms.' },
-          ].map((f, i) => (
-            <div key={i} className="rounded-xl border border-surface-800 bg-surface-900/40 p-6 hover:border-surface-700 transition-colors">
-              <div className="h-10 w-10 rounded-lg bg-brand-500/10 flex items-center justify-center mb-4">
-                <f.icon className="h-5 w-5 text-brand-400" />
+      {/* Divider line */}
+      <div className="max-w-6xl mx-auto px-6"><hr className="border-gray-200" /></div>
+
+      {/* Reasons to Join */}
+      <section className="py-20 md:py-28 px-6">
+        <div className="max-w-5xl mx-auto">
+          <h2 className="text-3xl md:text-4xl font-extrabold text-[#1a1a2e] text-center mb-16 tracking-tight">Reasons to Join</h2>
+          <div className="grid md:grid-cols-3 gap-8">
+            {REASONS.map((r, i) => (
+              <div key={i} className="text-center animate-fade-in-up" style={{ animationDelay: `${i * 0.1}s` }}>
+                <p className="text-lg md:text-xl text-gray-700 italic leading-relaxed mb-4">{r.quote}</p>
+                <p className="text-sm text-gray-400 font-medium">— {r.author}</p>
               </div>
-              <h3 className="font-semibold text-surface-100 mb-2">{f.title}</h3>
-              <p className="text-sm text-surface-400">{f.desc}</p>
-            </div>
-          ))}
+            ))}
+          </div>
+          <div className="text-center mt-12">
+            <button onClick={() => navigate('/reasons')} className="text-sm font-semibold text-[#1a1a2e] border-b-2 border-[#1a1a2e] pb-0.5 hover:opacity-70 transition-opacity">
+              See all reasons →
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <div className="max-w-6xl mx-auto px-6"><hr className="border-gray-200" /></div>
+
+      {/* Who It's For */}
+      <section className="py-20 md:py-28 px-6">
+        <div className="max-w-4xl mx-auto text-center">
+          <h2 className="text-3xl md:text-4xl font-extrabold text-[#1a1a2e] mb-16 tracking-tight">Who It's For</h2>
+          <div className="grid md:grid-cols-3 gap-10">
+            {WHO_ITS_FOR.map((w, i) => (
+              <div key={i} className="animate-fade-in-up" style={{ animationDelay: `${i * 0.1}s` }}>
+                <h3 className="text-xl font-bold text-[#1a1a2e] mb-2">{w.title}</h3>
+                <p className="text-gray-500">{w.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <div className="max-w-6xl mx-auto px-6"><hr className="border-gray-200" /></div>
+
+      {/* How It Works */}
+      <section className="py-20 md:py-28 px-6">
+        <div className="max-w-4xl mx-auto">
+          <h2 className="text-3xl md:text-4xl font-extrabold text-[#1a1a2e] text-center mb-16 tracking-tight">How It Works</h2>
+          <div className="space-y-12">
+            {HOW_STEPS.map((s, i) => (
+              <div key={i} className="flex items-start gap-6 animate-fade-in-up" style={{ animationDelay: `${i * 0.1}s` }}>
+                <span className="text-4xl md:text-5xl font-extrabold text-gray-200 leading-none">{s.num}</span>
+                <div>
+                  <h3 className="text-xl font-bold text-[#1a1a2e] mb-1">{s.title}</h3>
+                  <p className="text-gray-500">{s.desc}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <div className="max-w-6xl mx-auto px-6"><hr className="border-gray-200" /></div>
+
+      {/* Why It Matters */}
+      <section className="py-20 md:py-28 px-6 text-center">
+        <div className="max-w-3xl mx-auto">
+          <h2 className="text-3xl md:text-4xl font-extrabold text-[#1a1a2e] mb-8 tracking-tight">Why It Matters</h2>
+          <p className="text-lg md:text-xl text-gray-500 leading-relaxed">
+            Most networking is performative. We built RSN to be the opposite —
+            a space where you show up as yourself, meet someone real, and leave with
+            something that actually matters. No pitch decks. No forced follow-ups.
+            Just people connecting.
+          </p>
+        </div>
+      </section>
+
+      <div className="max-w-6xl mx-auto px-6"><hr className="border-gray-200" /></div>
+
+      {/* What You Avoid / What You Leave With */}
+      <section className="py-20 md:py-28 px-6">
+        <div className="max-w-5xl mx-auto grid md:grid-cols-2 gap-16">
+          <div className="animate-fade-in-up">
+            <h3 className="text-2xl font-extrabold text-[#1a1a2e] mb-6 tracking-tight">What You Avoid</h3>
+            <ul className="space-y-3">
+              {AVOID.map((item, i) => (
+                <li key={i} className="flex items-center gap-3 text-gray-500">
+                  <span className="w-2 h-2 rounded-full bg-red-400 flex-shrink-0" />
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div className="animate-fade-in-up" style={{ animationDelay: '0.15s' }}>
+            <h3 className="text-2xl font-extrabold text-[#1a1a2e] mb-6 tracking-tight">What You Leave With</h3>
+            <ul className="space-y-3">
+              {LEAVE_WITH.map((item, i) => (
+                <li key={i} className="flex items-center gap-3 text-gray-500">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 flex-shrink-0" />
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
         </div>
       </section>
 
       {/* CTA */}
-      <section className="bg-gradient-to-b from-surface-950 to-surface-900 py-20 border-t border-surface-800/50">
-        <div className="max-w-2xl mx-auto text-center px-6">
-          <h2 className="text-2xl md:text-3xl font-bold text-surface-100 mb-4">Ready to start networking?</h2>
-          <p className="text-surface-400 mb-8">Sign up with your email — no credit card, no noise. Just conversations that matter.</p>
-          <Button onClick={() => navigate('/login')} className="btn-glow text-base px-8 py-3">
-            Get Started Free <ArrowRight className="h-5 w-5 ml-2" />
-          </Button>
+      <section className="py-24 md:py-32 text-center px-6 bg-[#1a1a2e]">
+        <div className="max-w-3xl mx-auto">
+          <h2 className="text-3xl md:text-5xl font-extrabold text-white mb-6 tracking-tight">Join Raw Speed Networking</h2>
+          <p className="text-gray-400 text-lg mb-10">Sign up, get matched, connect. It's that simple.</p>
+          <button onClick={() => navigate('/login')} className="bg-white text-[#1a1a2e] px-10 py-4 rounded-full text-lg font-semibold hover:bg-gray-100 transition-all hover:scale-[1.02]">
+            Get Started <ArrowRight className="h-5 w-5 inline ml-2" />
+          </button>
         </div>
       </section>
 
       {/* Footer */}
-      <footer className="border-t border-surface-800/50 py-8">
-        <div className="max-w-6xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-surface-500">
-          <div className="flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-brand-400" />
-            <span>RSN Platform</span>
+      <footer className="bg-white border-t border-gray-100 py-10">
+        <div className="max-w-6xl mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-6">
+          <div className="flex items-center gap-3">
+            <span className="text-xl font-extrabold text-[#1a1a2e]">RSN</span>
+            <span className="text-sm text-gray-400">© {new Date().getFullYear()}</span>
           </div>
-          <div className="flex gap-6">
-            <button onClick={() => navigate('/how-it-works')} className="hover:text-surface-300 transition-colors">How It Works</button>
-            <button onClick={() => navigate('/login')} className="hover:text-surface-300 transition-colors">Sign In</button>
-          </div>
+          <nav className="flex items-center gap-6 text-sm text-gray-500">
+            <button onClick={() => navigate('/how-it-works')} className="hover:text-[#1a1a2e] transition-colors">The Format</button>
+            <button onClick={() => navigate('/reasons')} className="hover:text-[#1a1a2e] transition-colors">Reasons</button>
+            <button onClick={() => navigate('/about')} className="hover:text-[#1a1a2e] transition-colors">About</button>
+            <button onClick={() => navigate('/login')} className="hover:text-[#1a1a2e] transition-colors">Sign In</button>
+          </nav>
+          {/* Sheep easter egg */}
+          <img src="/rsn-sheep.png" alt="" className="h-8 w-8 opacity-30 hover:opacity-100 transition-opacity cursor-pointer" title="🐑" />
         </div>
       </footer>
     </div>

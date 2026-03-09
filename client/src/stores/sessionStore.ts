@@ -37,6 +37,9 @@ interface SessionLiveState {
   liveKitToken: string | null;
   livekitUrl: string | null;
   currentRoomId: string | null;
+  lobbyToken: string | null;
+  lobbyUrl: string | null;
+  lobbyRoomId: string | null;
 
   setPhase: (phase: SessionPhase) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
@@ -55,6 +58,7 @@ interface SessionLiveState {
   setByeRound: (v: boolean) => void;
   setLiveKitToken: (token: string | null, url?: string | null) => void;
   setRoomId: (roomId: string | null) => void;
+  setLobbyToken: (token: string | null, url?: string | null, roomId?: string | null) => void;
   reset: () => void;
 }
 
@@ -75,6 +79,9 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   liveKitToken: null,
   livekitUrl: null,
   currentRoomId: null,
+  lobbyToken: null,
+  lobbyUrl: null,
+  lobbyRoomId: null,
 
   setPhase: (phase) => set({ phase }),
   setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
@@ -97,10 +104,12 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   setByeRound: (isByeRound) => set({ isByeRound }),
   setLiveKitToken: (liveKitToken, livekitUrl = null) => set({ liveKitToken, livekitUrl }),
   setRoomId: (currentRoomId) => set({ currentRoomId }),
+  setLobbyToken: (lobbyToken, lobbyUrl = null, lobbyRoomId = null) => set({ lobbyToken, lobbyUrl, lobbyRoomId }),
   reset: () => set({
     phase: 'lobby', connectionStatus: 'connecting', transitionStatus: null, totalRounds: 5,
     participants: [], currentMatch: null, currentMatchId: null,
     timerSeconds: 0, currentRound: 1, broadcasts: [], error: null,
     isReconnecting: false, isByeRound: false, liveKitToken: null, livekitUrl: null, currentRoomId: null,
+    lobbyToken: null, lobbyUrl: null, lobbyRoomId: null,
   }),
 }));

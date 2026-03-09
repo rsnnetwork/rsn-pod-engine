@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Users, Calendar, LogOut, Shield, UserMinus, Eye, Radio, Pencil, Trash2, UserPlus } from 'lucide-react';
+import { ArrowLeft, Users, Calendar, LogOut, Shield, UserMinus, Eye, Radio, Pencil, Trash2, UserPlus, Lock, Mail, Copy, Check, UserCheck, X, Clock } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Avatar from '@/components/ui/Avatar';
@@ -18,8 +18,10 @@ const podTypeLabels: Record<string, string> = {
   duo: 'Duo', trio: 'Trio', kvartet: 'Kvartet',
   band: 'Band', orchestra: 'Orchestra', concert: 'Concert',
 };
-const visibilityIcons: Record<string, string> = {
-  private: 'Private', invite_only: 'Invite Only', public: 'Public',
+const visibilityLabels: Record<string, { label: string; icon: typeof Eye; color: string }> = {
+  public: { label: 'Public', icon: Eye, color: 'text-emerald-400' },
+  invite_only: { label: 'Invite Only', icon: Shield, color: 'text-amber-400' },
+  private: { label: 'Private', icon: Lock, color: 'text-red-400' },
 };
 
 export default function PodDetailPage() {
@@ -31,6 +33,10 @@ export default function PodDetailPage() {
   const [editOpen, setEditOpen] = useState(false);
   const [editName, setEditName] = useState('');
   const [editDescription, setEditDescription] = useState('');
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteLink, setInviteLink] = useState('');
+  const [copied, setCopied] = useState(false);
 
   const { data: pod, isLoading } = useQuery({
     queryKey: ['pod', podId],
@@ -107,6 +113,53 @@ export default function PodDetailPage() {
     onError: (err: any) => addToast(err?.response?.data?.error?.message || 'Failed to join pod', 'error'),
   });
 
+  const requestJoinMutation = useMutation({
+    mutationFn: () => api.post(`/pods/${podId}/request-join`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['pod', podId] });
+      qc.invalidateQueries({ queryKey: ['pod-members', podId] });
+      addToast('Join request sent! The pod director will review it.', 'success');
+    },
+    onError: (err: any) => addToast(err?.response?.data?.error?.message || 'Failed to request join', 'error'),
+  });
+
+  const approveMutation = useMutation({
+    mutationFn: (userId: string) => api.post(`/pods/${podId}/members/${userId}/approve`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['pod-members', podId] });
+      addToast('Member approved!', 'success');
+    },
+    onError: () => addToast('Failed to approve member', 'error'),
+  });
+
+  const rejectMutation = useMutation({
+    mutationFn: (userId: string) => api.post(`/pods/${podId}/members/${userId}/reject`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['pod-members', podId] });
+      addToast('Request rejected', 'success');
+    },
+    onError: () => addToast('Failed to reject request', 'error'),
+  });
+
+  const createInviteMutation = useMutation({
+    mutationFn: (data: { inviteeEmail?: string }) => api.post('/invites', {
+      type: 'pod',
+      podId,
+      inviteeEmail: data.inviteeEmail || undefined,
+      maxUses: 10,
+      expiresInHours: 168,
+    }),
+    onSuccess: (res) => {
+      const code = res.data.data?.code;
+      if (code) {
+        const link = `${window.location.origin}/invite/${code}`;
+        setInviteLink(link);
+      }
+      addToast('Pod invite created!', 'success');
+    },
+    onError: () => addToast('Failed to create invite', 'error'),
+  });
+
   const openEdit = () => {
     setEditName(pod?.name || '');
     setEditDescription(pod?.description || '');
@@ -117,9 +170,21 @@ export default function PodDetailPage() {
   if (!pod) return <p className="text-surface-400 text-center py-20">Pod not found</p>;
 
   const membersList = members || pod.members || [];
+  const activeMembers = membersList.filter((m: any) => m.status === 'active');
+  const pendingMembers = membersList.filter((m: any) => m.status === 'pending_approval');
   const myMembership = membersList.find((m: any) => m.userId === user?.id);
-  const isMember = !!myMembership || !!pod.memberRole;
+  const isMember = myMembership?.status === 'active' || !!pod.memberRole;
+  const isPending = myMembership?.status === 'pending_approval';
   const isDirector = myMembership?.role === 'director' || pod.memberRole === 'director' || user?.role === 'admin';
+  const isDirectorOrHost = isDirector || myMembership?.role === 'host' || pod.memberRole === 'host';
+  const vis = visibilityLabels[pod.visibility] || visibilityLabels.public;
+  const VisIcon = vis.icon;
+
+  const handleCopyLink = () => {
+    navigator.clipboard.writeText(inviteLink);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -140,7 +205,7 @@ export default function PodDetailPage() {
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mt-4 pt-4 border-t border-surface-800">
           <div className="flex items-center gap-2 text-sm text-surface-400">
             <Users className="h-4 w-4 text-brand-400" />
-            <span>{membersList.length} members</span>
+            <span>{activeMembers.length} members</span>
           </div>
           <div className="flex items-center gap-2 text-sm text-surface-400">
             <Calendar className="h-4 w-4 text-brand-400" />
@@ -150,9 +215,9 @@ export default function PodDetailPage() {
             <Radio className="h-4 w-4 text-brand-400" />
             <span>{podTypeLabels[pod.podType] || pod.podType}</span>
           </div>
-          <div className="flex items-center gap-2 text-sm text-surface-400">
-            <Eye className="h-4 w-4 text-brand-400" />
-            <span>{visibilityIcons[pod.visibility] || pod.visibility}</span>
+          <div className="flex items-center gap-2 text-sm">
+            <VisIcon className={`h-4 w-4 ${vis.color}`} />
+            <span className={vis.color}>{vis.label}</span>
           </div>
           <div className="flex items-center gap-2 text-sm text-surface-400">
             <Calendar className="h-4 w-4 text-brand-400" />
@@ -169,12 +234,31 @@ export default function PodDetailPage() {
       </Card>
 
       {/* Actions */}
-      {!isMember && pod.status === 'active' ? (
+      {!isMember && !isPending && pod.status === 'active' ? (
         <div className="flex flex-wrap gap-3 animate-fade-in-up stagger-1">
-          <Button onClick={() => joinMutation.mutate()} isLoading={joinMutation.isPending} className="btn-glow">
-            <UserPlus className="h-4 w-4 mr-2" /> Join Pod
-          </Button>
-          <p className="text-sm text-surface-500 self-center">Join this pod to participate in sessions and meet members.</p>
+          {pod.visibility === 'public' ? (
+            <>
+              <Button onClick={() => joinMutation.mutate()} isLoading={joinMutation.isPending} className="btn-glow">
+                <UserPlus className="h-4 w-4 mr-2" /> Join Pod
+              </Button>
+              <p className="text-sm text-surface-500 self-center">Join this pod to participate in sessions and meet members.</p>
+            </>
+          ) : (
+            <>
+              <Button onClick={() => requestJoinMutation.mutate()} isLoading={requestJoinMutation.isPending} className="btn-glow">
+                <UserPlus className="h-4 w-4 mr-2" /> Request to Join
+              </Button>
+              <p className="text-sm text-surface-500 self-center">
+                {pod.visibility === 'invite_only' ? 'This pod is invite-only. Request to join or use an invite link.' : 'This is a private pod. Request access from the director.'}
+              </p>
+            </>
+          )}
+        </div>
+      ) : isPending ? (
+        <div className="flex items-center gap-3 animate-fade-in-up stagger-1">
+          <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 text-sm">
+            <Clock className="h-4 w-4" /> Join request pending — waiting for director approval
+          </div>
         </div>
       ) : pod.status === 'archived' ? (
         <div className="flex flex-wrap gap-3 animate-fade-in-up stagger-1">
@@ -187,9 +271,16 @@ export default function PodDetailPage() {
         </div>
       ) : pod.status !== 'archived' && (
         <div className="flex flex-wrap gap-3 animate-fade-in-up stagger-1">
-          <Button onClick={() => navigate(`/sessions/new?podId=${podId}`)} className="btn-glow">
-            <Calendar className="h-4 w-4 mr-2" /> Schedule Session
-          </Button>
+          {isMember && (
+            <Button onClick={() => navigate(`/sessions/new?podId=${podId}`)} className="btn-glow">
+              <Calendar className="h-4 w-4 mr-2" /> Schedule Session
+            </Button>
+          )}
+          {isDirectorOrHost && (
+            <Button variant="secondary" onClick={() => { setInviteLink(''); setInviteEmail(''); setInviteOpen(true); }}>
+              <Mail className="h-4 w-4 mr-2" /> Invite Members
+            </Button>
+          )}
           {isDirector && (
             <Button variant="secondary" onClick={openEdit}>
               <Pencil className="h-4 w-4 mr-2" /> Edit Pod
@@ -226,13 +317,71 @@ export default function PodDetailPage() {
         </form>
       </Modal>
 
+      {/* Invite Members Modal */}
+      <Modal open={inviteOpen} onClose={() => setInviteOpen(false)} title="Invite Members to Pod">
+        <div className="space-y-4">
+          <p className="text-sm text-surface-400">Create an invite link that people can use to join this pod.</p>
+          <Input label="Invitee Email (optional)" type="email" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} placeholder="user@example.com" />
+          <Button onClick={() => createInviteMutation.mutate({ inviteeEmail: inviteEmail || undefined })} isLoading={createInviteMutation.isPending} className="w-full">
+            Generate Invite Link
+          </Button>
+          {inviteLink && (
+            <div className="mt-4 space-y-2">
+              <label className="block text-sm font-medium text-surface-300">Share this link:</label>
+              <div className="flex gap-2">
+                <input
+                  readOnly value={inviteLink}
+                  className="flex-1 rounded-lg bg-surface-800 border border-surface-700 px-3 py-2 text-surface-200 text-sm"
+                />
+                <Button variant="secondary" onClick={handleCopyLink}>
+                  {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
+              <p className="text-xs text-surface-500">This link allows up to 10 uses and expires in 7 days.</p>
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      {/* Pending Join Requests */}
+      {isDirectorOrHost && pendingMembers.length > 0 && (
+        <div className="animate-fade-in-up stagger-2">
+          <h2 className="text-lg font-semibold text-amber-400 mb-3 flex items-center gap-2">
+            <Clock className="h-5 w-5" /> Pending Requests ({pendingMembers.length})
+          </h2>
+          <div className="grid gap-2">
+            {pendingMembers.map((m: any) => (
+              <Card key={m.userId || m.id} className="!p-4 border-amber-500/20">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Avatar name={m.displayName || m.email || 'User'} size="sm" />
+                    <div>
+                      <p className="text-sm font-medium text-surface-200">{m.displayName || m.email || 'User'}</p>
+                      <p className="text-xs text-amber-400">Pending approval</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => approveMutation.mutate(m.userId)} className="p-1.5 rounded-lg text-emerald-400 hover:bg-emerald-500/10 transition-all" title="Approve">
+                      <UserCheck className="h-4 w-4" />
+                    </button>
+                    <button onClick={() => rejectMutation.mutate(m.userId)} className="p-1.5 rounded-lg text-red-400 hover:bg-red-500/10 transition-all" title="Reject">
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Members */}
       <div className="animate-fade-in-up stagger-2">
         <h2 className="text-lg font-semibold text-surface-100 mb-3 flex items-center gap-2">
-          <Users className="h-5 w-5 text-brand-400" /> Members ({membersList.length})
+          <Users className="h-5 w-5 text-brand-400" /> Members ({activeMembers.length})
         </h2>
         <div className="grid gap-2">
-          {membersList.map((m: any) => (
+          {activeMembers.map((m: any) => (
             <Card key={m.userId || m.id} className="!p-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -261,7 +410,7 @@ export default function PodDetailPage() {
               </div>
             </Card>
           ))}
-          {membersList.length === 0 && (
+          {activeMembers.length === 0 && (
             <Card>
               <p className="text-surface-500 text-sm text-center py-4">No members yet</p>
             </Card>

@@ -96,6 +96,12 @@ describe('Session Service', () => {
     it('should register a participant for a session', async () => {
       // getSessionById — SELECT sessions
       mockQuery.mockResolvedValueOnce({ rows: [{ ...mockSession, status: SessionStatus.LOBBY_OPEN }], rowCount: 1 });
+      // Get pod visibility
+      mockQuery.mockResolvedValueOnce({ rows: [{ visibility: 'public' }], rowCount: 1 });
+      // Check membership
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      // Auto-add to pod (public pod, not a member) - INSERT INTO pod_members
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
       // COUNT participants (capacity check)
       mockQuery.mockResolvedValueOnce({ rows: [{ count: '5' }], rowCount: 1 });
       // Check existing registration — none found
@@ -165,6 +171,10 @@ describe('Session Service', () => {
     it('should throw ConflictError when already registered', async () => {
       // getSessionById
       mockQuery.mockResolvedValueOnce({ rows: [{ ...mockSession, status: SessionStatus.LOBBY_OPEN }], rowCount: 1 });
+      // Get pod visibility
+      mockQuery.mockResolvedValueOnce({ rows: [{ visibility: 'public' }], rowCount: 1 });
+      // Check membership
+      mockQuery.mockResolvedValueOnce({ rows: [{ role: 'member' }], rowCount: 1 });
       // COUNT participants (capacity check)
       mockQuery.mockResolvedValueOnce({ rows: [{ count: '2' }], rowCount: 1 });
       // Check existing — already registered
@@ -178,6 +188,10 @@ describe('Session Service', () => {
       const reregistered = { id: 'sp-1', sessionId: 'session-123', userId: 'user-left', status: 'registered' };
       // getSessionById
       mockQuery.mockResolvedValueOnce({ rows: [{ ...mockSession, status: SessionStatus.LOBBY_OPEN }], rowCount: 1 });
+      // Get pod visibility
+      mockQuery.mockResolvedValueOnce({ rows: [{ visibility: 'public' }], rowCount: 1 });
+      // Check membership
+      mockQuery.mockResolvedValueOnce({ rows: [{ role: 'member' }], rowCount: 1 });
       // COUNT participants
       mockQuery.mockResolvedValueOnce({ rows: [{ count: '2' }], rowCount: 1 });
       // Check existing — left status

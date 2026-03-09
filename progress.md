@@ -41,10 +41,10 @@ Purpose: Persistent execution history and current state, independent of chat mem
 ## Current Phase Snapshot
 
 - Active Phase: Implementation
-- Active Milestone: **Milestone 2 (In Progress) — Deployment Polish & UX Status Messages**
-- Current Session: Login cleanup, invite UX, live session status messages
+- Active Milestone: **Milestone 2 (In Progress) — Pod Visibility, Lobby Mosaic & rsn.network Design**
+- Current Session: Pod visibility enforcement, session invites, lobby video mosaic, late-join UX, rsn.network design integration
 - Overall Build Status: All Features Complete, Zero Errors, All Tests Passing
-- Last Updated: March 9, 2026
+- Last Updated: March 10, 2026
 
 ---
 
@@ -105,6 +105,12 @@ Purpose: Persistent execution history and current state, independent of chat mem
 | T-039 | Fix Google OAuth first_name null crash | Completed | Copilot | Added first_name/last_name to Google OAuth INSERT, extract given_name/family_name from Google profile, sanitize error redirect |
 | T-040 | Fix logout 401 error loop | Completed | Copilot | Made logout async, skip retry for /auth/logout, prevent multiple simultaneous logout calls |
 | T-041 | Open pods/sessions visibility + self-join + host auto-register | Completed | Copilot | All pods/sessions visible to all users, self-join pods, host auto-registered on session create |
+| T-042 | Pod visibility enforcement (private/invite-only/public) | Completed | Copilot | Browse filter, joinPod, requestToJoin, approveMember, rejectMember, PodDetailPage invite modal + pending members |
+| T-043 | Session access enforcement tied to pod visibility | Completed | Copilot | registerParticipant checks pod visibility, listSessions hides private pod sessions |
+| T-044 | Session invite UI from SessionDetailPage | Completed | Copilot | Invite modal, link generation + copy, host-only button |
+| T-045 | Late-join UX for active sessions | Completed | Copilot | Warning banner, Join Late button, expanded joinable states |
+| T-046 | Lobby mosaic with LiveKit video grid | Completed | Copilot | Backend lobby room creation + token issuance, frontend video mosaic with responsive grid |
+| T-047 | rsn.network design integration | Completed | Copilot | Light theme, DM Sans font, landing page redesign, HowItWorks, About, Reasons pages, routes, sheep easter egg |
 
 ---
 
@@ -2216,3 +2222,146 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - ✅ 277/277 tests passing
 - Next immediate action:
   - Push to GitHub, Render + Vercel auto-deploy, test browse and join flows
+
+---
+
+### 2026-03-10 00:00 - Entry T-042
+- Task ID: T-042
+- Task Title: Pod visibility enforcement (private/invite-only/public)
+- Status: Completed
+- What changed:
+  - **Backend pod service**: `listPods()` now filters private pods from browse results. Added `joinPod()` (public pods only), `requestToJoin()` (creates `pending_approval` membership), `approveMember()`, `rejectMember()` for director/host approval workflow.
+  - **Backend pod routes**: `GET /pods` passes browse flag, `POST /pods/:id/join` uses joinPod, added `/request-join`, `/members/:userId/approve`, `/members/:userId/reject` endpoints.
+  - **Session service**: `registerParticipant` checks pod visibility — auto-join for public pods, rejects non-members for private/invite-only. `listSessions` browse mode hides sessions belonging to private pods.
+  - **Frontend PodsPage**: Added visibility badges (Lock for private, Shield for invite-only, Eye for public) in browse mode.
+  - **Frontend PodDetailPage**: Visibility-aware actions (Join for public, Request to Join for invite-only/private with pending state), Invite Members button for directors/hosts, Invite modal with email input and link generation + copy, Pending members section with approve/reject buttons, Active members section with role badges.
+- Files touched:
+  - server/src/services/pod/pod.service.ts
+  - server/src/routes/pods.ts
+  - server/src/services/session/session.service.ts
+  - client/src/features/pods/PodsPage.tsx
+  - client/src/features/pods/PodDetailPage.tsx
+- Decisions made:
+  - Three-tier visibility: public (open join), invite-only (request + approve), private (invite-only, hidden from browse)
+  - Directors and hosts can approve/reject join requests
+  - Invite modal generates shareable invite links
+- Next immediate action:
+  - Implement session invite UI and late-join UX
+
+---
+
+### 2026-03-10 00:15 - Entry T-043
+- Task ID: T-043
+- Task Title: Session access enforcement tied to pod visibility
+- Status: Completed
+- What changed:
+  - `registerParticipant` in session service now checks the parent pod's visibility before allowing registration. Public pods allow anyone; private/invite-only pods require existing membership.
+  - `listSessions` in browse mode filters out sessions belonging to private pods so non-members don't see them.
+- Files touched:
+  - server/src/services/session/session.service.ts
+- Decisions made:
+  - Session access inherits from pod visibility — no separate session-level visibility setting needed
+  - Private pod sessions are completely hidden from browse results
+- Next immediate action:
+  - Build session invite feature
+
+---
+
+### 2026-03-10 00:30 - Entry T-044
+- Task ID: T-044
+- Task Title: Session invite UI from SessionDetailPage
+- Status: Completed
+- What changed:
+  - Added "Invite to Session" button for hosts on SessionDetailPage (visible for non-completed sessions).
+  - Invite modal with email input, createSessionInviteMutation, generated shareable link with copy-to-clipboard functionality.
+  - New state variables: inviteOpen, inviteEmail, inviteLink, copied.
+  - Imports added: Mail, Copy, Check, AlertTriangle icons.
+- Files touched:
+  - client/src/features/sessions/SessionDetailPage.tsx
+- Decisions made:
+  - Only hosts can invite to sessions (not regular members)
+  - Invite link generated via existing invite API with type='session'
+- Next immediate action:
+  - Add late-join UX for active sessions
+
+---
+
+### 2026-03-10 00:45 - Entry T-045
+- Task ID: T-045
+- Task Title: Late-join UX for active sessions
+- Status: Completed
+- What changed:
+  - Late-join warning banner with AlertTriangle icon for sessions that are already in progress, showing current round info.
+  - Register button changes to "Join Late" for active sessions.
+  - "Join Live" button text for active sessions (instead of generic "Join Session").
+  - Expanded joinable session states to include: scheduled, lobby_open, round_active, round_rating, round_transition.
+  - Unregister button only available for scheduled sessions (can't unregister once session is active).
+- Files touched:
+  - client/src/features/sessions/SessionDetailPage.tsx
+- Decisions made:
+  - Late-joiners see a clear warning about joining mid-session
+  - No restrictions on late-join once registered — users can enter at any phase
+  - Unregister disabled for active sessions to prevent disruption
+- Next immediate action:
+  - Build lobby mosaic with LiveKit video
+
+---
+
+### 2026-03-10 01:00 - Entry T-046
+- Task ID: T-046
+- Task Title: Lobby mosaic with LiveKit video grid
+- Status: Completed
+- What changed:
+  - **Backend orchestration**: `handleHostStart` now creates a LiveKit lobby room via `videoService.createLobbyRoom()` and stores the room ID. `handleJoinSession` issues lobby tokens to participants in lobby phase via `videoService.issueJoinToken()`, emitting `lobby:token` event with token, livekitUrl (from config.livekit.host), and roomId.
+  - **Shared events**: Added `'lobby:token': (data: { token: string; livekitUrl: string; roomId: string }) => void` to ServerToClientEvents.
+  - **Session store**: Added lobbyToken, lobbyUrl, lobbyRoomId fields with setLobbyToken method. Reset clears lobby fields.
+  - **Socket hook**: Added lobby:token handler calling store.setLobbyToken.
+  - **Lobby.tsx rewrite**: LobbyMosaic component with LiveKit video grid — responsive columns that auto-scale based on participant count (1→1col, 2→2col, 3-4→2col, 5-6→3col, 7+→4col, 13+→5col). VideoTrack rendering, participant name overlays, avatar fallback for users without camera. LobbyStatusOverlay for contextual messages (bye round, between rounds, starting, waiting). Fallback text-only lobby when no LiveKit token available.
+- Files touched:
+  - server/src/services/orchestration/orchestration.service.ts
+  - shared/src/types/events.ts
+  - client/src/stores/sessionStore.ts
+  - client/src/hooks/useSessionSocket.ts
+  - client/src/features/live/Lobby.tsx
+- Decisions made:
+  - Lobby video room is separate from match rooms — created once per session on host start
+  - Lobby tokens issued on join, not on session create (lazy token issuance)
+  - Responsive grid scales with participant count for optimal video tile sizing
+  - Fallback text lobby if LiveKit credentials not configured
+- Next immediate action:
+  - Integrate rsn.network design system and public pages
+
+---
+
+### 2026-03-10 01:30 - Entry T-047
+- Task ID: T-047
+- Task Title: rsn.network design integration — light theme, public pages, routes
+- Status: Completed
+- What changed:
+  - **Design system**: Updated tailwind.config.js with `display` font family (DM Sans), marquee/marquee-reverse animations. Updated index.css with `.light-theme` class, `.lt-*` utility classes for light theme, `.ticker-wrap`/`.ticker-content` for scrolling marquee. Added DM Sans Google Font in index.html.
+  - **Landing page rewrite**: Light theme (white bg, [#1a1a2e] text), scrolling ticker bar, clean nav (The Format | Reasons To Join | About | Login | Get Started), hero "8 MINUTES WITH PEOPLE WHO GET IT", sections: Reasons to Join (3 quotes), Who It's For, How It Works (01/02/03), Why It Matters, What You Avoid / What You Leave With, dark CTA section, footer with sheep easter egg.
+  - **HowItWorks page rewrite**: Light theme, numbered steps 01-05, clean typography, title changed to "The Format", consistent nav/footer.
+  - **About page (new)**: RSN mission text, founders Stefan Avivson & Michael Kainatsky, light theme, consistent nav/footer.
+  - **Reasons page (new)**: 25 testimonial quotes from rsn.network/reasons, light theme, consistent nav/footer.
+  - **Routes**: Added /about and /reasons routes in App.tsx with lazy-loaded imports.
+  - **Sheep easter egg**: Copied sheep image to client/public/rsn-sheep.png, referenced in landing page footer.
+- Files touched:
+  - client/tailwind.config.js
+  - client/src/index.css
+  - client/index.html
+  - client/src/features/public/LandingPage.tsx
+  - client/src/features/public/HowItWorksPage.tsx
+  - client/src/features/public/AboutPage.tsx (new)
+  - client/src/features/public/ReasonsPage.tsx (new)
+  - client/src/App.tsx
+  - client/public/rsn-sheep.png (new)
+- Decisions made:
+  - Public/marketing pages use light theme (white bg, dark text, DM Sans) matching rsn.network
+  - Authenticated app pages retain dark theme
+  - Ticker bar uses CSS marquee animation for continuous scroll
+  - Consistent nav/footer across all public pages
+  - All rsn.network content faithfully reproduced (quotes, sections, founders)
+- Test Results:
+  - ✅ Zero TypeScript errors across all modified files
+- Next immediate action:
+  - Push to GitHub, deploy, verify all public pages render correctly

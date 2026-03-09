@@ -5,6 +5,8 @@ import AppLayout from '@/components/layout/AppLayout';
 import ProtectedRoute from '@/components/layout/ProtectedRoute';
 import LandingPage from '@/features/public/LandingPage';
 import HowItWorksPage from '@/features/public/HowItWorksPage';
+import AboutPage from '@/features/public/AboutPage';
+import ReasonsPage from '@/features/public/ReasonsPage';
 import LoginPage from '@/features/auth/LoginPage';
 import VerifyPage from '@/features/auth/VerifyPage';
 import HomePage from '@/features/home/HomePage';
@@ -38,6 +40,8 @@ export default function App() {
       {/* Public pages */}
       <Route path="/welcome" element={<LandingPage />} />
       <Route path="/how-it-works" element={<HowItWorksPage />} />
+      <Route path="/about" element={<AboutPage />} />
+      <Route path="/reasons" element={<ReasonsPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/auth/verify" element={<VerifyPage />} />
       <Route path="/invite/:code" element={<InviteAcceptPage />} />

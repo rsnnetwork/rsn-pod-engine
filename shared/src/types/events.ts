@@ -27,6 +27,9 @@ export interface ServerToClientEvents {
   'host:broadcast': (data: { message: string; sentAt: string }) => void;
   'host:participant_removed': (data: { userId: string; reason: string }) => void;
 
+  // Lobby video
+  'lobby:token': (data: { token: string; livekitUrl: string; roomId: string }) => void;
+
   // Timer sync
   'timer:sync': (data: { segmentType: string; secondsRemaining: number; totalSeconds: number }) => void;
 

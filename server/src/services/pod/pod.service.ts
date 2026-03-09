@@ -114,6 +114,7 @@ export async function listPods(params: {
   status?: PodStatus;
   page?: number;
   pageSize?: number;
+  browse?: boolean;
 }): Promise<{ pods: Pod[]; total: number }> {
   const page = params.page || 1;
   const pageSize = Math.min(params.pageSize || 20, 100);
@@ -127,6 +128,11 @@ export async function listPods(params: {
     whereClause += ` AND p.id IN (SELECT pod_id FROM pod_members WHERE user_id = $${paramIdx} AND status = 'active')`;
     values.push(params.userId);
     paramIdx++;
+  }
+
+  // When browsing, only show public and invite_only pods (hide private)
+  if (params.browse) {
+    whereClause += ` AND p.visibility IN ('public', 'invite_only')`;
   }
 
   if (params.podType) {
@@ -303,6 +309,76 @@ export async function reactivatePod(podId: string, userId: string): Promise<Pod>
   );
   logger.info({ podId, userId }, 'Pod reactivated');
   return result.rows[0];
+}
+
+export async function joinPod(podId: string, userId: string): Promise<PodMember> {
+  const pod = await getPodById(podId);
+
+  if (pod.status !== PodStatus.ACTIVE) {
+    throw new ForbiddenError('This pod is not currently active');
+  }
+
+  // Enforce visibility rules
+  if (pod.visibility === PodVisibility.PRIVATE) {
+    throw new ForbiddenError('This is a private pod. You need an invite to join.');
+  }
+
+  if (pod.visibility === PodVisibility.INVITE_ONLY) {
+    throw new ForbiddenError('This pod is invite-only. Request to join or use an invite link.');
+  }
+
+  // Public pods: allow self-join
+  return addMember(podId, userId, PodMemberRole.MEMBER);
+}
+
+export async function requestToJoin(podId: string, userId: string): Promise<PodMember> {
+  const pod = await getPodById(podId);
+
+  if (pod.status !== PodStatus.ACTIVE) {
+    throw new ForbiddenError('This pod is not currently active');
+  }
+
+  if (pod.visibility === PodVisibility.PUBLIC) {
+    // Public pods: just join directly
+    return addMember(podId, userId, PodMemberRole.MEMBER);
+  }
+
+  // For invite-only and private: create pending_approval membership
+  return addMember(podId, userId, PodMemberRole.MEMBER, PodMemberStatus.PENDING_APPROVAL);
+}
+
+export async function approveMember(podId: string, memberUserId: string, approvedBy: string): Promise<PodMember> {
+  await requirePodRole(podId, approvedBy, [PodMemberRole.DIRECTOR, PodMemberRole.HOST]);
+
+  const result = await query<PodMember>(
+    `UPDATE pod_members SET status = 'active', joined_at = NOW()
+     WHERE pod_id = $1 AND user_id = $2 AND status = 'pending_approval'
+     RETURNING ${MEMBER_COLUMNS}`,
+    [podId, memberUserId]
+  );
+
+  if (result.rows.length === 0) {
+    throw new NotFoundError('PendingMember');
+  }
+
+  logger.info({ podId, memberUserId, approvedBy }, 'Pod join request approved');
+  return result.rows[0];
+}
+
+export async function rejectMember(podId: string, memberUserId: string, rejectedBy: string): Promise<void> {
+  await requirePodRole(podId, rejectedBy, [PodMemberRole.DIRECTOR, PodMemberRole.HOST]);
+
+  const result = await query(
+    `UPDATE pod_members SET status = 'removed', left_at = NOW()
+     WHERE pod_id = $1 AND user_id = $2 AND status = 'pending_approval'`,
+    [podId, memberUserId]
+  );
+
+  if (result.rowCount === 0) {
+    throw new NotFoundError('PendingMember');
+  }
+
+  logger.info({ podId, memberUserId, rejectedBy }, 'Pod join request rejected');
 }
 
 export async function getSessionCountForPod(podId: string): Promise<number> {

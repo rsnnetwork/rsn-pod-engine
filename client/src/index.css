@@ -48,6 +48,35 @@
   .btn-glow {
     @apply shadow-lg shadow-brand-500/20 hover:shadow-brand-500/40 transition-all duration-300;
   }
+
+  /* Light theme for public / marketing pages */
+  .light-theme {
+    --tw-bg-opacity: 1;
+    background-color: #ffffff;
+    color: #1a1a2e;
+  }
+  .light-theme .lt-bg { background-color: #ffffff; }
+  .light-theme .lt-bg-alt { background-color: #f9fafb; }
+  .light-theme .lt-bg-accent { background-color: #f3f4f6; }
+  .light-theme .lt-text { color: #1a1a2e; }
+  .light-theme .lt-text-secondary { color: #4b5563; }
+  .light-theme .lt-text-muted { color: #9ca3af; }
+  .light-theme .lt-border { border-color: #e5e7eb; }
+
+  /* Scrolling ticker */
+  .ticker-wrap {
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .ticker-content {
+    display: inline-block;
+    animation: marquee 30s linear infinite;
+  }
+  .ticker-content span {
+    display: inline-block;
+    padding: 0 2rem;
+  }
+
   .stagger-1 { animation-delay: 0.05s; }
   .stagger-2 { animation-delay: 0.1s; }
   .stagger-3 { animation-delay: 0.15s; }

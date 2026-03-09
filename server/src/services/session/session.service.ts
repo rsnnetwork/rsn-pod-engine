@@ -160,6 +160,9 @@ export async function listSessions(params: {
     whereClause += ` AND s.pod_id IN (SELECT pod_id FROM pod_members WHERE user_id = $${paramIdx} AND status = 'active')`;
     values.push(params.userId);
     paramIdx++;
+  } else {
+    // Browsing all sessions: hide sessions from private pods
+    whereClause += ` AND s.pod_id IN (SELECT id FROM pods WHERE visibility IN ('public', 'invite_only'))`;
   }
 
   if (params.status) {
@@ -212,6 +215,35 @@ export async function registerParticipant(sessionId: string, userId: string): Pr
     const closedStatuses: SessionStatus[] = [SessionStatus.COMPLETED, SessionStatus.CANCELLED];
     if (closedStatuses.includes(session.status)) {
       throw new AppError(400, 'SESSION_NOT_SCHEDULED', 'Session is no longer accepting participants');
+    }
+
+    // Enforce pod visibility rules for session access
+    const podResult = await client.query(
+      `SELECT visibility FROM pods WHERE id = $1`,
+      [session.podId]
+    );
+    if (podResult.rows.length > 0) {
+      const podVisibility = podResult.rows[0].visibility;
+      const memberResult = await client.query(
+        `SELECT role FROM pod_members WHERE pod_id = $1 AND user_id = $2 AND status = 'active'`,
+        [session.podId, userId]
+      );
+      const isMember = memberResult.rows.length > 0;
+
+      if (podVisibility === 'public' && !isMember) {
+        // Auto-add to pod when registering for a session in a public pod
+        try {
+          await client.query(
+            `INSERT INTO pod_members (pod_id, user_id, role, status) VALUES ($1, $2, 'member', 'active')
+             ON CONFLICT (pod_id, user_id) DO UPDATE SET status = 'active', joined_at = NOW(), left_at = NULL`,
+            [session.podId, userId]
+          );
+        } catch { /* ignore if already member */ }
+      } else if (podVisibility === 'invite_only' && !isMember) {
+        throw new ForbiddenError('You must be a pod member to register for sessions in an invite-only pod');
+      } else if (podVisibility === 'private' && !isMember) {
+        throw new ForbiddenError('You must be a pod member to register for sessions in a private pod');
+      }
     }
 
     // Check capacity

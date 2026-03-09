@@ -64,9 +64,10 @@ router.get(
     try {
       const { podType, status, page, pageSize, browse } = req.query as Record<string, string>;
 
-      // browse=true shows all active pods; otherwise scope to user's own pods (admins always see all)
-      const userId = browse === 'true' || req.user!.role === UserRole.ADMIN ? undefined : req.user!.userId;
-      const effectiveStatus = browse === 'true' ? 'active' : status;
+      // browse=true shows all active non-private pods; otherwise scope to user's own pods (admins always see all)
+      const isBrowse = browse === 'true';
+      const userId = isBrowse || req.user!.role === UserRole.ADMIN ? undefined : req.user!.userId;
+      const effectiveStatus = isBrowse ? 'active' : status;
 
       const result = await podService.listPods({
         userId,
@@ -74,6 +75,7 @@ router.get(
         status: effectiveStatus as any,
         page: page ? parseInt(page) : undefined,
         pageSize: pageSize ? parseInt(pageSize) : undefined,
+        browse: isBrowse,
       });
 
       const pg = parseInt(page || '1');
@@ -227,13 +229,73 @@ router.post(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const member = await podService.addMember(
+      const member = await podService.joinPod(
         req.params.id,
-        req.user!.userId,
-        PodMemberRole.MEMBER
+        req.user!.userId
       );
       const response: ApiResponse = { success: true, data: member };
       res.status(201).json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /pods/:id/request-join ────────────────────────────────────────────
+
+router.post(
+  '/:id/request-join',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const member = await podService.requestToJoin(
+        req.params.id,
+        req.user!.userId
+      );
+      const response: ApiResponse = { success: true, data: member };
+      res.status(201).json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /pods/:id/members/:userId/approve ─────────────────────────────────
+
+router.post(
+  '/:id/members/:userId/approve',
+  authenticate,
+  auditMiddleware('approve_pod_member', 'pod'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const member = await podService.approveMember(
+        req.params.id,
+        req.params.userId,
+        req.user!.userId
+      );
+      const response: ApiResponse = { success: true, data: member };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /pods/:id/members/:userId/reject ──────────────────────────────────
+
+router.post(
+  '/:id/members/:userId/reject',
+  authenticate,
+  auditMiddleware('reject_pod_member', 'pod'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await podService.rejectMember(
+        req.params.id,
+        req.params.userId,
+        req.user!.userId
+      );
+      const response: ApiResponse = { success: true, data: { message: 'Request rejected' } };
+      res.json(response);
     } catch (err) {
       next(err);
     }

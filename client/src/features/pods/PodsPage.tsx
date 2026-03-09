@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Users, Plus, Globe } from 'lucide-react';
+import { Users, Plus, Globe, Lock, Shield, Eye } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -11,6 +11,12 @@ import api from '@/lib/api';
 import CreatePodModal from './CreatePodModal';
 
 type PodFilter = 'all' | 'active' | 'archived' | 'browse';
+
+const visibilityConfig: Record<string, { label: string; icon: typeof Eye; variant: 'default' | 'warning' | 'info' }> = {
+  public: { label: 'Public', icon: Eye, variant: 'info' },
+  invite_only: { label: 'Invite Only', icon: Shield, variant: 'warning' },
+  private: { label: 'Private', icon: Lock, variant: 'default' },
+};
 
 export default function PodsPage() {
   const navigate = useNavigate();
@@ -55,26 +61,35 @@ export default function PodsPage() {
         />
       ) : (
         <div className="grid gap-4 animate-fade-in-up">
-          {data.map((pod: any) => (
-            <Card key={pod.id} hover onClick={() => navigate(`/pods/${pod.id}`)} className="card-hover">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="h-10 w-10 rounded-xl bg-brand-500/20 flex items-center justify-center">
-                    <Users className="h-5 w-5 text-brand-400" />
+          {data.map((pod: any) => {
+            const vis = visibilityConfig[pod.visibility] || visibilityConfig.public;
+            const VisIcon = vis.icon;
+            return (
+              <Card key={pod.id} hover onClick={() => navigate(`/pods/${pod.id}`)} className="card-hover">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="h-10 w-10 rounded-xl bg-brand-500/20 flex items-center justify-center">
+                      <Users className="h-5 w-5 text-brand-400" />
+                    </div>
+                    <div>
+                      <p className="font-medium text-surface-200">{pod.name}</p>
+                      <p className="text-sm text-surface-400">
+                        {pod.memberCount || 0} members · {pod.sessionCount || 0} sessions · {pod.description || 'General'}
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="font-medium text-surface-200">{pod.name}</p>
-                    <p className="text-sm text-surface-400">
-                      {pod.memberCount || 0} members · {pod.sessionCount || 0} sessions · {pod.description || 'General'}
-                    </p>
+                  <div className="flex items-center gap-2">
+                    {filter === 'browse' && (
+                      <Badge variant={vis.variant} className="text-xs flex items-center gap-1">
+                        <VisIcon className="h-3 w-3" /> {vis.label}
+                      </Badge>
+                    )}
+                    <Badge variant={pod.status === 'active' ? 'success' : pod.status === 'archived' ? 'default' : 'warning'}>{pod.status}</Badge>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant={pod.status === 'active' ? 'success' : pod.status === 'archived' ? 'default' : 'warning'}>{pod.status}</Badge>
-                </div>
-              </div>
-            </Card>
-          ))}
+              </Card>
+            );
+          })}
         </div>
       )}
 
