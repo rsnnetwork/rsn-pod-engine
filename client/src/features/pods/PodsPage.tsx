@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Users, Plus } from 'lucide-react';
+import { Users, Plus, Globe } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -10,7 +10,7 @@ import { PageLoader } from '@/components/ui/Spinner';
 import api from '@/lib/api';
 import CreatePodModal from './CreatePodModal';
 
-type PodFilter = 'all' | 'active' | 'archived';
+type PodFilter = 'all' | 'active' | 'archived' | 'browse';
 
 export default function PodsPage() {
   const navigate = useNavigate();
@@ -20,6 +20,9 @@ export default function PodsPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['my-pods', filter],
     queryFn: () => {
+      if (filter === 'browse') {
+        return api.get('/pods?browse=true').then(r => r.data.data ?? []);
+      }
       const params = filter === 'all' ? '' : `?status=${filter}`;
       return api.get(`/pods${params}`).then(r => r.data.data ?? []);
     },
@@ -30,15 +33,15 @@ export default function PodsPage() {
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <div className="flex items-center justify-between animate-fade-in">
-        <h1 className="text-2xl font-bold text-surface-100">My Pods</h1>
+        <h1 className="text-2xl font-bold text-surface-100">{filter === 'browse' ? 'Browse Pods' : 'My Pods'}</h1>
         <Button onClick={() => setShowCreate(true)} className="btn-glow"><Plus className="h-4 w-4 mr-2" /> Create Pod</Button>
       </div>
 
       {/* Filters */}
       <div className="flex gap-2 animate-fade-in-up">
-        {(['all', 'active', 'archived'] as PodFilter[]).map(f => (
+        {(['all', 'active', 'archived', 'browse'] as PodFilter[]).map(f => (
           <Button key={f} variant={filter === f ? 'primary' : 'ghost'} size="sm" onClick={() => setFilter(f)}>
-            {f.charAt(0).toUpperCase() + f.slice(1)}
+            {f === 'browse' ? <><Globe className="h-3.5 w-3.5 mr-1" /> Browse All</> : f.charAt(0).toUpperCase() + f.slice(1)}
           </Button>
         ))}
       </div>
@@ -46,8 +49,8 @@ export default function PodsPage() {
       {(!data || data.length === 0) ? (
         <EmptyState
           icon={<Users className="h-8 w-8" />}
-          title={filter === 'archived' ? 'No archived pods' : 'No pods yet'}
-          description={filter === 'archived' ? 'Archived pods will appear here.' : 'Create your first pod to start networking with peers.'}
+          title={filter === 'archived' ? 'No archived pods' : filter === 'browse' ? 'No active pods found' : 'No pods yet'}
+          description={filter === 'archived' ? 'Archived pods will appear here.' : filter === 'browse' ? 'Be the first to create a pod!' : 'Create your first pod or browse existing ones.'}
           action={filter !== 'archived' ? <Button onClick={() => setShowCreate(true)}>Create Pod</Button> : undefined}
         />
       ) : (
@@ -66,7 +69,9 @@ export default function PodsPage() {
                     </p>
                   </div>
                 </div>
-                <Badge variant={pod.status === 'active' ? 'success' : pod.status === 'archived' ? 'default' : 'warning'}>{pod.status}</Badge>
+                <div className="flex items-center gap-2">
+                  <Badge variant={pod.status === 'active' ? 'success' : pod.status === 'archived' ? 'default' : 'warning'}>{pod.status}</Badge>
+                </div>
               </div>
             </Card>
           ))}

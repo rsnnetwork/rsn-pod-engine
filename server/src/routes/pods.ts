@@ -62,15 +62,16 @@ router.get(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { podType, status, page, pageSize } = req.query as Record<string, string>;
+      const { podType, status, page, pageSize, browse } = req.query as Record<string, string>;
 
-      // Regular users only see their own pods; admins see all
-      const userId = req.user!.role === UserRole.ADMIN ? undefined : req.user!.userId;
+      // browse=true shows all active pods; otherwise scope to user's own pods (admins always see all)
+      const userId = browse === 'true' || req.user!.role === UserRole.ADMIN ? undefined : req.user!.userId;
+      const effectiveStatus = browse === 'true' ? 'active' : status;
 
       const result = await podService.listPods({
         userId,
         podType: podType as PodType | undefined,
-        status: status as any,
+        status: effectiveStatus as any,
         page: page ? parseInt(page) : undefined,
         pageSize: pageSize ? parseInt(pageSize) : undefined,
       });
@@ -107,15 +108,13 @@ router.get(
     try {
       const pod = await podService.getPodById(req.params.id);
 
-      // Verify user is a pod member or admin
+      // Include user's membership role (null if not a member)
+      let memberRole = null;
       if (req.user!.role !== UserRole.ADMIN) {
-        const memberRole = await podService.getMemberRole(req.params.id, req.user!.userId);
-        if (!memberRole) {
-          throw new ForbiddenError('You do not have access to this pod');
-        }
+        memberRole = await podService.getMemberRole(req.params.id, req.user!.userId);
       }
 
-      const response: ApiResponse = { success: true, data: pod };
+      const response: ApiResponse = { success: true, data: { ...pod, memberRole } };
       res.json(response);
     } catch (err) {
       next(err);
@@ -165,14 +164,6 @@ router.get(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Verify user is a pod member or admin
-      if (req.user!.role !== UserRole.ADMIN) {
-        const memberRole = await podService.getMemberRole(req.params.id, req.user!.userId);
-        if (!memberRole) {
-          throw new ForbiddenError('You do not have access to this pod');
-        }
-      }
-
       const members = await podService.getPodMembers(req.params.id);
       const response: ApiResponse = { success: true, data: members };
       res.json(response);
@@ -223,6 +214,26 @@ router.delete(
       await podService.removeMember(req.params.id, req.params.userId, req.user!.userId);
       const response: ApiResponse = { success: true, data: { message: 'Member removed' } };
       res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /pods/:id/join ────────────────────────────────────────────────────
+
+router.post(
+  '/:id/join',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const member = await podService.addMember(
+        req.params.id,
+        req.user!.userId,
+        PodMemberRole.MEMBER
+      );
+      const response: ApiResponse = { success: true, data: member };
+      res.status(201).json(response);
     } catch (err) {
       next(err);
     }

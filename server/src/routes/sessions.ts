@@ -56,6 +56,12 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const session = await sessionService.createSession(req.user!.userId, req.body);
+
+      // Auto-register the host as a participant
+      try {
+        await sessionService.registerParticipant(session.id, req.user!.userId);
+      } catch { /* ignore if already registered */ }
+
       const response: ApiResponse = { success: true, data: session };
       res.status(201).json(response);
     } catch (err) {
@@ -72,15 +78,6 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const session = await sessionService.getSessionById(req.params.id);
-
-      // Verify user is pod member or admin
-      if (req.user!.role !== UserRole.ADMIN) {
-        const memberRole = await podService.getMemberRole(session.podId, req.user!.userId);
-        if (!memberRole) {
-          throw new ForbiddenError('You do not have access to this session');
-        }
-      }
-
       const participantCount = await sessionService.getParticipantCount(req.params.id);
 
       const response: ApiResponse = {
@@ -138,7 +135,7 @@ router.get(
     try {
       const { podId, status, page, pageSize } = req.query as Record<string, string>;
 
-      // Non-admin users must specify a podId and be a member of that pod
+      // Non-admin users: if podId specified, verify membership; otherwise show all sessions
       if (req.user!.role !== UserRole.ADMIN && podId) {
         const memberRole = await podService.getMemberRole(podId, req.user!.userId);
         if (!memberRole) {
@@ -148,7 +145,6 @@ router.get(
 
       const result = await sessionService.listSessions({
         podId,
-        userId: req.user!.role !== UserRole.ADMIN ? req.user!.userId : undefined,
         status: status as SessionStatus | undefined,
         page: page ? parseInt(page) : undefined,
         pageSize: pageSize ? parseInt(pageSize) : undefined,

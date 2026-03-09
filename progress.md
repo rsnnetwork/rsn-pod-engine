@@ -104,6 +104,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 | T-038 | Make invite optional for Google OAuth signup | Completed | Copilot | Aligned Google OAuth with magic link flow — new users can sign up without invite |
 | T-039 | Fix Google OAuth first_name null crash | Completed | Copilot | Added first_name/last_name to Google OAuth INSERT, extract given_name/family_name from Google profile, sanitize error redirect |
 | T-040 | Fix logout 401 error loop | Completed | Copilot | Made logout async, skip retry for /auth/logout, prevent multiple simultaneous logout calls |
+| T-041 | Open pods/sessions visibility + self-join + host auto-register | Completed | Copilot | All pods/sessions visible to all users, self-join pods, host auto-registered on session create |
 
 ---
 
@@ -2185,3 +2186,33 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - ✅ No TypeScript errors
 - Next immediate action:
   - Push to GitHub, test logout flow in browser (no 401 spam in console)
+
+### 2026-03-09 23:40 - Entry T-041
+- Task ID: T-041
+- Task Title: Open pod/session visibility, self-join pods, host auto-register
+- Status: Completed
+- What changed:
+  - **Pod visibility**: `GET /pods` now supports `?browse=true` to show all active pods without membership filtering. Non-browse requests still scope to user's own pods. Frontend PodsPage adds a "Browse All" tab.
+  - **Pod self-join**: New `POST /pods/:id/join` endpoint lets any authenticated user join an active pod as a member. PodDetailPage shows "Join Pod" button for non-members.
+  - **Pod detail open access**: `GET /pods/:id` no longer requires membership — any user can view pod details. Returns `memberRole` field so UI knows if user is a member.
+  - **Pod members open access**: `GET /pods/:id/members` viewable by all authenticated users.
+  - **Session visibility**: `GET /sessions` no longer scopes by userId — all sessions visible to all users. Only podId-specific filtering still checks membership.
+  - **Session detail open access**: `GET /sessions/:id` no longer requires pod membership — any user can view session details.
+  - **Host auto-registration**: When creating a session (`POST /sessions`), the host is automatically registered as a participant — no need to separately register.
+  - Updated plan.md design decisions to reflect new visibility model.
+- Files touched:
+  - server/src/routes/pods.ts
+  - server/src/routes/sessions.ts
+  - client/src/features/pods/PodsPage.tsx
+  - client/src/features/pods/PodDetailPage.tsx
+  - plan.md
+  - progress.md
+- Decisions made:
+  - Pods and sessions are now discoverable by all users (open platform model)
+  - Self-join replaces invite-only membership for active pods
+  - Host is always a participant in their own session
+  - Pod management actions (edit, archive, member removal) still restricted to directors
+- Test Results:
+  - ✅ 277/277 tests passing
+- Next immediate action:
+  - Push to GitHub, Render + Vercel auto-deploy, test browse and join flows

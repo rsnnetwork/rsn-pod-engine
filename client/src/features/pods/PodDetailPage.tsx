@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Users, Calendar, LogOut, Shield, UserMinus, Eye, Radio, Pencil, Trash2 } from 'lucide-react';
+import { ArrowLeft, Users, Calendar, LogOut, Shield, UserMinus, Eye, Radio, Pencil, Trash2, UserPlus } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Avatar from '@/components/ui/Avatar';
@@ -96,6 +96,17 @@ export default function PodDetailPage() {
     onError: () => addToast('Failed to reactivate pod', 'error'),
   });
 
+  const joinMutation = useMutation({
+    mutationFn: () => api.post(`/pods/${podId}/join`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['pod', podId] });
+      qc.invalidateQueries({ queryKey: ['pod-members', podId] });
+      qc.invalidateQueries({ queryKey: ['my-pods'] });
+      addToast('Joined pod!', 'success');
+    },
+    onError: (err: any) => addToast(err?.response?.data?.error?.message || 'Failed to join pod', 'error'),
+  });
+
   const openEdit = () => {
     setEditName(pod?.name || '');
     setEditDescription(pod?.description || '');
@@ -107,7 +118,8 @@ export default function PodDetailPage() {
 
   const membersList = members || pod.members || [];
   const myMembership = membersList.find((m: any) => m.userId === user?.id);
-  const isDirector = myMembership?.role === 'director' || user?.role === 'admin';
+  const isMember = !!myMembership || !!pod.memberRole;
+  const isDirector = myMembership?.role === 'director' || pod.memberRole === 'director' || user?.role === 'admin';
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -157,7 +169,14 @@ export default function PodDetailPage() {
       </Card>
 
       {/* Actions */}
-      {pod.status === 'archived' ? (
+      {!isMember && pod.status === 'active' ? (
+        <div className="flex flex-wrap gap-3 animate-fade-in-up stagger-1">
+          <Button onClick={() => joinMutation.mutate()} isLoading={joinMutation.isPending} className="btn-glow">
+            <UserPlus className="h-4 w-4 mr-2" /> Join Pod
+          </Button>
+          <p className="text-sm text-surface-500 self-center">Join this pod to participate in sessions and meet members.</p>
+        </div>
+      ) : pod.status === 'archived' ? (
         <div className="flex flex-wrap gap-3 animate-fade-in-up stagger-1">
           {isDirector && (
             <Button onClick={() => reactivateMutation.mutate()} isLoading={reactivateMutation.isPending} className="btn-glow">
