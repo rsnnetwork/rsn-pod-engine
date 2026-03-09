@@ -37,6 +37,7 @@ describe('Pod Service', () => {
   beforeEach(() => {
     mockQuery.mockReset();
     mockTransaction.mockReset();
+    mockTransaction.mockImplementation(async (cb: Function) => cb({ query: mockQuery }));
   });
 
   describe('getPodById', () => {

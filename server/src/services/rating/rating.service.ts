@@ -161,6 +161,16 @@ async function upsertEncounterHistory(
   }
 }
 
+// ─── Check if user is a participant in a match ─────────────────────────────
+
+export async function isMatchParticipant(matchId: string, userId: string): Promise<boolean> {
+  const result = await query(
+    `SELECT id FROM matches WHERE id = $1 AND (participant_a_id = $2 OR participant_b_id = $2)`,
+    [matchId, userId]
+  );
+  return result.rows.length > 0;
+}
+
 // ─── Check Mutual Meet-Again for a Specific Match ───────────────────────────
 
 export async function checkMutualMeetAgain(matchId: string): Promise<boolean> {
@@ -513,4 +523,43 @@ export async function exportSessionData(sessionId: string): Promise<{
     encounters: encountersResult.rows,
     stats,
   };
+}
+
+// ─── Finalize Session Encounters ────────────────────────────────────────────
+// Called once at session completion. Ensures encounter_history is fully
+// up-to-date even for matches where one or both participants skipped rating.
+
+export async function finalizeSessionEncounters(sessionId: string): Promise<number> {
+  const matchesResult = await query<{
+    participantAId: string;
+    participantBId: string;
+    roundNumber: number;
+  }>(
+    `SELECT participant_a_id AS "participantAId", participant_b_id AS "participantBId",
+            round_number AS "roundNumber"
+     FROM matches
+     WHERE session_id = $1 AND status IN ('completed', 'active')`,
+    [sessionId]
+  );
+
+  let created = 0;
+
+  for (const match of matchesResult.rows) {
+    const [userAId, userBId] = match.participantAId < match.participantBId
+      ? [match.participantAId, match.participantBId]
+      : [match.participantBId, match.participantAId];
+
+    // Ensure an encounter_history row exists (INSERT ... ON CONFLICT DO NOTHING)
+    const result = await query(
+      `INSERT INTO encounter_history (id, user_a_id, user_b_id, times_met, last_met_at, last_session_id)
+       VALUES ($1, $2, $3, 1, NOW(), $4)
+       ON CONFLICT (user_a_id, user_b_id) DO NOTHING`,
+      [uuid(), userAId, userBId, sessionId]
+    );
+    if (result.rowCount && result.rowCount > 0) created++;
+  }
+
+  logger.info({ sessionId, totalMatches: matchesResult.rows.length, newEncounters: created },
+    'Session encounters finalized');
+  return created;
 }

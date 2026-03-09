@@ -34,20 +34,26 @@ export default function SessionComplete({ sessionId }: Props) {
   const [mutualConnections, setMutualConnections] = useState<Connection[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
+
+  const fetchRecap = async () => {
+    setLoading(true);
+    setFetchError(false);
+    try {
+      const [peopleRes, statsRes] = await Promise.all([
+        api.get(`/ratings/sessions/${sessionId}/people-met`),
+        api.get(`/ratings/sessions/${sessionId}/stats`),
+      ]);
+      setConnections(peopleRes.data.data?.connections || []);
+      setMutualConnections(peopleRes.data.data?.mutualConnections || []);
+      setStats(statsRes.data.data || null);
+    } catch {
+      setFetchError(true);
+    }
+    setLoading(false);
+  };
 
   useEffect(() => {
-    async function fetchRecap() {
-      try {
-        const [peopleRes, statsRes] = await Promise.all([
-          api.get(`/ratings/sessions/${sessionId}/people-met`),
-          api.get(`/ratings/sessions/${sessionId}/stats`),
-        ]);
-        setConnections(peopleRes.data.data?.connections || []);
-        setMutualConnections(peopleRes.data.data?.mutualConnections || []);
-        setStats(statsRes.data.data || null);
-      } catch { /* gracefully degrade — show basic completion */ }
-      setLoading(false);
-    }
     fetchRecap();
   }, [sessionId]);
 
@@ -65,6 +71,11 @@ export default function SessionComplete({ sessionId }: Props) {
 
         {loading ? (
           <div className="flex justify-center py-8"><Spinner /></div>
+        ) : fetchError ? (
+          <Card className="text-center">
+            <p className="text-surface-400 mb-3">Could not load your recap.</p>
+            <Button size="sm" variant="secondary" onClick={fetchRecap}>Retry</Button>
+          </Card>
         ) : (
           <>
             {/* Stats summary */}

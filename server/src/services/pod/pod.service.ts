@@ -2,7 +2,7 @@
 // Handles pod CRUD, membership management, and pod configuration.
 
 import { v4 as uuid } from 'uuid';
-import { query } from '../../db';
+import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import {
   Pod, PodMember, CreatePodInput, UpdatePodInput,
@@ -174,49 +174,59 @@ export async function addMember(
   role: PodMemberRole = PodMemberRole.MEMBER,
   status: PodMemberStatus = PodMemberStatus.ACTIVE
 ): Promise<PodMember> {
-  const pod = await getPodById(podId);
-
-  // Check capacity
-  if (pod.maxMembers) {
-    const countResult = await query<{ count: string }>(
-      `SELECT COUNT(*) as count FROM pod_members WHERE pod_id = $1 AND status = 'active'`,
+  return transaction(async (client) => {
+    // Lock the pod row to serialize concurrent member additions
+    const podResult = await client.query<Pod>(
+      `SELECT ${POD_COLUMNS} FROM pods WHERE id = $1 FOR UPDATE`,
       [podId]
     );
-    if (parseInt(countResult.rows[0].count, 10) >= pod.maxMembers) {
-      throw new ConflictError('POD_FULL', 'This pod has reached its maximum member count');
+    if (podResult.rows.length === 0) {
+      throw new NotFoundError('Pod', podId);
     }
-  }
+    const pod = podResult.rows[0];
 
-  // Check for existing membership
-  const existing = await query(
-    `SELECT id, status FROM pod_members WHERE pod_id = $1 AND user_id = $2`,
-    [podId, userId]
-  );
-
-  if (existing.rows.length > 0) {
-    const existingStatus = existing.rows[0].status;
-    if (existingStatus === 'active') {
-      throw new ConflictError('POD_MEMBER_EXISTS', 'User is already an active member of this pod');
+    // Check capacity
+    if (pod.maxMembers) {
+      const countResult = await client.query<{ count: string }>(
+        `SELECT COUNT(*) as count FROM pod_members WHERE pod_id = $1 AND status = 'active'`,
+        [podId]
+      );
+      if (parseInt(countResult.rows[0].count, 10) >= pod.maxMembers) {
+        throw new ConflictError('POD_FULL', 'This pod has reached its maximum member count');
+      }
     }
-    // Reactivate if previously left or removed
-    const result = await query<PodMember>(
-      `UPDATE pod_members SET role = $1, status = $2, joined_at = NOW(), left_at = NULL
-       WHERE pod_id = $3 AND user_id = $4
-       RETURNING ${MEMBER_COLUMNS}`,
-      [role, status, podId, userId]
+
+    // Check for existing membership
+    const existing = await client.query(
+      `SELECT id, status FROM pod_members WHERE pod_id = $1 AND user_id = $2`,
+      [podId, userId]
     );
+
+    if (existing.rows.length > 0) {
+      const existingStatus = existing.rows[0].status;
+      if (existingStatus === 'active') {
+        throw new ConflictError('POD_MEMBER_EXISTS', 'User is already an active member of this pod');
+      }
+      // Reactivate if previously left or removed
+      const result = await client.query<PodMember>(
+        `UPDATE pod_members SET role = $1, status = $2, joined_at = NOW(), left_at = NULL
+         WHERE pod_id = $3 AND user_id = $4
+         RETURNING ${MEMBER_COLUMNS}`,
+        [role, status, podId, userId]
+      );
+      return result.rows[0];
+    }
+
+    const result = await client.query<PodMember>(
+      `INSERT INTO pod_members (pod_id, user_id, role, status)
+       VALUES ($1, $2, $3, $4)
+       RETURNING ${MEMBER_COLUMNS}`,
+      [podId, userId, role, status]
+    );
+
+    logger.info({ podId, userId, role }, 'Member added to pod');
     return result.rows[0];
-  }
-
-  const result = await query<PodMember>(
-    `INSERT INTO pod_members (pod_id, user_id, role, status)
-     VALUES ($1, $2, $3, $4)
-     RETURNING ${MEMBER_COLUMNS}`,
-    [podId, userId, role, status]
-  );
-
-  logger.info({ podId, userId, role }, 'Member added to pod');
-  return result.rows[0];
+  });
 }
 
 export async function removeMember(podId: string, userId: string, removedBy: string): Promise<void> {

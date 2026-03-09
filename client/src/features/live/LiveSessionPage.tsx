@@ -10,9 +10,9 @@ import RatingPrompt from './RatingPrompt';
 import SessionComplete from './SessionComplete';
 import HostControls from './HostControls';
 import { PageLoader } from '@/components/ui/Spinner';
-import { AlertCircle, X, LogOut, WifiOff, Loader2 } from 'lucide-react';
+import { AlertCircle, X, LogOut, WifiOff, Loader2, RefreshCw } from 'lucide-react';
 import api from '@/lib/api';
-import { disconnectSocket } from '@/lib/socket';
+import { disconnectSocket, connectSocket } from '@/lib/socket';
 
 export default function LiveSessionPage() {
   const { sessionId } = useParams();
@@ -81,7 +81,13 @@ export default function LiveSessionPage() {
       {connectionStatus === 'disconnected' && (
         <div className="bg-red-500/20 border-b border-red-500/30 px-4 py-2 flex items-center justify-center gap-2">
           <WifiOff className="h-4 w-4 text-red-400" />
-          <p className="text-sm text-red-300">Disconnected from server. Please refresh the page.</p>
+          <p className="text-sm text-red-300">Disconnected from server.</p>
+          <button
+            onClick={() => connectSocket()}
+            className="ml-2 flex items-center gap-1 text-sm text-red-300 hover:text-red-100 underline"
+          >
+            <RefreshCw className="h-3 w-3" /> Reconnect
+          </button>
         </div>
       )}
 

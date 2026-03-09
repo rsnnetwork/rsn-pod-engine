@@ -18,6 +18,7 @@ import * as sessionService from '../session/session.service';
 import * as matchingService from '../matching/matching.service';
 import * as ratingService from '../rating/rating.service';
 import * as videoService from '../video/video.service';
+import * as emailService from '../email/email.service';
 import { ForbiddenError, ValidationError } from '../../middleware/errors';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -73,6 +74,21 @@ export function initOrchestration(
   });
 
   logger.info('Orchestration engine initialised');
+
+  // Periodic TTL cleanup: purge stale sessions older than 4 hours
+  const MAX_SESSION_AGE_MS = 4 * 60 * 60 * 1000;
+  setInterval(() => {
+    const now = Date.now();
+    for (const [sessionId, session] of activeSessions) {
+      // Use timerEndsAt as a proxy for last activity; fallback to a generous window
+      const lastActivity = session.timerEndsAt?.getTime() || now;
+      if (now - lastActivity > MAX_SESSION_AGE_MS) {
+        logger.warn({ sessionId }, 'TTL cleanup: purging stale active session');
+        if (session.timer) clearTimeout(session.timer);
+        activeSessions.delete(sessionId);
+      }
+    }
+  }, 5 * 60 * 1000); // Check every 5 minutes
 }
 
 // ─── Socket Room Helpers ────────────────────────────────────────────────────
@@ -125,12 +141,19 @@ async function handleJoinSession(
       // Already registered or session not open — that's fine
     }
 
-    // Update participant status
+    // Update participant status based on current session state
     try {
-      await sessionService.updateParticipantStatus(
-        data.sessionId, userId,
-        session.status === SessionStatus.LOBBY_OPEN ? ParticipantStatus.IN_LOBBY : ParticipantStatus.CHECKED_IN
-      );
+      if (activeSession && activeSession.status === SessionStatus.ROUND_ACTIVE) {
+        // Will be updated to IN_ROUND below if they have an active match
+        await sessionService.updateParticipantStatus(
+          data.sessionId, userId, ParticipantStatus.IN_LOBBY
+        );
+      } else {
+        await sessionService.updateParticipantStatus(
+          data.sessionId, userId,
+          session.status === SessionStatus.LOBBY_OPEN ? ParticipantStatus.IN_LOBBY : ParticipantStatus.CHECKED_IN
+        );
+      }
     } catch {
       // Participant may not exist (e.g. host who's not a participant) — that's OK
     }
@@ -145,23 +168,52 @@ async function handleJoinSession(
     const count = await sessionService.getParticipantCount(data.sessionId);
     io.to(sessionRoom(data.sessionId)).emit('participant:count', { count });
 
-    // If session is mid-round, send current state
+    // If session is mid-round, restore user's match assignment
     if (activeSession && activeSession.status === SessionStatus.ROUND_ACTIVE) {
       const matches = await matchingService.getMatchesByRound(
         data.sessionId, activeSession.currentRound
       );
       const userMatch = matches.find(
-        m => m.participantAId === userId || m.participantBId === userId
+        m => (m.participantAId === userId || m.participantBId === userId) && m.status === 'active'
       );
 
       if (userMatch) {
         const partnerId = userMatch.participantAId === userId
           ? userMatch.participantBId : userMatch.participantAId;
+
+        // Restore participant status to IN_ROUND
+        await sessionService.updateParticipantStatus(
+          data.sessionId, userId, ParticipantStatus.IN_ROUND
+        ).catch(() => {});
+
         socket.emit('match:assigned', {
           matchId: userMatch.id,
           partnerId,
           roomId: userMatch.roomId || '',
           roundNumber: activeSession.currentRound,
+        });
+      }
+    }
+
+    // If session is in rating phase, re-send the rating window so reconnected users can still rate
+    if (activeSession && activeSession.status === SessionStatus.ROUND_RATING) {
+      const matches = await matchingService.getMatchesByRound(
+        data.sessionId, activeSession.currentRound
+      );
+      const userMatch = matches.find(
+        m => (m.participantAId === userId || m.participantBId === userId) && m.status === 'completed'
+      );
+      if (userMatch) {
+        const partnerId = userMatch.participantAId === userId
+          ? userMatch.participantBId : userMatch.participantAId;
+        const remainingSeconds = activeSession.timerEndsAt
+          ? Math.max(0, Math.ceil((activeSession.timerEndsAt.getTime() - Date.now()) / 1000))
+          : activeSession.config.ratingWindowSeconds;
+        socket.emit('rating:window_open', {
+          matchId: userMatch.id,
+          partnerId,
+          roundNumber: activeSession.currentRound,
+          durationSeconds: remainingSeconds,
         });
       }
     }
@@ -628,14 +680,24 @@ async function handleHostReassign(
 
     if (partner) {
       // Create a new match for this round
-      const roomId = `session-${data.sessionId}-round-${activeSession.currentRound}-reassign-${Date.now()}`;
+      const reassignSlug = `reassign-${Date.now()}`;
+      const roomId = `session-${data.sessionId}-round-${activeSession.currentRound}-${reassignSlug}`;
 
+      // Create the LiveKit room BEFORE inserting the match
+      try {
+        await videoService.createMatchRoom(data.sessionId, activeSession.currentRound, reassignSlug);
+      } catch (err) {
+        logger.warn({ err, roomId }, 'LiveKit room creation failed for reassignment (may already exist)');
+      }
+
+      let matchId = '';
       await transaction(async (client) => {
         const { v4: uuid } = await import('uuid');
+        matchId = uuid();
         await client.query(
           `INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, room_id, status)
            VALUES ($1, $2, $3, $4, $5, $6, 'active')`,
-          [uuid(), data.sessionId, activeSession.currentRound,
+          [matchId, data.sessionId, activeSession.currentRound,
            targetId < partner ? targetId : partner,
            targetId < partner ? partner : targetId,
            roomId]
@@ -644,13 +706,13 @@ async function handleHostReassign(
 
       // Notify both participants
       io.to(userRoom(targetId)).emit('match:reassigned', {
-        matchId: '', // Will be filled by client refresh
+        matchId,
         newPartnerId: partner,
         roomId,
       });
 
       io.to(userRoom(partner)).emit('match:reassigned', {
-        matchId: '',
+        matchId,
         newPartnerId: targetId,
         roomId,
       });
@@ -943,6 +1005,13 @@ async function completeSession(sessionId: string): Promise<void> {
     await sessionService.updateSessionStatus(sessionId, SessionStatus.COMPLETED);
     await query('UPDATE sessions SET ended_at = NOW() WHERE id = $1', [sessionId]);
 
+    // Finalize encounter history for any unrated matches
+    try {
+      await ratingService.finalizeSessionEncounters(sessionId);
+    } catch (encErr) {
+      logger.error({ err: encErr, sessionId }, 'Error finalizing session encounters (non-fatal)');
+    }
+
     io.to(sessionRoom(sessionId)).emit('session:completed', { sessionId });
     io.to(sessionRoom(sessionId)).emit('session:status_changed', {
       sessionId,
@@ -950,13 +1019,56 @@ async function completeSession(sessionId: string): Promise<void> {
       currentRound: activeSession?.currentRound || 0,
     });
 
-    // Clean up
-    activeSessions.delete(sessionId);
-
     logger.info({ sessionId }, 'Session completed');
+
+    // Fire-and-forget: send recap emails to all participants
+    sendRecapEmails(sessionId).catch(emailErr => {
+      logger.error({ err: emailErr, sessionId }, 'Error sending recap emails (non-fatal)');
+    });
   } catch (err) {
     logger.error({ err, sessionId }, 'Error completing session');
+  } finally {
+    // Always clean up to prevent memory leak, even on error
+    activeSessions.delete(sessionId);
   }
+}
+
+// ─── Send Recap Emails ──────────────────────────────────────────────────────
+
+async function sendRecapEmails(sessionId: string): Promise<void> {
+  const { config: appConfig } = await import('../../config');
+
+  const sessionResult = await query<{ title: string }>(
+    `SELECT title FROM sessions WHERE id = $1`, [sessionId]
+  );
+  if (sessionResult.rows.length === 0) return;
+  const sessionTitle = sessionResult.rows[0].title;
+
+  const stats = await ratingService.getSessionRatingStats(sessionId);
+
+  const participantsResult = await query<{ email: string; displayName: string; userId: string }>(
+    `SELECT u.email, u.display_name AS "displayName", u.id AS "userId"
+     FROM session_participants sp
+     JOIN users u ON u.id = sp.user_id
+     WHERE sp.session_id = $1 AND sp.status != 'removed'`,
+    [sessionId]
+  );
+
+  for (const p of participantsResult.rows) {
+    try {
+      await emailService.sendSessionRecapEmail(p.email, p.displayName || 'there', {
+        sessionTitle,
+        peopleMet: stats.totalRatings, // approximate
+        mutualConnections: stats.mutualMeetAgainCount,
+        avgRating: stats.avgQualityScore,
+        recapUrl: `${appConfig.clientUrl}/sessions/${sessionId}/recap`,
+      });
+    } catch (err) {
+      logger.warn({ err, userId: p.userId }, 'Failed to send recap email to participant');
+    }
+  }
+
+  logger.info({ sessionId, participantCount: participantsResult.rows.length }, 'Recap emails dispatched');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

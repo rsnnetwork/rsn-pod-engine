@@ -11,8 +11,8 @@ import { NotFoundError, ConflictError, AppError } from '../../middleware/errors'
 import * as podService from '../pod/pod.service';
 import * as sessionService from '../session/session.service';
 
-// Generate URL-safe invite codes (8 chars, alphanumeric)
-const generateCode = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789', 8);
+// Generate URL-safe invite codes (12 chars, alphanumeric — higher entropy for brute-force resistance)
+const generateCode = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789', 12);
 
 const INVITE_COLUMNS = `
   id, code, type, inviter_id AS "inviterId", invitee_email AS "inviteeEmail",

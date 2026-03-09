@@ -5,7 +5,9 @@ import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
 import { auditMiddleware } from '../middleware/audit';
 import * as sessionService from '../services/session/session.service';
-import { ApiResponse, SessionStatus } from '@rsn/shared';
+import * as podService from '../services/pod/pod.service';
+import { ApiResponse, SessionStatus, UserRole } from '@rsn/shared';
+import { ForbiddenError } from '../middleware/errors';
 
 const router = Router();
 
@@ -70,6 +72,15 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const session = await sessionService.getSessionById(req.params.id);
+
+      // Verify user is pod member or admin
+      if (req.user!.role !== UserRole.ADMIN) {
+        const memberRole = await podService.getMemberRole(session.podId, req.user!.userId);
+        if (!memberRole) {
+          throw new ForbiddenError('You do not have access to this session');
+        }
+      }
+
       const participantCount = await sessionService.getParticipantCount(req.params.id);
 
       const response: ApiResponse = {
@@ -127,8 +138,17 @@ router.get(
     try {
       const { podId, status, page, pageSize } = req.query as Record<string, string>;
 
+      // Non-admin users must specify a podId and be a member of that pod
+      if (req.user!.role !== UserRole.ADMIN && podId) {
+        const memberRole = await podService.getMemberRole(podId, req.user!.userId);
+        if (!memberRole) {
+          throw new ForbiddenError('You do not have access to this pod');
+        }
+      }
+
       const result = await sessionService.listSessions({
         podId,
+        userId: req.user!.role !== UserRole.ADMIN ? req.user!.userId : undefined,
         status: status as SessionStatus | undefined,
         page: page ? parseInt(page) : undefined,
         pageSize: pageSize ? parseInt(pageSize) : undefined,

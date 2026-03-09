@@ -38,6 +38,7 @@ describe('Session Service', () => {
   beforeEach(() => {
     mockQuery.mockReset();
     mockTransaction.mockReset();
+    mockTransaction.mockImplementation(async (cb: Function) => cb({ query: mockQuery }));
   });
 
   describe('getSessionById', () => {
@@ -290,6 +291,7 @@ describe('Session Service', () => {
 
   describe('updateParticipantStatus', () => {
     it('should update participant status', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ status: ParticipantStatus.REGISTERED }], rowCount: 1 });
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
 
       await sessionService.updateParticipantStatus('session-123', 'user-1', ParticipantStatus.IN_LOBBY);
@@ -300,17 +302,19 @@ describe('Session Service', () => {
     });
 
     it('should set is_no_show when marking as no-show', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ status: ParticipantStatus.IN_ROUND }], rowCount: 1 });
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
 
       await sessionService.updateParticipantStatus('session-123', 'user-1', ParticipantStatus.NO_SHOW);
-      expect(mockQuery.mock.calls[0][0]).toContain('is_no_show = TRUE');
+      expect(mockQuery.mock.calls.at(-1)?.[0]).toContain('is_no_show = TRUE');
     });
 
     it('should set left_at when marking as left', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ status: ParticipantStatus.IN_LOBBY }], rowCount: 1 });
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
 
       await sessionService.updateParticipantStatus('session-123', 'user-1', ParticipantStatus.LEFT);
-      expect(mockQuery.mock.calls[0][0]).toContain('left_at = NOW()');
+      expect(mockQuery.mock.calls.at(-1)?.[0]).toContain('left_at = NOW()');
     });
   });
 

@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { useParams } from 'react-router-dom';
 import { useSessionStore } from '@/stores/sessionStore';
 import Card from '@/components/ui/Card';
 import { formatTime } from '@/lib/utils';
@@ -119,9 +120,7 @@ export default function VideoRoom() {
   const { timerSeconds, currentRound, totalRounds, isByeRound, liveKitToken, livekitUrl, currentRoomId, transitionStatus } = useSessionStore();
   const { setLiveKitToken } = useSessionStore();
   const [connectionError, setConnectionError] = useState<string | null>(null);
-
-  // Also try fetching token if we don't have one yet (e.g. page refresh while matched)
-  const sessionId = window.location.pathname.split('/session/')[1]?.split('/')[0];
+  const { sessionId } = useParams();
   useEffect(() => {
     if (!liveKitToken && sessionId) {
       api.post(`/sessions/${sessionId}/token`, currentRoomId ? { roomId: currentRoomId } : {}).then(res => {
@@ -156,7 +155,11 @@ export default function VideoRoom() {
             <VideoOff className="h-8 w-8 text-red-400" />
           </div>
           <h3 className="text-lg font-semibold text-surface-200 mb-2">Video Error</h3>
-          <p className="text-surface-400 text-sm">{connectionError}</p>
+          <p className="text-surface-400 text-sm mb-3">{connectionError}</p>
+          <button
+            onClick={() => { setConnectionError(null); setLiveKitToken('', ''); }}
+            className="text-sm text-brand-400 hover:text-brand-300 underline"
+          >Retry</button>
         </Card>
       </div>
     );

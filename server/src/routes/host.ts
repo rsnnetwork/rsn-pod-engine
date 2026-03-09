@@ -8,6 +8,9 @@ import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { auditMiddleware } from '../middleware/audit';
 import * as orchestrationService from '../services/orchestration/orchestration.service';
+import * as sessionService from '../services/session/session.service';
+import { ForbiddenError } from '../middleware/errors';
+import { UserRole } from '@rsn/shared';
 
 const router = Router();
 
@@ -17,6 +20,17 @@ const broadcastSchema = z.object({
   message: z.string().min(1).max(2000),
 });
 
+// ─── Host Verification Helper ───────────────────────────────────────────────
+
+async function verifyHostOrAdmin(req: Request, next: NextFunction): Promise<boolean> {
+  const session = await sessionService.getSessionById(req.params.id);
+  if (session.hostUserId !== req.user!.userId && req.user!.role !== UserRole.ADMIN) {
+    next(new ForbiddenError('Only the session host can perform this action'));
+    return false;
+  }
+  return true;
+}
+
 // ─── POST /sessions/:id/host/start ──────────────────────────────────────────
 
 router.post(
@@ -25,6 +39,7 @@ router.post(
   auditMiddleware('session:start', 'session'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      if (!await verifyHostOrAdmin(req, next)) return;
       await orchestrationService.startSession(req.params.id, req.user!.userId);
       res.json({ success: true, data: { message: 'Session started' } });
     } catch (err) {
@@ -41,6 +56,7 @@ router.post(
   auditMiddleware('session:pause', 'session'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      if (!await verifyHostOrAdmin(req, next)) return;
       await orchestrationService.pauseSession(req.params.id, req.user!.userId);
       res.json({ success: true, data: { message: 'Session paused' } });
     } catch (err) {
@@ -57,6 +73,7 @@ router.post(
   auditMiddleware('session:resume', 'session'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      if (!await verifyHostOrAdmin(req, next)) return;
       await orchestrationService.resumeSession(req.params.id, req.user!.userId);
       res.json({ success: true, data: { message: 'Session resumed' } });
     } catch (err) {
@@ -73,6 +90,7 @@ router.post(
   auditMiddleware('session:end', 'session'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      if (!await verifyHostOrAdmin(req, next)) return;
       await orchestrationService.endSession(req.params.id, req.user!.userId);
       res.json({ success: true, data: { message: 'Session ended' } });
     } catch (err) {
@@ -90,6 +108,7 @@ router.post(
   auditMiddleware('session:broadcast', 'session'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      if (!await verifyHostOrAdmin(req, next)) return;
       await orchestrationService.broadcastMessage(
         req.params.id, req.user!.userId, req.body.message
       );
@@ -107,6 +126,7 @@ router.get(
   authenticate,
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      if (!await verifyHostOrAdmin(req, next)) return;
       const state = orchestrationService.getActiveSessionState(req.params.id);
       if (!state) {
         res.json({ success: true, data: { active: false } });

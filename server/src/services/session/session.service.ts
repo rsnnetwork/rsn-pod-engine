@@ -2,7 +2,7 @@
 // Handles session CRUD, participant registration, and session state management.
 
 import { v4 as uuid } from 'uuid';
-import { query } from '../../db';
+import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import {
   Session, SessionParticipant, SessionConfig, SessionStatus,
@@ -138,6 +138,7 @@ export async function updateSession(sessionId: string, userId: string, input: Up
 
 export async function listSessions(params: {
   podId?: string;
+  userId?: string;
   status?: SessionStatus;
   page?: number;
   pageSize?: number;
@@ -153,6 +154,11 @@ export async function listSessions(params: {
   if (params.podId) {
     whereClause += ` AND s.pod_id = $${paramIdx}`;
     values.push(params.podId);
+    paramIdx++;
+  } else if (params.userId) {
+    // Scope to pods where user is an active member
+    whereClause += ` AND s.pod_id IN (SELECT pod_id FROM pod_members WHERE user_id = $${paramIdx} AND status = 'active')`;
+    values.push(params.userId);
     paramIdx++;
   }
 
@@ -191,59 +197,69 @@ export async function listSessions(params: {
 // ─── Participant Registration ───────────────────────────────────────────────
 
 export async function registerParticipant(sessionId: string, userId: string): Promise<SessionParticipant> {
-  const session = await getSessionById(sessionId);
-
-  // Check session is open for registration (allow during active session phases too)
-  const closedStatuses: SessionStatus[] = [SessionStatus.COMPLETED, SessionStatus.CANCELLED];
-  if (closedStatuses.includes(session.status)) {
-    throw new AppError(400, 'SESSION_NOT_SCHEDULED', 'Session is no longer accepting participants');
-  }
-
-  // Check capacity
-  const config = typeof session.config === 'string'
-    ? JSON.parse(session.config as unknown as string)
-    : session.config;
-
-  const countResult = await query<{ count: string }>(
-    `SELECT COUNT(*) as count FROM session_participants WHERE session_id = $1 AND status NOT IN ('removed', 'left')`,
-    [sessionId]
-  );
-  const currentCount = parseInt(countResult.rows[0].count, 10);
-
-  if (config.maxParticipants && currentCount >= config.maxParticipants) {
-    throw new ConflictError('SESSION_FULL', 'This session has reached its maximum participant count');
-  }
-
-  // Check for existing registration
-  const existing = await query(
-    `SELECT id, status FROM session_participants WHERE session_id = $1 AND user_id = $2`,
-    [sessionId, userId]
-  );
-
-  if (existing.rows.length > 0) {
-    const existingStatus = existing.rows[0].status as string;
-    if (['registered', 'checked_in', 'in_lobby', 'in_round'].includes(existingStatus)) {
-      throw new ConflictError('SESSION_ALREADY_REGISTERED', 'You are already registered for this session');
+  return transaction(async (client) => {
+    // Lock the session row to serialize concurrent registrations
+    const sessionResult = await client.query<Session>(
+      `SELECT ${SESSION_COLUMNS} FROM sessions WHERE id = $1 FOR UPDATE`,
+      [sessionId]
+    );
+    if (sessionResult.rows.length === 0) {
+      throw new NotFoundError('Session', sessionId);
     }
-    // Re-register
-    const result = await query<SessionParticipant>(
-      `UPDATE session_participants SET status = 'registered', left_at = NULL, is_no_show = FALSE
-       WHERE session_id = $1 AND user_id = $2
+    const session = sessionResult.rows[0];
+
+    // Check session is open for registration
+    const closedStatuses: SessionStatus[] = [SessionStatus.COMPLETED, SessionStatus.CANCELLED];
+    if (closedStatuses.includes(session.status)) {
+      throw new AppError(400, 'SESSION_NOT_SCHEDULED', 'Session is no longer accepting participants');
+    }
+
+    // Check capacity
+    const config = typeof session.config === 'string'
+      ? JSON.parse(session.config as unknown as string)
+      : session.config;
+
+    const countResult = await client.query<{ count: string }>(
+      `SELECT COUNT(*) as count FROM session_participants WHERE session_id = $1 AND status NOT IN ('removed', 'left')`,
+      [sessionId]
+    );
+    const currentCount = parseInt(countResult.rows[0].count, 10);
+
+    if (config.maxParticipants && currentCount >= config.maxParticipants) {
+      throw new ConflictError('SESSION_FULL', 'This session has reached its maximum participant count');
+    }
+
+    // Check for existing registration
+    const existing = await client.query(
+      `SELECT id, status FROM session_participants WHERE session_id = $1 AND user_id = $2`,
+      [sessionId, userId]
+    );
+
+    if (existing.rows.length > 0) {
+      const existingStatus = existing.rows[0].status as string;
+      if (['registered', 'checked_in', 'in_lobby', 'in_round'].includes(existingStatus)) {
+        throw new ConflictError('SESSION_ALREADY_REGISTERED', 'You are already registered for this session');
+      }
+      // Re-register
+      const result = await client.query<SessionParticipant>(
+        `UPDATE session_participants SET status = 'registered', left_at = NULL, is_no_show = FALSE
+         WHERE session_id = $1 AND user_id = $2
+         RETURNING ${PARTICIPANT_COLUMNS}`,
+        [sessionId, userId]
+      );
+      return result.rows[0];
+    }
+
+    const result = await client.query<SessionParticipant>(
+      `INSERT INTO session_participants (session_id, user_id, status)
+       VALUES ($1, $2, 'registered')
        RETURNING ${PARTICIPANT_COLUMNS}`,
       [sessionId, userId]
     );
+
+    logger.info({ sessionId, userId }, 'Participant registered');
     return result.rows[0];
-  }
-
-  const result = await query<SessionParticipant>(
-    `INSERT INTO session_participants (session_id, user_id, status)
-     VALUES ($1, $2, 'registered')
-     RETURNING ${PARTICIPANT_COLUMNS}`,
-    [sessionId, userId]
-  );
-
-  logger.info({ sessionId, userId }, 'Participant registered');
-  return result.rows[0];
+  });
 }
 
 export async function unregisterParticipant(sessionId: string, userId: string): Promise<void> {
@@ -335,12 +351,41 @@ export async function updateSessionStatus(
   return result.rows[0];
 }
 
+// Valid participant status transitions. A null source means "from any state".
+const VALID_STATUS_TRANSITIONS: Record<string, string[] | null> = {
+  [ParticipantStatus.REGISTERED]: null, // initial state only
+  [ParticipantStatus.CHECKED_IN]: [ParticipantStatus.REGISTERED, ParticipantStatus.DISCONNECTED],
+  [ParticipantStatus.IN_LOBBY]: [ParticipantStatus.REGISTERED, ParticipantStatus.CHECKED_IN, ParticipantStatus.IN_ROUND, ParticipantStatus.DISCONNECTED],
+  [ParticipantStatus.IN_ROUND]: [ParticipantStatus.IN_LOBBY, ParticipantStatus.CHECKED_IN, ParticipantStatus.DISCONNECTED],
+  [ParticipantStatus.DISCONNECTED]: null, // can disconnect from any state
+  [ParticipantStatus.LEFT]: null, // can leave from any state
+  [ParticipantStatus.REMOVED]: null, // host can remove from any state
+  [ParticipantStatus.NO_SHOW]: [ParticipantStatus.REGISTERED, ParticipantStatus.CHECKED_IN, ParticipantStatus.IN_LOBBY, ParticipantStatus.IN_ROUND, ParticipantStatus.DISCONNECTED],
+};
+
 export async function updateParticipantStatus(
   sessionId: string,
   userId: string,
   status: ParticipantStatus,
   roomId?: string
 ): Promise<void> {
+  // Validate transition if rules exist for the target status
+  const validFrom = VALID_STATUS_TRANSITIONS[status];
+  if (validFrom !== null && validFrom !== undefined) {
+    const currentResult = await query<{ status: string }>(
+      `SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2`,
+      [sessionId, userId]
+    );
+    if (currentResult.rows.length > 0) {
+      const currentStatus = currentResult.rows[0].status;
+      if (!validFrom.includes(currentStatus as ParticipantStatus)) {
+        logger.warn({ sessionId, userId, from: currentStatus, to: status },
+          'Invalid participant status transition — allowing as fallback');
+        // Log but don't block — orchestration depends on these transitions
+      }
+    }
+  }
+
   const setClauses = ['status = $1'];
   const values: unknown[] = [status];
   let paramIdx = 2;

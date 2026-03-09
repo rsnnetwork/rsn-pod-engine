@@ -6,6 +6,7 @@ import { authenticate } from '../middleware/auth';
 import { auditMiddleware } from '../middleware/audit';
 import * as podService from '../services/pod/pod.service';
 import { ApiResponse, UserRole, PodType, PodVisibility, PodMemberRole } from '@rsn/shared';
+import { ForbiddenError } from '../middleware/errors';
 
 const router = Router();
 
@@ -105,6 +106,15 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const pod = await podService.getPodById(req.params.id);
+
+      // Verify user is a pod member or admin
+      if (req.user!.role !== UserRole.ADMIN) {
+        const memberRole = await podService.getMemberRole(req.params.id, req.user!.userId);
+        if (!memberRole) {
+          throw new ForbiddenError('You do not have access to this pod');
+        }
+      }
+
       const response: ApiResponse = { success: true, data: pod };
       res.json(response);
     } catch (err) {
@@ -155,6 +165,14 @@ router.get(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      // Verify user is a pod member or admin
+      if (req.user!.role !== UserRole.ADMIN) {
+        const memberRole = await podService.getMemberRole(req.params.id, req.user!.userId);
+        if (!memberRole) {
+          throw new ForbiddenError('You do not have access to this pod');
+        }
+      }
+
       const members = await podService.getPodMembers(req.params.id);
       const response: ApiResponse = { success: true, data: members };
       res.json(response);
@@ -173,6 +191,14 @@ router.post(
   auditMiddleware('add_pod_member', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      // Only directors and hosts can add members
+      if (req.user!.role !== UserRole.ADMIN) {
+        const requesterRole = await podService.getMemberRole(req.params.id, req.user!.userId);
+        if (!requesterRole || ![PodMemberRole.DIRECTOR, PodMemberRole.HOST].includes(requesterRole)) {
+          throw new ForbiddenError('Only pod directors and hosts can add members');
+        }
+      }
+
       const member = await podService.addMember(
         req.params.id,
         req.body.userId,

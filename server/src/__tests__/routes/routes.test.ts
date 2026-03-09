@@ -149,6 +149,12 @@ const mockSession = {
   updatedAt: new Date(),
 };
 
+beforeEach(() => {
+  jest.clearAllMocks();
+  (podService.getMemberRole as jest.Mock).mockResolvedValue('director');
+  (ratingService.isMatchParticipant as jest.Mock).mockResolvedValue(true);
+});
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 describe('Auth Routes', () => {
