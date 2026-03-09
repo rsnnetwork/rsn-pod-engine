@@ -93,6 +93,12 @@ Purpose: Persistent execution history and current state, independent of chat mem
 | T-027 | Fix auth rate limiting causing login errors | Completed | Copilot | Increased production limit from 10 to 50 requests per 15min |
 | T-028 | Make invite codes optional for registration | Completed | Copilot | Removed mandatory invite requirement, updated UI messaging |
 | T-029 | Fix identity service tests after invite changes | Completed | Copilot | Updated 4 tests to reflect optional invite design, 248/248 passing |
+| T-030 | Fix Render deploy build failure (test files in build) | Completed | Copilot | Excluded __tests__/*.test.ts from shared + server tsconfig builds |
+| T-031 | Fix Render deploy missing @types (devDependencies) | Completed | Copilot | Updated render.yaml buildCommand to use --include=dev |
+| T-032 | Configure Render env vars + secret files | Completed | Copilot | Added full env var schema to render.yaml + config loader for Render secret files |
+| T-033 | Fix SQL migrations missing from dist build | Completed | Copilot | Added cross-platform migrations copy to server build script |
+| T-034 | Deploy backend to Render | Completed | Copilot | Backend live at https://rsn-api-h04m.onrender.com, health endpoint OK |
+| T-035 | Point frontend to Render backend | Completed | Copilot | Updated runtimeEndpoints.ts from Cloudflare tunnel to Render URL |
 
 ---
 

@@ -1,4 +1,4 @@
-const ACTIVE_TUNNEL_ORIGIN = 'https://wan-combined-unless-fee.trycloudflare.com';
+const RENDER_API_ORIGIN = 'https://rsn-api-h04m.onrender.com';
 
 function isVercelHost(): boolean {
   if (typeof window === 'undefined') return false;
@@ -6,9 +6,9 @@ function isVercelHost(): boolean {
 }
 
 export const API_BASE_URL = isVercelHost()
-  ? `${ACTIVE_TUNNEL_ORIGIN}/api`
+  ? `${RENDER_API_ORIGIN}/api`
   : (import.meta.env.VITE_API_URL || '/api');
 
 export const SOCKET_BASE_URL = isVercelHost()
-  ? ACTIVE_TUNNEL_ORIGIN
+  ? RENDER_API_ORIGIN
   : (import.meta.env.VITE_SERVER_URL || '/');
