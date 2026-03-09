@@ -42,8 +42,8 @@ Purpose: Persistent execution history and current state, independent of chat mem
 
 - Active Phase: Implementation
 - Active Milestone: **Milestone 2 (Complete) — Pod Visibility, Lobby Mosaic & rsn.network Design** ✅
-- Current Session: Vercel build failure fix (T-049)
-- Overall Build Status: Shared + Client production builds passing, 248/248 tests passing
+- Current Session: Invites, light theme, landing page, animations (T-050)
+- Overall Build Status: Shared + Client + Server production builds passing, 248/248 tests passing
 - Last Updated: March 10, 2026
 
 ---
@@ -114,6 +114,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 | T-047 | rsn.network design integration | Completed | Copilot | Light theme, DM Sans font, landing page redesign, HowItWorks, About, Reasons pages, routes, sheep easter egg |
 | T-048 | Test fixes and git push | Completed | Copilot | Fixed session.service.test.ts mocks, all 248 tests passing, pushed to GitHub |
 | T-049 | Fix Vercel client build TS2322 in Lobby | Completed | Copilot | Added LiveKit type guard before VideoTrack usage; build command now passes |
+| T-050 | Fix invites, light theme, landing page, animations | Completed | Copilot | 7 fixes: invite 403, email delivery, type labels, landing redesign, light theme, animations, round audit |
 
 ---
 
@@ -2415,3 +2416,48 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - ✅ `cd client; npm run build` passed
 - Next immediate action:
   - Trigger/verify Vercel redeploy on latest commit
+
+---
+
+### 2026-03-10 04:00 - Entry T-050
+- Task ID: T-050
+- Task Title: Fix invites, light theme, landing page redesign, animations
+- Status: Completed
+- What changed:
+  1. **Invite accept 403 fix**: Relaxed email check in `acceptInvite()` — only enforces for single-use targeted invites (`maxUses === 1`). Shared/multi-use links can now be accepted by anyone.
+  2. **Invite email delivery**: Added `sendInviteEmail()` to email.service.ts with branded HTML template via Resend. Called from `createInvite()` when `inviteeEmail` is provided.
+  3. **Invite type labels**: InvitesPage shows pod/session/platform badges. CreateInviteModal rewritten to support all 3 types with dynamic form fields. InviteAcceptPage shows type-specific text.
+  4. **Landing page redesign**: Red CTA buttons (bg-red-600), decorative `{` `}` brackets in hero, sheep image (top-right, opacity-20), "How It Works" secondary CTA, hover-lift effects on cards, scroll-reveal on sections below fold.
+  5. **Light theme conversion**: Full app converted from dark (surface-*) to light (white bg, gray-*, [#1a1a2e] text). Updated AppLayout, Card, Badge, Button, and 28+ feature pages via bulk regex replacement.
+  6. **Animations**: Added CSS classes — `.scroll-reveal` (opacity+translateY transition), `.press-effect` (scale on active), `.hover-lift` (translateY+shadow on hover). Created `useScrollReveal.ts` IntersectionObserver hook.
+  7. **Round transition audit**: Reviewed full orchestration flow — logic is correct. `endRatingWindow` properly checks `roundNumber < config.numberOfRounds` and schedules next round. No changes needed.
+  8. **Test fix**: Added email service mock + 2 additional query mocks to invite.service.test.ts for new email sending code.
+- Files touched:
+  - server/src/services/invite/invite.service.ts
+  - server/src/services/email/email.service.ts
+  - server/src/__tests__/services/invite.service.test.ts
+  - client/src/features/invites/InvitesPage.tsx
+  - client/src/features/invites/CreateInviteModal.tsx
+  - client/src/features/invites/InviteAcceptPage.tsx
+  - client/src/features/public/LandingPage.tsx
+  - client/src/components/layout/AppLayout.tsx
+  - client/src/components/ui/Card.tsx, Badge.tsx, Button.tsx
+  - client/src/features/home/HomePage.tsx, PodsPage.tsx
+  - client/src/index.css
+  - client/src/hooks/useScrollReveal.ts (NEW)
+  - 28+ additional client files (bulk light theme conversion)
+  - progress.md
+- Decisions made:
+  - Shared/multi-use invite links skip email match — only single-use targeted invites enforce exact email.
+  - Light theme uses white bg, gray-50/100/200 accents, [#1a1a2e] text, indigo-600 active states.
+  - Red-600 CTA buttons on landing page to match rsn.network brand.
+  - Round transition logic confirmed correct — no code changes needed.
+- Validation Results:
+  - ✅ 248/248 tests passing (14 suites)
+  - ✅ Server TypeScript: 0 errors
+  - ✅ Client TypeScript: 0 errors
+  - ✅ `npm run build:shared` passed
+  - ✅ `cd client; npm run build` passed (chunk size warning only, non-fatal)
+  - ✅ Git pushed: 42 files changed, 722 insertions, 482 deletions
+- Next immediate action:
+  - Verify Render + Vercel redeploys on latest commit
