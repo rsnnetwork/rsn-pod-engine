@@ -2,7 +2,8 @@
 import dotenv from 'dotenv';
 import path from 'path';
 
-// Load .env from server directory
+// Load .env — Render secret file first, then local server directory
+dotenv.config({ path: '/etc/secrets/.env' });
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 export const config = {

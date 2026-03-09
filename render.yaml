@@ -17,14 +17,30 @@ services:
         value: production
       - key: PORT
         value: 3001
+      - key: LOG_LEVEL
+        value: info
+      - key: EMAIL_FROM
+        value: noreply@rsn.network
+      - key: EMAIL_PROVIDER
+        value: resend
       - key: DATABASE_URL
         sync: false
+      - key: DB_POOL_MIN
+        value: "2"
+      - key: DB_POOL_MAX
+        value: "10"
       - key: JWT_SECRET
         generateValue: true
+      - key: JWT_ACCESS_EXPIRY
+        value: 15m
+      - key: JWT_REFRESH_EXPIRY
+        value: 7d
+      - key: MAGIC_LINK_SECRET
+        sync: false
+      - key: MAGIC_LINK_EXPIRY_MINUTES
+        value: "60"
       - key: RESEND_API_KEY
         sync: false
-      - key: EMAIL_FROM
-        value: onboarding@resend.dev
       - key: LIVEKIT_API_KEY
         sync: false
       - key: LIVEKIT_API_SECRET
@@ -35,5 +51,7 @@ services:
         sync: false
       - key: API_BASE_URL
         sync: false
-      - key: LOG_LEVEL
-        value: info
+      - key: RATE_LIMIT_WINDOW_MS
+        value: "60000"
+      - key: RATE_LIMIT_MAX_REQUESTS
+        value: "100"
