@@ -31,6 +31,7 @@ export interface JwtPayload {
   sub: string;        // userId
   email: string;
   role: string;
+  displayName?: string;
   sessionId: string;
   iat: number;
   exp: number;

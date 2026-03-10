@@ -333,6 +333,7 @@ function generateTokenPair(user: User): AuthTokenPair {
     sub: user.id,
     email: user.email,
     role: user.role,
+    displayName: user.displayName || user.email,
     sessionId,
   };
 

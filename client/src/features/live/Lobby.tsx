@@ -1,4 +1,4 @@
-import { Users, Clock, Loader2, VideoOff } from 'lucide-react';
+import { Users, Clock, Loader2, VideoOff, Sparkles } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import { useSessionStore } from '@/stores/sessionStore';
 import {
@@ -28,30 +28,33 @@ function LobbyMosaic() {
     : 'grid-cols-3 sm:grid-cols-4 lg:grid-cols-5';
 
   return (
-    <div className={`grid ${gridCols} gap-2 w-full`}>
+    <div className={`grid ${gridCols} gap-3 w-full max-w-4xl mx-auto`}>
       {cameraTracks.map(trackRef => {
         const name = trackRef.participant.name || trackRef.participant.identity || 'User';
         const hasVideo = !!trackRef.publication?.track;
         return (
-          <div key={trackRef.participant.sid} className="relative rounded-xl overflow-hidden bg-gray-50 aspect-video flex items-center justify-center border border-gray-200">
+          <div key={trackRef.participant.sid} className="relative rounded-2xl overflow-hidden bg-gradient-to-br from-gray-50 to-gray-100 aspect-video flex items-center justify-center border border-gray-200 shadow-sm">
             {hasVideo && isTrackReference(trackRef) ? (
               <VideoTrack trackRef={trackRef} className="h-full w-full object-cover" />
             ) : (
-              <div className="flex flex-col items-center gap-1">
-                <div className="h-12 w-12 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 font-bold text-lg">
+              <div className="flex flex-col items-center gap-2">
+                <div className="h-14 w-14 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-500 font-bold text-xl shadow-inner">
                   {name.charAt(0).toUpperCase()}
                 </div>
-                <VideoOff className="h-3 w-3 text-gray-300" />
+                <VideoOff className="h-3.5 w-3.5 text-gray-300" />
               </div>
             )}
-            <div className="absolute bottom-1 left-1 bg-black/60 rounded px-1.5 py-0.5 text-[10px] text-white truncate max-w-[90%]">
+            <div className="absolute bottom-1.5 left-1.5 bg-black/50 backdrop-blur-sm rounded-lg px-2 py-0.5 text-[11px] text-white truncate max-w-[90%]">
               {name}
             </div>
           </div>
         );
       })}
       {cameraTracks.length === 0 && (
-        <div className="col-span-full text-center py-8 text-gray-400 text-sm">
+        <div className="col-span-full text-center py-12 text-gray-400 text-sm">
+          <div className="h-16 w-16 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-3">
+            <VideoOff className="h-6 w-6 text-gray-300" />
+          </div>
           Waiting for participants to enable cameras...
         </div>
       )}
@@ -59,55 +62,69 @@ function LobbyMosaic() {
   );
 }
 
-function LobbyStatusOverlay() {
+function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
   const { participants, isByeRound, currentRound, totalRounds, transitionStatus } = useSessionStore();
 
   return (
     <div className="text-center space-y-3">
       {isByeRound ? (
         <>
-          <h2 className="text-lg font-bold text-[#1a1a2e]">Bye Round</h2>
+          <h2 className="text-xl font-bold text-[#1a1a2e]">Bye Round</h2>
           <p className="text-gray-500 text-sm">You have a bye this round — sit tight!</p>
         </>
+      ) : transitionStatus === 'session_ending' ? (
+        <div className="flex flex-col items-center gap-2">
+          <Loader2 className="h-5 w-5 text-indigo-600 animate-spin" />
+          <p className="text-gray-600 text-sm font-medium">Session complete — preparing your recap...</p>
+        </div>
       ) : transitionStatus === 'between_rounds' ? (
-        <div className="flex items-center justify-center gap-2">
-          <Loader2 className="h-4 w-4 text-indigo-600 animate-spin" />
-          <p className="text-gray-500 text-sm">Preparing round {currentRound} of {totalRounds}...</p>
+        <div className="flex flex-col items-center gap-2">
+          <Loader2 className="h-5 w-5 text-indigo-600 animate-spin" />
+          <h2 className="text-xl font-bold text-[#1a1a2e]">Getting Ready</h2>
+          <p className="text-gray-500 text-sm">Preparing round {(currentRound || 0) + 1} of {totalRounds}...</p>
         </div>
       ) : transitionStatus === 'starting_session' ? (
-        <div className="flex items-center justify-center gap-2">
-          <Loader2 className="h-4 w-4 text-indigo-600 animate-spin" />
-          <p className="text-gray-500 text-sm">Session starting — preparing your first match...</p>
+        <div className="flex flex-col items-center gap-2">
+          <Loader2 className="h-5 w-5 text-indigo-600 animate-spin" />
+          <h2 className="text-xl font-bold text-[#1a1a2e]">Session Starting</h2>
+          <p className="text-gray-500 text-sm">Preparing your first match...</p>
         </div>
       ) : (
         <>
-          <h2 className="text-lg font-bold text-[#1a1a2e]">Lobby</h2>
-          <p className="text-gray-500 text-sm">The host will start the session soon</p>
+          <div className="inline-flex items-center justify-center h-12 w-12 rounded-full bg-indigo-50 text-indigo-500 mx-auto">
+            <Sparkles className="h-6 w-6" />
+          </div>
+          <h2 className="text-xl font-bold text-[#1a1a2e]">Lobby</h2>
+          <p className="text-gray-500 text-sm">
+            {isHost
+              ? 'You\'re the host — click Start Session below when everyone is ready'
+              : 'You\'re in the lobby — sit tight, the host will start the session soon!'}
+          </p>
         </>
       )}
-      <div className="flex items-center justify-center gap-2 text-gray-600 text-xs">
-        <Clock className="h-3 w-3" />
+      <div className="flex items-center justify-center gap-2 text-gray-500 text-xs">
+        <Users className="h-3.5 w-3.5" />
         <span>{participants.length} participant{participants.length !== 1 ? 's' : ''} connected</span>
       </div>
     </div>
   );
 }
 
-export default function Lobby() {
+export default function Lobby({ isHost = false }: { isHost?: boolean }) {
   const { participants, lobbyToken, lobbyUrl } = useSessionStore();
 
   // If we have a lobby token, render the video mosaic
   if (lobbyToken && lobbyUrl) {
     return (
-      <div className="flex-1 flex flex-col p-4 gap-4 overflow-auto">
-        <LobbyStatusOverlay />
+      <div className="flex-1 flex flex-col items-center p-6 gap-6 overflow-auto bg-gradient-to-b from-white to-gray-50/50">
+        <LobbyStatusOverlay isHost={isHost} />
         <LiveKitRoom
           token={lobbyToken}
           serverUrl={lobbyUrl}
           connect={true}
           video={true}
           audio={false}
-          className="flex-1"
+          className="flex-1 w-full max-w-4xl"
         >
           <RoomAudioRenderer />
           <LobbyMosaic />
@@ -118,15 +135,15 @@ export default function Lobby() {
 
   // Fallback: text-only lobby (no LiveKit credentials or lobby room)
   return (
-    <div className="flex-1 flex items-center justify-center p-4">
+    <div className="flex-1 flex items-center justify-center p-6 bg-gradient-to-b from-white to-gray-50/50">
       <Card className="max-w-lg w-full text-center">
-        <div className="inline-flex items-center justify-center h-16 w-16 rounded-full bg-indigo-50 text-indigo-600 mb-4">
-          <Users className="h-8 w-8" />
-        </div>
-        <LobbyStatusOverlay />
+        <LobbyStatusOverlay isHost={isHost} />
         <div className="mt-6 flex flex-wrap gap-2 justify-center">
           {participants.map(p => (
-            <span key={p.userId} className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600">
+            <span key={p.userId} className="inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-3 py-1.5 text-xs text-indigo-600 font-medium">
+              <span className="h-5 w-5 rounded-full bg-indigo-100 flex items-center justify-center text-[10px] font-bold">
+                {(p.displayName || 'U').charAt(0).toUpperCase()}
+              </span>
               {p.displayName || 'User'}
             </span>
           ))}

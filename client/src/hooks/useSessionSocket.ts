@@ -135,9 +135,12 @@ export default function useSessionSocket(sessionId: string) {
       store.setLiveKitToken(null, null);
       store.setMatch(null);
       store.setRoomId(null);
-      store.setTransitionStatus('between_rounds');
+      // If this was the last round, show session ending; otherwise between rounds
+      const state = useSessionStore.getState();
+      const isLastRound = state.currentRound >= state.totalRounds && state.totalRounds > 0;
+      store.setTransitionStatus(isLastRound ? 'session_ending' : 'between_rounds');
       store.setPhase('lobby');
-      setTimeout(() => store.setTransitionStatus(null), 3000);
+      if (!isLastRound) setTimeout(() => store.setTransitionStatus(null), 3000);
     });
 
     // ── Host broadcasts ──

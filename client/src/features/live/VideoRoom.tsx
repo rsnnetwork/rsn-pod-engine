@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { useSessionStore } from '@/stores/sessionStore';
 import Card from '@/components/ui/Card';
@@ -120,12 +120,14 @@ export default function VideoRoom() {
   const { timerSeconds, currentRound, totalRounds, isByeRound, liveKitToken, livekitUrl, currentRoomId, transitionStatus } = useSessionStore();
   const { setLiveKitToken } = useSessionStore();
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const retryCountRef = useRef(0);
   const { sessionId } = useParams();
   useEffect(() => {
     if (!liveKitToken && sessionId) {
       api.post(`/sessions/${sessionId}/token`, currentRoomId ? { roomId: currentRoomId } : {}).then(res => {
         const { token, livekitUrl: url } = res.data.data;
         setLiveKitToken(token, url);
+        retryCountRef.current = 0;
       }).catch(() => setConnectionError('Failed to get video room access'));
     }
   }, [liveKitToken, sessionId]);
@@ -189,18 +191,28 @@ export default function VideoRoom() {
         // Ignore disconnect during normal round transitions (server closes the room)
         if (useSessionStore.getState().phase !== 'matched') return;
         setTimeout(() => {
-          if (useSessionStore.getState().phase === 'matched') {
+          if (useSessionStore.getState().phase !== 'matched') return;
+          // Auto-retry once before showing error
+          if (retryCountRef.current < 1) {
+            retryCountRef.current++;
+            setLiveKitToken(null, null);
+          } else {
             setConnectionError('Disconnected from video room');
           }
-        }, 1500);
+        }, 3000);
       }}
       onError={(err) => {
         if (useSessionStore.getState().phase !== 'matched') return;
         setTimeout(() => {
-          if (useSessionStore.getState().phase === 'matched') {
+          if (useSessionStore.getState().phase !== 'matched') return;
+          // Auto-retry once before showing error
+          if (retryCountRef.current < 1) {
+            retryCountRef.current++;
+            setLiveKitToken(null, null);
+          } else {
             setConnectionError(err?.message || 'Video connection error');
           }
-        }, 1500);
+        }, 3000);
       }}
       className="flex-1 flex flex-col"
     >
