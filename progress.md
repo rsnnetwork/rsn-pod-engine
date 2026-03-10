@@ -2760,3 +2760,22 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - ✅ All 3 production builds pass (shared, server, client)
 - Next immediate action:
   - Deploy and re-test with ahmed rashid: Request-to-Join → Approve → Magic Link → Sign In (verify email lands in primary inbox and tab doesn't close)
+
+---
+
+### T-063 – Fix Neon idle connection pool errors
+- Timestamp: 2026-03-10
+- Status: **Completed**
+- What changed:
+  - `idleTimeoutMillis` in `server/src/db/index.ts` changed from `30_000` (30s) to `240_000` (4 min)
+  - Neon's PgBouncer pooler forcibly closes idle connections after ~5 minutes server-side. The pool was holding connections for only 30s but not detecting Neon's kill fast enough, causing `Connection terminated unexpectedly` pool errors. Setting idle timeout to 4 minutes ensures the pool proactively drops connections before Neon kills them.
+- Files touched:
+  - server/src/db/index.ts
+  - progress.md
+- Decisions made:
+  - 4 minutes (240_000ms) is safely under Neon's ~5-minute idle kill threshold.
+  - These errors were cosmetic (no queries failed, pool auto-reconnects) but noisy. Fix eliminates them entirely.
+- Validation Results:
+  - ✅ 250 server tests passing
+- Next immediate action:
+  - Monitor production logs — `Unexpected PostgreSQL pool error` messages should stop appearing after ~5 minutes of idle
