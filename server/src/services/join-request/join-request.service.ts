@@ -5,6 +5,7 @@ import { query } from '../../db';
 import logger from '../../config/logger';
 import config from '../../config';
 import { AppError } from '../../middleware/errors';
+import { ErrorCodes } from '@rsn/shared';
 import { sendJoinRequestConfirmationEmail, sendJoinRequestWelcomeEmail, sendJoinRequestDeclineEmail } from '../email/email.service';
 
 export interface JoinRequest {
@@ -51,7 +52,7 @@ export async function createJoinRequest(input: CreateJoinRequestInput): Promise<
     [input.email]
   );
   if (existing.rows.length > 0) {
-    throw new AppError('You already have a pending request.', 409);
+    throw new AppError(409, ErrorCodes.INVALID_INPUT, 'You already have a pending request.');
   }
 
   const result = await query(
@@ -87,11 +88,11 @@ export async function listJoinRequests(options: {
     whereClause = `WHERE status = $${params.length}`;
   }
 
-  const countResult = await query(
+  const countResult = await query<{ count: string }>(
     `SELECT COUNT(*) FROM join_requests ${whereClause}`,
     params
   );
-  const total = parseInt(countResult.rows[0].count, 10);
+  const total = parseInt(String(countResult.rows[0]?.count ?? '0'), 10);
 
   params.push(pageSize, offset);
   const result = await query(
@@ -110,7 +111,7 @@ export async function listJoinRequests(options: {
 export async function getJoinRequestById(id: string): Promise<JoinRequest> {
   const result = await query(`SELECT * FROM join_requests WHERE id = $1`, [id]);
   if (result.rows.length === 0) {
-    throw new AppError('Join request not found', 404);
+    throw new AppError(404, ErrorCodes.INVALID_INPUT, 'Join request not found');
   }
   return mapRow(result.rows[0]);
 }
@@ -130,7 +131,7 @@ export async function reviewJoinRequest(
   );
 
   if (result.rows.length === 0) {
-    throw new AppError('Join request not found', 404);
+    throw new AppError(404, ErrorCodes.INVALID_INPUT, 'Join request not found');
   }
 
   logger.info({ id, decision, reviewedBy }, 'Join request reviewed');

@@ -121,6 +121,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 | T-054 | Change 1.0: Profile, Settings/Billing, Admin Dashboard | Completed | Copilot | Avatar upload, phone/WhatsApp, email read-only, billing under settings, full admin dashboard with stats/health |
 | T-055 | Change 1.0: User role tiers + RBAC hierarchy | Completed | Copilot | 7 roles (super_admin, admin, host, founding_member, pro, member, free), hierarchy-based RBAC, all admin gates updated |
 | T-056 | Fix main deployment build failure | Completed | Copilot | Removed unused `Phone` import in ProfilePage; shared + client production builds pass locally |
+| T-057 | Fix Render backend build failure | Completed | Copilot | Updated join-request service for new AppError signature and typed COUNT query; Render build command now passes locally |
 
 ---
 
@@ -2597,3 +2598,28 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - ✅ Vite production bundle generated successfully
 - Next immediate action:
   - Push fix commit to `main` and trigger Vercel redeploy
+
+---
+
+### 2026-03-10 21:45 - Entry T-057
+- Task ID: T-057
+- Task Title: Fix Render backend build failure
+- Status: Completed
+- What changed:
+  1. Reproduced Render backend build failure locally using the same command chain (`npm install --include=dev`, `build:shared`, `build:server`, migrations copy).
+  2. Fixed `join-request.service.ts` compile issues caused by recent API/type evolution:
+     - Updated `AppError` calls to new constructor shape `(statusCode, code, message)`.
+     - Imported and used `ErrorCodes.INVALID_INPUT`.
+     - Typed `COUNT(*)` query result as `{ count: string }` and safely parsed to number.
+  3. Re-ran full Render-equivalent build flow successfully.
+- Files touched:
+  - server/src/services/join-request/join-request.service.ts
+  - progress.md
+- Decisions made:
+  - Preserved strict TypeScript and aligned service code with centralized error contract instead of weakening compile settings.
+- Validation Results:
+  - ✅ `npm run build:server` passed
+  - ✅ `npm install --include=dev && npm run build:shared && npm run build:server` passed
+  - ✅ migrations copy step succeeded locally
+- Next immediate action:
+  - Push `T-057` fix to `main` and re-trigger Render deploy
