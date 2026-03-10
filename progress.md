@@ -44,7 +44,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 - Active Milestone: **Change 1.0 Complete — Font, Logo, Landing, Login, Admin, Role Tiers**
 - Current Session: Change 1.0 implementation (T-051 through T-055)
 - Overall Build Status: Shared + Client + Server production builds passing, 279/279 tests passing (250 server + 29 shared)
-- Last Updated: March 11, 2026 (T-065)
+- Last Updated: March 11, 2026 (T-066)
 
 ---
 
@@ -127,6 +127,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 | T-060 | Enable super_admin join-request approvals + fresh DB cleanup | Completed | Copilot | Fixed AdminJoinRequestsPage guard to allow super_admin; cleaned production DB to keep only alihamza user and zero pods/sessions/invites/join-requests |
 | T-061 | Auth gate: require approved join request or invite code to sign up | Completed | Copilot | New users blocked from magic link + Google OAuth signup unless email has approved join_request or valid invite code; existing users can login normally; REGISTRATION_BLOCKED error code added; Google OAuth redirect passes error; LoginPage shows gate error message; 7 tests added/updated |
 | T-065 | Fix live session — video errors, participants, round flow, recap email | Completed | Copilot | 6 bugs fixed: room ID mismatch (match- vs session- prefix), late joiner participant sync (session:state), closing_lobby client handler, per-user recap email stats, partner display names in match:assigned |
+| T-066 | Fix session completion flow, host-aware lobby, video retry, mosaic polish, join gating | Completed | Copilot | 7 fixes: video auto-retry + 3s grace, HostControls derives state from store + hides Start Round after all rounds, host-aware lobby text, polished mosaic grid, JWT displayName fix (lobby shows real names), disabled Join for non-host when scheduled, session_ending on last round |
 
 ---
 
@@ -2834,3 +2835,38 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - ✅ All 3 production builds pass (shared, server, client)
 - Next immediate action:
   - Deploy and verify: video connects without disconnect errors, late joiners see participants, session transitions through closing_lobby to complete, recap emails show correct stats, partner names display correctly
+
+---
+
+### T-066 – Fix session completion flow, host-aware lobby, video retry, mosaic polish, join gating
+- Timestamp: 2026-03-11
+- Status: **Completed**
+- What changed:
+  1. **Phase A: VideoRoom auto-retry + grace period** — Extended disconnect/error grace from 1.5s→3s. Added `retryCountRef` — on first disconnect/error, clears token and re-fetches (auto-retry once) instead of immediately showing error UI. Only shows error on second failure.
+  2. **Phase B: HostControls state-aware buttons** — Replaced `useState(false)` for `sessionStarted` with store-derived expression: `currentRound > 0 || transitionStatus === 'starting_session' || 'between_rounds' || 'session_ending'`. Added `allRoundsDone = currentRound >= totalRounds` guard — Start Round button hidden after all rounds complete.
+  3. **Phase C: Host-aware lobby text** — `LiveSessionPage` now passes `isHost` prop to `<Lobby>`. `LobbyStatusOverlay` accepts `isHost` and shows "You're the host — click Start Session below when everyone is ready" for hosts, "sit tight, the host will start the session soon!" for non-hosts. Added Sparkles icon.
+  4. **Phase D: Lobby mosaic polish + displayName fix** — Grid: added `max-w-4xl mx-auto`, `gap-3`, `rounded-2xl`, gradient backgrounds, larger avatar circles, `backdrop-blur-sm` on name labels, empty state with VideoOff icon. **Root cause fix**: Added `displayName` to JWT access token payload in `identity.service.ts` and `JwtPayload` type in `shared/types/auth.ts`. Socket.IO middleware already does `socket.data.displayName = payload.displayName || payload.email` — now gets the real name.
+  5. **Phase E: Gate Join Session button** — `SessionDetailPage` Join button now `disabled` when `session.status === 'scheduled' && !isHost`. Text changes to "Awaiting Host" when disabled. Hover tooltip: "Available when the host starts the session".
+  6. **Phase F: HostControls session ending state** — When `transitionStatus === 'session_ending'`, HostControls renders a simple centered spinner with "Session ending — preparing your recap..." instead of action buttons. Uses Loader2 icon.
+  7. **Phase G: useSessionSocket last-round handling** — `rating:window_closed` handler now checks `currentRound >= totalRounds`. If last round: sets `session_ending` status (not `between_rounds`) and does NOT auto-clear the status after 3s (server will fire `session:completed` instead).
+- Files touched:
+  - client/src/features/live/VideoRoom.tsx (retry ref, extended grace, auto-retry logic)
+  - client/src/features/live/HostControls.tsx (derived state, allRoundsDone guard, ending state)
+  - client/src/features/live/Lobby.tsx (isHost prop, host-aware text, mosaic polish, imports)
+  - client/src/features/live/LiveSessionPage.tsx (pass isHost to Lobby)
+  - client/src/hooks/useSessionSocket.ts (last-round session_ending)
+  - client/src/features/sessions/SessionDetailPage.tsx (disabled Join, tooltip)
+  - shared/src/types/auth.ts (displayName on JwtPayload)
+  - server/src/services/identity/identity.service.ts (displayName in accessPayload)
+- Decisions made:
+  - Auto-retry once is sufficient — more than that risks loops on genuine server issues
+  - 3s grace period balances between false-positive errors and real disconnect detection
+  - `session_ending` transition status persists (no auto-clear) because `session:completed` handles the final transition
+  - Host sees "Start Session" on SessionDetailPage; non-host sees disabled "Awaiting Host"
+- Validation Results:
+  - ✅ 250 server tests passing
+  - ✅ 29 shared tests passing
+  - ✅ All 3 production builds pass (shared, server, client)
+  - ✅ Zero TypeScript errors across entire workspace
+- Next immediate action:
+  - Deploy and verify: session completes after all rounds (no stuck Start Round), lobby shows display names not emails, host sees correct text, video retries on disconnect, Join button gated for non-host
