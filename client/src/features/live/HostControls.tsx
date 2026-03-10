@@ -6,11 +6,11 @@ import { getSocket } from '@/lib/socket';
 interface Props { sessionId: string; }
 
 export default function HostControls({ sessionId }: Props) {
-  const { participants, phase, currentRound, totalRounds, transitionStatus } = useSessionStore();
+  const { participants, phase, currentRound, totalRounds, transitionStatus, sessionStatus } = useSessionStore();
   const socket = getSocket();
 
-  // Derive sessionStarted from store state instead of local useState
-  const sessionStarted = currentRound > 0 || transitionStatus === 'starting_session' || transitionStatus === 'between_rounds' || transitionStatus === 'session_ending';
+  // Session has been started if status is lobby_open or later, OR if we're in a transition state
+  const sessionStarted = sessionStatus !== 'scheduled' || transitionStatus === 'starting_session' || currentRound > 0;
   const isSessionEnding = transitionStatus === 'session_ending';
   const allRoundsDone = currentRound >= totalRounds && totalRounds > 0;
 

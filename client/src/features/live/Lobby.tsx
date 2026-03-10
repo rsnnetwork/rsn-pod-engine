@@ -63,7 +63,10 @@ function LobbyMosaic() {
 }
 
 function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
-  const { participants, isByeRound, currentRound, totalRounds, transitionStatus } = useSessionStore();
+  const { participants, isByeRound, currentRound, totalRounds, transitionStatus, sessionStatus, hostInLobby } = useSessionStore();
+
+  // Session hasn't been started yet by host
+  const isScheduled = sessionStatus === 'scheduled';
 
   return (
     <div className="text-center space-y-3">
@@ -89,7 +92,23 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
           <h2 className="text-xl font-bold text-[#1a1a2e]">Session Starting</h2>
           <p className="text-gray-500 text-sm">Preparing your first match...</p>
         </div>
+      ) : isScheduled ? (
+        // Session not yet started by host
+        <>
+          <div className="inline-flex items-center justify-center h-12 w-12 rounded-full bg-amber-50 text-amber-500 mx-auto">
+            <Sparkles className="h-6 w-6" />
+          </div>
+          <h2 className="text-xl font-bold text-[#1a1a2e]">Waiting Room</h2>
+          <p className="text-gray-500 text-sm">
+            {isHost
+              ? 'You\'re the host — click Start Session below when everyone is ready'
+              : hostInLobby
+                ? 'The host is here! They\'ll start the session shortly.'
+                : 'Waiting for the host to join and start the session...'}
+          </p>
+        </>
       ) : (
+        // Session is active (lobby_open or later)
         <>
           <div className="inline-flex items-center justify-center h-12 w-12 rounded-full bg-indigo-50 text-indigo-500 mx-auto">
             <Sparkles className="h-6 w-6" />
@@ -97,8 +116,8 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
           <h2 className="text-xl font-bold text-[#1a1a2e]">Lobby</h2>
           <p className="text-gray-500 text-sm">
             {isHost
-              ? 'You\'re the host — click Start Session below when everyone is ready'
-              : 'You\'re in the lobby — sit tight, the host will start the session soon!'}
+              ? 'You\'re the host — click Start Round below when everyone is ready'
+              : 'You\'re in the lobby — sit tight, the host will start the round soon!'}
           </p>
         </>
       )}

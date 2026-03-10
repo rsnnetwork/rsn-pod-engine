@@ -15,10 +15,16 @@ export interface ServerToClientEvents {
   'match:reassigned': (data: { matchId: string; newPartnerId: string; partnerDisplayName?: string; roomId: string }) => void;
 
   // Participant events
-  'participant:joined': (data: { userId: string; displayName: string }) => void;
-  'participant:left': (data: { userId: string }) => void;
+  'participant:joined': (data: { userId: string; displayName: string; isHost?: boolean }) => void;
+  'participant:left': (data: { userId: string; isHost?: boolean }) => void;
   'participant:count': (data: { count: number }) => void;
-  'session:state': (data: { participants: { userId: string; displayName: string }[] }) => void;
+  'session:state': (data: {
+    participants: { userId: string; displayName: string }[];
+    sessionStatus?: string;
+    hostInLobby?: boolean;
+    currentRound?: number;
+    totalRounds?: number;
+  }) => void;
 
   // Rating window
   'rating:window_open': (data: { matchId: string; partnerId: string; roundNumber: number; durationSeconds: number }) => void;

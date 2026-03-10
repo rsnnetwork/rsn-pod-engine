@@ -198,23 +198,15 @@ export default function SessionDetailPage() {
           </>
         )}
         {(session.status === 'scheduled' || session.status === 'lobby_open' || session.status === 'round_active' || session.status === 'round_rating' || session.status === 'round_transition') && (
-          <div className="relative group">
-            <Button
-              variant={isRegistered ? 'primary' : 'secondary'}
-              onClick={() => navigate(`/session/${sessionId}/live`)}
-              disabled={session.status === 'scheduled' && !isHost}
-            >
-              <Play className="h-4 w-4 mr-2" />
-              {session.status === 'scheduled'
-                ? (isHost ? 'Start Session' : 'Awaiting Host')
-                : 'Join Live'}
-            </Button>
-            {session.status === 'scheduled' && !isHost && (
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-gray-800 text-white text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-                Available when the host starts the session
-              </div>
-            )}
-          </div>
+          <Button
+            variant={isRegistered ? 'primary' : 'secondary'}
+            onClick={() => navigate(`/session/${sessionId}/live`)}
+          >
+            <Play className="h-4 w-4 mr-2" />
+            {session.status === 'scheduled'
+              ? (isHost ? 'Start Session' : 'Enter Lobby')
+              : 'Join Live'}
+          </Button>
         )}
         {isHost && (
           <Button variant="secondary" onClick={() => navigate(`/session/${sessionId}/host`)}>

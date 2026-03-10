@@ -45,16 +45,26 @@ export default function useSessionSocket(sessionId: string) {
     }
 
     // ── Participants ──
-    socket.on('participant:joined', (data: any) =>
-      store.addParticipant({ userId: data.userId, displayName: data.displayName }));
-    socket.on('participant:left', (data: any) => store.removeParticipant(data.userId));
+    socket.on('participant:joined', (data: any) => {
+      store.addParticipant({ userId: data.userId, displayName: data.displayName });
+      if (data.isHost) store.setHostInLobby(true);
+    });
+    socket.on('participant:left', (data: any) => {
+      store.removeParticipant(data.userId);
+      if (data.isHost) store.setHostInLobby(false);
+    });
     socket.on('participant:count', () => { /* count managed via join/leave */ });
     socket.on('session:state', (data: any) => {
       if (data.participants) store.setParticipants(data.participants);
+      if (data.sessionStatus) store.setSessionStatus(data.sessionStatus);
+      if (data.hostInLobby !== undefined) store.setHostInLobby(data.hostInLobby);
+      if (data.currentRound !== undefined) store.setRound(data.currentRound);
+      if (data.totalRounds !== undefined) store.setTotalRounds(data.totalRounds);
     });
 
     // ── Session lifecycle ──
     socket.on('session:status_changed', (data: any) => {
+      store.setSessionStatus(data.status);
       if (data.status === 'completed') { clearTimer(); store.setTransitionStatus('session_ending'); setTimeout(() => { store.setTransitionStatus(null); store.setPhase('complete'); }, 1500); }
       if (data.status === 'lobby_open') store.setTransitionStatus('starting_session');
       if (data.status === 'closing_lobby') store.setTransitionStatus('session_ending');

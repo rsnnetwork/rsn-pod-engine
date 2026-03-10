@@ -158,26 +158,44 @@ async function handleJoinSession(
       // Participant may not exist (e.g. host who's not a participant) — that's OK
     }
 
-    // Notify others
+    // Notify others — include isHost flag for client-side tracking
+    const isHost = session.hostUserId === userId;
     io.to(sessionRoom(data.sessionId)).emit('participant:joined', {
       userId,
       displayName: (socket.data as any)?.displayName || 'Unknown',
+      isHost,
     });
 
     // Send current participant count
     const count = await sessionService.getParticipantCount(data.sessionId);
     io.to(sessionRoom(data.sessionId)).emit('participant:count', { count });
 
-    // Send full participant list to the JOINING socket so they see who's already here
+    // Send session state to the JOINING socket: only socket-connected participants, session status, host presence
     try {
-      const allParticipantsResult = await query<{ userId: string; displayName: string }>(
-        `SELECT u.id AS "userId", u.display_name AS "displayName"
-         FROM session_participants sp
-         JOIN users u ON u.id = sp.user_id
-         WHERE sp.session_id = $1 AND sp.status NOT IN ('removed', 'no_show')`,
-        [data.sessionId]
-      );
-      socket.emit('session:state', { participants: allParticipantsResult.rows });
+      // Get only socket-connected participants from this session room
+      const socketsInRoom = await io.in(sessionRoom(data.sessionId)).fetchSockets();
+      const connectedParticipants = socketsInRoom
+        .map(s => ({
+          userId: (s.data as any)?.userId,
+          displayName: (s.data as any)?.displayName || 'User',
+        }))
+        .filter(p => p.userId);
+      
+      // Check if host is among connected participants
+      const hostInLobby = socketsInRoom.some(s => (s.data as any)?.userId === session.hostUserId);
+      
+      // Get session config for totalRounds
+      const config = typeof session.config === 'string'
+        ? JSON.parse(session.config as unknown as string)
+        : session.config || {};
+      
+      socket.emit('session:state', {
+        participants: connectedParticipants,
+        sessionStatus: activeSession?.status || session.status,
+        hostInLobby,
+        currentRound: activeSession?.currentRound || 0,
+        totalRounds: config.numberOfRounds || 5,
+      });
     } catch (stateErr) {
       logger.warn({ err: stateErr }, 'Failed to send initial session state');
     }
@@ -282,7 +300,11 @@ async function handleLeaveSession(
     data.sessionId, userId, ParticipantStatus.LEFT
   );
 
-  io.to(sessionRoom(data.sessionId)).emit('participant:left', { userId });
+  // Check if leaving user is host
+  const session = await sessionService.getSessionById(data.sessionId).catch(() => null);
+  const isHost = session?.hostUserId === userId;
+
+  io.to(sessionRoom(data.sessionId)).emit('participant:left', { userId, isHost });
 
   const count = await sessionService.getParticipantCount(data.sessionId);
   io.to(sessionRoom(data.sessionId)).emit('participant:count', { count });

@@ -19,11 +19,14 @@ type TransitionStatus =
   | 'round_ending'
   | 'between_rounds'
   | 'session_ending';
+type SessionStatus = 'scheduled' | 'lobby_open' | 'round_active' | 'round_rating' | 'round_transition' | 'closing_lobby' | 'completed' | 'cancelled';
 
 interface SessionLiveState {
   phase: SessionPhase;
   connectionStatus: ConnectionStatus;
   transitionStatus: TransitionStatus;
+  sessionStatus: SessionStatus;
+  hostInLobby: boolean;
   totalRounds: number;
   participants: Participant[];
   currentMatch: MatchPartner | null;
@@ -44,6 +47,8 @@ interface SessionLiveState {
   setPhase: (phase: SessionPhase) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setTransitionStatus: (status: TransitionStatus) => void;
+  setSessionStatus: (status: SessionStatus) => void;
+  setHostInLobby: (inLobby: boolean) => void;
   setTotalRounds: (total: number) => void;
   setParticipants: (p: Participant[]) => void;
   addParticipant: (p: Participant) => void;
@@ -66,12 +71,14 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   phase: 'lobby',
   connectionStatus: 'connecting',
   transitionStatus: null,
+  sessionStatus: 'scheduled',
+  hostInLobby: false,
   totalRounds: 5,
   participants: [],
   currentMatch: null,
   currentMatchId: null,
   timerSeconds: 0,
-  currentRound: 1,
+  currentRound: 0,
   broadcasts: [],
   error: null,
   isReconnecting: false,
@@ -86,6 +93,8 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   setPhase: (phase) => set({ phase }),
   setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
   setTransitionStatus: (transitionStatus) => set({ transitionStatus }),
+  setSessionStatus: (sessionStatus) => set({ sessionStatus }),
+  setHostInLobby: (hostInLobby) => set({ hostInLobby }),
   setTotalRounds: (totalRounds) => set({ totalRounds }),
   setParticipants: (participants) => set({ participants }),
   addParticipant: (p) => set((s) => ({
@@ -106,9 +115,10 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   setRoomId: (currentRoomId) => set({ currentRoomId }),
   setLobbyToken: (lobbyToken, lobbyUrl = null, lobbyRoomId = null) => set({ lobbyToken, lobbyUrl, lobbyRoomId }),
   reset: () => set({
-    phase: 'lobby', connectionStatus: 'connecting', transitionStatus: null, totalRounds: 5,
+    phase: 'lobby', connectionStatus: 'connecting', transitionStatus: null,
+    sessionStatus: 'scheduled', hostInLobby: false, totalRounds: 5,
     participants: [], currentMatch: null, currentMatchId: null,
-    timerSeconds: 0, currentRound: 1, broadcasts: [], error: null,
+    timerSeconds: 0, currentRound: 0, broadcasts: [], error: null,
     isReconnecting: false, isByeRound: false, liveKitToken: null, livekitUrl: null, currentRoomId: null,
     lobbyToken: null, lobbyUrl: null, lobbyRoomId: null,
   }),
