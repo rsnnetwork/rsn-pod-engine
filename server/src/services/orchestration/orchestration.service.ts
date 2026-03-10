@@ -168,6 +168,20 @@ async function handleJoinSession(
     const count = await sessionService.getParticipantCount(data.sessionId);
     io.to(sessionRoom(data.sessionId)).emit('participant:count', { count });
 
+    // Send full participant list to the JOINING socket so they see who's already here
+    try {
+      const allParticipantsResult = await query<{ userId: string; displayName: string }>(
+        `SELECT u.id AS "userId", u.display_name AS "displayName"
+         FROM session_participants sp
+         JOIN users u ON u.id = sp.user_id
+         WHERE sp.session_id = $1 AND sp.status NOT IN ('removed', 'no_show')`,
+        [data.sessionId]
+      );
+      socket.emit('session:state', { participants: allParticipantsResult.rows });
+    } catch (stateErr) {
+      logger.warn({ err: stateErr }, 'Failed to send initial session state');
+    }
+
     // If in lobby phase and session has a lobby room, send lobby token for video mosaic
     if (session.lobbyRoomId && (session.status === SessionStatus.LOBBY_OPEN || (activeSession && activeSession.status === SessionStatus.LOBBY_OPEN))) {
       try {
@@ -197,6 +211,12 @@ async function handleJoinSession(
         const partnerId = userMatch.participantAId === userId
           ? userMatch.participantBId : userMatch.participantAId;
 
+        // Look up partner display name
+        const partnerNameResult = await query<{ displayName: string }>(
+          `SELECT display_name AS "displayName" FROM users WHERE id = $1`, [partnerId]
+        );
+        const partnerDisplayName = partnerNameResult.rows[0]?.displayName || 'Partner';
+
         // Restore participant status to IN_ROUND
         await sessionService.updateParticipantStatus(
           data.sessionId, userId, ParticipantStatus.IN_ROUND
@@ -205,6 +225,7 @@ async function handleJoinSession(
         socket.emit('match:assigned', {
           matchId: userMatch.id,
           partnerId,
+          partnerDisplayName,
           roomId: userMatch.roomId || '',
           roundNumber: activeSession.currentRound,
         });
@@ -803,7 +824,8 @@ async function transitionToRound(
 
     // Activate matches, create LiveKit rooms, and notify participants
     for (const match of matches) {
-      const roomId = match.roomId || `session-${sessionId}-round-${roundNumber}-${match.id.slice(0, 8)}`;
+      const matchIdShort = match.id.slice(0, 8);
+      const roomId = match.roomId || videoService.matchRoomId(sessionId, roundNumber, matchIdShort);
 
       // Create a LiveKit room for this match before assigning participants
       try {
@@ -820,10 +842,18 @@ async function transitionToRound(
       matchedUserIds.add(match.participantAId);
       matchedUserIds.add(match.participantBId);
 
+      // Look up display names for both participants
+      const namesResult = await query<{ id: string; displayName: string }>(
+        `SELECT id, display_name AS "displayName" FROM users WHERE id = ANY($1)`,
+        [[match.participantAId, match.participantBId]]
+      );
+      const nameMap = new Map(namesResult.rows.map(r => [r.id, r.displayName]));
+
       // Notify participant A
       io.to(userRoom(match.participantAId)).emit('match:assigned', {
         matchId: match.id,
         partnerId: match.participantBId,
+        partnerDisplayName: nameMap.get(match.participantBId) || 'Partner',
         roomId,
         roundNumber,
       });
@@ -832,6 +862,7 @@ async function transitionToRound(
       io.to(userRoom(match.participantBId)).emit('match:assigned', {
         matchId: match.id,
         partnerId: match.participantAId,
+        partnerDisplayName: nameMap.get(match.participantAId) || 'Partner',
         roomId,
         roundNumber,
       });
@@ -1087,8 +1118,6 @@ async function sendRecapEmails(sessionId: string): Promise<void> {
   if (sessionResult.rows.length === 0) return;
   const sessionTitle = sessionResult.rows[0].title;
 
-  const stats = await ratingService.getSessionRatingStats(sessionId);
-
   const participantsResult = await query<{ email: string; displayName: string; userId: string }>(
     `SELECT u.email, u.display_name AS "displayName", u.id AS "userId"
      FROM session_participants sp
@@ -1099,11 +1128,45 @@ async function sendRecapEmails(sessionId: string): Promise<void> {
 
   for (const p of participantsResult.rows) {
     try {
+      // Per-user stats: unique partners met from completed matches
+      const peopleMetResult = await query<{ count: string }>(
+        `SELECT COUNT(DISTINCT CASE
+            WHEN participant_a_id = $1 THEN participant_b_id
+            WHEN participant_b_id = $1 THEN participant_a_id
+         END)::text AS count
+         FROM matches
+         WHERE session_id = $2 AND status = 'completed'
+           AND (participant_a_id = $1 OR participant_b_id = $1)`,
+        [p.userId, sessionId]
+      );
+      const peopleMet = parseInt(peopleMetResult.rows[0]?.count || '0', 10);
+
+      // Avg quality score from ratings submitted BY this user in this session
+      const avgRatingResult = await query<{ avg: string }>(
+        `SELECT COALESCE(AVG(r.quality_score), 0)::text AS avg
+         FROM ratings r
+         JOIN matches m ON m.id = r.match_id
+         WHERE r.from_user_id = $1 AND m.session_id = $2`,
+        [p.userId, sessionId]
+      );
+      const avgRating = parseFloat(avgRatingResult.rows[0]?.avg || '0');
+
+      // Mutual connections from encounter_history
+      const mutualResult = await query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count
+         FROM encounter_history
+         WHERE mutual_meet_again = TRUE
+           AND last_session_id = $1
+           AND (user_a_id = $2 OR user_b_id = $2)`,
+        [sessionId, p.userId]
+      );
+      const mutualConnections = parseInt(mutualResult.rows[0]?.count || '0', 10);
+
       await emailService.sendSessionRecapEmail(p.email, p.displayName || 'there', {
         sessionTitle,
-        peopleMet: stats.totalRatings, // approximate
-        mutualConnections: stats.mutualMeetAgainCount,
-        avgRating: stats.avgQualityScore,
+        peopleMet,
+        mutualConnections,
+        avgRating,
         recapUrl: `${appConfig.clientUrl}/sessions/${sessionId}/recap`,
       });
     } catch (err) {

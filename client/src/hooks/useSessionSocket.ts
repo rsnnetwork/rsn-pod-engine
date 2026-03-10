@@ -49,11 +49,15 @@ export default function useSessionSocket(sessionId: string) {
       store.addParticipant({ userId: data.userId, displayName: data.displayName }));
     socket.on('participant:left', (data: any) => store.removeParticipant(data.userId));
     socket.on('participant:count', () => { /* count managed via join/leave */ });
+    socket.on('session:state', (data: any) => {
+      if (data.participants) store.setParticipants(data.participants);
+    });
 
     // ── Session lifecycle ──
     socket.on('session:status_changed', (data: any) => {
       if (data.status === 'completed') { clearTimer(); store.setTransitionStatus('session_ending'); setTimeout(() => { store.setTransitionStatus(null); store.setPhase('complete'); }, 1500); }
       if (data.status === 'lobby_open') store.setTransitionStatus('starting_session');
+      if (data.status === 'closing_lobby') store.setTransitionStatus('session_ending');
       if (data.currentRound) store.setRound(data.currentRound);
     });
 
@@ -86,7 +90,7 @@ export default function useSessionSocket(sessionId: string) {
     socket.on('match:assigned', (data: any) => {
       store.setByeRound(false);
       store.setTransitionStatus('preparing_match');
-      store.setMatch({ userId: data.partnerId, displayName: data.partnerId }, data.matchId);
+      store.setMatch({ userId: data.partnerId, displayName: data.partnerDisplayName || data.partnerId }, data.matchId);
       store.setPhase('matched');
       // Store roomId for VideoRoom backup fetch
       if (data.roomId) store.setRoomId(data.roomId);
@@ -100,7 +104,7 @@ export default function useSessionSocket(sessionId: string) {
 
     socket.on('match:reassigned', (data: any) => {
       store.setTransitionStatus('preparing_match');
-      store.setMatch({ userId: data.newPartnerId, displayName: data.newPartnerId }, data.matchId || null);
+      store.setMatch({ userId: data.newPartnerId, displayName: data.partnerDisplayName || data.newPartnerId }, data.matchId || null);
       store.setPhase('matched');
       // Re-fetch token for new room
       api.post(`/sessions/${sessionId}/token`, { roomId: data.roomId }).then(res => {
