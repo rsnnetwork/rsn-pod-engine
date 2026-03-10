@@ -44,7 +44,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 - Active Milestone: **Change 1.0 Complete — Font, Logo, Landing, Login, Admin, Role Tiers**
 - Current Session: Change 1.0 implementation (T-051 through T-055)
 - Overall Build Status: Shared + Client + Server production builds passing, 279/279 tests passing (250 server + 29 shared)
-- Last Updated: March 10, 2026 (T-061)
+- Last Updated: March 11, 2026 (T-065)
 
 ---
 
@@ -126,6 +126,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 | T-059 | Fix sessions listing, invite counts, DB reset | Completed | Copilot | Sessions from private pods now visible to members on Events page; dashboard invite accepted count uses useCount sum; DB reset includes join_requests table/enum; errorHandler test mock fixed |
 | T-060 | Enable super_admin join-request approvals + fresh DB cleanup | Completed | Copilot | Fixed AdminJoinRequestsPage guard to allow super_admin; cleaned production DB to keep only alihamza user and zero pods/sessions/invites/join-requests |
 | T-061 | Auth gate: require approved join request or invite code to sign up | Completed | Copilot | New users blocked from magic link + Google OAuth signup unless email has approved join_request or valid invite code; existing users can login normally; REGISTRATION_BLOCKED error code added; Google OAuth redirect passes error; LoginPage shows gate error message; 7 tests added/updated |
+| T-065 | Fix live session — video errors, participants, round flow, recap email | Completed | Copilot | 6 bugs fixed: room ID mismatch (match- vs session- prefix), late joiner participant sync (session:state), closing_lobby client handler, per-user recap email stats, partner display names in match:assigned |
 
 ---
 
@@ -2805,3 +2806,31 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - ✅ All 3 production builds pass (shared, server, client)
 - Next immediate action:
   - Deploy and re-test live session: 2+ participants, 2 rounds configured, verify lobby mosaic shows, round 1 ends cleanly, round 2 starts, session completes after round 2
+
+---
+
+### T-065 – Fix live session — video errors, participants, round flow, recap email
+- Timestamp: 2026-03-11
+- Status: **Completed**
+- What changed:
+  1. **Phase A: Room ID mismatch (ROOT CAUSE of video errors)** — `transitionToRound` had a fallback room ID using `session-${id}-round-${n}-${short}` but `createMatchRoom` creates rooms named `match-${id}-r${n}-${short}`. Tokens were issued for the wrong room name. Fixed by replacing the fallback with `videoService.matchRoomId()`.
+  2. **Phase B: Late joiners don't see existing participants** — After joining, the server now queries all current participants and emits `session:state` with the full participant list to the joining socket. Client added `session:state` handler that calls `store.setParticipants()`.
+  3. **Phase C: closing_lobby not handled on client** — Added `closing_lobby` handling in `useSessionSocket.ts` `session:status_changed` handler. Sets `transitionStatus('session_ending')` so the user sees the session-ending overlay. `session:completed` event (fired after closing lobby timer) handles the final transition.
+  4. **Phase D: Recap email showing 0 stats** — Replaced session-wide stats with per-user stats: `peopleMet` = COUNT DISTINCT partners from completed matches involving user, `avgRating` = AVG quality_score from ratings BY user, `mutualConnections` = encounter_history with mutual_meet_again for this user in this session.
+  5. **Phase E: Partner display name in match:assigned** — Added display name query for both participants in `transitionToRound` and the reconnection handler. `partnerDisplayName` field added to `match:assigned` event payload. Client updated to use `data.partnerDisplayName` instead of `data.partnerId` for display.
+  6. **Shared types updated** — `ServerToClientEvents` now includes `partnerDisplayName?` on `match:assigned`/`match:reassigned`, and new `session:state` event.
+- Files touched:
+  - server/src/services/orchestration/orchestration.service.ts (room ID, initial state, partner names, recap stats)
+  - client/src/hooks/useSessionSocket.ts (session:state, closing_lobby, partnerDisplayName)
+  - shared/src/types/events.ts (updated ServerToClientEvents)
+  - progress.md
+- Decisions made:
+  - `peopleMet` = unique partners from completed matches (not rating count). You met them even if you didn't rate.
+  - `closing_lobby` shows "session ending" overlay; `session:completed` fires after closing lobby timer for final transition.
+  - Room IDs always use `videoService.matchRoomId()` for consistency between creation and token issuance.
+- Validation Results:
+  - ✅ 250 server tests passing
+  - ✅ 29 shared tests passing
+  - ✅ All 3 production builds pass (shared, server, client)
+- Next immediate action:
+  - Deploy and verify: video connects without disconnect errors, late joiners see participants, session transitions through closing_lobby to complete, recap emails show correct stats, partner names display correctly
