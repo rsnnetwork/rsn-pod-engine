@@ -394,6 +394,25 @@ async function handleHostStart(
         lobbyRoomId: lobbyRoom.roomId,
       });
       logger.info({ sessionId: data.sessionId, lobbyRoom: lobbyRoom.roomId }, 'Lobby LiveKit room created');
+
+      // Distribute lobby tokens to all sockets already in the session room
+      try {
+        const { config: appConfig } = await import('../../config');
+        const sockets = await io.in(sessionRoom(data.sessionId)).fetchSockets();
+        for (const s of sockets) {
+          const uid = (s.data as any)?.userId;
+          if (!uid) continue;
+          const name = (s.data as any)?.displayName || 'User';
+          const tok = await videoService.issueJoinToken(uid, lobbyRoom.roomId, name);
+          s.emit('lobby:token', {
+            token: tok.token,
+            livekitUrl: appConfig.livekit.host,
+            roomId: lobbyRoom.roomId,
+          });
+        }
+      } catch (broadcastErr) {
+        logger.warn({ err: broadcastErr, sessionId: data.sessionId }, 'Failed to broadcast lobby tokens to existing sockets');
+      }
     } catch (lobbyErr) {
       logger.warn({ err: lobbyErr, sessionId: data.sessionId }, 'Failed to create lobby LiveKit room — continuing without video mosaic');
     }
@@ -586,19 +605,16 @@ async function handleHostEnd(
 
     // If currently in an active round, end the round first so users get
     // a rating window before the session completes.
+    // endRound() triggers the normal flow: rating window → endRatingWindow() →
+    // next round (if more remain) or closing lobby → completeSession().
     if (activeSession && activeSession.status === SessionStatus.ROUND_ACTIVE) {
       // Clear any existing timer
       if (activeSession.timer) clearTimeout(activeSession.timer);
 
-      // End the current round (triggers rating window)
+      // End the current round — endRound() schedules the rating window timer
+      // which in turn calls endRatingWindow() → multi-round transition logic
       await endRound(data.sessionId, activeSession.currentRound);
-
-      // Override: after a short rating window (15s), auto-complete
-      if (activeSession.timer) clearTimeout(activeSession.timer);
-      startSegmentTimer(data.sessionId, 15, () => {
-        completeSession(data.sessionId);
-        logger.info({ sessionId: data.sessionId }, 'Session ended by host (after rating window)');
-      });
+      logger.info({ sessionId: data.sessionId }, 'Host ended active round — rating window started, normal flow continues');
       return;
     }
 

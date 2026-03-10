@@ -185,8 +185,23 @@ export default function VideoRoom() {
       connect={true}
       video={true}
       audio={true}
-      onDisconnected={() => setConnectionError('Disconnected from video room')}
-      onError={(err) => setConnectionError(err?.message || 'Video connection error')}
+      onDisconnected={() => {
+        // Ignore disconnect during normal round transitions (server closes the room)
+        if (useSessionStore.getState().phase !== 'matched') return;
+        setTimeout(() => {
+          if (useSessionStore.getState().phase === 'matched') {
+            setConnectionError('Disconnected from video room');
+          }
+        }, 1500);
+      }}
+      onError={(err) => {
+        if (useSessionStore.getState().phase !== 'matched') return;
+        setTimeout(() => {
+          if (useSessionStore.getState().phase === 'matched') {
+            setConnectionError(err?.message || 'Video connection error');
+          }
+        }, 1500);
+      }}
       className="flex-1 flex flex-col"
     >
       {/* Connecting to partner overlay */}

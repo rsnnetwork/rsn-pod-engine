@@ -126,7 +126,15 @@ export default function useSessionSocket(sessionId: string) {
       store.setPhase('rating');
     });
 
-    socket.on('rating:window_closed', () => { clearTimer(); store.setTransitionStatus('between_rounds'); store.setPhase('lobby'); setTimeout(() => store.setTransitionStatus(null), 3000); });
+    socket.on('rating:window_closed', () => {
+      clearTimer();
+      store.setLiveKitToken(null, null);
+      store.setMatch(null);
+      store.setRoomId(null);
+      store.setTransitionStatus('between_rounds');
+      store.setPhase('lobby');
+      setTimeout(() => store.setTransitionStatus(null), 3000);
+    });
 
     // ── Host broadcasts ──
     socket.on('host:broadcast', (data: any) => store.addBroadcast(data.message));

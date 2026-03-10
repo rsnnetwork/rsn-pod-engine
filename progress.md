@@ -2779,3 +2779,29 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - ✅ 250 server tests passing
 - Next immediate action:
   - Monitor production logs — `Unexpected PostgreSQL pool error` messages should stop appearing after ~5 minutes of idle
+
+---
+
+### T-064 – Fix live session bugs (lobby mosaic, VideoRoom disconnect, round transitions)
+- Timestamp: 2026-03-11
+- Status: **Completed**
+- What changed:
+  1. **Lobby mosaic not showing** – After creating the lobby LiveKit room in `handleHostStart()`, broadcast `lobby:token` to all sockets already in the session room (via `io.in().fetchSockets()`). Previously, participants who joined before the host started never received lobby tokens because `lobbyRoomId` was null at their join time.
+  2. **Round 2 never happening** – Removed the `completeSession()` override timer from `handleHostEnd()` during `ROUND_ACTIVE`. Now `endRound()` proceeds with its natural flow: rating window → `endRatingWindow()` → checks `roundNumber < numberOfRounds` → transitions to next round (or completes after last round). Host "End" during an active round = end the round, not the session.
+  3. **"Client initiated disconnect" error in VideoRoom** – Made `onDisconnected` and `onError` handlers phase-aware. When the server closes a LiveKit room during round transitions, the handlers now check if phase is still `'matched'` before showing errors. Uses 1.5s grace period for the `session:round_ended` socket event to arrive and transition away from `matched` phase.
+  4. **Stale match state between rounds** – In `rating:window_closed` handler, now clears `liveKitToken`, `currentMatch`, and `currentRoomId` when transitioning back to lobby between rounds. Lobby tokens are preserved.
+- Files touched:
+  - server/src/services/orchestration/orchestration.service.ts (lobby token broadcast in handleHostStart, removed completeSession override in handleHostEnd)
+  - client/src/features/live/VideoRoom.tsx (phase-aware onDisconnected/onError handlers)
+  - client/src/hooks/useSessionSocket.ts (clear match state in rating:window_closed)
+  - progress.md
+- Decisions made:
+  - Host "End" during active round = end the round (triggers normal rating → next round flow). To end entire session early, click "End" from lobby between rounds.
+  - VideoRoom disconnect grace period: 1.5 seconds for socket events to arrive before showing error UI.
+  - Per-user lobby tokens via `fetchSockets()` ensures each participant has their own LiveKit JWT identity.
+- Validation Results:
+  - ✅ 250 server tests passing
+  - ✅ 29 shared tests passing
+  - ✅ All 3 production builds pass (shared, server, client)
+- Next immediate action:
+  - Deploy and re-test live session: 2+ participants, 2 rounds configured, verify lobby mosaic shows, round 1 ends cleanly, round 2 starts, session completes after round 2
