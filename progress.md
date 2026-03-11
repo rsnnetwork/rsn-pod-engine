@@ -44,7 +44,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 - Active Milestone: **Change 1.0 Complete — Font, Logo, Landing, Login, Admin, Role Tiers**
 - Current Session: Change 1.0 implementation (T-051 through T-055)
 - Overall Build Status: Shared + Client + Server production builds passing, 279/279 tests passing (250 server + 29 shared)
-- Last Updated: March 11, 2026 (T-070)
+- Last Updated: March 12, 2026 (Change 1.1 Phase 1+2)
 
 ---
 
@@ -130,6 +130,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 | T-066 | Fix session completion flow, host-aware lobby, video retry, mosaic polish, join gating | Completed | Copilot | 7 fixes: video auto-retry + 3s grace, HostControls derives state from store + hides Start Round after all rounds, host-aware lobby text, polished mosaic grid, JWT displayName fix (lobby shows real names), disabled Join for non-host when scheduled, session_ending on last round |
 | T-067 | Fix Vercel deploy failure after T-066 | Completed | Copilot | Removed unused `Clock` import in Lobby.tsx causing TS6133 during Vercel build; verified Vercel-equivalent build passes |
 | T-068 | Fix session participant tracking, real-time status, join flow | Completed | Copilot | Fixed currentRound=0 default, server sends socket-connected users only, added sessionStatus/hostInLobby tracking, non-host can enter scheduled sessions, lobby shows appropriate state |
+| C1.1-P1P2 | Change 1.1 Phase 1+2: DB purge, auth whitelist, admin tabs | Completed | Copilot | Migration 009 purge, WHITELISTED_EMAILS bypass, status filter on GET /users, AdminUsersPage Active/Removed/Banned tabs |
 
 ---
 
@@ -3014,3 +3015,29 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - ✅ All 15 changed files verified intact
 - Next immediate action:
   - Deploy and verify: video tiles properly sized, session completes immediately after last round, admin can hard-delete, invite modal has two flows, both super_admin accounts active
+
+### Change 1.1 Phase 1+2 — DB purge, auth whitelist, admin users tabs
+- Timestamp: 2026-03-12
+- Status: **Completed**
+- What changed:
+  1. **Migration 009: Full platform data purge**: Deletes all data from 14 tables (audit_log, encounter_history, ratings, matches, session_participants, sessions, pod_members, pods, invites, magic_links, refresh_tokens, user_subscriptions, user_entitlements, join_requests). Keeps only 3 super_admin users (im@mister-raw.com, sa@mister-raw.com, alihamza891840@gmail.com). Re-creates subscriptions, entitlements, and approved join_requests for keepers.
+  2. **Auth whitelist for super admins**: Added `WHITELISTED_EMAILS` array to `assertRegistrationAllowed()` in identity.service.ts. All 3 super_admin emails bypass registration gate (no invite/join_request needed) — they can login via Google OAuth or magic link directly.
+  3. **Server-side status filter on GET /users**: Added `status` enum param to Zod schema (`active|suspended|banned|deactivated`), forwarded through route handler to `getUsers()` service function with WHERE clause builder.
+  4. **Admin Users Page rewrite with status tabs**: Added Active/Removed/Banned tab bar. Active tab shows role selector + Suspend + Ban + Remove. Removed/Banned tabs show Reactivate + Delete Forever (super_admin only). Fixed misleading "Delete" label — now "Remove" (soft-deactivate) on Active tab and "Delete Forever" (hard delete) on inactive tabs. Empty states are context-aware per tab.
+- Files touched:
+  - server/src/db/migrations/009_purge_and_reset.sql (new)
+  - server/src/services/identity/identity.service.ts (WHITELISTED_EMAILS + status filter in getUsers)
+  - server/src/routes/users.ts (status param in Zod schema + handler)
+  - client/src/features/admin/AdminUsersPage.tsx (complete rewrite with tabs)
+  - assets/Change 1.1.pdf (design reference)
+- Decisions made:
+  - Whitelist check is first in `assertRegistrationAllowed()` — returns immediately for whitelisted emails
+  - "Remove" = soft deactivate (status='deactivated'), "Delete Forever" = hard delete (super_admin only)
+  - Tab maps: Active = no status filter, Removed = status='deactivated', Banned = status='banned'
+- Validation Results:
+  - ✅ 250 server tests passing (14 suites)
+  - ✅ 29 shared tests passing
+  - ✅ tsc -b clean (zero TS errors)
+  - ✅ Vite production build passes
+- Next immediate action:
+  - Continue Change 1.1: Landing page design update, real-time broadcast system, received invites dashboard
