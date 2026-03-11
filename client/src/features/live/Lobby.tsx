@@ -130,7 +130,7 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
 }
 
 export default function Lobby({ isHost = false }: { isHost?: boolean }) {
-  const { participants, lobbyToken, lobbyUrl } = useSessionStore();
+  const { participants, lobbyToken, lobbyUrl, sessionStatus } = useSessionStore();
 
   // If we have a lobby token, render the video mosaic
   if (lobbyToken && lobbyUrl) {
@@ -167,6 +167,12 @@ export default function Lobby({ isHost = false }: { isHost?: boolean }) {
             </span>
           ))}
         </div>
+        {sessionStatus === 'scheduled' && (
+          <p className="mt-4 text-xs text-gray-400 flex items-center justify-center gap-1.5">
+            <VideoOff className="h-3.5 w-3.5" />
+            Video mosaic will appear once the host starts the session
+          </p>
+        )}
       </Card>
     </div>
   );

@@ -3,6 +3,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
+import { requireRole } from '../middleware/rbac';
 import { auditMiddleware } from '../middleware/audit';
 import * as sessionService from '../services/session/session.service';
 import * as podService from '../services/pod/pod.service';
@@ -234,6 +235,24 @@ router.post(
       res.json(response);
     } catch (err) {
       next(err);
+    }
+  }
+);
+
+// ─── DELETE /sessions/:id/permanent (super_admin only) ────────────────────
+
+router.delete(
+  '/:id/permanent',
+  authenticate,
+  requireRole(UserRole.SUPER_ADMIN),
+  auditMiddleware('hard_delete_session', 'session'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await sessionService.hardDeleteSession(req.params.id);
+      const response: ApiResponse = { success: true, data: { message: 'Session permanently deleted' } };
+      return res.json(response);
+    } catch (err) {
+      return next(err);
     }
   }
 );

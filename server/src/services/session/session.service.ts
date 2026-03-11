@@ -480,6 +480,22 @@ export async function deleteSession(sessionId: string, userId: string, userRole?
   logger.info({ sessionId, userId }, 'Session deleted (cancelled)');
 }
 
+// ─── Hard Delete Session (super_admin only) ─────────────────────────────────
+
+export async function hardDeleteSession(sessionId: string): Promise<void> {
+  await getSessionById(sessionId); // Verify exists
+
+  await transaction(async (client) => {
+    await client.query(`DELETE FROM ratings WHERE match_id IN (SELECT id FROM matches WHERE session_id = $1)`, [sessionId]);
+    await client.query(`DELETE FROM matches WHERE session_id = $1`, [sessionId]);
+    await client.query(`DELETE FROM session_participants WHERE session_id = $1`, [sessionId]);
+    await client.query(`DELETE FROM invites WHERE session_id = $1`, [sessionId]);
+    await client.query(`DELETE FROM sessions WHERE id = $1`, [sessionId]);
+  });
+
+  logger.info({ sessionId }, 'Session permanently deleted by admin');
+}
+
 export async function generateLiveKitToken(sessionId: string, userId: string, roomId?: string): Promise<{ token: string; livekitUrl: string }> {
   const { AccessToken } = await import('livekit-server-sdk');
   const config = (await import('../../config')).default;

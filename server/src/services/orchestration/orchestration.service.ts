@@ -1059,38 +1059,12 @@ async function endRatingWindow(
 
       logger.info({ sessionId, roundNumber }, 'Rating window closed → ROUND_TRANSITION');
     } else {
-      // Last round done → closing lobby
-      await transitionToClosingLobby(sessionId);
+      // Last round done → complete session directly (no long closing lobby wait)
+      logger.info({ sessionId, roundNumber }, 'All rounds completed → completing session');
+      await completeSession(sessionId);
     }
   } catch (err) {
     logger.error({ err, sessionId, roundNumber }, 'Error ending rating window');
-  }
-}
-
-// ─── Closing Lobby ──────────────────────────────────────────────────────────
-
-async function transitionToClosingLobby(sessionId: string): Promise<void> {
-  const activeSession = activeSessions.get(sessionId);
-  if (!activeSession) return;
-
-  try {
-    activeSession.status = SessionStatus.CLOSING_LOBBY;
-    await sessionService.updateSessionStatus(sessionId, SessionStatus.CLOSING_LOBBY);
-
-    io.to(sessionRoom(sessionId)).emit('session:status_changed', {
-      sessionId,
-      status: SessionStatus.CLOSING_LOBBY,
-      currentRound: activeSession.currentRound,
-    });
-
-    // Start closing lobby timer
-    startSegmentTimer(sessionId, activeSession.config.closingLobbyDurationSeconds, () => {
-      completeSession(sessionId);
-    });
-
-    logger.info({ sessionId }, 'Session entering closing lobby');
-  } catch (err) {
-    logger.error({ err, sessionId }, 'Error transitioning to closing lobby');
   }
 }
 

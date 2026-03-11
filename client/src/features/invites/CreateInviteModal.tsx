@@ -1,43 +1,93 @@
+import { useState } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import Modal from '@/components/ui/Modal';
 import Input from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { useToastStore } from '@/stores/toastStore';
+import { Copy, Send, Link } from 'lucide-react';
 import api from '@/lib/api';
 
 interface Props { open: boolean; onClose: () => void; }
 
+interface FormData { type: string; podId: string; sessionId: string; inviteeEmail: string; maxUses: number; }
+
 export default function CreateInviteModal({ open, onClose }: Props) {
   const qc = useQueryClient();
   const { addToast } = useToastStore();
+  const [generatedLink, setGeneratedLink] = useState<string | null>(null);
   const { data: pods } = useQuery({ queryKey: ['my-pods'], queryFn: () => api.get('/pods').then(r => r.data.data ?? []) });
   const { data: sessions } = useQuery({ queryKey: ['my-sessions'], queryFn: () => api.get('/sessions').then(r => r.data.data ?? []) });
-  const { register, handleSubmit, reset, control, formState: { errors } } = useForm<{ type: string; podId: string; sessionId: string; inviteeEmail: string; maxUses: number }>({
-    defaultValues: { type: 'pod' }
+  const { register, handleSubmit, reset, control, getValues, formState: { errors } } = useForm<FormData>({
+    defaultValues: { type: 'pod', maxUses: 10 }
   });
   const inviteType = useWatch({ control, name: 'type' });
+  const emailValue = useWatch({ control, name: 'inviteeEmail' });
 
-  const mutation = useMutation({
-    mutationFn: (data: any) => {
-      const payload: any = { type: data.type, maxUses: data.maxUses || 1 };
-      if (data.inviteeEmail) payload.inviteeEmail = data.inviteeEmail;
+  const handleClose = () => {
+    setGeneratedLink(null);
+    reset();
+    onClose();
+  };
+
+  // Send invite directly to an email (single-use, unique per email)
+  const sendEmailMutation = useMutation({
+    mutationFn: (data: FormData) => {
+      const payload: any = { type: data.type, maxUses: 1, inviteeEmail: data.inviteeEmail };
       if (data.type === 'pod' && data.podId) payload.podId = data.podId;
       if (data.type === 'session' && data.sessionId) payload.sessionId = data.sessionId;
       return api.post('/invites', payload);
     },
-    onSuccess: (res) => {
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['my-invites'] });
-      addToast(`Invite created: ${res.data.data?.code || 'done'}`, 'success');
-      reset();
-      onClose();
+      addToast('Invite sent to email!', 'success');
+      handleClose();
     },
-    onError: () => addToast('Failed to create invite', 'error'),
+    onError: () => addToast('Failed to send invite', 'error'),
   });
 
+  // Create a shareable invite link (multi-use)
+  const createLinkMutation = useMutation({
+    mutationFn: (data: FormData) => {
+      const payload: any = { type: data.type, maxUses: data.maxUses || 10 };
+      if (data.type === 'pod' && data.podId) payload.podId = data.podId;
+      if (data.type === 'session' && data.sessionId) payload.sessionId = data.sessionId;
+      return api.post('/invites', payload);
+    },
+    onSuccess: async (res) => {
+      qc.invalidateQueries({ queryKey: ['my-invites'] });
+      const code = res.data.data?.code;
+      const link = `${window.location.origin}/invite/${code}`;
+      setGeneratedLink(link);
+      try {
+        await navigator.clipboard.writeText(link);
+        addToast('Invite link created and copied!', 'success');
+      } catch {
+        addToast('Invite link created — copy it below', 'success');
+      }
+    },
+    onError: () => addToast('Failed to create invite link', 'error'),
+  });
+
+  const onSendEmail = handleSubmit((data) => sendEmailMutation.mutate(data));
+  const onCreateLink = () => {
+    const data = getValues();
+    createLinkMutation.mutate(data);
+  };
+
+  const copyLink = async () => {
+    if (!generatedLink) return;
+    try {
+      await navigator.clipboard.writeText(generatedLink);
+      addToast('Link copied!', 'success');
+    } catch {
+      addToast('Failed to copy', 'error');
+    }
+  };
+
   return (
-    <Modal open={open} onClose={onClose} title="Create Invite">
-      <form onSubmit={handleSubmit(d => mutation.mutate(d))} className="space-y-4">
+    <Modal open={open} onClose={handleClose} title="Create Invite">
+      <form onSubmit={onSendEmail} className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-gray-600 mb-1.5">Invite Type</label>
           <select
@@ -75,11 +125,57 @@ export default function CreateInviteModal({ open, onClose }: Props) {
             {errors.sessionId && <p className="text-xs text-red-400 mt-1">{errors.sessionId.message}</p>}
           </div>
         )}
-        <Input label="Recipient Email (optional)" type="email" {...register('inviteeEmail')} placeholder="someone@example.com" />
-        <Input label="Max Uses" type="number" {...register('maxUses', { valueAsNumber: true })} placeholder="10" />
-        <div className="flex gap-3 justify-end">
-          <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
-          <Button type="submit" isLoading={mutation.isPending}>Create</Button>
+
+        {/* Divider: two invite options */}
+        <div className="border-t border-gray-100 pt-4 space-y-4">
+          {/* Option 1: Send to email */}
+          <div className="rounded-xl border border-gray-200 p-4 space-y-3">
+            <p className="text-sm font-medium text-gray-700 flex items-center gap-2"><Send className="h-4 w-4 text-indigo-500" /> Send invite to email</p>
+            <p className="text-xs text-gray-400">A unique, single-use invite link will be emailed directly.</p>
+            <Input type="email" {...register('inviteeEmail')} placeholder="someone@example.com" />
+            <Button
+              type="submit"
+              size="sm"
+              isLoading={sendEmailMutation.isPending}
+              disabled={!emailValue}
+              className="w-full"
+            >
+              <Send className="h-4 w-4 mr-1" /> Send Invite Email
+            </Button>
+          </div>
+
+          {/* Option 2: Create shareable link */}
+          <div className="rounded-xl border border-gray-200 p-4 space-y-3">
+            <p className="text-sm font-medium text-gray-700 flex items-center gap-2"><Link className="h-4 w-4 text-emerald-500" /> Create shareable link</p>
+            <p className="text-xs text-gray-400">A multi-use invite link you can share manually.</p>
+            <Input label="Max Uses" type="number" {...register('maxUses', { valueAsNumber: true })} placeholder="10" />
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              isLoading={createLinkMutation.isPending}
+              onClick={onCreateLink}
+              className="w-full"
+            >
+              <Copy className="h-4 w-4 mr-1" /> Create & Copy Link
+            </Button>
+            {generatedLink && (
+              <div className="flex items-center gap-2 mt-2">
+                <input
+                  readOnly
+                  value={generatedLink}
+                  className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 truncate"
+                />
+                <button type="button" onClick={copyLink} className="text-indigo-600 hover:text-indigo-800 p-1">
+                  <Copy className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="flex justify-end pt-2">
+          <Button variant="ghost" type="button" onClick={handleClose}>Close</Button>
         </div>
       </form>
     </Modal>

@@ -41,9 +41,9 @@ function VideoStage() {
   const remoteTrack = cameraTracks.find(t => t.participant.sid !== localParticipant.sid);
 
   return (
-    <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
+    <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[calc(100vh-200px)]">
       {/* Local video */}
-      <div className="relative rounded-xl overflow-hidden bg-gray-50 min-h-[300px] flex items-center justify-center border border-gray-200">
+      <div className="relative rounded-xl overflow-hidden bg-gray-50 aspect-video flex items-center justify-center border border-gray-200">
         {localTrack?.publication?.track ? (
           <VideoTrack trackRef={localTrack} className="h-full w-full object-cover" />
         ) : (
@@ -60,7 +60,7 @@ function VideoStage() {
       </div>
 
       {/* Remote video */}
-      <div className="relative rounded-xl overflow-hidden bg-gray-50 min-h-[300px] flex items-center justify-center border border-gray-200">
+      <div className="relative rounded-xl overflow-hidden bg-gray-50 aspect-video flex items-center justify-center border border-gray-200">
         {remoteTrack?.publication?.track ? (
           <VideoTrack trackRef={remoteTrack} className="h-full w-full object-cover" />
         ) : (

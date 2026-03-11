@@ -25,6 +25,8 @@ import EncounterHistoryPage from '@/features/sessions/EncounterHistoryPage';
 import AdminDashboardPage from '@/features/admin/AdminDashboardPage';
 import AdminUsersPage from '@/features/admin/AdminUsersPage';
 import AdminJoinRequestsPage from '@/features/admin/AdminJoinRequestsPage';
+import AdminPodsPage from '@/features/admin/AdminPodsPage';
+import AdminSessionsPage from '@/features/admin/AdminSessionsPage';
 import SettingsPage from '@/features/settings/SettingsPage';
 import BillingPage from '@/features/billing/BillingPage';
 import SupportPage from '@/features/support/SupportPage';
@@ -68,6 +70,8 @@ export default function App() {
         <Route path="/admin" element={<AdminDashboardPage />} />
         <Route path="/admin/users" element={<AdminUsersPage />} />
         <Route path="/admin/join-requests" element={<AdminJoinRequestsPage />} />
+        <Route path="/admin/pods" element={<AdminPodsPage />} />
+        <Route path="/admin/sessions" element={<AdminSessionsPage />} />
       </Route>
 
       {/* Protected without layout (full-screen) */}

@@ -408,6 +408,29 @@ export async function getSessionCountForPod(podId: string): Promise<number> {
   return parseInt(result.rows[0].count, 10);
 }
 
+// ─── Hard Delete Pod (super_admin only) ─────────────────────────────────────
+
+export async function hardDeletePod(podId: string): Promise<void> {
+  await getPodById(podId); // Verify exists
+
+  await transaction(async (client) => {
+    // Delete related data in correct order (foreign key dependencies)
+    await client.query(`DELETE FROM invites WHERE pod_id = $1`, [podId]);
+    // Delete session-related data for sessions in this pod
+    const sessionsResult = await client.query<{ id: string }>(`SELECT id FROM sessions WHERE pod_id = $1`, [podId]);
+    for (const s of sessionsResult.rows) {
+      await client.query(`DELETE FROM ratings WHERE match_id IN (SELECT id FROM matches WHERE session_id = $1)`, [s.id]);
+      await client.query(`DELETE FROM matches WHERE session_id = $1`, [s.id]);
+      await client.query(`DELETE FROM session_participants WHERE session_id = $1`, [s.id]);
+    }
+    await client.query(`DELETE FROM sessions WHERE pod_id = $1`, [podId]);
+    await client.query(`DELETE FROM pod_members WHERE pod_id = $1`, [podId]);
+    await client.query(`DELETE FROM pods WHERE id = $1`, [podId]);
+  });
+
+  logger.info({ podId }, 'Pod permanently deleted by admin');
+}
+
 // ─── Authorization Helpers ──────────────────────────────────────────────────
 
 async function requirePodRole(podId: string, userId: string, roles: PodMemberRole[]): Promise<void> {

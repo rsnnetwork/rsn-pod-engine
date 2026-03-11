@@ -133,7 +133,7 @@ export default function AdminDashboardPage() {
               <span className="text-xs text-gray-400 group-hover:text-gray-600">→</span>
             </button>
             <button
-              onClick={() => navigate('/pods')}
+              onClick={() => navigate('/admin/pods')}
               className="w-full text-left px-4 py-3 rounded-xl hover:bg-gray-50 transition-colors flex items-center justify-between group"
             >
               <div className="flex items-center gap-3">
@@ -143,12 +143,12 @@ export default function AdminDashboardPage() {
               <span className="text-xs text-gray-400 group-hover:text-gray-600">→</span>
             </button>
             <button
-              onClick={() => navigate('/sessions')}
+              onClick={() => navigate('/admin/sessions')}
               className="w-full text-left px-4 py-3 rounded-xl hover:bg-gray-50 transition-colors flex items-center justify-between group"
             >
               <div className="flex items-center gap-3">
                 <Calendar className="h-4 w-4 text-gray-400" />
-                <span className="text-sm font-medium text-gray-700">Events</span>
+                <span className="text-sm font-medium text-gray-700">Manage Sessions</span>
               </div>
               <span className="text-xs text-gray-400 group-hover:text-gray-600">→</span>
             </button>
