@@ -65,5 +65,4 @@ SELECT
   u.id,
   'Auto-approved: super admin'
 FROM users u
-WHERE LOWER(u.email) IN ('im@mister-raw.com', 'sa@mister-raw.com', 'alihamza891840@gmail.com')
-ON CONFLICT DO NOTHING;
+WHERE LOWER(u.email) IN ('im@mister-raw.com', 'sa@mister-raw.com', 'alihamza891840@gmail.com');

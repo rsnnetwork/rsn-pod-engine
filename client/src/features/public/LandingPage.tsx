@@ -52,7 +52,7 @@ export default function LandingPage() {
         <div className="max-w-6xl mx-auto flex items-center justify-between px-6 py-4">
           <button onClick={() => navigate('/welcome')} className="flex items-center gap-2">
             <img src="/rsn-logo.png" alt="RSN" className="h-8 w-auto" />
-            <span className="text-2xl font-extrabold tracking-tight text-[#1a1a2e]">RSN</span>
+            <span className="text-2xl font-extrabold tracking-tight text-[#1a1a2e]">RSN<span className="text-red-600">.</span></span>
           </button>
           <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-gray-600">
             <button onClick={() => navigate('/how-it-works')} className="hover:text-[#1a1a2e] transition-colors">The Format</button>
@@ -71,9 +71,9 @@ export default function LandingPage() {
 
       {/* Hero */}
       <section className="relative py-24 md:py-36 text-center px-6 overflow-hidden">
-        {/* Decorative brackets */}
-        <div className="absolute top-16 left-8 md:left-24 text-[120px] md:text-[200px] font-extralight text-gray-100 leading-none select-none pointer-events-none" aria-hidden>&#123;</div>
-        <div className="absolute top-16 right-8 md:right-24 text-[120px] md:text-[200px] font-extralight text-gray-100 leading-none select-none pointer-events-none" aria-hidden>&#125;</div>
+        {/* Decorative L-shaped corner brackets */}
+        <div className="absolute top-16 left-8 md:left-24 w-12 h-12 md:w-20 md:h-20 border-l-2 border-t-2 border-gray-200 select-none pointer-events-none" aria-hidden></div>
+        <div className="absolute bottom-16 right-8 md:right-24 w-12 h-12 md:w-20 md:h-20 border-r-2 border-b-2 border-gray-200 select-none pointer-events-none" aria-hidden></div>
         {/* Sheep icon in hero */}
         <img src="/rsn-sheep.png" alt="" className="absolute top-8 right-12 md:right-32 h-12 w-12 md:h-16 md:w-16 opacity-20 hover:opacity-80 transition-opacity duration-500 pointer-events-auto cursor-pointer" title="🐑" />
 
@@ -84,12 +84,9 @@ export default function LandingPage() {
           <p className="mt-8 text-lg md:text-2xl text-[#1a1a2e] font-semibold tracking-wide border-b-2 border-[#1a1a2e] inline-block pb-1 animate-fade-in-up" style={{ animationDelay: '0.1s' }}>
             8 MINUTES WITH PEOPLE WHO GET IT
           </p>
-          <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4 animate-fade-in-up" style={{ animationDelay: '0.2s' }}>
-            <button onClick={() => navigate('/request-to-join')} className="bg-red-600 text-white px-10 py-4 rounded-full text-lg font-semibold hover:bg-red-700 transition-all hover:scale-[1.03] shadow-lg hover:shadow-red-200">
-              Request to Join <ArrowRight className="h-5 w-5 inline ml-2" />
-            </button>
-            <button onClick={() => navigate('/how-it-works')} className="text-[#1a1a2e] border-2 border-[#1a1a2e] px-8 py-4 rounded-full text-lg font-semibold hover:bg-[#1a1a2e] hover:text-white transition-all">
-              How It Works
+          <div className="mt-10 animate-fade-in-up" style={{ animationDelay: '0.2s' }}>
+            <button onClick={() => navigate('/request-to-join')} className="text-[#1a1a2e] text-lg font-semibold hover:text-red-600 transition-colors inline-flex items-center gap-2">
+              <ArrowRight className="h-5 w-5" /> REQUEST TO JOIN
             </button>
           </div>
         </div>
