@@ -44,7 +44,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 - Active Milestone: **Change 1.0 Complete — Font, Logo, Landing, Login, Admin, Role Tiers**
 - Current Session: Change 1.0 implementation (T-051 through T-055)
 - Overall Build Status: Shared + Client + Server production builds passing, 279/279 tests passing (250 server + 29 shared)
-- Last Updated: March 11, 2026 (T-068)
+- Last Updated: March 11, 2026 (T-069)
 
 ---
 
@@ -2928,3 +2928,49 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - ✅ All 3 production builds pass (shared, server, client)
 - Next immediate action:
   - Deploy and verify: host creates session → non-host enters lobby (sees "Waiting for host") → host enters (non-host sees "Host is here") → host starts session → everyone sees lobby with correct participant count
+
+---
+
+### T-069 — Fix reconnection loop, super admin permissions, full system audit
+- Timestamp: 2026-03-11
+- Status: **Completed**
+- What changed:
+  1. **Fixed socket reconnection loop/glitching**: Rewrote `useSessionSocket.ts` — added `SOCKET_EVENTS` array for deterministic cleanup of all 18 event types, `initializedRef` to prevent double-init in React strict mode, and full listener cleanup (socket events + socket.io manager events) before disconnect on unmount. Root cause: old cleanup only called `disconnectSocket()` without removing listeners → on remount, listeners stacked on singleton socket → events fired multiple times → state thrashing → visual glitching.
+  2. **Fixed "Host initiated disconnect" error**: Updated VideoRoom.tsx disconnect message to be less alarming. Updated orchestration `verifyHost()` to allow admin/super_admin via `hasRoleAtLeast()` so they don't get "Only the host can perform this action" errors.
+  3. **Promoted Im@mister-raw.com to super_admin**: Created migration `006_set_super_admin.sql` that runs automatically on deploy.
+  4. **Added full super admin permissions system**:
+     - Identity service: new `updateUserRole()`, `updateUserStatus()`, `deleteUser()` functions
+     - User routes: new `PUT /:id/role` (admin), `PUT /:id/status` (admin), `DELETE /:id` (super_admin) endpoints
+     - Session service: admin bypass on `deleteSession`, `updateSession`, `registerParticipant`
+     - Pod service: admin bypass on `deletePod`, `updatePod`, `removeMember`, `approveMember`, `rejectMember`
+     - Orchestration service: `verifyHost()` allows admin/super_admin, `registerParticipant` passes userRole for pod visibility bypass
+  5. **Full system audit — replaced all hardcoded admin checks**:
+     - All `=== UserRole.ADMIN` checks converted to `hasRoleAtLeast(role, UserRole.ADMIN)` across all routes (users, sessions, pods, host, ratings)
+     - Super admin now inherits all admin privileges throughout the system
+  6. **AdminUsersPage enhanced**: Ban, suspend, activate, delete buttons per user. Role change dropdown. Only super_admin sees Admin/Super Admin role options and Delete button. Self-actions prevented.
+- Files touched:
+  - client/src/hooks/useSessionSocket.ts (complete rewrite for deterministic cleanup)
+  - client/src/features/live/VideoRoom.tsx (softened disconnect message)
+  - client/src/features/admin/AdminUsersPage.tsx (user management actions UI)
+  - server/src/services/orchestration/orchestration.service.ts (verifyHost admin bypass, registerParticipant userRole passthrough)
+  - server/src/services/identity/identity.service.ts (updateUserRole, updateUserStatus, deleteUser)
+  - server/src/services/session/session.service.ts (admin bypass on delete/update/register)
+  - server/src/services/pod/pod.service.ts (admin bypass on 5 functions)
+  - server/src/routes/users.ts (3 new admin endpoints, hasRoleAtLeast fixes)
+  - server/src/routes/sessions.ts (hasRoleAtLeast, userRole passthrough)
+  - server/src/routes/pods.ts (hasRoleAtLeast, userRole passthrough on 7 operations)
+  - server/src/routes/host.ts (hasRoleAtLeast fix in verifyHostOrAdmin)
+  - server/src/routes/ratings.ts (hasRoleAtLeast fix)
+  - server/src/db/migrations/006_set_super_admin.sql (new migration)
+- Decisions made:
+  - All new service params are optional (`userRole?`) to maintain backward compatibility — existing callers and tests unaffected
+  - Super admin inherits all admin permissions via `hasRoleAtLeast()` — no separate super_admin checks needed
+  - User deletion is soft-delete (removes from pods/sessions, revokes tokens, sets status='deactivated')
+  - Socket cleanup must remove ALL event listeners before disconnect to prevent listener accumulation
+- Validation Results:
+  - ✅ 250 server tests passing
+  - ✅ 29 shared tests passing
+  - ✅ All 3 production builds pass (shared, server, client)
+  - ✅ Zero TypeScript errors across entire workspace
+- Next immediate action:
+  - Deploy and verify: live session no longer glitches for non-host users, super admin can manage users/pods/sessions from admin panel, Im@mister-raw.com has super_admin role

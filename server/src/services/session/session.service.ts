@@ -7,7 +7,7 @@ import logger from '../../config/logger';
 import {
   Session, SessionParticipant, SessionConfig, SessionStatus,
   ParticipantStatus, CreateSessionInput, UpdateSessionInput,
-  DEFAULT_SESSION_CONFIG,
+  DEFAULT_SESSION_CONFIG, UserRole, hasRoleAtLeast,
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, ForbiddenError, AppError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
@@ -78,11 +78,12 @@ export async function getSessionById(sessionId: string): Promise<Session> {
   return result.rows[0];
 }
 
-export async function updateSession(sessionId: string, userId: string, input: UpdateSessionInput): Promise<Session> {
+export async function updateSession(sessionId: string, userId: string, input: UpdateSessionInput, userRole?: UserRole): Promise<Session> {
   const session = await getSessionById(sessionId);
 
-  // Only host can update
-  if (session.hostUserId !== userId) {
+  // Admin/super_admin or session host can update
+  const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
+  if (!isAdmin && session.hostUserId !== userId) {
     throw new ForbiddenError('Only the session host can update the session');
   }
 
@@ -199,7 +200,7 @@ export async function listSessions(params: {
 
 // ─── Participant Registration ───────────────────────────────────────────────
 
-export async function registerParticipant(sessionId: string, userId: string): Promise<SessionParticipant> {
+export async function registerParticipant(sessionId: string, userId: string, userRole?: UserRole): Promise<SessionParticipant> {
   return transaction(async (client) => {
     // Lock the session row to serialize concurrent registrations
     const sessionResult = await client.query<Session>(
@@ -217,12 +218,13 @@ export async function registerParticipant(sessionId: string, userId: string): Pr
       throw new AppError(400, 'SESSION_NOT_SCHEDULED', 'Session is no longer accepting participants');
     }
 
-    // Enforce pod visibility rules for session access
+    // Enforce pod visibility rules for session access (admin/super_admin bypass)
+    const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
     const podResult = await client.query(
       `SELECT visibility FROM pods WHERE id = $1`,
       [session.podId]
     );
-    if (podResult.rows.length > 0) {
+    if (podResult.rows.length > 0 && !isAdmin) {
       const podVisibility = podResult.rows[0].visibility;
       const memberResult = await client.query(
         `SELECT role FROM pod_members WHERE pod_id = $1 AND user_id = $2 AND status = 'active'`,
@@ -459,14 +461,17 @@ export async function incrementRoundsCompleted(sessionId: string, userId: string
 
 // ─── Delete Session ─────────────────────────────────────────────────────────
 
-export async function deleteSession(sessionId: string, userId: string): Promise<void> {
+export async function deleteSession(sessionId: string, userId: string, userRole?: UserRole): Promise<void> {
   const session = await getSessionById(sessionId);
 
-  if (session.hostUserId !== userId) {
+  // Admin/super_admin can delete any session; otherwise only session host
+  const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
+  if (!isAdmin && session.hostUserId !== userId) {
     throw new ForbiddenError('Only the session host can delete the session');
   }
 
-  if (session.status !== SessionStatus.SCHEDULED && session.status !== SessionStatus.COMPLETED) {
+  // Admins can delete in any state; non-admins only scheduled or completed
+  if (!isAdmin && session.status !== SessionStatus.SCHEDULED && session.status !== SessionStatus.COMPLETED) {
     throw new AppError(400, 'SESSION_IN_PROGRESS', 'Cannot delete a session that is currently in progress');
   }
 

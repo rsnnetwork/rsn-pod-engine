@@ -537,3 +537,36 @@ export async function getUsers(params: {
 
   return { users: result.rows, total };
 }
+
+// ─── Admin User Management ──────────────────────────────────────────────────
+
+export async function updateUserRole(userId: string, role: UserRole): Promise<User> {
+  const user = await getUserById(userId);
+  await query('UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2', [role, userId]);
+  logger.info({ userId, oldRole: user.role, newRole: role }, 'User role updated');
+  return getUserById(userId);
+}
+
+export async function updateUserStatus(userId: string, status: 'active' | 'suspended' | 'banned' | 'deactivated'): Promise<User> {
+  const user = await getUserById(userId);
+  await query('UPDATE users SET status = $1, updated_at = NOW() WHERE id = $2', [status, userId]);
+  logger.info({ userId, oldStatus: user.status, newStatus: status }, 'User status updated');
+  return getUserById(userId);
+}
+
+export async function deleteUser(userId: string): Promise<void> {
+  await getUserById(userId); // Verify exists
+
+  // Remove from all pods
+  await query(`UPDATE pod_members SET status = 'removed', left_at = NOW() WHERE user_id = $1 AND status = 'active'`, [userId]);
+
+  // Remove from all sessions
+  await query(`UPDATE session_participants SET status = 'removed', left_at = NOW() WHERE user_id = $1 AND status NOT IN ('removed', 'left')`, [userId]);
+
+  // Revoke all tokens
+  await query(`UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL`, [userId]);
+
+  // Deactivate the account (soft delete)
+  await query(`UPDATE users SET status = 'deactivated', updated_at = NOW() WHERE id = $1`, [userId]);
+  logger.info({ userId }, 'User deleted (deactivated)');
+}

@@ -10,7 +10,7 @@ import { auditMiddleware } from '../middleware/audit';
 import * as orchestrationService from '../services/orchestration/orchestration.service';
 import * as sessionService from '../services/session/session.service';
 import { ForbiddenError } from '../middleware/errors';
-import { UserRole } from '@rsn/shared';
+import { UserRole, hasRoleAtLeast } from '@rsn/shared';
 
 const router = Router();
 
@@ -24,7 +24,7 @@ const broadcastSchema = z.object({
 
 async function verifyHostOrAdmin(req: Request, next: NextFunction): Promise<boolean> {
   const session = await sessionService.getSessionById(req.params.id);
-  if (session.hostUserId !== req.user!.userId && req.user!.role !== UserRole.ADMIN) {
+  if (session.hostUserId !== req.user!.userId && !hasRoleAtLeast(req.user!.role, UserRole.ADMIN)) {
     next(new ForbiddenError('Only the session host can perform this action'));
     return false;
   }

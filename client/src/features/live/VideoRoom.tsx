@@ -197,7 +197,7 @@ export default function VideoRoom() {
             retryCountRef.current++;
             setLiveKitToken(null, null);
           } else {
-            setConnectionError('Disconnected from video room');
+            setConnectionError('Video connection interrupted — try refreshing if the issue persists');
           }
         }, 3000);
       }}

@@ -10,6 +10,7 @@ import {
   OrchestrationMode, CommunicationMode, PodVisibility,
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, ForbiddenError } from '../../middleware/errors';
+import { UserRole, hasRoleAtLeast } from '@rsn/shared';
 
 // ─── Column select helpers ──────────────────────────────────────────────────
 
@@ -69,9 +70,12 @@ export async function getPodById(podId: string): Promise<Pod> {
   return result.rows[0];
 }
 
-export async function updatePod(podId: string, userId: string, input: UpdatePodInput): Promise<Pod> {
+export async function updatePod(podId: string, userId: string, input: UpdatePodInput, userRole?: UserRole): Promise<Pod> {
   const pod = await getPodById(podId);
-  await requirePodRole(podId, userId, [PodMemberRole.DIRECTOR, PodMemberRole.HOST]);
+  const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
+  if (!isAdmin) {
+    await requirePodRole(podId, userId, [PodMemberRole.DIRECTOR, PodMemberRole.HOST]);
+  }
 
   const setClauses: string[] = [];
   const values: unknown[] = [];
@@ -235,8 +239,12 @@ export async function addMember(
   });
 }
 
-export async function removeMember(podId: string, userId: string, removedBy: string): Promise<void> {
-  await requirePodRole(podId, removedBy, [PodMemberRole.DIRECTOR, PodMemberRole.HOST]);
+export async function removeMember(podId: string, userId: string, removedBy: string, removedByRole?: UserRole): Promise<void> {
+  // Admin/super_admin can remove any member; otherwise require director/host role
+  const isAdmin = removedByRole && hasRoleAtLeast(removedByRole, UserRole.ADMIN);
+  if (!isAdmin) {
+    await requirePodRole(podId, removedBy, [PodMemberRole.DIRECTOR, PodMemberRole.HOST]);
+  }
 
   const result = await query(
     `UPDATE pod_members SET status = 'removed', left_at = NOW() WHERE pod_id = $1 AND user_id = $2 AND status = 'active'`,
@@ -287,9 +295,14 @@ export async function getMemberRole(podId: string, userId: string): Promise<PodM
 
 // ─── Delete Pod ─────────────────────────────────────────────────────────────
 
-export async function deletePod(podId: string, userId: string): Promise<void> {
+export async function deletePod(podId: string, userId: string, userRole?: UserRole): Promise<void> {
   await getPodById(podId);
-  await requirePodRole(podId, userId, [PodMemberRole.DIRECTOR]);
+
+  // Admin/super_admin can delete any pod; otherwise require director role
+  const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
+  if (!isAdmin) {
+    await requirePodRole(podId, userId, [PodMemberRole.DIRECTOR]);
+  }
 
   // Soft-delete: archive the pod
   await query(`UPDATE pods SET status = 'archived', updated_at = NOW() WHERE id = $1`, [podId]);
@@ -347,8 +360,11 @@ export async function requestToJoin(podId: string, userId: string): Promise<PodM
   return addMember(podId, userId, PodMemberRole.MEMBER, PodMemberStatus.PENDING_APPROVAL);
 }
 
-export async function approveMember(podId: string, memberUserId: string, approvedBy: string): Promise<PodMember> {
-  await requirePodRole(podId, approvedBy, [PodMemberRole.DIRECTOR, PodMemberRole.HOST]);
+export async function approveMember(podId: string, memberUserId: string, approvedBy: string, approvedByRole?: UserRole): Promise<PodMember> {
+  const isAdmin = approvedByRole && hasRoleAtLeast(approvedByRole, UserRole.ADMIN);
+  if (!isAdmin) {
+    await requirePodRole(podId, approvedBy, [PodMemberRole.DIRECTOR, PodMemberRole.HOST]);
+  }
 
   const result = await query<PodMember>(
     `UPDATE pod_members SET status = 'active', joined_at = NOW()
@@ -365,8 +381,11 @@ export async function approveMember(podId: string, memberUserId: string, approve
   return result.rows[0];
 }
 
-export async function rejectMember(podId: string, memberUserId: string, rejectedBy: string): Promise<void> {
-  await requirePodRole(podId, rejectedBy, [PodMemberRole.DIRECTOR, PodMemberRole.HOST]);
+export async function rejectMember(podId: string, memberUserId: string, rejectedBy: string, rejectedByRole?: UserRole): Promise<void> {
+  const isAdmin = rejectedByRole && hasRoleAtLeast(rejectedByRole, UserRole.ADMIN);
+  if (!isAdmin) {
+    await requirePodRole(podId, rejectedBy, [PodMemberRole.DIRECTOR, PodMemberRole.HOST]);
+  }
 
   const result = await query(
     `UPDATE pod_members SET status = 'removed', left_at = NOW()

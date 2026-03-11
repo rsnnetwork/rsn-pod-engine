@@ -3,9 +3,21 @@ import { connectSocket, disconnectSocket, getSocket } from '@/lib/socket';
 import { useSessionStore } from '@/stores/sessionStore';
 import api from '@/lib/api';
 
+// All socket event names we listen to — used for deterministic cleanup
+const SOCKET_EVENTS = [
+  'participant:joined', 'participant:left', 'participant:count',
+  'session:state', 'session:status_changed', 'session:round_started',
+  'session:round_ended', 'session:completed',
+  'match:assigned', 'match:reassigned', 'match:bye_round',
+  'rating:window_open', 'rating:window_closed',
+  'host:broadcast', 'lobby:token', 'host:participant_removed',
+  'timer:sync', 'error',
+] as const;
+
 export default function useSessionSocket(sessionId: string) {
   const store = useSessionStore();
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const initializedRef = useRef<string | null>(null);
 
   const clearTimer = () => {
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
@@ -15,6 +27,10 @@ export default function useSessionSocket(sessionId: string) {
     const token = localStorage.getItem('rsn_access');
     if (!token || !sessionId) return;
 
+    // Prevent double-initialization for the same session (React strict mode)
+    if (initializedRef.current === sessionId) return;
+    initializedRef.current = sessionId;
+
     // Reset store on mount
     store.reset();
 
@@ -23,6 +39,9 @@ export default function useSessionSocket(sessionId: string) {
 
     connectSocket(token);
     const socket = getSocket();
+
+    // Remove any stale listeners from a previous mount before adding new ones
+    for (const ev of SOCKET_EVENTS) socket.off(ev);
 
     // Track connection status
     store.setConnectionStatus('connecting');
@@ -181,29 +200,45 @@ export default function useSessionSocket(sessionId: string) {
     });
 
     // ── Reconnection ──
-    socket.io.on('reconnect', () => {
+    const onReconnect = () => {
       store.setReconnecting(false);
       store.setConnectionStatus('connected');
       store.setError(null);
       socket.emit('session:join', { sessionId });
-    });
+    };
 
-    socket.io.on('reconnect_attempt', () => {
+    const onReconnectAttempt = () => {
       store.setReconnecting(true);
       store.setConnectionStatus('reconnecting');
-    });
-    socket.io.on('reconnect_failed', () => {
+    };
+
+    const onReconnectFailed = () => {
       store.setReconnecting(false);
       store.setConnectionStatus('disconnected');
       store.setError('Connection lost. Please refresh the page.');
-    });
+    };
+
+    socket.io.on('reconnect', onReconnect);
+    socket.io.on('reconnect_attempt', onReconnectAttempt);
+    socket.io.on('reconnect_failed', onReconnectFailed);
 
     return () => {
       clearTimer();
       clearInterval(heartbeatInterval);
+
+      // Remove ALL socket event listeners we attached
+      for (const ev of SOCKET_EVENTS) socket.off(ev);
       socket.off('connect', joinSession);
+      socket.io.off('reconnect', onReconnect);
+      socket.io.off('reconnect_attempt', onReconnectAttempt);
+      socket.io.off('reconnect_failed', onReconnectFailed);
+
+      // Leave the session room and disconnect
       socket.emit('session:leave', { sessionId });
       disconnectSocket();
+
+      // Allow re-initialization if this effect re-runs
+      initializedRef.current = null;
     };
   }, [sessionId]);
 }

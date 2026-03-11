@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { requireRole } from '../middleware/rbac';
-import { UserRole } from '@rsn/shared';
+import { UserRole, hasRoleAtLeast } from '@rsn/shared';
 import * as ratingService from '../services/rating/rating.service';
 import { ForbiddenError } from '../middleware/errors';
 
@@ -44,7 +44,7 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       // Verify user is a participant in this match or admin
-      if (req.user!.role !== UserRole.ADMIN) {
+      if (!hasRoleAtLeast(req.user!.role, UserRole.ADMIN)) {
         const isParticipant = await ratingService.isMatchParticipant(req.params.matchId, req.user!.userId);
         if (!isParticipant) {
           throw new ForbiddenError('You are not a participant in this match');

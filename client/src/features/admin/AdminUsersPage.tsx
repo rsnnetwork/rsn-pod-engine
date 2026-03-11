@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Shield, Search, ChevronLeft, ChevronRight } from 'lucide-react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Shield, Search, ChevronLeft, ChevronRight, Ban, Trash2, UserCheck, UserX } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Avatar from '@/components/ui/Avatar';
@@ -10,10 +10,13 @@ import { useAuthStore } from '@/stores/authStore';
 import { useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
 import { isAdmin } from '@/lib/utils';
+import { useToastStore } from '@/stores/toastStore';
 
 export default function AdminUsersPage() {
   const { user } = useAuthStore();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const addToast = useToastStore(s => s.addToast);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
@@ -44,6 +47,28 @@ export default function AdminUsersPage() {
 
   const users = data?.data ?? [];
   const meta = data?.meta;
+  const isSuperAdmin = user?.role === 'super_admin';
+
+  const banMutation = useMutation({
+    mutationFn: (userId: string) => api.put(`/users/${userId}/status`, { status: 'banned' }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['admin-users'] }); addToast('User banned', 'success'); },
+  });
+  const suspendMutation = useMutation({
+    mutationFn: (userId: string) => api.put(`/users/${userId}/status`, { status: 'suspended' }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['admin-users'] }); addToast('User suspended', 'success'); },
+  });
+  const activateMutation = useMutation({
+    mutationFn: (userId: string) => api.put(`/users/${userId}/status`, { status: 'active' }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['admin-users'] }); addToast('User activated', 'success'); },
+  });
+  const deleteMutation = useMutation({
+    mutationFn: (userId: string) => api.delete(`/users/${userId}`),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['admin-users'] }); addToast('User deleted', 'success'); },
+  });
+  const roleMutation = useMutation({
+    mutationFn: ({ userId, role }: { userId: string; role: string }) => api.put(`/users/${userId}/role`, { role }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['admin-users'] }); addToast('Role updated', 'success'); },
+  });
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -101,11 +126,49 @@ export default function AdminUsersPage() {
                   <Badge variant={u.role === 'admin' || u.role === 'super_admin' ? 'brand' : u.role === 'host' ? 'info' : u.role === 'founding_member' ? 'success' : u.role === 'pro' ? 'warning' : 'default'}>
                     {u.role}
                   </Badge>
-                  <Badge variant={u.status === 'active' ? 'success' : 'warning'}>
+                  <Badge variant={u.status === 'active' ? 'success' : u.status === 'banned' ? 'warning' : 'default'}>
                     {u.status}
                   </Badge>
                 </div>
               </div>
+              {/* Admin actions (don't show for self) */}
+              {u.id !== user?.id && (
+                <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-100">
+                  {/* Role selector */}
+                  <select
+                    value={u.role}
+                    onChange={e => roleMutation.mutate({ userId: u.id, role: e.target.value })}
+                    className="text-xs rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                  >
+                    <option value="free">Free</option>
+                    <option value="member">Member</option>
+                    <option value="pro">Pro</option>
+                    <option value="founding_member">Founding Member</option>
+                    <option value="host">Host</option>
+                    {isSuperAdmin && <option value="admin">Admin</option>}
+                    {isSuperAdmin && <option value="super_admin">Super Admin</option>}
+                  </select>
+                  {u.status === 'active' ? (
+                    <>
+                      <Button size="sm" variant="ghost" onClick={() => suspendMutation.mutate(u.id)} className="!text-amber-600 !text-xs">
+                        <UserX className="h-3 w-3 mr-1" /> Suspend
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => { if (confirm('Ban this user?')) banMutation.mutate(u.id); }} className="!text-red-600 !text-xs">
+                        <Ban className="h-3 w-3 mr-1" /> Ban
+                      </Button>
+                    </>
+                  ) : (
+                    <Button size="sm" variant="ghost" onClick={() => activateMutation.mutate(u.id)} className="!text-emerald-600 !text-xs">
+                      <UserCheck className="h-3 w-3 mr-1" /> Activate
+                    </Button>
+                  )}
+                  {isSuperAdmin && (
+                    <Button size="sm" variant="ghost" onClick={() => { if (confirm('Permanently delete this user? This cannot be undone.')) deleteMutation.mutate(u.id); }} className="!text-red-600 !text-xs">
+                      <Trash2 className="h-3 w-3 mr-1" /> Delete
+                    </Button>
+                  )}
+                </div>
+              )}
             </Card>
           ))}
           {users.length === 0 && (

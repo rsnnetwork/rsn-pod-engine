@@ -5,7 +5,7 @@ import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
 import { auditMiddleware } from '../middleware/audit';
 import * as podService from '../services/pod/pod.service';
-import { ApiResponse, UserRole, PodType, PodVisibility, PodMemberRole } from '@rsn/shared';
+import { ApiResponse, UserRole, PodType, PodVisibility, PodMemberRole, hasRoleAtLeast } from '@rsn/shared';
 import { ForbiddenError } from '../middleware/errors';
 
 const router = Router();
@@ -66,7 +66,7 @@ router.get(
 
       // browse=true shows all active non-private pods; otherwise scope to user's own pods (admins always see all)
       const isBrowse = browse === 'true';
-      const userId = isBrowse || req.user!.role === UserRole.ADMIN ? undefined : req.user!.userId;
+      const userId = isBrowse || hasRoleAtLeast(req.user!.role, UserRole.ADMIN) ? undefined : req.user!.userId;
       const effectiveStatus = isBrowse ? 'active' : status;
 
       const result = await podService.listPods({
@@ -112,7 +112,7 @@ router.get(
 
       // Include user's membership role (null if not a member)
       let memberRole = null;
-      if (req.user!.role !== UserRole.ADMIN) {
+      if (!hasRoleAtLeast(req.user!.role, UserRole.ADMIN)) {
         memberRole = await podService.getMemberRole(req.params.id, req.user!.userId);
       }
 
@@ -133,7 +133,7 @@ router.put(
   auditMiddleware('update_pod', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const pod = await podService.updatePod(req.params.id, req.user!.userId, req.body);
+      const pod = await podService.updatePod(req.params.id, req.user!.userId, req.body, req.user!.role);
       const response: ApiResponse = { success: true, data: pod };
       res.json(response);
     } catch (err) {
@@ -150,7 +150,7 @@ router.delete(
   auditMiddleware('delete_pod', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await podService.deletePod(req.params.id, req.user!.userId);
+      await podService.deletePod(req.params.id, req.user!.userId, req.user!.role);
       const response: ApiResponse = { success: true, data: { message: 'Pod deleted' } };
       res.json(response);
     } catch (err) {
@@ -185,7 +185,7 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       // Only directors and hosts can add members
-      if (req.user!.role !== UserRole.ADMIN) {
+      if (!hasRoleAtLeast(req.user!.role, UserRole.ADMIN)) {
         const requesterRole = await podService.getMemberRole(req.params.id, req.user!.userId);
         if (!requesterRole || ![PodMemberRole.DIRECTOR, PodMemberRole.HOST].includes(requesterRole)) {
           throw new ForbiddenError('Only pod directors and hosts can add members');
@@ -213,7 +213,7 @@ router.delete(
   auditMiddleware('remove_pod_member', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await podService.removeMember(req.params.id, req.params.userId, req.user!.userId);
+      await podService.removeMember(req.params.id, req.params.userId, req.user!.userId, req.user!.role);
       const response: ApiResponse = { success: true, data: { message: 'Member removed' } };
       res.json(response);
     } catch (err) {
@@ -271,7 +271,8 @@ router.post(
       const member = await podService.approveMember(
         req.params.id,
         req.params.userId,
-        req.user!.userId
+        req.user!.userId,
+        req.user!.role
       );
       const response: ApiResponse = { success: true, data: member };
       res.json(response);
@@ -292,7 +293,8 @@ router.post(
       await podService.rejectMember(
         req.params.id,
         req.params.userId,
-        req.user!.userId
+        req.user!.userId,
+        req.user!.role
       );
       const response: ApiResponse = { success: true, data: { message: 'Request rejected' } };
       res.json(response);

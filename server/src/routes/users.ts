@@ -5,7 +5,7 @@ import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import * as identityService from '../services/identity/identity.service';
-import { ApiResponse, UserRole } from '@rsn/shared';
+import { ApiResponse, UserRole, hasRoleAtLeast } from '@rsn/shared';
 
 const router = Router();
 
@@ -32,7 +32,7 @@ const updateUserSchema = z.object({
 const listUsersQuerySchema = z.object({
   page: z.coerce.number().int().positive().optional(),
   pageSize: z.coerce.number().int().positive().max(100).optional(),
-  role: z.enum(['member', 'host', 'admin']).optional(),
+  role: z.enum(['member', 'host', 'admin', 'super_admin', 'free', 'pro', 'founding_member']).optional(),
   search: z.string().max(100).optional(),
 });
 
@@ -81,7 +81,7 @@ router.get(
       const user = await identityService.getUserById(req.params.id);
 
       // Non-admin users only see public profile
-      const isOwnerOrAdmin = req.user!.userId === user.id || req.user!.role === UserRole.ADMIN;
+      const isOwnerOrAdmin = req.user!.userId === user.id || hasRoleAtLeast(req.user!.role, UserRole.ADMIN);
       const data = isOwnerOrAdmin
         ? user
         : {
@@ -139,6 +139,72 @@ router.get(
           hasPrev: pg > 1,
         },
       };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── PUT /users/:id/role (admin only) ───────────────────────────────────────
+
+router.put(
+  '/:id/role',
+  authenticate,
+  requireRole(UserRole.ADMIN),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { role } = req.body;
+      if (!role || !Object.values(UserRole).includes(role)) {
+        return res.status(400).json({ success: false, error: { message: 'Invalid role' } });
+      }
+
+      // Only super_admin can assign admin or super_admin roles
+      if ((role === UserRole.ADMIN || role === UserRole.SUPER_ADMIN) && req.user!.role !== UserRole.SUPER_ADMIN) {
+        return res.status(403).json({ success: false, error: { message: 'Only super admins can assign admin roles' } });
+      }
+
+      const user = await identityService.updateUserRole(req.params.id, role);
+      const response: ApiResponse = { success: true, data: user };
+      return res.json(response);
+    } catch (err) {
+      return next(err);
+    }
+  }
+);
+
+// ─── PUT /users/:id/status (admin only) ─────────────────────────────────────
+
+router.put(
+  '/:id/status',
+  authenticate,
+  requireRole(UserRole.ADMIN),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { status } = req.body;
+      if (!status || !['active', 'suspended', 'banned', 'deactivated'].includes(status)) {
+        return res.status(400).json({ success: false, error: { message: 'Invalid status' } });
+      }
+
+      const user = await identityService.updateUserStatus(req.params.id, status);
+      const response: ApiResponse = { success: true, data: user };
+      return res.json(response);
+    } catch (err) {
+      return next(err);
+    }
+  }
+);
+
+// ─── DELETE /users/:id (super_admin only) ───────────────────────────────────
+
+router.delete(
+  '/:id',
+  authenticate,
+  requireRole(UserRole.SUPER_ADMIN),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await identityService.deleteUser(req.params.id);
+      const response: ApiResponse = { success: true, data: { message: 'User deleted' } };
       res.json(response);
     } catch (err) {
       next(err);

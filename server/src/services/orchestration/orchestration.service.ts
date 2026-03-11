@@ -12,7 +12,7 @@ import { query, transaction } from '../../db';
 import {
   SessionStatus, ParticipantStatus, SessionConfig,
   ServerToClientEvents, ClientToServerEvents,
-  MatchStatus,
+  MatchStatus, UserRole, hasRoleAtLeast,
 } from '@rsn/shared';
 import * as sessionService from '../session/session.service';
 import * as matchingService from '../matching/matching.service';
@@ -135,8 +135,10 @@ async function handleJoinSession(
 
     // Auto-register if not already a participant.
     // The host is also a participant in speed networking — they network too.
+    // Pass user role so admin/super_admin can bypass pod visibility restrictions.
+    const userRole = (socket.data as any)?.role as UserRole | undefined;
     try {
-      await sessionService.registerParticipant(data.sessionId, userId);
+      await sessionService.registerParticipant(data.sessionId, userId, userRole);
     } catch {
       // Already registered or session not open — that's fine
     }
@@ -402,7 +404,13 @@ async function verifyHost(socket: Socket, sessionId: string): Promise<boolean> {
   }
 
   const session = await sessionService.getSessionById(sessionId);
-  if (session.hostUserId !== userId) {
+
+  // Allow session host, admin, and super_admin to perform host actions
+  const userRole = (socket.data as any)?.role as UserRole | undefined;
+  const isHost = session.hostUserId === userId;
+  const isAdminOrAbove = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
+
+  if (!isHost && !isAdminOrAbove) {
     socket.emit('error', { code: 'FORBIDDEN', message: 'Only the host can perform this action' });
     return false;
   }

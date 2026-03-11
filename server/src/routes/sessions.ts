@@ -6,7 +6,7 @@ import { authenticate } from '../middleware/auth';
 import { auditMiddleware } from '../middleware/audit';
 import * as sessionService from '../services/session/session.service';
 import * as podService from '../services/pod/pod.service';
-import { ApiResponse, SessionStatus, UserRole } from '@rsn/shared';
+import { ApiResponse, SessionStatus, UserRole, hasRoleAtLeast } from '@rsn/shared';
 import { ForbiddenError } from '../middleware/errors';
 
 const router = Router();
@@ -100,7 +100,7 @@ router.put(
   auditMiddleware('update_session', 'session'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const session = await sessionService.updateSession(req.params.id, req.user!.userId, req.body);
+      const session = await sessionService.updateSession(req.params.id, req.user!.userId, req.body, req.user!.role);
       const response: ApiResponse = { success: true, data: session };
       res.json(response);
     } catch (err) {
@@ -117,7 +117,7 @@ router.delete(
   auditMiddleware('delete_session', 'session'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await sessionService.deleteSession(req.params.id, req.user!.userId);
+      await sessionService.deleteSession(req.params.id, req.user!.userId, req.user!.role);
       const response: ApiResponse = { success: true, data: { message: 'Session deleted' } };
       res.json(response);
     } catch (err) {
@@ -136,7 +136,7 @@ router.get(
       const { podId, status, page, pageSize } = req.query as Record<string, string>;
 
       // Non-admin users: if podId specified, verify membership; otherwise show all sessions
-      if (req.user!.role !== UserRole.ADMIN && podId) {
+      if (!hasRoleAtLeast(req.user!.role, UserRole.ADMIN) && podId) {
         const memberRole = await podService.getMemberRole(podId, req.user!.userId);
         if (!memberRole) {
           throw new ForbiddenError('You do not have access to this pod');
@@ -145,7 +145,7 @@ router.get(
 
       const result = await sessionService.listSessions({
         podId,
-        userId: podId ? undefined : req.user!.userId,
+        userId: podId || hasRoleAtLeast(req.user!.role, UserRole.ADMIN) ? undefined : req.user!.userId,
         status: status as SessionStatus | undefined,
         page: page ? parseInt(page) : undefined,
         pageSize: pageSize ? parseInt(pageSize) : undefined,
@@ -181,7 +181,7 @@ router.post(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const participant = await sessionService.registerParticipant(req.params.id, req.user!.userId);
+      const participant = await sessionService.registerParticipant(req.params.id, req.user!.userId, req.user!.role);
       const response: ApiResponse = { success: true, data: participant };
       res.status(201).json(response);
     } catch (err) {
