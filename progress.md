@@ -2974,3 +2974,43 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - ✅ Zero TypeScript errors across entire workspace
 - Next immediate action:
   - Deploy and verify: live session no longer glitches for non-host users, super admin can manage users/pods/sessions from admin panel, Im@mister-raw.com has super_admin role
+
+### T-070 — Fix live session UX, admin hard-delete, invite redesign, super_admin assignments
+- Timestamp: 2026-03-11
+- Status: **Completed**
+- What changed:
+  1. **Fixed video tiles too zoomed in**: Replaced `min-h-[300px]` with `aspect-video` on both local and remote video containers in VideoRoom.tsx. Added `max-h-[calc(100vh-200px)]` constraint on grid container. Videos now display at natural 16:9 aspect ratio.
+  2. **Enhanced host controls during active rounds**: HostControls now shows round progress during matched/rating phases — "Round X/Y" with live pulse indicator (Radio icon), "Rating" suffix during rating phase, and participant count.
+  3. **Fixed session stuck at "preparing your recap"**: Root cause: `endRatingWindow()` called `transitionToClosingLobby()` after last round, starting a 480-second (8-minute!) timer. Fix: call `completeSession()` directly when all rounds finish naturally, skipping CLOSING_LOBBY entirely. Removed unused `transitionToClosingLobby` function.
+  4. **Added admin hard-delete for pods and sessions**: New `hardDeletePod()` in pod.service.ts and `hardDeleteSession()` in session.service.ts with transaction cascade deletion. New `DELETE /:id/permanent` routes restricted to SUPER_ADMIN via `requireRole()`.
+  5. **Added AdminPodsPage and AdminSessionsPage**: Full admin UI pages with filter tabs, archive/cancel actions, and "Delete Forever" button (super_admin only with confirmation). Linked from AdminDashboardPage quick actions.
+  6. **Redesigned invite modal with two distinct flows**: (a) "Send invite to email" — single-use invite (maxUses=1) with backend email. (b) "Create shareable link" — multi-use invite with copy to clipboard.
+  7. **Added lobby mosaic message**: When session status is 'scheduled', fallback lobby shows "Video mosaic will appear once the host starts the session" with VideoOff icon.
+  8. **Super admin assignments**: Migration 006 sets Im@mister-raw.com to super_admin. Migration 007 sets alihamza891840@gmail.com to super_admin. Both have full platform control.
+- Files touched:
+  - client/src/features/live/VideoRoom.tsx (aspect-video, max-h constraint)
+  - client/src/features/live/HostControls.tsx (round info display, pulse indicator)
+  - client/src/features/live/Lobby.tsx (sessionStatus, mosaic message)
+  - client/src/features/invites/CreateInviteModal.tsx (complete rewrite, two-flow design)
+  - client/src/features/admin/AdminPodsPage.tsx (new file)
+  - client/src/features/admin/AdminSessionsPage.tsx (new file)
+  - client/src/features/admin/AdminDashboardPage.tsx (updated nav links)
+  - client/src/App.tsx (added admin routes)
+  - server/src/services/orchestration/orchestration.service.ts (direct completeSession, removed transitionToClosingLobby)
+  - server/src/services/pod/pod.service.ts (hardDeletePod)
+  - server/src/services/session/session.service.ts (hardDeleteSession)
+  - server/src/routes/pods.ts (DELETE /:id/permanent)
+  - server/src/routes/sessions.ts (DELETE /:id/permanent)
+  - server/src/db/migrations/007_set_admin_alihamza.sql (new migration)
+- Decisions made:
+  - Skip CLOSING_LOBBY entirely on natural session completion — the 480s delay was root cause of "stuck at recap"
+  - Hard-delete is separate from soft-delete — requires SUPER_ADMIN, uses cascade transaction
+  - Invite email flow creates maxUses=1, link flow allows configurable maxUses (default 10)
+  - Both Im@mister-raw.com and alihamza891840@gmail.com promoted to super_admin
+- Validation Results:
+  - ✅ 250 server tests passing (14 suites)
+  - ✅ 29 shared tests passing
+  - ✅ All 3 production builds pass (shared, server, client)
+  - ✅ All 15 changed files verified intact
+- Next immediate action:
+  - Deploy and verify: video tiles properly sized, session completes immediately after last round, admin can hard-delete, invite modal has two flows, both super_admin accounts active
