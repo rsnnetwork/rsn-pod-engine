@@ -44,7 +44,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 - Active Milestone: **Change 1.0 Complete — Font, Logo, Landing, Login, Admin, Role Tiers**
 - Current Session: Change 1.0 implementation (T-051 through T-055)
 - Overall Build Status: Shared + Client + Server production builds passing, 279/279 tests passing (250 server + 29 shared)
-- Last Updated: March 11, 2026 (T-069)
+- Last Updated: March 11, 2026 (T-070)
 
 ---
 
@@ -2974,3 +2974,40 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - ✅ Zero TypeScript errors across entire workspace
 - Next immediate action:
   - Deploy and verify: live session no longer glitches for non-host users, super admin can manage users/pods/sessions from admin panel, Im@mister-raw.com has super_admin role
+
+### T-070 — Fix live session UX, admin hard-delete, invite redesign
+- Timestamp: 2026-03-11
+- Status: **Completed**
+- What changed:
+  1. **Fixed video tiles too zoomed in**: Replaced `min-h-[300px]` with `aspect-video` on both local and remote video containers in VideoRoom.tsx. Added `max-h-[calc(100vh-200px)]` constraint on grid container to prevent tiles from filling entire viewport. Videos now display at natural 16:9 aspect ratio.
+  2. **Enhanced host controls during active rounds**: HostControls now shows round progress during matched/rating phases — displays "Round X/Y" with live pulse indicator (Radio icon), "Rating" suffix during rating phase, and participant count. Host has full visibility into session state at all times.
+  3. **Fixed session stuck at "preparing your recap"**: Root cause was `endRatingWindow()` calling `transitionToClosingLobby()` after last round, which started a 480-second (8-minute!) timer before completing. Fix: call `completeSession()` directly when all rounds finish naturally, skipping the CLOSING_LOBBY phase entirely. Removed now-unused `transitionToClosingLobby` function.
+  4. **Added admin hard-delete for pods and sessions**: New `hardDeletePod()` in pod.service.ts and `hardDeleteSession()` in session.service.ts — both use transactions for cascading deletion (ratings → matches → participants → invites → sessions → pod_members → pods). New `DELETE /:id/permanent` routes on both pods and sessions, restricted to SUPER_ADMIN via `requireRole()`.
+  5. **Added AdminPodsPage and AdminSessionsPage**: Full admin UI pages with filter tabs (All/Active/Archived for pods; All/Scheduled/Completed/Cancelled for sessions), archive/cancel actions, and "Delete Forever" button (super_admin only with confirmation dialog). Linked from AdminDashboardPage quick actions.
+  6. **Redesigned invite modal with two distinct flows**: (a) "Send invite to email" — email input + Send button, creates single-use invite (maxUses=1) and triggers backend email. (b) "Create shareable link" — maxUses input (default 10) + Create & Copy Link button, creates multi-use invite and copies link to clipboard. Separate mutations and clear UI separation.
+  7. **Added lobby mosaic message**: When session status is 'scheduled' (before host starts), fallback lobby shows "Video mosaic will appear once the host starts the session" with VideoOff icon, so participants know what to expect.
+- Files touched:
+  - client/src/features/live/VideoRoom.tsx (aspect-video, max-h constraint)
+  - client/src/features/live/HostControls.tsx (round info display, pulse indicator)
+  - client/src/features/live/Lobby.tsx (sessionStatus, mosaic message)
+  - client/src/features/invites/CreateInviteModal.tsx (complete rewrite, two-flow design)
+  - client/src/features/admin/AdminPodsPage.tsx (new file)
+  - client/src/features/admin/AdminSessionsPage.tsx (new file)
+  - client/src/features/admin/AdminDashboardPage.tsx (updated nav links)
+  - client/src/App.tsx (added admin routes)
+  - server/src/services/orchestration/orchestration.service.ts (direct completeSession after last round, removed transitionToClosingLobby)
+  - server/src/services/pod/pod.service.ts (hardDeletePod)
+  - server/src/services/session/session.service.ts (hardDeleteSession)
+  - server/src/routes/pods.ts (DELETE /:id/permanent)
+  - server/src/routes/sessions.ts (DELETE /:id/permanent)
+- Decisions made:
+  - Skip CLOSING_LOBBY entirely on natural session completion (all rounds done) — the 480s delay was the root cause of "stuck at recap" bug
+  - Hard-delete is separate from soft-delete (archive/cancel) — requires SUPER_ADMIN role, uses cascade transaction
+  - Invite email flow creates maxUses=1, link flow allows configurable maxUses (default 10)
+  - Kept host "End" button flow going directly to completeSession (no closing lobby)
+- Validation Results:
+  - ✅ 250 server tests passing (14 suites)
+  - ✅ 29 shared tests passing
+  - ✅ All 3 production builds pass (shared, server, client)
+- Next immediate action:
+  - Deploy and verify: video tiles properly sized, session completes immediately after last round, admin can hard-delete pods/sessions, invite modal has two clear flows
