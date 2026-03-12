@@ -46,19 +46,19 @@ export default function SessionDetailPage() {
     mutationFn: (body: { title?: string; description?: string; scheduledAt?: string }) => api.put(`/sessions/${sessionId}`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['session', sessionId] });
-      addToast('Session updated', 'success');
+      addToast('Event updated', 'success');
       setEditOpen(false);
     },
-    onError: () => addToast('Failed to update session', 'error'),
+    onError: () => addToast('Failed to update event', 'error'),
   });
 
   const deleteMutation = useMutation({
     mutationFn: () => api.delete(`/sessions/${sessionId}`),
     onSuccess: () => {
-      addToast('Session deleted', 'success');
+      addToast('Event deleted', 'success');
       navigate('/sessions');
     },
-    onError: () => addToast('Failed to delete session', 'error'),
+    onError: () => addToast('Failed to delete event', 'error'),
   });
 
   const openEdit = () => {
@@ -73,7 +73,7 @@ export default function SessionDetailPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['session-participants', sessionId] });
       qc.invalidateQueries({ queryKey: ['session', sessionId] });
-      addToast('Registered for session!', 'success');
+      addToast('Registered for event!', 'success');
     },
     onError: () => addToast('Failed to register', 'error'),
   });
@@ -105,13 +105,13 @@ export default function SessionDetailPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['session-participants', sessionId] });
       qc.invalidateQueries({ queryKey: ['session', sessionId] });
-      addToast('Unregistered from session', 'success');
+      addToast('Unregistered from event', 'success');
     },
     onError: () => addToast('Failed to unregister', 'error'),
   });
 
   if (isLoading) return <PageLoader />;
-  if (!session) return <p className="text-gray-500 text-center py-20">Session not found</p>;
+  if (!session) return <p className="text-gray-500 text-center py-20">Event not found</p>;
 
   const statusVariant = session.status === 'scheduled' ? 'info'
     : session.status === 'lobby_open' || session.status === 'round_active' ? 'success'
@@ -120,14 +120,14 @@ export default function SessionDetailPage() {
   return (
     <div className="max-w-3xl mx-auto space-y-6">
       <button onClick={() => navigate('/sessions')} className="flex items-center gap-2 text-gray-500 hover:text-gray-800 transition-colors text-sm">
-        <ArrowLeft className="h-4 w-4" /> Back to Sessions
+        <ArrowLeft className="h-4 w-4" /> Back to Events
       </button>
 
       {/* Session Info */}
       <Card className="animate-fade-in-up">
         <div className="flex items-start justify-between mb-4">
           <div>
-            <h1 className="text-2xl font-bold text-[#1a1a2e]">{session.title || 'Session'}</h1>
+            <h1 className="text-2xl font-bold text-[#1a1a2e]">{session.title || 'Event'}</h1>
             {session.description && <p className="text-gray-500 mt-1 text-sm">{session.description}</p>}
             <p className="text-gray-400 mt-2 text-sm flex items-center gap-1.5">
               <Calendar className="h-4 w-4" />
@@ -174,7 +174,7 @@ export default function SessionDetailPage() {
         <div className="flex items-start gap-3 rounded-xl bg-amber-500/10 border border-amber-500/20 px-4 py-3 animate-fade-in-up stagger-1">
           <AlertTriangle className="h-5 w-5 text-amber-400 flex-shrink-0 mt-0.5" />
           <div>
-            <p className="text-sm font-medium text-amber-300">Session in progress</p>
+            <p className="text-sm font-medium text-amber-300">Event in progress</p>
             <p className="text-xs text-amber-400/80 mt-0.5">
               {session.status === 'round_active' ? `Round ${session.currentRound || '?'} is currently active. ` : ''}
               You can still join — you'll be placed in the lobby until the next round begins.
@@ -209,7 +209,7 @@ export default function SessionDetailPage() {
           >
             <Play className="h-4 w-4 mr-2" />
             {session.status === 'scheduled'
-              ? (isHost ? 'Start Session' : 'Enter Lobby')
+              ? (isHost ? 'Start Event' : 'Enter Lobby')
               : 'Join Live'}
           </Button>
         )}
@@ -224,7 +224,7 @@ export default function SessionDetailPage() {
           </Button>
         )}
         {isHost && (session.status === 'scheduled' || session.status === 'completed') && (
-          <Button variant="danger" onClick={() => { if (confirm('Delete this session? This cannot be undone.')) deleteMutation.mutate(); }} isLoading={deleteMutation.isPending}>
+          <Button variant="danger" onClick={() => { if (confirm('Delete this event? This cannot be undone.')) deleteMutation.mutate(); }} isLoading={deleteMutation.isPending}>
             <Trash2 className="h-4 w-4 mr-2" /> Delete
           </Button>
         )}
@@ -235,7 +235,7 @@ export default function SessionDetailPage() {
         )}
         {isHost && session.status !== 'completed' && (
           <Button variant="secondary" onClick={() => { setInviteLink(''); setInviteEmail(''); setInviteOpen(true); }}>
-            <Mail className="h-4 w-4 mr-2" /> Invite to Session
+            <Mail className="h-4 w-4 mr-2" /> Invite to Event
           </Button>
         )}
       </div>
@@ -272,7 +272,7 @@ export default function SessionDetailPage() {
       </div>
 
       {/* Invite to Session Modal */}
-      <Modal open={inviteOpen} onClose={() => setInviteOpen(false)} title="Invite to Session">
+      <Modal open={inviteOpen} onClose={() => setInviteOpen(false)} title="Invite to Event">
         <div className="space-y-5">
           {/* Option 1: Send Email Invite */}
           <div className="rounded-lg border border-gray-200 p-4 space-y-3">
@@ -324,7 +324,7 @@ export default function SessionDetailPage() {
       </Modal>
 
       {/* Edit Modal */}
-      <Modal open={editOpen} onClose={() => setEditOpen(false)} title="Edit Session">
+      <Modal open={editOpen} onClose={() => setEditOpen(false)} title="Edit Event">
         <form onSubmit={e => {
           e.preventDefault();
           const body: any = {};

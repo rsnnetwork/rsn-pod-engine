@@ -78,7 +78,7 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
       ) : transitionStatus === 'session_ending' ? (
         <div className="flex flex-col items-center gap-2">
           <Loader2 className="h-5 w-5 text-indigo-600 animate-spin" />
-          <p className="text-gray-600 text-sm font-medium">Session complete — preparing your recap...</p>
+          <p className="text-gray-600 text-sm font-medium">Event complete — preparing your recap...</p>
         </div>
       ) : transitionStatus === 'between_rounds' ? (
         <div className="flex flex-col items-center gap-2">
@@ -89,7 +89,7 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
       ) : transitionStatus === 'starting_session' ? (
         <div className="flex flex-col items-center gap-2">
           <Loader2 className="h-5 w-5 text-indigo-600 animate-spin" />
-          <h2 className="text-xl font-bold text-[#1a1a2e]">Session Starting</h2>
+          <h2 className="text-xl font-bold text-[#1a1a2e]">Event Starting</h2>
           <p className="text-gray-500 text-sm">Preparing your first match...</p>
         </div>
       ) : isScheduled ? (
@@ -101,10 +101,10 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
           <h2 className="text-xl font-bold text-[#1a1a2e]">Waiting Room</h2>
           <p className="text-gray-500 text-sm">
             {isHost
-              ? 'You\'re the host — click Start Session below when everyone is ready'
+              ? 'You\'re the host — click Start Event below when everyone is ready'
               : hostInLobby
-                ? 'The host is here! They\'ll start the session shortly.'
-                : 'Waiting for the host to join and start the session...'}
+                ? 'The host is here! They\'ll start the event shortly.'
+                : 'Waiting for the host to join and start the event...'}
           </p>
         </>
       ) : (
@@ -170,7 +170,7 @@ export default function Lobby({ isHost = false }: { isHost?: boolean }) {
         {sessionStatus === 'scheduled' && (
           <p className="mt-4 text-xs text-gray-400 flex items-center justify-center gap-1.5">
             <VideoOff className="h-3.5 w-3.5" />
-            Video mosaic will appear once the host starts the session
+            Video mosaic will appear once the host starts the event
           </p>
         )}
       </Card>

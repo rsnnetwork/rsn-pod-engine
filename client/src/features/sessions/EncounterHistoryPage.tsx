@@ -51,7 +51,7 @@ export default function EncounterHistoryPage() {
       {(encounters || []).length === 0 ? (
         <EmptyState
           title={mutualOnly ? 'No mutual matches yet' : 'No encounters yet'}
-          description="Join sessions to start meeting people!"
+          description="Join events to start meeting people!"
           icon={<Users className="h-12 w-12" />}
         />
       ) : (

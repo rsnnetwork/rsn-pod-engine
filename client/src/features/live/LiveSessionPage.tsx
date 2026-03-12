@@ -49,7 +49,7 @@ export default function LiveSessionPage() {
     <div className="h-screen bg-white flex flex-col">
       {/* Top bar */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-gray-50/60">
-        <h2 className="text-sm font-medium text-gray-600 truncate">{session?.title || 'Live Session'}</h2>
+        <h2 className="text-sm font-medium text-gray-600 truncate">{session?.title || 'Live Event'}</h2>
         <button
           onClick={handleLeave}
           className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-red-400 transition-colors px-2 py-1 rounded-lg hover:bg-gray-100"
@@ -69,7 +69,7 @@ export default function LiveSessionPage() {
       {connectionStatus === 'connecting' && (
         <div className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2 flex items-center justify-center gap-2">
           <Loader2 className="h-4 w-4 text-amber-400 animate-spin" />
-          <p className="text-sm text-amber-300">Connecting to session...</p>
+          <p className="text-sm text-amber-300">Connecting to event...</p>
         </div>
       )}
       {connectionStatus === 'reconnecting' && (
@@ -96,11 +96,11 @@ export default function LiveSessionPage() {
         <div className="bg-[#1a1a2e]/10 border-b border-brand-500/20 px-4 py-2 flex items-center justify-center gap-2">
           <Loader2 className="h-4 w-4 text-indigo-600 animate-spin" />
           <p className="text-sm text-brand-300">
-            {transitionStatus === 'starting_session' && 'Session is starting — preparing your first match...'}
+            {transitionStatus === 'starting_session' && 'Event is starting — preparing your first match...'}
             {transitionStatus === 'preparing_match' && "You've been matched! Connecting to your partner..."}
             {transitionStatus === 'round_ending' && 'Round ending — wrapping up...'}
             {transitionStatus === 'between_rounds' && 'Getting ready for the next round...'}
-            {transitionStatus === 'session_ending' && 'Session is wrapping up — preparing your recap...'}
+            {transitionStatus === 'session_ending' && 'Event is wrapping up — preparing your recap...'}
           </p>
         </div>
       )}

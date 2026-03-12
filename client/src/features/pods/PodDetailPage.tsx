@@ -214,7 +214,7 @@ export default function PodDetailPage() {
           </div>
           <div className="flex items-center gap-2 text-sm text-gray-500">
             <Calendar className="h-4 w-4 text-indigo-600" />
-            <span>{sessionCountData || 0} sessions</span>
+            <span>{sessionCountData || 0} events</span>
           </div>
           <div className="flex items-center gap-2 text-sm text-gray-500">
             <Radio className="h-4 w-4 text-indigo-600" />
@@ -246,7 +246,7 @@ export default function PodDetailPage() {
               <Button onClick={() => joinMutation.mutate()} isLoading={joinMutation.isPending} className="btn-glow">
                 <UserPlus className="h-4 w-4 mr-2" /> Join Pod
               </Button>
-              <p className="text-sm text-gray-400 self-center">Join this pod to participate in sessions and meet members.</p>
+              <p className="text-sm text-gray-400 self-center">Join this pod to participate in events and meet members.</p>
             </>
           ) : (
             <>
@@ -272,13 +272,13 @@ export default function PodDetailPage() {
               Reactivate Pod
             </Button>
           )}
-          <p className="text-sm text-gray-400 self-center">This pod is archived. Sessions and data are preserved.</p>
+          <p className="text-sm text-gray-400 self-center">This pod is archived. Events and data are preserved.</p>
         </div>
       ) : pod.status !== 'archived' && (
         <div className="flex flex-wrap gap-3 animate-fade-in-up stagger-1">
           {isMember && (
             <Button onClick={() => navigate(`/sessions/new?podId=${podId}`)} className="btn-glow">
-              <Calendar className="h-4 w-4 mr-2" /> Schedule Session
+              <Calendar className="h-4 w-4 mr-2" /> Schedule Event
             </Button>
           )}
           {isDirectorOrHost && (
@@ -292,7 +292,7 @@ export default function PodDetailPage() {
             </Button>
           )}
           {isDirector && (
-            <Button variant="danger" onClick={() => { if (confirm('Archive this pod? Sessions will be preserved and you can reactivate later.')) deleteMutation.mutate(); }} isLoading={deleteMutation.isPending}>
+            <Button variant="danger" onClick={() => { if (confirm('Archive this pod? Events will be preserved and you can reactivate later.')) deleteMutation.mutate(); }} isLoading={deleteMutation.isPending}>
               <Trash2 className="h-4 w-4 mr-2" /> Archive Pod
             </Button>
           )}

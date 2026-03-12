@@ -3075,3 +3075,47 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - ✅ tsc --noEmit clean (zero TS errors)
 - Next immediate action:
   - Verify Render + Vercel deploy
+
+---
+
+## Change 1.2 — Stefan's March 12 Test Review
+
+### 2026-03-13 — Entry C1.2-001
+- Task ID: C1.2-001
+- Task Title: Logo as home button (Phase 7)
+- Status: **Completed**
+- What changed:
+  - Made RSN logo + text both clickable as a home navigation button in sidebar
+  - Desktop and mobile variants both updated
+- Files touched:
+  - client/src/components/layout/AppLayout.tsx
+- Next immediate action:
+  - Continue with Phase 1A terminology rename
+
+### 2026-03-13 — Entry C1.2-002
+- Task ID: C1.2-002
+- Task Title: Rename "Session" → "Event" across all UI (Phase 1A)
+- Status: **Completed**
+- What changed:
+  - Renamed all user-facing "Session"/"Sessions" text to "Event"/"Events" across 12+ files
+  - Code identifiers (variable names, route paths, API endpoints) unchanged — UI-only rename
+  - 37+ individual text edits across: SessionsPage, CreateSessionPage, SessionDetailPage, HostControls, Lobby, LiveSessionPage, SessionComplete, HostDashboardPage, AdminSessionsPage, PodDetailPage, EncounterHistoryPage
+  - Toasts, button labels, page titles, empty states, confirm dialogs, back buttons all updated
+- Files touched:
+  - client/src/features/sessions/SessionsPage.tsx
+  - client/src/features/sessions/CreateSessionPage.tsx
+  - client/src/features/sessions/SessionDetailPage.tsx
+  - client/src/features/live/HostControls.tsx
+  - client/src/features/live/Lobby.tsx
+  - client/src/features/live/LiveSessionPage.tsx
+  - client/src/features/live/SessionComplete.tsx
+  - client/src/features/host/HostDashboardPage.tsx
+  - client/src/features/admin/AdminSessionsPage.tsx
+  - client/src/features/pods/PodDetailPage.tsx
+  - client/src/features/sessions/EncounterHistoryPage.tsx
+- Validation Results:
+  - ✅ Client build passes (vite build clean)
+  - ✅ Server tsc --noEmit clean
+  - ✅ 250 tests passing (14 suites)
+- Next immediate action:
+  - Phase 1B: Host-controlled lobby (remove auto-timer, host-only round start)

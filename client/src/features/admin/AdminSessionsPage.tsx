@@ -35,14 +35,14 @@ export default function AdminSessionsPage() {
 
   const cancelMutation = useMutation({
     mutationFn: (sessionId: string) => api.delete(`/sessions/${sessionId}`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin-sessions'] }); addToast('Session cancelled', 'success'); },
-    onError: () => addToast('Failed to cancel session', 'error'),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin-sessions'] }); addToast('Event cancelled', 'success'); },
+    onError: () => addToast('Failed to cancel event', 'error'),
   });
 
   const hardDeleteMutation = useMutation({
     mutationFn: (sessionId: string) => api.delete(`/sessions/${sessionId}/permanent`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin-sessions'] }); addToast('Session permanently deleted', 'success'); },
-    onError: () => addToast('Failed to delete session', 'error'),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['admin-sessions'] }); addToast('Event permanently deleted', 'success'); },
+    onError: () => addToast('Failed to delete event', 'error'),
   });
 
   if (isLoading) return <PageLoader />;
@@ -52,7 +52,7 @@ export default function AdminSessionsPage() {
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <div className="flex items-center justify-between animate-fade-in">
-        <h1 className="text-2xl font-bold text-[#1a1a2e]">Manage Sessions</h1>
+        <h1 className="text-2xl font-bold text-[#1a1a2e]">Manage Events</h1>
         <Calendar className="h-6 w-6 text-indigo-600" />
       </div>
 
@@ -71,7 +71,7 @@ export default function AdminSessionsPage() {
       <div className="grid gap-4 animate-fade-in-up">
         {(!data || data.length === 0) ? (
           <Card className="text-center py-8">
-            <p className="text-gray-500">No sessions found</p>
+            <p className="text-gray-500">No events found</p>
           </Card>
         ) : data.map((session: any) => (
           <Card key={session.id}>
@@ -90,7 +90,7 @@ export default function AdminSessionsPage() {
                   <Button
                     size="sm"
                     variant="secondary"
-                    onClick={() => { if (confirm('Cancel this session?')) cancelMutation.mutate(session.id); }}
+                    onClick={() => { if (confirm('Cancel this event?')) cancelMutation.mutate(session.id); }}
                   >
                     <XCircle className="h-3.5 w-3.5 mr-1" /> Cancel
                   </Button>
@@ -99,7 +99,7 @@ export default function AdminSessionsPage() {
                   <Button
                     size="sm"
                     variant="danger"
-                    onClick={() => { if (confirm('PERMANENTLY delete this session and ALL its matches, ratings, and data? This cannot be undone.')) hardDeleteMutation.mutate(session.id); }}
+                    onClick={() => { if (confirm('PERMANENTLY delete this event and ALL its matches, ratings, and data? This cannot be undone.')) hardDeleteMutation.mutate(session.id); }}
                   >
                     <Trash2 className="h-3.5 w-3.5 mr-1" /> Delete Forever
                   </Button>

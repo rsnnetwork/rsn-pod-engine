@@ -29,16 +29,16 @@ export default function SessionsPage() {
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <div className="flex items-center justify-between animate-fade-in">
-        <h1 className="text-2xl font-bold text-[#1a1a2e]">Sessions</h1>
-        <Button onClick={() => navigate('/sessions/new')} className="btn-glow"><Plus className="h-4 w-4 mr-2" /> New Session</Button>
+        <h1 className="text-2xl font-bold text-[#1a1a2e]">Events</h1>
+        <Button onClick={() => navigate('/sessions/new')} className="btn-glow"><Plus className="h-4 w-4 mr-2" /> New Event</Button>
       </div>
 
       {(!data || data.length === 0) ? (
         <EmptyState
           icon={<Calendar className="h-8 w-8" />}
-          title="No sessions yet"
-          description="Schedule a session to start connecting."
-          action={<Button onClick={() => navigate('/sessions/new')}>Schedule Session</Button>}
+          title="No events yet"
+          description="Schedule an event to start connecting."
+          action={<Button onClick={() => navigate('/sessions/new')}>Schedule Event</Button>}
         />
       ) : (
         <div className="grid gap-4 animate-fade-in-up">
@@ -50,7 +50,7 @@ export default function SessionsPage() {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <p className="font-medium text-gray-800">
-                        {s.title || 'Open session'}
+                        {s.title || 'Open event'}
                       </p>
                       {isHost && (
                         <Badge variant="brand" className="text-xs">

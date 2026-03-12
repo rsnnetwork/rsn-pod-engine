@@ -61,19 +61,19 @@ export default function CreateSessionPage() {
       return api.post('/sessions', body);
     },
     onSuccess: (res) => {
-      addToast('Session scheduled!', 'success');
+      addToast('Event scheduled!', 'success');
       navigate(`/sessions/${res.data.data?.id}`);
     },
-    onError: () => addToast('Failed to create session', 'error'),
+    onError: () => addToast('Failed to create event', 'error'),
   });
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <button onClick={() => navigate('/sessions')} className="flex items-center gap-2 text-gray-500 hover:text-gray-800 transition-colors text-sm">
-        <ArrowLeft className="h-4 w-4" /> Back to Sessions
+        <ArrowLeft className="h-4 w-4" /> Back to Events
       </button>
 
-      <h1 className="text-2xl font-bold text-[#1a1a2e] animate-fade-in">Schedule a Session</h1>
+      <h1 className="text-2xl font-bold text-[#1a1a2e] animate-fade-in">Schedule an Event</h1>
 
       <form onSubmit={handleSubmit(d => mutation.mutate(d))} className="space-y-6">
         {/* Basic Info */}
@@ -101,7 +101,7 @@ export default function CreateSessionPage() {
               <textarea
                 {...register('description')}
                 rows={2}
-                placeholder="Describe the session topic..."
+                placeholder="Describe the event topic..."
                 className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200 resize-none"
               />
             </div>
@@ -158,7 +158,7 @@ export default function CreateSessionPage() {
 
         <div className="flex gap-3 justify-end animate-fade-in-up stagger-3">
           <Button variant="ghost" type="button" onClick={() => navigate('/sessions')}>Cancel</Button>
-          <Button type="submit" isLoading={mutation.isPending} className="btn-glow">Schedule Session</Button>
+          <Button type="submit" isLoading={mutation.isPending} className="btn-glow">Schedule Event</Button>
         </div>
       </form>
     </div>

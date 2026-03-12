@@ -65,7 +65,7 @@ export default function SessionComplete({ sessionId }: Props) {
           <div className="inline-flex items-center justify-center h-16 w-16 rounded-full bg-emerald-500/20 text-emerald-400 mb-4">
             <CheckCircle className="h-8 w-8" />
           </div>
-          <h2 className="text-xl font-bold text-[#1a1a2e] mb-2">Session Complete!</h2>
+          <h2 className="text-xl font-bold text-[#1a1a2e] mb-2">Event Complete!</h2>
           <p className="text-gray-500">Great networking! Here's your recap.</p>
         </Card>
 
@@ -162,7 +162,7 @@ export default function SessionComplete({ sessionId }: Props) {
             Full Recap <ArrowRight className="h-4 w-4 ml-1" />
           </Button>
           <Button onClick={() => navigate('/sessions')} className="flex-1">
-            Back to Sessions
+            Back to Events
           </Button>
         </div>
       </div>

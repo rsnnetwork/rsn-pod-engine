@@ -46,7 +46,7 @@ export default function HostDashboardPage() {
       await api.post(`/sessions/${sessionId}/host/${action}`, body);
       qc.invalidateQueries({ queryKey: ['session', sessionId] });
       qc.invalidateQueries({ queryKey: ['host-state', sessionId] });
-      addToast(`Session ${action} successful`, 'success');
+      addToast(`Event ${action} successful`, 'success');
     } catch (err: any) {
       addToast(err?.response?.data?.message || `Failed to ${action}`, 'error');
     } finally {
@@ -61,7 +61,7 @@ export default function HostDashboardPage() {
   };
 
   if (isLoading) return <PageLoader />;
-  if (!session) return <p className="text-gray-500 text-center py-20">Session not found</p>;
+  if (!session) return <p className="text-gray-500 text-center py-20">Event not found</p>;
 
   // Auth check: Only host or admin can access
   const isHost = session.hostUserId === user?.id || user?.role === 'admin' || user?.role === 'super_admin';
@@ -73,8 +73,8 @@ export default function HostDashboardPage() {
             <Settings className="h-8 w-8" />
           </div>
           <h2 className="text-xl font-bold text-[#1a1a2e] mb-2">Access Denied</h2>
-          <p className="text-gray-500 mb-4">Only the session host can access this dashboard.</p>
-          <Button variant="secondary" onClick={() => navigate(`/sessions/${sessionId}`)}>Back to Session</Button>
+          <p className="text-gray-500 mb-4">Only the event host can access this dashboard.</p>
+          <Button variant="secondary" onClick={() => navigate(`/sessions/${sessionId}`)}>Back to Event</Button>
         </Card>
       </div>
     );
@@ -89,7 +89,7 @@ export default function HostDashboardPage() {
   return (
     <div className="max-w-4xl mx-auto space-y-6 p-4 md:p-8">
       <button onClick={() => navigate('/sessions')} className="flex items-center gap-2 text-gray-500 hover:text-gray-800 transition-colors text-sm">
-        <ArrowLeft className="h-4 w-4" /> Back to Sessions
+        <ArrowLeft className="h-4 w-4" /> Back to Events
       </button>
 
       <div className="flex items-center justify-between animate-fade-in">
@@ -97,10 +97,10 @@ export default function HostDashboardPage() {
         <Badge variant={statusVariant}>{session.status?.replace(/_/g, ' ')}</Badge>
       </div>
 
-      {/* Session Info */}
+      {/* Event Info */}
       <Card className="animate-fade-in-up">
         <h2 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
-          <Settings className="h-5 w-5 text-indigo-600" /> Session Info
+          <Settings className="h-5 w-5 text-indigo-600" /> Event Info
         </h2>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
           <div><span className="text-gray-400">Title:</span> <span className="text-gray-800 ml-1">{session.title || 'Open'}</span></div>
@@ -134,7 +134,7 @@ export default function HostDashboardPage() {
         <div className="flex flex-wrap gap-3">
           {session.status === 'scheduled' && (
             <Button onClick={() => hostAction('start')} isLoading={loading === 'start'} className="btn-glow">
-              <Play className="h-4 w-4 mr-2" /> Start Session
+              <Play className="h-4 w-4 mr-2" /> Start Event
             </Button>
           )}
           {isActive && session.status !== 'closing_lobby' && (
@@ -149,7 +149,7 @@ export default function HostDashboardPage() {
           )}
           {isActive && (
             <Button variant="danger" onClick={() => hostAction('end')} isLoading={loading === 'end'}>
-              <StopCircle className="h-4 w-4 mr-2" /> End Session
+              <StopCircle className="h-4 w-4 mr-2" /> End Event
             </Button>
           )}
           <Button variant="secondary" onClick={() => navigate(`/session/${sessionId}/live`)}>
