@@ -590,11 +590,12 @@ async function handleHostStartRound(
       return;
     }
 
-    // Need at least 2 participants with eligible status
+    // Need at least 2 non-host participants with eligible status
     const countResult = await query<{ count: string }>(
       `SELECT COUNT(*) as count FROM session_participants
-       WHERE session_id = $1 AND status IN ('in_lobby', 'checked_in', 'registered')`,
-      [data.sessionId]
+       WHERE session_id = $1 AND status IN ('in_lobby', 'checked_in', 'registered')
+         AND user_id != $2`,
+      [data.sessionId, activeSession.hostUserId]
     );
     const participantCount = parseInt(countResult.rows[0].count, 10);
     if (participantCount < 2) {
@@ -902,11 +903,12 @@ async function handleHostGenerateMatches(
       return;
     }
 
-    // Need at least 2 participants
+    // Need at least 2 non-host participants for matching
     const countResult = await query<{ count: string }>(
       `SELECT COUNT(*) as count FROM session_participants
-       WHERE session_id = $1 AND status IN ('in_lobby', 'checked_in', 'registered')`,
-      [data.sessionId]
+       WHERE session_id = $1 AND status IN ('in_lobby', 'checked_in', 'registered')
+         AND user_id != $2`,
+      [data.sessionId, activeSession.hostUserId]
     );
     const participantCount = parseInt(countResult.rows[0].count, 10);
     if (participantCount < 2) {
@@ -922,7 +924,8 @@ async function handleHostGenerateMatches(
       : activeSession.currentRound + 1;
 
     // Generate matches for preview (store them in DB but don't activate yet)
-    await matchingService.generateSingleRound(data.sessionId, nextRound);
+    // Exclude host from matching — host stays in lobby to manage the event
+    await matchingService.generateSingleRound(data.sessionId, nextRound, [activeSession.hostUserId]);
     const matches = await matchingService.getMatchesByRound(data.sessionId, nextRound);
 
     // Look up display names for all participants in matches
@@ -944,10 +947,11 @@ async function handleHostGenerateMatches(
       participantB: { userId: m.participantBId, displayName: nameMap.get(m.participantBId) || 'User' },
     }));
 
-    // Determine bye participants
+    // Determine bye participants (exclude host — host stays in lobby, not a "bye")
     const allParticipants = await query<{ user_id: string }>(
-      `SELECT user_id FROM session_participants WHERE session_id = $1 AND status IN ('in_lobby', 'checked_in', 'registered')`,
-      [data.sessionId]
+      `SELECT user_id FROM session_participants WHERE session_id = $1 AND status IN ('in_lobby', 'checked_in', 'registered')
+         AND user_id != $2`,
+      [data.sessionId, activeSession.hostUserId]
     );
     const matchedIds = new Set(matches.flatMap(m => [m.participantAId, m.participantBId]));
     const byeParticipants = allParticipants.rows
@@ -1119,11 +1123,11 @@ async function handleHostRegenerateMatches(
       [data.sessionId, roundNumber]
     );
 
-    // Re-generate
-    await matchingService.generateSingleRound(data.sessionId, roundNumber);
+    // Re-generate (exclude host from matching)
+    await matchingService.generateSingleRound(data.sessionId, roundNumber, [activeSession.hostUserId]);
 
     // Re-send preview
-    await sendMatchPreview(socket, data.sessionId, roundNumber);
+    await sendMatchPreview(socket, data.sessionId, roundNumber, activeSession.hostUserId);
 
     logger.info({ sessionId: data.sessionId, roundNumber }, 'Host regenerated matches');
   } catch (err: any) {
@@ -1136,7 +1140,8 @@ async function handleHostRegenerateMatches(
 async function sendMatchPreview(
   socket: Socket,
   sessionId: string,
-  roundNumber: number
+  roundNumber: number,
+  hostUserId?: string
 ): Promise<void> {
   const matches = await matchingService.getMatchesByRound(sessionId, roundNumber);
 
@@ -1157,10 +1162,17 @@ async function sendMatchPreview(
     participantB: { userId: m.participantBId, displayName: nameMap.get(m.participantBId) || 'User' },
   }));
 
-  const allParticipants = await query<{ user_id: string }>(
-    `SELECT user_id FROM session_participants WHERE session_id = $1 AND status IN ('in_lobby', 'checked_in', 'registered')`,
-    [sessionId]
-  );
+  // Exclude host from bye list — host stays in lobby, not a "bye"
+  const allParticipants = hostUserId
+    ? await query<{ user_id: string }>(
+        `SELECT user_id FROM session_participants WHERE session_id = $1 AND status IN ('in_lobby', 'checked_in', 'registered')
+           AND user_id != $2`,
+        [sessionId, hostUserId]
+      )
+    : await query<{ user_id: string }>(
+        `SELECT user_id FROM session_participants WHERE session_id = $1 AND status IN ('in_lobby', 'checked_in', 'registered')`,
+        [sessionId]
+      );
   const matchedIds = new Set(matches.flatMap(m => [m.participantAId, m.participantBId]));
   const byeParticipants = allParticipants.rows
     .filter(p => !matchedIds.has(p.user_id))
@@ -1195,10 +1207,11 @@ async function transitionToRound(
     await query('UPDATE sessions SET current_round = $1 WHERE id = $2', [roundNumber, sessionId]);
 
     // Generate matches for this round (or load if pre-generated)
+    // Exclude host from matching — host stays in lobby to manage the event
     let matches = await matchingService.getMatchesByRound(sessionId, roundNumber);
     if (matches.length === 0) {
       // Generate on-the-fly for this round
-      await matchingService.generateSingleRound(sessionId, roundNumber);
+      await matchingService.generateSingleRound(sessionId, roundNumber, [activeSession.hostUserId]);
       matches = await matchingService.getMatchesByRound(sessionId, roundNumber);
     }
 
@@ -1255,10 +1268,11 @@ async function transitionToRound(
       await sessionService.updateParticipantStatus(sessionId, match.participantBId, ParticipantStatus.IN_ROUND);
     }
 
-    // Notify bye participants (unmatched due to odd count)
+    // Notify bye participants (unmatched due to odd count — exclude host, they stay in lobby)
     const allParticipants = await query<{ user_id: string }>(
-      `SELECT user_id FROM session_participants WHERE session_id = $1 AND status IN ('in_lobby', 'checked_in', 'registered')`,
-      [sessionId]
+      `SELECT user_id FROM session_participants WHERE session_id = $1 AND status IN ('in_lobby', 'checked_in', 'registered')
+         AND user_id != $2`,
+      [sessionId, activeSession.hostUserId]
     );
     for (const p of allParticipants.rows) {
       if (!matchedUserIds.has(p.user_id)) {

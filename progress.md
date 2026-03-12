@@ -3249,3 +3249,20 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - client/src/features/sessions/SessionDetailPage.tsx
 - Validation Results:
   - ✅ 250 tests passing (14 suites)
+
+---
+
+### C1.2-008 — Host excluded from matching: stays in lobby during rounds
+- Date: 2026-03-13
+- Status: Completed
+- What changed:
+  1. **Host excluded from matching algorithm**: `generateSingleRound()` now accepts optional `excludeUserIds` param. All orchestration callers pass `[hostUserId]` so the host is never paired into a round.
+  2. **Host excluded from bye notifications**: `transitionToRound()` bye loop and `sendMatchPreview()` bye list both exclude the host — host stays in lobby normally, not treated as a "bye".
+  3. **Participant counts exclude host**: `handleHostStartRound()` and `handleHostGenerateMatches()` count only non-host participants when checking the "need at least 2" threshold.
+  4. **Regenerate matches also excludes host**: `handleHostRegenerateMatches()` passes host exclusion to `generateSingleRound()` and `sendMatchPreview()`.
+- Rationale: Per Change 1.2 doc — host manages the event from the lobby, does not participate in rounds.
+- Files touched:
+  - server/src/services/matching/matching.service.ts
+  - server/src/services/orchestration/orchestration.service.ts
+- Validation Results:
+  - ✅ 250 tests passing (14 suites)

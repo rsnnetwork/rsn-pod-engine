@@ -85,23 +85,35 @@ export async function generateSessionSchedule(
 
 export async function generateSingleRound(
   sessionId: string,
-  roundNumber: number
+  roundNumber: number,
+  excludeUserIds?: string[]
 ): Promise<RoundAssignment> {
   const session = await sessionService.getSessionById(sessionId);
   const sessionConfig = typeof session.config === 'string'
     ? JSON.parse(session.config as unknown as string)
     : session.config;
 
-  // Get active participants
-  const participantsResult = await query<MatchingParticipant>(
-    `SELECT u.id AS "userId", u.interests, u.reasons_to_connect AS "reasonsToConnect",
-            u.industry, u.company, u.languages, u.timezone,
-            '{}'::jsonb AS attributes
-     FROM session_participants sp
-     JOIN users u ON u.id = sp.user_id
-     WHERE sp.session_id = $1 AND sp.status IN ('in_lobby', 'checked_in', 'registered')`,
-    [sessionId]
-  );
+  // Get active participants (excluding host or other specified users)
+  const participantsResult = excludeUserIds && excludeUserIds.length > 0
+    ? await query<MatchingParticipant>(
+        `SELECT u.id AS "userId", u.interests, u.reasons_to_connect AS "reasonsToConnect",
+                u.industry, u.company, u.languages, u.timezone,
+                '{}'::jsonb AS attributes
+         FROM session_participants sp
+         JOIN users u ON u.id = sp.user_id
+         WHERE sp.session_id = $1 AND sp.status IN ('in_lobby', 'checked_in', 'registered')
+           AND sp.user_id != ALL($2::uuid[])`,
+        [sessionId, excludeUserIds]
+      )
+    : await query<MatchingParticipant>(
+        `SELECT u.id AS "userId", u.interests, u.reasons_to_connect AS "reasonsToConnect",
+                u.industry, u.company, u.languages, u.timezone,
+                '{}'::jsonb AS attributes
+         FROM session_participants sp
+         JOIN users u ON u.id = sp.user_id
+         WHERE sp.session_id = $1 AND sp.status IN ('in_lobby', 'checked_in', 'registered')`,
+        [sessionId]
+      );
 
   // Get encounter history
   const userIds = participantsResult.rows.map((p) => p.userId);
