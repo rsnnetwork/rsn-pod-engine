@@ -43,6 +43,12 @@ interface SessionLiveState {
   lobbyToken: string | null;
   lobbyUrl: string | null;
   lobbyRoomId: string | null;
+  timerVisibility: 'hidden' | 'always_visible' | 'last_30s' | 'last_60s' | 'last_120s';
+  matchPreview: {
+    roundNumber: number;
+    matches: { participantA: { userId: string; displayName: string }; participantB: { userId: string; displayName: string } }[];
+    byeParticipants: { userId: string; displayName: string }[];
+  } | null;
 
   setPhase: (phase: SessionPhase) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
@@ -64,6 +70,8 @@ interface SessionLiveState {
   setLiveKitToken: (token: string | null, url?: string | null) => void;
   setRoomId: (roomId: string | null) => void;
   setLobbyToken: (token: string | null, url?: string | null, roomId?: string | null) => void;
+  setTimerVisibility: (v: 'hidden' | 'always_visible' | 'last_30s' | 'last_60s' | 'last_120s') => void;
+  setMatchPreview: (preview: SessionLiveState['matchPreview']) => void;
   reset: () => void;
 }
 
@@ -89,6 +97,8 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   lobbyToken: null,
   lobbyUrl: null,
   lobbyRoomId: null,
+  timerVisibility: 'always_visible',
+  matchPreview: null,
 
   setPhase: (phase) => set({ phase }),
   setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
@@ -114,6 +124,8 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   setLiveKitToken: (liveKitToken, livekitUrl = null) => set({ liveKitToken, livekitUrl }),
   setRoomId: (currentRoomId) => set({ currentRoomId }),
   setLobbyToken: (lobbyToken, lobbyUrl = null, lobbyRoomId = null) => set({ lobbyToken, lobbyUrl, lobbyRoomId }),
+  setTimerVisibility: (timerVisibility) => set({ timerVisibility }),
+  setMatchPreview: (matchPreview) => set({ matchPreview }),
   reset: () => set({
     phase: 'lobby', connectionStatus: 'connecting', transitionStatus: null,
     sessionStatus: 'scheduled', hostInLobby: false, totalRounds: 5,
@@ -121,5 +133,6 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
     timerSeconds: 0, currentRound: 0, broadcasts: [], error: null,
     isReconnecting: false, isByeRound: false, liveKitToken: null, livekitUrl: null, currentRoomId: null,
     lobbyToken: null, lobbyUrl: null, lobbyRoomId: null,
+    timerVisibility: 'always_visible', matchPreview: null,
   }),
 }));

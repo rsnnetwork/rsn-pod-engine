@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -19,6 +19,21 @@ export default function LiveSessionPage() {
   const navigate = useNavigate();
   const { phase, broadcasts, error: sessionError, connectionStatus, transitionStatus, setError, setPhase, reset } = useSessionStore();
   const { user } = useAuthStore();
+  const mediaRequestedRef = useRef(false);
+
+  // Request media permissions once per event entry (not per room transition)
+  useEffect(() => {
+    if (mediaRequestedRef.current) return;
+    mediaRequestedRef.current = true;
+    navigator.mediaDevices?.getUserMedia({ video: true, audio: true })
+      .then(stream => {
+        // Stop tracks immediately — we just needed the permission grant
+        stream.getTracks().forEach(t => t.stop());
+      })
+      .catch(() => {
+        // User denied or no device — LiveKit will handle gracefully
+      });
+  }, []);
 
   const { data: session } = useQuery({
     queryKey: ['session', sessionId],

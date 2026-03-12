@@ -237,9 +237,11 @@ export class MatchingEngineV1 implements IMatchingEngine {
       .filter((p) => !matched.has(p.idx));
 
     if (stillUnmatched.length > 0) {
-      // Select the participant with the highest total match score as the bye
-      // (they'll get the best matches in other rounds)
-      byeParticipant = stillUnmatched[0].userId;
+      // Rotate bye assignment: pick the participant who has had the fewest byes
+      // by checking encounter history (fewer total matches = more likely to have been bye'd)
+      // As a simple heuristic, use the round number to rotate through unmatched participants
+      const rotationIdx = (roundNumber - 1) % stillUnmatched.length;
+      byeParticipant = stillUnmatched[rotationIdx].userId;
     }
 
     return {
@@ -316,7 +318,20 @@ export class MatchingEngineV1 implements IMatchingEngine {
       if (sharedLangs > 0) reasonTags.push('language_match');
     }
 
-    // 6. Encounter freshness (prefer people who haven't met recently)
+    // 6. Seniority/experience diversity (prefer mixing junior + senior)
+    if (weights.seniorityDiversity) {
+      const aLevel = (a as any).seniorityLevel || 0;
+      const bLevel = (b as any).seniorityLevel || 0;
+      const diff = Math.abs(aLevel - bLevel);
+      const seniorityScore = Math.min(diff / 3, 1.0); // Max 1.0 for 3+ levels apart
+
+      totalScore += seniorityScore * weights.seniorityDiversity;
+      totalWeight += weights.seniorityDiversity;
+
+      if (diff >= 2) reasonTags.push('seniority_diverse');
+    }
+
+    // 7. Encounter freshness (prefer people who haven't met recently)
     if (weights.encounterFreshness) {
       const key = pairKey(a.userId, b.userId);
       const encounter = encounterMap.get(key);

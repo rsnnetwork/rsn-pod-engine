@@ -29,6 +29,8 @@ export enum SegmentType {
   TRANSITION = 'transition',
 }
 
+export type TimerVisibility = 'hidden' | 'always_visible' | 'last_30s' | 'last_60s' | 'last_120s';
+
 export interface SessionConfig {
   numberOfRounds: number;
   roundDurationSeconds: number;
@@ -38,6 +40,7 @@ export interface SessionConfig {
   closingLobbyDurationSeconds: number;
   noShowTimeoutSeconds: number;
   maxParticipants: number;
+  timerVisibility: TimerVisibility;
 }
 
 export const DEFAULT_SESSION_CONFIG: SessionConfig = {
@@ -49,6 +52,7 @@ export const DEFAULT_SESSION_CONFIG: SessionConfig = {
   closingLobbyDurationSeconds: 480,  // 8 minutes
   noShowTimeoutSeconds: 60,          // 60 seconds
   maxParticipants: 500,
+  timerVisibility: 'always_visible' as TimerVisibility,
 };
 
 export interface Session {

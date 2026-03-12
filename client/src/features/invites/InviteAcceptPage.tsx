@@ -23,9 +23,21 @@ export default function InviteAcceptPage() {
   const accept = async () => {
     setAccepting(true);
     try {
-      await api.post(`/invites/${code}/accept`);
+      const res = await api.post(`/invites/${code}/accept`);
       addToast('Invite accepted!', 'success');
-      navigate('/pods');
+      // Deep link: redirect to the session/event if it's a session invite, otherwise to the pod
+      const data = res.data?.data;
+      if (data?.sessionId) {
+        navigate(`/sessions/${data.sessionId}`);
+      } else if (data?.podId) {
+        navigate(`/pods/${data.podId}`);
+      } else if (invite?.sessionId) {
+        navigate(`/sessions/${invite.sessionId}`);
+      } else if (invite?.podId) {
+        navigate(`/pods/${invite.podId}`);
+      } else {
+        navigate('/sessions');
+      }
     } catch {
       addToast('Failed to accept invite', 'error');
     } finally {
@@ -43,7 +55,7 @@ export default function InviteAcceptPage() {
             <h2 className="text-xl font-bold text-[#1a1a2e] mb-2">You&apos;re invited!</h2>
             <p className="text-gray-500 mb-6">
               {invite.type === 'pod' ? "You've been invited to join a pod" :
-               invite.type === 'session' ? "You've been invited to a session" :
+               invite.type === 'session' ? "You've been invited to an event" :
                "You've been invited to join RSN"}
             </p>
             {user ? (

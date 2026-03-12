@@ -116,7 +116,7 @@ export default function RecapPage() {
           </div>
           <div>
             <h1 className="text-xl font-bold text-[#1a1a2e]">
-              {data?.sessionTitle || 'Session Recap'}
+              {data?.sessionTitle || 'Event Recap'}
             </h1>
             {data?.sessionDate && (
               <p className="text-sm text-gray-400 flex items-center gap-1 mt-1">
@@ -228,7 +228,7 @@ export default function RecapPage() {
 
       <div className="flex justify-center">
         <Button onClick={() => navigate('/sessions')} className="px-8">
-          Back to Sessions
+          Back to Events
         </Button>
       </div>
     </div>

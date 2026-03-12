@@ -11,6 +11,7 @@ const SOCKET_EVENTS = [
   'match:assigned', 'match:reassigned', 'match:bye_round',
   'rating:window_open', 'rating:window_closed',
   'host:broadcast', 'lobby:token', 'host:participant_removed',
+  'host:match_preview',
   'timer:sync', 'error',
 ] as const;
 
@@ -79,6 +80,7 @@ export default function useSessionSocket(sessionId: string) {
       if (data.hostInLobby !== undefined) store.setHostInLobby(data.hostInLobby);
       if (data.currentRound !== undefined) store.setRound(data.currentRound);
       if (data.totalRounds !== undefined) store.setTotalRounds(data.totalRounds);
+      if (data.timerVisibility) store.setTimerVisibility(data.timerVisibility);
     });
 
     // ── Session lifecycle ──
@@ -95,6 +97,7 @@ export default function useSessionSocket(sessionId: string) {
       if (data.totalRounds) store.setTotalRounds(data.totalRounds);
       store.setByeRound(false);
       store.setTransitionStatus(null);
+      store.setMatchPreview(null);
       const duration = Math.floor((new Date(data.endsAt).getTime() - Date.now()) / 1000);
       store.setTimer(Math.max(0, duration));
       clearTimer();
@@ -162,8 +165,12 @@ export default function useSessionSocket(sessionId: string) {
     socket.on('rating:window_closed', () => {
       clearTimer();
       store.setLiveKitToken(null, null);
-      store.setMatch(null);
-      store.setRoomId(null);
+      // Don't clear match data immediately — let RatingPrompt finish if user is mid-submit.
+      // Delay cleanup slightly so any in-flight rating POST can complete.
+      setTimeout(() => {
+        store.setMatch(null);
+        store.setRoomId(null);
+      }, 500);
       // If this was the last round, show session ending; otherwise between rounds
       const state = useSessionStore.getState();
       const isLastRound = state.currentRound >= state.totalRounds && state.totalRounds > 0;
@@ -183,6 +190,10 @@ export default function useSessionSocket(sessionId: string) {
     socket.on('host:participant_removed', () => {
       store.setError('You have been removed from this session.');
       store.setPhase('complete');
+    });
+
+    socket.on('host:match_preview', (data: any) => {
+      store.setMatchPreview(data);
     });
 
     // ── Sync & errors ──

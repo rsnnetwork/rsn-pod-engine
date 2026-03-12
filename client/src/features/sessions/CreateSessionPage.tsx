@@ -18,6 +18,7 @@ interface SessionForm {
   lobbyDurationSeconds: number;
   transitionDurationSeconds: number;
   maxParticipants: number;
+  timerVisibility: string;
 }
 
 const selectClass = 'w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200';
@@ -40,6 +41,7 @@ export default function CreateSessionPage() {
       lobbyDurationSeconds: 480,
       transitionDurationSeconds: 30,
       maxParticipants: 500,
+      timerVisibility: 'always_visible',
     },
   });
 
@@ -56,6 +58,7 @@ export default function CreateSessionPage() {
           lobbyDurationSeconds: data.lobbyDurationSeconds,
           transitionDurationSeconds: data.transitionDurationSeconds,
           maxParticipants: data.maxParticipants,
+          timerVisibility: data.timerVisibility,
         },
       };
       return api.post('/sessions', body);
@@ -140,6 +143,17 @@ export default function CreateSessionPage() {
               <label className="block text-sm font-medium text-gray-600 mb-1.5">Transition Duration</label>
               <input type="number" {...register('transitionDurationSeconds', { valueAsNumber: true, min: 10, max: 120 })} className={selectClass} />
               <p className="text-xs text-gray-400 mt-1">10 – 120 seconds</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-600 mb-1.5">Timer Visibility</label>
+              <select {...register('timerVisibility')} className={selectClass}>
+                <option value="always_visible">Always visible</option>
+                <option value="hidden">Hidden</option>
+                <option value="last_30s">Show last 30 seconds</option>
+                <option value="last_60s">Show last 60 seconds</option>
+                <option value="last_120s">Show last 2 minutes</option>
+              </select>
+              <p className="text-xs text-gray-400 mt-1">When participants can see the countdown</p>
             </div>
           </div>
         </Card>

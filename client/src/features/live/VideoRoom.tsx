@@ -117,7 +117,7 @@ function MediaControls() {
 }
 
 export default function VideoRoom() {
-  const { timerSeconds, currentRound, totalRounds, isByeRound, liveKitToken, livekitUrl, currentRoomId, transitionStatus } = useSessionStore();
+  const { timerSeconds, currentRound, totalRounds, isByeRound, liveKitToken, livekitUrl, currentRoomId, transitionStatus, timerVisibility } = useSessionStore();
   const { setLiveKitToken } = useSessionStore();
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const retryCountRef = useRef(0);
@@ -232,15 +232,31 @@ export default function VideoRoom() {
             <ConnectionIndicator />
             <MediaControls />
           </div>
-          <div className="flex items-center gap-2 text-gray-800">
-            <Clock className="h-4 w-4" />
-            <span className={`font-mono text-lg ${timerSeconds <= 30 ? 'text-amber-400' : ''} ${timerSeconds <= 10 ? 'text-red-400 animate-pulse' : ''}`}>
-              {formatTime(timerSeconds)}
-            </span>
-            {timerSeconds <= 10 && timerSeconds > 0 && (
-              <span className="text-xs text-red-400 ml-1">Ending soon</span>
-            )}
-          </div>
+          {(() => {
+            const showTimer =
+              timerVisibility === 'always_visible' ||
+              (timerVisibility === 'last_30s' && timerSeconds <= 30) ||
+              (timerVisibility === 'last_60s' && timerSeconds <= 60) ||
+              (timerVisibility === 'last_120s' && timerSeconds <= 120);
+            if (timerVisibility === 'hidden') return null;
+            if (!showTimer) return (
+              <div className="flex items-center gap-2 text-gray-400">
+                <Clock className="h-4 w-4" />
+                <span className="text-sm">Timer hidden until final stretch</span>
+              </div>
+            );
+            return (
+              <div className="flex items-center gap-2 text-gray-800">
+                <Clock className="h-4 w-4" />
+                <span className={`font-mono text-lg ${timerSeconds <= 30 ? 'text-amber-400' : ''} ${timerSeconds <= 10 ? 'text-red-400 animate-pulse' : ''}`}>
+                  {formatTime(timerSeconds)}
+                </span>
+                {timerSeconds <= 10 && timerSeconds > 0 && (
+                  <span className="text-xs text-red-400 ml-1">Ending soon</span>
+                )}
+              </div>
+            );
+          })()}
         </div>
 
         {/* Video area */}

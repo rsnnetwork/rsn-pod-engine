@@ -3119,3 +3119,38 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - ✅ 250 tests passing (14 suites)
 - Next immediate action:
   - Phase 1B: Host-controlled lobby (remove auto-timer, host-only round start)
+
+### 2026-03-13 — Entry C1.2-003
+- Task ID: C1.2-003
+- Task Title: Change 1.2 — Full implementation (Phases 1B–6)
+- Status: **Completed**
+- What changed:
+  - **Phase 1B (Host-controlled lobby):** Already implemented — verified no auto-timer, host-only round start
+  - **Phase 1C (Two-step breakout flow):** Added `host:generate_matches` and `host:confirm_round` socket events. Host clicks "Match People" → sees preview of all pairings → clicks "Start Round" to confirm. Added `pendingRoundNumber` to ActiveSession, match preview panel in HostControls, `matchPreview` state in sessionStore
+  - **Phase 1D (Rating flow determinism):** Fixed `encounter_history.times_met` double-counting bug — now only increments on first rating per encounter per session. Added 500ms delay on match data cleanup after rating window close so in-flight rating submissions complete
+  - **Phase 1E (Dropout/disconnect handling):** Enhanced `handleDisconnect` to notify partner when their match partner disconnects mid-round via `match:bye_round` event
+  - **Phase 1F (Timer visibility config):** Added `TimerVisibility` type (`hidden`, `always_visible`, `last_30s`, `last_60s`, `last_120s`) to `SessionConfig`. Server sends `timerVisibility` via `session:state` event. Client conditionally shows/hides timer in VideoRoom. Added dropdown to CreateSessionPage form
+  - **Phase 1G (Media permissions):** Request camera/mic permissions once when entering LiveSessionPage (via `useRef` guard), not per room transition
+  - **Phase 2 (Permissions audit):** Verified — `verifyHost` allows admin/super_admin, client `isHost` check includes admin roles, participant list visible to all via `session:state`
+  - **Phase 3 (Rating storage & recap):** Fixed `encounter_history.times_met` double-counting (Phase 1D). Fixed "Session" → "Event" terminology in RecapPage
+  - **Phase 4 (Invite deep linking):** Fixed InviteAcceptPage to redirect to `/sessions/:id` for session invites, `/pods/:id` for pod invites (was `/pods`). Updated invite text terminology
+  - **Phase 5 (Host control panel redesign):** Redesigned HostControls with two-step breakout flow, pause/resume buttons, broadcast message input, "End Round" skip button, lobby status display
+  - **Phase 6 (Matching algorithm improvements):** Added seniority diversity scoring factor. Improved bye-participant rotation to distribute byes evenly across rounds
+- Files touched:
+  - shared/src/types/session.ts (TimerVisibility type, SessionConfig.timerVisibility)
+  - shared/src/types/events.ts (host:match_preview, host:generate_matches, host:confirm_round events)
+  - server/src/services/orchestration/orchestration.service.ts (two-step breakout handlers, disconnect partner notify, timerVisibility in session:state, pendingRoundNumber)
+  - server/src/services/rating/rating.service.ts (encounter_history times_met fix)
+  - server/src/services/matching/matching.engine.ts (seniority diversity, bye rotation)
+  - client/src/stores/sessionStore.ts (matchPreview, timerVisibility state)
+  - client/src/hooks/useSessionSocket.ts (host:match_preview listener, matchPreview clear on round start, rating window close delay)
+  - client/src/features/live/HostControls.tsx (full redesign: two-step flow, pause/resume, broadcast, match preview)
+  - client/src/features/live/VideoRoom.tsx (conditional timer visibility)
+  - client/src/features/live/LiveSessionPage.tsx (one-time media permission request)
+  - client/src/features/sessions/CreateSessionPage.tsx (timerVisibility dropdown)
+  - client/src/features/sessions/RecapPage.tsx (terminology fix)
+  - client/src/features/invites/InviteAcceptPage.tsx (deep link redirect, terminology)
+- Validation Results:
+  - ✅ Server tsc --noEmit clean
+  - ✅ 250 tests passing (14 suites)
+  - ✅ All Changes 1.2 phases (P1–P6) implemented

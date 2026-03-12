@@ -24,6 +24,7 @@ export interface ServerToClientEvents {
     hostInLobby?: boolean;
     currentRound?: number;
     totalRounds?: number;
+    timerVisibility?: string;
   }) => void;
 
   // Rating window
@@ -33,6 +34,11 @@ export interface ServerToClientEvents {
   // Host actions
   'host:broadcast': (data: { message: string; sentAt: string }) => void;
   'host:participant_removed': (data: { userId: string; reason: string }) => void;
+  'host:match_preview': (data: {
+    roundNumber: number;
+    matches: { participantA: { userId: string; displayName: string }; participantB: { userId: string; displayName: string } }[];
+    byeParticipants: { userId: string; displayName: string }[];
+  }) => void;
 
   // Lobby video
   'lobby:token': (data: { token: string; livekitUrl: string; roomId: string }) => void;
@@ -66,4 +72,6 @@ export interface ClientToServerEvents {
   'host:broadcast_message': (data: { sessionId: string; message: string }) => void;
   'host:remove_participant': (data: { sessionId: string; userId: string; reason: string }) => void;
   'host:reassign': (data: { sessionId: string; participantId: string }) => void;
+  'host:generate_matches': (data: { sessionId: string }) => void;
+  'host:confirm_round': (data: { sessionId: string }) => void;
 }

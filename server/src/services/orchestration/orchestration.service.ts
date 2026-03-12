@@ -34,6 +34,7 @@ interface ActiveSession {
   isPaused: boolean;
   pausedTimeRemaining: number | null;
   presenceMap: Map<string, { lastHeartbeat: Date; socketId: string }>;
+  pendingRoundNumber: number | null;  // Round number for pre-generated matches awaiting host confirmation
 }
 
 // ─── State Store ────────────────────────────────────────────────────────────
@@ -69,6 +70,8 @@ export function initOrchestration(
     socket.on('host:broadcast_message', (data) => handleHostBroadcast(socket, data));
     socket.on('host:remove_participant', (data) => handleHostRemoveParticipant(socket, data));
     socket.on('host:reassign', (data) => handleHostReassign(socket, data));
+    socket.on('host:generate_matches', (data) => handleHostGenerateMatches(socket, data));
+    socket.on('host:confirm_round', (data) => handleHostConfirmRound(socket, data));
 
     socket.on('disconnect', () => handleDisconnect(socket));
   });
@@ -197,6 +200,7 @@ async function handleJoinSession(
         hostInLobby,
         currentRound: activeSession?.currentRound || 0,
         totalRounds: config.numberOfRounds || 5,
+        timerVisibility: config.timerVisibility || 'always_visible',
       });
     } catch (stateErr) {
       logger.warn({ err: stateErr }, 'Failed to send initial session state');
@@ -385,6 +389,26 @@ async function handleDisconnect(socket: Socket): Promise<void> {
         sessionId, userId, ParticipantStatus.DISCONNECTED
       ).catch(() => {}); // Swallow errors on disconnect cleanup
 
+      // If mid-round, notify partner that their match partner disconnected
+      if (activeSession.status === SessionStatus.ROUND_ACTIVE) {
+        try {
+          const matches = await matchingService.getMatchesByRound(sessionId, activeSession.currentRound);
+          const userMatch = matches.find(
+            m => (m.participantAId === userId || m.participantBId === userId) && m.status === 'active'
+          );
+          if (userMatch) {
+            const partnerId = userMatch.participantAId === userId
+              ? userMatch.participantBId : userMatch.participantAId;
+            io.to(userRoom(partnerId)).emit('match:bye_round', {
+              roundNumber: activeSession.currentRound,
+              reason: 'Your partner disconnected. Waiting for them to reconnect...',
+            });
+          }
+        } catch (err) {
+          logger.warn({ err, sessionId, userId }, 'Failed to notify partner of disconnect');
+        }
+      }
+
       logger.info({ sessionId, userId }, 'Participant disconnected');
     }
   }
@@ -484,6 +508,7 @@ async function handleHostStart(
       isPaused: false,
       pausedTimeRemaining: null,
       presenceMap: new Map(),
+      pendingRoundNumber: null,
     };
 
     activeSessions.set(data.sessionId, activeSession);
@@ -495,12 +520,8 @@ async function handleHostStart(
       currentRound: 0,
     });
 
-    // Start lobby timer
-    startSegmentTimer(data.sessionId, config.lobbyDurationSeconds, () => {
-      transitionToRound(data.sessionId, 1);
-    });
-
-    logger.info({ sessionId: data.sessionId }, 'Session started → LOBBY_OPEN');
+    // Host-controlled lobby: no auto-timer. Host must click "Start Round" manually.
+    logger.info({ sessionId: data.sessionId }, 'Session started → LOBBY_OPEN (host-controlled)');
   } catch (err: any) {
     logger.error({ err }, 'Error starting session');
     socket.emit('error', { code: 'START_FAILED', message: err.message });
@@ -820,6 +841,139 @@ async function handleHostReassign(
   }
 }
 
+// ─── Host Generate Matches (preview step) ────────────────────────────────────
+
+async function handleHostGenerateMatches(
+  socket: Socket,
+  data: { sessionId: string }
+): Promise<void> {
+  try {
+    if (!await verifyHost(socket, data.sessionId)) return;
+
+    const activeSession = activeSessions.get(data.sessionId);
+    if (!activeSession) {
+      socket.emit('error', { code: 'INVALID_STATE', message: 'Session is not active' });
+      return;
+    }
+
+    if (
+      activeSession.status !== SessionStatus.LOBBY_OPEN &&
+      activeSession.status !== SessionStatus.ROUND_TRANSITION
+    ) {
+      socket.emit('error', {
+        code: 'INVALID_STATE',
+        message: 'Can only generate matches from the lobby or transition phase',
+      });
+      return;
+    }
+
+    // Need at least 2 participants
+    const countResult = await query<{ count: string }>(
+      `SELECT COUNT(*) as count FROM session_participants
+       WHERE session_id = $1 AND status IN ('in_lobby', 'checked_in', 'registered')`,
+      [data.sessionId]
+    );
+    const participantCount = parseInt(countResult.rows[0].count, 10);
+    if (participantCount < 2) {
+      socket.emit('error', {
+        code: 'NOT_ENOUGH_PARTICIPANTS',
+        message: `Need at least 2 participants (currently ${participantCount})`,
+      });
+      return;
+    }
+
+    const nextRound = activeSession.status === SessionStatus.LOBBY_OPEN
+      ? 1
+      : activeSession.currentRound + 1;
+
+    // Generate matches for preview (store them in DB but don't activate yet)
+    await matchingService.generateSingleRound(data.sessionId, nextRound);
+    const matches = await matchingService.getMatchesByRound(data.sessionId, nextRound);
+
+    // Look up display names for all participants in matches
+    const allUserIds = new Set<string>();
+    for (const m of matches) {
+      allUserIds.add(m.participantAId);
+      allUserIds.add(m.participantBId);
+    }
+
+    const namesResult = await query<{ id: string; displayName: string }>(
+      `SELECT id, display_name AS "displayName" FROM users WHERE id = ANY($1)`,
+      [Array.from(allUserIds)]
+    );
+    const nameMap = new Map(namesResult.rows.map(r => [r.id, r.displayName || 'User']));
+
+    // Build preview data
+    const matchPreview = matches.map(m => ({
+      participantA: { userId: m.participantAId, displayName: nameMap.get(m.participantAId) || 'User' },
+      participantB: { userId: m.participantBId, displayName: nameMap.get(m.participantBId) || 'User' },
+    }));
+
+    // Determine bye participants
+    const allParticipants = await query<{ user_id: string }>(
+      `SELECT user_id FROM session_participants WHERE session_id = $1 AND status IN ('in_lobby', 'checked_in', 'registered')`,
+      [data.sessionId]
+    );
+    const matchedIds = new Set(matches.flatMap(m => [m.participantAId, m.participantBId]));
+    const byeParticipants = allParticipants.rows
+      .filter(p => !matchedIds.has(p.user_id))
+      .map(p => ({ userId: p.user_id, displayName: nameMap.get(p.user_id) || 'User' }));
+
+    // Store pending round number so confirm_round knows what to start
+    activeSession.pendingRoundNumber = nextRound;
+
+    // Send preview to host only
+    socket.emit('host:match_preview', {
+      roundNumber: nextRound,
+      matches: matchPreview,
+      byeParticipants,
+    });
+
+    logger.info({ sessionId: data.sessionId, roundNumber: nextRound, matchCount: matches.length },
+      'Match preview generated for host');
+  } catch (err: any) {
+    logger.error({ err }, 'Error generating match preview');
+    socket.emit('error', { code: 'GENERATE_FAILED', message: err.message });
+  }
+}
+
+// ─── Host Confirm Round (start after preview) ───────────────────────────────
+
+async function handleHostConfirmRound(
+  socket: Socket,
+  data: { sessionId: string }
+): Promise<void> {
+  try {
+    if (!await verifyHost(socket, data.sessionId)) return;
+
+    const activeSession = activeSessions.get(data.sessionId);
+    if (!activeSession) {
+      socket.emit('error', { code: 'INVALID_STATE', message: 'Session is not active' });
+      return;
+    }
+
+    if (!activeSession.pendingRoundNumber) {
+      socket.emit('error', { code: 'INVALID_STATE', message: 'No pending matches to confirm. Click "Match People" first.' });
+      return;
+    }
+
+    // Clear any existing timer
+    if (activeSession.timer) {
+      clearTimeout(activeSession.timer);
+      activeSession.timer = null;
+    }
+
+    const roundNumber = activeSession.pendingRoundNumber;
+    activeSession.pendingRoundNumber = null;
+
+    logger.info({ sessionId: data.sessionId, roundNumber }, 'Host confirmed round — starting');
+    await transitionToRound(data.sessionId, roundNumber);
+  } catch (err: any) {
+    logger.error({ err }, 'Error confirming round');
+    socket.emit('error', { code: 'CONFIRM_ROUND_FAILED', message: err.message });
+  }
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // STATE MACHINE TRANSITIONS
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1052,12 +1206,8 @@ async function endRatingWindow(
         currentRound: roundNumber,
       });
 
-      // Start transition timer
-      startSegmentTimer(sessionId, activeSession.config.transitionDurationSeconds, () => {
-        transitionToRound(sessionId, roundNumber + 1);
-      });
-
-      logger.info({ sessionId, roundNumber }, 'Rating window closed → ROUND_TRANSITION');
+      // Host-controlled: no auto-timer. Host must click "Start Round" for next round.
+      logger.info({ sessionId, roundNumber }, 'Rating window closed → ROUND_TRANSITION (waiting for host)');
     } else {
       // Last round done → complete session directly (no long closing lobby wait)
       logger.info({ sessionId, roundNumber }, 'All rounds completed → completing session');
@@ -1340,6 +1490,7 @@ export async function startSession(sessionId: string, hostUserId: string): Promi
     isPaused: false,
     pausedTimeRemaining: null,
     presenceMap: new Map(),
+    pendingRoundNumber: null,
   };
 
   activeSessions.set(sessionId, activeSession);
@@ -1352,11 +1503,8 @@ export async function startSession(sessionId: string, hostUserId: string): Promi
     });
   }
 
-  startSegmentTimer(sessionId, config.lobbyDurationSeconds, () => {
-    transitionToRound(sessionId, 1);
-  });
-
-  logger.info({ sessionId }, 'Session started via REST → LOBBY_OPEN');
+  // Host-controlled lobby: no auto-timer. Host must click "Start Round" manually.
+  logger.info({ sessionId }, 'Session started via REST → LOBBY_OPEN (host-controlled)');
 }
 
 export async function pauseSession(sessionId: string, hostUserId: string): Promise<void> {

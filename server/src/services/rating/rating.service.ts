@@ -136,9 +136,16 @@ async function upsertEncounterHistory(
     const meetAgainB = isFromA ? row.last_meet_again_b : meetAgain;
     const mutual = meetAgainA === true && meetAgainB === true;
 
+    // Only increment times_met when this is the FIRST rating for this encounter
+    // (i.e. when the other side hasn't rated yet for this session).
+    // This prevents double-counting when both participants rate the same match.
+    const isFirstRating = isFromA
+      ? row.last_meet_again_b === null || row.last_session_id !== sessionId
+      : row.last_meet_again_a === null || row.last_session_id !== sessionId;
+
     await client.query(
       `UPDATE encounter_history
-       SET times_met = times_met + 1,
+       SET times_met = ${isFirstRating ? 'times_met + 1' : 'times_met'},
            last_met_at = NOW(),
            last_session_id = $3,
            last_quality_score = $4,
