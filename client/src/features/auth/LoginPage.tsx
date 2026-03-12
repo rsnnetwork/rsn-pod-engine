@@ -100,7 +100,7 @@ export default function LoginPage() {
       <div className="w-full max-w-md animate-fade-in-up">
         {/* RSN Logo + Header */}
         <div className="text-center mb-10">
-          <img src="/rsn-logo.png" alt="RSN" className="h-14 w-auto mx-auto mb-6" />
+          <img src="/rsn-logo.png" alt="RSN" className="h-14 w-auto mx-auto mb-6 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => navigate('/welcome')} />
           <h1 className="text-3xl md:text-4xl font-extrabold text-[#1a1a2e] tracking-tight">CONNECT WITH REASON</h1>
           <p className="text-gray-400 text-sm mt-2 tracking-wide">RSN Access System</p>
         </div>
