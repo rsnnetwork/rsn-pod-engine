@@ -44,10 +44,10 @@ const io = new SocketServer(server, {
       if (!origin) return callback(null, true);
       const allowedOrigins = [config.clientUrl];
       if (config.isDev) allowedOrigins.push('http://localhost:5173', 'http://localhost:3000');
-      // Allow Vercel preview/production domains
+      // Allow Vercel preview/production domains and rsn.network subdomains
       try {
-        const isVercelOrigin = /\.vercel\.app$/i.test(new URL(origin).hostname);
-        if (isVercelOrigin) return callback(null, true);
+        const hostname = new URL(origin).hostname;
+        if (/\.vercel\.app$/i.test(hostname) || /(\.|^)rsn\.network$/i.test(hostname)) return callback(null, true);
       } catch {}
       callback(null, allowedOrigins.includes(origin));
     },
@@ -93,10 +93,10 @@ app.use(cors({
       allowedOrigins.push('http://localhost:5173', 'http://localhost:3000');
     }
 
-    // Allow Vercel preview/production domains during no-card deployment setup.
+    // Allow Vercel preview/production domains and rsn.network subdomains
     try {
-      const isVercelOrigin = /\.vercel\.app$/i.test(new URL(origin).hostname);
-      if (isVercelOrigin) return callback(null, true);
+      const hostname = new URL(origin).hostname;
+      if (/\.vercel\.app$/i.test(hostname) || /(\.|^)rsn\.network$/i.test(hostname)) return callback(null, true);
     } catch {}
 
     if (allowedOrigins.includes(origin)) {

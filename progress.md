@@ -41,10 +41,11 @@ Purpose: Persistent execution history and current state, independent of chat mem
 ## Current Phase Snapshot
 
 - Active Phase: Production readiness
-- Active Milestone: **Change 1.3 Complete — Stefan Progress 1.2 feedback implemented**
-- Current Session: Post-implementation, ready for deploy
+- Active Milestone: **Landing/app separation complete — app.rsn.network ready**
+- Current Session: Deploy config finalized
 - Overall Build Status: Shared + Client + Server production builds passing, 262/262 tests passing (16 suites), client Vite build clean
-- Deployment: Render ✅ working | Vercel ❌ needs monorepo config (client builds locally but Vercel deploy fails)
+- Architecture: Landing page (Stefan/Lovable) at rsn.network | App (our codebase) at app.rsn.network
+- Deployment: Render ✅ working | Vercel ✅ vercel.json added for monorepo build
 - Last Updated: March 13, 2026
 
 ---
@@ -3456,5 +3457,26 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - ✅ TypeScript compiles cleanly (shared, server, client — zero errors)
   - ✅ Client Vite build clean
 - Next immediate action:
-  - Commit and push to main
   - Change 1.4: Matching engine v2 (templates, extended profiles, scoring layers per RSN Matching Engine spec)
+
+---
+
+### C1.3-007 — Separate landing page from app (app.rsn.network)
+- Date: 2026-03-13
+- Status: Completed
+- What changed:
+  1. **Removed marketing pages**: Deleted LandingPage, AboutPage, HowItWorksPage, ReasonsPage — Stefan manages landing page separately on Lovable at rsn.network
+  2. **Updated routing**: `/welcome` now redirects to `/login`. Removed `/about`, `/how-it-works`, `/reasons` routes. Unauthenticated users land on `/login`, authenticated on `/` (dashboard)
+  3. **CORS updated**: Server now allows `*.rsn.network` subdomains alongside `*.vercel.app`
+  4. **vercel.json added**: Monorepo build config — builds shared first, then client, outputs `client/dist`, SPA rewrites for client-side routing
+  5. **Email links**: Already use `CLIENT_URL` env var — set to `https://app.rsn.network` on Render to update all invite/recap URLs
+- Architecture: rsn.network (Lovable/marketing) | app.rsn.network (our app/Vercel) | API on Render
+- Files touched:
+  - client/src/App.tsx (routing cleanup)
+  - client/src/features/public/ (deleted: LandingPage.tsx, AboutPage.tsx, HowItWorksPage.tsx, ReasonsPage.tsx)
+  - server/src/index.ts (CORS for rsn.network)
+  - vercel.json (new)
+- Validation Results:
+  - ✅ 262/262 tests passing (16 suites)
+  - ✅ Client Vite build clean
+  - ✅ TypeScript compiles cleanly
