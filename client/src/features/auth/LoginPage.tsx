@@ -104,9 +104,8 @@ export default function LoginPage() {
       <div className="w-full max-w-md animate-fade-in-up">
         {/* RSN Logo + Header */}
         <div className="text-center mb-10">
-          <img src="/rsn-logo.png" alt="RSN" className="h-14 w-auto mx-auto mb-6 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => navigate('/welcome')} />
+          <img src="/rsn-logo.png" alt="RSN" className="h-14 w-auto mx-auto mb-6" />
           <h1 className="text-3xl md:text-4xl font-extrabold text-[#1a1a2e] tracking-tight">CONNECT WITH REASON</h1>
-          <p className="text-gray-400 text-sm mt-2 tracking-wide">Raw Speed Networking</p>
         </div>
 
         {displayError && (
@@ -229,12 +228,6 @@ export default function LoginPage() {
           </div>
         )}
 
-        {/* Back to landing */}
-        <div className="text-center mt-6">
-          <button onClick={() => navigate('/welcome')} className="text-sm text-gray-400 hover:text-[#1a1a2e] transition-colors">
-            ← Back to RSN
-          </button>
-        </div>
       </div>
     </div>
   );
