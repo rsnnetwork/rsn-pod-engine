@@ -74,6 +74,10 @@ describe('Invite Service', () => {
     it('should create a pod invite', async () => {
       // podService.getPodById — SELECT pods (validates pod exists)
       mockQuery.mockResolvedValueOnce({ rows: [{ id: 'pod-123', name: 'Test', status: 'active' }], rowCount: 1 });
+      // podService.getMemberRole — SELECT role FROM pod_members (role check)
+      mockQuery.mockResolvedValueOnce({ rows: [{ role: 'director' }], rowCount: 1 });
+      // Check existing member — SELECT u.id FROM users JOIN pod_members
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
       // INSERT invite RETURNING
       mockQuery.mockResolvedValueOnce({ rows: [mockInvite], rowCount: 1 });
       // Inviter display name lookup (for email)
@@ -224,8 +228,8 @@ describe('Invite Service', () => {
   describe('createInvite - session type', () => {
     it('should create a session invite', async () => {
       const sessionInvite = { ...mockInvite, type: InviteType.SESSION, sessionId: 'session-123', podId: null };
-      // sessionService.getSessionById
-      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'session-123', status: 'scheduled' }], rowCount: 1 });
+      // sessionService.getSessionById — returns session with hostUserId matching caller
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'session-123', status: 'scheduled', hostUserId: 'user-host' }], rowCount: 1 });
       // INSERT invite
       mockQuery.mockResolvedValueOnce({ rows: [sessionInvite], rowCount: 1 });
 

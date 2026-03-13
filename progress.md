@@ -3526,3 +3526,29 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
 - Next:
   - Change 1.4 scope: Matching engine v2 (per RSN Matching Engine spec)
   - Admin system (per Changes 1.2 Section 17)
+
+---
+
+### Entry — March 14, 2026, 4:15 AM PKT
+- Task: Invite permissions + search UX fixes
+- Status: Completed
+- What changed:
+  1. **PodDetailPage "already a member" message**: When searching for a user who is already a member of the pod, the search results were silently filtered out with no feedback. Now shows amber warning: "All matching users are already members of this pod."
+  2. **Server-side invite role enforcement**: Added authorization checks to `createInvite()`:
+     - Pod invites: Only pod directors and hosts can create (admins bypass). Regular members get 403.
+     - Session invites: Only the session host can create (admins bypass). Non-hosts get 403.
+  3. **Bulk pod invite error handling**: Changed from `Promise.all` to sequential execution with per-user error tracking. Each failed invite shows the specific server error message (e.g., "already a member") instead of generic "Failed to send some invites".
+  4. **Updated invite tests**: Fixed 2 failing tests to account for new `getMemberRole` query and `hostUserId` return from `getSessionById`.
+- Files touched:
+  - client/src/features/pods/PodDetailPage.tsx (already-member message, bulk invite error handling)
+  - server/src/services/invite/invite.service.ts (role checks for pod director/host and session host)
+  - server/src/routes/invites.ts (pass userRole to createInvite)
+  - server/src/__tests__/services/invite.service.test.ts (fix mock queries for new role checks)
+- Decisions:
+  - Per Stefan's plan: only directors/hosts invite to pods, only session host invites to sessions
+  - Server-side enforcement is the key gate; UI already hides buttons for non-authorized users
+  - Admins/super_admins bypass all invite restrictions
+- Validation Results:
+  - ✅ 262/262 tests passing (16 suites)
+  - ✅ Client Vite build clean
+  - ✅ TypeScript compiles cleanly

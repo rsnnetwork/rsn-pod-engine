@@ -26,7 +26,7 @@ const INVITE_COLUMNS = `
 
 // ─── Create Invite ──────────────────────────────────────────────────────────
 
-export async function createInvite(userId: string, input: CreateInviteInput): Promise<Invite> {
+export async function createInvite(userId: string, input: CreateInviteInput, userRole?: string): Promise<Invite> {
   const code = generateCode();
 
   let expiresAt: Date | null = null;
@@ -34,12 +34,22 @@ export async function createInvite(userId: string, input: CreateInviteInput): Pr
     expiresAt = new Date(Date.now() + input.expiresInHours * 60 * 60 * 1000);
   }
 
+  const isAdmin = userRole === 'admin' || userRole === 'super_admin';
+
   // Validate pod/session references — require target for pod/session invites
   if (input.type === InviteType.POD) {
     if (!input.podId) {
       throw new AppError(400, 'VALIDATION_ERROR', 'Pod invite requires a pod to be selected');
     }
     await podService.getPodById(input.podId);
+
+    // Only directors and hosts can invite to pods (admins bypass)
+    if (!isAdmin) {
+      const memberRole = await podService.getMemberRole(input.podId, userId);
+      if (!memberRole || (memberRole !== 'director' && memberRole !== 'host')) {
+        throw new AppError(403, 'AUTH_FORBIDDEN', 'Only pod directors and hosts can send pod invites');
+      }
+    }
 
     // Check if invitee is already a member of this pod
     if (input.inviteeEmail) {
@@ -59,7 +69,12 @@ export async function createInvite(userId: string, input: CreateInviteInput): Pr
     if (!input.sessionId) {
       throw new AppError(400, 'VALIDATION_ERROR', 'Event invite requires an event to be selected');
     }
-    await sessionService.getSessionById(input.sessionId);
+    const session = await sessionService.getSessionById(input.sessionId);
+
+    // Only the session host can invite to events (admins bypass)
+    if (!isAdmin && session.hostUserId !== userId) {
+      throw new AppError(403, 'AUTH_FORBIDDEN', 'Only the event host can send event invites');
+    }
 
     // Check if invitee is already a participant of this session
     if (input.inviteeEmail) {

@@ -192,15 +192,28 @@ export default function PodDetailPage() {
   });
 
   const bulkPodInviteMutation = useMutation({
-    mutationFn: (emails: string[]) => Promise.all(emails.map(email =>
-      api.post('/invites', { type: 'pod', podId, maxUses: 1, inviteeEmail: email, expiresInHours: 168 })
-    )),
-    onSuccess: () => {
-      addToast(`${podSelectedUsers.length} invite(s) sent!`, 'success');
+    mutationFn: async (emails: string[]) => {
+      const results: { email: string; ok: boolean; msg?: string }[] = [];
+      for (const email of emails) {
+        try {
+          await api.post('/invites', { type: 'pod', podId, maxUses: 1, inviteeEmail: email, expiresInHours: 168 });
+          results.push({ email, ok: true });
+        } catch (err: any) {
+          const msg = err?.response?.data?.error?.message || 'Failed to send invite';
+          results.push({ email, ok: false, msg });
+        }
+      }
+      return results;
+    },
+    onSuccess: (results) => {
+      qc.invalidateQueries({ queryKey: ['pod-members', podId] });
+      const succeeded = results.filter(r => r.ok);
+      const failed = results.filter(r => !r.ok);
+      if (succeeded.length > 0) addToast(`${succeeded.length} invite(s) sent!`, 'success');
+      failed.forEach(r => addToast(`${r.email}: ${r.msg}`, 'error'));
       setPodSelectedUsers([]);
       setPodUserSearch('');
     },
-    onError: () => addToast('Failed to send some invites', 'error'),
   });
 
   const openEdit = () => {
@@ -398,6 +411,12 @@ export default function PodDetailPage() {
             </div>
             {podUserSearch.length >= 1 && podSearchResults && podSearchResults.length === 0 && (
               <p className="text-xs text-gray-400 text-center py-2">No users found matching "{podUserSearch}"</p>
+            )}
+            {podUserSearch.length >= 1 && podSearchResults && podSearchResults.length > 0 &&
+              podSearchResults.every((u: any) => activeMembers.some((m: any) => m.userId === u.id)) && (
+              <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-center">
+                All matching users are already members of this pod.
+              </p>
             )}
             {podSearchResults && podSearchResults.length > 0 && (
               <div className="max-h-32 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">

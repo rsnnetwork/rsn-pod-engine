@@ -31,7 +31,7 @@ router.post(
   auditMiddleware('create_invite', 'invite'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const invite = await inviteService.createInvite(req.user!.userId, req.body);
+      const invite = await inviteService.createInvite(req.user!.userId, req.body, req.user!.role);
       const response: ApiResponse = { success: true, data: invite };
       res.status(201).json(response);
     } catch (err) {
