@@ -78,7 +78,6 @@ export default function AppLayout() {
       <aside className="hidden md:flex flex-col w-60 border-r border-gray-200 bg-gray-50/60 backdrop-blur-sm">
         <div className="px-5 py-5 flex items-center gap-2.5 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => navigate('/')}>
           <img src="/rsn-logo.png" alt="RSN" className="h-8 w-auto" />
-          <h1 className="text-lg font-bold text-[#1a1a2e]">RSN</h1>
         </div>
         {sidebarContent()}
         {user && (
@@ -97,7 +96,6 @@ export default function AppLayout() {
         <header className="md:hidden flex items-center justify-between border-b border-gray-200 bg-white/90 px-4 py-3 backdrop-blur-sm">
           <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => navigate('/')}>
             <img src="/rsn-logo.png" alt="RSN" className="h-7 w-auto" />
-            <h1 className="text-lg font-bold text-[#1a1a2e]">RSN</h1>
           </div>
           <button onClick={() => setMobileOpen(!mobileOpen)} className="text-gray-500 hover:text-gray-800 transition-colors">
             {mobileOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}

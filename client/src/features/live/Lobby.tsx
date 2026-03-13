@@ -1,4 +1,4 @@
-import { Users, Loader2, VideoOff, Sparkles, ChevronDown, ChevronUp, Mic, MicOff, Volume2, VolumeX } from 'lucide-react';
+import { Users, Loader2, VideoOff, Sparkles, ChevronDown, ChevronUp, Mic, MicOff, Volume2, VolumeX, UserX } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import Card from '@/components/ui/Card';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -34,8 +34,14 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
   const handleHostMute = useCallback((targetIdentity: string, mute: boolean) => {
     if (!sessionId) return;
     const socket = getSocket();
-    // Identity in LiveKit maps to userId
     socket?.emit('host:mute_participant', { sessionId, targetUserId: targetIdentity, muted: mute });
+  }, [sessionId]);
+
+  const handleKick = useCallback((targetIdentity: string, targetName: string) => {
+    if (!sessionId) return;
+    if (!window.confirm(`Remove ${targetName} from this event?`)) return;
+    const socket = getSocket();
+    socket?.emit('host:remove_participant', { sessionId, userId: targetIdentity, reason: 'Removed by host' });
   }, [sessionId]);
 
   return (
@@ -60,15 +66,24 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
             <div className="absolute bottom-1.5 left-1.5 bg-black/50 backdrop-blur-sm rounded-lg px-2 py-0.5 text-[11px] text-white truncate max-w-[90%]">
               {name}
             </div>
-            {/* Host mute/unmute button on remote participant tiles */}
+            {/* Host mute/unmute + kick buttons on remote participant tiles */}
             {isHost && !isLocal && (
-              <button
-                onClick={() => handleHostMute(trackRef.participant.identity, !!isMicOn)}
-                className="absolute top-1.5 right-1.5 bg-black/50 backdrop-blur-sm rounded-full p-1.5 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70"
-                title={isMicOn ? `Mute ${name}` : `Unmute ${name}`}
-              >
-                {isMicOn ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5 text-red-400" />}
-              </button>
+              <div className="absolute top-1.5 right-1.5 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  onClick={() => handleHostMute(trackRef.participant.identity, !!isMicOn)}
+                  className="bg-black/50 backdrop-blur-sm rounded-full p-1.5 text-white hover:bg-black/70"
+                  title={isMicOn ? `Mute ${name}` : `Unmute ${name}`}
+                >
+                  {isMicOn ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5 text-red-400" />}
+                </button>
+                <button
+                  onClick={() => handleKick(trackRef.participant.identity, name)}
+                  className="bg-black/50 backdrop-blur-sm rounded-full p-1.5 text-white hover:bg-red-600/70"
+                  title={`Remove ${name}`}
+                >
+                  <UserX className="h-3.5 w-3.5" />
+                </button>
+              </div>
             )}
             {/* Mic status indicator */}
             {!isMicOn && (
@@ -91,10 +106,11 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
   );
 }
 
-function LobbyMediaControls({ isHost }: { isHost: boolean }) {
+function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?: string }) {
   const { localParticipant } = useLocalParticipant();
   const { hostMuteCommand, setHostMuteCommand } = useSessionStore();
   const [micEnabled, setMicEnabled] = useState(isHost); // Host unmuted by default, others muted
+  const [allMuted, setAllMuted] = useState(false);
 
   // Auto-mute participants (not host) on mount
   useEffect(() => {
@@ -118,6 +134,14 @@ function LobbyMediaControls({ isHost }: { isHost: boolean }) {
     setMicEnabled(!micEnabled);
   }, [localParticipant, micEnabled]);
 
+  const handleMuteAll = useCallback(() => {
+    if (!sessionId) return;
+    const socket = getSocket();
+    const newMuted = !allMuted;
+    socket?.emit('host:mute_all', { sessionId, muted: newMuted });
+    setAllMuted(newMuted);
+  }, [sessionId, allMuted]);
+
   return (
     <div className="flex items-center gap-2">
       <button
@@ -131,6 +155,19 @@ function LobbyMediaControls({ isHost }: { isHost: boolean }) {
         {micEnabled ? <Mic className="h-3.5 w-3.5" /> : <MicOff className="h-3.5 w-3.5" />}
         {micEnabled ? 'Mute' : 'Unmute'}
       </button>
+      {isHost && sessionId && (
+        <button
+          onClick={handleMuteAll}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+            allMuted
+              ? 'bg-red-50 text-red-500 hover:bg-red-100'
+              : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
+          }`}
+        >
+          {allMuted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+          {allMuted ? 'Unmute All' : 'Mute All'}
+        </button>
+      )}
     </div>
   );
 }
@@ -204,9 +241,16 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
   );
 }
 
-function HostParticipantPanel() {
+function HostParticipantPanel({ sessionId }: { sessionId?: string }) {
   const { participants } = useSessionStore();
   const [expanded, setExpanded] = useState(true);
+
+  const handleKick = useCallback((userId: string, displayName: string) => {
+    if (!sessionId) return;
+    if (!window.confirm(`Remove ${displayName} from this event?`)) return;
+    const socket = getSocket();
+    socket?.emit('host:remove_participant', { sessionId, userId, reason: 'Removed by host' });
+  }, [sessionId]);
 
   return (
     <div className="w-full max-w-4xl mx-auto bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
@@ -227,11 +271,20 @@ function HostParticipantPanel() {
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5">
               {participants.map(p => (
-                <div key={p.userId} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-50">
+                <div key={p.userId} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-50 group/participant">
                   <div className="h-6 w-6 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-500 text-[10px] font-bold shrink-0">
                     {(p.displayName || 'U').charAt(0).toUpperCase()}
                   </div>
-                  <span className="text-xs text-gray-700 truncate">{p.displayName || 'User'}</span>
+                  <span className="text-xs text-gray-700 truncate flex-1">{p.displayName || 'User'}</span>
+                  {sessionId && (
+                    <button
+                      onClick={() => handleKick(p.userId, p.displayName || 'User')}
+                      className="opacity-0 group-hover/participant:opacity-100 transition-opacity text-gray-400 hover:text-red-500 p-0.5 rounded"
+                      title={`Remove ${p.displayName || 'User'}`}
+                    >
+                      <UserX className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -250,7 +303,7 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
     return (
       <div className="flex-1 flex flex-col items-center p-6 gap-6 overflow-auto bg-gradient-to-b from-white to-gray-50/50">
         <LobbyStatusOverlay isHost={isHost} />
-        {isHost && <HostParticipantPanel />}
+        {isHost && <HostParticipantPanel sessionId={sessionId} />}
         <LiveKitRoom
           token={lobbyToken}
           serverUrl={lobbyUrl}
@@ -260,7 +313,7 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
           className="flex-1 w-full max-w-4xl"
         >
           <RoomAudioRenderer />
-          <LobbyMediaControls isHost={isHost} />
+          <LobbyMediaControls isHost={isHost} sessionId={sessionId} />
           <LobbyMosaic isHost={isHost} sessionId={sessionId} />
         </LiveKitRoom>
       </div>

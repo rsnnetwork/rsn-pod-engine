@@ -76,6 +76,7 @@ export function initOrchestration(
     socket.on('host:exclude_participant', (data) => handleHostExcludeFromRound(socket, data));
     socket.on('host:regenerate_matches', (data) => handleHostRegenerateMatches(socket, data));
     socket.on('host:mute_participant', (data) => handleHostMuteParticipant(socket, data));
+    socket.on('host:mute_all', (data) => handleHostMuteAll(socket, data));
 
     socket.on('disconnect', () => handleDisconnect(socket));
   });
@@ -1240,6 +1241,36 @@ async function handleHostMuteParticipant(socket: Socket, data: any): Promise<voi
     'Host mute/unmute command sent');
 }
 
+async function handleHostMuteAll(socket: Socket, data: any): Promise<void> {
+  const userId = getUserIdFromSocket(socket);
+  if (!userId) return;
+
+  const activeSession = activeSessions.get(data.sessionId);
+  if (!activeSession) {
+    socket.emit('error', { code: 'SESSION_NOT_FOUND', message: 'Session not found' });
+    return;
+  }
+
+  if (activeSession.hostUserId !== userId) {
+    socket.emit('error', { code: 'NOT_HOST', message: 'Only the host can mute/unmute all participants' });
+    return;
+  }
+
+  let count = 0;
+  for (const [participantId] of activeSession.presenceMap) {
+    // Skip the host — they should not be muted
+    if (participantId === activeSession.hostUserId) continue;
+    io.to(userRoom(participantId)).emit('lobby:mute_command', {
+      muted: data.muted,
+      byHost: true,
+    });
+    count++;
+  }
+
+  logger.info({ sessionId: data.sessionId, muted: data.muted, count },
+    'Host mute/unmute all command sent');
+}
+
 // ─── Helper: Send Match Preview to Host ─────────────────────────────────────
 
 async function sendMatchPreview(
@@ -1692,6 +1723,43 @@ async function sendRecapEmails(sessionId: string): Promise<void> {
   }
 
   logger.info({ sessionId, participantCount: participantsResult.rows.length }, 'Recap emails dispatched');
+
+  // ─── Host Event Recap ─────────────────────────────────────────────────────
+  try {
+    const hostResult = await query<{ email: string; displayName: string }>(
+      `SELECT email, display_name AS "displayName" FROM users WHERE id = $1`, [hostUserId]
+    );
+    if (hostResult.rows.length > 0) {
+      const host = hostResult.rows[0];
+
+      const totalRoundsResult = await query<{ max: string }>(
+        `SELECT COALESCE(MAX(round_number), 0)::text AS max FROM matches WHERE session_id = $1`, [sessionId]
+      );
+      const totalMatchesResult = await query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM matches WHERE session_id = $1 AND status = 'completed'`, [sessionId]
+      );
+      const avgEventRatingResult = await query<{ avg: string }>(
+        `SELECT COALESCE(AVG(r.quality_score), 0)::text AS avg FROM ratings r JOIN matches m ON m.id = r.match_id WHERE m.session_id = $1`, [sessionId]
+      );
+      const totalMutualResult = await query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM encounter_history WHERE mutual_meet_again = TRUE AND last_session_id = $1`, [sessionId]
+      );
+
+      await emailService.sendHostRecapEmail(host.email, host.displayName || 'Host', {
+        sessionTitle,
+        totalParticipants: participantsResult.rows.length,
+        totalRounds: parseInt(totalRoundsResult.rows[0]?.max || '0', 10),
+        totalMatches: parseInt(totalMatchesResult.rows[0]?.count || '0', 10),
+        avgEventRating: parseFloat(avgEventRatingResult.rows[0]?.avg || '0'),
+        mutualConnectionsCount: parseInt(totalMutualResult.rows[0]?.count || '0', 10),
+        recapUrl: `${appConfig.clientUrl}/sessions/${sessionId}/recap`,
+      });
+
+      logger.info({ sessionId, hostUserId }, 'Host recap email dispatched');
+    }
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'Failed to send host recap email');
+  }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

@@ -192,6 +192,102 @@ export async function sendSessionRecapEmail(
   logger.warn({ to, sessionTitle: data.sessionTitle }, 'No email provider — recap email skipped');
 }
 
+// ─── Host Event Recap Email ─────────────────────────────────────────────────
+
+interface HostRecapEmailData {
+  sessionTitle: string;
+  totalParticipants: number;
+  totalRounds: number;
+  totalMatches: number;
+  avgEventRating: number;
+  mutualConnectionsCount: number;
+  recapUrl: string;
+}
+
+export async function sendHostRecapEmail(
+  to: string,
+  displayName: string,
+  data: HostRecapEmailData
+): Promise<void> {
+  const subject = `Host Recap — ${data.sessionTitle}`;
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body style="margin:0;padding:0;background-color:#0a0a0f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
+        <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;padding:40px 32px;border:1px solid rgba(99,102,241,0.2);">
+          <h1 style="color:#818cf8;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
+          <p style="color:#94a3b8;font-size:14px;margin:0 0 32px 0;text-align:center;">Host Event Recap</p>
+
+          <p style="color:#e2e8f0;font-size:16px;line-height:1.6;margin:0 0 8px 0;">
+            Hey ${displayName},
+          </p>
+          <p style="color:#e2e8f0;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
+            Here's the full recap for <strong>${data.sessionTitle}</strong>:
+          </p>
+
+          <table style="width:100%;border-collapse:collapse;margin:0 0 24px 0;">
+            <tr>
+              <td style="text-align:center;background:rgba(99,102,241,0.1);border-radius:10px;padding:16px 8px;width:33%;">
+                <p style="color:#818cf8;font-size:24px;font-weight:700;margin:0;">${data.totalParticipants}</p>
+                <p style="color:#94a3b8;font-size:11px;margin:4px 0 0 0;">Participants</p>
+              </td>
+              <td style="width:8px;"></td>
+              <td style="text-align:center;background:rgba(99,102,241,0.1);border-radius:10px;padding:16px 8px;width:33%;">
+                <p style="color:#818cf8;font-size:24px;font-weight:700;margin:0;">${data.totalRounds}</p>
+                <p style="color:#94a3b8;font-size:11px;margin:4px 0 0 0;">Rounds</p>
+              </td>
+              <td style="width:8px;"></td>
+              <td style="text-align:center;background:rgba(99,102,241,0.1);border-radius:10px;padding:16px 8px;width:33%;">
+                <p style="color:#818cf8;font-size:24px;font-weight:700;margin:0;">${data.totalMatches}</p>
+                <p style="color:#94a3b8;font-size:11px;margin:4px 0 0 0;">Matches</p>
+              </td>
+            </tr>
+          </table>
+
+          <table style="width:100%;border-collapse:collapse;margin:0 0 24px 0;">
+            <tr>
+              <td style="text-align:center;background:rgba(245,158,11,0.1);border-radius:10px;padding:16px 8px;width:50%;">
+                <p style="color:#f59e0b;font-size:24px;font-weight:700;margin:0;">${data.avgEventRating > 0 ? data.avgEventRating.toFixed(1) : '—'}</p>
+                <p style="color:#94a3b8;font-size:11px;margin:4px 0 0 0;">Avg Rating</p>
+              </td>
+              <td style="width:8px;"></td>
+              <td style="text-align:center;background:rgba(16,185,129,0.1);border-radius:10px;padding:16px 8px;width:50%;">
+                <p style="color:#10b981;font-size:24px;font-weight:700;margin:0;">${data.mutualConnectionsCount}</p>
+                <p style="color:#94a3b8;font-size:11px;margin:4px 0 0 0;">Mutual Connections</p>
+              </td>
+            </tr>
+          </table>
+
+          <div style="text-align:center;margin:32px 0;">
+            <a href="${data.recapUrl}"
+               style="display:inline-block;background:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
+              View Full Recap
+            </a>
+          </div>
+        </div>
+
+        <p style="color:#475569;font-size:12px;text-align:center;margin:24px 0 0 0;">
+          RSN — Raw Speed Networking
+        </p>
+      </div>
+    </body>
+    </html>
+  `;
+
+  if (config.resendApiKey) {
+    const text = `Hey ${displayName},\n\nHere's the full recap for ${data.sessionTitle}:\n\nParticipants: ${data.totalParticipants}\nRounds: ${data.totalRounds}\nMatches: ${data.totalMatches}\nAvg Rating: ${data.avgEventRating > 0 ? data.avgEventRating.toFixed(1) : 'N/A'}\nMutual Connections: ${data.mutualConnectionsCount}\n\nView Full Recap: ${data.recapUrl}\n\nRSN — Raw Speed Networking`;
+    await sendEmail({ to, subject, html, text });
+    return;
+  }
+
+  logger.warn({ to, sessionTitle: data.sessionTitle }, 'No email provider — host recap email skipped');
+}
+
 // ─── Invite Email ───────────────────────────────────────────────────────────
 
 interface InviteEmailData {

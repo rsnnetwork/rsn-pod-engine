@@ -41,9 +41,9 @@ Purpose: Persistent execution history and current state, independent of chat mem
 ## Current Phase Snapshot
 
 - Active Phase: Production readiness
-- Active Milestone: **Change 1.2 Complete — All Stefan March 12 review items implemented**
-- Current Session: Post-implementation fixes and deploy verification
-- Overall Build Status: Shared + Client + Server production builds passing, 250/250 tests passing (14 suites), client Vite build clean
+- Active Milestone: **Change 1.3 Complete — Stefan Progress 1.2 feedback implemented**
+- Current Session: Post-implementation, ready for deploy
+- Overall Build Status: Shared + Client + Server production builds passing, 262/262 tests passing (16 suites), client Vite build clean
 - Deployment: Render ✅ working | Vercel ❌ needs monorepo config (client builds locally but Vercel deploy fails)
 - Last Updated: March 13, 2026
 
@@ -3388,3 +3388,73 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
 - Validation Results:
   - ✅ 250/250 tests passing (14 suites, 0 failures)
   - ✅ TypeScript compiles cleanly (shared, server, client — zero errors)
+
+---
+
+## Change 1.3 — Stefan's Progress 1.2 Feedback
+
+### 2026-03-13 — Entry C1.3-001
+- Task ID: C1.3-001
+- Task Title: Change 1.3 — All 6 items from Stefan's Progress 1.2 feedback PDF
+- Status: **Completed**
+- What changed:
+
+  **Task 1: Remove "RSN" text next to logo**
+  - Removed `<h1>RSN</h1>` from both desktop sidebar (line 81) and mobile header (line 100) in AppLayout.tsx
+  - Logo image remains as sole clickable home link
+
+  **Task 2: Switch font from Inter to Sora**
+  - Changed `tailwind.config.js` sans font family from `['Inter', ...]` to `['"Sora"', ...]`
+  - Google Fonts already loaded Sora in index.html — no additional import needed
+
+  **Task 3: "Mute All" button for host**
+  - Added `host:mute_all` event to `ClientToServerEvents` in shared/src/types/events.ts
+  - Added `handleHostMuteAll` handler in orchestration.service.ts — iterates presenceMap, emits `lobby:mute_command` to each non-host participant
+  - Added "Mute All" / "Unmute All" toggle button in Lobby.tsx `LobbyMediaControls` (host only)
+  - Passed `sessionId` prop through to `LobbyMediaControls`
+
+  **Task 4: Kick participant UI button**
+  - Backend already existed (`host:remove_participant` event + handler + client listener)
+  - Added kick button (UserX icon) next to mute button on remote participant video tiles (hover-activated, host only)
+  - Added kick button in HostParticipantPanel text list (hover-activated)
+  - Both use `window.confirm()` dialog before emitting remove event
+
+  **Task 5: Invite flow for non-logged-in users + onboarding**
+  - Created new `OnboardingPage` component (3-step wizard: name → professional → reasons/interests)
+  - Registered `/onboarding` route in App.tsx (protected, full-screen)
+  - Updated `InviteAcceptPage`: improved non-logged-in UX (icon, Sign In + Create Account buttons, descriptive copy)
+  - After invite accept: checks if profile is incomplete → redirects to `/onboarding?redirect=<destination>` before final destination
+  - OnboardingPage saves profile via `PUT /users/me`, then redirects to invite destination
+
+  **Task 6: Host event recap email**
+  - Added `sendHostRecapEmail()` in email.service.ts with event-wide stats (participants, rounds, matches, avg rating, mutual connections)
+  - Updated `sendRecapEmails()` in orchestration.service.ts to query event-wide stats and send host recap after participant emails
+  - Host now receives a dedicated recap email with full event summary
+
+  **New tests:**
+  - Added `email.service.test.ts` — 7 tests covering all email functions (dev mode / no-throw validation)
+  - Added `socket-events.test.ts` — 5 tests validating all socket event type definitions including new `host:mute_all`
+
+- Files touched:
+  - client/src/components/layout/AppLayout.tsx (logo text removal)
+  - client/tailwind.config.js (font change)
+  - client/src/features/live/Lobby.tsx (Mute All button, kick button, sessionId prop threading)
+  - client/src/features/invites/InviteAcceptPage.tsx (improved UX + onboarding redirect)
+  - client/src/features/onboarding/OnboardingPage.tsx (NEW)
+  - client/src/App.tsx (onboarding route)
+  - shared/src/types/events.ts (host:mute_all event)
+  - server/src/services/orchestration/orchestration.service.ts (handleHostMuteAll handler + host recap in sendRecapEmails)
+  - server/src/services/email/email.service.ts (sendHostRecapEmail function)
+  - server/src/__tests__/services/email.service.test.ts (NEW)
+  - server/src/__tests__/services/socket-events.test.ts (NEW)
+- Decisions made:
+  - Matching engine overhaul (from RSN Matching Engine spec PDF) deferred to Change 1.4 due to scope
+  - Onboarding checks displayName + jobTitle + reasonsToConnect — if any missing, redirects to onboarding before invite destination
+  - Kick uses native confirm() dialog for simplicity — can upgrade to modal later
+- Validation Results:
+  - ✅ 262/262 tests passing (16 suites, 0 failures)
+  - ✅ TypeScript compiles cleanly (shared, server, client — zero errors)
+  - ✅ Client Vite build clean
+- Next immediate action:
+  - Commit and push to main
+  - Change 1.4: Matching engine v2 (templates, extended profiles, scoring layers per RSN Matching Engine spec)

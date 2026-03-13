@@ -81,4 +81,5 @@ export interface ClientToServerEvents {
   'host:exclude_participant': (data: { sessionId: string; userId: string }) => void;
   'host:regenerate_matches': (data: { sessionId: string }) => void;
   'host:mute_participant': (data: { sessionId: string; targetUserId: string; muted: boolean }) => void;
+  'host:mute_all': (data: { sessionId: string; muted: boolean }) => void;
 }

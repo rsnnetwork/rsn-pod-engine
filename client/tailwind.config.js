@@ -4,7 +4,7 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+        sans: ['"Sora"', 'system-ui', '-apple-system', 'sans-serif'],
         display: ['"Sora"', 'Inter', 'system-ui', 'sans-serif'],
       },
       colors: {

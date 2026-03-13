@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button';
 import Card from '@/components/ui/Card';
 import { PageLoader } from '@/components/ui/Spinner';
 import { useToastStore } from '@/stores/toastStore';
+import { Users, Calendar, LogIn, UserPlus } from 'lucide-react';
 import api from '@/lib/api';
 
 export default function InviteAcceptPage() {
@@ -22,6 +23,15 @@ export default function InviteAcceptPage() {
     api.get(`/invites/${code}`).then(r => setInvite(r.data.data)).catch(() => setInvite(null)).finally(() => setLoading(false));
   }, [code]);
 
+  // Determine the final destination after accepting the invite
+  const getDestination = useCallback((data: any) => {
+    const sessionId = data?.sessionId || invite?.sessionId;
+    const podId = data?.podId || invite?.podId;
+    if (sessionId) return `/sessions/${sessionId}`;
+    if (podId) return `/pods/${podId}`;
+    return '/sessions';
+  }, [invite]);
+
   const accept = useCallback(async () => {
     setAccepting(true);
     setError(null);
@@ -29,16 +39,14 @@ export default function InviteAcceptPage() {
       const res = await api.post(`/invites/${code}/accept`);
       addToast('Invite accepted!', 'success');
       const data = res.data?.data;
-      if (data?.sessionId) {
-        navigate(`/sessions/${data.sessionId}`, { replace: true });
-      } else if (data?.podId) {
-        navigate(`/pods/${data.podId}`, { replace: true });
-      } else if (invite?.sessionId) {
-        navigate(`/sessions/${invite.sessionId}`, { replace: true });
-      } else if (invite?.podId) {
-        navigate(`/pods/${invite.podId}`, { replace: true });
+      const destination = getDestination(data);
+
+      // Check if profile is incomplete — redirect to onboarding first
+      const isProfileIncomplete = !user?.displayName || !user?.jobTitle || !user?.reasonsToConnect?.length;
+      if (isProfileIncomplete) {
+        navigate(`/onboarding?redirect=${encodeURIComponent(destination)}`, { replace: true });
       } else {
-        navigate('/sessions', { replace: true });
+        navigate(destination, { replace: true });
       }
     } catch (err: any) {
       const msg = err?.response?.data?.error?.message || 'Failed to accept invite';
@@ -47,7 +55,7 @@ export default function InviteAcceptPage() {
     } finally {
       setAccepting(false);
     }
-  }, [code, invite, navigate, addToast]);
+  }, [code, invite, user, navigate, addToast, getDestination]);
 
   // Auto-accept for logged-in users — seamless deep linking
   useEffect(() => {
@@ -60,16 +68,20 @@ export default function InviteAcceptPage() {
   // Show loader while auto-accepting or fetching invite
   if (loading || (user && invite && !error)) return <PageLoader />;
 
+  const InviteIcon = invite?.type === 'session' ? Calendar : Users;
+  const inviteLabel = invite?.type === 'pod' ? 'a pod' : invite?.type === 'session' ? 'an event' : 'RSN';
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-white p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-white to-gray-50/50 p-4">
       <Card className="max-w-md w-full text-center">
         {invite ? (
           <>
+            <div className="inline-flex items-center justify-center h-14 w-14 rounded-full bg-indigo-50 text-indigo-500 mx-auto mb-4">
+              <InviteIcon className="h-7 w-7" />
+            </div>
             <h2 className="text-xl font-bold text-[#1a1a2e] mb-2">You&apos;re invited!</h2>
             <p className="text-gray-500 mb-6">
-              {invite.type === 'pod' ? "You've been invited to join a pod" :
-               invite.type === 'session' ? "You've been invited to an event" :
-               "You've been invited to join RSN"}
+              You&apos;ve been invited to join {inviteLabel}. Sign in or create an account to get started.
             </p>
             {error && (
               <p className="text-red-500 text-sm mb-4">{error}</p>
@@ -79,7 +91,17 @@ export default function InviteAcceptPage() {
                 {error ? 'Try Again' : 'Accept Invite'}
               </Button>
             ) : (
-              <Button onClick={() => navigate(`/login?redirect=/invite/${code}`)} className="w-full">Sign in to accept</Button>
+              <div className="space-y-3">
+                <Button onClick={() => navigate(`/login?redirect=/invite/${code}`)} className="w-full">
+                  <LogIn className="h-4 w-4 mr-2" /> Sign In
+                </Button>
+                <Button variant="secondary" onClick={() => navigate(`/login?redirect=/invite/${code}`)} className="w-full">
+                  <UserPlus className="h-4 w-4 mr-2" /> Create Account
+                </Button>
+                <p className="text-xs text-gray-400 mt-2">
+                  After signing in, you&apos;ll be taken directly to {inviteLabel}.
+                </p>
+              </div>
             )}
           </>
         ) : (

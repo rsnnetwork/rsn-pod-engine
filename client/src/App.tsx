@@ -32,6 +32,7 @@ import BillingPage from '@/features/billing/BillingPage';
 import SupportPage from '@/features/support/SupportPage';
 import NotFoundPage from '@/features/misc/NotFoundPage';
 import RequestToJoinPage from '@/features/auth/RequestToJoinPage';
+import OnboardingPage from '@/features/onboarding/OnboardingPage';
 
 export default function App() {
   const { checkSession } = useAuthStore();
@@ -75,6 +76,7 @@ export default function App() {
       </Route>
 
       {/* Protected without layout (full-screen) */}
+      <Route path="/onboarding" element={<ProtectedRoute><OnboardingPage /></ProtectedRoute>} />
       <Route path="/session/:sessionId/live" element={<ProtectedRoute><LiveSessionPage /></ProtectedRoute>} />
       <Route path="/session/:sessionId/host" element={<ProtectedRoute><HostDashboardPage /></ProtectedRoute>} />
 
