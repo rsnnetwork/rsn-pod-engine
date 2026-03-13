@@ -28,14 +28,13 @@ export default function CreateSessionPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const { addToast } = useToastStore();
-
-  const { data: allPods } = useQuery({
-    queryKey: ['my-pods'],
-    queryFn: () => api.get('/pods?status=active').then(r => r.data.data ?? []),
-  });
-
   const { user } = useAuthStore();
   const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
+
+  const { data: allPods } = useQuery({
+    queryKey: ['my-pods', isAdmin],
+    queryFn: () => api.get(`/pods?status=active${isAdmin ? '&admin=true' : ''}`).then(r => r.data.data ?? []),
+  });
   // Admins can create events in any pod; others need director/host role
   const pods = isAdmin ? (allPods || []) : (allPods || []).filter((p: any) => p.memberRole === 'director' || p.memberRole === 'host');
 

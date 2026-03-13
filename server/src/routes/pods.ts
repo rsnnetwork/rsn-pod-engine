@@ -65,9 +65,11 @@ router.get(
     try {
       const { podType, status, page, pageSize, browse } = req.query as Record<string, string>;
 
-      // browse=true shows all active non-private pods; otherwise scope to user's own pods (admins always see all)
+      // browse=true shows all active non-private pods; otherwise scope to user's own pods
+      // admin=true allows admins to see all pods (e.g. for create-event dropdown)
       const isBrowse = browse === 'true';
-      const scopeUserId = isBrowse || hasRoleAtLeast(req.user!.role, UserRole.ADMIN) ? undefined : req.user!.userId;
+      const isAdminView = req.query.admin === 'true' && hasRoleAtLeast(req.user!.role, UserRole.ADMIN);
+      const scopeUserId = isBrowse || isAdminView ? undefined : req.user!.userId;
       const effectiveStatus = isBrowse ? 'active' : status;
 
       const result = await podService.listPods({
