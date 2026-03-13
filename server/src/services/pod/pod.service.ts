@@ -163,7 +163,7 @@ export async function listPods(params: {
   }
 
   const countResult = await query<{ count: string }>(
-    `SELECT COUNT(*) as count FROM pods p ${whereClause}`,
+    `SELECT COUNT(*) as count FROM pods p ${memberRoleJoin} ${whereClause}`,
     values
   );
   const total = parseInt(countResult.rows[0].count, 10);
