@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Mail, Copy, Check, Users, Calendar, Globe, Trash2, Send, Link } from 'lucide-react';
+import { Mail, Copy, Check, Users, Calendar, Globe, Trash2, Send, Link, Search } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -28,6 +28,8 @@ export default function InvitesPage() {
   const [inviteeEmail, setInviteeEmail] = useState('');
   const [maxUses, setMaxUses] = useState(10);
   const [generatedLink, setGeneratedLink] = useState<string | null>(null);
+  const [userSearch, setUserSearch] = useState('');
+  const [selectedUsers, setSelectedUsers] = useState<any[]>([]);
 
   const { data, isLoading } = useQuery({
     queryKey: ['my-invites'],
@@ -42,6 +44,12 @@ export default function InvitesPage() {
   const { data: sessions } = useQuery({
     queryKey: ['my-sessions'],
     queryFn: () => api.get('/sessions').then(r => r.data.data ?? []),
+  });
+
+  const { data: searchResults } = useQuery({
+    queryKey: ['user-search', userSearch],
+    queryFn: () => api.get(`/users/search?q=${encodeURIComponent(userSearch)}`).then(r => r.data.data ?? []),
+    enabled: userSearch.length >= 2,
   });
 
   const getInviteUrl = (code: string) => `${window.location.origin}/invite/${code}`;
@@ -103,6 +111,24 @@ export default function InvitesPage() {
     onError: () => addToast('Failed to create invite link', 'error'),
   });
 
+  const bulkInviteMutation = useMutation({
+    mutationFn: (emails: string[]) => {
+      return Promise.all(emails.map(email => {
+        const payload: any = { type: inviteType, maxUses: 1, inviteeEmail: email };
+        if (inviteType === 'pod' && podId) payload.podId = podId;
+        if (inviteType === 'session' && sessionId) payload.sessionId = sessionId;
+        return api.post('/invites', payload);
+      }));
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['my-invites'] });
+      addToast(`${selectedUsers.length} invite(s) sent!`, 'success');
+      setSelectedUsers([]);
+      setUserSearch('');
+    },
+    onError: () => addToast('Failed to send some invites', 'error'),
+  });
+
   if (isLoading) return <PageLoader />;
 
   return (
@@ -156,11 +182,12 @@ export default function InvitesPage() {
             )}
           </div>
 
-          {/* Two side-by-side options */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {/* Send to email */}
+          {/* Three invite options */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {/* Option 1: Send to email */}
             <div className="rounded-xl border border-gray-200 p-4 space-y-3">
               <p className="text-sm font-medium text-gray-700 flex items-center gap-2"><Send className="h-4 w-4 text-indigo-500" /> Send to email</p>
+              <p className="text-xs text-gray-400">A unique, single-use invite emailed directly.</p>
               <Input type="email" value={inviteeEmail} onChange={e => setInviteeEmail(e.target.value)} placeholder="someone@example.com" />
               <Button
                 size="sm"
@@ -173,9 +200,58 @@ export default function InvitesPage() {
               </Button>
             </div>
 
-            {/* Create shareable link */}
+            {/* Option 2: Invite platform users */}
+            <div className="rounded-xl border border-gray-200 p-4 space-y-3">
+              <p className="text-sm font-medium text-gray-700 flex items-center gap-2"><Users className="h-4 w-4 text-amber-500" /> Invite platform users</p>
+              <p className="text-xs text-gray-400">Search existing users and invite them directly.</p>
+              <div className="relative">
+                <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+                <input
+                  value={userSearch}
+                  onChange={e => setUserSearch(e.target.value)}
+                  placeholder="Search by name or email..."
+                  className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#1a1a2e]"
+                />
+              </div>
+              {searchResults && searchResults.length > 0 && (
+                <div className="max-h-32 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                  {searchResults.map((u: any) => {
+                    const isSelected = selectedUsers.some(s => s.id === u.id);
+                    return (
+                      <button
+                        key={u.id}
+                        type="button"
+                        onClick={() => setSelectedUsers(prev => isSelected ? prev.filter(s => s.id !== u.id) : [...prev, u])}
+                        className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-gray-50 transition-colors ${isSelected ? 'bg-indigo-50' : ''}`}
+                      >
+                        <div className={`h-4 w-4 rounded border ${isSelected ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300'} flex items-center justify-center shrink-0`}>
+                          {isSelected && <Check className="h-3 w-3 text-white" />}
+                        </div>
+                        <span className="font-medium text-gray-800 truncate">{u.displayName || u.email}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {selectedUsers.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs text-gray-500">{selectedUsers.length} user(s) selected</p>
+                  <Button
+                    size="sm"
+                    onClick={() => bulkInviteMutation.mutate(selectedUsers.map(u => u.email))}
+                    isLoading={bulkInviteMutation.isPending}
+                    className="w-full"
+                  >
+                    <Mail className="h-4 w-4 mr-1" /> Send {selectedUsers.length} Invite(s)
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            {/* Option 3: Create shareable link */}
             <div className="rounded-xl border border-gray-200 p-4 space-y-3">
               <p className="text-sm font-medium text-gray-700 flex items-center gap-2"><Link className="h-4 w-4 text-emerald-500" /> Shareable link</p>
+              <p className="text-xs text-gray-400">A multi-use link you can share manually.</p>
               <Input label="Max Uses" type="number" value={maxUses} onChange={e => setMaxUses(Number(e.target.value))} placeholder="10" />
               <Button
                 size="sm"
