@@ -67,7 +67,8 @@ export default function ProfilePage() {
   const [avatarUploading, setAvatarUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const { register, handleSubmit, reset, formState: { isSubmitting } } = useForm<ProfileForm>();
+  const { register, handleSubmit, reset, formState: { isSubmitting, isDirty } } = useForm<ProfileForm>();
+  const [tagsChanged, setTagsChanged] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -87,6 +88,7 @@ export default function ProfilePage() {
       setInterests(user.interests || []);
       setReasons(user.reasonsToConnect || []);
       setLanguages(user.languages || []);
+      setTagsChanged(false);
     }
   }, [user]);
 
@@ -126,6 +128,12 @@ export default function ProfilePage() {
       setAvatarUploading(false);
     }
   };
+
+  const hasChanges = isDirty || tagsChanged;
+
+  const handleSetInterests = (t: string[]) => { setInterests(t); setTagsChanged(true); };
+  const handleSetReasons = (t: string[]) => { setReasons(t); setTagsChanged(true); };
+  const handleSetLanguages = (t: string[]) => { setLanguages(t); setTagsChanged(true); };
 
   const onSubmit = async (data: ProfileForm) => {
     try {
@@ -305,7 +313,7 @@ export default function ProfilePage() {
             <Input label="Timezone" {...register('timezone')} placeholder="America/New_York" />
           </div>
           <div className="mt-4">
-            <TagInput label="Languages" tags={languages} setTags={setLanguages} placeholder="e.g. english" icon={Languages} />
+            <TagInput label="Languages" tags={languages} setTags={handleSetLanguages} placeholder="e.g. english" icon={Languages} />
           </div>
         </Card>
 
@@ -315,13 +323,13 @@ export default function ProfilePage() {
             <Sparkles className="h-5 w-5 text-indigo-600" /> Interests & Intent
           </h2>
           <div className="space-y-5">
-            <TagInput label="Expertise & Interests" tags={interests} setTags={setInterests} placeholder="e.g. react, machine-learning" />
-            <TagInput label="Reasons to Connect" tags={reasons} setTags={setReasons} placeholder="e.g. hiring, co-founder search" />
+            <TagInput label="Expertise & Interests" tags={interests} setTags={handleSetInterests} placeholder="e.g. react, machine-learning" />
+            <TagInput label="Reasons to Connect" tags={reasons} setTags={handleSetReasons} placeholder="e.g. hiring, co-founder search" />
           </div>
         </Card>
 
         <div className="animate-fade-in-up stagger-5">
-          <Button type="submit" isLoading={isSubmitting} className="w-full sm:w-auto btn-glow">
+          <Button type="submit" isLoading={isSubmitting} disabled={!hasChanges} className="w-full sm:w-auto btn-glow">
             Save Changes
           </Button>
         </div>

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Users, Calendar, LogOut, Shield, UserMinus, Eye, Radio, Pencil, Trash2, UserPlus, Lock, Mail, Copy, Check, UserCheck, X, Clock, CopyPlus } from 'lucide-react';
+import { ArrowLeft, Users, Calendar, LogOut, Shield, UserMinus, Eye, Radio, Pencil, Trash2, UserPlus, Lock, Mail, Copy, Check, UserCheck, X, Clock, CopyPlus, Search } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Avatar from '@/components/ui/Avatar';
@@ -37,6 +37,8 @@ export default function PodDetailPage() {
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteLink, setInviteLink] = useState('');
   const [copied, setCopied] = useState(false);
+  const [podUserSearch, setPodUserSearch] = useState('');
+  const [podSelectedUsers, setPodSelectedUsers] = useState<any[]>([]);
 
   const { data: pod, isLoading } = useQuery({
     queryKey: ['pod', podId],
@@ -53,6 +55,12 @@ export default function PodDetailPage() {
     queryKey: ['pod-session-count', podId],
     queryFn: () => api.get(`/pods/${podId}/session-count`).then(r => r.data.data?.count ?? 0),
     enabled: !!podId,
+  });
+
+  const { data: podSearchResults } = useQuery({
+    queryKey: ['user-search', podUserSearch],
+    queryFn: () => api.get(`/users/search?q=${encodeURIComponent(podUserSearch)}`).then(r => r.data.data ?? []),
+    enabled: podUserSearch.length >= 1,
   });
 
   const leaveMutation = useMutation({
@@ -181,6 +189,18 @@ export default function PodDetailPage() {
       }
     },
     onError: () => addToast('Failed to create invite', 'error'),
+  });
+
+  const bulkPodInviteMutation = useMutation({
+    mutationFn: (emails: string[]) => Promise.all(emails.map(email =>
+      api.post('/invites', { type: 'pod', podId, maxUses: 1, inviteeEmail: email, expiresInHours: 168 })
+    )),
+    onSuccess: () => {
+      addToast(`${podSelectedUsers.length} invite(s) sent!`, 'success');
+      setPodSelectedUsers([]);
+      setPodUserSearch('');
+    },
+    onError: () => addToast('Failed to send some invites', 'error'),
   });
 
   const openEdit = () => {
@@ -363,15 +383,66 @@ export default function PodDetailPage() {
             </Button>
           </div>
 
+          {/* Option 2: Invite Platform Users */}
+          <div className="rounded-lg border border-gray-200 p-4 space-y-3">
+            <h3 className="text-sm font-semibold text-[#1a1a2e]">Option 2 — Invite Platform Users</h3>
+            <p className="text-xs text-gray-500">Search existing users and invite them directly.</p>
+            <div className="relative">
+              <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+              <input
+                value={podUserSearch}
+                onChange={e => setPodUserSearch(e.target.value)}
+                placeholder="Search by name or email..."
+                className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#1a1a2e]"
+              />
+            </div>
+            {podUserSearch.length >= 1 && podSearchResults && podSearchResults.length === 0 && (
+              <p className="text-xs text-gray-400 text-center py-2">No users found matching "{podUserSearch}"</p>
+            )}
+            {podSearchResults && podSearchResults.length > 0 && (
+              <div className="max-h-32 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                {podSearchResults.filter((u: any) => !activeMembers.some((m: any) => m.userId === u.id)).map((u: any) => {
+                  const isSelected = podSelectedUsers.some(s => s.id === u.id);
+                  return (
+                    <button
+                      key={u.id}
+                      type="button"
+                      onClick={() => setPodSelectedUsers(prev => isSelected ? prev.filter(s => s.id !== u.id) : [...prev, u])}
+                      className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-gray-50 transition-colors ${isSelected ? 'bg-indigo-50' : ''}`}
+                    >
+                      <div className={`h-4 w-4 rounded border ${isSelected ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300'} flex items-center justify-center shrink-0`}>
+                        {isSelected && <Check className="h-3 w-3 text-white" />}
+                      </div>
+                      <span className="font-medium text-gray-800 truncate">{u.displayName || u.email}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {podSelectedUsers.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs text-gray-500">{podSelectedUsers.length} user(s) selected</p>
+                <Button
+                  size="sm"
+                  onClick={() => bulkPodInviteMutation.mutate(podSelectedUsers.map(u => u.email))}
+                  isLoading={bulkPodInviteMutation.isPending}
+                  className="w-full"
+                >
+                  <Mail className="h-4 w-4 mr-2" /> Send {podSelectedUsers.length} Invite(s)
+                </Button>
+              </div>
+            )}
+          </div>
+
           <div className="flex items-center gap-3">
             <div className="h-px flex-1 bg-gray-200" />
             <span className="text-xs font-medium text-gray-400 uppercase">or</span>
             <div className="h-px flex-1 bg-gray-200" />
           </div>
 
-          {/* Option 2: Generate Shareable Link */}
+          {/* Option 3: Generate Shareable Link */}
           <div className="rounded-lg border border-gray-200 p-4 space-y-3">
-            <h3 className="text-sm font-semibold text-[#1a1a2e]">Option 2 — Generate Shareable Link</h3>
+            <h3 className="text-sm font-semibold text-[#1a1a2e]">Option 3 — Generate Shareable Link</h3>
             <p className="text-xs text-gray-500">Create a reusable link to share manually (up to 10 uses, expires in 7 days).</p>
             {!inviteLink ? (
               <Button

@@ -49,7 +49,7 @@ export default function InvitesPage() {
   const { data: searchResults } = useQuery({
     queryKey: ['user-search', userSearch],
     queryFn: () => api.get(`/users/search?q=${encodeURIComponent(userSearch)}`).then(r => r.data.data ?? []),
-    enabled: userSearch.length >= 2,
+    enabled: userSearch.length >= 1,
   });
 
   const getInviteUrl = (code: string) => `${window.location.origin}/invite/${code}`;
@@ -129,6 +129,8 @@ export default function InvitesPage() {
     onError: () => addToast('Failed to send some invites', 'error'),
   });
 
+  const needsTarget = (inviteType === 'pod' && !podId) || (inviteType === 'session' && !sessionId);
+
   if (isLoading) return <PageLoader />;
 
   return (
@@ -182,8 +184,8 @@ export default function InvitesPage() {
             )}
           </div>
 
-          {/* Three invite options */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {/* Invite options */}
+          <div className={`grid grid-cols-1 ${inviteType === 'platform' ? 'sm:grid-cols-2' : 'sm:grid-cols-3'} gap-4`}>
             {/* Option 1: Send to email */}
             <div className="rounded-xl border border-gray-200 p-4 space-y-3">
               <p className="text-sm font-medium text-gray-700 flex items-center gap-2"><Send className="h-4 w-4 text-indigo-500" /> Send to email</p>
@@ -193,60 +195,66 @@ export default function InvitesPage() {
                 size="sm"
                 onClick={() => sendEmailMutation.mutate()}
                 isLoading={sendEmailMutation.isPending}
-                disabled={!inviteeEmail}
+                disabled={!inviteeEmail || needsTarget}
                 className="w-full"
               >
                 <Send className="h-4 w-4 mr-1" /> Send Invite Email
               </Button>
             </div>
 
-            {/* Option 2: Invite platform users */}
-            <div className="rounded-xl border border-gray-200 p-4 space-y-3">
-              <p className="text-sm font-medium text-gray-700 flex items-center gap-2"><Users className="h-4 w-4 text-amber-500" /> Invite platform users</p>
-              <p className="text-xs text-gray-400">Search existing users and invite them directly.</p>
-              <div className="relative">
-                <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
-                <input
-                  value={userSearch}
-                  onChange={e => setUserSearch(e.target.value)}
-                  placeholder="Search by name or email..."
-                  className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#1a1a2e]"
-                />
+            {/* Option 2: Invite platform users (not for platform invites — those are for non-users) */}
+            {inviteType !== 'platform' && (
+              <div className="rounded-xl border border-gray-200 p-4 space-y-3">
+                <p className="text-sm font-medium text-gray-700 flex items-center gap-2"><Users className="h-4 w-4 text-amber-500" /> Invite platform users</p>
+                <p className="text-xs text-gray-400">Search existing users and invite them directly.</p>
+                <div className="relative">
+                  <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+                  <input
+                    value={userSearch}
+                    onChange={e => setUserSearch(e.target.value)}
+                    placeholder="Search by name or email..."
+                    className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#1a1a2e]"
+                  />
+                </div>
+                {userSearch.length >= 1 && searchResults && searchResults.length === 0 && (
+                  <p className="text-xs text-gray-400 text-center py-2">No users found matching "{userSearch}"</p>
+                )}
+                {searchResults && searchResults.length > 0 && (
+                  <div className="max-h-32 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                    {searchResults.map((u: any) => {
+                      const isSelected = selectedUsers.some(s => s.id === u.id);
+                      return (
+                        <button
+                          key={u.id}
+                          type="button"
+                          onClick={() => setSelectedUsers(prev => isSelected ? prev.filter(s => s.id !== u.id) : [...prev, u])}
+                          className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-gray-50 transition-colors ${isSelected ? 'bg-indigo-50' : ''}`}
+                        >
+                          <div className={`h-4 w-4 rounded border ${isSelected ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300'} flex items-center justify-center shrink-0`}>
+                            {isSelected && <Check className="h-3 w-3 text-white" />}
+                          </div>
+                          <span className="font-medium text-gray-800 truncate">{u.displayName || u.email}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                {selectedUsers.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-gray-500">{selectedUsers.length} user(s) selected</p>
+                    <Button
+                      size="sm"
+                      onClick={() => bulkInviteMutation.mutate(selectedUsers.map(u => u.email))}
+                      isLoading={bulkInviteMutation.isPending}
+                      disabled={needsTarget}
+                      className="w-full"
+                    >
+                      <Mail className="h-4 w-4 mr-1" /> Send {selectedUsers.length} Invite(s)
+                    </Button>
+                  </div>
+                )}
               </div>
-              {searchResults && searchResults.length > 0 && (
-                <div className="max-h-32 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
-                  {searchResults.map((u: any) => {
-                    const isSelected = selectedUsers.some(s => s.id === u.id);
-                    return (
-                      <button
-                        key={u.id}
-                        type="button"
-                        onClick={() => setSelectedUsers(prev => isSelected ? prev.filter(s => s.id !== u.id) : [...prev, u])}
-                        className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-gray-50 transition-colors ${isSelected ? 'bg-indigo-50' : ''}`}
-                      >
-                        <div className={`h-4 w-4 rounded border ${isSelected ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300'} flex items-center justify-center shrink-0`}>
-                          {isSelected && <Check className="h-3 w-3 text-white" />}
-                        </div>
-                        <span className="font-medium text-gray-800 truncate">{u.displayName || u.email}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-              {selectedUsers.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-xs text-gray-500">{selectedUsers.length} user(s) selected</p>
-                  <Button
-                    size="sm"
-                    onClick={() => bulkInviteMutation.mutate(selectedUsers.map(u => u.email))}
-                    isLoading={bulkInviteMutation.isPending}
-                    className="w-full"
-                  >
-                    <Mail className="h-4 w-4 mr-1" /> Send {selectedUsers.length} Invite(s)
-                  </Button>
-                </div>
-              )}
-            </div>
+            )}
 
             {/* Option 3: Create shareable link */}
             <div className="rounded-xl border border-gray-200 p-4 space-y-3">
@@ -258,6 +266,7 @@ export default function InvitesPage() {
                 variant="secondary"
                 onClick={() => createLinkMutation.mutate()}
                 isLoading={createLinkMutation.isPending}
+                disabled={needsTarget}
                 className="w-full"
               >
                 <Copy className="h-4 w-4 mr-1" /> Create & Copy Link
