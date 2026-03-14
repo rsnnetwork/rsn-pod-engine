@@ -234,6 +234,8 @@ describe('Identity Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
       // isEmailApproved — no approved join request
       mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      // hasPendingInviteForEmail — no pending invites
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
 
       await expect(identityService.sendMagicLink('new@example.com'))
         .rejects.toThrow('Registration requires an approved join request');

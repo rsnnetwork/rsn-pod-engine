@@ -32,17 +32,32 @@ async function isEmailApproved(email: string): Promise<boolean> {
   return result.rows.length > 0;
 }
 
+async function hasPendingInviteForEmail(email: string): Promise<boolean> {
+  const result = await query<{ id: string }>(
+    `SELECT id FROM invites
+     WHERE invitee_email = $1
+       AND status = 'pending'
+       AND (expires_at IS NULL OR expires_at > NOW())
+       AND use_count < max_uses
+     LIMIT 1`,
+    [email.toLowerCase().trim()]
+  );
+  return result.rows.length > 0;
+}
+
 async function assertRegistrationAllowed(email: string, hasValidInvite: boolean): Promise<void> {
   if (WHITELISTED_EMAILS.includes(email.toLowerCase().trim())) return;
   if (hasValidInvite) return; // invite code already validated upstream
   const approved = await isEmailApproved(email);
-  if (!approved) {
-    throw new AppError(
-      403,
-      ErrorCodes.REGISTRATION_BLOCKED,
-      'Registration requires an approved join request or a valid invite code. Please request to join first.'
-    );
-  }
+  if (approved) return;
+  // Auto-detect: if someone sent this email ANY invite (pod, event, platform), let them in
+  const hasInvite = await hasPendingInviteForEmail(email);
+  if (hasInvite) return;
+  throw new AppError(
+    403,
+    ErrorCodes.REGISTRATION_BLOCKED,
+    'Registration requires an approved join request or a valid invite code. Please request to join first.'
+  );
 }
 
 // ─── User Operations ────────────────────────────────────────────────────────
