@@ -23,9 +23,19 @@ export default function LoginPage() {
   const [devLink, setDevLink] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const handlingCrossTabAuth = useRef(false);
-  const { register, handleSubmit, formState: { errors, isSubmitting }, getValues, watch } = useForm<{ email: string; inviteCode: string }>();
+  const inviteCodeFromUrl = params.get('inviteCode');
+  const { register, handleSubmit, formState: { errors, isSubmitting }, getValues, watch, setValue } = useForm<{ email: string; inviteCode: string }>({
+    defaultValues: { inviteCode: inviteCodeFromUrl || '' },
+  });
 
   const inviteCodeValue = watch('inviteCode');
+
+  // Auto-fill invite code from URL param (e.g. when redirected from invite page)
+  useEffect(() => {
+    if (inviteCodeFromUrl) {
+      setValue('inviteCode', inviteCodeFromUrl);
+    }
+  }, [inviteCodeFromUrl, setValue]);
 
   // Store redirect path so VerifyPage can use it after login
   const redirectPath = params.get('redirect');

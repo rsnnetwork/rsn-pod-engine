@@ -92,10 +92,10 @@ export default function InviteAcceptPage() {
               </Button>
             ) : (
               <div className="space-y-3">
-                <Button onClick={() => navigate(`/login?redirect=/invite/${code}`)} className="w-full">
+                <Button onClick={() => navigate(`/login?redirect=/invite/${code}&inviteCode=${code}`)} className="w-full">
                   <LogIn className="h-4 w-4 mr-2" /> Sign In
                 </Button>
-                <Button variant="secondary" onClick={() => navigate(`/login?redirect=/invite/${code}`)} className="w-full">
+                <Button variant="secondary" onClick={() => navigate(`/login?redirect=/invite/${code}&inviteCode=${code}`)} className="w-full">
                   <UserPlus className="h-4 w-4 mr-2" /> Create Account
                 </Button>
                 <p className="text-xs text-gray-400 mt-2">
