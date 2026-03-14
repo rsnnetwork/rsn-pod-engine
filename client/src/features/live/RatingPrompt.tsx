@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Card from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useToastStore } from '@/stores/toastStore';
-import { Star, UserCheck, CheckCircle, Loader2 } from 'lucide-react';
+import { Star, UserCheck, CheckCircle, Loader2, Clock } from 'lucide-react';
 import api from '@/lib/api';
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -89,21 +89,29 @@ function PartnerRatingForm({ partnerName, toUserId, matchId, onSubmitted, onSkip
 }
 
 export default function RatingPrompt(_props: Props) {
-  const { currentMatch, currentMatchId, currentPartners, setPhase } = useSessionStore();
+  const { currentMatch, currentMatchId, currentPartners, timerSeconds, setPhase } = useSessionStore();
   const { addToast } = useToastStore();
   const [currentPartnerIdx, setCurrentPartnerIdx] = useState(0);
+  const hasRedirected = useRef(false);
 
   const partners = currentPartners.length > 0
     ? currentPartners
     : currentMatch ? [currentMatch] : [];
 
-  const allDone = currentPartnerIdx >= partners.length;
+  const noMatchData = !currentMatchId || partners.length === 0;
 
-  if (!currentMatchId || partners.length === 0) {
-    addToast('No match data available to rate', 'error');
-    setPhase('lobby');
-    return null;
-  }
+  // Handle missing match data safely via useEffect (not during render)
+  useEffect(() => {
+    if (noMatchData && !hasRedirected.current) {
+      hasRedirected.current = true;
+      addToast('No match data available to rate', 'error');
+      setPhase('lobby');
+    }
+  }, [noMatchData, addToast, setPhase]);
+
+  if (noMatchData) return null;
+
+  const allDone = currentPartnerIdx >= partners.length;
 
   if (allDone) {
     return (
@@ -119,6 +127,12 @@ export default function RatingPrompt(_props: Props) {
             <Loader2 className="h-4 w-4 text-gray-500 animate-spin" />
             <p className="text-gray-500">Waiting for the next round to begin...</p>
           </div>
+          {timerSeconds > 0 && (
+            <div className="flex items-center justify-center gap-1.5 mt-3 text-sm text-gray-400">
+              <Clock className="h-3.5 w-3.5" />
+              <span>{timerSeconds}s remaining</span>
+            </div>
+          )}
         </Card>
       </div>
     );
@@ -129,6 +143,12 @@ export default function RatingPrompt(_props: Props) {
 
   return (
     <div className="flex-1 flex items-center justify-center p-4">
+      {timerSeconds > 0 && (
+        <div className="absolute top-4 right-4 flex items-center gap-1.5 text-sm text-gray-400 bg-white/80 backdrop-blur-sm rounded-full px-3 py-1">
+          <Clock className="h-3.5 w-3.5" />
+          <span>{timerSeconds}s</span>
+        </div>
+      )}
       <PartnerRatingForm
         key={partner.userId}
         partnerName={partner.displayName || 'your partner'}

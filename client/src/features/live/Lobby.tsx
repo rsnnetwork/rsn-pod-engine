@@ -228,9 +228,17 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
           <h2 className="text-xl font-bold text-[#1a1a2e]">Lobby</h2>
           <p className="text-gray-500 text-sm">
             {isHost
-              ? 'You\'re the host — click Start Round below when everyone is ready'
-              : 'You\'re in the lobby — sit tight, the host will start the round soon!'}
+              ? 'You\'re the host — click Match People below when ready'
+              : hostInLobby
+                ? 'You\'re in the lobby — the host will start the next round soon!'
+                : 'You\'re in the lobby — waiting for the host to reconnect...'}
           </p>
+          {!isHost && !hostInLobby && (
+            <div className="inline-flex items-center gap-1.5 text-xs text-amber-600 bg-amber-50 px-3 py-1 rounded-full">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Host is offline
+            </div>
+          )}
         </>
       )}
       <div className="flex items-center justify-center gap-2 text-gray-500 text-xs">

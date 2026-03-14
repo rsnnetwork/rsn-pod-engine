@@ -121,6 +121,11 @@ export default function useSessionSocket(sessionId: string) {
 
     // ── Matching ──
     socket.on('match:assigned', (data: any) => {
+      // Only transition to 'matched' phase during an active round — ignore stale
+      // match:assigned events that arrive during rating or lobby transitions
+      const currentStatus = useSessionStore.getState().sessionStatus;
+      if (currentStatus === 'round_rating' || currentStatus === 'completed') return;
+
       store.setByeRound(false);
       store.setPartnerDisconnected(false);
       store.setTransitionStatus('preparing_match');
