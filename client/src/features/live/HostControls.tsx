@@ -97,9 +97,19 @@ export default function HostControls({ sessionId }: Props) {
   if (isSessionEnding) {
     return (
       <div className="border-t border-gray-200 bg-gray-50/60 backdrop-blur-sm p-4">
-        <div className="max-w-4xl mx-auto flex items-center justify-center gap-2">
-          <Loader2 className="h-4 w-4 text-indigo-600 animate-spin" />
-          <p className="text-sm text-gray-600 font-medium">Event ending — preparing your recap...</p>
+        <div className="max-w-4xl mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Loader2 className="h-4 w-4 text-indigo-600 animate-spin" />
+            <p className="text-sm text-gray-600 font-medium">Event ending — preparing recap...</p>
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" variant="ghost" onClick={() => setShowBroadcast(!showBroadcast)} title="Send final message">
+              <MessageSquare className="h-4 w-4" />
+            </Button>
+            <Button size="sm" variant="danger" onClick={() => socket?.emit('host:end_session', { sessionId })}>
+              <Square className="h-4 w-4 mr-1" /> Force End
+            </Button>
+          </div>
         </div>
       </div>
     );

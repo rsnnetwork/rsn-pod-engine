@@ -90,12 +90,16 @@ export default function useSessionSocket(sessionId: string) {
       if (data.status === 'completed') { clearTimer(); store.setTransitionStatus('session_ending'); setTimeout(() => { store.setTransitionStatus(null); store.setPhase('complete'); }, 1500); }
       if (data.status === 'lobby_open') store.setTransitionStatus('starting_session');
       if (data.status === 'closing_lobby') store.setTransitionStatus('session_ending');
-      // Handle round_rating — ensure clients in bye-round or without match also transition
+      // Handle round_rating — only transition matched participants to rating
       if (data.status === 'round_rating') {
         clearTimer();
-        const currentPhase = useSessionStore.getState().phase;
-        // Only transition to rating if not already there (matched users get rating:window_open)
-        if (currentPhase !== 'rating') {
+        const state = useSessionStore.getState();
+        // Bye-round users stay in lobby — they have no match to rate
+        if (state.isByeRound) {
+          store.setTransitionStatus('between_rounds');
+          // Don't change phase — keep them in lobby
+        } else if (state.phase !== 'rating') {
+          // Matched users who didn't get rating:window_open (edge case) — transition them
           store.setTransitionStatus('round_ending');
           store.setPhase('rating');
         }
@@ -127,9 +131,15 @@ export default function useSessionSocket(sessionId: string) {
 
     socket.on('session:round_ended', () => {
       clearTimer();
-      store.setTransitionStatus('round_ending');
-      // Preserve currentMatch/currentMatchId so RatingPrompt can use them
-      store.setPhase('rating');
+      const state = useSessionStore.getState();
+      if (state.isByeRound) {
+        // Bye-round users have no match to rate — stay in lobby
+        store.setTransitionStatus('between_rounds');
+      } else {
+        store.setTransitionStatus('round_ending');
+        // Preserve currentMatch/currentMatchId so RatingPrompt can use them
+        store.setPhase('rating');
+      }
     });
 
     socket.on('session:completed', () => {

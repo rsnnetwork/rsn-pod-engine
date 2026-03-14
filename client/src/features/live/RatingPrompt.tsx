@@ -89,7 +89,7 @@ function PartnerRatingForm({ partnerName, toUserId, matchId, onSubmitted, onSkip
 }
 
 export default function RatingPrompt(_props: Props) {
-  const { currentMatch, currentMatchId, currentPartners, timerSeconds, setPhase } = useSessionStore();
+  const { currentMatch, currentMatchId, currentPartners, timerSeconds, setPhase, currentRound, totalRounds } = useSessionStore();
   const { addToast } = useToastStore();
   const [currentPartnerIdx, setCurrentPartnerIdx] = useState(0);
   const hasRedirected = useRef(false);
@@ -125,7 +125,11 @@ export default function RatingPrompt(_props: Props) {
           </h2>
           <div className="flex items-center justify-center gap-2">
             <Loader2 className="h-4 w-4 text-gray-500 animate-spin" />
-            <p className="text-gray-500">Waiting for the next round to begin...</p>
+            <p className="text-gray-500">
+              {currentRound >= totalRounds && totalRounds > 0
+                ? 'Event wrapping up — preparing your recap...'
+                : 'Waiting for the next round to begin...'}
+            </p>
           </div>
           {timerSeconds > 0 && (
             <div className="flex items-center justify-center gap-1.5 mt-3 text-sm text-gray-400">
