@@ -48,9 +48,9 @@ export default function SessionDetailPage() {
     enabled: !!sessionId,
   });
 
-  const isHost = session?.hostUserId === user?.id || user?.role === 'admin' || user?.role === 'super_admin';
-  const isRegistered = (participants || []).some((p: any) => p.userId === user?.id && p.status !== 'removed');
+  const isHost = session?.hostUserId === user?.id;
   const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
+  const isRegistered = (participants || []).some((p: any) => p.userId === user?.id && p.status !== 'removed');
   const isMember = !!pod?.memberRole || isAdmin;
   const isRestrictedPod = pod?.visibility === 'invite_only' || pod?.visibility === 'private';
   const canRegister = isMember || !isRestrictedPod;
@@ -279,7 +279,7 @@ export default function SessionDetailPage() {
         )}
         {(session.status === 'scheduled' || session.status === 'lobby_open' || session.status === 'round_active' || session.status === 'round_rating' || session.status === 'round_transition') && (
           <Button
-            variant={isRegistered ? 'primary' : 'secondary'}
+            variant={isRegistered || isHost ? 'primary' : 'secondary'}
             onClick={() => navigate(`/session/${sessionId}/live`)}
           >
             <Play className="h-4 w-4 mr-2" />
@@ -293,12 +293,12 @@ export default function SessionDetailPage() {
             <Settings className="h-4 w-4 mr-2" /> Host Controls
           </Button>
         )}
-        {isHost && session.status === 'scheduled' && (
+        {(isHost || isAdmin) && session.status === 'scheduled' && (
           <Button variant="secondary" onClick={openEdit}>
             <Pencil className="h-4 w-4 mr-2" /> Edit
           </Button>
         )}
-        {isHost && (session.status === 'scheduled' || session.status === 'completed') && (
+        {(isHost || isAdmin) && (session.status === 'scheduled' || session.status === 'completed') && (
           <Button variant="danger" onClick={() => { if (confirm('Delete this event? This cannot be undone.')) deleteMutation.mutate(); }} isLoading={deleteMutation.isPending}>
             <Trash2 className="h-4 w-4 mr-2" /> Delete
           </Button>
@@ -308,12 +308,12 @@ export default function SessionDetailPage() {
             View Recap
           </Button>
         )}
-        {isHost && (
+        {(isHost || isAdmin) && (
           <Button variant="secondary" onClick={() => duplicateMutation.mutate()} isLoading={duplicateMutation.isPending}>
             <CopyPlus className="h-4 w-4 mr-2" /> Copy Event
           </Button>
         )}
-        {isHost && session.status !== 'completed' && (
+        {(isHost || isAdmin) && session.status !== 'completed' && (
           <Button variant="secondary" onClick={() => { setInviteLink(''); setInviteEmail(''); setInviteOpen(true); }}>
             <Mail className="h-4 w-4 mr-2" /> Invite to Event
           </Button>
