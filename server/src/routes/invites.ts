@@ -6,6 +6,7 @@ import { authenticate, optionalAuth } from '../middleware/auth';
 import { inviteLimiter } from '../middleware/rateLimit';
 import { auditMiddleware } from '../middleware/audit';
 import * as inviteService from '../services/invite/invite.service';
+import { query } from '../db';
 import { ApiResponse, InviteType, InviteStatus } from '@rsn/shared';
 
 const router = Router();
@@ -79,6 +80,33 @@ router.get(
   }
 );
 
+// ─── GET /invites/received ──────────────────────────────────────────────────
+
+router.get(
+  '/received',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      // Look up the user's email, then find invites addressed to them
+      const userResult = await query<{ email: string }>(
+        `SELECT email FROM users WHERE id = $1`,
+        [req.user!.userId]
+      );
+      const email = userResult.rows[0]?.email;
+      if (!email) {
+        const response: ApiResponse = { success: true, data: [] };
+        return res.json(response);
+      }
+
+      const invites = await inviteService.listReceivedInvites(email);
+      const response: ApiResponse = { success: true, data: invites };
+      return res.json(response);
+    } catch (err) {
+      return next(err);
+    }
+  }
+);
+
 // ─── GET /invites/:code ─────────────────────────────────────────────────────
 
 router.get(
@@ -121,6 +149,32 @@ router.post(
       res.json(response);
     } catch (err) {
       next(err);
+    }
+  }
+);
+
+// ─── POST /invites/:code/decline ────────────────────────────────────────────
+
+router.post(
+  '/:code/decline',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userResult = await query<{ email: string }>(
+        `SELECT email FROM users WHERE id = $1`,
+        [req.user!.userId]
+      );
+      const email = userResult.rows[0]?.email;
+      if (!email) {
+        const response: ApiResponse = { success: false, error: { code: 'NOT_FOUND', message: 'User not found' } };
+        return res.status(404).json(response);
+      }
+
+      await inviteService.declineInvite(req.params.code, email);
+      const response: ApiResponse = { success: true, data: { message: 'Invite declined' } };
+      return res.json(response);
+    } catch (err) {
+      return next(err);
     }
   }
 );

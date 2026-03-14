@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Calendar, Users, Mail, Plus, Eye, ChevronRight } from 'lucide-react';
+import { Calendar, Users, Mail, Plus, Eye, ChevronRight, Inbox } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
@@ -24,6 +24,11 @@ export default function HomePage() {
   const { data: invites, isLoading: invitesLoading } = useQuery({
     queryKey: ['my-invites'],
     queryFn: () => api.get('/invites').then(r => r.data.data ?? []),
+  });
+
+  const { data: receivedInvites } = useQuery({
+    queryKey: ['received-invites'],
+    queryFn: () => api.get('/invites/received').then(r => r.data.data ?? []),
   });
 
   if (podsLoading || sessionsLoading || invitesLoading) return <PageLoader />;
@@ -50,6 +55,23 @@ export default function HomePage() {
         </h1>
         <p className="text-gray-500 mt-1">Here&apos;s what&apos;s happening with your RSN account.</p>
       </div>
+
+      {/* Pending received invites banner */}
+      {receivedInvites && receivedInvites.length > 0 && (
+        <button
+          onClick={() => navigate('/invites')}
+          className="w-full flex items-center gap-3 p-4 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 transition-colors animate-fade-in-up"
+        >
+          <Inbox className="h-5 w-5 text-indigo-600 shrink-0" />
+          <div className="flex-1 text-left">
+            <p className="text-sm font-semibold text-[#1a1a2e]">
+              You have {receivedInvites.length} pending invite{receivedInvites.length > 1 ? 's' : ''}
+            </p>
+            <p className="text-xs text-gray-500">Click to view and accept pod/event invitations sent to you.</p>
+          </div>
+          <ChevronRight className="h-4 w-4 text-indigo-400" />
+        </button>
+      )}
 
       {/* Stats row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 animate-fade-in-up">

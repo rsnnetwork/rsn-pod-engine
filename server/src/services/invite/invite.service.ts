@@ -335,6 +335,50 @@ export async function listInvitesByUser(userId: string, params: {
   return { invites: result.rows, total };
 }
 
+// ─── List Received Invites ──────────────────────────────────────────────────
+
+export async function listReceivedInvites(userEmail: string): Promise<(Invite & { podName?: string; sessionTitle?: string; inviterName?: string })[]> {
+  const ENRICHED_COLUMNS = `
+    i.id, i.code, i.type, i.inviter_id AS "inviterId", i.invitee_email AS "inviteeEmail",
+    i.pod_id AS "podId", i.session_id AS "sessionId", i.status, i.max_uses AS "maxUses",
+    i.use_count AS "useCount", i.expires_at AS "expiresAt",
+    i.accepted_by_user_id AS "acceptedByUserId", i.accepted_at AS "acceptedAt",
+    i.created_at AS "createdAt", i.updated_at AS "updatedAt",
+    p.name AS "podName", s.title AS "sessionTitle",
+    u.display_name AS "inviterName"
+  `;
+
+  const result = await query<Invite & { podName?: string; sessionTitle?: string; inviterName?: string }>(
+    `SELECT ${ENRICHED_COLUMNS}
+     FROM invites i
+     LEFT JOIN pods p ON p.id = i.pod_id
+     LEFT JOIN sessions s ON s.id = i.session_id
+     LEFT JOIN users u ON u.id = i.inviter_id
+     WHERE i.invitee_email = $1 AND i.status = 'pending'
+       AND (i.expires_at IS NULL OR i.expires_at > NOW())
+     ORDER BY i.created_at DESC`,
+    [userEmail.toLowerCase()]
+  );
+
+  return result.rows;
+}
+
+// ─── Decline Invite ─────────────────────────────────────────────────────────
+
+export async function declineInvite(code: string, userEmail: string): Promise<void> {
+  const result = await query(
+    `UPDATE invites SET status = 'revoked'
+     WHERE code = $1 AND invitee_email = $2 AND status = 'pending'`,
+    [code, userEmail.toLowerCase()]
+  );
+
+  if (result.rowCount === 0) {
+    throw new NotFoundError('Invite');
+  }
+
+  logger.info({ code, userEmail }, 'Invite declined by recipient');
+}
+
 // ─── Revoke Invite ──────────────────────────────────────────────────────────
 
 export async function revokeInvite(inviteId: string, userId: string): Promise<void> {

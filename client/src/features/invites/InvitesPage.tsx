@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Mail, Copy, Check, Users, Calendar, Globe, Trash2, Send, Link, Search } from 'lucide-react';
+import { Mail, Copy, Check, Users, Calendar, Globe, Trash2, Send, Link, Search, Inbox, UserCheck, X } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -67,6 +67,32 @@ export default function InvitesPage() {
     queryKey: ['session-participants', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}/participants`).then(r => r.data.data ?? []),
     enabled: inviteType === 'session' && !!sessionId,
+  });
+
+  // Invites sent TO this user (pod/event invites from directors/hosts/admins)
+  const { data: receivedInvites } = useQuery({
+    queryKey: ['received-invites'],
+    queryFn: () => api.get('/invites/received').then(r => r.data.data ?? []),
+  });
+
+  const acceptInviteMutation = useMutation({
+    mutationFn: (code: string) => api.post(`/invites/${code}/accept`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['received-invites'] });
+      qc.invalidateQueries({ queryKey: ['my-pods'] });
+      qc.invalidateQueries({ queryKey: ['my-sessions'] });
+      addToast('Invite accepted!', 'success');
+    },
+    onError: (err: any) => addToast(err?.response?.data?.error?.message || 'Failed to accept invite', 'error'),
+  });
+
+  const declineInviteMutation = useMutation({
+    mutationFn: (code: string) => api.post(`/invites/${code}/decline`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['received-invites'] });
+      addToast('Invite declined', 'info');
+    },
+    onError: () => addToast('Failed to decline invite', 'error'),
   });
 
   const getInviteUrl = (code: string) => `${window.location.origin}/invite/${code}`;
@@ -357,6 +383,61 @@ export default function InvitesPage() {
           </div>
         </div>
       </Card>
+
+      {/* Received Invites */}
+      {receivedInvites && receivedInvites.length > 0 && (
+        <div className="animate-fade-in-up">
+          <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
+            <Inbox className="h-5 w-5 text-indigo-600" /> Pending Invites for You ({receivedInvites.length})
+          </h2>
+          <div className="grid gap-3">
+            {receivedInvites.map((inv: any) => {
+              const typeConf = TYPE_CONFIG[inv.type] || TYPE_CONFIG.platform;
+              const TypeIcon = typeConf.icon;
+              const targetName = inv.podName || inv.sessionTitle || 'RSN Platform';
+              return (
+                <Card key={inv.id} className="border-indigo-200 bg-indigo-50/30">
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Badge variant={typeConf.variant} className="text-xs flex items-center gap-1">
+                          <TypeIcon className="h-3 w-3" /> {typeConf.label}
+                        </Badge>
+                        <span className="text-sm font-semibold text-[#1a1a2e]">{targetName}</span>
+                      </div>
+                      <p className="text-sm text-gray-500">
+                        From <span className="font-medium text-gray-700">{inv.inviterName || 'Someone'}</span>
+                      </p>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        Sent {new Date(inv.createdAt).toLocaleDateString()}
+                        {inv.expiresAt && ` · Expires ${new Date(inv.expiresAt).toLocaleDateString()}`}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => acceptInviteMutation.mutate(inv.code)}
+                        isLoading={acceptInviteMutation.isPending}
+                      >
+                        <UserCheck className="h-4 w-4 mr-1" /> Accept
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => declineInviteMutation.mutate(inv.code)}
+                        isLoading={declineInviteMutation.isPending}
+                        className="text-gray-400 hover:text-red-500"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Invite List */}
       {(!data || data.length === 0) ? (
