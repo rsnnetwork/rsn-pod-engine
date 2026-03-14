@@ -41,7 +41,7 @@ export default function LiveSessionPage() {
     enabled: !!sessionId,
   });
 
-  const isHost = session?.hostUserId === user?.id || user?.role === 'admin' || user?.role === 'super_admin';
+  const isHost = session?.hostUserId === user?.id;
 
   useSessionSocket(sessionId!);
 
