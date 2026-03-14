@@ -229,9 +229,10 @@ export default function PodDetailPage() {
   const activeMembers = membersList.filter((m: any) => m.status === 'active');
   const pendingMembers = membersList.filter((m: any) => m.status === 'pending_approval');
   const myMembership = membersList.find((m: any) => m.userId === user?.id);
-  const isMember = myMembership?.status === 'active' || !!pod.memberRole;
+  const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
+  const isMember = myMembership?.status === 'active' || !!pod.memberRole || isAdmin;
   const isPending = myMembership?.status === 'pending_approval';
-  const isDirector = myMembership?.role === 'director' || pod.memberRole === 'director' || user?.role === 'admin' || user?.role === 'super_admin';
+  const isDirector = myMembership?.role === 'director' || pod.memberRole === 'director' || isAdmin;
   const isDirectorOrHost = isDirector || myMembership?.role === 'host' || pod.memberRole === 'host';
   const vis = visibilityLabels[pod.visibility] || visibilityLabels.public;
   const VisIcon = vis.icon;
