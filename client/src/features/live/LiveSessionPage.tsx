@@ -53,6 +53,11 @@ export default function LiveSessionPage() {
   }, [session?.status, setPhase]);
 
   const handleLeave = () => {
+    const inActivePhase = phase === 'matched' || phase === 'rating';
+    const message = inActivePhase
+      ? 'You are in an active round. Leaving now will end your current conversation and you may miss this round. Are you sure?'
+      : 'Are you sure you want to leave this event?';
+    if (!confirm(message)) return;
     disconnectSocket();
     reset();
     navigate('/sessions');

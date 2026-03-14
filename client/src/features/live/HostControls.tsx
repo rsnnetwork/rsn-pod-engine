@@ -21,7 +21,16 @@ export default function HostControls({ sessionId }: Props) {
   const isInRound = phase === 'matched' || phase === 'rating';
 
   const startSession = () => socket?.emit('host:start_session', { sessionId });
-  const endSession = () => socket?.emit('host:end_session', { sessionId });
+  const endSession = () => {
+    const msg = isInRound
+      ? 'A round is currently active. Ending the event will cut all conversations short. Are you sure?'
+      : 'Are you sure you want to end this event? All participants will be disconnected.';
+    if (!confirm(msg)) return;
+    socket?.emit('host:end_session', { sessionId });
+  };
+
+  // Count non-host participants for matching eligibility
+  const eligibleCount = Math.max(0, participants.length - 1); // exclude host
 
   const generateMatches = () => {
     setGenerating(true);
@@ -270,13 +279,19 @@ export default function HostControls({ sessionId }: Props) {
 
             {/* Two-step breakout: Match People → preview → Start Round */}
             {sessionStarted && phase === 'lobby' && !allRoundsDone && !matchPreview && (
-              <Button size="sm" variant="secondary" onClick={generateMatches} disabled={generating}>
-                {generating ? (
-                  <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Matching...</>
-                ) : (
-                  <><Shuffle className="h-4 w-4 mr-1" /> Match People</>
-                )}
-              </Button>
+              eligibleCount >= 2 ? (
+                <Button size="sm" variant="secondary" onClick={generateMatches} disabled={generating}>
+                  {generating ? (
+                    <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Matching...</>
+                  ) : (
+                    <><Shuffle className="h-4 w-4 mr-1" /> Match People</>
+                  )}
+                </Button>
+              ) : (
+                <span className="text-xs text-gray-400 px-2 py-1.5 border border-gray-200 rounded-lg">
+                  Need {2 - eligibleCount} more participant{eligibleCount === 1 ? '' : 's'} to match
+                </span>
+              )
             )}
 
             {/* After preview: Confirm or Cancel */}

@@ -183,7 +183,8 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
       {isByeRound ? (
         <>
           <h2 className="text-xl font-bold text-[#1a1a2e]">Bye Round</h2>
-          <p className="text-gray-500 text-sm">You have a bye this round — sit tight!</p>
+          <p className="text-gray-500 text-sm">Odd one out this round — you'll be matched in the next round!</p>
+          <p className="text-xs text-gray-400 mt-1">The round timer is still running. Hang tight.</p>
         </>
       ) : transitionStatus === 'session_ending' ? (
         <div className="flex flex-col items-center gap-2">
