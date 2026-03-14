@@ -148,7 +148,7 @@ export default function AdminDashboardPage() {
             >
               <div className="flex items-center gap-3">
                 <Calendar className="h-4 w-4 text-gray-400" />
-                <span className="text-sm font-medium text-gray-700">Manage Sessions</span>
+                <span className="text-sm font-medium text-gray-700">Manage Events</span>
               </div>
               <span className="text-xs text-gray-400 group-hover:text-gray-600">→</span>
             </button>
