@@ -13,6 +13,24 @@ import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
 
+/** Map invite API error codes to user-friendly messages */
+function getInviteErrorMessage(err: any): string {
+  const code = err?.response?.data?.error?.code;
+  const message = err?.response?.data?.error?.message;
+  switch (code) {
+    case 'DUPLICATE_INVITE': return 'This person already has a pending invite';
+    case 'SELF_INVITE': return 'You cannot send an invite to yourself';
+    case 'ALREADY_REGISTERED': return 'This person already has an account on the platform';
+    case 'POD_MEMBER_EXISTS': return 'This person is already a member of this pod';
+    case 'SESSION_ALREADY_REGISTERED': return 'This person is already a participant of this event';
+    case 'POD_ARCHIVED': return 'Cannot send invites to an archived pod';
+    case 'AUTH_FORBIDDEN': return message || 'You do not have permission to send this invite';
+    case 'VALIDATION_ERROR': return message || 'Please check the form and try again';
+    case 'RATE_LIMIT_EXCEEDED': return 'Too many invites sent. Please wait and try again';
+    default: return message || 'Failed to send invite. Please try again';
+  }
+}
+
 const podTypeLabels: Record<string, string> = {
   speed_networking: 'Speed Networking',
   duo: 'Duo', trio: 'Trio', kvartet: 'Kvartet',
@@ -204,7 +222,7 @@ export default function PodDetailPage() {
         addToast('Invite link generated!', 'success');
       }
     },
-    onError: () => addToast('Failed to create invite', 'error'),
+    onError: (err: any) => addToast(getInviteErrorMessage(err), 'error'),
   });
 
   const bulkPodInviteMutation = useMutation({
