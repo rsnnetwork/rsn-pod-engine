@@ -1,4 +1,5 @@
 import { Users, Loader2, VideoOff, Sparkles, ChevronDown, ChevronUp, Mic, MicOff, Volume2, VolumeX, UserX } from 'lucide-react';
+import HostRoundDashboard from './HostRoundDashboard';
 import { useState, useEffect, useCallback } from 'react';
 import Card from '@/components/ui/Card';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -309,8 +310,7 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
 
   // During an active round, the host sees the breakout room dashboard instead of lobby
   if (isHost && sessionStatus === 'round_active' && roundDashboard) {
-    const HostRoundDashboard = require('./HostRoundDashboard').default;
-    return <HostRoundDashboard sessionId={sessionId} />;
+    return <HostRoundDashboard sessionId={sessionId!} />;
   }
 
   // If we have a lobby token, render the video mosaic
