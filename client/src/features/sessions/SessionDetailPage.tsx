@@ -306,7 +306,7 @@ export default function SessionDetailPage() {
           >
             <Play className="h-4 w-4 mr-2" />
             {session.status === 'scheduled'
-              ? (isHost ? 'Start Event' : 'Enter Lobby')
+              ? (isHost ? 'Go Live' : 'Enter Lobby')
               : 'Join Live'}
           </Button>
         )}
