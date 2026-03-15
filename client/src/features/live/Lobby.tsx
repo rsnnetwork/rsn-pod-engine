@@ -236,7 +236,7 @@ function useHostPresence(gracePeriodMs = 5000): boolean | null {
 }
 
 function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
-  const { participants, isByeRound, currentRound, totalRounds, transitionStatus, sessionStatus } = useSessionStore();
+  const { participants, isByeRound, currentRound, totalRounds, transitionStatus, sessionStatus, hostUserId } = useSessionStore();
   const hostOnline = useHostPresence();
 
   // Session hasn't been started yet by host
@@ -309,8 +309,11 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
       <div className="flex items-center justify-center gap-2 text-gray-500 text-xs">
         <Users className="h-3.5 w-3.5" />
         <span>
-          {Math.max(0, participants.length - (hostOnline ? 1 : 0))} participant{(participants.length - (hostOnline ? 1 : 0)) !== 1 ? 's' : ''}
-          {hostOnline ? ' + host' : ''} connected
+          {(() => {
+            const hostInList = participants.some(p => p.userId === hostUserId);
+            const count = participants.length - (hostInList ? 1 : 0);
+            return `${count} participant${count !== 1 ? 's' : ''}${hostOnline || hostInList ? ' + host' : ''} connected`;
+          })()}
         </span>
       </div>
     </div>
@@ -421,8 +424,11 @@ function PreLobbyWaitingRoom() {
             <div className="flex items-center justify-center gap-2 text-gray-500 text-xs mb-3">
               <Users className="h-3.5 w-3.5" />
               <span>
-                {Math.max(0, participants.length - (hostOnline ? 1 : 0))} participant{(participants.length - (hostOnline ? 1 : 0)) !== 1 ? 's' : ''}
-                {hostOnline ? ' + host' : ''} waiting
+                {(() => {
+                  const hostInList = participants.some(p => p.userId === hostUserId);
+                  const participantCount = participants.length - (hostInList ? 1 : 0);
+                  return `${participantCount} participant${participantCount !== 1 ? 's' : ''}${hostOnline || hostInList ? ' + host' : ''} waiting`;
+                })()}
               </span>
             </div>
             <div className="flex flex-wrap gap-2 justify-center">
