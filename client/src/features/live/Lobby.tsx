@@ -192,15 +192,25 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
 
 /**
  * Hook: delays "host is offline" by a grace period to avoid flickering on brief disconnects.
- * Returns the debounced host-online status.
+ * Also checks participant list as a fallback — if the host is in the participants list,
+ * they're online regardless of the hostInLobby flag.
+ * Starts as `true` (optimistic) to avoid "offline" flash on initial load / rejoin.
  */
 function useHostPresence(gracePeriodMs = 5000): boolean {
   const rawHostInLobby = useSessionStore(s => s.hostInLobby);
-  const [debouncedOnline, setDebouncedOnline] = useState(rawHostInLobby);
+  const participants = useSessionStore(s => s.participants);
+  const hostUserId = useSessionStore(s => s.hostUserId);
+
+  // Fallback: if the host is in the participants list, they're online
+  const hostInParticipants = hostUserId ? participants.some(p => p.userId === hostUserId) : false;
+  const isHostOnline = rawHostInLobby || hostInParticipants;
+
+  // Start optimistic (true) to avoid flash on initial load / rejoin
+  const [debouncedOnline, setDebouncedOnline] = useState(true);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (rawHostInLobby) {
+    if (isHostOnline) {
       // Host came online — show immediately, cancel any pending offline transition
       if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
       setDebouncedOnline(true);
@@ -214,7 +224,7 @@ function useHostPresence(gracePeriodMs = 5000): boolean {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [rawHostInLobby, gracePeriodMs]);
+  }, [isHostOnline, gracePeriodMs]);
 
   return debouncedOnline;
 }
