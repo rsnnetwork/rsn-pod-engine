@@ -52,10 +52,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       return;
     }
     try {
-      const { data } = await api.get('/auth/session');
+      const { data } = await api.get('/auth/session', { timeout: 15000 });
       set({ user: data.data.user, isAuthenticated: true, isLoading: false });
-    } catch {
-      set({ isLoading: false, isAuthenticated: false, user: null });
+    } catch (err: any) {
+      // Only log out on 401 (token genuinely invalid/expired).
+      // Network errors, timeouts, 5xx — keep the user logged in so a
+      // server hiccup or Render cold-start doesn't nuke the session.
+      if (err?.response?.status === 401) {
+        set({ isLoading: false, isAuthenticated: false, user: null });
+      } else {
+        set({ isLoading: false });
+      }
     }
   },
 
