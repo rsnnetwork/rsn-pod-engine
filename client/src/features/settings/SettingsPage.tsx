@@ -86,7 +86,7 @@ export default function SettingsPage() {
       {/* Notifications */}
       <Card className="animate-fade-in-up">
         <div className="flex items-center gap-2 mb-4">
-          <Bell className="h-5 w-5 text-indigo-600" />
+          <Bell className="h-5 w-5 text-rsn-red" />
           <h2 className="font-semibold text-[#1a1a2e]">Notifications</h2>
         </div>
         <div className="divide-y divide-gray-100">
@@ -114,7 +114,7 @@ export default function SettingsPage() {
       {/* Privacy */}
       <Card className="animate-fade-in-up">
         <div className="flex items-center gap-2 mb-4">
-          <Eye className="h-5 w-5 text-indigo-600" />
+          <Eye className="h-5 w-5 text-rsn-red" />
           <h2 className="font-semibold text-[#1a1a2e]">Privacy</h2>
         </div>
         <div className="divide-y divide-gray-100">
@@ -130,7 +130,7 @@ export default function SettingsPage() {
       {/* Account */}
       <Card className="animate-fade-in-up">
         <div className="flex items-center gap-2 mb-4">
-          <Shield className="h-5 w-5 text-indigo-600" />
+          <Shield className="h-5 w-5 text-rsn-red" />
           <h2 className="font-semibold text-[#1a1a2e]">Account</h2>
         </div>
         <div className="space-y-3">
@@ -153,7 +153,7 @@ export default function SettingsPage() {
       <Card className="animate-fade-in-up">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
-            <CreditCard className="h-5 w-5 text-indigo-600" />
+            <CreditCard className="h-5 w-5 text-rsn-red" />
             <h2 className="font-semibold text-[#1a1a2e]">Billing & Subscription</h2>
           </div>
           <Badge variant="brand">Starter</Badge>

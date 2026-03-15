@@ -277,15 +277,15 @@ export default function PodDetailPage() {
 
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mt-4 pt-4 border-t border-gray-200">
           <div className="flex items-center gap-2 text-sm text-gray-500">
-            <Users className="h-4 w-4 text-indigo-600" />
+            <Users className="h-4 w-4 text-rsn-red" />
             <span>{pod.memberCount ?? activeMembers.length} members</span>
           </div>
           <div className="flex items-center gap-2 text-sm text-gray-500">
-            <Calendar className="h-4 w-4 text-indigo-600" />
+            <Calendar className="h-4 w-4 text-rsn-red" />
             <span>{pod.sessionCount ?? sessionCountData ?? 0} events</span>
           </div>
           <div className="flex items-center gap-2 text-sm text-gray-500">
-            <Radio className="h-4 w-4 text-indigo-600" />
+            <Radio className="h-4 w-4 text-rsn-red" />
             <span>{podTypeLabels[pod.podType] || pod.podType}</span>
           </div>
           <div className="flex items-center gap-2 text-sm">
@@ -293,14 +293,14 @@ export default function PodDetailPage() {
             <span className={vis.color}>{vis.label}</span>
           </div>
           <div className="flex items-center gap-2 text-sm text-gray-500">
-            <Calendar className="h-4 w-4 text-indigo-600" />
+            <Calendar className="h-4 w-4 text-rsn-red" />
             <span>Created {new Date(pod.createdAt).toLocaleDateString()}</span>
           </div>
         </div>
 
         {pod.directorName && (
           <div className="flex items-center gap-2 mt-3 text-sm text-gray-500">
-            <Shield className="h-4 w-4 text-indigo-600" />
+            <Shield className="h-4 w-4 text-rsn-red" />
             <span>Director: <span className="font-medium text-[#1a1a2e]">{pod.directorName}</span></span>
           </div>
         )}
@@ -447,10 +447,10 @@ export default function PodDetailPage() {
                       type="button"
                       disabled={isMember}
                       onClick={() => !isMember && setPodSelectedUsers(prev => isSelected ? prev.filter(s => s.id !== u.id) : [...prev, u])}
-                      className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${isMember ? 'opacity-60 cursor-not-allowed bg-gray-50' : isSelected ? 'bg-indigo-50 hover:bg-indigo-100' : 'hover:bg-gray-50'}`}
+                      className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${isMember ? 'opacity-60 cursor-not-allowed bg-gray-50' : isSelected ? 'bg-rsn-red-light hover:bg-rsn-red-100' : 'hover:bg-gray-50'}`}
                     >
                       {!isMember && (
-                        <div className={`h-4 w-4 rounded border ${isSelected ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300'} flex items-center justify-center shrink-0`}>
+                        <div className={`h-4 w-4 rounded border ${isSelected ? 'bg-rsn-red border-rsn-red' : 'border-gray-300'} flex items-center justify-center shrink-0`}>
                           {isSelected && <Check className="h-3 w-3 text-white" />}
                         </div>
                       )}
@@ -551,7 +551,7 @@ export default function PodDetailPage() {
       {podSessions && podSessions.length > 0 && (
         <div className="animate-fade-in-up stagger-2">
           <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
-            <Calendar className="h-5 w-5 text-indigo-600" /> Events ({podSessions.length})
+            <Calendar className="h-5 w-5 text-rsn-red" /> Events ({podSessions.length})
           </h2>
           <div className="grid gap-2">
             {podSessions.map((s: any) => (
@@ -580,7 +580,7 @@ export default function PodDetailPage() {
       {/* Members */}
       <div className="animate-fade-in-up stagger-2">
         <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
-          <Users className="h-5 w-5 text-indigo-600" /> Members ({activeMembers.length})
+          <Users className="h-5 w-5 text-rsn-red" /> Members ({activeMembers.length})
         </h2>
         <div className="grid gap-2">
           {activeMembers.map((m: any) => (
@@ -605,7 +605,7 @@ export default function PodDetailPage() {
                         userId: m.userId,
                         role: m.role === 'host' ? 'member' : 'host',
                       })}
-                      className="px-2 py-1 rounded-lg text-xs font-medium text-indigo-600 hover:bg-indigo-50 border border-indigo-200 transition-all"
+                      className="px-2 py-1 rounded-lg text-xs font-medium text-rsn-red hover:bg-rsn-red-light border border-rsn-red-200 transition-all"
                       title={m.role === 'host' ? 'Demote to member' : 'Promote to host'}
                     >
                       {m.role === 'host' ? 'Demote' : 'Make Host'}

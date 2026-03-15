@@ -58,7 +58,7 @@ export default function LiveSessionPage() {
       ? 'You are in an active round. Leaving now will end your current conversation and you may miss this round. Are you sure?'
       : 'Are you sure you want to leave this event?';
     if (!confirm(message)) return;
-    getSocket()?.emit('session:leave', { sessionId });
+    getSocket()?.emit('session:leave', { sessionId: sessionId! });
     disconnectSocket();
     reset();
     navigate('/sessions');
@@ -81,7 +81,7 @@ export default function LiveSessionPage() {
 
       {/* Broadcast banner */}
       {broadcasts.length > 0 && (
-        <div className="bg-indigo-50 border-b border-brand-500/30 px-4 py-2 text-center">
+        <div className="bg-rsn-red-light border-b border-rsn-red/30 px-4 py-2 text-center">
           <p className="text-sm text-brand-300">{broadcasts[broadcasts.length - 1]}</p>
         </div>
       )}
@@ -115,7 +115,7 @@ export default function LiveSessionPage() {
       {/* Transition status overlay */}
       {transitionStatus && (
         <div className="bg-[#1a1a2e]/10 border-b border-brand-500/20 px-4 py-2 flex items-center justify-center gap-2">
-          <Loader2 className="h-4 w-4 text-indigo-600 animate-spin" />
+          <Loader2 className="h-4 w-4 text-rsn-red animate-spin" />
           <p className="text-sm text-brand-300">
             {transitionStatus === 'starting_session' && 'Event is starting — preparing your first match...'}
             {transitionStatus === 'preparing_match' && "You've been matched! Connecting to your partner..."}

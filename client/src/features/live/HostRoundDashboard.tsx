@@ -61,7 +61,7 @@ export default function HostRoundDashboard({ sessionId }: Props) {
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-semibold text-gray-500 uppercase">
                   Room {idx + 1}
-                  {room.isTrio && <span className="ml-1 text-indigo-500">(Trio)</span>}
+                  {room.isTrio && <span className="ml-1 text-rsn-red">(Trio)</span>}
                 </span>
                 <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                   room.status === 'active' ? 'bg-green-50 text-green-600' :
@@ -113,9 +113,9 @@ export default function HostRoundDashboard({ sessionId }: Props) {
 
         {/* Reassignment indicator */}
         {roundDashboard.reassignmentInProgress && (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-indigo-50 border border-indigo-200">
-            <Radio className="h-4 w-4 text-indigo-500 animate-pulse" />
-            <span className="text-sm text-indigo-700">Reassignment in progress...</span>
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-rsn-red-light border border-rsn-red-200">
+            <Radio className="h-4 w-4 text-rsn-red animate-pulse" />
+            <span className="text-sm text-rsn-red-hover">Reassignment in progress...</span>
           </div>
         )}
       </div>

@@ -42,7 +42,7 @@ export default function AdminPodsPage() {
     <div className="max-w-5xl mx-auto space-y-6">
       <div className="flex items-center justify-between animate-fade-in">
         <h1 className="text-2xl font-bold text-[#1a1a2e]">Manage Pods</h1>
-        <Hexagon className="h-6 w-6 text-indigo-600" />
+        <Hexagon className="h-6 w-6 text-rsn-red" />
       </div>
 
       <div className="flex gap-2">

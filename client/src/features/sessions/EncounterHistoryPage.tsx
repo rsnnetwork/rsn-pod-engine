@@ -26,7 +26,7 @@ export default function EncounterHistoryPage() {
           <h1 className="text-2xl font-bold text-[#1a1a2e]">People</h1>
           <p className="text-gray-500 text-sm mt-1">People you've connected with</p>
         </div>
-        <Heart className="h-8 w-8 text-indigo-600" />
+        <Heart className="h-8 w-8 text-rsn-red" />
       </div>
 
       {/* Filter */}

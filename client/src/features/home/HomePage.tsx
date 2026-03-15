@@ -60,16 +60,16 @@ export default function HomePage() {
       {receivedInvites && receivedInvites.length > 0 && (
         <button
           onClick={() => navigate('/invites')}
-          className="w-full flex items-center gap-3 p-4 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 transition-colors animate-fade-in-up"
+          className="w-full flex items-center gap-3 p-4 rounded-xl border border-rsn-red-200 bg-rsn-red-light hover:bg-rsn-red-100 transition-colors animate-fade-in-up"
         >
-          <Inbox className="h-5 w-5 text-indigo-600 shrink-0" />
+          <Inbox className="h-5 w-5 text-rsn-red shrink-0" />
           <div className="flex-1 text-left">
             <p className="text-sm font-semibold text-[#1a1a2e]">
               You have {receivedInvites.length} pending invite{receivedInvites.length > 1 ? 's' : ''}
             </p>
             <p className="text-xs text-gray-500">Click to view and accept pod/event invitations sent to you.</p>
           </div>
-          <ChevronRight className="h-4 w-4 text-indigo-400" />
+          <ChevronRight className="h-4 w-4 text-rsn-red/60" />
         </button>
       )}
 
@@ -102,10 +102,10 @@ export default function HomePage() {
           <p className="text-xs text-gray-400 mt-1">Events registered</p>
         </Card>
 
-        <Card className="border-indigo-200 bg-indigo-50/50">
+        <Card className="border-rsn-red-200 bg-rsn-red-light/50">
           <div className="flex items-center justify-between mb-3">
             <p className="text-sm text-gray-500">Unlock Level</p>
-            <span className="text-xs font-medium text-indigo-600">{unlockLevel}</span>
+            <span className="text-xs font-medium text-rsn-red">{unlockLevel}</span>
           </div>
           <p className="text-3xl font-bold text-[#1a1a2e]">{totalAccepted}/{unlockLevel === 'Starter' ? 1 : unlockLevel === 'Basic' ? 3 : '∞'}</p>
           <p className="text-xs text-gray-400 mt-1">Accepted invites{unlockLevel === 'Starter' ? ' — invite 1 to unlock' : ''}</p>
@@ -149,7 +149,7 @@ export default function HomePage() {
             onClick={() => navigate('/profile')}
             className="flex items-center gap-4 w-full py-3 group hover:bg-gray-50 -mx-2 px-2 rounded-lg transition-colors"
           >
-            <span className={`flex-shrink-0 h-7 w-7 rounded-full flex items-center justify-center text-xs font-bold ${hasProfile ? 'bg-emerald-50 text-emerald-600' : 'bg-indigo-50 text-indigo-600'}`}>
+            <span className={`flex-shrink-0 h-7 w-7 rounded-full flex items-center justify-center text-xs font-bold ${hasProfile ? 'bg-emerald-50 text-emerald-600' : 'bg-rsn-red-light text-rsn-red'}`}>
               {hasProfile ? '✓' : '1'}
             </span>
             <div className="flex-1 text-left">
@@ -163,7 +163,7 @@ export default function HomePage() {
             onClick={() => navigate('/invites')}
             className="flex items-center gap-4 w-full py-3 group hover:bg-gray-50 -mx-2 px-2 rounded-lg transition-colors"
           >
-            <span className={`flex-shrink-0 h-7 w-7 rounded-full flex items-center justify-center text-xs font-bold ${hasInvite ? 'bg-emerald-50 text-emerald-600' : 'bg-indigo-50 text-indigo-600'}`}>
+            <span className={`flex-shrink-0 h-7 w-7 rounded-full flex items-center justify-center text-xs font-bold ${hasInvite ? 'bg-emerald-50 text-emerald-600' : 'bg-rsn-red-light text-rsn-red'}`}>
               {hasInvite ? '✓' : '2'}
             </span>
             <div className="flex-1 text-left">
@@ -177,7 +177,7 @@ export default function HomePage() {
             onClick={() => navigate('/pods')}
             className="flex items-center gap-4 w-full py-3 group hover:bg-gray-50 -mx-2 px-2 rounded-lg transition-colors"
           >
-            <span className={`flex-shrink-0 h-7 w-7 rounded-full flex items-center justify-center text-xs font-bold ${hasPod ? 'bg-emerald-50 text-emerald-600' : 'bg-indigo-50 text-indigo-600'}`}>
+            <span className={`flex-shrink-0 h-7 w-7 rounded-full flex items-center justify-center text-xs font-bold ${hasPod ? 'bg-emerald-50 text-emerald-600' : 'bg-rsn-red-light text-rsn-red'}`}>
               {hasPod ? '✓' : '3'}
             </span>
             <div className="flex-1 text-left">

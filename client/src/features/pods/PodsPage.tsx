@@ -68,8 +68,8 @@ export default function PodsPage() {
               <Card key={pod.id} hover onClick={() => navigate(`/pods/${pod.id}`)} className="card-hover">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="h-10 w-10 rounded-xl bg-indigo-50 flex items-center justify-center">
-                      <Users className="h-5 w-5 text-indigo-600" />
+                    <div className="h-10 w-10 rounded-xl bg-rsn-red-light flex items-center justify-center">
+                      <Users className="h-5 w-5 text-rsn-red" />
                     </div>
                     <div>
                       <p className="font-medium text-gray-800">{pod.name}</p>

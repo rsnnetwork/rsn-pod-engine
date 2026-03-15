@@ -13,7 +13,7 @@ const variants: Record<string, string> = {
   info: 'bg-blue-50 text-blue-600',
   warning: 'bg-amber-50 text-amber-600',
   danger: 'bg-red-50 text-red-600',
-  brand: 'bg-indigo-50 text-indigo-600',
+  brand: 'bg-rsn-red-light text-rsn-red',
 };
 
 export default function Badge({ children, variant = 'default', className }: BadgeProps) {

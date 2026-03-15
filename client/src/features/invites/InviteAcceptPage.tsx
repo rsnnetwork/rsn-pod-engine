@@ -5,8 +5,43 @@ import { Button } from '@/components/ui/Button';
 import Card from '@/components/ui/Card';
 import { PageLoader } from '@/components/ui/Spinner';
 import { useToastStore } from '@/stores/toastStore';
-import { Users, Calendar, LogIn, UserPlus } from 'lucide-react';
+import { Users, Calendar, LogIn, UserPlus, Clock, User, AlertCircle } from 'lucide-react';
 import api from '@/lib/api';
+
+/** Map accept-invite error codes to user-friendly messages */
+function getAcceptErrorMessage(err: any): string {
+  const code = err?.response?.data?.error?.code;
+  const message = err?.response?.data?.error?.message;
+
+  switch (code) {
+    case 'INVITE_REVOKED':
+      return 'This invite has been revoked by the sender';
+    case 'INVITE_EXPIRED':
+      return 'This invite has expired and is no longer valid';
+    case 'INVITE_ALREADY_USED':
+      return 'This invite has already been used the maximum number of times';
+    case 'AUTH_FORBIDDEN':
+      return 'This invite was sent to a different email address';
+    default:
+      return message || 'Failed to accept invite';
+  }
+}
+
+function formatEventDate(dateStr: string): string {
+  try {
+    const date = new Date(dateStr);
+    return date.toLocaleDateString('en-US', {
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  } catch {
+    return dateStr;
+  }
+}
 
 export default function InviteAcceptPage() {
   const { code } = useParams();
@@ -49,7 +84,7 @@ export default function InviteAcceptPage() {
         navigate(destination, { replace: true });
       }
     } catch (err: any) {
-      const msg = err?.response?.data?.error?.message || 'Failed to accept invite';
+      const msg = getAcceptErrorMessage(err);
       setError(msg);
       addToast(msg, 'error');
     } finally {
@@ -71,20 +106,63 @@ export default function InviteAcceptPage() {
   const InviteIcon = invite?.type === 'session' ? Calendar : Users;
   const inviteLabel = invite?.type === 'pod' ? 'a pod' : invite?.type === 'session' ? 'an event' : 'RSN';
 
+  // Derive display values from enriched invite data
+  const targetName = invite?.sessionTitle || invite?.podName;
+  const inviterName = invite?.inviterName;
+  const description = invite?.sessionDescription || invite?.podDescription;
+  const scheduledAt = invite?.sessionScheduledAt;
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-white to-gray-50/50 p-4">
       <Card className="max-w-md w-full text-center">
         {invite ? (
           <>
-            <div className="inline-flex items-center justify-center h-14 w-14 rounded-full bg-indigo-50 text-indigo-500 mx-auto mb-4">
+            <div className="inline-flex items-center justify-center h-14 w-14 rounded-full bg-rsn-red-light text-rsn-red mx-auto mb-4">
               <InviteIcon className="h-7 w-7" />
             </div>
             <h2 className="text-xl font-bold text-[#1a1a2e] mb-2">You&apos;re invited!</h2>
-            <p className="text-gray-500 mb-6">
-              You&apos;ve been invited to join {inviteLabel}. Sign in or create an account to get started.
-            </p>
+
+            {/* Invite context section */}
+            <div className="mb-6 space-y-3">
+              {inviterName && (
+                <div className="flex items-center justify-center gap-2 text-sm text-gray-600">
+                  <User className="h-4 w-4 text-gray-400 flex-shrink-0" />
+                  <span><span className="font-medium text-[#1a1a2e]">{inviterName}</span> invited you to join {inviteLabel}</span>
+                </div>
+              )}
+              {!inviterName && (
+                <p className="text-gray-500 text-sm">
+                  You&apos;ve been invited to join {inviteLabel}.
+                </p>
+              )}
+
+              {targetName && (
+                <div className="rounded-xl bg-gray-50 border border-gray-100 p-4 text-left space-y-2">
+                  <p className="font-semibold text-[#1a1a2e]">{targetName}</p>
+                  {description && (
+                    <p className="text-sm text-gray-500 line-clamp-3">{description}</p>
+                  )}
+                  {scheduledAt && (
+                    <div className="flex items-center gap-2 text-sm text-gray-600">
+                      <Clock className="h-4 w-4 text-rsn-red flex-shrink-0" />
+                      <span>{formatEventDate(scheduledAt)}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {!inviterName && !targetName && (
+                <p className="text-gray-500 text-sm">
+                  Sign in or create an account to get started.
+                </p>
+              )}
+            </div>
+
             {error && (
-              <p className="text-red-500 text-sm mb-4">{error}</p>
+              <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-100 p-3 mb-4 text-left">
+                <AlertCircle className="h-4 w-4 text-red-500 mt-0.5 flex-shrink-0" />
+                <p className="text-red-600 text-sm">{error}</p>
+              </div>
             )}
             {user ? (
               <Button onClick={accept} isLoading={accepting} className="w-full">
@@ -92,6 +170,9 @@ export default function InviteAcceptPage() {
               </Button>
             ) : (
               <div className="space-y-3">
+                <p className="text-xs text-gray-400 mb-2">
+                  Sign in or create an account to accept this invite.
+                </p>
                 <Button onClick={() => navigate(`/login?redirect=/invite/${code}&inviteCode=${code}`)} className="w-full">
                   <LogIn className="h-4 w-4 mr-2" /> Sign In
                 </Button>
@@ -106,8 +187,11 @@ export default function InviteAcceptPage() {
           </>
         ) : (
           <>
+            <div className="inline-flex items-center justify-center h-14 w-14 rounded-full bg-red-50 text-red-400 mx-auto mb-4">
+              <AlertCircle className="h-7 w-7" />
+            </div>
             <h2 className="text-xl font-bold text-[#1a1a2e] mb-2">Invalid Invite</h2>
-            <p className="text-gray-500 mb-4">This invite link is invalid or expired.</p>
+            <p className="text-gray-500 mb-4">This invite link is invalid or has expired.</p>
             <Button variant="secondary" onClick={() => navigate('/')}>Go Home</Button>
           </>
         )}

@@ -45,7 +45,7 @@ export default function SupportPage() {
       {/* FAQ Section */}
       <Card className="animate-fade-in-up">
         <div className="flex items-center gap-2 mb-4">
-          <HelpCircle className="h-5 w-5 text-indigo-600" />
+          <HelpCircle className="h-5 w-5 text-rsn-red" />
           <h2 className="font-semibold text-[#1a1a2e]">Frequently Asked Questions</h2>
         </div>
         <div className="divide-y divide-surface-800">
@@ -70,7 +70,7 @@ export default function SupportPage() {
       {/* Contact Form */}
       <Card className="animate-fade-in-up">
         <div className="flex items-center gap-2 mb-4">
-          <MessageSquare className="h-5 w-5 text-indigo-600" />
+          <MessageSquare className="h-5 w-5 text-rsn-red" />
           <h2 className="font-semibold text-[#1a1a2e]">Contact Support</h2>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">

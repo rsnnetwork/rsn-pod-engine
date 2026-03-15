@@ -90,7 +90,7 @@ export default function CreateSessionPage() {
         {/* Basic Info */}
         <Card className="animate-fade-in-up">
           <h2 className="flex items-center gap-2 text-lg font-semibold text-gray-800 mb-4">
-            <Settings className="h-5 w-5 text-indigo-600" /> Basic Info
+            <Settings className="h-5 w-5 text-rsn-red" /> Basic Info
           </h2>
           <div className="space-y-4">
             <div>
@@ -129,7 +129,7 @@ export default function CreateSessionPage() {
         {/* Session Config */}
         <Card className="animate-fade-in-up stagger-1">
           <h2 className="flex items-center gap-2 text-lg font-semibold text-gray-800 mb-4">
-            <Clock className="h-5 w-5 text-indigo-600" /> Timing Configuration
+            <Clock className="h-5 w-5 text-rsn-red" /> Timing Configuration
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
@@ -170,7 +170,7 @@ export default function CreateSessionPage() {
         {/* Capacity */}
         <Card className="animate-fade-in-up stagger-2">
           <h2 className="flex items-center gap-2 text-lg font-semibold text-gray-800 mb-4">
-            <Users className="h-5 w-5 text-indigo-600" /> Capacity
+            <Users className="h-5 w-5 text-rsn-red" /> Capacity
           </h2>
           <div>
             <label className="block text-sm font-medium text-gray-600 mb-1.5">Max Participants</label>

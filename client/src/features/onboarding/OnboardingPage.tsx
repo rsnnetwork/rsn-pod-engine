@@ -24,7 +24,7 @@ function TagInput({ tags, setTags, placeholder }: { tags: string[]; setTags: (t:
     <div>
       <div className="flex gap-2 mb-2 flex-wrap min-h-[28px]">
         {tags.map(t => (
-          <span key={t} className="inline-flex items-center gap-1 rounded-full bg-indigo-50 text-indigo-600 px-3 py-1 text-xs font-medium">
+          <span key={t} className="inline-flex items-center gap-1 rounded-full bg-rsn-red-light text-rsn-red px-3 py-1 text-xs font-medium">
             {t}
             <button type="button" onClick={() => setTags(tags.filter(x => x !== t))} className="hover:text-red-400 transition-colors"><X className="h-3 w-3" /></button>
           </span>
@@ -107,7 +107,7 @@ export default function OnboardingPage() {
             <div
               key={i}
               className={`h-2 rounded-full transition-all duration-300 ${
-                i === step ? 'w-8 bg-indigo-500' : i < step ? 'w-2 bg-indigo-300' : 'w-2 bg-gray-200'
+                i === step ? 'w-8 bg-rsn-red' : i < step ? 'w-2 bg-rsn-red/40' : 'w-2 bg-gray-200'
               }`}
             />
           ))}
@@ -116,7 +116,7 @@ export default function OnboardingPage() {
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-8 animate-fade-in">
           {/* Header */}
           <div className="text-center mb-6">
-            <div className="inline-flex items-center justify-center h-12 w-12 rounded-full bg-indigo-50 text-indigo-500 mx-auto mb-3">
+            <div className="inline-flex items-center justify-center h-12 w-12 rounded-full bg-rsn-red-light text-rsn-red mx-auto mb-3">
               <StepIcon className="h-6 w-6" />
             </div>
             <h2 className="text-xl font-bold text-[#1a1a2e]">{STEPS[step].title}</h2>

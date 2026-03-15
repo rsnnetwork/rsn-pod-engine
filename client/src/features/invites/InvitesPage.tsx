@@ -275,7 +275,7 @@ export default function InvitesPage() {
           <div className={`grid grid-cols-1 ${inviteType === 'platform' ? 'sm:grid-cols-2' : 'sm:grid-cols-3'} gap-4`}>
             {/* Option 1: Send to email */}
             <div className="rounded-xl border border-gray-200 p-4 space-y-3">
-              <p className="text-sm font-medium text-gray-700 flex items-center gap-2"><Send className="h-4 w-4 text-indigo-500" /> Send to email</p>
+              <p className="text-sm font-medium text-gray-700 flex items-center gap-2"><Send className="h-4 w-4 text-rsn-red" /> Send to email</p>
               <p className="text-xs text-gray-400">A unique, single-use invite emailed directly.</p>
               <Input type="email" value={inviteeEmail} onChange={e => setInviteeEmail(e.target.value)} placeholder="someone@example.com" />
               <Button
@@ -321,10 +321,10 @@ export default function InvitesPage() {
                           type="button"
                           disabled={isExisting}
                           onClick={() => !isExisting && setSelectedUsers(prev => isSelected ? prev.filter(s => s.id !== u.id) : [...prev, u])}
-                          className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${isExisting ? 'opacity-60 cursor-not-allowed bg-gray-50' : isSelected ? 'bg-indigo-50 hover:bg-indigo-100' : 'hover:bg-gray-50'}`}
+                          className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${isExisting ? 'opacity-60 cursor-not-allowed bg-gray-50' : isSelected ? 'bg-rsn-red-light hover:bg-rsn-red-100' : 'hover:bg-gray-50'}`}
                         >
                           {!isExisting && (
-                            <div className={`h-4 w-4 rounded border ${isSelected ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300'} flex items-center justify-center shrink-0`}>
+                            <div className={`h-4 w-4 rounded border ${isSelected ? 'bg-rsn-red border-rsn-red' : 'border-gray-300'} flex items-center justify-center shrink-0`}>
                               {isSelected && <Check className="h-3 w-3 text-white" />}
                             </div>
                           )}
@@ -374,7 +374,7 @@ export default function InvitesPage() {
               {generatedLink && (
                 <div className="flex items-center gap-2">
                   <input readOnly value={generatedLink} className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 truncate" />
-                  <button type="button" onClick={() => { navigator.clipboard.writeText(generatedLink); addToast('Copied!', 'success'); }} className="text-indigo-600 hover:text-indigo-800 p-1">
+                  <button type="button" onClick={() => { navigator.clipboard.writeText(generatedLink); addToast('Copied!', 'success'); }} className="text-rsn-red hover:text-rsn-red-hover p-1">
                     <Copy className="h-4 w-4" />
                   </button>
                 </div>
@@ -388,7 +388,7 @@ export default function InvitesPage() {
       {receivedInvites && receivedInvites.length > 0 && (
         <div className="animate-fade-in-up">
           <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
-            <Inbox className="h-5 w-5 text-indigo-600" /> Pending Invites for You ({receivedInvites.length})
+            <Inbox className="h-5 w-5 text-rsn-red" /> Pending Invites for You ({receivedInvites.length})
           </h2>
           <div className="grid gap-3">
             {receivedInvites.map((inv: any) => {
@@ -396,7 +396,7 @@ export default function InvitesPage() {
               const TypeIcon = typeConf.icon;
               const targetName = inv.podName || inv.sessionTitle || 'RSN Platform';
               return (
-                <Card key={inv.id} className="border-indigo-200 bg-indigo-50/30">
+                <Card key={inv.id} className="border-rsn-red-200 bg-rsn-red-light/30">
                   <div className="flex items-center justify-between">
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-1">

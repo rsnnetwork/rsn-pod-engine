@@ -196,7 +196,7 @@ export default function LoginPage() {
               <p className="text-sm text-gray-500 mb-4">RSN is invite-only. Request access below.</p>
               <button
                 onClick={() => navigate('/request-to-join')}
-                className="bg-red-600 text-white px-6 py-2.5 rounded-full text-sm font-semibold hover:bg-red-700 transition-all hover:scale-[1.02] shadow-md inline-flex items-center gap-2"
+                className="bg-rsn-red text-white px-6 py-2.5 rounded-full text-sm font-semibold hover:bg-rsn-red-hover transition-all hover:scale-[1.02] shadow-md inline-flex items-center gap-2"
               >
                 Request to Join <ArrowRight className="h-4 w-4" />
               </button>

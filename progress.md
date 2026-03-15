@@ -3627,3 +3627,52 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - ✅ 265/265 tests passing (16 suites)
   - ✅ Client Vite build clean
   - ✅ Shared + server TypeScript compiles cleanly
+
+---
+
+## Change 1.5: RSN Brand Colors Implementation
+
+- **Timestamp**: 2026-03-15
+- **Task**: Replace all indigo/generic Tailwind color references with RSN brand colors across the entire platform
+- **Brand Colors**:
+  - RSN Red (Primary): #DE322E — CTAs, interactive elements, accents
+  - RSN Red Hover: #C52B28 — hover states
+  - RSN Red Light: #FEF2F2 — light backgrounds, selection states
+  - Black: #000000 — structure, text
+  - White: #FFFFFF — backgrounds
+  - Light Gray: #F3F4F6 — UI surfaces
+- **Summary**: Complete sweep of 31 files replacing all indigo color class references with rsn-red brand colors. Updated Tailwind config with rsn-red color scale and brand palette. Updated glow keyframe animation to use RSN red rgba values. Zero indigo references remain in the codebase.
+- **Files Modified**:
+  - client/tailwind.config.js (added rsn-red color scale, updated brand palette, updated glow keyframe)
+  - client/src/index.css (selection color, gradient-text)
+  - client/src/components/ui/Spinner.tsx
+  - client/src/components/ui/Badge.tsx
+  - client/src/features/auth/LoginPage.tsx
+  - client/src/features/auth/VerifyPage.tsx
+  - client/src/features/home/HomePage.tsx
+  - client/src/features/profile/ProfilePage.tsx
+  - client/src/features/settings/SettingsPage.tsx
+  - client/src/features/support/SupportPage.tsx
+  - client/src/features/onboarding/OnboardingPage.tsx
+  - client/src/features/pods/PodsPage.tsx
+  - client/src/features/pods/PodDetailPage.tsx
+  - client/src/features/sessions/CreateSessionPage.tsx
+  - client/src/features/sessions/SessionDetailPage.tsx
+  - client/src/features/sessions/RecapPage.tsx
+  - client/src/features/sessions/EncounterHistoryPage.tsx
+  - client/src/features/live/LiveSessionPage.tsx
+  - client/src/features/live/Lobby.tsx
+  - client/src/features/live/HostControls.tsx
+  - client/src/features/live/HostRoundDashboard.tsx
+  - client/src/features/live/SessionComplete.tsx
+  - client/src/features/live/VideoRoom.tsx
+  - client/src/features/host/HostDashboardPage.tsx
+  - client/src/features/admin/AdminDashboardPage.tsx
+  - client/src/features/admin/AdminUsersPage.tsx
+  - client/src/features/admin/AdminPodsPage.tsx
+  - client/src/features/admin/AdminSessionsPage.tsx
+  - client/src/features/invites/InvitesPage.tsx
+  - client/src/features/invites/InviteAcceptPage.tsx
+  - client/src/features/invites/CreateInviteModal.tsx
+- Validation Results:
+  - ✅ Zero indigo references remaining in codebase (verified with grep)

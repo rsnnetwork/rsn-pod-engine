@@ -82,7 +82,7 @@ export default function SessionComplete({ sessionId }: Props) {
             {stats && (
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <Card className="text-center py-3">
-                  <Users className="h-5 w-5 text-indigo-600 mx-auto mb-1" />
+                  <Users className="h-5 w-5 text-rsn-red mx-auto mb-1" />
                   <p className="text-2xl font-bold text-[#1a1a2e]">{connections.length}</p>
                   <p className="text-xs text-gray-400">People Met</p>
                 </Card>

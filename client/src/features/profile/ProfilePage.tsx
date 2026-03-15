@@ -40,7 +40,7 @@ function TagInput({ label, tags, setTags, placeholder, icon: Icon }: {
       </label>
       <div className="flex gap-2 mb-2 flex-wrap min-h-[28px]">
         {tags.map(t => (
-          <span key={t} className="inline-flex items-center gap-1 rounded-full bg-indigo-50 text-indigo-600 px-3 py-1 text-xs font-medium animate-scale-in">
+          <span key={t} className="inline-flex items-center gap-1 rounded-full bg-rsn-red-light text-rsn-red px-3 py-1 text-xs font-medium animate-scale-in">
             {t}
             <button type="button" onClick={() => setTags(tags.filter(x => x !== t))} className="hover:text-red-400 transition-colors"><X className="h-3 w-3" /></button>
           </span>
@@ -135,7 +135,30 @@ export default function ProfilePage() {
   const handleSetReasons = (t: string[]) => { setReasons(t); setTagsChanged(true); };
   const handleSetLanguages = (t: string[]) => { setLanguages(t); setTagsChanged(true); };
 
+  const normalizeLinkedInUrl = (value: string): string => {
+    let v = value.trim();
+    if (!v) return '';
+    // Strip trailing slashes
+    v = v.replace(/\/+$/, '');
+    // If it already looks like a URL, return as-is (after trailing slash strip)
+    if (/^https?:\/\//i.test(v)) return v;
+    // Otherwise treat as a username — strip any leading @ or /in/ prefix users might paste
+    v = v.replace(/^@/, '').replace(/^\/?in\//, '');
+    return `https://linkedin.com/in/${v}`;
+  };
+
+  const isValidLinkedInUrl = (url: string): boolean => {
+    if (!url) return true; // optional field on profile
+    return /^https?:\/\/(www\.)?linkedin\.com\/in\/.+/i.test(url);
+  };
+
   const onSubmit = async (data: ProfileForm) => {
+    // Normalize LinkedIn URL before saving
+    data.linkedinUrl = normalizeLinkedInUrl(data.linkedinUrl);
+    if (data.linkedinUrl && !isValidLinkedInUrl(data.linkedinUrl)) {
+      addToast('Enter your LinkedIn username or full profile URL', 'error');
+      return;
+    }
     try {
       await api.put('/users/me', {
         ...data,
@@ -190,7 +213,7 @@ export default function ProfilePage() {
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="text-xs text-indigo-600 hover:text-indigo-700 mt-1 font-medium"
+              className="text-xs text-rsn-red hover:text-rsn-red-hover mt-1 font-medium"
             >
               {avatarUploading ? 'Uploading...' : 'Change photo'}
             </button>
@@ -203,7 +226,7 @@ export default function ProfilePage() {
         {/* Basic Info */}
         <Card className="animate-fade-in-up stagger-1">
           <h2 className="flex items-center gap-2 text-lg font-semibold text-gray-800 mb-4">
-            <User className="h-5 w-5 text-indigo-600" /> Basic Information
+            <User className="h-5 w-5 text-rsn-red" /> Basic Information
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="First Name" {...register('firstName')} placeholder="John" />
@@ -249,7 +272,7 @@ export default function ProfilePage() {
         {/* Professional Info */}
         <Card className="animate-fade-in-up stagger-2">
           <h2 className="flex items-center gap-2 text-lg font-semibold text-gray-800 mb-4">
-            <Briefcase className="h-5 w-5 text-indigo-600" /> Professional
+            <Briefcase className="h-5 w-5 text-rsn-red" /> Professional
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label="Job Title" {...register('jobTitle')} placeholder="Product Manager" />
@@ -258,16 +281,9 @@ export default function ProfilePage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
             <Input label="Industry" {...register('industry')} placeholder="Technology" />
             <Input
-              label="LinkedIn URL"
+              label="LinkedIn"
               {...register('linkedinUrl')}
-              placeholder="https://linkedin.com/in/your-profile"
-              onFocus={(e) => {
-                if (!e.target.value) {
-                  e.target.value = 'https://linkedin.com/in/';
-                  // trigger react-hook-form update
-                  e.target.dispatchEvent(new Event('input', { bubbles: true }));
-                }
-              }}
+              placeholder="username or full LinkedIn URL"
             />
           </div>
         </Card>
@@ -275,7 +291,7 @@ export default function ProfilePage() {
         {/* Location & Language */}
         <Card className="animate-fade-in-up stagger-3">
           <h2 className="flex items-center gap-2 text-lg font-semibold text-gray-800 mb-4">
-            <Globe className="h-5 w-5 text-indigo-600" /> Location & Language
+            <Globe className="h-5 w-5 text-rsn-red" /> Location & Language
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
@@ -320,7 +336,7 @@ export default function ProfilePage() {
         {/* Tags */}
         <Card className="animate-fade-in-up stagger-4">
           <h2 className="flex items-center gap-2 text-lg font-semibold text-gray-800 mb-4">
-            <Sparkles className="h-5 w-5 text-indigo-600" /> Interests & Intent
+            <Sparkles className="h-5 w-5 text-rsn-red" /> Interests & Intent
           </h2>
           <div className="space-y-5">
             <TagInput label="Expertise & Interests" tags={interests} setTags={handleSetInterests} placeholder="e.g. react, machine-learning" />

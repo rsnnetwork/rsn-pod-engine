@@ -106,7 +106,7 @@ export default function AdminDashboardPage() {
         {/* Quick Actions */}
         <Card className="animate-fade-in-up">
           <h2 className="font-semibold text-[#1a1a2e] mb-4 flex items-center gap-2">
-            <Activity className="h-5 w-5 text-indigo-600" /> Quick Actions
+            <Activity className="h-5 w-5 text-rsn-red" /> Quick Actions
           </h2>
           <div className="space-y-2">
             <button
@@ -191,7 +191,7 @@ export default function AdminDashboardPage() {
       {/* Recent Activity */}
       <Card className="animate-fade-in-up">
         <h2 className="font-semibold text-[#1a1a2e] mb-4 flex items-center gap-2">
-          <Activity className="h-5 w-5 text-indigo-600" /> Recent Activity
+          <Activity className="h-5 w-5 text-rsn-red" /> Recent Activity
         </h2>
         <div className="text-sm text-gray-400 text-center py-6">
           Activity feed will be populated as the platform grows.

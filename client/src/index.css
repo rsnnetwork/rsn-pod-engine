@@ -13,7 +13,7 @@
     @apply bg-white text-[#1a1a2e] font-sans antialiased;
   }
   ::selection {
-    @apply bg-indigo-100 text-[#1a1a2e];
+    @apply bg-rsn-red-light text-[#1a1a2e];
   }
   ::-webkit-scrollbar {
     @apply w-2;
@@ -40,7 +40,7 @@
     @apply bg-surface-800/60 backdrop-blur-lg border border-surface-700/30;
   }
   .gradient-text {
-    @apply bg-gradient-to-r from-brand-400 to-purple-400 bg-clip-text text-transparent;
+    @apply bg-gradient-to-r from-rsn-red to-rsn-red-hover bg-clip-text text-transparent;
   }
   .card-hover {
     @apply transition-all duration-300 hover:border-gray-300 hover:bg-gray-50 hover:shadow-md hover:-translate-y-0.5;

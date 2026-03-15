@@ -165,7 +165,7 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
           <p className="text-gray-500 text-sm mb-3">{connectionError}</p>
           <button
             onClick={() => { setConnectionError(null); setLiveKitToken('', ''); }}
-            className="text-sm text-indigo-600 hover:text-brand-300 underline"
+            className="text-sm text-rsn-red hover:text-rsn-red-hover underline"
           >Retry</button>
         </Card>
       </div>

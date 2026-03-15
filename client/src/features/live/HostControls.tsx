@@ -99,7 +99,7 @@ export default function HostControls({ sessionId }: Props) {
       <div className="border-t border-gray-200 bg-gray-50/60 backdrop-blur-sm p-4">
         <div className="max-w-4xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Loader2 className="h-4 w-4 text-indigo-600 animate-spin" />
+            <Loader2 className="h-4 w-4 text-rsn-red animate-spin" />
             <p className="text-sm text-gray-600 font-medium">Event ending — preparing recap...</p>
           </div>
           <div className="flex gap-2">
@@ -127,14 +127,14 @@ export default function HostControls({ sessionId }: Props) {
               </h3>
               <div className="flex items-center gap-1.5">
                 {swapMode && (
-                  <span className="text-xs text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full">
+                  <span className="text-xs text-rsn-red bg-rsn-red-light px-2 py-0.5 rounded-full">
                     Select second person to swap
                   </span>
                 )}
                 <button
                   onClick={regenerateMatches}
                   disabled={generating}
-                  className="flex items-center gap-1 text-xs text-gray-500 hover:text-indigo-600 transition-colors px-2 py-1 rounded hover:bg-gray-100"
+                  className="flex items-center gap-1 text-xs text-gray-500 hover:text-rsn-red transition-colors px-2 py-1 rounded hover:bg-gray-100"
                   title="Re-run matching algorithm"
                 >
                   {generating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
@@ -149,8 +149,8 @@ export default function HostControls({ sessionId }: Props) {
                     onClick={() => handleParticipantClick(m.participantA.userId)}
                     className={`font-medium truncate px-1.5 py-0.5 rounded transition-colors ${
                       swapMode === m.participantA.userId
-                        ? 'bg-indigo-100 text-indigo-700 ring-1 ring-indigo-300'
-                        : 'text-gray-700 hover:bg-indigo-50 hover:text-indigo-600'
+                        ? 'bg-rsn-red-100 text-rsn-red ring-1 ring-rsn-red-300'
+                        : 'text-gray-700 hover:bg-rsn-red-light hover:text-rsn-red'
                     }`}
                     title="Click to swap this person"
                   >
@@ -161,8 +161,8 @@ export default function HostControls({ sessionId }: Props) {
                     onClick={() => handleParticipantClick(m.participantB.userId)}
                     className={`font-medium truncate px-1.5 py-0.5 rounded transition-colors ${
                       swapMode === m.participantB.userId
-                        ? 'bg-indigo-100 text-indigo-700 ring-1 ring-indigo-300'
-                        : 'text-gray-700 hover:bg-indigo-50 hover:text-indigo-600'
+                        ? 'bg-rsn-red-100 text-rsn-red ring-1 ring-rsn-red-300'
+                        : 'text-gray-700 hover:bg-rsn-red-light hover:text-rsn-red'
                     }`}
                     title="Click to swap this person"
                   >
@@ -175,8 +175,8 @@ export default function HostControls({ sessionId }: Props) {
                         onClick={() => handleParticipantClick(m.participantC!.userId)}
                         className={`font-medium truncate px-1.5 py-0.5 rounded transition-colors ${
                           swapMode === m.participantC!.userId
-                            ? 'bg-indigo-100 text-indigo-700 ring-1 ring-indigo-300'
-                            : 'text-gray-700 hover:bg-indigo-50 hover:text-indigo-600'
+                            ? 'bg-rsn-red-100 text-rsn-red ring-1 ring-rsn-red-300'
+                            : 'text-gray-700 hover:bg-rsn-red-light hover:text-rsn-red'
                         }`}
                         title="Click to swap this person"
                       >
@@ -185,7 +185,7 @@ export default function HostControls({ sessionId }: Props) {
                     </>
                   )}
                   {m.isTrio && (
-                    <span className="text-[10px] text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded-full shrink-0">
+                    <span className="text-[10px] text-rsn-red bg-rsn-red-light px-1.5 py-0.5 rounded-full shrink-0">
                       Trio
                     </span>
                   )}
@@ -244,7 +244,7 @@ export default function HostControls({ sessionId }: Props) {
               onChange={e => setBroadcastMsg(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && sendBroadcast()}
               placeholder="Type a message to all participants..."
-              className="flex-1 rounded-lg border border-gray-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="flex-1 rounded-lg border border-gray-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-rsn-red"
               autoFocus
             />
             <Button size="sm" onClick={sendBroadcast} disabled={!broadcastMsg.trim()}>Send</Button>

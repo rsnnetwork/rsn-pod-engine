@@ -323,7 +323,7 @@ export default function SessionDetailPage() {
       {/* Participants */}
       <div className="animate-fade-in-up stagger-2">
         <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
-          <Users className="h-5 w-5 text-indigo-600" /> Participants ({(participants || []).length})
+          <Users className="h-5 w-5 text-rsn-red" /> Participants ({(participants || []).length})
         </h2>
         {(participants || []).length === 0 ? (
           <Card>
@@ -403,10 +403,10 @@ export default function SessionDetailPage() {
                         type="button"
                         disabled={isParticipant}
                         onClick={() => !isParticipant && setSelectedUsers(prev => isSelected ? prev.filter(s => s.id !== u.id) : [...prev, u])}
-                        className={`w-full flex items-center gap-3 px-3 py-2 text-left text-sm transition-colors ${isParticipant ? 'opacity-60 cursor-not-allowed bg-gray-50' : isSelected ? 'bg-indigo-50 hover:bg-indigo-100' : 'hover:bg-gray-50'}`}
+                        className={`w-full flex items-center gap-3 px-3 py-2 text-left text-sm transition-colors ${isParticipant ? 'opacity-60 cursor-not-allowed bg-gray-50' : isSelected ? 'bg-rsn-red-light hover:bg-rsn-red-100' : 'hover:bg-gray-50'}`}
                       >
                         {!isParticipant && (
-                          <div className={`h-4 w-4 rounded border ${isSelected ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300'} flex items-center justify-center`}>
+                          <div className={`h-4 w-4 rounded border ${isSelected ? 'bg-rsn-red border-rsn-red' : 'border-gray-300'} flex items-center justify-center`}>
                             {isSelected && <Check className="h-3 w-3 text-white" />}
                           </div>
                         )}

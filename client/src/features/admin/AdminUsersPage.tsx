@@ -95,7 +95,7 @@ export default function AdminUsersPage() {
           <h1 className="text-2xl font-bold text-[#1a1a2e]">User Management</h1>
           <p className="text-gray-500 text-sm mt-1">{meta?.totalCount || 0} users</p>
         </div>
-        <Shield className="h-8 w-8 text-indigo-600" />
+        <Shield className="h-8 w-8 text-rsn-red" />
       </div>
 
       {/* Status Tabs */}
@@ -175,7 +175,7 @@ export default function AdminUsersPage() {
                       <select
                         value={u.role}
                         onChange={e => roleMutation.mutate({ userId: u.id, role: e.target.value })}
-                        className="text-xs rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                        className="text-xs rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-rsn-red/30"
                       >
                         <option value="free">Free</option>
                         <option value="member">Member</option>

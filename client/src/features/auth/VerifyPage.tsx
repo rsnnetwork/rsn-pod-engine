@@ -68,7 +68,7 @@ export default function VerifyPage() {
             <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
           </div>
           <p className="text-red-400 text-lg">{error}</p>
-          <a href="/login" className="text-indigo-600 underline hover:text-brand-300 transition-colors">Back to login</a>
+          <a href="/login" className="text-rsn-red underline hover:text-rsn-red-hover transition-colors">Back to login</a>
         </div>
       </div>
     );

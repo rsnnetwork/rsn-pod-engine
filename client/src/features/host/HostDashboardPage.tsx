@@ -100,7 +100,7 @@ export default function HostDashboardPage() {
       {/* Event Info */}
       <Card className="animate-fade-in-up">
         <h2 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
-          <Settings className="h-5 w-5 text-indigo-600" /> Event Info
+          <Settings className="h-5 w-5 text-rsn-red" /> Event Info
         </h2>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
           <div><span className="text-gray-400">Title:</span> <span className="text-gray-800 ml-1">{session.title || 'Open'}</span></div>
@@ -129,7 +129,7 @@ export default function HostDashboardPage() {
       {/* Controls */}
       <Card className="animate-fade-in-up stagger-2">
         <h2 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
-          <Play className="h-5 w-5 text-indigo-600" /> Controls
+          <Play className="h-5 w-5 text-rsn-red" /> Controls
         </h2>
         <div className="flex flex-wrap gap-3">
           {session.status === 'scheduled' && (
@@ -162,7 +162,7 @@ export default function HostDashboardPage() {
       {isActive && (
         <Card className="animate-fade-in-up stagger-3">
           <h2 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
-            <MessageSquare className="h-5 w-5 text-indigo-600" /> Broadcast Message
+            <MessageSquare className="h-5 w-5 text-rsn-red" /> Broadcast Message
           </h2>
           <div className="flex gap-2">
             <input
@@ -182,7 +182,7 @@ export default function HostDashboardPage() {
       {/* Participants */}
       <div className="animate-fade-in-up stagger-4">
         <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
-          <Users className="h-5 w-5 text-indigo-600" /> Participants ({(participants || []).length})
+          <Users className="h-5 w-5 text-rsn-red" /> Participants ({(participants || []).length})
         </h2>
         {(participants || []).length === 0 ? (
           <Card><p className="text-gray-400 text-sm text-center py-4">No participants yet</p></Card>

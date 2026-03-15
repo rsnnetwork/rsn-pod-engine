@@ -12,6 +12,35 @@ interface Props { open: boolean; onClose: () => void; }
 
 interface FormData { type: string; podId: string; sessionId: string; inviteeEmail: string; maxUses: number; }
 
+/** Map API error codes to user-friendly messages */
+function getInviteErrorMessage(err: any): string {
+  const code = err?.response?.data?.error?.code;
+  const message = err?.response?.data?.error?.message;
+
+  switch (code) {
+    case 'DUPLICATE_INVITE':
+      return 'This person already has a pending invite to this event';
+    case 'SELF_INVITE':
+      return 'You cannot send an invite to yourself';
+    case 'ALREADY_REGISTERED':
+      return 'This person already has an account on the platform';
+    case 'POD_MEMBER_EXISTS':
+      return 'This person is already a member of this pod';
+    case 'SESSION_ALREADY_REGISTERED':
+      return 'This person is already a participant of this event';
+    case 'POD_ARCHIVED':
+      return 'Cannot send invites to an archived pod';
+    case 'AUTH_FORBIDDEN':
+      return message || 'You do not have permission to send this invite';
+    case 'VALIDATION_ERROR':
+      return message || 'Please check the form and try again';
+    case 'RATE_LIMIT_EXCEEDED':
+      return 'Too many invites sent. Please wait a moment and try again';
+    default:
+      return message || 'Failed to send invite. Please try again';
+  }
+}
+
 export default function CreateInviteModal({ open, onClose }: Props) {
   const qc = useQueryClient();
   const { addToast } = useToastStore();
@@ -43,7 +72,7 @@ export default function CreateInviteModal({ open, onClose }: Props) {
       addToast('Invite sent to email!', 'success');
       handleClose();
     },
-    onError: () => addToast('Failed to send invite', 'error'),
+    onError: (err: any) => addToast(getInviteErrorMessage(err), 'error'),
   });
 
   // Create a shareable invite link (multi-use)
@@ -66,7 +95,7 @@ export default function CreateInviteModal({ open, onClose }: Props) {
         addToast('Invite link created — copy it below', 'success');
       }
     },
-    onError: () => addToast('Failed to create invite link', 'error'),
+    onError: (err: any) => addToast(getInviteErrorMessage(err), 'error'),
   });
 
   const onSendEmail = handleSubmit((data) => sendEmailMutation.mutate(data));
@@ -130,7 +159,7 @@ export default function CreateInviteModal({ open, onClose }: Props) {
         <div className="border-t border-gray-100 pt-4 space-y-4">
           {/* Option 1: Send to email */}
           <div className="rounded-xl border border-gray-200 p-4 space-y-3">
-            <p className="text-sm font-medium text-gray-700 flex items-center gap-2"><Send className="h-4 w-4 text-indigo-500" /> Send invite to email</p>
+            <p className="text-sm font-medium text-gray-700 flex items-center gap-2"><Send className="h-4 w-4 text-rsn-red" /> Send invite to email</p>
             <p className="text-xs text-gray-400">A unique, single-use invite link will be emailed directly.</p>
             <Input type="email" {...register('inviteeEmail')} placeholder="someone@example.com" />
             <Button
@@ -166,7 +195,7 @@ export default function CreateInviteModal({ open, onClose }: Props) {
                   value={generatedLink}
                   className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 truncate"
                 />
-                <button type="button" onClick={copyLink} className="text-indigo-600 hover:text-indigo-800 p-1">
+                <button type="button" onClick={copyLink} className="text-rsn-red hover:text-rsn-red-hover p-1">
                   <Copy className="h-4 w-4" />
                 </button>
               </div>
