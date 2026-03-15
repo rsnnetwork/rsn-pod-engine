@@ -45,18 +45,6 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
     if (callerResult.rows[0]?.email === input.inviteeEmail.toLowerCase()) {
       throw new AppError(400, 'SELF_INVITE', 'You cannot invite yourself');
     }
-
-    // Block duplicate pending invites to same email + target
-    const dupCheck = await query<{ id: string }>(
-      `SELECT id FROM invites
-       WHERE invitee_email = $1 AND type = $2 AND status = 'pending'
-         AND ($3::uuid IS NULL OR pod_id = $3)
-         AND ($4::uuid IS NULL OR session_id = $4)`,
-      [input.inviteeEmail.toLowerCase(), input.type, input.podId || null, input.sessionId || null]
-    );
-    if (dupCheck.rows.length > 0) {
-      throw new AppError(409, 'DUPLICATE_INVITE', 'A pending invite already exists for this user');
-    }
   }
 
   // Platform invites: reject if user is already registered
@@ -71,6 +59,8 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
   }
 
   // Validate pod/session references — require target for pod/session invites
+  // IMPORTANT: membership checks come BEFORE duplicate-invite checks so the
+  // user sees "already a member" instead of "pending invite exists"
   if (input.type === InviteType.POD) {
     if (!input.podId) {
       throw new AppError(400, 'VALIDATION_ERROR', 'Pod invite requires a pod to be selected');
@@ -131,6 +121,20 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
       if (existingParticipant.rows.length > 0) {
         throw new AppError(409, 'SESSION_ALREADY_REGISTERED', 'This user is already a participant of this event');
       }
+    }
+  }
+
+  // Block duplicate pending invites (checked AFTER membership so the right error shows)
+  if (input.inviteeEmail) {
+    const dupCheck = await query<{ id: string }>(
+      `SELECT id FROM invites
+       WHERE invitee_email = $1 AND type = $2 AND status = 'pending'
+         AND ($3::uuid IS NULL OR pod_id = $3)
+         AND ($4::uuid IS NULL OR session_id = $4)`,
+      [input.inviteeEmail.toLowerCase(), input.type, input.podId || null, input.sessionId || null]
+    );
+    if (dupCheck.rows.length > 0) {
+      throw new AppError(409, 'DUPLICATE_INVITE', 'A pending invite already exists for this user');
     }
   }
 
