@@ -5,17 +5,20 @@ import { cn, isAdmin } from '@/lib/utils';
 import { useAuthStore } from '@/stores/authStore';
 import { useScrollReveal } from '@/hooks/useScrollReveal';
 import Avatar from '@/components/ui/Avatar';
+import Modal from '@/components/ui/Modal';
 import ToastContainer from '@/components/ui/Toast';
 
 export default function AppLayout() {
   const { user, logout } = useAuthStore();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [logoutModalOpen, setLogoutModalOpen] = useState(false);
   useScrollReveal();
 
-  const handleLogout = async () => { 
-    await logout(); 
-    navigate('/login'); 
+  const handleLogout = async () => {
+    setLogoutModalOpen(false);
+    await logout();
+    navigate('/login');
   };
 
   const mainLinks = [
@@ -61,7 +64,7 @@ export default function AppLayout() {
           {bottomLinks.map(l => renderLink(l, closeMobile))}
         </div>
         <button
-          onClick={handleLogout}
+          onClick={() => { if (closeMobile) setMobileOpen(false); setLogoutModalOpen(true); }}
           className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-gray-500 hover:bg-red-50 hover:text-red-600 transition-all duration-200 w-full"
         >
           <LogOut className="h-4.5 w-4.5 shrink-0" />
@@ -137,6 +140,24 @@ export default function AppLayout() {
           ))}
         </nav>
       </div>
+
+      <Modal open={logoutModalOpen} onClose={() => setLogoutModalOpen(false)} title="Log out" className="max-w-sm">
+        <p className="text-sm text-gray-600 mb-6">Are you sure you want to log out?</p>
+        <div className="flex items-center justify-end gap-3">
+          <button
+            onClick={() => setLogoutModalOpen(false)}
+            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleLogout}
+            className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors"
+          >
+            Log Out
+          </button>
+        </div>
+      </Modal>
 
       <ToastContainer />
     </div>

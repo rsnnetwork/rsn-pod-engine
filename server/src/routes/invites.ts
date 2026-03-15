@@ -116,9 +116,47 @@ router.get(
     try {
       const invite = await inviteService.getInviteByCode(req.params.code);
 
-      // Non-authenticated users see limited info
+      // Enrich with context: inviter name, pod/session details
+      let inviterName: string | undefined;
+      let podName: string | undefined;
+      let podDescription: string | undefined;
+      let sessionTitle: string | undefined;
+      let sessionScheduledAt: string | undefined;
+      let sessionDescription: string | undefined;
+
+      // Fetch inviter display name
+      const inviterResult = await query<{ displayName: string }>(
+        `SELECT display_name AS "displayName" FROM users WHERE id = $1`,
+        [invite.inviterId]
+      );
+      inviterName = inviterResult.rows[0]?.displayName || undefined;
+
+      // Fetch pod details
+      if (invite.podId) {
+        const podResult = await query<{ name: string; description: string }>(
+          `SELECT name, description FROM pods WHERE id = $1`,
+          [invite.podId]
+        );
+        podName = podResult.rows[0]?.name;
+        podDescription = podResult.rows[0]?.description;
+      }
+
+      // Fetch session details
+      if (invite.sessionId) {
+        const sessionResult = await query<{ title: string; scheduledAt: string; description: string }>(
+          `SELECT title, scheduled_at AS "scheduledAt", description FROM sessions WHERE id = $1`,
+          [invite.sessionId]
+        );
+        sessionTitle = sessionResult.rows[0]?.title;
+        sessionScheduledAt = sessionResult.rows[0]?.scheduledAt;
+        sessionDescription = sessionResult.rows[0]?.description;
+      }
+
+      const context = { inviterName, podName, podDescription, sessionTitle, sessionScheduledAt, sessionDescription };
+
+      // Non-authenticated users see limited invite fields but full context
       const data = req.user
-        ? invite
+        ? { ...invite, ...context }
         : {
             code: invite.code,
             type: invite.type,
@@ -126,6 +164,7 @@ router.get(
             podId: invite.podId,
             sessionId: invite.sessionId,
             expiresAt: invite.expiresAt,
+            ...context,
           };
 
       const response: ApiResponse = { success: true, data };

@@ -30,7 +30,7 @@ export interface ServerToClientEvents {
   }) => void;
 
   // Rating window
-  'rating:window_open': (data: { matchId: string; partnerId: string; roundNumber: number; durationSeconds: number }) => void;
+  'rating:window_open': (data: { matchId: string; partnerId: string; partnerDisplayName?: string; partners?: { userId: string; displayName: string }[]; roundNumber: number; durationSeconds: number }) => void;
   'rating:window_closed': (data: { roundNumber: number }) => void;
 
   // Host actions

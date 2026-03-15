@@ -19,8 +19,18 @@ export default function RequestToJoinPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<RequestForm>();
 
+  const normalizeLinkedInUrl = (value: string): string => {
+    let v = value.trim();
+    if (!v) return '';
+    v = v.replace(/\/+$/, '');
+    if (/^https?:\/\//i.test(v)) return v;
+    v = v.replace(/^@/, '').replace(/^\/?in\//, '');
+    return `https://linkedin.com/in/${v}`;
+  };
+
   const onSubmit = async (data: RequestForm) => {
     setSubmitError(null);
+    data.linkedinUrl = normalizeLinkedInUrl(data.linkedinUrl);
     try {
       await api.post('/join-requests', data);
       setSubmitted(true);
@@ -64,9 +74,15 @@ export default function RequestToJoinPage() {
               />
               <Input
                 label="LinkedIn Profile"
-                placeholder="https://linkedin.com/in/your-profile"
+                placeholder="username or full LinkedIn URL"
                 error={errors.linkedinUrl?.message}
-                {...register('linkedinUrl', { required: 'LinkedIn profile is required', pattern: { value: /^https?:\/\/(www\.)?linkedin\.com\/in\/.+/i, message: 'Enter a valid LinkedIn profile URL' } })}
+                {...register('linkedinUrl', {
+                  required: 'LinkedIn profile is required',
+                  validate: (value) => {
+                    const normalized = normalizeLinkedInUrl(value);
+                    return /^https?:\/\/(www\.)?linkedin\.com\/in\/.+/i.test(normalized) || 'Enter your LinkedIn username or full profile URL';
+                  }
+                })}
               />
               <div>
                 <label className="block text-sm font-medium text-gray-600 mb-1.5">Why do you want to join RSN?</label>

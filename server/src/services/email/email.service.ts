@@ -71,9 +71,9 @@ export async function sendMagicLinkEmail(
     </head>
     <body style="margin:0;padding:0;background-color:#0a0a0f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;padding:40px 32px;border:1px solid rgba(99,102,241,0.2);">
-          <h1 style="color:#818cf8;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
-          <p style="color:#94a3b8;font-size:14px;margin:0 0 32px 0;text-align:center;">Raw Speed Networking</p>
+        <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;padding:40px 32px;border:1px solid rgba(222,50,46,0.15);">
+          <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
+          <p style="color:#94a3b8;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
           
           <p style="color:#e2e8f0;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
             Click the button below to sign in to your account. This link expires in ${config.magicLinkExpiryMinutes} minutes.
@@ -81,7 +81,7 @@ export async function sendMagicLinkEmail(
           
           <div style="text-align:center;margin:32px 0;">
             <a href="${magicLinkUrl}" 
-               style="display:inline-block;background:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
+               style="display:inline-block;background:#DE322E;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
               Sign In
             </a>
           </div>
@@ -89,7 +89,7 @@ export async function sendMagicLinkEmail(
           <p style="color:#64748b;font-size:13px;line-height:1.5;margin:24px 0 0 0;">
             If the button doesn't work, copy and paste this link into your browser:
           </p>
-          <p style="color:#818cf8;font-size:12px;word-break:break-all;margin:8px 0 0 0;">
+          <p style="color:#DE322E;font-size:12px;word-break:break-all;margin:8px 0 0 0;">
             ${magicLinkUrl}
           </p>
         </div>
@@ -141,8 +141,8 @@ export async function sendSessionRecapEmail(
     </head>
     <body style="margin:0;padding:0;background-color:#0a0a0f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;padding:40px 32px;border:1px solid rgba(99,102,241,0.2);">
-          <h1 style="color:#818cf8;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
+        <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;padding:40px 32px;border:1px solid rgba(222,50,46,0.15);">
+          <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
           <p style="color:#94a3b8;font-size:14px;margin:0 0 32px 0;text-align:center;">Event Recap</p>
 
           <p style="color:#e2e8f0;font-size:16px;line-height:1.6;margin:0 0 8px 0;">
@@ -153,8 +153,8 @@ export async function sendSessionRecapEmail(
           </p>
 
           <div style="display:flex;gap:12px;margin:0 0 24px 0;">
-            <div style="flex:1;text-align:center;background:rgba(99,102,241,0.1);border-radius:10px;padding:16px 8px;">
-              <p style="color:#818cf8;font-size:24px;font-weight:700;margin:0;">${data.peopleMet}</p>
+            <div style="flex:1;text-align:center;background:rgba(222,50,46,0.08);border-radius:10px;padding:16px 8px;">
+              <p style="color:#DE322E;font-size:24px;font-weight:700;margin:0;">${data.peopleMet}</p>
               <p style="color:#94a3b8;font-size:12px;margin:4px 0 0 0;">People Met</p>
             </div>
             <div style="flex:1;text-align:center;background:rgba(16,185,129,0.1);border-radius:10px;padding:16px 8px;">
@@ -169,14 +169,14 @@ export async function sendSessionRecapEmail(
 
           <div style="text-align:center;margin:32px 0;">
             <a href="${data.recapUrl}"
-               style="display:inline-block;background:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
+               style="display:inline-block;background:#DE322E;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
               View Full Recap
             </a>
           </div>
         </div>
 
         <p style="color:#475569;font-size:12px;text-align:center;margin:24px 0 0 0;">
-          RSN — Raw Speed Networking
+          RSN — Connect with Reason
         </p>
       </div>
     </body>
@@ -184,7 +184,7 @@ export async function sendSessionRecapEmail(
   `;
 
   if (config.resendApiKey) {
-    const text = `Hey ${displayName},\n\nThanks for joining ${data.sessionTitle}! Here's your event recap:\n\nPeople Met: ${data.peopleMet}\nMutual Matches: ${data.mutualConnections}\nAvg Rating: ${data.avgRating.toFixed(1)}\n\nView Full Recap: ${data.recapUrl}\n\nRSN — Raw Speed Networking`;
+    const text = `Hey ${displayName},\n\nThanks for joining ${data.sessionTitle}! Here's your event recap:\n\nPeople Met: ${data.peopleMet}\nMutual Matches: ${data.mutualConnections}\nAvg Rating: ${data.avgRating.toFixed(1)}\n\nView Full Recap: ${data.recapUrl}\n\nRSN — Connect with Reason`;
     await sendEmail({ to, subject, html, text });
     return;
   }
@@ -219,8 +219,8 @@ export async function sendHostRecapEmail(
     </head>
     <body style="margin:0;padding:0;background-color:#0a0a0f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;padding:40px 32px;border:1px solid rgba(99,102,241,0.2);">
-          <h1 style="color:#818cf8;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
+        <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;padding:40px 32px;border:1px solid rgba(222,50,46,0.15);">
+          <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
           <p style="color:#94a3b8;font-size:14px;margin:0 0 32px 0;text-align:center;">Host Event Recap</p>
 
           <p style="color:#e2e8f0;font-size:16px;line-height:1.6;margin:0 0 8px 0;">
@@ -232,18 +232,18 @@ export async function sendHostRecapEmail(
 
           <table style="width:100%;border-collapse:collapse;margin:0 0 24px 0;">
             <tr>
-              <td style="text-align:center;background:rgba(99,102,241,0.1);border-radius:10px;padding:16px 8px;width:33%;">
-                <p style="color:#818cf8;font-size:24px;font-weight:700;margin:0;">${data.totalParticipants}</p>
+              <td style="text-align:center;background:rgba(222,50,46,0.08);border-radius:10px;padding:16px 8px;width:33%;">
+                <p style="color:#DE322E;font-size:24px;font-weight:700;margin:0;">${data.totalParticipants}</p>
                 <p style="color:#94a3b8;font-size:11px;margin:4px 0 0 0;">Participants</p>
               </td>
               <td style="width:8px;"></td>
-              <td style="text-align:center;background:rgba(99,102,241,0.1);border-radius:10px;padding:16px 8px;width:33%;">
-                <p style="color:#818cf8;font-size:24px;font-weight:700;margin:0;">${data.totalRounds}</p>
+              <td style="text-align:center;background:rgba(222,50,46,0.08);border-radius:10px;padding:16px 8px;width:33%;">
+                <p style="color:#DE322E;font-size:24px;font-weight:700;margin:0;">${data.totalRounds}</p>
                 <p style="color:#94a3b8;font-size:11px;margin:4px 0 0 0;">Rounds</p>
               </td>
               <td style="width:8px;"></td>
-              <td style="text-align:center;background:rgba(99,102,241,0.1);border-radius:10px;padding:16px 8px;width:33%;">
-                <p style="color:#818cf8;font-size:24px;font-weight:700;margin:0;">${data.totalMatches}</p>
+              <td style="text-align:center;background:rgba(222,50,46,0.08);border-radius:10px;padding:16px 8px;width:33%;">
+                <p style="color:#DE322E;font-size:24px;font-weight:700;margin:0;">${data.totalMatches}</p>
                 <p style="color:#94a3b8;font-size:11px;margin:4px 0 0 0;">Matches</p>
               </td>
             </tr>
@@ -265,14 +265,14 @@ export async function sendHostRecapEmail(
 
           <div style="text-align:center;margin:32px 0;">
             <a href="${data.recapUrl}"
-               style="display:inline-block;background:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
+               style="display:inline-block;background:#DE322E;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
               View Full Recap
             </a>
           </div>
         </div>
 
         <p style="color:#475569;font-size:12px;text-align:center;margin:24px 0 0 0;">
-          RSN — Raw Speed Networking
+          RSN — Connect with Reason
         </p>
       </div>
     </body>
@@ -280,7 +280,7 @@ export async function sendHostRecapEmail(
   `;
 
   if (config.resendApiKey) {
-    const text = `Hey ${displayName},\n\nHere's the full recap for ${data.sessionTitle}:\n\nParticipants: ${data.totalParticipants}\nRounds: ${data.totalRounds}\nMatches: ${data.totalMatches}\nAvg Rating: ${data.avgEventRating > 0 ? data.avgEventRating.toFixed(1) : 'N/A'}\nMutual Connections: ${data.mutualConnectionsCount}\n\nView Full Recap: ${data.recapUrl}\n\nRSN — Raw Speed Networking`;
+    const text = `Hey ${displayName},\n\nHere's the full recap for ${data.sessionTitle}:\n\nParticipants: ${data.totalParticipants}\nRounds: ${data.totalRounds}\nMatches: ${data.totalMatches}\nAvg Rating: ${data.avgEventRating > 0 ? data.avgEventRating.toFixed(1) : 'N/A'}\nMutual Connections: ${data.mutualConnectionsCount}\n\nView Full Recap: ${data.recapUrl}\n\nRSN — Connect with Reason`;
     await sendEmail({ to, subject, html, text });
     return;
   }
@@ -314,9 +314,9 @@ export async function sendInviteEmail(
     </head>
     <body style="margin:0;padding:0;background-color:#0a0a0f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;padding:40px 32px;border:1px solid rgba(99,102,241,0.2);">
-          <h1 style="color:#818cf8;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
-          <p style="color:#94a3b8;font-size:14px;margin:0 0 32px 0;text-align:center;">Raw Speed Networking</p>
+        <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;padding:40px 32px;border:1px solid rgba(222,50,46,0.15);">
+          <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
+          <p style="color:#94a3b8;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
 
           <p style="color:#e2e8f0;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
             <strong>${data.inviterName}</strong> has invited you to join ${typeLabel}${targetLine} on RSN.
@@ -324,7 +324,7 @@ export async function sendInviteEmail(
 
           <div style="text-align:center;margin:32px 0;">
             <a href="${data.inviteUrl}"
-               style="display:inline-block;background:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
+               style="display:inline-block;background:#DE322E;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
               Accept Invite
             </a>
           </div>
@@ -332,13 +332,13 @@ export async function sendInviteEmail(
           <p style="color:#64748b;font-size:13px;line-height:1.5;margin:24px 0 0 0;">
             If the button doesn't work, copy and paste this link into your browser:
           </p>
-          <p style="color:#818cf8;font-size:12px;word-break:break-all;margin:8px 0 0 0;">
+          <p style="color:#DE322E;font-size:12px;word-break:break-all;margin:8px 0 0 0;">
             ${data.inviteUrl}
           </p>
         </div>
 
         <p style="color:#475569;font-size:12px;text-align:center;margin:24px 0 0 0;">
-          RSN — Raw Speed Networking
+          RSN — Connect with Reason
         </p>
       </div>
     </body>
@@ -346,7 +346,7 @@ export async function sendInviteEmail(
   `;
 
   if (config.resendApiKey) {
-    const text = `${data.inviterName} has invited you to join ${typeLabel}${data.targetName ? ` — ${data.targetName}` : ''} on RSN.\n\nAccept Invite: ${data.inviteUrl}\n\nRSN — Raw Speed Networking`;
+    const text = `${data.inviterName} has invited you to join ${typeLabel}${data.targetName ? ` — ${data.targetName}` : ''} on RSN.\n\nAccept Invite: ${data.inviteUrl}\n\nRSN — Connect with Reason`;
     await sendEmail({ to, subject, html, text });
     return;
   }
@@ -372,7 +372,7 @@ export async function sendJoinRequestConfirmationEmail(
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
         <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
           <h1 style="color:#1a1a2e;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
-          <p style="color:#9ca3af;font-size:14px;margin:0 0 32px 0;text-align:center;">Raw Speed Networking</p>
+          <p style="color:#9ca3af;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
             Hi ${fullName},
@@ -423,7 +423,7 @@ export async function sendJoinRequestWelcomeEmail(
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
         <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
           <h1 style="color:#1a1a2e;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
-          <p style="color:#9ca3af;font-size:14px;margin:0 0 32px 0;text-align:center;">Raw Speed Networking</p>
+          <p style="color:#9ca3af;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
             Hi ${fullName},
@@ -437,7 +437,7 @@ export async function sendJoinRequestWelcomeEmail(
 
           <div style="text-align:center;margin:32px 0;">
             <a href="${loginUrl}"
-               style="display:inline-block;background:#dc2626;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:999px;">
+               style="display:inline-block;background:#DE322E;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:999px;">
               Sign In to RSN
             </a>
           </div>
@@ -481,7 +481,7 @@ export async function sendJoinRequestDeclineEmail(
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
         <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
           <h1 style="color:#1a1a2e;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
-          <p style="color:#9ca3af;font-size:14px;margin:0 0 32px 0;text-align:center;">Raw Speed Networking</p>
+          <p style="color:#9ca3af;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
             Hi ${fullName},

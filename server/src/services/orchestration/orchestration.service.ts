@@ -242,18 +242,21 @@ async function handleJoinSession(
         data.sessionId, activeSession.currentRound
       );
       const userMatch = matches.find(
-        m => (m.participantAId === userId || m.participantBId === userId) && m.status === 'active'
+        m => (m.participantAId === userId || m.participantBId === userId || m.participantCId === userId) && m.status === 'active'
       );
 
       if (userMatch) {
-        const partnerId = userMatch.participantAId === userId
-          ? userMatch.participantBId : userMatch.participantAId;
+        // Collect all participant IDs for this match
+        const participantIds = [userMatch.participantAId, userMatch.participantBId];
+        if (userMatch.participantCId) participantIds.push(userMatch.participantCId);
+        const partnerIds = participantIds.filter(id => id !== userId);
 
-        // Look up partner display name
-        const partnerNameResult = await query<{ displayName: string }>(
-          `SELECT display_name AS "displayName" FROM users WHERE id = $1`, [partnerId]
+        // Look up partner display names
+        const partnerNameResult = await query<{ id: string; displayName: string }>(
+          `SELECT id, display_name AS "displayName" FROM users WHERE id = ANY($1)`, [partnerIds]
         );
-        const partnerDisplayName = partnerNameResult.rows[0]?.displayName || 'Partner';
+        const nameMap = new Map(partnerNameResult.rows.map(r => [r.id, r.displayName || 'Partner']));
+        const partners = partnerIds.map(id => ({ userId: id, displayName: nameMap.get(id) || 'Partner' }));
 
         // Restore participant status to IN_ROUND
         await sessionService.updateParticipantStatus(
@@ -262,8 +265,9 @@ async function handleJoinSession(
 
         socket.emit('match:assigned', {
           matchId: userMatch.id,
-          partnerId,
-          partnerDisplayName,
+          partnerId: partners[0].userId,
+          partnerDisplayName: partners[0].displayName,
+          partners,
           roomId: userMatch.roomId || '',
           roundNumber: activeSession.currentRound,
         });
@@ -276,17 +280,28 @@ async function handleJoinSession(
         data.sessionId, activeSession.currentRound
       );
       const userMatch = matches.find(
-        m => (m.participantAId === userId || m.participantBId === userId) && m.status === 'completed'
+        m => (m.participantAId === userId || m.participantBId === userId || m.participantCId === userId) && m.status === 'completed'
       );
       if (userMatch) {
-        const partnerId = userMatch.participantAId === userId
-          ? userMatch.participantBId : userMatch.participantAId;
+        const participantIds = [userMatch.participantAId, userMatch.participantBId];
+        if (userMatch.participantCId) participantIds.push(userMatch.participantCId);
+        const partnerIds = participantIds.filter(id => id !== userId);
+
+        // Look up partner display names for the rating UI
+        const partnerNameResult = await query<{ id: string; displayName: string }>(
+          `SELECT id, display_name AS "displayName" FROM users WHERE id = ANY($1)`, [partnerIds]
+        );
+        const nameMap = new Map(partnerNameResult.rows.map(r => [r.id, r.displayName || 'Partner']));
+        const partnersWithNames = partnerIds.map(id => ({ userId: id, displayName: nameMap.get(id) || 'Partner' }));
+
         const remainingSeconds = activeSession.timerEndsAt
           ? Math.max(0, Math.ceil((activeSession.timerEndsAt.getTime() - Date.now()) / 1000))
           : activeSession.config.ratingWindowSeconds;
         socket.emit('rating:window_open', {
           matchId: userMatch.id,
-          partnerId,
+          partnerId: partnerIds[0],
+          partnerDisplayName: nameMap.get(partnerIds[0]) || 'Partner',
+          partners: partnersWithNames,
           roundNumber: activeSession.currentRound,
           durationSeconds: remainingSeconds,
         });
@@ -401,9 +416,13 @@ async function handleDisconnect(socket: Socket): Promise<void> {
   const userId = getUserIdFromSocket(socket);
   if (!userId) return;
 
+  // Track which session IDs we already handled via activeSessions so we don't double-emit
+  const handledSessionIds = new Set<string>();
+
   // Mark disconnected in all active sessions they were part of
   for (const [sessionId, activeSession] of activeSessions) {
     if (activeSession.presenceMap.has(userId)) {
+      handledSessionIds.add(sessionId);
       activeSession.presenceMap.delete(userId);
 
       await sessionService.updateParticipantStatus(
@@ -528,6 +547,29 @@ async function handleDisconnect(socket: Socket): Promise<void> {
 
       logger.info({ sessionId, userId }, 'Participant disconnected');
     }
+  }
+
+  // Handle disconnects for sessions not yet in activeSessions (e.g. SCHEDULED state).
+  // The socket joined session rooms via session:join but the host hasn't started yet,
+  // so there's no ActiveSession with a presenceMap entry. We still need to emit
+  // participant:left so other waiting participants see the real-time update.
+  try {
+    const socketRooms = [...socket.rooms];
+    for (const room of socketRooms) {
+      if (!room.startsWith('session:')) continue;
+      const sessionId = room.replace('session:', '');
+      if (handledSessionIds.has(sessionId)) continue; // Already handled above
+
+      // Look up session to determine if this user is host
+      const session = await sessionService.getSessionById(sessionId).catch(() => null);
+      if (!session) continue;
+      const isHost = session.hostUserId === userId;
+
+      io.to(sessionRoom(sessionId)).emit('participant:left', { userId, isHost });
+      logger.info({ sessionId, userId }, 'Participant disconnected from pre-lobby waiting room');
+    }
+  } catch (err) {
+    logger.warn({ err, userId }, 'Error handling disconnect for non-active session rooms');
   }
 }
 
@@ -1688,28 +1730,53 @@ async function endRound(
 
     // Get matches for rating window notifications
     const matches = await matchingService.getMatchesByRound(sessionId, roundNumber);
+
+    // Batch-lookup display names for all participants across all matches
+    const allMatchParticipantIds = new Set<string>();
+    for (const match of matches) {
+      allMatchParticipantIds.add(match.participantAId);
+      allMatchParticipantIds.add(match.participantBId);
+      if (match.participantCId) allMatchParticipantIds.add(match.participantCId);
+    }
+    const ratingNameMap = new Map<string, string>();
+    if (allMatchParticipantIds.size > 0) {
+      const nameResult = await query<{ id: string; displayName: string }>(
+        `SELECT id, display_name AS "displayName" FROM users WHERE id = ANY($1)`,
+        [Array.from(allMatchParticipantIds)]
+      );
+      for (const row of nameResult.rows) ratingNameMap.set(row.id, row.displayName || 'Partner');
+    }
+
     for (const match of matches) {
       if (match.status === 'completed') {
-        // Notify participant A to rate
-        io.to(userRoom(match.participantAId)).emit('rating:window_open', {
-          matchId: match.id,
-          partnerId: match.participantBId,
-          roundNumber,
-          durationSeconds: activeSession.config.ratingWindowSeconds,
-        });
+        // Collect all participant IDs for this match (pair or trio)
+        const participantIds = [match.participantAId, match.participantBId];
+        if (match.participantCId) participantIds.push(match.participantCId);
 
-        // Notify participant B to rate
-        io.to(userRoom(match.participantBId)).emit('rating:window_open', {
-          matchId: match.id,
-          partnerId: match.participantAId,
-          roundNumber,
-          durationSeconds: activeSession.config.ratingWindowSeconds,
-        });
+        // Notify each participant to rate their partner(s) — include display names
+        for (const pid of participantIds) {
+          const partnerIds = participantIds.filter(id => id !== pid);
+          const partnersWithNames = partnerIds.map(id => ({
+            userId: id,
+            displayName: ratingNameMap.get(id) || 'Partner',
+          }));
+          io.to(userRoom(pid)).emit('rating:window_open', {
+            matchId: match.id,
+            partnerId: partnerIds[0],
+            partnerDisplayName: ratingNameMap.get(partnerIds[0]) || 'Partner',
+            partners: partnersWithNames,
+            roundNumber,
+            durationSeconds: activeSession.config.ratingWindowSeconds,
+          });
+        }
       }
 
-      // Increment rounds completed for participants
+      // Increment rounds completed for all participants (including C)
       await sessionService.incrementRoundsCompleted(sessionId, match.participantAId);
       await sessionService.incrementRoundsCompleted(sessionId, match.participantBId);
+      if (match.participantCId) {
+        await sessionService.incrementRoundsCompleted(sessionId, match.participantCId);
+      }
     }
 
     // Update participant statuses back to lobby

@@ -206,7 +206,21 @@ export default function useSessionSocket(sessionId: string) {
 
     // ── Ratings ──
     socket.on('rating:window_open', (data: any) => {
-      if (data.matchId) store.setMatch(store.currentMatch, data.matchId);
+      // On reconnect during rating phase, currentMatch/currentPartners may be empty.
+      // The server now sends partners with display names so we can restore them.
+      const currentState = useSessionStore.getState();
+      if (data.partners && data.partners.length > 0) {
+        // Server sent full partner info (reconnect or trio) — use it
+        const primaryPartner = data.partners[0];
+        store.setMatch(
+          { userId: primaryPartner.userId, displayName: primaryPartner.displayName || data.partnerDisplayName || primaryPartner.userId },
+          data.matchId || currentState.currentMatchId,
+          data.partners,
+        );
+      } else if (data.matchId) {
+        // Normal case: preserve existing match data, just update matchId
+        store.setMatch(currentState.currentMatch, data.matchId, currentState.currentPartners);
+      }
       store.setTimer(data.durationSeconds || 30);
       clearTimer();
       intervalRef.current = setInterval(() => store.tickTimer(), 1000);

@@ -86,7 +86,7 @@ export async function submitRating(
   );
 
   if (existingRating.rows.length > 0) {
-    throw new ConflictError(ErrorCodes.MATCH_ALREADY_RATED, 'You have already rated this partner');
+    throw new ConflictError(ErrorCodes.MATCH_ALREADY_RATED, 'You have already rated this partner for this match');
   }
 
   const ratingId = uuid();
@@ -97,7 +97,7 @@ export async function submitRating(
     const result = await client.query<Rating>(
       `INSERT INTO ratings (id, match_id, from_user_id, to_user_id, quality_score, meet_again, feedback)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
-       ON CONFLICT (match_id, from_user_id) DO UPDATE SET
+       ON CONFLICT (match_id, from_user_id, to_user_id) DO UPDATE SET
          quality_score = EXCLUDED.quality_score,
          meet_again = EXCLUDED.meet_again,
          feedback = EXCLUDED.feedback
@@ -138,7 +138,7 @@ async function upsertEncounterHistory(
 
   // Try to find existing encounter
   const existing = await client.query(
-    'SELECT id, last_meet_again_a, last_meet_again_b FROM encounter_history WHERE user_a_id = $1 AND user_b_id = $2 FOR UPDATE',
+    'SELECT id, last_meet_again_a, last_meet_again_b, last_session_id FROM encounter_history WHERE user_a_id = $1 AND user_b_id = $2 FOR UPDATE',
     [userAId, userBId]
   );
 
@@ -287,14 +287,14 @@ export async function getPeopleMet(
        COALESCE(r_given.meet_again, FALSE) AS "meetAgain",
        COALESCE(eh.mutual_meet_again, FALSE) AS "mutualMeetAgain",
        m.round_number AS "roundNumber"
-     FROM matches m,
-     LATERAL (
+     FROM matches m
+     CROSS JOIN LATERAL (
        SELECT unnest(ARRAY[
          CASE WHEN m.participant_a_id != $1 THEN m.participant_a_id END,
          CASE WHEN m.participant_b_id != $1 THEN m.participant_b_id END,
          CASE WHEN m.participant_c_id IS NOT NULL AND m.participant_c_id != $1 THEN m.participant_c_id END
        ]) AS partner_id
-     ) partners
+     ) AS partners
      JOIN users u ON u.id = partners.partner_id
      LEFT JOIN ratings r_given ON r_given.match_id = m.id AND r_given.from_user_id = $1 AND r_given.to_user_id = u.id
      LEFT JOIN encounter_history eh ON (
@@ -443,12 +443,8 @@ export async function getSessionRatingStats(sessionId: string): Promise<{
   const mutualResult = await query<{ count: string }>(
     `SELECT COUNT(*)::text AS count
      FROM encounter_history eh
-     JOIN matches m ON m.session_id = $1
-       AND (
-         (m.participant_a_id = eh.user_a_id AND m.participant_b_id = eh.user_b_id)
-         OR (m.participant_a_id = eh.user_b_id AND m.participant_b_id = eh.user_a_id)
-       )
-     WHERE eh.mutual_meet_again = TRUE`,
+     WHERE eh.mutual_meet_again = TRUE
+       AND eh.last_session_id = $1`,
     [sessionId]
   );
 
