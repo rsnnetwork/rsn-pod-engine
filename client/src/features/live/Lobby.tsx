@@ -24,7 +24,14 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
   const participants = useParticipants();
   const { localParticipant } = useLocalParticipant();
   const hostUserId = useSessionStore(s => s.hostUserId);
-  const cameraTracks = tracks.filter(t => t.source === Track.Source.Camera);
+  const cameraTracksRaw = tracks.filter(t => t.source === Track.Source.Camera);
+
+  // Sort: host (local) tile always first in the grid
+  const cameraTracks = [...cameraTracksRaw].sort((a, b) => {
+    const aIsLocal = a.participant.sid === localParticipant.sid ? 0 : 1;
+    const bIsLocal = b.participant.sid === localParticipant.sid ? 0 : 1;
+    return aIsLocal - bIsLocal;
+  });
 
   // Responsive grid: up to 2 cols on mobile, 3 on tablet, 4-5 on desktop
   const gridCols =
@@ -71,6 +78,12 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
                 <span className="bg-amber-500 text-[9px] font-bold text-white px-1.5 py-0.5 rounded-full">Host</span>
               )}
             </div>
+            {/* Own media controls on local (host) tile */}
+            {isLocal && (
+              <div className="absolute bottom-1.5 right-1.5">
+                <LobbyMediaControls isHost={isHost} sessionId={sessionId} />
+              </div>
+            )}
             {/* Host mute/unmute + kick buttons on remote participant tiles */}
             {isHost && !isLocal && (
               <div className="absolute top-1.5 right-1.5 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -148,28 +161,28 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
   }, [sessionId, allMuted]);
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-1.5">
       <button
         onClick={toggleMic}
-        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+        className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors backdrop-blur-sm ${
           micEnabled
-            ? 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-            : 'bg-red-50 text-red-500 hover:bg-red-100'
+            ? 'bg-black/40 text-white hover:bg-black/60'
+            : 'bg-red-500/80 text-white hover:bg-red-600/80'
         }`}
       >
-        {micEnabled ? <Mic className="h-3.5 w-3.5" /> : <MicOff className="h-3.5 w-3.5" />}
+        {micEnabled ? <Mic className="h-3 w-3" /> : <MicOff className="h-3 w-3" />}
         {micEnabled ? 'Mute' : 'Unmute'}
       </button>
       {isHost && sessionId && (
         <button
           onClick={handleMuteAll}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+          className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors backdrop-blur-sm ${
             allMuted
-              ? 'bg-red-50 text-red-500 hover:bg-red-100'
-              : 'bg-rsn-red-light text-rsn-red hover:bg-rsn-red-100'
+              ? 'bg-red-500/80 text-white hover:bg-red-600/80'
+              : 'bg-black/40 text-white hover:bg-black/60'
           }`}
         >
-          {allMuted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+          {allMuted ? <VolumeX className="h-3 w-3" /> : <Volume2 className="h-3 w-3" />}
           {allMuted ? 'Unmute All' : 'Mute All'}
         </button>
       )}
@@ -445,7 +458,6 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
           className="flex-1 w-full max-w-4xl"
         >
           <RoomAudioRenderer />
-          <LobbyMediaControls isHost={isHost} sessionId={sessionId} />
           <LobbyMosaic isHost={isHost} sessionId={sessionId} />
         </LiveKitRoom>
       </div>
