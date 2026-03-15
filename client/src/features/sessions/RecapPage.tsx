@@ -47,26 +47,32 @@ export default function RecapPage() {
     enabled: !!sessionId,
   });
 
-  const isHost = session?.hostUserId === user?.id || user?.role === 'admin' || user?.role === 'super_admin';
+  const isHost = session?.hostUserId === user?.id;
 
   const [data, setData] = useState<PeopleMetData | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
 
-  useEffect(() => {
+  const fetchRecap = async () => {
     if (!sessionId) return;
-    async function fetchRecap() {
-      try {
-        const [peopleRes, statsRes] = await Promise.all([
-          api.get(`/ratings/sessions/${sessionId}/people-met`),
-          api.get(`/ratings/sessions/${sessionId}/stats`),
-        ]);
-        setData(peopleRes.data.data || null);
-        setStats(statsRes.data.data || null);
-      } catch { /* gracefully degrade */ }
-      setLoading(false);
+    setLoading(true);
+    setFetchError(false);
+    try {
+      const [peopleRes, statsRes] = await Promise.all([
+        api.get(`/ratings/sessions/${sessionId}/people-met`),
+        api.get(`/ratings/sessions/${sessionId}/stats`),
+      ]);
+      setData(peopleRes.data.data || null);
+      setStats(statsRes.data.data || null);
+    } catch {
+      setFetchError(true);
     }
+    setLoading(false);
+  };
+
+  useEffect(() => {
     fetchRecap();
   }, [sessionId]);
 
@@ -90,6 +96,17 @@ export default function RecapPage() {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <Spinner />
+      </div>
+    );
+  }
+
+  if (fetchError) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="text-center space-y-3">
+          <p className="text-gray-500">Could not load event recap.</p>
+          <Button size="sm" variant="secondary" onClick={fetchRecap}>Retry</Button>
+        </div>
       </div>
     );
   }
