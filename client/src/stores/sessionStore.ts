@@ -27,6 +27,7 @@ interface SessionLiveState {
   transitionStatus: TransitionStatus;
   sessionStatus: SessionStatus;
   hostInLobby: boolean;
+  hostUserId: string | null;
   totalRounds: number;
   participants: Participant[];
   currentMatch: MatchPartner | null;
@@ -70,6 +71,7 @@ interface SessionLiveState {
   setTransitionStatus: (status: TransitionStatus) => void;
   setSessionStatus: (status: SessionStatus) => void;
   setHostInLobby: (inLobby: boolean) => void;
+  setHostUserId: (hostUserId: string | null) => void;
   setTotalRounds: (total: number) => void;
   setParticipants: (p: Participant[]) => void;
   addParticipant: (p: Participant) => void;
@@ -99,7 +101,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   connectionStatus: 'connecting',
   transitionStatus: null,
   sessionStatus: 'scheduled',
-  hostInLobby: false,
+  hostInLobby: false, hostUserId: null,
   totalRounds: 5,
   participants: [],
   currentMatch: null,
@@ -128,6 +130,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   setTransitionStatus: (transitionStatus) => set({ transitionStatus }),
   setSessionStatus: (sessionStatus) => set({ sessionStatus }),
   setHostInLobby: (hostInLobby) => set({ hostInLobby }),
+  setHostUserId: (hostUserId) => set({ hostUserId }),
   setTotalRounds: (totalRounds) => set({ totalRounds }),
   setParticipants: (participants) => set({ participants }),
   addParticipant: (p) => set((s) => ({
@@ -165,7 +168,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   }),
   reset: () => set({
     phase: 'lobby', connectionStatus: 'connecting', transitionStatus: null,
-    sessionStatus: 'scheduled', hostInLobby: false, totalRounds: 5,
+    sessionStatus: 'scheduled', hostInLobby: false, hostUserId: null, totalRounds: 5,
     participants: [], currentMatch: null, currentPartners: [], currentMatchId: null,
     timerSeconds: 0, currentRound: 0, broadcasts: [], error: null,
     isReconnecting: false, isByeRound: false, liveKitToken: null, livekitUrl: null, currentRoomId: null,

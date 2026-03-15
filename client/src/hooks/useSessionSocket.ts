@@ -80,6 +80,7 @@ export default function useSessionSocket(sessionId: string) {
       if (data.participants) store.setParticipants(data.participants);
       if (data.sessionStatus) store.setSessionStatus(data.sessionStatus);
       if (data.hostInLobby !== undefined) store.setHostInLobby(data.hostInLobby);
+      if (data.hostUserId) store.setHostUserId(data.hostUserId);
       if (data.currentRound !== undefined) store.setRound(data.currentRound);
       if (data.totalRounds !== undefined) store.setTotalRounds(data.totalRounds);
       if (data.timerVisibility) store.setTimerVisibility(data.timerVisibility);

@@ -245,14 +245,17 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
       )}
       <div className="flex items-center justify-center gap-2 text-gray-500 text-xs">
         <Users className="h-3.5 w-3.5" />
-        <span>{Math.max(0, participants.length - 1)} participant{participants.length - 1 !== 1 ? 's' : ''} + host connected</span>
+        <span>
+          {Math.max(0, participants.length - (hostInLobby ? 1 : 0))} participant{(participants.length - (hostInLobby ? 1 : 0)) !== 1 ? 's' : ''}
+          {hostInLobby ? ' + host' : ''} connected
+        </span>
       </div>
     </div>
   );
 }
 
 function HostParticipantPanel({ sessionId }: { sessionId?: string }) {
-  const { participants } = useSessionStore();
+  const { participants, hostUserId } = useSessionStore();
   const [expanded, setExpanded] = useState(true);
 
   const handleKick = useCallback((userId: string, displayName: string) => {
@@ -282,10 +285,13 @@ function HostParticipantPanel({ sessionId }: { sessionId?: string }) {
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5">
               {participants.map(p => (
                 <div key={p.userId} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-50 group/participant">
-                  <div className="h-6 w-6 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-500 text-[10px] font-bold shrink-0">
+                  <div className={`h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${
+                    p.userId === hostUserId ? 'bg-amber-50 text-amber-600' : 'bg-indigo-50 text-indigo-500'
+                  }`}>
                     {(p.displayName || 'U').charAt(0).toUpperCase()}
                   </div>
                   <span className="text-xs text-gray-700 truncate flex-1">{p.displayName || 'User'}</span>
+                  {p.userId === hostUserId && <span className="text-[9px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">Host</span>}
                   {sessionId && (
                     <button
                       onClick={() => handleKick(p.userId, p.displayName || 'User')}
@@ -306,7 +312,7 @@ function HostParticipantPanel({ sessionId }: { sessionId?: string }) {
 }
 
 export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean; sessionId?: string }) {
-  const { participants, lobbyToken, lobbyUrl, sessionStatus, roundDashboard } = useSessionStore();
+  const { participants, lobbyToken, lobbyUrl, sessionStatus, roundDashboard, hostUserId } = useSessionStore();
 
   // During an active round, the host sees the breakout room dashboard instead of lobby
   if (isHost && sessionStatus === 'round_active' && roundDashboard) {
@@ -347,11 +353,16 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
         )}
         <div className="mt-6 flex flex-wrap gap-2 justify-center">
           {participants.map(p => (
-            <span key={p.userId} className="inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-3 py-1.5 text-xs text-indigo-600 font-medium">
-              <span className="h-5 w-5 rounded-full bg-indigo-100 flex items-center justify-center text-[10px] font-bold">
+            <span key={p.userId} className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium ${
+              p.userId === hostUserId ? 'bg-amber-50 text-amber-700 ring-1 ring-amber-200' : 'bg-indigo-50 text-indigo-600'
+            }`}>
+              <span className={`h-5 w-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                p.userId === hostUserId ? 'bg-amber-100' : 'bg-indigo-100'
+              }`}>
                 {(p.displayName || 'U').charAt(0).toUpperCase()}
               </span>
               {p.displayName || 'User'}
+              {p.userId === hostUserId && <span className="text-[9px] bg-amber-200 text-amber-800 px-1.5 py-0.5 rounded-full ml-0.5">Host</span>}
             </span>
           ))}
         </div>

@@ -204,6 +204,7 @@ async function handleJoinSession(
         participants: connectedParticipants,
         sessionStatus: activeSession?.status || session.status,
         hostInLobby,
+        hostUserId: session.hostUserId,
         currentRound: activeSession?.currentRound || 0,
         totalRounds: config.numberOfRounds || 5,
         timerVisibility: config.timerVisibility || 'always_visible',
