@@ -23,8 +23,8 @@ export const config = {
 
   // JWT
   jwtSecret: process.env.JWT_SECRET || 'dev-jwt-secret-not-for-production',
-  jwtAccessExpiry: process.env.JWT_ACCESS_EXPIRY || '2h',
-  jwtRefreshExpiry: process.env.JWT_REFRESH_EXPIRY || '7d',
+  jwtAccessExpiry: process.env.JWT_ACCESS_EXPIRY || '7d',
+  jwtRefreshExpiry: process.env.JWT_REFRESH_EXPIRY || '30d',
 
   // Magic Link
   magicLinkSecret: process.env.MAGIC_LINK_SECRET || 'dev-magic-link-secret-not-for-production',
