@@ -60,12 +60,21 @@ export default function RecapPage() {
     setLoading(true);
     setFetchError(false);
     try {
-      const [peopleRes, statsRes] = await Promise.all([
+      // Fetch both independently — if one fails, still show what we can
+      const [peopleRes, statsRes] = await Promise.allSettled([
         api.get(`/ratings/sessions/${sessionId}/people-met`),
         api.get(`/ratings/sessions/${sessionId}/stats`),
       ]);
-      setData(peopleRes.data.data || null);
-      setStats(statsRes.data.data || null);
+      if (peopleRes.status === 'fulfilled') {
+        setData(peopleRes.value.data.data || null);
+      }
+      if (statsRes.status === 'fulfilled') {
+        setStats(statsRes.value.data.data || null);
+      }
+      // Only show error if BOTH failed
+      if (peopleRes.status === 'rejected' && statsRes.status === 'rejected') {
+        setFetchError(true);
+      }
     } catch {
       setFetchError(true);
     }

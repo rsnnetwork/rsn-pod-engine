@@ -17,14 +17,14 @@ api.interceptors.request.use((cfg) => {
   return cfg;
 });
 
-// Auto-refresh on 401
+// Auto-refresh on 401 — NEVER auto-logout, only the user can log out manually
 api.interceptors.response.use(
   (res) => res,
   async (err) => {
     const original = err.config;
     const isLogoutRequest = original?.url?.includes('/auth/logout');
     const isRefreshRequest = original?.url?.includes('/auth/refresh');
-    
+
     // Don't retry logout or refresh requests to avoid 401 loops
     if (err.response?.status === 401 && !original._retry && !isLogoutRequest && !isRefreshRequest) {
       original._retry = true;
@@ -34,7 +34,9 @@ api.interceptors.response.use(
         original.headers.Authorization = `Bearer ${newToken}`;
         return api(original);
       } catch {
-        useAuthStore.getState().logout();
+        // Refresh failed — do NOT auto-logout. Let the request fail
+        // naturally. The user stays logged in and can retry or
+        // manually log out when they choose to.
       }
     }
     return Promise.reject(err);

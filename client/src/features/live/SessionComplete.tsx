@@ -40,13 +40,20 @@ export default function SessionComplete({ sessionId }: Props) {
     setLoading(true);
     setFetchError(false);
     try {
-      const [peopleRes, statsRes] = await Promise.all([
+      const [peopleRes, statsRes] = await Promise.allSettled([
         api.get(`/ratings/sessions/${sessionId}/people-met`),
         api.get(`/ratings/sessions/${sessionId}/stats`),
       ]);
-      setConnections(peopleRes.data.data?.connections || []);
-      setMutualConnections(peopleRes.data.data?.mutualConnections || []);
-      setStats(statsRes.data.data || null);
+      if (peopleRes.status === 'fulfilled') {
+        setConnections(peopleRes.value.data.data?.connections || []);
+        setMutualConnections(peopleRes.value.data.data?.mutualConnections || []);
+      }
+      if (statsRes.status === 'fulfilled') {
+        setStats(statsRes.value.data.data || null);
+      }
+      if (peopleRes.status === 'rejected' && statsRes.status === 'rejected') {
+        setFetchError(true);
+      }
     } catch {
       setFetchError(true);
     }
