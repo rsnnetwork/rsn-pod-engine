@@ -410,6 +410,10 @@ async function handleDisconnect(socket: Socket): Promise<void> {
         sessionId, userId, ParticipantStatus.DISCONNECTED
       ).catch(() => {}); // Swallow errors on disconnect cleanup
 
+      // Always notify remaining participants that this user left
+      const isHost = activeSession.hostUserId === userId;
+      io.to(sessionRoom(sessionId)).emit('participant:left', { userId, isHost });
+
       // If mid-round, notify partner and attempt auto-reassignment
       if (activeSession.status === SessionStatus.ROUND_ACTIVE) {
         try {

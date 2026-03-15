@@ -12,7 +12,7 @@ import HostControls from './HostControls';
 import { PageLoader } from '@/components/ui/Spinner';
 import { AlertCircle, X, LogOut, WifiOff, Loader2, RefreshCw } from 'lucide-react';
 import api from '@/lib/api';
-import { disconnectSocket, connectSocket } from '@/lib/socket';
+import { disconnectSocket, connectSocket, getSocket } from '@/lib/socket';
 
 export default function LiveSessionPage() {
   const { sessionId } = useParams();
@@ -58,6 +58,7 @@ export default function LiveSessionPage() {
       ? 'You are in an active round. Leaving now will end your current conversation and you may miss this round. Are you sure?'
       : 'Are you sure you want to leave this event?';
     if (!confirm(message)) return;
+    getSocket()?.emit('session:leave', { sessionId });
     disconnectSocket();
     reset();
     navigate('/sessions');
