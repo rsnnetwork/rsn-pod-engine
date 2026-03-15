@@ -76,13 +76,30 @@ Purpose: Persistent execution history and current state, independent of chat mem
 - Recap enhancement: mutual match badges, interest indicators, participation summary
 - Participant status tracking: counts endpoint, filterable tabs on session detail
 
-### What's Next
+### What's Done (Phase 3 — Pod System Overhaul) — 2026-03-16
 
-**Phase 3 — Pod System Overhaul**
-- Pod types → purpose-based (reason, conversational, speed_networking, etc.)
-- Max members decoupled from pod type
-- Full pod editing, pod copy, member states (declined, no_response)
-- Pod browse UX, access models, request-to-join flow
+**DB Migrations (015, 016, 017) — applied to Neon:**
+- 015: pod_type enum replaced — 8 purpose-based types (speed_networking, reason, conversational, webinar, physical_event, chat, two_sided_networking, one_sided_networking). Old size-based types mapped: duo/trio/kvartet/band → conversational, orchestra/concert → speed_networking.
+- 016: pod_member_status gained `declined` + `no_response` values
+- 017: pod_visibility gained `public_with_approval` + `request_to_join`; `join_config` JSONB column added to pods
+
+**Shared types updated:**
+- PodType enum: 8 new purpose-based values
+- PodMemberStatus: DECLINED + NO_RESPONSE
+- PodVisibility: PUBLIC_WITH_APPROVAL + REQUEST_TO_JOIN
+- PodJoinConfig interface (rulesText, agreementText)
+- UpdatePodInput: now allows podType, orchestrationMode, communicationMode, joinConfig
+
+**Server:**
+- pod.service.ts: updatePod now supports all fields; joinPod/requestToJoin handle new visibility modes; declineMember() added; getJoinConfig/setJoinConfig added
+- pods.ts routes: updatePodSchema expanded; POST /decline, GET+PUT /join-config added
+
+**Client:**
+- CreatePodModal: 8 new pod types with descriptions; maxMembers blank=unlimited; accepts initialValues prop for pre-fill/duplicate
+- PodDetailPage: edit modal is full-featured (type, visibility, capacity, orchestration, communication, rules); Copy Pod → Duplicate Pod opens pre-filled form; declined/no_response member buckets shown to director; new visibility labels/icons
+- PodsPage: default tab = active; tab order Browse All | Active | Archived | All; browse callout banner; visibility badges always shown
+
+### What's Next
 
 **Phase 4 — Profile & Matching Data**
 - Expanded profile fields, profile card, premium pre-selection

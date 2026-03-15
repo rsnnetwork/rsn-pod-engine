@@ -1,7 +1,11 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Users, Calendar, LogOut, Shield, UserMinus, Eye, Radio, Pencil, Trash2, UserPlus, Lock, Mail, Copy, Check, UserCheck, X, Clock, CopyPlus, Search } from 'lucide-react';
+import {
+  ArrowLeft, Users, Calendar, LogOut, Shield, UserMinus, Eye, Radio,
+  Pencil, Trash2, UserPlus, Lock, Mail, Copy, Check, UserCheck, X,
+  Clock, CopyPlus, Search, XCircle,
+} from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Avatar from '@/components/ui/Avatar';
@@ -12,35 +16,82 @@ import { PageLoader } from '@/components/ui/Spinner';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
+import CreatePodModal from './CreatePodModal';
 
 /** Map invite API error codes to user-friendly messages */
 function getInviteErrorMessage(err: any): string {
   const code = err?.response?.data?.error?.code;
   const message = err?.response?.data?.error?.message;
   switch (code) {
-    case 'DUPLICATE_INVITE': return 'This person already has a pending invite';
-    case 'SELF_INVITE': return 'You cannot send an invite to yourself';
-    case 'ALREADY_REGISTERED': return 'This person already has an account on the platform';
-    case 'POD_MEMBER_EXISTS': return 'This person is already a member of this pod';
-    case 'SESSION_ALREADY_REGISTERED': return 'This person is already a participant of this event';
-    case 'POD_ARCHIVED': return 'Cannot send invites to an archived pod';
-    case 'AUTH_FORBIDDEN': return message || 'You do not have permission to send this invite';
-    case 'VALIDATION_ERROR': return message || 'Please check the form and try again';
-    case 'RATE_LIMIT_EXCEEDED': return 'Too many invites sent. Please wait and try again';
-    default: return message || 'Failed to send invite. Please try again';
+    case 'DUPLICATE_INVITE':          return 'This person already has a pending invite';
+    case 'SELF_INVITE':               return 'You cannot send an invite to yourself';
+    case 'ALREADY_REGISTERED':        return 'This person already has an account on the platform';
+    case 'POD_MEMBER_EXISTS':         return 'This person is already a member of this pod';
+    case 'SESSION_ALREADY_REGISTERED':return 'This person is already a participant of this event';
+    case 'POD_ARCHIVED':              return 'Cannot send invites to an archived pod';
+    case 'AUTH_FORBIDDEN':            return message || 'You do not have permission to send this invite';
+    case 'VALIDATION_ERROR':          return message || 'Please check the form and try again';
+    case 'RATE_LIMIT_EXCEEDED':       return 'Too many invites sent. Please wait and try again';
+    default:                          return message || 'Failed to send invite. Please try again';
   }
 }
 
-const podTypeLabels: Record<string, string> = {
-  speed_networking: 'Speed Networking',
-  duo: 'Duo', trio: 'Trio', kvartet: 'Kvartet',
-  band: 'Band', orchestra: 'Orchestra', concert: 'Concert',
+// ─── Label / icon maps ──────────────────────────────────────────────────────
+
+const POD_TYPE_LABELS: Record<string, string> = {
+  speed_networking:    'Speed Networking',
+  reason:              'Reason Pod',
+  conversational:      'Conversational',
+  webinar:             'Webinar',
+  physical_event:      'Physical Event',
+  chat:                'Chat Pod',
+  two_sided_networking:'Two-Sided Networking',
+  one_sided_networking:'One-Sided Networking',
 };
-const visibilityLabels: Record<string, { label: string; icon: typeof Eye; color: string }> = {
-  public: { label: 'Public', icon: Eye, color: 'text-emerald-400' },
-  invite_only: { label: 'Invite Only', icon: Shield, color: 'text-amber-400' },
-  private: { label: 'Private', icon: Lock, color: 'text-red-400' },
+
+const VISIBILITY_CONFIG: Record<string, { label: string; icon: typeof Eye; color: string; desc: string }> = {
+  public:              { label: 'Public',               icon: Eye,    color: 'text-emerald-400', desc: 'Anyone can join directly' },
+  invite_only:         { label: 'Invite Only',          icon: Shield, color: 'text-amber-400',   desc: 'Requires an invite link' },
+  private:             { label: 'Private',              icon: Lock,   color: 'text-red-400',     desc: 'Hidden, invite only' },
+  public_with_approval:{ label: 'Public + Approval',   icon: UserCheck, color: 'text-indigo-400', desc: 'Visible to all, director approves' },
+  request_to_join:     { label: 'Request to Join',      icon: UserPlus,  color: 'text-blue-400',  desc: 'Open requests with optional rules' },
 };
+
+const POD_TYPES_OPTIONS = [
+  { value: 'speed_networking',    label: 'Speed Networking' },
+  { value: 'reason',              label: 'Reason Pod' },
+  { value: 'conversational',      label: 'Conversational' },
+  { value: 'webinar',             label: 'Webinar' },
+  { value: 'physical_event',      label: 'Physical Event' },
+  { value: 'chat',                label: 'Chat Pod' },
+  { value: 'two_sided_networking', label: 'Two-Sided Networking' },
+  { value: 'one_sided_networking', label: 'One-Sided Networking' },
+];
+
+const VISIBILITY_OPTIONS = [
+  { value: 'private',              label: 'Private — invite only, hidden from browse' },
+  { value: 'invite_only',          label: 'Invite Only — discoverable but requires invite' },
+  { value: 'public_with_approval', label: 'Public + Approval — anyone can request, you approve' },
+  { value: 'request_to_join',      label: 'Request to Join — open requests with optional rules' },
+  { value: 'public',               label: 'Public — anyone can join directly' },
+];
+
+const selectClass = 'w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200';
+
+// ─── Edit form state ─────────────────────────────────────────────────────────
+
+interface EditForm {
+  name: string;
+  description: string;
+  podType: string;
+  orchestrationMode: string;
+  communicationMode: string;
+  visibility: string;
+  maxMembers: number | '';
+  rules: string;
+}
+
+// ─── Component ───────────────────────────────────────────────────────────────
 
 export default function PodDetailPage() {
   const { podId } = useParams();
@@ -48,15 +99,23 @@ export default function PodDetailPage() {
   const { user } = useAuthStore();
   const { addToast } = useToastStore();
   const qc = useQueryClient();
+
   const [editOpen, setEditOpen] = useState(false);
-  const [editName, setEditName] = useState('');
-  const [editDescription, setEditDescription] = useState('');
+  const [editForm, setEditForm] = useState<EditForm>({
+    name: '', description: '', podType: 'speed_networking',
+    orchestrationMode: 'timed_rounds', communicationMode: 'video',
+    visibility: 'private', maxMembers: '', rules: '',
+  });
+
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteLink, setInviteLink] = useState('');
   const [copied, setCopied] = useState(false);
   const [podUserSearch, setPodUserSearch] = useState('');
   const [podSelectedUsers, setPodSelectedUsers] = useState<any[]>([]);
+
+  // Duplicate pod: open CreatePodModal pre-filled
+  const [duplicateOpen, setDuplicateOpen] = useState(false);
 
   const { data: pod, isLoading } = useQuery({
     queryKey: ['pod', podId],
@@ -87,36 +146,32 @@ export default function PodDetailPage() {
     enabled: podUserSearch.length >= 1,
   });
 
+  // ─── Mutations ─────────────────────────────────────────────────────────────
+
   const leaveMutation = useMutation({
     mutationFn: () => api.post(`/pods/${podId}/leave`),
-    onSuccess: () => {
-      addToast('Left pod', 'success');
-      navigate('/pods');
-    },
+    onSuccess: () => { addToast('Left pod', 'success'); navigate('/pods'); },
     onError: () => addToast('Failed to leave pod', 'error'),
   });
 
   const removeMemberMutation = useMutation({
     mutationFn: (userId: string) => api.delete(`/pods/${podId}/members/${userId}`),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['pod-members', podId] });
-      addToast('Member removed', 'success');
-    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['pod-members', podId] }); addToast('Member removed', 'success'); },
     onError: () => addToast('Failed to remove member', 'error'),
   });
 
   const changeRoleMutation = useMutation({
     mutationFn: ({ userId, role }: { userId: string; role: string }) =>
       api.patch(`/pods/${podId}/members/${userId}/role`, { role }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['pod-members', podId] });
-      addToast('Member role updated', 'success');
-    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['pod-members', podId] }); addToast('Member role updated', 'success'); },
     onError: (err: any) => addToast(err?.response?.data?.error?.message || 'Failed to update role', 'error'),
   });
 
   const updateMutation = useMutation({
-    mutationFn: (body: { name?: string; description?: string }) => api.put(`/pods/${podId}`, body),
+    mutationFn: (body: Partial<EditForm>) => api.put(`/pods/${podId}`, {
+      ...body,
+      maxMembers: body.maxMembers === '' ? null : Number(body.maxMembers),
+    }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['pod', podId] });
       addToast('Pod updated', 'success');
@@ -127,11 +182,8 @@ export default function PodDetailPage() {
 
   const deleteMutation = useMutation({
     mutationFn: () => api.delete(`/pods/${podId}`),
-    onSuccess: () => {
-      addToast('Pod deleted', 'success');
-      navigate('/pods');
-    },
-    onError: () => addToast('Failed to delete pod', 'error'),
+    onSuccess: () => { addToast('Pod archived', 'success'); navigate('/pods'); },
+    onError: () => addToast('Failed to archive pod', 'error'),
   });
 
   const reactivateMutation = useMutation({
@@ -142,24 +194,6 @@ export default function PodDetailPage() {
       addToast('Pod reactivated', 'success');
     },
     onError: () => addToast('Failed to reactivate pod', 'error'),
-  });
-
-  const copyPodMutation = useMutation({
-    mutationFn: () => api.post('/pods', {
-      name: `${pod?.name || 'Pod'} (copy)`,
-      description: pod?.description || '',
-      podType: pod?.podType || 'speed_networking',
-      orchestrationMode: pod?.orchestrationMode || 'timed_rounds',
-      communicationMode: pod?.communicationMode || 'video',
-      visibility: pod?.visibility || 'private',
-      maxMembers: pod?.maxMembers || 50,
-    }),
-    onSuccess: (res: any) => {
-      const newId = res.data?.data?.id;
-      addToast('Pod copied! You can now edit the new pod.', 'success');
-      if (newId) navigate(`/pods/${newId}`);
-    },
-    onError: () => addToast('Failed to copy pod', 'error'),
   });
 
   const joinMutation = useMutation({
@@ -185,36 +219,26 @@ export default function PodDetailPage() {
 
   const approveMutation = useMutation({
     mutationFn: (userId: string) => api.post(`/pods/${podId}/members/${userId}/approve`),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['pod-members', podId] });
-      addToast('Member approved!', 'success');
-    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['pod-members', podId] }); addToast('Member approved!', 'success'); },
     onError: () => addToast('Failed to approve member', 'error'),
   });
 
   const rejectMutation = useMutation({
     mutationFn: (userId: string) => api.post(`/pods/${podId}/members/${userId}/reject`),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['pod-members', podId] });
-      addToast('Request rejected', 'success');
-    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['pod-members', podId] }); addToast('Request rejected', 'success'); },
     onError: () => addToast('Failed to reject request', 'error'),
   });
 
   const createInviteMutation = useMutation({
     mutationFn: (data: { inviteeEmail?: string }) => api.post('/invites', {
-      type: 'pod',
-      podId,
+      type: 'pod', podId,
       inviteeEmail: data.inviteeEmail || undefined,
       maxUses: data.inviteeEmail ? 1 : 10,
       expiresInHours: 168,
     }),
     onSuccess: (res, variables) => {
       const code = res.data.data?.code;
-      if (code) {
-        const link = `${window.location.origin}/invite/${code}`;
-        setInviteLink(link);
-      }
+      if (code) setInviteLink(`${window.location.origin}/invite/${code}`);
       if (variables.inviteeEmail) {
         addToast(`Invite sent to ${variables.inviteeEmail}`, 'success');
         setInviteEmail('');
@@ -233,8 +257,7 @@ export default function PodDetailPage() {
           await api.post('/invites', { type: 'pod', podId, maxUses: 1, inviteeEmail: email, expiresInHours: 168 });
           results.push({ email, ok: true });
         } catch (err: any) {
-          const msg = err?.response?.data?.error?.message || 'Failed to send invite';
-          results.push({ email, ok: false, msg });
+          results.push({ email, ok: false, msg: err?.response?.data?.error?.message || 'Failed' });
         }
       }
       return results;
@@ -242,7 +265,7 @@ export default function PodDetailPage() {
     onSuccess: (results) => {
       qc.invalidateQueries({ queryKey: ['pod-members', podId] });
       const succeeded = results.filter(r => r.ok);
-      const failed = results.filter(r => !r.ok);
+      const failed    = results.filter(r => !r.ok);
       if (succeeded.length > 0) addToast(`${succeeded.length} invite(s) sent!`, 'success');
       failed.forEach(r => addToast(`${r.email}: ${r.msg}`, 'error'));
       setPodSelectedUsers([]);
@@ -250,32 +273,61 @@ export default function PodDetailPage() {
     },
   });
 
+  // ─── Helpers ───────────────────────────────────────────────────────────────
+
   const openEdit = () => {
-    setEditName(pod?.name || '');
-    setEditDescription(pod?.description || '');
+    setEditForm({
+      name:              pod?.name || '',
+      description:       pod?.description || '',
+      podType:           pod?.podType || 'speed_networking',
+      orchestrationMode: pod?.orchestrationMode || 'timed_rounds',
+      communicationMode: pod?.communicationMode || 'video',
+      visibility:        pod?.visibility || 'private',
+      maxMembers:        pod?.maxMembers ?? '',
+      rules:             pod?.rules || '',
+    });
     setEditOpen(true);
   };
-
-  if (isLoading) return <PageLoader />;
-  if (!pod) return <p className="text-gray-500 text-center py-20">Pod not found</p>;
-
-  const membersList = members || pod.members || [];
-  const activeMembers = membersList.filter((m: any) => m.status === 'active');
-  const pendingMembers = membersList.filter((m: any) => m.status === 'pending_approval');
-  const myMembership = membersList.find((m: any) => m.userId === user?.id);
-  const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
-  const isMember = myMembership?.status === 'active' || !!pod.memberRole || isAdmin;
-  const isPending = myMembership?.status === 'pending_approval';
-  const isDirector = myMembership?.role === 'director' || pod.memberRole === 'director' || isAdmin;
-  const isDirectorOrHost = isDirector || myMembership?.role === 'host' || pod.memberRole === 'host';
-  const vis = visibilityLabels[pod.visibility] || visibilityLabels.public;
-  const VisIcon = vis.icon;
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(inviteLink);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  // ─── Render guards ─────────────────────────────────────────────────────────
+
+  if (isLoading) return <PageLoader />;
+  if (!pod) return <p className="text-gray-500 text-center py-20">Pod not found</p>;
+
+  const membersList    = members || pod.members || [];
+  const activeMembers  = membersList.filter((m: any) => m.status === 'active');
+  const pendingMembers = membersList.filter((m: any) => m.status === 'pending_approval');
+  const declinedMembers  = membersList.filter((m: any) => m.status === 'declined');
+  const noResponseMembers = membersList.filter((m: any) => m.status === 'no_response');
+
+  const myMembership     = membersList.find((m: any) => m.userId === user?.id);
+  const isAdminUser      = user?.role === 'admin' || user?.role === 'super_admin';
+  const isMember         = myMembership?.status === 'active' || !!pod.memberRole || isAdminUser;
+  const isPending        = myMembership?.status === 'pending_approval';
+  const isDirector       = myMembership?.role === 'director' || pod.memberRole === 'director' || isAdminUser;
+  const isDirectorOrHost = isDirector || myMembership?.role === 'host' || pod.memberRole === 'host';
+
+  const vis    = VISIBILITY_CONFIG[pod.visibility] || VISIBILITY_CONFIG.public;
+  const VisIcon = vis.icon;
+
+  // Build initialValues for duplicate — strip id, rename
+  const duplicateInitialValues = {
+    name:              `${pod.name} (copy)`,
+    description:       pod.description || '',
+    podType:           pod.podType || 'speed_networking',
+    orchestrationMode: pod.orchestrationMode || 'timed_rounds',
+    communicationMode: pod.communicationMode || 'video',
+    visibility:        pod.visibility || 'private',
+    maxMembers:        pod.maxMembers ?? '',
+  };
+
+  // ─── JSX ──────────────────────────────────────────────────────────────────
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -288,7 +340,7 @@ export default function PodDetailPage() {
         <div className="flex items-start justify-between mb-4">
           <div>
             <h1 className="text-2xl font-bold text-[#1a1a2e]">{pod.name}</h1>
-            <p className="text-gray-500 mt-1">{pod.description || 'General focus'}</p>
+            <p className="text-gray-500 mt-1">{pod.description || 'No description'}</p>
           </div>
           <Badge variant={pod.status === 'active' ? 'success' : 'default'}>{pod.status}</Badge>
         </div>
@@ -296,7 +348,7 @@ export default function PodDetailPage() {
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mt-4 pt-4 border-t border-gray-200">
           <div className="flex items-center gap-2 text-sm text-gray-500">
             <Users className="h-4 w-4 text-rsn-red" />
-            <span>{pod.memberCount ?? activeMembers.length} members</span>
+            <span>{pod.memberCount ?? activeMembers.length} members{pod.maxMembers ? ` / ${pod.maxMembers}` : ''}</span>
           </div>
           <div className="flex items-center gap-2 text-sm text-gray-500">
             <Calendar className="h-4 w-4 text-rsn-red" />
@@ -304,7 +356,7 @@ export default function PodDetailPage() {
           </div>
           <div className="flex items-center gap-2 text-sm text-gray-500">
             <Radio className="h-4 w-4 text-rsn-red" />
-            <span>{podTypeLabels[pod.podType] || pod.podType}</span>
+            <span>{POD_TYPE_LABELS[pod.podType] || pod.podType}</span>
           </div>
           <div className="flex items-center gap-2 text-sm">
             <VisIcon className={`h-4 w-4 ${vis.color}`} />
@@ -347,7 +399,11 @@ export default function PodDetailPage() {
                 <UserPlus className="h-4 w-4 mr-2" /> Request to Join
               </Button>
               <p className="text-sm text-gray-400 self-center">
-                {pod.visibility === 'invite_only' ? 'This pod is invite-only. Request to join or use an invite link.' : 'This is a private pod. Request access from the director.'}
+                {pod.visibility === 'invite_only'
+                  ? 'This pod is invite-only. Request to join or use an invite link.'
+                  : pod.visibility === 'public_with_approval' || pod.visibility === 'request_to_join'
+                  ? 'Your request will be reviewed by the pod director.'
+                  : 'This is a private pod. Request access from the director.'}
               </p>
             </>
           )}
@@ -385,12 +441,20 @@ export default function PodDetailPage() {
             </Button>
           )}
           {isDirector && (
-            <Button variant="secondary" onClick={() => copyPodMutation.mutate()} isLoading={copyPodMutation.isPending}>
-              <CopyPlus className="h-4 w-4 mr-2" /> Copy Pod
+            <Button variant="secondary" onClick={() => setDuplicateOpen(true)}>
+              <CopyPlus className="h-4 w-4 mr-2" /> Duplicate Pod
             </Button>
           )}
           {isDirector && (
-            <Button variant="danger" onClick={() => { if (confirm('Archive this pod? Events will be preserved and you can reactivate later.')) deleteMutation.mutate(); }} isLoading={deleteMutation.isPending}>
+            <Button
+              variant="danger"
+              onClick={() => {
+                if (confirm('Archive this pod? Events will be preserved and you can reactivate later.')) {
+                  deleteMutation.mutate();
+                }
+              }}
+              isLoading={deleteMutation.isPending}
+            >
               <Trash2 className="h-4 w-4 mr-2" /> Archive Pod
             </Button>
           )}
@@ -402,28 +466,121 @@ export default function PodDetailPage() {
         </div>
       )}
 
-      {/* Edit Modal */}
+      {/* ── Full Edit Modal ──────────────────────────────────────────────── */}
       <Modal open={editOpen} onClose={() => setEditOpen(false)} title="Edit Pod">
-        <form onSubmit={e => { e.preventDefault(); updateMutation.mutate({ name: editName, description: editDescription }); }} className="space-y-4">
-          <Input label="Pod Name" value={editName} onChange={e => setEditName(e.target.value)} required />
+        <form
+          onSubmit={e => { e.preventDefault(); updateMutation.mutate(editForm); }}
+          className="space-y-4"
+        >
+          <Input
+            label="Pod Name"
+            value={editForm.name}
+            onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))}
+            required
+          />
+
           <div>
             <label className="block text-sm font-medium text-gray-600 mb-1">Description</label>
             <textarea
               className="w-full rounded-lg bg-gray-100 border border-gray-200 px-3 py-2 text-gray-800 text-sm focus:border-[#1a1a2e] focus:ring-1 focus:ring-[#1a1a2e] outline-none"
-              rows={3} value={editDescription} onChange={e => setEditDescription(e.target.value)}
+              rows={2}
+              value={editForm.description}
+              onChange={e => setEditForm(f => ({ ...f, description: e.target.value }))}
             />
           </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-600 mb-1.5">Pod Type</label>
+              <select
+                className={selectClass}
+                value={editForm.podType}
+                onChange={e => setEditForm(f => ({ ...f, podType: e.target.value }))}
+              >
+                {POD_TYPES_OPTIONS.map(t => (
+                  <option key={t.value} value={t.value}>{t.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-600 mb-1.5">Visibility</label>
+              <select
+                className={selectClass}
+                value={editForm.visibility}
+                onChange={e => setEditForm(f => ({ ...f, visibility: e.target.value }))}
+              >
+                {VISIBILITY_OPTIONS.map(v => (
+                  <option key={v.value} value={v.value}>{v.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-600 mb-1.5">Orchestration</label>
+              <select
+                className={selectClass}
+                value={editForm.orchestrationMode}
+                onChange={e => setEditForm(f => ({ ...f, orchestrationMode: e.target.value }))}
+              >
+                <option value="timed_rounds">Timed Rounds</option>
+                <option value="free_form">Free Form</option>
+                <option value="moderated">Moderated</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-600 mb-1.5">Communication</label>
+              <select
+                className={selectClass}
+                value={editForm.communicationMode}
+                onChange={e => setEditForm(f => ({ ...f, communicationMode: e.target.value }))}
+              >
+                <option value="video">Video</option>
+                <option value="audio">Audio Only</option>
+                <option value="text">Text</option>
+                <option value="hybrid">Hybrid</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Input
+              label="Max Members (blank = unlimited)"
+              type="number"
+              value={editForm.maxMembers === '' ? '' : String(editForm.maxMembers)}
+              onChange={e => setEditForm(f => ({ ...f, maxMembers: e.target.value === '' ? '' : Number(e.target.value) }))}
+              placeholder="Unlimited"
+            />
+            <div className="col-span-2">
+              <label className="block text-sm font-medium text-gray-600 mb-1">Pod Rules (optional)</label>
+              <textarea
+                className="w-full rounded-lg bg-gray-100 border border-gray-200 px-3 py-2 text-gray-800 text-sm focus:border-[#1a1a2e] focus:ring-1 focus:ring-[#1a1a2e] outline-none"
+                rows={2}
+                placeholder="Community rules or guidelines shown to members"
+                value={editForm.rules}
+                onChange={e => setEditForm(f => ({ ...f, rules: e.target.value }))}
+              />
+            </div>
+          </div>
+
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={() => setEditOpen(false)}>Cancel</Button>
-            <Button type="submit" isLoading={updateMutation.isPending}>Save</Button>
+            <Button type="submit" isLoading={updateMutation.isPending}>Save Changes</Button>
           </div>
         </form>
       </Modal>
 
-      {/* Invite Members Modal */}
+      {/* ── Duplicate Pod Modal (pre-filled CreatePodModal) ─────────────── */}
+      <CreatePodModal
+        open={duplicateOpen}
+        onClose={() => setDuplicateOpen(false)}
+        initialValues={duplicateInitialValues}
+      />
+
+      {/* ── Invite Members Modal ────────────────────────────────────────── */}
       <Modal open={inviteOpen} onClose={() => setInviteOpen(false)} title="Invite Members to Pod">
         <div className="space-y-5">
-          {/* Option 1: Send Email Invite */}
           <div className="rounded-lg border border-gray-200 p-4 space-y-3">
             <h3 className="text-sm font-semibold text-[#1a1a2e]">Option 1 — Send Email Invite</h3>
             <p className="text-xs text-gray-500">Enter their email and we'll send the invite directly.</p>
@@ -438,7 +595,6 @@ export default function PodDetailPage() {
             </Button>
           </div>
 
-          {/* Option 2: Invite Platform Users */}
           <div className="rounded-lg border border-gray-200 p-4 space-y-3">
             <h3 className="text-sm font-semibold text-[#1a1a2e]">Option 2 — Invite Platform Users</h3>
             <p className="text-xs text-gray-500">Search existing users and invite them directly.</p>
@@ -457,24 +613,34 @@ export default function PodDetailPage() {
             {podSearchResults && podSearchResults.length > 0 && (
               <div className="max-h-32 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
                 {podSearchResults.filter((u: any) => u.id !== user?.id).map((u: any) => {
-                  const isMember = activeMembers.some((m: any) => m.userId === u.id);
-                  const isSelected = !isMember && podSelectedUsers.some(s => s.id === u.id);
+                  const alreadyMember = activeMembers.some((m: any) => m.userId === u.id);
+                  const isSelected = !alreadyMember && podSelectedUsers.some(s => s.id === u.id);
                   return (
                     <button
                       key={u.id}
                       type="button"
-                      disabled={isMember}
-                      onClick={() => !isMember && setPodSelectedUsers(prev => isSelected ? prev.filter(s => s.id !== u.id) : [...prev, u])}
-                      className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${isMember ? 'opacity-60 cursor-not-allowed bg-gray-50' : isSelected ? 'bg-rsn-red-light hover:bg-rsn-red-100' : 'hover:bg-gray-50'}`}
+                      disabled={alreadyMember}
+                      onClick={() => !alreadyMember && setPodSelectedUsers(prev =>
+                        isSelected ? prev.filter(s => s.id !== u.id) : [...prev, u]
+                      )}
+                      className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
+                        alreadyMember ? 'opacity-60 cursor-not-allowed bg-gray-50'
+                        : isSelected ? 'bg-rsn-red-light hover:bg-rsn-red-100'
+                        : 'hover:bg-gray-50'
+                      }`}
                     >
-                      {!isMember && (
+                      {!alreadyMember && (
                         <div className={`h-4 w-4 rounded border ${isSelected ? 'bg-rsn-red border-rsn-red' : 'border-gray-300'} flex items-center justify-center shrink-0`}>
                           {isSelected && <Check className="h-3 w-3 text-white" />}
                         </div>
                       )}
-                      <span className={`font-medium truncate ${isMember ? 'text-gray-400' : 'text-gray-800'}`}>{u.displayName || u.email}</span>
-                      {isMember && (
-                        <span className="ml-auto text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 shrink-0">Already a member</span>
+                      <span className={`font-medium truncate ${alreadyMember ? 'text-gray-400' : 'text-gray-800'}`}>
+                        {u.displayName || u.email}
+                      </span>
+                      {alreadyMember && (
+                        <span className="ml-auto text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5 shrink-0">
+                          Already a member
+                        </span>
                       )}
                     </button>
                   );
@@ -502,38 +668,29 @@ export default function PodDetailPage() {
             <div className="h-px flex-1 bg-gray-200" />
           </div>
 
-          {/* Option 3: Generate Shareable Link */}
           <div className="rounded-lg border border-gray-200 p-4 space-y-3">
             <h3 className="text-sm font-semibold text-[#1a1a2e]">Option 3 — Generate Shareable Link</h3>
-            <p className="text-xs text-gray-500">Create a reusable link to share manually (up to 10 uses, expires in 7 days).</p>
+            <p className="text-xs text-gray-500">Create a reusable link (up to 10 uses, expires in 7 days).</p>
             {!inviteLink ? (
-              <Button
-                variant="secondary"
-                onClick={() => createInviteMutation.mutate({})}
-                isLoading={createInviteMutation.isPending}
-                className="w-full"
-              >
+              <Button variant="secondary" onClick={() => createInviteMutation.mutate({})} isLoading={createInviteMutation.isPending} className="w-full">
                 <Copy className="h-4 w-4 mr-2" /> Generate Link
               </Button>
             ) : (
               <div className="space-y-2">
                 <div className="flex gap-2">
-                  <input
-                    readOnly value={inviteLink}
-                    className="flex-1 rounded-lg bg-gray-100 border border-gray-200 px-3 py-2 text-gray-800 text-sm"
-                  />
+                  <input readOnly value={inviteLink} className="flex-1 rounded-lg bg-gray-100 border border-gray-200 px-3 py-2 text-gray-800 text-sm" />
                   <Button variant="secondary" onClick={handleCopyLink}>
                     {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                   </Button>
                 </div>
-                <p className="text-xs text-gray-400">Link copied or ready to share. Up to 10 uses, expires in 7 days.</p>
+                <p className="text-xs text-gray-400">Ready to share. Up to 10 uses, expires in 7 days.</p>
               </div>
             )}
           </div>
         </div>
       </Modal>
 
-      {/* Pending Join Requests */}
+      {/* ── Pending Join Requests ───────────────────────────────────────── */}
       {isDirectorOrHost && pendingMembers.length > 0 && (
         <div className="animate-fade-in-up stagger-2">
           <h2 className="text-lg font-semibold text-amber-400 mb-3 flex items-center gap-2">
@@ -565,7 +722,40 @@ export default function PodDetailPage() {
         </div>
       )}
 
-      {/* Events */}
+      {/* ── Declined / No Response (director only) ──────────────────────── */}
+      {isDirector && (declinedMembers.length > 0 || noResponseMembers.length > 0) && (
+        <div className="animate-fade-in-up stagger-2">
+          <h2 className="text-base font-semibold text-gray-400 mb-2 flex items-center gap-2">
+            <XCircle className="h-4 w-4" /> Other Invite Outcomes
+          </h2>
+          <div className="grid gap-2">
+            {declinedMembers.map((m: any) => (
+              <Card key={m.userId || m.id} className="!p-3 bg-gray-50 border-gray-200">
+                <div className="flex items-center gap-3">
+                  <Avatar name={m.displayName || m.email || 'User'} size="sm" />
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-gray-700">{m.displayName || m.email || 'User'}</p>
+                    <p className="text-xs text-gray-400">Declined</p>
+                  </div>
+                </div>
+              </Card>
+            ))}
+            {noResponseMembers.map((m: any) => (
+              <Card key={m.userId || m.id} className="!p-3 bg-gray-50 border-gray-200">
+                <div className="flex items-center gap-3">
+                  <Avatar name={m.displayName || m.email || 'User'} size="sm" />
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-gray-700">{m.displayName || m.email || 'User'}</p>
+                    <p className="text-xs text-gray-400">No response</p>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Events ──────────────────────────────────────────────────────── */}
       {podSessions && podSessions.length > 0 && (
         <div className="animate-fade-in-up stagger-2">
           <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
@@ -585,7 +775,7 @@ export default function PodDetailPage() {
                       {s.scheduledAt ? new Date(s.scheduledAt).toLocaleString() : 'No date set'}
                     </p>
                   </div>
-                  <Badge variant={s.status === 'scheduled' ? 'info' : s.status === 'active' || s.status === 'lobby' ? 'success' : 'default'}>
+                  <Badge variant={s.status === 'scheduled' ? 'info' : s.status === 'active' ? 'success' : 'default'}>
                     {s.status}
                   </Badge>
                 </div>
@@ -595,7 +785,7 @@ export default function PodDetailPage() {
         </div>
       )}
 
-      {/* Members */}
+      {/* ── Active Members ───────────────────────────────────────────────── */}
       <div className="animate-fade-in-up stagger-2">
         <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
           <Users className="h-5 w-5 text-rsn-red" /> Members ({activeMembers.length})
@@ -643,9 +833,7 @@ export default function PodDetailPage() {
             </Card>
           ))}
           {activeMembers.length === 0 && (
-            <Card>
-              <p className="text-gray-400 text-sm text-center py-4">No members yet</p>
-            </Card>
+            <Card><p className="text-gray-400 text-sm text-center py-4">No members yet</p></Card>
           )}
         </div>
       </div>

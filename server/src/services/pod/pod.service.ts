@@ -7,7 +7,7 @@ import logger from '../../config/logger';
 import {
   Pod, PodMember, CreatePodInput, UpdatePodInput,
   PodType, PodStatus, PodMemberRole, PodMemberStatus,
-  OrchestrationMode, CommunicationMode, PodVisibility,
+  OrchestrationMode, CommunicationMode, PodVisibility, PodJoinConfig,
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, ForbiddenError } from '../../middleware/errors';
 import { UserRole, hasRoleAtLeast } from '@rsn/shared';
@@ -17,7 +17,8 @@ import { UserRole, hasRoleAtLeast } from '@rsn/shared';
 const POD_COLUMNS = `
   id, name, description, pod_type AS "podType", orchestration_mode AS "orchestrationMode",
   communication_mode AS "communicationMode", visibility, status, max_members AS "maxMembers",
-  rules, config, created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
+  rules, join_config AS "joinConfig", config, created_by AS "createdBy",
+  created_at AS "createdAt", updated_at AS "updatedAt"
 `;
 
 const MEMBER_COLUMNS = `
@@ -95,19 +96,26 @@ export async function updatePod(podId: string, userId: string, input: UpdatePodI
   const values: unknown[] = [];
   let paramIdx = 1;
 
+  // All editable fields — director can now change type, modes, visibility, capacity, etc.
   const fieldMap: Record<string, string> = {
-    name: 'name',
-    description: 'description',
-    visibility: 'visibility',
-    maxMembers: 'max_members',
-    rules: 'rules',
-    status: 'status',
+    name:              'name',
+    description:       'description',
+    podType:           'pod_type',
+    orchestrationMode: 'orchestration_mode',
+    communicationMode: 'communication_mode',
+    visibility:        'visibility',
+    maxMembers:        'max_members',
+    rules:             'rules',
+    status:            'status',
+    joinConfig:        'join_config',
   };
 
   for (const [key, dbCol] of Object.entries(fieldMap)) {
     if (key in input) {
+      const val = (input as Record<string, unknown>)[key];
       setClauses.push(`${dbCol} = $${paramIdx}`);
-      values.push((input as Record<string, unknown>)[key]);
+      // joinConfig is stored as JSONB — cast explicitly
+      values.push(dbCol === 'join_config' && val !== null ? JSON.stringify(val) : val);
       paramIdx++;
     }
   }
@@ -116,6 +124,7 @@ export async function updatePod(podId: string, userId: string, input: UpdatePodI
     return pod;
   }
 
+  setClauses.push(`updated_at = NOW()`);
   values.push(podId);
   const result = await query<Pod>(
     `UPDATE pods SET ${setClauses.join(', ')} WHERE id = $${paramIdx} RETURNING ${POD_COLUMNS}`,
@@ -159,9 +168,9 @@ export async function listPods(params: {
     paramIdx++;
   }
 
-  // When browsing, only show public and invite_only pods (hide private)
+  // Browse mode: show all non-private pods (includes public_with_approval and request_to_join)
   if (params.browse) {
-    whereClause += ` AND p.visibility IN ('public', 'invite_only')`;
+    whereClause += ` AND p.visibility NOT IN ('private')`;
   }
 
   if (params.podType) {
@@ -186,7 +195,8 @@ export async function listPods(params: {
   const result = await query<Pod & { memberCount: number; sessionCount: number; memberRole: string | null }>(
     `SELECT p.id, p.name, p.description, p.pod_type AS "podType", p.orchestration_mode AS "orchestrationMode",
             p.communication_mode AS "communicationMode", p.visibility, p.status, p.max_members AS "maxMembers",
-            p.rules, p.config, p.created_by AS "createdBy", p.created_at AS "createdAt", p.updated_at AS "updatedAt",
+            p.rules, p.join_config AS "joinConfig", p.config,
+            p.created_by AS "createdBy", p.created_at AS "createdAt", p.updated_at AS "updatedAt",
             COALESCE(mc.cnt, 0)::int AS "memberCount",
             COALESCE(sc.cnt, 0)::int AS "sessionCount",
             ${memberRoleSelect}
@@ -222,8 +232,8 @@ export async function addMember(
     }
     const pod = podResult.rows[0];
 
-    // Check capacity
-    if (pod.maxMembers) {
+    // Check capacity (only for active memberships)
+    if (pod.maxMembers && status === PodMemberStatus.ACTIVE) {
       const countResult = await client.query<{ count: string }>(
         `SELECT COUNT(*) as count FROM pod_members WHERE pod_id = $1 AND status = 'active'`,
         [podId]
@@ -244,7 +254,7 @@ export async function addMember(
       if (existingStatus === 'active') {
         throw new ConflictError('POD_MEMBER_EXISTS', 'User is already an active member of this pod');
       }
-      // Reactivate if previously left or removed
+      // Reactivate if previously left, removed, declined, or no_response
       const result = await client.query<PodMember>(
         `UPDATE pod_members SET role = $1, status = $2, joined_at = NOW(), left_at = NULL
          WHERE pod_id = $3 AND user_id = $4
@@ -267,7 +277,6 @@ export async function addMember(
 }
 
 export async function removeMember(podId: string, userId: string, removedBy: string, removedByRole?: UserRole): Promise<void> {
-  // Admin/super_admin can remove any member; otherwise require director/host role
   const isAdmin = removedByRole && hasRoleAtLeast(removedByRole, UserRole.ADMIN);
   if (!isAdmin) {
     await requirePodRole(podId, removedBy, [PodMemberRole.DIRECTOR, PodMemberRole.HOST]);
@@ -286,18 +295,15 @@ export async function removeMember(podId: string, userId: string, removedBy: str
 }
 
 export async function updateMemberRole(podId: string, targetUserId: string, newRole: PodMemberRole, updatedBy: string, updatedByRole?: UserRole): Promise<PodMember> {
-  // Only directors and admins can change roles
   const isAdmin = updatedByRole && hasRoleAtLeast(updatedByRole, UserRole.ADMIN);
   if (!isAdmin) {
     await requirePodRole(podId, updatedBy, [PodMemberRole.DIRECTOR]);
   }
 
-  // Cannot change the director's own role (there must always be one director)
   if (targetUserId === updatedBy && newRole !== PodMemberRole.DIRECTOR) {
     throw new ForbiddenError('You cannot change your own role as director');
   }
 
-  // Cannot promote someone to director (transfer ownership is a separate operation)
   if (newRole === PodMemberRole.DIRECTOR) {
     throw new ForbiddenError('Director role cannot be assigned. Use transfer ownership instead.');
   }
@@ -337,7 +343,7 @@ export async function getPodMembers(podId: string, status?: PodMemberStatus): Pr
   const values: unknown[] = [podId];
 
   if (status) {
-    sql += ' AND status = $2';
+    sql += ' AND pod_members.status = $2';
     values.push(status);
   }
 
@@ -354,36 +360,7 @@ export async function getMemberRole(podId: string, userId: string): Promise<PodM
   return result.rows.length > 0 ? result.rows[0].role : null;
 }
 
-// ─── Delete Pod ─────────────────────────────────────────────────────────────
-
-export async function deletePod(podId: string, userId: string, userRole?: UserRole): Promise<void> {
-  await getPodById(podId);
-
-  // Admin/super_admin can delete any pod; otherwise require director role
-  const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
-  if (!isAdmin) {
-    await requirePodRole(podId, userId, [PodMemberRole.DIRECTOR]);
-  }
-
-  // Soft-delete: archive the pod
-  await query(`UPDATE pods SET status = 'archived', updated_at = NOW() WHERE id = $1`, [podId]);
-  logger.info({ podId, userId }, 'Pod deleted (archived)');
-}
-
-export async function reactivatePod(podId: string, userId: string): Promise<Pod> {
-  const pod = await getPodById(podId);
-  if (pod.status !== 'archived') {
-    throw new ConflictError('POD_NOT_ARCHIVED', 'Only archived pods can be reactivated');
-  }
-  await requirePodRole(podId, userId, [PodMemberRole.DIRECTOR]);
-
-  const result = await query<Pod>(
-    `UPDATE pods SET status = 'active', updated_at = NOW() WHERE id = $1 RETURNING ${POD_COLUMNS}`,
-    [podId]
-  );
-  logger.info({ podId, userId }, 'Pod reactivated');
-  return result.rows[0];
-}
+// ─── Join / Request to Join ──────────────────────────────────────────────────
 
 export async function joinPod(podId: string, userId: string): Promise<PodMember> {
   const pod = await getPodById(podId);
@@ -392,16 +369,18 @@ export async function joinPod(podId: string, userId: string): Promise<PodMember>
     throw new ForbiddenError('This pod is not currently active');
   }
 
-  // Enforce visibility rules
-  if (pod.visibility === PodVisibility.PRIVATE) {
-    throw new ForbiddenError('This is a private pod. You need an invite to join.');
+  if (pod.visibility === PodVisibility.PRIVATE || pod.visibility === PodVisibility.INVITE_ONLY) {
+    throw new ForbiddenError('This pod requires an invite to join');
   }
 
-  if (pod.visibility === PodVisibility.INVITE_ONLY) {
-    throw new ForbiddenError('This pod is invite-only. Request to join or use an invite link.');
+  if (
+    pod.visibility === PodVisibility.PUBLIC_WITH_APPROVAL ||
+    pod.visibility === PodVisibility.REQUEST_TO_JOIN
+  ) {
+    throw new ForbiddenError('This pod requires approval. Use "Request to Join" instead.');
   }
 
-  // Public pods: allow self-join
+  // Public: direct join
   return addMember(podId, userId, PodMemberRole.MEMBER);
 }
 
@@ -412,12 +391,16 @@ export async function requestToJoin(podId: string, userId: string): Promise<PodM
     throw new ForbiddenError('This pod is not currently active');
   }
 
+  if (pod.visibility === PodVisibility.PRIVATE) {
+    throw new ForbiddenError('This is a private pod. You need an invite to join.');
+  }
+
   if (pod.visibility === PodVisibility.PUBLIC) {
-    // Public pods: just join directly
+    // Public pods: join directly rather than requesting
     return addMember(podId, userId, PodMemberRole.MEMBER);
   }
 
-  // For invite-only and private: create pending_approval membership
+  // invite_only, public_with_approval, request_to_join → pending approval
   return addMember(podId, userId, PodMemberRole.MEMBER, PodMemberStatus.PENDING_APPROVAL);
 }
 
@@ -461,6 +444,75 @@ export async function rejectMember(podId: string, memberUserId: string, rejected
   logger.info({ podId, memberUserId, rejectedBy }, 'Pod join request rejected');
 }
 
+/** Mark an invited member as declined. Called when the invitee explicitly refuses. */
+export async function declineMember(podId: string, userId: string): Promise<void> {
+  const result = await query(
+    `UPDATE pod_members SET status = 'declined', left_at = NOW()
+     WHERE pod_id = $1 AND user_id = $2 AND status IN ('invited', 'pending_approval')`,
+    [podId, userId]
+  );
+
+  if (result.rowCount === 0) {
+    throw new NotFoundError('PodMember');
+  }
+
+  logger.info({ podId, userId }, 'Pod invitation declined');
+}
+
+// ─── Join Config ─────────────────────────────────────────────────────────────
+
+export async function getJoinConfig(podId: string): Promise<PodJoinConfig | null> {
+  const result = await query<{ joinConfig: PodJoinConfig | null }>(
+    `SELECT join_config AS "joinConfig" FROM pods WHERE id = $1`,
+    [podId]
+  );
+  if (result.rows.length === 0) throw new NotFoundError('Pod', podId);
+  return result.rows[0].joinConfig;
+}
+
+export async function setJoinConfig(podId: string, userId: string, config: PodJoinConfig | null, userRole?: UserRole): Promise<void> {
+  const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
+  if (!isAdmin) {
+    await requirePodRole(podId, userId, [PodMemberRole.DIRECTOR]);
+  }
+
+  await query(
+    `UPDATE pods SET join_config = $1, updated_at = NOW() WHERE id = $2`,
+    [config ? JSON.stringify(config) : null, podId]
+  );
+
+  logger.info({ podId, userId }, 'Pod join config updated');
+}
+
+// ─── Delete Pod ─────────────────────────────────────────────────────────────
+
+export async function deletePod(podId: string, userId: string, userRole?: UserRole): Promise<void> {
+  await getPodById(podId);
+
+  const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
+  if (!isAdmin) {
+    await requirePodRole(podId, userId, [PodMemberRole.DIRECTOR]);
+  }
+
+  await query(`UPDATE pods SET status = 'archived', updated_at = NOW() WHERE id = $1`, [podId]);
+  logger.info({ podId, userId }, 'Pod deleted (archived)');
+}
+
+export async function reactivatePod(podId: string, userId: string): Promise<Pod> {
+  const pod = await getPodById(podId);
+  if (pod.status !== 'archived') {
+    throw new ConflictError('POD_NOT_ARCHIVED', 'Only archived pods can be reactivated');
+  }
+  await requirePodRole(podId, userId, [PodMemberRole.DIRECTOR]);
+
+  const result = await query<Pod>(
+    `UPDATE pods SET status = 'active', updated_at = NOW() WHERE id = $1 RETURNING ${POD_COLUMNS}`,
+    [podId]
+  );
+  logger.info({ podId, userId }, 'Pod reactivated');
+  return result.rows[0];
+}
+
 export async function getSessionCountForPod(podId: string): Promise<number> {
   const result = await query<{ count: string }>(
     `SELECT COUNT(*) as count FROM sessions WHERE pod_id = $1`,
@@ -472,12 +524,10 @@ export async function getSessionCountForPod(podId: string): Promise<number> {
 // ─── Hard Delete Pod (super_admin only) ─────────────────────────────────────
 
 export async function hardDeletePod(podId: string): Promise<void> {
-  await getPodById(podId); // Verify exists
+  await getPodById(podId);
 
   await transaction(async (client) => {
-    // Delete related data in correct order (foreign key dependencies)
     await client.query(`DELETE FROM invites WHERE pod_id = $1`, [podId]);
-    // Delete session-related data for sessions in this pod
     const sessionsResult = await client.query<{ id: string }>(`SELECT id FROM sessions WHERE pod_id = $1`, [podId]);
     for (const s of sessionsResult.rows) {
       await client.query(`DELETE FROM ratings WHERE match_id IN (SELECT id FROM matches WHERE session_id = $1)`, [s.id]);

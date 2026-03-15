@@ -6,7 +6,7 @@ import { authenticate } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import { auditMiddleware } from '../middleware/audit';
 import * as podService from '../services/pod/pod.service';
-import { ApiResponse, UserRole, PodType, PodVisibility, PodMemberRole, hasRoleAtLeast } from '@rsn/shared';
+import { ApiResponse, UserRole, PodType, PodVisibility, PodMemberRole, OrchestrationMode, CommunicationMode, hasRoleAtLeast } from '@rsn/shared';
 import { ForbiddenError } from '../middleware/errors';
 
 const router = Router();
@@ -14,29 +14,41 @@ const router = Router();
 // ─── Validation Schemas ─────────────────────────────────────────────────────
 
 const createPodSchema = z.object({
-  name: z.string().min(1).max(200),
-  description: z.string().max(2000).optional(),
-  podType: z.nativeEnum(PodType).optional(),
-  orchestrationMode: z.enum(['timed_rounds', 'free_form', 'moderated']).optional(),
-  communicationMode: z.enum(['video', 'audio', 'text', 'hybrid']).optional(),
-  visibility: z.nativeEnum(PodVisibility).optional(),
-  maxMembers: z.number().int().positive().max(10000).optional(),
-  rules: z.string().max(5000).optional(),
+  name:              z.string().min(1).max(200),
+  description:       z.string().max(2000).optional(),
+  podType:           z.nativeEnum(PodType).optional(),
+  orchestrationMode: z.nativeEnum(OrchestrationMode).optional(),
+  communicationMode: z.nativeEnum(CommunicationMode).optional(),
+  visibility:        z.nativeEnum(PodVisibility).optional(),
+  maxMembers:        z.number().int().positive().max(10000).optional(),
+  rules:             z.string().max(5000).optional(),
 });
 
 const updatePodSchema = z.object({
-  name: z.string().min(1).max(200).optional(),
-  description: z.string().max(2000).optional(),
-  visibility: z.nativeEnum(PodVisibility).optional(),
-  maxMembers: z.number().int().positive().max(10000).optional(),
-  rules: z.string().max(5000).optional(),
-  status: z.enum(['draft', 'active', 'archived', 'suspended']).optional(),
+  name:              z.string().min(1).max(200).optional(),
+  description:       z.string().max(2000).optional(),
+  podType:           z.nativeEnum(PodType).optional(),
+  orchestrationMode: z.nativeEnum(OrchestrationMode).optional(),
+  communicationMode: z.nativeEnum(CommunicationMode).optional(),
+  visibility:        z.nativeEnum(PodVisibility).optional(),
+  maxMembers:        z.number().int().positive().max(10000).nullable().optional(),
+  rules:             z.string().max(5000).optional(),
+  status:            z.enum(['draft', 'active', 'archived', 'suspended']).optional(),
+  joinConfig:        z.object({
+    rulesText:     z.string().max(5000).optional(),
+    agreementText: z.string().max(1000).optional(),
+  }).nullable().optional(),
 });
 
 const addMemberSchema = z.object({
   userId: z.string().uuid(),
-  role: z.enum(['director', 'host', 'member']).optional(),
+  role:   z.enum(['director', 'host', 'member']).optional(),
 });
+
+const joinConfigSchema = z.object({
+  rulesText:     z.string().max(5000).optional(),
+  agreementText: z.string().max(1000).optional(),
+}).nullable();
 
 // ─── POST /pods ─────────────────────────────────────────────────────────────
 
@@ -65,21 +77,19 @@ router.get(
     try {
       const { podType, status, page, pageSize, browse } = req.query as Record<string, string>;
 
-      // browse=true shows all active non-private pods; otherwise scope to user's own pods
-      // admin=true allows admins to see all pods (e.g. for create-event dropdown)
-      const isBrowse = browse === 'true';
+      const isBrowse    = browse === 'true';
       const isAdminView = req.query.admin === 'true' && hasRoleAtLeast(req.user!.role, UserRole.ADMIN);
       const scopeUserId = isBrowse || isAdminView ? undefined : req.user!.userId;
       const effectiveStatus = isBrowse ? 'active' : status;
 
       const result = await podService.listPods({
-        userId: scopeUserId,
+        userId:           scopeUserId,
         requestingUserId: req.user!.userId,
-        podType: podType as PodType | undefined,
-        status: effectiveStatus as any,
-        page: page ? parseInt(page) : undefined,
-        pageSize: pageSize ? parseInt(pageSize) : undefined,
-        browse: isBrowse,
+        podType:          podType as PodType | undefined,
+        status:           effectiveStatus as any,
+        page:             page ? parseInt(page) : undefined,
+        pageSize:         pageSize ? parseInt(pageSize) : undefined,
+        browse:           isBrowse,
       });
 
       const pg = parseInt(page || '1');
@@ -90,12 +100,9 @@ router.get(
         success: true,
         data: result.pods,
         meta: {
-          page: pg,
-          pageSize: ps,
-          totalCount: result.total,
-          totalPages,
-          hasNext: pg < totalPages,
-          hasPrev: pg > 1,
+          page: pg, pageSize: ps,
+          totalCount: result.total, totalPages,
+          hasNext: pg < totalPages, hasPrev: pg > 1,
         },
       };
       res.json(response);
@@ -113,11 +120,8 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const pod = await podService.getPodById(req.params.id);
-
-      // Always fetch membership role so the client knows the user's relationship to the pod
       const memberRole = await podService.getMemberRole(req.params.id, req.user!.userId);
 
-      // Private pods are only visible to their members (admins can always see)
       if (pod.visibility === 'private' && !memberRole && !hasRoleAtLeast(req.user!.role, UserRole.ADMIN)) {
         throw new ForbiddenError('This pod is private. You must be a member to view it.');
       }
@@ -172,7 +176,6 @@ router.get(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Only pod members or admins can see the member list
       if (!hasRoleAtLeast(req.user!.role, UserRole.ADMIN)) {
         const requesterRole = await podService.getMemberRole(req.params.id, req.user!.userId);
         if (!requesterRole) {
@@ -197,19 +200,13 @@ router.post(
   auditMiddleware('add_pod_member', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Only directors and hosts can add members
       if (!hasRoleAtLeast(req.user!.role, UserRole.ADMIN)) {
         const requesterRole = await podService.getMemberRole(req.params.id, req.user!.userId);
         if (!requesterRole || ![PodMemberRole.DIRECTOR, PodMemberRole.HOST].includes(requesterRole)) {
           throw new ForbiddenError('Only pod directors and hosts can add members');
         }
       }
-
-      const member = await podService.addMember(
-        req.params.id,
-        req.body.userId,
-        req.body.role || PodMemberRole.MEMBER
-      );
+      const member = await podService.addMember(req.params.id, req.body.userId, req.body.role || PodMemberRole.MEMBER);
       const response: ApiResponse = { success: true, data: member };
       res.status(201).json(response);
     } catch (err) {
@@ -247,9 +244,7 @@ router.patch(
       if (!role || !['host', 'member'].includes(role)) {
         throw new ForbiddenError('Role must be "host" or "member"');
       }
-      const member = await podService.updateMemberRole(
-        req.params.id, req.params.userId, role, req.user!.userId, req.user!.role
-      );
+      const member = await podService.updateMemberRole(req.params.id, req.params.userId, role, req.user!.userId, req.user!.role);
       const response: ApiResponse = { success: true, data: member };
       res.json(response);
     } catch (err) {
@@ -265,10 +260,7 @@ router.post(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const member = await podService.joinPod(
-        req.params.id,
-        req.user!.userId
-      );
+      const member = await podService.joinPod(req.params.id, req.user!.userId);
       const response: ApiResponse = { success: true, data: member };
       res.status(201).json(response);
     } catch (err) {
@@ -284,12 +276,25 @@ router.post(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const member = await podService.requestToJoin(
-        req.params.id,
-        req.user!.userId
-      );
+      const member = await podService.requestToJoin(req.params.id, req.user!.userId);
       const response: ApiResponse = { success: true, data: member };
       res.status(201).json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /pods/:id/decline ──────────────────────────────────────────────────
+
+router.post(
+  '/:id/decline',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await podService.declineMember(req.params.id, req.user!.userId);
+      const response: ApiResponse = { success: true, data: { message: 'Invitation declined' } };
+      res.json(response);
     } catch (err) {
       next(err);
     }
@@ -304,12 +309,7 @@ router.post(
   auditMiddleware('approve_pod_member', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const member = await podService.approveMember(
-        req.params.id,
-        req.params.userId,
-        req.user!.userId,
-        req.user!.role
-      );
+      const member = await podService.approveMember(req.params.id, req.params.userId, req.user!.userId, req.user!.role);
       const response: ApiResponse = { success: true, data: member };
       res.json(response);
     } catch (err) {
@@ -326,12 +326,7 @@ router.post(
   auditMiddleware('reject_pod_member', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await podService.rejectMember(
-        req.params.id,
-        req.params.userId,
-        req.user!.userId,
-        req.user!.role
-      );
+      await podService.rejectMember(req.params.id, req.params.userId, req.user!.userId, req.user!.role);
       const response: ApiResponse = { success: true, data: { message: 'Request rejected' } };
       res.json(response);
     } catch (err) {
@@ -382,6 +377,40 @@ router.get(
     try {
       const count = await podService.getSessionCountForPod(req.params.id);
       const response: ApiResponse = { success: true, data: { count } };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── GET /pods/:id/join-config ───────────────────────────────────────────────
+
+router.get(
+  '/:id/join-config',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const config = await podService.getJoinConfig(req.params.id);
+      const response: ApiResponse = { success: true, data: config };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── PUT /pods/:id/join-config ───────────────────────────────────────────────
+
+router.put(
+  '/:id/join-config',
+  authenticate,
+  validate(z.object({ joinConfig: joinConfigSchema })),
+  auditMiddleware('update_pod_join_config', 'pod'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await podService.setJoinConfig(req.params.id, req.user!.userId, req.body.joinConfig, req.user!.role);
+      const response: ApiResponse = { success: true, data: { message: 'Join config updated' } };
       res.json(response);
     } catch (err) {
       next(err);
