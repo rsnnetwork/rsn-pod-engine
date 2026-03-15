@@ -56,7 +56,7 @@ router.post(
   auditMiddleware('create_session', 'session'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const session = await sessionService.createSession(req.user!.userId, req.body);
+      const session = await sessionService.createSession(req.user!.userId, req.body, req.user!.role);
 
       // Auto-register the host as a participant
       try {

@@ -30,14 +30,17 @@ const PARTICIPANT_COLUMNS = `
 
 // ─── Session CRUD ───────────────────────────────────────────────────────────
 
-export async function createSession(userId: string, input: CreateSessionInput): Promise<Session> {
-  // Verify pod exists and user has host/director role
+export async function createSession(userId: string, input: CreateSessionInput, userRole?: UserRole): Promise<Session> {
   // Verify pod exists (will throw NotFoundError if not)
   await podService.getPodById(input.podId);
-  const memberRole = await podService.getMemberRole(input.podId, userId);
 
-  if (!memberRole || !['director', 'host'].includes(memberRole)) {
-    throw new ForbiddenError('Only pod directors and hosts can create sessions');
+  // Admins can create sessions in any pod; others must be director or host
+  const isAdmin = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
+  if (!isAdmin) {
+    const memberRole = await podService.getMemberRole(input.podId, userId);
+    if (!memberRole || !['director', 'host'].includes(memberRole)) {
+      throw new ForbiddenError('Only pod directors and hosts can create sessions');
+    }
   }
 
   const sessionConfig: SessionConfig = {
