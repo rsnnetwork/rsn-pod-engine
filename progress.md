@@ -136,10 +136,44 @@ Purpose: Persistent execution history and current state, independent of chat mem
 - Request-to-join rules: joinConfig rules modal with checkbox
 - Admin configurable limits: deferred to Phase 6
 
+### What's Done (Phase 6 — Admin Power-Up) — 2026-03-17
+
+**Quick Wins:**
+- Event type selector: speed networking, video meeting, voice meeting, webinar, physical event (stored in session config JSONB)
+- Event scheduling defaults: scheduledAt pre-filled to next 15-min slot
+
+**DB Migrations (020, 021):**
+- 020: violations table (reporter, reported, reason, status, admin notes, resolution) + email_config table with 7 default email types
+- 021: matching_templates table (name, 5 scoring weights, rematch cooldown, exploration, same-company, fallback) + pods.matching_template_id FK + default template seed
+
+**Server:**
+- New /api/admin routes file: stats, entitlements CRUD, bulk user actions, bulk join request actions, violations CRUD, matching templates CRUD, email config toggle
+- GET /admin/stats: totalUsers, activeUsers7d, totalPods, activePods, totalEvents, completedEvents, totalMatches, avgRating, userGrowth (30d)
+- GET/PUT /admin/users/:id/entitlements
+- POST /admin/users/bulk-action (suspend/ban/activate/delete)
+- POST /admin/join-requests/bulk-action (approve/decline)
+- GET/POST /admin/violations, POST /admin/violations/:id/resolve, POST /admin/violations/report
+- GET/POST/PUT/DELETE /admin/templates
+- GET/PUT /admin/email-config
+
+**Client:**
+- AdminDashboardPage: rewritten with real stats (8 metric cards + 30d user growth bar chart)
+- AdminUsersPage: checkbox bulk select + floating action bar (Bulk Suspend/Ban/Reactivate) + entitlements modal (Limits button)
+- AdminJoinRequestsPage: checkbox bulk select + floating action bar (Bulk Approve/Decline)
+- AdminModerationPage: new — moderation queue with status filters, resolve modal (dismiss/warn/suspend/ban)
+- AdminTemplatesPage: new — CRUD with weight sliders, cooldown, exploration, fallback, same-company toggle
+- AdminEmailPage: new — toggle per email type with descriptions and subject preview
+- CreateSessionPage: event type dropdown + scheduledAt defaults to now
+
 ### What's Next
 
-**Phase 6 — Admin Power-Up**
-- Bulk actions, matching templates, violations, stats dashboard, admin-configurable entitlement limits
+**All 6 phases complete.** Platform is production-ready for the features in the Change 1.4 doc.
+Remaining future work (not in current scope):
+- Premium pre-selection UI (matching engine wiring)
+- Member states: decline invite flow + no-response detection
+- Circle layer above pods (strategic product direction)
+- AI template wizard
+- Stripe billing integration
 
 ---
 

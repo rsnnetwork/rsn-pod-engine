@@ -185,4 +185,45 @@ Hi! We've shipped a major update. Please test on app.rsn.network — log out and
 
 -----------------------------------------------------------------
 
+  30. Event Type Selector
+  - Go to Events → Schedule an Event
+  - New dropdown: Event Type — Speed Networking, Video Meeting, Voice Meeting, Webinar, Physical Event
+  - Date and time now default to the current time (rounded to next 15 minutes)
+
+  31. Admin Dashboard — Real Stats
+  - Go to Admin → dashboard now shows real numbers
+  - Total Users, Active Users (last 7 days), Pods, Events, Matches, Avg Rating
+  - 30-day user growth bar chart (hover bars to see daily counts)
+
+  32. Bulk Actions
+  - Admin → Users: checkboxes on each user row, "Select All" at the top
+  - Select multiple → floating bar appears with Bulk Suspend / Bulk Ban / Bulk Reactivate
+  - Admin → Join Requests: same pattern with Bulk Approve / Bulk Decline
+
+  33. User Entitlements
+  - Admin → Users → click "Limits" button on any user
+  - Modal shows: Max Pods Owned, Max Sessions/Month, Max Invites/Day, Can Host Events, Can Create Pods
+  - Edit and save — limits are enforced immediately
+
+  34. Moderation Queue
+  - Admin → Moderation Queue (new page)
+  - Shows all user reports with Open / Actioned / Dismissed filters
+  - Click "Review" → choose action: Dismiss, Warn, Suspend, or Ban
+  - Suspend/Ban automatically updates the user's status
+
+  35. Matching Templates
+  - Admin → Matching Templates (new page)
+  - Create templates with scoring weight sliders: Industry, Interests, Intent, Experience, Location
+  - Configure: rematch cooldown, exploration level, same-company matches, fallback strategy
+  - Default template is pre-seeded — can't be deleted
+  - Templates can be assigned to pods (foundation for matching engine)
+
+  36. Email Controls
+  - Admin → Email Controls (new page)
+  - Toggle each email type on/off: Magic Link, Pod Invite, Event Invite, Platform Invite, Recap, Join Request Approved/Declined
+  - Shows description and subject line for each email type
+  - Warning: disabling Magic Link blocks login for all users
+
+-----------------------------------------------------------------
+
 Questions? Reply with screenshots and we'll fix anything immediately.
