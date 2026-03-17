@@ -3803,3 +3803,26 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - client/src/features/invites/CreateInviteModal.tsx
 - Validation Results:
   - ✅ Zero indigo references remaining in codebase (verified with grep)
+
+### 2026-03-18 — Entry (DB Integrity Audit)
+- Task ID: T-DB-AUDIT
+- Task Title: Migration audit — fix FK gap & missing hot-path indexes
+- Status: Completed
+- What changed:
+  - **Full audit** of all 21 migrations (001–021) against actual server queries and schema.
+  - **Bug fix**: `users.invited_by_user_id` FK (from migration 004) had no ON DELETE behavior — deleting a user who invited others would throw a FK violation error. Fixed with ON DELETE SET NULL.
+  - **Missing index**: `ratings(from_user_id, created_at DESC)` — rating recap queries were doing full-table scans.
+  - **Missing index**: `matches(session_id, round_number, status)` — the orchestration engine hits this pattern ~10 times per round.
+  - **Missing index**: `encounter_history(last_session_id, mutual_meet_again) WHERE mutual_meet_again = TRUE` — recap analytics query.
+  - Reverted trivial blank-line diff in 002_integrity_and_indexes.sql.
+- Files touched:
+  - server/src/db/migrations/022_integrity_gaps.sql (new)
+  - server/src/db/migrations/002_integrity_and_indexes.sql (reverted stray blank line)
+  - progress.md
+  - CHANGE_1.4_LOG.md
+- Decisions made:
+  - Created a new migration (022) rather than editing 002, since 002 may already be applied on production DB.
+  - Used ON DELETE SET NULL (not CASCADE) for invited_by_user_id — we want to keep the user record, just clear the invitation link.
+  - Only added HIGH and MEDIUM priority indexes; skipped low-ROI `matches(session_id, status)` composite.
+- Next immediate action:
+  - Deploy and let migration auto-run on next server startup.

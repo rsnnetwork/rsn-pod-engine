@@ -184,6 +184,8 @@ Hi! We've shipped a major update. Please test on app.rsn.network — log out and
   - If no rules are set, request goes through immediately (same as before)
 
 -----------------------------------------------------------------
+  Phase 6 — Admin Power-Up (2026-03-17)
+-----------------------------------------------------------------
 
   30. Event Type Selector
   - Go to Events → Schedule an Event
@@ -223,6 +225,13 @@ Hi! We've shipped a major update. Please test on app.rsn.network — log out and
   - Toggle each email type on/off: Magic Link, Pod Invite, Event Invite, Platform Invite, Recap, Join Request Approved/Declined
   - Shows description and subject line for each email type
   - Warning: disabling Magic Link blocks login for all users
+
+-----------------------------------------------------------------
+
+  37. Database Integrity Fixes
+  - Deleting a user who invited others no longer throws an error (FK violation fixed)
+  - Added performance indexes for rating history, match orchestration, and encounter recap queries
+  - Migration 022 runs automatically on next server startup — no manual action needed
 
 -----------------------------------------------------------------
 
