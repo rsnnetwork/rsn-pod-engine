@@ -7,6 +7,7 @@ import LoginPage from '@/features/auth/LoginPage';
 import VerifyPage from '@/features/auth/VerifyPage';
 import HomePage from '@/features/home/HomePage';
 import ProfilePage from '@/features/profile/ProfilePage';
+import PublicProfilePage from '@/features/profile/PublicProfilePage';
 import PodsPage from '@/features/pods/PodsPage';
 import PodDetailPage from '@/features/pods/PodDetailPage';
 import SessionsPage from '@/features/sessions/SessionsPage';
@@ -53,6 +54,7 @@ export default function App() {
       <Route element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
         <Route path="/" element={<HomePage />} />
         <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/profile/:userId" element={<PublicProfilePage />} />
         <Route path="/pods" element={<PodsPage />} />
         <Route path="/pods/:podId" element={<PodDetailPage />} />
         <Route path="/sessions" element={<SessionsPage />} />
