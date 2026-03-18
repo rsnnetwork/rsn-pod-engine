@@ -59,6 +59,12 @@ export interface ServerToClientEvents {
   // Breakout room
   'match:return_to_lobby': (data: { reason: 'partner_left' | 'you_left' | 'auto_return' }) => void;
 
+  // Matching anticipation
+  'session:matching_in_progress': (data: { sessionId: string; roomCount: number; roundNumber: number }) => void;
+
+  // Reactions
+  'reaction:received': (data: { userId: string; displayName: string; type: string; timestamp: string }) => void;
+
   // Lobby video
   'lobby:token': (data: { token: string; livekitUrl: string; roomId: string }) => void;
   'lobby:mute_command': (data: { muted: boolean; byHost: boolean }) => void;
@@ -107,6 +113,9 @@ export interface ClientToServerEvents {
 
   // Breakout room
   'participant:leave_conversation': (data: { sessionId: string }) => void;
+
+  // Reactions
+  'reaction:send': (data: { sessionId: string; type: string }) => void;
 
   // Chat
   'chat:send': (data: { sessionId: string; message: string; scope: 'lobby' | 'room' }) => void;

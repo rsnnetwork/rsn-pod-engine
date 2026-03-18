@@ -98,6 +98,7 @@ export function initOrchestration(
 
     // Chat
     socket.on('chat:send', (data) => handleChatSend(socket, data));
+    socket.on('reaction:send', (data) => handleReactionSend(socket, data));
 
     socket.on('disconnect', () => handleDisconnect(socket));
   });
@@ -1299,7 +1300,20 @@ async function handleHostConfirmRound(
     const roundNumber = activeSession.pendingRoundNumber;
     activeSession.pendingRoundNumber = null;
 
-    logger.info({ sessionId: data.sessionId, roundNumber }, 'Host confirmed round — starting');
+    // ─── Matching anticipation: broadcast "matching in progress" then delay ───
+    const matches = await matchingService.getMatchesByRound(data.sessionId, roundNumber);
+    const roomCount = matches.length;
+
+    io.to(sessionRoom(data.sessionId)).emit('session:matching_in_progress', {
+      sessionId: data.sessionId,
+      roomCount,
+      roundNumber,
+    });
+
+    // Deliberate 2.5s anticipation delay before actually moving people
+    await new Promise(resolve => setTimeout(resolve, 2500));
+
+    logger.info({ sessionId: data.sessionId, roundNumber, roomCount }, 'Host confirmed round — starting');
     await transitionToRound(data.sessionId, roundNumber);
   } catch (err: any) {
     logger.error({ err }, 'Error confirming round');
@@ -2528,6 +2542,36 @@ async function handleChatSend(
   } catch (err: any) {
     logger.error({ err }, 'Error handling chat message');
     socket.emit('error', { code: 'CHAT_FAILED', message: 'Failed to send message' });
+  }
+}
+
+// ─── Reactions ──────────────────────────────────────────────────────────────
+
+const VALID_REACTIONS = ['raise_hand', 'heart', 'clap', 'thumbs_up'];
+
+async function handleReactionSend(
+  socket: Socket,
+  data: { sessionId: string; type: string }
+): Promise<void> {
+  try {
+    const userId = getUserIdFromSocket(socket);
+    if (!userId) return;
+
+    const { sessionId, type } = data;
+    if (!VALID_REACTIONS.includes(type)) return;
+
+    if (!socket.rooms.has(sessionRoom(sessionId))) return;
+
+    const displayName = (socket.data as any)?.displayName || 'User';
+
+    io.to(sessionRoom(sessionId)).emit('reaction:received', {
+      userId,
+      displayName,
+      type,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    logger.error({ err }, 'Error handling reaction');
   }
 }
 

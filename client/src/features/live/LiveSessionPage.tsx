@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -10,6 +10,9 @@ import RatingPrompt from './RatingPrompt';
 import SessionComplete from './SessionComplete';
 import HostControls from './HostControls';
 import ChatPanel from './ChatPanel';
+import MatchingOverlay from './MatchingOverlay';
+import ReactionBar from './ReactionBar';
+import ParticipantList from './ParticipantList';
 import { PageLoader } from '@/components/ui/Spinner';
 import { AlertCircle, X, LogOut, WifiOff, Loader2, RefreshCw, MessageCircle, Radio, Users, Shuffle, Mic, ArrowLeftRight, CheckCircle2 } from 'lucide-react';
 import api from '@/lib/api';
@@ -18,9 +21,10 @@ import { disconnectSocket, connectSocket, getSocket } from '@/lib/socket';
 export default function LiveSessionPage() {
   const { sessionId } = useParams();
   const navigate = useNavigate();
-  const { phase, broadcasts, error: sessionError, connectionStatus, transitionStatus, sessionStatus, currentRound, totalRounds, setError, setPhase, reset, chatOpen, setChatOpen, unreadChatCount } = useSessionStore();
+  const { phase, broadcasts, error: sessionError, connectionStatus, transitionStatus, sessionStatus, currentRound, totalRounds, setError, setPhase, reset, chatOpen, setChatOpen, unreadChatCount, matchingOverlay } = useSessionStore();
   const { user } = useAuthStore();
   const mediaRequestedRef = useRef(false);
+  const [participantListOpen, setParticipantListOpen] = useState(false);
 
   // Request media permissions once per event entry (not per room transition)
   useEffect(() => {
@@ -72,12 +76,20 @@ export default function LiveSessionPage() {
       {/* Top bar */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-gray-50/60">
         <h2 className="text-sm font-medium text-gray-600 truncate">{session?.title || 'Live Event'}</h2>
-        <button
-          onClick={handleLeave}
-          className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-red-400 transition-colors px-2 py-1 rounded-lg hover:bg-gray-100"
-        >
-          <LogOut className="h-4 w-4" /> Leave
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setParticipantListOpen(!participantListOpen)}
+            className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors px-2 py-1 rounded-lg hover:bg-gray-100"
+          >
+            <Users className="h-4 w-4" />
+          </button>
+          <button
+            onClick={handleLeave}
+            className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-red-400 transition-colors px-2 py-1 rounded-lg hover:bg-gray-100"
+          >
+            <LogOut className="h-4 w-4" /> Leave
+          </button>
+        </div>
       </div>
 
       {/* Persistent event state banner */}
@@ -143,6 +155,11 @@ export default function LiveSessionPage() {
         </div>
       )}
 
+      {/* Matching anticipation overlay */}
+      {matchingOverlay && (
+        <MatchingOverlay roomCount={matchingOverlay.roomCount} roundNumber={matchingOverlay.roundNumber} />
+      )}
+
       {/* Main content + chat panel layout */}
       <div className="flex-1 flex overflow-hidden relative">
         {/* Session content */}
@@ -153,10 +170,24 @@ export default function LiveSessionPage() {
           {phase === 'complete' && <SessionComplete sessionId={sessionId} />}
         </div>
 
+        {/* Participant list panel */}
+        {participantListOpen && !chatOpen && (
+          <div className="w-full sm:w-72 sm:min-w-[288px] flex-shrink-0 h-full">
+            <ParticipantList onClose={() => setParticipantListOpen(false)} />
+          </div>
+        )}
+
         {/* Chat panel -- side panel on desktop, full overlay on mobile */}
         {chatOpen && (
           <div className="w-full sm:w-80 sm:min-w-[320px] flex-shrink-0 h-full">
             <ChatPanel sessionId={sessionId} onClose={() => setChatOpen(false)} />
+          </div>
+        )}
+
+        {/* Reaction bar — visible during lobby and matched phases */}
+        {phase !== 'complete' && phase !== 'rating' && sessionId && (
+          <div className="absolute bottom-20 left-4 z-20">
+            <ReactionBar sessionId={sessionId} />
           </div>
         )}
 

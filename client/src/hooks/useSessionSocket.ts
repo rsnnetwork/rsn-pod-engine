@@ -11,6 +11,7 @@ const SOCKET_EVENTS = [
   'match:assigned', 'match:reassigned', 'match:bye_round',
   'match:partner_disconnected', 'match:partner_reconnected', 'match:return_to_lobby',
   'rating:window_open', 'rating:window_closed',
+  'session:matching_in_progress',
   'host:broadcast', 'lobby:token', 'host:participant_removed',
   'host:match_preview', 'lobby:mute_command',
   'host:round_dashboard', 'host:room_status_update',
@@ -153,6 +154,11 @@ export default function useSessionSocket(sessionId: string) {
       setTimeout(() => { store.setTransitionStatus(null); store.setPhase('complete'); }, 1500);
     });
 
+    // ── Matching anticipation ──
+    socket.on('session:matching_in_progress', (data: any) => {
+      store.setMatchingOverlay({ roomCount: data.roomCount, roundNumber: data.roundNumber });
+    });
+
     // ── Matching ──
     socket.on('match:assigned', (data: any) => {
       // Only transition to 'matched' phase during an active round — ignore stale
@@ -160,6 +166,7 @@ export default function useSessionSocket(sessionId: string) {
       const currentStatus = useSessionStore.getState().sessionStatus;
       if (currentStatus === 'round_rating' || currentStatus === 'completed') return;
 
+      store.setMatchingOverlay(null); // Clear anticipation screen
       store.setByeRound(false);
       store.setPartnerDisconnected(false);
       store.setTransitionStatus('preparing_match');
@@ -209,6 +216,7 @@ export default function useSessionSocket(sessionId: string) {
     });
 
     socket.on('match:bye_round', () => {
+      store.setMatchingOverlay(null);
       store.setByeRound(true);
       store.setPartnerDisconnected(false);
       store.setMatch(null);

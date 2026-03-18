@@ -47,8 +47,10 @@ export default {
         'glow': 'glow 2s ease-in-out infinite alternate',
         'marquee': 'marquee 30s linear infinite',
         'marquee-reverse': 'marquee 30s linear infinite reverse',
+        'float-up': 'floatUp 2.5s ease-out forwards',
       },
       keyframes: {
+        floatUp: { '0%': { opacity: '1', transform: 'translateY(0)' }, '70%': { opacity: '1' }, '100%': { opacity: '0', transform: 'translateY(-120px)' } },
         fadeIn: { '0%': { opacity: '0' }, '100%': { opacity: '1' } },
         fadeInUp: { '0%': { opacity: '0', transform: 'translateY(20px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
         fadeInDown: { '0%': { opacity: '0', transform: 'translateY(-20px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
