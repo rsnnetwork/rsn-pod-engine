@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Bell, Check, CheckCircle, X, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
 
@@ -12,6 +13,7 @@ interface Notification {
   link?: string;
   isRead: boolean;
   createdAt: string;
+  inviteStatus?: string | null; // 'pending' | 'accepted' | 'revoked' | 'expired' — from server join
 }
 
 const INVITE_TYPES = ['pod_invite', 'event_invite'];
@@ -28,12 +30,13 @@ export default function NotificationBell() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [actionLoading, setActionLoading] = useState<string | null>(null); // notification id being acted on
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [dropPos, setDropPos] = useState<{ top: number; left: number } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const navigate = useNavigate();
   const { addToast } = useToastStore();
+  const qc = useQueryClient();
 
   // Close on outside click
   useEffect(() => {
@@ -44,7 +47,6 @@ export default function NotificationBell() {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  // Fetch on mount + when opening
   const fetchNotifications = async () => {
     setLoading(true);
     try {
@@ -81,6 +83,13 @@ export default function NotificationBell() {
     setUnreadCount(0);
   };
 
+  /** Invalidate all caches that display invite/membership data */
+  const invalidateInviteCaches = () => {
+    qc.invalidateQueries({ queryKey: ['received-invites'] });
+    qc.invalidateQueries({ queryKey: ['my-pods'] });
+    qc.invalidateQueries({ queryKey: ['my-sessions'] });
+  };
+
   const handleAcceptInvite = async (n: Notification) => {
     const code = extractInviteCode(n.link);
     if (!code) return;
@@ -89,10 +98,11 @@ export default function NotificationBell() {
       const res = await api.post(`/invites/${code}/accept`);
       addToast('Invite accepted!', 'success');
       if (!n.isRead) markRead(n.id);
-      // Remove from list
-      setNotifications(prev => prev.filter(x => x.id !== n.id));
+      // Update notification status locally so buttons disappear
+      setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, inviteStatus: 'accepted', isRead: true } : x));
+      invalidateInviteCaches();
       setOpen(false);
-      // Navigate to the destination
+      // Navigate to destination
       const data = res.data?.data;
       if (data?.sessionId) navigate(`/sessions/${data.sessionId}`);
       else if (data?.podId) navigate(`/pods/${data.podId}`);
@@ -105,6 +115,8 @@ export default function NotificationBell() {
         : code_ === 'AUTH_FORBIDDEN' ? 'This invite was sent to a different email'
         : err?.response?.data?.error?.message || 'Failed to accept invite';
       addToast(msg, 'error');
+      // Update status so buttons reflect reality
+      setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, inviteStatus: code_ === 'INVITE_REVOKED' ? 'revoked' : code_ === 'INVITE_EXPIRED' ? 'expired' : x.inviteStatus } : x));
     } finally {
       setActionLoading(null);
     }
@@ -118,8 +130,9 @@ export default function NotificationBell() {
       await api.post(`/invites/${code}/decline`);
       addToast('Invite declined', 'info');
       if (!n.isRead) markRead(n.id);
-      // Remove from list
-      setNotifications(prev => prev.filter(x => x.id !== n.id));
+      // Update notification status locally
+      setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, inviteStatus: 'revoked', isRead: true } : x));
+      invalidateInviteCaches();
     } catch {
       addToast('Failed to decline invite', 'error');
     } finally {
@@ -129,7 +142,6 @@ export default function NotificationBell() {
 
   const handleClick = (n: Notification) => {
     if (!n.isRead) markRead(n.id);
-    // For invite notifications with action buttons, clicking title navigates to invite page
     if (n.link) {
       setOpen(false);
       navigate(n.link);
@@ -149,7 +161,18 @@ export default function NotificationBell() {
     return `${days}d ago`;
   };
 
-  const isInviteNotification = (n: Notification) => INVITE_TYPES.includes(n.type) && extractInviteCode(n.link);
+  /** Only show action buttons for invite notifications where the invite is still pending */
+  const canActOnInvite = (n: Notification) =>
+    INVITE_TYPES.includes(n.type) && extractInviteCode(n.link) && n.inviteStatus === 'pending';
+
+  /** Show a status label for non-pending invite notifications */
+  const getInviteStatusLabel = (n: Notification) => {
+    if (!INVITE_TYPES.includes(n.type) || !n.inviteStatus || n.inviteStatus === 'pending') return null;
+    if (n.inviteStatus === 'accepted') return { text: 'Accepted', color: 'text-emerald-500' };
+    if (n.inviteStatus === 'revoked') return { text: 'Declined', color: 'text-gray-400' };
+    if (n.inviteStatus === 'expired') return { text: 'Expired', color: 'text-amber-400' };
+    return null;
+  };
 
   return (
     <div ref={ref} className="relative">
@@ -183,7 +206,8 @@ export default function NotificationBell() {
               <p className="text-sm text-gray-400 text-center py-6">No notifications yet</p>
             )}
             {notifications.map(n => {
-              const isInvite = isInviteNotification(n);
+              const showActions = canActOnInvite(n);
+              const statusLabel = getInviteStatusLabel(n);
               const isActing = actionLoading === n.id;
 
               return (
@@ -203,8 +227,8 @@ export default function NotificationBell() {
                     </div>
                   </button>
 
-                  {/* Inline Accept / Decline for invite notifications */}
-                  {isInvite && (
+                  {/* Inline Accept / Decline for PENDING invite notifications only */}
+                  {showActions && (
                     <div className="flex items-center gap-2 mt-2 ml-4">
                       <button
                         onClick={() => handleAcceptInvite(n)}
@@ -222,6 +246,13 @@ export default function NotificationBell() {
                         <X className="h-3 w-3" />
                         Decline
                       </button>
+                    </div>
+                  )}
+
+                  {/* Status label for already-acted invites */}
+                  {statusLabel && (
+                    <div className="mt-1.5 ml-4">
+                      <span className={`text-xs font-medium ${statusLabel.color}`}>{statusLabel.text}</span>
                     </div>
                   )}
                 </div>

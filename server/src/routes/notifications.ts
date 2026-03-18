@@ -6,16 +6,22 @@ import { ApiResponse } from '@rsn/shared';
 const router = Router();
 
 // GET /notifications — last 20 for current user
+// For invite-type notifications, includes invite status so the client knows
+// whether to show Accept/Decline buttons.
 router.get(
   '/',
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await query<any>(
-        `SELECT id, type, title, body, link, is_read AS "isRead", created_at AS "createdAt"
-         FROM notifications
-         WHERE user_id = $1
-         ORDER BY created_at DESC
+        `SELECT n.id, n.type, n.title, n.body, n.link, n.is_read AS "isRead", n.created_at AS "createdAt",
+                i.status AS "inviteStatus"
+         FROM notifications n
+         LEFT JOIN invites i ON n.type IN ('pod_invite', 'event_invite')
+           AND n.link LIKE '/invite/%'
+           AND i.code = SUBSTRING(n.link FROM '/invite/(.+)$')
+         WHERE n.user_id = $1
+         ORDER BY n.created_at DESC
          LIMIT 20`,
         [req.user!.userId]
       );
@@ -64,6 +70,23 @@ router.post(
     try {
       await query(
         `UPDATE notifications SET is_read = TRUE WHERE user_id = $1 AND is_read = FALSE`,
+        [req.user!.userId]
+      );
+      res.json({ success: true } as ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// DELETE /notifications — clear all notifications for current user
+router.delete(
+  '/',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await query(
+        `DELETE FROM notifications WHERE user_id = $1`,
         [req.user!.userId]
       );
       res.json({ success: true } as ApiResponse);
