@@ -4,6 +4,17 @@ import path from 'path';
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      // @livekit/track-processors is optionally loaded at runtime for background blur
+      external: ['@livekit/track-processors'],
+      output: {
+        globals: {
+          '@livekit/track-processors': 'LivekitTrackProcessors',
+        },
+      },
+    },
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
