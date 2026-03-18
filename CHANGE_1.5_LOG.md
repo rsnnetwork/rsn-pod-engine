@@ -42,13 +42,12 @@ Hi! We've shipped Change 1.5 — a major live event UX overhaul. Please test on 
   - You should NOT be stuck on "Waiting for next round..." if everyone already rated
   - If some people haven't rated yet → normal countdown continues
 
-  7. Leave Conversation (Back to Lobby)
+  7. Leave Round / Leave Event
   - During a breakout round → two separate buttons visible:
-    a) "Back to Lobby" or "Leave Conversation" → returns you to the lobby, stays in event
+    a) "Leave Round" → returns you to the lobby, stays in event, can be rematched next round
     b) "Leave Event" → exits the event entirely
-  - Click "Back to Lobby" → you're back in the lobby with other waiting participants
-  - You can be rematched in the next round
   - Your partner sees a notification that you left the conversation
+  - After round ends → participants return to lobby instantly (no transition delay)
 
   8. Auto-Return if Alone
   - Your partner leaves the breakout room (via "Back to Lobby" or disconnect)
@@ -57,11 +56,10 @@ Hi! We've shipped Change 1.5 — a major live event UX overhaul. Please test on 
   - You're added to the rematch pool for the next round
 
   9. Matching Anticipation Screen
-  - Host clicks "Match People" and confirms → all participants see a full-screen overlay
-  - Animated graphic with "Matching people..." text
-  - Holds for 2-3 seconds (building anticipation)
-  - Then briefly shows "X breakout rooms created"
-  - Then transitions into breakout rooms
+  - Host clicks "Start Round" → participants see a full-screen overlay
+  - Animated graphic with "Matching people..." → "X breakout rooms created!"
+  - Host does NOT see this overlay — they stay on the dashboard
+  - Then participants transition into breakout rooms
 
   10. Emoji Reactions
   - During event (lobby or breakout room) → reaction buttons visible
@@ -78,14 +76,17 @@ Hi! We've shipped Change 1.5 — a major live event UX overhaul. Please test on 
   - Updates in real-time as people join, leave, or move between rooms
 
   12. Co-Host / Moderator Delegation
-  - Host → participant panel → click a user → option to "Promote to Co-Host"
+  - Host → participant panel → click the shield icon next to a user to promote to Co-Host
+  - Co-host gets the full host controls bar: Match People, Start Round, Pause, End, Broadcast, Invite
+  - Co-hosts are excluded from matching (they're hosts, not participants)
+  - Co-host status updates in real-time (no refresh needed)
+  - Only the original host can promote/demote co-hosts
   - Works even after the event has started
-  - Co-host can: manage rooms, trigger rematch, move users, help monitor
-  - Host can remove co-host rights at any time
 
   13. Add People During Live Event
-  - Host → "Copy Link" button available during lobby or between rounds
-  - Copies the event link to clipboard (host stays in the live event, no navigation away)
+  - Host → "Invite" button available during lobby or between rounds
+  - Opens the session invite page in a popup window (host stays in the live event)
+  - Can send email invites, search platform users, or generate shareable links
   - New participants join into lobby (not into an active round)
   - Does NOT require ending or restarting the event
 
@@ -125,10 +126,14 @@ Hi! We've shipped Change 1.5 — a major live event UX overhaul. Please test on 
   19. Notifications Center
   - Bell icon in the left sidebar (desktop) and top bar (mobile)
   - Red badge shows how many unread notifications you have
-  - Click the bell → dropdown shows your recent notifications (last 20)
-  - Invite notifications show inline Accept / Decline buttons — no need to leave the page
-  - Click a notification title → goes to the invite acceptance page as fallback
+  - New notifications appear instantly (real-time push, no refresh needed)
+  - Invite notifications (pod + event) show inline Accept / Decline buttons
+  - Accept → joins the pod/event and navigates there. Decline → removes invite
+  - Already accepted shows "Accepted" label, declined shows "Declined"
+  - Clicking an accepted notification → goes to that pod/event page
+  - Clicking a declined/expired notification → shows a toast, no navigation
   - "Mark all read" button at the top of the dropdown
+  - All actions update the Invites page and Dashboard pending count immediately
 
   20. Pin / Highlight Speaker
   - In a breakout room → click any participant's video tile to pin them
@@ -154,6 +159,12 @@ Hi! We've shipped Change 1.5 — a major live event UX overhaul. Please test on 
   - Accept an invite link while logged in with a different email → clear error message shown
   - Shows which email you're signed in as
   - "Log Out & Sign In with Correct Email" button — logs you out and redirects back to the invite
+
+  24. Host Dashboard — Round Monitoring
+  - During an active round, host sees a live dashboard with all breakout rooms
+  - Each room card shows: participant names, connection status (green/red), room status (Live/Disconnected)
+  - Dashboard persists through page refresh (host can reload without losing the view)
+  - Host stays in lobby view when no dashboard data is available yet
 
   ---
 
