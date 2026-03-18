@@ -307,7 +307,37 @@ export default function InvitesPage() {
                   <p className="text-xs text-gray-400 text-center py-2">No users found matching "{userSearch}"</p>
                 )}
                 {searchResults && searchResults.length > 0 && (
-                  <div className="max-h-32 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                  <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                    {/* Select All */}
+                    {(() => {
+                      const invitable = searchResults.filter((u: any) => {
+                        if (inviteType === 'pod') return !(podMembers || []).some((m: any) => m.userId === u.id && m.status === 'active');
+                        if (inviteType === 'session') return !(sessionParticipants || []).some((p: any) => p.userId === u.id);
+                        return true;
+                      });
+                      const allSelected = invitable.length > 0 && invitable.every((u: any) => selectedUsers.some(s => s.id === u.id));
+                      return invitable.length > 1 ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (allSelected) {
+                              const invitableIds = new Set(invitable.map((u: any) => u.id));
+                              setSelectedUsers(prev => prev.filter(s => !invitableIds.has(s.id)));
+                            } else {
+                              const existing = new Set(selectedUsers.map(s => s.id));
+                              const toAdd = invitable.filter((u: any) => !existing.has(u.id));
+                              setSelectedUsers(prev => [...prev, ...toAdd]);
+                            }
+                          }}
+                          className="w-full flex items-center gap-3 px-3 py-2 text-left text-xs font-semibold text-gray-500 bg-gray-50 hover:bg-gray-100 transition-colors"
+                        >
+                          <div className={`h-4 w-4 rounded border ${allSelected ? 'bg-rsn-red border-rsn-red' : 'border-gray-300'} flex items-center justify-center`}>
+                            {allSelected && <Check className="h-3 w-3 text-white" />}
+                          </div>
+                          Select All ({invitable.length})
+                        </button>
+                      ) : null;
+                    })()}
                     {searchResults.map((u: any) => {
                       const isExisting = inviteType === 'pod'
                         ? (podMembers || []).some((m: any) => m.userId === u.id && m.status === 'active')
