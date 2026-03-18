@@ -87,7 +87,7 @@ export default function ProfilePage() {
         jobTitle: user.jobTitle || '',
         industry: user.industry || '',
         location: user.location || '',
-        linkedinUrl: user.linkedinUrl || '',
+        linkedinUrl: (user.linkedinUrl || '').replace(/^https?:\/\/(www\.)?linkedin\.com\/in\//i, ''),
         timezone: user.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || '',
         phone: (user as any).phone || '',
         expertiseText: (user as any).expertiseText || '',
@@ -298,11 +298,17 @@ export default function ProfilePage() {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
             <Input label="Industry" {...register('industry')} placeholder="Technology" />
-            <Input
-              label="LinkedIn"
-              {...register('linkedinUrl')}
-              placeholder="username or full LinkedIn URL"
-            />
+            <div>
+              <label className="flex items-center gap-2 text-sm font-medium text-gray-600 mb-1.5">LinkedIn</label>
+              <div className="flex items-center rounded-xl border border-gray-200 bg-gray-50 overflow-hidden focus-within:ring-2 focus-within:ring-[#1a1a2e] transition-all duration-200">
+                <span className="pl-4 pr-1 text-sm text-gray-400 whitespace-nowrap select-none">linkedin.com/in/</span>
+                <input
+                  {...register('linkedinUrl')}
+                  placeholder="your-username"
+                  className="flex-1 bg-transparent px-2 py-2.5 text-sm text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none"
+                />
+              </div>
+            </div>
           </div>
         </Card>
 

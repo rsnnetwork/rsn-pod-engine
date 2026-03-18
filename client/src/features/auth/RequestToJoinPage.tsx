@@ -72,18 +72,24 @@ export default function RequestToJoinPage() {
                 error={errors.email?.message}
                 {...register('email', { required: 'Email is required', pattern: { value: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: 'Invalid email' } })}
               />
-              <Input
-                label="LinkedIn Profile"
-                placeholder="username or full LinkedIn URL"
-                error={errors.linkedinUrl?.message}
-                {...register('linkedinUrl', {
-                  required: 'LinkedIn profile is required',
-                  validate: (value) => {
-                    const normalized = normalizeLinkedInUrl(value);
-                    return /^https?:\/\/(www\.)?linkedin\.com\/in\/.+/i.test(normalized) || 'Enter your LinkedIn username or full profile URL';
-                  }
-                })}
-              />
+              <div>
+                <label className="block text-sm font-medium text-gray-600 mb-1.5">LinkedIn Profile</label>
+                <div className="flex items-center rounded-xl border border-gray-200 bg-gray-50 overflow-hidden focus-within:ring-2 focus-within:ring-[#1a1a2e] transition-all duration-200">
+                  <span className="pl-4 pr-1 text-sm text-gray-400 whitespace-nowrap select-none">linkedin.com/in/</span>
+                  <input
+                    {...register('linkedinUrl', {
+                      required: 'LinkedIn profile is required',
+                      validate: (value) => {
+                        const normalized = normalizeLinkedInUrl(value);
+                        return /^https?:\/\/(www\.)?linkedin\.com\/in\/.+/i.test(normalized) || 'Enter your LinkedIn username or full profile URL';
+                      }
+                    })}
+                    placeholder="your-username"
+                    className="flex-1 bg-transparent px-2 py-2.5 text-sm text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none"
+                  />
+                </div>
+                {errors.linkedinUrl && <p className="text-xs text-red-500 mt-1">{errors.linkedinUrl.message}</p>}
+              </div>
               <div>
                 <label className="block text-sm font-medium text-gray-600 mb-1.5">Why do you want to join RSN?</label>
                 <textarea
