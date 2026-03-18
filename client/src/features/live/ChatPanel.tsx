@@ -147,7 +147,7 @@ function MessageBubble({ msg, isOwn }: { msg: ChatMessage; isOwn: boolean }) {
             </span>
           </div>
         )}
-        <p className="text-sm leading-relaxed break-words">{msg.message}</p>
+        <p className="text-sm leading-relaxed break-words"><Linkify text={msg.message} /></p>
         <div className={`flex ${isOwn ? 'justify-end' : 'justify-start'} mt-0.5`}>
           <span className="text-[10px] text-gray-400">
             {msg.scope === 'room' && <span className="mr-1">Room</span>}
@@ -156,5 +156,24 @@ function MessageBubble({ msg, isOwn }: { msg: ChatMessage; isOwn: boolean }) {
         </div>
       </div>
     </div>
+  );
+}
+
+const URL_REGEX = /(https?:\/\/[^\s<]+)/g;
+
+function Linkify({ text }: { text: string }) {
+  const parts = text.split(URL_REGEX);
+  return (
+    <>
+      {parts.map((part, i) =>
+        URL_REGEX.test(part) ? (
+          <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline hover:text-blue-800 break-all">
+            {part}
+          </a>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </>
   );
 }

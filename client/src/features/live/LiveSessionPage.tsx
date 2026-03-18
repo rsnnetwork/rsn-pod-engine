@@ -11,14 +11,14 @@ import SessionComplete from './SessionComplete';
 import HostControls from './HostControls';
 import ChatPanel from './ChatPanel';
 import { PageLoader } from '@/components/ui/Spinner';
-import { AlertCircle, X, LogOut, WifiOff, Loader2, RefreshCw, MessageCircle } from 'lucide-react';
+import { AlertCircle, X, LogOut, WifiOff, Loader2, RefreshCw, MessageCircle, Radio, Users, Shuffle, Mic, ArrowLeftRight, CheckCircle2 } from 'lucide-react';
 import api from '@/lib/api';
 import { disconnectSocket, connectSocket, getSocket } from '@/lib/socket';
 
 export default function LiveSessionPage() {
   const { sessionId } = useParams();
   const navigate = useNavigate();
-  const { phase, broadcasts, error: sessionError, connectionStatus, transitionStatus, setError, setPhase, reset, chatOpen, setChatOpen, unreadChatCount } = useSessionStore();
+  const { phase, broadcasts, error: sessionError, connectionStatus, transitionStatus, sessionStatus, currentRound, totalRounds, setError, setPhase, reset, chatOpen, setChatOpen, unreadChatCount } = useSessionStore();
   const { user } = useAuthStore();
   const mediaRequestedRef = useRef(false);
 
@@ -80,10 +80,15 @@ export default function LiveSessionPage() {
         </button>
       </div>
 
+      {/* Persistent event state banner */}
+      {connectionStatus === 'connected' && (
+        <EventStateBanner sessionStatus={sessionStatus} currentRound={currentRound} totalRounds={totalRounds} phase={phase} />
+      )}
+
       {/* Broadcast banner */}
       {broadcasts.length > 0 && (
         <div className="bg-rsn-red-light border-b border-rsn-red/30 px-4 py-2 text-center">
-          <p className="text-sm font-medium text-rsn-red">{broadcasts[broadcasts.length - 1]}</p>
+          <p className="text-sm font-medium text-rsn-red"><LinkifyText text={broadcasts[broadcasts.length - 1]} /></p>
         </div>
       )}
 
@@ -174,5 +179,57 @@ export default function LiveSessionPage() {
       {/* Host controls visible in all active phases */}
       {isHost && phase !== 'complete' && <HostControls sessionId={sessionId} />}
     </div>
+  );
+}
+
+/* ─── Persistent Event State Banner ─────────────────────────────────────── */
+
+const STATE_CONFIG: Record<string, { label: string; icon: React.ReactNode; color: string }> = {
+  scheduled:        { label: 'Waiting for participants', icon: <Users className="h-3.5 w-3.5" />, color: 'bg-blue-50 text-blue-700 border-blue-200' },
+  lobby_open:       { label: 'Lobby — waiting for host to start round', icon: <Mic className="h-3.5 w-3.5" />, color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  round_active:     { label: 'Round {round} Live', icon: <Radio className="h-3.5 w-3.5 animate-pulse" />, color: 'bg-rsn-red/10 text-rsn-red border-rsn-red/20' },
+  round_rating:     { label: 'Rating — Round {round}', icon: <ArrowLeftRight className="h-3.5 w-3.5" />, color: 'bg-amber-50 text-amber-700 border-amber-200' },
+  round_transition: { label: 'Back in lobby', icon: <Shuffle className="h-3.5 w-3.5" />, color: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
+  closing_lobby:    { label: 'Event wrapping up', icon: <Loader2 className="h-3.5 w-3.5 animate-spin" />, color: 'bg-gray-100 text-gray-600 border-gray-200' },
+  completed:        { label: 'Event completed', icon: <CheckCircle2 className="h-3.5 w-3.5" />, color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+};
+
+function EventStateBanner({ sessionStatus, currentRound, totalRounds }: { sessionStatus: string; currentRound: number; totalRounds: number; phase?: string }) {
+  const config = STATE_CONFIG[sessionStatus] || STATE_CONFIG.scheduled;
+  const label = config.label
+    .replace('{round}', String(currentRound || 1));
+  const roundInfo = totalRounds > 0 && sessionStatus !== 'completed' && sessionStatus !== 'scheduled'
+    ? ` · Round ${currentRound || 1} of ${totalRounds}`
+    : '';
+
+  // Don't duplicate round info if already in label
+  const showRoundInfo = roundInfo && !label.includes(`Round ${currentRound || 1}`);
+
+  return (
+    <div className={`px-4 py-1.5 border-b flex items-center justify-center gap-2 text-xs font-medium ${config.color}`}>
+      {config.icon}
+      <span>{label}{showRoundInfo ? roundInfo : ''}</span>
+    </div>
+  );
+}
+
+/* ─── Linkify helper for broadcast banner ───────────────────────────────── */
+
+const LINK_REGEX = /(https?:\/\/[^\s<]+)/g;
+
+function LinkifyText({ text }: { text: string }) {
+  const parts = text.split(LINK_REGEX);
+  return (
+    <>
+      {parts.map((part, i) =>
+        LINK_REGEX.test(part) ? (
+          <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="underline hover:opacity-80 break-all">
+            {part}
+          </a>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </>
   );
 }

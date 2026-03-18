@@ -144,7 +144,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   roundDashboard: null,
   chatMessages: [],
   unreadChatCount: 0,
-  chatOpen: false,
+  chatOpen: true,
 
   setPhase: (phase) => set({ phase }),
   setConnectionStatus: (connectionStatus) => set({ connectionStatus }),

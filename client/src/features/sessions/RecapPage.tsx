@@ -231,7 +231,7 @@ export default function RecapPage() {
           </h3>
           <div className="space-y-3">
             {data.mutualConnections.map(c => (
-              <div key={c.userId} className="flex items-center gap-3 p-3 rounded-lg bg-rsn-red/5 border border-rsn-red/20">
+              <a key={c.userId} href={`/profile/${c.userId}`} className="flex items-center gap-3 p-3 rounded-lg bg-rsn-red/5 border border-rsn-red/20 hover:bg-rsn-red/10 transition-colors">
                 <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="md" />
                 <div className="flex-1 min-w-0">
                   <p className="text-gray-800 font-medium truncate">{c.displayName}</p>
@@ -247,45 +247,53 @@ export default function RecapPage() {
                   </div>
                   <Heart className="h-4 w-4 text-rsn-red fill-rsn-red" />
                 </div>
-              </div>
+              </a>
             ))}
           </div>
         </Card>
       )}
 
-      {/* All connections by round */}
-      {data && data.connections.length > 0 && (
-        <Card>
-          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4">
-            All Connections
-          </h3>
-          <div className="space-y-2">
-            {data.connections.map(c => (
-              <div key={`${c.userId}-${c.roundNumber}`} className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-100/40 transition-colors">
-                <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="text-gray-800 font-medium truncate">{c.displayName}</p>
-                    <InterestBadge connection={c} />
-                  </div>
-                  <p className="text-xs text-gray-400">
-                    Round {c.roundNumber}
-                    {c.jobTitle && ` · ${c.jobTitle}`}
-                    {c.company && ` @ ${c.company}`}
-                  </p>
-                </div>
-                <div className="flex items-center gap-3 shrink-0">
-                  {c.qualityScore > 0 && (
-                    <div className="flex items-center gap-1 text-xs text-amber-400">
-                      <Star className="h-3 w-3 fill-amber-400" />{c.qualityScore}
+      {/* All connections grouped by round */}
+      {data && data.connections.length > 0 && (() => {
+        const byRound = data.connections.reduce<Record<number, typeof data.connections>>((acc, c) => {
+          (acc[c.roundNumber] ||= []).push(c);
+          return acc;
+        }, {});
+        const rounds = Object.keys(byRound).map(Number).sort((a, b) => a - b);
+        return rounds.map(round => (
+          <Card key={round}>
+            <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+              <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-rsn-red/10 text-rsn-red text-xs font-bold">{round}</span>
+              Round {round}
+              <span className="text-xs font-normal text-gray-400">· {byRound[round].length} {byRound[round].length === 1 ? 'person' : 'people'}</span>
+            </h3>
+            <div className="space-y-2">
+              {byRound[round].map(c => (
+                <a key={`${c.userId}-${c.roundNumber}`} href={`/profile/${c.userId}`} className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-100/40 transition-colors">
+                  <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-gray-800 font-medium truncate">{c.displayName}</p>
+                      <InterestBadge connection={c} />
                     </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
+                    <p className="text-xs text-gray-400">
+                      {c.jobTitle && `${c.jobTitle}`}
+                      {c.company && ` @ ${c.company}`}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    {c.qualityScore > 0 && (
+                      <div className="flex items-center gap-1 text-xs text-amber-400">
+                        <Star className="h-3 w-3 fill-amber-400" />{c.qualityScore}
+                      </div>
+                    )}
+                  </div>
+                </a>
+              ))}
+            </div>
+          </Card>
+        ));
+      })()}
 
       {/* Empty state */}
       {data && data.connections.length === 0 && (
