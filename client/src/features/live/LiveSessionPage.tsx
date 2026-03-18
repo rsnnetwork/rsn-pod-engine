@@ -46,7 +46,10 @@ export default function LiveSessionPage() {
     enabled: !!sessionId,
   });
 
-  const isHost = session?.hostUserId === user?.id;
+  const cohosts = useSessionStore(s => s.cohosts);
+  const isOriginalHost = session?.hostUserId === user?.id;
+  const isCohost = !!user?.id && cohosts.has(user.id);
+  const isHost = isOriginalHost || isCohost;
 
   useSessionSocket(sessionId!);
 

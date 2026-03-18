@@ -1,15 +1,13 @@
 import { useSessionStore } from '@/stores/sessionStore';
 import { Button } from '@/components/ui/Button';
-import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, MessageSquare, UserMinus, RefreshCw, Link2 } from 'lucide-react';
+import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, MessageSquare, UserMinus, RefreshCw, UserPlus } from 'lucide-react';
 import { getSocket } from '@/lib/socket';
 import { useState } from 'react';
-import { useToastStore } from '@/stores/toastStore';
 
 interface Props { sessionId: string; }
 
 export default function HostControls({ sessionId }: Props) {
   const { participants, phase, currentRound, totalRounds, transitionStatus, sessionStatus, matchPreview, setMatchPreview, roundDashboard } = useSessionStore();
-  const { addToast } = useToastStore();
   const socket = getSocket();
   const [generating, setGenerating] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -360,13 +358,10 @@ export default function HostControls({ sessionId }: Props) {
               </Button>
             )}
 
-            {/* Copy event link for inviting people */}
+            {/* Invite people — opens session page in new tab */}
             {(sessionStatus === 'lobby_open' || sessionStatus === 'round_transition') && (
-              <Button size="sm" variant="secondary" onClick={() => {
-                const link = `${window.location.origin}/sessions/${sessionId}`;
-                navigator.clipboard.writeText(link).then(() => addToast('Event link copied to clipboard!', 'success'));
-              }}>
-                <Link2 className="h-4 w-4 mr-1" /> Copy Link
+              <Button size="sm" variant="secondary" onClick={() => window.open(`/sessions/${sessionId}`, '_blank')}>
+                <UserPlus className="h-4 w-4 mr-1" /> Invite
               </Button>
             )}
 

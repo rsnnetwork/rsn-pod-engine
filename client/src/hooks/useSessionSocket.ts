@@ -17,6 +17,7 @@ const SOCKET_EVENTS = [
   'host:round_dashboard', 'host:room_status_update',
   'chat:message', 'chat:history',
   'timer:sync', 'error',
+  'cohost:assigned', 'cohost:removed',
 ] as const;
 
 export default function useSessionSocket(sessionId: string) {
@@ -86,7 +87,12 @@ export default function useSessionSocket(sessionId: string) {
       if (data.currentRound !== undefined) store.setRound(data.currentRound);
       if (data.totalRounds !== undefined) store.setTotalRounds(data.totalRounds);
       if (data.timerVisibility) store.setTimerVisibility(data.timerVisibility);
+      if (data.cohosts) store.setCohosts(data.cohosts);
     });
+
+    // ── Co-host ──
+    socket.on('cohost:assigned', (data: any) => { store.addCohost(data.userId); });
+    socket.on('cohost:removed', (data: any) => { store.removeCohost(data.userId); });
 
     // ── Session lifecycle ──
     socket.on('session:status_changed', (data: any) => {

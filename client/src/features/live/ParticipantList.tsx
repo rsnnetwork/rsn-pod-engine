@@ -1,4 +1,3 @@
-import { useState, useEffect } from 'react';
 import { Users, X, Crown, Shield, ShieldCheck } from 'lucide-react';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
@@ -13,24 +12,9 @@ interface Props {
 export default function ParticipantList({ onClose, sessionId }: Props) {
   const participants = useSessionStore(s => s.participants);
   const hostUserId = useSessionStore(s => s.hostUserId);
+  const cohosts = useSessionStore(s => s.cohosts);
   const { user } = useAuthStore();
-  const isHost = user?.id === hostUserId;
-  const [cohosts, setCohosts] = useState<Set<string>>(new Set());
-
-  // Listen for co-host changes
-  useEffect(() => {
-    const socket = getSocket();
-    if (!socket) return;
-    const onAssigned = (data: { userId: string }) => {
-      setCohosts(prev => new Set(prev).add(data.userId));
-    };
-    const onRemoved = (data: { userId: string }) => {
-      setCohosts(prev => { const s = new Set(prev); s.delete(data.userId); return s; });
-    };
-    socket.on('cohost:assigned', onAssigned);
-    socket.on('cohost:removed', onRemoved);
-    return () => { socket.off('cohost:assigned', onAssigned); socket.off('cohost:removed', onRemoved); };
-  }, []);
+  const isOriginalHost = user?.id === hostUserId;
 
   const toggleCohost = (userId: string) => {
     const socket = getSocket();
@@ -93,7 +77,7 @@ export default function ParticipantList({ onClose, sessionId }: Props) {
                   <ShieldCheck className="h-2.5 w-2.5" /> Co-Host
                 </span>
               )}
-              {isHost && !isPHost && !isSelf && (
+              {isOriginalHost && !isPHost && !isSelf && (
                 <button
                   onClick={() => toggleCohost(p.userId)}
                   title={isCohost ? 'Remove co-host' : 'Make co-host'}

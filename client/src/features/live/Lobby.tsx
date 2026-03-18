@@ -1,7 +1,6 @@
 import { Users, Loader2, VideoOff, Sparkles, ChevronDown, ChevronUp, Mic, MicOff, Volume2, VolumeX, UserX, Clock } from 'lucide-react';
 import HostRoundDashboard from './HostRoundDashboard';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import ProfileCard from '@/components/ui/ProfileCard';
 import { useSessionStore } from '@/stores/sessionStore';
 import { getSocket } from '@/lib/socket';
 import {
@@ -354,24 +353,18 @@ function HostParticipantPanel({ sessionId }: { sessionId?: string }) {
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
               {participants.map(p => (
-                <div key={p.userId} className="relative group/participant">
-                  <ProfileCard
-                    compact
-                    user={{
-                      id: p.userId,
-                      displayName: p.displayName || 'User',
-                      avatarUrl: (p as any).avatarUrl,
-                      jobTitle: (p as any).jobTitle,
-                      company: (p as any).company,
-                      interests: (p as any).interests,
-                    }}
-                    badge={p.userId === hostUserId ? 'Host' : undefined}
-                    badgeVariant="warning"
-                  />
+                <div key={p.userId} className="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-white/5 transition-colors group/participant relative">
+                  <div className="h-8 w-8 rounded-full bg-[#5f6368] flex items-center justify-center text-white text-xs font-semibold shrink-0">
+                    {(p.displayName || 'U').charAt(0).toUpperCase()}
+                  </div>
+                  <span className="text-sm text-gray-300 truncate">{p.displayName || 'User'}</span>
+                  {p.userId === hostUserId && (
+                    <span className="text-[9px] text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded-full shrink-0">Host</span>
+                  )}
                   {sessionId && p.userId !== hostUserId && (
                     <button
                       onClick={() => handleKick(p.userId, p.displayName || 'User')}
-                      className="absolute top-2 right-2 opacity-0 group-hover/participant:opacity-100 transition-opacity text-gray-400 hover:text-red-500 p-1 rounded"
+                      className="absolute top-2 right-2 opacity-0 group-hover/participant:opacity-100 transition-opacity text-gray-500 hover:text-red-400 p-1 rounded"
                       title={`Remove ${p.displayName || 'User'}`}
                     >
                       <UserX className="h-3.5 w-3.5" />

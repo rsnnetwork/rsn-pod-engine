@@ -224,6 +224,13 @@ async function handleJoinSession(
         ? JSON.parse(session.config as unknown as string)
         : session.config || {};
       
+      // Fetch co-hosts for this session
+      const cohostResult = await query<{ user_id: string }>(
+        `SELECT user_id FROM session_cohosts WHERE session_id = $1`,
+        [session.id]
+      );
+      const cohosts = cohostResult.rows.map(r => r.user_id);
+
       socket.emit('session:state', {
         participants: connectedParticipants,
         sessionStatus: activeSession?.status || session.status,
@@ -232,6 +239,7 @@ async function handleJoinSession(
         currentRound: activeSession?.currentRound || 0,
         totalRounds: config.numberOfRounds || 5,
         timerVisibility: config.timerVisibility || 'always_visible',
+        cohosts,
       });
     } catch (stateErr) {
       logger.warn({ err: stateErr }, 'Failed to send initial session state');

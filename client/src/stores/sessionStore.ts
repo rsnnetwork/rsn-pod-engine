@@ -80,6 +80,7 @@ interface SessionLiveState {
   chatOpen: boolean;
   matchingOverlay: { roomCount: number; roundNumber: number } | null;
   lobbyDensity: 'compact' | 'normal' | 'spacious';
+  cohosts: Set<string>;
 
   setPhase: (phase: SessionPhase) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
@@ -115,6 +116,9 @@ interface SessionLiveState {
   resetUnreadChat: () => void;
   setMatchingOverlay: (data: { roomCount: number; roundNumber: number } | null) => void;
   setLobbyDensity: (d: 'compact' | 'normal' | 'spacious') => void;
+  setCohosts: (userIds: string[]) => void;
+  addCohost: (userId: string) => void;
+  removeCohost: (userId: string) => void;
 
   reset: () => void;
 }
@@ -152,6 +156,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   chatOpen: true,
   matchingOverlay: null,
   lobbyDensity: 'normal' as const,
+  cohosts: new Set<string>(),
 
   setPhase: (phase) => set({ phase }),
   setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
@@ -193,6 +198,9 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   resetUnreadChat: () => set({ unreadChatCount: 0 }),
   setMatchingOverlay: (matchingOverlay) => set({ matchingOverlay }),
   setLobbyDensity: (lobbyDensity) => set({ lobbyDensity }),
+  setCohosts: (userIds) => set({ cohosts: new Set(userIds) }),
+  addCohost: (userId) => set((s) => { const c = new Set(s.cohosts); c.add(userId); return { cohosts: c }; }),
+  removeCohost: (userId) => set((s) => { const c = new Set(s.cohosts); c.delete(userId); return { cohosts: c }; }),
   updateRoomStatus: (matchId, status, participants) => set((s) => {
     if (!s.roundDashboard) return {};
     return {
@@ -214,5 +222,6 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
     timerVisibility: 'always_visible', matchPreview: null,
     hostMuteCommand: null, partnerDisconnected: false, roundDashboard: null,
     chatMessages: [], unreadChatCount: 0, chatOpen: false, matchingOverlay: null, lobbyDensity: 'normal' as const,
+    cohosts: new Set<string>(),
   }),
 }));
