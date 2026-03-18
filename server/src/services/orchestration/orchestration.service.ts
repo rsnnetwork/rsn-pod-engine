@@ -245,6 +245,41 @@ async function handleJoinSession(
       logger.warn({ err: stateErr }, 'Failed to send initial session state');
     }
 
+    // If host reconnects during an active round, re-send the round dashboard
+    if (isHost && activeSession && (activeSession.status === SessionStatus.ROUND_ACTIVE || activeSession.status === SessionStatus.ROUND_RATING)) {
+      try {
+        const getName = async (uid: string) => {
+          const r = await query<{ display_name: string }>('SELECT display_name FROM users WHERE id = $1', [uid]);
+          return r.rows[0]?.display_name || 'User';
+        };
+        const matches = await matchingService.getMatchesByRound(data.sessionId, activeSession.currentRound);
+        const rooms = await Promise.all(matches.map(async (m: any) => {
+          const participants = [
+            { userId: m.participantAId, displayName: await getName(m.participantAId), isConnected: activeSession!.presenceMap.has(m.participantAId) },
+            { userId: m.participantBId, displayName: await getName(m.participantBId), isConnected: activeSession!.presenceMap.has(m.participantBId) },
+          ];
+          if (m.participantCId) {
+            participants.push({ userId: m.participantCId, displayName: await getName(m.participantCId), isConnected: activeSession!.presenceMap.has(m.participantCId) });
+          }
+          return { matchId: m.id, roomId: m.roomId || '', status: m.status, participants, isTrio: !!m.participantCId };
+        }));
+        const byeResult = await query<{ user_id: string; display_name: string }>(
+          `SELECT sp.user_id, u.display_name FROM session_participants sp JOIN users u ON u.id = sp.user_id
+           WHERE sp.session_id = $1 AND sp.status = 'bye' AND sp.user_id != $2`,
+          [data.sessionId, session.hostUserId]
+        );
+        socket.emit('host:round_dashboard', {
+          roundNumber: activeSession.currentRound,
+          rooms: rooms.filter((r: any) => r.status !== 'cancelled'),
+          byeParticipants: byeResult.rows.map(r => ({ userId: r.user_id, displayName: r.display_name })),
+          timerSecondsRemaining: 0,
+          reassignmentInProgress: false,
+        });
+      } catch (dashErr) {
+        logger.warn({ err: dashErr }, 'Failed to re-send host round dashboard on reconnect');
+      }
+    }
+
     // If in lobby/transition phase and session has a lobby room, send lobby token for video mosaic
     const lobbyPhases = [SessionStatus.LOBBY_OPEN, SessionStatus.ROUND_TRANSITION, SessionStatus.ROUND_RATING];
     const currentStatus = activeSession?.status || session.status;
