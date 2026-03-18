@@ -91,13 +91,15 @@ router.get(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const q = (req.query.q as string || '').trim();
-      if (q.length < 1) {
+      const industry = (req.query.industry as string || '').trim();
+      if (q.length < 1 && !industry) {
         res.json({ success: true, data: [] });
         return;
       }
       const result = await identityService.getUsers({
-        search: q,
-        pageSize: 10,
+        search: q || undefined,
+        industry: industry || undefined,
+        pageSize: 20,
         status: 'active',
       });
       // Return only public profile fields
@@ -107,6 +109,7 @@ router.get(
         email: u.email,
         company: u.company,
         jobTitle: u.jobTitle,
+        industry: u.industry,
         avatarUrl: u.avatarUrl,
       }));
       res.json({ success: true, data } as ApiResponse);

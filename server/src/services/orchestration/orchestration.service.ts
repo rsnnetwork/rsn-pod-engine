@@ -95,6 +95,8 @@ export function initOrchestration(
     socket.on('host:mute_participant', (data) => handleHostMuteParticipant(socket, data));
     socket.on('host:mute_all', (data) => handleHostMuteAll(socket, data));
     socket.on('host:remove_from_room', (data) => handleHostRemoveFromRoom(socket, data));
+    socket.on('host:assign_cohost', (data) => handleAssignCohost(socket, data));
+    socket.on('host:remove_cohost', (data) => handleRemoveCohost(socket, data));
 
     // Chat
     socket.on('chat:send', (data) => handleChatSend(socket, data));
@@ -794,14 +796,21 @@ async function verifyHost(socket: Socket, sessionId: string): Promise<boolean> {
 
   const session = await sessionService.getSessionById(sessionId);
 
-  // Allow session host, admin, and super_admin to perform host actions
+  // Allow session host, co-hosts, admin, and super_admin to perform host actions
   const userRole = (socket.data as any)?.role as UserRole | undefined;
   const isHost = session.hostUserId === userId;
   const isAdminOrAbove = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
 
   if (!isHost && !isAdminOrAbove) {
-    socket.emit('error', { code: 'FORBIDDEN', message: 'Only the host can perform this action' });
-    return false;
+    // Check co-host table
+    const cohostResult = await query<{ role: string }>(
+      `SELECT role FROM session_cohosts WHERE session_id = $1 AND user_id = $2`,
+      [sessionId, userId]
+    );
+    if (cohostResult.rows.length === 0) {
+      socket.emit('error', { code: 'FORBIDDEN', message: 'Only the host can perform this action' });
+      return false;
+    }
   }
 
   return true;
@@ -2572,6 +2581,72 @@ async function handleReactionSend(
     });
   } catch (err) {
     logger.error({ err }, 'Error handling reaction');
+  }
+}
+
+// ─── Co-Host Management ─────────────────────────────────────────────────────
+
+async function handleAssignCohost(
+  socket: Socket,
+  data: { sessionId: string; userId: string; role: 'co_host' | 'moderator' }
+): Promise<void> {
+  try {
+    const hostId = getUserIdFromSocket(socket);
+    if (!hostId) return;
+
+    const { sessionId, userId, role } = data;
+    const session = await sessionService.getSessionById(sessionId);
+
+    // Only the original host (not co-hosts) can assign co-hosts
+    if (session.hostUserId !== hostId) {
+      socket.emit('error', { code: 'FORBIDDEN', message: 'Only the event host can assign co-hosts' });
+      return;
+    }
+
+    await query(
+      `INSERT INTO session_cohosts (session_id, user_id, role, granted_by)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (session_id, user_id) DO UPDATE SET role = $3`,
+      [sessionId, userId, role, hostId]
+    );
+
+    const displayName = (await query<{ display_name: string }>(
+      `SELECT display_name FROM users WHERE id = $1`, [userId]
+    )).rows[0]?.display_name || 'User';
+
+    io.to(sessionRoom(sessionId)).emit('cohost:assigned', { userId, displayName, role });
+    logger.info({ sessionId, userId, role, grantedBy: hostId }, 'Co-host assigned');
+  } catch (err) {
+    logger.error({ err }, 'Error assigning co-host');
+    socket.emit('error', { code: 'COHOST_FAILED', message: 'Failed to assign co-host' });
+  }
+}
+
+async function handleRemoveCohost(
+  socket: Socket,
+  data: { sessionId: string; userId: string }
+): Promise<void> {
+  try {
+    const hostId = getUserIdFromSocket(socket);
+    if (!hostId) return;
+
+    const { sessionId, userId } = data;
+    const session = await sessionService.getSessionById(sessionId);
+
+    if (session.hostUserId !== hostId) {
+      socket.emit('error', { code: 'FORBIDDEN', message: 'Only the event host can remove co-hosts' });
+      return;
+    }
+
+    await query(
+      `DELETE FROM session_cohosts WHERE session_id = $1 AND user_id = $2`,
+      [sessionId, userId]
+    );
+
+    io.to(sessionRoom(sessionId)).emit('cohost:removed', { userId });
+    logger.info({ sessionId, userId, removedBy: hostId }, 'Co-host removed');
+  } catch (err) {
+    logger.error({ err }, 'Error removing co-host');
   }
 }
 

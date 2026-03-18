@@ -62,6 +62,10 @@ export interface ServerToClientEvents {
   // Matching anticipation
   'session:matching_in_progress': (data: { sessionId: string; roomCount: number; roundNumber: number }) => void;
 
+  // Co-host
+  'cohost:assigned': (data: { userId: string; displayName: string; role: string }) => void;
+  'cohost:removed': (data: { userId: string }) => void;
+
   // Reactions
   'reaction:received': (data: { userId: string; displayName: string; type: string; timestamp: string }) => void;
 
@@ -113,6 +117,10 @@ export interface ClientToServerEvents {
 
   // Breakout room
   'participant:leave_conversation': (data: { sessionId: string }) => void;
+
+  // Co-host
+  'host:assign_cohost': (data: { sessionId: string; userId: string; role: 'co_host' | 'moderator' }) => void;
+  'host:remove_cohost': (data: { sessionId: string; userId: string }) => void;
 
   // Reactions
   'reaction:send': (data: { sessionId: string; type: string }) => void;

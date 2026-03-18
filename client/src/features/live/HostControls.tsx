@@ -1,13 +1,13 @@
 import { useSessionStore } from '@/stores/sessionStore';
 import { Button } from '@/components/ui/Button';
-import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, MessageSquare, UserMinus, RefreshCw } from 'lucide-react';
+import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, MessageSquare, UserMinus, RefreshCw, UserPlus } from 'lucide-react';
 import { getSocket } from '@/lib/socket';
 import { useState } from 'react';
 
 interface Props { sessionId: string; }
 
 export default function HostControls({ sessionId }: Props) {
-  const { participants, phase, currentRound, totalRounds, transitionStatus, sessionStatus, matchPreview, setMatchPreview } = useSessionStore();
+  const { participants, phase, currentRound, totalRounds, transitionStatus, sessionStatus, matchPreview, setMatchPreview, roundDashboard } = useSessionStore();
   const socket = getSocket();
   const [generating, setGenerating] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -261,9 +261,17 @@ export default function HostControls({ sessionId }: Props) {
       <div className="p-4">
         <div className="max-w-4xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1.5 text-sm text-gray-500">
-              <Users className="h-3.5 w-3.5" />
-              <span>{Math.max(0, participants.length - 1)}</span>
+            <div className="flex items-center gap-2 text-xs text-gray-500">
+              <span className="flex items-center gap-1"><Users className="h-3.5 w-3.5" /> {Math.max(0, participants.length - 1)}</span>
+              {roundDashboard && isInRound && (
+                <>
+                  <span className="text-gray-300">|</span>
+                  <span>{roundDashboard.rooms.length} room{roundDashboard.rooms.length !== 1 ? 's' : ''}</span>
+                  {roundDashboard.byeParticipants.length > 0 && (
+                    <span className="text-amber-500">{roundDashboard.byeParticipants.length} bye</span>
+                  )}
+                </>
+              )}
             </div>
             {isInRound && (
               <div className="flex items-center gap-1.5">
@@ -336,6 +344,13 @@ export default function HostControls({ sessionId }: Props) {
             {sessionStarted && (
               <Button size="sm" variant="ghost" onClick={() => setShowBroadcast(!showBroadcast)} title="Send announcement to all">
                 <MessageSquare className="h-4 w-4" />
+              </Button>
+            )}
+
+            {/* Invite people during lobby/transition */}
+            {(sessionStatus === 'lobby_open' || sessionStatus === 'round_transition') && (
+              <Button size="sm" variant="secondary" onClick={() => window.open(`/sessions/${sessionId}`, '_blank')}>
+                <UserPlus className="h-4 w-4 mr-1" /> Invite
               </Button>
             )}
 

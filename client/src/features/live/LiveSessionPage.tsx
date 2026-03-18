@@ -173,7 +173,7 @@ export default function LiveSessionPage() {
         {/* Participant list panel */}
         {participantListOpen && !chatOpen && (
           <div className="w-full sm:w-72 sm:min-w-[288px] flex-shrink-0 h-full">
-            <ParticipantList onClose={() => setParticipantListOpen(false)} />
+            <ParticipantList onClose={() => setParticipantListOpen(false)} sessionId={sessionId} />
           </div>
         )}
 

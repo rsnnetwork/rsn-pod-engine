@@ -544,6 +544,7 @@ export async function getUsers(params: {
   role?: UserRole;
   status?: 'active' | 'suspended' | 'banned' | 'deactivated';
   search?: string;
+  industry?: string;
 }): Promise<{ users: User[]; total: number }> {
   const page = params.page || 1;
   const pageSize = Math.min(params.pageSize || 20, 100);
@@ -568,6 +569,12 @@ export async function getUsers(params: {
   if (params.search) {
     whereClause += ` AND (display_name ILIKE $${paramIdx} OR email ILIKE $${paramIdx} OR first_name ILIKE $${paramIdx} OR last_name ILIKE $${paramIdx})`;
     values.push(`%${params.search}%`);
+    paramIdx++;
+  }
+
+  if (params.industry) {
+    whereClause += ` AND industry ILIKE $${paramIdx}`;
+    values.push(`%${params.industry}%`);
     paramIdx++;
   }
 
