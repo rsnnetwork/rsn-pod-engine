@@ -470,10 +470,11 @@ function PreLobbyWaitingRoom() {
 }
 
 export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean; sessionId?: string }) {
-  const { participants, lobbyToken, lobbyUrl, sessionStatus, hostUserId } = useSessionStore();
+  const { participants, lobbyToken, lobbyUrl, sessionStatus, hostUserId, roundDashboard } = useSessionStore();
 
-  // During an active round or rating, the host sees the breakout room dashboard instead of lobby
-  if (isHost && (sessionStatus === 'round_active' || sessionStatus === 'round_rating')) {
+  // During an active round or rating, the host sees the breakout room dashboard
+  // but ONLY if we have dashboard data — otherwise stay in lobby with status message
+  if (isHost && (sessionStatus === 'round_active' || sessionStatus === 'round_rating') && roundDashboard && roundDashboard.rooms.length > 0) {
     return <HostRoundDashboard sessionId={sessionId!} />;
   }
 

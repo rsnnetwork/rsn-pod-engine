@@ -158,8 +158,8 @@ export default function LiveSessionPage() {
         </div>
       )}
 
-      {/* Matching anticipation overlay */}
-      {matchingOverlay && (
+      {/* Matching anticipation overlay — participants only, host sees the dashboard */}
+      {matchingOverlay && !isHost && (
         <MatchingOverlay roomCount={matchingOverlay.roomCount} roundNumber={matchingOverlay.roundNumber} />
       )}
 
