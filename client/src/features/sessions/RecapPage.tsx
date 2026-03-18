@@ -303,11 +303,128 @@ export default function RecapPage() {
         </Card>
       )}
 
+      {/* Host-only: full event recap */}
+      {isHost && <HostRecapSection sessionId={sessionId!} />}
+
       <div className="flex justify-center">
         <Button onClick={() => navigate('/sessions')} className="px-8">
           Back to Events
         </Button>
       </div>
     </div>
+  );
+}
+
+/* ─── Host Event-Wide Recap ──────────────────────────────────────────────── */
+
+function HostRecapSection({ sessionId }: { sessionId: string }) {
+  const [hostData, setHostData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.get(`/sessions/${sessionId}/host-recap`).then(r => {
+      setHostData(r.data.data);
+    }).catch(() => {}).finally(() => setLoading(false));
+  }, [sessionId]);
+
+  const exportCSV = () => {
+    if (!hostData) return;
+    const rows: string[] = ['Round,Room,Participant A,Participant B,Participant C,Status'];
+    for (const m of hostData.matches) {
+      rows.push(`${m.roundNumber},${m.roomId || ''},${m.nameA},${m.nameB},${m.nameC || ''},${m.status}`);
+    }
+    rows.push('');
+    rows.push('Participant,Email,Rounds Completed,Status,No Show');
+    for (const p of hostData.participants) {
+      rows.push(`${p.displayName},${p.email},${p.roundsCompleted},${p.status},${p.isNoShow}`);
+    }
+    if (hostData.feedback.length > 0) {
+      rows.push('');
+      rows.push('Feedback From,Feedback,Submitted At');
+      for (const f of hostData.feedback) {
+        rows.push(`${f.displayName},"${f.feedback.replace(/"/g, '""')}",${f.createdAt}`);
+      }
+    }
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `event-recap-${sessionId}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  if (loading) return null;
+  if (!hostData) return null;
+
+  // Group matches by round
+  const byRound: Record<number, any[]> = {};
+  for (const m of hostData.matches) {
+    (byRound[m.roundNumber] ||= []).push(m);
+  }
+  const rounds = Object.keys(byRound).map(Number).sort((a, b) => a - b);
+
+  return (
+    <>
+      <div className="border-t border-gray-200 pt-6 mt-2">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-bold text-gray-800">Host Recap — Full Breakdown</h2>
+          <Button size="sm" variant="secondary" onClick={exportCSV}>
+            <Download className="h-4 w-4 mr-1" /> Export CSV
+          </Button>
+        </div>
+
+        {/* Stats */}
+        <div className="grid grid-cols-3 gap-3 mb-4">
+          <Card className="text-center py-3">
+            <p className="text-xl font-bold text-gray-800">{hostData.participants.length}</p>
+            <p className="text-xs text-gray-400">Total Participants</p>
+          </Card>
+          <Card className="text-center py-3">
+            <p className="text-xl font-bold text-gray-800">{hostData.stats.totalRatings}</p>
+            <p className="text-xs text-gray-400">Ratings Submitted</p>
+          </Card>
+          <Card className="text-center py-3">
+            <p className="text-xl font-bold text-gray-800">{Number(hostData.stats.avgQuality).toFixed(1)}</p>
+            <p className="text-xs text-gray-400">Avg Quality</p>
+          </Card>
+        </div>
+
+        {/* Round-by-round match breakdown */}
+        {rounds.map(round => (
+          <Card key={round} className="mb-3">
+            <h3 className="text-sm font-semibold text-gray-600 mb-2">Round {round} — {byRound[round].length} room{byRound[round].length !== 1 ? 's' : ''}</h3>
+            <div className="space-y-1.5">
+              {byRound[round].map((m: any) => (
+                <div key={m.id} className="flex items-center gap-2 text-sm text-gray-700 bg-gray-50 rounded-lg px-3 py-1.5">
+                  <span className="font-medium">{m.nameA}</span>
+                  <span className="text-gray-400">&</span>
+                  <span className="font-medium">{m.nameB}</span>
+                  {m.nameC && <><span className="text-gray-400">&</span><span className="font-medium">{m.nameC}</span></>}
+                  <span className={`ml-auto text-xs px-2 py-0.5 rounded-full ${m.status === 'completed' ? 'bg-emerald-50 text-emerald-600' : m.status === 'no_show' ? 'bg-red-50 text-red-500' : 'bg-gray-100 text-gray-500'}`}>
+                    {m.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </Card>
+        ))}
+
+        {/* Participant feedback */}
+        {hostData.feedback.length > 0 && (
+          <Card>
+            <h3 className="text-sm font-semibold text-gray-600 mb-3">Participant Feedback ({hostData.feedback.length})</h3>
+            <div className="space-y-3">
+              {hostData.feedback.map((f: any) => (
+                <div key={f.userId} className="bg-gray-50 rounded-lg px-3 py-2">
+                  <p className="text-xs font-medium text-gray-500 mb-1">{f.displayName}</p>
+                  <p className="text-sm text-gray-700">{f.feedback}</p>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+      </div>
+    </>
   );
 }

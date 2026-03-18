@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import { useSessionStore } from '@/stores/sessionStore';
 import Card from '@/components/ui/Card';
 import { formatTime } from '@/lib/utils';
-import { Video, Clock, Mic, MicOff, VideoOff, Wifi, UserX, Loader2, ArrowLeft } from 'lucide-react';
+import { Video, Clock, Mic, MicOff, VideoOff, Wifi, UserX, Loader2, ArrowLeft, Sparkles } from 'lucide-react';
 import { getSocket } from '@/lib/socket';
 import {
   LiveKitRoom,
@@ -93,6 +93,7 @@ function MediaControls() {
   const { localParticipant } = useLocalParticipant();
   const [micEnabled, setMicEnabled] = useState(true);
   const [camEnabled, setCamEnabled] = useState(true);
+  const [bgBlur, setBgBlur] = useState(false);
 
   const toggleMic = useCallback(async () => {
     await localParticipant.setMicrophoneEnabled(!micEnabled);
@@ -117,6 +118,30 @@ function MediaControls() {
         className={`p-2 rounded-full transition-colors ${camEnabled ? 'bg-gray-200 hover:bg-surface-600 text-gray-800' : 'bg-red-500/20 text-red-400 hover:bg-red-500/30'}`}
       >
         {camEnabled ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
+      </button>
+      <button
+        onClick={async () => {
+          try {
+            // @ts-ignore — dynamic import, package may not be installed
+            const mod = await import('@livekit/track-processors');
+            const camPub = localParticipant.getTrackPublicationByName?.('camera') || Array.from(localParticipant.trackPublications.values()).find(p => p.source === 'camera');
+            const camTrack = camPub?.track;
+            if (!camTrack) return;
+            if (bgBlur) {
+              await (camTrack as any).stopProcessor();
+              setBgBlur(false);
+            } else {
+              await (camTrack as any).setProcessor(mod.BackgroundBlur(10));
+              setBgBlur(true);
+            }
+          } catch {
+            // @livekit/track-processors not installed — silently ignore
+          }
+        }}
+        title="Background blur"
+        className={`p-2 rounded-full transition-colors ${bgBlur ? 'bg-indigo-100 text-indigo-600' : 'bg-gray-200 hover:bg-surface-600 text-gray-800'}`}
+      >
+        <Sparkles className="h-5 w-5" />
       </button>
     </div>
   );

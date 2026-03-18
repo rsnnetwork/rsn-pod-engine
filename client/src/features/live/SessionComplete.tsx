@@ -218,6 +218,9 @@ export default function SessionComplete({ sessionId }: Props) {
           </>
         )}
 
+        {/* Post-event feedback */}
+        <FeedbackPrompt sessionId={sessionId} />
+
         {/* Actions */}
         <div className="flex gap-3">
           <Button onClick={() => navigate(`/sessions/${sessionId}/recap`)} variant="secondary" className="flex-1">
@@ -229,5 +232,55 @@ export default function SessionComplete({ sessionId }: Props) {
         </div>
       </div>
     </div>
+  );
+}
+
+/* ─── Post-Event Feedback Prompt ─────────────────────────────────────────── */
+
+function FeedbackPrompt({ sessionId }: { sessionId: string }) {
+  const [text, setText] = useState('');
+  const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!text.trim() || submitting) return;
+    setSubmitting(true);
+    try {
+      await api.post(`/sessions/${sessionId}/feedback`, { feedback: text.trim() });
+      setSubmitted(true);
+    } catch {
+      // silently fail
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (submitted) {
+    return (
+      <Card className="text-center py-4">
+        <CheckCircle className="h-5 w-5 text-emerald-500 mx-auto mb-1" />
+        <p className="text-sm text-gray-600">Thanks for your feedback!</p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <h3 className="text-sm font-semibold text-gray-700 mb-2">Is there anything you want to add?</h3>
+      <p className="text-xs text-gray-400 mb-3">Share your thoughts about this event — what worked, what could be better.</p>
+      <textarea
+        value={text}
+        onChange={e => setText(e.target.value)}
+        placeholder="Your feedback..."
+        maxLength={2000}
+        rows={3}
+        className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-rsn-red/30 resize-none"
+      />
+      <div className="flex justify-end mt-2">
+        <Button size="sm" onClick={handleSubmit} disabled={!text.trim() || submitting}>
+          {submitting ? 'Sending...' : 'Submit Feedback'}
+        </Button>
+      </div>
+    </Card>
   );
 }

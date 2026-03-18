@@ -9,6 +9,7 @@ import * as sessionService from '../services/session/session.service';
 import * as podService from '../services/pod/pod.service';
 import { ApiResponse, SessionStatus, UserRole, hasRoleAtLeast } from '@rsn/shared';
 import { ForbiddenError } from '../middleware/errors';
+import { query } from '../db';
 
 const router = Router();
 
@@ -327,6 +328,141 @@ router.post(
     try {
       await sessionService.setPremiumSelections(req.params.id, req.user!.userId, req.body.selectedUserIds);
       const response: ApiResponse = { success: true, data: { message: 'Preferred people saved' } };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /sessions/:id/feedback ──────────────────────────────────────────────
+
+router.post(
+  '/:id/feedback',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { feedback } = req.body;
+      if (!feedback || typeof feedback !== 'string' || feedback.trim().length === 0) {
+        res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Feedback text is required' } });
+        return;
+      }
+
+      await query(
+        `INSERT INTO event_feedback (session_id, user_id, feedback)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (session_id, user_id) DO UPDATE SET feedback = $3, created_at = NOW()`,
+        [req.params.id, req.user!.userId, feedback.trim().slice(0, 2000)]
+      );
+
+      const response: ApiResponse = { success: true, data: { submitted: true } };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── GET /sessions/:id/feedback (host only) ──────────────────────────────────
+
+router.get(
+  '/:id/feedback',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const session = await sessionService.getSessionById(req.params.id);
+      const isHostOrAdmin = session.hostUserId === req.user!.userId || hasRoleAtLeast(req.user!.role, UserRole.ADMIN);
+      if (!isHostOrAdmin) {
+        res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Only the host can view feedback' } });
+        return;
+      }
+
+      const result = await query<{ userId: string; displayName: string; feedback: string; createdAt: string }>(
+        `SELECT ef.user_id AS "userId", u.display_name AS "displayName", ef.feedback, ef.created_at AS "createdAt"
+         FROM event_feedback ef
+         JOIN users u ON u.id = ef.user_id
+         WHERE ef.session_id = $1
+         ORDER BY ef.created_at ASC`,
+        [req.params.id]
+      );
+
+      const response: ApiResponse = { success: true, data: result.rows };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── GET /sessions/:id/host-recap (full round breakdown for host) ────────────
+
+router.get(
+  '/:id/host-recap',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const session = await sessionService.getSessionById(req.params.id);
+      const isHostOrAdmin = session.hostUserId === req.user!.userId || hasRoleAtLeast(req.user!.role, UserRole.ADMIN);
+      if (!isHostOrAdmin) {
+        res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Only the host can view the full recap' } });
+        return;
+      }
+
+      // Get all matches grouped by round
+      const matchesResult = await query<any>(
+        `SELECT m.id, m.round_number AS "roundNumber", m.room_id AS "roomId", m.status,
+                m.participant_a_id AS "participantAId", m.participant_b_id AS "participantBId",
+                m.participant_c_id AS "participantCId",
+                ua.display_name AS "nameA", ub.display_name AS "nameB", uc.display_name AS "nameC"
+         FROM matches m
+         JOIN users ua ON ua.id = m.participant_a_id
+         JOIN users ub ON ub.id = m.participant_b_id
+         LEFT JOIN users uc ON uc.id = m.participant_c_id
+         WHERE m.session_id = $1
+         ORDER BY m.round_number ASC, m.created_at ASC`,
+        [req.params.id]
+      );
+
+      // Get all participants with stats
+      const participantsResult = await query<any>(
+        `SELECT sp.user_id AS "userId", u.display_name AS "displayName", u.email,
+                sp.rounds_completed AS "roundsCompleted", sp.status,
+                sp.is_no_show AS "isNoShow"
+         FROM session_participants sp
+         JOIN users u ON u.id = sp.user_id
+         WHERE sp.session_id = $1
+         ORDER BY u.display_name ASC`,
+        [req.params.id]
+      );
+
+      // Get feedback
+      const feedbackResult = await query<any>(
+        `SELECT ef.user_id AS "userId", u.display_name AS "displayName", ef.feedback, ef.created_at AS "createdAt"
+         FROM event_feedback ef JOIN users u ON u.id = ef.user_id
+         WHERE ef.session_id = $1 ORDER BY ef.created_at ASC`,
+        [req.params.id]
+      );
+
+      // Get rating stats
+      const statsResult = await query<any>(
+        `SELECT COUNT(*)::int AS "totalRatings",
+                COALESCE(AVG(quality_score), 0) AS "avgQuality",
+                COUNT(*) FILTER (WHERE meet_again = true)::int AS "meetAgainCount"
+         FROM ratings r JOIN matches m ON r.match_id = m.id
+         WHERE m.session_id = $1`,
+        [req.params.id]
+      );
+
+      const response: ApiResponse = {
+        success: true,
+        data: {
+          session: { id: session.id, title: session.title, scheduledAt: session.scheduledAt, status: session.status },
+          matches: matchesResult.rows,
+          participants: participantsResult.rows,
+          feedback: feedbackResult.rows,
+          stats: statsResult.rows[0] || { totalRatings: 0, avgQuality: 0, meetAgainCount: 0 },
+        },
+      };
       res.json(response);
     } catch (err) {
       next(err);
