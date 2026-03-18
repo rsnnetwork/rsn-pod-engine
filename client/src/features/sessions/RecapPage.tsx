@@ -78,7 +78,12 @@ export default function RecapPage() {
     enabled: !!sessionId,
   });
 
-  const isHost = session?.hostUserId === user?.id;
+  const { data: cohostData } = useQuery({
+    queryKey: ['session-cohost', sessionId, user?.id],
+    queryFn: () => api.get(`/sessions/${sessionId}/cohosts/check`).then(r => r.data.data?.isCohost).catch(() => false),
+    enabled: !!sessionId && !!user?.id && session?.hostUserId !== user?.id,
+  });
+  const isHost = session?.hostUserId === user?.id || cohostData === true;
 
   const [data, setData] = useState<PeopleMetData | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);

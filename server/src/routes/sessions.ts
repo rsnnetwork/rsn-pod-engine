@@ -394,6 +394,19 @@ router.get(
   }
 );
 
+// ─── GET /sessions/:id/cohosts/check (am I a co-host?) ──────────────────────
+
+router.get(
+  '/:id/cohosts/check',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await query<any>('SELECT 1 FROM session_cohosts WHERE session_id = $1 AND user_id = $2', [req.params.id, req.user!.userId]);
+      res.json({ success: true, data: { isCohost: result.rows.length > 0 } });
+    } catch (err) { next(err); }
+  }
+);
+
 // ─── GET /sessions/:id/host-recap (full round breakdown for host) ────────────
 
 router.get(
@@ -403,7 +416,13 @@ router.get(
     try {
       const session = await sessionService.getSessionById(req.params.id);
       const isHostOrAdmin = session.hostUserId === req.user!.userId || hasRoleAtLeast(req.user!.role, UserRole.ADMIN);
+      // Also allow co-hosts
+      let isCohost = false;
       if (!isHostOrAdmin) {
+        const cohostCheck = await query<any>('SELECT 1 FROM session_cohosts WHERE session_id = $1 AND user_id = $2', [req.params.id, req.user!.userId]);
+        isCohost = cohostCheck.rows.length > 0;
+      }
+      if (!isHostOrAdmin && !isCohost) {
         res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Only the host can view the full recap' } });
         return;
       }

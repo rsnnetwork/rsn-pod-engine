@@ -93,7 +93,24 @@ function MediaControls() {
   const { localParticipant } = useLocalParticipant();
   const [micEnabled, setMicEnabled] = useState(true);
   const [camEnabled, setCamEnabled] = useState(true);
-  const [bgBlur, setBgBlur] = useState(false);
+  const { bgBlur, setBgBlur } = useSessionStore();
+
+  // Re-apply blur when entering a new room if user had it enabled
+  useEffect(() => {
+    if (!bgBlur) return;
+    const applyBlur = async () => {
+      try {
+        // @ts-ignore
+        const mod = await import('@livekit/track-processors');
+        const camPub = Array.from(localParticipant.trackPublications.values()).find(p => p.source === 'camera');
+        const camTrack = camPub?.track;
+        if (camTrack) await (camTrack as any).setProcessor(mod.BackgroundBlur(10));
+      } catch { /* package not installed */ }
+    };
+    // Small delay to let camera track initialize in new room
+    const timer = setTimeout(applyBlur, 1000);
+    return () => clearTimeout(timer);
+  }, [localParticipant]);
 
   const toggleMic = useCallback(async () => {
     await localParticipant.setMicrophoneEnabled(!micEnabled);

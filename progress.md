@@ -3846,3 +3846,22 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - Computed lobby/disconnected counts from existing store data (no new server events needed)
 - Next immediate action:
   - Phase 5: Post-Event + Visual Polish
+
+### 2026-03-19 00:20 — Phase 5 Gap Fixes (Co-host recap access + blur persistence)
+- Task ID: T-1.5-P5-GAPS
+- Task Title: Close Phase 5 audit gaps — co-host host-recap access + bgBlur persistence across rooms
+- Status: Completed
+- What changed:
+  - **Co-host host-recap access**: Added co-host check to `/sessions/:id/host-recap` endpoint (queries session_cohosts table). New lightweight `/sessions/:id/cohosts/check` endpoint. RecapPage client now checks co-host status so co-hosts see host recap section.
+  - **bgBlur persistence**: Moved `bgBlur` state from local useState in MediaControls to sessionStore. Added `setBgBlur` action. VideoRoom re-applies blur via useEffect when entering new room if blur was previously enabled. Resets on full session reset.
+- Files touched:
+  - server/src/routes/sessions.ts (co-host auth check on host-recap + new cohosts/check endpoint)
+  - client/src/features/sessions/RecapPage.tsx (co-host isHost check)
+  - client/src/stores/sessionStore.ts (bgBlur state + setter + reset)
+  - client/src/features/live/VideoRoom.tsx (use store bgBlur + re-apply on room change)
+  - progress.md
+- Decisions made:
+  - Created lightweight /cohosts/check endpoint rather than embedding co-host list in session response
+  - Re-apply blur with 1s delay after room join to let camera track initialize
+- Next immediate action:
+  - Phase 6 is deferred per spec. Change 1.5 complete.

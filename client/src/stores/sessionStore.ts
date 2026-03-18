@@ -79,6 +79,7 @@ interface SessionLiveState {
   unreadChatCount: number;
   chatOpen: boolean;
   matchingOverlay: { roomCount: number; roundNumber: number } | null;
+  bgBlur: boolean;
 
   setPhase: (phase: SessionPhase) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
@@ -113,6 +114,7 @@ interface SessionLiveState {
   setChatOpen: (open: boolean) => void;
   resetUnreadChat: () => void;
   setMatchingOverlay: (data: { roomCount: number; roundNumber: number } | null) => void;
+  setBgBlur: (v: boolean) => void;
   reset: () => void;
 }
 
@@ -148,6 +150,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   unreadChatCount: 0,
   chatOpen: true,
   matchingOverlay: null,
+  bgBlur: false,
 
   setPhase: (phase) => set({ phase }),
   setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
@@ -188,6 +191,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   setChatOpen: (chatOpen) => set((s) => ({ chatOpen, unreadChatCount: chatOpen ? 0 : s.unreadChatCount })),
   resetUnreadChat: () => set({ unreadChatCount: 0 }),
   setMatchingOverlay: (matchingOverlay) => set({ matchingOverlay }),
+  setBgBlur: (bgBlur) => set({ bgBlur }),
   updateRoomStatus: (matchId, status, participants) => set((s) => {
     if (!s.roundDashboard) return {};
     return {
@@ -208,6 +212,6 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
     lobbyToken: null, lobbyUrl: null, lobbyRoomId: null,
     timerVisibility: 'always_visible', matchPreview: null,
     hostMuteCommand: null, partnerDisconnected: false, roundDashboard: null,
-    chatMessages: [], unreadChatCount: 0, chatOpen: false, matchingOverlay: null,
+    chatMessages: [], unreadChatCount: 0, chatOpen: false, matchingOverlay: null, bgBlur: false,
   }),
 }));
