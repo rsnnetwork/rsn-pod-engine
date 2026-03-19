@@ -134,7 +134,6 @@ export default function NotificationBell() {
       const msg = errCode === 'INVITE_REVOKED' ? 'This invite has been revoked'
         : errCode === 'INVITE_EXPIRED' ? 'This invite has expired'
         : errCode === 'INVITE_ALREADY_USED' ? 'This invite has been fully used'
-        : errCode === 'AUTH_FORBIDDEN' ? 'This invite was sent to a different email'
         : err?.response?.data?.error?.message || 'Failed to accept invite';
       addToast(msg, 'error');
       setNotifications(prev => prev.map(x => x.id === n.id ? {

@@ -3865,3 +3865,26 @@ All Milestones complete. System validated end-to-end. Ready for final GitHub pus
   - Re-apply blur with 1s delay after room join to let camera track initialize
 - Next immediate action:
   - Phase 6 is deferred per spec. Change 1.5 complete.
+
+### 2026-03-19 — Invite system fix + DB clean
+
+- Task ID: T-INVITE-FIX
+- Task Title: Remove broken email guard from invite accept + DB clean for fresh testing
+- Status: Completed
+- What changed:
+  - **Server**: Removed email mismatch guard from `acceptInvite()` — anyone with the invite link can accept. The invite code itself is the authorization token. No `AUTH_FORBIDDEN` thrown on accept path.
+  - **Client InviteAcceptPage**: Removed `AUTH_FORBIDDEN` error case, removed "Log Out & Sign In with Correct Email" button, removed `errorCode` state (now unused). Simplified error display.
+  - **Client NotificationBell**: Removed `AUTH_FORBIDDEN` case from invite accept error handling.
+  - **DB clean**: Wiped all invites (39), sessions (11), pods (7), pod_members (23), session_participants (32), matches (15), encounters (13), notifications (19), ratings (19), audit_log (209), refresh_tokens (388), join_requests (6), magic_links (7), session_cohosts (2), event_feedback (1), matching_templates (1).
+  - **Deleted 4 users**: Noor Fatima, Ali Hamzaa, Waseem Javed, Ahmed Rashid.
+  - **Kept 9 users**: Raja Ali, Stefan (×2), Claus, Shradha (×4), Chief Developer.
+- Files touched:
+  - server/src/services/invite/invite.service.ts (email guard removed)
+  - client/src/features/invites/InviteAcceptPage.tsx (AUTH_FORBIDDEN UI removed)
+  - client/src/components/ui/NotificationBell.tsx (AUTH_FORBIDDEN case removed)
+  - progress.md
+- Decisions made:
+  - Removed email guard entirely rather than fixing it — invite code is the auth token, no email matching needed
+  - Clean slate DB for fresh invite testing
+- Next immediate action:
+  - Fresh test of full invite flow: create invite → send email → recipient clicks link → accepts
