@@ -71,6 +71,11 @@ export function initOrchestration(
   io.on('connection', (socket: Socket) => {
     logger.debug({ socketId: socket.id }, 'Socket connected');
 
+    // Join user-specific room for notifications (works on all pages)
+    if (socket.data.userId) {
+      socket.join(`user:${socket.data.userId}`);
+    }
+
     socket.on('session:join', (data) => handleJoinSession(socket, data));
     socket.on('session:leave', (data) => handleLeaveSession(socket, data));
     socket.on('presence:heartbeat', (data) => handleHeartbeat(socket, data));

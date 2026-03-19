@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { LayoutDashboard, Users, Calendar, Mail, User, LogOut, Menu, X, Shield, Settings, HelpCircle, Heart } from 'lucide-react';
 import { cn, isAdmin } from '@/lib/utils';
 import { useAuthStore } from '@/stores/authStore';
 import { useScrollReveal } from '@/hooks/useScrollReveal';
+import { connectSocket } from '@/lib/socket';
 import Avatar from '@/components/ui/Avatar';
 import Modal from '@/components/ui/Modal';
 import ToastContainer from '@/components/ui/Toast';
@@ -14,6 +15,13 @@ export default function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const isOnAdmin = location.pathname.startsWith('/admin');
+
+  // Keep socket connected on all pages for real-time notifications
+  useEffect(() => {
+    const token = useAuthStore.getState().accessToken;
+    if (token) connectSocket(token);
+    return () => { /* don't disconnect — live event pages manage their own connection */ };
+  }, []);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
   useScrollReveal();
