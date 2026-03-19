@@ -7,7 +7,7 @@ export function Spinner({ className }: { className?: string }) {
 
 export function PageLoader() {
   return (
-    <div className="flex h-full items-center justify-center py-20">
+    <div className="flex h-full items-center justify-center py-20 bg-white">
       <Spinner className="h-8 w-8" />
     </div>
   );

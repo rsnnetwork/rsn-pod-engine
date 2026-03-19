@@ -7,7 +7,7 @@ export default function ProtectedRoute({ children }: { children?: ReactNode }) {
   const { user, isLoading } = useAuthStore();
   const location = useLocation();
 
-  if (isLoading) return <PageLoader />;
+  if (isLoading) return <div className="h-screen w-screen bg-white flex items-center justify-center"><PageLoader /></div>;
   if (!user) return <Navigate to="/welcome" state={{ from: location }} replace />;
   return <>{children}</>;
 }
