@@ -53,39 +53,6 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
     }
   }
 
-  // ─── Role-based invite restriction: standard users can only invite encountered users ──
-  if (!isAdmin && input.inviteeEmail) {
-    // Look up invitee user id
-    const inviteeResult = await query<{ id: string }>(
-      `SELECT id FROM users WHERE email = $1`,
-      [input.inviteeEmail.toLowerCase()]
-    );
-    if (inviteeResult.rows.length > 0) {
-      const inviteeId = inviteeResult.rows[0].id;
-      // Check encounter_history for any past match between these two users
-      const encounterResult = await query<{ id: string }>(
-        `SELECT id FROM encounter_history
-         WHERE (user_a_id = $1 AND user_b_id = $2) OR (user_a_id = $2 AND user_b_id = $1)
-         LIMIT 1`,
-        [userId, inviteeId]
-      );
-      // If no encounter AND they're not in the same pod, block the invite
-      if (encounterResult.rows.length === 0) {
-        const samePodResult = await query<{ id: string }>(
-          `SELECT pm1.id FROM pod_members pm1
-           JOIN pod_members pm2 ON pm1.pod_id = pm2.pod_id
-           WHERE pm1.user_id = $1 AND pm2.user_id = $2 AND pm1.status = 'active' AND pm2.status = 'active'
-           LIMIT 1`,
-          [userId, inviteeId]
-        );
-        if (samePodResult.rows.length === 0) {
-          throw new AppError(403, 'INVITE_NOT_PERMITTED', 'You can only invite people you\'ve met or share a pod with');
-        }
-      }
-    }
-    // If user doesn't exist on platform yet, allow the invite (it's a new user invitation)
-  }
-
   // Block self-invites
   if (input.inviteeEmail) {
     const callerResult = await query<{ email: string }>(

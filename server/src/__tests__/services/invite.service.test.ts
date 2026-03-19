@@ -76,9 +76,7 @@ describe('Invite Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 50 }], rowCount: 1 });
       // 2. Rate limit: count invites in past 24h
       mockQuery.mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });
-      // 3. Role-based restriction: look up invitee by email
-      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
-      // 4. Self-invite check — SELECT email FROM users
+      // 3. Self-invite check — SELECT email FROM users
       mockQuery.mockResolvedValueOnce({ rows: [{ email: 'host@example.com' }], rowCount: 1 });
       // 5. podService.getPodById — SELECT pods (validates pod exists + archived check)
       mockQuery.mockResolvedValueOnce({ rows: [{ id: 'pod-123', name: 'Test', status: 'active' }], rowCount: 1 });
@@ -111,9 +109,7 @@ describe('Invite Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 50 }], rowCount: 1 });
       // 2. Rate limit: count invites in past 24h
       mockQuery.mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });
-      // 3. Role-based restriction: look up invitee by email
-      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
-      // 4. Self-invite check — email matches caller
+      // 3. Self-invite check — email matches caller
       mockQuery.mockResolvedValueOnce({ rows: [{ email: 'guest@example.com' }], rowCount: 1 });
 
       await expect(inviteService.createInvite('user-host', {
@@ -128,9 +124,7 @@ describe('Invite Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 50 }], rowCount: 1 });
       // 2. Rate limit: count invites in past 24h
       mockQuery.mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });
-      // 3. Role-based restriction: look up invitee by email
-      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
-      // 4. Self-invite check — different email
+      // 3. Self-invite check — different email
       mockQuery.mockResolvedValueOnce({ rows: [{ email: 'host@example.com' }], rowCount: 1 });
       // 5. podService.getPodById
       mockQuery.mockResolvedValueOnce({ rows: [{ id: 'pod-123', name: 'Test', status: 'active' }], rowCount: 1 });
@@ -153,9 +147,7 @@ describe('Invite Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 50 }], rowCount: 1 });
       // 2. Rate limit: count invites in past 24h
       mockQuery.mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });
-      // 3. Role-based restriction: look up invitee by email
-      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
-      // 4. Self-invite check
+      // 3. Self-invite check
       mockQuery.mockResolvedValueOnce({ rows: [{ email: 'host@example.com' }], rowCount: 1 });
       // 5. getPodById returns archived pod
       mockQuery.mockResolvedValueOnce({ rows: [{ id: 'pod-123', name: 'Test', status: 'archived' }], rowCount: 1 });
