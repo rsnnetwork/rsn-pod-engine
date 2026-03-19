@@ -42,9 +42,9 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
       `SELECT max_invites_per_day FROM user_entitlements WHERE user_id = $1`,
       [userId]
     );
-    const maxPerDay = entResult.rows[0]?.max_invites_per_day ?? 10;
+    const maxPerDay = entResult.rows[0]?.max_invites_per_day ?? 100; // default 100/day
     const countResult = await query<{ count: string }>(
-      `SELECT COUNT(*) as count FROM invites WHERE inviter_id = $1 AND created_at > NOW() - INTERVAL '1 day'`,
+      `SELECT COUNT(*) as count FROM invites WHERE inviter_id = $1 AND created_at > NOW() - INTERVAL '1 day' AND status = 'pending'`,
       [userId]
     );
     const todayCount = parseInt(countResult.rows[0].count, 10);
@@ -338,28 +338,8 @@ export async function acceptInvite(code: string, userId: string): Promise<Invite
       throw new AppError(400, 'INVITE_ALREADY_USED', 'This invite has reached its maximum uses');
     }
 
-    if (invite.inviteeEmail && invite.maxUses === 1) {
-      // Only enforce email check for single-use targeted invites;
-      // multi-use / shared links can be accepted by anyone.
-      // Use case-insensitive comparison — emails are case-insensitive per RFC 5321.
-      // Also check if this user received the in-app notification for this invite
-      // (notification was delivered based on email match at creation time).
-      const userResult = await client.query(
-        `SELECT email FROM users WHERE id = $1`,
-        [userId]
-      );
-      if (userResult.rows.length > 0 && userResult.rows[0].email.toLowerCase() !== invite.inviteeEmail.toLowerCase()) {
-        // Before rejecting, check if this user was the notification target —
-        // the system already validated the email match when creating the notification.
-        const wasNotified = await client.query(
-          `SELECT id FROM notifications WHERE user_id = $1 AND link = $2 LIMIT 1`,
-          [userId, `/invite/${code}`]
-        );
-        if (wasNotified.rows.length === 0) {
-          throw new AppError(403, 'AUTH_FORBIDDEN', 'This invite was sent to a different email address');
-        }
-      }
-    }
+    // No email restriction — anyone with the invite link can accept it.
+    // The invite code itself is the authorization token.
 
     // Update invite
     const updatedResult = await client.query(
