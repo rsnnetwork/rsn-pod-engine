@@ -130,6 +130,8 @@ export default function useSessionSocket(sessionId: string) {
       store.setRound(data.roundNumber);
       if (data.totalRounds) store.setTotalRounds(data.totalRounds);
       store.setByeRound(false);
+      store.setLeftCurrentRound(false); // New round — allow matching
+      store.setPartnerDisconnected(false);
       store.setTransitionStatus(null);
       store.setMatchPreview(null);
       const duration = Math.floor((new Date(data.endsAt).getTime() - Date.now()) / 1000);
@@ -168,8 +170,10 @@ export default function useSessionSocket(sessionId: string) {
     socket.on('match:assigned', (data: any) => {
       // Only transition to 'matched' phase during an active round — ignore stale
       // match:assigned events that arrive during rating or lobby transitions
-      const currentStatus = useSessionStore.getState().sessionStatus;
-      if (currentStatus === 'round_rating' || currentStatus === 'completed') return;
+      const state = useSessionStore.getState();
+      if (state.sessionStatus === 'round_rating' || state.sessionStatus === 'completed') return;
+      if (state.sessionStatus === 'round_transition') return;
+      if (state.leftCurrentRound) return; // User manually left this round
 
       store.setMatchingOverlay(null); // Clear anticipation screen
       store.setByeRound(false);
@@ -217,6 +221,7 @@ export default function useSessionSocket(sessionId: string) {
       store.setByeRound(false);
       store.setPartnerDisconnected(false);
       store.setTransitionStatus(null);
+      store.setLeftCurrentRound(true); // Prevent re-entry via stale match:assigned
       store.setPhase('lobby');
     });
 

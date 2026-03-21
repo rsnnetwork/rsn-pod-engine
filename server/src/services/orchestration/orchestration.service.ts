@@ -35,6 +35,7 @@ interface ActiveSession {
   pausedTimeRemaining: number | null;
   presenceMap: Map<string, { lastHeartbeat: Date; socketId: string }>;
   pendingRoundNumber: number | null;  // Round number for pre-generated matches awaiting host confirmation
+  manuallyLeftRound: Set<string>;     // Users who clicked "Leave Conversation" — skip in reconnect/reassignment
 }
 
 // ─── State Store ────────────────────────────────────────────────────────────
@@ -308,8 +309,8 @@ async function handleJoinSession(
       emitHostDashboard(data.sessionId);
     }
 
-    // If session is mid-round, restore user's match assignment
-    if (activeSession && activeSession.status === SessionStatus.ROUND_ACTIVE) {
+    // If session is mid-round, restore user's match assignment (skip if they manually left)
+    if (activeSession && activeSession.status === SessionStatus.ROUND_ACTIVE && !activeSession.manuallyLeftRound.has(userId)) {
       const matches = await matchingService.getMatchesByRound(
         data.sessionId, activeSession.currentRound
       );
@@ -573,6 +574,9 @@ async function handleLeaveConversation(
     const { sessionId } = data;
     const activeSession = activeSessions.get(sessionId);
     if (!activeSession || activeSession.status !== SessionStatus.ROUND_ACTIVE) return;
+
+    // Track that this user manually left — prevents re-entry via reconnect
+    activeSession.manuallyLeftRound.add(userId);
 
     // Find the user's active match
     const matches = await matchingService.getMatchesByRound(sessionId, activeSession.currentRound);
@@ -944,6 +948,7 @@ async function handleHostStart(
       pausedTimeRemaining: null,
       presenceMap: new Map(),
       pendingRoundNumber: null,
+      manuallyLeftRound: new Set(),
     };
 
     activeSessions.set(data.sessionId, activeSession);
@@ -1836,6 +1841,7 @@ async function transitionToRound(
     // Update session state
     activeSession.currentRound = roundNumber;
     activeSession.status = SessionStatus.ROUND_ACTIVE;
+    activeSession.manuallyLeftRound.clear();
 
     await sessionService.updateSessionStatus(sessionId, SessionStatus.ROUND_ACTIVE);
     await query('UPDATE sessions SET current_round = $1 WHERE id = $2', [roundNumber, sessionId]);
@@ -2450,6 +2456,7 @@ export async function startSession(sessionId: string, hostUserId: string): Promi
     pausedTimeRemaining: null,
     presenceMap: new Map(),
     pendingRoundNumber: null,
+    manuallyLeftRound: new Set(),
   };
 
   activeSessions.set(sessionId, activeSession);
