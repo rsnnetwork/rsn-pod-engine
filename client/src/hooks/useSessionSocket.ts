@@ -320,7 +320,7 @@ export default function useSessionSocket(sessionId: string) {
     });
 
     socket.on('host:participant_removed', () => {
-      store.setError('You have been removed from this session.');
+      store.setError('You have been removed from this event.');
       store.setPhase('complete');
     });
 

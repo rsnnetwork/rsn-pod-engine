@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/Button';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useToastStore } from '@/stores/toastStore';
-import { Star, UserCheck, CheckCircle, Loader2, Clock, Heart } from 'lucide-react';
+import { Star, CheckCircle, Loader2, Clock, Heart } from 'lucide-react';
 import api from '@/lib/api';
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -46,22 +46,29 @@ function PartnerRatingForm({ partnerName, toUserId, matchId, onSubmitted, onSkip
   return (
     <div className="max-w-md w-full text-center animate-fade-in-up bg-[#292a2d] rounded-2xl p-8">
       {totalPartners > 1 && (
-        <p className="text-xs text-gray-500 mb-2">Partner {partnerIndex + 1} of {totalPartners}</p>
+        <div className="flex items-center justify-center gap-1.5 mb-3">
+          {Array.from({ length: totalPartners }).map((_, i) => (
+            <div key={i} className={`h-1.5 rounded-full transition-all ${
+              i === partnerIndex ? 'w-6 bg-white' : i < partnerIndex ? 'w-4 bg-emerald-500' : 'w-4 bg-white/20'
+            }`} />
+          ))}
+        </div>
       )}
       <h2 className="text-xl font-bold text-white mb-2">Rate your conversation</h2>
-      <p className="text-gray-400 mb-6">
-        How was your chat with {partnerName}?
+      <p className="text-gray-400 mb-2">
+        How was your chat with <span className="text-white font-medium">{partnerName}</span>?
       </p>
+      <p className="text-xs text-gray-500 mb-5">Tap the stars to rate</p>
 
-      <div className="flex justify-center gap-2 mb-6">
+      <div className="flex justify-center gap-3 mb-6">
         {[1, 2, 3, 4, 5].map(n => (
           <button
             key={n}
             onClick={() => setRating(n)}
-            className="transition-transform hover:scale-110"
+            className="transition-transform hover:scale-110 active:scale-95"
           >
             <Star
-              className={`h-10 w-10 ${n <= rating ? 'text-amber-400 fill-amber-400' : 'text-gray-600'}`}
+              className={`h-12 w-12 ${n <= rating ? 'text-amber-400 fill-amber-400' : 'text-gray-600 hover:text-gray-500'}`}
             />
           </button>
         ))}
@@ -69,15 +76,15 @@ function PartnerRatingForm({ partnerName, toUserId, matchId, onSubmitted, onSkip
 
       <button
         onClick={() => setMeetAgain(!meetAgain)}
-        className={`flex items-center justify-center gap-2 w-full py-2 rounded-lg border transition-colors mb-4 ${
-          meetAgain ? 'border-emerald-500 bg-emerald-500/10 text-emerald-400' : 'border-white/10 text-gray-400 hover:border-white/20'
+        className={`flex items-center justify-center gap-2.5 w-full py-3 rounded-xl border-2 transition-all mb-5 text-base font-medium ${
+          meetAgain ? 'border-pink-500 bg-pink-500/10 text-pink-400' : 'border-white/10 text-gray-400 hover:border-white/20'
         }`}
       >
-        <UserCheck className="h-4 w-4" />
+        <Heart className={`h-5 w-5 ${meetAgain ? 'fill-pink-400' : ''}`} />
         {meetAgain ? 'Would meet again!' : 'Would you meet again?'}
       </button>
 
-      <Button onClick={submit} isLoading={submitting} disabled={rating === 0} className="w-full">
+      <Button onClick={submit} isLoading={submitting} disabled={rating === 0} className="w-full text-base py-3">
         Submit Rating
       </Button>
 
