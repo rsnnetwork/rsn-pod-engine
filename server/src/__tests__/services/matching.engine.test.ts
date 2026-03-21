@@ -189,19 +189,31 @@ describe('MatchingEngineV1', () => {
       expect(uniqueKeys.size).toBe(6);
     });
 
-    it('should still work when all unique pairs exhausted (allows fallback repeats)', async () => {
+    it('should give bye rounds when all unique pairs exhausted (no repeat matches)', async () => {
       // 3 participants → max 3 unique pairs, 1 pair per round.
-      // Requesting 5 rounds means rounds 4+ need fallback repeats.
+      // Requesting 5 rounds means rounds 4+ have no unique pairs left — participants get bye.
       const participants = ['a', 'b', 'c'].map(id => makeParticipant({ userId: id }));
       const input = makeInput(participants, { numberOfRounds: 5 });
 
       const output = await engine.generateSchedule(input);
 
       expect(output.rounds).toHaveLength(5);
-      // Each round should still produce at least 1 pair
-      for (const round of output.rounds) {
-        expect(round.pairs.length).toBeGreaterThanOrEqual(1);
+      // First 3 rounds should each have 1 pair (3 unique pairs available)
+      for (let i = 0; i < 3; i++) {
+        expect(output.rounds[i].pairs.length).toBe(1);
       }
+      // Rounds 4+ should have no pairs (all unique pairs exhausted) and warnings
+      for (let i = 3; i < 5; i++) {
+        expect(output.rounds[i].pairs.length).toBe(0);
+        expect(output.rounds[i].warnings).toBeDefined();
+        expect(output.rounds[i].warnings!.length).toBeGreaterThan(0);
+      }
+      // No pair should appear twice across all rounds (no-repeat rule)
+      const allPairKeys = output.rounds.flatMap(r =>
+        r.pairs.map(p => [p.participantAId, p.participantBId].sort().join(':'))
+      );
+      const uniqueKeys = new Set(allPairKeys);
+      expect(uniqueKeys.size).toBe(allPairKeys.length);
     });
   });
 
