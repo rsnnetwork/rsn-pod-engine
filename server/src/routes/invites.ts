@@ -107,6 +107,98 @@ router.get(
   }
 );
 
+// ─── GET /invites/session/:sessionId ─────────────────────────────────────────
+
+router.get(
+  '/session/:sessionId',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { sessionId } = req.params;
+      const status = req.query.status as string | undefined;
+
+      // Only host or admin can view session invites
+      const sessionResult = await query<{ host_user_id: string }>(
+        `SELECT host_user_id FROM sessions WHERE id = $1`, [sessionId]
+      );
+      if (sessionResult.rows.length === 0) {
+        return res.status(404).json({ success: false, error: { code: 'SESSION_NOT_FOUND', message: 'Session not found' } });
+      }
+      const isHost = sessionResult.rows[0].host_user_id === req.user!.userId;
+      const isAdmin = req.user!.role === 'admin' || req.user!.role === 'super_admin';
+      if (!isHost && !isAdmin) {
+        return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only the host can view session invites' } });
+      }
+
+      const invites = await inviteService.listSessionInvites(sessionId, status);
+      const response: ApiResponse = { success: true, data: invites };
+      return res.json(response);
+    } catch (err) {
+      return next(err);
+    }
+  }
+);
+
+// ─── POST /invites/:id/remind ────────────────────────────────────────────────
+
+router.post(
+  '/:id/remind',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const invite = await query<{ id: string; invitee_email: string; session_id: string; status: string; code: string }>(
+        `SELECT id, invitee_email, session_id, status, code FROM invites WHERE id = $1`, [req.params.id]
+      );
+      if (invite.rows.length === 0) {
+        return res.status(404).json({ success: false, error: { code: 'INVITE_NOT_FOUND', message: 'Invite not found' } });
+      }
+      const inv = invite.rows[0];
+      if (inv.status !== 'pending') {
+        return res.status(400).json({ success: false, error: { code: 'INVITE_NOT_PENDING', message: 'Invite is no longer pending' } });
+      }
+
+      // Only host/admin of the session can remind
+      if (inv.session_id) {
+        const sessionResult = await query<{ host_user_id: string }>(
+          `SELECT host_user_id FROM sessions WHERE id = $1`, [inv.session_id]
+        );
+        const isHost = sessionResult.rows[0]?.host_user_id === req.user!.userId;
+        const isAdmin = req.user!.role === 'admin' || req.user!.role === 'super_admin';
+        if (!isHost && !isAdmin) {
+          return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only the host can send reminders' } });
+        }
+      }
+
+      // Re-send invite email
+      if (inv.invitee_email) {
+        const { default: config } = await import('../config');
+        const emailService = await import('../services/email/email.service');
+        const inviterResult = await query<{ displayName: string }>(
+          `SELECT display_name AS "displayName" FROM users WHERE id = $1`, [req.user!.userId]
+        );
+        const inviterName = inviterResult.rows[0]?.displayName || 'Someone';
+
+        let targetName: string | undefined;
+        if (inv.session_id) {
+          const sr = await query<{ title: string }>(`SELECT title FROM sessions WHERE id = $1`, [inv.session_id]);
+          targetName = sr.rows[0]?.title;
+        }
+
+        await emailService.sendInviteEmail(inv.invitee_email, {
+          inviterName,
+          type: 'session',
+          targetName,
+          inviteUrl: `${config.clientUrl}/invite/${inv.code}`,
+        });
+      }
+
+      return res.json({ success: true, data: { reminded: true } });
+    } catch (err) {
+      return next(err);
+    }
+  }
+);
+
 // ─── GET /invites/:code ─────────────────────────────────────────────────────
 
 router.get(

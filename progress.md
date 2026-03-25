@@ -41,7 +41,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 ## Current Phase Snapshot
 
 - Active Phase: Change 1.8 — Platform Feedback v1.8
-- Active Milestone: **Phase 1 + Phase 2 complete (6 bug fixes + 2 UX fixes)**
+- Active Milestone: **Phases 1-3 complete (6 bug fixes + 2 UX fixes + 1 feature)**
 - Source Document: Changes 1.8.pdf (Stefan/Shradha call feedback, March 24, 2026)
 - Last Updated: March 26, 2026
 
@@ -58,6 +58,9 @@ Purpose: Persistent execution history and current state, independent of chat mem
 **Phase 2 — Event Flow UX (2 items, ALL COMPLETE)**
 - 2A: Renamed "Leave Round" to "Return to Lobby" with tooltip + updated confirm dialog
 - 2B: Added camera/mic test to pre-lobby waiting room (self-preview, mic level bar, toggle controls)
+
+**Phase 3 — Invitation & Participant Visibility (1 item, COMPLETE)**
+- 3A: Host can see pending invites on event detail page + send reminders
 
 ### What's Done (Change 1.7)
 

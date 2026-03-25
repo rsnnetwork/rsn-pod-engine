@@ -45,6 +45,7 @@ export default function SessionDetailPage() {
   const [userSearch, setUserSearch] = useState('');
   const [selectedUsers, setSelectedUsers] = useState<any[]>([]);
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
+  const [showPendingInvites, setShowPendingInvites] = useState(false);
 
   const { data: session, isLoading } = useQuery({
     queryKey: ['session', sessionId],
@@ -71,6 +72,18 @@ export default function SessionDetailPage() {
     queryFn: () => api.get(`/sessions/${sessionId}/participant-counts`).then(r => r.data.data),
     enabled: !!sessionId && (isHost || isAdmin),
   });
+  const { data: pendingInvites, refetch: refetchPendingInvites } = useQuery({
+    queryKey: ['session-pending-invites', sessionId],
+    queryFn: () => api.get(`/invites/session/${sessionId}?status=pending`).then(r => r.data.data ?? []),
+    enabled: !!sessionId && (isHost || isAdmin) && showPendingInvites,
+  });
+
+  const remindMutation = useMutation({
+    mutationFn: (inviteId: string) => api.post(`/invites/${inviteId}/remind`),
+    onSuccess: () => addToast('Reminder sent!', 'success'),
+    onError: () => addToast('Failed to send reminder', 'error'),
+  });
+
   const isRegistered = (participants || []).some((p: any) => p.userId === user?.id && p.status !== 'removed');
   const isMember = !!pod?.memberRole || isAdmin;
   const isRestrictedPod = pod?.visibility === 'invite_only' || pod?.visibility === 'private';
@@ -359,9 +372,17 @@ export default function SessionDetailPage() {
             ].map((tab: any) => (
               <button
                 key={tab.key ?? 'all'}
-                onClick={() => setStatusFilter(tab.key === 'pending_invite' ? statusFilter : tab.key)}
+                onClick={() => {
+                  if (tab.key === 'pending_invite') {
+                    setShowPendingInvites(!showPendingInvites);
+                    setStatusFilter(null);
+                  } else {
+                    setShowPendingInvites(false);
+                    setStatusFilter(tab.key);
+                  }
+                }}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
-                  statusFilter === tab.key
+                  (tab.key === 'pending_invite' ? showPendingInvites : statusFilter === tab.key)
                     ? 'ring-2 ring-rsn-red/30 border-rsn-red ' + tab.color
                     : tab.color + ' hover:opacity-80'
                 }`}
@@ -374,7 +395,52 @@ export default function SessionDetailPage() {
           </div>
         )}
 
-        {(participants || []).length === 0 ? (
+        {/* Pending invites list (shown when tab is active) */}
+        {showPendingInvites && (
+          <div className="mb-4">
+            {!pendingInvites || pendingInvites.length === 0 ? (
+              <Card>
+                <p className="text-gray-400 text-sm text-center py-4">No pending invites</p>
+              </Card>
+            ) : (
+              <div className="grid gap-2">
+                {pendingInvites.map((inv: any) => (
+                  <Card key={inv.id} className="!p-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="h-8 w-8 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 text-xs font-bold">
+                          {(inv.inviteeName || inv.inviteeEmail || '?').charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-gray-800">{inv.inviteeName || inv.inviteeEmail || 'Shareable link'}</p>
+                          {inv.inviteeName && inv.inviteeEmail && (
+                            <p className="text-xs text-gray-400">{inv.inviteeEmail}</p>
+                          )}
+                          <p className="text-xs text-gray-400">Sent {new Date(inv.createdAt).toLocaleDateString()}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="warning" className="text-xs">Pending</Badge>
+                        {inv.inviteeEmail && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => remindMutation.mutate(inv.id)}
+                            isLoading={remindMutation.isPending}
+                          >
+                            <Send className="h-3 w-3 mr-1" /> Remind
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {!showPendingInvites && ((participants || []).length === 0 ? (
           <Card>
             <p className="text-gray-400 text-sm text-center py-4">No participants yet. Be the first to register!</p>
           </Card>
@@ -410,7 +476,7 @@ export default function SessionDetailPage() {
               );
             })}
           </div>
-        )}
+        ))}
       </div>
 
       {/* Invite to Session Modal */}
