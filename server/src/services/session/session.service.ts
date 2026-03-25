@@ -254,10 +254,26 @@ export async function registerParticipant(sessionId: string, userId: string, use
             [session.podId, userId]
           );
         } catch { /* ignore if already member */ }
-      } else if (podVisibility === 'invite_only' && !isMember) {
-        throw new ForbiddenError('You must be a pod member to register for sessions in an invite-only pod');
-      } else if (podVisibility === 'private' && !isMember) {
-        throw new ForbiddenError('You must be a pod member to register for sessions in a private pod');
+      } else if ((podVisibility === 'invite_only' || podVisibility === 'private') && !isMember) {
+        // Check if user has a valid invite for this session — if so, auto-add to pod
+        const inviteCheck = await client.query(
+          `SELECT i.id FROM invites i
+           JOIN users u ON u.email = i.invitee_email
+           WHERE i.session_id = $1 AND u.id = $2 AND i.status IN ('pending', 'accepted')
+           LIMIT 1`,
+          [session.id, userId]
+        );
+        if (inviteCheck.rows.length > 0) {
+          try {
+            await client.query(
+              `INSERT INTO pod_members (pod_id, user_id, role, status) VALUES ($1, $2, 'member', 'active')
+               ON CONFLICT (pod_id, user_id) DO UPDATE SET status = 'active', joined_at = NOW(), left_at = NULL`,
+              [session.podId, userId]
+            );
+          } catch { /* ignore if already member */ }
+        } else {
+          throw new ForbiddenError('You must be a pod member to register for sessions in a private pod');
+        }
       }
     }
 
