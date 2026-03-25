@@ -271,6 +271,11 @@ export async function registerParticipant(sessionId: string, userId: string, use
               [session.podId, userId]
             );
           } catch { /* ignore if already member */ }
+          // Mark the invite as accepted so it disappears from pending list
+          await client.query(
+            `UPDATE invites SET status = 'accepted', accepted_by_user_id = $1, accepted_at = NOW(), use_count = use_count + 1 WHERE id = $2`,
+            [userId, inviteCheck.rows[0].id]
+          );
         } else {
           throw new ForbiddenError('You must be a pod member to register for sessions in a private pod');
         }
