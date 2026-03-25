@@ -15,10 +15,17 @@ export default function ChatPanel({ sessionId, onClose }: ChatPanelProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const chatMessages = useSessionStore(s => s.chatMessages);
   const phase = useSessionStore(s => s.phase);
+  const hostInLobby = useSessionStore(s => s.hostInLobby);
+  const hostUserId = useSessionStore(s => s.hostUserId);
+  const cohosts = useSessionStore(s => s.cohosts);
   const { user } = useAuthStore();
 
   // Determine scope based on current phase
   const scope: 'lobby' | 'room' = phase === 'matched' ? 'room' : 'lobby';
+
+  // Chat disabled in lobby when host is not present (host/co-hosts always allowed)
+  const isHostOrCohost = user?.id === hostUserId || (!!user?.id && cohosts.has(user.id));
+  const chatDisabled = scope === 'lobby' && !hostInLobby && !isHostOrCohost;
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -96,26 +103,30 @@ export default function ChatPanel({ sessionId, onClose }: ChatPanelProps) {
       {/* Input */}
       {phase !== 'complete' && (
         <div className="px-4 py-3 border-t border-white/10">
-          <div className="flex items-center gap-2">
-            <input
-              ref={inputRef}
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={scope === 'room' ? 'Message your room...' : 'Message everyone...'}
-              maxLength={500}
-              style={{ color: '#000000' }}
-              className="flex-1 px-3 py-2 text-sm bg-white border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500/50 placeholder-gray-400"
-            />
-            <button
-              onClick={handleSend}
-              disabled={!input.trim()}
-              className="p-2 rounded-full bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              <Send className="h-4 w-4" />
-            </button>
-          </div>
+          {chatDisabled ? (
+            <p className="text-xs text-gray-500 text-center py-1">Chat available when host joins</p>
+          ) : (
+            <div className="flex items-center gap-2">
+              <input
+                ref={inputRef}
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder={scope === 'room' ? 'Message your room...' : 'Message everyone...'}
+                maxLength={500}
+                style={{ color: '#000000' }}
+                className="flex-1 px-3 py-2 text-sm bg-white border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500/50 placeholder-gray-400"
+              />
+              <button
+                onClick={handleSend}
+                disabled={!input.trim()}
+                className="p-2 rounded-full bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                <Send className="h-4 w-4" />
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -40,10 +40,20 @@ Purpose: Persistent execution history and current state, independent of chat mem
 
 ## Current Phase Snapshot
 
-- Active Phase: Change 1.7 — Event Flow Bug Report + Matching Fix
-- Active Milestone: **All 5 phases complete (7 commits)**
-- Source Document: Tommy's live walkthrough bug report (March 20, 2026)
-- Last Updated: March 22, 2026
+- Active Phase: Change 1.8 — Platform Feedback v1.8
+- Active Milestone: **Phase 1 complete (6 critical bug fixes)**
+- Source Document: Changes 1.8.pdf (Stefan/Shradha call feedback, March 24, 2026)
+- Last Updated: March 26, 2026
+
+### What's Done (Change 1.8 — Phase 1)
+
+**Phase 1 — Critical Bugs (6 items, ALL COMPLETE)**
+- 1A: Fix "Preparing your first match" misleading text → now says "Waiting for host to begin matching"
+- 1B: Fix accepted invites still showing as pending → listReceivedInvites filters by accepted_by_user_id
+- 1C: Fix "Already a member of pod" blocking event access → friendly error messages + proper handling
+- 1D: Disable lobby chat/reactions without host present → server + client gated on host presence
+- 1E: Remove confusing event settings → Lobby Duration removed, Transition renamed to "Break Between Rounds"
+- 1F: Pods default to "Browse All" + search → default changed, search input filters by name
 
 ### What's Done (Change 1.7)
 

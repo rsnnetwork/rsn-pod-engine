@@ -138,7 +138,7 @@ export default function LiveSessionPage() {
         <div className="bg-white/5 px-4 py-2 flex items-center justify-center gap-2">
           <Loader2 className="h-4 w-4 text-blue-400 animate-spin" />
           <p className="text-sm text-gray-300">
-            {transitionStatus === 'starting_session' && (isHost ? 'Starting event — generating matches...' : 'Event is starting — preparing your first match...')}
+            {transitionStatus === 'starting_session' && (isHost ? 'Starting event — lobby is open' : 'Event is starting — waiting for host to begin matching...')}
             {transitionStatus === 'preparing_match' && (isHost ? 'Sending participants to breakout rooms...' : "You've been matched! Connecting to your partner...")}
             {transitionStatus === 'round_ending' && (isHost ? 'Ending round — collecting participants...' : 'Round ending — wrapping up...')}
             {transitionStatus === 'between_rounds' && (isHost ? 'Preparing next round...' : 'Getting ready for the next round...')}

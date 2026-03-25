@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Users, Plus, Globe, Lock, Shield, Eye, UserCheck, UserPlus } from 'lucide-react';
+import { Users, Plus, Globe, Lock, Shield, Eye, UserCheck, UserPlus, Search } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -23,8 +23,8 @@ const VISIBILITY_CONFIG: Record<string, { label: string; icon: typeof Eye; varia
 export default function PodsPage() {
   const navigate = useNavigate();
   const [showCreate, setShowCreate] = useState(false);
-  // Default to 'active' — shows the user's own active pods on first load
-  const [filter, setFilter] = useState<PodFilter>('active');
+  const [filter, setFilter] = useState<PodFilter>('browse');
+  const [search, setSearch] = useState('');
 
   const { data, isLoading } = useQuery({
     queryKey: ['my-pods', filter],
@@ -37,6 +37,15 @@ export default function PodsPage() {
       return api.get(`/pods${params}`).then(r => r.data.data ?? []);
     },
   });
+
+  // Client-side search filter
+  const filteredData = useMemo(() => {
+    if (!data || !search.trim()) return data;
+    const q = search.toLowerCase();
+    return data.filter((pod: any) =>
+      pod.name?.toLowerCase().includes(q) || pod.description?.toLowerCase().includes(q)
+    );
+  }, [data, search]);
 
   if (isLoading) return <PageLoader />;
 
@@ -77,6 +86,18 @@ export default function PodsPage() {
         ))}
       </div>
 
+      {/* Search */}
+      <div className="relative animate-fade-in-up">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search pods by name..."
+          className="w-full pl-10 pr-4 py-2.5 text-sm border border-gray-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-rsn-red/20 focus:border-rsn-red/40 placeholder-gray-400"
+        />
+      </div>
+
       {/* Browse mode callout */}
       {isBrowse && (
         <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-700 flex items-center gap-2">
@@ -86,7 +107,7 @@ export default function PodsPage() {
       )}
 
       {/* Pod list */}
-      {(!data || data.length === 0) ? (
+      {(!filteredData || filteredData.length === 0) ? (
         <EmptyState
           icon={<Users className="h-8 w-8" />}
           title={
@@ -105,7 +126,7 @@ export default function PodsPage() {
         />
       ) : (
         <div className="grid gap-4 animate-fade-in-up">
-          {data.map((pod: any) => {
+          {filteredData.map((pod: any) => {
             const vis = VISIBILITY_CONFIG[pod.visibility] || VISIBILITY_CONFIG.public;
             const VisIcon = vis.icon;
             return (

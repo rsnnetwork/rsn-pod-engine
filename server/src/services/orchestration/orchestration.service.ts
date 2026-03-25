@@ -2611,9 +2611,23 @@ async function handleChatSend(
       return;
     }
 
-    // Determine if sender is host
+    // Determine if sender is host/co-host
     const session = await sessionService.getSessionById(sessionId).catch(() => null);
     const isHost = session?.hostUserId === userId;
+    const cohostResult = isHost ? { rows: [] } : await query<{ user_id: string }>(
+      `SELECT user_id FROM session_cohosts WHERE session_id = $1 AND user_id = $2`, [sessionId, userId]
+    ).catch(() => ({ rows: [] }));
+    const isCohost = cohostResult.rows.length > 0;
+
+    // In lobby phase, only allow chat when host is present (host/co-hosts always allowed)
+    const activeSession = activeSessions.get(sessionId);
+    if (!isHost && !isCohost && scope === 'lobby') {
+      const hostPresent = activeSession?.presenceMap.has(session?.hostUserId || '');
+      if (!hostPresent) {
+        socket.emit('error', { code: 'CHAT_DISABLED', message: 'Chat is available once the host joins' });
+        return;
+      }
+    }
 
     const displayName = (socket.data as any)?.displayName || 'Unknown';
     const chatMsg: ChatMessage = {
@@ -2686,6 +2700,17 @@ async function handleReactionSend(
     if (!VALID_REACTIONS.includes(type)) return;
 
     if (!socket.rooms.has(sessionRoom(sessionId))) return;
+
+    // In lobby phase, block reactions when host is not present (host/co-hosts always allowed)
+    const session = await sessionService.getSessionById(sessionId).catch(() => null);
+    const isHost = session?.hostUserId === userId;
+    if (!isHost) {
+      const activeSession = activeSessions.get(sessionId);
+      const hostPresent = activeSession?.presenceMap.has(session?.hostUserId || '');
+      if (!hostPresent && (!activeSession || activeSession.status === SessionStatus.LOBBY_OPEN || activeSession.status === SessionStatus.SCHEDULED)) {
+        return; // Silently ignore reactions when host is absent in lobby
+      }
+    }
 
     const displayName = (socket.data as any)?.displayName || 'User';
 

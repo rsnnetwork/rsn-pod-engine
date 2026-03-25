@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { getSocket } from '@/lib/socket';
+import { useSessionStore } from '@/stores/sessionStore';
+import { useAuthStore } from '@/stores/authStore';
 import { Hand, Heart, ThumbsUp } from 'lucide-react';
 
 const REACTIONS = [
@@ -19,6 +21,13 @@ interface FloatingReaction {
 export default function ReactionBar({ sessionId }: { sessionId: string }) {
   const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
   const [cooldown, setCooldown] = useState(false);
+  const hostInLobby = useSessionStore(s => s.hostInLobby);
+  const hostUserId = useSessionStore(s => s.hostUserId);
+  const phase = useSessionStore(s => s.phase);
+  const cohosts = useSessionStore(s => s.cohosts);
+  const { user } = useAuthStore();
+  const isHostOrCohost = user?.id === hostUserId || (!!user?.id && cohosts.has(user.id));
+  const reactionsDisabled = phase === 'lobby' && !hostInLobby && !isHostOrCohost;
 
   // Listen for incoming reactions
   useEffect(() => {
@@ -70,20 +79,22 @@ export default function ReactionBar({ sessionId }: { sessionId: string }) {
         ))}
       </div>
 
-      {/* Reaction buttons */}
-      <div className="flex items-center gap-1 bg-[#3c4043]/90 backdrop-blur-sm rounded-full px-2 py-1">
-        {REACTIONS.map(({ type, emoji, label }) => (
-          <button
-            key={type}
-            onClick={() => sendReaction(type)}
-            disabled={cooldown}
-            title={label}
-            className="p-1.5 rounded-full hover:bg-white/10 active:scale-90 transition-all disabled:opacity-40 text-lg leading-none"
-          >
-            {emoji}
-          </button>
-        ))}
-      </div>
+      {/* Reaction buttons — hidden when host is not in lobby */}
+      {!reactionsDisabled && (
+        <div className="flex items-center gap-1 bg-[#3c4043]/90 backdrop-blur-sm rounded-full px-2 py-1">
+          {REACTIONS.map(({ type, emoji, label }) => (
+            <button
+              key={type}
+              onClick={() => sendReaction(type)}
+              disabled={cooldown}
+              title={label}
+              className="p-1.5 rounded-full hover:bg-white/10 active:scale-90 transition-all disabled:opacity-40 text-lg leading-none"
+            >
+              {emoji}
+            </button>
+          ))}
+        </div>
+      )}
     </>
   );
 }

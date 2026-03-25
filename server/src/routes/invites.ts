@@ -98,7 +98,7 @@ router.get(
         return res.json(response);
       }
 
-      const invites = await inviteService.listReceivedInvites(email);
+      const invites = await inviteService.listReceivedInvites(email, req.user!.userId);
       const response: ApiResponse = { success: true, data: invites };
       return res.json(response);
     } catch (err) {

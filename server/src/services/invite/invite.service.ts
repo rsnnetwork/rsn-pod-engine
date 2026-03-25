@@ -432,7 +432,7 @@ export async function listInvitesByUser(userId: string, params: {
 
 // ─── List Received Invites ──────────────────────────────────────────────────
 
-export async function listReceivedInvites(userEmail: string): Promise<(Invite & { podName?: string; sessionTitle?: string; inviterName?: string })[]> {
+export async function listReceivedInvites(userEmail: string, userId?: string): Promise<(Invite & { podName?: string; sessionTitle?: string; inviterName?: string })[]> {
   const ENRICHED_COLUMNS = `
     i.id, i.code, i.type, i.inviter_id AS "inviterId", i.invitee_email AS "inviteeEmail",
     i.pod_id AS "podId", i.session_id AS "sessionId", i.status, i.max_uses AS "maxUses",
@@ -443,6 +443,15 @@ export async function listReceivedInvites(userEmail: string): Promise<(Invite & 
     u.display_name AS "inviterName"
   `;
 
+  // Exclude invites already accepted by this user (multi-use invites keep status='pending'
+  // after first accept, so we must also filter by accepted_by_user_id)
+  const userFilter = userId
+    ? `AND (i.accepted_by_user_id IS NULL OR i.accepted_by_user_id != $2)`
+    : '';
+  const params = userId
+    ? [userEmail.toLowerCase(), userId]
+    : [userEmail.toLowerCase()];
+
   const result = await query<Invite & { podName?: string; sessionTitle?: string; inviterName?: string }>(
     `SELECT ${ENRICHED_COLUMNS}
      FROM invites i
@@ -451,8 +460,9 @@ export async function listReceivedInvites(userEmail: string): Promise<(Invite & 
      LEFT JOIN users u ON u.id = i.inviter_id
      WHERE i.invitee_email = $1 AND i.status = 'pending'
        AND (i.expires_at IS NULL OR i.expires_at > NOW())
+       ${userFilter}
      ORDER BY i.created_at DESC`,
-    [userEmail.toLowerCase()]
+    params
   );
 
   return result.rows;

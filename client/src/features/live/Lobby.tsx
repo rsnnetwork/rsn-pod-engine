@@ -285,7 +285,7 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
           <Loader2 className="h-5 w-5 text-gray-400 animate-spin" />
           <h2 className="text-xl font-bold text-white">Event Starting</h2>
           <p className="text-gray-400 text-sm">
-            {isHost ? 'Lobby is open — use Match People below when ready.' : 'Preparing your first match...'}
+            {isHost ? 'Lobby is open — use Match People below when ready.' : 'Waiting for the host to begin matching...'}
           </p>
         </div>
       ) : (sessionStatus === 'round_active' || sessionStatus === 'round_rating') ? (

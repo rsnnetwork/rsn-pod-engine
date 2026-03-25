@@ -179,14 +179,9 @@ export default function CreateSessionPage() {
               <p className="text-xs text-gray-400 mt-1">60 – 3600 seconds (default 8 min)</p>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-600 mb-1.5">Lobby Duration</label>
-              <input type="number" {...register('lobbyDurationSeconds', { valueAsNumber: true, min: 30, max: 3600 })} className={selectClass} />
-              <p className="text-xs text-gray-400 mt-1">30 – 3600 seconds</p>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-600 mb-1.5">Transition Duration</label>
+              <label className="block text-sm font-medium text-gray-600 mb-1.5">Break Between Rounds</label>
               <input type="number" {...register('transitionDurationSeconds', { valueAsNumber: true, min: 10, max: 120 })} className={selectClass} />
-              <p className="text-xs text-gray-400 mt-1">10 – 120 seconds</p>
+              <p className="text-xs text-gray-400 mt-1">Seconds participants wait between rounds (10 – 120)</p>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-600 mb-1.5">Timer Visibility</label>

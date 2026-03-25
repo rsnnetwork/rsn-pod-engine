@@ -22,6 +22,10 @@ function getAcceptErrorMessage(err: any): { message: string } {
       return { message: 'This invite has already been used the maximum number of times' };
     case 'EVENT_ENDED':
       return { message: 'This event has already ended' };
+    case 'SESSION_ALREADY_REGISTERED':
+      return { message: 'You\'re already registered for this event' };
+    case 'POD_MEMBER_EXISTS':
+      return { message: 'You\'re already a member — navigating to the event' };
     default:
       return { message: message || 'Failed to accept invite' };
   }
