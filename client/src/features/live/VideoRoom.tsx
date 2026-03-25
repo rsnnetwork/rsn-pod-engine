@@ -321,13 +321,14 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
               <>
                 <button
                   onClick={() => {
-                    if (confirm('Leave this conversation and return to the lobby? You can be rematched in the next round.')) {
+                    if (confirm('Return to the lobby? Your round will continue for your partner.')) {
                       if (sessionId) getSocket()?.emit('participant:leave_conversation', { sessionId });
                     }
                   }}
                   className="flex items-center gap-1 px-2.5 py-1 text-xs text-gray-400 hover:text-amber-400 hover:bg-white/5 rounded-lg transition-colors"
+                  title="You can return to the lobby at any time"
                 >
-                  <ArrowLeft className="h-3 w-3" /> Leave Round
+                  <ArrowLeft className="h-3 w-3" /> Return to Lobby
                 </button>
                 <button
                   onClick={() => {

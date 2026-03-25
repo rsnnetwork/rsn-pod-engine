@@ -1,4 +1,4 @@
-import { Users, Loader2, VideoOff, Sparkles, ChevronDown, ChevronUp, Mic, MicOff, Volume2, VolumeX, UserX, Clock } from 'lucide-react';
+import { Users, Loader2, VideoOff, Sparkles, ChevronDown, ChevronUp, Mic, MicOff, Volume2, VolumeX, UserX, Clock, Camera } from 'lucide-react';
 import HostRoundDashboard from './HostRoundDashboard';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -403,6 +403,120 @@ function HostParticipantPanel({ sessionId }: { sessionId?: string }) {
 }
 
 /**
+ * Camera/Mic test — Google Meet style self-preview before joining.
+ * Uses raw getUserMedia (no LiveKit room needed).
+ */
+function DeviceTest() {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [micLevel, setMicLevel] = useState(0);
+  const [camOn, setCamOn] = useState(true);
+  const [micOn, setMicOn] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const animFrameRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    let mediaStream: MediaStream | null = null;
+    let audioCtx: AudioContext | null = null;
+
+    navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+      .then(s => {
+        if (!mounted) { s.getTracks().forEach(t => t.stop()); return; }
+        mediaStream = s;
+        setStream(s);
+        if (videoRef.current) videoRef.current.srcObject = s;
+
+        // Set up mic level meter
+        audioCtx = new AudioContext();
+        const source = audioCtx.createMediaStreamSource(s);
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        source.connect(analyser);
+        analyserRef.current = analyser;
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        const tick = () => {
+          if (!mounted) return;
+          analyser.getByteFrequencyData(dataArray);
+          const avg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+          setMicLevel(Math.min(avg / 128, 1));
+          animFrameRef.current = requestAnimationFrame(tick);
+        };
+        tick();
+      })
+      .catch(() => {
+        if (mounted) setError('Camera or microphone not available');
+      });
+
+    return () => {
+      mounted = false;
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      if (audioCtx) audioCtx.close().catch(() => {});
+      if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
+    };
+  }, []);
+
+  const toggleCam = () => {
+    if (!stream) return;
+    const track = stream.getVideoTracks()[0];
+    if (track) { track.enabled = !track.enabled; setCamOn(track.enabled); }
+  };
+
+  const toggleMic = () => {
+    if (!stream) return;
+    const track = stream.getAudioTracks()[0];
+    if (track) { track.enabled = !track.enabled; setMicOn(track.enabled); }
+  };
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center gap-2 py-4">
+        <div className="h-32 w-48 rounded-xl bg-[#3c4043] flex items-center justify-center">
+          <VideoOff className="h-8 w-8 text-gray-500" />
+        </div>
+        <p className="text-xs text-gray-500">{error}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col items-center gap-3 py-4">
+      {/* Camera preview */}
+      <div className="relative w-56 h-40 rounded-xl overflow-hidden bg-[#3c4043]">
+        {camOn ? (
+          <video ref={videoRef} autoPlay muted playsInline className="h-full w-full object-cover" style={{ transform: 'scaleX(-1)' }} />
+        ) : (
+          <div className="h-full w-full flex items-center justify-center">
+            <VideoOff className="h-8 w-8 text-gray-500" />
+          </div>
+        )}
+      </div>
+
+      {/* Controls + mic level */}
+      <div className="flex items-center gap-3">
+        <button onClick={toggleCam} className={`p-2 rounded-full transition-colors ${camOn ? 'bg-white/10 text-white hover:bg-white/20' : 'bg-red-500/80 text-white'}`}>
+          {camOn ? <Camera className="h-4 w-4" /> : <VideoOff className="h-4 w-4" />}
+        </button>
+        <button onClick={toggleMic} className={`p-2 rounded-full transition-colors ${micOn ? 'bg-white/10 text-white hover:bg-white/20' : 'bg-red-500/80 text-white'}`}>
+          {micOn ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}
+        </button>
+        {/* Mic level bar */}
+        {micOn && (
+          <div className="flex items-center gap-1">
+            <div className="w-16 h-1.5 bg-white/10 rounded-full overflow-hidden">
+              <div className="h-full bg-green-500 rounded-full transition-all duration-75" style={{ width: `${micLevel * 100}%` }} />
+            </div>
+          </div>
+        )}
+      </div>
+      <p className="text-[10px] text-gray-500">Test your camera and mic before the event starts</p>
+    </div>
+  );
+}
+
+/**
  * Participant-only waiting room shown before the host starts the event.
  * No video, no lobby controls — just a clean holding screen with participant list.
  */
@@ -474,10 +588,10 @@ function PreLobbyWaitingRoom() {
           </div>
         )}
 
-        <p className="mt-6 text-xs text-gray-500 flex items-center justify-center gap-1.5">
-          <VideoOff className="h-3.5 w-3.5" />
-          Video will be available once the event starts
-        </p>
+        {/* Camera/mic test */}
+        <div className="mt-6 pt-6 border-t border-white/10">
+          <DeviceTest />
+        </div>
       </div>
     </div>
   );
