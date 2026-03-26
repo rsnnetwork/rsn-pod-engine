@@ -71,6 +71,9 @@ export async function getUserById(id: string): Promise<User> {
             expertise_text AS "expertiseText", what_i_care_about AS "whatICareAbout",
             what_i_can_help_with AS "whatICanHelpWith", who_i_want_to_meet AS "whoIWantToMeet",
             why_i_want_to_meet AS "whyIWantToMeet", my_intent AS "myIntent",
+            professional_role AS "professionalRole", current_state AS "currentState",
+            career_stage AS "careerStage", goals, meeting_preferences AS "meetingPreferences",
+            matching_notes AS "matchingNotes",
             invited_by_user_id AS "invitedByUserId",
             role, status, profile_complete AS "profileComplete",
             email_verified AS "emailVerified",
@@ -98,6 +101,9 @@ export async function getUserByEmail(email: string): Promise<User | null> {
             expertise_text AS "expertiseText", what_i_care_about AS "whatICareAbout",
             what_i_can_help_with AS "whatICanHelpWith", who_i_want_to_meet AS "whoIWantToMeet",
             why_i_want_to_meet AS "whyIWantToMeet", my_intent AS "myIntent",
+            professional_role AS "professionalRole", current_state AS "currentState",
+            career_stage AS "careerStage", goals, meeting_preferences AS "meetingPreferences",
+            matching_notes AS "matchingNotes",
             invited_by_user_id AS "invitedByUserId",
             role, status, profile_complete AS "profileComplete",
             email_verified AS "emailVerified",
@@ -178,6 +184,12 @@ export async function updateUser(id: string, input: UpdateUserInput): Promise<Us
     notifyMatches: 'notify_matches',
     profileVisible: 'profile_visible',
     inviteOptOutPublicEvents: 'invite_opt_out_public_events',
+    professionalRole: 'professional_role',
+    currentState: 'current_state',
+    careerStage: 'career_stage',
+    goals: 'goals',
+    meetingPreferences: 'meeting_preferences',
+    matchingNotes: 'matching_notes',
   };
 
   for (const [key, dbCol] of Object.entries(fieldMap)) {

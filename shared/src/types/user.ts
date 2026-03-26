@@ -57,6 +57,12 @@ export interface User {
   whoIWantToMeet: string | null;
   whyIWantToMeet: string | null;
   myIntent: string | null;
+  professionalRole: string[];
+  currentState: string | null;
+  careerStage: string | null;
+  goals: string[];
+  meetingPreferences: string[];
+  matchingNotes: string | null;
   invitedByUserId: string | null;
   role: UserRole;
   status: UserStatus;

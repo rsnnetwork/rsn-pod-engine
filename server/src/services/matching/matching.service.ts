@@ -142,8 +142,45 @@ export async function generateSingleRound(
     ? [{ type: 'inviter_invitee_block' as const, params: { pairs: inviterInviteePairs } }]
     : [];
 
+  // Load matching template weights from pod's template (or session config template, or default)
+  const templateId = sessionConfig.matchingTemplateId || null;
+  let weights = DEFAULT_WEIGHTS;
+
+  // Try session-level template first, then pod-level, then default
+  const tplId = templateId || (session as any).podId
+    ? await query<{ matching_template_id: string | null }>(
+        `SELECT matching_template_id FROM pods WHERE id = $1`,
+        [(session as any).podId]
+      ).then(r => r.rows[0]?.matching_template_id).catch(() => null)
+    : null;
+
+  if (tplId || templateId) {
+    const tplResult = await query<{
+      weight_industry: number; weight_interests: number; weight_intent: number;
+      weight_experience: number; weight_location: number;
+      same_company_allowed: boolean;
+    }>(
+      templateId
+        ? `SELECT * FROM matching_templates WHERE id = $1`
+        : `SELECT * FROM matching_templates WHERE id = $1`,
+      [templateId || tplId]
+    );
+    if (tplResult.rows.length > 0) {
+      const t = tplResult.rows[0];
+      weights = {
+        sharedInterests: t.weight_interests,
+        sharedReasons: t.weight_intent,
+        industryDiversity: t.weight_industry,
+        companyDiversity: t.same_company_allowed ? 0 : 0.15,
+        languageMatch: t.weight_location,
+        encounterFreshness: t.weight_experience,
+      };
+      logger.info({ templateId: templateId || tplId, weights }, 'Using matching template weights');
+    }
+  }
+
   const config: MatchingConfig = {
-    weights: DEFAULT_WEIGHTS,
+    weights,
     hardConstraints,
     numberOfRounds: sessionConfig.numberOfRounds,
     avoidDuplicates: true,

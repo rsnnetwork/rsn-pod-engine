@@ -21,6 +21,7 @@ interface SessionForm {
   transitionDurationSeconds: number;
   maxParticipants: number;
   timerVisibility: string;
+  matchingTemplateId: string;
 }
 
 const EVENT_TYPES = [
@@ -56,6 +57,11 @@ export default function CreateSessionPage() {
     queryKey: ['my-pods', isAdmin],
     queryFn: () => api.get(`/pods?status=active${isAdmin ? '&admin=true' : ''}`).then(r => r.data.data ?? []),
   });
+  const { data: templates } = useQuery({
+    queryKey: ['matching-templates'],
+    queryFn: () => api.get('/admin/templates').then(r => r.data.data ?? []),
+  });
+
   // Admins can create events in any pod; others need director/host role
   const pods = isAdmin ? (allPods || []) : (allPods || []).filter((p: any) => p.memberRole === 'director' || p.memberRole === 'host');
 
@@ -70,6 +76,7 @@ export default function CreateSessionPage() {
       transitionDurationSeconds: 30,
       maxParticipants: 500,
       timerVisibility: 'always_visible',
+      matchingTemplateId: '',
     },
   });
 
@@ -88,6 +95,7 @@ export default function CreateSessionPage() {
           transitionDurationSeconds: data.transitionDurationSeconds,
           maxParticipants: data.maxParticipants,
           timerVisibility: data.timerVisibility,
+          ...(data.matchingTemplateId && { matchingTemplateId: data.matchingTemplateId }),
         },
       };
       return api.post('/sessions', body);
@@ -194,6 +202,16 @@ export default function CreateSessionPage() {
                 <option value="last_120s">Show last 2 minutes</option>
               </select>
               <p className="text-xs text-gray-400 mt-1">When participants can see the countdown</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-600 mb-1.5">Matching Template</label>
+              <select {...register('matchingTemplateId')} className={selectClass}>
+                <option value="">Default (balanced)</option>
+                {(templates || []).map((t: any) => (
+                  <option key={t.id} value={t.id}>{t.name}{t.isDefault ? ' (default)' : ''}</option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-400 mt-1">How participants are matched — affects scoring weights</p>
             </div>
           </div>
         </Card>

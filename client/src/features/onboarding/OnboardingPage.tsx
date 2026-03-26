@@ -4,14 +4,53 @@ import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { Button } from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
-import { User, Briefcase, Sparkles, ArrowRight, ArrowLeft, X, Check } from 'lucide-react';
+import { User, Target, Layers, ArrowRight, ArrowLeft, X, Check } from 'lucide-react';
 import api from '@/lib/api';
 
 const STEPS = [
-  { title: 'Who are you?', icon: User, description: 'Let others know who they\'re meeting' },
-  { title: 'What do you do?', icon: Briefcase, description: 'Your professional context helps with matching' },
-  { title: 'Why are you here?', icon: Sparkles, description: 'Help us connect you with the right people' },
+  { title: 'About You', icon: User, description: 'Let others know who they\'re meeting' },
+  { title: 'What You Want', icon: Target, description: 'Help us match you with the right people' },
+  { title: 'Depth', icon: Layers, description: 'Fine-tune your matching profile' },
 ];
+
+const ROLES = ['Founder', 'CEO', 'CTO', 'COO', 'VP', 'Director', 'Manager', 'IC', 'Advisor', 'Investor', 'Student', 'Other'];
+const STATES = ['Building', 'Scaling', 'Exploring', 'Transitioning', 'Advising'];
+const STAGES = ['Early Career', 'Mid Career', 'Senior', 'Executive', 'Retired'];
+const GOALS = ['Find Co-founder', 'Get Mentorship', 'Give Mentorship', 'Expand Network', 'Find Investors', 'Find Talent', 'Learn Skills', 'Share Knowledge'];
+const MEETING_PREFS = ['Founders', 'Investors', 'Mentors', 'Industry Peers', 'Students', 'Anyone'];
+
+function ChipSelect({ options, selected, onChange, multi = true }: {
+  options: string[];
+  selected: string[];
+  onChange: (v: string[]) => void;
+  multi?: boolean;
+}) {
+  const toggle = (opt: string) => {
+    if (multi) {
+      onChange(selected.includes(opt) ? selected.filter(s => s !== opt) : [...selected, opt]);
+    } else {
+      onChange(selected.includes(opt) ? [] : [opt]);
+    }
+  };
+  return (
+    <div className="flex flex-wrap gap-2">
+      {options.map(opt => (
+        <button
+          key={opt}
+          type="button"
+          onClick={() => toggle(opt)}
+          className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-all ${
+            selected.includes(opt)
+              ? 'bg-rsn-red text-white border-rsn-red'
+              : 'bg-white text-gray-600 border-gray-200 hover:border-rsn-red/40 hover:text-rsn-red'
+          }`}
+        >
+          {opt}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 function TagInput({ tags, setTags, placeholder }: { tags: string[]; setTags: (t: string[]) => void; placeholder: string }) {
   const [input, setInput] = useState('');
@@ -53,38 +92,38 @@ export default function OnboardingPage() {
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
 
-  // Step 1 fields
+  // Step 1 — About You
   const [displayName, setDisplayName] = useState(user?.displayName || '');
-  const [firstName, setFirstName] = useState(user?.firstName || '');
-  const [lastName, setLastName] = useState(user?.lastName || '');
+  const [professionalRole, setProfessionalRole] = useState<string[]>(user?.professionalRole || []);
+  const [currentState, setCurrentState] = useState<string[]>(user?.currentState ? [user.currentState] : []);
+  const [careerStage, setCareerStage] = useState<string[]>(user?.careerStage ? [user.careerStage] : []);
 
-  // Step 2 fields
-  const [jobTitle, setJobTitle] = useState(user?.jobTitle || '');
-  const [company, setCompany] = useState(user?.company || '');
-  const [industry, setIndustry] = useState(user?.industry || '');
+  // Step 2 — What You Want
+  const [goals, setGoals] = useState<string[]>(user?.goals || []);
+  const [meetingPreferences, setMeetingPreferences] = useState<string[]>(user?.meetingPreferences || []);
 
-  // Step 3 fields
-  const [reasons, setReasons] = useState<string[]>(user?.reasonsToConnect || []);
+  // Step 3 — Depth
   const [interests, setInterests] = useState<string[]>(user?.interests || []);
+  const [matchingNotes, setMatchingNotes] = useState(user?.matchingNotes || '');
 
   const canProceed = step === 0
     ? displayName.trim().length > 0
     : step === 1
-      ? true // professional info is optional
-      : reasons.length > 0;
+      ? goals.length > 0
+      : true; // Step 3 is optional
 
   const handleFinish = useCallback(async () => {
     setSaving(true);
     try {
       await api.put('/users/me', {
         displayName: displayName.trim(),
-        firstName: firstName.trim(),
-        lastName: lastName.trim(),
-        jobTitle: jobTitle.trim(),
-        company: company.trim(),
-        industry: industry.trim(),
-        reasonsToConnect: reasons,
+        professionalRole,
+        currentState: currentState[0] || null,
+        careerStage: careerStage[0] || null,
+        goals,
+        meetingPreferences,
         interests,
+        matchingNotes: matchingNotes.trim() || null,
       });
       await checkSession();
       addToast('Profile set up!', 'success');
@@ -94,7 +133,7 @@ export default function OnboardingPage() {
     } finally {
       setSaving(false);
     }
-  }, [displayName, firstName, lastName, jobTitle, company, industry, reasons, interests, checkSession, addToast, navigate, redirect]);
+  }, [displayName, professionalRole, currentState, careerStage, goals, meetingPreferences, interests, matchingNotes, checkSession, addToast, navigate, redirect]);
 
   const StepIcon = STEPS[step].icon;
 
@@ -123,52 +162,59 @@ export default function OnboardingPage() {
             <p className="text-gray-500 text-sm mt-1">{STEPS[step].description}</p>
           </div>
 
-          {/* Step content */}
+          {/* Step 1: About You */}
           {step === 0 && (
-            <div className="space-y-4">
+            <div className="space-y-5">
               <div>
                 <label className="block text-sm font-medium text-gray-600 mb-1">Display Name *</label>
                 <Input value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="How you want to appear" />
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-600 mb-1">First Name</label>
-                  <Input value={firstName} onChange={e => setFirstName(e.target.value)} placeholder="First" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-600 mb-1">Last Name</label>
-                  <Input value={lastName} onChange={e => setLastName(e.target.value)} placeholder="Last" />
-                </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-600 mb-1.5">Role</label>
+                <ChipSelect options={ROLES} selected={professionalRole} onChange={setProfessionalRole} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-600 mb-1.5">Current State</label>
+                <ChipSelect options={STATES} selected={currentState} onChange={setCurrentState} multi={false} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-600 mb-1.5">Career Stage</label>
+                <ChipSelect options={STAGES} selected={careerStage} onChange={setCareerStage} multi={false} />
               </div>
             </div>
           )}
 
+          {/* Step 2: What You Want */}
           {step === 1 && (
-            <div className="space-y-4">
+            <div className="space-y-5">
               <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1">Job Title</label>
-                <Input value={jobTitle} onChange={e => setJobTitle(e.target.value)} placeholder="e.g. Product Manager" />
+                <label className="block text-sm font-medium text-gray-600 mb-1.5">Goals *</label>
+                <ChipSelect options={GOALS} selected={goals} onChange={setGoals} />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1">Company</label>
-                <Input value={company} onChange={e => setCompany(e.target.value)} placeholder="Where you work" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1">Industry</label>
-                <Input value={industry} onChange={e => setIndustry(e.target.value)} placeholder="e.g. Technology, Finance" />
+                <label className="block text-sm font-medium text-gray-600 mb-1.5">Who do you want to meet?</label>
+                <ChipSelect options={MEETING_PREFS} selected={meetingPreferences} onChange={setMeetingPreferences} />
               </div>
             </div>
           )}
 
+          {/* Step 3: Depth */}
           {step === 2 && (
             <div className="space-y-5">
               <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1.5">Why do you want to connect? *</label>
-                <TagInput tags={reasons} setTags={setReasons} placeholder="e.g. meet founders, find partners" />
+                <label className="block text-sm font-medium text-gray-600 mb-1.5">Topics / Interests</label>
+                <TagInput tags={interests} setTags={setInterests} placeholder="e.g. AI, startups, design" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1.5">Your interests</label>
-                <TagInput tags={interests} setTags={setInterests} placeholder="e.g. AI, startups, design" />
+                <label className="block text-sm font-medium text-gray-600 mb-1.5">Matching Notes</label>
+                <textarea
+                  value={matchingNotes}
+                  onChange={e => setMatchingNotes(e.target.value)}
+                  rows={3}
+                  placeholder="Anything else you'd like potential matches to know?"
+                  maxLength={1000}
+                  className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-rsn-red/20 focus:border-rsn-red/40 transition-all resize-none"
+                />
               </div>
             </div>
           )}
@@ -191,7 +237,7 @@ export default function OnboardingPage() {
               </Button>
             ) : (
               <Button onClick={handleFinish} isLoading={saving} disabled={!canProceed} size="sm">
-                <Check className="h-4 w-4 mr-1" /> Finish
+                <Check className="h-4 w-4 mr-1" /> Complete
               </Button>
             )}
           </div>
