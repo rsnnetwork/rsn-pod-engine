@@ -133,4 +133,47 @@ router.patch(
   }
 );
 
+// ─── POST /join-requests/:id/note (admin only) ──────────────────────────────
+
+router.post(
+  '/:id/note',
+  authenticate,
+  requireRole(UserRole.ADMIN),
+  validate(z.object({ note: z.string().max(2000) })),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const updated = await joinRequestService.updateAdminNotes(req.params.id, req.body.note);
+      const response: ApiResponse = { success: true, data: updated };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /join-requests/:id/message (admin only) ───────────────────────────
+
+router.post(
+  '/:id/message',
+  authenticate,
+  requireRole(UserRole.ADMIN),
+  validate(z.object({ message: z.string().min(1).max(2000) })),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const joinRequest = await joinRequestService.getJoinRequestById(req.params.id);
+
+      // Send email to the applicant
+      const { sendGenericEmail } = await import('../services/email/email.service');
+      await sendGenericEmail(joinRequest.email, joinRequest.fullName, {
+        subject: 'Message from RSN',
+        body: req.body.message,
+      });
+
+      res.json({ success: true, data: { sent: true } });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 export default router;

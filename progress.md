@@ -41,7 +41,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 ## Current Phase Snapshot
 
 - Active Phase: Change 1.8 — Platform Feedback v1.8
-- Active Milestone: **Phases 1-3 complete (6 bug fixes + 2 UX fixes + 1 feature)**
+- Active Milestone: **Phases 1-4 complete (6 bug fixes + 2 UX fixes + 1 feature + 2 admin polish)**
 - Source Document: Changes 1.8.pdf (Stefan/Shradha call feedback, March 24, 2026)
 - Last Updated: March 26, 2026
 

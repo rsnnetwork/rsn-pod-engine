@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Shield, ChevronLeft, ChevronRight, CheckCircle, XCircle, Clock, ExternalLink } from 'lucide-react';
+import { Shield, ChevronLeft, ChevronRight, CheckCircle, XCircle, Clock, ExternalLink, MessageSquare, StickyNote, Send } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -20,6 +20,7 @@ interface JoinRequest {
   reason: string;
   status: 'pending' | 'approved' | 'declined';
   reviewedAt: string | null;
+  adminNotes: string | null;
   createdAt: string;
 }
 
@@ -33,6 +34,10 @@ export default function AdminJoinRequestsPage() {
   const [reviewModal, setReviewModal] = useState<{ request: JoinRequest; decision: 'approved' | 'declined' } | null>(null);
   const [reviewNotes, setReviewNotes] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [messageModal, setMessageModal] = useState<JoinRequest | null>(null);
+  const [messageText, setMessageText] = useState('');
+  const [noteEdit, setNoteEdit] = useState<string | null>(null); // request ID being edited
+  const [noteText, setNoteText] = useState('');
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin-join-requests', page, statusFilter],
@@ -67,6 +72,29 @@ export default function AdminJoinRequestsPage() {
       setSelected(new Set());
     },
     onError: () => addToast('Bulk action failed', 'error'),
+  });
+
+  const sendMessageMutation = useMutation({
+    mutationFn: ({ id, message }: { id: string; message: string }) =>
+      api.post(`/join-requests/${id}/message`, { message }),
+    onSuccess: () => {
+      addToast('Message sent', 'success');
+      setMessageModal(null);
+      setMessageText('');
+    },
+    onError: () => addToast('Failed to send message', 'error'),
+  });
+
+  const saveNoteMutation = useMutation({
+    mutationFn: ({ id, note }: { id: string; note: string }) =>
+      api.post(`/join-requests/${id}/note`, { note }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-join-requests'] });
+      addToast('Note saved', 'success');
+      setNoteEdit(null);
+      setNoteText('');
+    },
+    onError: () => addToast('Failed to save note', 'error'),
   });
 
   const toggleSelect = (id: string) => setSelected(prev => {
@@ -194,27 +222,71 @@ export default function AdminJoinRequestsPage() {
                         <Clock className="h-3 w-3" /> {new Date(r.createdAt).toLocaleDateString()}
                       </span>
                     </div>
+                    {/* Admin notes display */}
+                    {r.adminNotes && noteEdit !== r.id && (
+                      <div className="mt-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-700">
+                        <span className="font-medium">Note:</span> {r.adminNotes}
+                      </div>
+                    )}
+                    {/* Inline note editor */}
+                    {noteEdit === r.id && (
+                      <div className="mt-2 flex gap-2">
+                        <textarea
+                          value={noteText}
+                          onChange={e => setNoteText(e.target.value)}
+                          rows={2}
+                          placeholder="Add internal note..."
+                          className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-rsn-red/20 resize-none"
+                        />
+                        <div className="flex flex-col gap-1">
+                          <Button size="sm" onClick={() => saveNoteMutation.mutate({ id: r.id, note: noteText })} isLoading={saveNoteMutation.isPending}>
+                            Save
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => setNoteEdit(null)}>
+                            Cancel
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                {r.status === 'pending' && (
-                  <div className="flex items-center gap-2 shrink-0">
+                <div className="flex flex-col items-end gap-2 shrink-0">
+                  {r.status === 'pending' && (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => setReviewModal({ request: r, decision: 'approved' })}
+                        className="!bg-emerald-600 hover:!bg-emerald-700"
+                      >
+                        <CheckCircle className="h-4 w-4 mr-1" /> Approve
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => setReviewModal({ request: r, decision: 'declined' })}
+                      >
+                        <XCircle className="h-4 w-4 mr-1" /> Decline
+                      </Button>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2">
                     <Button
                       size="sm"
-                      onClick={() => setReviewModal({ request: r, decision: 'approved' })}
-                      className="!bg-emerald-600 hover:!bg-emerald-700"
+                      variant="ghost"
+                      onClick={() => setMessageModal(r)}
                     >
-                      <CheckCircle className="h-4 w-4 mr-1" /> Approve
+                      <MessageSquare className="h-3.5 w-3.5 mr-1" /> Message
                     </Button>
                     <Button
                       size="sm"
-                      variant="secondary"
-                      onClick={() => setReviewModal({ request: r, decision: 'declined' })}
+                      variant="ghost"
+                      onClick={() => { setNoteEdit(r.id); setNoteText(r.adminNotes || ''); }}
                     >
-                      <XCircle className="h-4 w-4 mr-1" /> Decline
+                      <StickyNote className="h-3.5 w-3.5 mr-1" /> Note
                     </Button>
                   </div>
-                )}
+                </div>
               </div>
             </Card>
           ))}
@@ -239,6 +311,36 @@ export default function AdminJoinRequestsPage() {
             </Button>
           </div>
         </div>
+      )}
+
+      {/* Send Message Modal */}
+      {messageModal && (
+        <Modal
+          open={!!messageModal}
+          onClose={() => { setMessageModal(null); setMessageText(''); }}
+          title={`Message ${messageModal.fullName}`}
+        >
+          <div className="space-y-4">
+            <p className="text-sm text-gray-500">Send an email to {messageModal.email}</p>
+            <textarea
+              value={messageText}
+              onChange={e => setMessageText(e.target.value)}
+              rows={4}
+              placeholder="Type your message..."
+              className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200 resize-none"
+            />
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => { setMessageModal(null); setMessageText(''); }}>Cancel</Button>
+              <Button
+                onClick={() => sendMessageMutation.mutate({ id: messageModal.id, message: messageText })}
+                isLoading={sendMessageMutation.isPending}
+                disabled={!messageText.trim()}
+              >
+                <Send className="h-4 w-4 mr-1" /> Send
+              </Button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* Review Modal */}

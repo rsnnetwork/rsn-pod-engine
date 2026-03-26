@@ -18,6 +18,7 @@ export interface JoinRequest {
   reviewedBy: string | null;
   reviewedAt: Date | null;
   reviewNotes: string | null;
+  adminNotes: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -40,6 +41,7 @@ function mapRow(row: any): JoinRequest {
     reviewedBy: row.reviewed_by,
     reviewedAt: row.reviewed_at,
     reviewNotes: row.review_notes,
+    adminNotes: row.admin_notes,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -151,4 +153,15 @@ export async function reviewJoinRequest(
   }
 
   return reviewed;
+}
+
+export async function updateAdminNotes(id: string, notes: string): Promise<JoinRequest> {
+  const result = await query(
+    `UPDATE join_requests SET admin_notes = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+    [notes, id]
+  );
+  if (result.rows.length === 0) {
+    throw new AppError(404, ErrorCodes.INVALID_INPUT, 'Join request not found');
+  }
+  return mapRow(result.rows[0]);
 }
