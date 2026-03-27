@@ -179,9 +179,34 @@ router.post(
         const inviterName = inviterResult.rows[0]?.displayName || 'Someone';
 
         let targetName: string | undefined;
+        let calendarEvent: any = undefined;
         if (inv.session_id) {
-          const sr = await query<{ title: string }>(`SELECT title FROM sessions WHERE id = $1`, [inv.session_id]);
-          targetName = sr.rows[0]?.title;
+          const sr = await query<{ title: string; scheduled_at: string | null; host_user_id: string; config: any }>(
+            `SELECT title, scheduled_at, host_user_id, config FROM sessions WHERE id = $1`, [inv.session_id]
+          );
+          const session = sr.rows[0];
+          targetName = session?.title;
+
+          if (session?.scheduled_at) {
+            const cfg = session.config || {};
+            const rounds = cfg.numberOfRounds || 5;
+            const roundDuration = cfg.roundDurationSeconds || 480;
+            const breakDuration = cfg.transitionDurationSeconds || 30;
+            const totalMinutes = Math.ceil((rounds * roundDuration + (rounds - 1) * breakDuration) / 60);
+            const hostResult = await query<{ display_name: string; email: string }>(
+              'SELECT display_name, email FROM users WHERE id = $1', [session.host_user_id]
+            );
+            const host = hostResult.rows[0];
+            calendarEvent = {
+              title: session.title,
+              description: `RSN Event — ${session.title}`,
+              startTime: new Date(session.scheduled_at),
+              durationMinutes: totalMinutes,
+              organizerName: host?.display_name || 'RSN Host',
+              organizerEmail: host?.email,
+              sessionId: inv.session_id,
+            };
+          }
         }
 
         await emailService.sendInviteEmail(inv.invitee_email, {
@@ -189,6 +214,7 @@ router.post(
           type: 'session',
           targetName,
           inviteUrl: `${config.clientUrl}/invite/${inv.code}`,
+          calendarEvent,
         });
       }
 

@@ -5,6 +5,7 @@ import { Resend } from 'resend';
 import { v4 as uuid } from 'uuid';
 import config from '../../config';
 import logger from '../../config/logger';
+import { generateIcsContent } from '../calendar/calendar.service';
 
 let resend: Resend | null = null;
 
@@ -25,6 +26,7 @@ async function sendEmail(opts: {
   html: string;
   text: string;
   replyTo?: string;
+  attachments?: { filename: string; content: string }[];
 }): Promise<{ sent: boolean }> {
   if (!config.resendApiKey) {
     logger.warn({ to: opts.to, subject: opts.subject }, 'No email provider — email skipped');
@@ -36,7 +38,7 @@ async function sendEmail(opts: {
   const from = fromRaw.includes('<') ? fromRaw : `${senderName} <${fromRaw}>`;
 
   const client = getResendClient();
-  const { error } = await client.emails.send({
+  const emailPayload: any = {
     from,
     to: [opts.to],
     subject: opts.subject,
@@ -46,7 +48,16 @@ async function sendEmail(opts: {
     headers: {
       'X-Entity-Ref-ID': uuid(), // unique per email — prevents Gmail grouping into one thread
     },
-  });
+  };
+
+  if (opts.attachments && opts.attachments.length > 0) {
+    emailPayload.attachments = opts.attachments.map(a => ({
+      filename: a.filename,
+      content: Buffer.from(a.content).toString('base64'),
+    }));
+  }
+
+  const { error } = await client.emails.send(emailPayload);
 
   if (error) {
     logger.error({ error, to: opts.to }, `Failed to send email: ${opts.subject}`);
@@ -295,6 +306,15 @@ interface InviteEmailData {
   type: 'pod' | 'session' | 'platform';
   targetName?: string; // pod or session name
   inviteUrl: string;
+  calendarEvent?: {
+    title: string;
+    description?: string;
+    startTime: Date;
+    durationMinutes: number;
+    organizerName?: string;
+    organizerEmail?: string;
+    sessionId?: string;
+  };
 }
 
 export async function sendInviteEmail(
@@ -347,7 +367,25 @@ export async function sendInviteEmail(
 
   if (config.resendApiKey) {
     const text = `${data.inviterName} has invited you to join ${typeLabel}${data.targetName ? ` — ${data.targetName}` : ''} on RSN.\n\nAccept Invite: ${data.inviteUrl}\n\nRSN — Connect with Reason`;
-    await sendEmail({ to, subject, html, text });
+    const attachments: { filename: string; content: string }[] = [];
+
+    // Attach .ics calendar invite for session invites with scheduled time
+    if (data.calendarEvent) {
+      const icsContent = generateIcsContent({
+        title: data.calendarEvent.title,
+        description: data.calendarEvent.description || `RSN Event — ${data.calendarEvent.title}`,
+        startTime: data.calendarEvent.startTime,
+        durationMinutes: data.calendarEvent.durationMinutes,
+        organizerName: data.calendarEvent.organizerName,
+        organizerEmail: data.calendarEvent.organizerEmail,
+        location: data.calendarEvent.sessionId
+          ? `${config.clientUrl}/sessions/${data.calendarEvent.sessionId}`
+          : undefined,
+      });
+      attachments.push({ filename: 'event.ics', content: icsContent });
+    }
+
+    await sendEmail({ to, subject, html, text, attachments: attachments.length > 0 ? attachments : undefined });
     return;
   }
 

@@ -41,7 +41,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 ## Current Phase Snapshot
 
 - Active Phase: Change 1.8 — Phase 6: New Features
-- Active Milestone: **6A complete, 6C next**
+- Active Milestone: **6A + 6C complete, 6B next**
 - Source Document: assets/Changes 1.8.pdf
 - Last Updated: March 28, 2026
 
@@ -75,6 +75,13 @@ Purpose: Persistent execution history and current state, independent of chat mem
 - Sidebar: Support link in both admin sidebar and user bottom links (HelpCircle icon)
 - Router: /admin/support and /support routes wired in App.tsx
 - Build: Both client and server pass TypeScript + production build with zero errors
+
+**6C — Google Calendar .ics Invites (COMPLETE)**
+- ICS: calendar.service.ts — RFC 5545 VEVENT with title, description, DTSTART/DTEND (UTC), organizer, location, 15min VALARM
+- Email: email.service.ts updated — .ics attached as base64 via Resend API, conditional on calendarEvent
+- Triggers: invite creation (invite.service.ts) + invite reminder (invites.ts) both attach .ics
+- No extra npm dependency — raw VEVENT string generation with proper text escaping
+- Works with Google Calendar, Outlook, Apple Calendar universally
 
 ### What's Done (Change 1.8 — Phase 1)
 

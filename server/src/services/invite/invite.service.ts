@@ -186,9 +186,38 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
       const podResult = await query<{ name: string }>('SELECT name FROM pods WHERE id = $1', [input.podId]);
       targetName = podResult.rows[0]?.name;
     }
+    let calendarEvent: any = undefined;
     if (input.type === InviteType.SESSION && input.sessionId) {
-      const sessionResult = await query<{ title: string }>('SELECT title FROM sessions WHERE id = $1', [input.sessionId]);
-      targetName = sessionResult.rows[0]?.title;
+      const sessionResult = await query<{ title: string; scheduled_at: string | null; host_user_id: string; config: any }>(
+        'SELECT title, scheduled_at, host_user_id, config FROM sessions WHERE id = $1', [input.sessionId]
+      );
+      const session = sessionResult.rows[0];
+      targetName = session?.title;
+
+      // Build calendar event data if session has a scheduled time
+      if (session?.scheduled_at) {
+        const cfg = session.config || {};
+        const rounds = cfg.numberOfRounds || 5;
+        const roundDuration = cfg.roundDurationSeconds || 480;
+        const breakDuration = cfg.transitionDurationSeconds || 30;
+        const totalMinutes = Math.ceil((rounds * roundDuration + (rounds - 1) * breakDuration) / 60);
+
+        // Get host email for organizer
+        const hostResult = await query<{ display_name: string; email: string }>(
+          'SELECT display_name, email FROM users WHERE id = $1', [session.host_user_id]
+        );
+        const host = hostResult.rows[0];
+
+        calendarEvent = {
+          title: session.title,
+          description: `RSN Event — ${session.title}`,
+          startTime: new Date(session.scheduled_at),
+          durationMinutes: totalMinutes,
+          organizerName: host?.display_name || 'RSN Host',
+          organizerEmail: host?.email,
+          sessionId: input.sessionId,
+        };
+      }
     }
 
     emailService.sendInviteEmail(input.inviteeEmail, {
@@ -196,6 +225,7 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
       type: (input.type || 'platform') as 'pod' | 'session' | 'platform',
       targetName,
       inviteUrl: `${config.clientUrl}/invite/${code}`,
+      calendarEvent,
     }).catch(err => logger.warn({ err }, 'Failed to send invite email (non-fatal)'));
 
     // Create in-app notification for existing users
