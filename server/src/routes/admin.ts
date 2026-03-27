@@ -512,6 +512,139 @@ router.put(
 );
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// SUPPORT TICKETS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// GET /admin/support-tickets
+router.get(
+  '/support-tickets',
+  authenticate,
+  requireRole(UserRole.ADMIN),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const status = (req.query.status as string) || '';
+      const page = Math.max(1, parseInt((req.query.page as string) || '1', 10));
+      const pageSize = 20;
+      const offset = (page - 1) * pageSize;
+
+      const whereClause = status ? `WHERE st.status = $1` : '';
+      const params = status ? [status, pageSize, offset] : [pageSize, offset];
+      const countParams = status ? [status] : [];
+
+      const [ticketsResult, countResult] = await Promise.all([
+        query(
+          `SELECT st.id, st.subject, st.message, st.status, st.admin_notes AS "adminNotes",
+                  st.created_at AS "createdAt", st.updated_at AS "updatedAt",
+                  u.display_name AS "userName", u.email AS "userEmail", u.avatar_url AS "userAvatarUrl",
+                  a.display_name AS "assignedToName"
+           FROM support_tickets st
+           JOIN users u ON u.id = st.user_id
+           LEFT JOIN users a ON a.id = st.assigned_to
+           ${whereClause}
+           ORDER BY CASE st.status WHEN 'open' THEN 0 WHEN 'in_progress' THEN 1 WHEN 'resolved' THEN 2 ELSE 3 END, st.created_at DESC
+           LIMIT $${status ? 2 : 1} OFFSET $${status ? 3 : 2}`,
+          params
+        ),
+        query(`SELECT COUNT(*) as count FROM support_tickets st ${whereClause}`, countParams),
+      ]);
+
+      const total = parseInt(countResult.rows[0].count as string, 10);
+      const response: ApiResponse = {
+        success: true,
+        data: ticketsResult.rows,
+        meta: { page, pageSize, totalCount: total, totalPages: Math.ceil(total / pageSize), hasPrev: page > 1, hasNext: page * pageSize < total },
+      };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// PATCH /admin/support-tickets/:id
+const updateTicketSchema = z.object({
+  status: z.enum(['open', 'in_progress', 'resolved', 'closed']).optional(),
+  adminNotes: z.string().max(5000).nullable().optional(),
+  assignedTo: z.string().uuid().nullable().optional(),
+});
+
+router.patch(
+  '/support-tickets/:id',
+  authenticate,
+  requireRole(UserRole.ADMIN),
+  validate(updateTicketSchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const setClauses: string[] = ['updated_at = NOW()'];
+      const values: unknown[] = [];
+      let idx = 1;
+
+      if (req.body.status !== undefined) {
+        setClauses.push(`status = $${idx}`); values.push(req.body.status); idx++;
+      }
+      if (req.body.adminNotes !== undefined) {
+        setClauses.push(`admin_notes = $${idx}`); values.push(req.body.adminNotes); idx++;
+      }
+      if (req.body.assignedTo !== undefined) {
+        setClauses.push(`assigned_to = $${idx}`); values.push(req.body.assignedTo); idx++;
+      }
+
+      values.push(req.params.id);
+      await query(`UPDATE support_tickets SET ${setClauses.join(', ')} WHERE id = $${idx}`, values);
+
+      const response: ApiResponse = { success: true, data: { message: 'Ticket updated' } };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// POST /support-tickets (any authenticated user)
+const createTicketSchema = z.object({
+  subject: z.string().min(1).max(200),
+  message: z.string().min(1).max(5000),
+});
+
+router.post(
+  '/support-tickets',
+  authenticate,
+  validate(createTicketSchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { subject, message } = req.body;
+      const result = await query(
+        `INSERT INTO support_tickets (user_id, subject, message) VALUES ($1, $2, $3) RETURNING id`,
+        [req.user!.userId, subject, message]
+      );
+      const response: ApiResponse = { success: true, data: result.rows[0] };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// GET /support-tickets/mine (user's own tickets)
+router.get(
+  '/support-tickets/mine',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await query(
+        `SELECT id, subject, status, created_at AS "createdAt", updated_at AS "updatedAt"
+         FROM support_tickets WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`,
+        [req.user!.userId]
+      );
+      const response: ApiResponse = { success: true, data: result.rows };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // RECENT MATCHES (admin view with user details)
 // ═══════════════════════════════════════════════════════════════════════════════
 

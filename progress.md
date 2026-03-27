@@ -40,9 +40,9 @@ Purpose: Persistent execution history and current state, independent of chat mem
 
 ## Current Phase Snapshot
 
-- Active Phase: Change 1.9 — Beta Testing Group Feedback
-- Active Milestone: **All 3 phases complete**
-- Source Document: Beta Testing Group Feedback - 27th March.pdf
+- Active Phase: Change 1.8 — Phase 6: New Features
+- Active Milestone: **6A complete, 6C next**
+- Source Document: assets/Changes 1.8.pdf
 - Last Updated: March 28, 2026
 
 ### What's Done (Change 1.9 — Beta Testing Feedback, March 28, 2026)
@@ -64,6 +64,17 @@ Purpose: Persistent execution history and current state, independent of chat mem
 - 3C: ChevronRight arrow added to event cards for clickability affordance
 - 3D: Active tab gets shadow-sm for depth cue
 - 3E: AdminSessionsPage raw <button> replaced with Button component for consistency
+
+### What's Done (Change 1.8 — Phase 6: New Features, March 28, 2026)
+
+**6A — Admin Support Ticket System (COMPLETE)**
+- DB: Migration 028_support_tickets.sql — id, user_id, subject, message, status, admin_notes, assigned_to, timestamps + indexes
+- Server: 4 endpoints in admin.ts — GET list (with pagination/filtering), GET mine, POST create, PATCH update (status/notes/assign)
+- Admin UI: AdminSupportPage.tsx — list with status filter tabs (Open/In Progress/Resolved/All), detail modal with status change + admin notes
+- User UI: SupportPage.tsx — FAQ accordion, submit form (subject + message), "My Tickets" section with live status tracking
+- Sidebar: Support link in both admin sidebar and user bottom links (HelpCircle icon)
+- Router: /admin/support and /support routes wired in App.tsx
+- Build: Both client and server pass TypeScript + production build with zero errors
 
 ### What's Done (Change 1.8 — Phase 1)
 

@@ -51,6 +51,7 @@ export default function AppLayout() {
     { to: '/admin/moderation', label: 'Moderation' },
     { to: '/admin/templates', label: 'Templates' },
     { to: '/admin/email', label: 'Email' },
+    { to: '/admin/support', label: 'Support' },
   ];
 
   const bottomLinks = [

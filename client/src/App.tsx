@@ -27,6 +27,7 @@ import AdminSessionsPage from '@/features/admin/AdminSessionsPage';
 import AdminModerationPage from '@/features/admin/AdminModerationPage';
 import AdminTemplatesPage from '@/features/admin/AdminTemplatesPage';
 import AdminEmailPage from '@/features/admin/AdminEmailPage';
+import AdminSupportPage from '@/features/admin/AdminSupportPage';
 import SettingsPage from '@/features/settings/SettingsPage';
 import BillingPage from '@/features/billing/BillingPage';
 import SupportPage from '@/features/support/SupportPage';
@@ -74,6 +75,7 @@ export default function App() {
         <Route path="/admin/moderation" element={<AdminModerationPage />} />
         <Route path="/admin/templates" element={<AdminTemplatesPage />} />
         <Route path="/admin/email" element={<AdminEmailPage />} />
+        <Route path="/admin/support" element={<AdminSupportPage />} />
       </Route>
 
       {/* Protected without layout (full-screen) */}
