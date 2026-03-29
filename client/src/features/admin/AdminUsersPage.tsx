@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Shield, Search, ChevronLeft, ChevronRight, Ban, Trash2, UserX, RotateCcw, Settings } from 'lucide-react';
 import Card from '@/components/ui/Card';
@@ -28,6 +29,7 @@ export default function AdminUsersPage() {
   const addToast = useToastStore(s => s.addToast);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search, 300);
   const [roleFilter, setRoleFilter] = useState('');
   const [statusTab, setStatusTab] = useState<StatusTab>('active');
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -37,12 +39,12 @@ export default function AdminUsersPage() {
   const activeTabConfig = TAB_CONFIG.find(t => t.key === statusTab)!;
 
   const { data, isLoading } = useQuery({
-    queryKey: ['admin-users', page, search, roleFilter, statusTab],
+    queryKey: ['admin-users', page, debouncedSearch, roleFilter, statusTab],
     queryFn: () => {
       const params = new URLSearchParams();
       params.set('page', String(page));
       params.set('pageSize', '20');
-      if (search) params.set('search', search);
+      if (debouncedSearch) params.set('search', debouncedSearch);
       if (roleFilter) params.set('role', roleFilter);
       if (activeTabConfig.apiStatus) params.set('status', activeTabConfig.apiStatus);
       return api.get(`/users?${params.toString()}`).then(r => r.data);

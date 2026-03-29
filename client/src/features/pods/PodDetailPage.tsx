@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -114,6 +115,7 @@ export default function PodDetailPage() {
   const [inviteLink, setInviteLink] = useState('');
   const [copied, setCopied] = useState(false);
   const [podUserSearch, setPodUserSearch] = useState('');
+  const debouncedPodSearch = useDebouncedValue(podUserSearch, 300);
   const [podSelectedUsers, setPodSelectedUsers] = useState<any[]>([]);
 
   // Duplicate pod: open CreatePodModal pre-filled
@@ -146,9 +148,9 @@ export default function PodDetailPage() {
   });
 
   const { data: podSearchResults } = useQuery({
-    queryKey: ['user-search', podUserSearch],
-    queryFn: () => api.get(`/users/search?q=${encodeURIComponent(podUserSearch)}`).then(r => r.data.data ?? []),
-    enabled: podUserSearch.length >= 1,
+    queryKey: ['user-search', debouncedPodSearch],
+    queryFn: () => api.get(`/users/search?q=${encodeURIComponent(debouncedPodSearch)}`).then(r => r.data.data ?? []),
+    enabled: debouncedPodSearch.length >= 1,
   });
 
   // ─── Mutations ─────────────────────────────────────────────────────────────

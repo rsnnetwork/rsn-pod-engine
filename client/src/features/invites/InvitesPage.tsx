@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Mail, Copy, Check, Users, Calendar, Globe, Trash2, Send, Link, Search, Inbox, UserCheck, X } from 'lucide-react';
 import Card from '@/components/ui/Card';
@@ -33,6 +34,7 @@ export default function InvitesPage() {
   const [maxUses, setMaxUses] = useState(10);
   const [generatedLink, setGeneratedLink] = useState<string | null>(null);
   const [userSearch, setUserSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(userSearch, 300);
   const [selectedUsers, setSelectedUsers] = useState<any[]>([]);
 
   const { data, isLoading } = useQuery({
@@ -51,9 +53,9 @@ export default function InvitesPage() {
   });
 
   const { data: searchResults } = useQuery({
-    queryKey: ['user-search', userSearch],
-    queryFn: () => api.get(`/users/search?q=${encodeURIComponent(userSearch)}`).then(r => r.data.data ?? []),
-    enabled: userSearch.length >= 1,
+    queryKey: ['user-search', debouncedSearch],
+    queryFn: () => api.get(`/users/search?q=${encodeURIComponent(debouncedSearch)}`).then(r => r.data.data ?? []),
+    enabled: debouncedSearch.length >= 1,
   });
 
   // Fetch members/participants for selected pod/session to tag search results

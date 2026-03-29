@@ -638,6 +638,16 @@ export async function getUsers(params: {
   );
   const total = parseInt(countResult.rows[0].count, 10);
 
+  // Add prefix search param for relevance sorting (prefix matches ranked first)
+  let relevanceOrder = '';
+  if (params.search) {
+    values.push(`${params.search.toLowerCase()}%`);
+    relevanceOrder = `CASE WHEN LOWER(display_name) LIKE $${paramIdx} THEN 0
+                           WHEN LOWER(email) LIKE $${paramIdx} THEN 1
+                           ELSE 2 END ASC,`;
+    paramIdx++;
+  }
+
   values.push(pageSize, offset);
   const result = await query<User>(
     `SELECT id, email, display_name AS "displayName", first_name AS "firstName", last_name AS "lastName",
@@ -656,7 +666,7 @@ export async function getUsers(params: {
             last_active_at AS "lastActiveAt",
             created_at AS "createdAt", updated_at AS "updatedAt"
      FROM users ${whereClause}
-     ORDER BY created_at DESC
+     ORDER BY ${relevanceOrder} LOWER(COALESCE(display_name, email)) ASC, created_at DESC
      LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
     values
   );

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Calendar, Users, Play, Clock, UserPlus, UserMinus, Settings, CheckCircle, Pencil, Trash2, Mail, Copy, Check, AlertTriangle, CopyPlus, Search, Send } from 'lucide-react';
@@ -44,6 +45,7 @@ export default function SessionDetailPage() {
   const [inviteLink, setInviteLink] = useState('');
   const [copied, setCopied] = useState(false);
   const [userSearch, setUserSearch] = useState('');
+  const debouncedUserSearch = useDebouncedValue(userSearch, 300);
   const [selectedUsers, setSelectedUsers] = useState<any[]>([]);
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [showPendingInvites, setShowPendingInvites] = useState(false);
@@ -170,11 +172,11 @@ export default function SessionDetailPage() {
     onError: () => addToast('Failed to duplicate event', 'error'),
   });
 
-  // Search platform users (admin or host)
+  // Search platform users (admin or host) — debounced to avoid API spam
   const { data: searchResults } = useQuery({
-    queryKey: ['user-search', userSearch],
-    queryFn: () => api.get(`/users/search?q=${encodeURIComponent(userSearch)}`).then(r => r.data.data ?? []),
-    enabled: userSearch.length >= 1 && isHost,
+    queryKey: ['user-search', debouncedUserSearch],
+    queryFn: () => api.get(`/users/search?q=${encodeURIComponent(debouncedUserSearch)}`).then(r => r.data.data ?? []),
+    enabled: debouncedUserSearch.length >= 1 && isHost,
   });
 
   const bulkInviteMutation = useMutation({
