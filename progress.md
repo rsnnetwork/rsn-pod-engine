@@ -41,7 +41,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 ## Current Phase Snapshot
 
 - Active Phase: Change 2.0 — Critical Event Flow Fix (client review issues)
-- Active Milestone: **Phase 4/5 complete (event lifecycle + cleanup)**
+- Active Milestone: **ALL 5 PHASES COMPLETE — Change 2.0 shipped**
 - Source Document: assets/Review on 29th March.pdf (9 system-level issues)
 - Last Updated: March 30, 2026
 
@@ -110,7 +110,16 @@ Approach: 5-phase fix, each verified against actual code with full-stack trace
 - Client: SessionDetailPage — "Remind All" button when 2+ pending invites, calls bulk endpoint
 - Files: orchestration.service.ts, invite.service.ts, invites.ts (routes), SessionDetailPage.tsx
 - Build: Zero TS errors, 266/266 tests pass, client production build passes
-- Audit: Verified sort by invitee email. Route ordering safe. LiveKit room name consistent. Session status index exists.
+- Audit: Verified sort by invitee email. Route ordering safe. LiveKit room name consistent. Session status index exists. Remind-all excludes null-email shareable links.
+
+**Phase 5 — Real-time State Sync (COMPLETE)**
+- Client: fetchTokenWithRetry() — 3 attempts with exponential backoff (1s, 2s, 4s) for LiveKit token. Eliminates "refresh to enter room"
+- Client: match:assigned and match:reassigned both use retry instead of fire-and-forget
+- Client: Rating fallback safety timer — auto-returns to lobby after rating duration + 30s if socket event missed
+- Client: Fallback cancelled on normal event, cleaned up on unmount. session:evicted in SOCKET_EVENTS array
+- Files: useSessionSocket.ts
+- Build: Zero TS errors, 266/266 tests pass, client production build passes
+- Audit: Retry safe on round end. Fallback only fires if still in rating phase. No timer leaks.
 
 ### What's Done (Change 1.8 — Phase 6: New Features, March 28, 2026)
 

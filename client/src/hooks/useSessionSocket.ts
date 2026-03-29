@@ -7,7 +7,7 @@ import api from '@/lib/api';
 const SOCKET_EVENTS = [
   'participant:joined', 'participant:left', 'participant:count',
   'session:state', 'session:status_changed', 'session:round_started',
-  'session:round_ended', 'session:completed',
+  'session:round_ended', 'session:completed', 'session:evicted',
   'match:assigned', 'match:reassigned', 'match:bye_round',
   'match:partner_disconnected', 'match:partner_reconnected', 'match:return_to_lobby',
   'rating:window_open', 'rating:window_closed',
@@ -20,13 +20,40 @@ const SOCKET_EVENTS = [
   'cohost:assigned', 'cohost:removed',
 ] as const;
 
+// ── LiveKit token fetch with retry ──
+// At 200+ participants, token API can be under load. Retry with backoff
+// prevents users from needing to refresh to enter breakout rooms.
+async function fetchTokenWithRetry(
+  sessionId: string,
+  roomId: string,
+  maxRetries = 3,
+): Promise<{ token: string; livekitUrl: string } | null> {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const res = await api.post(`/sessions/${sessionId}/token`, { roomId });
+      return res.data.data;
+    } catch {
+      if (attempt < maxRetries - 1) {
+        // Exponential backoff: 1s, 2s, 4s
+        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
+      }
+    }
+  }
+  return null;
+}
+
 export default function useSessionSocket(sessionId: string) {
   const store = useSessionStore();
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const ratingFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initializedRef = useRef<string | null>(null);
 
   const clearTimer = () => {
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+  };
+
+  const clearRatingFallback = () => {
+    if (ratingFallbackRef.current) { clearTimeout(ratingFallbackRef.current); ratingFallbackRef.current = null; }
   };
 
   useEffect(() => {
@@ -217,12 +244,13 @@ export default function useSessionSocket(sessionId: string) {
       store.setPhase('matched');
       // Store roomId for VideoRoom backup fetch
       if (data.roomId) store.setRoomId(data.roomId);
-      // Fetch LiveKit token for the match-specific video room
-      api.post(`/sessions/${sessionId}/token`, { roomId: data.roomId }).then(res => {
-        const { token, livekitUrl } = res.data.data;
-        store.setLiveKitToken(token, livekitUrl);
+      // Fetch LiveKit token with retry — eliminates "refresh to enter room" at scale
+      fetchTokenWithRetry(sessionId, data.roomId).then(result => {
+        if (result) {
+          store.setLiveKitToken(result.token, result.livekitUrl);
+        }
         store.setTransitionStatus(null);
-      }).catch(() => { store.setTransitionStatus(null); });
+      });
     });
 
     socket.on('match:reassigned', (data: any) => {
@@ -235,12 +263,13 @@ export default function useSessionSocket(sessionId: string) {
       store.setTransitionStatus('preparing_match');
       store.setMatch({ userId: data.newPartnerId, displayName: data.partnerDisplayName || data.newPartnerId }, data.matchId || null);
       store.setPhase('matched');
-      // Re-fetch token for new room
-      api.post(`/sessions/${sessionId}/token`, { roomId: data.roomId }).then(res => {
-        const { token, livekitUrl } = res.data.data;
-        store.setLiveKitToken(token, livekitUrl);
+      // Re-fetch token with retry for new room
+      fetchTokenWithRetry(sessionId, data.roomId).then(result => {
+        if (result) {
+          store.setLiveKitToken(result.token, result.livekitUrl);
+        }
         store.setTransitionStatus(null);
-      }).catch(() => { store.setTransitionStatus(null); });
+      });
     });
 
     socket.on('match:partner_disconnected', () => {
@@ -293,10 +322,28 @@ export default function useSessionSocket(sessionId: string) {
       clearTimer();
       intervalRef.current = setInterval(() => store.tickTimer(), 1000);
       store.setPhase('rating');
+
+      // ── Fallback safety timer ──
+      // If rating:window_closed is missed (network issue, socket drop), auto-return
+      // to lobby after rating duration + 30s buffer. Prevents users getting stuck.
+      clearRatingFallback();
+      const fallbackMs = ((data.durationSeconds || 30) + 30) * 1000;
+      ratingFallbackRef.current = setTimeout(() => {
+        const currentPhase = useSessionStore.getState().phase;
+        if (currentPhase === 'rating') {
+          clearTimer();
+          store.setLiveKitToken(null, null);
+          store.setMatch(null);
+          store.setRoomId(null);
+          store.setTransitionStatus(null);
+          store.setPhase('lobby');
+        }
+      }, fallbackMs);
     });
 
     socket.on('rating:window_closed', () => {
       clearTimer();
+      clearRatingFallback(); // Cancel fallback — normal event received
       store.setLiveKitToken(null, null);
       const state = useSessionStore.getState();
       store.setLastRatedRound(state.currentRound); // Prevent re-entry to rating for this round
@@ -392,6 +439,7 @@ export default function useSessionSocket(sessionId: string) {
 
     return () => {
       clearTimer();
+      clearRatingFallback();
       clearInterval(heartbeatInterval);
 
       // Remove ALL socket event listeners we attached
