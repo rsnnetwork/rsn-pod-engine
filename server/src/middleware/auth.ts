@@ -76,8 +76,8 @@ export function authenticate(req: Request, _res: Response, next: NextFunction): 
       };
 
       next();
-    } catch (err) {
-      if (err instanceof UnauthorizedError) {
+    } catch (err: any) {
+      if (err instanceof UnauthorizedError || err?.statusCode === 401) {
         next(err);
         return;
       }

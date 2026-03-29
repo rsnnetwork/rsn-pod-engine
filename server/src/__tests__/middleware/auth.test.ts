@@ -1,7 +1,7 @@
 // ─── JWT Auth Middleware Tests ───────────────────────────────────────────────
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { authenticate, optionalAuth } from '../../middleware/auth';
+import { authenticate, optionalAuth, invalidateUserStatusCache } from '../../middleware/auth';
 
 // Mock config
 jest.mock('../../config', () => ({
@@ -15,20 +15,29 @@ jest.mock('../../config/logger', () => ({
   __esModule: true,
 }));
 
+// Mock DB query — return active user by default
+jest.mock('../../db', () => ({
+  query: jest.fn().mockResolvedValue({ rows: [{ status: 'active' }] }),
+}));
+
 function createRequest(authHeader?: string): Request {
   return {
     headers: authHeader ? { authorization: authHeader } : {},
   } as Request;
 }
 
-describe('authenticate middleware', () => {
-  let next: jest.MockedFunction<NextFunction>;
-
-  beforeEach(() => {
-    next = jest.fn();
+/** Helper: wait for async middleware to call next */
+function waitForNext(fn: (req: Request, res: Response, next: NextFunction) => void, req: Request): Promise<any[]> {
+  return new Promise((resolve) => {
+    const next = jest.fn((...args: any[]) => resolve(args));
+    fn(req, {} as Response, next);
+    // Fallback timeout in case next is called synchronously
+    setTimeout(() => resolve(next.mock.calls[0] || []), 100);
   });
+}
 
-  it('should set req.user for a valid token', () => {
+describe('authenticate middleware', () => {
+  it('should set req.user for a valid token', async () => {
     const payload = {
       sub: 'user-123',
       email: 'test@example.com',
@@ -38,9 +47,9 @@ describe('authenticate middleware', () => {
     const token = jwt.sign(payload, 'test-secret-key', { expiresIn: '15m' });
     const req = createRequest(`Bearer ${token}`);
 
-    authenticate(req, {} as Response, next);
+    const nextArgs = await waitForNext(authenticate, req);
 
-    expect(next).toHaveBeenCalledWith();
+    expect(nextArgs.length === 0 || nextArgs[0] === undefined).toBe(true);
     expect(req.user).toBeDefined();
     expect(req.user!.userId).toBe('user-123');
     expect(req.user!.email).toBe('test@example.com');
@@ -48,28 +57,25 @@ describe('authenticate middleware', () => {
     expect(req.user!.sessionId).toBe('sess-abc');
   });
 
-  it('should call next with UnauthorizedError when no auth header', () => {
+  it('should call next with UnauthorizedError when no auth header', async () => {
     const req = createRequest();
 
-    authenticate(req, {} as Response, next);
+    const nextArgs = await waitForNext(authenticate, req);
 
-    expect(next).toHaveBeenCalled();
-    const err = next.mock.calls[0][0] as any;
-    expect(err).toBeDefined();
-    expect(err.statusCode).toBe(401);
+    expect(nextArgs[0]).toBeDefined();
+    expect(nextArgs[0].statusCode).toBe(401);
   });
 
-  it('should call next with UnauthorizedError when auth header is not Bearer', () => {
+  it('should call next with UnauthorizedError when auth header is not Bearer', async () => {
     const req = createRequest('Basic abc123');
 
-    authenticate(req, {} as Response, next);
+    const nextArgs = await waitForNext(authenticate, req);
 
-    expect(next).toHaveBeenCalled();
-    const err = next.mock.calls[0][0] as any;
-    expect(err.statusCode).toBe(401);
+    expect(nextArgs[0]).toBeDefined();
+    expect(nextArgs[0].statusCode).toBe(401);
   });
 
-  it('should call next with UnauthorizedError for expired token', () => {
+  it('should call next with UnauthorizedError for expired token', async () => {
     const payload = {
       sub: 'user-123',
       email: 'test@example.com',
@@ -80,33 +86,52 @@ describe('authenticate middleware', () => {
     const token = jwt.sign(payload, 'test-secret-key', { expiresIn: '-10s' });
     const req = createRequest(`Bearer ${token}`);
 
-    authenticate(req, {} as Response, next);
+    const nextArgs = await waitForNext(authenticate, req);
 
-    expect(next).toHaveBeenCalled();
-    const err = next.mock.calls[0][0] as any;
-    expect(err.statusCode).toBe(401);
-    expect(err.message).toContain('expired');
+    expect(nextArgs[0]).toBeDefined();
+    expect(nextArgs[0].statusCode).toBe(401);
+    expect(nextArgs[0].message).toContain('expired');
   });
 
-  it('should call next with UnauthorizedError for invalid token', () => {
+  it('should call next with UnauthorizedError for invalid token', async () => {
     const req = createRequest('Bearer invalid.token.here');
 
-    authenticate(req, {} as Response, next);
+    const nextArgs = await waitForNext(authenticate, req);
 
-    expect(next).toHaveBeenCalled();
-    const err = next.mock.calls[0][0] as any;
-    expect(err.statusCode).toBe(401);
+    expect(nextArgs[0]).toBeDefined();
+    expect(nextArgs[0].statusCode).toBe(401);
   });
 
-  it('should call next with UnauthorizedError for token signed with wrong secret', () => {
+  it('should call next with UnauthorizedError for token signed with wrong secret', async () => {
     const token = jwt.sign({ sub: 'x' }, 'wrong-secret');
     const req = createRequest(`Bearer ${token}`);
 
-    authenticate(req, {} as Response, next);
+    const nextArgs = await waitForNext(authenticate, req);
 
-    expect(next).toHaveBeenCalled();
-    const err = next.mock.calls[0][0] as any;
-    expect(err.statusCode).toBe(401);
+    expect(nextArgs[0]).toBeDefined();
+    expect(nextArgs[0].statusCode).toBe(401);
+  });
+
+  it('should block deactivated users', async () => {
+    const { query: mockQuery } = require('../../db');
+    // Clear status cache so DB mock is hit fresh
+    invalidateUserStatusCache('user-deactivated');
+    mockQuery.mockResolvedValueOnce({ rows: [{ status: 'deactivated' }] });
+
+    const payload = {
+      sub: 'user-deactivated',
+      email: 'deactivated@example.com',
+      role: 'member',
+      sessionId: 'sess-abc',
+    };
+    const token = jwt.sign(payload, 'test-secret-key', { expiresIn: '15m' });
+    const req = createRequest(`Bearer ${token}`);
+
+    const nextArgs = await waitForNext(authenticate, req);
+
+    expect(nextArgs[0]).toBeDefined();
+    expect(nextArgs[0].statusCode).toBe(401);
+    expect(nextArgs[0].message).toContain('deactivated');
   });
 });
 
