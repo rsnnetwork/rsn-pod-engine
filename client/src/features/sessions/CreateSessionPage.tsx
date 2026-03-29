@@ -1,4 +1,5 @@
 import { useForm } from 'react-hook-form';
+import { useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import Card from '@/components/ui/Card';
@@ -65,7 +66,7 @@ export default function CreateSessionPage() {
   // Admins can create events in any pod; others need director/host role
   const pods = isAdmin ? (allPods || []) : (allPods || []).filter((p: any) => p.memberRole === 'director' || p.memberRole === 'host');
 
-  const { register, handleSubmit, formState: { errors } } = useForm<SessionForm>({
+  const { register, handleSubmit, setValue, formState: { errors } } = useForm<SessionForm>({
     defaultValues: {
       podId: params.get('podId') || '',
       scheduledAt: getDefaultScheduledAt(),
@@ -79,6 +80,20 @@ export default function CreateSessionPage() {
       matchingTemplateId: '',
     },
   });
+
+  // Pre-select pod from URL param once pods are loaded
+  // defaultValues only works on first render — if pods load after mount,
+  // the <select> shows "Select a pod" even though podId is in form state.
+  // This useEffect syncs the dropdown once pods data is available.
+  const urlPodId = params.get('podId');
+  useEffect(() => {
+    if (urlPodId && pods && pods.length > 0) {
+      const podExists = pods.some((p: any) => p.id === urlPodId);
+      if (podExists) {
+        setValue('podId', urlPodId);
+      }
+    }
+  }, [urlPodId, pods, setValue]);
 
   const mutation = useMutation({
     mutationFn: (data: SessionForm) => {
