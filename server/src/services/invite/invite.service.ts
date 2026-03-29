@@ -220,13 +220,20 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
       }
     }
 
-    emailService.sendInviteEmail(input.inviteeEmail, {
-      inviterName,
-      type: (input.type || 'platform') as 'pod' | 'session' | 'platform',
-      targetName,
-      inviteUrl: `${config.clientUrl}/invite/${code}`,
-      calendarEvent,
-    }).catch(err => logger.warn({ err }, 'Failed to send invite email (non-fatal)'));
+    // Await email send — if it fails, the invite still exists in DB but we log the failure.
+    // Previously fire-and-forget caused silent delivery failures.
+    try {
+      await emailService.sendInviteEmail(input.inviteeEmail, {
+        inviterName,
+        type: (input.type || 'platform') as 'pod' | 'session' | 'platform',
+        targetName,
+        inviteUrl: `${config.clientUrl}/invite/${code}`,
+        calendarEvent,
+      });
+    } catch (err) {
+      // Don't fail the invite creation — email is best-effort but now properly logged
+      logger.warn({ err, inviteeEmail: input.inviteeEmail }, 'Failed to send invite email (invite still created)');
+    }
 
     // Create in-app notification for existing users
     const inviteeUser = await query<{ id: string }>(`SELECT id FROM users WHERE email = $1`, [input.inviteeEmail.toLowerCase()]);

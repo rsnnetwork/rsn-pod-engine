@@ -41,7 +41,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 ## Current Phase Snapshot
 
 - Active Phase: Change 2.0 — Critical Event Flow Fix (client review issues)
-- Active Milestone: **Phase 2/5 complete (auth + token stability)**
+- Active Milestone: **Phase 3/5 complete (invite flow end-to-end)**
 - Source Document: assets/Review on 29th March.pdf (9 system-level issues)
 - Last Updated: March 30, 2026
 
@@ -90,6 +90,15 @@ Approach: 5-phase fix, each verified against actual code with full-stack trace
 - Cache: statusCache with 60s TTL — at 200+ users, no DB query per request. invalidateUserStatusCache() exported for admin deactivation flow
 - Files: api.ts, authStore.ts, auth.ts, identity.service.ts, index.ts
 - Build: Zero TS errors (server + client), client production build passes
+
+**Phase 3 — Invite Flow End-to-End (COMPLETE)**
+- Server: Google OAuth callback now passes inviteCode in redirect URL params to client
+- Client: VerifyPage checks for inviteCode param (priority over sessionStorage) → redirects to /invite/{code} after auth
+- Server: findOrCreateGoogleUser() now applies membership effects (pod_members + session_participants) via ON CONFLICT DO NOTHING queries — Google OAuth users are immediately added to the pod/session
+- Client: InviteAcceptPage catch block handles SESSION_ALREADY_REGISTERED / POD_MEMBER_EXISTS by redirecting to the event instead of showing error
+- Server: Invite email sends now awaited (try/catch) instead of fire-and-forget — failures properly logged with invitee email context
+- Files: auth.ts (routes), VerifyPage.tsx, identity.service.ts, InviteAcceptPage.tsx, invite.service.ts
+- Build: Zero TS errors, 266/266 tests pass, client production build passes
 
 ### What's Done (Change 1.8 — Phase 6: New Features, March 28, 2026)
 

@@ -235,11 +235,15 @@ router.get(
         inviteCode || undefined,
       );
 
-      // Redirect to client with tokens
+      // Redirect to client with tokens + invite context (if any)
       const params = new URLSearchParams({
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
       });
+      // Preserve invite context so VerifyPage can redirect to /invite/{code}
+      if (inviteCode) {
+        params.set('inviteCode', inviteCode);
+      }
       res.redirect(`${config.clientUrl}/auth/verify?${params}`);
     } catch (err: any) {
       logger.error({ err }, 'Google OAuth callback error');

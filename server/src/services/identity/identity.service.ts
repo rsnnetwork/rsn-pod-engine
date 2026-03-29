@@ -526,6 +526,45 @@ export async function findOrCreateGoogleUser(
         `UPDATE invites SET use_count = $1, status = $2, accepted_by_user_id = $3, accepted_at = NOW() WHERE id = $4`,
         [newCount, newStatus, id, inviteId]
       );
+
+      // Apply invite membership effects — same logic as invite.service.ts acceptInvite()
+      // Without this, Google OAuth users are created but NOT added to the pod/session.
+      const inviteDetail = await query<{ type: string; pod_id: string | null; session_id: string | null }>(
+        `SELECT type, pod_id, session_id FROM invites WHERE id = $1`,
+        [inviteId]
+      );
+      const inv = inviteDetail.rows[0];
+      if (inv) {
+        if (inv.type === 'pod' && inv.pod_id) {
+          await query(
+            `INSERT INTO pod_members (pod_id, user_id, role) VALUES ($1, $2, 'member')
+             ON CONFLICT (pod_id, user_id) DO NOTHING`,
+            [inv.pod_id, id]
+          );
+        }
+        if (inv.type === 'session' && inv.session_id) {
+          // Add to pod first (required for private pod sessions)
+          const sessionPod = await query<{ pod_id: string }>(
+            `SELECT pod_id FROM sessions WHERE id = $1`, [inv.session_id]
+          );
+          if (sessionPod.rows[0]?.pod_id) {
+            await query(
+              `INSERT INTO pod_members (pod_id, user_id, role) VALUES ($1, $2, 'member')
+               ON CONFLICT (pod_id, user_id) DO NOTHING`,
+              [sessionPod.rows[0].pod_id, id]
+            );
+          }
+          // Register as session participant
+          await query(
+            `INSERT INTO session_participants (session_id, user_id, status)
+             VALUES ($1, $2, 'registered')
+             ON CONFLICT (session_id, user_id) DO NOTHING`,
+            [inv.session_id, id]
+          );
+        }
+        logger.info({ userId: id, inviteType: inv.type, podId: inv.pod_id, sessionId: inv.session_id },
+          'Google OAuth: invite membership effects applied');
+      }
     }
 
     user = await getUserById(id);

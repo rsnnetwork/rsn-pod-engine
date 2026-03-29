@@ -88,6 +88,14 @@ export default function InviteAcceptPage() {
         navigate(destination, { replace: true });
       }
     } catch (err: any) {
+      const errCode = err?.response?.data?.error?.code;
+      // "Already a member" — redirect to the event instead of showing error
+      if (errCode === 'SESSION_ALREADY_REGISTERED' || errCode === 'POD_MEMBER_EXISTS') {
+        const destination = getDestination(null);
+        addToast('You\'re already a member — taking you there now', 'success');
+        navigate(destination, { replace: true });
+        return;
+      }
       const { message } = getAcceptErrorMessage(err);
       setError(message);
       addToast(message, 'error');

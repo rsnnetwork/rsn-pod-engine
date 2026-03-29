@@ -22,9 +22,11 @@ export default function VerifyPage() {
       // Signal original login tab that auth is complete
       localStorage.setItem('rsn_auth_completed_at', String(Date.now()));
 
+      // Priority: inviteCode from URL (Google OAuth) > sessionStorage (magic link) > home
+      const inviteCode = params.get('inviteCode');
       const redirect = sessionStorage.getItem('rsn_redirect');
       sessionStorage.removeItem('rsn_redirect');
-      const destination = redirect || '/';
+      const destination = inviteCode ? `/invite/${inviteCode}` : redirect || '/';
 
       // Only try window.close() if we detect another RSN tab is listening.
       // The login page sets 'rsn_magic_link_sent' when the magic link state is active.
