@@ -90,13 +90,21 @@ export default function InviteAcceptPage() {
     } catch (err: any) {
       const errCode = err?.response?.data?.error?.code;
       // "Already a member" or "invite used/expired but user already has access"
-      // — redirect to the event instead of blocking
+      // — ensure session registration, then redirect to the event
       if (errCode === 'SESSION_ALREADY_REGISTERED' || errCode === 'POD_MEMBER_EXISTS'
           || errCode === 'INVITE_ALREADY_USED' || errCode === 'INVITE_EXPIRED') {
-        // Check if we can navigate to the event (we have invite context from the GET)
+        const sessionId = invite?.sessionId;
         const destination = getDestination(null);
         if (destination !== '/sessions') {
-          // We know the specific event/pod — take them there
+          // Ensure user is registered for the session before redirecting
+          // (they may be a pod member but not a session participant)
+          if (sessionId) {
+            try {
+              await api.post(`/sessions/${sessionId}/register`);
+            } catch {
+              // Already registered or session not open — that's fine
+            }
+          }
           addToast(
             errCode === 'INVITE_ALREADY_USED' || errCode === 'INVITE_EXPIRED'
               ? 'This invite is no longer valid, but you may already have access'
