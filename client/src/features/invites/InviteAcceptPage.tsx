@@ -89,12 +89,23 @@ export default function InviteAcceptPage() {
       }
     } catch (err: any) {
       const errCode = err?.response?.data?.error?.code;
-      // "Already a member" — redirect to the event instead of showing error
-      if (errCode === 'SESSION_ALREADY_REGISTERED' || errCode === 'POD_MEMBER_EXISTS') {
+      // "Already a member" or "invite used/expired but user already has access"
+      // — redirect to the event instead of blocking
+      if (errCode === 'SESSION_ALREADY_REGISTERED' || errCode === 'POD_MEMBER_EXISTS'
+          || errCode === 'INVITE_ALREADY_USED' || errCode === 'INVITE_EXPIRED') {
+        // Check if we can navigate to the event (we have invite context from the GET)
         const destination = getDestination(null);
-        addToast('You\'re already a member — taking you there now', 'success');
-        navigate(destination, { replace: true });
-        return;
+        if (destination !== '/sessions') {
+          // We know the specific event/pod — take them there
+          addToast(
+            errCode === 'INVITE_ALREADY_USED' || errCode === 'INVITE_EXPIRED'
+              ? 'This invite is no longer valid, but you may already have access'
+              : 'You\'re already a member — taking you there now',
+            'success'
+          );
+          navigate(destination, { replace: true });
+          return;
+        }
       }
       const { message } = getAcceptErrorMessage(err);
       setError(message);
