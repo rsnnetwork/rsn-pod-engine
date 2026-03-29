@@ -28,23 +28,13 @@ export default function VerifyPage() {
       sessionStorage.removeItem('rsn_redirect');
       const destination = inviteCode ? `/invite/${inviteCode}` : redirect || '/';
 
-      // Only try window.close() if we detect another RSN tab is listening.
-      // The login page sets 'rsn_magic_link_sent' when the magic link state is active.
-      // If no other tab is waiting, redirect in THIS tab instead of closing it.
-      const loginTabWaiting = localStorage.getItem('rsn_magic_link_sent');
+      // Clear magic link flag so original tab knows auth is done
+      localStorage.removeItem('rsn_magic_link_sent');
 
-      if (loginTabWaiting) {
-        localStorage.removeItem('rsn_magic_link_sent');
-        // Small delay to let localStorage event propagate to the original tab
-        setTimeout(() => {
-          window.close();
-          // If window.close() was blocked, redirect normally
-          navigate(destination, { replace: true });
-        }, 500);
-      } else {
-        // No login tab waiting — this is the only tab (e.g. opened from email link)
-        navigate(destination, { replace: true });
-      }
+      // Always navigate in this tab — never close it.
+      // Both tabs stay open and usable: original tab picks up auth via localStorage event,
+      // this tab navigates to the destination.
+      navigate(destination, { replace: true });
     };
 
     if (accessToken && refreshToken) {
