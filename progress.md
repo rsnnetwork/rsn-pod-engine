@@ -41,7 +41,7 @@ Purpose: Persistent execution history and current state, independent of chat mem
 ## Current Phase Snapshot
 
 - Active Phase: Change 2.0 — Critical Event Flow Fix (client review issues)
-- Active Milestone: **Phase 3/5 complete (invite flow end-to-end)**
+- Active Milestone: **Phase 4/5 complete (event lifecycle + cleanup)**
 - Source Document: assets/Review on 29th March.pdf (9 system-level issues)
 - Last Updated: March 30, 2026
 
@@ -99,6 +99,18 @@ Approach: 5-phase fix, each verified against actual code with full-stack trace
 - Server: Invite email sends now awaited (try/catch) instead of fire-and-forget — failures properly logged with invitee email context
 - Files: auth.ts (routes), VerifyPage.tsx, identity.service.ts, InviteAcceptPage.tsx, invite.service.ts
 - Build: Zero TS errors, 266/266 tests pass, client production build passes
+- Audit: Fixed invite sort (invitee email alphabetical, not inviter name). Expired/used invites redirect to event.
+
+**Phase 4 — Event Lifecycle & Cleanup (COMPLETE)**
+- Server: completeSession() now expires all pending session invites on completion (UPDATE invites SET status='expired')
+- Server: listReceivedInvites() adds NOT EXISTS subquery to exclude invites for completed/cancelled sessions
+- Server: listReceivedInvites() sorted alphabetically by invitee email (was created_at DESC)
+- Server: cleanupLiveKitRooms() — closes lobby + all match rooms in parallel batches on session end
+- Server: POST /invites/remind-all/:sessionId — bulk remind endpoint, batched parallel sends, returns sent/total
+- Client: SessionDetailPage — "Remind All" button when 2+ pending invites, calls bulk endpoint
+- Files: orchestration.service.ts, invite.service.ts, invites.ts (routes), SessionDetailPage.tsx
+- Build: Zero TS errors, 266/266 tests pass, client production build passes
+- Audit: Verified sort by invitee email. Route ordering safe. LiveKit room name consistent. Session status index exists.
 
 ### What's Done (Change 1.8 — Phase 6: New Features, March 28, 2026)
 

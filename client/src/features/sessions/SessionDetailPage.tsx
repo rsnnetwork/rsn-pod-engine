@@ -85,6 +85,15 @@ export default function SessionDetailPage() {
     onError: () => addToast('Failed to send reminder', 'error'),
   });
 
+  const remindAllMutation = useMutation({
+    mutationFn: () => api.post(`/invites/remind-all/${sessionId}`),
+    onSuccess: (res) => {
+      const { reminded, total } = res.data.data;
+      addToast(`Reminders sent to ${reminded}/${total} pending invites`, 'success');
+    },
+    onError: () => addToast('Failed to send bulk reminders', 'error'),
+  });
+
   const isRegistered = (participants || []).some((p: any) => p.userId === user?.id && p.status !== 'removed');
   const isMember = !!pod?.memberRole || isAdmin;
   const isRestrictedPod = pod?.visibility === 'invite_only' || pod?.visibility === 'private';
@@ -435,7 +444,22 @@ export default function SessionDetailPage() {
                 <p className="text-gray-400 text-sm text-center py-4">No pending invites</p>
               </Card>
             ) : (
-              <div className="grid gap-2">
+              <div className="space-y-2">
+                {/* Remind All button */}
+                {pendingInvites.filter((inv: any) => inv.inviteeEmail).length > 1 && (
+                  <div className="flex justify-end mb-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => remindAllMutation.mutate()}
+                      isLoading={remindAllMutation.isPending}
+                      className="!border-purple-300 !text-purple-700 hover:!bg-purple-100"
+                    >
+                      <Send className="h-3.5 w-3.5 mr-1" /> Remind All ({pendingInvites.filter((inv: any) => inv.inviteeEmail).length})
+                    </Button>
+                  </div>
+                )}
+                <div className="grid gap-2">
                 {pendingInvites.map((inv: any) => (
                   <Card key={inv.id} className="!p-4">
                     <div className="flex items-center justify-between">
@@ -467,6 +491,7 @@ export default function SessionDetailPage() {
                     </div>
                   </Card>
                 ))}
+              </div>
               </div>
             )}
           </div>

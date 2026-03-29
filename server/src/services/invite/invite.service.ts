@@ -508,8 +508,11 @@ export async function listReceivedInvites(userEmail: string, userId?: string): P
      LEFT JOIN users u ON u.id = i.inviter_id
      WHERE i.invitee_email = $1 AND i.status = 'pending'
        AND (i.expires_at IS NULL OR i.expires_at > NOW())
+       AND (i.session_id IS NULL OR NOT EXISTS (
+         SELECT 1 FROM sessions ses WHERE ses.id = i.session_id AND ses.status IN ('completed', 'cancelled')
+       ))
        ${userFilter}
-     ORDER BY i.created_at DESC`,
+     ORDER BY LOWER(i.invitee_email) ASC, i.created_at DESC`,
     params
   );
 

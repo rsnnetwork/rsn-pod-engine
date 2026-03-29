@@ -225,6 +225,96 @@ router.post(
   }
 );
 
+// ─── POST /invites/remind-all/:sessionId ─────────────────────────────────────
+// Bulk remind: resend invite emails to ALL pending invites for a session
+
+router.post(
+  '/remind-all/:sessionId',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { sessionId } = req.params;
+
+      // Only host/admin can bulk remind
+      const sessionResult = await query<{ host_user_id: string; title: string; scheduled_at: string | null; config: any }>(
+        `SELECT host_user_id, title, scheduled_at, config FROM sessions WHERE id = $1`, [sessionId]
+      );
+      if (sessionResult.rows.length === 0) {
+        return res.status(404).json({ success: false, error: { code: 'SESSION_NOT_FOUND', message: 'Session not found' } });
+      }
+      const session = sessionResult.rows[0];
+      const isHost = session.host_user_id === req.user!.userId;
+      const isAdmin = req.user!.role === 'admin' || req.user!.role === 'super_admin';
+      if (!isHost && !isAdmin) {
+        return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only the host can send reminders' } });
+      }
+
+      // Get all pending invites for this session
+      const pendingInvites = await query<{ id: string; invitee_email: string; code: string }>(
+        `SELECT id, invitee_email, code FROM invites WHERE session_id = $1 AND status = 'pending'`,
+        [sessionId]
+      );
+
+      if (pendingInvites.rows.length === 0) {
+        return res.json({ success: true, data: { reminded: 0 } });
+      }
+
+      // Build calendar event context
+      const inviterResult = await query<{ displayName: string }>(
+        `SELECT display_name AS "displayName" FROM users WHERE id = $1`, [req.user!.userId]
+      );
+      const inviterName = inviterResult.rows[0]?.displayName || 'Someone';
+
+      let calendarEvent: any = undefined;
+      if (session.scheduled_at) {
+        const cfg = session.config || {};
+        const rounds = cfg.numberOfRounds || 5;
+        const roundDuration = cfg.roundDurationSeconds || 480;
+        const breakDuration = cfg.transitionDurationSeconds || 30;
+        const totalMinutes = Math.ceil((rounds * roundDuration + (rounds - 1) * breakDuration) / 60);
+        const hostResult = await query<{ display_name: string; email: string }>(
+          'SELECT display_name, email FROM users WHERE id = $1', [session.host_user_id]
+        );
+        const host = hostResult.rows[0];
+        calendarEvent = {
+          title: session.title,
+          description: `RSN Event — ${session.title}`,
+          startTime: new Date(session.scheduled_at),
+          durationMinutes: totalMinutes,
+          organizerName: host?.display_name || 'RSN Host',
+          organizerEmail: host?.email,
+          sessionId,
+        };
+      }
+
+      // Send reminders in parallel (batched)
+      const { default: appConfig } = await import('../config');
+      const emailService = await import('../services/email/email.service');
+      let sentCount = 0;
+      const BATCH = 10;
+      for (let i = 0; i < pendingInvites.rows.length; i += BATCH) {
+        const batch = pendingInvites.rows.slice(i, i + BATCH);
+        const results = await Promise.allSettled(
+          batch.map(inv =>
+            emailService.sendInviteEmail(inv.invitee_email, {
+              inviterName,
+              type: 'session',
+              targetName: session.title,
+              inviteUrl: `${appConfig.clientUrl}/invite/${inv.code}`,
+              calendarEvent,
+            })
+          )
+        );
+        sentCount += results.filter(r => r.status === 'fulfilled').length;
+      }
+
+      return res.json({ success: true, data: { reminded: sentCount, total: pendingInvites.rows.length } });
+    } catch (err) {
+      return next(err);
+    }
+  }
+);
+
 // ─── GET /invites/:code ─────────────────────────────────────────────────────
 
 router.get(

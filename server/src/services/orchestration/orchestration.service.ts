@@ -2260,6 +2260,12 @@ async function completeSession(sessionId: string): Promise<void> {
     await sessionService.updateSessionStatus(sessionId, SessionStatus.COMPLETED);
     await query('UPDATE sessions SET ended_at = NOW() WHERE id = $1', [sessionId]);
 
+    // Invalidate all pending invites for this session — no one can join a completed event
+    await query(
+      `UPDATE invites SET status = 'expired' WHERE session_id = $1 AND status = 'pending'`,
+      [sessionId]
+    ).catch(err => logger.warn({ err, sessionId }, 'Failed to expire session invites (non-fatal)'));
+
     // Finalize encounter history for any unrated matches
     try {
       await ratingService.finalizeSessionEncounters(sessionId);
@@ -2280,6 +2286,11 @@ async function completeSession(sessionId: string): Promise<void> {
     sendRecapEmails(sessionId).catch(emailErr => {
       logger.error({ err: emailErr, sessionId }, 'Error sending recap emails (non-fatal)');
     });
+
+    // Fire-and-forget: clean up LiveKit rooms (lobby + all match rooms)
+    cleanupLiveKitRooms(sessionId).catch(roomErr => {
+      logger.warn({ err: roomErr, sessionId }, 'Error cleaning up LiveKit rooms (non-fatal)');
+    });
   } catch (err) {
     logger.error({ err, sessionId }, 'Error completing session');
   } finally {
@@ -2287,6 +2298,35 @@ async function completeSession(sessionId: string): Promise<void> {
     activeSessions.delete(sessionId);
     cleanupChatMessages(sessionId);
   }
+}
+
+// ─── Clean Up LiveKit Rooms ──────────────────────────────────────────────────
+
+async function cleanupLiveKitRooms(sessionId: string): Promise<void> {
+  // Close lobby room
+  try {
+    await videoService.closeLobbyRoom(sessionId);
+  } catch { /* may not exist */ }
+
+  // Close all match rooms for this session
+  const matches = await query<{ id: string; round_number: number }>(
+    `SELECT id, round_number FROM matches WHERE session_id = $1 AND room_id IS NOT NULL`,
+    [sessionId]
+  );
+
+  // Batch close in parallel (max 20 concurrent to avoid overwhelming LiveKit)
+  const BATCH_SIZE = 20;
+  for (let i = 0; i < matches.rows.length; i += BATCH_SIZE) {
+    const batch = matches.rows.slice(i, i + BATCH_SIZE);
+    await Promise.allSettled(
+      batch.map(m =>
+        videoService.closeMatchRoom(sessionId, m.round_number, m.id.slice(0, 8))
+          .catch(() => { /* room may already be closed */ })
+      )
+    );
+  }
+
+  logger.info({ sessionId, roomsClosed: matches.rows.length + 1 }, 'LiveKit rooms cleaned up');
 }
 
 // ─── Send Recap Emails ──────────────────────────────────────────────────────
