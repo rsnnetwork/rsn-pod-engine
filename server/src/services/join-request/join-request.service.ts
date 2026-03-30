@@ -142,14 +142,15 @@ export async function reviewJoinRequest(
   reviewNotes?: string
 ): Promise<JoinRequest> {
   // Reset reminder tracking when (re-)approving so auto-reminders start fresh
+  const resetReminders = decision === 'approved';
   const result = await query(
     `UPDATE join_requests
      SET status = $1, reviewed_by = $2, reviewed_at = NOW(), review_notes = $3, updated_at = NOW(),
-         reminder_count = CASE WHEN $1 = 'approved' THEN 0 ELSE reminder_count END,
-         last_reminded_at = CASE WHEN $1 = 'approved' THEN NULL ELSE last_reminded_at END
+         reminder_count = CASE WHEN $5 THEN 0 ELSE reminder_count END,
+         last_reminded_at = CASE WHEN $5 THEN NULL ELSE last_reminded_at END
      WHERE id = $4
      RETURNING *`,
-    [decision, reviewedBy, reviewNotes || null, id]
+    [decision, reviewedBy, reviewNotes || null, id, resetReminders]
   );
 
   if (result.rows.length === 0) {

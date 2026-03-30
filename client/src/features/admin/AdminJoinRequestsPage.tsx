@@ -363,7 +363,7 @@ export default function AdminJoinRequestsPage() {
                       <div className="flex items-center gap-2">
                         <Button
                           size="sm"
-                          onClick={() => setReviewModal({ request: r, decision: 'approved' })}
+                          onClick={() => reviewMutation.mutate({ id: r.id, decision: 'approved', reviewNotes: '' })}
                           className="!bg-emerald-600 hover:!bg-emerald-700"
                         >
                           <CheckCircle className="h-4 w-4 mr-1" /> Approve
