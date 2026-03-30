@@ -46,6 +46,7 @@ export default function useSessionSocket(sessionId: string) {
   const store = useSessionStore();
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const ratingFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const byeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initializedRef = useRef<string | null>(null);
 
   const clearTimer = () => {
@@ -54,6 +55,10 @@ export default function useSessionSocket(sessionId: string) {
 
   const clearRatingFallback = () => {
     if (ratingFallbackRef.current) { clearTimeout(ratingFallbackRef.current); ratingFallbackRef.current = null; }
+  };
+
+  const clearByeTimeout = () => {
+    if (byeTimeoutRef.current) { clearTimeout(byeTimeoutRef.current); byeTimeoutRef.current = null; }
   };
 
   useEffect(() => {
@@ -181,6 +186,7 @@ export default function useSessionSocket(sessionId: string) {
       store.setRound(data.roundNumber);
       if (data.totalRounds) store.setTotalRounds(data.totalRounds);
       store.setByeRound(false);
+      clearByeTimeout();
       store.setLeftCurrentRound(false); // New round — allow matching
       store.setPartnerDisconnected(false);
       store.setTransitionStatus(null);
@@ -229,14 +235,16 @@ export default function useSessionSocket(sessionId: string) {
     // ── Matching ──
     socket.on('match:assigned', (data: any) => {
       // Only transition to 'matched' phase during an active round — ignore stale
-      // match:assigned events that arrive during rating or lobby transitions
+      // match:assigned events that arrive during rating or lobby transitions.
+      // NOTE: round_transition is allowed because the server emits match:assigned
+      // BEFORE session:status_changed(round_active) when starting a new round.
       const state = useSessionStore.getState();
       if (state.sessionStatus === 'round_rating' || state.sessionStatus === 'completed') return;
-      if (state.sessionStatus === 'round_transition') return;
       if (state.leftCurrentRound) return; // User manually left this round
 
       store.setMatchingOverlay(null); // Clear anticipation screen
       store.setByeRound(false);
+      clearByeTimeout();
       store.setPartnerDisconnected(false);
       store.setTransitionStatus('preparing_match');
       const partners = data.partners || [{ userId: data.partnerId, displayName: data.partnerDisplayName || data.partnerId }];
@@ -257,7 +265,6 @@ export default function useSessionSocket(sessionId: string) {
       // Same guards as match:assigned
       const reassignState = useSessionStore.getState();
       if (reassignState.sessionStatus === 'round_rating' || reassignState.sessionStatus === 'completed') return;
-      if (reassignState.sessionStatus === 'round_transition') return;
       if (reassignState.leftCurrentRound) return;
       store.setPartnerDisconnected(false);
       store.setTransitionStatus('preparing_match');
@@ -299,6 +306,16 @@ export default function useSessionSocket(sessionId: string) {
       store.setMatch(null);
       store.setTransitionStatus(null);
       store.setPhase('lobby');
+
+      // After 15 seconds, if still bye (not reassigned), transition to between_rounds
+      // so the user sees "Getting ready for the next round..." instead of sitting idle
+      clearByeTimeout();
+      byeTimeoutRef.current = setTimeout(() => {
+        const s = useSessionStore.getState();
+        if (s.isByeRound && s.phase === 'lobby') {
+          store.setTransitionStatus('between_rounds');
+        }
+      }, 15000);
     });
 
     // ── Ratings ──
@@ -318,6 +335,7 @@ export default function useSessionSocket(sessionId: string) {
         // Normal case: preserve existing match data, just update matchId
         store.setMatch(currentState.currentMatch, data.matchId, currentState.currentPartners);
       }
+      store.setTransitionStatus(null); // Clear "Round ending — wrapping up" banner
       store.setTimer(data.durationSeconds || 30);
       clearTimer();
       intervalRef.current = setInterval(() => store.tickTimer(), 1000);
@@ -440,6 +458,7 @@ export default function useSessionSocket(sessionId: string) {
     return () => {
       clearTimer();
       clearRatingFallback();
+      clearByeTimeout();
       clearInterval(heartbeatInterval);
 
       // Remove ALL socket event listeners we attached
