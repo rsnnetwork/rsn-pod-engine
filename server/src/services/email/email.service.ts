@@ -57,15 +57,30 @@ async function sendEmail(opts: {
     }));
   }
 
-  const { error } = await client.emails.send(emailPayload);
+  // Retry with exponential backoff for rate-limit and transient errors
+  const MAX_RETRIES = 3;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const { error } = await client.emails.send(emailPayload);
 
-  if (error) {
-    logger.error({ error, to: opts.to }, `Failed to send email: ${opts.subject}`);
-    return { sent: false };
+    if (!error) {
+      if (attempt > 0) logger.warn({ to: opts.to, attempt }, `Email sent after ${attempt} retries: ${opts.subject}`);
+      else logger.info({ to: opts.to }, `Email sent: ${opts.subject}`);
+      return { sent: true };
+    }
+
+    const statusCode = (error as any).statusCode;
+    const isRetryable = statusCode === 429 || statusCode === 500 || statusCode === 503;
+
+    if (!isRetryable || attempt === MAX_RETRIES) {
+      logger.error({ error, to: opts.to, attempts: attempt + 1 }, `Failed to send email: ${opts.subject}`);
+      return { sent: false };
+    }
+
+    // Exponential backoff: 1s, 2s, 4s
+    await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
   }
 
-  logger.info({ to: opts.to }, `Email sent: ${opts.subject}`);
-  return { sent: true };
+  return { sent: false };
 }
 
 export async function sendMagicLinkEmail(

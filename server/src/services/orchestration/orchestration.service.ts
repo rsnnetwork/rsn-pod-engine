@@ -157,6 +157,14 @@ async function handleJoinSession(
       return;
     }
 
+    // Refresh display name from DB — JWT may be stale if user updated their profile
+    const freshNameResult = await query<{ display_name: string }>(
+      'SELECT display_name FROM users WHERE id = $1', [userId]
+    );
+    if (freshNameResult.rows[0]?.display_name) {
+      (socket.data as any).displayName = freshNameResult.rows[0].display_name;
+    }
+
     const session = await sessionService.getSessionById(data.sessionId);
 
     // ── Single-session enforcement ──
@@ -2233,12 +2241,13 @@ async function endRatingWindow(
         }
       }
 
-      // 30-second closing lobby timer, then auto-complete
-      startSegmentTimer(sessionId, 30, () => {
+      // Host-controlled: no auto-end. Host must click "End Event".
+      // 10-minute safety fallback prevents orphaned sessions if host disconnects.
+      startSegmentTimer(sessionId, 600, () => {
         completeSession(sessionId);
       });
 
-      logger.info({ sessionId, roundNumber }, 'All rounds completed → CLOSING_LOBBY (30s goodbye period)');
+      logger.info({ sessionId, roundNumber }, 'All rounds completed → CLOSING_LOBBY (waiting for host, 10min safety timeout)');
     }
   } catch (err) {
     logger.error({ err, sessionId, roundNumber }, 'Error ending rating window');
@@ -2402,6 +2411,7 @@ async function sendRecapEmails(sessionId: string): Promise<void> {
   );
   const mutualMap = new Map(mutualBatch.rows.map(r => [r.userId, parseInt(r.count, 10)]));
 
+  const failedEmails: string[] = [];
   for (const p of participantsResult.rows) {
     try {
       await emailService.sendSessionRecapEmail(p.email, p.displayName || 'there', {
@@ -2412,11 +2422,19 @@ async function sendRecapEmails(sessionId: string): Promise<void> {
         recapUrl: `${appConfig.clientUrl}/sessions/${sessionId}/recap`,
       });
     } catch (err) {
+      failedEmails.push(p.email);
       logger.warn({ err, userId: p.userId }, 'Failed to send recap email to participant');
     }
+    // Rate-limit safety: 200ms between emails to avoid hitting Resend's 429
+    await new Promise(r => setTimeout(r, 200));
   }
 
-  logger.info({ sessionId, participantCount: participantsResult.rows.length }, 'Recap emails dispatched');
+  if (failedEmails.length > 0) {
+    logger.error({ sessionId, failedEmails, failedCount: failedEmails.length },
+      'Some recap emails failed after all retries');
+  }
+  logger.info({ sessionId, sent: participantsResult.rows.length - failedEmails.length,
+    failed: failedEmails.length }, 'Recap emails dispatched');
 
   // ─── Host Event Recap ─────────────────────────────────────────────────────
   try {

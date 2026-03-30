@@ -1,6 +1,6 @@
 import { useSessionStore } from '@/stores/sessionStore';
 import { Button } from '@/components/ui/Button';
-import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, MessageSquare, UserMinus, RefreshCw, UserPlus, AlertTriangle } from 'lucide-react';
+import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, MessageSquare, UserMinus, RefreshCw, UserPlus, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { getSocket } from '@/lib/socket';
 import { useState } from 'react';
 
@@ -101,15 +101,15 @@ export default function HostControls({ sessionId }: Props) {
       <div className="border-t border-white/10 bg-[#292a2d] p-4">
         <div className="max-w-4xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Loader2 className="h-4 w-4 text-gray-400 animate-spin" />
-            <p className="text-sm text-gray-300 font-medium">Event ending — preparing recap...</p>
+            <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+            <p className="text-sm text-gray-300 font-medium">All rounds complete — end the event when ready</p>
           </div>
           <div className="flex gap-2">
             <Button size="sm" variant="ghost" onClick={() => setShowBroadcast(!showBroadcast)} title="Send announcement to all">
               <MessageSquare className="h-4 w-4" />
             </Button>
             <Button size="sm" variant="danger" onClick={() => socket?.emit('host:end_session', { sessionId })}>
-              <Square className="h-4 w-4 mr-1" /> Force End
+              <Square className="h-4 w-4 mr-1" /> End Event
             </Button>
           </div>
         </div>
