@@ -119,10 +119,11 @@ export async function generateSingleRound(
   const userIds = participantsResult.rows.map((p) => p.userId);
   const encounterHistory = await getEncounterHistoryForUsers(userIds);
 
-  // Get excluded pairs (already matched in this session)
+  // Get excluded pairs (completed/in-progress matches in OTHER rounds — not the current round being regenerated)
   const excludedResult = await query<{ participant_a_id: string; participant_b_id: string }>(
-    `SELECT participant_a_id, participant_b_id FROM matches WHERE session_id = $1`,
-    [sessionId]
+    `SELECT participant_a_id, participant_b_id FROM matches
+     WHERE session_id = $1 AND round_number != $2 AND status NOT IN ('cancelled', 'no_show')`,
+    [sessionId, roundNumber]
   );
   const excludedPairs = new Set(
     excludedResult.rows.map((r) => pairKey(r.participant_a_id, r.participant_b_id))
@@ -343,12 +344,18 @@ async function getExistingRounds(sessionId: string): Promise<RoundAssignment[]> 
 async function persistMatches(sessionId: string, rounds: RoundAssignment[]): Promise<void> {
   await transaction(async (client) => {
     for (const round of rounds) {
+      // Cancel any existing scheduled matches for this round before inserting new ones
+      // (handles rematch/regeneration — avoids trigger conflict with stale active matches)
+      await client.query(
+        `UPDATE matches SET status = 'cancelled'
+         WHERE session_id = $1 AND round_number = $2 AND status = 'scheduled'`,
+        [sessionId, round.roundNumber]
+      );
+
       for (const pair of round.pairs) {
         await client.query(
           `INSERT INTO matches (session_id, round_number, participant_a_id, participant_b_id, participant_c_id, score, reason_tags, status)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'scheduled')
-           ON CONFLICT (session_id, round_number, participant_a_id) DO UPDATE
-           SET participant_b_id = $4, participant_c_id = $5, score = $6, reason_tags = $7`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'scheduled')`,
           [
             sessionId,
             round.roundNumber,

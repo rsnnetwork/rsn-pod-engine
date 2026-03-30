@@ -12,9 +12,12 @@ async function cleanTestData(): Promise<void> {
 
     // Delete in dependency order (children first)
     await client.query('DELETE FROM ratings');
+    await client.query('DELETE FROM event_feedback');
+    await client.query('DELETE FROM session_cohosts');
     await client.query('DELETE FROM encounter_history');
     await client.query('DELETE FROM matches');
     await client.query('DELETE FROM session_participants');
+    await client.query('DELETE FROM notifications');
     await client.query('DELETE FROM invites');
     await client.query('DELETE FROM sessions');
     await client.query('DELETE FROM pod_members');
@@ -22,8 +25,8 @@ async function cleanTestData(): Promise<void> {
 
     await client.query('COMMIT');
 
-    console.log('✅ Cleaned: ratings, matches, sessions, pods, invites, members');
-    console.log('✅ Kept: users, subscriptions, entitlements, join_requests, auth tokens');
+    console.log('Cleaned: ratings, event_feedback, session_cohosts, encounter_history, matches, session_participants, notifications, invites, sessions, pod_members, pods');
+    console.log('Kept: users, subscriptions, entitlements, join_requests, auth tokens, refresh_tokens, matching_templates');
   } catch (err) {
     await client.query('ROLLBACK');
     logger.error({ err }, 'Clean failed');
