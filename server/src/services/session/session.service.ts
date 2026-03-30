@@ -318,7 +318,7 @@ export async function unregisterParticipant(sessionId: string, userId: string): 
 
   const result = await query(
     `UPDATE session_participants SET status = 'left', left_at = NOW()
-     WHERE session_id = $1 AND user_id = $2 AND status = 'registered'`,
+     WHERE session_id = $1 AND user_id = $2 AND status IN ('registered', 'checked_in')`,
     [sessionId, userId]
   );
 

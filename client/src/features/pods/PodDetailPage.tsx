@@ -918,7 +918,9 @@ export default function PodDetailPage() {
             </Card>
           ))}
           {activeMembers.length === 0 && (
-            <Card><p className="text-gray-400 text-sm text-center py-4">No members yet</p></Card>
+            <Card><p className="text-gray-400 text-sm text-center py-4">
+              {isMember ? 'No members yet' : 'To access pod details, please join the pod.'}
+            </p></Card>
           )}
         </div>
       </div>
