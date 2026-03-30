@@ -131,8 +131,9 @@ export default function LoginPage() {
             <div className="rounded-2xl border border-gray-200 bg-gray-50/60 p-6">
               <div className="flex items-center gap-2 mb-4">
                 <KeyRound className="h-5 w-5 text-[#1a1a2e]" />
-                <h2 className="text-base font-semibold text-[#1a1a2e]">Existing Member</h2>
+                <h2 className="text-base font-semibold text-[#1a1a2e]">Already a member? Sign in</h2>
               </div>
+              <p className="text-sm text-gray-500 -mt-2 mb-4">Use Google or magic link to access your account</p>
 
               {/* Google Login */}
               <button
@@ -179,7 +180,7 @@ export default function LoginPage() {
             <div className="rounded-2xl border border-gray-200 bg-gray-50/60 p-6">
               <div className="flex items-center gap-2 mb-4">
                 <UserPlus className="h-5 w-5 text-[#1a1a2e]" />
-                <h2 className="text-base font-semibold text-[#1a1a2e]">Have an Invite Code?</h2>
+                <h2 className="text-base font-semibold text-[#1a1a2e]">New here? Use your invite code</h2>
               </div>
               <Input
                 label="Invite code"
@@ -187,13 +188,13 @@ export default function LoginPage() {
                 error={errors.inviteCode?.message}
                 {...register('inviteCode')}
               />
-              <p className="text-xs text-gray-400 mt-1.5 mb-3">Enter your invite code, then sign in above to join.</p>
+              <p className="text-xs text-gray-400 mt-1.5 mb-3">Enter your code below, then sign in above with Google or email.</p>
             </div>
 
             {/* Path 3: New User without Invite */}
             <div className="rounded-2xl border border-gray-200 bg-gray-50/60 p-6 text-center">
-              <h2 className="text-base font-semibold text-[#1a1a2e] mb-2">Don&apos;t have an invite?</h2>
-              <p className="text-sm text-gray-500 mb-4">RSN is invite-only. Request access below.</p>
+              <h2 className="text-base font-semibold text-[#1a1a2e] mb-2">No invite? Request access</h2>
+              <p className="text-sm text-gray-500 mb-4">RSN is invite-only. Apply and we&apos;ll review your request.</p>
               <button
                 onClick={() => navigate('/request-to-join')}
                 className="bg-rsn-red text-white px-6 py-2.5 rounded-full text-sm font-semibold hover:bg-rsn-red-hover transition-all hover:scale-[1.02] shadow-md inline-flex items-center gap-2"
