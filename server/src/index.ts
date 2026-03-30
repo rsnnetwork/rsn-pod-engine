@@ -18,6 +18,9 @@ import { runMigrations } from './db/migrate';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { apiLimiter } from './middleware/rateLimit';
 
+// Services
+import { processAutoReminders } from './services/join-request/join-request.service';
+
 // Routes
 import authRoutes from './routes/auth';
 import userRoutes from './routes/users';
@@ -223,6 +226,20 @@ async function start(): Promise<void> {
 
     // Initialise orchestration with Socket.IO
     initOrchestration(io);
+
+    // Start auto-reminder engine for join requests (runs every 6 hours)
+    const SIX_HOURS = 6 * 60 * 60 * 1000;
+    setInterval(() => {
+      processAutoReminders().catch(err =>
+        logger.error({ err }, 'Auto-reminder cycle failed')
+      );
+    }, SIX_HOURS);
+    // Run once on startup (after a short delay to let migrations settle)
+    setTimeout(() => {
+      processAutoReminders().catch(err =>
+        logger.error({ err }, 'Initial auto-reminder cycle failed')
+      );
+    }, 30_000);
 
     // Start listening
     server.listen(config.port, () => {

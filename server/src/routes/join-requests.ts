@@ -90,6 +90,25 @@ router.get(
   }
 );
 
+// ─── POST /join-requests/bulk-poke (admin only) ────────────────────────────
+// Must be before /:id routes to avoid Express matching "bulk-poke" as a UUID
+
+router.post(
+  '/bulk-poke',
+  authenticate,
+  requireRole(UserRole.ADMIN),
+  validate(z.object({ requestIds: z.array(z.string().uuid()).min(1).max(100) })),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await joinRequestService.bulkPokeJoinRequests(req.body.requestIds);
+      const response: ApiResponse = { success: true, data: result };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // ─── GET /join-requests/:id (admin only) ────────────────────────────────────
 
 router.get(
@@ -143,6 +162,23 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const updated = await joinRequestService.updateAdminNotes(req.params.id, req.body.note);
+      const response: ApiResponse = { success: true, data: updated };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /join-requests/:id/poke (admin only) ─────────────────────────────
+
+router.post(
+  '/:id/poke',
+  authenticate,
+  requireRole(UserRole.ADMIN),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const updated = await joinRequestService.pokeJoinRequest(req.params.id);
       const response: ApiResponse = { success: true, data: updated };
       res.json(response);
     } catch (err) {

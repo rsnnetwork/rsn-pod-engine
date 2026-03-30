@@ -566,6 +566,71 @@ export async function sendJoinRequestDeclineEmail(
   logger.warn({ to }, 'No email provider — decline email skipped');
 }
 
+// ─── Join Request Reminder Email (Nudge / Poke) ─────────────────────────────
+
+export async function sendJoinRequestReminderEmail(
+  to: string,
+  fullName: string,
+  loginUrl: string,
+  reminderCount: number
+): Promise<void> {
+  const isSecondReminder = reminderCount >= 2;
+  const subject = isSecondReminder
+    ? 'RSN — Your spot is still waiting'
+    : 'RSN — Don\'t forget to complete your signup!';
+
+  const mainMessage = isSecondReminder
+    ? 'We noticed you haven\'t completed your signup yet. Your approved spot at RSN is still reserved — but it won\'t last forever.'
+    : 'You were approved to join RSN! We\'d love to see you at our next event. Complete your signup in under a minute.';
+
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body style="margin:0;padding:0;background-color:#0a0a0f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
+        <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;padding:40px 32px;border:1px solid rgba(222,50,46,0.15);">
+          <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
+          <p style="color:#94a3b8;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
+
+          <p style="color:#e2e8f0;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
+            Hi ${fullName},
+          </p>
+          <p style="color:#cbd5e1;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
+            ${mainMessage}
+          </p>
+
+          <div style="text-align:center;margin:32px 0;">
+            <a href="${loginUrl}"
+               style="display:inline-block;background:#DE322E;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
+              Complete Your Signup
+            </a>
+          </div>
+
+          <p style="color:#94a3b8;font-size:14px;line-height:1.6;margin:0;">
+            Once you're in, join an event and meet five people in focused 8-minute conversations. No pitching. No selling. Just real talk.
+          </p>
+        </div>
+        <p style="color:#475569;font-size:12px;text-align:center;margin:24px 0 0 0;">
+          RSN — Fast, focused, and human.
+        </p>
+      </div>
+    </body>
+    </html>
+  `;
+
+  if (config.resendApiKey) {
+    const text = `Hi ${fullName},\n\n${mainMessage}\n\nComplete Your Signup: ${loginUrl}\n\nOnce you're in, join an event and meet five people in focused 8-minute conversations. No pitching. No selling. Just real talk.\n\nRSN — Fast, focused, and human.`;
+    await sendEmail({ to, subject, html, text });
+    return;
+  }
+
+  logger.warn({ to }, 'No email provider — reminder email skipped');
+}
+
 // ─── Generic Message Email (admin → applicant) ─────────────────────────────
 
 export async function sendGenericEmail(

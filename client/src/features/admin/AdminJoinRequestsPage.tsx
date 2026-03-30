@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Shield, ChevronLeft, ChevronRight, CheckCircle, XCircle, Clock, ExternalLink, MessageSquare, StickyNote, Send } from 'lucide-react';
+import { Shield, ChevronLeft, ChevronRight, CheckCircle, XCircle, Clock, ExternalLink, MessageSquare, StickyNote, Send, Bell, BellRing, UserCheck, UserX } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -21,7 +21,36 @@ interface JoinRequest {
   status: 'pending' | 'approved' | 'declined';
   reviewedAt: string | null;
   adminNotes: string | null;
+  lastRemindedAt: string | null;
+  reminderCount: number;
   createdAt: string;
+  hasActivated?: boolean;
+  daysSinceApproval?: number;
+}
+
+// ─── Helpers ───────────────────────────────────────────────────────────────
+
+/** Activation urgency tier for approved-but-not-activated requests. */
+function getActivationTier(days: number | undefined): { label: string; color: string; variant: 'success' | 'warning' | 'danger' | 'default' } {
+  if (days == null) return { label: '', color: '', variant: 'default' };
+  if (days < 3)  return { label: 'Fresh',       color: 'text-emerald-500', variant: 'success' };
+  if (days < 7)  return { label: 'Needs Nudge', color: 'text-amber-500',   variant: 'warning' };
+  if (days < 30) return { label: 'Going Cold',  color: 'text-red-500',     variant: 'danger' };
+  return { label: 'Gone Cold', color: 'text-gray-400', variant: 'default' };
+}
+
+function canPoke(r: JoinRequest): boolean {
+  if (r.status !== 'approved' || r.hasActivated) return false;
+  if (!r.lastRemindedAt) return true;
+  const hoursSince = (Date.now() - new Date(r.lastRemindedAt).getTime()) / (1000 * 60 * 60);
+  return hoursSince >= 24;
+}
+
+function formatTimeSince(dateStr: string): string {
+  const days = Math.floor((Date.now() - new Date(dateStr).getTime()) / (1000 * 60 * 60 * 24));
+  if (days === 0) return 'today';
+  if (days === 1) return '1 day ago';
+  return `${days} days ago`;
 }
 
 export default function AdminJoinRequestsPage() {
@@ -36,7 +65,7 @@ export default function AdminJoinRequestsPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [messageModal, setMessageModal] = useState<JoinRequest | null>(null);
   const [messageText, setMessageText] = useState('');
-  const [noteEdit, setNoteEdit] = useState<string | null>(null); // request ID being edited
+  const [noteEdit, setNoteEdit] = useState<string | null>(null);
   const [noteText, setNoteText] = useState('');
 
   const { data, isLoading } = useQuery({
@@ -72,6 +101,29 @@ export default function AdminJoinRequestsPage() {
       setSelected(new Set());
     },
     onError: () => addToast('Bulk action failed', 'error'),
+  });
+
+  const pokeMutation = useMutation({
+    mutationFn: (id: string) => api.post(`/join-requests/${id}/poke`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-join-requests'] });
+      addToast('Reminder sent!', 'success');
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.error?.message || 'Failed to send reminder';
+      addToast(msg, 'error');
+    },
+  });
+
+  const bulkPokeMutation = useMutation({
+    mutationFn: (requestIds: string[]) => api.post('/join-requests/bulk-poke', { requestIds }),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['admin-join-requests'] });
+      const d = res.data?.data;
+      addToast(`Poked ${d?.poked ?? 0}, skipped ${d?.skipped ?? 0}`, 'success');
+      setSelected(new Set());
+    },
+    onError: () => addToast('Bulk poke failed', 'error'),
   });
 
   const sendMessageMutation = useMutation({
@@ -116,14 +168,24 @@ export default function AdminJoinRequestsPage() {
 
   const requests: JoinRequest[] = data?.data ?? [];
   const meta = data?.meta;
-  const pendingReqs = requests.filter(r => r.status === 'pending');
+  const selectableReqs = statusFilter === 'pending'
+    ? requests.filter(r => r.status === 'pending')
+    : statusFilter === 'approved'
+      ? requests.filter(r => r.status === 'approved' && !r.hasActivated)
+      : [];
   const toggleAll = () => {
-    if (selected.size === pendingReqs.length) {
+    if (selected.size === selectableReqs.length) {
       setSelected(new Set());
     } else {
-      setSelected(new Set(pendingReqs.map(r => r.id)));
+      setSelected(new Set(selectableReqs.map(r => r.id)));
     }
   };
+
+  // Count how many approved-but-unactivated are pokeable
+  const pokeableSelected = Array.from(selected).filter(id => {
+    const r = requests.find(req => req.id === id);
+    return r && canPoke(r);
+  });
 
   const handleReview = () => {
     if (!reviewModal) return;
@@ -149,7 +211,7 @@ export default function AdminJoinRequestsPage() {
         {['pending', 'approved', 'declined', ''].map(s => (
           <button
             key={s}
-            onClick={() => { setStatusFilter(s); setPage(1); }}
+            onClick={() => { setStatusFilter(s); setPage(1); setSelected(new Set()); }}
             className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
               statusFilter === s
                 ? 'bg-rsn-red text-white'
@@ -166,12 +228,27 @@ export default function AdminJoinRequestsPage() {
         <div className="sticky top-0 z-10 flex items-center gap-3 bg-[#1a1a2e] text-white rounded-xl px-4 py-3 shadow-lg animate-fade-in">
           <span className="text-sm font-medium">{selected.size} selected</span>
           <div className="flex-1" />
-          <Button size="sm" variant="ghost" className="!text-emerald-300 !text-xs" onClick={() => { if (confirm(`Approve ${selected.size} request(s)?`)) bulkMutation.mutate({ action: 'approve' }); }}>
-            Bulk Approve
-          </Button>
-          <Button size="sm" variant="ghost" className="!text-red-300 !text-xs" onClick={() => { if (confirm(`Decline ${selected.size} request(s)?`)) bulkMutation.mutate({ action: 'decline' }); }}>
-            Bulk Decline
-          </Button>
+          {statusFilter === 'pending' && (
+            <>
+              <Button size="sm" variant="ghost" className="!text-emerald-300 !text-xs" onClick={() => { if (confirm(`Approve ${selected.size} request(s)?`)) bulkMutation.mutate({ action: 'approve' }); }}>
+                Bulk Approve
+              </Button>
+              <Button size="sm" variant="ghost" className="!text-red-300 !text-xs" onClick={() => { if (confirm(`Decline ${selected.size} request(s)?`)) bulkMutation.mutate({ action: 'decline' }); }}>
+                Bulk Decline
+              </Button>
+            </>
+          )}
+          {statusFilter === 'approved' && pokeableSelected.length > 0 && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="!text-amber-300 !text-xs"
+              isLoading={bulkPokeMutation.isPending}
+              onClick={() => { if (confirm(`Send reminder to ${pokeableSelected.length} people?`)) bulkPokeMutation.mutate(pokeableSelected); }}
+            >
+              <BellRing className="h-3.5 w-3.5 mr-1" /> Bulk Poke ({pokeableSelected.length})
+            </Button>
+          )}
           <Button size="sm" variant="ghost" className="!text-gray-300 !text-xs" onClick={() => setSelected(new Set())}>
             Clear
           </Button>
@@ -181,115 +258,160 @@ export default function AdminJoinRequestsPage() {
       {/* Request List */}
       {isLoading ? <PageLoader /> : (
         <div className="space-y-3 animate-fade-in-up">
-          {/* Select all for pending */}
-          {statusFilter === 'pending' && pendingReqs.length > 0 && (
+          {/* Select all */}
+          {selectableReqs.length > 0 && (
             <label className="flex items-center gap-2 px-4 py-1 text-xs text-gray-500 cursor-pointer">
               <input
                 type="checkbox"
-                checked={selected.size > 0 && selected.size === pendingReqs.length}
+                checked={selected.size > 0 && selected.size === selectableReqs.length}
                 onChange={toggleAll}
                 className="h-3.5 w-3.5 rounded border-gray-300 text-rsn-red focus:ring-rsn-red"
               />
-              Select all pending
+              Select all {statusFilter === 'approved' ? 'awaiting signup' : 'pending'}
             </label>
           )}
-          {requests.map((r) => (
-            <Card key={r.id} className={`!p-5 ${selected.has(r.id) ? 'ring-2 ring-rsn-red/30' : ''}`}>
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex items-start gap-3 flex-1 min-w-0">
-                  {r.status === 'pending' && (
-                    <input
-                      type="checkbox"
-                      checked={selected.has(r.id)}
-                      onChange={() => toggleSelect(r.id)}
-                      className="h-4 w-4 rounded border-gray-300 text-rsn-red focus:ring-rsn-red mt-0.5 shrink-0"
-                    />
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <p className="text-sm font-semibold text-gray-800">{r.fullName}</p>
-                      <Badge variant={r.status === 'pending' ? 'warning' : r.status === 'approved' ? 'success' : 'default'}>
-                        {r.status}
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-gray-400 mb-2">{r.email}</p>
-                    <p className="text-sm text-gray-600 line-clamp-2 mb-2">{r.reason}</p>
-                    <div className="flex items-center gap-4 text-xs text-gray-400">
-                      <a href={r.linkedinUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-blue-500 hover:text-blue-600">
-                        <ExternalLink className="h-3 w-3" /> LinkedIn
-                      </a>
-                      <span className="inline-flex items-center gap-1">
-                        <Clock className="h-3 w-3" /> {new Date(r.createdAt).toLocaleDateString()}
-                      </span>
-                    </div>
-                    {/* Admin notes display */}
-                    {r.adminNotes && noteEdit !== r.id && (
-                      <div className="mt-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-700">
-                        <span className="font-medium">Note:</span> {r.adminNotes}
-                      </div>
-                    )}
-                    {/* Inline note editor */}
-                    {noteEdit === r.id && (
-                      <div className="mt-2 flex gap-2">
-                        <textarea
-                          value={noteText}
-                          onChange={e => setNoteText(e.target.value)}
-                          rows={2}
-                          placeholder="Add internal note..."
-                          className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-rsn-red/20 resize-none"
-                        />
-                        <div className="flex flex-col gap-1">
-                          <Button size="sm" onClick={() => saveNoteMutation.mutate({ id: r.id, note: noteText })} isLoading={saveNoteMutation.isPending}>
-                            Save
-                          </Button>
-                          <Button size="sm" variant="ghost" onClick={() => setNoteEdit(null)}>
-                            Cancel
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
+          {requests.map((r) => {
+            const tier = r.status === 'approved' && !r.hasActivated ? getActivationTier(r.daysSinceApproval) : null;
+            const isSelectable = (statusFilter === 'pending' && r.status === 'pending')
+              || (statusFilter === 'approved' && r.status === 'approved' && !r.hasActivated);
 
-                <div className="flex flex-col items-end gap-2 shrink-0">
-                  {r.status === 'pending' && (
+            return (
+              <Card key={r.id} className={`!p-5 ${selected.has(r.id) ? 'ring-2 ring-rsn-red/30' : ''}`}>
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-start gap-3 flex-1 min-w-0">
+                    {isSelectable && (
+                      <input
+                        type="checkbox"
+                        checked={selected.has(r.id)}
+                        onChange={() => toggleSelect(r.id)}
+                        className="h-4 w-4 rounded border-gray-300 text-rsn-red focus:ring-rsn-red mt-0.5 shrink-0"
+                      />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <p className="text-sm font-semibold text-gray-800">{r.fullName}</p>
+                        {/* Status badge */}
+                        <Badge variant={r.status === 'pending' ? 'warning' : r.status === 'approved' ? 'success' : 'default'}>
+                          {r.status}
+                        </Badge>
+                        {/* Activation status for approved requests */}
+                        {r.status === 'approved' && r.hasActivated && (
+                          <Badge variant="info">
+                            <UserCheck className="h-3 w-3 mr-0.5" /> Signed Up
+                          </Badge>
+                        )}
+                        {tier && (
+                          <Badge variant={tier.variant}>
+                            <UserX className="h-3 w-3 mr-0.5" /> {tier.label}
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-400 mb-2">{r.email}</p>
+                      <p className="text-sm text-gray-600 line-clamp-2 mb-2">{r.reason}</p>
+                      <div className="flex items-center gap-4 text-xs text-gray-400 flex-wrap">
+                        <a href={r.linkedinUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-blue-500 hover:text-blue-600">
+                          <ExternalLink className="h-3 w-3" /> LinkedIn
+                        </a>
+                        <span className="inline-flex items-center gap-1">
+                          <Clock className="h-3 w-3" /> {new Date(r.createdAt).toLocaleDateString()}
+                        </span>
+                        {/* Awaiting signup duration */}
+                        {tier && r.daysSinceApproval != null && (
+                          <span className={`inline-flex items-center gap-1 font-medium ${tier.color}`}>
+                            <Bell className="h-3 w-3" /> Awaiting signup {r.daysSinceApproval} day{r.daysSinceApproval !== 1 ? 's' : ''}
+                          </span>
+                        )}
+                        {/* Poke history */}
+                        {r.reminderCount > 0 && (
+                          <span className="inline-flex items-center gap-1 text-gray-400">
+                            <BellRing className="h-3 w-3" /> Poked {r.reminderCount}x
+                            {r.lastRemindedAt && <> &middot; last {formatTimeSince(r.lastRemindedAt)}</>}
+                          </span>
+                        )}
+                      </div>
+                      {/* Admin notes display */}
+                      {r.adminNotes && noteEdit !== r.id && (
+                        <div className="mt-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-700">
+                          <span className="font-medium">Note:</span> {r.adminNotes}
+                        </div>
+                      )}
+                      {/* Inline note editor */}
+                      {noteEdit === r.id && (
+                        <div className="mt-2 flex gap-2">
+                          <textarea
+                            value={noteText}
+                            onChange={e => setNoteText(e.target.value)}
+                            rows={2}
+                            placeholder="Add internal note..."
+                            className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-rsn-red/20 resize-none"
+                          />
+                          <div className="flex flex-col gap-1">
+                            <Button size="sm" onClick={() => saveNoteMutation.mutate({ id: r.id, note: noteText })} isLoading={saveNoteMutation.isPending}>
+                              Save
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => setNoteEdit(null)}>
+                              Cancel
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col items-end gap-2 shrink-0">
+                    {r.status === 'pending' && (
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() => setReviewModal({ request: r, decision: 'approved' })}
+                          className="!bg-emerald-600 hover:!bg-emerald-700"
+                        >
+                          <CheckCircle className="h-4 w-4 mr-1" /> Approve
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => setReviewModal({ request: r, decision: 'declined' })}
+                        >
+                          <XCircle className="h-4 w-4 mr-1" /> Decline
+                        </Button>
+                      </div>
+                    )}
+                    {/* Poke button for approved-but-not-activated */}
+                    {r.status === 'approved' && !r.hasActivated && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!canPoke(r)}
+                        isLoading={pokeMutation.isPending}
+                        onClick={() => pokeMutation.mutate(r.id)}
+                        className={canPoke(r) ? '!border-amber-400 !text-amber-600 hover:!bg-amber-50' : ''}
+                        title={canPoke(r) ? 'Send signup reminder email' : 'Cooldown: wait 24h between pokes'}
+                      >
+                        <BellRing className="h-3.5 w-3.5 mr-1" /> Poke
+                      </Button>
+                    )}
                     <div className="flex items-center gap-2">
                       <Button
                         size="sm"
-                        onClick={() => setReviewModal({ request: r, decision: 'approved' })}
-                        className="!bg-emerald-600 hover:!bg-emerald-700"
+                        variant="outline"
+                        onClick={() => setMessageModal(r)}
                       >
-                        <CheckCircle className="h-4 w-4 mr-1" /> Approve
+                        <MessageSquare className="h-3.5 w-3.5 mr-1" /> Message
                       </Button>
                       <Button
                         size="sm"
-                        variant="secondary"
-                        onClick={() => setReviewModal({ request: r, decision: 'declined' })}
+                        variant="outline"
+                        onClick={() => { setNoteEdit(r.id); setNoteText(r.adminNotes || ''); }}
                       >
-                        <XCircle className="h-4 w-4 mr-1" /> Decline
+                        <StickyNote className="h-3.5 w-3.5 mr-1" /> Note
                       </Button>
                     </div>
-                  )}
-                  <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setMessageModal(r)}
-                    >
-                      <MessageSquare className="h-3.5 w-3.5 mr-1" /> Message
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => { setNoteEdit(r.id); setNoteText(r.adminNotes || ''); }}
-                    >
-                      <StickyNote className="h-3.5 w-3.5 mr-1" /> Note
-                    </Button>
                   </div>
                 </div>
-              </div>
-            </Card>
-          ))}
+              </Card>
+            );
+          })}
           {requests.length === 0 && (
             <Card>
               <p className="text-gray-400 text-sm text-center py-8">No {statusFilter || ''} requests found</p>
