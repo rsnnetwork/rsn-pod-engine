@@ -590,7 +590,7 @@ export async function getParticipantStatusCounts(sessionId: string): Promise<{
   let activeTotal = 0;
   for (const row of statusResult.rows) {
     counts[row.status] = parseInt(row.count, 10);
-    if (row.status !== 'removed' && row.status !== 'left') {
+    if (row.status !== 'removed') {
       activeTotal += parseInt(row.count, 10);
     }
   }
