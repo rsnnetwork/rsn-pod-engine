@@ -202,29 +202,48 @@ export default function RecapPage() {
         </div>
       )}
 
-      {/* Stats grid */}
+      {/* Stats grid — host sees event-level stats, participants see personal stats */}
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Card className="text-center py-4">
-            <Users className="h-5 w-5 text-rsn-red mx-auto mb-1" />
-            <p className="text-2xl font-bold text-[#1a1a2e]">{data?.connections.length || 0}</p>
-            <p className="text-xs text-gray-400">People Met</p>
-          </Card>
-          <Card className="text-center py-4">
-            <Heart className="h-5 w-5 text-rsn-red mx-auto mb-1" />
-            <p className="text-2xl font-bold text-[#1a1a2e]">{stats.mutualMeetAgainCount}</p>
-            <p className="text-xs text-gray-400">Mutual Matches</p>
-          </Card>
-          <Card className="text-center py-4">
-            <Star className="h-5 w-5 text-amber-400 mx-auto mb-1" />
-            <p className="text-2xl font-bold text-[#1a1a2e]">{stats.avgQualityScore.toFixed(1)}</p>
-            <p className="text-xs text-gray-400">Avg Rating</p>
-          </Card>
-          <Card className="text-center py-4">
-            <p className="text-2xl font-bold text-[#1a1a2e]">{stats.totalRatings}</p>
-            <p className="text-xs text-gray-400">Total Ratings</p>
-          </Card>
-        </div>
+        isHost ? (
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <Card className="text-center py-4">
+              <Star className="h-5 w-5 text-amber-400 mx-auto mb-1" />
+              <p className="text-2xl font-bold text-[#1a1a2e]">{stats.avgQualityScore.toFixed(1)}</p>
+              <p className="text-xs text-gray-400">Avg Rating</p>
+            </Card>
+            <Card className="text-center py-4">
+              <Heart className="h-5 w-5 text-rsn-red mx-auto mb-1" />
+              <p className="text-2xl font-bold text-[#1a1a2e]">{stats.mutualMeetAgainCount}</p>
+              <p className="text-xs text-gray-400">Mutual Matches (all)</p>
+            </Card>
+            <Card className="text-center py-4">
+              <p className="text-2xl font-bold text-[#1a1a2e]">{stats.totalRatings}</p>
+              <p className="text-xs text-gray-400">Total Ratings</p>
+            </Card>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Card className="text-center py-4">
+              <Users className="h-5 w-5 text-rsn-red mx-auto mb-1" />
+              <p className="text-2xl font-bold text-[#1a1a2e]">{data?.connections.length || 0}</p>
+              <p className="text-xs text-gray-400">People Met</p>
+            </Card>
+            <Card className="text-center py-4">
+              <Heart className="h-5 w-5 text-rsn-red mx-auto mb-1" />
+              <p className="text-2xl font-bold text-[#1a1a2e]">{stats.mutualMeetAgainCount}</p>
+              <p className="text-xs text-gray-400">Mutual Matches</p>
+            </Card>
+            <Card className="text-center py-4">
+              <Star className="h-5 w-5 text-amber-400 mx-auto mb-1" />
+              <p className="text-2xl font-bold text-[#1a1a2e]">{stats.avgQualityScore.toFixed(1)}</p>
+              <p className="text-xs text-gray-400">Avg Rating</p>
+            </Card>
+            <Card className="text-center py-4">
+              <p className="text-2xl font-bold text-[#1a1a2e]">{stats.totalRatings}</p>
+              <p className="text-xs text-gray-400">Total Ratings</p>
+            </Card>
+          </div>
+        )
       )}
 
       {/* Mutual connections */}

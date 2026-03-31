@@ -314,7 +314,7 @@ export default function SessionDetailPage() {
               <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400 text-sm">
                 <CheckCircle className="h-4 w-4" /> Registered
               </div>
-              {session.status === 'scheduled' && (
+              {(session.status === 'scheduled' || session.status === 'lobby_open') && (
                 <Button variant="ghost" onClick={() => unregisterMutation.mutate()} isLoading={unregisterMutation.isPending}>
                   <UserMinus className="h-4 w-4 mr-2" /> Unregister
                 </Button>
@@ -396,7 +396,7 @@ export default function SessionDetailPage() {
       {/* Participants */}
       <div className="animate-fade-in-up stagger-2">
         <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
-          <Users className="h-5 w-5 text-rsn-red" /> Participants ({(participants || []).filter((p: any) => p.status !== 'removed').length})
+          <Users className="h-5 w-5 text-rsn-red" /> Participants ({(participants || []).filter((p: any) => p.status !== 'removed' && p.userId !== session.hostUserId).length})
         </h2>
 
         {/* Status summary row (host/admin only) */}
@@ -506,10 +506,10 @@ export default function SessionDetailPage() {
         ) : (
           <div className="grid gap-2">
             {(participants || [])
-              .filter((p: any) => p.status !== 'removed')
+              .filter((p: any) => p.status !== 'removed' && p.userId !== session.hostUserId)
               .filter((p: any) => statusFilter === null || p.status === statusFilter)
               .map((p: any) => {
-              const pIsHost = p.userId === session.hostUserId;
+              const pIsHost = false;
               const statusLabel = pIsHost ? 'Host'
                 : (p.status === 'registered' || p.status === 'left' || p.status === 'checked_in') ? 'Member'
                 : p.status === 'in_lobby' ? 'In Main Room'

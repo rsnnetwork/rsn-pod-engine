@@ -1457,9 +1457,6 @@ async function handleHostConfirmRound(
       roundNumber,
     });
 
-    // Deliberate 2.5s anticipation delay before actually moving people
-    await new Promise(resolve => setTimeout(resolve, 2500));
-
     logger.info({ sessionId: data.sessionId, roundNumber, roomCount }, 'Host confirmed round — starting');
     await transitionToRound(data.sessionId, roundNumber);
   } catch (err: any) {

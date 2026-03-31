@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import Modal from '@/components/ui/Modal';
 import Input from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
@@ -57,6 +58,7 @@ const DEFAULT_VALUES: PodForm = {
 
 export default function CreatePodModal({ open, onClose, initialValues }: Props) {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const { addToast } = useToastStore();
   const { register, handleSubmit, reset, formState: { errors } } = useForm<PodForm>({
     defaultValues: DEFAULT_VALUES,
@@ -74,11 +76,15 @@ export default function CreatePodModal({ open, onClose, initialValues }: Props) 
       ...data,
       maxMembers: data.maxMembers === '' ? undefined : Number(data.maxMembers),
     }),
-    onSuccess: () => {
+    onSuccess: (res) => {
+      const newPodId = res.data?.data?.id;
       qc.invalidateQueries({ queryKey: ['my-pods'] });
-      addToast(initialValues ? 'Pod duplicated! Edit it below.' : 'Pod created!', 'success');
+      addToast(initialValues ? 'Pod duplicated!' : 'Pod created!', 'success');
       reset(DEFAULT_VALUES);
       onClose();
+      if (newPodId && !initialValues) {
+        navigate(`/pods/${newPodId}`);
+      }
     },
     onError: () => addToast('Failed to create pod', 'error'),
   });

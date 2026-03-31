@@ -95,13 +95,13 @@ export async function sendMagicLinkEmail(
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin:0;padding:0;background-color:#0a0a0f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;padding:40px 32px;border:1px solid rgba(222,50,46,0.15);">
+        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
           <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
-          <p style="color:#94a3b8;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
+          <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
           
-          <p style="color:#e2e8f0;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
             Click the button below to sign in to your account. This link expires in ${config.magicLinkExpiryMinutes} minutes.
           </p>
           
@@ -165,31 +165,31 @@ export async function sendSessionRecapEmail(
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin:0;padding:0;background-color:#0a0a0f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;padding:40px 32px;border:1px solid rgba(222,50,46,0.15);">
+        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
           <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
-          <p style="color:#94a3b8;font-size:14px;margin:0 0 32px 0;text-align:center;">Event Recap</p>
+          <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Event Recap</p>
 
-          <p style="color:#e2e8f0;font-size:16px;line-height:1.6;margin:0 0 8px 0;">
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">
             Hey ${displayName},
           </p>
-          <p style="color:#e2e8f0;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
             Thanks for joining <strong>${data.sessionTitle}</strong>! Here's your event recap:
           </p>
 
           <div style="display:flex;gap:12px;margin:0 0 24px 0;">
             <div style="flex:1;text-align:center;background:rgba(222,50,46,0.08);border-radius:10px;padding:16px 8px;">
               <p style="color:#DE322E;font-size:24px;font-weight:700;margin:0;">${data.peopleMet}</p>
-              <p style="color:#94a3b8;font-size:12px;margin:4px 0 0 0;">People Met</p>
+              <p style="color:#6b7280;font-size:12px;margin:4px 0 0 0;">People Met</p>
             </div>
             <div style="flex:1;text-align:center;background:rgba(16,185,129,0.1);border-radius:10px;padding:16px 8px;">
               <p style="color:#10b981;font-size:24px;font-weight:700;margin:0;">${data.mutualConnections}</p>
-              <p style="color:#94a3b8;font-size:12px;margin:4px 0 0 0;">Mutual Matches</p>
+              <p style="color:#6b7280;font-size:12px;margin:4px 0 0 0;">Mutual Matches</p>
             </div>
             <div style="flex:1;text-align:center;background:rgba(245,158,11,0.1);border-radius:10px;padding:16px 8px;">
               <p style="color:#f59e0b;font-size:24px;font-weight:700;margin:0;">${data.avgRating.toFixed(1)}</p>
-              <p style="color:#94a3b8;font-size:12px;margin:4px 0 0 0;">Avg Rating</p>
+              <p style="color:#6b7280;font-size:12px;margin:4px 0 0 0;">Avg Rating</p>
             </div>
           </div>
 
@@ -243,16 +243,16 @@ export async function sendHostRecapEmail(
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin:0;padding:0;background-color:#0a0a0f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;padding:40px 32px;border:1px solid rgba(222,50,46,0.15);">
+        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
           <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
-          <p style="color:#94a3b8;font-size:14px;margin:0 0 32px 0;text-align:center;">Host Event Recap</p>
+          <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Host Event Recap</p>
 
-          <p style="color:#e2e8f0;font-size:16px;line-height:1.6;margin:0 0 8px 0;">
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">
             Hey ${displayName},
           </p>
-          <p style="color:#e2e8f0;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
             Here's the full recap for <strong>${data.sessionTitle}</strong>:
           </p>
 
@@ -260,17 +260,17 @@ export async function sendHostRecapEmail(
             <tr>
               <td style="text-align:center;background:rgba(222,50,46,0.08);border-radius:10px;padding:16px 8px;width:33%;">
                 <p style="color:#DE322E;font-size:24px;font-weight:700;margin:0;">${data.totalParticipants}</p>
-                <p style="color:#94a3b8;font-size:11px;margin:4px 0 0 0;">Participants</p>
+                <p style="color:#6b7280;font-size:11px;margin:4px 0 0 0;">Participants</p>
               </td>
               <td style="width:8px;"></td>
               <td style="text-align:center;background:rgba(222,50,46,0.08);border-radius:10px;padding:16px 8px;width:33%;">
                 <p style="color:#DE322E;font-size:24px;font-weight:700;margin:0;">${data.totalRounds}</p>
-                <p style="color:#94a3b8;font-size:11px;margin:4px 0 0 0;">Rounds</p>
+                <p style="color:#6b7280;font-size:11px;margin:4px 0 0 0;">Rounds</p>
               </td>
               <td style="width:8px;"></td>
               <td style="text-align:center;background:rgba(222,50,46,0.08);border-radius:10px;padding:16px 8px;width:33%;">
                 <p style="color:#DE322E;font-size:24px;font-weight:700;margin:0;">${data.totalMatches}</p>
-                <p style="color:#94a3b8;font-size:11px;margin:4px 0 0 0;">Matches</p>
+                <p style="color:#6b7280;font-size:11px;margin:4px 0 0 0;">Matches</p>
               </td>
             </tr>
           </table>
@@ -279,12 +279,12 @@ export async function sendHostRecapEmail(
             <tr>
               <td style="text-align:center;background:rgba(245,158,11,0.1);border-radius:10px;padding:16px 8px;width:50%;">
                 <p style="color:#f59e0b;font-size:24px;font-weight:700;margin:0;">${data.avgEventRating > 0 ? data.avgEventRating.toFixed(1) : '—'}</p>
-                <p style="color:#94a3b8;font-size:11px;margin:4px 0 0 0;">Avg Rating</p>
+                <p style="color:#6b7280;font-size:11px;margin:4px 0 0 0;">Avg Rating</p>
               </td>
               <td style="width:8px;"></td>
               <td style="text-align:center;background:rgba(16,185,129,0.1);border-radius:10px;padding:16px 8px;width:50%;">
                 <p style="color:#10b981;font-size:24px;font-weight:700;margin:0;">${data.mutualConnectionsCount}</p>
-                <p style="color:#94a3b8;font-size:11px;margin:4px 0 0 0;">Mutual Connections</p>
+                <p style="color:#6b7280;font-size:11px;margin:4px 0 0 0;">Mutual Connections</p>
               </td>
             </tr>
           </table>
@@ -347,13 +347,13 @@ export async function sendInviteEmail(
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin:0;padding:0;background-color:#0a0a0f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;padding:40px 32px;border:1px solid rgba(222,50,46,0.15);">
+        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
           <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
-          <p style="color:#94a3b8;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
+          <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
 
-          <p style="color:#e2e8f0;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
             <strong>${data.inviterName}</strong> has invited you to join ${typeLabel}${targetLine} on RSN.
           </p>
 
@@ -421,22 +421,22 @@ export async function sendJoinRequestConfirmationEmail(
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin:0;padding:0;background-color:#0a0a0f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;padding:40px 32px;border:1px solid rgba(222,50,46,0.15);">
+        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
           <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
-          <p style="color:#94a3b8;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
+          <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
 
-          <p style="color:#e2e8f0;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
             Hi ${fullName},
           </p>
-          <p style="color:#cbd5e1;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
+          <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
             Thank you for requesting to join RSN. We've received your application and our team will review it shortly.
           </p>
-          <p style="color:#cbd5e1;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
+          <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
             RSN is an invite-only community for founders, leaders, and company owners who value honesty over hype. We review every application carefully to maintain the quality of our community.
           </p>
-          <p style="color:#cbd5e1;font-size:16px;line-height:1.6;margin:0 0 0 0;">
+          <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 0 0;">
             You'll hear from us within 1-3 business days.
           </p>
         </div>
@@ -472,19 +472,19 @@ export async function sendJoinRequestWelcomeEmail(
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin:0;padding:0;background-color:#0a0a0f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;padding:40px 32px;border:1px solid rgba(222,50,46,0.15);">
+        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
           <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
-          <p style="color:#94a3b8;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
+          <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
 
-          <p style="color:#e2e8f0;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
             Hi ${fullName},
           </p>
-          <p style="color:#cbd5e1;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
-            Great news — your request to join RSN has been <strong style="color:#e2e8f0;">approved</strong>!
+          <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
+            Great news — your request to join RSN has been <strong style="color:#1a1a2e;">approved</strong>!
           </p>
-          <p style="color:#cbd5e1;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
+          <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
             You're now part of a community of founders, leaders, and company owners who connect with honesty and purpose. No pitching. No selling. Just real conversations.
           </p>
 
@@ -495,7 +495,7 @@ export async function sendJoinRequestWelcomeEmail(
             </a>
           </div>
 
-          <p style="color:#94a3b8;font-size:14px;line-height:1.6;margin:0;">
+          <p style="color:#6b7280;font-size:14px;line-height:1.6;margin:0;">
             Your first step: sign up for an event and meet five people in focused 8-minute conversations.
           </p>
         </div>
@@ -530,22 +530,22 @@ export async function sendJoinRequestDeclineEmail(
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin:0;padding:0;background-color:#0a0a0f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;padding:40px 32px;border:1px solid rgba(222,50,46,0.15);">
+        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
           <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
-          <p style="color:#94a3b8;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
+          <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
 
-          <p style="color:#e2e8f0;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
             Hi ${fullName},
           </p>
-          <p style="color:#cbd5e1;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
+          <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
             Thank you for your interest in RSN. After reviewing your application, we're unable to offer access at this time.
           </p>
-          <p style="color:#cbd5e1;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
+          <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
             RSN is a curated community, and we carefully consider each application. This decision is based on our current community composition and needs.
           </p>
-          <p style="color:#cbd5e1;font-size:16px;line-height:1.6;margin:0 0 0 0;">
+          <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 0 0;">
             If your circumstances change or you receive an invite from a current member, you're welcome to reapply.
           </p>
         </div>
@@ -590,16 +590,16 @@ export async function sendJoinRequestReminderEmail(
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin:0;padding:0;background-color:#0a0a0f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;padding:40px 32px;border:1px solid rgba(222,50,46,0.15);">
+        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
           <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
-          <p style="color:#94a3b8;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
+          <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
 
-          <p style="color:#e2e8f0;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
             Hi ${fullName},
           </p>
-          <p style="color:#cbd5e1;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
+          <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
             ${mainMessage}
           </p>
 
@@ -610,7 +610,7 @@ export async function sendJoinRequestReminderEmail(
             </a>
           </div>
 
-          <p style="color:#94a3b8;font-size:14px;line-height:1.6;margin:0;">
+          <p style="color:#6b7280;font-size:14px;line-height:1.6;margin:0;">
             Once you're in, join an event and meet five people in focused 8-minute conversations. No pitching. No selling. Just real talk.
           </p>
         </div>
@@ -646,15 +646,15 @@ export async function sendGenericEmail(
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin:0;padding:0;background-color:#0a0a0f;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:16px;padding:40px 32px;border:1px solid rgba(222,50,46,0.15);">
+        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
           <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
-          <p style="color:#94a3b8;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
-          <p style="color:#e2e8f0;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
+          <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
             Hi ${recipientName},
           </p>
-          <p style="color:#cbd5e1;font-size:16px;line-height:1.6;margin:0 0 0 0;white-space:pre-wrap;">${data.body}</p>
+          <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 0 0;white-space:pre-wrap;">${data.body}</p>
         </div>
         <p style="color:#475569;font-size:12px;text-align:center;margin:24px 0 0 0;">
           RSN — Fast, focused, and human.

@@ -18,8 +18,6 @@ interface SessionForm {
   eventType: string;
   numberOfRounds: number;
   roundDurationSeconds: number;
-  lobbyDurationSeconds: number;
-  transitionDurationSeconds: number;
   maxParticipants: number;
   timerVisibility: string;
   matchingTemplateId: string;
@@ -73,8 +71,6 @@ export default function CreateSessionPage() {
       eventType: 'speed_networking',
       numberOfRounds: 5,
       roundDurationSeconds: 480,
-      lobbyDurationSeconds: 480,
-      transitionDurationSeconds: 30,
       maxParticipants: 500,
       timerVisibility: 'always_visible',
       matchingTemplateId: '',
@@ -106,8 +102,6 @@ export default function CreateSessionPage() {
           eventType: data.eventType,
           numberOfRounds: data.numberOfRounds,
           roundDurationSeconds: data.roundDurationSeconds,
-          lobbyDurationSeconds: data.lobbyDurationSeconds,
-          transitionDurationSeconds: data.transitionDurationSeconds,
           maxParticipants: data.maxParticipants,
           timerVisibility: data.timerVisibility,
           ...(data.matchingTemplateId && { matchingTemplateId: data.matchingTemplateId }),
@@ -200,11 +194,6 @@ export default function CreateSessionPage() {
               <label className="block text-sm font-medium text-gray-600 mb-1.5">Round Duration</label>
               <input type="number" {...register('roundDurationSeconds', { valueAsNumber: true, min: 60, max: 3600 })} className={selectClass} />
               <p className="text-xs text-gray-400 mt-1">60 – 3600 seconds (default 8 min)</p>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-600 mb-1.5">Break Between Rounds</label>
-              <input type="number" {...register('transitionDurationSeconds', { valueAsNumber: true, min: 10, max: 120 })} className={selectClass} />
-              <p className="text-xs text-gray-400 mt-1">Seconds participants wait between rounds (10 – 120)</p>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-600 mb-1.5">Timer Visibility</label>

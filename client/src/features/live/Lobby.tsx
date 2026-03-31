@@ -207,8 +207,25 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
   }, [localParticipant, micEnabled]);
 
   const toggleCam = useCallback(async () => {
-    await localParticipant.setCameraEnabled(!camEnabled);
-    setCamEnabled(!camEnabled);
+    try {
+      const target = !camEnabled;
+      await localParticipant.setCameraEnabled(target);
+      setCamEnabled(target);
+    } catch (err) {
+      console.error('Camera toggle failed, retrying:', err);
+      try {
+        // Retry: unpublish all video tracks then re-enable
+        for (const pub of localParticipant.videoTrackPublications.values()) {
+          if (pub.track) await localParticipant.unpublishTrack(pub.track);
+        }
+        if (!camEnabled) {
+          await localParticipant.setCameraEnabled(true);
+          setCamEnabled(true);
+        } else {
+          setCamEnabled(false);
+        }
+      } catch { setCamEnabled(camEnabled); }
+    }
   }, [localParticipant, camEnabled]);
 
   const handleMuteAll = useCallback(() => {

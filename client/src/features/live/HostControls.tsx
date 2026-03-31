@@ -21,7 +21,11 @@ export default function HostControls({ sessionId }: Props) {
   const isInRound = phase === 'matched' || phase === 'rating';
 
   const startSession = () => socket?.emit('host:start_session', { sessionId });
-  const endSession = () => {
+  const endCurrentRound = () => {
+    if (!confirm('End this round early? Participants will move to the rating screen.')) return;
+    socket?.emit('host:end_session', { sessionId });
+  };
+  const endEvent = () => {
     const msg = isInRound
       ? 'A round is currently active. Ending the event will cut all conversations short. Are you sure?'
       : 'Are you sure you want to end this event? All participants will be disconnected.';
@@ -116,19 +120,43 @@ export default function HostControls({ sessionId }: Props) {
 
   if (isSessionEnding) {
     return (
-      <div className="border-t border-white/10 bg-[#292a2d] p-4">
-        <div className="max-w-4xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-            <p className="text-sm text-gray-300 font-medium">All rounds complete — end the event when ready</p>
+      <div className="border-t border-white/10 bg-[#292a2d]">
+        {/* Announcement input — available in wrapping-up state */}
+        {showBroadcast && (
+          <div className="border-b border-white/10 bg-amber-500/10 px-4 py-3">
+            <p className="text-xs font-semibold text-amber-400 mb-2 max-w-4xl mx-auto">Announcement — visible as a banner to all participants</p>
+            <div className="max-w-4xl mx-auto flex gap-2">
+              <input
+                type="text"
+                value={broadcastMsg}
+                onChange={e => setBroadcastMsg(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && sendBroadcast()}
+                placeholder="Type an announcement..."
+                style={{ color: '#000000' }}
+                className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                autoFocus
+              />
+              <Button size="sm" onClick={sendBroadcast} disabled={!broadcastMsg.trim()}>Send</Button>
+              <Button size="sm" variant="ghost" onClick={() => setShowBroadcast(false)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <Button size="sm" variant="ghost" onClick={() => setShowBroadcast(!showBroadcast)} title="Send announcement to all">
-              <MessageSquare className="h-4 w-4" />
-            </Button>
-            <Button size="sm" variant="danger" onClick={() => socket?.emit('host:end_session', { sessionId })}>
-              <Square className="h-4 w-4 mr-1" /> End Event
-            </Button>
+        )}
+        <div className="p-4">
+          <div className="max-w-4xl mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+              <p className="text-sm text-gray-300 font-medium">All rounds complete — end the event when ready</p>
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setShowBroadcast(!showBroadcast)} title="Send announcement to all">
+                <MessageSquare className="h-4 w-4" />
+              </Button>
+              <Button size="sm" variant="danger" onClick={() => socket?.emit('host:end_session', { sessionId })}>
+                <Square className="h-4 w-4 mr-1" /> End Event
+              </Button>
+            </div>
           </div>
         </div>
       </div>
@@ -372,9 +400,9 @@ export default function HostControls({ sessionId }: Props) {
               </Button>
             )}
 
-            {/* Skip to next round (end current round early) */}
+            {/* End current round early — moves to rating, NOT end event */}
             {isInRound && phase === 'matched' && (
-              <Button size="sm" variant="secondary" onClick={endSession} title="End round early">
+              <Button size="sm" variant="secondary" onClick={endCurrentRound} title="End round early — goes to rating">
                 <SkipForward className="h-4 w-4 mr-1" /> End Round
               </Button>
             )}
@@ -395,8 +423,8 @@ export default function HostControls({ sessionId }: Props) {
               </Button>
             )}
 
-            <Button size="sm" variant="danger" onClick={endSession}>
-              <Square className="h-4 w-4 mr-1" /> End
+            <Button size="sm" variant="danger" onClick={endEvent}>
+              <Square className="h-4 w-4 mr-1" /> End Event
             </Button>
           </div>
         </div>

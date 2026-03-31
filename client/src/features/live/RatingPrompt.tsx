@@ -102,12 +102,12 @@ function RatingConfirmation({ meetAgain, isLastPartner, isLastRound, onContinue 
   onContinue: () => void;
 }) {
   useEffect(() => {
-    const timer = setTimeout(onContinue, meetAgain ? 2500 : 1800);
+    const timer = setTimeout(onContinue, 800);
     return () => clearTimeout(timer);
-  }, [onContinue, meetAgain]);
+  }, [onContinue]);
 
   return (
-    <div className="max-w-md w-full text-center animate-fade-in-up bg-[#292a2d] rounded-2xl p-8">
+    <div className="max-w-md w-full text-center animate-fade-in-up bg-[#292a2d] rounded-2xl p-8 cursor-pointer" onClick={onContinue}>
       <div className="inline-flex items-center justify-center h-14 w-14 rounded-full bg-emerald-500/20 text-emerald-400 mb-3">
         <CheckCircle className="h-7 w-7" />
       </div>
@@ -123,7 +123,7 @@ function RatingConfirmation({ meetAgain, isLastPartner, isLastRound, onContinue 
       {isLastPartner && isLastRound && (
         <div className="flex items-center justify-center gap-2 mt-3 text-sm text-gray-400">
           <Loader2 className="h-4 w-4 animate-spin" />
-          <span>Last round complete! Event wrapping up...</span>
+          <span>Last round complete! Returning to main room...</span>
         </div>
       )}
     </div>

@@ -3,6 +3,7 @@ import { Bell, Check, CheckCircle, X, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useToastStore } from '@/stores/toastStore';
+import { useAuthStore } from '@/stores/authStore';
 import { getSocket } from '@/lib/socket';
 import api from '@/lib/api';
 
@@ -38,6 +39,7 @@ function getDestination(n: Notification): string | null {
 }
 
 export default function NotificationBell() {
+  const { user } = useAuthStore();
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -130,10 +132,17 @@ export default function NotificationBell() {
       setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, inviteStatus: 'accepted', isRead: true } : x));
       invalidateInviteCaches();
       setOpen(false);
-      // Navigate to the pod/session
+      // Navigate to the pod/session — check profile completeness first
       const data = res.data?.data;
       const dest = data?.sessionId ? `/sessions/${data.sessionId}` : data?.podId ? `/pods/${data.podId}` : null;
-      if (dest) navigate(dest);
+      if (dest) {
+        const profileIncomplete = !user?.displayName || !user?.jobTitle;
+        if (profileIncomplete) {
+          navigate(`/onboarding?redirect=${encodeURIComponent(dest)}`);
+        } else {
+          navigate(dest);
+        }
+      }
     } catch (err: any) {
       const errCode = err?.response?.data?.error?.code;
       // Already registered/member = treat as success, navigate to event

@@ -531,9 +531,16 @@ export async function generateLiveKitToken(sessionId: string, userId: string, ro
   }
 
   try {
+    // Fetch fresh display name from DB for LiveKit participant name
+    const nameResult = await query<{ display_name: string }>(
+      `SELECT display_name FROM users WHERE id = $1`, [userId]
+    );
+    const displayName = nameResult.rows[0]?.display_name || 'User';
+
     // Generate LiveKit access token
     const at = new AccessToken(config.livekitApiKey, config.livekitApiSecret, {
       identity: userId,
+      name: displayName,
       ttl: 3600,
     });
 

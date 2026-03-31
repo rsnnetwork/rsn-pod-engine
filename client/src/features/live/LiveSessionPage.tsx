@@ -26,17 +26,22 @@ export default function LiveSessionPage() {
   const mediaRequestedRef = useRef(false);
   const [participantListOpen, setParticipantListOpen] = useState(false);
 
+  const [mediaError, setMediaError] = useState(false);
+
   // Request media permissions once per event entry (not per room transition)
   useEffect(() => {
     if (mediaRequestedRef.current) return;
     mediaRequestedRef.current = true;
-    navigator.mediaDevices?.getUserMedia({ video: true, audio: true })
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setMediaError(true);
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({ video: true, audio: true })
       .then(stream => {
-        // Stop tracks immediately — we just needed the permission grant
         stream.getTracks().forEach(t => t.stop());
       })
       .catch(() => {
-        // User denied or no device — LiveKit will handle gracefully
+        setMediaError(true);
       });
   }, []);
 
@@ -148,6 +153,15 @@ export default function LiveSessionPage() {
       )}
 
       {/* Error banner — dismissable */}
+      {mediaError && (
+        <div className="bg-amber-500/15 px-4 py-2 flex items-center justify-center gap-2">
+          <AlertCircle className="h-4 w-4 text-amber-400" />
+          <p className="text-sm text-amber-300">Camera/microphone access denied. Check browser permissions to enable video.</p>
+          <button onClick={() => setMediaError(false)} className="ml-2 text-amber-400 hover:text-amber-300">
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      )}
       {sessionError && (
         <div className="bg-red-500/15 px-4 py-2 flex items-center justify-center gap-2">
           <AlertCircle className="h-4 w-4 text-red-400" />
