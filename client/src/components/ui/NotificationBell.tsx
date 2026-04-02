@@ -256,7 +256,7 @@ export default function NotificationBell() {
   };
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative z-50">
       <button ref={btnRef} onClick={handleOpen} className="relative p-2 text-gray-500 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors">
         <Bell className="h-5 w-5" />
         {unreadCount > 0 && (
@@ -267,7 +267,14 @@ export default function NotificationBell() {
       </button>
 
       {open && (
-        <div className="fixed w-80 bg-white rounded-xl shadow-xl border border-gray-200 z-[9999] overflow-hidden" style={dropPos ? { top: dropPos.top, left: dropPos.left } : undefined}>
+        <>
+          {/* Mobile backdrop — tappable to close */}
+          <div className="fixed inset-0 z-[9998] sm:hidden" onClick={() => setOpen(false)} />
+          <div className="fixed w-[calc(100vw-16px)] sm:w-80 max-h-[80vh] bg-white rounded-xl shadow-xl border border-gray-200 z-[9999] overflow-hidden"
+            style={dropPos ? {
+              top: dropPos.top,
+              left: typeof window !== 'undefined' && window.innerWidth < 640 ? 8 : dropPos.left,
+            } : undefined}>
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
             <h3 className="text-sm font-semibold text-gray-700">Notifications</h3>
@@ -343,6 +350,7 @@ export default function NotificationBell() {
             })}
           </div>
         </div>
+        </>
       )}
     </div>
   );

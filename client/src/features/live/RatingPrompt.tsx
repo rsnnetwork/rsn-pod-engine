@@ -175,34 +175,15 @@ export default function RatingPrompt(_props: Props) {
     );
   }
 
-  if (allDone) {
-    return (
-      <div className="flex-1 flex items-center justify-center p-4 bg-[#202124]">
-        <div className="max-w-md w-full text-center animate-fade-in-up bg-[#292a2d] rounded-2xl p-8">
-          <div className="inline-flex items-center justify-center h-16 w-16 rounded-full bg-emerald-500/20 text-emerald-400 mb-4">
-            <CheckCircle className="h-8 w-8" />
-          </div>
-          <h2 className="text-xl font-bold text-white mb-2">
-            {partners.length > 1 ? 'All Ratings Submitted!' : 'Rating Submitted!'}
-          </h2>
-          <div className="flex items-center justify-center gap-2">
-            <Loader2 className="h-4 w-4 text-gray-400 animate-spin" />
-            <p className="text-gray-400">
-              {isLastRound
-                ? 'Event wrapping up — preparing your recap...'
-                : 'Waiting for the next round to begin...'}
-            </p>
-          </div>
-          {timerSeconds > 0 && (
-            <div className="flex items-center justify-center gap-1.5 mt-3 text-sm text-gray-500">
-              <Clock className="h-3.5 w-3.5" />
-              <span>{timerSeconds}s remaining</span>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
+  // All partners rated — return to lobby immediately, don't wait for rating window timer
+  useEffect(() => {
+    if (allDone && !hasRedirected.current) {
+      hasRedirected.current = true;
+      setPhase('lobby');
+    }
+  }, [allDone, setPhase]);
+
+  if (allDone) return null;
 
   const partner = partners[currentPartnerIdx];
 

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Mail, Copy, Check, Users, Calendar, Globe, Trash2, Send, Link, Search, Inbox, UserCheck, X } from 'lucide-react';
@@ -20,6 +21,7 @@ const TYPE_CONFIG: Record<string, { label: string; icon: typeof Users; variant: 
 };
 
 export default function InvitesPage() {
+  const navigate = useNavigate();
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const { user } = useAuthStore();
   const { addToast } = useToastStore();
@@ -79,13 +81,28 @@ export default function InvitesPage() {
 
   const acceptInviteMutation = useMutation({
     mutationFn: (code: string) => api.post(`/invites/${code}/accept`),
-    onSuccess: () => {
+    onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['received-invites'] });
       qc.invalidateQueries({ queryKey: ['my-pods'] });
       qc.invalidateQueries({ queryKey: ['my-sessions'] });
       addToast('Invite accepted!', 'success');
+      const data = res.data?.data;
+      const dest = data?.sessionId ? `/sessions/${data.sessionId}` : data?.podId ? `/pods/${data.podId}` : null;
+      if (dest) navigate(dest);
     },
-    onError: (err: any) => addToast(err?.response?.data?.error?.message || 'Failed to accept invite', 'error'),
+    onError: (err: any) => {
+      const code = err?.response?.data?.error?.code;
+      // Already a member — navigate them there with a friendly message
+      if (code === 'POD_MEMBER_EXISTS' || code === 'SESSION_ALREADY_REGISTERED') {
+        qc.invalidateQueries({ queryKey: ['received-invites'] });
+        addToast("You're already in! Taking you there now.", 'success');
+        const data = err?.response?.data?.data;
+        const dest = data?.sessionId ? `/sessions/${data.sessionId}` : data?.podId ? `/pods/${data.podId}` : null;
+        if (dest) navigate(dest);
+        return;
+      }
+      addToast(err?.response?.data?.error?.message || 'Failed to accept invite', 'error');
+    },
   });
 
   const declineInviteMutation = useMutation({
@@ -209,6 +226,61 @@ export default function InvitesPage() {
       <div className="animate-fade-in">
         <h1 className="text-2xl font-bold text-[#1a1a2e]">Invites</h1>
       </div>
+
+      {/* Received Invites — shown FIRST so users see them immediately */}
+      {receivedInvites && receivedInvites.length > 0 && (
+        <div className="animate-fade-in-up">
+          <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
+            <Inbox className="h-5 w-5 text-rsn-red" /> Pending Invites for You ({receivedInvites.length})
+          </h2>
+          <div className="grid gap-3">
+            {receivedInvites.map((inv: any) => {
+              const typeConf = TYPE_CONFIG[inv.type] || TYPE_CONFIG.platform;
+              const TypeIcon = typeConf.icon;
+              const targetName = inv.podName || inv.sessionTitle || 'RSN Platform';
+              return (
+                <Card key={inv.id} className="border-rsn-red-200 bg-rsn-red-light/30">
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Badge variant={typeConf.variant} className="text-xs flex items-center gap-1">
+                          <TypeIcon className="h-3 w-3" /> {typeConf.label}
+                        </Badge>
+                        <span className="text-sm font-semibold text-[#1a1a2e]">{targetName}</span>
+                      </div>
+                      <p className="text-sm text-gray-500">
+                        From <span className="font-medium text-gray-700">{inv.inviterName || 'Someone'}</span>
+                      </p>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        Sent {new Date(inv.createdAt).toLocaleDateString()}
+                        {inv.expiresAt && ` · Expires ${new Date(inv.expiresAt).toLocaleDateString()}`}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => acceptInviteMutation.mutate(inv.code)}
+                        isLoading={acceptInviteMutation.isPending}
+                      >
+                        <UserCheck className="h-4 w-4 mr-1" /> Accept
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => declineInviteMutation.mutate(inv.code)}
+                        isLoading={declineInviteMutation.isPending}
+                        className="text-gray-400 hover:text-red-500"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Inline Create Invite Form */}
       <Card className="animate-fade-in-up">
@@ -415,61 +487,6 @@ export default function InvitesPage() {
           </div>
         </div>
       </Card>
-
-      {/* Received Invites */}
-      {receivedInvites && receivedInvites.length > 0 && (
-        <div className="animate-fade-in-up">
-          <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
-            <Inbox className="h-5 w-5 text-rsn-red" /> Pending Invites for You ({receivedInvites.length})
-          </h2>
-          <div className="grid gap-3">
-            {receivedInvites.map((inv: any) => {
-              const typeConf = TYPE_CONFIG[inv.type] || TYPE_CONFIG.platform;
-              const TypeIcon = typeConf.icon;
-              const targetName = inv.podName || inv.sessionTitle || 'RSN Platform';
-              return (
-                <Card key={inv.id} className="border-rsn-red-200 bg-rsn-red-light/30">
-                  <div className="flex items-center justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <Badge variant={typeConf.variant} className="text-xs flex items-center gap-1">
-                          <TypeIcon className="h-3 w-3" /> {typeConf.label}
-                        </Badge>
-                        <span className="text-sm font-semibold text-[#1a1a2e]">{targetName}</span>
-                      </div>
-                      <p className="text-sm text-gray-500">
-                        From <span className="font-medium text-gray-700">{inv.inviterName || 'Someone'}</span>
-                      </p>
-                      <p className="text-xs text-gray-400 mt-0.5">
-                        Sent {new Date(inv.createdAt).toLocaleDateString()}
-                        {inv.expiresAt && ` · Expires ${new Date(inv.expiresAt).toLocaleDateString()}`}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        size="sm"
-                        onClick={() => acceptInviteMutation.mutate(inv.code)}
-                        isLoading={acceptInviteMutation.isPending}
-                      >
-                        <UserCheck className="h-4 w-4 mr-1" /> Accept
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => declineInviteMutation.mutate(inv.code)}
-                        isLoading={declineInviteMutation.isPending}
-                        className="text-gray-400 hover:text-red-500"
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </div>
-                </Card>
-              );
-            })}
-          </div>
-        </div>
-      )}
 
       {/* Invite List */}
       {(!data || data.length === 0) ? (
