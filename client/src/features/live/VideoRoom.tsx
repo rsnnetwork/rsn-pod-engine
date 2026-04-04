@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { useSessionStore } from '@/stores/sessionStore';
 import { formatTime } from '@/lib/utils';
 import { Video, Clock, Mic, MicOff, VideoOff, Wifi, UserX, ArrowLeft, Sparkles } from 'lucide-react';
+import { BackgroundBlur, VirtualBackground } from '@livekit/track-processors';
 import { getSocket, disconnectSocket } from '@/lib/socket';
 import {
   LiveKitRoom,
@@ -171,7 +172,6 @@ function MediaControls() {
 
   const applyBackground = useCallback(async (mode: string, imagePath?: string) => {
     try {
-      const mod = await import('@livekit/track-processors');
       const camPub = Array.from(localParticipant.trackPublications.values()).find(p => p.source === 'camera');
       const camTrack = camPub?.track;
       if (!camTrack) return;
@@ -187,11 +187,11 @@ function MediaControls() {
       await (camTrack as any).stopProcessor?.();
 
       if (mode === 'background-blur') {
-        const processor = mod.BackgroundBlur(10);
+        const processor = BackgroundBlur(10);
         await (camTrack as any).setProcessor(processor);
         processorRef.current = processor;
       } else if (mode === 'virtual-background' && imagePath) {
-        const processor = mod.VirtualBackground(imagePath);
+        const processor = VirtualBackground(imagePath);
         await (camTrack as any).setProcessor(processor);
         processorRef.current = processor;
       }

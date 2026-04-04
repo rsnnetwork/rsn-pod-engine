@@ -1,4 +1,5 @@
 import { Users, Loader2, Video, VideoOff, Sparkles, ChevronDown, ChevronUp, Mic, MicOff, Volume2, VolumeX, UserX, Clock, Camera } from 'lucide-react';
+import { BackgroundBlur, VirtualBackground } from '@livekit/track-processors';
 import HostRoundDashboard from './HostRoundDashboard';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -275,7 +276,7 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
           BG
         </button>
         {showBgPanel && (
-          <div className="absolute bottom-full left-0 mb-2 bg-white rounded-xl shadow-xl border border-gray-200 p-2 w-56 z-50">
+          <div className="absolute bottom-full right-0 mb-2 bg-white rounded-xl shadow-xl border border-gray-200 p-2 w-56 z-50">
             <p className="text-[10px] font-semibold text-gray-400 uppercase mb-1.5 px-1">Background</p>
             <div className="grid grid-cols-3 gap-1.5">
               {[
@@ -288,14 +289,13 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
               ].map(preset => (
                 <button key={preset.mode} onClick={async () => {
                   try {
-                    const mod = await import('@livekit/track-processors');
                     const camPub = Array.from(localParticipant.trackPublications.values()).find(p => p.source === 'camera');
                     const camTrack = camPub?.track;
                     if (!camTrack) return;
                     await (camTrack as any).stopProcessor?.();
                     if (preset.mode === 'disabled') { setBgMode('disabled'); }
-                    else if (preset.mode === 'blur') { await (camTrack as any).setProcessor(mod.BackgroundBlur(10)); setBgMode('blur'); }
-                    else if (preset.img) { await (camTrack as any).setProcessor(mod.VirtualBackground(preset.img.replace('w=200', 'w=1280'))); setBgMode(preset.mode); }
+                    else if (preset.mode === 'blur') { await (camTrack as any).setProcessor(BackgroundBlur(10)); setBgMode('blur'); }
+                    else if (preset.img) { await (camTrack as any).setProcessor(VirtualBackground(preset.img.replace('w=200', 'w=1280'))); setBgMode(preset.mode); }
                   } catch (err) { console.error('BG effect failed:', err); }
                   setShowBgPanel(false);
                 }}
