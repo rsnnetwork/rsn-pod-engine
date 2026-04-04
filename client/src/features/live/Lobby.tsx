@@ -183,6 +183,8 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
   const [micEnabled, setMicEnabled] = useState(isHost); // Host unmuted by default, others muted
   const [camEnabled, setCamEnabled] = useState(true);
   const [allMuted, setAllMuted] = useState(false);
+  const [bgMode, setBgMode] = useState('disabled');
+  const [showBgPanel, setShowBgPanel] = useState(false);
 
   // Auto-mute participants (not host) on mount
   useEffect(() => {
@@ -260,6 +262,55 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
         {camEnabled ? <Video className="h-3 w-3" /> : <VideoOff className="h-3 w-3" />}
         {camEnabled ? 'Cam Off' : 'Cam On'}
       </button>
+      {/* Virtual background toggle */}
+      <div className="relative">
+        <button
+          onClick={() => setShowBgPanel(!showBgPanel)}
+          className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors backdrop-blur-sm ${
+            bgMode !== 'disabled' ? 'bg-indigo-500/80 text-white' : 'bg-black/40 text-white hover:bg-black/60'
+          }`}
+          title="Background effects"
+        >
+          <Sparkles className="h-3 w-3" />
+          BG
+        </button>
+        {showBgPanel && (
+          <div className="absolute bottom-full left-0 mb-2 bg-white rounded-xl shadow-xl border border-gray-200 p-2 w-56 z-50">
+            <p className="text-[10px] font-semibold text-gray-400 uppercase mb-1.5 px-1">Background</p>
+            <div className="grid grid-cols-3 gap-1.5">
+              {[
+                { label: 'None', mode: 'disabled' },
+                { label: 'Blur', mode: 'blur' },
+                { label: 'Office', mode: 'office', img: 'https://images.unsplash.com/photo-1497366216548-37526070297c?w=200&q=60' },
+                { label: 'Nature', mode: 'nature', img: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=200&q=60' },
+                { label: 'City', mode: 'city', img: 'https://images.unsplash.com/photo-1480714378408-67cf0d13bc1b?w=200&q=60' },
+                { label: 'Abstract', mode: 'abstract', img: 'https://images.unsplash.com/photo-1557683316-973673baf926?w=200&q=60' },
+              ].map(preset => (
+                <button key={preset.mode} onClick={async () => {
+                  try {
+                    const mod = await import('@livekit/track-processors');
+                    const camPub = Array.from(localParticipant.trackPublications.values()).find(p => p.source === 'camera');
+                    const camTrack = camPub?.track;
+                    if (!camTrack) return;
+                    await (camTrack as any).stopProcessor?.();
+                    if (preset.mode === 'disabled') { setBgMode('disabled'); }
+                    else if (preset.mode === 'blur') { await (camTrack as any).setProcessor(mod.BackgroundBlur(10)); setBgMode('blur'); }
+                    else if (preset.img) { await (camTrack as any).setProcessor(mod.VirtualBackground(preset.img.replace('w=200', 'w=1280'))); setBgMode(preset.mode); }
+                  } catch (err) { console.error('BG effect failed:', err); }
+                  setShowBgPanel(false);
+                }}
+                className={`rounded-lg border-2 overflow-hidden ${bgMode === preset.mode ? 'border-rsn-red' : 'border-gray-200 hover:border-gray-400'}`}>
+                  {preset.img ? (
+                    <img src={preset.img} alt={preset.label} className="w-full h-10 object-cover" />
+                  ) : (
+                    <div className={`w-full h-10 flex items-center justify-center text-[10px] font-medium ${preset.mode === 'disabled' ? 'bg-gray-100 text-gray-500' : 'bg-indigo-50 text-indigo-600'}`}>{preset.label}</div>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
       {isHost && sessionId && (
         <button
           onClick={handleMuteAll}
