@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect } from 'react';
-import { createPortal } from 'react-dom';
 import { Bell, Check, CheckCircle, X, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
@@ -212,8 +211,7 @@ export default function NotificationBell() {
     const dest = getDestination(n);
     if (dest) {
       setOpen(false);
-      // Use window.location for guaranteed navigation (portal can interfere with React Router)
-      window.location.href = dest;
+      navigate(dest);
     }
   };
 
@@ -254,13 +252,14 @@ export default function NotificationBell() {
         )}
       </button>
 
-      {open && createPortal(
+      {open && (
         <>
           {/* Backdrop — tappable to close */}
           <div className="fixed inset-0 z-[9998] bg-black/20 sm:bg-transparent" onClick={() => setOpen(false)} />
           {/* Mobile: bottom slide-up sheet. Desktop: positioned dropdown */}
           <div className="fixed z-[9999] sm:rounded-xl rounded-t-2xl bg-white shadow-xl border border-gray-200 overflow-hidden
             inset-x-0 bottom-0 sm:inset-auto sm:w-80 max-h-[80vh]"
+            onClick={(e) => e.stopPropagation()}
             style={dropPos && typeof window !== 'undefined' && window.innerWidth >= 640 ? {
               top: dropPos.top,
               left: dropPos.left,
@@ -340,8 +339,7 @@ export default function NotificationBell() {
             })}
           </div>
         </div>
-        </>,
-        document.body
+        </>
       )}
     </div>
   );
