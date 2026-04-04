@@ -3,7 +3,20 @@ import { useParams } from 'react-router-dom';
 import { useSessionStore } from '@/stores/sessionStore';
 import { formatTime } from '@/lib/utils';
 import { Video, Clock, Mic, MicOff, VideoOff, Wifi, UserX, ArrowLeft, Sparkles } from 'lucide-react';
-import { BackgroundBlur, VirtualBackground } from '@livekit/track-processors';
+// Lazy-load track processors (may not be available in all environments)
+let _bgBlur: any = null;
+let _vBg: any = null;
+let _bgLoaded = false;
+async function loadBgProcessors() {
+  if (_bgLoaded) return { BackgroundBlur: _bgBlur, VirtualBackground: _vBg };
+  try {
+    const mod = await import(/* @vite-ignore */ '@livekit/track-processors');
+    _bgBlur = mod.BackgroundBlur;
+    _vBg = mod.VirtualBackground;
+    _bgLoaded = true;
+    return { BackgroundBlur: _bgBlur, VirtualBackground: _vBg };
+  } catch { return null; }
+}
 import { getSocket, disconnectSocket } from '@/lib/socket';
 import {
   LiveKitRoom,
@@ -172,6 +185,8 @@ function MediaControls() {
 
   const applyBackground = useCallback(async (mode: string, imagePath?: string) => {
     try {
+      const mod = await loadBgProcessors();
+      if (!mod) { console.error('Background processors not available'); return; }
       const camPub = Array.from(localParticipant.trackPublications.values()).find(p => p.source === 'camera');
       const camTrack = camPub?.track;
       if (!camTrack) return;
@@ -187,11 +202,11 @@ function MediaControls() {
       await (camTrack as any).stopProcessor?.();
 
       if (mode === 'background-blur') {
-        const processor = BackgroundBlur(10);
+        const processor = mod.BackgroundBlur(10);
         await (camTrack as any).setProcessor(processor);
         processorRef.current = processor;
       } else if (mode === 'virtual-background' && imagePath) {
-        const processor = VirtualBackground(imagePath);
+        const processor = mod.VirtualBackground(imagePath);
         await (camTrack as any).setProcessor(processor);
         processorRef.current = processor;
       }
