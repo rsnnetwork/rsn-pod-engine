@@ -86,19 +86,19 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
           <VideoTrack trackRef={trackRef} className={`h-full w-full ${isPinned ? 'object-contain' : 'object-cover'}`} />
         ) : (
           <div className="flex flex-col items-center gap-2">
-            <div className={`${isPinned ? 'h-20 w-20' : 'h-14 w-14'} rounded-full bg-[#5f6368] flex items-center justify-center text-white font-semibold text-xl`}>
+            <div className={`${isPinned ? 'h-20 w-20' : 'h-14 w-14'} rounded-full bg-[#5f6368] flex items-center justify-center text-[#1a1a2e] font-semibold text-xl`}>
               {name.charAt(0).toUpperCase()}
             </div>
           </div>
         )}
-        <div className="absolute bottom-2 left-2 bg-black/60 backdrop-blur-sm rounded px-2 py-0.5 text-[11px] text-white truncate max-w-[90%] flex items-center gap-1.5">
+        <div className="absolute bottom-2 left-2 bg-black/60 backdrop-blur-sm rounded px-2 py-0.5 text-[11px] text-[#1a1a2e] truncate max-w-[90%] flex items-center gap-1.5">
           {name}
           {trackRef.participant.identity === hostUserId && (
             <span className="text-[9px] font-medium text-gray-300 ml-0.5">(Host)</span>
           )}
         </div>
         {isPinned && (
-          <div className="absolute top-2 right-2 bg-black/60 text-white text-[10px] px-2 py-0.5 rounded-full">
+          <div className="absolute top-2 right-2 bg-black/60 text-[#1a1a2e] text-[10px] px-2 py-0.5 rounded-full">
             Pinned · click to unpin
           </div>
         )}
@@ -113,14 +113,14 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
           <div className="absolute top-1.5 right-1.5 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
             <button
               onClick={() => handleHostMute(trackRef.participant.identity, !!isMicOn)}
-              className="bg-black/50 backdrop-blur-sm rounded-full p-1.5 text-white hover:bg-black/70"
+              className="bg-black/50 backdrop-blur-sm rounded-full p-1.5 text-[#1a1a2e] hover:bg-black/70"
               title={isMicOn ? `Mute ${name}` : `Unmute ${name}`}
             >
               {isMicOn ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5 text-red-400" />}
             </button>
             <button
               onClick={() => handleKick(trackRef.participant.identity, name)}
-              className="bg-black/50 backdrop-blur-sm rounded-full p-1.5 text-white hover:bg-red-600/70"
+              className="bg-black/50 backdrop-blur-sm rounded-full p-1.5 text-[#1a1a2e] hover:bg-red-600/70"
               title={`Remove ${name}`}
             >
               <UserX className="h-3.5 w-3.5" />
@@ -130,7 +130,7 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
         {/* Mic status indicator */}
         {!isMicOn && (
           <div className="absolute top-2 left-2 bg-red-500/90 rounded-full p-1">
-            <MicOff className="h-2.5 w-2.5 text-white" />
+            <MicOff className="h-2.5 w-2.5 text-[#1a1a2e]" />
           </div>
         )}
       </div>
@@ -242,8 +242,8 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
         onClick={toggleMic}
         className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors backdrop-blur-sm ${
           micEnabled
-            ? 'bg-black/40 text-white hover:bg-black/60'
-            : 'bg-red-500/80 text-white hover:bg-red-600/80'
+            ? 'bg-black/40 text-[#1a1a2e] hover:bg-black/60'
+            : 'bg-red-500/80 text-[#1a1a2e] hover:bg-red-600/80'
         }`}
       >
         {micEnabled ? <Mic className="h-3 w-3" /> : <MicOff className="h-3 w-3" />}
@@ -253,8 +253,8 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
         onClick={toggleCam}
         className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors backdrop-blur-sm ${
           camEnabled
-            ? 'bg-black/40 text-white hover:bg-black/60'
-            : 'bg-red-500/80 text-white hover:bg-red-600/80'
+            ? 'bg-black/40 text-[#1a1a2e] hover:bg-black/60'
+            : 'bg-red-500/80 text-[#1a1a2e] hover:bg-red-600/80'
         }`}
       >
         {camEnabled ? <Video className="h-3 w-3" /> : <VideoOff className="h-3 w-3" />}
@@ -265,8 +265,8 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
           onClick={handleMuteAll}
           className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors backdrop-blur-sm ${
             allMuted
-              ? 'bg-red-500/80 text-white hover:bg-red-600/80'
-              : 'bg-black/40 text-white hover:bg-black/60'
+              ? 'bg-red-500/80 text-[#1a1a2e] hover:bg-red-600/80'
+              : 'bg-black/40 text-[#1a1a2e] hover:bg-black/60'
           }`}
         >
           {allMuted ? <VolumeX className="h-3 w-3" /> : <Volume2 className="h-3 w-3" />}
@@ -337,12 +337,12 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
           <div className="inline-flex items-center justify-center h-14 w-14 rounded-full bg-emerald-500/20 text-emerald-400">
             <Sparkles className="h-7 w-7" />
           </div>
-          <h2 className="text-xl font-bold text-white">All Rounds Complete!</h2>
+          <h2 className="text-xl font-bold text-[#1a1a2e]">All Rounds Complete!</h2>
           <p className="text-gray-400 text-sm max-w-xs">Take a moment to say your goodbyes. The host will end the event shortly.</p>
         </div>
       ) : isByeRound ? (
         <>
-          <h2 className="text-xl font-bold text-white">Waiting for Next Round</h2>
+          <h2 className="text-xl font-bold text-[#1a1a2e]">Waiting for Next Round</h2>
           <p className="text-gray-400 text-sm">You have a round off — you'll be back in the next one!</p>
           <p className="text-xs text-gray-500 mt-1">The round is still in progress. Sit tight.</p>
         </>
@@ -354,13 +354,13 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
       ) : transitionStatus === 'between_rounds' ? (
         <div className="flex flex-col items-center gap-2">
           <Loader2 className="h-5 w-5 text-gray-400 animate-spin" />
-          <h2 className="text-xl font-bold text-white">Getting Ready</h2>
+          <h2 className="text-xl font-bold text-[#1a1a2e]">Getting Ready</h2>
           <p className="text-gray-400 text-sm">Preparing round {(currentRound || 0) + 1} of {totalRounds}...</p>
         </div>
       ) : transitionStatus === 'starting_session' ? (
         <div className="flex flex-col items-center gap-2">
           <Loader2 className="h-5 w-5 text-gray-400 animate-spin" />
-          <h2 className="text-xl font-bold text-white">Event Starting</h2>
+          <h2 className="text-xl font-bold text-[#1a1a2e]">Event Starting</h2>
           <p className="text-gray-400 text-sm">
             {isHost ? 'Main room is open — use Match People below when ready.' : 'Waiting for the host to begin matching...'}
           </p>
@@ -368,7 +368,7 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
       ) : (sessionStatus === 'round_active' || sessionStatus === 'round_rating') ? (
         <div className="flex flex-col items-center gap-2">
           <Loader2 className="h-5 w-5 text-gray-400 animate-spin" />
-          <h2 className="text-xl font-bold text-white">Round in Progress</h2>
+          <h2 className="text-xl font-bold text-[#1a1a2e]">Round in Progress</h2>
           <p className="text-gray-400 text-sm">
             {isHost ? 'Monitoring breakout rooms...' : 'Waiting for this round to finish'}
           </p>
@@ -378,7 +378,7 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
           <div className="inline-flex items-center justify-center h-12 w-12 rounded-full bg-white/10 text-gray-300 mx-auto">
             <Sparkles className="h-6 w-6" />
           </div>
-          <h2 className="text-xl font-bold text-white">Waiting Room</h2>
+          <h2 className="text-xl font-bold text-[#1a1a2e]">Waiting Room</h2>
           <p className="text-gray-400 text-sm">
             {isHost
               ? 'You\'re the host — click Start Event below when everyone is ready'
@@ -392,7 +392,7 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
           <div className="inline-flex items-center justify-center h-12 w-12 rounded-full bg-white/10 text-gray-300 mx-auto">
             <Sparkles className="h-6 w-6" />
           </div>
-          <h2 className="text-xl font-bold text-white">Main Room</h2>
+          <h2 className="text-xl font-bold text-[#1a1a2e]">Main Room</h2>
           <p className="text-gray-400 text-sm">
             {isHost
               ? 'You\'re the host — click Match People below when ready'
@@ -426,7 +426,7 @@ function HostParticipantPanel({ sessionId }: { sessionId?: string }) {
   }, [sessionId]);
 
   return (
-    <div className="w-full max-w-4xl mx-auto bg-[#292a2d] rounded-xl overflow-hidden">
+    <div className="w-full max-w-4xl mx-auto bg-gray-50 rounded-xl overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center justify-between px-4 py-2.5 text-sm font-medium text-gray-300 hover:bg-white/5 transition-colors"
@@ -445,7 +445,7 @@ function HostParticipantPanel({ sessionId }: { sessionId?: string }) {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
               {participants.map(p => (
                 <div key={p.userId} className="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-white/5 transition-colors group/participant relative">
-                  <div className="h-8 w-8 rounded-full bg-[#5f6368] flex items-center justify-center text-white text-xs font-semibold shrink-0">
+                  <div className="h-8 w-8 rounded-full bg-[#5f6368] flex items-center justify-center text-[#1a1a2e] text-xs font-semibold shrink-0">
                     {(p.displayName || 'U').charAt(0).toUpperCase()}
                   </div>
                   <span className="text-sm text-gray-300 truncate">{p.displayName || 'User'}</span>
@@ -565,10 +565,10 @@ function DeviceTest() {
 
       {/* Controls + mic level */}
       <div className="flex items-center gap-3">
-        <button onClick={toggleCam} className={`p-2 rounded-full transition-colors ${camOn ? 'bg-white/10 text-white hover:bg-white/20' : 'bg-red-500/80 text-white'}`}>
+        <button onClick={toggleCam} className={`p-2 rounded-full transition-colors ${camOn ? 'bg-white/10 text-[#1a1a2e] hover:bg-white/20' : 'bg-red-500/80 text-[#1a1a2e]'}`}>
           {camOn ? <Camera className="h-4 w-4" /> : <VideoOff className="h-4 w-4" />}
         </button>
-        <button onClick={toggleMic} className={`p-2 rounded-full transition-colors ${micOn ? 'bg-white/10 text-white hover:bg-white/20' : 'bg-red-500/80 text-white'}`}>
+        <button onClick={toggleMic} className={`p-2 rounded-full transition-colors ${micOn ? 'bg-white/10 text-[#1a1a2e] hover:bg-white/20' : 'bg-red-500/80 text-[#1a1a2e]'}`}>
           {micOn ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}
         </button>
         {/* Mic level bar */}
@@ -594,13 +594,13 @@ function PreLobbyWaitingRoom({ isHost = false }: { isHost?: boolean }) {
   const hostOnline = useHostPresence();
 
   return (
-    <div className="flex-1 flex items-center justify-center p-6 bg-[#202124]">
-      <div className="max-w-md w-full text-center py-10 px-6 bg-[#292a2d] rounded-2xl">
+    <div className="flex-1 flex items-center justify-center p-6 bg-white">
+      <div className="max-w-md w-full text-center py-10 px-6 bg-gray-50 rounded-2xl">
         <div className="flex flex-col items-center gap-4">
           <div className="inline-flex items-center justify-center h-16 w-16 rounded-full bg-white/10 text-gray-400">
             <Clock className="h-8 w-8" />
           </div>
-          <h2 className="text-xl font-bold text-white">Waiting for host to start the event...</h2>
+          <h2 className="text-xl font-bold text-[#1a1a2e]">Waiting for host to start the event...</h2>
           <p className="text-gray-400 text-sm max-w-xs">
             {hostOnline === true
               ? 'The host is here! The event will begin shortly.'
@@ -686,7 +686,7 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
   // If we have a lobby token, render the video mosaic
   if (lobbyToken && lobbyUrl) {
     return (
-      <div className="flex-1 flex flex-col items-center p-6 gap-6 overflow-auto bg-[#202124]">
+      <div className="flex-1 flex flex-col items-center p-6 gap-6 overflow-auto bg-white">
         <LobbyStatusOverlay isHost={isHost} />
         <DensityToggle />
         {isHost && <HostParticipantPanel sessionId={sessionId} />}
@@ -710,8 +710,8 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
 
   // Fallback: text-only lobby (no LiveKit credentials or lobby room)
   return (
-    <div className="flex-1 flex items-center justify-center p-6 bg-[#202124]">
-      <div className="max-w-lg w-full text-center bg-[#292a2d] rounded-2xl p-8">
+    <div className="flex-1 flex items-center justify-center p-6 bg-white">
+      <div className="max-w-lg w-full text-center bg-gray-50 rounded-2xl p-8">
         <LobbyStatusOverlay isHost={isHost} />
         {isHost && (
           <div className="mt-4">
@@ -760,7 +760,7 @@ function DensityToggle() {
           onClick={() => setLobbyDensity(o.value)}
           className={`px-3 py-1 text-[11px] font-medium rounded-full transition-colors ${
             lobbyDensity === o.value
-              ? 'bg-white/20 text-white'
+              ? 'bg-white/20 text-[#1a1a2e]'
               : 'text-gray-500 hover:text-gray-300'
           }`}
         >

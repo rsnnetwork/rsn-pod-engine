@@ -120,10 +120,10 @@ export default function HostControls({ sessionId }: Props) {
 
   if (isSessionEnding) {
     return (
-      <div className="border-t border-white/10 bg-[#292a2d]">
+      <div className="border-t border-gray-200 bg-white">
         {/* Announcement input — available in wrapping-up state */}
         {showBroadcast && (
-          <div className="border-b border-white/10 bg-amber-500/10 px-4 py-3">
+          <div className="border-b border-gray-200 bg-amber-500/10 px-4 py-3">
             <p className="text-xs font-semibold text-amber-400 mb-2 max-w-4xl mx-auto">Announcement — visible as a banner to all participants</p>
             <div className="max-w-4xl mx-auto flex gap-2">
               <input
@@ -147,7 +147,7 @@ export default function HostControls({ sessionId }: Props) {
           <div className="max-w-4xl mx-auto flex items-center justify-between">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-              <p className="text-sm text-gray-300 font-medium">All rounds complete — end the event when ready</p>
+              <p className="text-sm text-gray-700 font-medium">All rounds complete — end the event when ready</p>
             </div>
             <div className="flex gap-2">
               <Button size="sm" variant="ghost" onClick={() => setShowBroadcast(!showBroadcast)} title="Send announcement to all">
@@ -164,13 +164,13 @@ export default function HostControls({ sessionId }: Props) {
   }
 
   return (
-    <div className="border-t border-white/10 bg-[#292a2d]">
+    <div className="border-t border-gray-200 bg-white">
       {/* Match preview panel with interactive controls */}
       {matchPreview && (
-        <div className="border-b border-white/10 bg-[#1e1f22] px-4 py-3 max-h-72 overflow-y-auto">
+        <div className="border-b border-gray-200 bg-gray-50 px-4 py-3 max-h-72 overflow-y-auto">
           <div className="max-w-4xl mx-auto">
             <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-semibold text-gray-300">
+              <h3 className="text-sm font-semibold text-gray-700">
                 Round {matchPreview.roundNumber} Preview — {matchPreview.matches.length} match{matchPreview.matches.length !== 1 ? 'es' : ''}
               </h3>
               <div className="flex items-center gap-1.5">
@@ -206,7 +206,7 @@ export default function HostControls({ sessionId }: Props) {
                     className={`font-medium truncate px-1.5 py-0.5 rounded transition-colors ${
                       swapMode === m.participantA.userId
                         ? 'bg-blue-500/20 text-blue-400 ring-1 ring-blue-500/30'
-                        : 'text-gray-300 hover:bg-white/10 hover:text-white'
+                        : 'text-gray-700 hover:bg-white/10 hover:text-white'
                     }`}
                     title="Click to swap this person"
                   >
@@ -218,7 +218,7 @@ export default function HostControls({ sessionId }: Props) {
                     className={`font-medium truncate px-1.5 py-0.5 rounded transition-colors ${
                       swapMode === m.participantB.userId
                         ? 'bg-blue-500/20 text-blue-400 ring-1 ring-blue-500/30'
-                        : 'text-gray-300 hover:bg-white/10 hover:text-white'
+                        : 'text-gray-700 hover:bg-white/10 hover:text-white'
                     }`}
                     title="Click to swap this person"
                   >
@@ -232,7 +232,7 @@ export default function HostControls({ sessionId }: Props) {
                         className={`font-medium truncate px-1.5 py-0.5 rounded transition-colors ${
                           swapMode === m.participantC!.userId
                             ? 'bg-blue-500/20 text-blue-400 ring-1 ring-blue-500/30'
-                            : 'text-gray-300 hover:bg-white/10 hover:text-white'
+                            : 'text-gray-700 hover:bg-white/10 hover:text-white'
                         }`}
                         title="Click to swap this person"
                       >
@@ -253,14 +253,14 @@ export default function HostControls({ sessionId }: Props) {
                   <div className="flex gap-0.5 ml-auto shrink-0">
                     <button
                       onClick={() => excludeParticipant(m.participantA.userId)}
-                      className="p-0.5 text-gray-300 hover:text-red-400 transition-colors"
+                      className="p-0.5 text-gray-700 hover:text-red-400 transition-colors"
                       title={`Exclude ${m.participantA.displayName}`}
                     >
                       <UserMinus className="h-3 w-3" />
                     </button>
                     <button
                       onClick={() => excludeParticipant(m.participantB.userId)}
-                      className="p-0.5 text-gray-300 hover:text-red-400 transition-colors"
+                      className="p-0.5 text-gray-700 hover:text-red-400 transition-colors"
                       title={`Exclude ${m.participantB.displayName}`}
                     >
                       <UserMinus className="h-3 w-3" />
@@ -268,7 +268,7 @@ export default function HostControls({ sessionId }: Props) {
                     {m.participantC && (
                       <button
                         onClick={() => excludeParticipant(m.participantC!.userId)}
-                        className="p-0.5 text-gray-300 hover:text-red-400 transition-colors"
+                        className="p-0.5 text-gray-700 hover:text-red-400 transition-colors"
                         title={`Exclude ${m.participantC!.displayName}`}
                       >
                         <UserMinus className="h-3 w-3" />
@@ -292,7 +292,7 @@ export default function HostControls({ sessionId }: Props) {
 
       {/* Announcement input */}
       {showBroadcast && (
-        <div className="border-b border-white/10 bg-amber-500/10 px-4 py-3">
+        <div className="border-b border-gray-200 bg-amber-500/10 px-4 py-3">
           <p className="text-xs font-semibold text-amber-400 mb-2 max-w-4xl mx-auto">Announcement — visible as a banner to all participants</p>
           <div className="max-w-4xl mx-auto flex gap-2">
             <input
@@ -343,7 +343,7 @@ export default function HostControls({ sessionId }: Props) {
             {isInRound && (
               <div className="flex items-center gap-1.5">
                 <Radio className="h-3.5 w-3.5 text-red-500 animate-pulse" />
-                <span className="text-sm text-gray-300 font-medium">
+                <span className="text-sm text-gray-700 font-medium">
                   Round {currentRound}/{totalRounds}
                   {phase === 'rating' && ' — Rating'}
                   {isPaused && ' — Paused'}
@@ -375,7 +375,7 @@ export default function HostControls({ sessionId }: Props) {
                   )}
                 </Button>
               ) : (
-                <span className="text-xs text-gray-500 px-2 py-1.5 border border-white/10 rounded-lg">
+                <span className="text-xs text-gray-500 px-2 py-1.5 border border-gray-200 rounded-lg">
                   Need {2 - eligibleCount} more participant{eligibleCount === 1 ? '' : 's'} to match
                 </span>
               )
