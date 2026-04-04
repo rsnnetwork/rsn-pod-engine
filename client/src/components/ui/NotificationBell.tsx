@@ -254,11 +254,11 @@ export default function NotificationBell() {
       </button>
 
       {open && createPortal(
-        <>
-          {/* Backdrop — tappable to close */}
-          <div className="fixed inset-0 z-[9998] bg-black/20 sm:bg-transparent" onClick={() => setOpen(false)} />
-          {/* Mobile: bottom slide-up sheet. Desktop: positioned dropdown */}
-          <div className="fixed z-[9999] sm:rounded-xl rounded-t-2xl bg-white shadow-xl border border-gray-200 overflow-hidden
+        <div className="fixed inset-0 z-[9998]" onClick={() => setOpen(false)}>
+          {/* Backdrop overlay for mobile */}
+          <div className="absolute inset-0 bg-black/20 sm:bg-transparent" />
+          {/* Notification panel — stopPropagation prevents backdrop close on panel click */}
+          <div className="absolute z-[9999] sm:rounded-xl rounded-t-2xl bg-white shadow-xl border border-gray-200 overflow-hidden
             inset-x-0 bottom-0 sm:inset-auto sm:w-80 max-h-[80vh]"
             onClick={(e) => e.stopPropagation()}
             style={dropPos && typeof window !== 'undefined' && window.innerWidth >= 640 ? {
@@ -340,7 +340,7 @@ export default function NotificationBell() {
             })}
           </div>
         </div>
-        </>,
+        </div>,
         document.body
       )}
     </div>
