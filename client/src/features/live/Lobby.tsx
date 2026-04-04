@@ -8,7 +8,7 @@ let _bgLoaded = false;
 async function loadBgProcessors() {
   if (_bgLoaded) return { BackgroundBlur: _bgBlur, VirtualBackground: _vBg };
   try {
-    const mod = await import(/* @vite-ignore */ '@livekit/track-processors');
+    const mod = await import('@livekit/track-processors');
     _bgBlur = mod.BackgroundBlur;
     _vBg = mod.VirtualBackground;
     _bgLoaded = true;
