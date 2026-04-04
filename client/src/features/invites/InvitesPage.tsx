@@ -79,6 +79,8 @@ export default function InvitesPage() {
     queryFn: () => api.get('/invites/received').then(r => r.data.data ?? []),
   });
 
+  // Track the invite being accepted so error handler can navigate
+  const [acceptingInvite, setAcceptingInvite] = useState<any>(null);
   const acceptInviteMutation = useMutation({
     mutationFn: (code: string) => api.post(`/invites/${code}/accept`),
     onSuccess: (res) => {
@@ -90,14 +92,20 @@ export default function InvitesPage() {
       const dest = data?.sessionId ? `/sessions/${data.sessionId}` : data?.podId ? `/pods/${data.podId}` : null;
       if (dest) navigate(dest);
     },
-    onError: (err: any) => {
-      const code = err?.response?.data?.error?.code;
-      // Already a member — navigate them there with a friendly message
-      if (code === 'POD_MEMBER_EXISTS' || code === 'SESSION_ALREADY_REGISTERED') {
+    onError: async (err: any) => {
+      const errCode = err?.response?.data?.error?.code;
+      // Already a member or similar — try to register anyway, then navigate
+      if (errCode === 'POD_MEMBER_EXISTS' || errCode === 'SESSION_ALREADY_REGISTERED' || errCode === 'INVITE_ALREADY_USED') {
         qc.invalidateQueries({ queryKey: ['received-invites'] });
+        // Use the tracked invite data (from receivedInvites list) to find session/pod
+        const inv = acceptingInvite;
+        const sessionId = inv?.sessionId || err?.response?.data?.data?.sessionId;
+        const podId = inv?.podId || err?.response?.data?.data?.podId;
+        if (sessionId) {
+          try { await api.post(`/sessions/${sessionId}/register`); } catch { /* already registered */ }
+        }
         addToast("You're already in! Taking you there now.", 'success');
-        const data = err?.response?.data?.data;
-        const dest = data?.sessionId ? `/sessions/${data.sessionId}` : data?.podId ? `/pods/${data.podId}` : null;
+        const dest = sessionId ? `/sessions/${sessionId}` : podId ? `/pods/${podId}` : null;
         if (dest) navigate(dest);
         return;
       }
@@ -259,7 +267,7 @@ export default function InvitesPage() {
                     <div className="flex items-center gap-2">
                       <Button
                         size="sm"
-                        onClick={() => acceptInviteMutation.mutate(inv.code)}
+                        onClick={() => { setAcceptingInvite(inv); acceptInviteMutation.mutate(inv.code); }}
                         isLoading={acceptInviteMutation.isPending}
                       >
                         <UserCheck className="h-4 w-4 mr-1" /> Accept
