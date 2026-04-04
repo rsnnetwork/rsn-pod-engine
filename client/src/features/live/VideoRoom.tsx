@@ -106,31 +106,58 @@ function VideoStage() {
     );
   }
 
+  // Mobile: floating self-view, partner takes full area
+  // Desktop: side-by-side grid
   return (
-    <div className={`flex-1 grid ${gridClass} gap-4 max-h-[calc(100vh-200px)]`}>
+    <div className="flex-1 relative max-h-[calc(100vh-200px)]">
       {remoteTracks.length > 0 ? (
-        allTiles.map(t => (
-          <div key={t.sid} className="cursor-pointer" onClick={() => setPinnedSid(t.sid)}>
-            <VideoTile trackRef={t.trackRef} label={t.label} />
-          </div>
-        ))
-      ) : (
         <>
+          {/* Remote tracks — full area on mobile, grid on desktop */}
+          <div className={`h-full grid gap-4 ${isTrio ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1 md:grid-cols-2'}`}>
+            {remoteTracks.map((rt, i) => (
+              <div key={rt.participant.sid} className="cursor-pointer" onClick={() => setPinnedSid(rt.participant.sid)}>
+                <VideoTile trackRef={rt} label={rt.participant.name || currentPartners[i]?.displayName || 'Partner'} />
+              </div>
+            ))}
+            {/* Self-view as equal tile on desktop only */}
+            <div className="hidden md:block cursor-pointer" onClick={() => setPinnedSid(localParticipant.sid)}>
+              <VideoTile trackRef={localTrack} label="You" />
+            </div>
+          </div>
+          {/* Self-view as floating thumbnail on mobile */}
+          <div className="md:hidden absolute bottom-3 right-3 w-28 h-20 rounded-xl overflow-hidden shadow-lg border-2 border-white/80 z-10"
+            onClick={() => setPinnedSid(localParticipant.sid)}>
+            <VideoTile trackRef={localTrack} label="You" />
+          </div>
+        </>
+      ) : (
+        <div className={`h-full grid ${gridClass} gap-4`}>
           <VideoTile trackRef={localTrack} label="You" />
           {currentPartners.map((p, i) => (
             <VideoTile key={p.userId || i} label={p.displayName || 'Partner'} isWaiting />
           ))}
-        </>
+        </div>
       )}
     </div>
   );
 }
 
+const BG_PRESETS = [
+  { label: 'None', mode: 'disabled' as const, preview: null },
+  { label: 'Blur', mode: 'background-blur' as const, preview: null },
+  { label: 'Office', mode: 'virtual-background' as const, preview: 'https://images.unsplash.com/photo-1497366216548-37526070297c?w=400&q=80', image: 'https://images.unsplash.com/photo-1497366216548-37526070297c?w=1280&q=80' },
+  { label: 'Nature', mode: 'virtual-background' as const, preview: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=400&q=80', image: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=1280&q=80' },
+  { label: 'City', mode: 'virtual-background' as const, preview: 'https://images.unsplash.com/photo-1480714378408-67cf0d13bc1b?w=400&q=80', image: 'https://images.unsplash.com/photo-1480714378408-67cf0d13bc1b?w=1280&q=80' },
+  { label: 'Abstract', mode: 'virtual-background' as const, preview: 'https://images.unsplash.com/photo-1557683316-973673baf926?w=400&q=80', image: 'https://images.unsplash.com/photo-1557683316-973673baf926?w=1280&q=80' },
+];
+
 function MediaControls() {
   const { localParticipant } = useLocalParticipant();
   const [micEnabled, setMicEnabled] = useState(true);
   const [camEnabled, setCamEnabled] = useState(true);
-  const [bgBlur, setBgBlur] = useState(false);
+  const [bgMode, setBgMode] = useState<string>('disabled');
+  const [showBgPanel, setShowBgPanel] = useState(false);
+  const processorRef = useRef<any>(null);
 
   const toggleMic = useCallback(async () => {
     await localParticipant.setMicrophoneEnabled(!micEnabled);
@@ -142,44 +169,102 @@ function MediaControls() {
     setCamEnabled(!camEnabled);
   }, [localParticipant, camEnabled]);
 
+  const applyBackground = useCallback(async (mode: string, imagePath?: string) => {
+    try {
+      const mod = await import('@livekit/track-processors');
+      const camPub = Array.from(localParticipant.trackPublications.values()).find(p => p.source === 'camera');
+      const camTrack = camPub?.track;
+      if (!camTrack) return;
+
+      if (mode === 'disabled') {
+        await (camTrack as any).stopProcessor?.();
+        processorRef.current = null;
+        setBgMode('disabled');
+        return;
+      }
+
+      // Stop existing processor first
+      await (camTrack as any).stopProcessor?.();
+
+      if (mode === 'background-blur') {
+        const processor = mod.BackgroundBlur(10);
+        await (camTrack as any).setProcessor(processor);
+        processorRef.current = processor;
+      } else if (mode === 'virtual-background' && imagePath) {
+        const processor = mod.VirtualBackground(imagePath);
+        await (camTrack as any).setProcessor(processor);
+        processorRef.current = processor;
+      }
+      setBgMode(mode + (imagePath ? ':' + imagePath : ''));
+    } catch (err) {
+      console.error('Background effect failed:', err);
+    }
+  }, [localParticipant]);
+
+  const handleCustomUpload = useCallback(async () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      const url = URL.createObjectURL(file);
+      await applyBackground('virtual-background', url);
+      setShowBgPanel(false);
+    };
+    input.click();
+  }, [applyBackground]);
+
   return (
-    <div className="flex items-center gap-3">
-      <button
-        onClick={toggleMic}
-        className={`p-2 rounded-full transition-colors ${micEnabled ? 'bg-[#3c4043] hover:bg-[#4a4e51] text-white' : 'bg-red-500/20 text-red-400 hover:bg-red-500/30'}`}
-      >
+    <div className="flex items-center gap-3 relative">
+      <button onClick={toggleMic}
+        className={`p-2 rounded-full transition-colors ${micEnabled ? 'bg-gray-200 hover:bg-gray-300 text-gray-700' : 'bg-red-100 text-red-500 hover:bg-red-200'}`}>
         {micEnabled ? <Mic className="h-5 w-5" /> : <MicOff className="h-5 w-5" />}
       </button>
-      <button
-        onClick={toggleCam}
-        className={`p-2 rounded-full transition-colors ${camEnabled ? 'bg-[#3c4043] hover:bg-[#4a4e51] text-white' : 'bg-red-500/20 text-red-400 hover:bg-red-500/30'}`}
-      >
+      <button onClick={toggleCam}
+        className={`p-2 rounded-full transition-colors ${camEnabled ? 'bg-gray-200 hover:bg-gray-300 text-gray-700' : 'bg-red-100 text-red-500 hover:bg-red-200'}`}>
         {camEnabled ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
       </button>
-      <button
-        onClick={async () => {
-          try {
-            // @ts-ignore — dynamic import, package may not be installed
-            const mod = await import('@livekit/track-processors');
-            const camPub = localParticipant.getTrackPublicationByName?.('camera') || Array.from(localParticipant.trackPublications.values()).find(p => p.source === 'camera');
-            const camTrack = camPub?.track;
-            if (!camTrack) return;
-            if (bgBlur) {
-              await (camTrack as any).stopProcessor();
-              setBgBlur(false);
-            } else {
-              await (camTrack as any).setProcessor(mod.BackgroundBlur(10));
-              setBgBlur(true);
-            }
-          } catch {
-            // @livekit/track-processors not installed — silently ignore
-          }
-        }}
-        title="Background blur"
-        className={`p-2 rounded-full transition-colors ${bgBlur ? 'bg-indigo-500/20 text-indigo-400' : 'bg-[#3c4043] hover:bg-[#4a4e51] text-white'}`}
-      >
+      <button onClick={() => setShowBgPanel(!showBgPanel)} title="Background effects"
+        className={`p-2 rounded-full transition-colors ${bgMode !== 'disabled' ? 'bg-indigo-100 text-indigo-600' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}>
         <Sparkles className="h-5 w-5" />
       </button>
+
+      {/* Background effects panel */}
+      {showBgPanel && (
+        <div className="absolute bottom-full left-0 mb-2 bg-white rounded-xl shadow-xl border border-gray-200 p-3 w-72 z-50">
+          <p className="text-xs font-semibold text-gray-500 uppercase mb-2">Background Effects</p>
+          <div className="grid grid-cols-3 gap-2">
+            {BG_PRESETS.map(preset => (
+              <button key={preset.label}
+                onClick={() => { applyBackground(preset.mode, preset.image); if (preset.mode === 'disabled') setBgMode('disabled'); setShowBgPanel(false); }}
+                className={`rounded-lg border-2 overflow-hidden transition-all ${
+                  (preset.mode === 'disabled' && bgMode === 'disabled') || bgMode.includes(preset.image || '__none__')
+                    ? 'border-rsn-red ring-2 ring-rsn-red/30' : 'border-gray-200 hover:border-gray-400'
+                }`}>
+                {preset.preview ? (
+                  <img src={preset.preview} alt={preset.label} className="w-full h-14 object-cover" />
+                ) : (
+                  <div className={`w-full h-14 flex items-center justify-center text-xs font-medium ${
+                    preset.mode === 'disabled' ? 'bg-gray-100 text-gray-500' : 'bg-indigo-50 text-indigo-600'
+                  }`}>
+                    {preset.label}
+                  </div>
+                )}
+                <p className="text-[10px] text-gray-500 py-0.5 text-center">{preset.label}</p>
+              </button>
+            ))}
+            {/* Custom upload */}
+            <button onClick={() => { handleCustomUpload(); }}
+              className="rounded-lg border-2 border-dashed border-gray-300 hover:border-gray-400 transition-all">
+              <div className="w-full h-14 flex items-center justify-center text-xs font-medium text-gray-400">
+                + Upload
+              </div>
+              <p className="text-[10px] text-gray-400 py-0.5 text-center">Custom</p>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
