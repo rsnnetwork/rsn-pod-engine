@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Send, SmilePlus } from 'lucide-react';
+import { X, Send, SmilePlus, Smile } from 'lucide-react';
 import { useSessionStore, ChatMessage } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
 import { getSocket } from '@/lib/socket';
@@ -9,6 +9,8 @@ const CHAT_EMOJIS = [
   { type: 'clap', emoji: '👏' },
   { type: 'thumbs_up', emoji: '👍' },
 ] as const;
+
+const EMOJI_PICKER_LIST = ['😀','😂','😍','🥳','🤔','👍','👏','❤️','🔥','🎉','💯','🙌','😮','🤩','😎','👋','✅','💪','🙏','⭐'];
 
 interface ChatPanelProps {
   sessionId: string;
@@ -113,29 +115,60 @@ export default function ChatPanel({ sessionId, onClose }: ChatPanelProps) {
           {chatDisabled ? (
             <p className="text-xs text-gray-500 text-center py-1">Chat available when host joins</p>
           ) : (
-            <div className="flex items-center gap-2">
-              <input
-                ref={inputRef}
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder={scope === 'room' ? 'Message your room...' : 'Message everyone...'}
-                maxLength={500}
-                style={{ color: '#000000' }}
-                className="flex-1 px-3 py-2 text-sm bg-white border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500/50 placeholder-gray-400"
-              />
-              <button
-                onClick={handleSend}
-                disabled={!input.trim()}
-                className="p-2 rounded-full bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              >
-                <Send className="h-4 w-4" />
-              </button>
-            </div>
+            <ChatInputWithEmoji
+              inputRef={inputRef}
+              input={input}
+              setInput={setInput}
+              handleKeyDown={handleKeyDown}
+              handleSend={handleSend}
+              scope={scope}
+            />
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSend, scope }: {
+  inputRef: any;
+  input: string;
+  setInput: (v: string) => void;
+  handleKeyDown: (e: React.KeyboardEvent) => void;
+  handleSend: () => void;
+  scope: string;
+}) {
+  const [showEmoji, setShowEmoji] = useState(false);
+  return (
+    <div className="relative">
+      {showEmoji && (
+        <div className="absolute bottom-full left-0 right-0 mb-1 bg-[#292a2d] border border-white/10 rounded-xl p-2 grid grid-cols-10 gap-1">
+          {EMOJI_PICKER_LIST.map(e => (
+            <button key={e} onClick={() => { setInput(input + e); setShowEmoji(false); inputRef.current?.focus(); }}
+              className="text-lg hover:bg-white/10 rounded p-1 transition-colors">{e}</button>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <button onClick={() => setShowEmoji(!showEmoji)} className="p-2 text-gray-400 hover:text-white transition-colors">
+          <Smile className="h-4 w-4" />
+        </button>
+        <input
+          ref={inputRef}
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={scope === 'room' ? 'Message your room...' : 'Message everyone...'}
+          maxLength={500}
+          style={{ color: '#000000' }}
+          className="flex-1 px-3 py-2 text-sm bg-white border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500/50 placeholder-gray-400"
+        />
+        <button onClick={handleSend} disabled={!input.trim()}
+          className="p-2 rounded-full bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+          <Send className="h-4 w-4" />
+        </button>
+      </div>
     </div>
   );
 }

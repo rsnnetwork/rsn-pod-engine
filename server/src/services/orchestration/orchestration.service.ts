@@ -2919,11 +2919,11 @@ async function handleChatReact(
 
 // ─── Reactions ──────────────────────────────────────────────────────────────
 
-const VALID_REACTIONS = ['raise_hand', 'heart', 'clap', 'thumbs_up'];
+const VALID_REACTIONS = ['raise_hand', 'heart', 'clap', 'thumbs_up', 'fire', 'laugh', 'surprise', 'wave', 'party', 'hundred'];
 
 async function handleReactionSend(
   socket: Socket,
-  data: { sessionId: string; type: string }
+  data: { sessionId: string; type: string; matchId?: string }
 ): Promise<void> {
   try {
     const userId = getUserIdFromSocket(socket);
@@ -2951,7 +2951,12 @@ async function handleReactionSend(
 
     const displayName = (socket.data as any)?.displayName || 'User';
 
-    io.to(sessionRoom(sessionId)).emit('reaction:received', {
+    // Scope reactions: if user is in a breakout room (has matchId), emit only to that room
+    // Otherwise emit to the full session (lobby)
+    const targetRoom = data.matchId
+      ? `match:${data.matchId}`
+      : sessionRoom(sessionId);
+    io.to(targetRoom).emit('reaction:received', {
       userId,
       displayName,
       type,

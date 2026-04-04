@@ -80,20 +80,20 @@ export default function LiveSessionPage() {
   if (!sessionId) return <PageLoader />;
 
   return (
-    <div className="h-screen bg-[#202124] flex flex-col">
-      {/* Top bar — Google Meet style: minimal, dark */}
-      <div className="flex items-center justify-between px-4 py-2 bg-[#202124] border-b border-white/10">
-        <h2 className="text-sm font-medium text-gray-300 truncate">{session?.title || 'Live Event'}</h2>
+    <div className="h-screen bg-white flex flex-col">
+      {/* Top bar */}
+      <div className="flex items-center justify-between px-4 py-2 bg-white border-b border-gray-200">
+        <h2 className="text-sm font-medium text-[#1a1a2e] truncate">{session?.title || 'Live Event'}</h2>
         <div className="flex items-center gap-1">
           <button
             onClick={() => setParticipantListOpen(!participantListOpen)}
-            className={`p-2 rounded-full transition-colors ${participantListOpen ? 'bg-white/20 text-white' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}
+            className={`p-2 rounded-full transition-colors ${participantListOpen ? 'bg-gray-200 text-[#1a1a2e]' : 'text-gray-500 hover:text-[#1a1a2e] hover:bg-gray-100'}`}
           >
             <Users className="h-4 w-4" />
           </button>
           <button
             onClick={handleLeave}
-            className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-red-400 transition-colors px-3 py-1.5 rounded-full hover:bg-white/10"
+            className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-red-500 transition-colors px-3 py-1.5 rounded-full hover:bg-gray-100"
           >
             <LogOut className="h-4 w-4" /> Leave
           </button>
@@ -107,14 +107,14 @@ export default function LiveSessionPage() {
 
       {/* Broadcast banner */}
       {broadcasts.length > 0 && (
-        <div className="bg-blue-600/90 px-4 py-2 text-center">
+        <div className="bg-rsn-red px-4 py-2 text-center">
           <p className="text-sm font-medium text-white"><LinkifyText text={broadcasts[broadcasts.length - 1]} /></p>
         </div>
       )}
 
       {/* Connection status banner */}
       {connectionStatus === 'connecting' && (
-        <div className="bg-white/5 px-4 py-2 flex items-center justify-center gap-2">
+        <div className="bg-gray-100 px-4 py-2 flex items-center justify-center gap-2">
           <Loader2 className="h-4 w-4 text-gray-400 animate-spin" />
           <p className="text-sm text-gray-400">Connecting to event...</p>
         </div>
@@ -140,7 +140,7 @@ export default function LiveSessionPage() {
 
       {/* Transition status overlay */}
       {transitionStatus && (
-        <div className="bg-white/5 px-4 py-2 flex items-center justify-center gap-2">
+        <div className="bg-gray-100 px-4 py-2 flex items-center justify-center gap-2">
           <Loader2 className="h-4 w-4 text-blue-400 animate-spin" />
           <p className="text-sm text-gray-300">
             {transitionStatus === 'starting_session' && (isHost ? 'Starting event — lobby is open' : 'Event is starting — waiting for host to begin matching...')}

@@ -133,7 +133,7 @@ export interface ClientToServerEvents {
   'host:remove_cohost': (data: { sessionId: string; userId: string }) => void;
 
   // Reactions
-  'reaction:send': (data: { sessionId: string; type: string }) => void;
+  'reaction:send': (data: { sessionId: string; type: string; matchId?: string }) => void;
 
   // Chat
   'chat:send': (data: { sessionId: string; message: string; scope: 'lobby' | 'room' }) => void;

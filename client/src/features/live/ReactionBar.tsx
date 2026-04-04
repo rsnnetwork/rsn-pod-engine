@@ -9,6 +9,12 @@ const REACTIONS = [
   { type: 'heart', icon: Heart, label: 'Heart', emoji: '❤️' },
   { type: 'clap', icon: null, label: 'Clap', emoji: '👏' },
   { type: 'thumbs_up', icon: ThumbsUp, label: 'Thumbs Up', emoji: '👍' },
+  { type: 'fire', icon: null, label: 'Fire', emoji: '🔥' },
+  { type: 'laugh', icon: null, label: 'Laugh', emoji: '😂' },
+  { type: 'surprise', icon: null, label: 'Wow', emoji: '😮' },
+  { type: 'wave', icon: null, label: 'Wave', emoji: '👋' },
+  { type: 'party', icon: null, label: 'Party', emoji: '🎉' },
+  { type: 'hundred', icon: null, label: '100', emoji: '💯' },
 ] as const;
 
 interface FloatingReaction {
@@ -58,7 +64,8 @@ export default function ReactionBar({ sessionId }: { sessionId: string }) {
     const socket = getSocket();
     if (!socket) return;
 
-    socket.emit('reaction:send', { sessionId, type });
+    const matchId = useSessionStore.getState().currentMatchId;
+    socket.emit('reaction:send', { sessionId, type, matchId: matchId || undefined });
     setCooldown(true);
     setTimeout(() => setCooldown(false), 1000);
   }, [sessionId, cooldown]);

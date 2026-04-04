@@ -12,6 +12,7 @@
   "dependencies": {
     "@livekit/components-react": "^2.9.20",
     "@livekit/components-styles": "^1.2.0",
+    "@livekit/track-processors": "^0.7.2",
     "@rsn/shared": "1.0.0",
     "@tanstack/react-query": "^5.60.0",
     "axios": "^1.7.0",
