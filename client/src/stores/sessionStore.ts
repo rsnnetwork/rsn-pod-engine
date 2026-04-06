@@ -201,10 +201,16 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   setHostMuteCommand: (muted) => set({ hostMuteCommand: muted }),
   setPartnerDisconnected: (partnerDisconnected) => set({ partnerDisconnected }),
   setRoundDashboard: (roundDashboard) => set({ roundDashboard }),
-  addChatMessage: (msg) => set((s) => ({
-    chatMessages: [...s.chatMessages, msg],
-    unreadChatCount: s.chatOpen ? s.unreadChatCount : s.unreadChatCount + 1,
-  })),
+  addChatMessage: (msg) => set((s) => {
+    const messages = [...s.chatMessages, msg];
+    if (messages.length > 200) {
+      messages.splice(0, messages.length - 200);
+    }
+    return {
+      chatMessages: messages,
+      unreadChatCount: s.chatOpen ? s.unreadChatCount : s.unreadChatCount + 1,
+    };
+  }),
   setChatMessages: (chatMessages) => set({ chatMessages }),
   updateMessageReaction: (messageId, reactions) => set((s) => ({
     chatMessages: s.chatMessages.map(m => m.id === messageId ? { ...m, reactions } : m),

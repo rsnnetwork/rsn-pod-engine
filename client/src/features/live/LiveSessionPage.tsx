@@ -13,6 +13,7 @@ import ChatPanel from './ChatPanel';
 // MatchingOverlay replaced with inline banner — no longer full-screen
 import ReactionBar from './ReactionBar';
 import ParticipantList from './ParticipantList';
+import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 import { PageLoader } from '@/components/ui/Spinner';
 import { AlertCircle, X, LogOut, WifiOff, Loader2, RefreshCw, MessageCircle, Radio, Users, Shuffle, Mic, ArrowLeftRight, CheckCircle2 } from 'lucide-react';
 import api from '@/lib/api';
@@ -21,7 +22,19 @@ import { disconnectSocket, connectSocket, getSocket } from '@/lib/socket';
 export default function LiveSessionPage() {
   const { sessionId } = useParams();
   const navigate = useNavigate();
-  const { phase, broadcasts, error: sessionError, connectionStatus, transitionStatus, sessionStatus, currentRound, totalRounds, setError, setPhase, reset, chatOpen, setChatOpen, unreadChatCount, matchingOverlay, preparingMatches } = useSessionStore();
+  const phase = useSessionStore(s => s.phase);
+  const broadcasts = useSessionStore(s => s.broadcasts);
+  const sessionError = useSessionStore(s => s.error);
+  const connectionStatus = useSessionStore(s => s.connectionStatus);
+  const transitionStatus = useSessionStore(s => s.transitionStatus);
+  const sessionStatus = useSessionStore(s => s.sessionStatus);
+  const currentRound = useSessionStore(s => s.currentRound);
+  const totalRounds = useSessionStore(s => s.totalRounds);
+  const chatOpen = useSessionStore(s => s.chatOpen);
+  const unreadChatCount = useSessionStore(s => s.unreadChatCount);
+  const matchingOverlay = useSessionStore(s => s.matchingOverlay);
+  const preparingMatches = useSessionStore(s => s.preparingMatches);
+  const { setError, setPhase, reset, setChatOpen } = useSessionStore.getState();
   const { user } = useAuthStore();
   const mediaRequestedRef = useRef(false);
   const [participantListOpen, setParticipantListOpen] = useState(false);
@@ -197,9 +210,9 @@ export default function LiveSessionPage() {
       <div className="flex-1 flex overflow-hidden relative">
         {/* Session content */}
         <div className={`flex-1 flex flex-col overflow-hidden ${chatOpen ? 'hidden sm:flex' : ''}`}>
-          {phase === 'lobby' && <Lobby isHost={isHost} sessionId={sessionId} />}
-          {phase === 'matched' && <VideoRoom isHost={isHost} />}
-          {phase === 'rating' && <RatingPrompt sessionId={sessionId} />}
+          {phase === 'lobby' && <SectionErrorBoundary name="Lobby"><Lobby isHost={isHost} sessionId={sessionId} /></SectionErrorBoundary>}
+          {phase === 'matched' && <SectionErrorBoundary name="Video"><VideoRoom isHost={isHost} /></SectionErrorBoundary>}
+          {phase === 'rating' && <SectionErrorBoundary name="Rating"><RatingPrompt sessionId={sessionId} /></SectionErrorBoundary>}
           {phase === 'complete' && <SessionComplete sessionId={sessionId} />}
         </div>
 
@@ -213,7 +226,7 @@ export default function LiveSessionPage() {
         {/* Chat panel -- side panel on desktop, full overlay on mobile */}
         {chatOpen && (
           <div className="w-full sm:w-80 sm:min-w-[320px] flex-shrink-0 h-full">
-            <ChatPanel sessionId={sessionId} onClose={() => setChatOpen(false)} />
+            <SectionErrorBoundary name="Chat"><ChatPanel sessionId={sessionId} onClose={() => setChatOpen(false)} /></SectionErrorBoundary>
           </div>
         )}
 
