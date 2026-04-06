@@ -559,7 +559,7 @@ export async function findOrCreateGoogleUser(
           await query(
             `INSERT INTO session_participants (session_id, user_id, status)
              VALUES ($1, $2, 'registered')
-             ON CONFLICT (session_id, user_id) DO NOTHING`,
+             ON CONFLICT (session_id, user_id) DO UPDATE SET status = 'registered', left_at = NULL`,
             [inv.session_id, id]
           );
         }

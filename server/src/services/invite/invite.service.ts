@@ -364,6 +364,13 @@ export async function acceptInvite(code: string, userId: string): Promise<Invite
           try { await sessionService.registerParticipant(invite.sessionId, userId); } catch (err) {
             if (!(err instanceof ConflictError)) throw err;
           }
+          // Fallback: force-register even if registerParticipant failed silently
+          await query(
+            `INSERT INTO session_participants (session_id, user_id, status)
+             VALUES ($1, $2, 'registered')
+             ON CONFLICT (session_id, user_id) DO UPDATE SET status = 'registered', left_at = NULL`,
+            [invite.sessionId, userId]
+          );
         }
         logger.info({ code, userId, type: invite.type }, 'Invite effects applied (already consumed during registration)');
         return invite;
@@ -414,7 +421,7 @@ export async function acceptInvite(code: string, userId: string): Promise<Invite
             await query(
               `INSERT INTO session_participants (session_id, user_id, status)
                VALUES ($1, $2, 'registered')
-               ON CONFLICT (session_id, user_id) DO NOTHING`,
+               ON CONFLICT (session_id, user_id) DO UPDATE SET status = 'registered', left_at = NULL`,
               [invite.sessionId, userId]
             );
           } catch (insertErr) {
