@@ -76,6 +76,19 @@ export async function createJoinRequest(input: CreateJoinRequestInput): Promise<
 
   logger.info({ email: input.email }, 'New join request submitted');
 
+  // Notify all admins about the new join request
+  try {
+    await query(
+      `INSERT INTO notifications (user_id, type, title, body, link, created_at)
+       SELECT id, 'join_request', 'New Join Request',
+         $1 || ' wants to join RSN', '/admin/join-requests', NOW()
+       FROM users WHERE role IN ('admin', 'super_admin')`,
+      [input.fullName || input.email]
+    );
+  } catch (notifErr) {
+    logger.warn({ err: notifErr }, 'Failed to create admin notifications for join request — non-fatal');
+  }
+
   // Send confirmation email (non-blocking)
   sendJoinRequestConfirmationEmail(input.email, input.fullName).catch(err =>
     logger.error({ err, email: input.email }, 'Failed to send join request confirmation')
@@ -167,6 +180,20 @@ export async function reviewJoinRequest(
     sendJoinRequestWelcomeEmail(reviewed.email, reviewed.fullName, loginUrl).catch(err =>
       logger.error({ err, email: reviewed.email }, 'Failed to send welcome email')
     );
+
+    // In-app notification for the approved user (only if they already have an account)
+    try {
+      await query(
+        `INSERT INTO notifications (user_id, type, title, body, link, created_at)
+         SELECT id, 'approval', 'Welcome to RSN!',
+           'Your request to join has been approved. Start exploring!', '/pods', NOW()
+         FROM users WHERE LOWER(email) = LOWER($1)
+         LIMIT 1`,
+        [reviewed.email]
+      );
+    } catch (notifErr) {
+      logger.warn({ err: notifErr }, 'Failed to create approval notification — non-fatal');
+    }
   } else {
     sendJoinRequestDeclineEmail(reviewed.email, reviewed.fullName).catch(err =>
       logger.error({ err, email: reviewed.email }, 'Failed to send decline email')
