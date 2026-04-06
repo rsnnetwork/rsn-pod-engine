@@ -17,8 +17,8 @@ import { UserRole, hasRoleAtLeast } from '@rsn/shared';
 const POD_COLUMNS = `
   id, name, description, pod_type AS "podType", orchestration_mode AS "orchestrationMode",
   communication_mode AS "communicationMode", visibility, status, max_members AS "maxMembers",
-  rules, join_config AS "joinConfig", config, created_by AS "createdBy",
-  created_at AS "createdAt", updated_at AS "updatedAt"
+  rules, join_config AS "joinConfig", config, allow_member_invites AS "allowMemberInvites",
+  created_by AS "createdBy", created_at AS "createdAt", updated_at AS "updatedAt"
 `;
 
 const MEMBER_COLUMNS = `
@@ -108,6 +108,7 @@ export async function updatePod(podId: string, userId: string, input: UpdatePodI
     rules:             'rules',
     status:            'status',
     joinConfig:        'join_config',
+    allowMemberInvites:'allow_member_invites',
   };
 
   for (const [key, dbCol] of Object.entries(fieldMap)) {

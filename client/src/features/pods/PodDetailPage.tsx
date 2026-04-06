@@ -92,6 +92,7 @@ interface EditForm {
   visibility: string;
   maxMembers: number | '';
   rules: string;
+  allowMemberInvites: boolean;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -107,7 +108,7 @@ export default function PodDetailPage() {
   const [editForm, setEditForm] = useState<EditForm>({
     name: '', description: '', podType: 'speed_networking',
     orchestrationMode: 'timed_rounds', communicationMode: 'video',
-    visibility: 'private', maxMembers: '', rules: '',
+    visibility: 'private', maxMembers: '', rules: '', allowMemberInvites: false,
   });
 
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -306,6 +307,7 @@ export default function PodDetailPage() {
       visibility:        pod?.visibility || 'private',
       maxMembers:        pod?.maxMembers ?? '',
       rules:             pod?.rules || '',
+      allowMemberInvites: pod?.allowMemberInvites ?? false,
     });
     setEditOpen(true);
   };
@@ -592,6 +594,16 @@ export default function PodDetailPage() {
               />
             </div>
           </div>
+
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={editForm.allowMemberInvites}
+              onChange={(e) => setEditForm(f => ({ ...f, allowMemberInvites: e.target.checked }))}
+              className="h-4 w-4 rounded border-gray-300 text-[#1a1a2e] focus:ring-[#1a1a2e]"
+            />
+            <span className="text-sm text-gray-600">Allow members to invite others</span>
+          </label>
 
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={() => setEditOpen(false)}>Cancel</Button>

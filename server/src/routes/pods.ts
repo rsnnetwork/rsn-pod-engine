@@ -38,6 +38,7 @@ const updatePodSchema = z.object({
     rulesText:     z.string().max(5000).optional(),
     agreementText: z.string().max(1000).optional(),
   }).nullable().optional(),
+  allowMemberInvites: z.boolean().optional(),
 });
 
 const addMemberSchema = z.object({

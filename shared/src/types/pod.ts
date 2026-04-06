@@ -67,6 +67,7 @@ export interface Pod {
   maxMembers: number | null;
   rules: string | null;
   joinConfig: PodJoinConfig | null;
+  allowMemberInvites: boolean;
   createdBy: string;
   createdAt: Date;
   updatedAt: Date;
@@ -110,6 +111,7 @@ export interface UpdatePodInput {
   rules?: string;
   status?: PodStatus;
   joinConfig?: PodJoinConfig | null;
+  allowMemberInvites?: boolean;
 }
 
 export interface PodConfig {

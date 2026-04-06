@@ -89,11 +89,18 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
       throw new AppError(400, 'POD_ARCHIVED', 'Cannot invite to an archived pod');
     }
 
-    // Only directors and hosts can invite to pods (admins bypass)
+    // Directors and hosts can always invite; regular members can only invite if pod allows it
     if (!isAdmin) {
       const memberRole = await podService.getMemberRole(input.podId, userId);
-      if (!memberRole || (memberRole !== 'director' && memberRole !== 'host')) {
-        throw new AppError(403, 'AUTH_FORBIDDEN', 'Only pod directors and hosts can send pod invites');
+      const isDirectorOrHost = memberRole === 'director' || memberRole === 'host';
+      if (!isDirectorOrHost) {
+        // Check if pod allows member invites AND sender is an active member
+        if (!pod.allowMemberInvites) {
+          throw new AppError(403, 'AUTH_FORBIDDEN', 'Only pod directors and hosts can send pod invites');
+        }
+        if (!memberRole || memberRole !== 'member') {
+          throw new AppError(403, 'AUTH_FORBIDDEN', 'You must be a pod member to send invites');
+        }
       }
     }
 

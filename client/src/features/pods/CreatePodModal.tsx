@@ -23,6 +23,7 @@ interface PodForm {
   communicationMode: string;
   visibility: string;
   maxMembers: number | '';
+  allowMemberInvites?: boolean;
 }
 
 const POD_TYPES = [
@@ -54,13 +55,14 @@ const DEFAULT_VALUES: PodForm = {
   communicationMode: 'video',
   visibility:        'private',
   maxMembers:        '',
+  allowMemberInvites: false,
 };
 
 export default function CreatePodModal({ open, onClose, initialValues }: Props) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { addToast } = useToastStore();
-  const { register, handleSubmit, reset, formState: { errors } } = useForm<PodForm>({
+  const { register, handleSubmit, reset, watch, setValue, formState: { errors } } = useForm<PodForm>({
     defaultValues: DEFAULT_VALUES,
   });
 
@@ -156,6 +158,16 @@ export default function CreatePodModal({ open, onClose, initialValues }: Props) 
             placeholder="Unlimited"
           />
         </div>
+
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={watch('allowMemberInvites') || false}
+            onChange={(e) => setValue('allowMemberInvites', e.target.checked)}
+            className="h-4 w-4 rounded border-gray-300 text-[#1a1a2e] focus:ring-[#1a1a2e]"
+          />
+          <span className="text-sm text-gray-600">Allow members to invite others</span>
+        </label>
 
         <div className="flex gap-3 justify-end pt-2">
           <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
