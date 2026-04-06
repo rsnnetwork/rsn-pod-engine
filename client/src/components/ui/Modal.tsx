@@ -29,15 +29,15 @@ export default function Modal({ open, onClose, title, children, className }: Mod
           />
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
-            className={cn('relative w-full max-w-lg rounded-2xl border border-gray-200 bg-gray-50 p-6 shadow-2xl', className)}
+            className={cn('relative w-full max-w-lg max-h-[90vh] rounded-2xl border border-gray-200 bg-gray-50 shadow-2xl flex flex-col', className)}
           >
             {title && (
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center justify-between p-6 pb-0 mb-4 shrink-0">
                 <h2 className="text-lg font-semibold text-[#1a1a2e]">{title}</h2>
                 <button onClick={onClose} className="text-gray-500 hover:text-gray-800 transition-colors"><X className="h-5 w-5" /></button>
               </div>
             )}
-            {children}
+            <div className="overflow-y-auto p-6 pt-0">{children}</div>
           </motion.div>
         </div>
       )}
