@@ -4,7 +4,7 @@ import { Bell, Check, CheckCircle, X, Loader2 } from 'lucide-react';
 // Navigation uses window.location.href because portal renders outside Router context
 import { useQueryClient } from '@tanstack/react-query';
 import { useToastStore } from '@/stores/toastStore';
-import { useAuthStore } from '@/stores/authStore';
+// useAuthStore removed — onboarding redirect no longer needed here
 import { getSocket } from '@/lib/socket';
 import api from '@/lib/api';
 
@@ -42,7 +42,7 @@ function getDestination(n: Notification): string | null {
 }
 
 export default function NotificationBell() {
-  const { user } = useAuthStore();
+  // Auth store removed — onboarding check moved to ProtectedRoute
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -130,14 +130,13 @@ export default function NotificationBell() {
       setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, inviteStatus: 'accepted', isRead: true } : x));
       invalidateInviteCaches();
       setOpen(false);
-      // Navigate to the pod/session — check profile completeness first
+      // Navigate to the pod/session directly — no onboarding hijack
       const data = res.data?.data;
       const dest = data?.sessionId ? `/sessions/${data.sessionId}` : data?.podId ? `/pods/${data.podId}` : null;
       if (dest) {
-        const profileIncomplete = !user?.displayName || !user?.jobTitle;
         setOpen(false);
         setTimeout(() => {
-          window.location.href = profileIncomplete ? `/onboarding?redirect=${encodeURIComponent(dest)}` : dest;
+          window.location.href = dest;
         }, 50);
       }
     } catch (err: any) {

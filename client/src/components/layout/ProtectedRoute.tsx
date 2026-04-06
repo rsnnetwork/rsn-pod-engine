@@ -9,5 +9,13 @@ export default function ProtectedRoute({ children }: { children?: ReactNode }) {
 
   if (isLoading) return <div className="h-screen w-screen bg-white flex items-center justify-center"><PageLoader /></div>;
   if (!user) return <Navigate to="/welcome" state={{ from: location }} replace />;
+
+  // Gate onboarding to first login — don't interrupt live sessions or the onboarding page itself
+  const isOnboarding = location.pathname === '/onboarding';
+  const isLiveSession = location.pathname.startsWith('/sessions/') && location.pathname.includes('/live');
+  if ((user as any).onboardingCompleted === false && !isOnboarding && !isLiveSession) {
+    return <Navigate to={`/onboarding?redirect=${encodeURIComponent(location.pathname)}`} replace />;
+  }
+
   return <>{children}</>;
 }

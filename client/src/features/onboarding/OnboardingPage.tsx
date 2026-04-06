@@ -125,6 +125,8 @@ export default function OnboardingPage() {
         interests,
         matchingNotes: matchingNotes.trim() || null,
       });
+      // Mark onboarding as completed so it never shows again
+      await api.post('/auth/onboarding/complete').catch(() => {});
       await checkSession();
       addToast('Profile set up!', 'success');
       navigate(redirect, { replace: true });

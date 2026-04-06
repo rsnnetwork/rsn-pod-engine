@@ -253,4 +253,17 @@ router.get(
   }
 );
 
+// ─── Onboarding Complete ───────────────────────────────────────────────────
+import { query } from '../db';
+
+router.post('/onboarding/complete', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const userId = (req as any).user?.userId || (req as any).user?.id;
+    await query('UPDATE users SET onboarding_completed = true WHERE id = $1', [userId]);
+    res.json({ data: { onboardingCompleted: true } });
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;

@@ -84,13 +84,8 @@ export default function InviteAcceptPage() {
       const data = res.data?.data;
       const destination = getDestination(data);
 
-      // Check if profile is incomplete — redirect to onboarding first
-      const isProfileIncomplete = !user?.displayName || !user?.jobTitle || !user?.reasonsToConnect?.length;
-      if (isProfileIncomplete) {
-        navigate(`/onboarding?redirect=${encodeURIComponent(destination)}`, { replace: true });
-      } else {
-        navigate(destination, { replace: true });
-      }
+      // Navigate directly — onboarding is handled by ProtectedRoute on first login, not here
+      navigate(destination, { replace: true });
     } catch (err: any) {
       const errCode = err?.response?.data?.error?.code;
       // "Already a member" or "invite used/expired but user already has access"
