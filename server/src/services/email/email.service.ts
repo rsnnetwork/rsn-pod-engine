@@ -98,7 +98,7 @@ export async function sendMagicLinkEmail(
     <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
         <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
+          <div style="text-align:center;margin:0 0 8px 0;"><img src="${config.clientUrl}/favicon-192.png" alt="RSN" width="48" height="48" style="display:inline-block;vertical-align:middle;margin-right:8px;border-radius:10px;" /><span style="color:#DE322E;font-size:28px;font-weight:700;vertical-align:middle;">RSN</span></div>
           <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
           
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
@@ -168,7 +168,7 @@ export async function sendSessionRecapEmail(
     <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
         <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
+          <div style="text-align:center;margin:0 0 8px 0;"><img src="${config.clientUrl}/favicon-192.png" alt="RSN" width="48" height="48" style="display:inline-block;vertical-align:middle;margin-right:8px;border-radius:10px;" /><span style="color:#DE322E;font-size:28px;font-weight:700;vertical-align:middle;">RSN</span></div>
           <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Event Recap</p>
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">
@@ -246,7 +246,7 @@ export async function sendHostRecapEmail(
     <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
         <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
+          <div style="text-align:center;margin:0 0 8px 0;"><img src="${config.clientUrl}/favicon-192.png" alt="RSN" width="48" height="48" style="display:inline-block;vertical-align:middle;margin-right:8px;border-radius:10px;" /><span style="color:#DE322E;font-size:28px;font-weight:700;vertical-align:middle;">RSN</span></div>
           <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Host Event Recap</p>
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">
@@ -350,7 +350,7 @@ export async function sendInviteEmail(
     <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
         <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
+          <div style="text-align:center;margin:0 0 8px 0;"><img src="${config.clientUrl}/favicon-192.png" alt="RSN" width="48" height="48" style="display:inline-block;vertical-align:middle;margin-right:8px;border-radius:10px;" /><span style="color:#DE322E;font-size:28px;font-weight:700;vertical-align:middle;">RSN</span></div>
           <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
@@ -424,7 +424,7 @@ export async function sendJoinRequestConfirmationEmail(
     <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
         <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
+          <div style="text-align:center;margin:0 0 8px 0;"><img src="${config.clientUrl}/favicon-192.png" alt="RSN" width="48" height="48" style="display:inline-block;vertical-align:middle;margin-right:8px;border-radius:10px;" /><span style="color:#DE322E;font-size:28px;font-weight:700;vertical-align:middle;">RSN</span></div>
           <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
@@ -475,7 +475,7 @@ export async function sendJoinRequestWelcomeEmail(
     <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
         <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
+          <div style="text-align:center;margin:0 0 8px 0;"><img src="${config.clientUrl}/favicon-192.png" alt="RSN" width="48" height="48" style="display:inline-block;vertical-align:middle;margin-right:8px;border-radius:10px;" /><span style="color:#DE322E;font-size:28px;font-weight:700;vertical-align:middle;">RSN</span></div>
           <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
@@ -533,7 +533,7 @@ export async function sendJoinRequestDeclineEmail(
     <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
         <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
+          <div style="text-align:center;margin:0 0 8px 0;"><img src="${config.clientUrl}/favicon-192.png" alt="RSN" width="48" height="48" style="display:inline-block;vertical-align:middle;margin-right:8px;border-radius:10px;" /><span style="color:#DE322E;font-size:28px;font-weight:700;vertical-align:middle;">RSN</span></div>
           <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
@@ -593,7 +593,7 @@ export async function sendJoinRequestReminderEmail(
     <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
         <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
+          <div style="text-align:center;margin:0 0 8px 0;"><img src="${config.clientUrl}/favicon-192.png" alt="RSN" width="48" height="48" style="display:inline-block;vertical-align:middle;margin-right:8px;border-radius:10px;" /><span style="color:#DE322E;font-size:28px;font-weight:700;vertical-align:middle;">RSN</span></div>
           <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
@@ -649,7 +649,7 @@ export async function sendGenericEmail(
     <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
         <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <h1 style="color:#DE322E;font-size:28px;font-weight:700;margin:0 0 8px 0;text-align:center;">RSN</h1>
+          <div style="text-align:center;margin:0 0 8px 0;"><img src="${config.clientUrl}/favicon-192.png" alt="RSN" width="48" height="48" style="display:inline-block;vertical-align:middle;margin-right:8px;border-radius:10px;" /><span style="color:#DE322E;font-size:28px;font-weight:700;vertical-align:middle;">RSN</span></div>
           <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
             Hi ${recipientName},
