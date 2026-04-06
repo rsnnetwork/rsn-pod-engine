@@ -373,26 +373,28 @@ export default function useSessionSocket(sessionId: string) {
 
     socket.on('rating:window_closed', () => {
       clearTimer();
-      clearRatingFallback(); // Cancel fallback — normal event received
+      clearRatingFallback();
       clearByeTimeout();
-      store.setLiveKitToken(null, null);
-      store.setByeRound(false);
-      store.setPartnerDisconnected(false);
       const state = useSessionStore.getState();
-      store.setLastRatedRound(state.currentRound); // Prevent re-entry to rating for this round
-      // Don't clear match data immediately — let RatingPrompt finish if user is mid-submit.
+      store.setLastRatedRound(state.currentRound);
+
+      // 3-second grace period for in-flight rating submissions
+      // Don't nuke match data immediately — let RatingPrompt finish
       setTimeout(() => {
-        store.setMatch(null);
-        store.setRoomId(null);
-      }, 500);
-      // Return to lobby immediately — no transition delay
-      const isLastRound = state.currentRound >= state.totalRounds && state.totalRounds > 0;
-      if (isLastRound) {
-        store.setTransitionStatus('session_ending');
-      } else {
-        store.setTransitionStatus(null);
-      }
-      store.setPhase('lobby');
+        const current = useSessionStore.getState();
+        if (current.phase === 'rating') {
+          // Still in rating after grace — force return to lobby
+          store.setLiveKitToken(null, null);
+          store.setByeRound(false);
+          store.setPartnerDisconnected(false);
+          store.setMatch(null);
+          store.setRoomId(null);
+          const isLastRound = current.currentRound >= current.totalRounds && current.totalRounds > 0;
+          store.setTransitionStatus(isLastRound ? 'session_ending' : null);
+          store.setPhase('lobby');
+        }
+        // If phase already changed (user finished rating naturally), do nothing
+      }, 3000);
     });
 
     // ── Host broadcasts ──
