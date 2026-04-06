@@ -10,7 +10,7 @@ import { PageLoader } from '@/components/ui/Spinner';
 import api from '@/lib/api';
 import CreatePodModal from './CreatePodModal';
 
-type PodFilter = 'browse' | 'active' | 'archived' | 'all';
+type PodFilter = 'browse' | 'active' | 'archived';
 
 const VISIBILITY_CONFIG: Record<string, { label: string; icon: typeof Eye; variant: 'default' | 'warning' | 'info' | 'success' }> = {
   public:               { label: 'Public',             icon: Eye,       variant: 'info' },
@@ -23,7 +23,7 @@ const VISIBILITY_CONFIG: Record<string, { label: string; icon: typeof Eye; varia
 export default function PodsPage() {
   const navigate = useNavigate();
   const [showCreate, setShowCreate] = useState(false);
-  const [filter, setFilter] = useState<PodFilter>('browse');
+  const [filter, setFilter] = useState<PodFilter>('active');
   const [search, setSearch] = useState('');
 
   const { data, isLoading } = useQuery({
@@ -33,7 +33,7 @@ export default function PodsPage() {
         // Browse shows all non-private active pods across the platform
         return api.get('/pods?browse=true').then(r => r.data.data ?? []);
       }
-      const params = filter === 'all' ? '' : `?status=${filter}`;
+      const params = `?status=${filter}`;
       return api.get(`/pods${params}`).then(r => r.data.data ?? []);
     },
   });
@@ -67,13 +67,12 @@ export default function PodsPage() {
         </Button>
       </div>
 
-      {/* Tabs — order: Browse All | Active | Archived | All */}
+      {/* Tabs — order: Active | Browse All | Archived */}
       <div className="flex gap-2 flex-wrap animate-fade-in-up">
         {([
-          { key: 'browse',   label: 'Browse All', icon: Globe },
           { key: 'active',   label: 'Active',     icon: null },
+          { key: 'browse',   label: 'Browse All', icon: Globe },
           { key: 'archived', label: 'Archived',   icon: null },
-          { key: 'all',      label: 'All',        icon: null },
         ] as { key: PodFilter; label: string; icon: typeof Globe | null }[]).map(({ key, label, icon: Icon }) => (
           <Button
             key={key}
