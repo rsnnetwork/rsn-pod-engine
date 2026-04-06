@@ -127,7 +127,7 @@ function VideoStage() {
       {remoteTracks.length > 0 ? (
         <>
           {/* Remote tracks — full area on mobile, grid on desktop */}
-          <div className={`h-full grid gap-4 ${isTrio ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1 md:grid-cols-2'}`}>
+          <div className={`h-full grid gap-4 ${isTrio ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1 md:grid-cols-2'}`}>
             {remoteTracks.map((rt, i) => (
               <div key={rt.participant.sid} className="cursor-pointer" onClick={() => setPinnedSid(rt.participant.sid)}>
                 <VideoTile trackRef={rt} label={rt.participant.name || currentPartners[i]?.displayName || 'Partner'} />
@@ -173,14 +173,34 @@ function MediaControls() {
   const [showBgPanel, setShowBgPanel] = useState(false);
   const processorRef = useRef<any>(null);
 
+  useEffect(() => {
+    if (localParticipant) {
+      setCamEnabled(localParticipant.isCameraEnabled);
+    }
+  }, [localParticipant]);
+
   const toggleMic = useCallback(async () => {
     await localParticipant.setMicrophoneEnabled(!micEnabled);
     setMicEnabled(!micEnabled);
   }, [localParticipant, micEnabled]);
 
   const toggleCam = useCallback(async () => {
-    await localParticipant.setCameraEnabled(!camEnabled);
-    setCamEnabled(!camEnabled);
+    try {
+      const target = !camEnabled;
+      await localParticipant.setCameraEnabled(target);
+      setCamEnabled(localParticipant.isCameraEnabled);
+    } catch (err) {
+      console.error('Camera toggle failed, retrying:', err);
+      try {
+        for (const pub of localParticipant.videoTrackPublications.values()) {
+          if (pub.track) await localParticipant.unpublishTrack(pub.track);
+        }
+        if (!camEnabled) {
+          await localParticipant.setCameraEnabled(true);
+        }
+      } catch { /* retry failed */ }
+      setCamEnabled(localParticipant.isCameraEnabled);
+    }
   }, [localParticipant, camEnabled]);
 
   const applyBackground = useCallback(async (mode: string, imagePath?: string) => {

@@ -201,6 +201,12 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
   const [bgMode, setBgMode] = useState('disabled');
   const [showBgPanel, setShowBgPanel] = useState(false);
 
+  useEffect(() => {
+    if (localParticipant) {
+      setCamEnabled(localParticipant.isCameraEnabled);
+    }
+  }, [localParticipant]);
+
   // Auto-mute participants (not host) on mount
   useEffect(() => {
     if (!isHost) {
@@ -241,7 +247,7 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
         } else {
           setCamEnabled(false);
         }
-      } catch { setCamEnabled(camEnabled); }
+      } catch { setCamEnabled(localParticipant.isCameraEnabled); }
     }
   }, [localParticipant, camEnabled]);
 
