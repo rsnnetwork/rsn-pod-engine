@@ -113,6 +113,27 @@ router.get(
   }
 );
 
+// ─── GET /pods/:id/members/for-invite ───────────────────────────────────────
+// MUST be before /:id to avoid Express matching /:id first
+
+router.get(
+  '/:id/members/for-invite',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const sessionId = req.query.sessionId as string;
+      if (!sessionId) {
+        res.status(400).json({ error: { message: 'sessionId required' } });
+        return;
+      }
+      const members = await podService.getPodMembersForInvite(req.params.id, sessionId);
+      res.json({ data: members });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // ─── GET /pods/:id ──────────────────────────────────────────────────────────
 
 router.get(
@@ -164,26 +185,6 @@ router.delete(
       await podService.deletePod(req.params.id, req.user!.userId, req.user!.role);
       const response: ApiResponse = { success: true, data: { message: 'Pod deleted' } };
       res.json(response);
-    } catch (err) {
-      next(err);
-    }
-  }
-);
-
-// ─── GET /pods/:id/members/for-invite ───────────────────────────────────────
-
-router.get(
-  '/:id/members/for-invite',
-  authenticate,
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const sessionId = req.query.sessionId as string;
-      if (!sessionId) {
-        res.status(400).json({ error: { message: 'sessionId required' } });
-        return;
-      }
-      const members = await podService.getPodMembersForInvite(req.params.id, sessionId);
-      res.json({ data: members });
     } catch (err) {
       next(err);
     }
