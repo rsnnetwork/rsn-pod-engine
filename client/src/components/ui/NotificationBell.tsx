@@ -190,7 +190,7 @@ export default function NotificationBell() {
    * - Invite (declined/expired) → toast, no navigation
    * - Other notification types → navigate to link destination
    */
-  const handleClick = (n: Notification) => {
+  const handleClick = async (n: Notification) => {
     if (!n.isRead) markRead(n.id);
 
     if (n.inviteStatus === 'revoked') {
@@ -199,13 +199,35 @@ export default function NotificationBell() {
     }
     if (n.inviteStatus === 'expired') {
       addToast('This invite has expired', 'info');
+      return;
     }
 
-    // Navigate to destination — use window.location because portal renders outside Router
+    // CRITICAL: If this is a pending invite, accept it FIRST before navigating
+    // This ensures the user is always registered — whether they click the notification
+    // title or the Accept button. Fixes the "click notification → land unregistered" bug.
+    if (n.inviteStatus === 'pending') {
+      const code = extractInviteCode(n.link);
+      if (code) {
+        try {
+          await api.post(`/invites/${code}/accept`);
+          invalidateInviteCaches();
+          setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, inviteStatus: 'accepted', isRead: true } : x));
+        } catch (err: any) {
+          const errCode = err?.response?.data?.error?.code;
+          // Already registered/member = still navigate
+          if (errCode !== 'SESSION_ALREADY_REGISTERED' && errCode !== 'POD_MEMBER_EXISTS' &&
+              errCode !== 'INVITE_ALREADY_USED' && errCode !== 'INVITE_EXPIRED') {
+            addToast('Failed to accept invite', 'error');
+            return;
+          }
+        }
+      }
+    }
+
+    // Navigate to destination
     const dest = getDestination(n);
     if (dest) {
       setOpen(false);
-      // Small delay to let panel close animation complete before navigation
       setTimeout(() => { window.location.href = dest; }, 50);
     }
   };
