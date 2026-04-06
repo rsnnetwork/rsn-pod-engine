@@ -23,6 +23,7 @@ const TYPE_CONFIG: Record<string, { label: string; icon: typeof Users; variant: 
 export default function InvitesPage() {
   const navigate = useNavigate();
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'accepted' | 'revoked'>('all');
   const { user } = useAuthStore();
   const { addToast } = useToastStore();
   const userIsAdmin = isAdmin(user?.role);
@@ -226,6 +227,21 @@ export default function InvitesPage() {
   });
 
   const needsTarget = (inviteType === 'pod' && !podId) || (inviteType === 'session' && !sessionId);
+
+  // Status filter counts (client-side from full data)
+  const allInvites = data || [];
+  const counts = {
+    all: allInvites.length,
+    pending: allInvites.filter((i: any) => i.status === 'pending' || i.status === 'active').length,
+    accepted: allInvites.filter((i: any) => i.status === 'accepted').length,
+    revoked: allInvites.filter((i: any) => i.status === 'revoked').length,
+  };
+  const filteredInvites = statusFilter === 'all'
+    ? allInvites
+    : allInvites.filter((i: any) => {
+        if (statusFilter === 'pending') return i.status === 'pending' || i.status === 'active';
+        return i.status === statusFilter;
+      });
 
   if (isLoading) return <PageLoader />;
 
@@ -496,67 +512,85 @@ export default function InvitesPage() {
         </div>
       </Card>
 
-      {/* Invite List */}
-      {(!data || data.length === 0) ? (
-        <EmptyState
-          icon={<Mail className="h-8 w-8" />}
-          title="No invites yet"
-          description="Create invite links above to grow your pods."
-        />
-      ) : (
-        <div className="grid gap-4 animate-fade-in-up">
-          {data.map((inv: any) => {
-            const typeConf = TYPE_CONFIG[inv.type] || TYPE_CONFIG.platform;
-            const TypeIcon = typeConf.icon;
-            const isActive = inv.status === 'active' || inv.status === 'pending';
-            return (
-            <Card key={inv.id}>
-              <div className="flex items-center justify-between">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Badge variant={typeConf.variant} className="text-xs flex items-center gap-1">
-                      <TypeIcon className="h-3 w-3" /> {typeConf.label}
-                    </Badge>
-                    {inv.podName && <span className="text-sm font-medium text-gray-700">{inv.podName}</span>}
-                    {inv.sessionTitle && <span className="text-sm font-medium text-gray-700">{inv.sessionTitle}</span>}
+      {/* Sent Invites — Status Filter Tabs + List */}
+      <div className="animate-fade-in-up">
+        <div className="flex gap-2 mb-4">
+          {(['all', 'pending', 'accepted', 'revoked'] as const).map(tab => (
+            <button
+              key={tab}
+              onClick={() => setStatusFilter(tab)}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                statusFilter === tab
+                  ? 'bg-[#1a1a2e] text-white'
+                  : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              {tab === 'revoked' ? 'Declined' : tab.charAt(0).toUpperCase() + tab.slice(1)} ({counts[tab]})
+            </button>
+          ))}
+        </div>
+
+        {filteredInvites.length === 0 ? (
+          <EmptyState
+            icon={<Mail className="h-8 w-8" />}
+            title={statusFilter === 'all' ? 'No invites yet' : `No ${statusFilter === 'revoked' ? 'declined' : statusFilter} invites`}
+            description={statusFilter === 'all' ? 'Create invite links above to grow your pods.' : `You don't have any ${statusFilter === 'revoked' ? 'declined' : statusFilter} invites.`}
+          />
+        ) : (
+          <div className="grid gap-4">
+            {filteredInvites.map((inv: any) => {
+              const typeConf = TYPE_CONFIG[inv.type] || TYPE_CONFIG.platform;
+              const TypeIcon = typeConf.icon;
+              const isActive = inv.status === 'active' || inv.status === 'pending';
+              return (
+              <Card key={inv.id}>
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Badge variant={typeConf.variant} className="text-xs flex items-center gap-1">
+                        <TypeIcon className="h-3 w-3" /> {typeConf.label}
+                      </Badge>
+                      {inv.podName && <span className="text-sm font-medium text-gray-700">{inv.podName}</span>}
+                      {inv.sessionTitle && <span className="text-sm font-medium text-gray-700">{inv.sessionTitle}</span>}
+                    </div>
+                    <p className="text-sm text-gray-500 mt-0.5">
+                      Uses: {inv.useCount || 0}{inv.maxUses ? ` / ${inv.maxUses}` : ''}
+                      {inv.inviteeEmail ? ` · To: ${inv.inviteeEmail}` : ''}
+                    </p>
+                    <p className="text-xs text-gray-400 mt-1">
+                      Created {new Date(inv.createdAt).toLocaleDateString()}
+                      {inv.acceptedAt && ` · Accepted ${new Date(inv.acceptedAt).toLocaleDateString()}`}
+                      {inv.expiresAt && inv.status === 'pending' && ` · Expires ${new Date(inv.expiresAt).toLocaleDateString()}`}
+                    </p>
                   </div>
-                  <p className="text-sm text-gray-500 mt-0.5">
-                    Uses: {inv.useCount || 0}{inv.maxUses ? ` / ${inv.maxUses}` : ''}
-                    {inv.inviteeEmail ? ` · To: ${inv.inviteeEmail}` : ''}
-                  </p>
-                  <p className="text-xs text-gray-400 mt-1">
-                    Created {new Date(inv.createdAt).toLocaleDateString()}
-                    {inv.acceptedAt && ` · Accepted ${new Date(inv.acceptedAt).toLocaleDateString()}`}
-                    {inv.expiresAt && inv.status === 'pending' && ` · Expires ${new Date(inv.expiresAt).toLocaleDateString()}`}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant={isActive ? 'success' : 'default'}>{inv.status}</Badge>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => copyLink(inv)}
-                    title="Copy invite link"
-                  >
-                    {copiedId === inv.id ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
-                  </Button>
-                  {isActive && (
+                  <div className="flex items-center gap-2">
+                    <Badge variant={isActive ? 'success' : 'default'}>{inv.status}</Badge>
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => { if (confirm('Revoke this invite? It will no longer be usable.')) revokeMutation.mutate(inv.id); }}
-                      title="Revoke invite"
-                      className="text-red-400 hover:text-red-600 hover:bg-red-50"
+                      onClick={() => copyLink(inv)}
+                      title="Copy invite link"
                     >
-                      <Trash2 className="h-4 w-4" />
+                      {copiedId === inv.id ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
                     </Button>
-                  )}
+                    {isActive && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => { if (confirm('Revoke this invite? It will no longer be usable.')) revokeMutation.mutate(inv.id); }}
+                        title="Revoke invite"
+                        className="text-red-400 hover:text-red-600 hover:bg-red-50"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            </Card>
-          );})}
-        </div>
-      )}
+              </Card>
+            );})}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
