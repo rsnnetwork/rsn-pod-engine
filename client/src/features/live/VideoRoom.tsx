@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { useSessionStore } from '@/stores/sessionStore';
 import { formatTime } from '@/lib/utils';
-import { Video, Clock, Mic, MicOff, VideoOff, Wifi, UserX, ArrowLeft, Sparkles } from 'lucide-react';
+import { Video, Clock, Mic, MicOff, VideoOff, Wifi, UserX, ArrowLeft } from 'lucide-react';
 // Lazy-load track processors (may not be available in all environments)
 let _bgBlur: any = null;
 let _vBg: any = null;
@@ -260,10 +260,7 @@ function MediaControls() {
         className={`p-2 rounded-full transition-colors ${camEnabled ? 'bg-gray-200 hover:bg-gray-300 text-gray-700' : 'bg-red-100 text-red-500 hover:bg-red-200'}`}>
         {camEnabled ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
       </button>
-      <button onClick={() => setShowBgPanel(!showBgPanel)} title="Background effects"
-        className={`p-2 rounded-full transition-colors ${bgMode !== 'disabled' ? 'bg-indigo-100 text-indigo-600' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}>
-        <Sparkles className="h-5 w-5" />
-      </button>
+      {/* Background effects button removed — already accessible via BG button in media controls */}
 
       {/* Background effects panel */}
       {showBgPanel && (
