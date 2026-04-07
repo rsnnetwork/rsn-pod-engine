@@ -613,6 +613,11 @@ export async function getPodMembersForInvite(podId: string, sessionId: string): 
         WHERE i.session_id = $2 AND i.status IN ('pending', 'accepted')
         AND i.accepted_by_user_id IS NOT NULL
       )
+      AND u.email NOT IN (
+        SELECT i.invitee_email FROM invites i
+        WHERE i.session_id = $2 AND i.status IN ('pending', 'accepted')
+        AND i.invitee_email IS NOT NULL
+      )
     ORDER BY u.display_name
   `, [podId, sessionId]);
 

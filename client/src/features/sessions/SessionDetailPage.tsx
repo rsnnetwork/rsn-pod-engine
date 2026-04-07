@@ -174,8 +174,14 @@ export default function SessionDetailPage() {
       addToast('Registered for event!', 'success');
     },
     onError: (err: any) => {
-      const msg = err?.response?.data?.error?.message || 'Failed to register';
-      addToast(msg, 'error');
+      const errCode = err?.response?.data?.error?.code;
+      if (errCode === 'SESSION_ALREADY_REGISTERED') {
+        addToast('You\'re already registered for this event!', 'info');
+        qc.invalidateQueries({ queryKey: ['session-participants', sessionId] });
+      } else {
+        const msg = err?.response?.data?.error?.message || 'Failed to register';
+        addToast(msg, 'error');
+      }
     },
   });
 

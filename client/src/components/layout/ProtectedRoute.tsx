@@ -14,7 +14,8 @@ export default function ProtectedRoute({ children }: { children?: ReactNode }) {
   const isOnboarding = location.pathname === '/onboarding';
   const isLiveSession = location.pathname.startsWith('/sessions/') && location.pathname.includes('/live');
   if ((user as any).onboardingCompleted === false && !isOnboarding && !isLiveSession) {
-    return <Navigate to={`/onboarding?redirect=${encodeURIComponent(location.pathname)}`} replace />;
+    const safeRedirect = location.pathname.startsWith('/onboarding') ? '/' : location.pathname;
+    return <Navigate to={`/onboarding?redirect=${encodeURIComponent(safeRedirect)}`} replace />;
   }
 
   return <>{children}</>;
