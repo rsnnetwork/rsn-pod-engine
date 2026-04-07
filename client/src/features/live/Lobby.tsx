@@ -230,28 +230,28 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
   }, [localParticipant, micEnabled]);
 
   const toggleCam = useCallback(async () => {
+    const target = !camEnabled;
     try {
-      const target = !camEnabled;
-      await localParticipant.setCameraEnabled(target);
-      setCamEnabled(target);
-      // Mobile fix: verify track state restored after a short delay
-      setTimeout(() => {
-        setCamEnabled(localParticipant.isCameraEnabled);
-      }, 500);
-    } catch (err) {
-      console.error('Camera toggle failed, retrying:', err);
-      try {
-        // Retry: unpublish all video tracks then re-enable
+      if (!target) {
+        // Turning OFF — just disable
+        await localParticipant.setCameraEnabled(false);
+        setCamEnabled(false);
+      } else {
+        // Turning ON — unpublish stale tracks first, then re-enable fresh
         for (const pub of localParticipant.videoTrackPublications.values()) {
-          if (pub.track) await localParticipant.unpublishTrack(pub.track);
+          if (pub.track) {
+            try { await localParticipant.unpublishTrack(pub.track); } catch { /* ignore */ }
+          }
         }
-        if (!camEnabled) {
-          await localParticipant.setCameraEnabled(true);
-          setCamEnabled(true);
-        } else {
-          setCamEnabled(false);
-        }
-      } catch { setCamEnabled(localParticipant.isCameraEnabled); }
+        await localParticipant.setCameraEnabled(true);
+        setCamEnabled(true);
+        // Verify after delay — catches mobile browser quirks
+        setTimeout(() => setCamEnabled(localParticipant.isCameraEnabled), 500);
+      }
+    } catch (err) {
+      console.error('Camera toggle failed:', err);
+      // Last resort: read actual state from LiveKit
+      setCamEnabled(localParticipant.isCameraEnabled);
     }
   }, [localParticipant, camEnabled]);
 

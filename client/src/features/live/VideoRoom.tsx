@@ -185,24 +185,24 @@ function MediaControls() {
   }, [localParticipant, micEnabled]);
 
   const toggleCam = useCallback(async () => {
+    const target = !camEnabled;
     try {
-      const target = !camEnabled;
-      await localParticipant.setCameraEnabled(target);
-      setCamEnabled(localParticipant.isCameraEnabled);
-      // Mobile fix: verify track state restored after a short delay
-      setTimeout(() => {
-        setCamEnabled(localParticipant.isCameraEnabled);
-      }, 500);
-    } catch (err) {
-      console.error('Camera toggle failed, retrying:', err);
-      try {
+      if (!target) {
+        await localParticipant.setCameraEnabled(false);
+        setCamEnabled(false);
+      } else {
+        // Unpublish stale tracks first, then re-enable fresh
         for (const pub of localParticipant.videoTrackPublications.values()) {
-          if (pub.track) await localParticipant.unpublishTrack(pub.track);
+          if (pub.track) {
+            try { await localParticipant.unpublishTrack(pub.track); } catch { /* ignore */ }
+          }
         }
-        if (!camEnabled) {
-          await localParticipant.setCameraEnabled(true);
-        }
-      } catch { /* retry failed */ }
+        await localParticipant.setCameraEnabled(true);
+        setCamEnabled(true);
+        setTimeout(() => setCamEnabled(localParticipant.isCameraEnabled), 500);
+      }
+    } catch (err) {
+      console.error('Camera toggle failed:', err);
       setCamEnabled(localParticipant.isCameraEnabled);
     }
   }, [localParticipant, camEnabled]);
