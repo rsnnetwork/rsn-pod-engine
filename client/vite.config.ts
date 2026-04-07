@@ -4,7 +4,12 @@ import path from 'path';
 
 export default defineConfig({
   plugins: [react()],
-  build: {},
+  build: {
+    target: 'esnext',
+  },
+  optimizeDeps: {
+    exclude: ['@livekit/track-processors'],
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
