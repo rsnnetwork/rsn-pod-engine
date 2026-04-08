@@ -143,7 +143,7 @@ export default function useSessionSocket(sessionId: string) {
     socket.on('session:status_changed', (data: any) => {
       store.setSessionStatus(data.status);
       if (data.status === 'completed') { clearTimer(); clearByeTimeout(); store.setLiveKitToken(null, null); store.setMatch(null); store.setRoomId(null); store.setMatchingOverlay(null); store.setRoundDashboard(null); store.setByeRound(false); store.setPartnerDisconnected(false); store.setLeftCurrentRound(false); store.setTransitionStatus('session_ending'); setTimeout(() => { store.setTransitionStatus(null); store.setPhase('complete'); }, 1500); }
-      if (data.status === 'lobby_open') store.setTransitionStatus(null); // Lobby overlay handles messaging
+      if (data.status === 'lobby_open') { store.setTransitionStatus(null); store.setHostInLobby(true); } // Host is present when lobby reopens
       if (data.status === 'closing_lobby') {
         // Closing lobby: clear match data, return to lobby with closing overlay
         store.setLiveKitToken(null, null);
@@ -182,6 +182,7 @@ export default function useSessionSocket(sessionId: string) {
         store.setMatchingOverlay(null);
         store.setLeftCurrentRound(false);
         store.setTransitionStatus(null);
+        store.setHostInLobby(true); // Host triggered the transition — they're back in lobby
         store.setPhase('lobby');
       }
       if (data.currentRound) store.setRound(data.currentRound);

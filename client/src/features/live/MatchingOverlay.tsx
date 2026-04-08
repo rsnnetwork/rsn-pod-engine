@@ -95,7 +95,7 @@ export default function MatchingOverlay({ roundNumber }: Props) {
                 You've been matched!
               </h2>
               <p className="text-sm text-gray-400 mt-1">
-                {countdown > 0 ? `Entering breakout room in ${countdown}...` : 'Connecting you now...'}
+                {countdown > 0 ? `Entering breakout room in ${countdown}...` : 'Connecting you to your breakout room...'}
               </p>
             </div>
           </>

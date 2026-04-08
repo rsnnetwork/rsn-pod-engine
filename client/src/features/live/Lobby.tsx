@@ -423,8 +423,8 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
           <div className="inline-flex items-center justify-center h-14 w-14 rounded-full bg-emerald-500/20 text-emerald-400">
             <Sparkles className="h-7 w-7" />
           </div>
-          <h2 className="text-xl font-bold text-[#1a1a2e]">Event Complete</h2>
-          <p className="text-gray-400 text-sm max-w-xs">Thanks for joining! Your recap is being prepared.</p>
+          <h2 className="text-xl font-bold text-[#1a1a2e]">Event finished</h2>
+          <p className="text-gray-400 text-sm max-w-xs">Preparing your recap...</p>
           {timerSeconds > 0 && (
             <p className="text-sm text-gray-500 mt-2">
               Ending in <span className="text-white font-mono">{timerSeconds}s</span>

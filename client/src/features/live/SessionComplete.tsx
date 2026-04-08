@@ -114,7 +114,7 @@ export default function SessionComplete({ sessionId }: Props) {
             <CheckCircle className="h-8 w-8" />
           </div>
           <h2 className="text-xl font-bold text-gray-900 mb-2">Event Complete!</h2>
-          <p className="text-gray-500">Great networking! Here's your recap.</p>
+          <p className="text-gray-500">Event finished — view your recap or go back to your pod.</p>
         </div>
 
         {loading ? (

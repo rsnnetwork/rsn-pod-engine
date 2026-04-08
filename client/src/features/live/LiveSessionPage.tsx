@@ -167,7 +167,7 @@ export default function LiveSessionPage() {
             {transitionStatus === 'starting_session' && (isHost ? 'Starting event — main room is open' : 'Event is starting — waiting for host to begin matching...')}
             {transitionStatus === 'preparing_match' && (isHost ? 'Sending participants to breakout rooms...' : "You've been matched! Connecting to your partner...")}
             {transitionStatus === 'round_ending' && (isHost ? 'Ending round — collecting participants...' : 'Round ending...')}
-            {transitionStatus === 'between_rounds' && (isHost ? 'Preparing next round...' : 'Getting ready for the next round...')}
+            {transitionStatus === 'between_rounds' && (isHost ? 'Preparing next round...' : 'Next round starting soon...')}
             {transitionStatus === 'session_ending' && (isHost ? 'Ending event — generating recaps...' : 'Preparing your recap...')}
           </p>
         </div>
