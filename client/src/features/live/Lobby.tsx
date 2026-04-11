@@ -1,4 +1,4 @@
-import { Users, Loader2, Video, VideoOff, Sparkles, ChevronDown, ChevronUp, Mic, MicOff, Volume2, VolumeX, UserX, Clock, Camera } from 'lucide-react';
+import { Users, Loader2, Video, VideoOff, Sparkles, ChevronDown, ChevronUp, Mic, MicOff, Volume2, VolumeX, UserX, Camera } from 'lucide-react';
 import HostRoundDashboard from './HostRoundDashboard';
 
 // Lazy-load track processors (may not be available in all environments)
@@ -642,9 +642,9 @@ function DeviceTest() {
   }
 
   return (
-    <div className="flex flex-col items-center gap-3 py-4">
-      {/* Camera preview — always render video element, hide with CSS to preserve srcObject */}
-      <div className="relative w-56 h-40 rounded-xl overflow-hidden bg-[#3c4043]">
+    <div className="flex flex-col items-center gap-3">
+      {/* Camera preview — large, prominent, the main thing users see */}
+      <div className="relative w-full aspect-video max-w-lg rounded-2xl overflow-hidden bg-gray-900 shadow-lg">
         <video
           ref={videoRef}
           autoPlay muted playsInline
@@ -652,109 +652,99 @@ function DeviceTest() {
           style={{ transform: 'scaleX(-1)', display: camOn ? 'block' : 'none' }}
         />
         {!camOn && (
-          <div className="h-full w-full flex items-center justify-center">
-            <VideoOff className="h-8 w-8 text-gray-500" />
+          <div className="h-full w-full flex items-center justify-center bg-gray-100">
+            <VideoOff className="h-10 w-10 text-gray-400" />
           </div>
         )}
-      </div>
 
-      {/* Controls + mic level */}
-      <div className="flex items-center gap-3">
-        <button onClick={toggleCam} className={`p-2 rounded-full transition-colors ${camOn ? 'bg-white/10 text-[#1a1a2e] hover:bg-white/20' : 'bg-red-500/80 text-[#1a1a2e]'}`}>
-          {camOn ? <Camera className="h-4 w-4" /> : <VideoOff className="h-4 w-4" />}
-        </button>
-        <button onClick={toggleMic} className={`p-2 rounded-full transition-colors ${micOn ? 'bg-white/10 text-[#1a1a2e] hover:bg-white/20' : 'bg-red-500/80 text-[#1a1a2e]'}`}>
-          {micOn ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}
-        </button>
-        {/* Mic level bar — always visible, dims when muted */}
-        <div className="flex items-center gap-1">
-          <div className="w-16 h-1.5 bg-white/10 rounded-full overflow-hidden">
-            <div className={`h-full rounded-full transition-all duration-75 ${micOn ? 'bg-green-500' : 'bg-gray-500'}`} style={{ width: `${micOn ? micLevel * 100 : 0}%` }} />
+        {/* Controls overlaid on bottom of camera — Google Meet style */}
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-3 bg-white/90 backdrop-blur-sm rounded-full px-4 py-2 shadow-md">
+          <button onClick={toggleCam} className={`p-2 rounded-full transition-colors ${camOn ? 'bg-gray-100 text-gray-700 hover:bg-gray-200' : 'bg-red-500 text-white'}`}>
+            {camOn ? <Camera className="h-4 w-4" /> : <VideoOff className="h-4 w-4" />}
+          </button>
+          <button onClick={toggleMic} className={`p-2 rounded-full transition-colors ${micOn ? 'bg-gray-100 text-gray-700 hover:bg-gray-200' : 'bg-red-500 text-white'}`}>
+            {micOn ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}
+          </button>
+          {/* Mic level bar */}
+          <div className="w-16 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+            <div className={`h-full rounded-full transition-all duration-75 ${micOn ? 'bg-green-500' : 'bg-gray-400'}`} style={{ width: `${micOn ? micLevel * 100 : 0}%` }} />
           </div>
         </div>
       </div>
-      <p className="text-[10px] text-gray-500">Test your camera and mic before the event starts</p>
+      <p className="text-xs text-gray-400">Check your camera and mic before the event starts</p>
     </div>
   );
 }
 
 /**
  * Participant-only waiting room shown before the host starts the event.
- * No video, no lobby controls — just a clean holding screen with participant list.
+ * Camera-first layout: video preview is the primary content,
+ * status overlay is secondary — matches how Google Meet / FaceTime handle pre-call.
  */
 function PreLobbyWaitingRoom({ isHost = false }: { isHost?: boolean }) {
   const { participants, hostUserId } = useSessionStore();
   const hostOnline = useHostPresence();
 
   return (
-    <div className="flex-1 flex items-center justify-center p-6 bg-white">
-      <div className="max-w-md w-full text-center py-10 px-6 bg-gray-50 rounded-2xl">
-        <div className="flex flex-col items-center gap-4">
-          <div className="inline-flex items-center justify-center h-16 w-16 rounded-full bg-white/10 text-gray-400">
-            <Clock className="h-8 w-8" />
-          </div>
-          <h2 className="text-xl font-bold text-[#1a1a2e]">Waiting for host to start the event...</h2>
-          <p className="text-gray-400 text-sm max-w-xs">
-            {hostOnline === true
-              ? 'The host is here! The event will begin shortly.'
-              : hostOnline === false
-              ? 'The host hasn\'t joined yet. Once they start the event, you\'ll enter the main room.'
-              : 'Connecting to the event...'}
-          </p>
-          {hostOnline === true ? (
-            <div className="inline-flex items-center gap-1.5 text-xs text-green-400 bg-green-500/10 px-3 py-1.5 rounded-full">
-              <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-              Host is online
-            </div>
-          ) : hostOnline === false ? (
-            <div className="inline-flex items-center gap-1.5 text-xs text-gray-400 bg-gray-100 px-3 py-1.5 rounded-full">
-              <span className="h-2 w-2 rounded-full bg-gray-400" />
-              Waiting for host
-            </div>
-          ) : (
-            <div className="inline-flex items-center gap-1.5 text-xs text-gray-500 bg-white/5 px-3 py-1.5 rounded-full">
-              <span className="h-2 w-2 rounded-full bg-gray-500 animate-pulse" />
-              Checking...
-            </div>
-          )}
-        </div>
+    <div className="flex-1 flex flex-col bg-white">
+      {/* Camera-first: DeviceTest is the primary content area */}
+      <div className="flex-1 flex items-center justify-center p-6">
+        <div className="w-full max-w-lg">
+          {/* Large camera preview — the main thing you see */}
+          <DeviceTest />
 
-        {/* Connected participants — host sees names, participants see only count */}
-        {participants.length > 0 && (
-          <div className="mt-8 pt-6 border-t border-white/10">
-            <div className="flex items-center justify-center gap-2 text-gray-500 text-xs mb-3">
-              <Users className="h-3.5 w-3.5" />
-              <span>
-                {(() => {
-                  const hostInList = participants.some(p => p.userId === hostUserId);
-                  const participantCount = participants.length - (hostInList ? 1 : 0);
-                  return `${participantCount} participant${participantCount !== 1 ? 's' : ''}${hostOnline || hostInList ? ' + host' : ''} waiting`;
-                })()}
-              </span>
-            </div>
-            {isHost && (
-              <div className="flex flex-wrap gap-2 justify-center">
+          {/* Status strip — compact overlay below camera */}
+          <div className="mt-4 flex flex-col items-center gap-2">
+            {hostOnline === true ? (
+              <div className="inline-flex items-center gap-2 bg-green-50 border border-green-200 px-4 py-2 rounded-full">
+                <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+                <span className="text-sm font-medium text-green-700">Host is here — event starting soon</span>
+              </div>
+            ) : hostOnline === false ? (
+              <div className="inline-flex items-center gap-2 bg-gray-50 border border-gray-200 px-4 py-2 rounded-full">
+                <span className="h-2 w-2 rounded-full bg-gray-400" />
+                <span className="text-sm font-medium text-gray-600">Waiting for host to start the event</span>
+              </div>
+            ) : (
+              <div className="inline-flex items-center gap-2 bg-gray-50 border border-gray-200 px-4 py-2 rounded-full">
+                <span className="h-2 w-2 rounded-full bg-gray-500 animate-pulse" />
+                <span className="text-sm font-medium text-gray-600">Connecting...</span>
+              </div>
+            )}
+
+            {/* Participant count — compact inline */}
+            {participants.length > 0 && (
+              <div className="flex items-center gap-2 text-gray-500 text-xs">
+                <Users className="h-3.5 w-3.5" />
+                <span>
+                  {(() => {
+                    const hostInList = participants.some(p => p.userId === hostUserId);
+                    const participantCount = participants.length - (hostInList ? 1 : 0);
+                    return `${participantCount} participant${participantCount !== 1 ? 's' : ''}${hostOnline || hostInList ? ' + host' : ''} waiting`;
+                  })()}
+                </span>
+              </div>
+            )}
+
+            {/* Host sees participant names */}
+            {isHost && participants.length > 0 && (
+              <div className="flex flex-wrap gap-2 justify-center mt-2">
                 {participants.map(p => (
                   <span key={p.userId} className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium ${
-                    p.userId === hostUserId ? 'bg-amber-500/10 text-amber-400' : 'bg-white/10 text-gray-300'
+                    p.userId === hostUserId ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-gray-100 text-gray-600'
                   }`}>
                     <span className={`h-5 w-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
-                      p.userId === hostUserId ? 'bg-amber-500/20' : 'bg-white/10'
+                      p.userId === hostUserId ? 'bg-amber-100' : 'bg-gray-200'
                     }`}>
                       {(p.displayName || 'U').charAt(0).toUpperCase()}
                     </span>
                     {p.displayName || 'User'}
-                    {p.userId === hostUserId && <span className="text-[9px] text-amber-400 ml-0.5">(Host)</span>}
+                    {p.userId === hostUserId && <span className="text-[9px] text-amber-600 ml-0.5">(Host)</span>}
                   </span>
                 ))}
               </div>
             )}
           </div>
-        )}
-
-        {/* Camera/mic test */}
-        <div className="mt-6 pt-6 border-t border-white/10">
-          <DeviceTest />
         </div>
       </div>
     </div>

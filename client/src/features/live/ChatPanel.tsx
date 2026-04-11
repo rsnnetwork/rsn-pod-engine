@@ -74,18 +74,18 @@ export default function ChatPanel({ sessionId, onClose }: ChatPanelProps) {
   const visibleMessages = chatMessages;
 
   return (
-    <div className="flex flex-col h-full bg-[#292a2d] border-l border-white/10">
+    <div className="flex flex-col h-full bg-white border-l border-gray-200">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
         <div className="flex items-center gap-2">
-          <h3 className="text-sm font-semibold text-gray-200">Chat</h3>
-          <span className="text-xs text-gray-400 bg-white/10 px-2 py-0.5 rounded-full">
+          <h3 className="text-sm font-semibold text-gray-800">Chat</h3>
+          <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
             {scope === 'room' ? 'Room' : 'Everyone'}
           </span>
         </div>
         <button
           onClick={onClose}
-          className="p-1 text-gray-400 hover:text-gray-900 rounded-lg hover:bg-gray-100 transition-colors"
+          className="p-1 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
         >
           <X className="h-4 w-4" />
         </button>
@@ -95,7 +95,7 @@ export default function ChatPanel({ sessionId, onClose }: ChatPanelProps) {
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
         {visibleMessages.length === 0 && (
           <div className="flex items-center justify-center h-full">
-            <p className="text-sm text-gray-500">No messages yet. Say hello!</p>
+            <p className="text-sm text-gray-400">No messages yet. Say hello!</p>
           </div>
         )}
         {visibleMessages.map((msg) => (
@@ -111,9 +111,9 @@ export default function ChatPanel({ sessionId, onClose }: ChatPanelProps) {
 
       {/* Input */}
       {phase !== 'complete' && (
-        <div className="px-4 py-3 border-t border-white/10">
+        <div className="px-4 py-3 border-t border-gray-200">
           {chatDisabled ? (
-            <p className="text-xs text-gray-500 text-center py-1">Chat available when host joins</p>
+            <p className="text-xs text-gray-400 text-center py-1">Chat available when host joins</p>
           ) : (
             <ChatInputWithEmoji
               inputRef={inputRef}
@@ -142,7 +142,7 @@ function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSe
   return (
     <div className="relative">
       {showEmoji && (
-        <div className="absolute bottom-full left-0 right-0 mb-1 bg-[#292a2d] border border-white/10 rounded-xl p-2 grid grid-cols-10 gap-1">
+        <div className="absolute bottom-full left-0 right-0 mb-1 bg-white border border-gray-200 rounded-xl p-2 grid grid-cols-10 gap-1 shadow-lg">
           {EMOJI_PICKER_LIST.map(e => (
             <button key={e} onClick={() => { setInput(input + e); setShowEmoji(false); inputRef.current?.focus(); }}
               className="text-lg hover:bg-gray-100 rounded p-1 transition-colors">{e}</button>
@@ -150,7 +150,7 @@ function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSe
         </div>
       )}
       <div className="flex items-center gap-2">
-        <button onClick={() => setShowEmoji(!showEmoji)} className="p-2 text-gray-400 hover:text-gray-900 transition-colors">
+        <button onClick={() => setShowEmoji(!showEmoji)} className="p-2 text-gray-400 hover:text-gray-600 transition-colors">
           <Smile className="h-4 w-4" />
         </button>
         <input
@@ -161,8 +161,7 @@ function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSe
           onKeyDown={handleKeyDown}
           placeholder={scope === 'room' ? 'Message your room...' : 'Message everyone...'}
           maxLength={500}
-          style={{ color: '#000000' }}
-          className="flex-1 px-3 py-2 text-sm bg-white border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500/50 placeholder-gray-400"
+          className="flex-1 px-3 py-2 text-sm text-gray-800 bg-gray-50 border border-gray-200 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500/50 placeholder-gray-400"
         />
         <button onClick={handleSend} disabled={!input.trim()}
           className="p-2 rounded-full bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
@@ -196,21 +195,21 @@ function MessageBubble({ msg, isOwn, sessionId }: { msg: ChatMessage; isOwn: boo
       <div
         className={`max-w-[85%] rounded-2xl px-3.5 py-2 ${
           isOwn
-            ? 'bg-blue-600/20 text-gray-200'
+            ? 'bg-blue-50 text-gray-800'
             : msg.isHost
-            ? 'bg-amber-500/10 border-l-2 border-amber-500 text-gray-200'
-            : 'bg-white/10 text-gray-200'
+            ? 'bg-amber-50 border-l-2 border-amber-500 text-gray-800'
+            : 'bg-gray-100 text-gray-800'
         }`}
       >
         {!isOwn && (
           <div className="flex items-center gap-1.5 mb-0.5">
-            <a href={`/profile/${msg.userId}`} className={`text-xs font-semibold hover:underline ${msg.isHost ? 'text-amber-400' : 'text-gray-400'}`}>
+            <a href={`/profile/${msg.userId}`} className={`text-xs font-semibold hover:underline ${msg.isHost ? 'text-amber-600' : 'text-gray-500'}`}>
               {msg.displayName}
-              {msg.isHost && <span className="ml-1 text-[10px] font-medium text-amber-400">HOST</span>}
+              {msg.isHost && <span className="ml-1 text-[10px] font-medium text-amber-600">HOST</span>}
             </a>
           </div>
         )}
-        <p className="text-sm leading-relaxed break-words text-gray-200"><Linkify text={msg.message} /></p>
+        <p className="text-sm leading-relaxed break-words text-gray-800"><Linkify text={msg.message} /></p>
         <div className={`flex ${isOwn ? 'justify-end' : 'justify-start'} mt-0.5`}>
           <span className="text-[10px] text-gray-400">
             {msg.scope === 'room' && <span className="mr-1">Room</span>}
@@ -226,11 +225,11 @@ function MessageBubble({ msg, isOwn, sessionId }: { msg: ChatMessage; isOwn: boo
               key={e.type}
               onClick={() => handleReact(e.type)}
               className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[11px] transition-colors ${
-                reactions[e.type]?.includes(userId || '') ? 'bg-blue-500/20 border border-blue-500/40' : 'bg-white/5 border border-white/10'
+                reactions[e.type]?.includes(userId || '') ? 'bg-blue-100 border border-blue-300' : 'bg-gray-50 border border-gray-200'
               } hover:bg-gray-100`}
             >
               <span>{e.emoji}</span>
-              <span className="text-gray-400">{reactions[e.type].length}</span>
+              <span className="text-gray-600">{reactions[e.type].length}</span>
             </button>
           ))}
         </div>
@@ -244,7 +243,7 @@ function MessageBubble({ msg, isOwn, sessionId }: { msg: ChatMessage; isOwn: boo
           <SmilePlus className="h-3.5 w-3.5" />
         </button>
         {showPicker && (
-          <div className={`absolute bottom-6 ${isOwn ? 'right-0' : 'left-0'} flex gap-1 bg-[#292a2d] border border-white/10 rounded-full px-2 py-1 shadow-lg z-10`}>
+          <div className={`absolute bottom-6 ${isOwn ? 'right-0' : 'left-0'} flex gap-1 bg-white border border-gray-200 rounded-full px-2 py-1 shadow-lg z-10`}>
             {CHAT_EMOJIS.map(e => (
               <button key={e.type} onClick={() => handleReact(e.type)} className="hover:scale-125 transition-transform text-sm">
                 {e.emoji}
@@ -265,7 +264,7 @@ function Linkify({ text }: { text: string }) {
     <>
       {parts.map((part, i) =>
         URL_REGEX.test(part) ? (
-          <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline hover:text-blue-800 break-all">
+          <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline hover:text-blue-700 break-all">
             {part}
           </a>
         ) : (

@@ -120,29 +120,54 @@ function VideoStage() {
     );
   }
 
-  // Mobile: floating self-view, partner takes full area
-  // Desktop: side-by-side grid
+  // Mobile 1:1: stacked layout — partner 60%, self 40% (FaceTime/Google Meet style)
+  // Mobile trio: partner grid + larger floating self-view
+  // Desktop: side-by-side equal grid tiles
   return (
     <div className="flex-1 relative max-h-[calc(100vh-200px)]">
       {remoteTracks.length > 0 ? (
         <>
-          {/* Remote tracks — full area on mobile, grid on desktop */}
-          <div className={`h-full grid gap-4 ${isTrio ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1 md:grid-cols-2'}`}>
+          {/* Desktop: equal grid tiles including self-view */}
+          <div className={`hidden md:grid h-full gap-4 ${isTrio ? 'grid-cols-2 lg:grid-cols-3' : 'grid-cols-2'}`}>
             {remoteTracks.map((rt, i) => (
               <div key={rt.participant.sid} className="cursor-pointer" onClick={() => setPinnedSid(rt.participant.sid)}>
                 <VideoTile trackRef={rt} label={rt.participant.name || currentPartners[i]?.displayName || 'Partner'} />
               </div>
             ))}
-            {/* Self-view as equal tile on desktop only */}
-            <div className="hidden md:block cursor-pointer" onClick={() => setPinnedSid(localParticipant.sid)}>
+            <div className="cursor-pointer" onClick={() => setPinnedSid(localParticipant.sid)}>
               <VideoTile trackRef={localTrack} label="You" />
             </div>
           </div>
-          {/* Self-view as floating thumbnail on mobile */}
-          <div className="md:hidden absolute bottom-3 right-3 w-28 h-20 rounded-xl overflow-hidden shadow-lg border-2 border-white/80 z-10"
-            onClick={() => setPinnedSid(localParticipant.sid)}>
-            <VideoTile trackRef={localTrack} label="You" />
-          </div>
+
+          {/* Mobile 1:1: stacked layout — partner on top, you below */}
+          {!isTrio && (
+            <div className="md:hidden flex flex-col h-full gap-2">
+              <div className="flex-[3] min-h-0 cursor-pointer" onClick={() => setPinnedSid(remoteTracks[0].participant.sid)}>
+                <VideoTile trackRef={remoteTracks[0]} label={remoteTracks[0].participant.name || currentPartners[0]?.displayName || 'Partner'} />
+              </div>
+              <div className="flex-[2] min-h-0 cursor-pointer" onClick={() => setPinnedSid(localParticipant.sid)}>
+                <VideoTile trackRef={localTrack} label="You" />
+              </div>
+            </div>
+          )}
+
+          {/* Mobile trio: grid + larger floating self-view */}
+          {isTrio && (
+            <div className="md:hidden h-full relative">
+              <div className="h-full grid grid-cols-1 gap-2">
+                {remoteTracks.map((rt, i) => (
+                  <div key={rt.participant.sid} className="cursor-pointer" onClick={() => setPinnedSid(rt.participant.sid)}>
+                    <VideoTile trackRef={rt} label={rt.participant.name || currentPartners[i]?.displayName || 'Partner'} />
+                  </div>
+                ))}
+              </div>
+              {/* Larger floating self-view for trio */}
+              <div className="absolute bottom-3 right-3 w-36 h-28 rounded-xl overflow-hidden shadow-lg border-2 border-white/80 z-10"
+                onClick={() => setPinnedSid(localParticipant.sid)}>
+                <VideoTile trackRef={localTrack} label="You" />
+              </div>
+            </div>
+          )}
         </>
       ) : (
         <div className={`h-full grid ${gridClass} gap-4`}>
@@ -458,14 +483,7 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
       )}
 
       <div className="flex-1 flex flex-col p-4 gap-4 bg-[#202124] overflow-auto min-h-0 relative">
-        {/* "Last N seconds!" pulse overlay for participants */}
-        {!isHost && timerSeconds > 0 && timerSeconds <= 30 && (
-          <div className="absolute top-12 left-1/2 -translate-x-1/2 bg-amber-500/90 text-white text-sm font-bold px-4 py-1.5 rounded-full animate-pulse z-10">
-            Last {timerSeconds} seconds!
-          </div>
-        )}
-
-        {/* Timer bar */}
+        {/* Timer bar — single source of truth for time display */}
         <div className="flex items-center justify-between bg-[#292a2d] rounded-xl px-4 py-3">
           <div className="flex items-center gap-3">
             <span className="text-sm text-white font-medium">Breakout Room</span>

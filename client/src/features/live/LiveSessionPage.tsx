@@ -10,7 +10,7 @@ import RatingPrompt from './RatingPrompt';
 import SessionComplete from './SessionComplete';
 import HostControls from './HostControls';
 import ChatPanel from './ChatPanel';
-// MatchingOverlay replaced with inline banner — no longer full-screen
+import MatchingOverlay from './MatchingOverlay';
 import ReactionBar from './ReactionBar';
 import ParticipantList from './ParticipantList';
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
@@ -33,7 +33,6 @@ export default function LiveSessionPage() {
   const chatOpen = useSessionStore(s => s.chatOpen);
   const unreadChatCount = useSessionStore(s => s.unreadChatCount);
   const matchingOverlay = useSessionStore(s => s.matchingOverlay);
-  const preparingMatches = useSessionStore(s => s.preparingMatches);
   const { setError, setPhase, reset, setChatOpen } = useSessionStore.getState();
   const { user } = useAuthStore();
   const mediaRequestedRef = useRef(false);
@@ -193,25 +192,9 @@ export default function LiveSessionPage() {
         </div>
       )}
 
-      {/* "Host is preparing matches" — light top banner, not full-screen overlay */}
-      {preparingMatches && !matchingOverlay && !isHost && (
-        <div className="bg-blue-500/10 px-4 py-2.5 flex items-center justify-center gap-2">
-          <Shuffle className="h-4 w-4 text-blue-400 animate-pulse" />
-          <p className="text-sm text-blue-300 font-medium">Host is preparing matches...</p>
-          <div className="flex items-center gap-1 ml-1">
-            {[0, 1, 2].map(i => (
-              <div key={i} className="w-1.5 h-1.5 rounded-full bg-blue-400/70" style={{ animation: 'bounce 1s ease-in-out infinite', animationDelay: `${i * 0.2}s` }} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Matching anticipation — light banner instead of full-screen overlay */}
+      {/* Full-screen matching overlay — creates anticipation and emotional engagement */}
       {matchingOverlay && !isHost && (
-        <div className="bg-emerald-500/10 px-4 py-2.5 flex items-center justify-center gap-2">
-          <Shuffle className="h-4 w-4 text-emerald-400" />
-          <p className="text-sm text-emerald-300 font-medium">You've been matched! Connecting to Room {matchingOverlay.roomCount}...</p>
-        </div>
+        <MatchingOverlay roomCount={matchingOverlay.roomCount} roundNumber={currentRound} />
       )}
 
       {/* Main content + chat panel layout */}
