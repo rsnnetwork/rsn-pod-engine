@@ -196,14 +196,35 @@ export async function handleReactionSend(
 
     const displayName = (socket.data as any)?.displayName || 'User';
 
-    // Emit reactions to the full session room — all participants see floating emojis
-    // (Sockets don't join match: rooms, so scoping to match room wouldn't reach anyone)
-    io.to(sessionRoom(sessionId)).emit('reaction:received', {
+    const reactionPayload = {
       userId,
       displayName,
       type,
       timestamp: new Date().toISOString(),
-    });
+    };
+
+    // Scope reactions: during active rounds, only show to breakout room participants.
+    // In lobby/transition phases, broadcast to everyone.
+    const activeSession = activeSessions.get(sessionId);
+    if (activeSession && activeSession.status === SessionStatus.ROUND_ACTIVE && data.matchId) {
+      // Room-scoped: find match participants and emit only to them
+      const matches = await matchingService.getMatchesByRound(sessionId, activeSession.currentRound);
+      const userMatch = matches.find(
+        m => (m.participantAId === userId || m.participantBId === userId || m.participantCId === userId) && m.status === 'active'
+      );
+      if (userMatch) {
+        const participantIds = [userMatch.participantAId, userMatch.participantBId];
+        if (userMatch.participantCId) participantIds.push(userMatch.participantCId);
+        for (const pid of participantIds) {
+          io.to(userRoom(pid)).emit('reaction:received', reactionPayload);
+        }
+      } else {
+        socket.emit('reaction:received', reactionPayload);
+      }
+    } else {
+      // Lobby/transition: broadcast to everyone
+      io.to(sessionRoom(sessionId)).emit('reaction:received', reactionPayload);
+    }
   } catch (err) {
     logger.error({ err }, 'Error handling reaction');
   }

@@ -410,7 +410,7 @@ function useHostPresence(gracePeriodMs = 15000): boolean | null {
 }
 
 function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
-  const { participants, isByeRound, currentRound, totalRounds, transitionStatus, sessionStatus, hostUserId } = useSessionStore();
+  const { participants, isByeRound, currentRound, totalRounds, transitionStatus, sessionStatus, hostUserId, preparingMatches } = useSessionStore();
   const hostOnline = useHostPresence();
 
   // Session hasn't been started yet by host
@@ -446,6 +446,16 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
           <Loader2 className="h-5 w-5 text-gray-400 animate-spin" />
           <h2 className="text-xl font-bold text-[#1a1a2e]">Getting Ready</h2>
           <p className="text-gray-400 text-sm">Preparing round {(currentRound || 0) + 1} of {totalRounds}...</p>
+        </div>
+      ) : preparingMatches ? (
+        <div className="flex flex-col items-center gap-2">
+          <div className="relative h-10 w-10">
+            <Loader2 className="h-10 w-10 text-indigo-500 animate-spin" />
+          </div>
+          <h2 className="text-xl font-bold text-[#1a1a2e]">Finding Your Match</h2>
+          <p className="text-gray-400 text-sm">
+            {isHost ? 'Generating match preview...' : 'The host is generating matches — get ready!'}
+          </p>
         </div>
       ) : transitionStatus === 'starting_session' ? (
         <div className="flex flex-col items-center gap-2">
@@ -753,11 +763,8 @@ function PreLobbyWaitingRoom({ isHost = false }: { isHost?: boolean }) {
 export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean; sessionId?: string }) {
   const { participants, lobbyToken, lobbyUrl, sessionStatus, hostUserId, roundDashboard } = useSessionStore();
 
-  // During an active round or rating, the host sees the breakout room dashboard
-  // but ONLY if we have dashboard data — otherwise stay in lobby with status message
-  if (isHost && (sessionStatus === 'round_active' || sessionStatus === 'round_rating') && roundDashboard && roundDashboard.rooms.length > 0) {
-    return <HostRoundDashboard sessionId={sessionId!} />;
-  }
+  // Host sees breakout room dashboard as a panel above the lobby video during active rounds
+  const showRoundDashboard = isHost && (sessionStatus === 'round_active' || sessionStatus === 'round_rating') && roundDashboard && roundDashboard.rooms.length > 0;
 
   // LOBBY GATE: Participants cannot enter the lobby before the host starts the event.
   // Show a dedicated waiting room instead. Host still sees the normal lobby with controls.
@@ -769,6 +776,11 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
   if (lobbyToken && lobbyUrl) {
     return (
       <div className="flex-1 flex flex-col items-center p-6 gap-6 overflow-auto bg-white">
+        {showRoundDashboard && (
+          <div className="w-full max-w-4xl">
+            <HostRoundDashboard sessionId={sessionId!} />
+          </div>
+        )}
         <LobbyStatusOverlay isHost={isHost} />
         <DensityToggle />
         {isHost && <HostParticipantPanel sessionId={sessionId} />}

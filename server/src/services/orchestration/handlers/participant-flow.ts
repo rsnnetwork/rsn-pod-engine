@@ -877,7 +877,7 @@ export async function handleDisconnect(
 
 // ─── FIX 5E: Heartbeat Stale Detection ─────────────────────────────────────
 
-const STALE_HEARTBEAT_MS = 45_000; // 3 missed heartbeats at 15s interval
+const STALE_HEARTBEAT_MS = 90_000; // 6 missed heartbeats at 15s interval — generous tolerance
 const STALE_CHECK_INTERVAL_MS = 30_000;
 
 export function startHeartbeatStaleDetection(io: SocketServer): void {
@@ -888,10 +888,7 @@ export function startHeartbeatStaleDetection(io: SocketServer): void {
         if (now - presence.lastHeartbeat.getTime() > STALE_HEARTBEAT_MS) {
           logger.warn({ userId, sessionId }, 'Stale heartbeat — triggering disconnect flow');
           session.presenceMap.delete(userId);
-          // Emit participant:left and handle disconnect logic for this user
           io.to(sessionRoom(sessionId)).emit('participant:left', { userId });
-          // Note: Full disconnect handling (no-show detection etc) would be triggered
-          // through the normal disconnect path. For stale detection, we just clean presence.
         }
       }
     }

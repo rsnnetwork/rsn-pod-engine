@@ -193,7 +193,7 @@ export default function LiveSessionPage() {
       )}
 
       {/* Full-screen matching overlay — creates anticipation and emotional engagement */}
-      {matchingOverlay && !isHost && (
+      {matchingOverlay && (
         <MatchingOverlay roomCount={matchingOverlay.roomCount} roundNumber={currentRound} />
       )}
 
