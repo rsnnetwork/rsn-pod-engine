@@ -503,7 +503,7 @@ export async function sendMatchPreview(
   // Generate warnings when multiple participants have byes (unique pairs likely exhausted)
   const roundWarnings: string[] = [];
   if (byeParticipants.length > 1) {
-    roundWarnings.push(`All unique pairs exhausted — ${byeParticipants.length} participants have bye rounds`);
+    roundWarnings.push(`All participants have already met — ${byeParticipants.length} will sit this round out. Need new participants for fresh matches.`);
   }
 
   socket.emit('host:match_preview', {

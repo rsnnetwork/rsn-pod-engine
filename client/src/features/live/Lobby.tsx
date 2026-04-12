@@ -309,7 +309,7 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
           BG
         </button>
         {showBgPanel && (
-          <div className="absolute top-full right-0 mt-2 bg-white rounded-xl shadow-xl border border-gray-200 p-2 w-56 z-50">
+          <div className="absolute bottom-full right-0 mb-2 bg-white rounded-xl shadow-xl border border-gray-200 p-2 w-56 z-50">
             <p className="text-[10px] font-semibold text-gray-400 uppercase mb-1.5 px-1">Background</p>
             <div className="grid grid-cols-3 gap-1.5">
               {[
@@ -432,9 +432,9 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
         </div>
       ) : isByeRound ? (
         <>
-          <h2 className="text-xl font-bold text-[#1a1a2e]">Waiting for Next Round</h2>
-          <p className="text-gray-400 text-sm">You have a round off — you'll be back in the next one!</p>
-          <p className="text-xs text-gray-500 mt-1">The round is still in progress. Sit tight.</p>
+          <h2 className="text-xl font-bold text-[#1a1a2e]">Sitting This One Out</h2>
+          <p className="text-gray-400 text-sm">You'll be matched in the next round — hang tight!</p>
+          <p className="text-xs text-gray-500 mt-1">The current round is still in progress.</p>
         </>
       ) : transitionStatus === 'session_ending' ? (
         <div className="flex flex-col items-center gap-2">
@@ -447,15 +447,13 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
           <h2 className="text-xl font-bold text-[#1a1a2e]">Getting Ready</h2>
           <p className="text-gray-400 text-sm">Preparing round {(currentRound || 0) + 1} of {totalRounds}...</p>
         </div>
-      ) : preparingMatches ? (
+      ) : preparingMatches && !isHost ? (
         <div className="flex flex-col items-center gap-2">
           <div className="relative h-10 w-10">
             <Loader2 className="h-10 w-10 text-indigo-500 animate-spin" />
           </div>
           <h2 className="text-xl font-bold text-[#1a1a2e]">Finding Your Match</h2>
-          <p className="text-gray-400 text-sm">
-            {isHost ? 'Generating match preview...' : 'The host is generating matches — get ready!'}
-          </p>
+          <p className="text-gray-400 text-sm">The host is generating matches — get ready!</p>
         </div>
       ) : transitionStatus === 'starting_session' ? (
         <div className="flex flex-col items-center gap-2">

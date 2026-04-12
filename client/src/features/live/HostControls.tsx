@@ -344,7 +344,7 @@ export default function HostControls({ sessionId }: Props) {
             </div>
             {matchPreview.byeParticipants.length > 0 && (
               <p className="text-xs text-amber-400 mt-2">
-                Bye: {matchPreview.byeParticipants.map(p => p.displayName).join(', ')}
+                Sitting out: {matchPreview.byeParticipants.map(p => p.displayName).join(', ')}
               </p>
             )}
             <p className="text-[10px] text-gray-500 mt-1.5">
@@ -393,7 +393,7 @@ export default function HostControls({ sessionId }: Props) {
                     <span className="text-gray-600">|</span>
                     <span className="text-green-400">{inRooms} in rooms</span>
                     {inLobby > 0 && <span className="text-blue-400">{inLobby} in main room</span>}
-                    {byeCount > 0 && <span className="text-amber-400">{byeCount} bye</span>}
+                    {byeCount > 0 && <span className="text-amber-400">{byeCount} sitting out</span>}
                     {disconnected > 0 && <span className="text-red-400">{disconnected} disconnected</span>}
                   </>
                 );

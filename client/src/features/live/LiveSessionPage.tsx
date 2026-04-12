@@ -192,8 +192,8 @@ export default function LiveSessionPage() {
         </div>
       )}
 
-      {/* Full-screen matching overlay — creates anticipation and emotional engagement */}
-      {matchingOverlay && (
+      {/* Full-screen matching overlay — participants only, host stays in main room */}
+      {matchingOverlay && !isHost && (
         <MatchingOverlay roomCount={matchingOverlay.roomCount} roundNumber={currentRound} />
       )}
 
