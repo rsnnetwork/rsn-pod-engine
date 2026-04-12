@@ -158,11 +158,20 @@ export default function HostControls({ sessionId }: Props) {
           <div className="max-w-4xl mx-auto flex items-center justify-between">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-              <p className="text-sm text-gray-700 font-medium">All rounds complete — end the event when ready</p>
+              <p className="text-sm text-gray-700 font-medium">All rounds complete</p>
             </div>
             <div className="flex gap-2">
               <Button size="sm" variant="ghost" onClick={() => setShowBroadcast(!showBroadcast)} title="Send announcement to all">
                 <MessageSquare className="h-4 w-4" />
+              </Button>
+              <Button size="sm" onClick={() => {
+                if (eligibleCount < 2) {
+                  alert(`Need at least 2 participants to start a round (currently ${eligibleCount})`);
+                  return;
+                }
+                socket?.emit('host:start_round', { sessionId });
+              }}>
+                <Play className="h-4 w-4 mr-1" /> Another Round
               </Button>
               <Button size="sm" variant="danger" onClick={() => socket?.emit('host:end_session', { sessionId })}>
                 <Square className="h-4 w-4 mr-1" /> End Event

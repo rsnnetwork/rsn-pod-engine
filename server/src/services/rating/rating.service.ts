@@ -58,8 +58,9 @@ export async function submitRating(
     throw new ForbiddenError('You are not a participant in this match');
   }
 
-  // Check match status allows rating
-  if (!['completed', 'active', 'no_show'].includes(match.status)) {
+  // Check match status allows rating — accept broadly so ratings survive
+  // session state transitions (closing_lobby, round_transition race conditions)
+  if (!['completed', 'active', 'no_show', 'scheduled', 'reassigned'].includes(match.status)) {
     throw new ValidationError('Match is not in a ratable state');
   }
 

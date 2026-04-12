@@ -207,14 +207,15 @@ export async function handleHostStartRound(
       return;
     }
 
-    // Allow starting round from lobby or transition states
+    // Allow starting round from lobby, transition, or closing_lobby (dynamic round extension)
     if (
       activeSession.status !== SessionStatus.LOBBY_OPEN &&
-      activeSession.status !== SessionStatus.ROUND_TRANSITION
+      activeSession.status !== SessionStatus.ROUND_TRANSITION &&
+      activeSession.status !== SessionStatus.CLOSING_LOBBY
     ) {
       socket.emit('error', {
         code: 'INVALID_STATE',
-        message: 'Can only start a round from the lobby or transition phase',
+        message: 'Can only start a round from the lobby, transition, or closing phase',
       });
       return;
     }
@@ -245,6 +246,12 @@ export async function handleHostStartRound(
     const nextRound = activeSession.status === SessionStatus.LOBBY_OPEN
       ? 1
       : activeSession.currentRound + 1;
+
+    // If starting a round beyond the original plan, extend the total
+    if (nextRound > activeSession.config.numberOfRounds) {
+      activeSession.config.numberOfRounds = nextRound;
+      logger.info({ sessionId: data.sessionId, newTotal: nextRound }, 'Host extended total rounds dynamically');
+    }
 
     logger.info({ sessionId: data.sessionId, roundNumber: nextRound }, 'Host manually starting round');
 

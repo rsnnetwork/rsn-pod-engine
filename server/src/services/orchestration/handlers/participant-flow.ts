@@ -544,15 +544,20 @@ async function checkAllRatingsCompleteByUserId(userId: string): Promise<void> {
     if (totalRatings >= expectedRatings && expectedRatings > 0) {
       logger.info({ sessionId, roundNumber, totalRatings, expectedRatings }, 'All ratings submitted — ending rating window early');
 
-      // Cancel the existing timer
+      // Cancel the existing round timer
       if (activeSession.timer) {
         clearTimeout(activeSession.timer);
         activeSession.timer = null;
         activeSession.timerEndsAt = null;
       }
 
-      // Advance immediately
-      endRatingWindow(sessionId, roundNumber);
+      // 3-second grace period: allow in-flight rating submissions to land
+      // before advancing. This prevents race conditions where the last
+      // rating triggers early-exit while another user is mid-submission.
+      activeSession.timer = setTimeout(() => {
+        activeSession.timer = null;
+        endRatingWindow(sessionId, roundNumber);
+      }, 3000);
     }
   } catch (err) {
     logger.error({ err }, 'Error in checkAllRatingsComplete');

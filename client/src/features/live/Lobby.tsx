@@ -309,7 +309,7 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
           BG
         </button>
         {showBgPanel && (
-          <div className="absolute bottom-full right-0 mb-2 bg-white rounded-xl shadow-xl border border-gray-200 p-2 w-56 z-50">
+          <div className="absolute top-full right-0 mt-2 bg-white rounded-xl shadow-xl border border-gray-200 p-2 w-56 z-50">
             <p className="text-[10px] font-semibold text-gray-400 uppercase mb-1.5 px-1">Background</p>
             <div className="grid grid-cols-3 gap-1.5">
               {[
@@ -410,7 +410,7 @@ function useHostPresence(gracePeriodMs = 15000): boolean | null {
 }
 
 function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
-  const { participants, isByeRound, currentRound, totalRounds, transitionStatus, sessionStatus, hostUserId, timerSeconds } = useSessionStore();
+  const { participants, isByeRound, currentRound, totalRounds, transitionStatus, sessionStatus, hostUserId } = useSessionStore();
   const hostOnline = useHostPresence();
 
   // Session hasn't been started yet by host
@@ -423,13 +423,12 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
           <div className="inline-flex items-center justify-center h-14 w-14 rounded-full bg-emerald-500/20 text-emerald-400">
             <Sparkles className="h-7 w-7" />
           </div>
-          <h2 className="text-xl font-bold text-[#1a1a2e]">Event finished</h2>
-          <p className="text-gray-400 text-sm max-w-xs">Preparing your recap...</p>
-          {timerSeconds > 0 && (
-            <p className="text-sm text-gray-500 mt-2">
-              Ending in <span className="text-white font-mono">{timerSeconds}s</span>
-            </p>
-          )}
+          <h2 className="text-xl font-bold text-[#1a1a2e]">All rounds complete</h2>
+          <p className="text-gray-400 text-sm max-w-xs">
+            {isHost
+              ? 'You can start another round or end the event below.'
+              : 'The host will wrap up shortly. Feel free to chat!'}
+          </p>
         </div>
       ) : isByeRound ? (
         <>

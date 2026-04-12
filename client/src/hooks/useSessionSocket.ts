@@ -145,16 +145,23 @@ export default function useSessionSocket(sessionId: string) {
       if (data.status === 'completed') { clearTimer(); clearByeTimeout(); store.setLiveKitToken(null, null); store.setMatch(null); store.setRoomId(null); store.setMatchingOverlay(null); store.setRoundDashboard(null); store.setByeRound(false); store.setPartnerDisconnected(false); store.setLeftCurrentRound(false); store.setTransitionStatus('session_ending'); setTimeout(() => { store.setTransitionStatus(null); store.setPhase('complete'); }, 1500); }
       if (data.status === 'lobby_open') { store.setTransitionStatus(null); store.setHostInLobby(true); } // Host is present when lobby reopens
       if (data.status === 'closing_lobby') {
-        // Closing lobby: clear match data, return to lobby with closing overlay
+        const currentState = useSessionStore.getState();
         store.setLiveKitToken(null, null);
-        store.setMatch(null);
-        store.setRoomId(null);
         store.setByeRound(false);
         store.setPartnerDisconnected(false);
         store.setMatchingOverlay(null);
         store.setLeftCurrentRound(false);
         store.setTransitionStatus('session_ending');
-        store.setPhase('lobby');
+        // If user is mid-rating, preserve match data so RatingPrompt can finish.
+        // Match data will be cleared when rating completes or window_closed fires.
+        if (currentState.phase !== 'rating') {
+          store.setMatch(null);
+          store.setRoomId(null);
+          store.setPhase('lobby');
+        }
+        // If in rating phase, DON'T change phase — let RatingPrompt finish naturally.
+        // The rating:window_closed handler or RatingPrompt's own allDone logic
+        // will transition to lobby when rating is complete.
       }
       // Handle round_rating — only transition matched participants to rating
       if (data.status === 'round_rating') {
@@ -176,14 +183,21 @@ export default function useSessionSocket(sessionId: string) {
       if (data.status === 'round_transition') {
         clearTimer();
         store.setLiveKitToken(null, null);
-        setTimeout(() => { store.setMatch(null); store.setRoomId(null); }, 500);
         store.setByeRound(false);
         store.setPartnerDisconnected(false);
         store.setMatchingOverlay(null);
         store.setLeftCurrentRound(false);
-        store.setTransitionStatus(null);
-        store.setHostInLobby(true); // Host triggered the transition — they're back in lobby
-        store.setPhase('lobby');
+        store.setHostInLobby(true);
+        const currentState = useSessionStore.getState();
+        if (currentState.phase === 'rating') {
+          // User is still rating — don't nuke match data or change phase.
+          // rating:window_closed or RatingPrompt allDone will handle cleanup.
+          store.setTransitionStatus(null);
+        } else {
+          setTimeout(() => { store.setMatch(null); store.setRoomId(null); }, 500);
+          store.setTransitionStatus(null);
+          store.setPhase('lobby');
+        }
       }
       if (data.currentRound) store.setRound(data.currentRound);
     });

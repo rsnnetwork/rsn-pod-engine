@@ -297,7 +297,7 @@ function MediaControls() {
 
       {/* Background effects panel */}
       {showBgPanel && (
-        <div className="absolute bottom-full left-0 mb-2 bg-white rounded-xl shadow-xl border border-gray-200 p-3 w-72 z-50">
+        <div className="absolute top-full left-0 mt-2 bg-white rounded-xl shadow-xl border border-gray-200 p-3 w-72 z-50">
           <p className="text-xs font-semibold text-gray-500 uppercase mb-2">Background Effects</p>
           <div className="grid grid-cols-3 gap-2">
             {BG_PRESETS.map(preset => (
