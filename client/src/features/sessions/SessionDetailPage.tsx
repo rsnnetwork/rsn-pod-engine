@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -135,6 +135,17 @@ export default function SessionDetailPage() {
   const isMember = !!pod?.memberRole || isAdmin;
   const isRestrictedPod = pod?.visibility === 'invite_only' || pod?.visibility === 'private';
   const canRegister = isMember || !isRestrictedPod;
+
+  // Auto-register: if user landed here from an invite flow but isn't registered yet,
+  // try to register silently. Covers all paths — notification bell, invite page, direct link.
+  // Server returns 409 if already registered (harmless), 403 if not allowed (ignored).
+  useEffect(() => {
+    if (session && user && participants && !isRegistered && sessionId) {
+      api.post(`/sessions/${sessionId}/register`).then(() => {
+        qc.invalidateQueries({ queryKey: ['session-participants', sessionId] });
+      }).catch(() => { /* not allowed or already registered — fine */ });
+    }
+  }, [session?.id, user?.id, isRegistered]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateMutation = useMutation({
     mutationFn: (body: { title?: string; description?: string; scheduledAt?: string; config?: Record<string, any> }) => api.put(`/sessions/${sessionId}`, body),
