@@ -10,11 +10,10 @@ const dbUrl = config.databaseUrl.includes('?')
 
 const pool = new Pool({
   connectionString: dbUrl,
-  min: config.dbPoolMin,
+  min: 1,             // Keep 1 connection warm — prevents Neon cold-start on first request
   max: config.dbPoolMax,
-  idleTimeoutMillis: 30_000,  // 30s — aggressively recycle idle connections for Neon serverless
+  idleTimeoutMillis: 120_000, // 2 min — balance between keeping warm and not wasting Neon resources
   connectionTimeoutMillis: 10_000,
-  allowExitOnIdle: true, // Let pool shrink to 0 when idle — Neon charges for active connections
 });
 
 pool.on('error', (err) => {
