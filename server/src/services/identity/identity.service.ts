@@ -625,9 +625,6 @@ export async function getUsers(params: {
     const prefixParam = paramIdx;
     values.push(`${params.search}%`);
     paramIdx++;
-    const containsParam = paramIdx;
-    values.push(`%${params.search}%`);
-    paramIdx++;
     // Short queries (1-2 chars): prefix-only on names — "c" finds "Chief" and "Claus", not "Mac"
     // Longer queries (3+): also search contains on names + emails for broader matching
     if (params.search.length <= 2) {
@@ -635,6 +632,9 @@ export async function getUsers(params: {
         display_name ILIKE $${prefixParam} OR first_name ILIKE $${prefixParam} OR last_name ILIKE $${prefixParam}
       )`;
     } else {
+      const containsParam = paramIdx;
+      values.push(`%${params.search}%`);
+      paramIdx++;
       whereClause += ` AND (
         display_name ILIKE $${prefixParam} OR first_name ILIKE $${prefixParam} OR last_name ILIKE $${prefixParam}
         OR display_name ILIKE $${containsParam} OR email ILIKE $${containsParam}
@@ -660,15 +660,23 @@ export async function getUsers(params: {
     const relPrefix = paramIdx;
     values.push(`${params.search.toLowerCase()}%`);
     paramIdx++;
-    const relContains = paramIdx;
-    values.push(`%${params.search.toLowerCase()}%`);
-    paramIdx++;
-    relevanceOrder = `CASE
-      WHEN LOWER(display_name) LIKE $${relPrefix} OR LOWER(first_name) LIKE $${relPrefix} THEN 0
-      WHEN LOWER(last_name) LIKE $${relPrefix} THEN 1
-      WHEN LOWER(display_name) LIKE $${relContains} THEN 2
-      WHEN LOWER(email) LIKE $${relContains} THEN 3
-      ELSE 4 END ASC,`;
+    if (params.search.length <= 2) {
+      // Short query: only prefix relevance (no contains params needed)
+      relevanceOrder = `CASE
+        WHEN LOWER(display_name) LIKE $${relPrefix} OR LOWER(first_name) LIKE $${relPrefix} THEN 0
+        WHEN LOWER(last_name) LIKE $${relPrefix} THEN 1
+        ELSE 2 END ASC,`;
+    } else {
+      const relContains = paramIdx;
+      values.push(`%${params.search.toLowerCase()}%`);
+      paramIdx++;
+      relevanceOrder = `CASE
+        WHEN LOWER(display_name) LIKE $${relPrefix} OR LOWER(first_name) LIKE $${relPrefix} THEN 0
+        WHEN LOWER(last_name) LIKE $${relPrefix} THEN 1
+        WHEN LOWER(display_name) LIKE $${relContains} THEN 2
+        WHEN LOWER(email) LIKE $${relContains} THEN 3
+        ELSE 4 END ASC,`;
+    }
   }
 
   values.push(pageSize, offset);
