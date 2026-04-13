@@ -273,6 +273,15 @@ export async function addMember(
       [podId, userId, role, status]
     );
 
+    // Sync invite status: if user had a pending invite for this pod, mark it accepted
+    if (status === PodMemberStatus.ACTIVE) {
+      await client.query(
+        `UPDATE invites SET status = 'accepted', accepted_by_user_id = COALESCE(accepted_by_user_id, $1), accepted_at = COALESCE(accepted_at, NOW())
+         WHERE pod_id = $2 AND status = 'pending' AND (invitee_email = (SELECT email FROM users WHERE id = $1) OR accepted_by_user_id = $1)`,
+        [userId, podId]
+      );
+    }
+
     logger.info({ podId, userId, role }, 'Member added to pod');
     return result.rows[0];
   });
