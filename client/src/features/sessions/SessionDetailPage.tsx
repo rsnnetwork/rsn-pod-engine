@@ -135,15 +135,17 @@ export default function SessionDetailPage() {
   const isMember = !!pod?.memberRole || isAdmin;
   const isRestrictedPod = pod?.visibility === 'invite_only' || pod?.visibility === 'private';
   const canRegister = isMember || !isRestrictedPod;
+  const [autoRegistering, setAutoRegistering] = useState(false);
 
-  // Auto-register: if user landed here from an invite flow but isn't registered yet,
-  // try to register silently. Covers all paths — notification bell, invite page, direct link.
-  // Server returns 409 if already registered (harmless), 403 if not allowed (ignored).
+  // Auto-register: if user landed here and isn't registered, register them immediately.
+  // Shows loading state so "Register" button never flashes.
   useEffect(() => {
-    if (session && user && participants && !isRegistered && sessionId) {
+    if (session && user && participants && !isRegistered && !autoRegistering && sessionId) {
+      setAutoRegistering(true);
       api.post(`/sessions/${sessionId}/register`).then(() => {
         qc.invalidateQueries({ queryKey: ['session-participants', sessionId] });
-      }).catch(() => { /* not allowed or already registered — fine */ });
+      }).catch(() => { /* not allowed or already registered */ })
+        .finally(() => setAutoRegistering(false));
     }
   }, [session?.id, user?.id, isRegistered]); // eslint-disable-line react-hooks/exhaustive-deps
 
