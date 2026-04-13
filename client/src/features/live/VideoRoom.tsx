@@ -139,19 +139,19 @@ function VideoStage() {
             </div>
           </div>
 
-          {/* Mobile 1:1: stacked layout — partner on top, you below */}
+          {/* Mobile 1:1: stacked layout — equal split, both clearly visible */}
           {!isTrio && (
             <div className="md:hidden flex flex-col h-full gap-2">
-              <div className="flex-[3] min-h-0 cursor-pointer" onClick={() => setPinnedSid(remoteTracks[0].participant.sid)}>
+              <div className="flex-1 min-h-0 cursor-pointer" onClick={() => setPinnedSid(remoteTracks[0].participant.sid)}>
                 <VideoTile trackRef={remoteTracks[0]} label={remoteTracks[0].participant.name || currentPartners[0]?.displayName || 'Partner'} />
               </div>
-              <div className="flex-[2] min-h-0 cursor-pointer" onClick={() => setPinnedSid(localParticipant.sid)}>
+              <div className="flex-1 min-h-0 cursor-pointer" onClick={() => setPinnedSid(localParticipant.sid)}>
                 <VideoTile trackRef={localTrack} label="You" />
               </div>
             </div>
           )}
 
-          {/* Mobile trio: grid + larger floating self-view */}
+          {/* Mobile trio: grid + floating self-view */}
           {isTrio && (
             <div className="md:hidden h-full relative">
               <div className="h-full grid grid-cols-1 gap-2">
@@ -161,8 +161,8 @@ function VideoStage() {
                   </div>
                 ))}
               </div>
-              {/* Larger floating self-view for trio */}
-              <div className="absolute bottom-3 right-3 w-36 h-28 rounded-xl overflow-hidden shadow-lg border-2 border-white/80 z-10"
+              {/* Floating self-view — tap to pin full screen */}
+              <div className="absolute bottom-3 right-3 w-44 h-32 rounded-xl overflow-hidden shadow-lg border-2 border-white/80 z-10"
                 onClick={() => setPinnedSid(localParticipant.sid)}>
                 <VideoTile trackRef={localTrack} label="You" />
               </div>
