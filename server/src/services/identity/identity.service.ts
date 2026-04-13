@@ -622,17 +622,24 @@ export async function getUsers(params: {
   }
 
   if (params.search) {
-    // Prefix match on names, contains match on email — so "a" finds "Ali" not "Beatrice"
     const prefixParam = paramIdx;
     values.push(`${params.search}%`);
     paramIdx++;
     const containsParam = paramIdx;
     values.push(`%${params.search}%`);
     paramIdx++;
-    whereClause += ` AND (
-      display_name ILIKE $${prefixParam} OR first_name ILIKE $${prefixParam} OR last_name ILIKE $${prefixParam}
-      OR display_name ILIKE $${containsParam} OR email ILIKE $${containsParam}
-    )`;
+    // Short queries (1-2 chars): prefix-only on names — "c" finds "Chief" and "Claus", not "Mac"
+    // Longer queries (3+): also search contains on names + emails for broader matching
+    if (params.search.length <= 2) {
+      whereClause += ` AND (
+        display_name ILIKE $${prefixParam} OR first_name ILIKE $${prefixParam} OR last_name ILIKE $${prefixParam}
+      )`;
+    } else {
+      whereClause += ` AND (
+        display_name ILIKE $${prefixParam} OR first_name ILIKE $${prefixParam} OR last_name ILIKE $${prefixParam}
+        OR display_name ILIKE $${containsParam} OR email ILIKE $${containsParam}
+      )`;
+    }
   }
 
   if (params.industry) {
