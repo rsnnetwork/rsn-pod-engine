@@ -177,8 +177,8 @@ router.post(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const invite = await query<{ id: string; invitee_email: string; session_id: string; status: string; code: string }>(
-        `SELECT id, invitee_email, session_id, status, code FROM invites WHERE id = $1`, [req.params.id]
+      const invite = await query<{ id: string; invitee_email: string; session_id: string; pod_id: string; status: string; code: string }>(
+        `SELECT id, invitee_email, session_id, pod_id, status, code FROM invites WHERE id = $1`, [req.params.id]
       );
       if (invite.rows.length === 0) {
         return res.status(404).json({ success: false, error: { code: 'INVITE_NOT_FOUND', message: 'Invite not found' } });
@@ -188,15 +188,23 @@ router.post(
         return res.status(400).json({ success: false, error: { code: 'INVITE_NOT_PENDING', message: 'Invite is no longer pending' } });
       }
 
-      // Only host/admin of the session can remind
+      // Only host/director/admin can remind
+      const isAdmin = req.user!.role === 'admin' || req.user!.role === 'super_admin';
       if (inv.session_id) {
         const sessionResult = await query<{ host_user_id: string }>(
           `SELECT host_user_id FROM sessions WHERE id = $1`, [inv.session_id]
         );
         const isHost = sessionResult.rows[0]?.host_user_id === req.user!.userId;
-        const isAdmin = req.user!.role === 'admin' || req.user!.role === 'super_admin';
         if (!isHost && !isAdmin) {
           return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only the host can send reminders' } });
+        }
+      } else if (inv.pod_id) {
+        const podMemberResult = await query<{ role: string }>(
+          `SELECT role FROM pod_members WHERE pod_id = $1 AND user_id = $2 AND status = 'active'`, [inv.pod_id, req.user!.userId]
+        );
+        const isDirector = podMemberResult.rows[0]?.role === 'director' || podMemberResult.rows[0]?.role === 'host';
+        if (!isDirector && !isAdmin) {
+          return res.status(403).json({ success: false, error: { code: 'AUTH_FORBIDDEN', message: 'Only pod directors can send reminders' } });
         }
       }
 

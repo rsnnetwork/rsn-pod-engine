@@ -922,7 +922,25 @@ export default function PodDetailPage() {
           {!podPendingInvites || podPendingInvites.length === 0 ? (
             <Card><p className="text-gray-400 text-sm text-center py-3">No pending invites</p></Card>
           ) : (
-            <div className="grid gap-2">
+            <div className="space-y-2">
+              {podPendingInvites.filter((inv: any) => inv.inviteeEmail).length > 1 && (
+                <div className="flex justify-end mb-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      podPendingInvites.filter((inv: any) => inv.inviteeEmail).forEach((inv: any) => {
+                        api.post(`/invites/${inv.id}/remind`).catch(() => {});
+                      });
+                      addToast(`Reminders sent to ${podPendingInvites.filter((i: any) => i.inviteeEmail).length} pending invites`, 'success');
+                    }}
+                    className="!border-purple-300 !text-purple-700 hover:!bg-purple-100"
+                  >
+                    <Send className="h-3.5 w-3.5 mr-1" /> Remind All ({podPendingInvites.filter((i: any) => i.inviteeEmail).length})
+                  </Button>
+                </div>
+              )}
+              <div className="grid gap-2">
               {podPendingInvites.map((inv: any) => (
                 <Card key={inv.id} className="!p-4">
                   <div className="flex items-center justify-between">
@@ -938,10 +956,24 @@ export default function PodDetailPage() {
                         <p className="text-xs text-gray-400">Sent {new Date(inv.createdAt).toLocaleDateString()}</p>
                       </div>
                     </div>
-                    <Badge variant="warning" className="text-xs">Pending</Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="warning" className="text-xs">Pending</Badge>
+                      {inv.inviteeEmail && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            api.post(`/invites/${inv.id}/remind`).then(() => addToast('Reminder sent!', 'success')).catch(() => addToast('Failed to send reminder', 'error'));
+                          }}
+                        >
+                          <Send className="h-3 w-3 mr-1" /> Remind
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </Card>
               ))}
+              </div>
             </div>
           )}
         </div>

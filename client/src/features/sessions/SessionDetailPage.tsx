@@ -89,7 +89,7 @@ export default function SessionDetailPage() {
   const { data: pendingInvites } = useQuery({
     queryKey: ['session-pending-invites', sessionId],
     queryFn: () => api.get(`/invites/session/${sessionId}?status=pending`).then(r => r.data.data ?? []),
-    enabled: !!sessionId && (isHost || isAdmin) && showPendingInvites,
+    enabled: !!sessionId && (isHost || isAdmin),
   });
 
   const { data: podMembers, refetch: refetchPodMembers } = useQuery({
@@ -603,6 +603,23 @@ export default function SessionDetailPage() {
                 </Card>
               );
             })}
+            {/* Show pending invites in "All" view so the count matches */}
+            {statusFilter === null && (isHost || isAdmin) && pendingInvites && pendingInvites.length > 0 && pendingInvites.map((inv: any) => (
+              <Card key={`inv-${inv.id}`} className="!p-4 opacity-70">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="h-8 w-8 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 text-xs font-bold">
+                      {(inv.inviteeName || inv.inviteeEmail || '?').charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-gray-500">{inv.inviteeName || inv.inviteeEmail || 'Invited user'}</p>
+                      <p className="text-xs text-gray-400">Invite pending</p>
+                    </div>
+                  </div>
+                  <Badge variant="warning" className="text-xs">Invite Pending</Badge>
+                </div>
+              </Card>
+            ))}
           </div>
         ))}
       </div>
