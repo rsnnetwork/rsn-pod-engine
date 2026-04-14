@@ -246,7 +246,45 @@ export async function transitionToRound(
       : { rows: [] };
     const globalNameMap = new Map<string, string>(namesResult.rows.map(r => [r.id, r.displayName] as [string, string]));
 
-    // Step 5: Emit match:assigned to all participants + batch status update
+    // Step 5: Pre-generate LiveKit tokens for all participants (inline, no API round-trip)
+    // Uses same TTL formula as session.service.ts generateLiveKitToken
+    const { config: appConfig } = await import('../../../config');
+    const sessionConfig = activeSession.config;
+    const roundsRemaining = Math.max(1, (sessionConfig.numberOfRounds || 5) - roundNumber);
+    const roundDuration = sessionConfig.roundDurationSeconds || 480;
+    const ratingWindow = sessionConfig.ratingWindowSeconds || 10;
+    const estimatedRemainingSeconds = roundsRemaining * (roundDuration + ratingWindow + 30) + 600;
+    const tokenTtl = Math.max(1800, Math.min(14400, estimatedRemainingSeconds));
+
+    // Generate tokens in parallel for all matched participants
+    const tokenMap = new Map<string, string>(); // pid -> JWT token
+    const tokenPromises = allPidArray
+      .filter(pid => matchedUserIds.has(pid))
+      .map(async (pid) => {
+        try {
+          const displayName = globalNameMap.get(pid) || 'User';
+          // Find which room this participant is in
+          let pidRoomId: string | undefined;
+          for (const match of matches) {
+            const mPids = [match.participantAId, match.participantBId];
+            if (match.participantCId) mPids.push(match.participantCId);
+            if (mPids.includes(pid)) {
+              pidRoomId = matchRoomMap.get(match.id);
+              break;
+            }
+          }
+          if (pidRoomId) {
+            const vt = await videoService.issueJoinToken(pid, pidRoomId, displayName, tokenTtl);
+            tokenMap.set(pid, vt.token);
+          }
+        } catch (err) {
+          // Non-fatal: client will fall back to API token fetch
+          logger.warn({ err, pid, sessionId }, 'Inline token generation failed — client will retry via API');
+        }
+      });
+    await Promise.all(tokenPromises);
+
+    // Step 6: Emit match:assigned to all participants + batch status update
     const statusUpdatePromises: Promise<void>[] = [];
     for (const match of matches) {
       const roomId = matchRoomMap.get(match.id)!;
@@ -265,6 +303,9 @@ export async function transitionToRound(
           partners,
           roomId,
           roundNumber,
+          // Inline token eliminates client-side API round-trip (~100-500ms saved)
+          token: tokenMap.get(pid) || null,
+          livekitUrl: appConfig.livekit.host,
         });
 
         statusUpdatePromises.push(

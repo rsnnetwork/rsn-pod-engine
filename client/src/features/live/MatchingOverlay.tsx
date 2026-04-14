@@ -11,7 +11,7 @@ export default function MatchingOverlay({ roundNumber }: Props) {
   const [countdown, setCountdown] = useState(3);
 
   useEffect(() => {
-    const timer = setTimeout(() => setPhase('result'), 1800);
+    const timer = setTimeout(() => setPhase('result'), 1000);
     return () => clearTimeout(timer);
   }, []);
 

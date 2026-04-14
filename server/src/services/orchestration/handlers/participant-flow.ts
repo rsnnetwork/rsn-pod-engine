@@ -809,15 +809,30 @@ export async function handleDisconnect(
                     );
                     const names = new Map(nameRes.rows.map(r => [r.id, r.display_name || 'User']));
 
+                    // Generate inline tokens for instant breakout transition
+                    const { config: reassignConfig } = await import('../../../config');
+                    let partnerTk: string | null = null;
+                    let candidateTk: string | null = null;
+                    try {
+                      const [pVt, cVt] = await Promise.all([
+                        videoService.issueJoinToken(partnerId, roomId, names.get(partnerId) || 'User'),
+                        videoService.issueJoinToken(candidatePresent, roomId, names.get(candidatePresent) || 'User'),
+                      ]);
+                      partnerTk = pVt.token;
+                      candidateTk = cVt.token;
+                    } catch { /* non-fatal — client retries via API */ }
+
                     io.to(userRoom(partnerId)).emit('match:reassigned', {
                       matchId, newPartnerId: candidatePresent,
                       partnerDisplayName: names.get(candidatePresent),
                       roomId, roundNumber: disconnectRound,
+                      token: partnerTk, livekitUrl: reassignConfig.livekit.host,
                     });
                     io.to(userRoom(candidatePresent)).emit('match:reassigned', {
                       matchId, newPartnerId: partnerId,
                       partnerDisplayName: names.get(partnerId),
                       roomId, roundNumber: disconnectRound,
+                      token: candidateTk, livekitUrl: reassignConfig.livekit.host,
                     });
 
                     logger.info({ sessionId, partnerId, candidatePresent, matchId },

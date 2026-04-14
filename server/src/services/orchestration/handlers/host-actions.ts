@@ -536,17 +536,38 @@ export async function handleHostReassign(
         );
       });
 
+      // Generate tokens for both participants inline
+      const { config: appConfig } = await import('../../../config');
+      let targetToken: string | null = null;
+      let partnerToken: string | null = null;
+      try {
+        const targetName = (await query<{ display_name: string }>(`SELECT display_name FROM users WHERE id = $1`, [targetId])).rows[0]?.display_name || 'User';
+        const partnerName = (await query<{ display_name: string }>(`SELECT display_name FROM users WHERE id = $1`, [partner])).rows[0]?.display_name || 'User';
+        const [tVt, pVt] = await Promise.all([
+          videoService.issueJoinToken(targetId, roomId, targetName),
+          videoService.issueJoinToken(partner, roomId, partnerName),
+        ]);
+        targetToken = tVt.token;
+        partnerToken = pVt.token;
+      } catch (err) {
+        logger.warn({ err }, 'Inline token gen failed for reassignment — clients will retry via API');
+      }
+
       // Notify both participants
       io.to(userRoom(targetId)).emit('match:reassigned', {
         matchId,
         newPartnerId: partner,
         roomId,
+        token: targetToken,
+        livekitUrl: appConfig.livekit.host,
       });
 
       io.to(userRoom(partner)).emit('match:reassigned', {
         matchId,
         newPartnerId: targetId,
         roomId,
+        token: partnerToken,
+        livekitUrl: appConfig.livekit.host,
       });
 
       logger.info({ sessionId: data.sessionId, targetId, partner }, 'Participant reassigned');
@@ -769,7 +790,21 @@ export async function handleHostMoveToRoom(
     );
     const nameMap = new Map(namesResult.rows.map(r => [r.id, r.display_name || 'User']));
 
-    // Notify all participants in the new room
+    // Generate tokens and notify all participants in the new room
+    const { config: moveConfig } = await import('../../../config');
+    const tokenMapMove = new Map<string, string>();
+    try {
+      const tokenResults = await Promise.all(
+        allParticipants.map(async (pid) => {
+          const vt = await videoService.issueJoinToken(pid, newRoomId, nameMap.get(pid) || 'User');
+          return { pid, token: vt.token };
+        })
+      );
+      for (const { pid, token } of tokenResults) tokenMapMove.set(pid, token);
+    } catch (err) {
+      logger.warn({ err }, 'Inline token gen failed for move-reassign — clients will retry via API');
+    }
+
     for (const pid of allParticipants) {
       const partners = allParticipants.filter(p => p !== pid).map(p => ({
         userId: p,
@@ -781,6 +816,8 @@ export async function handleHostMoveToRoom(
         partnerDisplayName: partners[0]?.displayName,
         roomId: newRoomId,
         roundNumber: activeSession.currentRound,
+        token: tokenMapMove.get(pid) || null,
+        livekitUrl: moveConfig.livekit.host,
       });
     }
 

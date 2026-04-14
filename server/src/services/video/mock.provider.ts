@@ -20,7 +20,7 @@ export class MockVideoProvider implements IVideoProvider {
     logger.debug({ roomId }, 'MockVideo: room closed');
   }
 
-  async issueJoinToken(userId: string, roomId: string, _displayName: string): Promise<VideoToken> {
+  async issueJoinToken(userId: string, roomId: string, _displayName: string, _tokenTtl?: number): Promise<VideoToken> {
     return { token: `mock-token-${userId}-${roomId}`, roomId, userId, expiresAt: new Date(Date.now() + 3600_000) };
   }
 

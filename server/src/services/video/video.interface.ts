@@ -12,7 +12,7 @@ export interface IVideoProvider {
   closeRoom(roomId: string): Promise<void>;
 
   /** Issue a join token for a user to enter a room. */
-  issueJoinToken(userId: string, roomId: string, displayName: string): Promise<VideoToken>;
+  issueJoinToken(userId: string, roomId: string, displayName: string, tokenTtl?: number): Promise<VideoToken>;
 
   /** Move a participant from one room to another (leave + join). */
   moveParticipant(userId: string, fromRoomId: string, toRoomId: string): Promise<void>;

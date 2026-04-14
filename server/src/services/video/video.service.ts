@@ -79,10 +79,11 @@ export async function closeMatchRoom(
 export async function issueJoinToken(
   userId: string,
   roomId: string,
-  displayName: string
+  displayName: string,
+  tokenTtl?: number
 ): Promise<VideoToken> {
   const p = getVideoProvider();
-  return p.issueJoinToken(userId, roomId, displayName);
+  return p.issueJoinToken(userId, roomId, displayName, tokenTtl);
 }
 
 // ─── Participant Operations ─────────────────────────────────────────────────

@@ -273,19 +273,24 @@ export default function useSessionSocket(sessionId: string) {
       store.setByeRound(false);
       clearByeTimeout();
       store.setPartnerDisconnected(false);
-      store.setTransitionStatus('preparing_match');
       const partners = data.partners || [{ userId: data.partnerId, displayName: data.partnerDisplayName || data.partnerId }];
       store.setMatch({ userId: data.partnerId, displayName: data.partnerDisplayName || data.partnerId }, data.matchId, partners);
       store.setPhase('matched');
       // Store roomId for VideoRoom backup fetch
       if (data.roomId) store.setRoomId(data.roomId);
-      // Fetch LiveKit token with retry — eliminates "refresh to enter room" at scale
-      fetchTokenWithRetry(sessionId, data.roomId).then(result => {
-        if (result) {
-          store.setLiveKitToken(result.token, result.livekitUrl);
-        }
+      // Use inline token if server provided it (instant), otherwise fall back to API fetch
+      if (data.token && data.livekitUrl) {
+        store.setLiveKitToken(data.token, data.livekitUrl);
         store.setTransitionStatus(null);
-      });
+      } else {
+        store.setTransitionStatus('preparing_match');
+        fetchTokenWithRetry(sessionId, data.roomId).then(result => {
+          if (result) {
+            store.setLiveKitToken(result.token, result.livekitUrl);
+          }
+          store.setTransitionStatus(null);
+        });
+      }
     });
 
     socket.on('match:reassigned', (data: any) => {
@@ -294,16 +299,21 @@ export default function useSessionSocket(sessionId: string) {
       if (reassignState.sessionStatus === 'round_rating' || reassignState.sessionStatus === 'completed') return;
       if (reassignState.leftCurrentRound) return;
       store.setPartnerDisconnected(false);
-      store.setTransitionStatus('preparing_match');
       store.setMatch({ userId: data.newPartnerId, displayName: data.partnerDisplayName || data.newPartnerId }, data.matchId || null);
       store.setPhase('matched');
-      // Re-fetch token with retry for new room
-      fetchTokenWithRetry(sessionId, data.roomId).then(result => {
-        if (result) {
-          store.setLiveKitToken(result.token, result.livekitUrl);
-        }
+      // Use inline token if server provided it, otherwise fall back to API fetch
+      if (data.token && data.livekitUrl) {
+        store.setLiveKitToken(data.token, data.livekitUrl);
         store.setTransitionStatus(null);
-      });
+      } else {
+        store.setTransitionStatus('preparing_match');
+        fetchTokenWithRetry(sessionId, data.roomId).then(result => {
+          if (result) {
+            store.setLiveKitToken(result.token, result.livekitUrl);
+          }
+          store.setTransitionStatus(null);
+        });
+      }
     });
 
     socket.on('match:partner_disconnected', () => {
