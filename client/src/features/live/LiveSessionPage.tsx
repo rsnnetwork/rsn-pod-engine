@@ -167,7 +167,7 @@ export default function LiveSessionPage() {
         </div>
       )}
 
-      {/* Transition status — only show session_ending (others flash too fast or duplicate lobby UI) */}
+      {/* Transition status — only show session_ending (others flash too fast or duplicate main room UI) */}
       {transitionStatus === 'session_ending' && (
         <div className="bg-gray-100 px-4 py-2 flex items-center justify-center gap-2">
           <Loader2 className="h-4 w-4 text-blue-400 animate-spin" />
@@ -255,10 +255,10 @@ export default function LiveSessionPage() {
 
 const STATE_CONFIG: Record<string, { label: string; icon: React.ReactNode; color: string }> = {
   scheduled:        { label: 'Waiting to start', icon: <Users className="h-3.5 w-3.5" />, color: 'bg-white/5 text-gray-400' },
-  lobby_open:       { label: 'Lobby', icon: <Mic className="h-3.5 w-3.5" />, color: 'bg-white/5 text-gray-300' },
+  lobby_open:       { label: 'Main Room', icon: <Mic className="h-3.5 w-3.5" />, color: 'bg-white/5 text-gray-300' },
   round_active:     { label: 'Breakout Rooms · Round {round}', icon: <Radio className="h-3.5 w-3.5 animate-pulse" />, color: 'bg-red-500/10 text-red-400' },
   round_rating:     { label: 'Rating', icon: <ArrowLeftRight className="h-3.5 w-3.5" />, color: 'bg-amber-500/10 text-amber-400' },
-  round_transition: { label: 'Lobby', icon: <Shuffle className="h-3.5 w-3.5" />, color: 'bg-white/5 text-gray-300' },
+  round_transition: { label: 'Main Room', icon: <Shuffle className="h-3.5 w-3.5" />, color: 'bg-white/5 text-gray-300' },
   closing_lobby:    { label: 'Wrapping up', icon: <Loader2 className="h-3.5 w-3.5 animate-spin" />, color: 'bg-white/5 text-gray-400' },
   completed:        { label: 'Event ended', icon: <CheckCircle2 className="h-3.5 w-3.5" />, color: 'bg-emerald-500/10 text-emerald-400' },
 };

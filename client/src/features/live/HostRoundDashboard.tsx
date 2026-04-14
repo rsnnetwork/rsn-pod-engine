@@ -11,7 +11,7 @@ export default function HostRoundDashboard({ sessionId }: Props) {
   const [moveMode, setMoveMode] = useState<{ userId: string; fromMatchId: string; displayName: string } | null>(null);
 
   const removeFromRoom = (matchId: string, userId: string) => {
-    if (!confirm('Remove this participant from their current room? Their partner will get a bye.')) return;
+    if (!confirm('Remove this participant from their current room? Their partner will be unmatched.')) return;
     socket?.emit('host:remove_from_room' as any, { sessionId, matchId, userId });
   };
 

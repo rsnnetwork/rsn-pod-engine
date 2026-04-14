@@ -469,7 +469,7 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
           <div className="inline-flex items-center justify-center h-14 w-14 rounded-full bg-blue-500/10 text-blue-400">
             <Users className="h-7 w-7" />
           </div>
-          <h2 className="text-xl font-bold text-[#1a1a2e]">You're in the lobby</h2>
+          <h2 className="text-xl font-bold text-[#1a1a2e]">Back in Main Room</h2>
           <p className="text-gray-400 text-sm max-w-xs">
             The host may assign you to a new room
           </p>
@@ -487,7 +487,7 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
           <div className="inline-flex items-center justify-center h-12 w-12 rounded-full bg-white/10 text-gray-300 mx-auto">
             <Sparkles className="h-6 w-6" />
           </div>
-          <h2 className="text-xl font-bold text-[#1a1a2e]">Lobby</h2>
+          <h2 className="text-xl font-bold text-[#1a1a2e]">Waiting Room</h2>
           <p className="text-gray-400 text-sm">
             {isHost
               ? 'Click Start Event below when everyone is ready'
@@ -501,7 +501,7 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
           <div className="inline-flex items-center justify-center h-12 w-12 rounded-full bg-white/10 text-gray-300 mx-auto">
             <Sparkles className="h-6 w-6" />
           </div>
-          <h2 className="text-xl font-bold text-[#1a1a2e]">Lobby</h2>
+          <h2 className="text-xl font-bold text-[#1a1a2e]">Main Room</h2>
           {isHost && (
             <p className="text-gray-400 text-sm">
               Click Match People below when ready

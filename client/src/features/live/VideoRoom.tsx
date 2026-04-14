@@ -346,12 +346,12 @@ function PartnerLeftAutoReturn({ sessionId }: { sessionId: string }) {
   return (
     <div className="bg-amber-500/10 px-4 py-3 flex items-center justify-center gap-2">
       <UserX className="h-4 w-4 text-amber-400" />
-      <p className="text-sm text-amber-400 font-medium">Your partner left the room. Returning to lobby in {Math.max(0, countdown)}s</p>
+      <p className="text-sm text-amber-400 font-medium">Your partner left the room. Returning to main room in {Math.max(0, countdown)}s</p>
       <button
         onClick={() => getSocket()?.emit('participant:leave_conversation', { sessionId })}
         className="ml-2 px-3 py-1 text-xs font-medium bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 rounded-full transition-colors"
       >
-        Return to Lobby
+        Return to Main Room
       </button>
     </div>
   );
@@ -447,7 +447,7 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
               onClick={handleReturnToLobby}
               className="w-full px-4 py-2.5 bg-white/10 hover:bg-white/20 text-gray-300 text-sm rounded-lg transition-colors"
             >
-              Return to Lobby
+              Return to Main Room
             </button>
           </div>
         </div>
@@ -467,7 +467,7 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
             onClick={handleReturnToLobby}
             className="mt-4 text-xs text-gray-500 hover:text-gray-300 transition-colors"
           >
-            Return to Lobby
+            Return to Main Room
           </button>
         </div>
       </div>
@@ -518,7 +518,7 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
       }}
       className="flex-1 flex flex-col"
     >
-      {/* Partner disconnected — auto-return to lobby */}
+      {/* Partner disconnected — auto-return to main room */}
       {partnerDisconnected && sessionId && (
         <PartnerLeftAutoReturn sessionId={sessionId} />
       )}
@@ -536,14 +536,14 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
               <>
                 <button
                   onClick={() => {
-                    if (confirm('Return to the lobby? Your conversation will end.')) {
+                    if (confirm('Return to the main room? Your conversation will end.')) {
                       if (sessionId) getSocket()?.emit('participant:leave_conversation', { sessionId });
                     }
                   }}
                   className="flex items-center gap-1 px-2.5 py-1 text-xs text-gray-400 hover:text-amber-400 hover:bg-white/5 rounded-lg transition-colors"
-                  title="Return to the lobby"
+                  title="Return to the main room"
                 >
-                  <ArrowLeft className="h-3 w-3" /> Return to Lobby
+                  <ArrowLeft className="h-3 w-3" /> Return to Main Room
                 </button>
                 <button
                   onClick={() => {
