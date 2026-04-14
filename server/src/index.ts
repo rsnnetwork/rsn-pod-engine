@@ -1,6 +1,22 @@
 // ─── RSN Server Entry Point ──────────────────────────────────────────────────
 // Express + Socket.IO application with all middleware, routes, and services.
 
+import * as Sentry from '@sentry/node';
+
+// Initialize Sentry BEFORE everything else
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV || 'development',
+    tracesSampleRate: 0.2, // 20% of transactions for performance monitoring
+    beforeSend(event) {
+      // Don't send health check noise
+      if (event.request?.url?.includes('/health')) return null;
+      return event;
+    },
+  });
+}
+
 import express from 'express';
 import http from 'http';
 import { randomUUID } from 'crypto';
@@ -219,6 +235,9 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/notifications', notificationRoutes);
 
 // ─── Error Handling ─────────────────────────────────────────────────────────
+
+// Sentry captures errors before our handler processes them
+Sentry.setupExpressErrorHandler(app);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
