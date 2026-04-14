@@ -627,46 +627,134 @@ export async function handleLeaveConversation(
 
       logger.info({ sessionId, userId, matchId: userMatch.id }, 'Participant left conversation → returned to lobby');
 
-      // ─── 2.3: Auto-return solo partner after 5s ────────────────────
+      // ─── 2.3: Auto-reassign solo partner after 5s, or return to lobby ──
       if (partnerIds.length === 1) {
         const soloPartnerId = partnerIds[0];
+
+        // Change match to no_show so reassign logic can find it
+        await query(
+          `UPDATE matches SET status = 'no_show' WHERE id = $1`,
+          [userMatch.id]
+        );
+
         setTimeout(async () => {
           try {
             const currentSession = activeSessions.get(sessionId);
             if (!currentSession || currentSession.status !== SessionStatus.ROUND_ACTIVE) return;
             if (currentSession.currentRound !== activeSession.currentRound) return;
 
-            // Check if the match is still marked completed (partner hasn't been reassigned)
+            // Check if already reassigned by host or other flow
             const freshMatch = (await matchingService.getMatchesByRound(sessionId, currentSession.currentRound))
               .find(m => m.id === userMatch.id);
-            if (!freshMatch || freshMatch.status !== 'completed') return;
+            if (!freshMatch || freshMatch.status !== 'no_show') return;
 
-            // Move solo partner to lobby
-            await sessionService.updateParticipantStatus(sessionId, soloPartnerId, ParticipantStatus.IN_LOBBY);
-            io.to(userRoom(soloPartnerId)).emit('match:return_to_lobby', { reason: 'partner_left' });
+            // Try to find another isolated participant for auto-reassign
+            const noShowMatches = await query<{ id: string; participant_a_id: string; participant_b_id: string }>(
+              `SELECT id, participant_a_id, participant_b_id FROM matches
+               WHERE session_id = $1 AND round_number = $2 AND status = 'no_show' AND id != $3`,
+              [sessionId, currentSession.currentRound, userMatch.id]
+            );
 
-            // Re-issue lobby token for the solo partner
-            if (session.lobbyRoomId) {
-              const socketsInRoom = await io.in(userRoom(soloPartnerId)).fetchSockets();
-              const { config: appConfig } = await import('../../../config');
-              for (const s of socketsInRoom) {
+            let reassigned = false;
+            for (const nsMatch of noShowMatches.rows) {
+              const candidateA = nsMatch.participant_a_id;
+              const candidateB = nsMatch.participant_b_id;
+              const candidatePresent = currentSession.presenceMap.has(candidateA) ? candidateA
+                : currentSession.presenceMap.has(candidateB) ? candidateB : null;
+
+              if (candidatePresent && candidatePresent !== soloPartnerId) {
+                // Found another isolated participant — pair them
+                const reassignSlug = `leave-reassign-${Date.now()}`;
+                const newRoomId = `session-${sessionId}-round-${currentSession.currentRound}-${reassignSlug}`;
                 try {
-                  const uid = (s.data as any)?.userId;
-                  const dName = (s.data as any)?.displayName || 'User';
-                  if (uid !== soloPartnerId) continue;
-                  const lobbyToken = await videoService.issueJoinToken(uid, session.lobbyRoomId, dName);
-                  s.emit('lobby:token', {
-                    token: lobbyToken.token,
-                    livekitUrl: appConfig.livekit.host,
-                    roomId: session.lobbyRoomId,
-                  });
-                } catch { /* skip */ }
+                  await videoService.createMatchRoom(sessionId, currentSession.currentRound, reassignSlug);
+                } catch { /* room may already exist */ }
+
+                const { v4: uuid } = await import('uuid');
+                const matchId = uuid();
+                const normA = soloPartnerId < candidatePresent ? soloPartnerId : candidatePresent;
+                const normB = soloPartnerId < candidatePresent ? candidatePresent : soloPartnerId;
+                try {
+                  await query(
+                    `INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, room_id, status, started_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, 'active', NOW())`,
+                    [matchId, sessionId, currentSession.currentRound, normA, normB, newRoomId]
+                  );
+                } catch (insertErr: any) {
+                  if (insertErr.message?.includes('PARTICIPANT_ALREADY_MATCHED') || insertErr.code === '23505') {
+                    logger.warn({ soloPartnerId, candidatePresent }, 'Auto-reassign after leave skipped: already matched');
+                    continue;
+                  }
+                  throw insertErr;
+                }
+
+                // Fetch display names + generate tokens
+                const nameRes = await query<{ id: string; display_name: string }>(
+                  `SELECT id, display_name FROM users WHERE id = ANY($1)`,
+                  [[soloPartnerId, candidatePresent]]
+                );
+                const names = new Map(nameRes.rows.map(r => [r.id, r.display_name || 'User']));
+
+                const { config: reassignConfig } = await import('../../../config');
+                let soloTk: string | null = null;
+                let candidateTk: string | null = null;
+                try {
+                  const [sVt, cVt] = await Promise.all([
+                    videoService.issueJoinToken(soloPartnerId, newRoomId, names.get(soloPartnerId) || 'User'),
+                    videoService.issueJoinToken(candidatePresent, newRoomId, names.get(candidatePresent) || 'User'),
+                  ]);
+                  soloTk = sVt.token;
+                  candidateTk = cVt.token;
+                } catch { /* non-fatal */ }
+
+                io.to(userRoom(soloPartnerId)).emit('match:reassigned', {
+                  matchId, newPartnerId: candidatePresent,
+                  partnerDisplayName: names.get(candidatePresent),
+                  roomId: newRoomId, roundNumber: currentSession.currentRound,
+                  token: soloTk, livekitUrl: reassignConfig.livekit.host,
+                });
+                io.to(userRoom(candidatePresent)).emit('match:reassigned', {
+                  matchId, newPartnerId: soloPartnerId,
+                  partnerDisplayName: names.get(soloPartnerId),
+                  roomId: newRoomId, roundNumber: currentSession.currentRound,
+                  token: candidateTk, livekitUrl: reassignConfig.livekit.host,
+                });
+
+                logger.info({ sessionId, soloPartnerId, candidatePresent, matchId },
+                  'Auto-reassigned after early leave');
+                reassigned = true;
+                break;
               }
             }
 
-            logger.info({ sessionId, soloPartnerId, matchId: userMatch.id }, 'Auto-returned solo partner to lobby after 5s');
+            if (!reassigned) {
+              // No partner available — return to lobby
+              await sessionService.updateParticipantStatus(sessionId, soloPartnerId, ParticipantStatus.IN_LOBBY);
+              io.to(userRoom(soloPartnerId)).emit('match:return_to_lobby', { reason: 'partner_left' });
+
+              // Re-issue lobby token
+              if (session.lobbyRoomId) {
+                const socketsInRoom = await io.in(userRoom(soloPartnerId)).fetchSockets();
+                const { config: appConfig } = await import('../../../config');
+                for (const s of socketsInRoom) {
+                  try {
+                    const uid = (s.data as any)?.userId;
+                    const dName = (s.data as any)?.displayName || 'User';
+                    if (uid !== soloPartnerId) continue;
+                    const lobbyToken = await videoService.issueJoinToken(uid, session.lobbyRoomId, dName);
+                    s.emit('lobby:token', {
+                      token: lobbyToken.token,
+                      livekitUrl: appConfig.livekit.host,
+                      roomId: session.lobbyRoomId,
+                    });
+                  } catch { /* skip */ }
+                }
+              }
+
+              logger.info({ sessionId, soloPartnerId, matchId: userMatch.id }, 'No reassign available — returned solo partner to lobby');
+            }
           } catch (err) {
-            logger.error({ err }, 'Error in auto-return solo partner');
+            logger.error({ err }, 'Error in auto-reassign after early leave');
           }
         }, 5000);
       }

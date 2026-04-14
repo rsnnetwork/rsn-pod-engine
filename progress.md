@@ -344,6 +344,20 @@ Approach: Full codebase+DB+client+server audit before any code, architectural de
 - Verified: tsc clean (server + client), 266 tests pass
 - Files: round-lifecycle.ts, host-actions.ts, participant-flow.ts, video.service.ts, video.interface.ts, mock.provider.ts, useSessionSocket.ts, MatchingOverlay.tsx
 
+**Fix 13 — Pause UI + Auto-Reassign After Early Leave (COMPLETE)**
+- Server: isPaused now included in session:status_changed broadcasts (pause + resume)
+- Server: Pause state persisted to DB on pause/resume
+- Client: isPaused field added to session store, synced from server broadcasts
+- Client: "Round paused by host" banner shown to ALL participants when paused
+- Client: HostControls now uses store isPaused (survives refresh) instead of local state
+- Server: handleLeaveConversation now marks match as no_show (was completed) enabling reassign
+- Server: 5s after early leave, auto-reassign searches for another isolated participant
+- Server: If reassign found → match:reassigned with inline token (instant transition)
+- Server: If no reassign → partner returned to lobby (same as before)
+- Manual reassign: already exists — host dashboard has Move/Remove buttons per participant
+- Verified: tsc clean (server + client), 266 tests pass
+- Files: host-actions.ts, participant-flow.ts, sessionStore.ts, useSessionSocket.ts, LiveSessionPage.tsx, HostControls.tsx
+
 ### What's Next
 
 **All 6 phases complete.** Platform is production-ready for the features in the Change 1.4 doc.

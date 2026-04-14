@@ -18,7 +18,8 @@ export default function HostControls({ sessionId }: Props) {
   const { setMatchPreview } = useSessionStore.getState();
   const socket = getSocket();
   const [generating, setGenerating] = useState(false);
-  const [isPaused, setIsPaused] = useState(false);
+  const isPaused = useSessionStore(s => s.isPaused);
+  const { setIsPaused } = useSessionStore.getState();
   const [broadcastMsg, setBroadcastMsg] = useState('');
   const [showBroadcast, setShowBroadcast] = useState(false);
   const [swapMode, setSwapMode] = useState<string | null>(null); // userId of first selected participant for swap
@@ -119,6 +120,7 @@ export default function HostControls({ sessionId }: Props) {
     } else {
       socket?.emit('host:pause_session', { sessionId });
     }
+    // Optimistic update — server will confirm via session:status_changed
     setIsPaused(!isPaused);
   };
 

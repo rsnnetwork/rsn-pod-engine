@@ -27,6 +27,7 @@ export default function LiveSessionPage() {
   const sessionError = useSessionStore(s => s.error);
   const connectionStatus = useSessionStore(s => s.connectionStatus);
   const transitionStatus = useSessionStore(s => s.transitionStatus);
+  const isPaused = useSessionStore(s => s.isPaused);
   const sessionStatus = useSessionStore(s => s.sessionStatus);
   const currentRound = useSessionStore(s => s.currentRound);
   const totalRounds = useSessionStore(s => s.totalRounds);
@@ -155,6 +156,14 @@ export default function LiveSessionPage() {
           >
             <RefreshCw className="h-3 w-3" /> Reconnect
           </button>
+        </div>
+      )}
+
+      {/* Pause banner — visible to all participants */}
+      {isPaused && (
+        <div className="bg-amber-500/15 px-4 py-2 flex items-center justify-center gap-2">
+          <Loader2 className="h-4 w-4 text-amber-400" />
+          <p className="text-sm text-amber-400 font-medium">Round paused by host</p>
         </div>
       )}
 

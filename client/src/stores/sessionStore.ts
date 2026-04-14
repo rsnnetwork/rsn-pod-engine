@@ -87,6 +87,7 @@ interface SessionLiveState {
   cohosts: Set<string>;
   leftCurrentRound: boolean;
   lastRatedRound: number;
+  isPaused: boolean;
 
   setPhase: (phase: SessionPhase) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
@@ -129,6 +130,7 @@ interface SessionLiveState {
   removeCohost: (userId: string) => void;
   setLeftCurrentRound: (v: boolean) => void;
   setLastRatedRound: (r: number) => void;
+  setIsPaused: (v: boolean) => void;
 
   reset: () => void;
 }
@@ -170,6 +172,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   cohosts: new Set<string>(),
   leftCurrentRound: false,
   lastRatedRound: 0,
+  isPaused: false,
 
   setPhase: (phase) => set({ phase }),
   setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
@@ -226,6 +229,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   removeCohost: (userId) => set((s) => { const c = new Set(s.cohosts); c.delete(userId); return { cohosts: c }; }),
   setLeftCurrentRound: (leftCurrentRound) => set({ leftCurrentRound }),
   setLastRatedRound: (lastRatedRound) => set({ lastRatedRound }),
+  setIsPaused: (isPaused) => set({ isPaused }),
   updateRoomStatus: (matchId, status, participants) => set((s) => {
     if (!s.roundDashboard) return {};
     return {
@@ -247,6 +251,6 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
     timerVisibility: 'always_visible', matchPreview: null,
     hostMuteCommand: null, partnerDisconnected: false, roundDashboard: null,
     chatMessages: [], unreadChatCount: 0, chatOpen: false, matchingOverlay: null, preparingMatches: false, lobbyDensity: 'normal' as const,
-    cohosts: new Set<string>(), leftCurrentRound: false, lastRatedRound: 0,
+    cohosts: new Set<string>(), leftCurrentRound: false, lastRatedRound: 0, isPaused: false,
   }),
 }));

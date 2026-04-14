@@ -294,11 +294,13 @@ export async function handleHostPause(
     }
 
     activeSession.isPaused = true;
+    persistSessionState(data.sessionId, activeSession).catch(() => {});
 
     io.to(sessionRoom(data.sessionId)).emit('session:status_changed', {
       sessionId: data.sessionId,
       status: activeSession.status,
       currentRound: activeSession.currentRound,
+      isPaused: true,
     });
 
     logger.info({ sessionId: data.sessionId }, 'Session paused');
@@ -341,10 +343,13 @@ export async function handleHostResume(
       }
     }
 
+    persistSessionState(data.sessionId, activeSession).catch(() => {});
+
     io.to(sessionRoom(data.sessionId)).emit('session:status_changed', {
       sessionId: data.sessionId,
       status: activeSession.status,
       currentRound: activeSession.currentRound,
+      isPaused: false,
     });
 
     logger.info({ sessionId: data.sessionId }, 'Session resumed');
