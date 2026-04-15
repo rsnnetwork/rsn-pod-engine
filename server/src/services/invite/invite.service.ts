@@ -462,6 +462,15 @@ export async function acceptInvite(code: string, userId: string): Promise<Invite
     }
 
     logger.info({ code, userId, type: invite.type }, 'Invite accepted');
+
+    // Auto-mark related notifications as read so they don't linger
+    try {
+      await client.query(
+        `UPDATE notifications SET is_read = TRUE WHERE user_id = $1 AND link LIKE $2 AND is_read = FALSE`,
+        [userId, `%${code}%`]
+      );
+    } catch { /* non-fatal */ }
+
     return updatedResult.rows[0] as Invite;
   });
 }
@@ -640,6 +649,17 @@ export async function declineInvite(code: string, userEmail: string): Promise<vo
   if (result.rowCount === 0) {
     throw new NotFoundError('Invite');
   }
+
+  // Auto-mark related notifications as read
+  try {
+    const userResult = await query<{ id: string }>(`SELECT id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1`, [userEmail]);
+    if (userResult.rows[0]) {
+      await query(
+        `UPDATE notifications SET is_read = TRUE WHERE user_id = $1 AND link LIKE $2 AND is_read = FALSE`,
+        [userResult.rows[0].id, `%${code}%`]
+      );
+    }
+  } catch { /* non-fatal */ }
 
   logger.info({ code, userEmail }, 'Invite declined by recipient');
 }

@@ -189,11 +189,12 @@ export default function HostControls({ sessionId }: Props) {
     <div className="border-t border-gray-200 bg-white">
       {/* Match preview panel with interactive controls */}
       {matchPreview && (
-        <div className="border-b border-gray-200 bg-gray-50 px-4 py-3 max-h-72 overflow-y-auto">
+        <div className="border-b border-gray-200 bg-emerald-50 px-4 py-3 max-h-72 overflow-y-auto animate-fade-in">
           <div className="max-w-4xl mx-auto">
             <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-semibold text-gray-700">
-                Round {matchPreview.roundNumber} Preview — {matchPreview.matches.length} match{matchPreview.matches.length !== 1 ? 'es' : ''}
+              <h3 className="text-sm font-semibold text-emerald-700 flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4" />
+                {matchPreview.matches.length} match{matchPreview.matches.length !== 1 ? 'es' : ''} ready — Round {matchPreview.roundNumber}
               </h3>
               <div className="flex items-center gap-1.5">
                 {swapMode && (
