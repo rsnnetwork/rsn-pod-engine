@@ -361,19 +361,24 @@ async function persistMatches(sessionId: string, rounds: RoundAssignment[]): Pro
         [sessionId, round.roundNumber]
       );
 
-      for (const pair of round.pairs) {
+      // Batch insert all matches for this round in one multi-row INSERT
+      if (round.pairs.length > 0) {
+        const values: unknown[] = [];
+        const placeholders: string[] = [];
+        let paramIdx = 1;
+
+        for (const pair of round.pairs) {
+          const pA = pair.participantAId < pair.participantBId ? pair.participantAId : pair.participantBId;
+          const pB = pair.participantAId < pair.participantBId ? pair.participantBId : pair.participantAId;
+          placeholders.push(`($${paramIdx}, $${paramIdx + 1}, $${paramIdx + 2}, $${paramIdx + 3}, $${paramIdx + 4}, $${paramIdx + 5}, $${paramIdx + 6}, 'scheduled')`);
+          values.push(sessionId, round.roundNumber, pA, pB, pair.participantCId || null, pair.score, pair.reasonTags);
+          paramIdx += 7;
+        }
+
         await client.query(
           `INSERT INTO matches (session_id, round_number, participant_a_id, participant_b_id, participant_c_id, score, reason_tags, status)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'scheduled')`,
-          [
-            sessionId,
-            round.roundNumber,
-            pair.participantAId < pair.participantBId ? pair.participantAId : pair.participantBId,
-            pair.participantAId < pair.participantBId ? pair.participantBId : pair.participantAId,
-            pair.participantCId || null,
-            pair.score,
-            pair.reasonTags,
-          ]
+           VALUES ${placeholders.join(', ')}`,
+          values
         );
       }
     }

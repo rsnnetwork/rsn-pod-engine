@@ -360,9 +360,8 @@ export async function handleHostForceMatch(
     );
 
     if (existing.rows.length > 0) {
-      for (const row of existing.rows) {
-        await query(`UPDATE matches SET status = 'cancelled' WHERE id = $1`, [row.id]);
-      }
+      const ids = existing.rows.map(r => r.id);
+      await query(`UPDATE matches SET status = 'cancelled' WHERE id = ANY($1)`, [ids]);
     }
 
     // Create the manual match

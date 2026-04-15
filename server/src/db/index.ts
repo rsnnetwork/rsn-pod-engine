@@ -10,7 +10,7 @@ const dbUrl = config.databaseUrl.includes('?')
 
 const pool = new Pool({
   connectionString: dbUrl,
-  min: 1,             // Keep 1 connection warm — prevents Neon cold-start on first request
+  min: config.dbPoolMin,  // Keep connections warm — prevents Neon cold-start under load
   max: config.dbPoolMax,
   idleTimeoutMillis: 120_000, // 2 min — balance between keeping warm and not wasting Neon resources
   connectionTimeoutMillis: 10_000,
