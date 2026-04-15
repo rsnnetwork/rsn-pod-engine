@@ -84,6 +84,56 @@ async function createRoomWithRetry(
 // ═════════════════════════════════════════════════════════════════════════════
 
 export async function recoverActiveSessions(io: SocketServer): Promise<void> {
+  // Try Redis first (has full state including presenceMap and manuallyLeftRound)
+  const { restoreAllFromRedis } = await import('../state/session-state');
+  const redisData = await restoreAllFromRedis();
+
+  if (redisData.size > 0) {
+    for (const [sessionId, data] of redisData) {
+      try {
+        const activeSession: ActiveSession = {
+          sessionId: data.sessionId,
+          hostUserId: data.hostUserId,
+          config: data.config,
+          currentRound: data.currentRound,
+          status: data.status as SessionStatus,
+          timer: null,
+          timerSyncInterval: null,
+          timerEndsAt: data.timerEndsAt ? new Date(data.timerEndsAt) : null,
+          isPaused: data.isPaused || false,
+          pausedTimeRemaining: data.pausedTimeRemaining || null,
+          pendingRoundNumber: data.pendingRoundNumber || null,
+          presenceMap: new Map(
+            Object.entries(data.presenceMap || {}).map(([k, v]: [string, any]) => [k, {
+              lastHeartbeat: new Date(v.lastHeartbeat),
+              socketId: v.socketId,
+              reconnectedAt: v.reconnectedAt ? new Date(v.reconnectedAt) : undefined,
+            }])
+          ),
+          manuallyLeftRound: new Set(data.manuallyLeftRound || []),
+        };
+
+        activeSessions.set(sessionId, activeSession);
+
+        if (activeSession.timerEndsAt && activeSession.timerEndsAt.getTime() > Date.now() && !activeSession.isPaused) {
+          const remainingMs = activeSession.timerEndsAt.getTime() - Date.now();
+          const remainingSec = Math.ceil(remainingMs / 1000);
+          if (_timerCallbacks) {
+            startSegmentTimer(io, sessionId, remainingSec, getTimerCallbackForState(sessionId, activeSession, _timerCallbacks));
+          }
+          logger.info({ sessionId, remainingSec }, 'Recovered from Redis with running timer');
+        } else {
+          logger.info({ sessionId, status: data.status }, 'Recovered from Redis (no timer)');
+        }
+      } catch (err) {
+        logger.warn({ err, sessionId }, 'Failed to restore session from Redis — will try DB');
+      }
+    }
+    logger.info({ count: redisData.size }, 'Active sessions recovered from Redis');
+    return;
+  }
+
+  // Fallback: recover from DB (original logic — less state but still works)
   const activeStatuses = ['lobby_open', 'round_active', 'round_rating', 'round_transition', 'closing_lobby'];
   const result = await query<{
     id: string; status: string; host_user_id: string; config: any; current_round: number;
@@ -121,23 +171,21 @@ export async function recoverActiveSessions(io: SocketServer): Promise<void> {
 
     activeSessions.set(row.id, activeSession);
 
-    // If there was a running timer, restart it based on remaining time
     if (activeSession.timerEndsAt && activeSession.timerEndsAt.getTime() > Date.now()) {
       const remainingMs = activeSession.timerEndsAt.getTime() - Date.now();
       const remainingSec = Math.ceil(remainingMs / 1000);
       logger.info({ sessionId: row.id, remainingSec, status: row.status },
-        'Recovering active session with running timer');
-      // Re-start the timer for the remaining duration
+        'Recovering active session with running timer (DB fallback)');
       if (_timerCallbacks) {
         startSegmentTimer(io, row.id, remainingSec, getTimerCallbackForState(row.id, activeSession, _timerCallbacks));
       }
     } else {
       logger.info({ sessionId: row.id, status: row.status },
-        'Recovered active session (no timer or timer expired)');
+        'Recovered active session from DB (no timer)');
     }
   }
 
-  logger.info({ count: result.rows.length }, 'Active sessions recovered from database');
+  logger.info({ count: result.rows.length }, 'Active sessions recovered from database (Redis was empty)');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

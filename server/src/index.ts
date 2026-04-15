@@ -256,6 +256,23 @@ async function start(): Promise<void> {
     // Run migrations (safe in production — skips already-applied ones)
     await runMigrations();
 
+    // Initialize Redis (optional — system runs without it)
+    const { initRedis, duplicateClient } = await import('./services/redis/redis.client');
+    const redisClient = await initRedis();
+    if (redisClient) {
+      try {
+        const { createAdapter } = await import('@socket.io/redis-adapter');
+        const pubClient = duplicateClient();
+        const subClient = duplicateClient();
+        if (pubClient && subClient) {
+          io.adapter(createAdapter(pubClient, subClient));
+          logger.info('Socket.IO Redis adapter enabled — multi-instance broadcasting ready');
+        }
+      } catch (err) {
+        logger.warn({ err }, 'Socket.IO Redis adapter failed — using in-memory adapter');
+      }
+    }
+
     // Initialise orchestration with Socket.IO
     initOrchestration(io);
 
