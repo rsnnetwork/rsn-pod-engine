@@ -3,13 +3,9 @@ import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import config from '../config';
 import logger from '../config/logger';
 
-// Append statement_timeout to connection string so it's set at connection time, not after
-const dbUrl = config.databaseUrl.includes('?')
-  ? `${config.databaseUrl}&options=-c%20statement_timeout%3D30000`
-  : `${config.databaseUrl}?options=-c%20statement_timeout%3D30000`;
-
+// Neon pooler doesn't support statement_timeout in startup options — set per-connection instead
 const pool = new Pool({
-  connectionString: dbUrl,
+  connectionString: config.databaseUrl,
   min: config.dbPoolMin,  // Keep connections warm — prevents Neon cold-start under load
   max: config.dbPoolMax,
   idleTimeoutMillis: 120_000, // 2 min — balance between keeping warm and not wasting Neon resources
@@ -21,7 +17,9 @@ pool.on('error', (err) => {
   logger.error({ err }, 'Unexpected PostgreSQL pool error — pool will recover');
 });
 
-pool.on('connect', () => {
+// Set statement_timeout per connection (compatible with Neon pooler)
+pool.on('connect', (client) => {
+  client.query('SET statement_timeout = 30000').catch(() => {});
   logger.debug('New PostgreSQL client connected');
 });
 
