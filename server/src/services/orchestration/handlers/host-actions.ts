@@ -1125,3 +1125,161 @@ export async function broadcastMessage(
     });
   }
 }
+
+// ─── Host Create Breakout Room ────────────────────────────────────────────
+
+export async function handleHostCreateBreakout(
+  io: SocketServer,
+  socket: Socket,
+  data: { sessionId: string; participantIds: string[] }
+): Promise<void> {
+  return withSessionGuard(data.sessionId, async () => {
+    try {
+      if (!await verifyHost(socket, data.sessionId)) return;
+
+      const activeSession = activeSessions.get(data.sessionId);
+      if (!activeSession || activeSession.status !== SessionStatus.ROUND_ACTIVE) {
+        socket.emit('error', { code: 'INVALID_STATE', message: 'Can only create rooms during an active round' });
+        return;
+      }
+
+      const { sessionId, participantIds } = data;
+      if (!participantIds || participantIds.length < 2 || participantIds.length > 3) {
+        socket.emit('error', { code: 'VALIDATION_ERROR', message: 'Select 2 or 3 participants for a breakout room' });
+        return;
+      }
+
+      // Step 1: Remove each participant from their current match (if any)
+      // Each removal is independent — failure in one doesn't affect others
+      for (const pid of participantIds) {
+        try {
+          const currentMatch = await query<{ id: string; participant_a_id: string; participant_b_id: string; participant_c_id: string | null }>(
+            `SELECT id, participant_a_id, participant_b_id, participant_c_id FROM matches
+             WHERE session_id = $1 AND round_number = $2 AND status = 'active'
+               AND (participant_a_id = $3 OR participant_b_id = $3 OR participant_c_id = $3)`,
+            [sessionId, activeSession.currentRound, pid]
+          );
+
+          if (currentMatch.rows.length > 0) {
+            const match = currentMatch.rows[0];
+            await query(`UPDATE matches SET status = 'no_show', ended_at = NOW() WHERE id = $1 AND status = 'active'`, [match.id]);
+
+            // Notify remaining partners (exclude participants being moved together)
+            const remainingPartners = [match.participant_a_id, match.participant_b_id, match.participant_c_id]
+              .filter((id): id is string => !!id && id !== pid && !participantIds.includes(id));
+
+            for (const partnerId of remainingPartners) {
+              io.to(userRoom(partnerId)).emit('match:partner_disconnected', { matchId: match.id });
+            }
+
+            // Solo partner left behind: return to lobby after 5s
+            if (remainingPartners.length === 1) {
+              const soloPartnerId = remainingPartners[0];
+              setTimeout(async () => {
+                try {
+                  const s = activeSessions.get(sessionId);
+                  if (!s || s.status !== SessionStatus.ROUND_ACTIVE) return;
+                  const freshMatch = (await matchingService.getMatchesByRound(sessionId, s.currentRound))
+                    .find(m => m.id === match.id);
+                  if (!freshMatch || freshMatch.status !== 'no_show') return;
+
+                  await sessionService.updateParticipantStatus(sessionId, soloPartnerId, ParticipantStatus.IN_LOBBY);
+                  io.to(userRoom(soloPartnerId)).emit('match:return_to_lobby', { reason: 'partner_left' });
+
+                  const session = await sessionService.getSessionById(sessionId);
+                  if (session.lobbyRoomId) {
+                    const { config: appConfig } = await import('../../../config');
+                    const socketsInRoom = await io.in(userRoom(soloPartnerId)).fetchSockets();
+                    for (const sk of socketsInRoom) {
+                      const uid = (sk.data as any)?.userId;
+                      if (uid !== soloPartnerId) continue;
+                      const dName = (sk.data as any)?.displayName || 'User';
+                      const lobbyToken = await videoService.issueJoinToken(uid, session.lobbyRoomId, dName);
+                      sk.emit('lobby:token', { token: lobbyToken.token, livekitUrl: appConfig.livekit.host, roomId: session.lobbyRoomId });
+                    }
+                  }
+                } catch (err) {
+                  logger.error({ err }, 'Error returning solo partner to lobby after create_breakout');
+                }
+              }, 5000);
+            }
+          }
+        } catch (err) {
+          logger.warn({ err, pid }, 'Non-fatal: failed to remove participant from current match during create_breakout');
+        }
+      }
+
+      // Step 2: Create LiveKit room
+      const roomSlug = `host-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      try {
+        await videoService.createMatchRoom(sessionId, activeSession.currentRound, roomSlug);
+      } catch (err) {
+        logger.error({ err }, 'Failed to create LiveKit room for host breakout');
+        socket.emit('error', { code: 'ROOM_CREATION_FAILED', message: 'Failed to create breakout room. Try again.' });
+        return;
+      }
+      const newRoomId = videoService.matchRoomId(sessionId, activeSession.currentRound, roomSlug);
+
+      // Step 3: Create match in DB
+      const { v4: uuid } = await import('uuid');
+      const matchId = uuid();
+      const sorted = [...participantIds].sort();
+      try {
+        await query(
+          `INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, participant_c_id, room_id, status, started_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', NOW())`,
+          [matchId, sessionId, activeSession.currentRound, sorted[0], sorted[1], sorted[2] || null, newRoomId]
+        );
+      } catch (err: any) {
+        logger.error({ err }, 'Failed to insert match for host breakout');
+        socket.emit('error', { code: 'MATCH_CREATION_FAILED', message: 'Failed to create room assignment. Try again.' });
+        return;
+      }
+
+      // Step 4: Update participant statuses
+      for (const pid of participantIds) {
+        await sessionService.updateParticipantStatus(sessionId, pid, ParticipantStatus.IN_ROUND).catch(() => {});
+      }
+
+      // Step 5: Fetch names + generate tokens + notify participants
+      const namesResult = await query<{ id: string; display_name: string }>(
+        `SELECT id, display_name FROM users WHERE id = ANY($1)`, [participantIds]
+      );
+      const nameMap = new Map(namesResult.rows.map(r => [r.id, r.display_name || 'User']));
+
+      const { config: appConfig } = await import('../../../config');
+      for (const pid of participantIds) {
+        const partners = participantIds
+          .filter(id => id !== pid)
+          .map(id => ({ userId: id, displayName: nameMap.get(id) || 'User' }));
+
+        let token: string | null = null;
+        try {
+          const vt = await videoService.issueJoinToken(pid, newRoomId, nameMap.get(pid) || 'User');
+          token = vt.token;
+        } catch { /* client retries via API */ }
+
+        io.to(userRoom(pid)).emit('match:reassigned', {
+          matchId,
+          newPartnerId: partners[0]?.userId,
+          partnerDisplayName: partners[0]?.displayName,
+          partners,
+          roomId: newRoomId,
+          roundNumber: activeSession.currentRound,
+          token,
+          livekitUrl: appConfig.livekit.host,
+        });
+      }
+
+      // Step 6: Refresh dashboard
+      if (_emitHostDashboard) {
+        await _emitHostDashboard(sessionId).catch(() => {});
+      }
+
+      logger.info({ sessionId, matchId, participantIds, roomSlug }, 'Host created breakout room');
+    } catch (err: any) {
+      logger.error({ err }, 'Error in handleHostCreateBreakout');
+      socket.emit('error', { code: 'CREATE_BREAKOUT_FAILED', message: err.message || 'Failed to create breakout room' });
+    }
+  });
+}

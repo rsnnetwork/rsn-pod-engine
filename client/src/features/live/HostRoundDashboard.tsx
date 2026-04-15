@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useSessionStore } from '@/stores/sessionStore';
-import { Clock, Wifi, WifiOff, UserMinus, Radio, AlertTriangle, ArrowRightLeft } from 'lucide-react';
+import { Clock, Wifi, WifiOff, UserMinus, Radio, AlertTriangle, ArrowRightLeft, UserPlus } from 'lucide-react';
 import { getSocket } from '@/lib/socket';
 
 interface Props { sessionId: string; }
@@ -9,6 +9,37 @@ export default function HostRoundDashboard({ sessionId }: Props) {
   const { roundDashboard, timerSeconds, currentRound, totalRounds } = useSessionStore();
   const socket = getSocket();
   const [moveMode, setMoveMode] = useState<{ userId: string; fromMatchId: string; displayName: string } | null>(null);
+  const [createMode, setCreateMode] = useState(false);
+  const [selectedForRoom, setSelectedForRoom] = useState<Set<string>>(new Set());
+
+  const toggleSelect = (userId: string) => {
+    setSelectedForRoom(prev => {
+      const next = new Set(prev);
+      if (next.has(userId)) next.delete(userId);
+      else if (next.size < 3) next.add(userId);
+      return next;
+    });
+  };
+
+  const createBreakout = () => {
+    if (selectedForRoom.size < 2) return;
+    const names: string[] = [];
+    for (const id of selectedForRoom) {
+      let found = false;
+      for (const room of roundDashboard!.rooms) {
+        const p = room.participants.find(p => p.userId === id);
+        if (p) { names.push(p.displayName); found = true; break; }
+      }
+      if (!found) {
+        const bye = roundDashboard!.byeParticipants.find(p => p.userId === id);
+        names.push(bye?.displayName || 'User');
+      }
+    }
+    if (!confirm(`Create breakout room with ${names.join(', ')}?`)) return;
+    socket?.emit('host:create_breakout' as any, { sessionId, participantIds: Array.from(selectedForRoom) });
+    setCreateMode(false);
+    setSelectedForRoom(new Set());
+  };
 
   const removeFromRoom = (matchId: string, userId: string) => {
     if (!confirm('Remove this participant from their current room? Their partner will be unmatched.')) return;
@@ -60,11 +91,42 @@ export default function HostRoundDashboard({ sessionId }: Props) {
               {activeRooms.length} room{activeRooms.length !== 1 ? 's' : ''} active
             </span>
           </div>
-          <div className="flex items-center gap-2 text-lg font-mono font-bold text-[#1a1a2e]">
-            <Clock className="h-5 w-5 text-gray-400" />
-            {formatTime(timerSeconds)}
+          <div className="flex items-center gap-3">
+            {!moveMode && !createMode && (
+              <button
+                onClick={() => setCreateMode(true)}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors"
+              >
+                <UserPlus className="h-3.5 w-3.5" /> Create Room
+              </button>
+            )}
+            <div className="flex items-center gap-2 text-lg font-mono font-bold text-[#1a1a2e]">
+              <Clock className="h-5 w-5 text-gray-400" />
+              {formatTime(timerSeconds)}
+            </div>
           </div>
         </div>
+
+        {/* Create room mode banner */}
+        {createMode && (
+          <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200">
+            <span className="text-sm text-emerald-700">
+              Select 2-3 participants for the new room ({selectedForRoom.size} selected)
+            </span>
+            <div className="flex gap-2">
+              <button
+                onClick={createBreakout}
+                disabled={selectedForRoom.size < 2}
+                className="px-3 py-1 text-xs font-medium bg-emerald-500 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-emerald-600"
+              >
+                Create ({selectedForRoom.size})
+              </button>
+              <button onClick={() => { setCreateMode(false); setSelectedForRoom(new Set()); }} className="text-xs text-emerald-500 hover:text-emerald-700 font-medium">
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Move mode banner */}
         {moveMode && (
@@ -114,6 +176,15 @@ export default function HostRoundDashboard({ sessionId }: Props) {
                   {room.participants.map(p => (
                     <div key={p.userId} className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
+                        {createMode && (
+                          <input
+                            type="checkbox"
+                            checked={selectedForRoom.has(p.userId)}
+                            onChange={() => toggleSelect(p.userId)}
+                            className="h-3.5 w-3.5 rounded border-gray-300 text-emerald-500 focus:ring-emerald-400 cursor-pointer"
+                            onClick={e => e.stopPropagation()}
+                          />
+                        )}
                         {p.isConnected ? (
                           <Wifi className="h-3 w-3 text-emerald-500" />
                         ) : (
@@ -156,9 +227,25 @@ export default function HostRoundDashboard({ sessionId }: Props) {
         {roundDashboard.byeParticipants.length > 0 && (
           <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200">
             <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
-            <span className="text-sm text-amber-700">
-              Not matched this round: {roundDashboard.byeParticipants.map(p => p.displayName).join(', ')}
-            </span>
+            {createMode ? (
+              <div className="flex flex-wrap gap-3 text-sm text-amber-700">
+                {roundDashboard.byeParticipants.map(p => (
+                  <label key={p.userId} className="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedForRoom.has(p.userId)}
+                      onChange={() => toggleSelect(p.userId)}
+                      className="h-3.5 w-3.5 rounded border-gray-300 text-emerald-500 focus:ring-emerald-400"
+                    />
+                    {p.displayName}
+                  </label>
+                ))}
+              </div>
+            ) : (
+              <span className="text-sm text-amber-700">
+                Not matched this round: {roundDashboard.byeParticipants.map(p => p.displayName).join(', ')}
+              </span>
+            )}
           </div>
         )}
 

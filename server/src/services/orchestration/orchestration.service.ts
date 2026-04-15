@@ -30,6 +30,7 @@ import {
   handleHostEnd, handleHostBroadcast, handleHostRemoveParticipant, handleHostReassign,
   handleHostMuteParticipant, handleHostMuteAll, handleHostRemoveFromRoom,
   handleHostMoveToRoom, handleAssignCohost, handleRemoveCohost, handleHostExtendRound,
+  handleHostCreateBreakout,
   startSession, pauseSession, resumeSession, endSession, broadcastMessage,
   setHostActionsIo, injectHostActionDeps,
 } from './handlers/host-actions';
@@ -170,6 +171,7 @@ export function initOrchestration(socketServer: SocketServer): void {
     wrapHandler('host:reassign', socket, handleHostReassign);
     wrapHandler('host:remove_from_room', socket, handleHostRemoveFromRoom);
     wrapHandler('host:move_to_room', socket, handleHostMoveToRoom);
+    wrapHandler('host:create_breakout', socket, handleHostCreateBreakout);
     wrapHandler('host:assign_cohost', socket, handleAssignCohost);
     wrapHandler('host:remove_cohost', socket, handleRemoveCohost);
     wrapHandler('host:extend_round', socket, handleHostExtendRound);
