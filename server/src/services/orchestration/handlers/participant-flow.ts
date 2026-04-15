@@ -320,8 +320,11 @@ export async function handleJoinSession(
         }
       }
 
-      // If session is in rating phase, re-send the rating window so reconnected users can still rate
-      if (activeSession && activeSession.status === SessionStatus.ROUND_RATING) {
+      // If session is in or recently past rating phase, re-send rating window
+      // so reconnected users who missed it can still rate their conversation.
+      // Also covers round_transition — user may have disconnected during rating.
+      const ratingReplayStatuses = [SessionStatus.ROUND_RATING, SessionStatus.ROUND_TRANSITION, SessionStatus.CLOSING_LOBBY];
+      if (activeSession && ratingReplayStatuses.includes(activeSession.status)) {
         const matches = await matchingService.getMatchesByRound(
           data.sessionId, activeSession.currentRound
         );
@@ -329,28 +332,35 @@ export async function handleJoinSession(
           m => (m.participantAId === userId || m.participantBId === userId || m.participantCId === userId) && m.status === 'completed'
         );
         if (userMatch) {
-          const participantIds = [userMatch.participantAId, userMatch.participantBId];
-          if (userMatch.participantCId) participantIds.push(userMatch.participantCId);
-          const partnerIds = participantIds.filter(id => id !== userId);
-
-          // Look up partner display names for the rating UI
-          const partnerNameResult = await query<{ id: string; displayName: string }>(
-            `SELECT id, display_name AS "displayName" FROM users WHERE id = ANY($1)`, [partnerIds]
+          // Check if user already rated this match — don't re-send if they did
+          const existingRating = await query<{ id: string }>(
+            `SELECT id FROM ratings WHERE match_id = $1 AND from_user_id = $2 LIMIT 1`,
+            [userMatch.id, userId]
           );
-          const nameMap = new Map(partnerNameResult.rows.map(r => [r.id, r.displayName || 'Partner']));
-          const partnersWithNames = partnerIds.map(id => ({ userId: id, displayName: nameMap.get(id) || 'Partner' }));
+          if (existingRating.rows.length === 0) {
+            const participantIds = [userMatch.participantAId, userMatch.participantBId];
+            if (userMatch.participantCId) participantIds.push(userMatch.participantCId);
+            const partnerIds = participantIds.filter(id => id !== userId);
 
-          const remainingSeconds = activeSession.timerEndsAt
-            ? Math.max(0, Math.ceil((activeSession.timerEndsAt.getTime() - Date.now()) / 1000))
-            : activeSession.config.ratingWindowSeconds;
-          socket.emit('rating:window_open', {
-            matchId: userMatch.id,
-            partnerId: partnerIds[0],
-            partnerDisplayName: nameMap.get(partnerIds[0]) || 'Partner',
-            partners: partnersWithNames,
-            roundNumber: activeSession.currentRound,
-            durationSeconds: remainingSeconds,
-          });
+            const partnerNameResult = await query<{ id: string; displayName: string }>(
+              `SELECT id, display_name AS "displayName" FROM users WHERE id = ANY($1)`, [partnerIds]
+            );
+            const nameMap = new Map(partnerNameResult.rows.map(r => [r.id, r.displayName || 'Partner']));
+            const partnersWithNames = partnerIds.map(id => ({ userId: id, displayName: nameMap.get(id) || 'Partner' }));
+
+            // Give a short window to rate (15s or remaining time, whichever is more)
+            const remainingSeconds = activeSession.timerEndsAt
+              ? Math.max(15, Math.ceil((activeSession.timerEndsAt.getTime() - Date.now()) / 1000))
+              : 15;
+            socket.emit('rating:window_open', {
+              matchId: userMatch.id,
+              partnerId: partnerIds[0],
+              partnerDisplayName: nameMap.get(partnerIds[0]) || 'Partner',
+              partners: partnersWithNames,
+              roundNumber: activeSession.currentRound,
+              durationSeconds: remainingSeconds,
+            });
+          }
         }
       }
 

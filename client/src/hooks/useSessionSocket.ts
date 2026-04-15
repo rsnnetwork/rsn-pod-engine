@@ -363,9 +363,10 @@ export default function useSessionSocket(sessionId: string) {
 
     // ── Ratings ──
     socket.on('rating:window_open', (data: any) => {
-      // Only process if we're actually in rating phase
+      // Accept rating events unless session is fully completed — on mobile (iOS Safari)
+      // events can arrive out of order after reconnect, so don't gate on sessionStatus
       const currentState = useSessionStore.getState();
-      if (currentState.sessionStatus !== 'round_rating' && currentState.sessionStatus !== 'round_active') return;
+      if (currentState.sessionStatus === 'completed') return;
       if (data.partners && data.partners.length > 0) {
         // Server sent full partner info (reconnect or trio) — use it
         const primaryPartner = data.partners[0];
