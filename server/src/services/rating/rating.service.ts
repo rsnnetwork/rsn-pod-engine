@@ -279,13 +279,14 @@ export async function getPeopleMet(
     : session.config;
   const totalRounds = config?.numberOfRounds || session.currentRound || 0;
 
-  // Get rounds attended count
+  // Get rounds attended count — include all states where user actually participated
+  // (completed, active, no_show, reassigned all mean the user was in that round)
   const roundsResult = await query<{ count: string }>(
     `SELECT COUNT(DISTINCT round_number)::text AS count
      FROM matches
      WHERE session_id = $1
        AND (participant_a_id = $2 OR participant_b_id = $2 OR participant_c_id = $2)
-       AND status IN ('completed', 'active')`,
+       AND status NOT IN ('cancelled', 'scheduled')`,
     [sessionId, userId]
   );
   const roundsAttended = parseInt(roundsResult.rows[0]?.count || '0', 10);
