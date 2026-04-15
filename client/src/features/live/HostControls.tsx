@@ -18,6 +18,7 @@ export default function HostControls({ sessionId }: Props) {
   const { setMatchPreview } = useSessionStore.getState();
   const socket = getSocket();
   const [generating, setGenerating] = useState(false);
+  const [matchesConfirmed, setMatchesConfirmed] = useState(false);
   const isPaused = useSessionStore(s => s.isPaused);
   const { setIsPaused } = useSessionStore.getState();
   const [broadcastMsg, setBroadcastMsg] = useState('');
@@ -68,15 +69,22 @@ export default function HostControls({ sessionId }: Props) {
     setTimeout(() => { setGenerating(false); socket?.off('error', onError); }, 10000);
   };
 
+  const confirmMatches = () => {
+    socket?.emit('host:confirm_matches' as any, { sessionId });
+    setMatchesConfirmed(true);
+  };
+
   const confirmRound = () => {
     socket?.emit('host:confirm_round', { sessionId });
     setMatchPreview(null);
+    setMatchesConfirmed(false);
     setSwapMode(null);
   };
 
   const cancelPreview = () => {
     socket?.emit('host:cancel_preview', { sessionId });
     setMatchPreview(null);
+    setMatchesConfirmed(false);
     setSwapMode(null);
   };
 
@@ -448,11 +456,21 @@ export default function HostControls({ sessionId }: Props) {
               )
             )}
 
-            {/* After preview: Confirm or Cancel */}
-            {matchPreview && (
+            {/* After preview: Confirm Matches → Start Round (two-step) */}
+            {matchPreview && !matchesConfirmed && (
               <>
-                <Button size="sm" onClick={confirmRound}>
-                  <Check className="h-4 w-4 mr-1" /> Start Round
+                <Button size="sm" onClick={confirmMatches}>
+                  <Check className="h-4 w-4 mr-1" /> Confirm Matches
+                </Button>
+                <Button size="sm" variant="ghost" onClick={cancelPreview}>
+                  <X className="h-4 w-4 mr-1" /> Cancel
+                </Button>
+              </>
+            )}
+            {matchPreview && matchesConfirmed && (
+              <>
+                <Button size="sm" onClick={confirmRound} className="animate-pulse">
+                  <Play className="h-4 w-4 mr-1" /> Start Round
                 </Button>
                 <Button size="sm" variant="ghost" onClick={cancelPreview}>
                   <X className="h-4 w-4 mr-1" /> Cancel

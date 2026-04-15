@@ -164,17 +164,7 @@ export async function handleHostConfirmRound(
     const roundNumber = activeSession.pendingRoundNumber;
     // FIX 3A: Do NOT clear before transition — if transition fails, host can't retry
 
-    // ─── Matching anticipation: broadcast "matching in progress" then delay ───
-    const matches = await matchingService.getMatchesByRound(data.sessionId, roundNumber);
-    const roomCount = matches.length;
-
-    io.to(sessionRoom(data.sessionId)).emit('session:matching_in_progress', {
-      sessionId: data.sessionId,
-      roomCount,
-      roundNumber,
-    });
-
-    logger.info({ sessionId: data.sessionId, roundNumber, roomCount }, 'Host confirmed round — starting');
+    logger.info({ sessionId: data.sessionId, roundNumber }, 'Host confirmed round — starting');
 
     if (!_transitionToRound) {
       throw new Error('transitionToRound not injected — call injectMatchingFlowDeps first');
@@ -426,6 +416,38 @@ export async function handleHostCancelPreview(
     logger.info({ sessionId: data.sessionId }, 'Host cancelled match preview');
   } catch (err: any) {
     logger.error({ err }, 'Error cancelling preview');
+  }
+}
+
+// ─── Host Confirm Matches (visual trigger — does NOT start the round) ─────
+
+export async function handleHostConfirmMatches(
+  io: SocketServer,
+  socket: Socket,
+  data: { sessionId: string }
+): Promise<void> {
+  try {
+    if (!await verifyHost(socket, data.sessionId)) return;
+
+    const activeSession = activeSessions.get(data.sessionId);
+    if (!activeSession || !activeSession.pendingRoundNumber) {
+      socket.emit('error', { code: 'INVALID_STATE', message: 'No pending matches to confirm' });
+      return;
+    }
+
+    const matches = await matchingService.getMatchesByRound(data.sessionId, activeSession.pendingRoundNumber);
+
+    // Broadcast to ALL participants — triggers 3-second visual
+    io.to(sessionRoom(data.sessionId)).emit('session:matches_confirmed', {
+      sessionId: data.sessionId,
+      matchCount: matches.length,
+      roundNumber: activeSession.pendingRoundNumber,
+    });
+
+    logger.info({ sessionId: data.sessionId, matchCount: matches.length }, 'Host confirmed matches — visual sent to participants');
+  } catch (err: any) {
+    logger.error({ err }, 'Error in handleHostConfirmMatches');
+    socket.emit('error', { code: 'CONFIRM_MATCHES_FAILED', message: err.message });
   }
 }
 

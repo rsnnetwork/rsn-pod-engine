@@ -11,7 +11,7 @@ const SOCKET_EVENTS = [
   'match:assigned', 'match:reassigned', 'match:bye_round',
   'match:partner_disconnected', 'match:partner_reconnected', 'match:return_to_lobby',
   'rating:window_open', 'rating:window_closed',
-  'session:matching_preparing', 'session:matching_in_progress', 'session:matching_cancelled',
+  'session:matching_preparing', 'session:matching_in_progress', 'session:matching_cancelled', 'session:matches_confirmed',
   'host:broadcast', 'lobby:token', 'host:participant_removed',
   'host:match_preview', 'lobby:mute_command',
   'host:round_dashboard', 'host:room_status_update',
@@ -259,7 +259,15 @@ export default function useSessionSocket(sessionId: string) {
     });
     socket.on('session:matching_in_progress', () => {
       store.setPreparingMatches(false);
-      // No matchingOverlay — participants only see the transition when match:assigned arrives
+    });
+    socket.on('session:matches_confirmed', (data: any) => {
+      store.setPreparingMatches(false);
+      // Show 3-second "matched" overlay for participants, non-blocking banner for host
+      store.setMatchingOverlay({ roomCount: data.matchCount || 0, roundNumber: data.roundNumber || 0 });
+      // Auto-clear after 3 seconds
+      setTimeout(() => {
+        store.setMatchingOverlay(null);
+      }, 3000);
     });
 
     // ── Matching ──

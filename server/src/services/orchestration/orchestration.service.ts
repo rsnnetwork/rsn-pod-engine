@@ -37,9 +37,9 @@ import {
 
 // Handlers — Matching Flow
 import {
-  handleHostGenerateMatches, handleHostConfirmRound, handleHostSwapMatch,
-  handleHostExcludeFromRound, handleHostRegenerateMatches, handleHostCancelPreview,
-  handleHostForceMatch, emitHostDashboard, injectMatchingFlowDeps,
+  handleHostGenerateMatches, handleHostConfirmRound, handleHostConfirmMatches,
+  handleHostSwapMatch, handleHostExcludeFromRound, handleHostRegenerateMatches,
+  handleHostCancelPreview, handleHostForceMatch, emitHostDashboard, injectMatchingFlowDeps,
 } from './handlers/matching-flow';
 
 // Handlers — Round Lifecycle
@@ -192,6 +192,7 @@ export function initOrchestration(socketServer: SocketServer): void {
 
     // ── Matching Events (guarded) ──
     wrapHandler('host:generate_matches', socket, handleHostGenerateMatches);
+    wrapHandler('host:confirm_matches', socket, handleHostConfirmMatches);
     wrapHandler('host:confirm_round', socket, handleHostConfirmRound);
     wrapHandler('host:swap_match', socket, handleHostSwapMatch);
     wrapHandler('host:exclude_participant', socket, handleHostExcludeFromRound);

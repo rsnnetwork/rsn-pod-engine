@@ -199,9 +199,17 @@ export default function LiveSessionPage() {
         </div>
       )}
 
-      {/* Full-screen matching overlay — participants only, host stays in main room */}
+      {/* Matching confirmed overlay — full screen for participants, banner for host */}
       {matchingOverlay && !isHost && (
         <MatchingOverlay roomCount={matchingOverlay.roomCount} roundNumber={currentRound} />
+      )}
+      {matchingOverlay && isHost && (
+        <div className="bg-emerald-500/15 px-4 py-2 flex items-center justify-center gap-2 animate-fade-in">
+          <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+          <p className="text-sm text-emerald-600 font-medium">
+            Matches confirmed — {matchingOverlay.roomCount} room{matchingOverlay.roomCount !== 1 ? 's' : ''} ready. Click Start Round when ready.
+          </p>
+        </div>
       )}
 
       {/* Main content + chat panel layout */}

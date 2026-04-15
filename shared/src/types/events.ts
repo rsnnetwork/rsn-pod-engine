@@ -66,6 +66,7 @@ export interface ServerToClientEvents {
   'session:matching_preparing': (data: { sessionId: string; roundNumber: number }) => void;
   'session:matching_in_progress': (data: { sessionId: string; roomCount: number; roundNumber: number }) => void;
   'session:matching_cancelled': (data: { sessionId: string }) => void;
+  'session:matches_confirmed': (data: { sessionId: string; matchCount: number; roundNumber: number }) => void;
 
   // Co-host
   'cohost:assigned': (data: { userId: string; displayName: string; role: string }) => void;
