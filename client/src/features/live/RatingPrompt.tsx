@@ -50,7 +50,7 @@ function PartnerRatingForm({ partnerName, toUserId, matchId, onSubmitted, onSkip
   };
 
   return (
-    <div className="max-w-md w-full text-center animate-fade-in-up bg-[#292a2d] rounded-2xl p-8">
+    <div className="max-w-md w-full text-center animate-fade-in-up bg-[#292a2d] rounded-2xl p-4 sm:p-8">
       {totalPartners > 1 && (
         <div className="flex items-center justify-center gap-1.5 mb-3">
           {Array.from({ length: totalPartners }).map((_, i) => (
@@ -113,7 +113,7 @@ function RatingConfirmation({ meetAgain, isLastPartner, isLastRound, onContinue 
   }, [onContinue]);
 
   return (
-    <div className="max-w-md w-full text-center animate-fade-in-up bg-[#292a2d] rounded-2xl p-8 cursor-pointer" onClick={onContinue}>
+    <div className="max-w-md w-full text-center animate-fade-in-up bg-[#292a2d] rounded-2xl p-4 sm:p-8 cursor-pointer" onClick={onContinue}>
       <div className="inline-flex items-center justify-center h-14 w-14 rounded-full bg-emerald-500/20 text-emerald-400 mb-3">
         <CheckCircle className="h-7 w-7" />
       </div>
