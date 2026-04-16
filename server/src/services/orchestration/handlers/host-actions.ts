@@ -1348,7 +1348,7 @@ export async function handleHostCreateBreakout(
 
         // Send timer:sync to participants in this room so they see countdown
         for (const pid of participantIds) {
-          io.to(userRoom(pid)).emit('timer:sync', { seconds: duration });
+          io.to(userRoom(pid)).emit('timer:sync', { secondsRemaining: duration });
         }
       }
 
