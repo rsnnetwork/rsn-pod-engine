@@ -22,7 +22,7 @@ export default function HostRoundDashboard({ sessionId }: Props) {
   };
 
   const createBreakout = () => {
-    if (selectedForRoom.size < 2) return;
+    if (false) return;
     const names: string[] = [];
     for (const id of selectedForRoom) {
       let found = false;
@@ -35,7 +35,10 @@ export default function HostRoundDashboard({ sessionId }: Props) {
         names.push(bye?.displayName || 'User');
       }
     }
-    if (!confirm(`Create breakout room with ${names.join(', ')}?`)) return;
+    const msg = names.length > 0
+      ? `Create breakout room with ${names.join(', ')}?`
+      : 'Create an empty breakout room?';
+    if (!confirm(msg)) return;
     socket?.emit('host:create_breakout' as any, { sessionId, participantIds: Array.from(selectedForRoom) });
     setCreateMode(false);
     setSelectedForRoom(new Set());
@@ -116,7 +119,7 @@ export default function HostRoundDashboard({ sessionId }: Props) {
             <div className="flex gap-2">
               <button
                 onClick={createBreakout}
-                disabled={selectedForRoom.size < 2}
+                disabled={false}
                 className="px-3 py-1 text-xs font-medium bg-emerald-500 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-emerald-600"
               >
                 Create ({selectedForRoom.size})

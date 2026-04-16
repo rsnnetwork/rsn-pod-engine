@@ -282,8 +282,13 @@ export async function handleJoinSession(
         emitHostDashboard(data.sessionId);
       }
 
-      // If session is mid-round, restore user's match assignment (skip if they manually left)
-      if (activeSession && activeSession.status === SessionStatus.ROUND_ACTIVE && !activeSession.manuallyLeftRound.has(userId)) {
+      // Clear manuallyLeftRound on rejoin — user chose to come back, let them participate
+      if (activeSession && activeSession.manuallyLeftRound.has(userId)) {
+        activeSession.manuallyLeftRound.delete(userId);
+      }
+
+      // If session is mid-round, restore user's match assignment
+      if (activeSession && activeSession.status === SessionStatus.ROUND_ACTIVE) {
         const matches = await matchingService.getMatchesByRound(
           data.sessionId, activeSession.currentRound
         );

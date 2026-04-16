@@ -1138,14 +1138,14 @@ export async function handleHostCreateBreakout(
       if (!await verifyHost(socket, data.sessionId)) return;
 
       const activeSession = activeSessions.get(data.sessionId);
-      if (!activeSession || activeSession.status !== SessionStatus.ROUND_ACTIVE) {
-        socket.emit('error', { code: 'INVALID_STATE', message: 'Can only create rooms during an active round' });
+      if (!activeSession) {
+        socket.emit('error', { code: 'INVALID_STATE', message: 'Event is not active' });
         return;
       }
 
-      const { sessionId, participantIds } = data;
-      if (!participantIds || participantIds.length < 2 || participantIds.length > 3) {
-        socket.emit('error', { code: 'VALIDATION_ERROR', message: 'Select 2 or 3 participants for a breakout room' });
+      const { sessionId, participantIds = [] } = data;
+      if (participantIds.length > 3) {
+        socket.emit('error', { code: 'VALIDATION_ERROR', message: 'Maximum 3 participants per breakout room' });
         return;
       }
 
@@ -1220,44 +1220,47 @@ export async function handleHostCreateBreakout(
       }
       const newRoomId = videoService.matchRoomId(sessionId, activeSession.currentRound, roomSlug);
 
-      // Step 3: Create match in DB
-      const { v4: uuid } = await import('uuid');
-      const matchId = uuid();
-      const sorted = [...participantIds].sort();
-      try {
-        await query(
-          `INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, participant_c_id, room_id, status, started_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', NOW())`,
-          [matchId, sessionId, activeSession.currentRound, sorted[0], sorted[1], sorted[2] || null, newRoomId]
-        );
-      } catch (err: any) {
-        logger.error({ err }, 'Failed to insert match for host breakout');
-        socket.emit('error', { code: 'MATCH_CREATION_FAILED', message: 'Failed to create room assignment. Try again.' });
-        return;
-      }
-
-      // Step 4: Update participant statuses
-      for (const pid of participantIds) {
-        await sessionService.updateParticipantStatus(sessionId, pid, ParticipantStatus.IN_ROUND).catch(() => {});
-      }
-
-      // Step 5: Fetch names + generate tokens + notify participants
-      const namesResult = await query<{ id: string; display_name: string }>(
-        `SELECT id, display_name FROM users WHERE id = ANY($1)`, [participantIds]
-      );
-      const nameMap = new Map(namesResult.rows.map(r => [r.id, r.display_name || 'User']));
-
-      const { config: appConfig } = await import('../../../config');
-      for (const pid of participantIds) {
-        const partners = participantIds
-          .filter(id => id !== pid)
-          .map(id => ({ userId: id, displayName: nameMap.get(id) || 'User' }));
-
-        let token: string | null = null;
+      // Step 3: Create match in DB (skip if empty room)
+      let matchId = '';
+      if (participantIds.length >= 2) {
+        const { v4: uuid } = await import('uuid');
+        matchId = uuid();
+        const sorted = [...participantIds].sort();
         try {
-          const vt = await videoService.issueJoinToken(pid, newRoomId, nameMap.get(pid) || 'User');
-          token = vt.token;
-        } catch { /* client retries via API */ }
+          await query(
+            `INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, participant_c_id, room_id, status, started_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', NOW())`,
+            [matchId, sessionId, activeSession.currentRound, sorted[0], sorted[1], sorted[2] || null, newRoomId]
+          );
+        } catch (err: any) {
+          logger.error({ err }, 'Failed to insert match for host breakout');
+          socket.emit('error', { code: 'MATCH_CREATION_FAILED', message: 'Failed to create room assignment. Try again.' });
+          return;
+        }
+      }
+
+      // Step 4: Update participant statuses + notify
+      if (participantIds.length > 0) {
+        for (const pid of participantIds) {
+          await sessionService.updateParticipantStatus(sessionId, pid, ParticipantStatus.IN_ROUND).catch(() => {});
+        }
+
+        const namesResult = await query<{ id: string; display_name: string }>(
+          `SELECT id, display_name FROM users WHERE id = ANY($1)`, [participantIds]
+        );
+        const nameMap = new Map(namesResult.rows.map(r => [r.id, r.display_name || 'User']));
+
+        const { config: appConfig } = await import('../../../config');
+        for (const pid of participantIds) {
+          const partners = participantIds
+            .filter(id => id !== pid)
+            .map(id => ({ userId: id, displayName: nameMap.get(id) || 'User' }));
+
+          let token: string | null = null;
+          try {
+            const vt = await videoService.issueJoinToken(pid, newRoomId, nameMap.get(pid) || 'User');
+            token = vt.token;
+          } catch { /* client retries via API */ }
 
         io.to(userRoom(pid)).emit('match:reassigned', {
           matchId,
@@ -1269,9 +1272,10 @@ export async function handleHostCreateBreakout(
           token,
           livekitUrl: appConfig.livekit.host,
         });
-      }
+        }
+      } // end if participantIds.length > 0
 
-      // Step 6: Refresh dashboard
+      // Step 5: Refresh dashboard
       if (_emitHostDashboard) {
         await _emitHostDashboard(sessionId).catch(() => {});
       }

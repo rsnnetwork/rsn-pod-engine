@@ -215,23 +215,33 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
   const [bgMode, setBgMode] = useState('disabled');
   const [showBgPanel, setShowBgPanel] = useState(false);
 
-  // Sync BOTH mic and camera state from actual LiveKit track state
-  const mountedRef = useRef(false);
+  // Apply saved camera/mic preferences to LiveKit on mount
+  const appliedRef = useRef(false);
   useEffect(() => {
-    if (localParticipant) {
+    if (!localParticipant || appliedRef.current) return;
+    appliedRef.current = true;
+
+    // Camera: apply sessionStorage preference (overrides LiveKit auto-enable)
+    const savedCam = sessionStorage.getItem('rsn_cam');
+    if (savedCam !== null) {
+      const wantCam = savedCam === 'true';
+      localParticipant.setCameraEnabled(wantCam).catch(() => {});
+      setCamEnabled(wantCam);
+    } else {
       setCamEnabled(localParticipant.isCameraEnabled);
-      if (mountedRef.current) {
-        // On remount (returning from breakout): sync mic from actual track state
-        setMicEnabled(localParticipant.isMicrophoneEnabled);
-        sessionStorage.setItem('rsn_mic', String(localParticipant.isMicrophoneEnabled));
-      } else {
-        // First mount only: auto-mute participants (not host)
-        mountedRef.current = true;
-        if (!isHost) {
-          localParticipant.setMicrophoneEnabled(false);
-          setMicEnabled(false);
-          sessionStorage.setItem('rsn_mic', 'false');
-        }
+    }
+
+    // Mic: auto-mute participants on first join, host gets sessionStorage preference
+    if (!isHost) {
+      localParticipant.setMicrophoneEnabled(false);
+      setMicEnabled(false);
+      sessionStorage.setItem('rsn_mic', 'false');
+    } else {
+      const savedMic = sessionStorage.getItem('rsn_mic');
+      if (savedMic !== null) {
+        const wantMic = savedMic === 'true';
+        localParticipant.setMicrophoneEnabled(wantMic).catch(() => {});
+        setMicEnabled(wantMic);
       }
     }
   }, [localParticipant, isHost]);
