@@ -99,7 +99,7 @@ router.post(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await identityService.logout(req.user!.userId, req.user!.sessionId);
+      await identityService.logout(req.user!.userId, req.user!.sessionId, req.body?.refreshToken);
 
       const response: ApiResponse = {
         success: true,

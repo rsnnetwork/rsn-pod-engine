@@ -178,9 +178,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const current = get();
     if (!current.accessToken && !current.refreshToken) return;
 
-    // Call logout endpoint before clearing tokens so the auth header is still present
-    // Use catch to silently ignore errors (e.g., if token is already invalid)
-    await api.post('/auth/logout').catch(() => {});
+    // Call logout endpoint with current refresh token — server revokes only THIS token,
+    // not all tokens for the user. Other devices/tabs keep their sessions.
+    await api.post('/auth/logout', { refreshToken: current.refreshToken }).catch(() => {});
 
     clearRefreshTimer();
     localStorage.removeItem('rsn_access');

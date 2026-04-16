@@ -584,13 +584,22 @@ export async function findOrCreateGoogleUser(
   return generateTokenPair(user);
 }
 
-export async function logout(userId: string, sessionId: string): Promise<void> {
-  // Revoke all refresh tokens for this session
-  await query(
-    `UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL`,
-    [userId]
-  );
-  logger.info({ userId, sessionId }, 'User logged out');
+export async function logout(userId: string, sessionId: string, refreshToken?: string): Promise<void> {
+  if (refreshToken) {
+    // Revoke only the specific refresh token — other devices/tabs keep their sessions
+    const tokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
+    await query(
+      `UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND token_hash = $2 AND revoked_at IS NULL`,
+      [userId, tokenHash]
+    );
+  } else {
+    // Fallback: revoke all tokens (backward compatibility if client doesn't send token)
+    await query(
+      `UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL`,
+      [userId]
+    );
+  }
+  logger.info({ userId, sessionId, specific: !!refreshToken }, 'User logged out');
 }
 
 export async function getUsers(params: {
