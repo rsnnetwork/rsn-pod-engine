@@ -98,7 +98,7 @@ export async function handleJoinSession(
 
       // ── Single-socket enforcement for same session ──
       // If this user already has a socket in this session, evict the old one
-      const activeSession = activeSessions.get(data.sessionId);
+      let activeSession = activeSessions.get(data.sessionId);
       if (activeSession) {
         const existingPresence = activeSession.presenceMap.get(userId);
         if (existingPresence && existingPresence.socketId !== socket.id) {
@@ -110,6 +110,33 @@ export async function handleJoinSession(
           }
           logger.info({ userId, oldSocketId: existingPresence.socketId, newSocketId: socket.id },
             'Evicted old socket — single connection per user per session');
+        }
+      }
+
+      // ── On-the-fly session recovery ──
+      // If activeSession is missing (server restarted/deployed) but session is active in DB,
+      // recreate the in-memory entry so all handlers work immediately
+      if (!activeSession) {
+        const activeStatuses = ['lobby_open', 'round_active', 'round_rating', 'round_transition', 'closing_lobby'];
+        if (activeStatuses.includes(session.status)) {
+          const config = typeof session.config === 'string' ? JSON.parse(session.config as unknown as string) : session.config || {};
+          activeSession = {
+            sessionId: data.sessionId,
+            hostUserId: session.hostUserId,
+            config,
+            currentRound: (session as any).currentRound || 0,
+            status: session.status as SessionStatus,
+            timer: null,
+            timerSyncInterval: null,
+            timerEndsAt: null,
+            isPaused: false,
+            pausedTimeRemaining: null,
+            pendingRoundNumber: null,
+            presenceMap: new Map(),
+            manuallyLeftRound: new Set(),
+          };
+          activeSessions.set(data.sessionId, activeSession);
+          logger.info({ sessionId: data.sessionId, status: session.status }, 'On-the-fly session recovery — created ActiveSession from DB');
         }
       }
 
