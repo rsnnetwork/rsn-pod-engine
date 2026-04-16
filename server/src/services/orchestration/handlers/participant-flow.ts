@@ -231,15 +231,26 @@ export async function handleJoinSession(
             }
             return { matchId: m.id, roomId: m.roomId || '', status: m.status, participants, isTrio: !!m.participantCId };
           }));
+          // Bye participants are those in_lobby during an active round (not in any active match)
+          const matchedUserIds = new Set<string>();
+          for (const m of matches) {
+            matchedUserIds.add(m.participantAId);
+            matchedUserIds.add(m.participantBId);
+            if (m.participantCId) matchedUserIds.add(m.participantCId);
+          }
           const byeResult = await query<{ user_id: string; display_name: string }>(
             `SELECT sp.user_id, u.display_name FROM session_participants sp JOIN users u ON u.id = sp.user_id
-             WHERE sp.session_id = $1 AND sp.status = 'bye' AND sp.user_id != $2`,
+             WHERE sp.session_id = $1 AND sp.status IN ('in_lobby', 'registered', 'checked_in') AND sp.user_id != $2`,
             [data.sessionId, session.hostUserId]
           );
+          // Filter to only those not in any match
+          const byeParticipants = byeResult.rows
+            .filter(r => !matchedUserIds.has(r.user_id))
+            .map(r => ({ userId: r.user_id, displayName: r.display_name }));
           socket.emit('host:round_dashboard', {
             roundNumber: activeSession.currentRound,
             rooms: rooms.filter((r: any) => r.status !== 'cancelled'),
-            byeParticipants: byeResult.rows.map(r => ({ userId: r.user_id, displayName: r.display_name })),
+            byeParticipants,
             timerSecondsRemaining: 0,
             reassignmentInProgress: false,
           });

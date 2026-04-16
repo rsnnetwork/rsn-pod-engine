@@ -371,7 +371,7 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const retryCountRef = useRef(0);
-  const connectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // connectTimeoutRef removed — no auto-timeout needed, onError/onDisconnected handle failures
   const { sessionId } = useParams();
 
   // Backup token fetch if not provided inline
@@ -386,16 +386,9 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
   }, [liveKitToken, sessionId, currentRoomId]);
 
   // Connection timeout — if stuck on "Connecting" for 15s, show actionable UI
-  useEffect(() => {
-    if (liveKitToken && !connectionError) {
-      connectTimeoutRef.current = setTimeout(() => {
-        if (useSessionStore.getState().phase === 'matched' && !connectionError) {
-          setConnectionError('Video connection is taking too long. Your network may be slow.');
-        }
-      }, 30000);
-    }
-    return () => { if (connectTimeoutRef.current) clearTimeout(connectTimeoutRef.current); };
-  }, [liveKitToken, connectionError]);
+  // No auto-timeout — onError and onDisconnected handlers catch real failures.
+  // The previous 30s timeout was causing false "Video Connection Issue" errors
+  // on slow mobile networks and during reconnections.
 
   const handleRetry = () => {
     setConnectionError(null);
@@ -486,7 +479,7 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
       }}
       onDisconnected={() => {
         if (useSessionStore.getState().phase !== 'matched') return;
-        if (connectTimeoutRef.current) clearTimeout(connectTimeoutRef.current);
+        // No timeout to clear — auto-timeout removed
         setTimeout(() => {
           if (useSessionStore.getState().phase !== 'matched') return;
           if (retryCountRef.current < 2) {
@@ -501,7 +494,7 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
       }}
       onError={(err) => {
         if (useSessionStore.getState().phase !== 'matched') return;
-        if (connectTimeoutRef.current) clearTimeout(connectTimeoutRef.current);
+        // No timeout to clear — auto-timeout removed
         setTimeout(() => {
           if (useSessionStore.getState().phase !== 'matched') return;
           if (retryCountRef.current < 2) {
