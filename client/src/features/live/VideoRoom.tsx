@@ -473,7 +473,9 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 bg-[#292a2d] rounded-xl px-3 py-2 sm:px-4 sm:py-3">
           <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
             <span className="text-xs sm:text-sm text-white font-medium">Breakout Room</span>
-            <span className="text-xs sm:text-sm text-gray-400">Round {currentRound}/{totalRounds}</span>
+            {currentRound > 0 && (
+              <span className="text-xs sm:text-sm text-gray-400">Round {currentRound}/{totalRounds}</span>
+            )}
             <ConnectionIndicator />
             <MediaControls />
           </div>
@@ -506,6 +508,8 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
             </div>
           )}
           {(() => {
+            // No timer if value is NaN/0 (e.g. host-created room without duration)
+            if (!timerSeconds || isNaN(timerSeconds)) return null;
             // Host always sees the timer regardless of visibility setting
             const showTimer = isHost ||
               timerVisibility === 'always_visible' ||

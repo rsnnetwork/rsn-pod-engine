@@ -795,8 +795,8 @@ function PreLobbyWaitingRoom({ isHost = false }: { isHost?: boolean }) {
 export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean; sessionId?: string }) {
   const { participants, lobbyToken, lobbyUrl, sessionStatus, hostUserId, roundDashboard } = useSessionStore();
 
-  // Host sees breakout room dashboard as a panel above the lobby video during active rounds
-  const showRoundDashboard = isHost && (sessionStatus === 'round_active' || sessionStatus === 'round_rating') && roundDashboard && roundDashboard.rooms.length > 0;
+  // Host sees breakout room dashboard when there are active rooms (formal rounds OR host-created rooms)
+  const showRoundDashboard = isHost && roundDashboard && roundDashboard.rooms.length > 0;
 
   // LOBBY GATE: Participants cannot enter the lobby before the host starts the event.
   // Show a dedicated waiting room instead. Host still sees the normal lobby with controls.

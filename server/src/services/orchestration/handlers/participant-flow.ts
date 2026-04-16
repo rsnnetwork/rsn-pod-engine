@@ -619,12 +619,17 @@ export async function handleLeaveConversation(
 
       const { sessionId } = data;
       const activeSession = activeSessions.get(sessionId);
-      if (!activeSession || activeSession.status !== SessionStatus.ROUND_ACTIVE) return;
+      if (!activeSession) return;
+
+      // Allow leaving during ROUND_ACTIVE (normal rounds) or LOBBY_OPEN (host-created rooms)
+      if (activeSession.status !== SessionStatus.ROUND_ACTIVE && activeSession.status !== SessionStatus.LOBBY_OPEN) return;
 
       // Track that this user manually left — prevents re-entry via reconnect
-      activeSession.manuallyLeftRound.add(userId);
+      if (activeSession.status === SessionStatus.ROUND_ACTIVE) {
+        activeSession.manuallyLeftRound.add(userId);
+      }
 
-      // Find the user's active match
+      // Find the user's active match (check all rounds — host-created rooms may be round 0)
       const matches = await matchingService.getMatchesByRound(sessionId, activeSession.currentRound);
       const userMatch = matches.find(
         m => (m.participantAId === userId || m.participantBId === userId || m.participantCId === userId) && m.status === 'active'

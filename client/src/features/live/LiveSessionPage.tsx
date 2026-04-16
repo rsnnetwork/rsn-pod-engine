@@ -121,8 +121,8 @@ export default function LiveSessionPage() {
         </div>
       </div>
 
-      {/* Persistent event state banner */}
-      {connectionStatus === 'connected' && (
+      {/* Persistent event state banner — hidden during breakout/rating (they have own UI) */}
+      {connectionStatus === 'connected' && phase !== 'matched' && phase !== 'rating' && (
         <EventStateBanner sessionStatus={sessionStatus} currentRound={currentRound} totalRounds={totalRounds} phase={phase} />
       )}
 
