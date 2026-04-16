@@ -98,7 +98,7 @@ function VideoStage() {
 
   if (pinnedTile) {
     return (
-      <div className="flex-1 flex flex-col gap-3 max-h-[calc(100vh-200px)]">
+      <div className="flex-1 flex flex-col gap-3 max-h-[calc(100dvh-160px)]">
         {/* Pinned tile — large */}
         <div className="flex-1 min-h-0 cursor-pointer" onClick={() => setPinnedSid(null)}>
           <div className="relative h-full">
@@ -124,7 +124,7 @@ function VideoStage() {
   // Mobile trio: partner grid + larger floating self-view
   // Desktop: side-by-side equal grid tiles
   return (
-    <div className="flex-1 relative max-h-[calc(100vh-200px)]">
+    <div className="flex-1 relative max-h-[calc(100dvh-160px)]">
       {remoteTracks.length > 0 ? (
         <>
           {/* Desktop: equal grid tiles including self-view */}
@@ -145,7 +145,7 @@ function VideoStage() {
               <div className="h-full cursor-pointer" onClick={() => setPinnedSid(remoteTracks[0].participant.sid)}>
                 <VideoTile trackRef={remoteTracks[0]} label={remoteTracks[0].participant.name || currentPartners[0]?.displayName || 'Partner'} />
               </div>
-              <div className="absolute top-3 right-3 w-28 h-40 rounded-xl overflow-hidden shadow-lg border-2 border-white/80 z-10"
+              <div className="absolute top-3 right-3 w-32 h-44 sm:w-36 sm:h-48 rounded-xl overflow-hidden shadow-lg border-2 border-white/80 z-10"
                 onClick={() => setPinnedSid(localParticipant.sid)}>
                 <VideoTile trackRef={localTrack} label="You" />
               </div>
@@ -162,7 +162,7 @@ function VideoStage() {
                   </div>
                 ))}
               </div>
-              <div className="absolute top-3 right-3 w-28 h-40 rounded-xl overflow-hidden shadow-lg border-2 border-white/80 z-10"
+              <div className="absolute top-3 right-3 w-32 h-44 sm:w-36 sm:h-48 rounded-xl overflow-hidden shadow-lg border-2 border-white/80 z-10"
                 onClick={() => setPinnedSid(localParticipant.sid)}>
                 <VideoTile trackRef={localTrack} label="You" />
               </div>

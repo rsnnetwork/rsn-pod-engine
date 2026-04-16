@@ -111,7 +111,7 @@ export default function AppLayout() {
   );
 
   return (
-    <div className="flex h-screen bg-white text-[#1a1a2e]">
+    <div className="flex h-[100dvh] bg-white text-[#1a1a2e]">
       {/* Desktop sidebar */}
       <aside className="hidden md:flex flex-col w-60 border-r border-gray-200 bg-gray-50/60 backdrop-blur-sm">
         <div className="px-5 py-5 flex items-center justify-between">
@@ -164,7 +164,7 @@ export default function AppLayout() {
         </main>
 
         {/* Mobile bottom nav */}
-        <nav className="md:hidden flex border-t border-gray-200 bg-white/90 backdrop-blur-sm">
+        <nav className="md:hidden flex border-t border-gray-200 bg-white/90 backdrop-blur-sm pb-[env(safe-area-inset-bottom)]">
           {[
             { to: '/', icon: LayoutDashboard, label: 'Home' },
             { to: '/pods', icon: Users, label: 'Pods' },
