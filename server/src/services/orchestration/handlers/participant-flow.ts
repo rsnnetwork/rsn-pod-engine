@@ -649,20 +649,32 @@ export async function handleLeaveConversation(
       const activeSession = activeSessions.get(sessionId);
       if (!activeSession) return;
 
-      // Allow leaving during ROUND_ACTIVE (normal rounds) or LOBBY_OPEN (host-created rooms)
-      if (activeSession.status !== SessionStatus.ROUND_ACTIVE && activeSession.status !== SessionStatus.LOBBY_OPEN) return;
+      // Allow leaving during any active status (manual rooms can exist at any time)
+      const blockedStatuses = [SessionStatus.COMPLETED];
+      if (blockedStatuses.includes(activeSession.status)) return;
 
       // Track that this user manually left — prevents re-entry via reconnect
       if (activeSession.status === SessionStatus.ROUND_ACTIVE) {
         activeSession.manuallyLeftRound.add(userId);
       }
 
-      // Find the user's active match (check all rounds — host-created rooms may be round 0)
-      const matches = await matchingService.getMatchesByRound(sessionId, activeSession.currentRound);
-      const userMatch = matches.find(
-        m => (m.participantAId === userId || m.participantBId === userId || m.participantCId === userId) && m.status === 'active'
+      // Find the user's active match across ALL rounds (manual rooms may be on any round)
+      const matchResult = await query<{ id: string; session_id: string; round_number: number; participant_a_id: string; participant_b_id: string | null; participant_c_id: string | null; room_id: string; status: string }>(
+        `SELECT id, session_id, round_number, participant_a_id, participant_b_id, participant_c_id, room_id, status
+         FROM matches WHERE session_id = $1 AND status = 'active'
+           AND (participant_a_id = $2 OR participant_b_id = $2 OR participant_c_id = $2)
+         LIMIT 1`,
+        [sessionId, userId]
       );
-      if (!userMatch) return;
+      if (matchResult.rows.length === 0) return;
+      const userMatch = {
+        id: matchResult.rows[0].id,
+        participantAId: matchResult.rows[0].participant_a_id,
+        participantBId: matchResult.rows[0].participant_b_id,
+        participantCId: matchResult.rows[0].participant_c_id,
+        roomId: matchResult.rows[0].room_id,
+        status: matchResult.rows[0].status,
+      };
 
       // Mark match as ended early
       await query(

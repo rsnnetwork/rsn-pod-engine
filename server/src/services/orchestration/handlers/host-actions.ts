@@ -1314,9 +1314,9 @@ export async function handleHostCreateBreakout(
       }
       const newRoomId = videoService.matchRoomId(sessionId, activeSession.currentRound, roomSlug);
 
-      // Step 3: Create match in DB (skip if empty room)
+      // Step 3: Create match in DB (for 1+ participants — enables dashboard, leave, timer)
       let matchId = '';
-      if (participantIds.length >= 2) {
+      if (participantIds.length >= 1) {
         const { v4: uuid } = await import('uuid');
         matchId = uuid();
         const sorted = [...participantIds].sort();
@@ -1324,7 +1324,7 @@ export async function handleHostCreateBreakout(
           await query(
             `INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, participant_c_id, room_id, status, started_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', NOW())`,
-            [matchId, sessionId, activeSession.currentRound, sorted[0], sorted[1], sorted[2] || null, newRoomId]
+            [matchId, sessionId, activeSession.currentRound, sorted[0], sorted[1] || null, sorted[2] || null, newRoomId]
           );
         } catch (err: any) {
           logger.error({ err }, 'Failed to insert match for host breakout');
@@ -1371,7 +1371,7 @@ export async function handleHostCreateBreakout(
 
       // Step 5: Per-room timer — end room after custom duration
       const duration = data.durationSeconds;
-      if (duration && duration > 0 && matchId && participantIds.length >= 2) {
+      if (duration && duration > 0 && matchId && participantIds.length >= 1) {
         // Clear any existing timer for this match
         if (roomTimers.has(matchId)) clearTimeout(roomTimers.get(matchId)!);
 

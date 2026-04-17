@@ -563,18 +563,21 @@ export async function emitHostDashboard(io: SocketServer, sessionId: string): Pr
     const rooms = matches
       .filter(m => m.status === 'active' || m.status === 'completed' || m.status === 'no_show')
       .map(m => {
-        const participants = [
-          {
+        const participants: { userId: string; displayName: string; isConnected: boolean }[] = [];
+        if (m.participantAId) {
+          participants.push({
             userId: m.participantAId,
             displayName: nameMap.get(m.participantAId) || 'User',
             isConnected: activeSession.presenceMap.has(m.participantAId),
-          },
-          {
+          });
+        }
+        if (m.participantBId) {
+          participants.push({
             userId: m.participantBId,
             displayName: nameMap.get(m.participantBId) || 'User',
             isConnected: activeSession.presenceMap.has(m.participantBId),
-          },
-        ];
+          });
+        }
         if (m.participantCId) {
           participants.push({
             userId: m.participantCId,
@@ -595,8 +598,8 @@ export async function emitHostDashboard(io: SocketServer, sessionId: string): Pr
     // Find bye participants (matched to nobody)
     const matchedUserIds = new Set<string>();
     for (const m of matches) {
-      matchedUserIds.add(m.participantAId);
-      matchedUserIds.add(m.participantBId);
+      if (m.participantAId) matchedUserIds.add(m.participantAId);
+      if (m.participantBId) matchedUserIds.add(m.participantBId);
       if (m.participantCId) matchedUserIds.add(m.participantCId);
     }
 
