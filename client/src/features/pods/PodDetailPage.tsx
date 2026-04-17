@@ -923,94 +923,6 @@ export default function PodDetailPage() {
         </div>
       </Modal>
 
-      {/* ── Pending Pod Invites Banner (directors only) ─────────────────── */}
-      {isDirectorOrHost && podMemberCounts?.pendingInvites > 0 && !showPodPendingInvites && (
-        <Card className="animate-fade-in-up border-purple-200 bg-purple-50">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Send className="h-4 w-4 text-purple-600" />
-              <p className="text-sm text-purple-800 font-medium">
-                {podMemberCounts.pendingInvites} Pending Invite{podMemberCounts.pendingInvites > 1 ? 's' : ''}</p>
-              <p className="text-xs text-purple-600">{podMemberCounts.pendingInvites} {podMemberCounts.pendingInvites > 1 ? "people haven't" : "person hasn't"} accepted their invite yet.</p>
-            </div>
-            <Button size="sm" variant="ghost" onClick={() => setShowPodPendingInvites(true)} className="text-purple-700">
-              <Eye className="h-4 w-4 mr-1" /> View & Remind
-            </Button>
-          </div>
-        </Card>
-      )}
-
-      {/* ── Pending Pod Invites List ──────────────────────────────────────── */}
-      {showPodPendingInvites && (
-        <div className="animate-fade-in-up">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold text-[#1a1a2e] flex items-center gap-2">
-              <Inbox className="h-5 w-5 text-purple-600" /> Pending Pod Invites ({podPendingInvites?.length ?? 0})
-            </h2>
-            <Button size="sm" variant="ghost" onClick={() => setShowPodPendingInvites(false)}>
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
-          {!podPendingInvites || podPendingInvites.length === 0 ? (
-            <Card><p className="text-gray-400 text-sm text-center py-3">No pending invites</p></Card>
-          ) : (
-            <div className="space-y-2">
-              {podPendingInvites.filter((inv: any) => inv.inviteeEmail).length > 1 && (
-                <div className="flex justify-end mb-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      podPendingInvites.filter((inv: any) => inv.inviteeEmail).forEach((inv: any) => {
-                        api.post(`/invites/${inv.id}/remind`).catch(() => {});
-                      });
-                      addToast(`Reminders sent to ${podPendingInvites.filter((i: any) => i.inviteeEmail).length} pending invites`, 'success');
-                    }}
-                    className="!border-purple-300 !text-purple-700 hover:!bg-purple-100"
-                  >
-                    <Send className="h-3.5 w-3.5 mr-1" /> Remind All ({podPendingInvites.filter((i: any) => i.inviteeEmail).length})
-                  </Button>
-                </div>
-              )}
-              <div className="grid gap-2">
-              {podPendingInvites.map((inv: any) => (
-                <Card key={inv.id} className="!p-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="h-8 w-8 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 text-xs font-bold">
-                        {(inv.inviteeName || inv.inviteeEmail || '?').charAt(0).toUpperCase()}
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-gray-800">{inv.inviteeName || inv.inviteeEmail || 'Shareable link'}</p>
-                        {inv.inviteeName && inv.inviteeEmail && (
-                          <p className="text-xs text-gray-400">{inv.inviteeEmail}</p>
-                        )}
-                        <p className="text-xs text-gray-400">Sent {new Date(inv.createdAt).toLocaleDateString()}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Badge variant="warning" className="text-xs">Pending</Badge>
-                      {inv.inviteeEmail && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => {
-                            api.post(`/invites/${inv.id}/remind`).then(() => addToast('Reminder sent!', 'success')).catch(() => addToast('Failed to send reminder', 'error'));
-                          }}
-                        >
-                          <Send className="h-3 w-3 mr-1" /> Remind
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                </Card>
-              ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
       {/* ── Members ────────────────────────────────────────────────────────── */}
       <div className="animate-fade-in-up stagger-2">
         <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
@@ -1105,6 +1017,94 @@ export default function PodDetailPage() {
           )}
         </div>
       </div>
+
+      {/* ── Pending Pod Invites Banner (directors only) ─────────────────── */}
+      {isDirectorOrHost && podMemberCounts?.pendingInvites > 0 && !showPodPendingInvites && (
+        <Card className="animate-fade-in-up border-purple-200 bg-purple-50">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Send className="h-4 w-4 text-purple-600" />
+              <p className="text-sm text-purple-800 font-medium">
+                {podMemberCounts.pendingInvites} Pending Invite{podMemberCounts.pendingInvites > 1 ? 's' : ''}</p>
+              <p className="text-xs text-purple-600">{podMemberCounts.pendingInvites} {podMemberCounts.pendingInvites > 1 ? "people haven't" : "person hasn't"} accepted their invite yet.</p>
+            </div>
+            <Button size="sm" variant="ghost" onClick={() => setShowPodPendingInvites(true)} className="text-purple-700">
+              <Eye className="h-4 w-4 mr-1" /> View & Remind
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {/* ── Pending Pod Invites List ──────────────────────────────────────── */}
+      {showPodPendingInvites && (
+        <div className="animate-fade-in-up">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold text-[#1a1a2e] flex items-center gap-2">
+              <Inbox className="h-5 w-5 text-purple-600" /> Pending Pod Invites ({podPendingInvites?.length ?? 0})
+            </h2>
+            <Button size="sm" variant="ghost" onClick={() => setShowPodPendingInvites(false)}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+          {!podPendingInvites || podPendingInvites.length === 0 ? (
+            <Card><p className="text-gray-400 text-sm text-center py-3">No pending invites</p></Card>
+          ) : (
+            <div className="space-y-2">
+              {podPendingInvites.filter((inv: any) => inv.inviteeEmail).length > 1 && (
+                <div className="flex justify-end mb-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      podPendingInvites.filter((inv: any) => inv.inviteeEmail).forEach((inv: any) => {
+                        api.post(`/invites/${inv.id}/remind`).catch(() => {});
+                      });
+                      addToast(`Reminders sent to ${podPendingInvites.filter((i: any) => i.inviteeEmail).length} pending invites`, 'success');
+                    }}
+                    className="!border-purple-300 !text-purple-700 hover:!bg-purple-100"
+                  >
+                    <Send className="h-3.5 w-3.5 mr-1" /> Remind All ({podPendingInvites.filter((i: any) => i.inviteeEmail).length})
+                  </Button>
+                </div>
+              )}
+              <div className="grid gap-2">
+              {podPendingInvites.map((inv: any) => (
+                <Card key={inv.id} className="!p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="h-8 w-8 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 text-xs font-bold">
+                        {(inv.inviteeName || inv.inviteeEmail || '?').charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-gray-800">{inv.inviteeName || inv.inviteeEmail || 'Shareable link'}</p>
+                        {inv.inviteeName && inv.inviteeEmail && (
+                          <p className="text-xs text-gray-400">{inv.inviteeEmail}</p>
+                        )}
+                        <p className="text-xs text-gray-400">Sent {new Date(inv.createdAt).toLocaleDateString()}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="warning" className="text-xs">Pending</Badge>
+                      {inv.inviteeEmail && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            api.post(`/invites/${inv.id}/remind`).then(() => addToast('Reminder sent!', 'success')).catch(() => addToast('Failed to send reminder', 'error'));
+                          }}
+                        >
+                          <Send className="h-3 w-3 mr-1" /> Remind
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </Card>
+              ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
