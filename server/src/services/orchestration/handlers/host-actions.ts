@@ -1021,6 +1021,73 @@ export async function handleHostExtendRound(
   });
 }
 
+// ─── Host Extend Breakout Room Timer ──────────────────────────────────────
+//
+// Extends a per-room timer started by handleHostCreateBreakout (manual rooms
+// with custom duration). Mirrors handleHostExtendRound but targets a single
+// match instead of the session-level round timer.
+//
+// Preserves Change 4.5 ghost-timer fixes: the sync interval reads endsAt from
+// the RoomTimerState struct, so extensions propagate to participants on the
+// next 5s tick without any extra state.
+
+export async function handleHostExtendBreakoutRoom(
+  io: SocketServer,
+  socket: Socket,
+  data: { sessionId: string; matchId: string; additionalSeconds: number },
+): Promise<void> {
+  return withSessionGuard(data.sessionId, async () => {
+    if (!await verifyHost(socket, data.sessionId)) return;
+
+    const { sessionId, matchId } = data;
+    const additionalSeconds = data.additionalSeconds || 120;
+
+    const activeSession = activeSessions.get(sessionId);
+    if (!activeSession) {
+      socket.emit('error', { code: 'INVALID_STATE', message: 'Session not active.' });
+      return;
+    }
+
+    const roomTimer = roomTimers.get(matchId);
+    if (!roomTimer) {
+      socket.emit('error', { code: 'NO_TIMER', message: 'Breakout room timer not found.' });
+      return;
+    }
+
+    // Validate match is still active
+    const matchRes = await query<{ status: string }>(
+      `SELECT status FROM matches WHERE id = $1`,
+      [matchId],
+    );
+    if (matchRes.rows.length === 0 || matchRes.rows[0].status !== 'active') {
+      socket.emit('error', { code: 'INVALID_STATE', message: 'Breakout room is not active.' });
+      return;
+    }
+
+    // Extend endsAt and reschedule the expiry timeout
+    const newEndsAt = new Date(roomTimer.endsAt.getTime() + additionalSeconds * 1000);
+    roomTimer.endsAt = newEndsAt;
+
+    clearTimeout(roomTimer.timeoutHandle);
+    const msRemaining = Math.max(0, newEndsAt.getTime() - Date.now());
+    roomTimer.timeoutHandle = setTimeout(() => { roomTimer.fireCallback(); }, msRemaining);
+
+    // Broadcast timer:sync to match participants immediately (don't wait for 5s tick)
+    const secondsRemaining = Math.ceil(msRemaining / 1000);
+    for (const pid of roomTimer.participantIds) {
+      io.to(userRoom(pid)).emit('timer:sync', { secondsRemaining });
+    }
+
+    // Refresh host dashboard
+    if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
+
+    logger.info(
+      { sessionId, matchId, additionalSeconds, newEndsAt: newEndsAt.toISOString(), secondsRemaining },
+      'Host extended breakout room timer',
+    );
+  });
+}
+
 // ─── Co-Host Management ─────────────────────────────────────────────────────
 
 export async function handleAssignCohost(
@@ -1233,14 +1300,28 @@ export async function broadcastMessage(
 
 // ─── Host Create Breakout Room ────────────────────────────────────────────
 
-// Per-room timers for host-created breakout rooms with custom duration
-const roomTimers = new Map<string, NodeJS.Timeout>();
+/**
+ * Per-room timer state for host-created breakout rooms with custom duration.
+ *
+ * Tracks endsAt + startedAt + participantIds so the timer can be extended by
+ * `handleHostExtendBreakoutRoom` without losing the original expiry callback.
+ * The callback is stored as `fireCallback` so extension can reschedule it.
+ */
+interface RoomTimerState {
+  timeoutHandle: NodeJS.Timeout;
+  endsAt: Date;
+  startedAt: Date;
+  participantIds: string[];
+  fireCallback: () => Promise<void>;
+}
+
+const roomTimers = new Map<string, RoomTimerState>();
 const roomSyncIntervals = new Map<string, NodeJS.Timeout>();
 
 /** Clear per-room timer and sync interval for a given matchId */
 export function clearRoomTimers(matchId: string): void {
   const timer = roomTimers.get(matchId);
-  if (timer) { clearTimeout(timer); roomTimers.delete(matchId); }
+  if (timer) { clearTimeout(timer.timeoutHandle); roomTimers.delete(matchId); }
   const interval = roomSyncIntervals.get(matchId);
   if (interval) { clearInterval(interval); roomSyncIntervals.delete(matchId); }
 }
@@ -1399,20 +1480,20 @@ export async function handleHostCreateBreakout(
       const duration = data.durationSeconds;
       if (duration && duration > 0 && matchId && participantIds.length >= 1) {
         // Clear any existing timer for this match
-        if (roomTimers.has(matchId)) clearTimeout(roomTimers.get(matchId)!);
+        if (roomTimers.has(matchId)) clearTimeout(roomTimers.get(matchId)!.timeoutHandle);
 
-        // Start per-room countdown sync interval (every 5s)
-        const roomStartTime = Date.now();
-        const roomEndTime = roomStartTime + duration * 1000;
-        roomSyncIntervals.set(matchId, setInterval(async () => {
-          // Verify the match is still active before sending sync
-          if (!roomTimers.has(matchId)) {
+        // Start per-room countdown sync interval (every 5s) — reads from
+        // roomTimers.get(matchId).endsAt so extensions propagate automatically.
+        const startedAt = new Date();
+        roomSyncIntervals.set(matchId, setInterval(() => {
+          const state = roomTimers.get(matchId);
+          if (!state) {
             const iv = roomSyncIntervals.get(matchId);
             if (iv) { clearInterval(iv); roomSyncIntervals.delete(matchId); }
             return;
           }
-          const remaining = Math.max(0, Math.ceil((roomEndTime - Date.now()) / 1000));
-          for (const pid of participantIds) {
+          const remaining = Math.max(0, Math.ceil((state.endsAt.getTime() - Date.now()) / 1000));
+          for (const pid of state.participantIds) {
             io.to(userRoom(pid)).emit('timer:sync', { secondsRemaining: remaining });
           }
           if (remaining <= 0) {
@@ -1421,25 +1502,23 @@ export async function handleHostCreateBreakout(
           }
         }, 5000));
 
-        roomTimers.set(matchId, setTimeout(async () => {
+        // Expiry callback — extracted so handleHostExtendBreakoutRoom can
+        // reschedule the same callback without duplicating the teardown logic.
+        const fireCallback = async () => {
           roomTimers.delete(matchId);
-          // Clear sync interval
           const iv = roomSyncIntervals.get(matchId);
           if (iv) { clearInterval(iv); roomSyncIntervals.delete(matchId); }
           try {
-            // Check match is still active
             const matchRow = await query<{ status: string }>(
               `SELECT status FROM matches WHERE id = $1`, [matchId]
             );
             if (!matchRow.rows[0] || matchRow.rows[0].status !== 'active') return;
 
-            // Mark match completed
             await query(
               `UPDATE matches SET status = 'completed', ended_at = NOW() WHERE id = $1 AND status = 'active'`,
               [matchId]
             );
 
-            // Send rating screen to each participant, then return to lobby
             const namesResult2 = await query<{ id: string; display_name: string }>(
               `SELECT id, display_name FROM users WHERE id = ANY($1)`, [participantIds]
             );
@@ -1461,7 +1540,6 @@ export async function handleHostCreateBreakout(
                 earlyLeave: true,
               });
 
-              // Send lobby token so they can rejoin main room after rating
               const session2 = await sessionService.getSessionById(sessionId);
               if (session2.lobbyRoomId) {
                 try {
@@ -1478,13 +1556,22 @@ export async function handleHostCreateBreakout(
               }
             }
 
-            // Refresh dashboard
             if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
             logger.info({ sessionId, matchId }, 'Host breakout room timer expired — participants sent to rating');
           } catch (err) {
             logger.error({ err, matchId }, 'Error in host breakout room timer');
           }
-        }, duration * 1000));
+        };
+
+        const endsAt = new Date(startedAt.getTime() + duration * 1000);
+        const timeoutHandle = setTimeout(() => { fireCallback(); }, duration * 1000);
+        roomTimers.set(matchId, {
+          timeoutHandle,
+          endsAt,
+          startedAt,
+          participantIds: [...participantIds],
+          fireCallback,
+        });
 
         // Send timer:sync to participants in this room so they see countdown
         for (const pid of participantIds) {

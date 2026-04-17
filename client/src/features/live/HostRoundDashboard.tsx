@@ -15,6 +15,14 @@ export default function HostRoundDashboard({ sessionId }: Props) {
     socket?.emit('host:remove_from_room' as any, { sessionId, matchId, userId });
   };
 
+  const extendBreakoutRoom = (matchId: string) => {
+    socket?.emit('host:extend_breakout_room' as any, {
+      sessionId,
+      matchId,
+      additionalSeconds: 120,
+    });
+  };
+
   const moveToRoom = (targetMatchId: string) => {
     if (!moveMode) return;
     if (!confirm(`Move ${moveMode.displayName} to this room?`)) return;
@@ -149,6 +157,18 @@ export default function HostRoundDashboard({ sessionId }: Props) {
                 </div>
                 {isTargetCandidate && (
                   <p className="text-xs text-blue-500 text-center mt-2 font-medium">Click to move here</p>
+                )}
+                {/* Per-room +2 min extend — only for manual breakout rooms with custom timer */}
+                {room.status === 'active' && !moveMode && (room as any).isManual && (
+                  <div className="flex justify-end mt-2">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); extendBreakoutRoom(room.matchId); }}
+                      className="text-xs text-gray-600 hover:text-gray-900 px-2 py-1 border border-gray-200 rounded inline-flex items-center gap-1"
+                      title="Add 2 minutes to this room's timer"
+                    >
+                      <Clock className="h-3 w-3" /> +2 min
+                    </button>
+                  </div>
                 )}
               </div>
             );
