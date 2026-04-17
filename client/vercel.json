@@ -12,6 +12,8 @@
     }
   },
   "rewrites": [
+    { "source": "/api/:path*", "destination": "https://rsn-api-h04m.onrender.com/api/:path*" },
+    { "source": "/socket.io/:path*", "destination": "https://rsn-api-h04m.onrender.com/socket.io/:path*" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
