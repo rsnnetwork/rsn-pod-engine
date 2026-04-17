@@ -484,8 +484,20 @@ export async function endRound(
         const participantIds = [match.participantAId, match.participantBId];
         if (match.participantCId) participantIds.push(match.participantCId);
 
+        // Dedup: only emit rating:window_open to users who haven't already rated
+        // this match. Primary emit sites (voluntary leave, host remove, auto-
+        // reassign timeout) fire on first-entry to rating state — this guard
+        // prevents endRound from re-firing for users who already saw the form.
+        const alreadyRated = await query<{ from_user_id: string }>(
+          `SELECT DISTINCT from_user_id FROM ratings WHERE match_id = $1 AND from_user_id = ANY($2)`,
+          [match.id, participantIds],
+        );
+        const ratedUserIds = new Set(alreadyRated.rows.map(r => r.from_user_id));
+
         // Notify each participant to rate their partner(s) — include display names
         for (const pid of participantIds) {
+          if (ratedUserIds.has(pid)) continue; // Already rated — skip double-form
+
           const partnerIds = participantIds.filter(id => id !== pid);
           const partnersWithNames = partnerIds.map(id => ({
             userId: id,
