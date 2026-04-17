@@ -279,7 +279,13 @@ export default function useSessionSocket(sessionId: string) {
       // BEFORE session:status_changed(round_active) when starting a new round.
       const state = useSessionStore.getState();
       if (state.sessionStatus === 'round_rating' || state.sessionStatus === 'completed') return;
-      if (state.leftCurrentRound) return; // User manually left this round
+      // If user left the current round, block re-entry UNLESS this is a new round
+      if (state.leftCurrentRound) {
+        const incomingRound = data.roundNumber || 0;
+        if (incomingRound <= state.currentRound) return; // Same or older round — block
+        // New round — clear the flag and accept
+        store.setLeftCurrentRound(false);
+      }
 
       store.setMatchingOverlay(null); // Clear anticipation screen
       store.setByeRound(false);
@@ -491,7 +497,13 @@ export default function useSessionSocket(sessionId: string) {
     });
 
     // ── Sync & errors ──
-    socket.on('timer:sync', (data: any) => store.setTimer(data.secondsRemaining));
+    socket.on('timer:sync', (data: any) => {
+      store.setTimer(data.secondsRemaining);
+      // Start a local 1s tick if not already running (smooth countdown for manual rooms)
+      if (data.secondsRemaining > 0 && !intervalRef.current) {
+        intervalRef.current = setInterval(() => store.tickTimer(), 1000);
+      }
+    });
 
     socket.on('error', (data: any) => {
       // Don't show transient errors as persistent banners

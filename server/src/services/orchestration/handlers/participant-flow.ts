@@ -19,6 +19,7 @@ import * as sessionService from '../../session/session.service';
 import * as matchingService from '../../matching/matching.service';
 import * as ratingService from '../../rating/rating.service';
 import * as videoService from '../../video/video.service';
+import { clearRoomTimers } from './host-actions';
 
 // ─── Cross-module references (wired in Task 7) ────────────────────────────
 // TODO: Import these from matching-flow.ts once it's created
@@ -668,6 +669,9 @@ export async function handleLeaveConversation(
         `UPDATE matches SET status = 'completed', ended_at = NOW() WHERE id = $1 AND status = 'active'`,
         [userMatch.id]
       );
+
+      // Clear any per-room timer/sync for this match (prevents ghost timers)
+      clearRoomTimers(userMatch.id);
 
       // Move user back to lobby status
       await sessionService.updateParticipantStatus(sessionId, userId, ParticipantStatus.IN_LOBBY);

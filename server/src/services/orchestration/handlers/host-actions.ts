@@ -681,6 +681,9 @@ export async function handleHostRemoveFromRoom(
       [data.matchId]
     );
 
+    // Clear any per-room timer/sync for this match (prevents ghost timers)
+    clearRoomTimers(data.matchId);
+
     // Get match participants before updating
     const matchResult = await query<{ participant_a_id: string; participant_b_id: string; participant_c_id: string | null }>(
       `SELECT participant_a_id, participant_b_id, participant_c_id FROM matches WHERE id = $1`,
@@ -1211,6 +1214,14 @@ export async function broadcastMessage(
 const roomTimers = new Map<string, NodeJS.Timeout>();
 const roomSyncIntervals = new Map<string, NodeJS.Timeout>();
 
+/** Clear per-room timer and sync interval for a given matchId */
+export function clearRoomTimers(matchId: string): void {
+  const timer = roomTimers.get(matchId);
+  if (timer) { clearTimeout(timer); roomTimers.delete(matchId); }
+  const interval = roomSyncIntervals.get(matchId);
+  if (interval) { clearInterval(interval); roomSyncIntervals.delete(matchId); }
+}
+
 export async function handleHostCreateBreakout(
   io: SocketServer,
   socket: Socket,
@@ -1367,7 +1378,13 @@ export async function handleHostCreateBreakout(
         // Start per-room countdown sync interval (every 5s)
         const roomStartTime = Date.now();
         const roomEndTime = roomStartTime + duration * 1000;
-        roomSyncIntervals.set(matchId, setInterval(() => {
+        roomSyncIntervals.set(matchId, setInterval(async () => {
+          // Verify the match is still active before sending sync
+          if (!roomTimers.has(matchId)) {
+            const iv = roomSyncIntervals.get(matchId);
+            if (iv) { clearInterval(iv); roomSyncIntervals.delete(matchId); }
+            return;
+          }
           const remaining = Math.max(0, Math.ceil((roomEndTime - Date.now()) / 1000));
           for (const pid of participantIds) {
             io.to(userRoom(pid)).emit('timer:sync', { secondsRemaining: remaining });
