@@ -588,8 +588,8 @@ export default function HostControls({ sessionId }: Props) {
               </Button>
             )}
 
-            {/* Create Room — available any time after event starts */}
-            {sessionStarted && (
+            {/* Create Room — available when NOT in a formal round (HostRoundDashboard has its own) */}
+            {sessionStarted && !isInRound && (
               <Button size="sm" variant="secondary" onClick={() => { setShowCreateRoom(!showCreateRoom); setCreateRoomSelected(new Set()); }} title="Create a breakout room">
                 <UserPlus className="h-4 w-4 mr-1" /> Room
               </Button>

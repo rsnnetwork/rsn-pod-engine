@@ -681,25 +681,42 @@ export async function handleHostRemoveFromRoom(
       [data.matchId]
     );
 
-    // Notify the removed user
-    io.to(userRoom(data.userId)).emit('host:participant_removed', {
-      userId: data.userId,
-      reason: 'The host removed you from the current round.',
-    });
-
-    // Notify partner if exists
-    const matchResult = await query<{ participant_a_id: string; participant_b_id: string }>(
-      `SELECT participant_a_id, participant_b_id FROM matches WHERE id = $1`,
+    // Get match participants before updating
+    const matchResult = await query<{ participant_a_id: string; participant_b_id: string; participant_c_id: string | null }>(
+      `SELECT participant_a_id, participant_b_id, participant_c_id FROM matches WHERE id = $1`,
       [data.matchId]
     );
+
+    // Return the removed user to lobby (NOT evict from event)
+    await sessionService.updateParticipantStatus(data.sessionId, data.userId, ParticipantStatus.IN_LOBBY).catch(() => {});
+    io.to(userRoom(data.userId)).emit('match:return_to_lobby', { reason: 'host_removed' });
+
+    // Re-issue lobby token for the removed user
+    const session = await sessionService.getSessionById(data.sessionId);
+    if (session.lobbyRoomId) {
+      try {
+        const { config: appConfig } = await import('../../../config');
+        const socketsInRoom = await io.in(userRoom(data.userId)).fetchSockets();
+        for (const sk of socketsInRoom) {
+          const uid = (sk.data as any)?.userId;
+          if (uid !== data.userId) continue;
+          const dName = (sk.data as any)?.displayName || 'User';
+          const lobbyToken = await videoService.issueJoinToken(uid, session.lobbyRoomId, dName);
+          sk.emit('lobby:token', { token: lobbyToken.token, livekitUrl: appConfig.livekit.host, roomId: session.lobbyRoomId });
+        }
+      } catch { /* skip */ }
+    }
+
+    // Notify partner — show "partner left" with auto-return after 5s
     if (matchResult.rows.length > 0) {
       const match = matchResult.rows[0];
-      const partnerId = match.participant_a_id === data.userId
-        ? match.participant_b_id : match.participant_a_id;
-      io.to(userRoom(partnerId)).emit('match:bye_round', {
-        roundNumber: activeSession.currentRound,
-        reason: 'Your partner was removed by the host. You have a bye this round.',
-      });
+      const partnerIds = [match.participant_a_id, match.participant_b_id, match.participant_c_id]
+        .filter((id): id is string => !!id && id !== data.userId);
+
+      for (const partnerId of partnerIds) {
+        // Show "Your partner left the room" banner with 5s countdown
+        io.to(userRoom(partnerId)).emit('match:partner_disconnected', { matchId: data.matchId });
+      }
     }
 
     // Refresh host dashboard
