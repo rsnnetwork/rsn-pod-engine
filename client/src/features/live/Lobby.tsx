@@ -811,6 +811,7 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
           </div>
         )}
         <LobbyStatusOverlay isHost={isHost} />
+        <DensityToggle />
         {isHost && <HostParticipantPanel sessionId={sessionId} />}
         <LiveKitRoom
           token={lobbyToken}
@@ -862,6 +863,33 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
   );
 }
 
-/* DensityToggle removed (April 17 screenshot) — it was only used next to
- * the removed "All rounds complete" overlay. lobbyDensity stays in the store
- * with the default 'normal' value so existing grid sizing still works. */
+/* ─── Layout Density Toggle ──────────────────────────────────────────────── */
+
+function DensityToggle() {
+  const lobbyDensity = useSessionStore(s => s.lobbyDensity);
+  const setLobbyDensity = useSessionStore(s => s.setLobbyDensity);
+
+  const options = [
+    { value: 'compact' as const, label: 'Compact' },
+    { value: 'normal' as const, label: 'Normal' },
+    { value: 'spacious' as const, label: 'Spacious' },
+  ];
+
+  return (
+    <div className="flex items-center gap-1 bg-white/10 rounded-full p-0.5">
+      {options.map(o => (
+        <button
+          key={o.value}
+          onClick={() => setLobbyDensity(o.value)}
+          className={`px-3 py-1 text-[11px] font-medium rounded-full transition-colors ${
+            lobbyDensity === o.value
+              ? 'bg-white/20 text-[#1a1a2e]'
+              : 'text-gray-500 hover:text-gray-300'
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
