@@ -61,7 +61,7 @@ function ConnectionIndicator() {
 function VideoTile({ trackRef, label, isWaiting, isPinned }: { trackRef?: any; label: string; isWaiting?: boolean; isPinned?: boolean }) {
   const hasVideo = trackRef?.publication?.track;
   return (
-    <div className={`relative rounded-xl overflow-hidden bg-[#3c4043] ${isPinned ? 'h-full w-full' : 'aspect-video'} flex items-center justify-center`}>
+    <div className={`relative rounded-xl overflow-hidden ${hasVideo ? 'bg-black' : 'bg-[#3c4043]'} ${isPinned ? 'h-full w-full' : 'aspect-video'} flex items-center justify-center`}>
       {hasVideo ? (
         <VideoTrack trackRef={trackRef} className={`h-full w-full ${isPinned ? 'object-contain' : 'object-cover'}`} />
       ) : (
@@ -164,9 +164,14 @@ function VideoStage() {
               <div className="h-full cursor-pointer" onClick={() => setPinnedSid(remoteTracks[0].participant.sid)}>
                 <VideoTile trackRef={remoteTracks[0]} label={userDisplayLabel(remoteTracks[0].participant.name || currentPartners[0])} />
               </div>
-              <div className="absolute top-3 right-3 w-32 h-44 sm:w-36 sm:h-48 rounded-xl overflow-hidden shadow-lg border-2 border-white/80 z-10 [&_div]:!aspect-auto [&_div]:!h-full"
-                onClick={() => setPinnedSid(localParticipant.sid)}>
-                <VideoTile trackRef={localTrack} label="You" />
+              <div
+                className="absolute top-3 right-3 w-32 h-44 sm:w-36 sm:h-48 rounded-xl overflow-hidden shadow-lg border-2 border-white/80 z-10 bg-black"
+                onClick={() => setPinnedSid(localParticipant.sid)}
+                style={{ cursor: 'pointer' }}
+              >
+                <div className="absolute inset-0">
+                  <VideoTile trackRef={localTrack} label="You" />
+                </div>
               </div>
             </div>
           )}
@@ -181,9 +186,14 @@ function VideoStage() {
                   </div>
                 ))}
               </div>
-              <div className="absolute top-3 right-3 w-32 h-44 sm:w-36 sm:h-48 rounded-xl overflow-hidden shadow-lg border-2 border-white/80 z-10 [&_div]:!aspect-auto [&_div]:!h-full"
-                onClick={() => setPinnedSid(localParticipant.sid)}>
-                <VideoTile trackRef={localTrack} label="You" />
+              <div
+                className="absolute top-3 right-3 w-32 h-44 sm:w-36 sm:h-48 rounded-xl overflow-hidden shadow-lg border-2 border-white/80 z-10 bg-black"
+                onClick={() => setPinnedSid(localParticipant.sid)}
+                style={{ cursor: 'pointer' }}
+              >
+                <div className="absolute inset-0">
+                  <VideoTile trackRef={localTrack} label="You" />
+                </div>
               </div>
             </div>
           )}
