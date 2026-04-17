@@ -144,7 +144,8 @@ export default function useSessionSocket(sessionId: string) {
       store.setSessionStatus(data.status);
       if (data.isPaused !== undefined) store.setIsPaused(data.isPaused);
       if (data.status === 'completed') { clearTimer(); clearByeTimeout(); store.setLiveKitToken(null, null); store.setMatch(null); store.setRoomId(null); store.setMatchingOverlay(null); store.setRoundDashboard(null); store.setByeRound(false); store.setPartnerDisconnected(false); store.setLeftCurrentRound(false); store.setTransitionStatus('session_ending'); setTimeout(() => { store.setTransitionStatus(null); store.setPhase('complete'); }, 1500); }
-      if (data.status === 'lobby_open') { store.setTransitionStatus(null); store.setHostInLobby(true); } // Host is present when lobby reopens
+      if (data.status === 'lobby_open') { store.setTransitionStatus(null); store.setHostInLobby(true); }
+      if (data.status === 'round_active') { store.setLeftCurrentRound(false); } // New round — clear flag so match:assigned is accepted
       if (data.status === 'closing_lobby') {
         const currentState = useSessionStore.getState();
         store.setLiveKitToken(null, null);

@@ -588,6 +588,7 @@ export async function emitHostDashboard(io: SocketServer, sessionId: string): Pr
           status: m.status,
           participants,
           isTrio: !!m.participantCId,
+          isManual: (m.roomId || '').includes('host-'),
         };
       });
 

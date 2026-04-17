@@ -687,9 +687,29 @@ export async function handleHostRemoveFromRoom(
       [data.matchId]
     );
 
-    // Return the removed user to lobby (NOT evict from event)
+    // Return the removed user with rating screen (NOT evict from event)
     await sessionService.updateParticipantStatus(data.sessionId, data.userId, ParticipantStatus.IN_LOBBY).catch(() => {});
-    io.to(userRoom(data.userId)).emit('match:return_to_lobby', { reason: 'host_removed' });
+
+    // Get partner info for the removed user's rating screen
+    if (matchResult.rows.length > 0) {
+      const match = matchResult.rows[0];
+      const partnerIds = [match.participant_a_id, match.participant_b_id, match.participant_c_id]
+        .filter((id): id is string => !!id && id !== data.userId);
+      const partnerNameRes = await query<{ id: string; display_name: string }>(
+        `SELECT id, display_name FROM users WHERE id = ANY($1)`, [partnerIds]
+      );
+      const pnm = new Map(partnerNameRes.rows.map(r => [r.id, r.display_name || 'Partner']));
+      const partnersWithNames = partnerIds.map(pid => ({ userId: pid, displayName: pnm.get(pid) || 'Partner' }));
+
+      io.to(userRoom(data.userId)).emit('rating:window_open', {
+        matchId: data.matchId,
+        partnerId: partnerIds[0],
+        partnerDisplayName: pnm.get(partnerIds[0]) || 'Partner',
+        partners: partnersWithNames,
+        durationSeconds: 20,
+        earlyLeave: true,
+      });
+    }
 
     // Re-issue lobby token for the removed user
     const session = await sessionService.getSessionById(data.sessionId);
@@ -1189,6 +1209,7 @@ export async function broadcastMessage(
 
 // Per-room timers for host-created breakout rooms with custom duration
 const roomTimers = new Map<string, NodeJS.Timeout>();
+const roomSyncIntervals = new Map<string, NodeJS.Timeout>();
 
 export async function handleHostCreateBreakout(
   io: SocketServer,
@@ -1343,8 +1364,25 @@ export async function handleHostCreateBreakout(
         // Clear any existing timer for this match
         if (roomTimers.has(matchId)) clearTimeout(roomTimers.get(matchId)!);
 
+        // Start per-room countdown sync interval (every 5s)
+        const roomStartTime = Date.now();
+        const roomEndTime = roomStartTime + duration * 1000;
+        roomSyncIntervals.set(matchId, setInterval(() => {
+          const remaining = Math.max(0, Math.ceil((roomEndTime - Date.now()) / 1000));
+          for (const pid of participantIds) {
+            io.to(userRoom(pid)).emit('timer:sync', { secondsRemaining: remaining });
+          }
+          if (remaining <= 0) {
+            const iv = roomSyncIntervals.get(matchId);
+            if (iv) { clearInterval(iv); roomSyncIntervals.delete(matchId); }
+          }
+        }, 5000));
+
         roomTimers.set(matchId, setTimeout(async () => {
           roomTimers.delete(matchId);
+          // Clear sync interval
+          const iv = roomSyncIntervals.get(matchId);
+          if (iv) { clearInterval(iv); roomSyncIntervals.delete(matchId); }
           try {
             // Check match is still active
             const matchRow = await query<{ status: string }>(
