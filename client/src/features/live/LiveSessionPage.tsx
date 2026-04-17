@@ -171,13 +171,8 @@ export default function LiveSessionPage() {
         </div>
       )}
 
-      {/* Transition status — only show session_ending (others flash too fast or duplicate main room UI) */}
-      {transitionStatus === 'session_ending' && (
-        <div className="bg-gray-100 px-4 py-2 flex items-center justify-center gap-2">
-          <Loader2 className="h-4 w-4 text-blue-400 animate-spin" />
-          <p className="text-sm text-gray-300">Wrapping up...</p>
-        </div>
-      )}
+      {/* Transition status: "Wrapping up..." banner removed (April 17 screenshot).
+          Host Controls already surface end-of-event state; no need for a second blocking banner. */}
 
       {/* Error banner — dismissable */}
       {mediaError && (
@@ -271,25 +266,29 @@ const STATE_CONFIG: Record<string, { label: string; icon: React.ReactNode; color
   round_active:     { label: 'Breakout Rooms · Round {round}', icon: <Radio className="h-3.5 w-3.5 animate-pulse" />, color: 'bg-red-500/10 text-red-400' },
   round_rating:     { label: 'Rating', icon: <ArrowLeftRight className="h-3.5 w-3.5" />, color: 'bg-amber-500/10 text-amber-400' },
   round_transition: { label: 'Main Room', icon: <Shuffle className="h-3.5 w-3.5" />, color: 'bg-white/5 text-gray-300' },
-  closing_lobby:    { label: 'Wrapping up', icon: <Loader2 className="h-3.5 w-3.5 animate-spin" />, color: 'bg-white/5 text-gray-400' },
+  // closing_lobby: empty label — the separate "Round X of Y" suffix carries the context on its own.
+  closing_lobby:    { label: '', icon: <Loader2 className="h-3.5 w-3.5 animate-spin" />, color: 'bg-white/5 text-gray-400' },
   completed:        { label: 'Event ended', icon: <CheckCircle2 className="h-3.5 w-3.5" />, color: 'bg-emerald-500/10 text-emerald-400' },
 };
 
 function EventStateBanner({ sessionStatus, currentRound, totalRounds }: { sessionStatus: string; currentRound: number; totalRounds: number; phase?: string }) {
   const config = STATE_CONFIG[sessionStatus] || STATE_CONFIG.scheduled;
-  const label = config.label
-    .replace('{round}', String(currentRound || 1));
+  const label = config.label.replace('{round}', String(currentRound || 1));
   const roundInfo = totalRounds > 0 && sessionStatus !== 'completed' && sessionStatus !== 'scheduled'
-    ? ` · Round ${currentRound || 1} of ${totalRounds}`
+    ? `Round ${currentRound || 1} of ${totalRounds}`
     : '';
 
   // Don't duplicate round info if already in label
   const showRoundInfo = roundInfo && !label.includes(`Round ${currentRound || 1}`);
+  // Handle empty labels (e.g. closing_lobby) — show round info alone, no separator
+  const display = label && showRoundInfo
+    ? `${label} · ${roundInfo}`
+    : label || (showRoundInfo ? roundInfo : '');
 
   return (
     <div className={`px-4 py-1.5 flex items-center justify-center gap-2 text-xs font-medium ${config.color}`}>
       {config.icon}
-      <span>{label}{showRoundInfo ? roundInfo : ''}</span>
+      <span>{display}</span>
     </div>
   );
 }

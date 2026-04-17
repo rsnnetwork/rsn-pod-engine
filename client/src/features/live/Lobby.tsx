@@ -457,27 +457,23 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
   return (
     <div className="text-center space-y-3">
       {sessionStatus === 'closing_lobby' ? (
-        <div className="flex flex-col items-center gap-3">
-          <div className="inline-flex items-center justify-center h-14 w-14 rounded-full bg-emerald-500/20 text-emerald-400">
-            <Sparkles className="h-7 w-7" />
-          </div>
-          <h2 className="text-xl font-bold text-[#1a1a2e]">All rounds complete</h2>
-          {isHost && (
-            <p className="text-gray-400 text-sm max-w-xs">
-              Start another round or end the event below.
-            </p>
-          )}
-        </div>
+        // Blocking "All rounds complete" overlay removed (April 17 screenshot).
+        // Host has controls to start another round / end; participants can
+        // navigate to Recap from the event detail page.
+        isHost ? (
+          <p className="text-gray-400 text-sm max-w-xs mx-auto">
+            Start another round or end the event below.
+          </p>
+        ) : null
       ) : isByeRound ? (
         <>
           <h2 className="text-xl font-bold text-[#1a1a2e]">Sitting this one out</h2>
           <p className="text-gray-400 text-sm">You'll be matched in the next round</p>
         </>
       ) : transitionStatus === 'session_ending' ? (
-        <div className="flex flex-col items-center gap-2">
-          <Loader2 className="h-5 w-5 text-gray-400 animate-spin" />
-          <p className="text-gray-300 text-sm font-medium">Wrapping up...</p>
-        </div>
+        // "Wrapping up..." overlay removed (April 17 screenshot). Host controls
+        // already show the end-of-event state; no need for a blocking message.
+        null
       ) : transitionStatus === 'between_rounds' ? (
         <div className="flex flex-col items-center gap-2">
           <Loader2 className="h-5 w-5 text-gray-400 animate-spin" />
@@ -815,7 +811,6 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
           </div>
         )}
         <LobbyStatusOverlay isHost={isHost} />
-        <DensityToggle />
         {isHost && <HostParticipantPanel sessionId={sessionId} />}
         <LiveKitRoom
           token={lobbyToken}
@@ -867,33 +862,6 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
   );
 }
 
-/* ─── Layout Density Toggle ──────────────────────────────────────────────── */
-
-function DensityToggle() {
-  const lobbyDensity = useSessionStore(s => s.lobbyDensity);
-  const setLobbyDensity = useSessionStore(s => s.setLobbyDensity);
-
-  const options = [
-    { value: 'compact' as const, label: 'Compact' },
-    { value: 'normal' as const, label: 'Normal' },
-    { value: 'spacious' as const, label: 'Spacious' },
-  ];
-
-  return (
-    <div className="flex items-center gap-1 bg-white/10 rounded-full p-0.5">
-      {options.map(o => (
-        <button
-          key={o.value}
-          onClick={() => setLobbyDensity(o.value)}
-          className={`px-3 py-1 text-[11px] font-medium rounded-full transition-colors ${
-            lobbyDensity === o.value
-              ? 'bg-white/20 text-[#1a1a2e]'
-              : 'text-gray-500 hover:text-gray-300'
-          }`}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-}
+/* DensityToggle removed (April 17 screenshot) — it was only used next to
+ * the removed "All rounds complete" overlay. lobbyDensity stays in the store
+ * with the default 'normal' value so existing grid sizing still works. */
