@@ -201,6 +201,7 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
 
 function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?: string }) {
   const { localParticipant } = useLocalParticipant();
+  const allParticipants = useParticipants();
   const { hostMuteCommand, setHostMuteCommand } = useSessionStore();
   // Restore camera/mic preference from sessionStorage (FIX 15D — survives refresh)
   const [micEnabled, setMicEnabled] = useState(() => {
@@ -211,9 +212,16 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
     const saved = sessionStorage.getItem('rsn_cam');
     return saved !== null ? saved === 'true' : true;
   });
-  const [allMuted, setAllMuted] = useState(false);
   const [bgMode, setBgMode] = useState('disabled');
   const [showBgPanel, setShowBgPanel] = useState(false);
+
+  // Derive allMuted from actual remote participant mic state (host button label
+  // must reflect reality, not a stale local flag that resets on remount).
+  const allMuted = (() => {
+    const remotes = allParticipants.filter(p => p.sid !== localParticipant?.sid);
+    if (remotes.length === 0) return false;
+    return remotes.every(p => !p.isMicrophoneEnabled);
+  })();
 
   // Apply saved camera/mic preferences to LiveKit on mount
   const appliedRef = useRef(false);
@@ -231,11 +239,17 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
       setCamEnabled(localParticipant.isCameraEnabled);
     }
 
-    // Mic: auto-mute participants on first join, host gets sessionStorage preference
+    // Mic: auto-mute participants on first join / return from breakout.
+    // Double-apply after 500ms to beat any LiveKit race where audio is auto-published
+    // shortly after the local participant becomes available.
     if (!isHost) {
-      localParticipant.setMicrophoneEnabled(false);
+      localParticipant.setMicrophoneEnabled(false).catch(() => {});
       setMicEnabled(false);
       sessionStorage.setItem('rsn_mic', 'false');
+      const t = setTimeout(() => {
+        localParticipant.setMicrophoneEnabled(false).catch(() => {});
+      }, 500);
+      return () => clearTimeout(t);
     } else {
       const savedMic = sessionStorage.getItem('rsn_mic');
       if (savedMic !== null) {
@@ -307,7 +321,8 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
     const socket = getSocket();
     const newMuted = !allMuted;
     socket?.emit('host:mute_all', { sessionId, muted: newMuted });
-    setAllMuted(newMuted);
+    // allMuted is derived from participant state; it will update via useParticipants
+    // once remote mic states change in response to host:mute_all command.
   }, [sessionId, allMuted]);
 
   return (
@@ -818,7 +833,7 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
           serverUrl={lobbyUrl}
           connect={true}
           video={true}
-          audio={true}
+          audio={isHost}
           className="flex-1 w-full max-w-4xl"
           options={{
             videoCaptureDefaults: { resolution: { width: 1280, height: 720, frameRate: 30 } },
