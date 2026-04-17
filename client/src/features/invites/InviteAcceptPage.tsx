@@ -74,6 +74,8 @@ export default function InviteAcceptPage() {
   }, [invite]);
 
   const accept = useCallback(async () => {
+    if (autoAcceptedRef.current) return; // guard against double-click / re-entry
+    autoAcceptedRef.current = true;
     setAccepting(true);
     setError(null);
     try {
@@ -116,6 +118,7 @@ export default function InviteAcceptPage() {
       const { message } = getAcceptErrorMessage(err);
       setError(message);
       addToast(message, 'error');
+      autoAcceptedRef.current = false; // allow user to retry
     } finally {
       setAccepting(false);
     }
@@ -124,19 +127,17 @@ export default function InviteAcceptPage() {
   // Pre-emptive check: if session has already ended, show error without attempting accept
   const eventEnded = invite?.sessionStatus === 'completed' || invite?.sessionStatus === 'cancelled';
 
-  // Auto-accept for logged-in users — seamless deep linking (skip if event already ended)
+  // NOTE: auto-accept was removed (April 17, items #6/#12). Users must explicitly
+  // click "Accept Invite" so merely viewing an invite link does NOT register them
+  // for the session. Keeping `autoAcceptedRef` to guard against double-clicks.
   useEffect(() => {
-    if (user && invite && !autoAcceptedRef.current && !accepting && !eventEnded) {
-      autoAcceptedRef.current = true;
-      accept();
-    }
     if (eventEnded && !error) {
       setError('This event has already ended');
     }
-  }, [user, invite, accepting, accept, eventEnded, error]);
+  }, [eventEnded, error]);
 
-  // Show loader while auto-accepting or fetching invite
-  if (loading || (user && invite && !error && !eventEnded)) return <PageLoader />;
+  // Show loader while fetching invite only — never auto-accept on landing
+  if (loading) return <PageLoader />;
 
   const InviteIcon = invite?.type === 'session' ? Calendar : Users;
   const inviteLabel = invite?.type === 'pod' ? 'a pod' : invite?.type === 'session' ? 'an event' : 'RSN';
