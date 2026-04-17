@@ -10,6 +10,7 @@ import { PageLoader } from '@/components/ui/Spinner';
 import { useAuthStore } from '@/stores/authStore';
 import { formatDateTime, LOCAL_TIME_LABEL } from '@/lib/utils';
 import api from '@/lib/api';
+import { sessionStatusLabel, sessionStatusColor } from './statusConfig';
 
 type EventFilter = 'upcoming' | 'cancelled' | 'all';
 
@@ -31,12 +32,12 @@ export default function SessionsPage() {
 
   if (isLoading) return <PageLoader />;
 
+  // statusVariant retained for legacy 'active' / 'in_progress' values that may appear
+  // in the API payload alongside the official enum; for canonical statuses, prefer
+  // sessionStatusColor.
   const statusVariant = (s: string) => {
-    if (s === 'scheduled') return 'info';
-    if (s === 'active' || s === 'in_progress' || s === 'lobby_open' || s === 'round_active') return 'success';
-    if (s === 'completed') return 'default';
-    if (s === 'cancelled') return 'warning';
-    return 'default';
+    if (s === 'active' || s === 'in_progress') return 'success';
+    return sessionStatusColor(s);
   };
 
   // Filter events
@@ -99,7 +100,7 @@ export default function SessionsPage() {
                     </p>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
-                    <Badge variant={statusVariant(s.status)}>{s.status}</Badge>
+                    <Badge variant={statusVariant(s.status)}>{sessionStatusLabel(s.status)}</Badge>
                     <ChevronRight className="h-4 w-4 text-gray-300" />
                   </div>
                 </div>
