@@ -88,6 +88,19 @@ export async function handleHostGenerateMatches(
       return;
     }
 
+    // Server-side guard: verify enough MAIN-ROOM participants are eligible
+    // (i.e. not currently in any active match — including manual breakouts).
+    // This prevents the case where N participants are present but most are
+    // already in manual rooms, leaving fewer than 2 to match.
+    const eligible = await matchingService.getEligibleParticipants(data.sessionId, allHostIds);
+    if (eligible.length < 2) {
+      socket.emit('error', {
+        code: 'INSUFFICIENT_PARTICIPANTS',
+        message: `Only ${eligible.length} participant(s) available in main room. Need at least 2 to match.`,
+      });
+      return;
+    }
+
     const nextRound = activeSession.status === SessionStatus.LOBBY_OPEN
       ? 1
       : activeSession.currentRound + 1;
@@ -111,6 +124,27 @@ export async function handleHostGenerateMatches(
         setTimeout(() => reject(new Error('Matching engine timeout after 60s')), MATCHING_TIMEOUT_MS)
       );
       await Promise.race([matchPromise, timeoutPromise]);
+
+      // Verify the algorithm actually produced pairs. Zero matches usually means
+      // every eligible pair has already been matched in a prior round — reject
+      // rather than silently presenting an empty preview to the host.
+      const generatedMatches = await matchingService.getMatchesByRound(data.sessionId, nextRound);
+      if (generatedMatches.length === 0) {
+        // Clean up the empty round so the next attempt starts fresh.
+        await query(
+          `DELETE FROM matches WHERE session_id = $1 AND round_number = $2 AND status IN ('scheduled', 'cancelled')`,
+          [data.sessionId, nextRound]
+        );
+        socket.emit('error', {
+          code: 'NO_ELIGIBLE_PAIRS',
+          message: 'All eligible pairs have already been matched in this session. End the event or wait for new participants to join.',
+        });
+        // Tell participants to clear the preparing overlay
+        io.to(sessionRoom(data.sessionId)).emit('session:matching_cancelled', {
+          sessionId: data.sessionId,
+        });
+        return;
+      }
 
       // Store pending round number so confirm_round knows what to start
       activeSession.pendingRoundNumber = nextRound;
@@ -591,7 +625,9 @@ export async function emitHostDashboard(io: SocketServer, sessionId: string): Pr
           status: m.status,
           participants,
           isTrio: !!m.participantCId,
-          isManual: (m.roomId || '').includes('host-'),
+          // Read from matches.is_manual column (migration 040). Manual breakouts
+          // and algorithm rounds are architecturally independent.
+          isManual: m.isManual === true,
         };
       });
 
@@ -617,11 +653,29 @@ export async function emitHostDashboard(io: SocketServer, sessionId: string): Pr
       ? Math.max(0, Math.ceil((activeSession.timerEndsAt.getTime() - Date.now()) / 1000))
       : 0;
 
+    // Count of main-room participants eligible for the next algorithm round.
+    // Excludes host AND anyone already in an active match (manual or algorithm).
+    // Used by the client to enable/disable the "Match People" button.
+    const eligibleMainRoomRes = await query<{ c: string }>(
+      `SELECT COUNT(*)::text AS c FROM session_participants sp
+       WHERE sp.session_id = $1
+         AND sp.status NOT IN ('removed', 'left', 'no_show')
+         AND sp.user_id != $2
+         AND NOT EXISTS (
+           SELECT 1 FROM matches m
+           WHERE m.session_id = $1 AND m.status = 'active'
+             AND (m.participant_a_id = sp.user_id OR m.participant_b_id = sp.user_id OR m.participant_c_id = sp.user_id)
+         )`,
+      [sessionId, activeSession.hostUserId],
+    );
+    const eligibleMainRoomCount = parseInt(eligibleMainRoomRes.rows[0]?.c || '0', 10);
+
     io.to(userRoom(activeSession.hostUserId)).emit('host:round_dashboard', {
       roundNumber: activeSession.currentRound,
       rooms,
       byeParticipants,
       timerSecondsRemaining,
+      eligibleMainRoomCount,
       reassignmentInProgress: false,
     });
   } catch (err) {

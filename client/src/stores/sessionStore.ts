@@ -78,9 +78,11 @@ interface SessionLiveState {
       status: string;
       participants: { userId: string; displayName: string; isConnected: boolean }[];
       isTrio: boolean;
+      isManual?: boolean;
     }[];
     byeParticipants: { userId: string; displayName: string }[];
     reassignmentInProgress: boolean;
+    eligibleMainRoomCount?: number;
   } | null;
   chatMessages: ChatMessage[];
   unreadChatCount: number;

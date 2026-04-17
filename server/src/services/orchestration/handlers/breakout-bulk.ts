@@ -47,6 +47,7 @@ export function injectBreakoutBulkDeps(deps: {
 async function getActiveManualMatches(sessionId: string): Promise<
   Array<{ id: string; roomId: string; participantAId: string; participantBId: string | null; participantCId: string | null }>
 > {
+  // Filter on is_manual = TRUE (migration 040) — replaces brittle room_id LIKE pattern.
   const res = await query<{
     id: string;
     room_id: string;
@@ -56,7 +57,7 @@ async function getActiveManualMatches(sessionId: string): Promise<
   }>(
     `SELECT id, room_id, participant_a_id, participant_b_id, participant_c_id
      FROM matches
-     WHERE session_id = $1 AND status = 'active' AND room_id LIKE '%host-%'`,
+     WHERE session_id = $1 AND status = 'active' AND is_manual = TRUE`,
     [sessionId],
   );
   return res.rows.map((r) => ({
@@ -182,18 +183,26 @@ export async function handleHostCreateBreakoutBulk(
       }
       const newRoomId = videoService.matchRoomId(sessionId, activeSession.currentRound, roomSlug);
 
-      // Insert match
+      // Insert match — is_manual=TRUE so algorithm exclusion ignores this match.
       const matchId = uuid();
       const sorted = [...participantIds].sort();
       try {
         await query(
-          `INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, participant_c_id, room_id, status, started_at, timer_visibility)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', NOW(), $8)`,
+          `INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, participant_c_id, room_id, status, started_at, timer_visibility, is_manual)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', NOW(), $8, TRUE)`,
           [matchId, sessionId, activeSession.currentRound, sorted[0], sorted[1] || null, sorted[2] || null, newRoomId, timerVisibility],
         );
-      } catch (err) {
+      } catch (err: any) {
         logger.error({ err, matchId }, 'Failed to insert match in bulk create');
-        socket.emit('error', { code: 'MATCH_CREATION_FAILED', message: 'Failed to create match records.' });
+        // Surface participant-already-matched constraint violation to host.
+        if (err?.code === '23505' || /unique|duplicate|already/i.test(err?.message || '')) {
+          socket.emit('error', {
+            code: 'PARTICIPANT_ALREADY_MATCHED',
+            message: 'One or more participants are already in another active match. Wait for it to end.',
+          });
+        } else {
+          socket.emit('error', { code: 'MATCH_CREATION_FAILED', message: 'Failed to create match records.' });
+        }
         continue;
       }
       createdMatchIds.push(matchId);

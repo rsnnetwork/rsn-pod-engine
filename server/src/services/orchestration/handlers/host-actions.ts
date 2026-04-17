@@ -1424,6 +1424,8 @@ export async function handleHostCreateBreakout(
       const newRoomId = videoService.matchRoomId(sessionId, activeSession.currentRound, roomSlug);
 
       // Step 3: Create match in DB (for 1+ participants — enables dashboard, leave, timer)
+      // is_manual=TRUE marks this as a host-created breakout — invisible to the
+      // algorithm exclusion logic (matching.service.ts).
       let matchId = '';
       if (participantIds.length >= 1) {
         const { v4: uuid } = await import('uuid');
@@ -1431,13 +1433,22 @@ export async function handleHostCreateBreakout(
         const sorted = [...participantIds].sort();
         try {
           await query(
-            `INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, participant_c_id, room_id, status, started_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', NOW())`,
+            `INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, participant_c_id, room_id, status, started_at, is_manual)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', NOW(), TRUE)`,
             [matchId, sessionId, activeSession.currentRound, sorted[0], sorted[1] || null, sorted[2] || null, newRoomId]
           );
         } catch (err: any) {
           logger.error({ err }, 'Failed to insert match for host breakout');
-          socket.emit('error', { code: 'MATCH_CREATION_FAILED', message: 'Failed to create room assignment. Try again.' });
+          // Surface participant-already-matched constraint violation to host so
+          // the UI can tell them what went wrong instead of silently failing.
+          if (err?.code === '23505' || /unique|duplicate|already/i.test(err?.message || '')) {
+            socket.emit('error', {
+              code: 'PARTICIPANT_ALREADY_MATCHED',
+              message: 'One or more participants are already in another active match. Wait for it to end.',
+            });
+          } else {
+            socket.emit('error', { code: 'MATCH_CREATION_FAILED', message: 'Failed to create room assignment. Try again.' });
+          }
           return;
         }
       }

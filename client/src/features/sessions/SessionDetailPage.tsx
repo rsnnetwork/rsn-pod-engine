@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Calendar, Users, Play, Clock, UserPlus, UserMinus, Settings, CheckCircle, Pencil, Trash2, Mail, Copy, Check, AlertTriangle, CopyPlus, Search, Send, MoreHorizontal } from 'lucide-react';
+import { ArrowLeft, Calendar, Users, Play, Clock, UserPlus, UserMinus, Settings, CheckCircle, Pencil, Trash2, Mail, Copy, Check, AlertTriangle, CopyPlus, Search, Send } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Avatar from '@/components/ui/Avatar';
@@ -485,11 +485,13 @@ export default function SessionDetailPage() {
             <div className="relative ml-auto" data-overflow-menu>
               <button
                 type="button"
-                aria-label="More actions"
+                aria-label="Manage event"
                 onClick={() => setOverflowOpen(v => !v)}
-                className="h-9 w-9 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 flex items-center justify-center text-gray-500 hover:text-gray-800 transition-colors"
+                className="h-9 px-3 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 flex items-center gap-1.5 text-sm font-medium text-gray-700 hover:text-gray-900 transition-colors"
               >
-                <MoreHorizontal className="h-4 w-4" />
+                <Settings className="h-4 w-4" />
+                <span>Manage</span>
+                <svg className={`h-3.5 w-3.5 transition-transform ${overflowOpen ? 'rotate-180' : ''}`} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.06l3.71-3.83a.75.75 0 111.08 1.04l-4.25 4.39a.75.75 0 01-1.08 0L5.21 8.27a.75.75 0 01.02-1.06z" clipRule="evenodd"/></svg>
               </button>
               {overflowOpen && (
                 <div className="absolute right-0 mt-1 w-52 rounded-lg border border-gray-200 bg-white shadow-lg z-20 py-1">
@@ -538,29 +540,6 @@ export default function SessionDetailPage() {
           )}
         </div>
       </div>
-
-      {/* Pending invites banner — prominent callout for host/admin */}
-      {(isHost || isAdmin) && participantCounts?.pendingInvites > 0 && !showPendingInvites && (
-        <div className="flex items-center gap-3 p-4 rounded-xl border border-purple-200 bg-purple-50 animate-fade-in-up">
-          <Send className="h-5 w-5 text-purple-600 shrink-0" />
-          <div className="flex-1">
-            <p className="text-sm font-semibold text-purple-800">
-              {participantCounts.pendingInvites} Pending Invite{participantCounts.pendingInvites > 1 ? 's' : ''}
-            </p>
-            <p className="text-xs text-purple-600">
-              {participantCounts.pendingInvites} {participantCounts.pendingInvites > 1 ? 'people haven\'t' : 'person hasn\'t'} accepted their invite yet.
-            </p>
-          </div>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => { setShowPendingInvites(true); setStatusFilter(null); }}
-            className="!border-purple-300 !text-purple-700 hover:!bg-purple-100"
-          >
-            <Send className="h-3.5 w-3.5 mr-1" /> View & Remind
-          </Button>
-        </div>
-      )}
 
       {/* Participants */}
       <div className="animate-fade-in-up stagger-2">

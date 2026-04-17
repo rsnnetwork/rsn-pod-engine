@@ -283,14 +283,16 @@ describe('Task 14 — bulk manual breakout handlers', () => {
       expect(content).toMatch(/roomTimers,\s*roomSyncIntervals/);
     });
 
-    it('only targets MANUAL rooms — roomId LIKE %host-%', async () => {
+    it('only targets MANUAL rooms — is_manual = TRUE (migration 040)', async () => {
       const fs = await import('fs');
       const path = await import('path');
       const content = fs.readFileSync(
         path.join(__dirname, '../../../services/orchestration/handlers/breakout-bulk.ts'),
         'utf8',
       );
-      expect(content).toMatch(/room_id\s+LIKE\s+'%host-%'/);
+      // Replaces the old brittle room_id LIKE pattern with the canonical
+      // is_manual column added in migration 040.
+      expect(content).toMatch(/is_manual\s*=\s*TRUE/);
     });
 
     it('host-actions still exports roomTimers/roomSyncIntervals/RoomTimerState for bulk module', async () => {
@@ -311,6 +313,135 @@ describe('Task 14 — bulk manual breakout handlers', () => {
       );
       // match:reassigned emit must include timerVisibility
       expect(content).toMatch(/match:reassigned[\s\S]{0,800}timerVisibility/);
+    });
+  });
+
+  describe('migration 040 + is_manual column', () => {
+    it('migration 040 file exists and adds is_manual column with backfill', async () => {
+      const fs = await import('fs');
+      const path = await import('path');
+      const sql = fs.readFileSync(
+        path.join(__dirname, '../../../db/migrations/040_matches_is_manual.sql'),
+        'utf8',
+      );
+      expect(sql).toMatch(/ADD COLUMN IF NOT EXISTS is_manual BOOLEAN/);
+      expect(sql).toMatch(/DEFAULT FALSE/);
+      // Backfill from existing room_id pattern (Change 4.5 convention)
+      expect(sql).toMatch(/UPDATE matches[\s\S]*SET is_manual = TRUE[\s\S]*WHERE room_id LIKE/);
+      // Index for filtering performance
+      expect(sql).toMatch(/CREATE INDEX[\s\S]*idx_matches_session_round_is_manual/);
+    });
+
+    it('bulk-create INSERT writes is_manual = TRUE', async () => {
+      const fs = await import('fs');
+      const path = await import('path');
+      const content = fs.readFileSync(
+        path.join(__dirname, '../../../services/orchestration/handlers/breakout-bulk.ts'),
+        'utf8',
+      );
+      // INSERT statement must mention is_manual with TRUE
+      expect(content).toMatch(/INSERT INTO matches[\s\S]*is_manual[\s\S]*TRUE/);
+    });
+
+    it('host-actions handleHostCreateBreakout writes is_manual = TRUE', async () => {
+      const fs = await import('fs');
+      const path = await import('path');
+      const content = fs.readFileSync(
+        path.join(__dirname, '../../../services/orchestration/handlers/host-actions.ts'),
+        'utf8',
+      );
+      expect(content).toMatch(/INSERT INTO matches[\s\S]*is_manual[\s\S]*TRUE/);
+    });
+
+    it('PARTICIPANT_ALREADY_MATCHED is emitted on constraint violation in single-room create', async () => {
+      const fs = await import('fs');
+      const path = await import('path');
+      const content = fs.readFileSync(
+        path.join(__dirname, '../../../services/orchestration/handlers/host-actions.ts'),
+        'utf8',
+      );
+      expect(content).toMatch(/PARTICIPANT_ALREADY_MATCHED/);
+    });
+
+    it('PARTICIPANT_ALREADY_MATCHED is emitted on constraint violation in bulk create', async () => {
+      const fs = await import('fs');
+      const path = await import('path');
+      const content = fs.readFileSync(
+        path.join(__dirname, '../../../services/orchestration/handlers/breakout-bulk.ts'),
+        'utf8',
+      );
+      expect(content).toMatch(/PARTICIPANT_ALREADY_MATCHED/);
+    });
+  });
+
+  describe('matching-flow: algorithm exclusion ignores manual matches', () => {
+    it('matching.service.ts excluded-pairs query has AND is_manual = FALSE', async () => {
+      const fs = await import('fs');
+      const path = await import('path');
+      const content = fs.readFileSync(
+        path.join(__dirname, '../../../services/matching/matching.service.ts'),
+        'utf8',
+      );
+      // Algorithm "already matched" set must NOT include manual breakout pairs
+      expect(content).toMatch(/excluded[\s\S]*is_manual\s*=\s*FALSE/i);
+    });
+
+    it('matching.service.ts getEligibleParticipants is exported', async () => {
+      const mod: any = await import('../../../services/matching/matching.service');
+      expect(typeof mod.getEligibleParticipants).toBe('function');
+    });
+
+    it('matching.service.ts eligible-participants query excludes users in active matches', async () => {
+      const fs = await import('fs');
+      const path = await import('path');
+      const content = fs.readFileSync(
+        path.join(__dirname, '../../../services/matching/matching.service.ts'),
+        'utf8',
+      );
+      // generateSingleRound + getEligibleParticipants both filter via NOT EXISTS subquery
+      expect(content).toMatch(/NOT EXISTS[\s\S]*FROM matches[\s\S]*status\s*=\s*'active'/);
+    });
+
+    it('matching-flow handleHostGenerateMatches emits INSUFFICIENT_PARTICIPANTS guard', async () => {
+      const fs = await import('fs');
+      const path = await import('path');
+      const content = fs.readFileSync(
+        path.join(__dirname, '../../../services/orchestration/handlers/matching-flow.ts'),
+        'utf8',
+      );
+      expect(content).toMatch(/INSUFFICIENT_PARTICIPANTS/);
+      expect(content).toMatch(/getEligibleParticipants/);
+    });
+
+    it('matching-flow handleHostGenerateMatches emits NO_ELIGIBLE_PAIRS guard on zero pairs', async () => {
+      const fs = await import('fs');
+      const path = await import('path');
+      const content = fs.readFileSync(
+        path.join(__dirname, '../../../services/orchestration/handlers/matching-flow.ts'),
+        'utf8',
+      );
+      expect(content).toMatch(/NO_ELIGIBLE_PAIRS/);
+    });
+
+    it('emitHostDashboard payload includes eligibleMainRoomCount', async () => {
+      const fs = await import('fs');
+      const path = await import('path');
+      const content = fs.readFileSync(
+        path.join(__dirname, '../../../services/orchestration/handlers/matching-flow.ts'),
+        'utf8',
+      );
+      expect(content).toMatch(/eligibleMainRoomCount/);
+    });
+
+    it('emitHostDashboard isManual reads from m.isManual column (not roomId pattern)', async () => {
+      const fs = await import('fs');
+      const path = await import('path');
+      const content = fs.readFileSync(
+        path.join(__dirname, '../../../services/orchestration/handlers/matching-flow.ts'),
+        'utf8',
+      );
+      // Must use the column, not the roomId LIKE pattern
+      expect(content).toMatch(/isManual:\s*m\.isManual/);
     });
   });
 });

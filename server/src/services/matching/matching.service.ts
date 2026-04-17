@@ -94,7 +94,9 @@ export async function generateSingleRound(
     ? JSON.parse(session.config as unknown as string)
     : session.config;
 
-  // Get active participants (excluding host or other specified users)
+  // Get active participants (excluding host/co-hosts and any users currently in
+  // active matches — including manual breakout rooms). This guarantees the
+  // algorithm never double-pairs someone who's already in a manual room.
   const participantsResult = excludeUserIds && excludeUserIds.length > 0
     ? await query<MatchingParticipant>(
         `SELECT u.id AS "userId", u.interests, u.reasons_to_connect AS "reasonsToConnect",
@@ -103,7 +105,12 @@ export async function generateSingleRound(
          FROM session_participants sp
          JOIN users u ON u.id = sp.user_id
          WHERE sp.session_id = $1 AND sp.status IN ('in_lobby', 'checked_in', 'registered')
-           AND sp.user_id != ALL($2::uuid[])`,
+           AND sp.user_id != ALL($2::uuid[])
+           AND NOT EXISTS (
+             SELECT 1 FROM matches m
+             WHERE m.session_id = $1 AND m.status = 'active'
+               AND (m.participant_a_id = u.id OR m.participant_b_id = u.id OR m.participant_c_id = u.id)
+           )`,
         [sessionId, excludeUserIds]
       )
     : await query<MatchingParticipant>(
@@ -112,7 +119,12 @@ export async function generateSingleRound(
                 '{}'::jsonb AS attributes
          FROM session_participants sp
          JOIN users u ON u.id = sp.user_id
-         WHERE sp.session_id = $1 AND sp.status IN ('in_lobby', 'checked_in', 'registered')`,
+         WHERE sp.session_id = $1 AND sp.status IN ('in_lobby', 'checked_in', 'registered')
+           AND NOT EXISTS (
+             SELECT 1 FROM matches m
+             WHERE m.session_id = $1 AND m.status = 'active'
+               AND (m.participant_a_id = u.id OR m.participant_b_id = u.id OR m.participant_c_id = u.id)
+           )`,
         [sessionId]
       );
 
@@ -129,9 +141,13 @@ export async function generateSingleRound(
   const encounterHistory = await getEncounterHistoryForUsers(userIds);
 
   // Get excluded pairs (completed/in-progress matches in OTHER rounds — not the current round being regenerated)
+  // Manual breakout rooms (is_manual=TRUE) are architecturally independent from
+  // algorithm rounds — they MUST NOT poison the algorithm's "already matched" set.
   const excludedResult = await query<{ participant_a_id: string; participant_b_id: string }>(
     `SELECT participant_a_id, participant_b_id FROM matches
-     WHERE session_id = $1 AND round_number != $2 AND status NOT IN ('cancelled', 'no_show')`,
+     WHERE session_id = $1 AND round_number != $2
+       AND status NOT IN ('cancelled', 'no_show')
+       AND is_manual = FALSE`,
     [sessionId, roundNumber]
   );
   const excludedPairs = new Set(
@@ -233,6 +249,46 @@ export async function generateSingleRound(
   return round;
 }
 
+// ─── Get Eligible Participants ─────────────────────────────────────────────
+//
+// Returns user IDs that are eligible to be matched in a new algorithm round —
+// i.e. registered/in-lobby/checked-in AND not currently in any active match
+// (including manual breakout rooms). Optionally excludes host/co-hosts.
+//
+// This is the single source of truth used by both the algorithm guard
+// (handleMatchPeople) and the host dashboard's eligibleMainRoomCount.
+
+export async function getEligibleParticipants(
+  sessionId: string,
+  excludeUserIds: string[] = []
+): Promise<string[]> {
+  const result = excludeUserIds.length > 0
+    ? await query<{ user_id: string }>(
+        `SELECT sp.user_id FROM session_participants sp
+         WHERE sp.session_id = $1
+           AND sp.status NOT IN ('removed', 'left', 'no_show')
+           AND sp.user_id != ALL($2::uuid[])
+           AND NOT EXISTS (
+             SELECT 1 FROM matches m
+             WHERE m.session_id = $1 AND m.status = 'active'
+               AND (m.participant_a_id = sp.user_id OR m.participant_b_id = sp.user_id OR m.participant_c_id = sp.user_id)
+           )`,
+        [sessionId, excludeUserIds]
+      )
+    : await query<{ user_id: string }>(
+        `SELECT sp.user_id FROM session_participants sp
+         WHERE sp.session_id = $1
+           AND sp.status NOT IN ('removed', 'left', 'no_show')
+           AND NOT EXISTS (
+             SELECT 1 FROM matches m
+             WHERE m.session_id = $1 AND m.status = 'active'
+               AND (m.participant_a_id = sp.user_id OR m.participant_b_id = sp.user_id OR m.participant_c_id = sp.user_id)
+           )`,
+        [sessionId]
+      );
+  return result.rows.map(r => r.user_id);
+}
+
 // ─── Get Matches for Session/Round ──────────────────────────────────────────
 
 export async function getMatchesBySession(sessionId: string): Promise<Match[]> {
@@ -241,6 +297,7 @@ export async function getMatchesBySession(sessionId: string): Promise<Match[]> {
             participant_a_id AS "participantAId", participant_b_id AS "participantBId",
             participant_c_id AS "participantCId",
             room_id AS "roomId", status, score, reason_tags AS "reasonTags",
+            is_manual AS "isManual",
             started_at AS "startedAt", ended_at AS "endedAt", created_at AS "createdAt"
      FROM matches WHERE session_id = $1
      ORDER BY round_number, created_at`,
@@ -255,6 +312,7 @@ export async function getMatchesByRound(sessionId: string, roundNumber: number):
             participant_a_id AS "participantAId", participant_b_id AS "participantBId",
             participant_c_id AS "participantCId",
             room_id AS "roomId", status, score, reason_tags AS "reasonTags",
+            is_manual AS "isManual",
             started_at AS "startedAt", ended_at AS "endedAt", created_at AS "createdAt"
      FROM matches WHERE session_id = $1 AND round_number = $2
      ORDER BY created_at`,
@@ -269,6 +327,7 @@ export async function getMatchById(matchId: string): Promise<Match> {
             participant_a_id AS "participantAId", participant_b_id AS "participantBId",
             participant_c_id AS "participantCId",
             room_id AS "roomId", status, score, reason_tags AS "reasonTags",
+            is_manual AS "isManual",
             started_at AS "startedAt", ended_at AS "endedAt", created_at AS "createdAt"
      FROM matches WHERE id = $1`,
     [matchId]

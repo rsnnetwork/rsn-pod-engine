@@ -27,14 +27,12 @@ export default function HostControls({ sessionId }: Props) {
   const [manualMatchMode, setManualMatchMode] = useState(false);
   const [manualA, setManualA] = useState<string | null>(null);
   const [manualB, setManualB] = useState<string | null>(null);
-  const [showCreateRoom, setShowCreateRoom] = useState(false);
-  const [createRoomDuration, setCreateRoomDuration] = useState(300); // 5 min default
-  const [createRoomSelected, setCreateRoomSelected] = useState<Set<string>>(new Set());
-  // Task 14 — Bulk manual breakout rooms
-  const [showBulkRoom, setShowBulkRoom] = useState(false);
-  const [bulkDuration, setBulkDuration] = useState(300);
-  const [bulkVisibility, setBulkVisibility] = useState<'visible' | 'hidden'>('visible');
-  const [bulkRooms, setBulkRooms] = useState<Array<Set<string>>>([new Set()]); // array of room-participant sets
+  // Unified breakout-room creation modal (replaces separate "Room" + "Bulk" buttons).
+  // Always submits via host:create_breakout_bulk — single-room is N=1.
+  const [showRoomModal, setShowRoomModal] = useState(false);
+  const [roomDuration, setRoomDuration] = useState(300);
+  const [roomVisibility, setRoomVisibility] = useState<'visible' | 'hidden'>('visible');
+  const [roomRows, setRoomRows] = useState<Array<Set<string>>>([new Set()]); // array of room-participant sets
   const [bulkDurationEdit, setBulkDurationEdit] = useState(false);
   const [bulkDurationValue, setBulkDurationValue] = useState(300);
 
@@ -149,7 +147,7 @@ export default function HostControls({ sessionId }: Props) {
     setShowBroadcast(false);
   };
 
-  // Task 14 — Bulk manual breakout controls
+  // Manual breakout controls — counts active manual rooms (is_manual=TRUE on server)
   const hasActiveManualRooms = !!roundDashboard?.rooms.some(
     (r: any) => r.status === 'active' && r.isManual,
   );
@@ -157,22 +155,24 @@ export default function HostControls({ sessionId }: Props) {
     (r: any) => r.status === 'active' && r.isManual,
   ).length || 0;
 
-  const bulkCreateSubmit = () => {
-    const roomsPayload = bulkRooms
+  const submitRoomCreate = () => {
+    const roomsPayload = roomRows
       .filter(s => s.size >= 1)
       .map(s => ({ participantIds: Array.from(s) }));
     if (roomsPayload.length === 0) {
       alert('Add at least one participant to a room.');
       return;
     }
+    // Always use bulk endpoint — N=1 is just a degenerate bulk case.
+    // This unifies the code path for single + multi-room creation.
     socket?.emit('host:create_breakout_bulk' as any, {
       sessionId,
       rooms: roomsPayload,
-      sharedDurationSeconds: bulkDuration || 0,
-      timerVisibility: bulkVisibility,
+      sharedDurationSeconds: roomDuration || 0,
+      timerVisibility: roomVisibility,
     });
-    setShowBulkRoom(false);
-    setBulkRooms([new Set()]);
+    setShowRoomModal(false);
+    setRoomRows([new Set()]);
   };
 
   const bulkExtendAll = () => {
@@ -415,110 +415,27 @@ export default function HostControls({ sessionId }: Props) {
         </div>
       )}
 
-      {/* Create Room panel */}
-      {showCreateRoom && (
+      {/* Unified breakout-room creation modal — replaces the old "Room" + "Bulk" buttons.
+          Always submits via host:create_breakout_bulk (N=1 is a degenerate bulk). */}
+      {showRoomModal && (
         <div className="border-b border-gray-200 bg-emerald-50 px-4 py-3">
           <div className="max-w-4xl mx-auto">
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-sm font-semibold text-emerald-700 flex items-center gap-2">
-                <UserPlus className="h-4 w-4" /> Create Breakout Room
+                <UserPlus className="h-4 w-4" /> Create breakout rooms
               </h3>
-              <button onClick={() => { setShowCreateRoom(false); setCreateRoomSelected(new Set()); }} className="text-xs text-gray-500 hover:text-gray-700">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="flex items-center gap-3 mb-2">
-              <label className="text-xs text-gray-600 font-medium">Duration:</label>
-              <select
-                value={createRoomDuration}
-                onChange={e => setCreateRoomDuration(Number(e.target.value))}
-                className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 focus:outline-none focus:ring-1 focus:ring-emerald-400"
-              >
-                <option value={180}>3 min</option>
-                <option value={300}>5 min</option>
-                <option value={600}>10 min</option>
-                <option value={900}>15 min</option>
-                <option value={1200}>20 min</option>
-                <option value={1800}>30 min</option>
-                <option value={0}>No limit</option>
-              </select>
-              <span className="text-xs text-gray-500">
-                {createRoomSelected.size} participant{createRoomSelected.size !== 1 ? 's' : ''} selected
-              </span>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 max-h-40 overflow-y-auto mb-2">
-              {participants
-                .filter(p => p.userId !== hostUserId && !cohosts.has(p.userId))
-                .map(p => {
-                  const inRoom = roundDashboard?.rooms.some(r =>
-                    r.status === 'active' && r.participants.some(rp => rp.userId === p.userId)
-                  );
-                  return (
-                    <label
-                      key={p.userId}
-                      className={`flex items-center gap-2 text-xs px-2 py-1.5 rounded-lg cursor-pointer transition-colors ${
-                        createRoomSelected.has(p.userId) ? 'bg-emerald-100 border border-emerald-300' :
-                        inRoom ? 'bg-blue-50 border border-blue-200' : 'bg-white border border-gray-200'
-                      } ${createRoomSelected.size >= 3 && !createRoomSelected.has(p.userId) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-emerald-50'}`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={createRoomSelected.has(p.userId)}
-                        disabled={createRoomSelected.size >= 3 && !createRoomSelected.has(p.userId)}
-                        onChange={() => {
-                          setCreateRoomSelected(prev => {
-                            const next = new Set(prev);
-                            if (next.has(p.userId)) next.delete(p.userId);
-                            else if (next.size < 3) next.add(p.userId);
-                            return next;
-                          });
-                        }}
-                        className="h-3.5 w-3.5 rounded border-gray-300 text-emerald-500 focus:ring-emerald-400"
-                      />
-                      <span className="truncate text-gray-700">{p.displayName}</span>
-                      {inRoom && <span className="text-[10px] text-blue-500 shrink-0">(in room)</span>}
-                    </label>
-                  );
-                })}
-            </div>
-            <div className="flex items-center gap-2">
-              <Button size="sm" disabled={createRoomSelected.size === 0} onClick={() => {
-                socket?.emit('host:create_breakout' as any, {
-                  sessionId,
-                  participantIds: Array.from(createRoomSelected),
-                  durationSeconds: createRoomDuration || undefined,
-                });
-                setShowCreateRoom(false);
-                setCreateRoomSelected(new Set());
-              }}>
-                Create Room ({createRoomSelected.size})
-              </Button>
-              <span className="text-[10px] text-gray-500">Select 1-3 participants to create a room.</span>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Task 14 — Bulk Manual Breakout Room modal */}
-      {showBulkRoom && (
-        <div className="border-b border-gray-200 bg-purple-50 px-4 py-3">
-          <div className="max-w-4xl mx-auto">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-semibold text-purple-700 flex items-center gap-2">
-                <UserPlus className="h-4 w-4" /> Create Bulk Breakout Rooms
-              </h3>
-              <button onClick={() => { setShowBulkRoom(false); setBulkRooms([new Set()]); }} className="text-xs text-gray-500 hover:text-gray-700">
+              <button onClick={() => { setShowRoomModal(false); setRoomRows([new Set()]); }} className="text-xs text-gray-500 hover:text-gray-700">
                 <X className="h-4 w-4" />
               </button>
             </div>
 
             {/* Shared duration + visibility */}
             <div className="flex items-center gap-3 mb-2 flex-wrap">
-              <label className="text-xs text-gray-600 font-medium">Shared duration:</label>
+              <label className="text-xs text-gray-600 font-medium">Duration:</label>
               <select
-                value={bulkDuration}
-                onChange={e => setBulkDuration(Number(e.target.value))}
-                className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 focus:outline-none focus:ring-1 focus:ring-purple-400"
+                value={roomDuration}
+                onChange={e => setRoomDuration(Number(e.target.value))}
+                className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 focus:outline-none focus:ring-1 focus:ring-emerald-400"
               >
                 <option value={180}>3 min</option>
                 <option value={300}>5 min</option>
@@ -530,27 +447,27 @@ export default function HostControls({ sessionId }: Props) {
               </select>
               <label className="text-xs text-gray-600 font-medium ml-2">Timer:</label>
               <select
-                value={bulkVisibility}
-                onChange={e => setBulkVisibility(e.target.value as 'visible' | 'hidden')}
-                className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 focus:outline-none focus:ring-1 focus:ring-purple-400"
+                value={roomVisibility}
+                onChange={e => setRoomVisibility(e.target.value as 'visible' | 'hidden')}
+                className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 focus:outline-none focus:ring-1 focus:ring-emerald-400"
               >
                 <option value="visible">Visible to participants</option>
                 <option value="hidden">Hidden from participants</option>
               </select>
             </div>
 
-            {/* Rooms — assign participants to each */}
+            {/* Room rows — assign participants to each. Start with 1 row, "+ Add room" appends. */}
             <div className="space-y-2 max-h-80 overflow-y-auto">
-              {bulkRooms.map((roomSet, idx) => {
+              {roomRows.map((roomSet, idx) => {
                 const usedIds = new Set<string>();
-                bulkRooms.forEach((s, i) => { if (i !== idx) s.forEach(id => usedIds.add(id)); });
+                roomRows.forEach((s, i) => { if (i !== idx) s.forEach(id => usedIds.add(id)); });
                 return (
-                  <div key={idx} className="bg-white border border-purple-200 rounded-lg p-2">
+                  <div key={idx} className="bg-white border border-emerald-200 rounded-lg p-2">
                     <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-medium text-purple-700">Room {idx + 1} — {roomSet.size} participant{roomSet.size !== 1 ? 's' : ''}</span>
-                      {bulkRooms.length > 1 && (
+                      <span className="text-xs font-medium text-emerald-700">Room {idx + 1} — {roomSet.size} participant{roomSet.size !== 1 ? 's' : ''}</span>
+                      {roomRows.length > 1 && (
                         <button
-                          onClick={() => setBulkRooms(prev => prev.filter((_, i) => i !== idx))}
+                          onClick={() => setRoomRows(prev => prev.filter((_, i) => i !== idx))}
                           className="text-[10px] text-red-500 hover:text-red-700"
                         >
                           Remove
@@ -563,13 +480,17 @@ export default function HostControls({ sessionId }: Props) {
                         .map(p => {
                           const selected = roomSet.has(p.userId);
                           const usedElsewhere = !selected && usedIds.has(p.userId);
+                          const inActiveRoom = !selected && !usedElsewhere && roundDashboard?.rooms.some(
+                            r => r.status === 'active' && r.participants.some(rp => rp.userId === p.userId)
+                          );
                           return (
                             <label
                               key={p.userId}
                               className={`flex items-center gap-1 text-[11px] px-1.5 py-1 rounded cursor-pointer transition-colors ${
-                                selected ? 'bg-purple-100 border border-purple-300' :
+                                selected ? 'bg-emerald-100 border border-emerald-300' :
                                 usedElsewhere ? 'bg-gray-100 border border-gray-200 opacity-50 cursor-not-allowed' :
-                                'bg-gray-50 border border-gray-200 hover:bg-purple-50'
+                                inActiveRoom ? 'bg-blue-50 border border-blue-200' :
+                                'bg-gray-50 border border-gray-200 hover:bg-emerald-50'
                               } ${roomSet.size >= 3 && !selected ? 'opacity-50 cursor-not-allowed' : ''}`}
                             >
                               <input
@@ -577,7 +498,7 @@ export default function HostControls({ sessionId }: Props) {
                                 checked={selected}
                                 disabled={usedElsewhere || (roomSet.size >= 3 && !selected)}
                                 onChange={() => {
-                                  setBulkRooms(prev => prev.map((s, i) => {
+                                  setRoomRows(prev => prev.map((s, i) => {
                                     if (i !== idx) return s;
                                     const next = new Set(s);
                                     if (next.has(p.userId)) next.delete(p.userId);
@@ -585,9 +506,10 @@ export default function HostControls({ sessionId }: Props) {
                                     return next;
                                   }));
                                 }}
-                                className="h-3 w-3 rounded border-gray-300 text-purple-500 focus:ring-purple-400"
+                                className="h-3 w-3 rounded border-gray-300 text-emerald-500 focus:ring-emerald-400"
                               />
                               <span className="truncate text-gray-700">{p.displayName}</span>
+                              {inActiveRoom && <span className="text-[10px] text-blue-500 shrink-0">(in room)</span>}
                             </label>
                           );
                         })}
@@ -601,21 +523,21 @@ export default function HostControls({ sessionId }: Props) {
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => setBulkRooms(prev => [...prev, new Set()])}
-                disabled={bulkRooms.length >= 25}
+                onClick={() => setRoomRows(prev => [...prev, new Set()])}
+                disabled={roomRows.length >= 25}
               >
-                <UserPlus className="h-3.5 w-3.5 mr-1" /> Add Room
+                <UserPlus className="h-3.5 w-3.5 mr-1" /> Add room
               </Button>
               <div className="flex gap-2">
-                <Button size="sm" variant="ghost" onClick={() => { setShowBulkRoom(false); setBulkRooms([new Set()]); }}>
+                <Button size="sm" variant="ghost" onClick={() => { setShowRoomModal(false); setRoomRows([new Set()]); }}>
                   Cancel
                 </Button>
                 <Button
                   size="sm"
-                  disabled={bulkRooms.every(s => s.size === 0)}
-                  onClick={bulkCreateSubmit}
+                  disabled={roomRows.every(s => s.size === 0)}
+                  onClick={submitRoomCreate}
                 >
-                  Create All ({bulkRooms.filter(s => s.size >= 1).length})
+                  Create ({roomRows.filter(s => s.size >= 1).length})
                 </Button>
               </div>
             </div>
@@ -722,23 +644,35 @@ export default function HostControls({ sessionId }: Props) {
               </Button>
             )}
 
-            {/* Two-step breakout: Match People → preview → Start Round */}
+            {/* Two-step breakout: Match People → preview → Start Round.
+                Button is enabled iff:
+                  - eligibleMainRoomCount >= 2 (server-computed: in lobby, NOT in any active match)
+                  - AND no active algorithm round (manual rooms don't block — they're independent) */}
             {sessionStarted && phase === 'lobby' && !allRoundsDone && !matchPreview && (() => {
-              // Match People is disabled ONLY when an algorithm-generated round is actively running.
-              // Manual rooms (created via "Room" button with 'host-' in roomId) are independent.
-              const hasActiveAlgorithmMatches = roundDashboard?.rooms.some(
+              // Server-computed count of participants in the main room (not in any
+              // active match — manual or algorithm). Falls back to client-side
+              // count if dashboard not loaded yet.
+              const eligibleMainRoomCount = (roundDashboard as any)?.eligibleMainRoomCount ?? eligibleCount;
+              const hasActiveAlgorithmRound = roundDashboard?.rooms.some(
                 (r: any) => r.status === 'active' && !r.isManual
               );
-              const isAlgorithmRoundActive = sessionStatus === 'round_active' && hasActiveAlgorithmMatches;
-              if (isAlgorithmRoundActive) return (
-                <span
-                  className="text-xs text-gray-400 px-2 py-1.5 border border-gray-200 rounded-lg cursor-not-allowed inline-flex items-center gap-1"
-                  title="Algorithm round in progress — end the round before matching again."
-                >
-                  <Shuffle className="h-3.5 w-3.5 opacity-50" /> Match People
-                </span>
-              );
-              return eligibleCount >= 2 ? (
+              const matchPeopleDisabled = eligibleMainRoomCount < 2 || hasActiveAlgorithmRound;
+              const matchPeopleHint = eligibleMainRoomCount < 2
+                ? `Need at least 2 participants in main room (currently ${eligibleMainRoomCount})`
+                : hasActiveAlgorithmRound
+                ? 'End the current round before matching again'
+                : '';
+              if (matchPeopleDisabled) {
+                return (
+                  <span
+                    className="text-xs text-gray-500 px-2 py-1.5 border border-gray-200 rounded-lg cursor-not-allowed inline-flex items-center gap-1"
+                    title={matchPeopleHint}
+                  >
+                    <Shuffle className="h-3.5 w-3.5 opacity-50" /> Match People
+                  </span>
+                );
+              }
+              return (
                 <Button size="sm" variant="secondary" onClick={generateMatches} disabled={generating}>
                   {generating ? (
                     <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Matching...</>
@@ -746,10 +680,6 @@ export default function HostControls({ sessionId }: Props) {
                     <><Shuffle className="h-4 w-4 mr-1" /> Match People</>
                   )}
                 </Button>
-              ) : (
-                <span className="text-xs text-gray-500 px-2 py-1.5 border border-gray-200 rounded-lg">
-                  Need {2 - eligibleCount} more participant{eligibleCount === 1 ? '' : 's'} to match
-                </span>
               );
             })()}
 
@@ -798,22 +728,16 @@ export default function HostControls({ sessionId }: Props) {
               </Button>
             )}
 
-            {/* Create Room — available any time, hidden when dashboard already shows active rooms */}
-            {sessionStarted && (
-              <Button size="sm" variant="secondary" onClick={() => { setShowCreateRoom(!showCreateRoom); setCreateRoomSelected(new Set()); }} title="Create a breakout room">
-                <UserPlus className="h-4 w-4 mr-1" /> Room
-              </Button>
-            )}
-
-            {/* Task 14 — Bulk breakout rooms (create N rooms with shared timer) */}
+            {/* Room — opens unified modal (single or multiple breakout rooms with shared timer).
+                Replaces the old separate "Room" + "Bulk" buttons. */}
             {sessionStarted && (
               <Button
                 size="sm"
                 variant="secondary"
-                onClick={() => { setShowBulkRoom(!showBulkRoom); setBulkRooms([new Set()]); }}
-                title="Create multiple breakout rooms at once with a shared timer"
+                onClick={() => { setShowRoomModal(!showRoomModal); setRoomRows([new Set()]); }}
+                title="Create one or more breakout rooms"
               >
-                <Users className="h-4 w-4 mr-1" /> Bulk
+                <UserPlus className="h-4 w-4 mr-1" /> Room
               </Button>
             )}
 

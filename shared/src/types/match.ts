@@ -20,6 +20,7 @@ export interface Match {
   status: MatchStatus;
   score: number | null;
   reasonTags: string[];
+  isManual: boolean;  // TRUE = host-created breakout (independent from algorithm rounds)
   startedAt: Date | null;
   endedAt: Date | null;
   createdAt: Date;
