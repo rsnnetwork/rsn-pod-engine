@@ -529,8 +529,9 @@ export default function HostControls({ sessionId }: Props) {
             {/* Two-step breakout: Match People → preview → Start Round */}
             {sessionStarted && phase === 'lobby' && !allRoundsDone && !matchPreview && (() => {
               const hasActiveRooms = roundDashboard?.rooms.some((r: any) => r.status === 'active');
-              if (hasActiveRooms) return (
-                <span className="text-xs text-gray-400 px-2 py-1.5 border border-gray-200 rounded-lg cursor-not-allowed" title="You can match people once the active rooms are over">
+              const isDuringActiveRound = ['round_active', 'round_rating', 'round_transition'].includes(sessionStatus);
+              if (hasActiveRooms || isDuringActiveRound) return (
+                <span className="text-xs text-gray-400 px-2 py-1.5 border border-gray-200 rounded-lg cursor-not-allowed" title="End the current round before matching again.">
                   <Shuffle className="h-3.5 w-3.5 inline mr-1 opacity-50" /> Match People
                 </span>
               );
