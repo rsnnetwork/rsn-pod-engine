@@ -488,13 +488,21 @@ export default function InvitesPage() {
             <div className="rounded-xl border border-gray-200 p-4 space-y-3">
               <p className="text-sm font-medium text-gray-700 flex items-center gap-2"><Link className="h-4 w-4 text-emerald-500" /> Shareable link</p>
               <p className="text-xs text-gray-400">A multi-use link you can share manually.</p>
-              <Input label="Max Uses" type="number" value={maxUses} onChange={e => setMaxUses(Number(e.target.value))} placeholder="10" />
+              <Input
+                label="Max Uses"
+                type="number"
+                min={1}
+                value={maxUses}
+                onChange={e => setMaxUses(Number(e.target.value))}
+                placeholder="10"
+                error={maxUses < 1 ? 'Must be 1 or greater' : undefined}
+              />
               <Button
                 size="sm"
                 variant="secondary"
                 onClick={() => createLinkMutation.mutate()}
                 isLoading={createLinkMutation.isPending}
-                disabled={needsTarget}
+                disabled={needsTarget || maxUses < 1}
                 className="w-full"
               >
                 <Copy className="h-4 w-4 mr-1" /> Create & Copy Link

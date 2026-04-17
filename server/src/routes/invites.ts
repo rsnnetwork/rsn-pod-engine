@@ -18,7 +18,7 @@ const createInviteSchema = z.object({
   inviteeEmail: z.string().email().optional(),
   podId: z.string().uuid().optional(),
   sessionId: z.string().uuid().optional(),
-  maxUses: z.number().int().positive().max(1000).optional(),
+  maxUses: z.number().int().min(1).max(1_000_000).optional(),
   expiresInHours: z.number().positive().max(720).optional(), // max 30 days
 });
 

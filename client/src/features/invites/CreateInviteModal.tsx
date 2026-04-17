@@ -177,7 +177,17 @@ export default function CreateInviteModal({ open, onClose }: Props) {
           <div className="rounded-xl border border-gray-200 p-4 space-y-3">
             <p className="text-sm font-medium text-gray-700 flex items-center gap-2"><Link className="h-4 w-4 text-emerald-500" /> Create shareable link</p>
             <p className="text-xs text-gray-400">A multi-use invite link you can share manually.</p>
-            <Input label="Max Uses" type="number" {...register('maxUses', { valueAsNumber: true })} placeholder="10" />
+            <Input
+              label="Max Uses"
+              type="number"
+              min={1}
+              {...register('maxUses', {
+                valueAsNumber: true,
+                min: { value: 1, message: 'Must be 1 or greater' },
+              })}
+              placeholder="10"
+              error={errors.maxUses?.message}
+            />
             <Button
               type="button"
               size="sm"
