@@ -4123,3 +4123,66 @@ Applied fixes based on client (Stefan/Shradha) feedback on Change 1.5.
 - CHANGE_1.4_LOG.md, CHANGE_1.5_LOG.md removed from repo — local docs only
 - assets/ directory gitignored
 - dash1.png, render logs gitignored
+
+## Change 4.6 — Match Status Semantics Fix (2026-04-17)
+
+**Context:** Post-Change 4.5 live test (session `1e13d771`, 2026-04-17 11:57-12:11 UTC) revealed that voluntary-leave matches were incorrectly marked `no_show` despite both participants submitting 5-star mutual ratings. Root cause: `participant-flow.ts` was overloading `no_show` as a scratch flag for reassign logic. Cascade damage hit 9 downstream queries (host dashboard, recap emails, encounter history, People Met count, unique indexes).
+
+**Full audit + 10-task plan:** `docs/superpowers/plans/2026-04-17-match-status-semantics-fix.md`
+
+### Commits (staging = main = 108be9e)
+
+1. `666dfb0` — fix: LiveKit closeRoom false-alarm + pin emptyTimeout to 300s
+2. `21d9b40` — feat: add findIsolatedParticipants helper for reassign flows
+3. `bd55eb1` — fix: voluntary leave keeps match status as completed
+4. `70eb503` — fix: disconnect mid-match uses duration/rating to pick status
+5. `2e42504` — fix: host remove from room uses cancelled, not no_show
+6. `d592638` — fix: host move between rooms uses reassigned + stats queries accept it
+7. `6fc345b` — fix: migration 037 backfills no_show matches with ratings to completed
+8. `4756d0a` — docs: single-source state machine doc for match_status enum
+9. `108be9e` — test: regression replay for session 1e13d771 scenario + Change 4.5 preservation
+
+### match_status state machine (new contract)
+
+| Status | Meaning | Set by |
+|---|---|---|
+| scheduled | Match exists but round not started | matching algorithm (persistMatches) |
+| active | Match running in LiveKit room | round-lifecycle.ts:transitionToRound |
+| completed | Real conversation finished (timer, voluntary leave, disconnect >30s or rated) | round-lifecycle:endRound, participant-flow voluntary leave + disconnect |
+| no_show | Participant never connected | round-lifecycle.ts:detectNoShows (ONLY) |
+| cancelled | Match aborted by host or early disconnect (<30s, no ratings) | host-actions host-remove, participant-flow early disconnect, matching-flow regenerate, migration 029 dedup |
+| reassigned | Host moved users to different room | host-actions host-move |
+
+**Rating grace:** `cancelled` matches ratable for 30s after `ended_at` (preserves Change 4.5 commit `3975009` rating-in-all-leave-paths flow).
+
+### Backfill (migration 037)
+
+- 2 matches flipped no_show → completed (session `1e13d771` round 3: `b8148650`, `b4a42743`)
+- DB-wide post-deploy: 0 no_show matches remain, 21 completed, 0 cancelled, 0 reassigned
+- 0 participant `is_no_show` flags cleared (the bug path never set them)
+
+### LiveKit close false-alarm
+
+- `livekit.provider.ts:closeRoom` now matches Twirp NotFound code 5 + `'does not exist'` + legacy `'not found'`
+- 404s log at `debug` level (not `error`) — eliminates ~9× false errors per session
+- `emptyTimeout` pinned explicitly: lobby 3600s (60 min, preserves prior behavior), match 300s (5 min)
+
+### Test suite
+
+- 291/291 tests pass (+11 from Change 4.5's 280)
+- Regression test `match-status-semantics.test.ts` asserts:
+  - ZERO `status='no_show'` writes in participant-flow.ts + host-actions.ts (source inspection)
+  - Exactly 2 legitimate `status='no_show'` writes in round-lifecycle.ts (detectNoShows)
+  - state-machine constants exported correctly
+  - Change 4.5 behaviors (clearRoomTimers, findIsolatedParticipants, rating allowlist) preserved
+
+### Post-deploy verification (2026-04-17 15:23 UTC)
+
+- Render: live @ 108be9e, DB 3ms
+- Sentry server: 0 unresolved
+- Sentry client: 0 unresolved (new window)
+- GitHub CI: green
+- Vercel: 200 OK
+- DB: 0 mis-labeled matches remain
+
+**Architecture forward-compat:** New semantics work with Phase 2 Redis, Phase 3 state machine, Phase 4 100K scale — single-source-of-truth status column, no scratch-flag overloading.
