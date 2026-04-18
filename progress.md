@@ -4433,3 +4433,46 @@ To run: `cd e2e && export JWT_SECRET=$(cat .jwt_secret) && export DATABASE_URL=.
 5. **Mobile self-view** — should not show grey/black rectangle (defensive fix; may need iteration if mobile-specific)
 6. **Disconnect-rejoin** — Ali leaves browser mid-breakout, returns → should be in main room with proper status, eligible for new manual rooms
 7. **Match People + manual rooms parallel** — manual room running, click Match People with 2+ in main room → should work without breaking the manual room
+
+---
+
+## 2026-04-18 (16:30 UTC) — Bug 5 + Bug 6 (April 18 Dr Arch round 2)
+
+**Bug 5 (host-controls visibility) + Bug 6 (video tile zoom)** — both client-side surgical fixes verified against actual server code paths before touching anything.
+
+### Deep audit done first (per user challenge)
+
+Verified by reading current code (not from running mental model):
+- `HostControls.tsx:715-735` — Pause/+2/End Round gated on `sessionStatus === 'round_active'` only. Vanish in `round_transition` even when an algorithm round is mid-flight.
+- `HostControls.tsx:660-665` — Match People disabled when `sessionStatus IN (round_active, round_rating, round_transition)`. The "Bug 3 April 18 Dr Arch" comment claimed this was intentional, but…
+- `matching-flow.ts:60-69` — `handleHostGenerateMatches` **explicitly accepts both `LOBBY_OPEN` AND `ROUND_TRANSITION`**. So the client was blocking a path the server fully supports.
+- `matching-flow.ts:597-680` — `emitHostDashboard` payload already gives us `rooms[].status`, `rooms[].isManual`, and authoritative `eligibleMainRoomCount`. No server change needed.
+- `host-actions.ts:434-449` — `handleHostEnd` routes to `endRound()` when state is `ROUND_ACTIVE`. Safe to expose End Round whenever an algorithm round is live.
+
+### Bug 5 — Host control visibility (HostControls.tsx)
+
+Derived `hasActiveAlgorithmRound = roundDashboard?.rooms.some(r => r.status === 'active' && !r.isManual)` as the single source of truth.
+
+- **Pause / +2 min / End Round** → show when `hasActiveAlgorithmRound` (was: `sessionStatus === 'round_active'`)
+- **Match People** disable rule → `hasActiveAlgorithmRound || eligibleMainRoomCount < 2` (was: `isRoundLifecycleActive` which incorrectly included `round_transition`)
+- Tooltip on disabled Match People now reads "A round is in progress — wait for it to end" (matches what the user actually sees on the dashboard)
+
+### Bug 6 — Video tile zoom (VideoRoom.tsx)
+
+Reverted `object-cover` → `object-contain` on the breakout VideoTile. Object-cover cropped portrait phone video so aggressively on landscape desktop tiles that only the centre slice of a face was visible. object-contain preserves the full source frame and pads with the tile's `bg-black` — matches Google Meet's portrait-on-desktop behaviour.
+
+Lobby.tsx already does the right thing (`object-contain` on pinned, `object-cover` on small thumbnails). Local device-check preview correctly stays `object-cover`.
+
+### Files touched
+
+- `client/src/features/live/HostControls.tsx` (live-state derivation + 3 visibility rules + 1 disable rule)
+- `client/src/features/live/VideoRoom.tsx` (object-contain)
+
+### Verification
+
+- `npx tsc --noEmit` → green
+- Server code paths cross-checked: no server changes required, all server guards already permit the new client behaviours.
+
+### Next
+
+Commit + push to both branches → check_hole → write Playwright suite covering both bugs + edge cases (state mismatch, manual-rooms-only state, round_transition next-round path) → run suite → cleanup → final summary.

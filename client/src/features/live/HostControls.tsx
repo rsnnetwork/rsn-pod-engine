@@ -155,6 +155,27 @@ export default function HostControls({ sessionId }: Props) {
     (r: any) => r.status === 'active' && r.isManual,
   ).length || 0;
 
+  // Bug 5 (April 18 Dr Arch): Round-control visibility / Match-People enable
+  // must derive from LIVE algorithm-match state, not from session.status alone.
+  //
+  // Why session.status is not enough:
+  //   1. Pause/+2/End Round were gated on session.status === 'round_active'
+  //      → they vanished during 'round_transition' even when an algorithm
+  //      round was still running on the wire (state-mismatch / mid-flight).
+  //   2. Match People was disabled on session.status === 'round_transition'
+  //      → but handleHostGenerateMatches (matching-flow.ts:60) explicitly
+  //      ALLOWS round_transition; that's exactly when the host generates
+  //      round 2's matches. The over-aggressive disable blocked the legit
+  //      "start next round" path.
+  //
+  // hasActiveAlgorithmRound is the ONE source of truth for both. The dashboard
+  // is server-emitted on every match transition (round-lifecycle.ts:274,414,
+  // 421,453,1026), so the client's view of `rooms[].status === 'active' &&
+  // !isManual` lags by at most one socket round-trip from the DB.
+  const hasActiveAlgorithmRound = !!roundDashboard?.rooms.some(
+    (r: any) => r.status === 'active' && !r.isManual,
+  );
+
   const submitRoomCreate = () => {
     const roomsPayload = roomRows
       .filter(s => s.size >= 1)
@@ -645,26 +666,21 @@ export default function HostControls({ sessionId }: Props) {
             )}
 
             {/* Two-step breakout: Match People → preview → Start Round.
-                Button is enabled iff:
-                  - eligibleMainRoomCount >= 2 (server-computed: in lobby, NOT in any active match)
-                  - AND session is NOT in an active round lifecycle (round_active /
-                    round_rating / round_transition). Bug 3 (April 18 Dr Arch):
-                    we now disable on the lifecycle state regardless of whether
-                    any algorithm match cards are visible — state-mismatch can
-                    leave 0 active matches with session.status='round_active',
-                    in which case generating would fail server-side anyway. */}
+                Bug 5 (April 18 Dr Arch): disable rule now derives from LIVE
+                algorithm-match state, not session.status. Server allows
+                generate_matches in both LOBBY_OPEN and ROUND_TRANSITION
+                (matching-flow.ts:60-69), so disabling on round_transition
+                blocked the legit "start next round" path. The new rule
+                disables only when an algorithm round is actually running
+                or there aren't enough eligible participants. */}
             {sessionStarted && phase === 'lobby' && !allRoundsDone && !matchPreview && (() => {
               // Server-computed count of participants in the main room (not in any
               // active match — manual or algorithm). Falls back to client-side
               // count if dashboard not loaded yet.
               const eligibleMainRoomCount = (roundDashboard as any)?.eligibleMainRoomCount ?? eligibleCount;
-              const isRoundLifecycleActive =
-                sessionStatus === 'round_active'
-                || sessionStatus === 'round_rating'
-                || sessionStatus === 'round_transition';
-              const matchPeopleDisabled = isRoundLifecycleActive || eligibleMainRoomCount < 2;
-              const matchPeopleHint = isRoundLifecycleActive
-                ? 'You can match in the next round'
+              const matchPeopleDisabled = hasActiveAlgorithmRound || eligibleMainRoomCount < 2;
+              const matchPeopleHint = hasActiveAlgorithmRound
+                ? 'A round is in progress — wait for it to end'
                 : eligibleMainRoomCount < 2
                 ? `Need at least 2 participants in main room (currently ${eligibleMainRoomCount})`
                 : '';
@@ -711,15 +727,20 @@ export default function HostControls({ sessionId }: Props) {
               </>
             )}
 
-            {/* Pause/Resume during round */}
-            {isInRound && sessionStatus === 'round_active' && (
+            {/* Pause/Resume during round.
+                Bug 5: visibility now derives from live algorithm-match state
+                instead of session.status === 'round_active'. The server-side
+                guards (host-actions.ts handlePauseSession etc.) gate on the
+                actual session state, so showing the button when an algorithm
+                round is in flight — even mid-transition — is safe. */}
+            {hasActiveAlgorithmRound && (
               <Button size="sm" variant="secondary" onClick={togglePause}>
                 {isPaused ? <><Play className="h-4 w-4 mr-1" /> Resume</> : <><Pause className="h-4 w-4 mr-1" /> Pause</>}
               </Button>
             )}
 
-            {/* Extend round by 2 minutes */}
-            {isInRound && sessionStatus === 'round_active' && (
+            {/* Extend round by 2 minutes — same live-state rule */}
+            {hasActiveAlgorithmRound && (
               <Button size="sm" variant="secondary" onClick={() => {
                 socket?.emit('host:extend_round', { sessionId, additionalSeconds: 120 });
               }} title="Add 2 minutes to the current round">
@@ -727,8 +748,10 @@ export default function HostControls({ sessionId }: Props) {
               </Button>
             )}
 
-            {/* End current round early — moves to rating, NOT end event */}
-            {isInRound && sessionStatus === 'round_active' && (
+            {/* End current round early — moves to rating, NOT end event.
+                handleHostEnd (host-actions.ts:434) detects ROUND_ACTIVE and
+                routes to endRound() → rating window flow. */}
+            {hasActiveAlgorithmRound && (
               <Button size="sm" variant="secondary" onClick={endCurrentRound} title="End round early — goes to rating">
                 <SkipForward className="h-4 w-4 mr-1" /> End Round
               </Button>

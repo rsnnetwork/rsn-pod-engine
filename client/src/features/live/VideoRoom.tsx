@@ -60,22 +60,20 @@ function ConnectionIndicator() {
 
 function VideoTile({ trackRef, label, isWaiting, isPinned }: { trackRef?: any; label: string; isWaiting?: boolean; isPinned?: boolean }) {
   const hasVideo = trackRef?.publication?.track;
-  // Bug 2 (April 18 Dr Arch): VideoTile must FILL its parent in both pinned
-  // and unpinned modes so 1:1 + trio breakouts max out the available area.
-  // The old `aspect-video` (16:9 box) made the tile shrink to height = width
-  // × 9/16 inside wide grid cells, leaving large empty space below — partner
-  // appeared as a small ~30% strip. Now: parent grid cells are h-full and
-  // the tile is h-full w-full, so the video fills the cell. Object-cover on
-  // the inner VideoTrack handles aspect cropping (FaceTime/Meet style).
+  // Bug 2 + Bug 6 (April 18 Dr Arch): VideoTile fills its parent cell, but
+  // the inner VideoTrack uses object-CONTAIN (not cover). Reasoning:
+  //   - object-cover crops the source to fill the cell. Portrait phone video
+  //     rendered in a landscape desktop tile gets aggressively zoomed in so
+  //     only the centre slice of the face is visible (Bug #6).
+  //   - object-contain preserves the full source frame and pads with the
+  //     tile's bg colour (black for video tiles) — matches the way Google
+  //     Meet shows portrait video on desktop without cropping.
+  // The black `bg-black` parent makes the letterbox feel intentional and
+  // unobtrusive instead of looking like a broken tile.
   return (
     <div className={`relative rounded-xl overflow-hidden ${hasVideo ? 'bg-black' : 'bg-[#3c4043]'} ${isPinned ? 'h-full w-full' : 'h-full w-full'} flex items-center justify-center`}>
       {hasVideo ? (
-        // Object-cover universally — never object-contain. Portrait videos in
-        // landscape containers (and vice-versa) get cropped to fill, matching
-        // FaceTime / Google Meet / WhatsApp behavior. The previous isPinned
-        // ternary caused mobile portrait video to render with massive black
-        // bars (letterbox / pillarbox) on the host's pinned tile (Bug #2).
-        <VideoTrack trackRef={trackRef} className="h-full w-full object-cover" />
+        <VideoTrack trackRef={trackRef} className="h-full w-full object-contain" />
       ) : (
         <div className="flex flex-col items-center gap-2">
           <div className={`h-20 w-20 rounded-full bg-[#5f6368] flex items-center justify-center ${isWaiting ? 'animate-pulse' : ''}`}>
