@@ -213,7 +213,7 @@ export async function generateSingleRound(
     globalOptimize: false,
   };
 
-  const round = matchingEngine.generateRound(
+  let round = matchingEngine.generateRound(
     participantsResult.rows,
     config,
     excludedPairs,
@@ -221,26 +221,23 @@ export async function generateSingleRound(
     roundNumber
   );
 
-  // Belt-and-suspenders: verify no returned pair exists in excludedPairs
-  const violatingPairs: typeof round.pairs = [];
-  for (const pair of round.pairs) {
-    const key = pairKey(pair.participantAId, pair.participantBId);
-    if (excludedPairs.has(key)) {
-      logger.error({ sessionId, roundNumber, pairKey: key },
-        'MATCHING VIOLATION: generated pair exists in excludedPairs — removing pair');
-      violatingPairs.push(pair);
-    }
-  }
-  if (violatingPairs.length > 0) {
-    const byeList = round.byeParticipants ?? [];
-    const warnList = round.warnings ?? [];
-    for (const vp of violatingPairs) {
-      round.pairs = round.pairs.filter(p => p !== vp);
-      byeList.push(vp.participantAId, vp.participantBId);
-      warnList.push(`Pair ${vp.participantAId}/${vp.participantBId} violated no-repeat rule and was removed`);
-    }
-    round.byeParticipants = byeList;
-    round.warnings = warnList;
+  // SOFT exclusion: if the strict no-repeat constraint left us with zero pairs
+  // (e.g. small group where every possible pair has already been matched),
+  // retry without the excludedPairs set. Repeats are acceptable when the
+  // alternative is "round with 0 matches" — host's intent is "match the
+  // people in main room", not "force unique pairings or fail".
+  if (round.pairs.length === 0 && participantsResult.rows.length >= 2 && excludedPairs.size > 0) {
+    logger.warn(
+      { sessionId, roundNumber, eligibleCount: participantsResult.rows.length, excludedCount: excludedPairs.size },
+      'No fresh pairs available — retrying matching without exclusion (allowing repeats)'
+    );
+    round = matchingEngine.generateRound(
+      participantsResult.rows,
+      config,
+      new Set(),  // empty exclusion — allow any pair
+      encounterHistory,
+      roundNumber
+    );
   }
 
   // Persist this round's matches
