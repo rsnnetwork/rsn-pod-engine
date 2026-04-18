@@ -80,7 +80,11 @@ export async function initRedis(): Promise<Redis | null> {
 export function duplicateClient(): Redis | null {
   if (!redisClient || !redisAvailable) return null;
   try {
-    return redisClient.duplicate();
+    const dup = redisClient.duplicate();
+    dup.on('error', (err) => {
+      logger.error({ err }, 'Redis duplicate client error');
+    });
+    return dup;
   } catch {
     return null;
   }

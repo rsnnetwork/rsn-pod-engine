@@ -85,14 +85,26 @@ export async function withSessionLock<T>(
 }
 
 export async function testConnection(): Promise<boolean> {
-  try {
-    const result = await pool.query('SELECT NOW()');
-    logger.info({ time: result.rows[0].now }, 'Database connection verified');
-    return true;
-  } catch (err) {
-    logger.error({ err }, 'Database connection failed');
-    return false;
+  const MAX_RETRIES = 5;
+  const BASE_DELAY_MS = 2000;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const result = await pool.query('SELECT NOW()');
+      logger.info({ time: result.rows[0].now, attempt }, 'Database connection verified');
+      return true;
+    } catch (err) {
+      logger.warn({ err, attempt, maxRetries: MAX_RETRIES }, 'Database connection attempt failed');
+      if (attempt < MAX_RETRIES) {
+        const delay = BASE_DELAY_MS * attempt; // 2s, 4s, 6s, 8s
+        logger.info({ delay, nextAttempt: attempt + 1 }, 'Retrying database connection...');
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
   }
+
+  logger.error('Database connection failed after all retries');
+  return false;
 }
 
 export async function closePool(): Promise<void> {
