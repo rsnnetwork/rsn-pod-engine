@@ -58,20 +58,13 @@ export default function SessionDetailPage() {
   const [invitingMember, setInvitingMember] = useState<string | null>(null);
   const [overflowOpen, setOverflowOpen] = useState(false);
 
-  // Close overflow menu on outside click or Escape
+  // Close overflow menu on Escape only — click-outside handled by backdrop overlay
+  // (more reliable than document mousedown listener which raced with menu items)
   useEffect(() => {
     if (!overflowOpen) return;
     const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOverflowOpen(false); };
-    const handleClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (target && !target.closest('[data-overflow-menu]')) setOverflowOpen(false);
-    };
     document.addEventListener('keydown', handleKey);
-    document.addEventListener('mousedown', handleClick);
-    return () => {
-      document.removeEventListener('keydown', handleKey);
-      document.removeEventListener('mousedown', handleClick);
-    };
+    return () => document.removeEventListener('keydown', handleKey);
   }, [overflowOpen]);
 
   const { data: session, isLoading, error: sessionError } = useQuery({
@@ -494,10 +487,16 @@ export default function SessionDetailPage() {
                 <svg className={`h-3.5 w-3.5 transition-transform ${overflowOpen ? 'rotate-180' : ''}`} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.06l3.71-3.83a.75.75 0 111.08 1.04l-4.25 4.39a.75.75 0 01-1.08 0L5.21 8.27a.75.75 0 01.02-1.06z" clipRule="evenodd"/></svg>
               </button>
               {overflowOpen && (
-                <div
-                  className="absolute right-0 mt-1 w-52 rounded-lg border border-gray-200 bg-white shadow-lg z-20 py-1"
-                  onMouseDown={(e) => e.stopPropagation()}
-                >
+                <>
+                  {/* Transparent backdrop — click anywhere outside menu closes it */}
+                  <div
+                    className="fixed inset-0 z-10"
+                    onClick={() => setOverflowOpen(false)}
+                    aria-hidden="true"
+                  />
+                  <div
+                    className="absolute right-0 mt-1 w-52 rounded-lg border border-gray-200 bg-white shadow-lg z-20 py-1"
+                  >
                   <button
                     type="button"
                     onClick={() => { setOverflowOpen(false); duplicateMutation.mutate(); }}
@@ -537,7 +536,8 @@ export default function SessionDetailPage() {
                       <Trash2 className="h-4 w-4" /> Delete
                     </button>
                   )}
-                </div>
+                  </div>
+                </>
               )}
             </div>
           )}
