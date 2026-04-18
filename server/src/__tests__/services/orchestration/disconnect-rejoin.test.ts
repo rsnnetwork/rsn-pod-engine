@@ -14,9 +14,9 @@
 //   Fix B — Centralized emitRatingWindowOnce helper that skips the emit
 //           if a rating already exists for (matchId, userId).
 
-const mockQuery = jest.fn();
+const dcMockQuery = jest.fn();
 jest.mock('../../../db', () => ({
-  query: (...args: unknown[]) => mockQuery(...args),
+  query: (...args: unknown[]) => dcMockQuery(...args),
   transaction: jest.fn(),
   __esModule: true,
 }));
@@ -28,7 +28,7 @@ jest.mock('../../../config/logger', () => ({
 
 describe('Disconnect-rejoin bug fixes', () => {
   beforeEach(() => {
-    mockQuery.mockReset();
+    dcMockQuery.mockReset();
   });
 
   // ────────────────────────────────────────────────────────────────────────
@@ -44,7 +44,7 @@ describe('Disconnect-rejoin bug fixes', () => {
     it('emits rating:window_open when user has NOT rated this match', async () => {
       const { emitRatingWindowOnce } = await import('../../../services/orchestration/state/session-state');
       // No existing rating
-      mockQuery.mockResolvedValueOnce({ rows: [] });
+      dcMockQuery.mockResolvedValueOnce({ rows: [] });
 
       const emit = jest.fn();
       const io: any = {
@@ -54,8 +54,8 @@ describe('Disconnect-rejoin bug fixes', () => {
 
       await emitRatingWindowOnce(io, 'user-a', 'match-1', payload);
 
-      expect(mockQuery).toHaveBeenCalledTimes(1);
-      expect(mockQuery.mock.calls[0][0]).toMatch(/SELECT id FROM ratings/);
+      expect(dcMockQuery).toHaveBeenCalledTimes(1);
+      expect(dcMockQuery.mock.calls[0][0]).toMatch(/SELECT id FROM ratings/);
       expect(io.to).toHaveBeenCalledWith('user:user-a');
       expect(emit).toHaveBeenCalledWith('rating:window_open', payload);
     });
@@ -63,7 +63,7 @@ describe('Disconnect-rejoin bug fixes', () => {
     it('skips emit when user has ALREADY rated this match', async () => {
       const { emitRatingWindowOnce } = await import('../../../services/orchestration/state/session-state');
       // Existing rating present
-      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'rating-existing' }] });
+      dcMockQuery.mockResolvedValueOnce({ rows: [{ id: 'rating-existing' }] });
 
       const emit = jest.fn();
       const io: any = {
@@ -72,14 +72,14 @@ describe('Disconnect-rejoin bug fixes', () => {
 
       await emitRatingWindowOnce(io, 'user-a', 'match-1', { matchId: 'match-1' });
 
-      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(dcMockQuery).toHaveBeenCalledTimes(1);
       expect(io.to).not.toHaveBeenCalled();
       expect(emit).not.toHaveBeenCalled();
     });
 
     it('emits when DB query fails (fail-open — better duplicate prompt than missing one)', async () => {
       const { emitRatingWindowOnce } = await import('../../../services/orchestration/state/session-state');
-      mockQuery.mockRejectedValueOnce(new Error('DB down'));
+      dcMockQuery.mockRejectedValueOnce(new Error('DB down'));
 
       const emit = jest.fn();
       const io: any = {
