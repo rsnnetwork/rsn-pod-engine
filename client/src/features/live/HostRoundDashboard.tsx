@@ -6,7 +6,14 @@ import { getSocket } from '@/lib/socket';
 interface Props { sessionId: string; }
 
 export default function HostRoundDashboard({ sessionId }: Props) {
-  const { roundDashboard, timerSeconds, currentRound, totalRounds } = useSessionStore();
+  // Bug 8.7 (April 19) — selector pattern (was destructuring whole store).
+  // Whole-store reads make this component re-render on EVERY field change
+  // (timer tick, participant updates, dashboard refresh). With selectors,
+  // only the actually-used fields trigger re-renders.
+  const roundDashboard = useSessionStore(s => s.roundDashboard);
+  const timerSeconds = useSessionStore(s => s.timerSeconds);
+  const currentRound = useSessionStore(s => s.currentRound);
+  const totalRounds = useSessionStore(s => s.totalRounds);
   const socket = getSocket();
   const [moveMode, setMoveMode] = useState<{ userId: string; fromMatchId: string; displayName: string } | null>(null);
 
@@ -88,9 +95,17 @@ export default function HostRoundDashboard({ sessionId }: Props) {
           </div>
         )}
 
-        {/* Breakout Rooms Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {roundDashboard.rooms.map((room, idx) => {
+        {/* Bug 11 (April 19) — split-column layout when BOTH algorithm and
+            manual breakouts are active concurrently. Algorithm rooms (left)
+            stay grouped under the round timer; manual rooms (right) get
+            their own header (per-room timers shown via the +2 min badge).
+            When only one type is active, falls back to single-column grid. */}
+        {(() => {
+          const algorithmRooms = roundDashboard.rooms.filter(r => !(r as any).isManual);
+          const manualRooms = roundDashboard.rooms.filter(r => (r as any).isManual);
+          const showSplit = algorithmRooms.length > 0 && manualRooms.length > 0;
+
+          const renderRoomCard = (room: any, idx: number) => {
             const isTargetCandidate = moveMode && room.matchId !== moveMode.fromMatchId && room.status === 'active';
             return (
               <div
@@ -110,7 +125,7 @@ export default function HostRoundDashboard({ sessionId }: Props) {
                   <span className="text-xs font-semibold text-gray-500 uppercase">
                     Room {idx + 1}
                     {room.isTrio && <span className="ml-1 text-blue-500">(Trio)</span>}
-                    {(room as any).isManual && <span className="ml-1 text-purple-500">(Manual)</span>}
+                    {room.isManual && <span className="ml-1 text-purple-500">(Manual)</span>}
                   </span>
                   <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                     room.status === 'active' ? 'bg-emerald-100 text-emerald-700' :
@@ -122,7 +137,7 @@ export default function HostRoundDashboard({ sessionId }: Props) {
                   </span>
                 </div>
                 <div className="space-y-1.5">
-                  {room.participants.map(p => (
+                  {room.participants.map((p: any) => (
                     <div key={p.userId} className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         {p.isConnected ? (
@@ -158,8 +173,7 @@ export default function HostRoundDashboard({ sessionId }: Props) {
                 {isTargetCandidate && (
                   <p className="text-xs text-blue-500 text-center mt-2 font-medium">Click to move here</p>
                 )}
-                {/* Per-room +2 min extend — only for manual breakout rooms with custom timer */}
-                {room.status === 'active' && !moveMode && (room as any).isManual && (
+                {room.status === 'active' && !moveMode && room.isManual && (
                   <div className="flex justify-end mt-2">
                     <button
                       onClick={(e) => { e.stopPropagation(); extendBreakoutRoom(room.matchId); }}
@@ -172,8 +186,41 @@ export default function HostRoundDashboard({ sessionId }: Props) {
                 )}
               </div>
             );
-          })}
-        </div>
+          };
+
+          if (!showSplit) {
+            return (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {roundDashboard.rooms.map((r, i) => renderRoomCard(r, i))}
+              </div>
+            );
+          }
+
+          return (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 px-1">
+                  <Radio className="h-3.5 w-3.5 text-emerald-500" />
+                  <h3 className="text-sm font-semibold text-gray-700">Algorithm rounds</h3>
+                  <span className="text-xs text-gray-400">{algorithmRooms.length} room{algorithmRooms.length !== 1 ? 's' : ''}</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {algorithmRooms.map((r, i) => renderRoomCard(r, i))}
+                </div>
+              </div>
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 px-1">
+                  <Clock className="h-3.5 w-3.5 text-purple-500" />
+                  <h3 className="text-sm font-semibold text-gray-700">Manual breakouts</h3>
+                  <span className="text-xs text-gray-400">{manualRooms.length} room{manualRooms.length !== 1 ? 's' : ''}</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {manualRooms.map((r, i) => renderRoomCard(r, i))}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Bye Participants */}
         {roundDashboard.byeParticipants.length > 0 && (

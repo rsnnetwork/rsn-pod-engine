@@ -44,15 +44,21 @@ export default function ReactionBar({ sessionId }: { sessionId: string }) {
       const reaction = REACTIONS.find(r => r.type === data.type);
       if (!reaction) return;
 
+      // Bug 10 (April 19) — Meet/Zoom-style: anchor reaction to the
+      // sender's tile (via store), persist 8 seconds. Replaces the
+      // floating-emoji-only UX so people can SEE who reacted.
+      useSessionStore.getState().setTileReaction(data.userId, reaction.emoji, data.displayName);
+      setTimeout(() => {
+        useSessionStore.getState().clearTileReaction(data.userId);
+      }, 8000);
+
+      // Keep the floating animation as a brief secondary cue (1.5s).
       const id = `${data.timestamp}-${data.userId}-${Math.random()}`;
-      const x = 20 + Math.random() * 60; // random horizontal position 20-80%
-
+      const x = 20 + Math.random() * 60;
       setFloatingReactions(prev => [...prev, { id, emoji: reaction.emoji, displayName: data.displayName, x }]);
-
-      // Remove after animation
       setTimeout(() => {
         setFloatingReactions(prev => prev.filter(r => r.id !== id));
-      }, 2500);
+      }, 1500);
     };
 
     socket.on('reaction:received', handler);

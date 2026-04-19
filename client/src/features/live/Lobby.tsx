@@ -15,7 +15,7 @@ async function loadBgProcessors() {
     return { BackgroundBlur: _bgBlur, VirtualBackground: _vBg };
   } catch { return null; }
 }
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, memo } from 'react';
 import { useSessionStore } from '@/stores/sessionStore';
 import { getSocket } from '@/lib/socket';
 import {
@@ -29,6 +29,20 @@ import {
 import { isTrackReference } from '@livekit/components-core';
 import '@livekit/components-styles';
 import { Track } from 'livekit-client';
+
+// Bug 10 (April 19) — Meet/Zoom-style reaction badge anchored above
+// the lobby tile name plate. Subscribes only to this user's entry so
+// other tiles don't re-render when someone reacts.
+const LobbyTileReaction = memo(function LobbyTileReaction({ userId }: { userId?: string }) {
+  const reaction = useSessionStore(s => userId ? s.tileReactions[userId] : undefined);
+  if (!reaction) return null;
+  return (
+    <div className="absolute bottom-9 left-1.5 flex items-center gap-1 bg-black/80 text-white rounded-full px-2 py-0.5 shadow-lg animate-fade-in pointer-events-none z-20">
+      <span className="text-base leading-none">{reaction.emoji}</span>
+      <span className="text-[10px] font-medium truncate max-w-[120px]">{reaction.displayName}</span>
+    </div>
+  );
+});
 
 function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: string }) {
   const tracks = useTracks(
@@ -155,6 +169,8 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
             <MicOff className="h-2.5 w-2.5 text-[#1a1a2e]" />
           </div>
         )}
+        {/* Bug 10 (April 19) — anchored reaction badge above the name plate. */}
+        <LobbyTileReaction userId={trackRef.participant.identity} />
       </div>
     );
   };

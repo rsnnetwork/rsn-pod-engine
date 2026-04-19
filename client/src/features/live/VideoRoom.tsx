@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, memo } from 'react';
 import { useParams } from 'react-router-dom';
 import { useSessionStore } from '@/stores/sessionStore';
 import { formatTime } from '@/lib/utils';
@@ -49,16 +49,34 @@ function userDisplayLabel(
   return 'Partner';
 }
 
-function ConnectionIndicator() {
+// Bug 8.7 (April 19) — memo'd. ConnectionIndicator has no props/state so
+// React skips re-render when the parent re-renders for unrelated reasons
+// (timer tick, dashboard update, etc.). Eliminates the visible flashing
+// reported during live testing on the breakout-room toolbar.
+const ConnectionIndicator = memo(function ConnectionIndicator() {
   return (
     <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20">
       <Wifi className="h-3 w-3 text-emerald-400" />
       <span className="text-xs text-emerald-400">Connected</span>
     </div>
   );
-}
+});
 
-function VideoTile({ trackRef, label, isWaiting, isPinned }: { trackRef?: any; label: string; isWaiting?: boolean; isPinned?: boolean }) {
+// Bug 10 (April 19) — anchored reaction badge above the tile name.
+// Subscribes ONLY to the per-user reaction entry so unrelated tiles
+// don't re-render when a different person reacts. Auto-clears after 8s.
+const TileReaction = memo(function TileReaction({ userId }: { userId?: string }) {
+  const reaction = useSessionStore(s => userId ? s.tileReactions[userId] : undefined);
+  if (!reaction) return null;
+  return (
+    <div className="absolute bottom-10 left-2 flex items-center gap-1 bg-black/80 text-white rounded-full px-2 py-0.5 shadow-lg animate-fade-in pointer-events-none z-20">
+      <span className="text-base leading-none">{reaction.emoji}</span>
+      <span className="text-[10px] font-medium truncate max-w-[120px]">{reaction.displayName}</span>
+    </div>
+  );
+});
+
+function VideoTile({ trackRef, label, isWaiting, isPinned, userId }: { trackRef?: any; label: string; isWaiting?: boolean; isPinned?: boolean; userId?: string }) {
   const hasVideo = trackRef?.publication?.track;
   // Bug 2 + Bug 6 (April 18 Dr Arch): VideoTile fills its parent cell, but
   // the inner VideoTrack uses object-CONTAIN (not cover). Reasoning:
@@ -87,11 +105,16 @@ function VideoTile({ trackRef, label, isWaiting, isPinned }: { trackRef?: any; l
       <div className="absolute bottom-2 left-2 bg-black/60 rounded px-2 py-1 text-xs text-white max-w-[60%] truncate">
         {label}
       </div>
+      <TileReaction userId={userId} />
     </div>
   );
 }
 
-function VideoStage() {
+// Bug 8.7 (April 19) — memo'd. VideoStage has no props; its internal
+// selectors (currentPartners, useTracks, useParticipants) trigger their
+// own re-renders when relevant. Memoization stops it from re-rendering
+// when the parent VideoRoom re-renders for unrelated reasons.
+const VideoStage = memo(function VideoStage() {
   const tracks = useTracks(
     [
       { source: Track.Source.Camera, withPlaceholder: true },
@@ -101,7 +124,12 @@ function VideoStage() {
   );
   useParticipants(); // Keep subscribed for LiveKit track updates
   const { localParticipant } = useLocalParticipant();
-  const { currentPartners } = useSessionStore();
+  // Bug 8.7 (April 19) — selector pattern (was destructuring whole store).
+  // Whole-store subscriptions made VideoStage re-render on EVERY field
+  // change in the store (timer tick, dashboard refresh, participant
+  // updates, etc.) which propagated to MediaControls + Leave/Main Room
+  // buttons, causing the visible "flashing" reported during live testing.
+  const currentPartners = useSessionStore(s => s.currentPartners);
   const [pinnedSid, setPinnedSid] = useState<string | null>(null);
 
   const cameraTracks = tracks.filter(t => t.source === Track.Source.Camera);
@@ -109,11 +137,12 @@ function VideoStage() {
   const remoteTracks = cameraTracks.filter(t => t.participant.sid !== localParticipant.sid);
 
   const allTiles = [
-    { trackRef: localTrack, label: 'You', sid: localParticipant.sid },
+    { trackRef: localTrack, label: 'You', sid: localParticipant.sid, userId: localParticipant.identity },
     ...remoteTracks.map((rt, i) => ({
       trackRef: rt,
       label: userDisplayLabel(rt.participant.name || currentPartners[i]),
       sid: rt.participant.sid,
+      userId: rt.participant.identity,
     })),
   ];
 
@@ -133,7 +162,7 @@ function VideoStage() {
             and avoids the huge black bar below the video on tall windows. */}
         <div className="flex-1 min-h-0 flex items-center justify-center cursor-pointer" onClick={() => setPinnedSid(null)}>
           <div className="relative w-full" style={{ aspectRatio: '16 / 9', maxHeight: '100%' }}>
-            <VideoTile trackRef={pinnedTile.trackRef} label={pinnedTile.label} isPinned />
+            <VideoTile trackRef={pinnedTile.trackRef} label={pinnedTile.label} isPinned userId={pinnedTile.userId} />
             <div className="absolute top-2 right-2 bg-black/60 text-white text-[10px] px-2 py-0.5 rounded-full">
               Pinned · click to unpin
             </div>
@@ -143,7 +172,7 @@ function VideoStage() {
         <div className="flex gap-3 h-28 shrink-0">
           {unpinnedTiles.map(t => (
             <div key={t.sid} className="flex-1 cursor-pointer" onClick={() => setPinnedSid(t.sid)}>
-              <VideoTile trackRef={t.trackRef} label={t.label} />
+              <VideoTile trackRef={t.trackRef} label={t.label} userId={t.userId} />
             </div>
           ))}
         </div>
@@ -174,13 +203,13 @@ function VideoStage() {
             {remoteTracks.map((rt, i) => (
               <div key={rt.participant.sid} className="h-full flex items-center justify-center cursor-pointer" onClick={() => setPinnedSid(rt.participant.sid)}>
                 <div className="w-full" style={{ aspectRatio: '16 / 9', maxHeight: '100%' }}>
-                  <VideoTile trackRef={rt} label={userDisplayLabel(rt.participant.name || currentPartners[i])} />
+                  <VideoTile trackRef={rt} label={userDisplayLabel(rt.participant.name || currentPartners[i])} userId={rt.participant.identity} />
                 </div>
               </div>
             ))}
             <div className="h-full flex items-center justify-center cursor-pointer" onClick={() => setPinnedSid(localParticipant.sid)}>
               <div className="w-full" style={{ aspectRatio: '16 / 9', maxHeight: '100%' }}>
-                <VideoTile trackRef={localTrack} label="You" />
+                <VideoTile trackRef={localTrack} label="You" userId={localParticipant.identity} />
               </div>
             </div>
           </div>
@@ -189,7 +218,7 @@ function VideoStage() {
           {!isTrio && (
             <div className="md:hidden h-full relative">
               <div className="h-full cursor-pointer" onClick={() => setPinnedSid(remoteTracks[0].participant.sid)}>
-                <VideoTile trackRef={remoteTracks[0]} label={userDisplayLabel(remoteTracks[0].participant.name || currentPartners[0])} />
+                <VideoTile trackRef={remoteTracks[0]} label={userDisplayLabel(remoteTracks[0].participant.name || currentPartners[0])} userId={remoteTracks[0].participant.identity} />
               </div>
               <div
                 className="absolute top-3 right-3 w-32 h-44 sm:w-36 sm:h-48 rounded-xl overflow-hidden shadow-lg border-2 border-white/80 z-10 bg-black"
@@ -197,7 +226,7 @@ function VideoStage() {
                 style={{ cursor: 'pointer' }}
               >
                 <div className="absolute inset-0">
-                  <VideoTile trackRef={localTrack} label="You" />
+                  <VideoTile trackRef={localTrack} label="You" userId={localParticipant.identity} />
                 </div>
               </div>
             </div>
@@ -211,7 +240,7 @@ function VideoStage() {
               <div className="h-full grid grid-cols-1 gap-2">
                 {remoteTracks.map((rt, i) => (
                   <div key={rt.participant.sid} className="h-full min-h-0 cursor-pointer" onClick={() => setPinnedSid(rt.participant.sid)}>
-                    <VideoTile trackRef={rt} label={userDisplayLabel(rt.participant.name || currentPartners[i])} />
+                    <VideoTile trackRef={rt} label={userDisplayLabel(rt.participant.name || currentPartners[i])} userId={rt.participant.identity} />
                   </div>
                 ))}
               </div>
@@ -221,7 +250,7 @@ function VideoStage() {
                 style={{ cursor: 'pointer' }}
               >
                 <div className="absolute inset-0">
-                  <VideoTile trackRef={localTrack} label="You" />
+                  <VideoTile trackRef={localTrack} label="You" userId={localParticipant.identity} />
                 </div>
               </div>
             </div>
@@ -229,15 +258,15 @@ function VideoStage() {
         </>
       ) : (
         <div className={`h-full grid ${gridClass} gap-4`}>
-          <VideoTile trackRef={localTrack} label="You" />
+          <VideoTile trackRef={localTrack} label="You" userId={localParticipant.identity} />
           {currentPartners.map((p, i) => (
-            <VideoTile key={p.userId || i} label={userDisplayLabel(p)} isWaiting />
+            <VideoTile key={p.userId || i} label={userDisplayLabel(p)} isWaiting userId={p.userId} />
           ))}
         </div>
       )}
     </div>
   );
-}
+});
 
 const BG_PRESETS = [
   { label: 'None', mode: 'disabled' as const, preview: null },
@@ -248,7 +277,10 @@ const BG_PRESETS = [
   { label: 'Abstract', mode: 'virtual-background' as const, preview: 'https://images.unsplash.com/photo-1557683316-973673baf926?w=400&q=80', image: 'https://images.unsplash.com/photo-1557683316-973673baf926?w=1280&q=80' },
 ];
 
-function MediaControls() {
+// Bug 8.7 (April 19) — memo'd. MediaControls has its own internal state
+// (mic/cam/bg toggles) and doesn't depend on parent props. Memoization
+// stops the toolbar from re-rendering on every timer tick.
+const MediaControls = memo(function MediaControls() {
   const { localParticipant } = useLocalParticipant();
   const [micEnabled, setMicEnabled] = useState(true);
   const [camEnabled, setCamEnabled] = useState(true);
@@ -390,7 +422,7 @@ function MediaControls() {
       )}
     </div>
   );
-}
+});
 
 function PartnerLeftAutoReturn({ sessionId }: { sessionId: string }) {
   const [countdown, setCountdown] = useState(5);

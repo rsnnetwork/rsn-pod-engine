@@ -94,6 +94,10 @@ interface SessionLiveState {
   leftCurrentRound: boolean;
   lastRatedRound: number;
   isPaused: boolean;
+  // Bug 10 (April 19) — Meet/Zoom-style reactions anchored to the
+  // participant's tile. Replaces the floating-animation-only UX so
+  // people can actually see WHO reacted.
+  tileReactions: Record<string, { emoji: string; displayName: string; expiresAt: number }>;
 
   setPhase: (phase: SessionPhase) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
@@ -149,6 +153,9 @@ interface SessionLiveState {
   setLeftCurrentRound: (v: boolean) => void;
   setLastRatedRound: (r: number) => void;
   setIsPaused: (v: boolean) => void;
+  // Bug 10 — reaction anchored to a participant tile for ~8s.
+  setTileReaction: (userId: string, emoji: string, displayName: string) => void;
+  clearTileReaction: (userId: string) => void;
 
   reset: () => void;
 }
@@ -193,6 +200,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   leftCurrentRound: false,
   lastRatedRound: 0,
   isPaused: false,
+  tileReactions: {},
 
   setPhase: (phase) => set({ phase }),
   setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
@@ -285,6 +293,18 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   setLeftCurrentRound: (leftCurrentRound) => set({ leftCurrentRound }),
   setLastRatedRound: (lastRatedRound) => set({ lastRatedRound }),
   setIsPaused: (isPaused) => set({ isPaused }),
+  setTileReaction: (userId, emoji, displayName) => set((s) => ({
+    tileReactions: {
+      ...s.tileReactions,
+      [userId]: { emoji, displayName, expiresAt: Date.now() + 8000 },
+    },
+  })),
+  clearTileReaction: (userId) => set((s) => {
+    if (!s.tileReactions[userId]) return {};
+    const next = { ...s.tileReactions };
+    delete next[userId];
+    return { tileReactions: next };
+  }),
   updateRoomStatus: (matchId, status, participants) => set((s) => {
     if (!s.roundDashboard) return {};
     return {
@@ -300,7 +320,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
     phase: 'lobby', connectionStatus: 'connecting', transitionStatus: null,
     sessionStatus: 'scheduled', hostInLobby: false, hostUserId: null, totalRounds: 5,
     participants: [], currentMatch: null, currentPartners: [], currentMatchId: null,
-    timerSeconds: 0, timerEndsAt: null, currentRound: 0, broadcasts: [], error: null,
+    timerSeconds: 0, timerEndsAt: null, currentRound: 0, broadcasts: [], error: null, tileReactions: {},
     isReconnecting: false, isByeRound: false, liveKitToken: null, livekitUrl: null, currentRoomId: null,
     lobbyToken: null, lobbyUrl: null, lobbyRoomId: null,
     timerVisibility: 'always_visible', breakoutTimerHidden: false, matchPreview: null,
