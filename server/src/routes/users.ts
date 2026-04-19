@@ -106,6 +106,29 @@ router.get(
         res.json({ success: true, data: [] });
         return;
       }
+      // Bug 21 (April 19) — admins/super_admins bypass the encounter-history
+      // filter. They can see ALL platform users in the search (same logic
+      // as /users/search), since admins are explicitly trusted to invite
+      // anyone. Regular users still see only their connected (previously-
+      // met) users. Single endpoint keeps the client simple.
+      if (hasRoleAtLeast(req.user!.role, UserRole.ADMIN)) {
+        const result = await identityService.getUsers({
+          search: q,
+          pageSize: limit,
+          status: 'active',
+        });
+        const data = result.users.map(u => ({
+          id: u.id,
+          displayName: u.displayName,
+          email: u.email,
+          company: u.company,
+          jobTitle: u.jobTitle,
+          industry: u.industry,
+          avatarUrl: u.avatarUrl,
+        }));
+        res.json({ success: true, data } as ApiResponse);
+        return;
+      }
       const rows = await searchConnectedUsers(req.user!.userId, q, limit);
       // Map snake_case DB fields to camelCase for client consistency with /users/search
       const data = rows.map(u => ({
