@@ -224,11 +224,21 @@ export default function useSessionSocket(sessionId: string) {
       store.setPartnerDisconnected(false);
       store.setTransitionStatus(null);
       store.setMatchPreview(null);
-      // Bug 8.5: store the authoritative endsAt; the 1s interval just
-      // triggers tickTimer() which RECOMPUTES from endsAt (no local
-      // decrement). Eliminates drift from tab throttling, sleep, missed
-      // syncs.
-      store.setTimerEndsAt(new Date(data.endsAt));
+      // Bug 16 (April 19) — clock-skew-immune: trust server's
+      // durationSeconds (relative) over endsAt (absolute). Compute the
+      // local endsAt as `clientNow + duration*1000` so display is
+      // computed against the SAME clock that ticks. The 10s drift was
+      // caused by computing `(serverAbsoluteEndsAt - clientNow)` when
+      // host's clock differed from server's by 10s.
+      // Also: explicitly reset isPaused so a stale pause flag from a
+      // prior round/manual room doesn't carry over and freeze the new
+      // round's tick.
+      store.setIsPaused(false);
+      const duration = typeof data.durationSeconds === 'number'
+        ? data.durationSeconds
+        : Math.max(0, Math.floor((new Date(data.endsAt).getTime() - Date.now()) / 1000));
+      store.setTimer(duration); // explicit reset so stale value (e.g. ended manual room's 8:20) doesn't leak
+      store.setTimerEndsAt(new Date(Date.now() + duration * 1000));
       clearTimer();
       intervalRef.current = setInterval(() => store.tickTimer(), 1000);
     });
@@ -533,15 +543,19 @@ export default function useSessionSocket(sessionId: string) {
       }
       if (data.paused === false) store.setIsPaused(false);
 
-      // Bug 8.5 — non-paused path: source-of-truth is server's endsAt.
-      // setTimerEndsAt also recomputes timerSeconds = ceil((endsAt - now) / 1000)
-      // immediately so the display jumps to the correct value within one
-      // socket round-trip — no waiting for the next 1s tick.
-      if (data.endsAt) {
-        store.setTimerEndsAt(new Date(data.endsAt));
-      } else if (typeof data.secondsRemaining === 'number') {
-        // Fallback: server didn't send endsAt (older payload, transitional).
-        store.setTimer(data.secondsRemaining);
+      // Bug 16 (April 19) — clock-skew immune. Use server's
+      // secondsRemaining as the source of truth (relative time = no
+      // clock skew). Compute local endsAt = clientNow + secondsRemaining
+      // *1000 so subsequent ticks recompute against the SAME clock that
+      // ticks. Drops the 10s "host pause/resume drift" caused by clock
+      // differences between host machine and server.
+      if (typeof data.secondsRemaining === 'number') {
+        store.setTimerEndsAt(new Date(Date.now() + data.secondsRemaining * 1000));
+      } else if (data.endsAt) {
+        // Fallback if no secondsRemaining (older server payload during
+        // rolling deploys) — best-effort using absolute timestamp.
+        const remaining = Math.max(0, Math.floor((new Date(data.endsAt).getTime() - Date.now()) / 1000));
+        store.setTimerEndsAt(new Date(Date.now() + remaining * 1000));
       }
 
       // Always clear existing interval then start fresh — prevents ghost timer overlap.

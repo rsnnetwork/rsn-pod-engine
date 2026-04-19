@@ -25,19 +25,15 @@ describe('Bug 6 — VideoTile uses object-contain (preserves full source frame)'
     );
   });
 
-  it('VideoTrack className uses object-contain', () => {
+  it('VideoTrack className supports both object-contain (default) and object-cover (PIP)', () => {
+    // Bug 16 (April 19) — VideoTile now accepts a fillMode prop. Default is
+    // contain (breakout tiles, no crop). PIP self-view uses cover (small
+    // portrait container — contain would visibly shrink the user via side
+    // bars). The className expression is a ternary on fillMode.
     const videoTrackBlocks = videoRoomSrc.match(/<VideoTrack[\s\S]*?\/>/g) || [];
     expect(videoTrackBlocks.length).toBeGreaterThan(0);
     for (const block of videoTrackBlocks) {
-      expect(block).toMatch(/object-contain/);
-    }
-  });
-
-  it('VideoTrack className never uses object-cover (would re-introduce desktop crop bug)', () => {
-    const videoTrackBlocks = videoRoomSrc.match(/<VideoTrack[\s\S]*?\/>/g) || [];
-    expect(videoTrackBlocks.length).toBeGreaterThan(0);
-    for (const block of videoTrackBlocks) {
-      expect(block).not.toMatch(/object-cover/);
+      expect(block).toMatch(/fillMode\s*===\s*['"]contain['"][\s\S]*object-contain[\s\S]*object-cover/);
     }
   });
 
@@ -47,10 +43,12 @@ describe('Bug 6 — VideoTile uses object-contain (preserves full source frame)'
     expect(videoRoomSrc).toMatch(/hasVideo\s*\?\s*['"`]bg-black/);
   });
 
-  it('Mobile self-view PIP wrapper still renders VideoTile (fix propagates)', () => {
-    // Both PIP wrappers (1:1 mobile + trio mobile) use VideoTile, so the
-    // object-contain rule applies there too automatically.
-    const pipMatches = videoRoomSrc.match(/w-32 h-44 sm:w-36 sm:h-48[\s\S]{0,400}<VideoTile\s+trackRef=\{localTrack\}\s+label="You"/g);
+  it('Mobile self-view PIP renders VideoTile with fillMode="cover"', () => {
+    // Bug 16 (April 19) — PIP self-views explicitly opt into cover mode.
+    // contain visibly shrinks the user in a small portrait container
+    // (side bars on portrait video inside portrait container). Confirm
+    // BOTH PIP wrappers (1:1 mobile + trio mobile) pass fillMode="cover".
+    const pipMatches = videoRoomSrc.match(/w-32 h-44 sm:w-36 sm:h-48[\s\S]{0,1000}<VideoTile[\s\S]{0,500}fillMode="cover"/g);
     expect(pipMatches).not.toBeNull();
     expect((pipMatches || []).length).toBeGreaterThanOrEqual(2);
   });

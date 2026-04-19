@@ -136,18 +136,16 @@ describe('Dr Arch April 18 — Bug 2: 1:1 + trio breakout tiles fill available s
     expect(videoRoomSrc).toMatch(/md:hidden h-full relative[\s\S]{0,400}h-full cursor-pointer/);
   });
 
-  it('VideoTrack className uses object-contain (Bug 6 — supersedes Bug #2 hotfix)', () => {
-    // Bug 6 (April 18 round 2): the original object-cover universal fix
-    // cropped portrait phone video so aggressively on landscape desktop
-    // tiles that only the centre of the face was visible. The architectural
-    // decision now is object-CONTAIN with bg-black on the parent — full
-    // source frame visible, letterbox padded by the tile's bg colour, which
-    // matches Google Meet / FaceTime portrait-on-desktop behaviour.
+  it('VideoTrack className supports both contain (default) and cover (PIP) — Bug 6 + Bug 16', () => {
+    // Bug 6 (April 18 r2): default to object-contain so portrait phone
+    // video on landscape desktop tiles isn't aggressively cropped.
+    // Bug 16 (April 19): PIP self-view opts into object-cover because
+    // portrait video in a small portrait container looks too small with
+    // contain (visible side bars). VideoTile now picks via fillMode prop.
     const videoTrackBlocks = videoRoomSrc.match(/<VideoTrack[\s\S]*?\/>/g) || [];
     expect(videoTrackBlocks.length).toBeGreaterThan(0);
     for (const block of videoTrackBlocks) {
-      expect(block).toMatch(/object-contain/);
-      expect(block).not.toMatch(/object-cover/);
+      expect(block).toMatch(/fillMode\s*===\s*['"]contain['"][\s\S]*object-contain[\s\S]*object-cover/);
     }
   });
 });

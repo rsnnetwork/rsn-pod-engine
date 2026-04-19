@@ -76,7 +76,7 @@ const TileReaction = memo(function TileReaction({ userId }: { userId?: string })
   );
 });
 
-function VideoTile({ trackRef, label, isWaiting, isPinned, userId }: { trackRef?: any; label: string; isWaiting?: boolean; isPinned?: boolean; userId?: string }) {
+function VideoTile({ trackRef, label, isWaiting, isPinned, userId, fillMode = 'contain' }: { trackRef?: any; label: string; isWaiting?: boolean; isPinned?: boolean; userId?: string; fillMode?: 'contain' | 'cover' }) {
   const hasVideo = trackRef?.publication?.track;
   // Bug 2 + Bug 6 (April 18 Dr Arch): VideoTile fills its parent cell, but
   // the inner VideoTrack uses object-CONTAIN (not cover). Reasoning:
@@ -89,9 +89,9 @@ function VideoTile({ trackRef, label, isWaiting, isPinned, userId }: { trackRef?
   // The black `bg-black` parent makes the letterbox feel intentional and
   // unobtrusive instead of looking like a broken tile.
   return (
-    <div className={`relative rounded-xl overflow-hidden ${hasVideo ? 'bg-black' : 'bg-[#3c4043]'} ${isPinned ? 'h-full w-full' : 'h-full w-full'} flex items-center justify-center`}>
+    <div className={`relative rounded-xl overflow-hidden ${fillMode === 'contain' ? 'rsn-tile-contain' : ''} ${hasVideo ? 'bg-black' : 'bg-[#3c4043]'} ${isPinned ? 'h-full w-full' : 'h-full w-full'} flex items-center justify-center`}>
       {hasVideo ? (
-        <VideoTrack trackRef={trackRef} className="h-full w-full object-contain" />
+        <VideoTrack trackRef={trackRef} className={`h-full w-full ${fillMode === 'contain' ? 'object-contain' : 'object-cover'}`} />
       ) : (
         <div className="flex flex-col items-center gap-2">
           <div className={`h-20 w-20 rounded-full bg-[#5f6368] flex items-center justify-center ${isWaiting ? 'animate-pulse' : ''}`}>
@@ -226,7 +226,10 @@ const VideoStage = memo(function VideoStage() {
                 style={{ cursor: 'pointer' }}
               >
                 <div className="absolute inset-0">
-                  <VideoTile trackRef={localTrack} label="You" userId={localParticipant.identity} />
+                  {/* Bug 16: PIP self-view uses cover mode — small portrait
+                      container with portrait source looks too small with
+                      contain (visible side bars shrink the user). */}
+                  <VideoTile trackRef={localTrack} label="You" userId={localParticipant.identity} fillMode="cover" />
                 </div>
               </div>
             </div>
@@ -250,7 +253,10 @@ const VideoStage = memo(function VideoStage() {
                 style={{ cursor: 'pointer' }}
               >
                 <div className="absolute inset-0">
-                  <VideoTile trackRef={localTrack} label="You" userId={localParticipant.identity} />
+                  {/* Bug 16: PIP self-view uses cover mode — small portrait
+                      container with portrait source looks too small with
+                      contain (visible side bars shrink the user). */}
+                  <VideoTile trackRef={localTrack} label="You" userId={localParticipant.identity} fillMode="cover" />
                 </div>
               </div>
             </div>

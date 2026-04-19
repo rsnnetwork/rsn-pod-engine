@@ -385,13 +385,17 @@ export async function transitionToRound(
       }
     }
 
-    // Broadcast round start
+    // Broadcast round start. Bug 16 (April 19) — also send durationSeconds
+    // so the client computes its local endsAt as `clientNow + duration*1000`
+    // (clock-skew-immune). Without this, host/participants with clocks out
+    // of sync with the server saw different remaining times.
     const endsAt = new Date(Date.now() + activeSession.config.roundDurationSeconds * 1000);
     io.to(sessionRoom(sessionId)).emit('session:round_started', {
       sessionId,
       roundNumber,
       totalRounds: activeSession.config.numberOfRounds,
       endsAt: endsAt.toISOString(),
+      durationSeconds: activeSession.config.roundDurationSeconds,
     });
 
     io.to(sessionRoom(sessionId)).emit('session:status_changed', {
