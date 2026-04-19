@@ -505,7 +505,28 @@ export default function useSessionSocket(sessionId: string) {
 
     // ── Host round dashboard (breakout room monitoring) ──
     socket.on('host:round_dashboard', (data: any) => {
-      store.setRoundDashboard(data);
+      // Bug 20 (April 19) — clock-skew-immune per-room manual timer.
+      // Server sends `roomSecondsRemaining` (relative) per room. Rebase
+      // the absolute `roomEndsAt` to the CLIENT's clock so the host
+      // dashboard's per-room countdown matches what the participant sees,
+      // even if the host's machine clock differs from the server's.
+      // This is the same fix shape as Bug 16 (algorithm round timer).
+      const nowMs = Date.now();
+      const rebased = {
+        ...data,
+        rooms: Array.isArray(data.rooms)
+          ? data.rooms.map((r: any) => {
+              if (typeof r.roomSecondsRemaining === 'number' && r.roomSecondsRemaining > 0) {
+                return {
+                  ...r,
+                  roomEndsAt: new Date(nowMs + r.roomSecondsRemaining * 1000).toISOString(),
+                };
+              }
+              return r;
+            })
+          : data.rooms,
+      };
+      store.setRoundDashboard(rebased);
     });
 
     socket.on('host:room_status_update', (data: any) => {

@@ -653,6 +653,15 @@ export async function emitHostDashboard(io: SocketServer, sessionId: string): Pr
         // Per-room timer (manual rooms only — algorithm rooms share the
         // session-level round timer at the dashboard's `timerEndsAt`).
         const roomTimer = isManual ? roomTimers.get(m.id) : undefined;
+        // Bug 20 (April 19) — also send roomSecondsRemaining (relative)
+        // so the client computes a CLOCK-SKEW-IMMUNE local endsAt
+        // (clientNow + secondsRemaining*1000). Sending only the absolute
+        // ISO endsAt produces visible drift between host and participant
+        // when their machine clocks differ from the server (same root
+        // cause as Bug 16 for the algorithm round timer).
+        const roomSecondsRemaining = roomTimer
+          ? Math.max(0, Math.ceil((roomTimer.endsAt.getTime() - Date.now()) / 1000))
+          : null;
         return {
           matchId: m.id,
           roomId: m.roomId || '',
@@ -664,6 +673,7 @@ export async function emitHostDashboard(io: SocketServer, sessionId: string): Pr
           // timer (host chose "no limit") or when this is an algorithm room.
           roomEndsAt: roomTimer ? roomTimer.endsAt.toISOString() : null,
           roomStartedAt: roomTimer ? roomTimer.startedAt.toISOString() : null,
+          roomSecondsRemaining,
         };
       });
 
