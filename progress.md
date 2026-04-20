@@ -4743,3 +4743,36 @@ Replaced with a single `incrementRoundsCompletedBatch` call backed by an `UPDATE
 
 A3 — session-scoped timeout registry (feature-flagged).
 
+
+---
+
+## 2026-04-20 — Tier-1 A4: Socket handshake reuses HTTP auth cache
+
+**Timestamp (local):** 2026-04-20
+**Task ID:** Tier-1 A4
+**Status:** Completed
+
+### What changed
+
+Socket.IO `io.use` middleware at `server/src/index.ts` previously ran a raw `SELECT status FROM users WHERE id = $1` per handshake. During a lobby surge (200 users reconnecting after a deploy) the pg pool (max=25) saturated, causing legitimate sockets to see "Invalid token" errors that were actually connection timeouts.
+
+Exported `isUserActive` from `middleware/auth.ts` (was private) and called it in the socket handshake. Both HTTP and WebSocket layers now share the same 60-second in-process cache. Repeat handshakes hit the cache in under 1 ms.
+
+### Files touched
+
+- `server/src/middleware/auth.ts` — made `isUserActive` a public export; added JSDoc explaining the Tier-1 A4 share
+- `server/src/index.ts` — socket `io.use` now calls `isUserActive` instead of raw query; removed unused `dbQuery` alias import
+- `server/src/__tests__/services/tier1-a4-socket-auth-cache.test.ts` — 7 new tests pinning the shared cache contract
+
+### Tests
+
+- 471/471 server tests pass (was 464 — +7 new). 0 broken.
+
+### Behavior-preservation
+
+- Deactivated users now take up to 60 seconds to be kicked from sockets (previously instant). Same grace window already existed for HTTP requests. Admin deactivation flow should call `invalidateUserStatusCache(userId)` for instant kick — that export was already there from prior work.
+
+### Next immediate action
+
+A5 — /health DB-check cache + /health/deep.
+

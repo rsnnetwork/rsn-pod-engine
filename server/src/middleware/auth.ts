@@ -27,7 +27,15 @@ declare global {
 const statusCache = new Map<string, { status: string; cachedAt: number }>();
 const STATUS_CACHE_TTL_MS = 60_000;
 
-async function isUserActive(userId: string): Promise<boolean> {
+/**
+ * Check whether a user is active, with a 60-second in-process cache.
+ *
+ * Exported for reuse by the Socket.IO auth middleware (Tier-1 A4) so both
+ * the HTTP and WebSocket layers share the same cache — previously the
+ * socket handshake hit the DB on every connect, saturating the pool during
+ * lobby-surge reconnects (200 users reconnecting in ~5 s after a deploy).
+ */
+export async function isUserActive(userId: string): Promise<boolean> {
   const cached = statusCache.get(userId);
   if (cached && Date.now() - cached.cachedAt < STATUS_CACHE_TTL_MS) {
     return cached.status === 'active';
