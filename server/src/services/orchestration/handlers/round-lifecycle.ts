@@ -534,13 +534,19 @@ export async function endRound(
         }
       }
 
-      // Increment rounds completed for all participants (including C)
-      await sessionService.incrementRoundsCompleted(sessionId, match.participantAId);
-      await sessionService.incrementRoundsCompleted(sessionId, match.participantBId);
-      if (match.participantCId) {
-        await sessionService.incrementRoundsCompleted(sessionId, match.participantCId);
+    }
+
+    // Tier-1 A2 — batch-increment rounds_completed for every participant in
+    // every match in this round, in a single UPDATE. Replaces 3×N sequential
+    // awaits that took 1.5–4.5 s wall time on 100 matches (during which the
+    // rating:window_open timer was already ticking on the client).
+    const roundUserCounts = new Map<string, number>();
+    for (const match of matches) {
+      for (const pid of [match.participantAId, match.participantBId, match.participantCId]) {
+        if (pid) roundUserCounts.set(pid, (roundUserCounts.get(pid) || 0) + 1);
       }
     }
+    await sessionService.incrementRoundsCompletedBatch(sessionId, roundUserCounts);
 
     // Update participant statuses back to lobby
     await query(

@@ -4709,3 +4709,37 @@ Two behavior-preserving optimisations on the hottest fan-out path (`emitHostDash
 
 A2 — batch `incrementRoundsCompleted` in `endRound` (replace 3×N sequential awaits with one `UPDATE … ANY($2)`).
 
+
+---
+
+## 2026-04-20 — Tier-1 A2: Batch incrementRoundsCompleted in endRound
+
+**Timestamp (local):** 2026-04-20
+**Task ID:** Tier-1 A2
+**Status:** Completed
+
+### What changed
+
+`endRound` previously ran 3×N sequential `incrementRoundsCompleted` awaits — one per participant per match. On 100 matches that's 300 sequential DB round-trips, ~1.5–4.5 s of wall time during which `rating:window_open` was already ticking on the client.
+
+Replaced with a single `incrementRoundsCompletedBatch` call backed by an `UPDATE … FROM (VALUES …) AS v(user_id, cnt)` query. One round-trip regardless of participant count. Preserves the exact pre-batch increment count (if a user appeared in 2 matches in the same round — rare edge case from cancel-then-re-match — they still get +2).
+
+### Files touched
+
+- `server/src/services/session/session.service.ts` — new `incrementRoundsCompletedBatch(sessionId, userCounts: Map)` function with VALUES-clause UPDATE; original single-user function kept
+- `server/src/services/orchestration/handlers/round-lifecycle.ts` — `endRound` builds `roundUserCounts` Map outside the match loop, calls batch once at the end
+- `server/src/__tests__/services/orchestration/tier1-a2-rounds-completed-batch.test.ts` — 7 new tests pinning the batch contract
+
+### Tests
+
+- 464/464 server tests pass (was 457 — +7 new). 0 broken.
+
+### Decisions
+
+- VALUES-clause approach (not `user_id = ANY(...)` with Set dedupe) because it preserves the exact +N count behavior. Set dedupe would have changed +2 → +1 for the rare cancel-then-re-match edge case, which is technically a behavior change.
+- Kept the original `incrementRoundsCompleted(sessionId, userId)` function — still used by other paths and tests.
+
+### Next immediate action
+
+A3 — session-scoped timeout registry (feature-flagged).
+

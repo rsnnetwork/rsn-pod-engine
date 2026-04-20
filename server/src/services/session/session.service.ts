@@ -510,6 +510,42 @@ export async function incrementRoundsCompleted(sessionId: string, userId: string
   );
 }
 
+/**
+ * Tier-1 A2 — batch-increment rounds_completed for many participants in one
+ * query. Replaces N sequential `incrementRoundsCompleted` calls at round-end.
+ *
+ * Accepts a Map<userId, increment-count>. Each user's counter is bumped by
+ * the given count (preserves the pre-batch behavior where a user appearing
+ * in multiple matches in the same round was incremented once per match —
+ * rare, but not a refactor we should bundle into this perf change).
+ *
+ * Uses a VALUES subquery joined against session_participants so it's a
+ * single server round-trip regardless of participant count.
+ */
+export async function incrementRoundsCompletedBatch(
+  sessionId: string,
+  userCounts: Map<string, number>
+): Promise<void> {
+  if (userCounts.size === 0) return;
+
+  const valuePlaceholders: string[] = [];
+  const values: unknown[] = [sessionId];
+  let idx = 2;
+  for (const [userId, count] of userCounts) {
+    valuePlaceholders.push(`($${idx}::uuid, $${idx + 1}::int)`);
+    values.push(userId, count);
+    idx += 2;
+  }
+
+  await query(
+    `UPDATE session_participants sp
+     SET rounds_completed = sp.rounds_completed + v.cnt
+     FROM (VALUES ${valuePlaceholders.join(', ')}) AS v(user_id, cnt)
+     WHERE sp.session_id = $1 AND sp.user_id = v.user_id`,
+    values
+  );
+}
+
 // ─── LiveKit Token Generation ──────────────────────────────────────────────
 
 // ─── Delete Session ─────────────────────────────────────────────────────────
