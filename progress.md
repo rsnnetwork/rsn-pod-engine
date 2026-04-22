@@ -5157,3 +5157,57 @@ Post-fix: a new `presence:room_joined` socket event fires from the client AFTER 
 
 T0-4 — atomic invite acceptance transaction (last of the 4 Tier-0 items).
 
+
+---
+
+## 2026-04-23 — URGENT: Defensive transaction wrappers (production crash fix)
+
+**Timestamp (local):** 2026-04-23
+**Task ID:** Hotfix (supersedes T0-4 in priority)
+**Status:** Completed
+
+### What changed
+
+Production server crashed twice on 2026-04-22 (10:59:44 UTC, 11:10:22 UTC) — both `nonZeroExit: 1` events on Render. Render auto-restarted both times, but a real event during these crashes would have lost in-flight state.
+
+**Root cause:** Postgres terminated an idle-in-transaction connection (Neon's `idle_in_transaction_session_timeout`). The pg client emitted an async `'error'` event with no listener attached. Node converted the unhandled event to `uncaughtException`. The `process.on('uncaughtException', ...)` handler in `server/src/index.ts:415-418` called `process.exit(1)`. Service died.
+
+This wasn't theoretical — both Render `server_failed` events match exactly: same error text, same `nonZeroExit:1`. Confirmed via Render API events + log queries.
+
+### Files touched
+
+- `server/src/db/index.ts` — `transaction()` and `withSessionLock()` now:
+  1. Attach a per-call `client.on('error', ...)` listener that swallows async termination events (only the synchronous error from the next `client.query()` reaches the caller, where it can be handled normally).
+  2. Skip `ROLLBACK` when the connection is already known dead (avoids redundant throw).
+  3. Use `safeRollback()` and `safeRelease()` helpers that wrap pg ops in try/catch + warn-log so secondary errors during cleanup never escape.
+  4. Always remove the error listener in finally (no listener leak).
+- `server/src/__tests__/db/transaction-defensive.test.ts` (new) — 8 source-pattern tests pinning the defensive contract: listener attached/removed, ROLLBACK guard, safeRollback/safeRelease usage in both wrappers.
+
+### Tests
+
+- 567/567 server tests pass (was 559 — +8 new). 0 broken.
+- Server build clean.
+
+### Behavior preservation
+
+- Normal transactions (connection healthy) behave identically — same BEGIN/COMMIT/ROLLBACK semantics, same error propagation to callers.
+- The only behavior change is on the crash path: instead of `process.exit(1)`, the caller receives the synchronous DatabaseError from the next `client.query()` and can handle it (or let it bubble to the request error handler, which sends a 500 to the client). The server stays up.
+- All callers (`acceptInvite`, `withSessionLock`, etc.) continue to throw on transaction failures — only the *uncaught secondary event* is swallowed.
+
+### Why architectural, not patched
+
+- A `try/catch` around each transaction caller would have to be added to every site individually (10+ places) — fragile, easy to miss new ones.
+- Fixing the wrapper itself is a single-point defensive layer that protects all current and future callers.
+- Helpers (`safeRollback`, `safeRelease`) are reusable for future error-handling work.
+- No data semantics change: ROLLBACK is still attempted when the connection might still be alive; only skipped after we know it's dead.
+
+### Why this took priority over T0-4
+
+T0-4 (atomic invite acceptance) is the right architectural fix for the same call site, but the underlying `transaction()` wrapper bug affects ALL transaction callers. Shipping T0-4 alone wouldn't have prevented future crashes from any other transaction-using path.
+
+The T0-4 work in `invite.service.ts` was preserved uncommitted in the working tree and will be the next commit.
+
+### Next immediate action
+
+Resume T0-4 — atomic invite acceptance + redirectTo (the in-progress invite.service.ts changes need their tests + commit).
+
