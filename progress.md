@@ -5573,3 +5573,66 @@ Plus `requireEffectiveRole()` (throws ForbiddenError below threshold) and `canAc
 
 T1-6 — encounter history session-scoped query (small, last Tier-1 item).
 
+
+---
+
+## 2026-04-23 — T1-6: Encounter history session-scoped query + crossEventMemory flag (Issue 11)
+
+**Timestamp (local):** 2026-04-23
+**Task ID:** T1-6 — completing Tier 1
+**Status:** Completed
+
+### What changed
+
+Architectural fix for Issue 11 (Session vs Historical Data). `getEncounterHistoryForUsers` previously returned ALL encounters across ALL events for a user pair. Two failure modes:
+1. A pair who met in Event A was penalised as "already met" in Event B before they actually met in Event B.
+2. Within a single session, encounters from round 1 (just written to encounter_history) double-counted alongside the engine's `usedPairs` Set in round 2+.
+
+Fix:
+- Optional `sessionId` parameter — when provided, filters out encounters whose `last_session_id` matches it. Within-session uniqueness stays in `usedPairs`; cross-event memory stays accurate.
+- Optional `crossEventMemory` parameter — pod owners can opt OUT for repeat-attendance pods (every pair treated as a first meeting). Default true (cross-event memory enabled).
+
+Both `generateSessionSchedule` and `generateSingleRound` now pass `{ sessionId, crossEventMemory }` derived from `sessionConfig.crossEventMemory !== false`.
+
+Verified via DB inspection: `encounter_history.last_session_id` column exists (used by rating service to log session origin per pair).
+
+### Files touched
+
+- `server/src/services/matching/matching.service.ts` — `getEncounterHistoryForUsers` widened to accept options; both callers updated to pass scope + flag
+- `server/src/__tests__/services/matching/t1-6-encounter-scope.test.ts` (new) — 7 tests pinning signature, short-circuit on flag, scope filter, caller wiring, default-behavior preservation
+
+### Tests
+
+- 639/639 server tests pass (was 632 — +7 new). 0 broken.
+- Server build clean.
+
+### Behavior preservation
+
+- Default behavior unchanged for any caller that doesn't pass options (`crossEventMemory === false` is strict equality, so undefined → enabled).
+- Cross-event memory remains the default for new pods. The `crossEventMemory: false` opt-out is per-pod via `sessionConfig.crossEventMemory`.
+- Within-session uniqueness via `usedPairs` Set in matching.engine.ts is unchanged.
+- The `last_session_id IS NULL OR != $2` filter handles legacy encounter rows that pre-date the column.
+
+### Why architectural, not patched
+
+- Single function carries the scope + flag — no duplicated logic.
+- Boolean flag uses strict equality (`!== false`) so default behavior is back-compat for any caller missing the option.
+- Pod-config flag aligns with the existing pattern (numberOfRounds, ratingWindowSeconds, etc. live there too) — pod directors get a single configuration surface.
+
+### TIER 1 COMPLETE
+
+| ID | Item | Commit |
+|---|---|---|
+| T1-1 | Email identity-match guard | c5ba3dd |
+| T1-2 | Decouple onboarding gate | 22abe53 |
+| T1-3 | Pod auto-redirect | 751e158 |
+| T1-4 | Three canonical participant counts | 6dfd1fc |
+| T1-5 | Unified role resolver + permissions:updated + host transfer | d2e7d6a |
+| T1-6 | Encounter history session-scoped + flag | (this) |
+
+Plus Tier 0 (4 items + hotfix) before this. All on staging.
+
+### Next immediate action
+
+T2 batch — 6 UI polish items (parallel-shippable in one commit).
+

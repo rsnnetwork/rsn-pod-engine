@@ -48,9 +48,15 @@ export async function generateSessionSchedule(
 
   const participants = participantsResult.rows;
 
-  // Get encounter history for all participant pairs
+  // T1-6 (Issue 11) — pass sessionId so encounters from THIS session don't
+  // pollute scoring. Read pod's crossEventMemory flag (default true). When
+  // false, the helper returns empty → every pair is treated as a first meeting.
   const userIds = participants.map((p) => p.userId);
-  const encounterHistory = await getEncounterHistoryForUsers(userIds);
+  const crossEventMemory = sessionConfig.crossEventMemory !== false;
+  const encounterHistory = await getEncounterHistoryForUsers(userIds, {
+    sessionId,
+    crossEventMemory,
+  });
 
   // Get any pre-existing round assignments
   const existingRounds = await getExistingRounds(sessionId);
@@ -136,9 +142,14 @@ export async function generateSingleRound(
     );
   }
 
-  // Get encounter history
+  // T1-6 (Issue 11) — same scoping as generateSessionSchedule above:
+  // exclude this session's own encounters from the cross-event memory.
   const userIds = participantsResult.rows.map((p) => p.userId);
-  const encounterHistory = await getEncounterHistoryForUsers(userIds);
+  const crossEventMemory = sessionConfig.crossEventMemory !== false;
+  const encounterHistory = await getEncounterHistoryForUsers(userIds, {
+    sessionId,
+    crossEventMemory,
+  });
 
   // Get excluded pairs (completed/in-progress matches in OTHER rounds — not the current round being regenerated)
   // Manual breakout rooms (is_manual=TRUE) are architecturally independent from
@@ -367,15 +378,45 @@ export async function updateMatchStatus(
 
 // ─── Internal Helpers ───────────────────────────────────────────────────────
 
-async function getEncounterHistoryForUsers(userIds: string[]): Promise<EncounterHistoryEntry[]> {
+/**
+ * Fetch cross-event encounter history for a set of users.
+ *
+ * T1-6 (Issue 11) — `sessionId` is now optional but recommended. When
+ * provided, encounters whose `last_session_id` matches it are filtered
+ * out so the matching engine doesn't penalise pairs as "already met"
+ * for meetings that happened in this *same* session (within-session
+ * uniqueness is already enforced by the engine's `usedPairs` Set —
+ * including those pairs in the cross-event score would double-count
+ * them and surface "already met N times" incorrectly during round 2+).
+ *
+ * `crossEventMemory=false` (pod-config) suppresses ALL prior-event
+ * memory — useful for repeat-attendance pods where directors want the
+ * algorithm to re-pair people who've already met before. Default true
+ * (current behaviour preserved).
+ */
+async function getEncounterHistoryForUsers(
+  userIds: string[],
+  options: { sessionId?: string; crossEventMemory?: boolean } = {},
+): Promise<EncounterHistoryEntry[]> {
   if (userIds.length === 0) return [];
+
+  // Pod opted OUT of cross-event memory → return empty so the engine treats
+  // every pair as a first meeting.
+  if (options.crossEventMemory === false) return [];
+
+  const params: unknown[] = [userIds];
+  let extraWhere = '';
+  if (options.sessionId) {
+    extraWhere = ` AND (last_session_id IS NULL OR last_session_id != $2)`;
+    params.push(options.sessionId);
+  }
 
   const result = await query<EncounterHistoryEntry>(
     `SELECT user_a_id AS "userAId", user_b_id AS "userBId", times_met AS "timesMet",
             last_met_at AS "lastMetAt"
      FROM encounter_history
-     WHERE user_a_id = ANY($1) AND user_b_id = ANY($1)`,
-    [userIds]
+     WHERE user_a_id = ANY($1) AND user_b_id = ANY($1)${extraWhere}`,
+    params
   );
   return result.rows;
 }
