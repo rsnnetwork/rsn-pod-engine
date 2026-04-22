@@ -512,15 +512,23 @@ export async function findOrCreateGoogleUser(
     // Gate: require approved join request or valid invite
     await assertRegistrationAllowed(normalizedEmail, hasValidInvite);
 
-    // Create the user
+    // Create the user.
+    //
+    // T1-2 (Issue 1) — invited users get onboarding_completed=TRUE so they
+    // can join their event/pod immediately without being intercepted by
+    // the onboarding gate. They can complete profile fields later via the
+    // non-blocking banner in AppLayout. Direct sign-ups (no invite) still
+    // default to onboarding_completed=FALSE so they're prompted to fill
+    // out the profile on first visit.
     const id = uuid();
     const displayName = profile.name || normalizedEmail.split('@')[0];
     const firstName = profile.givenName || (profile.name ? profile.name.split(' ')[0] : '');
     const lastName = profile.familyName || (profile.name && profile.name.includes(' ') ? profile.name.split(' ').slice(1).join(' ') : '');
+    const onboardingCompletedDefault = inviteId !== null;
     await query(
-      `INSERT INTO users (id, email, display_name, first_name, last_name, avatar_url, invited_by_user_id, role, status, email_verified)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'member', 'active', TRUE)`,
-      [id, normalizedEmail, displayName, firstName, lastName, profile.picture || null, inviterId]
+      `INSERT INTO users (id, email, display_name, first_name, last_name, avatar_url, invited_by_user_id, role, status, email_verified, onboarding_completed)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'member', 'active', TRUE, $8)`,
+      [id, normalizedEmail, displayName, firstName, lastName, profile.picture || null, inviterId, onboardingCompletedDefault]
     );
     await query(`INSERT INTO user_subscriptions (user_id, plan, status) VALUES ($1, 'free', 'active')`, [id]);
     await query(`INSERT INTO user_entitlements (user_id) VALUES ($1)`, [id]);

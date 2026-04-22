@@ -5325,3 +5325,57 @@ Guard:
 
 T1-2 — decouple onboarding gate from ProtectedRoute (biggest UX win).
 
+
+---
+
+## 2026-04-23 — T1-2: Decouple onboarding gate from ProtectedRoute (Issue 1)
+
+**Timestamp (local):** 2026-04-23
+**Task ID:** T1-2
+**Status:** Completed
+
+### What changed
+
+Architectural fix for Issue 1 (the second half — onboarding-gate over-reach). Pre-fix: `ProtectedRoute` blocked ALL pages (except `/onboarding` and `/sessions/.../live`) when `onboarding_completed=false`. Two failure modes:
+1. Returning users with stale flag got force-re-onboarded (couldn't access anything)
+2. Invited new users got intercepted before they could enter the event/lobby (the documented bug — `/invite/:code` was NOT exempt)
+
+**Architectural fix (three-part):**
+
+1. **`ProtectedRoute.tsx`** — checks ONLY auth now. The legacy gate is preserved behind a feature flag (`VITE_LEGACY_ONBOARDING_GATE=true`) for emergency rollback. Even in legacy mode, `/invite/:code` is now exempt (closes the original bug too).
+
+2. **`AppLayout.tsx`** — non-blocking amber banner at the top of the page when `user.onboardingCompleted=false`. "Complete your profile" message + "Complete now" CTA navigating to `/onboarding`. Banner is suppressed on `/onboarding` itself (no recursion).
+
+3. **`identity.service.ts findOrCreateGoogleUser`** — invited users (when `inviteId` is non-null) created with `onboarding_completed=TRUE`. They join the event immediately and complete profile via the banner. Direct (non-invited) Google sign-ups still default to `FALSE` so they're prompted on first visit.
+
+### Files touched
+
+- `client/src/components/layout/ProtectedRoute.tsx` — gate moved behind `VITE_LEGACY_ONBOARDING_GATE` flag; default code path returns children directly
+- `client/src/components/layout/AppLayout.tsx` — non-blocking banner above main content area
+- `server/src/services/identity/identity.service.ts` — `findOrCreateGoogleUser` sets `onboarding_completed=$8` derived from `inviteId !== null`
+- `server/src/__tests__/services/identity/t1-2-onboarding-gate.test.ts` (new) — 8 tests pinning all three changes (flag mechanism, /invite exemption even in legacy mode, banner conditions, invited-user default)
+
+### Tests
+
+- 597/597 server tests pass (was 589 — +8 new). 0 broken.
+- Server build clean. Client typecheck clean.
+
+### Behavior preservation
+
+- Existing users who completed onboarding (`onboarding_completed=true`): unchanged.
+- Direct (non-invited) sign-ups: still default to `onboarding_completed=false`. They see the banner. They can navigate freely now (vs being force-redirected) but the prompt is visible.
+- The `/onboarding` route itself: still works for users who navigate there.
+- Magic-link path: unchanged — those users still default to `false` (the gate-removal solves the over-reach without needing to flip the flag).
+- Live session, invite acceptance, lobby: all unblocked (was already broken, now fixed).
+
+### Why architectural, not patched
+
+- Banner-vs-redirect is the right architectural pattern: nudge, don't block. Aligns with the principle that onboarding is for collecting data, not gating access.
+- Invited users' `onboarding_completed=true` is set at the right server-side seam (user creation) rather than papered over with client-side exceptions.
+- Legacy flag preserves a clean rollback path AND fixes the original `/invite` bug even in legacy mode (so flipping the flag doesn't reintroduce the worst symptom).
+- `OnboardingGate` wrapper from the original plan was deemed unnecessary — removing the gate entirely is simpler than wrapping specific routes. Profile completion is already independently verifiable on the routes that actually need the data (e.g., matching consumes profile fields directly; if missing, the matching engine already handles gracefully via default scores).
+
+### Next immediate action
+
+T1-3 — pod join auto-redirect to active session.
+

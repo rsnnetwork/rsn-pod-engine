@@ -159,6 +159,23 @@ export default function AppLayout() {
           </div>
         )}
 
+        {/* T1-2 — non-blocking onboarding banner. Replaces the old hard
+            redirect from ProtectedRoute. Users who haven't completed
+            onboarding can use the app; this nudges them without blocking. */}
+        {user && (user as any).onboardingCompleted === false && location.pathname !== '/onboarding' && (
+          <div className="bg-amber-50 border-b border-amber-200 px-4 py-2 flex items-center justify-between gap-3 text-sm">
+            <span className="text-amber-900">
+              <strong>Complete your profile</strong> to unlock matching and a richer experience.
+            </span>
+            <button
+              onClick={() => navigate('/onboarding')}
+              className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-md text-xs font-medium whitespace-nowrap transition-colors"
+            >
+              Complete now
+            </button>
+          </div>
+        )}
+
         <main className="flex-1 overflow-y-auto p-4 md:p-8 bg-white">
           <Outlet />
         </main>
