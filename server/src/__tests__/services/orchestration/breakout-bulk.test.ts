@@ -199,7 +199,18 @@ describe('Task 14 — bulk manual breakout handlers', () => {
   describe('functional — validation errors', () => {
     beforeEach(() => {
       jest.clearAllMocks();
-      mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+      // T1-5 — verifyHost now uses canActAsHost → getEffectiveRole, which
+      // queries sessions/host_user_id directly. Default mock makes the
+      // calling user a recognised host so validation paths still run.
+      mockQuery.mockImplementation((sql: string) => {
+        if (/SELECT host_user_id FROM sessions/i.test(sql)) {
+          return Promise.resolve({ rows: [{ host_user_id: 'host-1' }], rowCount: 1 });
+        }
+        if (/SELECT pod_id FROM sessions/i.test(sql)) {
+          return Promise.resolve({ rows: [{ pod_id: null }], rowCount: 1 });
+        }
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      });
     });
 
     it('rejects bulk create with empty rooms array', async () => {

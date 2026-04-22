@@ -30,7 +30,7 @@ import {
   handleHostStart, handleHostStartRound, handleHostPause, handleHostResume,
   handleHostEnd, handleHostBroadcast, handleHostRemoveParticipant, handleHostReassign,
   handleHostMuteParticipant, handleHostMuteAll, handleHostRemoveFromRoom,
-  handleHostMoveToRoom, handleAssignCohost, handleRemoveCohost, handleHostExtendRound,
+  handleHostMoveToRoom, handleAssignCohost, handleRemoveCohost, handlePromoteCohost, handleHostExtendRound,
   handleHostExtendBreakoutRoom, handleHostCreateBreakout,
   startSession, pauseSession, resumeSession, endSession, broadcastMessage,
   setHostActionsIo, injectHostActionDeps,
@@ -203,6 +203,8 @@ export function initOrchestration(socketServer: SocketServer): void {
     wrapHandler('host:create_breakout', socket, handleHostCreateBreakout);
     wrapHandler('host:assign_cohost', socket, handleAssignCohost);
     wrapHandler('host:remove_cohost', socket, handleRemoveCohost);
+    // T1-5 — host can pass the baton to an existing co-host
+    wrapHandler('host:promote_cohost', socket, handlePromoteCohost);
     wrapHandler('host:extend_round', socket, handleHostExtendRound);
     wrapHandler('host:extend_breakout_room', socket, handleHostExtendBreakoutRoom);
 

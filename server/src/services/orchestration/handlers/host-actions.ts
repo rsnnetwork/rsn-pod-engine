@@ -11,7 +11,7 @@ import logger from '../../../config/logger';
 import { query, transaction } from '../../../db';
 import {
   SessionStatus, ParticipantStatus,
-  MatchStatus, UserRole, hasRoleAtLeast,
+  MatchStatus, UserRole,
 } from '@rsn/shared';
 import {
   ActiveSession, activeSessions, withSessionGuard,
@@ -87,23 +87,21 @@ export async function verifyHost(socket: Socket, sessionId: string): Promise<boo
     return false;
   }
 
-  const session = await sessionService.getSessionById(sessionId);
-
-  // Allow session host, co-hosts, admin, and super_admin to perform host actions
+  // T1-5 — delegated to the unified `getEffectiveRole` resolver. This
+  // adds pod-admin cascade (pod directors / pod creators can now act as
+  // session hosts even if they're not explicitly the session.host_user_id)
+  // alongside the existing host + admin + co-host paths. Behavior preserved
+  // for everyone who was already allowed: admins still pass, hosts still
+  // pass, co-hosts still pass. New: pod directors pass for sessions in
+  // their pod even without manual host assignment.
   const userRole = (socket.data as any)?.role as UserRole | undefined;
-  const isHost = session.hostUserId === userId;
-  const isAdminOrAbove = userRole && hasRoleAtLeast(userRole, UserRole.ADMIN);
+  const { canActAsHost } = await import('../../roles/effective-role.service');
+  const { allowed, effectiveRole } = await canActAsHost(userId, userRole, sessionId);
 
-  if (!isHost && !isAdminOrAbove) {
-    // Check co-host table
-    const cohostResult = await query<{ role: string }>(
-      `SELECT role FROM session_cohosts WHERE session_id = $1 AND user_id = $2`,
-      [sessionId, userId]
-    );
-    if (cohostResult.rows.length === 0) {
-      socket.emit('error', { code: 'FORBIDDEN', message: 'Only the host can perform this action' });
-      return false;
-    }
+  if (!allowed) {
+    logger.debug({ userId, sessionId, effectiveRole }, 'verifyHost denied');
+    socket.emit('error', { code: 'FORBIDDEN', message: 'Only the host can perform this action' });
+    return false;
   }
 
   return true;
@@ -1218,6 +1216,16 @@ export async function handleAssignCohost(
     )).rows[0]?.display_name || 'User';
 
     io.to(sessionRoom(sessionId)).emit('cohost:assigned', { userId, displayName, role });
+    // T1-5 — direct permission notification to the newly-promoted co-host
+    // so their UI re-renders host-only buttons without polling/refresh.
+    io.to(userRoom(userId)).emit('permissions:updated', {
+      sessionId,
+      effectiveRole: 'cohost' as const,
+      capabilities: [
+        'mute_participants', 'remove_participants', 'reassign',
+        'start_round', 'pause', 'resume', 'broadcast', 'create_breakout',
+      ],
+    });
     logger.info({ sessionId, userId, role, grantedBy: hostId }, 'Co-host assigned');
   } catch (err) {
     logger.error({ err }, 'Error assigning co-host');
@@ -1250,10 +1258,106 @@ export async function handleRemoveCohost(
     );
 
     io.to(sessionRoom(sessionId)).emit('cohost:removed', { userId });
+    // T1-5 — direct permission downgrade so removed co-host's UI hides
+    // host-only controls without polling/refresh.
+    io.to(userRoom(userId)).emit('permissions:updated', {
+      sessionId,
+      effectiveRole: 'participant' as const,
+      capabilities: [],
+    });
     logger.info({ sessionId, userId, removedBy: hostId }, 'Co-host removed');
   } catch (err) {
     logger.error({ err }, 'Error removing co-host');
   }
+  });
+}
+
+// ─── Promote Co-Host to Host (T1-5 — host transfer) ────────────────────────
+//
+// The original event host can transfer ownership to an existing co-host.
+// Without this handler the host couldn't gracefully leave mid-session;
+// they had to either let the event run without them or end it. Now they
+// can hand the baton.
+//
+// Steps (under withSessionGuard for the affected session):
+//   1. Verify caller is the current `sessions.host_user_id` (not a co-host
+//      — only the original host can transfer)
+//   2. Verify target is currently in `session_cohosts` for this session
+//   3. UPDATE sessions SET host_user_id = target
+//   4. DELETE old co-host row for the target (they're host now, not cohost)
+//   5. Broadcast host:transferred to the session room + permissions:updated
+//      to both old and new host's user rooms
+
+export async function handlePromoteCohost(
+  io: SocketServer,
+  socket: Socket,
+  data: { sessionId: string; cohostUserId: string },
+): Promise<void> {
+  return withSessionGuard(data.sessionId, async () => {
+    try {
+      const hostId = getUserIdFromSocket(socket);
+      if (!hostId) return;
+
+      const { sessionId, cohostUserId } = data;
+      const session = await sessionService.getSessionById(sessionId);
+
+      if (session.hostUserId !== hostId) {
+        socket.emit('error', { code: 'FORBIDDEN', message: 'Only the original host can transfer ownership' });
+        return;
+      }
+
+      const cohostCheck = await query(
+        `SELECT 1 FROM session_cohosts WHERE session_id = $1 AND user_id = $2`,
+        [sessionId, cohostUserId],
+      );
+      if (cohostCheck.rows.length === 0) {
+        socket.emit('error', { code: 'NOT_COHOST', message: 'Target user is not a co-host of this session' });
+        return;
+      }
+
+      await query(`UPDATE sessions SET host_user_id = $1 WHERE id = $2`, [cohostUserId, sessionId]);
+      await query(
+        `DELETE FROM session_cohosts WHERE session_id = $1 AND user_id = $2`,
+        [sessionId, cohostUserId],
+      );
+
+      // Update in-memory ActiveSession so subsequent verifyHost calls see new host
+      const activeSession = activeSessions.get(sessionId);
+      if (activeSession) activeSession.hostUserId = cohostUserId;
+
+      const newHostName = (await query<{ display_name: string }>(
+        `SELECT display_name FROM users WHERE id = $1`, [cohostUserId],
+      )).rows[0]?.display_name || 'New Host';
+
+      io.to(sessionRoom(sessionId)).emit('host:transferred', {
+        sessionId,
+        previousHostId: hostId,
+        newHostId: cohostUserId,
+        newHostDisplayName: newHostName,
+      });
+
+      // Direct permission updates to both parties so UIs re-render.
+      io.to(userRoom(cohostUserId)).emit('permissions:updated', {
+        sessionId,
+        effectiveRole: 'event_host' as const,
+        capabilities: [
+          'assign_cohost', 'remove_cohost', 'promote_cohost',
+          'mute_participants', 'remove_participants', 'reassign',
+          'start_round', 'pause', 'resume', 'broadcast', 'create_breakout',
+          'end_session',
+        ],
+      });
+      io.to(userRoom(hostId)).emit('permissions:updated', {
+        sessionId,
+        effectiveRole: 'participant' as const,
+        capabilities: [],
+      });
+
+      logger.info({ sessionId, previousHostId: hostId, newHostId: cohostUserId }, 'Host transferred');
+    } catch (err) {
+      logger.error({ err }, 'Error promoting co-host');
+      socket.emit('error', { code: 'PROMOTE_FAILED', message: 'Failed to transfer host role' });
+    }
   });
 }
 

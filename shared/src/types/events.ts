@@ -71,6 +71,13 @@ export interface ServerToClientEvents {
   // Co-host
   'cohost:assigned': (data: { userId: string; displayName: string; role: string }) => void;
   'cohost:removed': (data: { userId: string }) => void;
+  // T1-5 — host transferred ownership to a co-host
+  'host:transferred': (data: { sessionId: string; previousHostId: string; newHostId: string; newHostDisplayName: string }) => void;
+  // T1-5 — direct permission update sent to a user's personal room when
+  // their effective role in a session changes (cohost assigned/removed/
+  // promoted). Lets the client re-render host-only controls without
+  // polling or refresh.
+  'permissions:updated': (data: { sessionId: string; effectiveRole: 'pod_admin' | 'event_host' | 'cohost' | 'participant'; capabilities: string[] }) => void;
 
   // Reactions
   'reaction:received': (data: { userId: string; displayName: string; type: string; timestamp: string }) => void;
@@ -139,6 +146,7 @@ export interface ClientToServerEvents {
 
   // Co-host
   'host:assign_cohost': (data: { sessionId: string; userId: string; role: 'co_host' | 'moderator' }) => void;
+  'host:promote_cohost': (data: { sessionId: string; cohostUserId: string }) => void;
   'host:remove_cohost': (data: { sessionId: string; userId: string }) => void;
 
   // Reactions

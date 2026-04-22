@@ -5483,3 +5483,93 @@ Filters baked in:
 
 T1-5 — unified getEffectiveRole resolver + permissions:updated event + host transfer (largest Tier-1 item).
 
+
+---
+
+## 2026-04-23 — T1-5: Unified role resolver + permissions:updated + host transfer (Issue 9)
+
+**Timestamp (local):** 2026-04-23
+**Task ID:** T1-5
+**Status:** Completed (architectural foundation; broader callsite refactor deferred to Tier 2)
+
+### What changed
+
+Architectural fix for Issue 9 (Roles & Permissions). The four overlapping role systems (global users.role, pod_members.role, sessions.host_user_id, session_cohosts) collapse into a single resolver. Three concrete user-visible improvements ride on it.
+
+**1. New `effective-role.service.ts` resolver:**
+
+```typescript
+getEffectiveRole(userId, globalUserRole, { podId?, sessionId? })
+  → 'pod_admin' | 'event_host' | 'cohost' | 'participant' | 'unauthorized'
+```
+
+Resolution order (highest privilege wins):
+1. Global ADMIN/SUPER_ADMIN → `pod_admin`
+2. Pod creator OR `pod_members.role = 'director'` → `pod_admin`
+3. `sessions.host_user_id = userId` → `event_host`
+4. `session_cohosts` entry → `cohost`
+5. `session_participants` (non-removed) → `participant`
+6. else → `unauthorized`
+
+Plus `requireEffectiveRole()` (throws ForbiddenError below threshold) and `canActAsHost()` (returns `{ allowed, effectiveRole }`).
+
+**2. `verifyHost` refactored to use the resolver.** Closes the "pod admin ≠ event host" bug from the review — pod directors now pass `verifyHost` for sessions in their pod even without being explicitly assigned as host_user_id.
+
+**3. New socket event `permissions:updated` emitted on co-host changes.** Direct emit to `userRoom(userId)` so the affected user's UI re-renders host-only controls in real time. No polling, no refresh.
+- `handleAssignCohost` → emits `{ effectiveRole: 'cohost', capabilities: [...] }`
+- `handleRemoveCohost` → emits `{ effectiveRole: 'participant', capabilities: [] }`
+- `handlePromoteCohost` → emits to BOTH old and new host
+
+**4. New `handlePromoteCohost` socket handler — host transfer.** Original session host can pass the baton to an existing co-host. Steps under `withSessionGuard`:
+- Verify caller is `sessions.host_user_id` (not just any co-host)
+- Verify target is in `session_cohosts` for this session (`NOT_COHOST` else)
+- `UPDATE sessions SET host_user_id = target`
+- `DELETE` old cohost row for the new host
+- Update in-memory `ActiveSession.hostUserId` so subsequent verifyHost calls see the change immediately
+- Broadcast `host:transferred` to session room
+- Direct `permissions:updated` to both old and new host
+
+### Files touched
+
+- `server/src/services/roles/effective-role.service.ts` (new) — resolver + helpers
+- `server/src/services/orchestration/handlers/host-actions.ts` — verifyHost uses canActAsHost; handleAssignCohost + handleRemoveCohost emit permissions:updated; new handlePromoteCohost
+- `server/src/services/orchestration/orchestration.service.ts` — wires `host:promote_cohost` socket event
+- `shared/src/types/events.ts` — typed events `host:transferred`, `permissions:updated`, `host:promote_cohost`
+- `server/src/__tests__/services/roles/t1-5-effective-role.test.ts` (new) — 24 tests covering resolver layers, verifyHost integration, permissions:updated emits, host-transfer flow
+- `server/src/__tests__/services/orchestration/breakout-bulk.test.ts` — updated 2 mock-setups to satisfy the new query pattern (verifyHost now reads sessions/host_user_id directly via the resolver)
+
+### Tests
+
+- 632/632 server tests pass (was 608 — +24 new). 0 broken (2 existing tests updated for new query pattern).
+- Server build clean. Client typecheck pending verification (next step).
+
+### Behavior preservation
+
+- All previously-allowed host actions still allowed — admins still pass, existing hosts still pass, co-hosts still pass.
+- **NEW capability:** pod directors / pod creators can now perform host actions for sessions in their pod even without being assigned as `host_user_id` (closes the documented bug).
+- **NEW capability:** original host can transfer ownership to an existing co-host via `host:promote_cohost`.
+- All existing socket events continue to emit; `permissions:updated` is additive.
+
+### Why architectural, not patched
+
+- Single resolver = single source of truth for "what's this user allowed to do here?"
+- Type-safe `EffectiveRole` enum used by both server and client (via shared types)
+- Privilege ranking centralised in `ROLE_RANK` constant — extending the model is one-line change
+- Real-time permission propagation via socket event, not polling
+- Host transfer uses the same `withSessionGuard` pattern as other state-mutating ops — no race conditions
+- Resolver and existing role checks coexist; broader refactor of the 8+ existing checks deferred to Tier 2 (lower risk per commit)
+
+### Tier 1 status
+
+| ID | Item | Commit |
+|---|---|---|
+| T1-1 | Email identity-match guard | c5ba3dd |
+| T1-2 | Decouple onboarding gate | 22abe53 |
+| T1-3 | Pod auto-redirect to active session | 751e158 |
+| T1-4 | Three canonical participant counts | 6dfd1fc |
+| T1-5 | Unified role resolver + permissions:updated + host transfer | (this) |
+
+### Next immediate action
+
+T1-6 — encounter history session-scoped query (small, last Tier-1 item).
+
