@@ -223,10 +223,32 @@ export default function PodDetailPage() {
 
   const joinMutation = useMutation({
     mutationFn: () => api.post(`/pods/${podId}/join`),
-    onSuccess: () => {
+    onSuccess: async () => {
       qc.invalidateQueries({ queryKey: ['pod', podId] });
       qc.invalidateQueries({ queryKey: ['pod-members', podId] });
       qc.invalidateQueries({ queryKey: ['my-pods'] });
+      // T1-3 (Issue 3) — if this pod has a live or imminent session,
+      // navigate the user straight into it. Removes the "joined a pod
+      // but the event isn't visible" frustration. Falls through to a
+      // toast when there's nothing live (user stays on pod page).
+      try {
+        const res = await api.get(`/pods/${podId}/active-session`);
+        const session = res?.data?.data?.session;
+        if (session?.id) {
+          addToast('Joined pod — taking you to the event', 'success');
+          // Imminent (scheduled but not started) → session detail page;
+          // live (lobby_open, round_*, closing_lobby) → live lobby.
+          const liveStatuses = ['lobby_open', 'round_active', 'round_rating', 'round_transition', 'closing_lobby'];
+          if (liveStatuses.includes(session.status)) {
+            navigate(`/sessions/${session.id}/live`);
+          } else {
+            navigate(`/sessions/${session.id}`);
+          }
+          return;
+        }
+      } catch {
+        // Non-fatal — fall through to default toast
+      }
       addToast('Joined pod!', 'success');
     },
     onError: (err: any) => addToast(err?.response?.data?.error?.message || 'Failed to join pod', 'error'),

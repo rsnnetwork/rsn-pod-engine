@@ -9,6 +9,7 @@ import * as podService from '../services/pod/pod.service';
 import { canViewPod } from '../services/pods/pod-access';
 import { ApiResponse, UserRole, PodType, PodVisibility, PodMemberRole, OrchestrationMode, CommunicationMode, hasRoleAtLeast } from '@rsn/shared';
 import { ForbiddenError, NotFoundError } from '../middleware/errors';
+import { query } from '../db';
 
 const router = Router();
 
@@ -210,6 +211,63 @@ router.get(
       }
       const members = await podService.getPodMembers(req.params.id);
       const response: ApiResponse = { success: true, data: members };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── GET /pods/:id/active-session (T1-3 / Issue 3) ──────────────────────────
+//
+// Returns the current/next live or imminent session in this pod, so the
+// client can auto-redirect a freshly-joined user into the lobby instead of
+// stranding them on the pod page. "Live" = status in (lobby_open,
+// round_active, round_rating, round_transition, closing_lobby).
+// "Imminent" = scheduled to start within the next hour AND status='scheduled'.
+//
+// Returns 200 with `{ session: null }` when no live/imminent session exists
+// — the client treats that as "stay on the pod page".
+
+router.get(
+  '/:id/active-session',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      // Same access gate as other pod-scoped reads (member or admin).
+      if (!hasRoleAtLeast(req.user!.role, UserRole.ADMIN)) {
+        const role = await podService.getMemberRole(req.params.id, req.user!.userId);
+        if (!role) {
+          throw new ForbiddenError('You must be a pod member to view sessions');
+        }
+      }
+
+      const liveStatuses = `('lobby_open','round_active','round_rating','round_transition','closing_lobby')`;
+      // Live first; if none, look for imminent scheduled within next 60 min.
+      const liveResult = await query<{ id: string; title: string; status: string }>(
+        `SELECT id, title, status FROM sessions
+         WHERE pod_id = $1 AND status IN ${liveStatuses}
+         ORDER BY started_at DESC NULLS LAST
+         LIMIT 1`,
+        [req.params.id],
+      );
+
+      let session = liveResult.rows[0] || null;
+      if (!session) {
+        const upcoming = await query<{ id: string; title: string; status: string; scheduled_at: string }>(
+          `SELECT id, title, status, scheduled_at FROM sessions
+           WHERE pod_id = $1 AND status = 'scheduled'
+             AND scheduled_at IS NOT NULL
+             AND scheduled_at <= NOW() + INTERVAL '60 minutes'
+             AND scheduled_at > NOW() - INTERVAL '5 minutes'
+           ORDER BY scheduled_at ASC
+           LIMIT 1`,
+          [req.params.id],
+        );
+        if (upcoming.rows.length > 0) session = upcoming.rows[0];
+      }
+
+      const response: ApiResponse = { success: true, data: { session } };
       res.json(response);
     } catch (err) {
       next(err);

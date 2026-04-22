@@ -5379,3 +5379,49 @@ Architectural fix for Issue 1 (the second half — onboarding-gate over-reach). 
 
 T1-3 — pod join auto-redirect to active session.
 
+
+---
+
+## 2026-04-23 — T1-3: Pod join → auto-redirect to active session (Issue 3)
+
+**Timestamp (local):** 2026-04-23
+**Task ID:** T1-3
+**Status:** Completed
+
+### What changed
+
+Architectural fix for Issue 3 (Join → Event Visibility). Pre-fix: PodDetailPage joined the pod, showed a toast, left the user on the pod page. They had to manually navigate to /sessions and find the event. When the pod had a live event in progress, the user joined to participate but couldn't find the event without a refresh.
+
+Fix:
+1. **New endpoint:** `GET /api/pods/:id/active-session` returns the live or imminent session (or `{ session: null }`).
+2. **Client `joinMutation.onSuccess`:** calls the endpoint, navigates to `/sessions/:id/live` for live statuses (`lobby_open`, `round_active`, `round_rating`, `round_transition`, `closing_lobby`), or `/sessions/:id` for imminent scheduled (next 60 min). Falls back to original toast when nothing live.
+
+### Files touched
+
+- `server/src/routes/pods.ts` — new `GET /:id/active-session` endpoint with member-or-admin gate; queries live first, falls back to imminent (60 min window)
+- `client/src/features/pods/PodDetailPage.tsx` — `joinMutation.onSuccess` now async; calls the endpoint and navigates accordingly
+- `server/src/__tests__/routes/t1-3-pod-active-session.test.ts` (new) — 9 tests covering route registration, auth gating, live-status query, imminent fallback, null response, client navigation paths
+
+### Tests
+
+- 606/606 server tests pass (was 597 — +9 new). 0 broken.
+- Server build clean. Client typecheck clean.
+
+### Behavior preservation
+
+- Pods with no live/imminent session: user stays on pod page, gets the original toast.
+- Pods with live session: user redirected to `/sessions/:id/live`.
+- Pods with imminent session (≤60 min until start): user redirected to `/sessions/:id` (detail page where they can register/wait).
+- API endpoint returns 200 with `{ session: null }` rather than 404 — let client decide what to do.
+
+### Why architectural, not patched
+
+- Endpoint computes the answer server-side once (live vs imminent vs nothing) — client doesn't loop through all sessions.
+- Imminent threshold (60 min) is a single constant in one place, easy to tune.
+- Reuses the same membership gating used by other pod endpoints (`getMemberRole` or admin bypass).
+- Live-status enumeration matches the SessionStatus enum exactly — a future status addition only needs updating in one place.
+
+### Next immediate action
+
+T1-4 — three canonical participant counts.
+
