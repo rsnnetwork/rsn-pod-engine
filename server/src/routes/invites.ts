@@ -433,8 +433,17 @@ router.post(
   auditMiddleware('accept_invite', 'invite'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const invite = await inviteService.acceptInvite(req.params.code, req.user!.userId);
-      const response: ApiResponse = { success: true, data: invite };
+      // T0-4 — acceptInvite now returns { invite, redirectTo, registeredFor }
+      // so the client can navigate definitively without guessing.
+      const result = await inviteService.acceptInvite(req.params.code, req.user!.userId);
+      const response: ApiResponse = {
+        success: true,
+        data: {
+          ...result.invite,
+          redirectTo: result.redirectTo,
+          registeredFor: result.registeredFor,
+        },
+      };
       res.json(response);
     } catch (err) {
       next(err);

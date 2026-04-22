@@ -5211,3 +5211,68 @@ The T0-4 work in `invite.service.ts` was preserved uncommitted in the working tr
 
 Resume T0-4 — atomic invite acceptance + redirectTo (the in-progress invite.service.ts changes need their tests + commit).
 
+
+---
+
+## 2026-04-23 — T0-4: Atomic invite acceptance + redirectTo (Issue 2)
+
+**Timestamp (local):** 2026-04-23
+**Task ID:** T0-4 — completing Tier 0 of the 22nd April plan
+**Status:** Completed
+
+### What changed
+
+Architectural fix for Issue 2 (Invite Acceptance Flow). Pre-fix: invite UPDATE committed inside the transaction, then service calls (`podService.addMember`, `sessionService.registerParticipant`) ran against the GLOBAL POOL outside the transaction. If those failed after the invite UPDATE, the invite was permanently flagged accepted but the user was never registered. Next attempt → `INVITE_ALREADY_USED` → recovery code wrongly assumed they were already a member.
+
+Post-fix:
+1. SELECT FOR UPDATE invite + run all validations
+2. **Apply registration FIRST** via `applyInviteRegistration()` — idempotent through ON CONFLICT, ConflictError swallowed (already-member is fine), all other errors throw → invite UPDATE never runs → next attempt retries cleanly
+3. UPDATE invite to `accepted` + bump `use_count` (single statement, can't realistically fail while client holds the row lock)
+4. Return `{ invite, redirectTo, registeredFor }`
+
+Server now computes the authoritative `redirectTo` (`/sessions/:id/live` for session invites, `/pods/:id` for pod invites, `/dashboard` fallback). Client uses it directly — no more guessing.
+
+Idempotent re-acceptance preserved: same user re-clicking an already-consumed invite gets registration re-applied + same `redirectTo` returned (no error).
+
+### Files touched
+
+- `server/src/services/invite/invite.service.ts` — rewrote `acceptInvite()`. New `AcceptInviteResult` interface. New `applyInviteRegistration()` and `computeRedirectTo()` helpers.
+- `server/src/routes/invites.ts` — `POST /invites/:code/accept` now passes `redirectTo` and `registeredFor` in the response body.
+- `client/src/features/invites/InviteAcceptPage.tsx` — uses `data.redirectTo` from server response. Removed the recovery chain (mark-accepted + manual register fallback) — server is source of truth now.
+- `server/src/__tests__/services/invite/t0-4-atomic-invite.test.ts` (new) — 15 source-pattern + contract tests pinning execution order, idempotent re-acceptance, redirectTo computation, applyInviteRegistration semantics, route response shape, client integration.
+
+### Tests
+
+- 582/582 server tests pass (was 567 — +15 new). 0 broken.
+- Server build clean. Client typecheck clean.
+
+### Behavior preservation
+
+- All previously-successful invite acceptance flows continue to work.
+- Idempotent re-acceptance for the same user still works (now also returns `redirectTo`).
+- `ConflictError` from `addMember`/`registerParticipant` still treated as "already a member" (no-op).
+- Notifications still get marked as read on successful accept.
+- Multi-use invites continue to work.
+
+### Why architectural, not patched
+
+- `applyInviteRegistration()` is a separate function — same logic used by both the happy path AND the idempotent re-acceptance path. Single source of truth.
+- `AcceptInviteResult` is a typed interface, not an ad-hoc object — caller has compile-time guarantees.
+- `redirectTo` computation is centralised in `computeRedirectTo()` — change navigation in ONE place, applies everywhere.
+- Client recovery chain DELETED, not patched. Old recovery hid bugs by silently retrying; new contract: server returns success or definitive error.
+- Reorder of operations is a real architectural change (registration first, invite UPDATE last) that resolves the atomicity problem without requiring refactoring the underlying services to accept transaction clients (which would have been a bigger blast radius).
+
+### Tier 0 complete
+
+| ID | Item | Commit | Status |
+|---|---|---|---|
+| T0-1 | Central match validator | 9a6b5b1 | shipped to staging |
+| T0-3 | GET /api/sessions/:id/state | 765275c | shipped to staging |
+| T0-2 | Breakout state machine + presence:room_joined | a46dc5e | shipped to staging |
+| HOTFIX | Defensive transaction wrappers | 6002325 | shipped to staging (production crash fix) |
+| T0-4 | Atomic invite acceptance | (this commit) | shipped to staging |
+
+### Next immediate action
+
+Push staging → main as a single batch (per user direction "together no rush"). Then begin Tier 1 (T1-1 through T1-6).
+

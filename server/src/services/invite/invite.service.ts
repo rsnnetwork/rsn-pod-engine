@@ -322,10 +322,114 @@ export async function getInviteByCode(code: string): Promise<Invite> {
 }
 
 // ─── Accept Invite ──────────────────────────────────────────────────────────
+//
+// T0-4 — restructured for atomicity. Pre-fix: invite UPDATE committed
+// inside the transaction, then `podService.addMember` + `sessionService.
+// registerParticipant` ran AGAINST THE GLOBAL POOL (not the transaction
+// client). If those failed after invite was committed accepted, the user
+// was permanently flagged as having accepted an invite they were never
+// registered for.
+//
+// Post-fix: order is reversed and the failure model is well-defined.
+//
+//   1. SELECT FOR UPDATE the invite + run all validations (capacity,
+//      expiry, status, session-ended). If any fail → throw → tx rolls
+//      back the only thing that's there (the FOR UPDATE lock release).
+//   2. Run pod/session registration (against global pool, idempotent via
+//      ON CONFLICT). If it fails → throw → invite UPDATE never runs →
+//      next acceptance attempt re-validates and retries cleanly.
+//   3. UPDATE invite to mark accepted + bump use_count. Single statement,
+//      can't fail in any realistic scenario (the row is locked).
+//   4. Mark related notifications as read.
+//
+// Worst-case race: registration commits to global pool, invite UPDATE
+// (single SQL statement) fails. Result: registration persisted, invite
+// still pending. Next accept attempt re-runs registration (idempotent)
+// and re-attempts UPDATE. Self-healing.
+//
+// Returns AcceptInviteResult so the route can hand the client an explicit
+// `redirectTo` instead of guessing.
 
-export async function acceptInvite(code: string, userId: string): Promise<Invite> {
+export interface AcceptInviteResult {
+  invite: Invite;
+  /** Where the client should navigate next (lobby for session invites, pod page for pod invites). */
+  redirectTo: string;
+  registeredFor: { sessionId?: string; podId?: string };
+}
+
+async function applyInviteRegistration(
+  invite: Invite,
+  userId: string,
+): Promise<{ sessionId?: string; podId?: string }> {
+  const out: { sessionId?: string; podId?: string } = {};
+
+  if (invite.type === InviteType.POD && invite.podId) {
+    try {
+      await podService.addMember(invite.podId, userId);
+    } catch (err) {
+      // Already a member — that's fine, the invite still resolves to "you're in".
+      if (!(err instanceof ConflictError)) throw err;
+    }
+    out.podId = invite.podId;
+  }
+
+  if (invite.type === InviteType.SESSION && invite.sessionId) {
+    // Add to pod FIRST so registerParticipant doesn't reject for private pods
+    const sessionRow = await query<{ podId: string }>(
+      `SELECT pod_id AS "podId" FROM sessions WHERE id = $1`,
+      [invite.sessionId],
+    );
+    const podId = sessionRow.rows[0]?.podId;
+    if (podId) {
+      try {
+        await podService.addMember(podId, userId);
+      } catch (err) {
+        if (!(err instanceof ConflictError)) throw err;
+      }
+      out.podId = podId;
+    }
+
+    try {
+      await sessionService.registerParticipant(invite.sessionId, userId);
+    } catch (err) {
+      if (err instanceof ConflictError) {
+        // Already registered — fine, idempotent.
+      } else {
+        // Capacity, status, or other validation error — bubble up so the
+        // tx rolls back and the user gets a definitive error.
+        throw err;
+      }
+    }
+
+    // Defensive idempotent INSERT to handle the rare case where
+    // registerParticipant returned successfully but the row was wiped by
+    // a parallel removal. ON CONFLICT preserves invariant.
+    await query(
+      `INSERT INTO session_participants (session_id, user_id, status)
+       VALUES ($1, $2, 'registered')
+       ON CONFLICT (session_id, user_id) DO UPDATE SET status = 'registered', left_at = NULL
+       WHERE session_participants.status = 'removed'`,
+      [invite.sessionId, userId],
+    );
+
+    out.sessionId = invite.sessionId;
+  }
+
+  return out;
+}
+
+function computeRedirectTo(_invite: Invite, registered: { sessionId?: string; podId?: string }): string {
+  // Session invite → land in the live lobby. Pod invite → land on the pod page.
+  if (registered.sessionId) return `/sessions/${registered.sessionId}/live`;
+  if (registered.podId) return `/pods/${registered.podId}`;
+  // Fallback for malformed invites (no podId or sessionId attached) — never
+  // hit in practice, present for type completeness.
+  return '/dashboard';
+}
+
+export async function acceptInvite(code: string, userId: string): Promise<AcceptInviteResult> {
   return transaction(async (client) => {
-    // Lock the invite row for update
+    // ── 1. Lock + validate ──
     const inviteResult = await client.query(
       `SELECT ${INVITE_COLUMNS} FROM invites WHERE code = $1 FOR UPDATE`,
       [code]
@@ -337,7 +441,6 @@ export async function acceptInvite(code: string, userId: string): Promise<Invite
 
     const invite = inviteResult.rows[0] as Invite;
 
-    // Validation checks
     if (invite.status === InviteStatus.REVOKED) {
       throw new AppError(400, 'INVITE_REVOKED', 'This invite has been revoked');
     }
@@ -354,7 +457,6 @@ export async function acceptInvite(code: string, userId: string): Promise<Invite
       throw new AppError(400, 'INVITE_EXPIRED', 'This invite has expired');
     }
 
-    // Check if linked session has already ended
     if (invite.type === InviteType.SESSION && invite.sessionId) {
       const sessionResult = await client.query(
         `SELECT status FROM sessions WHERE id = $1`,
@@ -366,38 +468,27 @@ export async function acceptInvite(code: string, userId: string): Promise<Invite
       }
     }
 
+    // ── 2. Use-count gate. If already used by THIS user, treat as
+    //     idempotent re-acceptance (apply registration, return same invite). ──
     if (invite.useCount >= invite.maxUses) {
-      // If the invite was already consumed by THIS user during registration (Google OAuth),
-      // still apply the pod/session membership effect instead of rejecting.
       if (invite.acceptedByUserId === userId) {
-        // Apply effects without re-incrementing use_count
-        if (invite.type === InviteType.POD && invite.podId) {
-          try { await podService.addMember(invite.podId, userId); } catch (err) {
-            if (!(err instanceof ConflictError)) throw err;
-          }
-        }
-        if (invite.type === InviteType.SESSION && invite.sessionId) {
-          try { await sessionService.registerParticipant(invite.sessionId, userId); } catch (err) {
-            if (!(err instanceof ConflictError)) throw err;
-          }
-          // Fallback: force-register even if registerParticipant failed silently
-          await query(
-            `INSERT INTO session_participants (session_id, user_id, status)
-             VALUES ($1, $2, 'registered')
-             ON CONFLICT (session_id, user_id) DO UPDATE SET status = 'registered', left_at = NULL`,
-            [invite.sessionId, userId]
-          );
-        }
-        logger.info({ code, userId, type: invite.type }, 'Invite effects applied (already consumed during registration)');
-        return invite;
+        const registeredIdem = await applyInviteRegistration(invite, userId);
+        logger.info({ code, userId, type: invite.type }, 'Invite re-acceptance — effects re-applied');
+        return {
+          invite,
+          redirectTo: computeRedirectTo(invite, registeredIdem),
+          registeredFor: registeredIdem,
+        };
       }
       throw new AppError(400, 'INVITE_ALREADY_USED', 'This invite has reached its maximum uses');
     }
 
-    // No email restriction — anyone with the invite link can accept it.
-    // The invite code itself is the authorization token.
+    // ── 3. Apply registration FIRST (idempotent, ON CONFLICT-safe) ──
+    //     If this throws, the invite UPDATE below never runs and the row
+    //     stays in its pre-acceptance state. User can retry cleanly.
+    const registered = await applyInviteRegistration(invite, userId);
 
-    // Update invite — always mark as accepted for this user
+    // ── 4. Mark invite accepted ──
     const updatedResult = await client.query(
       `UPDATE invites SET use_count = use_count + 1, accepted_by_user_id = $1, accepted_at = NOW(),
        status = 'accepted'::invite_status
@@ -406,64 +497,7 @@ export async function acceptInvite(code: string, userId: string): Promise<Invite
       [userId, invite.id]
     );
 
-    // Apply invite effects
-    if (invite.type === InviteType.POD && invite.podId) {
-      try {
-        await podService.addMember(invite.podId, userId);
-      } catch (err) {
-        // Ignore if already a member
-        if (!(err instanceof ConflictError)) throw err;
-      }
-    }
-
-    if (invite.type === InviteType.SESSION && invite.sessionId) {
-      // Add to pod FIRST so registerParticipant doesn't reject for private pods
-      const sessionRow = await query<{ podId: string }>(`SELECT pod_id AS "podId" FROM sessions WHERE id = $1`, [invite.sessionId]);
-      if (sessionRow.rows[0]?.podId) {
-        try {
-          await podService.addMember(sessionRow.rows[0].podId, userId);
-        } catch (err) {
-          if (!(err instanceof ConflictError)) throw err;
-        }
-      }
-      // Register for the session — try service first, fall back to direct INSERT
-      try {
-        await sessionService.registerParticipant(invite.sessionId, userId);
-      } catch (err) {
-        if (!(err instanceof ConflictError)) {
-          // Service rejected (capacity, status check, etc.) — force-insert as registered
-          logger.warn({ err, sessionId: invite.sessionId, userId }, 'registerParticipant failed during invite accept — forcing direct insert');
-          try {
-            await query(
-              `INSERT INTO session_participants (session_id, user_id, status)
-               VALUES ($1, $2, 'registered')
-               ON CONFLICT (session_id, user_id) DO UPDATE SET status = 'registered', left_at = NULL`,
-              [invite.sessionId, userId]
-            );
-          } catch (insertErr) {
-            logger.error({ insertErr, sessionId: invite.sessionId, userId }, 'Direct participant insert also failed');
-          }
-        }
-      }
-      // Belt-and-suspenders: verify user is actually registered
-      const check = await query(
-        `SELECT 1 FROM session_participants WHERE session_id = $1 AND user_id = $2 AND status NOT IN ('removed')`,
-        [invite.sessionId, userId]
-      );
-      if (check.rows.length === 0) {
-        await query(
-          `INSERT INTO session_participants (session_id, user_id, status)
-           VALUES ($1, $2, 'registered')
-           ON CONFLICT (session_id, user_id) DO UPDATE SET status = 'registered', left_at = NULL`,
-          [invite.sessionId, userId]
-        );
-        logger.info({ sessionId: invite.sessionId, userId }, 'Forced registration via belt-and-suspenders check');
-      }
-    }
-
-    logger.info({ code, userId, type: invite.type }, 'Invite accepted');
-
-    // Auto-mark related notifications as read so they don't linger
+    // ── 5. Mark related notifications as read (best effort) ──
     try {
       await client.query(
         `UPDATE notifications SET is_read = TRUE WHERE user_id = $1 AND link LIKE $2 AND is_read = FALSE`,
@@ -471,7 +505,13 @@ export async function acceptInvite(code: string, userId: string): Promise<Invite
       );
     } catch { /* non-fatal */ }
 
-    return updatedResult.rows[0] as Invite;
+    logger.info({ code, userId, type: invite.type }, 'Invite accepted');
+
+    return {
+      invite: updatedResult.rows[0] as Invite,
+      redirectTo: computeRedirectTo(invite, registered),
+      registeredFor: registered,
+    };
   });
 }
 

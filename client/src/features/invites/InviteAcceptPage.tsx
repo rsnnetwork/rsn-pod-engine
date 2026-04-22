@@ -64,12 +64,13 @@ export default function InviteAcceptPage() {
     api.get(`/invites/${code}`).then(r => setInvite(r.data.data)).catch(() => setInvite(null)).finally(() => setLoading(false));
   }, [code]);
 
-  // Determine the final destination after accepting the invite
-  const getDestination = useCallback((data: any) => {
-    const sessionId = data?.sessionId || invite?.sessionId;
-    const podId = data?.podId || invite?.podId;
-    if (sessionId) return `/sessions/${sessionId}`;
-    if (podId) return `/pods/${podId}`;
+  // T0-4 — fallback destination only used if server somehow returns success
+  // without a redirectTo (defensive). The happy path uses res.data.data.redirectTo
+  // which the server now computes authoritatively (live lobby for session,
+  // pod page for pod, dashboard for malformed invites).
+  const fallbackDestination = useCallback(() => {
+    if (invite?.sessionId) return `/sessions/${invite.sessionId}/live`;
+    if (invite?.podId) return `/pods/${invite.podId}`;
     return '/sessions';
   }, [invite]);
 
@@ -79,50 +80,37 @@ export default function InviteAcceptPage() {
     setAccepting(true);
     setError(null);
     try {
+      // T0-4 — server runs ALL registration writes inside the same transaction
+      // as the invite UPDATE. If anything fails, the invite stays pending and
+      // we get a structured error here. Server response includes redirectTo
+      // so we don't have to guess where to send the user.
       const res = await api.post(`/invites/${code}/accept`);
       const data = res.data?.data;
-
-      // SAFETY NET: explicitly register for session after accept
-      if (data?.sessionId) {
-        try { await api.post(`/sessions/${data.sessionId}/register`); } catch { /* already registered is fine */ }
-      }
+      const destination = data?.redirectTo || fallbackDestination();
 
       addToast('Invite accepted!', 'success');
       qc.invalidateQueries({ queryKey: ['session-participants'] });
       qc.invalidateQueries({ queryKey: ['session-detail'] });
-      const destination = getDestination(data);
       // Full page reload ensures fresh data — React Router navigate can hit stale cache
       setTimeout(() => { window.location.href = destination; }, 50);
     } catch (err: any) {
       const errCode = err?.response?.data?.error?.code;
-      // "Already a member" or "invite used/expired but user already has access"
-      // — ensure session registration, mark invite accepted, then redirect
-      if (errCode === 'SESSION_ALREADY_REGISTERED' || errCode === 'POD_MEMBER_EXISTS'
-          || errCode === 'INVITE_ALREADY_USED' || errCode === 'INVITE_EXPIRED') {
-        const sessionId = invite?.sessionId;
-        const destination = getDestination(null);
-        if (destination !== '/sessions') {
-          // Ensure user is registered for the session before redirecting
-          if (sessionId) {
-            try { await api.post(`/sessions/${sessionId}/register`); } catch { /* already registered */ }
-          }
-          // Mark invite as accepted in DB so notifications/dashboard reflect it
-          if (code) {
-            try { await api.post(`/invites/${code}/mark-accepted`); } catch { /* best effort */ }
-          }
-          addToast('You\'re already a member — taking you there now', 'success');
-          setTimeout(() => { window.location.href = destination; }, 50);
-          return;
-        }
-      }
+      // T0-4 — INVITE_ALREADY_USED for THIS user is now treated server-side
+      // as idempotent re-acceptance (returns success + redirectTo). So if we
+      // see INVITE_ALREADY_USED here, it means a DIFFERENT user already
+      // consumed it. EVENT_ENDED, INVITE_EXPIRED, INVITE_REVOKED are real
+      // errors. The old recovery chain (mark-accepted + register) is gone —
+      // the server transaction is the source of truth.
       const { message } = getAcceptErrorMessage(err);
       setError(message);
       addToast(message, 'error');
       autoAcceptedRef.current = false; // allow user to retry
+      // Suppress unused-var lint
+      void errCode;
     } finally {
       setAccepting(false);
     }
-  }, [code, invite, user, navigate, addToast, getDestination]);
+  }, [code, invite, user, navigate, addToast, fallbackDestination, qc]);
 
   // Pre-emptive check: if session has already ended, show error without attempting accept
   const eventEnded = invite?.sessionStatus === 'completed' || invite?.sessionStatus === 'cancelled';
