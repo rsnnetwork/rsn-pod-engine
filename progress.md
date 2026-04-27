@@ -5704,3 +5704,38 @@ Six small, high-impact UI/video fixes shipped as a single batch (parallel-shippa
 - Run `check whole` after main deploy completes
 - Deliver final report: every issue from the 22nd April review mapped to its fix commit + behavior-preservation contract met
 
+---
+
+## 2026-04-27 — Tier-1 Phase C: Render Standard plan + DB_POOL_MAX=40 sync
+
+**Status:** Completed
+
+**Trigger:** User confirmed "render is now on standard" — Stefan upgraded the rsn-api service from Starter to Standard plan via Render dashboard.
+
+**What changed:**
+
+1. **Verified live plan via Render API** — `serviceDetails.plan = standard`, 1 instance, frankfurt, not_suspended.
+2. **Pre-restart safety check** — confirmed 0 live/upcoming sessions in DB, 0 `rsn:session:*` keys in Redis. Safe to restart.
+3. **Bumped `DB_POOL_MAX` env 25 → 40 via Render API** — single-key PUT to `/v1/services/srv-d6namvvtskes73f9oru0/env-vars/DB_POOL_MAX`. Triggers a zero-downtime restart.
+4. **Synced `render.yaml` to live state:**
+   - `plan: starter` → `plan: standard` (with updated CRITICAL comment noting 2026-04-27 Stefan upgrade and that Blueprint autoSync is OFF, so this is documentation, not source-of-truth)
+   - `DB_POOL_MAX` value `"25"` → `"40"`
+
+**Why:** Tier-1 Phase A (code) shipped 2026-04-20 with DB_POOL_MAX=40 as the target for 200-user headroom. Phase C waited for Stefan's plan upgrade so the pool bump wouldn't exceed Starter's 0.5 CPU budget. Now on Standard (1 CPU / 2 GB / 97 max connections in Neon Pro pool), the bumped pool is well within ceiling.
+
+**Files touched:**
+- `render.yaml` — plan + DB_POOL_MAX value sync
+- `progress.md` — this entry
+- Live Render env (no commit) — DB_POOL_MAX value via API
+
+**Capacity ceiling:**
+- Before: ~100 users measured on Starter (load test 2026-04-20, 102MB peak / 512MB ceiling = 80% headroom)
+- After: ~200 users estimated on Standard (1 CPU, 2GB RAM, 40 DB connections)
+
+**Behavior-preservation:** Zero user-visible changes. Pool size is invisible to clients. Plan change happened on dashboard before this commit, so no surprise behavior in this push.
+
+**Out of scope (deferred to Tier-2 plans):**
+- Multi-instance horizontal scaling (needs Redlock, Redis state read-through, cron leader election first)
+- Re-enabling RATE_LIMIT_STORE=redis (only needed multi-instance)
+- Re-enabling Blueprint autoSync (we keep dashboard as source of truth)
+

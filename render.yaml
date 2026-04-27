@@ -12,9 +12,10 @@ services:
     # the live service if the YAML drifts. Past incident: 2026-04-20 a
     # code-only push triggered a Blueprint sync that reverted the live
     # service from Starter back to Free (the value pre-existing here
-    # since 2026-03-06). When upgrading to Standard, change this in the
-    # SAME commit as the dashboard change.
-    plan: starter
+    # since 2026-03-06). Stefan upgraded the dashboard to Standard on
+    # 2026-04-27; this commit syncs IaC. Blueprint autoSync is OFF so
+    # this value is documentation, not the source of truth.
+    plan: standard
     rootDir: .
     buildCommand: npm install --include=dev && npm run build:shared && npm run build:server && cp -r server/src/db/migrations server/dist/db/
     startCommand: node server/dist/index.js
@@ -35,7 +36,7 @@ services:
       - key: DB_POOL_MIN
         value: "5"
       - key: DB_POOL_MAX
-        value: "25"
+        value: "40"
       - key: JWT_SECRET
         generateValue: true
       - key: JWT_ACCESS_EXPIRY
