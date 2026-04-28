@@ -346,6 +346,81 @@ export async function getMatchById(matchId: string): Promise<Match> {
   return result.rows[0];
 }
 
+/**
+ * Phase 3 (29 April 2026 spec) — remove a single participant from a match.
+ *
+ * Pre-fix, `handleLeaveConversation` and `handleHostRemoveFromRoom` both
+ * marked the entire match as `'completed'` / `'cancelled'` the moment ANY
+ * participant left, even if 2+ participants remained (i.e. it was a trio).
+ * That broke the user's spec rule:
+ *
+ *   "3-person room, 1 leaves → other 2 keep talking uninterrupted"
+ *
+ * This helper handles all three room sizes cleanly:
+ *
+ *   - 2+ remaining (trio with 1 leaver): NULL out the leaver's slot and keep
+ *     match status='active'. Slots are re-canonicalised so the remaining
+ *     two are sorted into A/B (matching the A < B convention used by INSERT
+ *     paths). The remaining participants continue their conversation; the
+ *     LiveKit room is unaffected.
+ *   - 1 remaining (was a 2-person room): mark match `terminalStatus`
+ *     (default 'completed'). Caller handles return-to-lobby and
+ *     auto-reassign for the solo partner.
+ *   - 0 remaining (rare; last person leaves a 1-person manual breakout):
+ *     mark match `terminalStatus`.
+ *
+ * Returns:
+ *   - remainingUserIds — IDs still in the match after demotion
+ *   - matchStillActive — true when 2+ remained and the match continues
+ *
+ * Atomicity: SELECT … FOR UPDATE prevents two concurrent leaves from racing
+ * (e.g. two users hitting "leave" within milliseconds). Whichever runs
+ * second sees the post-demotion slot layout and acts accordingly.
+ */
+export async function demoteParticipantFromMatch(
+  matchId: string,
+  userId: string,
+  terminalStatusIfRoomEmpties: 'completed' | 'cancelled' | 'reassigned' = 'completed',
+): Promise<{ remainingUserIds: string[]; matchStillActive: boolean }> {
+  return transaction(async (client) => {
+    const result = await client.query<{
+      participant_a_id: string;
+      participant_b_id: string | null;
+      participant_c_id: string | null;
+    }>(
+      `SELECT participant_a_id, participant_b_id, participant_c_id
+       FROM matches WHERE id = $1 AND status = 'active' FOR UPDATE`,
+      [matchId],
+    );
+    if (result.rows.length === 0) {
+      return { remainingUserIds: [], matchStillActive: false };
+    }
+    const m = result.rows[0];
+    const remaining = [m.participant_a_id, m.participant_b_id, m.participant_c_id]
+      .filter((id): id is string => !!id && id !== userId);
+
+    if (remaining.length >= 2) {
+      // Trio with 1 leaver — keep match active, re-canonicalise slots.
+      const sorted = [...remaining].sort();
+      const newA = sorted[0];
+      const newB = sorted[1];
+      const newC = sorted[2] || null; // 4-person rooms not supported, but safe
+      await client.query(
+        `UPDATE matches SET participant_a_id = $1, participant_b_id = $2, participant_c_id = $3 WHERE id = $4`,
+        [newA, newB, newC, matchId],
+      );
+      return { remainingUserIds: remaining, matchStillActive: true };
+    }
+
+    // 1 or 0 remain — terminal.
+    await client.query(
+      `UPDATE matches SET status = $2, ended_at = NOW() WHERE id = $1 AND status = 'active'`,
+      [matchId, terminalStatusIfRoomEmpties],
+    );
+    return { remainingUserIds: remaining, matchStillActive: false };
+  });
+}
+
 export async function updateMatchStatus(
   matchId: string,
   status: MatchStatus,

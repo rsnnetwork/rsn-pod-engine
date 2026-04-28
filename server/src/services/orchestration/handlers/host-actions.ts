@@ -757,24 +757,110 @@ export async function handleHostRemoveFromRoom(
     const ratingCount = parseInt(matchInfoRes.rows[0]?.rating_count || '0', 10);
     const terminalStatus = (durationS > 30 || ratingCount > 0) ? 'completed' : 'cancelled';
 
-    await query(
-      `UPDATE matches SET status = $2, ended_at = NOW() WHERE id = $1 AND status = 'active'`,
-      [data.matchId, terminalStatus]
+    // Phase 3 (29 April 2026 spec) — trio-aware demotion. Pre-fix the entire
+    // match was terminated when the host removed ONE participant from a
+    // 3-person room, killing the room for the other two. Per spec:
+    //   "the host pulls out the one ... the other two should continue
+    //    talking, no need to interrupt them, but the one who host pulled
+    //    off must give the rating and get back to the main room lobby"
+    // demoteParticipantFromMatch handles all room sizes cleanly.
+    const matchPreRemoval = await query<{ participant_a_id: string; participant_b_id: string; participant_c_id: string | null }>(
+      `SELECT participant_a_id, participant_b_id, participant_c_id FROM matches WHERE id = $1`,
+      [data.matchId]
     );
+    const removalDemote = await matchingService.demoteParticipantFromMatch(
+      data.matchId, data.userId, terminalStatus as 'completed' | 'cancelled',
+    );
+
+    if (removalDemote.matchStillActive) {
+      // Trio room with 1 removed — the room continues for the other 2.
+      // Send the removed user their rating screen + return to lobby; notify
+      // the remaining users with a lighter event (NOT partner_disconnected).
+      logger.info(
+        { sessionId: (data as any).sessionId, matchId: data.matchId, remaining: removalDemote.remainingUserIds.length },
+        'Host removed participant from trio — remaining users continue conversation',
+      );
+
+      await sessionService.updateParticipantStatus(data.sessionId, data.userId, ParticipantStatus.IN_LOBBY).catch(() => {});
+
+      const remPartnerIds = removalDemote.remainingUserIds;
+      const remNameRes = await query<{ id: string; display_name: string | null; email: string | null }>(
+        `SELECT id, display_name, email FROM users WHERE id = ANY($1)`, [remPartnerIds]
+      );
+      const remFallback = (id: string, dn: string | null, em: string | null): string => {
+        const t = (dn || '').trim();
+        if (t) return t;
+        const ep = (em || '').split('@')[0].trim();
+        if (ep) return ep;
+        return `Partner ${id.slice(0, 6)}`;
+      };
+      const remNameMap = new Map(remNameRes.rows.map(r => [r.id, remFallback(r.id, r.display_name, r.email)]));
+      const remPartnersWithNames = remPartnerIds.map(pid => ({
+        userId: pid, displayName: remNameMap.get(pid) || `Partner ${pid.slice(0, 6)}`,
+      }));
+      const removedNameRes = await query<{ display_name: string | null; email: string | null }>(
+        `SELECT display_name, email FROM users WHERE id = $1`, [data.userId]
+      );
+      const removedName = remFallback(
+        data.userId,
+        removedNameRes.rows[0]?.display_name || null,
+        removedNameRes.rows[0]?.email || null,
+      );
+
+      // Notify remaining (lighter event)
+      for (const partnerId of remPartnerIds) {
+        io.to(userRoom(partnerId)).emit('match:participant_left', {
+          matchId: data.matchId,
+          leftUserId: data.userId,
+          leftDisplayName: removedName,
+          remainingCount: remPartnerIds.length,
+          reason: 'host_removed',
+        });
+      }
+
+      // Send rating to removed user
+      await emitRatingWindowOnce(io, data.userId, data.matchId, {
+        matchId: data.matchId,
+        partnerId: remPartnerIds[0],
+        partnerDisplayName: remNameMap.get(remPartnerIds[0]) || `Partner ${remPartnerIds[0].slice(0, 6)}`,
+        partners: remPartnersWithNames,
+        durationSeconds: 20,
+        earlyLeave: true,
+      });
+
+      // Re-issue lobby token for removed user
+      const trioRemSession = await sessionService.getSessionById(data.sessionId);
+      if (trioRemSession.lobbyRoomId) {
+        try {
+          const { config: appConfig } = await import('../../../config');
+          const socketsInRoom = await io.in(userRoom(data.userId)).fetchSockets();
+          for (const sk of socketsInRoom) {
+            const uid = (sk.data as any)?.userId;
+            if (uid !== data.userId) continue;
+            const dName = (sk.data as any)?.displayName || 'User';
+            const lobbyToken = await videoService.issueJoinToken(uid, trioRemSession.lobbyRoomId, dName);
+            sk.emit('lobby:token', { token: lobbyToken.token, livekitUrl: appConfig.livekit.host, roomId: trioRemSession.lobbyRoomId });
+          }
+        } catch { /* skip */ }
+      }
+
+      // Refresh host dashboard so the room card reflects the smaller pair
+      if (_emitHostDashboard) await _emitHostDashboard(data.sessionId).catch(() => {});
+      return;
+    }
 
     logger.info(
       { sessionId: (data as any).sessionId, matchId: data.matchId, durationS, ratingCount, terminalStatus },
-      'Host removed participant — match ended'
+      'Host removed participant — match ended (room had 2 or fewer participants)'
     );
 
     // Clear any per-room timer/sync for this match (prevents ghost timers)
     clearRoomTimers(data.matchId);
 
-    // Get match participants before updating
-    const matchResult = await query<{ participant_a_id: string; participant_b_id: string; participant_c_id: string | null }>(
-      `SELECT participant_a_id, participant_b_id, participant_c_id FROM matches WHERE id = $1`,
-      [data.matchId]
-    );
+    // Get match participants before updating (use the snapshot we took
+    // pre-demotion so we know the original participant set for downstream
+    // notifications).
+    const matchResult = matchPreRemoval;
 
     // Return the removed user with rating screen (NOT evict from event)
     await sessionService.updateParticipantStatus(data.sessionId, data.userId, ParticipantStatus.IN_LOBBY).catch(() => {});

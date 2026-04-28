@@ -799,12 +799,93 @@ export async function handleLeaveConversation(
         status: matchResult.rows[0].status,
       };
 
-      // Mark match as ended early
-      await query(
-        `UPDATE matches SET status = 'completed', ended_at = NOW() WHERE id = $1 AND status = 'active'`,
-        [userMatch.id]
+      // Phase 3 (29 April 2026 spec) — trio-aware demotion. Pre-fix any
+      // leave killed the entire match, so a 3-person room becomes "completed"
+      // the moment one user clicked Leave, breaking the spec rule
+      //   "3-person room, 1 leaves → other 2 keep talking uninterrupted".
+      // demoteParticipantFromMatch nullifies the leaver's slot when 2+
+      // remain (match stays active, remaining users continue), or marks
+      // terminal when 0/1 remain.
+      const { remainingUserIds, matchStillActive } = await matchingService.demoteParticipantFromMatch(
+        userMatch.id, userId, 'completed'
       );
 
+      if (matchStillActive) {
+        // Trio room with 1 leaver. Don't broadcast partner_disconnected
+        // (which implies the match ended). Don't trigger solo-reassign.
+        // Just notify the remaining users with a lighter event, send the
+        // leaver their rating prompt, and return them to lobby.
+        emitHostDashboard(sessionId);
+        await sessionService.updateParticipantStatus(sessionId, userId, ParticipantStatus.IN_LOBBY);
+
+        const trioPartnerIds = [userMatch.participantAId, userMatch.participantBId, userMatch.participantCId]
+          .filter((id): id is string => !!id && id !== userId);
+        const trioNameRes = await query<{ id: string; display_name: string | null; email: string | null }>(
+          `SELECT id, display_name, email FROM users WHERE id = ANY($1)`, [trioPartnerIds]
+        );
+        const trioFallback = (id: string, dn: string | null, em: string | null): string => {
+          const t = (dn || '').trim();
+          if (t) return t;
+          const ep = (em || '').split('@')[0].trim();
+          if (ep) return ep;
+          return `Partner ${id.slice(0, 6)}`;
+        };
+        const trioNameMap = new Map(trioNameRes.rows.map(r => [r.id, trioFallback(r.id, r.display_name, r.email)]));
+        const trioPartnersWithNames = trioPartnerIds.map(pid => ({
+          userId: pid,
+          displayName: trioNameMap.get(pid) || `Partner ${pid.slice(0, 6)}`,
+        }));
+
+        const leaverNameRes = await query<{ display_name: string | null; email: string | null }>(
+          `SELECT display_name, email FROM users WHERE id = $1`, [userId]
+        );
+        const leaverName = trioFallback(
+          userId,
+          leaverNameRes.rows[0]?.display_name || null,
+          leaverNameRes.rows[0]?.email || null,
+        );
+
+        for (const remainingId of remainingUserIds) {
+          io.to(userRoom(remainingId)).emit('match:participant_left', {
+            matchId: userMatch.id,
+            leftUserId: userId,
+            leftDisplayName: leaverName,
+            remainingCount: remainingUserIds.length,
+          });
+        }
+
+        socket.emit('rating:window_open', {
+          matchId: userMatch.id,
+          partnerId: trioPartnerIds[0],
+          partnerDisplayName: trioNameMap.get(trioPartnerIds[0]) || `Partner ${trioPartnerIds[0].slice(0, 6)}`,
+          partners: trioPartnersWithNames,
+          durationSeconds: 20,
+          earlyLeave: true,
+        });
+
+        const trioSession = await sessionService.getSessionById(sessionId);
+        if (trioSession.lobbyRoomId) {
+          try {
+            const { config: appConfig } = await import('../../../config');
+            const dName = (socket.data as any)?.displayName || 'User';
+            const lobbyToken = await videoService.issueJoinToken(userId, trioSession.lobbyRoomId, dName);
+            socket.emit('lobby:token', {
+              token: lobbyToken.token,
+              livekitUrl: appConfig.livekit.host,
+              roomId: trioSession.lobbyRoomId,
+            });
+          } catch { /* skip */ }
+        }
+
+        logger.info(
+          { sessionId, userId, matchId: userMatch.id, remaining: remainingUserIds.length },
+          'Trio leave: leaver returned to lobby, remaining users continue conversation',
+        );
+        return;
+      }
+
+      // Match was 1-2 person and is now empty/solo — existing flow handles
+      // partner_disconnected, lobby return, and solo auto-reassign.
       // Clear any per-room timer/sync for this match (prevents ghost timers)
       clearRoomTimers(userMatch.id);
 

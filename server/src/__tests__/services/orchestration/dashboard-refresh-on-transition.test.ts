@@ -26,16 +26,21 @@ describe('Architectural: dashboard refresh on every match status transition', ()
   // ────────────────────────────────────────────────────────────────────────
 
   describe('participant-flow.ts — leave + disconnect transitions emit dashboard', () => {
-    it('handleLeaveConversation emits emitHostDashboard after UPDATE matches', () => {
+    it('handleLeaveConversation emits emitHostDashboard after match status change', () => {
       const src = readSource('../../../services/orchestration/handlers/participant-flow.ts');
-      // Find the leaveConversation block — single occurrence with the
-      // "Mark match as ended early" comment.
-      const blockStart = src.indexOf('Mark match as ended early');
-      expect(blockStart).toBeGreaterThan(-1);
-      // Look for emitHostDashboard call within ~2500 chars after the UPDATE
-      const block = src.slice(blockStart, blockStart + 2500);
-      expect(block).toMatch(/UPDATE matches SET status = 'completed'/);
-      expect(block).toMatch(/emitHostDashboard\(/);
+      // Phase 3 (29 April 2026 spec) refactor: the literal `UPDATE matches
+      // SET status = 'completed'` was replaced by a call to
+      // demoteParticipantFromMatch, which handles all room sizes (3-person
+      // trio with 1 leaver: NULLs the leaver's slot and keeps match active;
+      // 1/0 remaining: marks terminal). The architectural invariant is
+      // unchanged — every transition still emits the dashboard — but the
+      // test anchors on the new helper call instead of the inline SQL.
+      const fnStart = src.indexOf('export async function handleLeaveConversation');
+      expect(fnStart).toBeGreaterThan(-1);
+      const nextExport = src.indexOf('\nexport', fnStart + 30);
+      const fn = src.slice(fnStart, nextExport > -1 ? nextExport : src.length);
+      expect(fn).toMatch(/demoteParticipantFromMatch/);
+      expect(fn).toMatch(/emitHostDashboard\(/);
     });
 
     it('disconnect timeout (cancelled/completed) emits emitHostDashboard after UPDATE matches', () => {
@@ -85,20 +90,21 @@ describe('Architectural: dashboard refresh on every match status transition', ()
   });
 
   describe('host-actions.ts — every match transition emits dashboard', () => {
-    it('handleHostRemoveFromRoom emits emitHostDashboard after UPDATE matches', () => {
+    it('handleHostRemoveFromRoom emits emitHostDashboard after match status change', () => {
       const src = readSource('../../../services/orchestration/handlers/host-actions.ts');
-      // The remove-from-room handler: status = $2 (terminalStatus)
-      const updIdx = src.indexOf("UPDATE matches SET status = $2, ended_at = NOW() WHERE id = $1 AND status = 'active'");
-      expect(updIdx).toBeGreaterThan(-1);
-      // emitHostDashboard must appear within the same handler block after
-      // the UPDATE (5s setTimeout body + post-cleanup emit at end of
-      // handler). Threshold bumped from 6000 → 8000 to accommodate the
-      // Tier-1 A3 session-end guard that was added inside the setTimeout
-      // block. The architectural invariant is unchanged — transition
-      // followed by dashboard refresh inside the same handler — only the
-      // proximity-proxy window widened.
-      const block = src.slice(updIdx, updIdx + 8000);
-      expect(block).toMatch(/_emitHostDashboard\(data\.sessionId\)/);
+      // Phase 3 (29 April 2026 spec) refactor: handleHostRemoveFromRoom now
+      // calls demoteParticipantFromMatch instead of issuing the inline
+      // UPDATE for terminal cases. For trio (3-person room with 1 removed),
+      // the helper keeps the match active and the handler returns early.
+      // For non-trio (terminal status), the helper UPDATEs and the original
+      // emitHostDashboard cleanup-path runs. Both paths trigger
+      // _emitHostDashboard; the test anchors on the function body.
+      const fnStart = src.indexOf('export async function handleHostRemoveFromRoom');
+      expect(fnStart).toBeGreaterThan(-1);
+      const nextExport = src.indexOf('\nexport', fnStart + 30);
+      const fn = src.slice(fnStart, nextExport > -1 ? nextExport : src.length);
+      expect(fn).toMatch(/demoteParticipantFromMatch/);
+      expect(fn).toMatch(/_emitHostDashboard\(data\.sessionId\)/);
     });
 
     it('handleHostMoveToRoom emits emitHostDashboard after UPDATE matches', () => {
