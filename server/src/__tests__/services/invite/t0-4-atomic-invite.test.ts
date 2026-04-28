@@ -74,8 +74,107 @@ describe('T0-4 — atomic invite acceptance', () => {
       const fnStart = src.indexOf('export async function acceptInvite');
       const fnEnd = src.indexOf('\n}\n', fnStart);
       const fn = src.slice(fnStart, fnEnd);
-      const idempotentBlock = fn.slice(fn.indexOf('Invite re-acceptance'), fn.indexOf('throw new AppError(400, \'INVITE_ALREADY_USED\''));
+      // Post-2026-04-28 restructure: idempotent log + return live in Phase C
+      // (after Phase A's INVITE_ALREADY_USED throw). Anchor on the
+      // re-acceptance log line and look at the next return-block.
+      const reAcceptIdx = fn.indexOf('Invite re-acceptance');
+      expect(reAcceptIdx).toBeGreaterThan(-1);
+      const idempotentReturnIdx = fn.indexOf('return {', reAcceptIdx);
+      expect(idempotentReturnIdx).toBeGreaterThan(-1);
+      const idempotentBlock = fn.slice(reAcceptIdx, idempotentReturnIdx + 250);
       expect(idempotentBlock).toMatch(/redirectTo:\s*computeRedirectTo/);
+    });
+  });
+
+  // ── Post-2026-04-28 restructure pins ──
+  // The original acceptInvite wrapped the entire flow (validation,
+  // applyInviteRegistration, final UPDATE) in `transaction()`. Under
+  // concurrent accepts, the outer connection sat idle past Neon's
+  // idle-in-transaction timeout while nested service transactions
+  // serialized on a shared pod-row lock — Postgres killed the connection,
+  // requests 500'd after a ~22-second hang, users saw "click does
+  // nothing." These tests pin the four-phase split that fixes it.
+  describe('Phase A — short transaction (lock released before slow work)', () => {
+    const fnStart = src.indexOf('export async function acceptInvite');
+    const fnEnd = src.indexOf('\n}\n', fnStart);
+    const fn = src.slice(fnStart, fnEnd);
+
+    it('the only transaction wrapper is for Phase A — short, validation-only', () => {
+      const txOpens = (fn.match(/await transaction\(async \(client\)/g) || []).length;
+      expect(txOpens).toBe(1);
+    });
+
+    it('Phase A transaction body does NOT call applyInviteRegistration', () => {
+      const txStart = fn.indexOf('await transaction(async (client)');
+      expect(txStart).toBeGreaterThan(-1);
+      const phaseAEndMarker = fn.indexOf('Phase A committed', txStart);
+      expect(phaseAEndMarker).toBeGreaterThan(txStart);
+      const phaseABody = fn.slice(txStart, phaseAEndMarker);
+      expect(phaseABody).not.toMatch(/applyInviteRegistration\(/);
+    });
+
+    it('applyInviteRegistration is invoked AFTER the transaction wrapper closes', () => {
+      const phaseAEndMarker = fn.indexOf('Phase A committed');
+      const applyIdx = fn.indexOf('applyInviteRegistration(invite, userId)');
+      expect(phaseAEndMarker).toBeGreaterThan(-1);
+      expect(applyIdx).toBeGreaterThan(phaseAEndMarker);
+    });
+  });
+
+  describe('Phase C — atomic UPDATE with race-safe WHERE clause', () => {
+    it('Phase C UPDATE includes use_count < max_uses race guard', () => {
+      expect(src).toMatch(/UPDATE invites[\s\S]+?WHERE[\s\S]+?use_count\s*<\s*max_uses/);
+    });
+
+    it('Phase C UPDATE excludes revoked + expired statuses', () => {
+      expect(src).toMatch(/status NOT IN[\s\S]+?revoked[\s\S]+?expired/);
+    });
+
+    it('handles 0-row UPDATE result (concurrent caller bumped use_count past max)', () => {
+      const fnStart = src.indexOf('export async function acceptInvite');
+      const fnEnd = src.indexOf('\n}\n', fnStart);
+      const fn = src.slice(fnStart, fnEnd);
+      expect(fn).toMatch(/updateResult\.rowCount\s*===\s*0/);
+    });
+
+    it('Phase C runs against the pool, not the Phase A transaction client', () => {
+      const fnStart = src.indexOf('export async function acceptInvite');
+      const fnEnd = src.indexOf('\n}\n', fnStart);
+      const fn = src.slice(fnStart, fnEnd);
+      const phaseAEndMarker = fn.indexOf('Phase A committed');
+      const after = fn.slice(phaseAEndMarker);
+      // Should be a top-level `await query(...)`, not `await client.query(...)`
+      expect(after).toMatch(/await query<Invite>\(\s*\n?\s*`UPDATE invites/);
+    });
+  });
+
+  describe('NotificationBell does not double-fire register on success', () => {
+    const bellSrc = nodeFs.readFileSync(
+      nodePath.join(__dirname, '../../../../../client/src/components/ui/NotificationBell.tsx'),
+      'utf8',
+    );
+
+    it('handleAcceptInvite success path does not POST to /sessions/:id/register', () => {
+      // The success-path register call was the source of the
+      // 2026-04-28 incident: it raced with the server's nested
+      // sessionService.registerParticipant. The server now handles
+      // registration in Phase B; the client must not duplicate.
+      const handlerStart = bellSrc.indexOf('const tryAcceptAndRegister');
+      const handlerEnd = bellSrc.indexOf('catch (err: any)', handlerStart);
+      expect(handlerStart).toBeGreaterThan(-1);
+      expect(handlerEnd).toBeGreaterThan(handlerStart);
+      const successPath = bellSrc.slice(handlerStart, handlerEnd);
+      expect(successPath).not.toMatch(/api\.post\(`\/sessions\/\$\{[^}]+\}\/register`\)/);
+    });
+
+    it('error fallback for SESSION_ALREADY_REGISTERED still POSTs register (intentional)', () => {
+      // The error-fallback register IS still allowed because the server
+      // told us we're in a state where we don't need to redo work; this
+      // path just normalizes membership for the navigation that follows.
+      const fallbackStart = bellSrc.indexOf("errCode === 'SESSION_ALREADY_REGISTERED'");
+      expect(fallbackStart).toBeGreaterThan(-1);
+      const fallbackBlock = bellSrc.slice(fallbackStart, fallbackStart + 400);
+      expect(fallbackBlock).toMatch(/api\.post\(`\/sessions\/\$\{[^}]+\}\/register`\)/);
     });
   });
 

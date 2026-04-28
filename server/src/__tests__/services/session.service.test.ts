@@ -185,6 +185,46 @@ describe('Session Service', () => {
         .rejects.toThrow('already registered');
     });
 
+    it('returns existing row when concurrent INSERT wins the race (ON CONFLICT)', async () => {
+      // Pre-fix (incident 2026-04-28 11:00:48 UTC): the SELECT-existing
+      // check at L281-298 would pass with no row, then the INSERT at
+      // L301-306 (no ON CONFLICT) would 500 with a unique-constraint
+      // violation when a concurrent caller had already inserted between
+      // our SELECT and our INSERT. Post-fix: ON CONFLICT DO NOTHING +
+      // follow-up SELECT returns the existing row idempotently.
+      const existingParticipant = {
+        id: 'sp-from-concurrent-insert',
+        sessionId: 'session-123',
+        userId: 'user-new',
+        status: 'registered',
+      };
+      // getSessionById
+      mockQuery.mockResolvedValueOnce({ rows: [{ ...mockSession, status: SessionStatus.LOBBY_OPEN }], rowCount: 1 });
+      // visibility
+      mockQuery.mockResolvedValueOnce({ rows: [{ visibility: 'public' }], rowCount: 1 });
+      // membership check
+      mockQuery.mockResolvedValueOnce({ rows: [{ role: 'member' }], rowCount: 1 });
+      // COUNT participants
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: '5' }], rowCount: 1 });
+      // existing check — none yet (concurrent caller hasn't inserted yet from our perspective)
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      // INSERT … ON CONFLICT DO NOTHING — returns 0 rows (concurrent INSERT won)
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      // Follow-up SELECT — returns the row the concurrent caller inserted
+      mockQuery.mockResolvedValueOnce({ rows: [existingParticipant], rowCount: 1 });
+      // Sync invite status (always runs)
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+      const participant = await sessionService.registerParticipant('session-123', 'user-new');
+      expect(participant.id).toBe('sp-from-concurrent-insert');
+      // Verify the INSERT actually used ON CONFLICT DO NOTHING
+      const insertCall = mockQuery.mock.calls.find(
+        (c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).includes('INSERT INTO session_participants')
+      );
+      expect(insertCall).toBeDefined();
+      expect(insertCall![0]).toMatch(/ON CONFLICT \(session_id, user_id\) DO NOTHING/);
+    });
+
     it('should re-register a previously left participant', async () => {
       const reregistered = { id: 'sp-1', sessionId: 'session-123', userId: 'user-left', status: 'registered' };
       // getSessionById

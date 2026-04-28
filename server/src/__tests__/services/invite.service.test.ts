@@ -273,6 +273,92 @@ describe('Invite Service', () => {
         .rejects.toThrow('expired');
     });
 
+    it('Phase A short-tx: invite-row lock is released before applyInviteRegistration runs', async () => {
+      // Pre-fix (incident 2026-04-28 11:00 UTC): the entire flow ran
+      // inside transaction(), so the outer connection sat idle holding
+      // BEGIN while applyInviteRegistration's nested transactions
+      // serialized on a shared pod-row FOR UPDATE. Outer connection
+      // exceeded Neon's idle-in-transaction timeout → 25P03 FATAL →
+      // request 500'd after a ~22s hang. Post-fix: transaction()
+      // wraps Phase A only; addMember opens its own (separate) tx
+      // strictly AFTER Phase A commits.
+      let phaseACommittedAt = 0;
+      let phaseACommittedBeforeRegistration = false;
+
+      mockTransaction
+        // Phase A
+        .mockImplementationOnce(async (cb: Function) => {
+          const client = {
+            query: jest.fn().mockResolvedValueOnce({ rows: [mockInvite], rowCount: 1 }),
+          };
+          const result = await cb(client);
+          phaseACommittedAt = Date.now();
+          return result;
+        })
+        // addMember's nested tx (Phase B)
+        .mockImplementationOnce(async (cb: Function) => {
+          if (phaseACommittedAt > 0) phaseACommittedBeforeRegistration = true;
+          const client = {
+            query: jest.fn()
+              .mockResolvedValueOnce({ rows: [{ id: 'pod-123' }], rowCount: 1 })
+              .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+              .mockResolvedValueOnce({ rows: [{ id: 'pm-1' }], rowCount: 1 }),
+          };
+          return cb(client);
+        });
+
+      mockQuery
+        // Phase C atomic UPDATE
+        .mockResolvedValueOnce({ rows: [{ ...mockInvite, useCount: 1, status: InviteStatus.ACCEPTED }], rowCount: 1 })
+        // Phase D notifications
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+      await inviteService.acceptInvite('ABC123XYZ', 'user-guest');
+
+      expect(phaseACommittedBeforeRegistration).toBe(true);
+    });
+
+    it('Phase C atomic UPDATE absorbs use_count race (returns success when re-read finds invite consumed)', async () => {
+      // If a concurrent caller bumps use_count past max between Phase A
+      // and Phase C, our UPDATE returns 0 rows. We re-read and return
+      // the user-was-still-registered success path.
+      mockTransaction
+        .mockImplementationOnce(async (cb: Function) => {
+          const client = {
+            query: jest.fn().mockResolvedValueOnce({ rows: [mockInvite], rowCount: 1 }),
+          };
+          return cb(client);
+        })
+        // addMember's nested tx (Phase B)
+        .mockImplementationOnce(async (cb: Function) => {
+          const client = {
+            query: jest.fn()
+              .mockResolvedValueOnce({ rows: [{ id: 'pod-123' }], rowCount: 1 })
+              .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+              .mockResolvedValueOnce({ rows: [{ id: 'pm-1' }], rowCount: 1 }),
+          };
+          return cb(client);
+        });
+
+      mockQuery
+        // Phase C atomic UPDATE — returns 0 rows because race lost
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+        // Phase C re-read — invite was consumed by concurrent caller
+        .mockResolvedValueOnce({ rows: [{ ...mockInvite, useCount: 1, acceptedByUserId: 'other-user' }], rowCount: 1 })
+        // Phase D notifications
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+      const result = await inviteService.acceptInvite('ABC123XYZ', 'user-guest');
+      expect(result).toBeDefined();
+      expect(result.invite).toBeDefined();
+      const atomicUpdateCall = mockQuery.mock.calls.find(
+        (c: unknown[]) => typeof c[0] === 'string'
+          && (c[0] as string).includes('UPDATE invites')
+          && (c[0] as string).includes('use_count < max_uses')
+      );
+      expect(atomicUpdateCall).toBeDefined();
+    });
+
     it('should throw when max uses reached', async () => {
       mockTransaction.mockImplementation(async (cb: Function) => {
         const client = {

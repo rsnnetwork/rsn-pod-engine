@@ -298,12 +298,31 @@ export async function registerParticipant(sessionId: string, userId: string, use
       return result.rows[0];
     }
 
-    const result = await client.query<SessionParticipant>(
+    // ON CONFLICT DO NOTHING absorbs the race where a concurrent caller
+    // inserted the same (session_id, user_id) between our SELECT-existing
+    // check above and this INSERT. Pre-fix, the second caller hit the
+    // session_participants_session_id_user_id_key unique constraint and
+    // 500'd — incident 2026-04-28 11:00:48 UTC, where the lobby page's
+    // auto-register fired alongside the invite-accept flow's nested
+    // registerParticipant for the same user.
+    const insertResult = await client.query<SessionParticipant>(
       `INSERT INTO session_participants (session_id, user_id, status)
        VALUES ($1, $2, 'registered')
+       ON CONFLICT (session_id, user_id) DO NOTHING
        RETURNING ${PARTICIPANT_COLUMNS}`,
       [sessionId, userId]
     );
+
+    let participant: SessionParticipant;
+    if (insertResult.rowCount === 0) {
+      const existingRow = await client.query<SessionParticipant>(
+        `SELECT ${PARTICIPANT_COLUMNS} FROM session_participants WHERE session_id = $1 AND user_id = $2`,
+        [sessionId, userId]
+      );
+      participant = existingRow.rows[0];
+    } else {
+      participant = insertResult.rows[0];
+    }
 
     // Sync invite status: if user had a pending invite for this session, mark it accepted
     await client.query(
@@ -313,7 +332,7 @@ export async function registerParticipant(sessionId: string, userId: string, use
     );
 
     logger.info({ sessionId, userId }, 'Participant registered');
-    return result.rows[0];
+    return participant;
   });
 }
 

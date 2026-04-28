@@ -124,18 +124,21 @@ export default function NotificationBell() {
     if (!code) return;
     setActionLoading(n.id);
 
-    // Retry-capable accept + register flow
+    // Retry-capable accept flow. The server-side acceptInvite now registers
+    // the user in Phase B (sessionService.registerParticipant via
+    // applyInviteRegistration), so the client MUST NOT fire a second
+    // register on success — that double-fire was the source of the
+    // 2026-04-28 11:00 incident where the lobby's auto-register collided
+    // with this handler's register and hit the unique-constraint race in
+    // session_participants. Register is only fired in the error fallback
+    // below for the specific codes that mean "already registered" (where
+    // the server tells us we don't need to re-do anything).
     const tryAcceptAndRegister = async (attempt: number): Promise<{ dest: string | null; success: boolean }> => {
       try {
         const res = await api.post(`/invites/${code}/accept`);
         const data = res.data?.data;
         const sessionId = data?.sessionId || n.sessionId;
         const podId = data?.podId || n.podId;
-
-        // Ensure registration for session invites
-        if (sessionId) {
-          await api.post(`/sessions/${sessionId}/register`).catch(() => {});
-        }
 
         const dest = sessionId ? `/sessions/${sessionId}` : podId ? `/pods/${podId}` : null;
         return { dest, success: true };

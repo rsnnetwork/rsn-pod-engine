@@ -323,29 +323,51 @@ export async function getInviteByCode(code: string): Promise<Invite> {
 
 // ─── Accept Invite ──────────────────────────────────────────────────────────
 //
-// T0-4 — restructured for atomicity. Pre-fix: invite UPDATE committed
-// inside the transaction, then `podService.addMember` + `sessionService.
-// registerParticipant` ran AGAINST THE GLOBAL POOL (not the transaction
-// client). If those failed after invite was committed accepted, the user
-// was permanently flagged as having accepted an invite they were never
-// registered for.
+// Restructured 2026-04-28 into a four-phase pipeline that holds the
+// invite-row lock for the minimum time possible. Pre-fix, the entire flow
+// (validation + nested service calls + final UPDATE) ran inside a single
+// `transaction()` wrapper. The OUTER connection sat idle holding `BEGIN`
+// while applyInviteRegistration's NESTED transactions on OTHER pool
+// connections did the slow work — and under concurrent accepts (10
+// invitees clicking within seconds) the nested calls serialized on
+// podService.addMember's `SELECT pods FOR UPDATE`, dragging the outer
+// idle window past Neon's idle_in_transaction_session_timeout. Postgres
+// killed the connections (FATAL 25P03), the next query on the outer
+// client threw "Client has encountered a connection error and is not
+// queryable", and the request 500'd after a ~22s hang. From the user
+// the symptom was "click does nothing." See incident 2026-04-28 11:00.
 //
-// Post-fix: order is reversed and the failure model is well-defined.
+// Post-fix:
 //
-//   1. SELECT FOR UPDATE the invite + run all validations (capacity,
-//      expiry, status, session-ended). If any fail → throw → tx rolls
-//      back the only thing that's there (the FOR UPDATE lock release).
-//   2. Run pod/session registration (against global pool, idempotent via
-//      ON CONFLICT). If it fails → throw → invite UPDATE never runs →
-//      next acceptance attempt re-validates and retries cleanly.
-//   3. UPDATE invite to mark accepted + bump use_count. Single statement,
-//      can't fail in any realistic scenario (the row is locked).
-//   4. Mark related notifications as read.
+//   Phase A — short transaction (~50ms). SELECT FOR UPDATE invite and
+//             run all validations (status, expiry, session-ended,
+//             identity-match, use-count gate). COMMIT immediately.
+//             Lock released. Connection back in the pool. Even under
+//             load this never sits idle.
 //
-// Worst-case race: registration commits to global pool, invite UPDATE
-// (single SQL statement) fails. Result: registration persisted, invite
-// still pending. Next accept attempt re-runs registration (idempotent)
-// and re-attempts UPDATE. Self-healing.
+//   Phase B — applyInviteRegistration() outside any transaction. Uses
+//             pool queries with ON CONFLICT-safe inserts and the
+//             ConflictError-swallow pattern, so it's fully idempotent.
+//             A retry after a partial failure re-runs cleanly.
+//
+//   Phase C — atomic UPDATE invites SET use_count = use_count + 1,
+//             status = 'accepted', accepted_by/_at = COALESCE(...).
+//             The WHERE clause `use_count < max_uses AND status NOT IN
+//             ('revoked', 'expired')` is the race guard — it replaces
+//             the FOR UPDATE lock for the multi-use case. If a
+//             concurrent caller bumped use_count to max between Phase A
+//             and Phase C, our UPDATE returns 0 rows and we re-read.
+//
+//   Phase D — best-effort UPDATE notifications SET is_read = TRUE.
+//             Outside any transaction. Failures are non-fatal.
+//
+// Worst-case race: Phase B succeeds, then Phase C loses the use_count
+// race to a concurrent caller. The user is registered (Phase B
+// committed) but consumed someone else's slot. Returns success with a
+// re-read invite + a logger.warn for visibility. For email-gated
+// single-use invites (RSN's actual production usage) this is impossible
+// because the identity-match check in Phase A blocks all but the right
+// user — only one accept can pass.
 //
 // Returns AcceptInviteResult so the route can hand the client an explicit
 // `redirectTo` instead of guessing.
@@ -432,8 +454,10 @@ export async function acceptInvite(
   userId: string,
   userEmail?: string,
 ): Promise<AcceptInviteResult> {
-  return transaction(async (client) => {
-    // ── 1. Lock + validate ──
+  // ── Phase A — short transaction. Lock invite, run all validations,
+  //     COMMIT. The connection is back in the pool before any slow work,
+  //     so it can never sit idle past Neon's idle-in-transaction timeout.
+  const phaseA = await transaction(async (client) => {
     const inviteResult = await client.query(
       `SELECT ${INVITE_COLUMNS} FROM invites WHERE code = $1 FOR UPDATE`,
       [code]
@@ -472,13 +496,11 @@ export async function acceptInvite(
       }
     }
 
-    // ── T1-1 (Issue 1) — identity-match guard. If the invite was issued to
-    //     a specific email AND the authenticated user's email is known AND
-    //     they don't match (case-insensitive), reject. Prevents the
-    //     multi-device confusion where User A logged-in on phone clicks
-    //     User B's invite from desktop and accidentally consumes it. The
-    //     useEmail param is optional so legacy callers and code-only invites
-    //     (no invitee_email) keep working unchanged.
+    // T1-1 identity-match guard. If the invite was issued to a specific
+    // email AND the authenticated user's email is known AND they don't
+    // match (case-insensitive), reject. The userEmail param is optional
+    // so legacy callers and code-only invites (no invitee_email) keep
+    // working unchanged.
     if (invite.inviteeEmail && userEmail) {
       const inviteEmailNorm = invite.inviteeEmail.trim().toLowerCase();
       const userEmailNorm = userEmail.trim().toLowerCase();
@@ -491,51 +513,93 @@ export async function acceptInvite(
       }
     }
 
-    // ── 2. Use-count gate. If already used by THIS user, treat as
-    //     idempotent re-acceptance (apply registration, return same invite). ──
+    // Use-count gate. Same user re-clicking maxed invite → Invite
+    // re-acceptance, marker propagates to Phase B/C. Different user
+    // exhausting it → reject.
+    let isIdempotent = false;
     if (invite.useCount >= invite.maxUses) {
       if (invite.acceptedByUserId === userId) {
-        const registeredIdem = await applyInviteRegistration(invite, userId);
-        logger.info({ code, userId, type: invite.type }, 'Invite re-acceptance — effects re-applied');
-        return {
-          invite,
-          redirectTo: computeRedirectTo(invite, registeredIdem),
-          registeredFor: registeredIdem,
-        };
+        isIdempotent = true;
+      } else {
+        throw new AppError(400, 'INVITE_ALREADY_USED', 'This invite has reached its maximum uses');
       }
-      throw new AppError(400, 'INVITE_ALREADY_USED', 'This invite has reached its maximum uses');
     }
 
-    // ── 3. Apply registration FIRST (idempotent, ON CONFLICT-safe) ──
-    //     If this throws, the invite UPDATE below never runs and the row
-    //     stays in its pre-acceptance state. User can retry cleanly.
-    const registered = await applyInviteRegistration(invite, userId);
+    return { invite, isIdempotent };
+  });
+  // Phase A committed. Lock released. Connection returned to pool.
 
-    // ── 4. Mark invite accepted ──
-    const updatedResult = await client.query(
-      `UPDATE invites SET use_count = use_count + 1, accepted_by_user_id = $1, accepted_at = NOW(),
-       status = 'accepted'::invite_status
-       WHERE id = $2
-       RETURNING ${INVITE_COLUMNS}`,
-      [userId, invite.id]
-    );
+  const { invite, isIdempotent } = phaseA;
 
-    // ── 5. Mark related notifications as read (best effort) ──
-    try {
-      await client.query(
-        `UPDATE notifications SET is_read = TRUE WHERE user_id = $1 AND link LIKE $2 AND is_read = FALSE`,
-        [userId, `%${code}%`]
-      );
-    } catch { /* non-fatal */ }
+  // ── Phase B — apply registration outside any transaction. Uses pool
+  //     queries with ON CONFLICT and ConflictError-swallow → fully
+  //     idempotent. If this throws, Phase C never runs and the user can
+  //     retry cleanly. If a partial failure leaves pod_member committed
+  //     but session_participant missing, the next retry's Phase B
+  //     re-runs idempotently.
+  const registered = await applyInviteRegistration(invite, userId);
 
-    logger.info({ code, userId, type: invite.type }, 'Invite accepted');
-
+  // Idempotent re-acceptance path: registration re-applied, no use_count
+  // bump, no further DB writes needed.
+  if (isIdempotent) {
+    logger.info({ code, userId, type: invite.type }, 'Invite re-acceptance — effects re-applied');
     return {
-      invite: updatedResult.rows[0] as Invite,
+      invite,
       redirectTo: computeRedirectTo(invite, registered),
       registeredFor: registered,
     };
-  });
+  }
+
+  // ── Phase C — atomic UPDATE invites SET use_count. The WHERE clause
+  //     is the race guard: a concurrent caller that bumped use_count to
+  //     max between Phase A and here causes our UPDATE to return 0 rows.
+  const updateResult = await query<Invite>(
+    `UPDATE invites
+       SET use_count = use_count + 1,
+           status = 'accepted'::invite_status,
+           accepted_by_user_id = COALESCE(accepted_by_user_id, $1),
+           accepted_at = COALESCE(accepted_at, NOW())
+     WHERE id = $2
+       AND use_count < max_uses
+       AND status NOT IN ('revoked'::invite_status, 'expired'::invite_status)
+     RETURNING ${INVITE_COLUMNS}`,
+    [userId, invite.id]
+  );
+
+  let finalInvite: Invite;
+  if (updateResult.rowCount === 0) {
+    // Lost the use_count race or the invite was revoked/expired between
+    // Phase A and Phase C. Phase B already registered the user
+    // idempotently, so we still return success — they have what they
+    // wanted. Re-read invite for the response.
+    const reread = await query<Invite>(
+      `SELECT ${INVITE_COLUMNS} FROM invites WHERE id = $1`,
+      [invite.id]
+    );
+    finalInvite = reread.rows[0] as Invite;
+    logger.warn(
+      { code, userId, type: invite.type },
+      'Invite use_count race lost during accept; user registered anyway',
+    );
+  } else {
+    finalInvite = updateResult.rows[0] as Invite;
+  }
+
+  // ── Phase D — best-effort notification sync. Outside any transaction.
+  try {
+    await query(
+      `UPDATE notifications SET is_read = TRUE WHERE user_id = $1 AND link LIKE $2 AND is_read = FALSE`,
+      [userId, `%${code}%`]
+    );
+  } catch { /* non-fatal */ }
+
+  logger.info({ code, userId, type: invite.type }, 'Invite accepted');
+
+  return {
+    invite: finalInvite,
+    redirectTo: computeRedirectTo(invite, registered),
+    registeredFor: registered,
+  };
 }
 
 // ─── List Invites ───────────────────────────────────────────────────────────

@@ -5739,3 +5739,49 @@ Six small, high-impact UI/video fixes shipped as a single batch (parallel-shippa
 - Re-enabling RATE_LIMIT_STORE=redis (only needed multi-instance)
 - Re-enabling Blueprint autoSync (we keep dashboard as source of truth)
 
+
+---
+
+## 2026-04-28 — Tier-1 Hotfix: invite-accept idle-in-tx + register race + bell double-fire
+
+**Trigger:** Live event "TEST BIIIIIG HAMZA TEST" 12:00 UTC. ~10 invitees clicked Accept simultaneously between 10:55-11:01 UTC; 4 of 11 invites never accepted because requests hung 22 seconds then 500'd. User asked for root cause + fix in Dr Arch mode after confirming the issue.
+
+**Root cause (from production logs):**
+- `acceptInvite()` wrapped the entire flow in `transaction()`. Outer connection held `BEGIN` while `applyInviteRegistration()` ran nested transactions on OTHER pool connections to do the slow registration work. Under concurrent load, `podService.addMember`'s `SELECT pods FOR UPDATE` serialized all callers on the shared pod row. The outer connection sat idle past Neon's `idle_in_transaction_session_timeout` and Postgres killed it with FATAL `25P03`. Next query on the dead client threw `Client has encountered a connection error and is not queryable` → 500 after 22-second hang.
+- `sessionService.registerParticipant()` did SELECT-then-INSERT into `session_participants` without `ON CONFLICT`. When the lobby auto-register raced with the invite-accept's nested register call for the same user, second INSERT hit `session_participants_session_id_user_id_key` unique violation → 500.
+- `NotificationBell.handleAcceptInvite` unconditionally fired `POST /sessions/:id/register` after invite-accept SUCCESS, duplicating server-side work and amplifying the race above.
+
+**Fix architecture (server `acceptInvite` four-phase split):**
+
+- **Phase A** — short transaction (~50ms): SELECT FOR UPDATE invite, validate (revoked / expired / session-ended / identity-match / use-count gate), COMMIT. Lock released immediately. Connection back in pool.
+- **Phase B** — `applyInviteRegistration()` outside any transaction. Idempotent via `ConflictError`-swallow + `ON CONFLICT` inserts.
+- **Phase C** — atomic `UPDATE invites SET use_count = use_count + 1, status='accepted', accepted_by/_at = COALESCE(...) WHERE id=$1 AND use_count < max_uses AND status NOT IN ('revoked','expired')`. The `WHERE` clause is the race guard — replaces the FOR UPDATE lock for multi-use invites without holding a transaction. If 0 rows, re-read invite + return success (Phase B already registered the user).
+- **Phase D** — best-effort UPDATE notifications, outside any transaction.
+
+**Files changed:**
+- `server/src/services/invite/invite.service.ts` — `acceptInvite` restructured into Phase A/B/C/D pipeline.
+- `server/src/services/session/session.service.ts` — `registerParticipant` INSERT now uses `ON CONFLICT (session_id, user_id) DO NOTHING` + follow-up SELECT for the existing row when the race fires.
+- `client/src/components/ui/NotificationBell.tsx` — removed unconditional `/sessions/:id/register` POST on accept-invite success path. Server now registers in Phase B; client must not duplicate. Error fallback for `SESSION_ALREADY_REGISTERED` / `POD_MEMBER_EXISTS` still POSTs (intentional — server told us we don't need to redo work; this normalizes for navigation).
+- `server/src/__tests__/services/invite.service.test.ts` — added Phase A short-tx invariant test + Phase C atomic UPDATE race test.
+- `server/src/__tests__/services/session.service.test.ts` — added ON CONFLICT race test for `registerParticipant`.
+- `server/src/__tests__/services/invite/t0-4-atomic-invite.test.ts` — updated source-code assertions for new four-phase structure; added pins for Phase A short-tx, Phase C atomic UPDATE WHERE clause, Phase C 0-row recovery, and NotificationBell success path no-double-register.
+
+**Tests:** 663/663 server tests pass (was 651, added 12 new). Client + server builds clean.
+
+**Behavior-preservation:**
+- All existing error codes preserved: `INVITE_REVOKED`, `INVITE_EXPIRED`, `EVENT_ENDED`, `IDENTITY_MISMATCH`, `INVITE_ALREADY_USED`.
+- `AcceptInviteResult` shape unchanged (`{ invite, redirectTo, registeredFor }`).
+- Idempotent re-acceptance preserved (same user re-clicking maxed invite).
+- `redirectTo` semantics unchanged (`/sessions/:id/live` for session, `/pods/:id` for pod).
+- Self-healing on partial failure: Phase B can retry idempotently, Phase C atomic guard prevents over-consumption.
+
+**Edge case (multi-use open invites only):** If two users race for the last slot of a multi-use invite (max_uses>1, no `invitee_email` gate), one wins use_count + status=accepted, the other was already registered by Phase B and gets a re-read invite + a `logger.warn` for visibility. For RSN's actual production usage (single-use email-gated invites — bulk endpoint sets `maxUses: 1`), the identity-match check in Phase A makes this race impossible.
+
+**Out of scope (separate plans):**
+- LiveKit `NegotiationError` (RSN-CLIENT-8 from same Hamza event) — client-side LiveKit timeout, separate diagnosis.
+- `PARTICIPANT_ALREADY_MATCHED` during round transitions (1 server log at 11:19 UTC) — matching-engine state cleanup, separate diagnosis.
+- Tier-2 horizontal scaling (Redlock, Redis state read-through, leader election).
+
+**Stranded data from the original incident:** 4 Hamza-event invites are still `pending` because users gave up after the 500 hangs. They will self-heal on retry under the new code (Phase B's idempotent membership check + Phase C atomic UPDATE will mark them accepted cleanly). No manual data fix needed.
+
+**Rollback:** `git revert <sha>` on both branches. No DB migrations, no env changes.
