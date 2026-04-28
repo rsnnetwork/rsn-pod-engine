@@ -5785,3 +5785,39 @@ Six small, high-impact UI/video fixes shipped as a single batch (parallel-shippa
 **Stranded data from the original incident:** 4 Hamza-event invites are still `pending` because users gave up after the 500 hangs. They will self-heal on retry under the new code (Phase B's idempotent membership check + Phase C atomic UPDATE will mark them accepted cleanly). No manual data fix needed.
 
 **Rollback:** `git revert <sha>` on both branches. No DB migrations, no env changes.
+
+---
+
+## 2026-04-29 — Phase 1 of platform-spec-9-fixes plan: UI foundations (Q2, Q3, Q9)
+
+**Plan:** `docs/superpowers/plans/2026-04-29-platform-spec-9-fixes.md`
+
+**Scope:** SPA navigation cleanup, server-side display-name fallbacks (kills the "user: user" placeholder on host matching screen), silent-error-swallow audit.
+
+**What changed:**
+
+- **`server/src/services/orchestration/handlers/matching-flow.ts`** — `sendMatchPreview` and the host-dashboard emit now build the displayName map with a real fallback chain (`displayName → email-prefix → "Participant {short_id}"`). Pre-fix, missing display_names collapsed to the literal `"User"`, which rendered on the host UI as `"User × User"` for pairs and `"Not matched: User, User"` for the bye list — confusing the host completely. The query now selects `email` alongside `display_name`, the cache stores the resolved fallback, and a `safeName(uid)` helper guards every consumer.
+
+- **`server/src/services/orchestration/handlers/participant-flow.ts`** — same fallback chain applied to the rating-prompt partner-name lookup (the `Partner` literal was producing `"Partner, Partner"` in trio rating prompts when names were missing).
+
+- **`client/src/features/invites/InviteAcceptPage.tsx`** — replaced the post-accept `window.location.href = destination` hard reload with React Router `navigate(destination, { replace: true })`. Cache invalidation broadened to cover `my-sessions` / `my-pods` / `received-invites` so the dashboard reflects the new registration without the white-flash refresh. The doc said "no manual refresh dependency" — this kills it.
+
+- **`client/src/components/ui/NotificationBell.tsx`** — replaced both `window.location.href` calls with `useNavigate()`. The old comment claimed portals couldn't access router context; that was wrong — React Portals inherit context from where they're declared in the React tree, so `useNavigate()` works fine since the bell lives inside `AppLayout` → `ProtectedRoute` → `<Routes>`. Also: `markRead`/`markAllRead` and the post-accept "normalize register" call now log to console instead of being silent `.catch(() => {})`, so dev tools surface real failures.
+
+- **`client/src/hooks/useSessionSocket.ts`** — auto-register on session-join no longer silently swallows non-idempotent errors. `SESSION_ALREADY_REGISTERED` stays silent (idempotent), everything else logs a warn so dev tools can see what went wrong.
+
+- **`client/src/features/sessions/SessionDetailPage.tsx`** — the page-mount auto-register surfaces real errors via `addToast` (instead of swallowing). Pre-fix, a private-pod failure or session-completed failure would silently fail and the user would just see the Register button with no explanation.
+
+- **`client/src/features/sessions/RecapPage.tsx`** — host-recap fetch now logs errors (other than the expected 403 for non-hosts) instead of silently swallowing.
+
+- **`client/src/features/pods/PodDetailPage.tsx`** — "Remind All" now uses `Promise.allSettled` and reports actual success/failure counts in the toast. Pre-fix, every email could 500 and the toast still claimed success.
+
+**Tests:** new test file `server/src/__tests__/services/invite/phase1-spa-navigation.test.ts` pins the architectural invariants (no `window.location.href` in invite-accept paths, no `|| 'User'` literal in display-name fallbacks, silent `.catch(() => {})` patterns gone from key user-facing paths). Updated existing `tier1-a1-dashboard-coalesce.test.ts` to reflect the new `Participant {short_id}` negative-cache value. All 674 server tests pass (663 baseline + 11 new). Server + client builds clean.
+
+**Behavior preservation:**
+- Same UI layout — no visual changes.
+- Same accept-invite endpoint behavior — only the post-success client transition differs.
+- Same matching engine output — only the displayName field within the payload changes when display_name is null.
+- Toast helper / cache invalidation patterns unchanged.
+
+**Risk:** Low. Touches client navigation + server-side fallback labels only. No DB migration. No socket protocol change.

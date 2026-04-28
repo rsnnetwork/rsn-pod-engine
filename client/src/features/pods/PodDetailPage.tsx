@@ -1077,11 +1077,23 @@ export default function PodDetailPage() {
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => {
-                      podPendingInvites.filter((inv: any) => inv.inviteeEmail).forEach((inv: any) => {
-                        api.post(`/invites/${inv.id}/remind`).catch(() => {});
-                      });
-                      addToast(`Reminders sent to ${podPendingInvites.filter((i: any) => i.inviteeEmail).length} pending invites`, 'success');
+                    onClick={async () => {
+                      // Send reminders in parallel; tally successes vs failures
+                      // so the toast tells the user the truth instead of always
+                      // claiming success when half the emails actually 500'd.
+                      const targets = podPendingInvites.filter((i: any) => i.inviteeEmail);
+                      const results = await Promise.allSettled(
+                        targets.map((inv: any) => api.post(`/invites/${inv.id}/remind`))
+                      );
+                      const ok = results.filter(r => r.status === 'fulfilled').length;
+                      const failed = results.length - ok;
+                      if (failed === 0) {
+                        addToast(`Reminders sent to ${ok} pending invites`, 'success');
+                      } else if (ok === 0) {
+                        addToast(`Failed to send any reminders — try again`, 'error');
+                      } else {
+                        addToast(`Sent ${ok} reminders, ${failed} failed`, 'info');
+                      }
                     }}
                     className="!border-purple-300 !text-purple-700 hover:!bg-purple-100"
                   >

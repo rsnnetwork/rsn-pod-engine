@@ -72,8 +72,18 @@ export default function useSessionSocket(sessionId: string) {
     // Reset store on mount
     store.reset();
 
-    // Auto-register participant (ignore if already registered)
-    api.post(`/sessions/${sessionId}/register`).catch(() => {});
+    // Auto-register participant. Most failures here are idempotent
+    // "already registered" — fine. But genuine 4xx/5xx (pod-not-public,
+    // session-completed, etc.) should be visible in dev console rather than
+    // swallowed silently. The page's own register UI surfaces user-facing
+    // errors via React Query mutations elsewhere; this auto-register is a
+    // best-effort warmup, so console.warn is the right level of noise.
+    api.post(`/sessions/${sessionId}/register`).catch(err => {
+      const code = err?.response?.data?.error?.code;
+      if (code !== 'SESSION_ALREADY_REGISTERED') {
+        console.warn('auto-register failed', { sessionId, code, err });
+      }
+    });
 
     connectSocket(token);
     const socket = getSocket();

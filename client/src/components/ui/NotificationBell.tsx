@@ -1,10 +1,14 @@
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Bell, Check, CheckCircle, X, Loader2 } from 'lucide-react';
-// Navigation uses window.location.href because portal renders outside Router context
+// Note: createPortal renders to document.body, but the portal CHILDREN still
+// inherit React context from where the portal is declared in the tree (here,
+// inside the AppLayout which lives inside <Routes>). So useNavigate works.
+// The old comment claiming otherwise was wrong; window.location.href was the
+// lazy workaround that caused the page-reload UX everyone complained about.
+import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useToastStore } from '@/stores/toastStore';
-// useAuthStore removed — onboarding redirect no longer needed here
 import { getSocket } from '@/lib/socket';
 import api from '@/lib/api';
 
@@ -51,7 +55,7 @@ export default function NotificationBell() {
   const [dropPos, setDropPos] = useState<{ top: number; left: number } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
-  // navigate removed — using window.location.href for portal compatibility
+  const navigate = useNavigate();
   const { addToast } = useToastStore();
   const qc = useQueryClient();
 
@@ -99,13 +103,18 @@ export default function NotificationBell() {
   };
 
   const markRead = async (id: string) => {
-    await api.post(`/notifications/${id}/read`).catch(() => {});
+    // Mark-read failures are non-critical (UX nicety) — log to console for
+    // dev visibility but don't toast: the user has already moved on. The
+    // optimistic UI update below is the user-visible truth either way.
+    try { await api.post(`/notifications/${id}/read`); }
+    catch (err) { console.warn('mark notification read failed', err); }
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
     setUnreadCount(prev => Math.max(0, prev - 1));
   };
 
   const markAllRead = async () => {
-    await api.post('/notifications/read-all').catch(() => {});
+    try { await api.post('/notifications/read-all'); }
+    catch (err) { console.warn('mark all notifications read failed', err); }
     setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
     setUnreadCount(0);
   };
@@ -146,12 +155,15 @@ export default function NotificationBell() {
         const errCode = err?.response?.data?.error?.code;
         const status = err?.response?.status;
 
-        // Already accepted/registered — success
+        // Already accepted/registered — success. Server says we're in. We
+        // still ping register so the membership state is normalized for the
+        // navigation that follows; if it errors, log but don't toast (the
+        // server already told us we're fine).
         if (errCode === 'SESSION_ALREADY_REGISTERED' || errCode === 'POD_MEMBER_EXISTS'
             || errCode === 'INVITE_ALREADY_USED') {
-          // Still ensure registration
           if (n.sessionId) {
-            await api.post(`/sessions/${n.sessionId}/register`).catch(() => {});
+            try { await api.post(`/sessions/${n.sessionId}/register`); }
+            catch (regErr) { console.warn('register normalize after already-registered failed', regErr); }
           }
           return { dest: getDestination(n), success: true };
         }
@@ -183,7 +195,10 @@ export default function NotificationBell() {
       setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, inviteStatus: 'accepted', isRead: true } : x));
       invalidateInviteCaches();
       setOpen(false);
-      if (dest) setTimeout(() => { window.location.href = dest; }, 50);
+      // SPA navigation — no more page reload (the white-flash UX everyone hated).
+      // useNavigate works here because the bell is rendered inside the React
+      // Router context (AppLayout → ProtectedRoute → Routes).
+      if (dest) navigate(dest);
     }
 
     setActionLoading(null);
@@ -244,7 +259,7 @@ export default function NotificationBell() {
     const dest = getDestination(n);
     if (dest) {
       setOpen(false);
-      setTimeout(() => { window.location.href = dest; }, 50);
+      navigate(dest);
     }
   };
 

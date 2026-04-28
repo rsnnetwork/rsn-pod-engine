@@ -434,7 +434,15 @@ function HostRecapSection({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     api.get(`/sessions/${sessionId}/host-recap`).then(r => {
       setHostData(r.data.data);
-    }).catch(() => {}).finally(() => setLoading(false));
+    }).catch(err => {
+      // Host recap fetch can fail for non-hosts (403) — that's expected,
+      // the section just stays empty. For other errors, log so the host
+      // dev tools surface the issue rather than seeing a silent blank page.
+      const code = err?.response?.data?.error?.code;
+      if (code !== 'AUTH_FORBIDDEN') {
+        console.warn('host recap fetch failed', { sessionId, code, err });
+      }
+    }).finally(() => setLoading(false));
   }, [sessionId]);
 
   const exportCSV = () => {

@@ -591,11 +591,23 @@ export async function sendMatchPreview(
     if (m.participantCId) allUserIds.add(m.participantCId);
   }
 
-  const namesResult = await query<{ id: string; displayName: string }>(
-    `SELECT id, display_name AS "displayName" FROM users WHERE id = ANY($1)`,
+  // Fetch displayName + email so we can fall back to the email-prefix when
+  // displayName is null/empty. Pre-fix the host saw literal "User" everywhere
+  // (e.g. "Not matched: User, User" in the match preview, "User × User" in
+  // pair tiles) which made the screen useless. Now: displayName → email
+  // username → short userId — always something distinguishable per person.
+  const namesResult = await query<{ id: string; displayName: string | null; email: string | null }>(
+    `SELECT id, display_name AS "displayName", email FROM users WHERE id = ANY($1)`,
     [Array.from(allUserIds)]
   );
-  const nameMap = new Map(namesResult.rows.map(r => [r.id, r.displayName || 'User']));
+  const fallbackName = (id: string, displayName: string | null, email: string | null): string => {
+    const trimmed = (displayName || '').trim();
+    if (trimmed) return trimmed;
+    const emailPrefix = (email || '').split('@')[0].trim();
+    if (emailPrefix) return emailPrefix;
+    return `Participant ${id.slice(0, 6)}`;
+  };
+  const nameMap = new Map(namesResult.rows.map(r => [r.id, fallbackName(r.id, r.displayName, r.email)]));
 
   // Fetch encounter history for all matched pairs to show "met before" info
   const userIdsArray = Array.from(allUserIds);
@@ -612,17 +624,21 @@ export async function sendMatchPreview(
     encounterMap.set(key, e.times_met);
   }
 
+  // Defensive fallback if a user appears in matches but somehow not in nameMap
+  // (race between query and DB write — extremely rare, kept for safety).
+  const safeName = (uid: string): string => nameMap.get(uid) || `Participant ${uid.slice(0, 6)}`;
+
   const matchPreview = matches.map(m => {
     const pairKey = [m.participantAId, m.participantBId].sort().join(':');
     const timesMet = encounterMap.get(pairKey) || 0;
     const preview: any = {
-      participantA: { userId: m.participantAId, displayName: nameMap.get(m.participantAId) || 'User' },
-      participantB: { userId: m.participantBId, displayName: nameMap.get(m.participantBId) || 'User' },
+      participantA: { userId: m.participantAId, displayName: safeName(m.participantAId) },
+      participantB: { userId: m.participantBId, displayName: safeName(m.participantBId) },
       metBefore: timesMet > 0,
       timesMet,
     };
     if (m.participantCId) {
-      preview.participantC = { userId: m.participantCId, displayName: nameMap.get(m.participantCId) || 'User' };
+      preview.participantC = { userId: m.participantCId, displayName: safeName(m.participantCId) };
       preview.isTrio = true;
     }
     return preview;
@@ -639,10 +655,26 @@ export async function sendMatchPreview(
         `SELECT user_id FROM session_participants WHERE session_id = $1 AND status IN ('in_lobby', 'checked_in', 'registered')`,
         [sessionId]
       );
+  // byeParticipants list shows up in the host UI as "Not matched: X, Y, Z" —
+  // the placeholder bug ("Not matched: User, User") was caused by missing
+  // display names. We re-fetch names for any bye-only users not already in
+  // nameMap so they always render with a real label.
   const matchedIds = new Set(matches.flatMap(m => [m.participantAId, m.participantBId, ...(m.participantCId ? [m.participantCId] : [])]));
-  const byeParticipants = allParticipants.rows
-    .filter(p => !matchedIds.has(p.user_id))
-    .map(p => ({ userId: p.user_id, displayName: nameMap.get(p.user_id) || 'User' }));
+  const byeUserIds = allParticipants.rows.map(p => p.user_id).filter(uid => !matchedIds.has(uid));
+  const byeNamesNeeded = byeUserIds.filter(uid => !nameMap.has(uid));
+  if (byeNamesNeeded.length > 0) {
+    const byeNamesResult = await query<{ id: string; displayName: string | null; email: string | null }>(
+      `SELECT id, display_name AS "displayName", email FROM users WHERE id = ANY($1)`,
+      [byeNamesNeeded]
+    );
+    for (const r of byeNamesResult.rows) {
+      nameMap.set(r.id, fallbackName(r.id, r.displayName, r.email));
+    }
+  }
+  const byeParticipants = byeUserIds.map(uid => ({
+    userId: uid,
+    displayName: safeName(uid),
+  }));
 
   // Generate warnings when multiple participants have byes (unique pairs likely exhausted)
   const roundWarnings: string[] = [];
@@ -759,15 +791,29 @@ async function emitHostDashboardImmediate(io: SocketServer, sessionId: string): 
     }
 
     if (missingIds.length > 0) {
-      const nameResult = await query<{ id: string; displayName: string }>(
-        `SELECT id, display_name AS "displayName" FROM users WHERE id = ANY($1)`,
+      // Fetch email alongside displayName so the fallback chain
+      // (displayName → email-prefix → "Participant {short_id}") produces a
+      // distinguishable label per person. Pre-fix, missing display_names
+      // collapsed to literal "User" and the host dashboard rendered
+      // "User × User" / "Not matched: User, User" — confusing and useless.
+      const nameResult = await query<{ id: string; displayName: string | null; email: string | null }>(
+        `SELECT id, display_name AS "displayName", email FROM users WHERE id = ANY($1)`,
         [missingIds]
       );
-      for (const row of nameResult.rows) cache.set(row.id, row.displayName || 'User');
-      // Negative-cache misses so we don't re-query a user who has a null name
-      for (const uid of missingIds) if (!cache.has(uid)) cache.set(uid, 'User');
+      const fallbackNameFor = (id: string, dn: string | null, em: string | null): string => {
+        const t = (dn || '').trim();
+        if (t) return t;
+        const ep = (em || '').split('@')[0].trim();
+        if (ep) return ep;
+        return `Participant ${id.slice(0, 6)}`;
+      };
+      for (const row of nameResult.rows) cache.set(row.id, fallbackNameFor(row.id, row.displayName, row.email));
+      // Negative-cache misses so we don't re-query a user we couldn't find at
+      // all. Use a userId-derived label so they remain distinguishable.
+      for (const uid of missingIds) if (!cache.has(uid)) cache.set(uid, `Participant ${uid.slice(0, 6)}`);
     }
     const nameMap = cache;
+    const safeName = (uid: string): string => nameMap.get(uid) || `Participant ${uid.slice(0, 6)}`;
 
     // Bug 18 (April 19) — per-room manual timer in dashboard payload.
     // Each manual room has its own RoomTimerState in the roomTimers Map
@@ -796,21 +842,21 @@ async function emitHostDashboardImmediate(io: SocketServer, sessionId: string): 
         if (m.participantAId) {
           participants.push({
             userId: m.participantAId,
-            displayName: nameMap.get(m.participantAId) || 'User',
+            displayName: safeName(m.participantAId),
             isConnected: isConnectedFor(m.participantAId),
           });
         }
         if (m.participantBId) {
           participants.push({
             userId: m.participantBId,
-            displayName: nameMap.get(m.participantBId) || 'User',
+            displayName: safeName(m.participantBId),
             isConnected: isConnectedFor(m.participantBId),
           });
         }
         if (m.participantCId) {
           participants.push({
             userId: m.participantCId,
-            displayName: nameMap.get(m.participantCId) || 'User',
+            displayName: safeName(m.participantCId),
             isConnected: isConnectedFor(m.participantCId),
           });
         }
@@ -855,7 +901,7 @@ async function emitHostDashboardImmediate(io: SocketServer, sessionId: string): 
       if (userId !== activeSession.hostUserId && !matchedUserIds.has(userId)) {
         byeParticipants.push({
           userId,
-          displayName: nameMap.get(userId) || 'User',
+          displayName: safeName(userId),
         });
       }
     }

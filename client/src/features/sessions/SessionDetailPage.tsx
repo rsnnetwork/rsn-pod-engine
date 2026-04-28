@@ -161,13 +161,23 @@ export default function SessionDetailPage() {
   // Auto-register: if user landed here and isn't registered, register them immediately.
   // Shows loading state so "Register" button never flashes. Skipped after an
   // explicit unregister (see ref above).
+  //
+  // Failure handling: SESSION_ALREADY_REGISTERED is idempotent (fine, silent).
+  // Anything else (private pod, event ended, etc.) gets a visible toast — we
+  // used to swallow these errors which made the user think the auto-register
+  // worked when it didn't, then the Register button appeared mysteriously.
   useEffect(() => {
     if (explicitlyUnregisteredRef.current) return;
     if (session && user && participants && !isRegistered && !autoRegistering && sessionId) {
       setAutoRegistering(true);
       api.post(`/sessions/${sessionId}/register`).then(() => {
         qc.invalidateQueries({ queryKey: ['session-participants', sessionId] });
-      }).catch(() => { /* not allowed or already registered */ })
+      }).catch(err => {
+        const code = err?.response?.data?.error?.code;
+        if (code === 'SESSION_ALREADY_REGISTERED') return; // idempotent — silent
+        const msg = err?.response?.data?.error?.message;
+        if (msg) addToast(msg, 'error');
+      })
         .finally(() => setAutoRegistering(false));
     }
   }, [session?.id, user?.id, isRegistered]); // eslint-disable-line react-hooks/exhaustive-deps

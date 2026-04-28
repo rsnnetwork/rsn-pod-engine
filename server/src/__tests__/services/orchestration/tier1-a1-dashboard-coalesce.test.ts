@@ -91,9 +91,21 @@ describe('Tier-1 A1 — dashboard coalesce + name cache', () => {
     });
 
     it('negative-caches unknown ids to avoid repeated lookups', () => {
-      // If the DB didn't return a row for a user, we still insert "User" so
-      // the next emit doesn't re-query that id.
-      expect(fn).toMatch(/if\s*\(!cache\.has\(uid\)\)\s*cache\.set\(uid,\s*'User'\)/);
+      // If the DB didn't return a row for a user we still insert a label so
+      // the next emit doesn't re-query that id. Phase 1 (29 April 2026)
+      // changed the negative-cache value from the literal "User" — which
+      // produced "User × User" / "Not matched: User, User" in the host UI
+      // when several users had missing names — to a userId-derived label
+      // that's distinguishable per person.
+      expect(fn).toMatch(/if\s*\(!cache\.has\(uid\)\)\s*cache\.set\(uid,\s*`Participant \$\{uid\.slice\(0,\s*6\)\}`\)/);
+    });
+
+    it('positive-cache uses email-prefix fallback when display_name is missing', () => {
+      // The query selects email alongside displayName so the fallback chain
+      // can produce a useful label (displayName → email-prefix → short userId)
+      // instead of collapsing every nameless user to the literal "User".
+      expect(fn).toMatch(/SELECT id,\s*display_name[^,]*,\s*email/);
+      expect(fn).toMatch(/fallbackNameFor/);
     });
   });
 

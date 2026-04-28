@@ -89,10 +89,19 @@ export default function InviteAcceptPage() {
       const destination = data?.redirectTo || fallbackDestination();
 
       addToast('Invite accepted!', 'success');
+      // Invalidate broadly so the dashboard's "My Events" / pod cards / session
+      // detail all reflect the new registration when we land. Pre-fix this used
+      // window.location.href as a "trust nothing, refresh everything" hammer
+      // — that defeated React state and felt like a website (white flash).
+      // Now: invalidate the relevant caches, let React Query refetch in the
+      // background, and use react-router navigate() for an SPA transition.
       qc.invalidateQueries({ queryKey: ['session-participants'] });
       qc.invalidateQueries({ queryKey: ['session-detail'] });
-      // Full page reload ensures fresh data — React Router navigate can hit stale cache
-      setTimeout(() => { window.location.href = destination; }, 50);
+      qc.invalidateQueries({ queryKey: ['session', invite?.sessionId] });
+      qc.invalidateQueries({ queryKey: ['my-sessions'] });
+      qc.invalidateQueries({ queryKey: ['my-pods'] });
+      qc.invalidateQueries({ queryKey: ['received-invites'] });
+      navigate(destination, { replace: true });
     } catch (err: any) {
       const errCode = err?.response?.data?.error?.code;
       // T0-4 — INVITE_ALREADY_USED for THIS user is now treated server-side

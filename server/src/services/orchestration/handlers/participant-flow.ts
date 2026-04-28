@@ -370,12 +370,21 @@ export async function handleJoinSession(
           if (userMatch.participantCId) participantIds.push(userMatch.participantCId);
           const partnerIds = participantIds.filter(id => id !== userId);
 
-          // Look up partner display names
-          const partnerNameResult = await query<{ id: string; displayName: string }>(
-            `SELECT id, display_name AS "displayName" FROM users WHERE id = ANY($1)`, [partnerIds]
+          // Look up partner display names. Fall back to email-prefix then to
+          // a short userId-derived label so trios never show "Partner, Partner"
+          // in the rating prompt — same fix family as the host matching screen.
+          const partnerNameResult = await query<{ id: string; displayName: string | null; email: string | null }>(
+            `SELECT id, display_name AS "displayName", email FROM users WHERE id = ANY($1)`, [partnerIds]
           );
-          const nameMap = new Map(partnerNameResult.rows.map(r => [r.id, r.displayName || 'Partner']));
-          const partners = partnerIds.map(id => ({ userId: id, displayName: nameMap.get(id) || 'Partner' }));
+          const fallbackPartnerName = (id: string, dn: string | null, em: string | null): string => {
+            const t = (dn || '').trim();
+            if (t) return t;
+            const ep = (em || '').split('@')[0].trim();
+            if (ep) return ep;
+            return `Partner ${id.slice(0, 6)}`;
+          };
+          const nameMap = new Map(partnerNameResult.rows.map(r => [r.id, fallbackPartnerName(r.id, r.displayName, r.email)]));
+          const partners = partnerIds.map(id => ({ userId: id, displayName: nameMap.get(id) || `Partner ${id.slice(0, 6)}` }));
 
           // Restore participant status to IN_ROUND
           await sessionService.updateParticipantStatus(
@@ -426,11 +435,20 @@ export async function handleJoinSession(
             if (userMatch.participantCId) participantIds.push(userMatch.participantCId);
             const partnerIds = participantIds.filter(id => id !== userId);
 
-            const partnerNameResult = await query<{ id: string; displayName: string }>(
-              `SELECT id, display_name AS "displayName" FROM users WHERE id = ANY($1)`, [partnerIds]
+            // Same fallback chain as the assigned-partner block above to keep
+            // the rating prompt names readable when display_name is missing.
+            const partnerNameResult = await query<{ id: string; displayName: string | null; email: string | null }>(
+              `SELECT id, display_name AS "displayName", email FROM users WHERE id = ANY($1)`, [partnerIds]
             );
-            const nameMap = new Map(partnerNameResult.rows.map(r => [r.id, r.displayName || 'Partner']));
-            const partnersWithNames = partnerIds.map(id => ({ userId: id, displayName: nameMap.get(id) || 'Partner' }));
+            const fallbackName = (id: string, dn: string | null, em: string | null): string => {
+              const t = (dn || '').trim();
+              if (t) return t;
+              const ep = (em || '').split('@')[0].trim();
+              if (ep) return ep;
+              return `Partner ${id.slice(0, 6)}`;
+            };
+            const nameMap = new Map(partnerNameResult.rows.map(r => [r.id, fallbackName(r.id, r.displayName, r.email)]));
+            const partnersWithNames = partnerIds.map(id => ({ userId: id, displayName: nameMap.get(id) || `Partner ${id.slice(0, 6)}` }));
 
             // Give a short window to rate (15s or remaining time, whichever is more)
             const remainingSeconds = activeSession.timerEndsAt
@@ -439,7 +457,7 @@ export async function handleJoinSession(
             socket.emit('rating:window_open', {
               matchId: userMatch.id,
               partnerId: partnerIds[0],
-              partnerDisplayName: nameMap.get(partnerIds[0]) || 'Partner',
+              partnerDisplayName: nameMap.get(partnerIds[0]) || `Partner ${partnerIds[0].slice(0, 6)}`,
               partners: partnersWithNames,
               roundNumber: activeSession.currentRound,
               durationSeconds: remainingSeconds,
