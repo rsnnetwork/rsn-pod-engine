@@ -68,8 +68,19 @@ function InterestBadge({ connection }: { connection: Connection }) {
   return null;
 }
 
-function LateRatingForm({ matchId, partnerId, partnerName, roundNumber, onRated }: {
-  matchId: string; partnerId: string; partnerName: string; roundNumber: number; onRated: () => void;
+function LateRatingForm({
+  matchId, partnerId, partnerName, roundNumber, isManual, isTrio, onRated,
+}: {
+  matchId: string;
+  partnerId: string;
+  partnerName: string;
+  roundNumber: number;
+  // Phase 5 (29 April 2026 spec) — context label so the user knows exactly
+  // who they're rating + which conversation. "rate your manual room with
+  // this partner" / "Round 3 trio with Charlie" — never an unlabeled rating.
+  isManual?: boolean;
+  isTrio?: boolean;
+  onRated: () => void;
 }) {
   const [rating, setRating] = useState(0);
   const [meetAgain, setMeetAgain] = useState(false);
@@ -98,7 +109,11 @@ function LateRatingForm({ matchId, partnerId, partnerName, roundNumber, onRated 
     <div className="flex items-center gap-4 p-3 rounded-xl bg-[#292a2d]">
       <div className="flex-1 min-w-0">
         <p className="text-sm text-white font-medium truncate">{partnerName}</p>
-        <p className="text-xs text-gray-500">Round {roundNumber}</p>
+        <p className="text-xs text-gray-500">
+          {isManual
+            ? 'Manual breakout room'
+            : `Round ${roundNumber}${isTrio ? ' (trio)' : ''}`}
+        </p>
       </div>
       <div className="flex gap-1 shrink-0">
         {[1, 2, 3, 4, 5].map(n => (
@@ -320,6 +335,8 @@ export default function RecapPage() {
                 partnerId={partner.partnerId}
                 partnerName={partner.partnerDisplayName}
                 roundNumber={partner.roundNumber}
+                isManual={partner.isManual}
+                isTrio={partner.isTrio}
                 onRated={() => refetchUnrated()}
               />
             ))}

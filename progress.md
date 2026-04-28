@@ -5894,3 +5894,38 @@ Updated existing `t1-6-encounter-scope.test.ts` to reflect the new (backwards-co
 **Out of scope:**
 - Pod-level cross-event memory (Stefan said "expand later").
 - Removing the legacy `crossEventMemory` flag from session configs (kept for backwards compat indefinitely; new sessions don't write it).
+
+---
+
+## 2026-04-29 — Phase 5 of platform-spec-9-fixes plan: missed-rating fallback with context labels (Q6, Q7)
+
+**Spec:** end-of-event recap page surfaces every match the user was in but didn't rate, each form labelled clearly so the user knows which conversation they're rating ("Manual breakout room" / "Round 3 (trio)" / "Round 2") — never an unlabelled rating prompt.
+
+**Files changed:**
+
+- **`server/src/services/rating/rating.service.ts`** — extended `getUnratedPartners` return type with `isManual` and `isTrio` flags. SQL now selects `m.is_manual` and computes `is_trio = (participant_c_id IS NOT NULL)`. Display-name fallback chain inlined in SQL using `COALESCE(NULLIF(TRIM(display_name), ''), SPLIT_PART(email, '@', 1), 'Partner ' || SUBSTRING(partner_id::text, 1, 6))` — same fallback pattern as Phase 1's matching-flow nameMap, so the recap never shows "Rate Partner — Round 3" when display_name is null. Result rows ordered by `is_manual ASC, round_number ASC` so the user walks through algorithm rounds in chronological order before any manual breakouts.
+
+- **`client/src/features/sessions/RecapPage.tsx`** — extended `LateRatingForm` props with `isManual` and `isTrio`. Replaced the single "Round N" context line with conditional rendering:
+  - `isManual` → "Manual breakout room"
+  - `isTrio` → "Round N (trio)"
+  - else → "Round N"
+- The `unratedData.map(...)` rendering now passes `isManual` and `isTrio` from the API response.
+
+**Tests:** new `phase5-missed-rating-context.test.ts` (10 tests) pins the architecture:
+- `getUnratedPartners` return type includes `isManual` and `isTrio`.
+- SQL selects `m.is_manual` and computes `is_trio` correctly.
+- Display-name fallback chain present in SQL.
+- Result mapping returns the new fields.
+- Sort order matches spec.
+- Client `LateRatingForm` accepts the props and renders the right label per case.
+- Unrated rendering passes the props through.
+
+725/725 server tests pass (715 baseline + 10 new). Server + client builds clean.
+
+**Behavior preservation:**
+- `/api/ratings/unrated?sessionId=...` route already existed (used by RecapPage) — only the response shape was extended (added two boolean fields). Existing clients ignore the new fields.
+- `getUnratedPartners` query semantics unchanged (still gates on session status `'completed'` or `'closing_lobby'`).
+- `LateRatingForm` rendering preserved; `isManual` / `isTrio` are optional props (default `undefined` → falls through to "Round N" — back-compat).
+
+**Out of scope for Phase 5:**
+- Context-aware End Event 8-10s rating popup (when rounds are in progress at the moment host clicks End Event). Server flow currently runs `endRound` first if needed, then completes session — the missed-rating fallback at the recap page catches any unrated matches afterwards. The 8-10s popup is a UX nicety; the data correctness fix (recap shows everything missed) is what Phase 5 ships. Can be added as a follow-up if needed during testing.

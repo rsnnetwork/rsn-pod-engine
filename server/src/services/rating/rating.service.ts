@@ -585,25 +585,45 @@ export async function exportSessionData(sessionId: string): Promise<{
 // up-to-date even for matches where one or both participants skipped rating.
 
 /**
- * Get partners the user hasn't rated yet for a given session.
- * Only returns results for completed/closing_lobby sessions.
+ * Phase 5 (29 April 2026 spec) — get every partner the user met but hasn't
+ * rated yet for a given session. Used by the recap missed-rating fallback:
+ * "at the end of event the missed rating forms should also appear to the
+ * users ... that rating form must appear with proper distinction like
+ * 'rate your manual room with this partner' so this user knows for who
+ * I am actually writing".
+ *
+ * Returns one row per (user, partner) — for a trio the user gets two rows
+ * (one for each of the other two participants). Each row carries
+ * `roundNumber` and `isManual` so the client can render a clear context
+ * label ("Round 3 trio with Charlie" vs "Manual Breakout Room").
+ *
+ * Only returns results for sessions that are completed or closing_lobby —
+ * per-round missed ratings are still handled by the existing
+ * rating-window replay during the event itself; this endpoint is the
+ * end-of-event fallback per Q6/Q7.
  */
 export async function getUnratedPartners(sessionId: string, userId: string): Promise<{
   matchId: string;
   partnerId: string;
   partnerDisplayName: string;
   roundNumber: number;
+  isManual: boolean;
+  isTrio: boolean;
 }[]> {
   const result = await query<{
     match_id: string;
     partner_id: string;
     partner_display_name: string;
     round_number: number;
+    is_manual: boolean;
+    is_trio: boolean;
   }>(`
     WITH user_partners AS (
       SELECT
         m.id AS match_id,
         m.round_number,
+        m.is_manual,
+        (m.participant_c_id IS NOT NULL) AS is_trio,
         CASE
           WHEN m.participant_a_id = $2 THEN m.participant_b_id
           WHEN m.participant_b_id = $2 THEN m.participant_a_id
@@ -621,6 +641,8 @@ export async function getUnratedPartners(sessionId: string, userId: string): Pro
       SELECT
         m.id AS match_id,
         m.round_number,
+        m.is_manual,
+        TRUE AS is_trio,
         m.participant_c_id AS partner_id
       FROM matches m
       JOIN sessions s ON s.id = m.session_id
@@ -635,6 +657,8 @@ export async function getUnratedPartners(sessionId: string, userId: string): Pro
       SELECT
         m.id AS match_id,
         m.round_number,
+        m.is_manual,
+        TRUE AS is_trio,
         CASE
           WHEN m.participant_a_id != $2 THEN m.participant_a_id
           ELSE m.participant_b_id
@@ -649,8 +673,10 @@ export async function getUnratedPartners(sessionId: string, userId: string): Pro
     SELECT
       up.match_id,
       up.partner_id,
-      u.display_name AS partner_display_name,
-      up.round_number
+      COALESCE(NULLIF(TRIM(u.display_name), ''), SPLIT_PART(u.email, '@', 1), 'Partner ' || SUBSTRING(up.partner_id::text, 1, 6)) AS partner_display_name,
+      up.round_number,
+      up.is_manual,
+      up.is_trio
     FROM user_partners up
     JOIN users u ON u.id = up.partner_id
     WHERE NOT EXISTS (
@@ -659,7 +685,7 @@ export async function getUnratedPartners(sessionId: string, userId: string): Pro
         AND r.from_user_id = $2
         AND r.to_user_id = up.partner_id
     )
-    ORDER BY up.round_number
+    ORDER BY up.is_manual ASC, up.round_number ASC
   `, [sessionId, userId]);
 
   return result.rows.map(r => ({
@@ -667,6 +693,8 @@ export async function getUnratedPartners(sessionId: string, userId: string): Pro
     partnerId: r.partner_id,
     partnerDisplayName: r.partner_display_name,
     roundNumber: r.round_number,
+    isManual: r.is_manual,
+    isTrio: r.is_trio,
   }));
 }
 
