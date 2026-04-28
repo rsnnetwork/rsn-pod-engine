@@ -39,6 +39,17 @@ export interface MatchValidationInput {
   conflictingStatuses?: MatchStatus[];
   /** Minimum participant count to consider valid. Default: 1 (allow solo holder rooms). */
   minParticipants?: number;
+  /**
+   * When true, in addition to the per-round conflict check, ALSO query for
+   * any 'active' match in this session in ANY round number containing any of
+   * these participants. Used by handlers that enforce the session-wide
+   * "one user = one room at any moment" invariant — specifically the manual
+   * force-match path (where the host might pair someone who is currently
+   * inside an active manual breakout from a different round number).
+   * Default: false. The per-round check at conflictingStatuses is sufficient
+   * for swap/exclude paths that operate on the preview state only.
+   */
+  sessionWideActiveCheck?: boolean;
 }
 
 export interface MatchValidationResult {
@@ -63,6 +74,7 @@ export async function validateMatchAssignment(
     skipConflictCheck = false,
     conflictingStatuses = DEFAULT_CONFLICTING_STATUSES,
     minParticipants = 1,
+    sessionWideActiveCheck = false,
   } = input;
 
   const errors: string[] = [];
@@ -121,6 +133,46 @@ export async function validateMatchAssignment(
       errors.push(
         `${conflictSet.size} participant${conflictSet.size === 1 ? ' is' : 's are'} already in another active match in this round`
       );
+    }
+  }
+
+  // ── Session-wide active-match check (opt-in) ──────────────────────────────
+  // Used by manual force-match to catch the case where a user is mid-call
+  // inside a manual breakout from a different round number — that breakout
+  // is status='active' and lives outside the current round's preview, so the
+  // per-round check above won't see it. The "one user = one room at any
+  // moment" invariant requires us to look across all rounds for active rows.
+  if (sessionWideActiveCheck && !skipConflictCheck && uniqueIds.length > 0 && participantAId) {
+    const sessionWideQuery = `
+      SELECT id AS match_id, user_id, round_number
+      FROM matches m,
+           LATERAL UNNEST(ARRAY[m.participant_a_id, m.participant_b_id, m.participant_c_id]) AS user_id
+      WHERE m.session_id = $1
+        AND m.status = 'active'
+        AND m.id != COALESCE($2, '00000000-0000-0000-0000-000000000000'::uuid)
+        AND user_id = ANY($3)
+        AND user_id IS NOT NULL
+    `;
+    const sessionWideResult = await query<{ match_id: string; user_id: string; round_number: number }>(
+      sessionWideQuery,
+      [sessionId, excludeMatchId || null, uniqueIds]
+    );
+    if (sessionWideResult.rows.length > 0) {
+      const newConflicts = new Set(sessionWideResult.rows.map(r => r.user_id));
+      // Don't double-add ids already flagged by the per-round check.
+      const alreadyFlagged = new Set(conflictingUserIds);
+      for (const uid of newConflicts) {
+        if (!alreadyFlagged.has(uid)) conflictingUserIds.push(uid);
+      }
+      // Only add a separate error message if these conflicts are NEW (not
+      // already covered by the per-round check above). Otherwise the same
+      // user would generate two error lines.
+      const newOnly = [...newConflicts].filter(uid => !alreadyFlagged.has(uid));
+      if (newOnly.length > 0) {
+        errors.push(
+          `${newOnly.length} participant${newOnly.length === 1 ? ' is' : 's are'} currently inside another active room in this event`
+        );
+      }
     }
   }
 

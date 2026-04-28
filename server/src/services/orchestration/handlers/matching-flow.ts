@@ -473,21 +473,56 @@ export async function handleHostForceMatch(
     const normA = data.userIdA < data.userIdB ? data.userIdA : data.userIdB;
     const normB = data.userIdA < data.userIdB ? data.userIdB : data.userIdA;
 
-    // Cancel any existing matches containing either participant for this round
-    const existing = await query(
-      `SELECT id FROM matches WHERE session_id = $1 AND round_number = $2
-       AND (participant_a_id = $3 OR participant_b_id = $3 OR participant_c_id = $3
-         OR participant_a_id = $4 OR participant_b_id = $4 OR participant_c_id = $4)
-       AND status != 'cancelled'`,
-      [data.sessionId, roundNumber, data.userIdA, data.userIdB]
-    );
-
-    if (existing.rows.length > 0) {
-      const ids = existing.rows.map(r => r.id);
-      await query(`UPDATE matches SET status = 'cancelled' WHERE id = ANY($1)`, [ids]);
+    // Phase 2 (29 April 2026 spec) — hard-block force_match when either user
+    // is already in another pair for this round. Pre-fix, this handler would
+    // SILENTLY cancel the user's existing pair and create a new one, leaving
+    // the host's preview screen rearranged with no warning. The user
+    // explicitly asked for the system to STOP the action with a clear
+    // message naming the conflict, and pointed out that Swap is the right
+    // way to move someone between existing pairs:
+    //   "one user one room, always. system must stops hosts and tells why."
+    // We also check session-wide for any *active* match (i.e. a manual
+    // breakout in progress in another round number) so the host can't put
+    // someone into a preview pair while they're physically inside another
+    // breakout room having a conversation.
+    const validation = await validateMatchAssignment({
+      sessionId: data.sessionId,
+      roundNumber,
+      participantAId: normA,
+      participantBId: normB,
+      conflictingStatuses: ['scheduled', 'active'],
+      sessionWideActiveCheck: true,
+    });
+    if (!validation.valid) {
+      const namesResult = await query<{ id: string; displayName: string | null; email: string | null }>(
+        `SELECT id, display_name AS "displayName", email FROM users WHERE id = ANY($1)`,
+        [validation.conflictingUserIds]
+      );
+      const conflictName = (id: string, dn: string | null, em: string | null): string => {
+        const t = (dn || '').trim();
+        if (t) return t;
+        const ep = (em || '').split('@')[0].trim();
+        if (ep) return ep;
+        return `Participant ${id.slice(0, 6)}`;
+      };
+      const conflictNames = namesResult.rows.map(r => conflictName(r.id, r.displayName, r.email));
+      const who = conflictNames.length > 0
+        ? conflictNames.join(' and ')
+        : `${validation.conflictingUserIds.length} participant(s)`;
+      const verb = validation.conflictingUserIds.length > 1 ? 'are' : 'is';
+      socket.emit('error', {
+        code: 'PARTICIPANT_ALREADY_MATCHED',
+        message: `${who} ${verb} already in another room. Use Swap to move them between pairs, or move them back to the lobby first.`,
+        conflictingUserIds: validation.conflictingUserIds,
+      });
+      logger.info(
+        { sessionId: data.sessionId, userA: normA, userB: normB, conflictingUserIds: validation.conflictingUserIds },
+        'Manual force-match rejected: participants already in another room',
+      );
+      return;
     }
 
-    // Create the manual match
+    // No conflicts — safe to create the preview pair (status='scheduled').
     const { v4: uuid } = await import('uuid');
     const matchId = uuid();
     await query(

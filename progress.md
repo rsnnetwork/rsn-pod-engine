@@ -5821,3 +5821,42 @@ Six small, high-impact UI/video fixes shipped as a single batch (parallel-shippa
 - Toast helper / cache invalidation patterns unchanged.
 
 **Risk:** Low. Touches client navigation + server-side fallback labels only. No DB migration. No socket protocol change.
+
+---
+
+## 2026-04-29 — Phase 2 of platform-spec-9-fixes plan: one-user-one-room hard block (Q1)
+
+**Bug:** Stefan reported that during the 28 April test event, with 7 participants and 3 algorithm-generated pairs in preview, using Manual Match Edit silently rearranged everything. The host picked Alice + Bob and the system cancelled their existing pairs and recreated, leaving Charlie + Dave reshuffled with no warning. Result: confusion, broken state, round started wrong.
+
+**Root cause:** `handleHostForceMatch` (`server/src/services/orchestration/handlers/matching-flow.ts`) had no validation. It blindly ran `UPDATE matches SET status = 'cancelled' WHERE id = ANY(...)` for any conflicting matches, then INSERTed the new pair as `'scheduled'`. Compare with `handleHostSwapMatch` and `handleHostExcludeFromRound` which both use `validateMatchAssignment` properly — `handleHostForceMatch` was the one outlier.
+
+**Fix:**
+
+- **`server/src/services/matching/match-validator.service.ts`** — added new `sessionWideActiveCheck: boolean` option to `MatchValidationInput`. When true, in addition to the per-round conflict check, the validator queries for any `status='active'` match in this session in **any round number** containing any of these participants. Catches the case where someone is mid-call inside an active manual breakout from a different round number — the per-round check would miss that. De-dupes against the per-round conflict list so a user flagged by both checks only appears once in `conflictingUserIds`.
+
+- **`server/src/services/orchestration/handlers/matching-flow.ts`** `handleHostForceMatch` — replaced the silent cancel-and-recreate with a hard block:
+  1. Calls `validateMatchAssignment` with `conflictingStatuses: ['scheduled', 'active']` AND `sessionWideActiveCheck: true`.
+  2. On conflict: resolves conflicting user IDs to display names via the same email-prefix fallback chain shipped in Phase 1, emits a structured `'error'` socket event with code `PARTICIPANT_ALREADY_MATCHED`, message naming the conflict and telling the host to use Swap, and the raw `conflictingUserIds` array for client-side highlighting.
+  3. Only INSERTs the new `'scheduled'` match if validation passes.
+  4. The pre-fix `UPDATE matches SET status = 'cancelled'` is removed entirely — handler no longer modifies anyone else's pair.
+
+**Tests:** new `phase2-force-match-hard-block.test.ts` pins the architectural invariants:
+- handleHostForceMatch validates BEFORE writing
+- Validator called with both conflictingStatuses + sessionWideActiveCheck
+- Returns BEFORE INSERT when validation fails
+- Pre-fix silent cancel-and-recreate is gone (anti-regression)
+- Error message tells host to use Swap (per user spec)
+- Conflict-user names use email-prefix fallback chain (no "Alice and User" output)
+- Validator's session-wide query has NO `round_number` clause (catches manual breakouts in other rounds)
+- De-dupes conflictingUserIds when both checks flag the same user
+- Default `sessionWideActiveCheck=false` so existing per-round-only callers (swap, exclude) keep their behavior
+
+687/687 server tests pass (674 baseline + 13 new). Server + client builds clean.
+
+**Behavior preservation:**
+- Same socket protocol (no new events).
+- Same response shape on success.
+- Existing swap + exclude paths unchanged — they don't pass `sessionWideActiveCheck`, default is false, behavior preserved.
+- handleHostCreateBreakout (standalone manual breakout) unchanged — its Step 1 reassign behavior is intentional (host explicitly chose those participants).
+
+**Out of scope for Phase 2:** strict transition-map enforcement in `updateParticipantStatus` (currently advisory) — flagged in plan but skipped this phase, the audit found existing orchestration code relies on the advisory mode for valid edge cases. Will revisit if a state-integrity bug materializes.
