@@ -6042,3 +6042,37 @@ The same fix pattern applied to `handleReactionSend` for floating reactions (sam
 - Chat message storage in `chatMessages` Map unchanged.
 - Redis snapshot unchanged.
 - All existing socket events preserved.
+
+---
+
+## 2026-05-01 — Phase B of chat-fix-and-dm-system plan: user block infrastructure
+
+**Scope:** Foundation for both the upcoming DM system AND the future Matching Engine 1.0 redesign. The block table is shared between the two so blocks gate both DMs and matching from a single source of truth.
+
+**Files added:**
+- `server/src/db/migrations/043_user_blocks.sql` — table with blocker_id, blocked_id, reason, created_at, UNIQUE(blocker, blocked), CHECK(blocker != blocked), indexes on both columns for bidirectional lookups
+- `server/src/services/block/block.service.ts` — block / unblock / areBlocked (symmetric) / getBlockedPairsForUsers (bulk for matching) / listBlocked / hasBlocked
+- `server/src/__tests__/services/block/phaseB-block-service.test.ts` — 25 architectural tests pinning migration shape, service surface, matching engine integration, route registration, and client UI
+
+**Files changed:**
+- `shared/src/types/match.ts` — added `'user_block'` to `HardConstraint.type` union
+- `server/src/services/matching/matching.engine.ts` — new `case 'user_block'` in `buildHardExclusions`, uses `pairKey` for direction-agnostic exclusion
+- `server/src/services/matching/matching.service.ts` — imports blockService, calls `getBlockedPairsForUsers` for the session's participants in `generateSingleRound`, pushes a `user_block` constraint alongside the existing `inviter_invitee_block`
+- `server/src/routes/users.ts` — adds POST/DELETE `/:id/block`, GET `/:id/block-status`, GET `/blocked` (list mine), all auth-gated
+- `client/src/features/profile/PublicProfilePage.tsx` — Block / Unblock button next to LinkedIn link, hidden on own profile, fetches block-status, confirms before blocking with user-friendly explanation, invalidates the right caches on success
+
+**Tests:** 771/771 server tests pass (746 baseline + 25 new). Server + client + shared builds clean.
+
+**Architecture invariants pinned:**
+- Schema: UNIQUE blocker/blocked, CHECK no self-block, both indexes
+- Service: idempotent block via ON CONFLICT DO UPDATE, bidirectional areBlocked single-roundtrip
+- Matching: user_block case uses pairKey (direction-agnostic), service queries blocks per session and adds to hardConstraints
+- Routes: GET /blocked exists with auth, no /:id GET in users.ts to shadow it
+- UI: block-status fetched for non-own profiles, Block uses Ban icon, Unblock uses ShieldOff icon, confirm dialog explains "won't be matched together"
+
+**Behavior preservation:**
+- Existing matching constraints (inviter_invitee_block, etc.) unchanged
+- Existing user routes preserved
+- All previous tests continue to pass
+
+**Migration safety:** Additive only (new table + new index). No data migration needed. Default empty table = no blocks = no behavior change for existing users.

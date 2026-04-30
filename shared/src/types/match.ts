@@ -122,7 +122,19 @@ export interface MatchingWeights {
 }
 
 export interface HardConstraint {
-  type: 'exclude_pair' | 'same_company_block' | 'language_required' | 'inviter_invitee_block' | 'custom';
+  type:
+    | 'exclude_pair'
+    | 'same_company_block'
+    | 'language_required'
+    | 'inviter_invitee_block'
+    /**
+     * Phase B (1 May 2026 spec) — user-blocked pairs. Params shape mirrors
+     * `inviter_invitee_block`: pairs is a string[] of "blockerId:blockedId"
+     * tokens. Direction-agnostic at the engine level (excludes the pair
+     * regardless of which direction the block came from).
+     */
+    | 'user_block'
+    | 'custom';
   params: Record<string, string | string[]>;
 }
 

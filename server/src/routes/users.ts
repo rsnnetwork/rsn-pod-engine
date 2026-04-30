@@ -6,6 +6,7 @@ import { authenticate } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import * as identityService from '../services/identity/identity.service';
 import { searchConnectedUsers } from '../services/invite/connected-users';
+import * as blockService from '../services/block/block.service';
 import { ApiResponse, UserRole, hasRoleAtLeast } from '@rsn/shared';
 
 const router = Router();
@@ -331,6 +332,84 @@ router.delete(
     try {
       await identityService.deleteUser(req.params.id);
       const response: ApiResponse = { success: true, data: { message: 'User deleted' } };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── Block Routes (Phase B of chat-fix-and-dm-system, 1 May 2026) ────────────
+//
+// User-to-user blocking. The block table is shared between the upcoming DM
+// system and the matching engine — blocked pairs are excluded from matching
+// via a hard constraint and DMs are rejected if either side has blocked the
+// other. See server/src/services/block/block.service.ts.
+
+const blockBodySchema = z.object({
+  reason: z.string().max(500).optional(),
+});
+
+// GET /users/blocked — list users I have blocked (for the Settings UI).
+// Note: this must come BEFORE /:id routes to avoid being shadowed.
+router.get(
+  '/blocked',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const blocked = await blockService.listBlocked(req.user!.userId);
+      const response: ApiResponse = { success: true, data: blocked };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// POST /users/:id/block — block another user
+router.post(
+  '/:id/block',
+  authenticate,
+  validate(blockBodySchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await blockService.block(
+        req.user!.userId,
+        req.params.id,
+        req.body.reason,
+      );
+      const response: ApiResponse = { success: true, data: result };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// DELETE /users/:id/block — unblock
+router.delete(
+  '/:id/block',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await blockService.unblock(req.user!.userId, req.params.id);
+      const response: ApiResponse = { success: true, data: { message: 'User unblocked' } };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// GET /users/:id/block-status — has the current user blocked this profile?
+// Used by the public profile page to render Block vs Unblock button.
+router.get(
+  '/:id/block-status',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const hasBlocked = await blockService.hasBlocked(req.user!.userId, req.params.id);
+      const response: ApiResponse = { success: true, data: { hasBlocked } };
       res.json(response);
     } catch (err) {
       next(err);

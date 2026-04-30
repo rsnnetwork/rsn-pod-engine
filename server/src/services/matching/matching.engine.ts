@@ -453,6 +453,23 @@ export class MatchingEngineV1 implements IMatchingEngine {
           break;
         }
 
+        case 'user_block': {
+          // Phase B (1 May 2026) — bidirectional user blocks. Pairs format
+          // is "blockerId:blockedId" but the exclusion is direction-agnostic
+          // (pairKey normalises by sorting). One block excludes the pair
+          // for the whole event regardless of who blocked whom.
+          const userBlockPairs = constraint.params.pairs as string[];
+          if (userBlockPairs) {
+            for (const pair of userBlockPairs) {
+              const [blockerId, blockedId] = pair.split(':');
+              if (blockerId && blockedId) {
+                exclusions.add(pairKey(blockerId, blockedId));
+              }
+            }
+          }
+          break;
+        }
+
         case 'inviter_invitee_block': {
           // Avoid matching the inviter with the person they invited
           const inviterInviteePairs = constraint.params.pairs as string[];

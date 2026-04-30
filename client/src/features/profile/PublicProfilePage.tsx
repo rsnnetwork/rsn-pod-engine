@@ -1,24 +1,64 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
 import {
   ArrowLeft, MapPin, Globe, Sparkles, Target, Heart,
   HelpCircle, Users, User, Award, Compass, Link2, Languages, Linkedin,
+  Ban, ShieldOff,
 } from 'lucide-react';
 import api from '@/lib/api';
+import { useAuthStore } from '@/stores/authStore';
+import { useToastStore } from '@/stores/toastStore';
 
 const EMPTY = <span className="text-sm italic text-gray-300">Not shared yet</span>;
 
 export default function PublicProfilePage() {
   const { userId } = useParams();
   const navigate = useNavigate();
+  const qc = useQueryClient();
+  const { user: currentUser } = useAuthStore();
+  const { addToast } = useToastStore();
+  const isOwnProfile = currentUser?.id === userId;
 
   const { data: user, isLoading, error } = useQuery({
     queryKey: ['user', userId],
     queryFn: () => api.get(`/users/${userId}`).then(r => r.data.data),
     enabled: !!userId,
+  });
+
+  // Phase B (1 May 2026 spec) — fetch the block status so the profile renders
+  // either Block or Unblock. Skipped on own profile (you can't block yourself).
+  const { data: blockStatus } = useQuery({
+    queryKey: ['user-block-status', userId],
+    queryFn: () => api.get(`/users/${userId}/block-status`).then(r => r.data.data),
+    enabled: !!userId && !isOwnProfile && !!currentUser?.id,
+  });
+  const isBlocked = blockStatus?.hasBlocked === true;
+
+  const blockMutation = useMutation({
+    mutationFn: () => api.post(`/users/${userId}/block`),
+    onSuccess: () => {
+      addToast('User blocked. They can no longer message you, and you won\'t be matched together.', 'success');
+      qc.invalidateQueries({ queryKey: ['user-block-status', userId] });
+      qc.invalidateQueries({ queryKey: ['blocked-users'] });
+    },
+    onError: (err: any) => {
+      addToast(err?.response?.data?.error?.message || 'Failed to block user', 'error');
+    },
+  });
+
+  const unblockMutation = useMutation({
+    mutationFn: () => api.delete(`/users/${userId}/block`),
+    onSuccess: () => {
+      addToast('User unblocked.', 'success');
+      qc.invalidateQueries({ queryKey: ['user-block-status', userId] });
+      qc.invalidateQueries({ queryKey: ['blocked-users'] });
+    },
+    onError: (err: any) => {
+      addToast(err?.response?.data?.error?.message || 'Failed to unblock user', 'error');
+    },
   });
 
   if (isLoading) return <PageLoader />;
@@ -88,6 +128,37 @@ export default function PublicProfilePage() {
               </span>
             )}
           </div>
+
+          {/* Phase B — Block / Unblock button. Hidden on own profile. */}
+          {!isOwnProfile && currentUser?.id && (
+            <div className="mt-4">
+              {isBlocked ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => unblockMutation.mutate()}
+                  isLoading={unblockMutation.isPending}
+                  className="text-xs"
+                >
+                  <ShieldOff className="h-3.5 w-3.5 mr-1.5" /> Unblock
+                </Button>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    if (confirm(`Block ${user.displayName || 'this user'}? They won't be able to message you and you won't be matched together in future events.`)) {
+                      blockMutation.mutate();
+                    }
+                  }}
+                  isLoading={blockMutation.isPending}
+                  className="text-xs text-red-500 hover:bg-red-50"
+                >
+                  <Ban className="h-3.5 w-3.5 mr-1.5" /> Block
+                </Button>
+              )}
+            </div>
+          )}
         </div>
 
         {/* ─── About ─── */}

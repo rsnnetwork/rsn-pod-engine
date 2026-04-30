@@ -11,6 +11,7 @@ import {
 import { matchingEngine } from './matching.engine';
 import { pairKey } from './matching.interface';
 import * as sessionService from '../session/session.service';
+import * as blockService from '../block/block.service';
 import { NotFoundError } from '../../middleware/errors';
 
 // ─── Default Weights ────────────────────────────────────────────────────────
@@ -174,7 +175,7 @@ export async function generateSingleRound(
     }
   }
 
-  // Build hard constraints: inviter-invitee avoidance
+  // Build hard constraints: inviter-invitee avoidance + user-block exclusions.
   const inviterInviteeResult = await query<{ inviter_id: string; accepted_by_user_id: string }>(
     `SELECT inviter_id, accepted_by_user_id FROM invites
      WHERE session_id = $1 AND accepted_by_user_id IS NOT NULL AND status = 'accepted'`,
@@ -184,9 +185,19 @@ export async function generateSingleRound(
     .filter(r => r.inviter_id && r.accepted_by_user_id)
     .map(r => `${r.inviter_id}:${r.accepted_by_user_id}`);
 
-  const hardConstraints = inviterInviteePairs.length > 0
-    ? [{ type: 'inviter_invitee_block' as const, params: { pairs: inviterInviteePairs } }]
-    : [];
+  // Phase B (1 May 2026 spec) — user-block exclusions. Blocked pairs (in
+  // either direction) are added as a hard constraint so the matching engine
+  // never pairs them. The same blocks gate DM sends, so this is the single
+  // source of truth for "these two should never interact".
+  const blockedPairs = await blockService.getBlockedPairsForUsers(participantsResult.rows.map(p => p.userId));
+
+  const hardConstraints: { type: 'inviter_invitee_block' | 'user_block'; params: { pairs: string[] } }[] = [];
+  if (inviterInviteePairs.length > 0) {
+    hardConstraints.push({ type: 'inviter_invitee_block', params: { pairs: inviterInviteePairs } });
+  }
+  if (blockedPairs.length > 0) {
+    hardConstraints.push({ type: 'user_block', params: { pairs: blockedPairs } });
+  }
 
   // Load matching template weights from pod's template (or session config template, or default)
   const templateId = sessionConfig.matchingTemplateId || null;
