@@ -79,8 +79,12 @@ describe('Phase C — DM data model + service + REST', () => {
       expect(sql).toMatch(/DROP CONSTRAINT IF EXISTS notifications_type_check/);
     });
 
-    it('adds new constraint allowing direct_message', () => {
-      expect(sql).toMatch(/CHECK \(type IN \('event_invite', 'pod_invite', 'direct_message'\)\)/);
+    it('adds new constraint allowing direct_message and preserving prior types', () => {
+      expect(sql).toMatch(/'direct_message'/);
+      expect(sql).toMatch(/'event_invite'/);
+      expect(sql).toMatch(/'pod_invite'/);
+      expect(sql).toMatch(/'join_request'/);
+      expect(sql).toMatch(/'approval'/);
     });
   });
 
