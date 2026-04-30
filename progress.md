@@ -6305,3 +6305,34 @@ The same fix pattern applied to `handleReactionSend` for floating reactions (sam
 - Reuses the same socket events fired by Phase D — no new events needed.
 - Mobile + desktop both get the button, positioned consistently to the left of the bell.
 - Why not a full sidebar: the existing AppLayout has a 2-column desktop layout (nav left, content right). Adding a third column for chat would compete with the nav's left position and require significant CSS rework. The quick-access popover delivers the spec's "always one click away" intent with zero risk to the existing layout.
+
+---
+
+## 2026-04-30 22:37 UTC — Hotfix: migrations 046/048 type CHECK (recover Phases C–K from broken deploys)
+
+**Status:** Completed. All Phases B–K of chat-fix-and-dm-system plan are now LIVE in production.
+
+**Bug:** Every deploy from commit `fffd1623` (Phase C) through `f6216407` (Phase K) failed at boot with:
+`check constraint "notifications_type_check" of relation "notifications" is violated by some row`. Last live deploy before the hotfix was `a4d52546` (Phase B) at 2026-04-30 20:58 UTC.
+
+**Root cause:** Migration 034 widened `notifications_type_check` to allow `('event_invite', 'pod_invite', 'join_request', 'approval')`. Migrations 046 (DM) and 048 (poke) dropped the constraint and re-added it WITHOUT carrying forward `'join_request'` and `'approval'`. 23 production rows (20 join_request + 3 approval) failed validation, the migration transaction rolled back, the server failed to start, and Render kept the previous live deploy (Phase B) running while every Phase C–K deploy showed `update_failed`.
+
+**Fix (commit `a00867f`):**
+- `server/src/db/migrations/046_notifications_dm_type.sql` — re-add `'join_request'` and `'approval'` so the new allowlist is `('event_invite', 'pod_invite', 'join_request', 'approval', 'direct_message')`.
+- `server/src/db/migrations/048_notifications_poke_type.sql` — same plus `'poke'`.
+- `server/src/__tests__/services/dm/phaseC-dm-service.test.ts` — assertion was pinning the buggy exact tuple; now checks each required member is present.
+
+**Verification (post-deploy):**
+- Render deploy `dep-d7ptemfq2j2c73a4q4ng` status=`live`, commit `a00867fa`.
+- Migrations 043–053 all in `_migrations` table.
+- All 8 pending migrations (046–053) ran successfully in ~140ms.
+- `/health` → `{"status":"ok","db":{"connected":true}}`.
+- Routes 401-gated as expected: `/api/dm/conversations`, `/api/groups`, `/api/pokes/received`, `/api/notification-prefs`, `POST /api/reports`.
+- Redis connected.
+- Sentry server: 0 unresolved.
+- Sentry client: 5 stale issues from before deploy window (not regressions).
+- CI green on main and staging.
+- Vercel: latest deployment Ready.
+- Server tests: 821/821 pass.
+
+**Take-away:** Any future migration that drops and re-adds a CHECK constraint must carry forward the full prior allowlist. Better long-term: split `notifications.type` into a small lookup table or use a single migration as the source of truth for the union, so additions don't require remembering history.
