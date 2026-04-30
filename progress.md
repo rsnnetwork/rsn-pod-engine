@@ -6011,3 +6011,34 @@ Updated existing `t1-6-encounter-scope.test.ts` to reflect the new (backwards-co
 - Q9 UI State & Feedback → Phase 1: "user: user" placeholder fix + silent-catch sweep + loading/error states
 
 **Behavior preservation:** every existing user-visible feature confirmed unchanged. No DB migrations. Legacy `crossEventMemory` flag still honored via `resolveMatchingPolicy`. All socket event names + REST routes preserved. Backwards-compatible field additions only.
+
+---
+
+## 2026-05-01 — Phase A of chat-fix-and-dm-system plan: in-room chat bug fix
+
+**Plan:** `docs/superpowers/plans/2026-05-01-chat-fix-and-dm-system.md`
+
+**Bug:** Stefan reported during the 30 April test event that users in a breakout room could type messages, the chat window rendered, but messages didn't reach the other participants in the room. First issue in his bug screenshot.
+
+**Root cause:** `chat-handlers.ts:104-112` queried for the sender's match using `WHERE status = 'active'`. Three failure modes were silently producing 0 rows:
+- State transition race (active → round_rating just after End Round)
+- Trio with one leaver post-Phase-3 (match still has remaining users but match.status moves to round_rating semantics during the rating window)
+- Manual breakout rooms in 'completed' or 'reassigned' status where the LiveKit room is still live
+The handler's fallback when no match was found: `socket.emit('chat:message', chatMsg)` — emit only to the sender. The other LiveKit room participants never received the message.
+
+**Fix:** Resolution order changed to use the in-memory `activeSession.roomParticipants` Map as the primary source of truth (it tracks who is actually in which LiveKit room right now, set when the client emits `presence:room_joined` after `room.connect()` resolves). Falls back to a RELAXED match query that excludes only `'cancelled'` and `'no_show'` (instead of requiring `'active'`) and orders by most recent. Final fallback to socket-self only when sender has no tracked room AND no DB row, which is the genuinely-orphan case.
+
+The same fix pattern applied to `handleReactionSend` for floating reactions (same status-race bug).
+
+**Files changed:**
+- `server/src/services/orchestration/handlers/chat-handlers.ts` — `handleChatSend` and `handleReactionSend` now consult `roomParticipants` first, fall back to relaxed match query
+- `server/src/__tests__/services/orchestration/phaseA-chat-room-scope.test.ts` — 7 new tests pinning the new architecture (no `status='active'` hard filter, recipient set built from roomParticipants, socket.emit-self only as last fallback, chatMsg.roomId attached from resolved source, same pattern in reactions)
+
+**Tests:** 746/746 server tests pass (was 739 + 7 new).
+
+**Behavior preservation:**
+- Lobby chat unchanged.
+- Chat reactions broadcast logic unchanged (already correctly used msg.roomId).
+- Chat message storage in `chatMessages` Map unchanged.
+- Redis snapshot unchanged.
+- All existing socket events preserved.

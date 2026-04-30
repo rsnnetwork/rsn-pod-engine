@@ -101,33 +101,72 @@ export async function handleChatSend(
         }
       }
     } else {
-      // Room scope: find the user's current active match and emit only to those users
-      // Search across ALL rounds (manual rooms can exist on any round)
-      const matchRes = await query<{ id: string; participant_a_id: string; participant_b_id: string | null; participant_c_id: string | null; room_id: string }>(
-        `SELECT id, participant_a_id, participant_b_id, participant_c_id, room_id
-         FROM matches WHERE session_id = $1 AND status = 'active'
-           AND (participant_a_id = $2 OR participant_b_id = $2 OR participant_c_id = $2)
-         LIMIT 1`,
-        [sessionId, userId]
-      );
-      const userMatch = matchRes.rows[0] ? {
-        id: matchRes.rows[0].id,
-        participantAId: matchRes.rows[0].participant_a_id,
-        participantBId: matchRes.rows[0].participant_b_id,
-        participantCId: matchRes.rows[0].participant_c_id,
-        roomId: matchRes.rows[0].room_id,
-      } : null;
+      // Room scope: resolve recipients via in-memory roomParticipants FIRST
+      // (the source of truth for "who is in which LiveKit room right now"),
+      // and fall back to a relaxed match query if needed.
+      //
+      // Phase A (1 May 2026 spec) — pre-fix this branch hard-filtered on
+      // `status = 'active'`. That excluded users in rooms whose match was
+      // mid-state-transition (active → round_rating just-completed trios,
+      // active → reassigned during host-pull-back, scheduled rooms not yet
+      // flipped to active), so chat-send returned 0 rows and the handler's
+      // last-resort `socket.emit` only went back to the sender. Result:
+      // users could type, the chat window showed their message, but no one
+      // else in the room ever saw it. The user reported this as the very
+      // first issue in the 30 April test event.
+      //
+      // Resolution order:
+      //   1. activeSession.roomParticipants[userId] — set when the LiveKit
+      //      `room.connect()` resolves and the client emits
+      //      `presence:room_joined`. This is the most accurate source.
+      //   2. Relaxed DB query: any match in this session containing the
+      //      user, where status is NOT 'cancelled' or 'no_show'. Picks up
+      //      users in 'completed', 'reassigned', or 'scheduled' rooms that
+      //      are still talking.
+      //   3. socket.emit-self only (the truly-orphan sender path — kept as
+      //      a safety net so we never throw the message away).
+      let resolvedRoomId: string | null = null;
+      const recipientIds: Set<string> = new Set();
 
-      if (userMatch) {
-        chatMsg.roomId = userMatch.roomId || undefined;
-        // Emit to all participants in this match (handle nullable participant_b for solo rooms)
-        const participantIds = [userMatch.participantAId, userMatch.participantBId, userMatch.participantCId]
-          .filter((id): id is string => !!id);
-        for (const pid of participantIds) {
+      const senderRoomEntry = activeSession?.roomParticipants?.get(userId);
+      if (senderRoomEntry) {
+        // Primary source: the in-memory presence map. Find every userId
+        // currently in the same LiveKit room.
+        resolvedRoomId = senderRoomEntry.roomId;
+        for (const [uid, info] of activeSession!.roomParticipants!) {
+          if (info.roomId === senderRoomEntry.roomId) recipientIds.add(uid);
+        }
+      } else {
+        // Fallback: relaxed match query. status filter intentionally
+        // excludes only the truly-dead states. Pick most recent.
+        const matchRes = await query<{ id: string; participant_a_id: string; participant_b_id: string | null; participant_c_id: string | null; room_id: string }>(
+          `SELECT id, participant_a_id, participant_b_id, participant_c_id, room_id
+           FROM matches
+           WHERE session_id = $1
+             AND (participant_a_id = $2 OR participant_b_id = $2 OR participant_c_id = $2)
+             AND status NOT IN ('cancelled', 'no_show')
+           ORDER BY started_at DESC NULLS LAST, created_at DESC
+           LIMIT 1`,
+          [sessionId, userId]
+        );
+        if (matchRes.rows[0]) {
+          const m = matchRes.rows[0];
+          resolvedRoomId = m.room_id || null;
+          for (const pid of [m.participant_a_id, m.participant_b_id, m.participant_c_id]) {
+            if (pid) recipientIds.add(pid);
+          }
+        }
+      }
+
+      if (resolvedRoomId !== null && recipientIds.size > 0) {
+        chatMsg.roomId = resolvedRoomId || undefined;
+        for (const pid of recipientIds) {
           io.to(userRoom(pid)).emit('chat:message', chatMsg);
         }
       } else {
-        // Not matched, send only to self
+        // Truly orphan: the sender isn't in any tracked room and has no
+        // matching DB row. Honour the request locally so they at least see
+        // their own message rendered, but nothing more.
         socket.emit('chat:message', chatMsg);
       }
     }
@@ -213,8 +252,10 @@ export async function handleReactionSend(
       `SELECT user_id FROM session_cohosts WHERE session_id = $1 AND user_id = $2`, [sessionId, userId]
     ).catch(() => ({ rows: [] }));
     const isCohost = cohostCheck.rows.length > 0;
+    // Hoisted: needed both for the lobby-host-presence guard below AND for
+    // the room-scope resolution further down (Phase A fix).
+    const activeSession = activeSessions.get(sessionId);
     if (!isHost && !isCohost) {
-      const activeSession = activeSessions.get(sessionId);
       const hostPresent = activeSession?.presenceMap.has(session?.hostUserId || '');
       if (!hostPresent && (!activeSession || activeSession.status === SessionStatus.LOBBY_OPEN || activeSession.status === SessionStatus.SCHEDULED)) {
         return; // Silently ignore reactions when host is absent in lobby
@@ -232,19 +273,38 @@ export async function handleReactionSend(
 
     // Scope reactions: during active rounds, only show to breakout room participants.
     // In lobby/transition phases, broadcast to everyone.
-    // Check if user is in an active match — scope reactions to room only
-    const reactionMatchRes = await query<{ participant_a_id: string; participant_b_id: string | null; participant_c_id: string | null }>(
-      `SELECT participant_a_id, participant_b_id, participant_c_id
-       FROM matches WHERE session_id = $1 AND status = 'active'
-         AND (participant_a_id = $2 OR participant_b_id = $2 OR participant_c_id = $2)
-       LIMIT 1`,
-      [sessionId, userId]
-    );
-    if (reactionMatchRes.rows[0]) {
-      const m = reactionMatchRes.rows[0];
-      const participantIds = [m.participant_a_id, m.participant_b_id, m.participant_c_id]
-        .filter((id): id is string => !!id);
-      for (const pid of participantIds) {
+    //
+    // Phase A (1 May 2026 spec) — same status-race bug as handleChatSend.
+    // Use roomParticipants as primary source, fall back to a relaxed match
+    // query that doesn't hard-filter on `status='active'` so reactions
+    // survive state transitions (round_active → round_rating after End Round).
+    const senderRoomEntryRx = activeSession?.roomParticipants?.get(userId);
+    const recipientIdsRx: Set<string> = new Set();
+    if (senderRoomEntryRx) {
+      for (const [uid, info] of activeSession!.roomParticipants!) {
+        if (info.roomId === senderRoomEntryRx.roomId) recipientIdsRx.add(uid);
+      }
+    } else {
+      const reactionMatchRes = await query<{ participant_a_id: string; participant_b_id: string | null; participant_c_id: string | null }>(
+        `SELECT participant_a_id, participant_b_id, participant_c_id
+         FROM matches
+         WHERE session_id = $1
+           AND (participant_a_id = $2 OR participant_b_id = $2 OR participant_c_id = $2)
+           AND status NOT IN ('cancelled', 'no_show')
+         ORDER BY started_at DESC NULLS LAST, created_at DESC
+         LIMIT 1`,
+        [sessionId, userId]
+      );
+      if (reactionMatchRes.rows[0]) {
+        const m = reactionMatchRes.rows[0];
+        for (const pid of [m.participant_a_id, m.participant_b_id, m.participant_c_id]) {
+          if (pid) recipientIdsRx.add(pid);
+        }
+      }
+    }
+
+    if (recipientIdsRx.size > 0) {
+      for (const pid of recipientIdsRx) {
         io.to(userRoom(pid)).emit('reaction:received', reactionPayload);
       }
     } else {
