@@ -6130,3 +6130,39 @@ The same fix pattern applied to `handleReactionSend` for floating reactions (sam
 - Real-time delivery via socket — Phase D
 - UI (Messages page, profile button, bell badge) — Phase E
 - Email notifications when offline — Phase D
+
+---
+
+## 2026-05-01 — Phase D of chat-fix-and-dm-system plan: DM real-time + notifications + offline email
+
+**Scope:** real-time fan-out, bell-icon notifications, debounced email when offline. Phase C built the data layer; Phase D makes it live and reachable.
+
+**Files added:**
+- `server/src/services/orchestration/handlers/dm-handlers.ts` — `handleDmSend` and `handleDmRead`. The send handler:
+  1. Calls `dmService.sendMessage` (auth re-check + persist)
+  2. Emits `dm:message` to BOTH users' rooms (sender + recipient) so any open tabs update live
+  3. Emits `dm:conversation_updated` to both for inbox sort + last-message snippet
+  4. Inserts a `notifications` row with `type='direct_message'` and emits `notification:new` to the recipient (existing bell badge pattern reused)
+  5. Checks if recipient has any live socket via `io.in(userRoom(toUserId)).fetchSockets()`. If offline, fires off a debounced email via `void maybeSendDmEmail` (never awaited so the socket response isn't blocked on email I/O)
+  - The read handler emits `dm:read_receipt` to the sender's userRoom
+
+- `server/src/__tests__/services/dm/phaseD-dm-realtime.test.ts` — 15 architectural tests pinning the fan-out, notification, debounce, and read-receipt patterns
+
+**Files changed:**
+- `server/src/services/orchestration/orchestration.service.ts` — imports + registers `socket.on('dm:send')` and `socket.on('dm:read')` alongside the existing chat handlers
+- `server/src/services/email/email.service.ts` — new `sendDmNotificationEmail(to, recipientDisplayName, { senderName, snippet, threadUrl })`. Branded HTML + plain-text fallback. Subject format: `"{senderName} sent you a message on RSN"`
+
+**Architecture invariants pinned:**
+- Send fan-out: ≥2 emits to userRoom (sender + recipient). Inbox-update event fires for both.
+- Notification path: row inserted with type='direct_message', `notification:new` socket event emitted (same pattern as invites).
+- Email debounce: Redis key `dm:email-debounce:{from}:{to}`, TTL 3600 seconds (1 hour).
+- Email is fire-and-forget (`void maybeSendDmEmail`) — never blocks socket response.
+- Read receipt only emits to the OTHER user.
+- Orchestration wires both handlers.
+
+**Tests:** 821/821 server tests pass (806 baseline + 15 new). Server build clean.
+
+**Behavior preservation:**
+- Existing notifications + bell badge unchanged (DM notifications use same `notification:new` event)
+- Existing email service unchanged (DM email is a NEW function, not a modification)
+- Socket auth + connection flow unchanged (DM handlers reuse existing `socket.data.userId`)

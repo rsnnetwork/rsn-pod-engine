@@ -51,6 +51,7 @@ import {
 
 // Handlers — Chat
 import { handleChatSend, handleChatReact, handleReactionSend } from './handlers/chat-handlers';
+import { handleDmSend, handleDmRead } from './handlers/dm-handlers';
 
 // Handlers — Bulk Breakout (Task 14)
 import {
@@ -250,6 +251,17 @@ export function initOrchestration(socketServer: SocketServer): void {
     socket.on('reaction:send', async (data) => {
       try { await handleReactionSend(io, socket, data); }
       catch (err) { logger.error({ err, userId }, 'Reaction error'); }
+    });
+
+    // ── DM Events (Phase D, 1 May 2026 spec) — platform-level person-to-
+    // person messaging. Independent of any session/round/event.
+    socket.on('dm:send', async (data) => {
+      try { await handleDmSend(io, socket, data); }
+      catch (err) { logger.error({ err, userId }, 'DM send error'); }
+    });
+    socket.on('dm:read', async (data) => {
+      try { await handleDmRead(io, socket, data); }
+      catch (err) { logger.error({ err, userId }, 'DM read error'); }
     });
 
     // ── Disconnect ──

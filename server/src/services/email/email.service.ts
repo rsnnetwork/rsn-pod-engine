@@ -223,6 +223,58 @@ export async function sendSessionRecapEmail(
   logger.warn({ to, sessionTitle: data.sessionTitle }, 'No email provider — recap email skipped');
 }
 
+// ─── DM Notification Email (Phase D of chat-fix-and-dm-system, 1 May 2026) ─
+
+interface DmNotificationEmailData {
+  senderName: string;
+  snippet: string;
+  threadUrl: string;
+}
+
+/**
+ * Sent when a user receives a DM while offline. Debounced one-per-hour
+ * per (sender, recipient) pair by the caller (dm-handlers.ts).
+ */
+export async function sendDmNotificationEmail(
+  to: string,
+  recipientDisplayName: string,
+  data: DmNotificationEmailData,
+): Promise<void> {
+  const subject = `${data.senderName} sent you a message on RSN`;
+  const html = `
+    <!DOCTYPE html><html><head><meta charset="utf-8"></head>
+    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
+        <div style="background:#fff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
+          <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
+          <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">New message</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">Hey ${recipientDisplayName},</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
+            <strong>${data.senderName}</strong> sent you a message on RSN.
+          </p>
+          <div style="background:#f8f9fa;border-left:3px solid #DE322E;border-radius:6px;padding:12px 16px;margin:0 0 24px 0;">
+            <p style="color:#374151;font-size:14px;line-height:1.5;margin:0;">${data.snippet}</p>
+          </div>
+          <div style="text-align:center;margin:24px 0;">
+            <a href="${data.threadUrl}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 32px;border-radius:8px;">View Message</a>
+          </div>
+          <p style="color:#9ca3af;font-size:12px;text-align:center;margin:24px 0 0 0;">
+            You're receiving this because someone messaged you on RSN.
+            You can change your notification preferences in Settings.
+          </p>
+        </div>
+      </div>
+    </body></html>`;
+
+  if (config.resendApiKey) {
+    const text = `Hey ${recipientDisplayName},\n\n${data.senderName} sent you a message on RSN:\n\n"${data.snippet}"\n\nView the conversation: ${data.threadUrl}\n\nRSN — Connect with Reason`;
+    await sendEmail({ to, subject, html, text });
+    return;
+  }
+
+  logger.warn({ to, senderName: data.senderName }, 'No email provider — DM notification email skipped');
+}
+
 // ─── Host Event Recap Email ─────────────────────────────────────────────────
 
 interface HostRecapEmailData {
