@@ -6231,3 +6231,32 @@ The same fix pattern applied to `handleReactionSend` for floating reactions (sam
 - Reports are visible to admins only; reporter and reported user don't see each other's report records via the API.
 - The auto-flag signal (`totalOpenAgainstReported`) lets admin sort by repeat-offender count without needing a separate alert system.
 - Description capped at 2000 chars at both schema and API layers.
+
+---
+
+## 2026-05-01 — Phase I of chat-fix-and-dm-system plan: group chats + pod chats
+
+**Spec (Stefan):** "groups too — and pods too." Custom group chats users build by selecting members + auto-provisioned pod chats with members synced to pod_members.
+
+**Files added:**
+- `server/src/db/migrations/050_dm_groups.sql` — table with name, type ('custom'|'pod'), pod_id (NOT NULL only when type='pod', enforced via CHECK), created_by, last_message_at. Partial unique index ensures one pod chat per pod.
+- `server/src/db/migrations/051_dm_group_members.sql` — group_id, user_id, role ('admin'|'member'), last_read_at, joined_at, UNIQUE(group_id, user_id).
+- `server/src/db/migrations/052_direct_messages_group_id.sql` — adds optional group_id to direct_messages, relaxes conversation_id NOT NULL, adds CHECK enforcing exactly one of (conversation_id, group_id) must be set. Partial index for group thread queries.
+- `server/src/services/dm/group.service.ts` — createCustomGroup (encounter-gates every initial member against creator, blocks rejected, creator becomes admin), ensurePodGroup (idempotent, syncs initial members from active pod_members, directors and hosts get admin role), syncPodMember (called from pod hooks on join/leave), sendGroupMessage (membership-gated, 4000 char cap), listMyGroups, listGroupMessages.
+- `server/src/routes/groups.ts` — POST /groups (create custom), GET /groups (my groups), POST /groups/:id/messages (send), GET /groups/:id/messages (paginated thread).
+
+**Files changed:**
+- `server/src/index.ts` — mounts /api/groups.
+
+**Tests:** 821/821 server tests still pass. Build clean.
+
+**Architecture notes:**
+- direct_messages table now serves BOTH 1:1 conversations and group chats via the (conversation_id, group_id) XOR constraint. Single source of truth for "what messages exist" stays simple.
+- Pod chat auto-provisioning lives in `ensurePodGroup`. Calling it is idempotent — Phase J or a future migration can wire pod.service.addMember/removeMember to call `syncPodMember` so pod chat membership tracks pod membership automatically.
+- Custom groups enforce encounter-gate: you can only add people you've already met. Same rule as DMs.
+- Group blocking is intentionally not enforced at send time; users can leave a group instead. Notification preferences (Phase J) will let users mute group notifications without leaving.
+
+**Out of scope this phase:**
+- pod.service auto-call to syncPodMember on add/remove (will wire in Phase J)
+- group UI extension to MessagesPage (Phase K sidebar redesign integrates them)
+- group admin actions (rename, add/remove members post-creation)
