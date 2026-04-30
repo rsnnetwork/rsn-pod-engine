@@ -53,6 +53,7 @@ import dmRoutes from './routes/dm';
 import pokeRoutes from './routes/pokes';
 import reportRoutes from './routes/reports';
 import groupRoutes from './routes/groups';
+import notificationPrefsRoutes from './routes/notification-prefs';
 
 // Services
 import { initOrchestration } from './services/orchestration/orchestration.service';
@@ -322,6 +323,7 @@ app.use('/api/dm', dmRoutes);
 app.use('/api/pokes', pokeRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/groups', groupRoutes);
+app.use('/api/notification-prefs', notificationPrefsRoutes);
 
 // ─── Error Handling ─────────────────────────────────────────────────────────
 

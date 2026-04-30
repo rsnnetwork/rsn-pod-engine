@@ -36,6 +36,7 @@ import { query } from '../../../db';
 import { v4 as uuid } from 'uuid';
 import * as dmService from '../../dm/dm.service';
 import * as emailService from '../../email/email.service';
+import * as prefsService from '../../notification-prefs/notification-prefs.service';
 import { getRedisClient } from '../../redis/redis.client';
 import config from '../../../config';
 
@@ -66,6 +67,10 @@ async function maybeSendDmEmail(
   contentSnippet: string,
   conversationId: string,
 ): Promise<void> {
+  // Phase J — respect recipient's notification preferences. Skip email
+  // entirely if they've turned off DM email in settings.
+  if (!(await prefsService.shouldSendEmail(toUserId, 'dm'))) return;
+
   const redis = getRedisClient();
   const debounceKey = `dm:email-debounce:${fromUserId}:${toUserId}`;
 

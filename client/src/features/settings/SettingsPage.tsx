@@ -1,12 +1,80 @@
 import { useState, useEffect } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import Card from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
-import { Bell, Shield, Eye, CreditCard, Check, Lock, Zap } from 'lucide-react';
+import { Bell, Shield, Eye, CreditCard, Check, Lock, Zap, MessageSquare } from 'lucide-react';
 import api from '@/lib/api';
+
+/**
+ * Phase J (1 May 2026 spec) — per-channel toggles for chat notifications.
+ * Stefan: "the possibility should be there, and be changed in your settings".
+ */
+function MessageNotificationPrefsCard() {
+  const { addToast } = useToastStore();
+  const { data: prefs, refetch } = useQuery({
+    queryKey: ['notification-prefs'],
+    queryFn: () => api.get('/notification-prefs').then(r => r.data.data),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: (patch: Record<string, boolean>) => api.put('/notification-prefs', patch),
+    onSuccess: () => { refetch(); },
+    onError: (err: any) => addToast(err?.response?.data?.error?.message || 'Failed to save', 'error'),
+  });
+
+  const set = (key: string, value: boolean) => updateMutation.mutate({ [key]: value });
+
+  if (!prefs) return null;
+
+  const rows = [
+    { key: 'dm', label: 'Direct messages', description: 'When someone sends you a 1:1 message' },
+    { key: 'poke', label: 'Pokes', description: 'When someone you haven\'t met pokes you' },
+    { key: 'group', label: 'Group + pod chats', description: 'New messages in your group + pod conversations' },
+    { key: 'invite', label: 'Event + pod invites', description: 'When someone invites you to an event or pod' },
+    { key: 'report_resolved', label: 'Report resolved', description: 'When an admin acts on a report you submitted' },
+  ];
+
+  return (
+    <Card className="animate-fade-in-up">
+      <div className="flex items-center gap-2 mb-4">
+        <MessageSquare className="h-5 w-5 text-rsn-red" />
+        <h2 className="font-semibold text-[#1a1a2e]">Messaging notifications</h2>
+      </div>
+      <div className="grid grid-cols-[1fr_auto_auto] gap-x-4 gap-y-1 items-center text-xs text-gray-400 mb-2 px-1">
+        <span></span>
+        <span className="text-center">Bell</span>
+        <span className="text-center">Email</span>
+      </div>
+      <div className="divide-y divide-gray-100">
+        {rows.map(row => (
+          <div key={row.key} className="grid grid-cols-[1fr_auto_auto] gap-x-4 items-center py-3">
+            <div>
+              <p className="text-sm font-medium text-gray-800">{row.label}</p>
+              <p className="text-xs text-gray-400">{row.description}</p>
+            </div>
+            <button
+              onClick={() => set(`${row.key}_bell`, !prefs[`${row.key}_bell`])}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${prefs[`${row.key}_bell`] ? 'bg-rsn-red' : 'bg-gray-200'}`}
+              aria-label={`Toggle ${row.label} bell`}
+            >
+              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${prefs[`${row.key}_bell`] ? 'translate-x-6' : 'translate-x-1'}`} />
+            </button>
+            <button
+              onClick={() => set(`${row.key}_email`, !prefs[`${row.key}_email`])}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${prefs[`${row.key}_email`] ? 'bg-rsn-red' : 'bg-gray-200'}`}
+              aria-label={`Toggle ${row.label} email`}
+            >
+              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${prefs[`${row.key}_email`] ? 'translate-x-6' : 'translate-x-1'}`} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
 
 function Toggle({ enabled, onToggle, label, description }: {
   enabled: boolean; onToggle: () => void; label: string; description: string;
@@ -113,6 +181,9 @@ export default function SettingsPage() {
           />
         </div>
       </Card>
+
+      {/* Phase J — Messaging notifications. Per-channel toggles. */}
+      <MessageNotificationPrefsCard />
 
       {/* Privacy */}
       <Card className="animate-fade-in-up">

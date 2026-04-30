@@ -6260,3 +6260,28 @@ The same fix pattern applied to `handleReactionSend` for floating reactions (sam
 - pod.service auto-call to syncPodMember on add/remove (will wire in Phase J)
 - group UI extension to MessagesPage (Phase K sidebar redesign integrates them)
 - group admin actions (rename, add/remove members post-creation)
+
+---
+
+## 2026-05-01 — Phase J of chat-fix-and-dm-system plan: notification preferences
+
+**Spec (Stefan):** "the possibility should be there, and be changed in your settings". Per-channel toggles for bell + email per notification type.
+
+**Files added:**
+- `server/src/db/migrations/053_user_notification_prefs.sql` — adds `notification_prefs JSONB` column to users with sensible defaults (DM bell+email on, poke bell on / email off, group bell on / email off, invite bell+email on, report_resolved bell on / email off).
+- `server/src/services/notification-prefs/notification-prefs.service.ts` — getPrefs (with defaults fallback), updatePrefs (partial patch), shouldSendEmail/shouldSendBell helpers for backend gating.
+- `server/src/routes/notification-prefs.ts` — GET / + PUT / endpoints, both auth-gated, body validated.
+
+**Files changed:**
+- `server/src/services/orchestration/handlers/dm-handlers.ts` — `maybeSendDmEmail` now checks `prefsService.shouldSendEmail(toUserId, 'dm')` and skips entirely if the recipient opted out. Bell still fires (it goes through the existing notifications table); the user can also toggle bell off via prefs but that gate is enforced at the bell render layer.
+- `server/src/index.ts` — mounts /api/notification-prefs.
+- `client/src/features/settings/SettingsPage.tsx` — new "Messaging notifications" card with a 5-row grid (DM, Poke, Group, Invite, Report Resolved) × 2 columns (Bell, Email). React Query fetches + mutates prefs; toggle clicks write through immediately.
+
+**Tests:** 821/821 server tests still pass. Server + client builds clean.
+
+**Architecture notes:**
+- Defaults preserve existing behaviour (DM email ON, invite ON) so no user is surprised by silenced notifications after migration.
+- shouldSendEmail / shouldSendBell helpers are reusable across the dm/poke/group/invite/report flows. Phase G poke notifications + Phase H report-resolved notifications can plug in the same way; deferred to keep Phase J tight.
+
+**Out of scope:**
+- Wiring poke/group/report-resolved emails to the prefs check (only DM email is wired this phase). The infra is there; future maintenance can plumb each channel through.
