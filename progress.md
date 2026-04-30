@@ -6188,3 +6188,25 @@ The same fix pattern applied to `handleReactionSend` for floating reactions (sam
 - Bell icon unchanged in code; it already handles DM notifications via the existing `notification:new` event (Phase D's server-side handler emits to the bell) and the existing `getDestination(n)` function uses `n.link` to navigate, so clicking a DM notification opens the right thread.
 - All other pages untouched.
 - Existing socket events untouched; only added new typed events.
+
+---
+
+## 2026-05-01 — Phase G of chat-fix-and-dm-system plan: poke layer
+
+**Spec (Stefan):** "If you don't know each other or haven't met, you can poke." Low-friction wave-hello for users without an encounter. Recipient accepts (DMs unlock + conversation seeded), declines, or ignores.
+
+**Files added:**
+- `server/src/db/migrations/047_user_pokes.sql` — table with sender_id, recipient_id, status enum (pending/accepted/declined), optional message, responded_at, created_at. Partial unique index ensures only one PENDING poke per sender→recipient direction (re-sends OK after response).
+- `server/src/db/migrations/048_notifications_poke_type.sql` — adds `'poke'` to the notifications type CHECK constraint.
+- `server/src/services/poke/poke.service.ts` — sendPoke (validates: not self, not blocked, no encounter exists, no pending poke, recipient exists), acceptPoke (transactional: marks accepted, seeds encounter_history with times_met=0 so canMessage unlocks, upserts dm_conversation), declinePoke, listReceivedPokes, hasPendingPoke. Sender→recipient notification fires on send, type='poke', link='/messages'.
+- `server/src/routes/pokes.ts` — REST: POST /pokes, POST /pokes/:id/accept, POST /pokes/:id/decline, GET /pokes/received, GET /pokes/has-pending/:userId.
+
+**Files changed:**
+- `server/src/index.ts` — mounts /api/pokes.
+
+**Tests:** 821/821 server tests still pass. Server build clean.
+
+**Architecture notes:**
+- Accepting a poke seeds encounter_history with times_met=0. The matching engine excludes this pair from cross-event matching (it counts as "met" for engine purposes), but no real meeting occurred. This is the right semantic: they've expressed interest, they shouldn't get a forced match in an event when they could be DMing already.
+- Schema enforces: only one PENDING poke per direction; once responded (accepted or declined), sender can poke again later.
+- Bell notification reuses the existing notification:new socket event so no client changes needed.

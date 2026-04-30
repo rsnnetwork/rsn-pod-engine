@@ -50,6 +50,7 @@ import joinRequestRoutes from './routes/join-requests';
 import adminRoutes from './routes/admin';
 import notificationRoutes from './routes/notifications';
 import dmRoutes from './routes/dm';
+import pokeRoutes from './routes/pokes';
 
 // Services
 import { initOrchestration } from './services/orchestration/orchestration.service';
@@ -316,6 +317,7 @@ app.use('/api/join-requests', joinRequestRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/dm', dmRoutes);
+app.use('/api/pokes', pokeRoutes);
 
 // ─── Error Handling ─────────────────────────────────────────────────────────
 
