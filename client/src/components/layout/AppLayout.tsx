@@ -9,6 +9,7 @@ import Avatar from '@/components/ui/Avatar';
 import Modal from '@/components/ui/Modal';
 import ToastContainer from '@/components/ui/Toast';
 import NotificationBell from '@/components/ui/NotificationBell';
+import ChatQuickAccess from '@/components/ui/ChatQuickAccess';
 
 export default function AppLayout() {
   const { user, logout } = useAuthStore();
@@ -119,7 +120,10 @@ export default function AppLayout() {
           <div className="flex items-center gap-2.5 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => navigate('/')}>
             <img src="/rsn-logo.png" alt="RSN" className="h-8 w-auto" />
           </div>
-          <NotificationBell />
+          <div className="flex items-center gap-1">
+            <ChatQuickAccess />
+            <NotificationBell />
+          </div>
         </div>
         {sidebarContent()}
         {user && (
@@ -142,9 +146,10 @@ export default function AppLayout() {
           <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => navigate('/')}>
             <img src="/rsn-logo.png" alt="RSN" className="h-7 w-auto" />
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
+            <ChatQuickAccess />
             <NotificationBell />
-            <button onClick={() => setMobileOpen(!mobileOpen)} className="text-gray-500 hover:text-gray-800 transition-colors">
+            <button onClick={() => setMobileOpen(!mobileOpen)} className="text-gray-500 hover:text-gray-800 transition-colors ml-1">
               {mobileOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
             </button>
           </div>

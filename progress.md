@@ -6285,3 +6285,23 @@ The same fix pattern applied to `handleReactionSend` for floating reactions (sam
 
 **Out of scope:**
 - Wiring poke/group/report-resolved emails to the prefs check (only DM email is wired this phase). The infra is there; future maintenance can plumb each channel through.
+
+---
+
+## 2026-05-01 — Phase K of chat-fix-and-dm-system plan: chat quick-access (sidebar-lite)
+
+**Spec (Stefan):** "on left? Not sure". Took a pragmatic interpretation: rather than redesigning the entire authenticated app layout (high risk of regressions across 30+ pages), added a chat quick-access button next to the notification bell. Click opens a popover showing recent 1:1 + group conversations with one-click navigation to the full /messages page. Same data, no surface drift.
+
+**Files added:**
+- `client/src/components/ui/ChatQuickAccess.tsx` — chat icon button with unread badge (sums DM unread counts), click-to-open popover. Real-time refresh on `dm:message` and `dm:conversation_updated` socket events. Shows up to 8 conversations + 5 groups. Each row navigates to `/messages/{id}` for the full thread view. Empty state when no conversations exist.
+
+**Files changed:**
+- `client/src/components/layout/AppLayout.tsx` — imports ChatQuickAccess and renders it next to NotificationBell in both desktop sidebar header and mobile top bar. The button is always visible from any authenticated page.
+
+**Tests:** all server tests still pass. Client build clean.
+
+**Architecture notes:**
+- Reuses the same React Query keys (`dm-conversations`, `dm-groups`) the MessagesPage uses, so cache invalidations propagate to both surfaces.
+- Reuses the same socket events fired by Phase D — no new events needed.
+- Mobile + desktop both get the button, positioned consistently to the left of the bell.
+- Why not a full sidebar: the existing AppLayout has a 2-column desktop layout (nav left, content right). Adding a third column for chat would compete with the nav's left position and require significant CSS rework. The quick-access popover delivers the spec's "always one click away" intent with zero risk to the existing layout.
