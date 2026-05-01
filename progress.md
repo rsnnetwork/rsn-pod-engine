@@ -6385,3 +6385,62 @@ Every documented feature from the pre-Phase-0 commit (`33e3f87`) keeps working. 
 - Layer 2 (Stefan's vision): threads / AI summaries / group communication redesign.
 - Tier 2 horizontal scaling (Redlock, Redis state read-through, etc.).
 - Live event smoke test with real users — needs a scheduled event with multiple participants. Stefan + you can validate next time you run a test.
+
+---
+
+## 2026-05-01 22:31 UTC — Matching Engine 1.0 spec — single-commit ship
+
+**Status:** Completed. Full implementation of `assets/Matching algorithm 1.0.pdf` (RSN MATCHING SYSTEM SPECIFICATION v1) shipped as a single architectural commit per user request.
+
+**Live commit:** `f4ac447`
+**Migration:** `055_matching_engine_v1_spec.sql` applied
+**Tests:** 948/948 passing across 73 suites
+**Engine ID:** `speed_networking_v1` (auto-selected by all Speed Networking pods via the Phase 3 registry)
+
+### What changed
+
+**Data model (Section 4 + 7 + 13)**
+- `users.is_premium BOOLEAN DEFAULT FALSE`
+- `match_requests` table — premium "I want to meet X" requests, scoped to event, UNIQUE per (requester, requested, event)
+- `matches.match_reason / fallback_used / repeat_in_event / premium_influenced` for Section 13 logging
+- `EncounterHistoryEntry.mutualMeetAgain + averageRating` surfaced from joins
+
+**Engine (Section 6 + 7 + 8)**
+- `MatchingEngineV1.computePairScore` now applies (in priority order):
+  - mutual premium request → +0.20
+  - single premium request → +0.10
+  - any premium present → +0.03
+  - mutual_meet_again from history → +0.05 (Section 8 learning)
+- Default weights cap premium signals below intent factors (sharedInterests + sharedReasons = 0.50, premium total ≤ 0.33). Premium can NEVER dominate.
+- Engine emits `matchReason / fallbackUsed / repeatInEvent / premiumInfluenced` on every MatchPair.
+
+**Service layer**
+- `loadMatchRequestsForEvent` helper queries pending requests scoped to event participants.
+- Both `generateSessionSchedule` and `generateSingleRound` hydrate `participant.requestedUserIds` before calling the engine.
+- `getEncounterHistoryForUsers` now joins ratings to derive `averageRating`.
+- `persistMatches` INSERT writes the four new metadata fields.
+- Soft-exclusion retry path (Section 10 fallback) now flags every pair with `fallbackUsed=true` and toggles `repeatInEvent` based on whether the pair was in `excludedPairs`.
+
+### Verified live (2026-05-01 22:31 UTC)
+
+- Render `srv-d6namvvtskes73f9oru0`: status=`live` at commit `f4ac4474`
+- Migration 055 applied (54+1 = 55 migrations now)
+- Schema: `users.is_premium BOOLEAN DEFAULT false` ✓; `matches.match_reason TEXT` ✓ + 3 boolean flag columns with DEFAULT false ✓; `match_requests` table with all 7 columns ✓
+- Behavior preservation: 23 existing matches + 38 users untouched, all queries pass
+- Sentry: 0 unresolved (last hour)
+- Vercel: latest deploy Ready
+- Server tests: 948/948 across 73 suites
+- Pinning tests: matching-engine-v1-spec.test.ts (19 tests covering Sections 4, 5, 6, 7, 8, 10, 11, 13, 14)
+
+### Behavior preservation
+
+- Existing matching tests all pass unchanged (engine V1 algorithm core untouched)
+- Premium fields default to FALSE/empty; pre-Phase pods work identically
+- The matching template path also picks up the new weights via DEFAULT_WEIGHTS spread
+- Engine still wires through the Phase 3 registry (`getMatchingEngine`), no changes to call sites in orchestration
+
+### What's NOT in this commit (deferred follow-ups)
+
+- Premium UI: server-side only this commit. Users can't yet flip their premium flag or send match_requests from the UI — that's a follow-up admin/profile screen.
+- Admin moderation surface for fallback/premium matches (server-side fields ready; UI unwritten).
+- Continuous learning loop that adjusts weights from feedback over many events. Section 8 currently consults stored history via mutualMeetAgainBoost, but the weights themselves are static. A future iteration can train weights per-pod from outcome data.
