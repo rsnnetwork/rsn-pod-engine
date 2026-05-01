@@ -54,11 +54,15 @@ describe('T2 UI polish batch', () => {
     });
   });
 
-  describe('T2-4 — rating star color readable on dark bg', () => {
+  describe('T2-4 — rating star color readable (superseded by Phase 7)', () => {
     const src = readClient('features/live/RatingPrompt.tsx');
 
-    it('unselected stars use text-white/60 (not text-gray-600 on dark bg)', () => {
-      expect(src).toMatch(/text-white\/60\s+hover:text-white\/80/);
+    // Phase 7 (1 May 2026 spec) flipped the rating surface to white per
+    // Stefan's request. Stars are now text-gray-300 (visible on white)
+    // instead of text-white/60 (visible on dark). Both are readable
+    // contrasts; the surface change is what made Phase 7 supersede T2-4.
+    it('unselected stars use a readable contrast (gray-300 on white surface)', () => {
+      expect(src).toMatch(/text-gray-300\s+hover:text-gray-400/);
       expect(src).not.toMatch(/text-gray-600\s+hover:text-gray-500/);
     });
   });

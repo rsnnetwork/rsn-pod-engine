@@ -50,21 +50,24 @@ function PartnerRatingForm({ partnerName, toUserId, matchId, onSubmitted, onSkip
   };
 
   return (
-    <div className="max-w-md w-full text-center animate-fade-in-up bg-[#292a2d] rounded-2xl p-4 sm:p-8">
+    // Phase 7 (1 May 2026 spec, item 8) — rating screen on white background.
+    // Stefan: 'Rating screen wrong color (should be white)'. Pre-Phase-7 used
+    // bg-[#292a2d] dark surface inconsistent with the rest of the app.
+    <div className="max-w-md w-full text-center animate-fade-in-up bg-white border border-gray-200 rounded-2xl p-4 sm:p-8 shadow-lg">
       {totalPartners > 1 && (
         <div className="flex items-center justify-center gap-1.5 mb-3">
           {Array.from({ length: totalPartners }).map((_, i) => (
             <div key={i} className={`h-1.5 rounded-full transition-all ${
-              i === partnerIndex ? 'w-6 bg-white' : i < partnerIndex ? 'w-4 bg-emerald-500' : 'w-4 bg-white/20'
+              i === partnerIndex ? 'w-6 bg-rsn-red' : i < partnerIndex ? 'w-4 bg-emerald-500' : 'w-4 bg-gray-200'
             }`} />
           ))}
         </div>
       )}
-      <h2 className="text-xl font-bold text-white mb-2">Rate your conversation</h2>
-      <p className="text-gray-400 mb-2">
-        How was your chat with <span className="text-white font-medium">{partnerName}</span>?
+      <h2 className="text-xl font-bold text-[#1a1a2e] mb-2">Rate your conversation</h2>
+      <p className="text-gray-500 mb-2">
+        How was your chat with <span className="text-[#1a1a2e] font-medium">{partnerName}</span>?
       </p>
-      <p className="text-xs text-gray-500 mb-5">Tap the stars to rate</p>
+      <p className="text-xs text-gray-400 mb-5">Tap the stars to rate</p>
 
       <div className="flex justify-center gap-3 mb-6">
         {[1, 2, 3, 4, 5].map(n => (
@@ -74,11 +77,7 @@ function PartnerRatingForm({ partnerName, toUserId, matchId, onSubmitted, onSkip
             className="transition-transform hover:scale-110 active:scale-95"
           >
             <Star
-              // T2-4 (Issue 14.1) — unselected stars were text-gray-600 on
-              // the dark bg-[#292a2d] background, making them nearly
-              // invisible (the "wrong color" the review reported).
-              // text-white/60 gives a proper outline that's visible on dark.
-              className={`h-12 w-12 ${n <= rating ? 'text-amber-400 fill-amber-400' : 'text-white/60 hover:text-white/80'}`}
+              className={`h-12 w-12 ${n <= rating ? 'text-amber-400 fill-amber-400' : 'text-gray-300 hover:text-gray-400'}`}
             />
           </button>
         ))}
@@ -87,10 +86,10 @@ function PartnerRatingForm({ partnerName, toUserId, matchId, onSubmitted, onSkip
       <button
         onClick={() => setMeetAgain(!meetAgain)}
         className={`flex items-center justify-center gap-2.5 w-full py-3 rounded-xl border-2 transition-all mb-5 text-base font-medium ${
-          meetAgain ? 'border-indigo-500 bg-indigo-500/10 text-indigo-400' : 'border-white/10 text-gray-400 hover:border-white/20'
+          meetAgain ? 'border-indigo-500 bg-indigo-50 text-indigo-600' : 'border-gray-200 text-gray-500 hover:border-gray-300'
         }`}
       >
-        <Handshake className={`h-5 w-5 ${meetAgain ? 'text-indigo-400' : ''}`} />
+        <Handshake className={`h-5 w-5 ${meetAgain ? 'text-indigo-500' : ''}`} />
         {meetAgain ? 'Would meet again!' : 'Would you meet again?'}
       </button>
 
@@ -98,7 +97,7 @@ function PartnerRatingForm({ partnerName, toUserId, matchId, onSubmitted, onSkip
         Submit Rating
       </Button>
 
-      <button onClick={onSkip} className="text-sm text-gray-500 hover:text-gray-300 mt-4 transition-colors">
+      <button onClick={onSkip} className="text-sm text-gray-400 hover:text-gray-600 mt-4 transition-colors">
         Skip
       </button>
     </div>
@@ -117,21 +116,23 @@ function RatingConfirmation({ meetAgain, isLastPartner, isLastRound, onContinue 
   }, [onContinue]);
 
   return (
-    <div className="max-w-md w-full text-center animate-fade-in-up bg-[#292a2d] rounded-2xl p-4 sm:p-8 cursor-pointer" onClick={onContinue}>
-      <div className="inline-flex items-center justify-center h-14 w-14 rounded-full bg-emerald-500/20 text-emerald-400 mb-3">
+    // Phase 7 (1 May spec) — confirmation card on white surface for visual
+    // consistency with the rest of the app.
+    <div className="max-w-md w-full text-center animate-fade-in-up bg-white border border-gray-200 rounded-2xl p-4 sm:p-8 cursor-pointer shadow-lg" onClick={onContinue}>
+      <div className="inline-flex items-center justify-center h-14 w-14 rounded-full bg-emerald-50 text-emerald-600 mb-3">
         <CheckCircle className="h-7 w-7" />
       </div>
-      <h2 className="text-lg font-bold text-white mb-1">Rating submitted!</h2>
+      <h2 className="text-lg font-bold text-[#1a1a2e] mb-1">Rating submitted!</h2>
       {meetAgain && (
-        <div className="flex items-center justify-center gap-2 mt-2 px-4 py-2 rounded-lg bg-indigo-500/10 border border-indigo-500/20">
-          <Handshake className="h-4 w-4 text-indigo-400" />
-          <p className="text-sm text-indigo-300">
+        <div className="flex items-center justify-center gap-2 mt-2 px-4 py-2 rounded-lg bg-indigo-50 border border-indigo-200">
+          <Handshake className="h-4 w-4 text-indigo-500" />
+          <p className="text-sm text-indigo-700">
             You want to meet again! We'll let you know if it's mutual.
           </p>
         </div>
       )}
       {isLastPartner && isLastRound && (
-        <div className="flex items-center justify-center gap-2 mt-3 text-sm text-gray-400">
+        <div className="flex items-center justify-center gap-2 mt-3 text-sm text-gray-500">
           <Loader2 className="h-4 w-4 animate-spin" />
           <span>Last round complete! Returning to main room...</span>
         </div>
