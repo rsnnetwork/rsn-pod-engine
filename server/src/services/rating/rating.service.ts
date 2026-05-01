@@ -125,6 +125,25 @@ export async function submitRating(
       client, fromUserId, toUserId, match.sessionId, input.qualityScore, input.meetAgain
     );
 
+    // Phase 2 (1 May spec) — also update meeting_records so recap counts
+    // stay deterministic. Encounter history is a cross-session aggregate;
+    // meeting_records is the per-meeting record the recap reads from.
+    try {
+      const { upsertRatingForMeeting } = await import('../meeting-records/meeting-records.service');
+      await upsertRatingForMeeting({
+        sessionId: match.sessionId,
+        roundNumber: match.roundNumber,
+        matchId: input.matchId,
+        raterUserId: fromUserId,
+        ratedUserId: toUserId,
+        qualityScore: input.qualityScore,
+        meetAgain: input.meetAgain,
+      });
+    } catch (mrErr) {
+      logger.error({ mrErr, ratingId, matchId: input.matchId },
+        'Failed to update meeting_records — recap will rebuild from matches × ratings on next aggregation');
+    }
+
     logger.info({ ratingId, matchId: input.matchId, fromUserId, toUserId }, 'Rating submitted');
     return rating;
   });
@@ -343,6 +362,24 @@ export async function getPeopleMet(
   const connections = connectionsResult.rows;
   const mutualConnections = connections.filter(c => c.mutualMeetAgain);
 
+  // Phase 2 (1 May spec) — surface deterministic counts from meeting_records.
+  // The connections[] array above stays for the per-row UI rendering, but
+  // the headline numbers (people met / total meetings / mutual matches) come
+  // from the canonical stored aggregate so they don't drift between renders.
+  let counts = { uniquePeopleMet: 0, totalMeetings: 0, mutualMatches: 0 };
+  try {
+    const { getMeetingCounts } = await import('../meeting-records/meeting-records.service');
+    counts = await getMeetingCounts(userId, sessionId);
+  } catch (err) {
+    logger.warn({ err, userId, sessionId }, 'Falling back to derived counts (meeting_records read failed)');
+    // Derive from connections so the UI still works.
+    counts = {
+      uniquePeopleMet: new Set(connections.map(c => c.userId)).size,
+      totalMeetings: connections.length,
+      mutualMatches: mutualConnections.length,
+    };
+  }
+
   return {
     sessionId,
     sessionTitle: session.title,
@@ -351,6 +388,11 @@ export async function getPeopleMet(
     roundsAttended,
     connections,
     mutualConnections,
+    // New Phase 2 fields. Existing clients that read connections.length and
+    // mutualConnections.length keep working; new consumers use these.
+    uniquePeopleMet: counts.uniquePeopleMet,
+    totalMeetings: counts.totalMeetings,
+    mutualMatches: counts.mutualMatches,
   };
 }
 
@@ -420,8 +462,9 @@ export async function finalizeRoundRatings(
   sessionId: string,
   roundNumber: number
 ): Promise<{ totalMatches: number; ratedMatches: number; mutualConnections: number }> {
-  const matchesResult = await query<Match>(
-    `SELECT id, participant_a_id AS "participantAId", participant_b_id AS "participantBId"
+  const matchesResult = await query<Match & { participantCId?: string | null }>(
+    `SELECT id, participant_a_id AS "participantAId", participant_b_id AS "participantBId",
+            participant_c_id AS "participantCId"
      FROM matches
      WHERE session_id = $1 AND round_number = $2 AND status IN ('completed', 'reassigned')`,
     [sessionId, roundNumber]
@@ -436,6 +479,19 @@ export async function finalizeRoundRatings(
 
     const ratings = await getRatingsByMatch(match.id);
     if (ratings.length > 0) ratedMatches++;
+  }
+
+  // Phase 2 (1 May spec) — write canonical meeting records for this round.
+  // Stored, deterministic, never recalculated. All recap consumers will read
+  // from meeting_records instead of re-deriving from matches × ratings.
+  try {
+    const { recordRoundMeetings } = await import('../meeting-records/meeting-records.service');
+    await recordRoundMeetings(sessionId, roundNumber, matchesResult.rows.map(m => ({
+      id: m.id, participantAId: m.participantAId, participantBId: m.participantBId,
+      participantCId: m.participantCId ?? null,
+    })));
+  } catch (err) {
+    logger.error({ err, sessionId, roundNumber }, 'Failed to write meeting_records — recap will rebuild from matches × ratings');
   }
 
   logger.info({

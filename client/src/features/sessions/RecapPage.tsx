@@ -38,6 +38,10 @@ interface PeopleMetData {
   roundsAttended: number;
   connections: Connection[];
   mutualConnections: Connection[];
+  // Phase 2 (1 May spec) — deterministic counts from server's meeting_records.
+  uniquePeopleMet?: number;
+  totalMeetings?: number;
+  mutualMatches?: number;
 }
 
 function InterestBadge({ connection }: { connection: Connection }) {
@@ -296,39 +300,42 @@ export default function RecapPage() {
             </Card>
           </div>
         ) : (
-          // Phase 6 (29 April 2026 spec) — stats labels and counts aligned
-          // with Stefan's clarification:
-          //   "Mutual matches" = distinct people met (NOT total meetings — if I
-          //                      met Alice twice, that's still 1 person)
-          //   "Want to meet again" = subset where BOTH of us ticked
-          //                          meet-again on the rating
-          // Both counts derived from the SAME server source so they can never
-          // disagree (the previous "0 people met but 2 mutual matches"
-          // inconsistency was the result of separate count sources).
+          // Phase 2 (1 May 2026 spec) — three deterministic metrics from the
+          // server's meeting_records aggregate. Stefan's strict definitions:
+          //   People Met       = distinct partners (meeting Alice 3 times = 1)
+          //   Total Meetings   = every meeting, including repeats
+          //   Mutual Matches   = both said yes (BOTH ticked meet-again)
+          // All three come from the SAME stored aggregate so they can never
+          // drift between renders. Falls back to client-side dedup of
+          // connections[] only if the server didn't supply them (older data).
           (() => {
-            const distinctPeopleMet = data
-              ? new Set(data.connections.map(c => c.userId)).size
-              : 0;
+            const peopleMet = data?.uniquePeopleMet
+              ?? (data ? new Set(data.connections.map(c => c.userId)).size : 0);
+            const totalMeetings = data?.totalMeetings
+              ?? (data ? data.connections.length : 0);
+            const mutualMatches = data?.mutualMatches
+              ?? (data ? data.mutualConnections.length : stats.mutualMeetAgainCount);
             return (
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <Card className="text-center py-4">
                   <Handshake className="h-5 w-5 text-rsn-red mx-auto mb-1" />
-                  <p className="text-2xl font-bold text-[#1a1a2e]">{distinctPeopleMet}</p>
-                  <p className="text-xs text-gray-400">Mutual Matches</p>
+                  <p className="text-2xl font-bold text-[#1a1a2e]">{peopleMet}</p>
+                  <p className="text-xs text-gray-400">People Met</p>
                 </Card>
                 <Card className="text-center py-4">
                   <Handshake className="h-5 w-5 text-indigo-500 mx-auto mb-1" />
-                  <p className="text-2xl font-bold text-[#1a1a2e]">{stats.mutualMeetAgainCount}</p>
-                  <p className="text-xs text-gray-400">Want to Meet Again</p>
+                  <p className="text-2xl font-bold text-[#1a1a2e]">{totalMeetings}</p>
+                  <p className="text-xs text-gray-400">Total Meetings</p>
+                </Card>
+                <Card className="text-center py-4">
+                  <Handshake className="h-5 w-5 text-emerald-500 mx-auto mb-1" />
+                  <p className="text-2xl font-bold text-[#1a1a2e]">{mutualMatches}</p>
+                  <p className="text-xs text-gray-400">Mutual Matches</p>
                 </Card>
                 <Card className="text-center py-4">
                   <Star className="h-5 w-5 text-amber-400 mx-auto mb-1" />
                   <p className="text-2xl font-bold text-[#1a1a2e]">{stats.avgQualityScore.toFixed(1)}</p>
                   <p className="text-xs text-gray-400">Avg Rating</p>
-                </Card>
-                <Card className="text-center py-4">
-                  <p className="text-2xl font-bold text-[#1a1a2e]">{stats.totalRatings}</p>
-                  <p className="text-xs text-gray-400">Total Ratings</p>
                 </Card>
               </div>
             );

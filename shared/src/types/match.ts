@@ -80,6 +80,12 @@ export interface PeopleMet {
   roundsAttended: number;
   connections: ConnectionResult[];
   mutualConnections: ConnectionResult[];
+  // Phase 2 (1 May spec) — deterministic stored counts from meeting_records.
+  // Headline numbers shown in the recap, never recalculated from connections[]
+  // (which is the per-row UI list and may include duplicates across rounds).
+  uniquePeopleMet?: number;
+  totalMeetings?: number;
+  mutualMatches?: number;
 }
 
 // ─── Matching Engine Types ───────────────────────────────────────────────────

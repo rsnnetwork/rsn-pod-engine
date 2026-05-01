@@ -32,30 +32,30 @@ function readClient(rel: string): string {
 }
 
 describe('Phase 6 — stats parity (Q8) + UI/email label alignment', () => {
-  describe('client RecapPage participant stats use distinct people-met count', () => {
+  describe('client RecapPage participant stats use deterministic counts (superseded by Phase 2)', () => {
     const src = readClient('features/sessions/RecapPage.tsx');
 
-    it('participant stats compute distinctPeopleMet via Set', () => {
-      // Pre-fix used data.connections.length which double-counts when the
-      // user met the same partner more than once (e.g. across rounds).
-      expect(src).toMatch(/distinctPeopleMet[\s\S]+?new Set\(data\.connections\.map\(c\s*=>\s*c\.userId\)\)\.size/);
+    // Phase 2 (1 May 2026) supersedes Phase 6's labeling. The new strict
+    // definitions are: People Met (distinct), Total Meetings (with repeats),
+    // Mutual Matches (both said yes). All three come from the SAME server
+    // aggregate (meeting_records) so they can never drift between renders.
+    // The fallback path still derives via Set when the server omits them
+    // (older sessions where the table didn't backfill yet).
+
+    it('participant stats fall back to Set-based dedup when server omits uniquePeopleMet', () => {
+      expect(src).toMatch(/new Set\(data\.connections\.map\(c\s*=>\s*c\.userId\)\)\.size/);
     });
 
-    it('label says "Mutual Matches" (Stefan: distinct people met)', () => {
-      expect(src).toMatch(/Mutual Matches/);
+    it('label says "People Met" (Phase 2: distinct partners)', () => {
+      expect(src).toMatch(/>People Met</);
     });
 
-    it('label says "Want to Meet Again" (the rating-based subset)', () => {
-      expect(src).toMatch(/Want to Meet Again/);
+    it('label says "Total Meetings" (Phase 2: includes repeats)', () => {
+      expect(src).toMatch(/>Total Meetings</);
     });
 
-    it('participant stats DO NOT use the bare connections.length anymore', () => {
-      // Search the participant-stats branch (else clause of isHost). Pre-fix
-      // contained `{data?.connections.length || 0}` rendering as "People Met".
-      const elseStart = src.indexOf(') : (', src.indexOf('grid-cols-2 md:grid-cols-3 gap-3'));
-      const elseEnd = src.indexOf(')\n      )}', elseStart);
-      const elseBody = elseStart > -1 ? src.slice(elseStart, elseEnd) : '';
-      expect(elseBody).not.toMatch(/data\?\.connections\.length\s*\|\|\s*0\s*\}\s*<\/p>\s*<p[^>]*>\s*People Met/);
+    it('label says "Mutual Matches" (Phase 2: both said yes)', () => {
+      expect(src).toMatch(/>Mutual Matches</);
     });
   });
 
