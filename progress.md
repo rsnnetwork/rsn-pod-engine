@@ -6336,3 +6336,52 @@ The same fix pattern applied to `handleReactionSend` for floating reactions (sam
 - Server tests: 821/821 pass.
 
 **Take-away:** Any future migration that drops and re-adds a CHECK constraint must carry forward the full prior allowlist. Better long-term: split `notifications.type` into a small lookup table or use a single migration as the source of truth for the union, so additions don't require remembering history.
+
+---
+
+## 2026-05-01 22:03 UTC — 1st May architectural plan: Phases 0–8 all LIVE
+
+**Status:** Completed. All 9 phases of `docs/superpowers/plans/2026-05-01-1st-may-architectural-fixes.md` shipped end-to-end and verified live in production. Matching Engine 1.0 algorithm itself stays parked per Stefan's "one of many" carveout; Phase 3 added the registry seam so it can plug in later.
+
+**Final commit on main:** `c56bad8` (Phase 8 — host action receipts + lobby compact header)
+**Total tests:** 929/929 passing across 72 suites
+**Total commits in this batch:** 9 (Phase 0 → 8)
+
+### Phase outcomes
+
+| Phase | Architectural change | Live commit |
+|---|---|---|
+| 0 | Server-canonical roomParticipants assignment (breakout chat fix true root cause) | `012e5f9` |
+| 1 | Participant state machine spine (single transition() chokepoint, in-memory canonical state) | `1c79c01` |
+| 2 | meeting_records table + 3 deterministic metrics (people met / total meetings / mutual matches) | `e76d27b` |
+| 3 | Matching engine registry seam (sessions.matching_algorithm_id, getMatchingEngine lookup) | `9792182` |
+| 4 | Invite flow server-confirmed registration ack (eliminates 404→magic race) | `76d7bc5` |
+| 5 | Single-source displayName helper in shared (kills 5 inline copies across orchestration) | `3620b50` |
+| 6 | ChatPanel mobile drawer + global iOS zoom kill (16px input rule) | `08ca6df` |
+| 7 | Rating screen on white surface (palette consistency) | `5fd37db` |
+| 8 | Host action receipts + lobby compact header | `c56bad8` |
+
+### Final whole-system verification (2026-05-01 22:03 UTC)
+
+- `/health` ok, db connected, latency 4ms
+- `/health/deep` ok (cache bypass), db connected
+- Render `srv-d6namvvtskes73f9oru0`: status=`live` at commit `c56bad8a`
+- Vercel: latest deploy Ready, 2 minutes ago
+- `app.rsn.network` HTTP 200
+- CI green on `main` and `staging` (both at `c56bad8`)
+- Database: 54 migrations applied, 50 meeting_records (Phase 2 backfill correct), 38 users, 23 matches, 50 ratings, 138 notifications, 4 dm_conversations, all new tables queryable
+- Sentry server: 0 unresolved (last hour AND last 24h)
+- Sentry client: 5 stale issues (last seen 2026-04-20, 2026-04-28, 2026-04-30 — all pre-Phase-0; LiveKit NegotiationError + AbortError, not regressions)
+- Redis: connected + healthy + Socket.IO adapter enabled (per Render boot logs)
+- Routes 401-gated as expected: /api/dm, /api/groups, /api/pokes, POST /api/reports, /api/notification-prefs, /api/sessions/:id, /api/pods
+
+### Behavior preservation
+
+Every documented feature from the pre-Phase-0 commit (`33e3f87`) keeps working. New surfaces (state machine, meeting_records, matching registry, identity helper, action receipts) are additive seams; legacy callers continue to work unchanged. Five client-side cosmetic changes are user-visible by design: rating screen on white instead of dark, ChatPanel as bottom drawer on mobile, lobby header compact on all sizes, recap shows three metrics instead of two, host gets toast confirmations after destructive actions.
+
+### Out of scope (deliberately deferred)
+
+- Matching Engine 1.0 algorithm itself (Stefan's "one of many" — registry ready for it).
+- Layer 2 (Stefan's vision): threads / AI summaries / group communication redesign.
+- Tier 2 horizontal scaling (Redlock, Redis state read-through, etc.).
+- Live event smoke test with real users — needs a scheduled event with multiple participants. Stefan + you can validate next time you run a test.
