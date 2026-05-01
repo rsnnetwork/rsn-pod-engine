@@ -604,6 +604,41 @@ export async function handleRoomJoined(
 }
 
 /**
+ * Server-canonical room assignment. Called at match-activation time (auto
+ * round start, manual host breakout, solo-recovery match insert) so that
+ * roomParticipants reflects "user X is assigned to room Y" the moment the
+ * server hands out the LiveKit token, NOT after each client emits
+ * presence:room_joined.
+ *
+ * Phase 0 (1 May 2026 spec) — pre-fix, roomParticipants was populated only
+ * via the client-side LiveKit `onConnected` callback. If user A's LK
+ * connected before user B's, A's chat-send found A in roomParticipants but
+ * no one else mapped to the same roomId, so the message routed only back
+ * to A. B's later presence:room_joined fixed it for the next message but
+ * the first one was lost. This helper makes assignment server-canonical.
+ *
+ * Idempotent: safe to call multiple times for the same (sessionId, matchId,
+ * roomId, userIds). Existing entries for the same user are overwritten.
+ */
+export function setRoomAssignment(
+  sessionId: string,
+  matchId: string,
+  roomId: string,
+  userIds: (string | null | undefined)[],
+): void {
+  const activeSession = activeSessions.get(sessionId);
+  if (!activeSession) return;
+  if (!activeSession.roomParticipants) {
+    activeSession.roomParticipants = new Map();
+  }
+  const now = new Date();
+  for (const uid of userIds) {
+    if (!uid) continue;
+    activeSession.roomParticipants.set(uid, { matchId, roomId, joinedAt: now });
+  }
+}
+
+/**
  * Drop a participant from the roomParticipants map. Called on socket
  * disconnect / leave / participant removal. Safe no-op if not present.
  */
@@ -1036,6 +1071,10 @@ export async function handleLeaveConversation(
                 candidateTk = cVt.token;
               } catch { /* non-fatal */ }
 
+              // Phase 0 (1 May spec) — server-canonical room assignment
+              // for solo-recovery match. Same architectural rule.
+              setRoomAssignment(sessionId, matchId, newRoomId, [soloPartnerId, candidateUserId]);
+
               io.to(userRoom(soloPartnerId)).emit('match:reassigned', {
                 matchId, newPartnerId: candidateUserId,
                 partnerDisplayName: names.get(candidateUserId),
@@ -1278,6 +1317,10 @@ export async function handleDisconnect(
                     partnerTk = pVt.token;
                     candidateTk = cVt.token;
                   } catch { /* non-fatal — client retries via API */ }
+
+                  // Phase 0 (1 May spec) — server-canonical room
+                  // assignment for disconnect-recovery match. Same rule.
+                  setRoomAssignment(sessionId, matchId, roomId, [partnerId, candidateUserId]);
 
                   io.to(userRoom(partnerId)).emit('match:reassigned', {
                     matchId, newPartnerId: candidateUserId,

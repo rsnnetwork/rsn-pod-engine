@@ -610,6 +610,11 @@ export async function handleHostReassign(
         );
       });
 
+      // Phase 0 (1 May spec) — server-canonical room assignment for host
+      // reassign action. Same architectural rule as auto-rounds.
+      const { setRoomAssignment } = await import('./participant-flow');
+      setRoomAssignment(data.sessionId, matchId, roomId, [targetId, partner]);
+
       // Generate tokens for both participants inline
       const { config: appConfig } = await import('../../../config');
       let targetToken: string | null = null;
@@ -1069,6 +1074,13 @@ export async function handleHostMoveToRoom(
       [sessionId, activeSession.currentRound, pA, pB, allParticipants.length > 2 ? allParticipants[2] : null, newRoomId]
     );
     const newMatchId = newMatchResult.rows[0].id;
+
+    // Phase 0 (1 May spec) — server-canonical room assignment for host
+    // move-to-room. Same architectural rule.
+    {
+      const { setRoomAssignment } = await import('./participant-flow');
+      setRoomAssignment(sessionId, newMatchId, newRoomId, allParticipants);
+    }
 
     // Get display names for all participants
     const namesResult = await query<{ id: string; display_name: string }>(
@@ -1885,6 +1897,13 @@ export async function handleHostCreateBreakout(
           if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
           return;
         }
+      }
+
+      // Phase 0 (1 May spec) — server-canonical room assignment for host
+      // single-breakout. Same architectural rule.
+      if (participantIds.length > 0 && matchId) {
+        const { setRoomAssignment } = await import('./participant-flow');
+        setRoomAssignment(sessionId, matchId, newRoomId, participantIds);
       }
 
       // Step 4: Update participant statuses + notify

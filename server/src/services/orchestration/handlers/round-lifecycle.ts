@@ -344,6 +344,14 @@ export async function transitionToRound(
       const matchParticipantIds = [match.participantAId, match.participantBId];
       if (match.participantCId) matchParticipantIds.push(match.participantCId);
 
+      // Phase 0 (1 May spec) — server-canonical room assignment. Populate
+      // roomParticipants for every participant in this match BEFORE any
+      // client emits presence:room_joined. Pre-fix, asymmetric LK connect
+      // timing meant fast-connector A had its entry but slow-connector B
+      // didn't, so room-scope chat from A resolved only to A.
+      const { setRoomAssignment } = await import('./participant-flow');
+      setRoomAssignment(sessionId, match.id, roomId, matchParticipantIds);
+
       for (const pid of matchParticipantIds) {
         const partners = matchParticipantIds
           .filter(id => id !== pid)

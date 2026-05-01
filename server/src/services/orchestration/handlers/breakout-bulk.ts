@@ -268,6 +268,13 @@ export async function handleHostCreateBreakoutBulk(
       }
       createdMatchIds.push(matchId);
 
+      // Phase 0 (1 May spec) — server-canonical room assignment for manual
+      // host-created breakouts. Same architectural rule as auto-rounds:
+      // populate roomParticipants now so room-scope chat works regardless
+      // of which client's LiveKit connects first.
+      const { setRoomAssignment } = await import('./participant-flow');
+      setRoomAssignment(sessionId, matchId, newRoomId, participantIds);
+
       // Update participant statuses
       for (const pid of participantIds) {
         await sessionService.updateParticipantStatus(sessionId, pid, ParticipantStatus.IN_ROUND).catch(() => {});
