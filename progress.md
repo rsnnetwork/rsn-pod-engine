@@ -6483,3 +6483,31 @@ Every documented feature from the pre-Phase-0 commit (`33e3f87`) keeps working. 
 - Message reactions (Phase C — needs migration 056 + new endpoints)
 - In-event ChatPanel (already polished, out of scope)
 - Group / pod chat UI
+
+---
+
+## DM Chat Polish — Phase B — 2026-05-03
+
+**Status:** Completed (client only, server unchanged)
+**Trigger:** User asked for emoji input in the DM chat ("inside the chat the user must… have an option to send emojis like in the real chat").
+
+### Files touched
+- `client/src/features/messages/MessagesPage.tsx`
+
+### What changed
+- Smile-icon button to the left of the textarea opens a curated 20-emoji grid above the composer.
+- Click an emoji → appends to the draft, closes the picker, refocuses the textarea (keyboard stays visible on mobile).
+- Grid is `grid-cols-6 sm:grid-cols-10` — bigger tap targets on phones, denser on desktop.
+- Picker also closes when the textarea regains focus (so users don't get a stranded picker).
+- Same 20-emoji set as the in-event ChatPanel (😀 😂 😍 🥳 🤔 👍 👏 ❤️ 🔥 🎉 💯 🙌 😮 🤩 😎 👋 ✅ 💪 🙏 ⭐) for consistency across surfaces.
+- Smile button is itself a 44pt mobile target / 36pt desktop, in line with the send button.
+
+### Why kept inline (not extracted to shared component)
+RajaSkill: "3 similar lines beats a wrong abstraction." The two chats share the same 20-emoji list today; either could legitimately diverge tomorrow (DM might add skin-tone variants, in-event might trim to fewer). Wait for a third caller before extracting.
+
+### Verification
+- `npx tsc --noEmit` — clean
+- `npm run build` — clean (11.52 s)
+
+### What is NOT in this phase
+- Message reactions (Phase C)

@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Send, Trash2, MessageSquare } from 'lucide-react';
+import { ArrowLeft, Send, Smile, Trash2, MessageSquare } from 'lucide-react';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { PageLoader, Spinner } from '@/components/ui/Spinner';
@@ -76,6 +76,14 @@ function timeOnly(d: Date): string {
 // so we only show name/avatar/timestamp once per cluster (iMessage / WhatsApp pattern).
 const CLUSTER_GAP_MS = 60_000;
 
+// Phase B polish — curated emoji set for the composer picker.
+// Same 20 the in-event ChatPanel uses, kept duplicated rather than abstracted
+// because each chat surface might tune its own list later (no premature DRY).
+const EMOJI_PICKER_LIST = [
+  '😀','😂','😍','🥳','🤔','👍','👏','❤️','🔥','🎉',
+  '💯','🙌','😮','🤩','😎','👋','✅','💪','🙏','⭐',
+];
+
 interface MessageCluster {
   senderId: string;
   messages: DmMessage[];
@@ -104,7 +112,9 @@ export default function MessagesPage() {
   const { addToast } = useToastStore();
   const myUserId = user?.id;
   const [draft, setDraft] = useState('');
+  const [showEmoji, setShowEmoji] = useState(false);
   const threadEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Inbox: list of conversations sorted by recent activity.
   const { data: inboxData } = useQuery({
@@ -361,40 +371,76 @@ export default function MessagesPage() {
 
             {/* Composer — Phase A polish: 16px input on mobile (kills iOS auto-zoom),
                 safe-area padding so iPhone home indicator doesn't cover it,
-                44pt send button on mobile (Apple HIG touch target). */}
+                44pt send button on mobile (Apple HIG touch target).
+                Phase B polish: emoji picker behind the smile icon. */}
             <div
-              className="px-3 py-2 border-t border-gray-200 flex items-end gap-2"
+              className="relative px-3 py-2 border-t border-gray-200"
               style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 0.5rem)' }}
             >
-              <textarea
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onFocus={() => {
-                  // Phase A polish — when keyboard opens on mobile the thread
-                  // can scroll out from under it; pin to the latest message.
-                  setTimeout(() => threadEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 250);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    if (draft.trim() && !sendMutation.isPending) sendMutation.mutate(draft.trim());
-                  }
-                }}
-                rows={1}
-                placeholder="Type a message..."
-                className="flex-1 resize-none px-3 py-2 text-base sm:text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-rsn-red max-h-32"
-                maxLength={4000}
-              />
-              <Button
-                size="sm"
-                onClick={() => sendMutation.mutate(draft.trim())}
-                disabled={!draft.trim() || sendMutation.isPending}
-                isLoading={sendMutation.isPending}
-                className="!w-11 !h-11 sm:!w-9 sm:!h-9 !p-0 flex-shrink-0"
-                aria-label="Send message"
-              >
-                <Send className="h-4 w-4" />
-              </Button>
+              {showEmoji && (
+                <div
+                  className="absolute bottom-full left-3 right-3 mb-2 bg-white border border-gray-200 rounded-xl shadow-lg p-2 grid grid-cols-6 sm:grid-cols-10 gap-1 z-10"
+                  role="dialog"
+                  aria-label="Emoji picker"
+                >
+                  {EMOJI_PICKER_LIST.map(e => (
+                    <button
+                      key={e}
+                      type="button"
+                      onClick={() => {
+                        setDraft(prev => prev + e);
+                        setShowEmoji(false);
+                        textareaRef.current?.focus();
+                      }}
+                      className="text-xl sm:text-lg hover:bg-gray-100 active:scale-95 rounded p-1.5 transition-transform"
+                    >
+                      {e}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowEmoji(s => !s)}
+                  className="w-11 h-11 sm:w-9 sm:h-9 flex items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex-shrink-0"
+                  aria-label="Add emoji"
+                  title="Add emoji"
+                >
+                  <Smile className="h-5 w-5" />
+                </button>
+                <textarea
+                  ref={textareaRef}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onFocus={() => {
+                    // Phase A polish — when keyboard opens on mobile the thread
+                    // can scroll out from under it; pin to the latest message.
+                    setTimeout(() => threadEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 250);
+                    setShowEmoji(false);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      if (draft.trim() && !sendMutation.isPending) sendMutation.mutate(draft.trim());
+                    }
+                  }}
+                  rows={1}
+                  placeholder="Type a message..."
+                  className="flex-1 resize-none px-3 py-2 text-base sm:text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-rsn-red max-h-32"
+                  maxLength={4000}
+                />
+                <Button
+                  size="sm"
+                  onClick={() => sendMutation.mutate(draft.trim())}
+                  disabled={!draft.trim() || sendMutation.isPending}
+                  isLoading={sendMutation.isPending}
+                  className="!w-11 !h-11 sm:!w-9 sm:!h-9 !p-0 flex-shrink-0"
+                  aria-label="Send message"
+                >
+                  <Send className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
           </>
         )}
