@@ -45,7 +45,26 @@ export interface DmMessage {
   content: string;
   readAt: Date | null;
   createdAt: Date;
+  // Phase E: emoji reactions, aggregated per emoji type → list of reactor userIds.
+  // Optional so callers that build a DmMessage from an INSERT result (which
+  // can never have reactions yet) don't have to supply an empty record.
+  // listMessages always returns it as at least {}.
+  reactions?: Record<string, string[]>;
 }
+
+// ─── Reaction allow-list ───────────────────────────────────────────────────
+//
+// Reactions are stored as short type strings on the server so the table
+// stays compact. The client picks the unicode glyph it wants to render for
+// each type. Extending this list is a code-only change; no migration needed.
+export const REACTION_EMOJI_ALLOWLIST: ReadonlyArray<string> = [
+  'heart',
+  'clap',
+  'thumbs_up',
+  'laugh',
+  'fire',
+  'wow',
+] as const;
 
 export interface ConversationSummary {
   conversationId: string;
@@ -309,14 +328,30 @@ export async function listMessages(
   );
   const total = parseInt(countResult.rows[0]?.count || '0', 10);
 
+  // Phase E: aggregate reactions per message in a single round-trip.
+  // The LATERAL subquery groups dm_message_reactions by emoji and returns
+  // a jsonb object shaped { [emoji_type]: [userId, userId, ...] }.
   const messagesResult = await query<{
     id: string; conversation_id: string; from_user_id: string;
     content: string; read_at: Date | null; created_at: Date;
+    reactions: Record<string, string[]> | null;
   }>(
-    `SELECT id, conversation_id, from_user_id, content, read_at, created_at
-     FROM direct_messages
-     WHERE conversation_id = $1
-     ORDER BY created_at DESC
+    `SELECT
+        m.id, m.conversation_id, m.from_user_id,
+        m.content, m.read_at, m.created_at,
+        COALESCE(r.reactions, '{}'::jsonb) AS reactions
+     FROM direct_messages m
+     LEFT JOIN LATERAL (
+       SELECT jsonb_object_agg(emoji, users) AS reactions
+       FROM (
+         SELECT emoji, jsonb_agg(user_id::text ORDER BY created_at) AS users
+         FROM dm_message_reactions
+         WHERE message_id = m.id
+         GROUP BY emoji
+       ) g
+     ) r ON TRUE
+     WHERE m.conversation_id = $1
+     ORDER BY m.created_at DESC
      LIMIT $2 OFFSET $3`,
     [conversationId, pageSize, offset],
   );
@@ -329,6 +364,7 @@ export async function listMessages(
       content: r.content,
       readAt: r.read_at,
       createdAt: r.created_at,
+      reactions: r.reactions || {},
     })),
     total,
   };
@@ -415,4 +451,109 @@ export async function getUnreadCount(userId: string): Promise<number> {
     [userId],
   );
   return parseInt(result.rows[0]?.count || '0', 10);
+}
+
+// ─── Reactions (Phase E) ───────────────────────────────────────────────────
+
+/**
+ * Look up the message + its conversation participants. Throws NotFound if
+ * the message has no conversation row (it could be a group message — those
+ * are out-of-scope for this phase).
+ */
+async function loadMessageContext(messageId: string): Promise<{
+  conversationId: string;
+  userAId: string;
+  userBId: string;
+}> {
+  const result = await query<{
+    conversation_id: string | null;
+    user_a_id: string;
+    user_b_id: string;
+  }>(
+    `SELECT m.conversation_id, c.user_a_id, c.user_b_id
+       FROM direct_messages m
+       JOIN dm_conversations c ON c.id = m.conversation_id
+      WHERE m.id = $1`,
+    [messageId],
+  );
+  if (result.rows.length === 0 || !result.rows[0].conversation_id) {
+    throw new NotFoundError('Message', messageId);
+  }
+  return {
+    conversationId: result.rows[0].conversation_id,
+    userAId: result.rows[0].user_a_id,
+    userBId: result.rows[0].user_b_id,
+  };
+}
+
+/**
+ * Add an emoji reaction to a DM. Idempotent — adding the same emoji twice
+ * by the same user is a no-op (ON CONFLICT DO NOTHING). Authorization is
+ * conversation-participant: only the two users in the conversation can
+ * react. Emoji must be in the REACTION_EMOJI_ALLOWLIST.
+ *
+ * Returns the conversation id + the *other* participant's user id so the
+ * caller (socket handler) can fan-out the broadcast without a second query.
+ */
+export async function addReaction(
+  messageId: string,
+  userId: string,
+  emoji: string,
+): Promise<{ conversationId: string; otherUserId: string }> {
+  if (!REACTION_EMOJI_ALLOWLIST.includes(emoji)) {
+    throw new AppError(
+      400,
+      ErrorCodes.VALIDATION_ERROR,
+      `Reaction must be one of: ${REACTION_EMOJI_ALLOWLIST.join(', ')}`,
+    );
+  }
+
+  const ctx = await loadMessageContext(messageId);
+  if (ctx.userAId !== userId && ctx.userBId !== userId) {
+    throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'You cannot react in this conversation');
+  }
+
+  await query(
+    `INSERT INTO dm_message_reactions (message_id, user_id, emoji)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (message_id, user_id, emoji) DO NOTHING`,
+    [messageId, userId, emoji],
+  );
+
+  const otherUserId = ctx.userAId === userId ? ctx.userBId : ctx.userAId;
+  logger.info({ messageId, userId, emoji, conversationId: ctx.conversationId }, 'DM reaction added');
+  return { conversationId: ctx.conversationId, otherUserId };
+}
+
+/**
+ * Remove an emoji reaction. Idempotent — removing one that doesn't exist
+ * is a no-op. Authorization mirrors addReaction.
+ */
+export async function removeReaction(
+  messageId: string,
+  userId: string,
+  emoji: string,
+): Promise<{ conversationId: string; otherUserId: string }> {
+  if (!REACTION_EMOJI_ALLOWLIST.includes(emoji)) {
+    throw new AppError(
+      400,
+      ErrorCodes.VALIDATION_ERROR,
+      `Reaction must be one of: ${REACTION_EMOJI_ALLOWLIST.join(', ')}`,
+    );
+  }
+
+  const ctx = await loadMessageContext(messageId);
+  if (ctx.userAId !== userId && ctx.userBId !== userId) {
+    throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'You cannot react in this conversation');
+  }
+
+  await query(
+    `DELETE FROM dm_message_reactions
+      WHERE message_id = $1 AND user_id = $2 AND emoji = $3`,
+    [messageId, userId, emoji],
+  );
+
+  const otherUserId = ctx.userAId === userId ? ctx.userBId : ctx.userAId;
+  logger.info({ messageId, userId, emoji, conversationId: ctx.conversationId }, 'DM reaction removed');
+  return { conversationId: ctx.conversationId, otherUserId };
 }

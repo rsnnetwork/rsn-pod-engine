@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Send, Smile, Trash2, MessageSquare } from 'lucide-react';
+import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare } from 'lucide-react';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { PageLoader, Spinner } from '@/components/ui/Spinner';
@@ -37,6 +37,24 @@ interface DmMessage {
   content: string;
   readAt: string | null;
   createdAt: string;
+  // Phase E — server returns aggregated reactions per emoji type
+  reactions?: Record<string, string[]>;
+}
+
+// Phase E — client-side reaction palette. Server stores type strings so the
+// client controls the unicode glyph. Same set as the in-event ChatPanel uses
+// for its message reactions, plus laugh/fire/wow which Slack-class chats expect.
+const DM_REACTIONS: ReadonlyArray<{ type: string; emoji: string; label: string }> = [
+  { type: 'heart', emoji: '❤️', label: 'Love' },
+  { type: 'clap', emoji: '👏', label: 'Clap' },
+  { type: 'thumbs_up', emoji: '👍', label: 'Thumbs up' },
+  { type: 'laugh', emoji: '😂', label: 'Laugh' },
+  { type: 'fire', emoji: '🔥', label: 'Fire' },
+  { type: 'wow', emoji: '😮', label: 'Wow' },
+];
+
+function emojiForType(type: string): string {
+  return DM_REACTIONS.find(r => r.type === type)?.emoji || type;
 }
 
 function formatRelative(iso: string | null): string {
@@ -113,8 +131,20 @@ export default function MessagesPage() {
   const myUserId = user?.id;
   const [draft, setDraft] = useState('');
   const [showEmoji, setShowEmoji] = useState(false);
+  // Phase E — which message the reaction picker is currently anchored to.
+  const [reactionPickerFor, setReactionPickerFor] = useState<string | null>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Phase E — toggle a reaction on a DM message. Uses socket events so the
+  // server fan-out broadcasts to both users at once. Optimistic invalidation
+  // happens via the `dm:reaction_added` / `dm:reaction_removed` listeners.
+  const toggleReaction = (messageId: string, type: string, alreadyMine: boolean) => {
+    const socket = getSocket();
+    if (!socket) return;
+    socket.emit(alreadyMine ? 'dm:unreact' : 'dm:react', { messageId, emoji: type });
+    setReactionPickerFor(null);
+  };
 
   // Inbox: list of conversations sorted by recent activity.
   const { data: inboxData } = useQuery({
@@ -165,14 +195,24 @@ export default function MessagesPage() {
       qc.invalidateQueries({ queryKey: ['dm-conversations'] });
       qc.invalidateQueries({ queryKey: ['dm-unread-count'] });
     };
+    // Phase E — reaction events update the active thread in real time.
+    const onReaction = (data: { conversationId: string }) => {
+      if (data.conversationId === activeId) {
+        qc.invalidateQueries({ queryKey: ['dm-messages', activeId] });
+      }
+    };
 
     socket.on('dm:message', onMessage);
     socket.on('dm:conversation_updated', onConversationUpdated);
     socket.on('dm:read_receipt', onReadReceipt);
+    socket.on('dm:reaction_added', onReaction);
+    socket.on('dm:reaction_removed', onReaction);
     return () => {
       socket.off('dm:message', onMessage);
       socket.off('dm:conversation_updated', onConversationUpdated);
       socket.off('dm:read_receipt', onReadReceipt);
+      socket.off('dm:reaction_added', onReaction);
+      socket.off('dm:reaction_removed', onReaction);
     };
   }, [activeId, qc]);
 
@@ -338,17 +378,83 @@ export default function MessagesPage() {
                         <div className={`flex flex-col max-w-[75%] sm:max-w-[60%] ${fromMe ? 'items-end' : 'items-start'}`}>
                           {cluster.messages.map((m, idx) => {
                             const isLast = idx === cluster.messages.length - 1;
+                            const reactions = m.reactions || {};
+                            const reactionEntries = Object.entries(reactions).filter(([, ids]) => ids.length > 0);
+                            const hasReactions = reactionEntries.length > 0;
+                            const pickerOpen = reactionPickerFor === m.id;
                             return (
                               <div
                                 key={m.id}
                                 data-message-id={m.id}
-                                className={`px-3.5 py-2 text-sm break-words whitespace-pre-wrap ${
-                                  fromMe
-                                    ? `bg-rsn-red text-white rounded-2xl ${isLast ? 'rounded-br-sm' : ''}`
-                                    : `bg-gray-100 text-[#1a1a2e] rounded-2xl ${isLast ? 'rounded-bl-sm' : ''}`
-                                } ${idx > 0 ? 'mt-0.5' : ''}`}
+                                className={`group/bubble relative flex ${fromMe ? 'flex-row-reverse' : 'flex-row'} items-center gap-1 ${idx > 0 ? 'mt-0.5' : ''} ${hasReactions ? 'mb-3' : ''}`}
                               >
-                                {m.content}
+                                <div
+                                  className={`px-3.5 py-2 text-sm break-words whitespace-pre-wrap ${
+                                    fromMe
+                                      ? `bg-rsn-red text-white rounded-2xl ${isLast ? 'rounded-br-sm' : ''}`
+                                      : `bg-gray-100 text-[#1a1a2e] rounded-2xl ${isLast ? 'rounded-bl-sm' : ''}`
+                                  }`}
+                                >
+                                  {m.content}
+                                </div>
+                                {/* Phase E — reaction trigger.
+                                    Mobile: always at low opacity. Desktop: hover-revealed. */}
+                                <button
+                                  type="button"
+                                  onClick={() => setReactionPickerFor(prev => prev === m.id ? null : m.id)}
+                                  className="opacity-50 sm:opacity-0 sm:group-hover/bubble:opacity-100 hover:!opacity-100 active:!opacity-100 transition-opacity p-1 rounded-full bg-white border border-gray-200 shadow-sm text-gray-500 hover:text-gray-700"
+                                  aria-label="Add reaction"
+                                  title="Add reaction"
+                                >
+                                  <SmilePlus className="h-3.5 w-3.5" />
+                                </button>
+                                {/* Reaction pills — under the bubble, slightly indented onto it */}
+                                {hasReactions && (
+                                  <div className={`absolute -bottom-3 ${fromMe ? 'right-2' : 'left-2'} flex gap-1`}>
+                                    {reactionEntries.map(([type, userIds]) => {
+                                      const mine = !!myUserId && userIds.includes(myUserId);
+                                      return (
+                                        <button
+                                          key={type}
+                                          type="button"
+                                          onClick={() => toggleReaction(m.id, type, mine)}
+                                          className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[11px] border transition-colors ${
+                                            mine
+                                              ? 'bg-rsn-red/10 border-rsn-red/40 text-rsn-red'
+                                              : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                                          }`}
+                                          title={mine ? 'Remove your reaction' : 'Add your reaction'}
+                                        >
+                                          <span>{emojiForType(type)}</span>
+                                          <span className="font-semibold">{userIds.length}</span>
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                                {/* Reaction picker (6 emojis) — anchored above the bubble */}
+                                {pickerOpen && (
+                                  <div
+                                    className={`absolute bottom-full mb-1 ${fromMe ? 'right-0' : 'left-0'} flex items-center gap-1 bg-white border border-gray-200 rounded-full shadow-lg px-1.5 py-1 z-10`}
+                                    role="dialog"
+                                    aria-label="Reaction picker"
+                                  >
+                                    {DM_REACTIONS.map(({ type, emoji, label }) => {
+                                      const mine = !!myUserId && (reactions[type] || []).includes(myUserId);
+                                      return (
+                                        <button
+                                          key={type}
+                                          type="button"
+                                          onClick={() => toggleReaction(m.id, type, mine)}
+                                          title={label}
+                                          className={`text-base hover:scale-125 active:scale-110 transition-transform p-1 rounded-full ${mine ? 'bg-rsn-red/10' : ''}`}
+                                        >
+                                          {emoji}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                )}
                               </div>
                             );
                           })}

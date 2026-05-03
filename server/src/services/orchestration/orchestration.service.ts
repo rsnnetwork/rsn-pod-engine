@@ -51,7 +51,7 @@ import {
 
 // Handlers — Chat
 import { handleChatSend, handleChatReact, handleReactionSend } from './handlers/chat-handlers';
-import { handleDmSend, handleDmRead } from './handlers/dm-handlers';
+import { handleDmSend, handleDmRead, handleDmReact, handleDmUnreact } from './handlers/dm-handlers';
 
 // Handlers — Bulk Breakout (Task 14)
 import {
@@ -262,6 +262,15 @@ export function initOrchestration(socketServer: SocketServer): void {
     socket.on('dm:read', async (data) => {
       try { await handleDmRead(io, socket, data); }
       catch (err) { logger.error({ err, userId }, 'DM read error'); }
+    });
+    // Phase E (3 May 2026) — emoji reactions on DM messages.
+    socket.on('dm:react', async (data) => {
+      try { await handleDmReact(io, socket, data); }
+      catch (err) { logger.error({ err, userId }, 'DM react error'); }
+    });
+    socket.on('dm:unreact', async (data) => {
+      try { await handleDmUnreact(io, socket, data); }
+      catch (err) { logger.error({ err, userId }, 'DM unreact error'); }
     });
 
     // ── Disconnect ──

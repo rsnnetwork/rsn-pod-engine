@@ -6511,3 +6511,49 @@ RajaSkill: "3 similar lines beats a wrong abstraction." The two chats share the 
 
 ### What is NOT in this phase
 - Message reactions (Phase C)
+
+---
+
+## DM Chat Polish — Phase C — 2026-05-03
+
+**Status:** Completed (server + client)
+**Trigger:** User asked for hard reactions on DM messages ("inside the chat the user must can react to the chat… in all the reactions").
+
+### Files touched
+
+**Server**
+- `server/src/db/migrations/056_dm_message_reactions.sql` — new table
+- `server/src/services/dm/dm.service.ts` — `addReaction`, `removeReaction`, `loadMessageContext`, `REACTION_EMOJI_ALLOWLIST`, extended `listMessages` to aggregate reactions per message
+- `server/src/routes/dm.ts` — `POST /messages/:id/reactions`, `DELETE /messages/:id/reactions/:emoji`, `reactionBodySchema`
+- `server/src/services/orchestration/handlers/dm-handlers.ts` — `handleDmReact`, `handleDmUnreact`
+- `server/src/services/orchestration/orchestration.service.ts` — wires `dm:react` and `dm:unreact` socket events
+- `server/src/__tests__/services/dm/phaseE-dm-reactions.test.ts` — 19 grep-style architectural pins
+- `server/src/__tests__/services/dm/phaseD-dm-realtime.test.ts` — relaxed import-line pin to allow Phase E additions
+
+**Shared**
+- `shared/src/types/events.ts` — `dm:reaction_added` / `dm:reaction_removed` (server→client) and `dm:react` / `dm:unreact` (client→server)
+
+**Client**
+- `client/src/features/messages/MessagesPage.tsx` — DmMessage gains `reactions?`, palette of 6 reactions (heart/clap/thumbs_up/laugh/fire/wow → ❤️👏👍😂🔥😮), per-bubble `+😀` trigger (always-visible at low opacity on mobile, hover-revealed on desktop), 6-emoji picker overlay anchored above the bubble, reaction count pills under each bubble (own reactions highlighted in rsn-red, tap to toggle off), socket listeners for `dm:reaction_added` / `dm:reaction_removed` invalidate the messages query for live cross-tab sync.
+
+### Architectural decisions
+
+- **Storage shape:** `dm_message_reactions(message_id, user_id, emoji)` with PRIMARY KEY on the triple. Same user + same emoji on the same message is a no-op via `ON CONFLICT DO NOTHING`. Stored as the type string ('heart', not '❤️') so the client owns the glyph rendering — extending the palette is a code change, not a migration.
+- **Auth model:** conversation-participant only. Helper `loadMessageContext` joins `direct_messages` to `dm_conversations` and exposes `userAId` / `userBId` so both REST and socket paths share one auth check.
+- **REST + sockets share the service:** routes call `addReaction` / `removeReaction` directly (no socket fan-out from the route — the live UI uses sockets). Socket handlers call the same service then broadcast `dm:reaction_added` / `dm:reaction_removed` to both participants' rooms. Tests pin both surfaces.
+- **Aggregation:** `listMessages` now `LEFT JOIN LATERAL`s a per-message reactions sub-aggregate so loading a thread is still a single round-trip even with reactions. No N+1.
+- **Forward-architecture:** the table is purely persistent state, no in-memory or Redis dependencies. Survives Phase 2 / 3 / 4 architecture upgrades unchanged.
+
+### Verification
+
+- `npx tsc --noEmit` — server, shared, client all clean
+- `npm run build` — all three packages build clean (client 13.26 s, 2735 modules)
+- `npx jest` — **967 / 967 tests pass across 74 suites** (was 948; Phase E adds 19 architectural pins)
+
+### What is NOT in this phase
+
+- Pod / group chat reactions (would need group_id participant check; group chats are out of the DM scope)
+- Skin-tone variants
+- Reaction shortcuts (e.g. typing `+1` → 👍)
+- Mass-react / undo all
+- Notification on reactions (would be too noisy; deliberately silent)

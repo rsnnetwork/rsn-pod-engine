@@ -102,6 +102,9 @@ export interface ServerToClientEvents {
   'dm:message': (data: { id: string; conversationId: string; fromUserId: string; content: string; readAt: string | null; createdAt: string }) => void;
   'dm:conversation_updated': (data: { conversationId: string; lastMessageAt: string; lastMessage: string; lastMessageFromUserId: string }) => void;
   'dm:read_receipt': (data: { conversationId: string; readBy: string; readAt: string; markedCount: number }) => void;
+  // Phase E (3 May 2026) — emoji reactions on direct messages.
+  'dm:reaction_added': (data: { messageId: string; conversationId: string; userId: string; emoji: string }) => void;
+  'dm:reaction_removed': (data: { messageId: string; conversationId: string; userId: string; emoji: string }) => void;
 
   // Errors
   'error': (data: { code: string; message: string }) => void;
@@ -165,4 +168,7 @@ export interface ClientToServerEvents {
   // DM (Phase D of chat-fix-and-dm-system, 1 May 2026)
   'dm:send': (data: { toUserId: string; content: string }) => void;
   'dm:read': (data: { conversationId: string }) => void;
+  // Phase E (3 May 2026) — emoji reactions on direct messages.
+  'dm:react': (data: { messageId: string; emoji: string }) => void;
+  'dm:unreact': (data: { messageId: string; emoji: string }) => void;
 }

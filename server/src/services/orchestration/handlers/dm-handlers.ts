@@ -213,6 +213,80 @@ export async function handleDmSend(
   }
 }
 
+// ─── Reaction handlers (Phase E) ───────────────────────────────────────────
+
+export async function handleDmReact(
+  io: SocketServer,
+  socket: Socket,
+  data: { messageId: string; emoji: string },
+): Promise<void> {
+  try {
+    const userId = (socket.data as any)?.userId;
+    if (!userId) {
+      socket.emit('error', { code: 'UNAUTHORIZED', message: 'Not authenticated' });
+      return;
+    }
+    if (!data?.messageId || typeof data.emoji !== 'string') {
+      socket.emit('error', { code: 'VALIDATION_ERROR', message: 'messageId and emoji are required' });
+      return;
+    }
+
+    const { conversationId, otherUserId } = await dmService.addReaction(
+      data.messageId, userId, data.emoji,
+    );
+
+    const payload = {
+      messageId: data.messageId,
+      conversationId,
+      userId,
+      emoji: data.emoji,
+    };
+    io.to(userRoom(userId)).emit('dm:reaction_added', payload);
+    io.to(userRoom(otherUserId)).emit('dm:reaction_added', payload);
+  } catch (err: any) {
+    const code = err?.code || 'DM_REACT_FAILED';
+    const message = err?.message || 'Failed to add reaction';
+    logger.warn({ err }, 'handleDmReact failed');
+    socket.emit('error', { code, message });
+  }
+}
+
+export async function handleDmUnreact(
+  io: SocketServer,
+  socket: Socket,
+  data: { messageId: string; emoji: string },
+): Promise<void> {
+  try {
+    const userId = (socket.data as any)?.userId;
+    if (!userId) {
+      socket.emit('error', { code: 'UNAUTHORIZED', message: 'Not authenticated' });
+      return;
+    }
+    if (!data?.messageId || typeof data.emoji !== 'string') {
+      socket.emit('error', { code: 'VALIDATION_ERROR', message: 'messageId and emoji are required' });
+      return;
+    }
+
+    const { conversationId, otherUserId } = await dmService.removeReaction(
+      data.messageId, userId, data.emoji,
+    );
+
+    const payload = {
+      messageId: data.messageId,
+      conversationId,
+      userId,
+      emoji: data.emoji,
+    };
+    io.to(userRoom(userId)).emit('dm:reaction_removed', payload);
+    io.to(userRoom(otherUserId)).emit('dm:reaction_removed', payload);
+  } catch (err: any) {
+    const code = err?.code || 'DM_UNREACT_FAILED';
+    const message = err?.message || 'Failed to remove reaction';
+    logger.warn({ err }, 'handleDmUnreact failed');
+    socket.emit('error', { code, message });
+  }
+}
+
 export async function handleDmRead(
   io: SocketServer,
   socket: Socket,

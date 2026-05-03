@@ -25,6 +25,12 @@ const listQuerySchema = z.object({
   pageSize: z.string().regex(/^\d+$/).optional(),
 });
 
+// Phase E — reaction body. Service layer enforces the allow-list, this
+// schema only ensures the field shape is right.
+const reactionBodySchema = z.object({
+  emoji: z.string().min(1).max(16),
+});
+
 // ─── GET /dm/conversations — list my conversations ────────────────────────
 
 router.get(
@@ -163,6 +169,50 @@ router.get(
     try {
       const count = await dmService.getUnreadCount(req.user!.userId);
       const response: ApiResponse = { success: true, data: { count } };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /dm/messages/:id/reactions — add an emoji reaction (Phase E) ────
+//
+// Body: { emoji: 'heart' | 'clap' | 'thumbs_up' | 'laugh' | 'fire' | 'wow' }
+// Idempotent: same user + same emoji + same message is a no-op.
+
+router.post(
+  '/messages/:id/reactions',
+  authenticate,
+  validate(reactionBodySchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await dmService.addReaction(
+        req.params.id,
+        req.user!.userId,
+        req.body.emoji,
+      );
+      const response: ApiResponse = { success: true, data: result };
+      res.status(201).json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── DELETE /dm/messages/:id/reactions/:emoji — remove a reaction ─────────
+
+router.delete(
+  '/messages/:id/reactions/:emoji',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await dmService.removeReaction(
+        req.params.id,
+        req.user!.userId,
+        req.params.emoji,
+      );
+      const response: ApiResponse = { success: true, data: result };
       res.json(response);
     } catch (err) {
       next(err);

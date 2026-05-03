@@ -91,7 +91,10 @@ describe('Phase D — DM real-time + notifications', () => {
     const src = readServer('services/orchestration/orchestration.service.ts');
 
     it('imports handleDmSend and handleDmRead from dm-handlers', () => {
-      expect(src).toMatch(/import \{ handleDmSend, handleDmRead \} from ['"]\.\/handlers\/dm-handlers['"]/);
+      // Phase E (3 May) added handleDmReact + handleDmUnreact to the same
+      // import line. The pin only requires that the two Phase D handlers are
+      // among the imports from dm-handlers, regardless of what else is there.
+      expect(src).toMatch(/import \{[^}]*\bhandleDmSend\b[^}]*\bhandleDmRead\b[^}]*\} from ['"]\.\/handlers\/dm-handlers['"]/);
     });
 
     it('registers socket.on(dm:send)', () => {
