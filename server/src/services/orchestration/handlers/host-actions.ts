@@ -24,6 +24,8 @@ import * as sessionService from '../../session/session.service';
 import * as videoService from '../../video/video.service';
 import { ForbiddenError, ValidationError } from '../../../middleware/errors';
 import * as matchingService from '../../matching/matching.service';
+// Phase 2B (5 May spec) — single chokepoint for presenceMap mutations.
+import { setPresence } from '../state/participant-state-machine';
 import { validateMatchAssignment } from '../../matching/match-validator.service';
 
 // ─── Cross-module references (wired in Task 7) ────────────────────────────
@@ -546,7 +548,7 @@ export async function handleHostRemoveParticipant(
         if (targetSocket) {
           targetSocket.leave(sessionRoom(data.sessionId));
         }
-        activeSession.presenceMap.delete(data.userId);
+        setPresence(data.sessionId, data.userId, null);
       }
     }
 

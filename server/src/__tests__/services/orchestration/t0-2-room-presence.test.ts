@@ -45,21 +45,24 @@ describe('T0-2 — server side: roomParticipants tracking', () => {
       expect(src).toMatch(/export function clearRoomParticipantsForMatch\(/);
     });
 
-    it('handleRoomJoined sets roomParticipants entry then triggers dashboard refresh', () => {
+    it('handleRoomJoined assigns the room via setRoomAssignment + triggers dashboard refresh', () => {
+      // Phase 2D (5 May spec) — direct roomParticipants.set was replaced with
+      // the setRoomAssignment chokepoint helper. The pin now asserts the
+      // chokepoint is used; the helper itself is verified at its own
+      // definition site.
       const fnStart = src.indexOf('export async function handleRoomJoined(');
-      const fnEnd = src.indexOf('\n}\n', fnStart);
-      const fn = src.slice(fnStart, fnEnd);
-      expect(fn).toMatch(/activeSession\.roomParticipants\s*=\s*new Map\(\)/);
-      expect(fn).toMatch(/activeSession\.roomParticipants\.set\(userId,\s*\{/);
+      const nextExport = src.indexOf('\nexport ', fnStart + 1);
+      const fn = src.slice(fnStart, nextExport > -1 ? nextExport : src.length);
+      expect(fn).toMatch(/setRoomAssignment\(/);
       expect(fn).toMatch(/_emitHostDashboard\(data\.sessionId\)/);
     });
 
-    it('handleDisconnect clears roomParticipants entry alongside presenceMap', () => {
+    it('handleDisconnect clears roomParticipants entry via clearRoomParticipant', () => {
       const handlerStart = src.indexOf('export async function handleDisconnect(');
       const handlerEnd = src.indexOf('\nexport ', handlerStart + 1);
       const handler = src.slice(handlerStart, handlerEnd);
-      // The same loop that does presenceMap.delete must also do roomParticipants?.delete
-      expect(handler).toMatch(/activeSession\.roomParticipants\?\.\bdelete\b\(userId\)/);
+      // Phase 2D — direct .delete() chain replaced with the wrapper helper.
+      expect(handler).toMatch(/clearRoomParticipant\(sessionId,\s*userId\)/);
     });
   });
 

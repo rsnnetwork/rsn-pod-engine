@@ -19,6 +19,8 @@ import * as sessionService from '../../session/session.service';
 import * as matchingService from '../../matching/matching.service';
 import * as ratingService from '../../rating/rating.service';
 import * as videoService from '../../video/video.service';
+// Phase 2C (5 May spec) — chokepoint for status writes.
+import { transitionParticipant, ParticipantState } from '../state/participant-state-machine';
 import * as emailService from '../../email/email.service';
 
 // ─── Cross-module references (wired in Task 7) ────────────────────────────
@@ -556,12 +558,16 @@ export async function endRound(
     }
     await sessionService.incrementRoundsCompletedBatch(sessionId, roundUserCounts);
 
-    // Update participant statuses back to lobby
-    await query(
-      `UPDATE session_participants SET status = 'in_lobby'
-       WHERE session_id = $1 AND status = 'in_round'`,
-      [sessionId]
-    );
+    // Phase 2C (5 May spec) — return each round-participant to the main room
+    // through the chokepoint instead of a bulk UPDATE. The chokepoint
+    // validates the IN_BREAKOUT → IN_MAIN_ROOM transition (allowed by the
+    // legal table) and updates both in-memory and DB in one pass per user.
+    // Failed transitions (e.g. user already left mid-round) are logged and
+    // skipped, not silently overwritten — matches the behaviour we want at
+    // round end.
+    for (const userId of roundUserCounts.keys()) {
+      await transitionParticipant(sessionId, userId, ParticipantState.IN_MAIN_ROOM);
+    }
 
     // Find the max partner count across all completed matches
     // Each match has participant_a, participant_b, and optionally participant_c
@@ -1018,12 +1024,11 @@ export async function detectNoShows(
           [match.id]
         );
         anyTransition = true;
+        // Phase 2C (5 May spec) — updateParticipantStatus delegates to the
+        // chokepoint which already writes is_no_show=TRUE on the NO_SHOW
+        // transition. The follow-up bulk UPDATE was redundant and removed.
         await sessionService.updateParticipantStatus(sessionId, match.participantAId, ParticipantStatus.NO_SHOW);
         await sessionService.updateParticipantStatus(sessionId, match.participantBId, ParticipantStatus.NO_SHOW);
-        await query(
-          'UPDATE session_participants SET is_no_show = TRUE WHERE session_id = $1 AND user_id = ANY($2)',
-          [sessionId, [match.participantAId, match.participantBId]]
-        );
 
         logger.warn({ sessionId, roundNumber, matchId: match.id }, 'Both participants no-show');
       } else if (!aPresent || !bPresent) {
@@ -1036,11 +1041,8 @@ export async function detectNoShows(
           [match.id]
         );
         anyTransition = true;
+        // Phase 2C — chokepoint NO_SHOW transition already sets is_no_show=TRUE.
         await sessionService.updateParticipantStatus(sessionId, missingUserId, ParticipantStatus.NO_SHOW);
-        await query(
-          'UPDATE session_participants SET is_no_show = TRUE WHERE session_id = $1 AND user_id = $2',
-          [sessionId, missingUserId]
-        );
 
         // Notify waiting participant
         io.to(userRoom(waitingUserId)).emit('match:bye_round', {

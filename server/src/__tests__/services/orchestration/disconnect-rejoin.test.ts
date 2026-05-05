@@ -134,16 +134,22 @@ describe('Disconnect-rejoin bug fixes', () => {
   // ────────────────────────────────────────────────────────────────────────
 
   describe('Fix A — handleJoinSession resets stuck status on reconnect', () => {
-    it('participant-flow.ts contains the status-reset SQL for disconnected/in_round users with no active match', async () => {
+    it('participant-flow.ts gates the reset on (disconnected, in_round) for users with no active match', async () => {
       const fs = await import('fs');
       const path = await import('path');
       const content = fs.readFileSync(
         path.join(__dirname, '../../../services/orchestration/handlers/participant-flow.ts'),
         'utf8',
       );
-      // Look for the WHERE clause restricting to (disconnected, in_round) which is
-      // the precise reset scope (not blanket overwrite of valid statuses).
-      expect(content).toMatch(/status\s+IN\s*\(\s*'disconnected'\s*,\s*'in_round'\s*\)/);
+      // Phase 2B (5 May spec) — the reset was migrated from a raw UPDATE to
+      // a transitionParticipant call gated by a JS comparison of the current
+      // status. Either form (the legacy SQL `status IN (...)` or the new JS
+      // `=== 'disconnected' || === 'in_round'`) satisfies the pin: what
+      // matters is that the reset is restricted to those two statuses.
+      const sqlForm = /status\s+IN\s*\(\s*'disconnected'\s*,\s*'in_round'\s*\)/;
+      const jsForm = /currentStatus\s*===\s*'disconnected'\s*\|\|\s*currentStatus\s*===\s*'in_round'/;
+      const matched = sqlForm.test(content) || jsForm.test(content);
+      expect(matched).toBe(true);
     });
 
     it('participant-flow.ts checks for active match before resetting (no-match precondition)', async () => {
@@ -153,13 +159,15 @@ describe('Disconnect-rejoin bug fixes', () => {
         path.join(__dirname, '../../../services/orchestration/handlers/participant-flow.ts'),
         'utf8',
       );
-      // Should query matches table for active match before the reset
-      // Pattern: select active matches involving this user, then conditionally
-      // reset status. Order matters: match-check must precede the status update.
+      // Match-check must precede the conditional reset. Phase 2B replaced the
+      // SQL-shaped reset with a JS-shaped one; the precondition still holds —
+      // we still query active matches first, then transition only on no-match.
       const matchCheckIdx = content.indexOf("FROM matches");
-      const statusResetIdx = content.search(/status\s+IN\s*\(\s*'disconnected'\s*,\s*'in_round'\s*\)/);
+      const sqlForm = content.search(/status\s+IN\s*\(\s*'disconnected'\s*,\s*'in_round'\s*\)/);
+      const jsForm = content.search(/currentStatus\s*===\s*'disconnected'\s*\|\|\s*currentStatus\s*===\s*'in_round'/);
+      const resetIdx = sqlForm > -1 ? sqlForm : jsForm;
       expect(matchCheckIdx).toBeGreaterThan(-1);
-      expect(statusResetIdx).toBeGreaterThan(matchCheckIdx);
+      expect(resetIdx).toBeGreaterThan(matchCheckIdx);
     });
   });
 

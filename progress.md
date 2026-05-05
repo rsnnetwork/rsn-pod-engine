@@ -6628,3 +6628,83 @@ RajaSkill: "3 similar lines beats a wrong abstraction." The two chats share the 
 - Test-mode UX (Phase 5)
 
 These are queued in the master plan and ship in subsequent phases, each with its own plan + approval cycle.
+
+---
+
+## Matching Spec Compliance — Phase 2 — 2026-05-06
+
+**Status:** Completed (server-only, no client or DB schema changes)
+**Plan:** `docs/superpowers/plans/2026-05-05-phase-2-state-machine-adoption.md`
+**Why:** Stefan's 5th May items #1, #2, #13 + Matching Spec §12. The state-machine spine was already built (`participant-state-machine.ts`) but only one caller was using it; most code still wrote `session_participants.status` directly and mutated the in-memory shadow stores (`presenceMap`, `roomParticipants`) ad-hoc. Phase 2 forces every state mutation through the chokepoint, removes the bypass paths, and adds a 30-second reconciler that auto-heals drift so leave-and-rejoin is no longer a workaround.
+
+### Sub-phases shipped (six commits, one push cycle each)
+
+**2A — `identity.service.ts` + `session.service.ts`**
+- `deleteUser` captures the user's live-session footprint *before* the bulk DB write, then iterates and calls `transitionParticipant(REMOVED, persistToDb:false)` for any session currently in `activeSessions` so the in-memory state machine stays aligned.
+- `registerParticipant` keeps its in-transaction direct UPDATE for atomicity, then post-transaction calls `transitionParticipant(REGISTERED, persistToDb:false)` to sync in-memory.
+- Both gracefully degrade — failures log a warn and rely on the reconciler to converge on the next tick.
+
+**2B — `participant-flow.ts` (status writes + `presenceMap`)**
+- New `setPresence(sessionId, userId, presence | null)` chokepoint added to the state module — all 6 direct `presenceMap.set/.delete` mutations migrated to it.
+- The Fix A reset path migrated from raw `UPDATE session_participants SET status = 'in_lobby' WHERE status IN (…)` to a JS-gated `transitionParticipant(IN_MAIN_ROOM)` call — which the legal-transitions table already supports for both `DISCONNECTED → IN_MAIN_ROOM` and `IN_BREAKOUT → IN_MAIN_ROOM`.
+- The `host-actions.ts` host-remove-participant path also migrated to `setPresence(null)`.
+
+**2C — `round-lifecycle.ts` (round-end + no-show)**
+- Round-end bulk `UPDATE session_participants SET status = 'in_lobby' WHERE status = 'in_round'` replaced with a per-user loop over `roundUserCounts.keys()` calling `transitionParticipant(IN_MAIN_ROOM)` — chokepoint validates each transition against the legal table.
+- Both no-show paths (bulk and single) had their **redundant** `UPDATE session_participants SET is_no_show = TRUE` follow-ups removed; the chokepoint already sets `is_no_show=TRUE` when transitioning to `NO_SHOW`. Net diff: −10 lines, simpler code, single source of truth.
+
+**2D — `roomParticipants` chokepoint**
+- The lone direct `activeSession.roomParticipants.set(...)` in `handleRoomJoined` migrated to call the existing `setRoomAssignment(...)` wrapper — the wrapper is now the single legal mutation site.
+- The disconnect-loop's direct `activeSession.roomParticipants?.delete(userId)` migrated to call the existing `clearRoomParticipant(sessionId, userId)` wrapper.
+- The two pre-existing `t0-2-room-presence.test.ts` pins were updated from "asserts the direct mutation" to "asserts the wrapper is called" so future regressions are caught at the chokepoint level.
+
+**2E — Periodic state-machine reconciler**
+- New `reconcileSessionStates(sessionId)` reads `session_participants` rows, compares against the in-memory `participantStates`, and converges DB → memory wherever they disagree. Memory wins per the spine doc; DB is a projection.
+- New `startGlobalReconciler()` / `stopGlobalReconciler()` wired into `orchestration.service.ts`'s boot path immediately after `recoverActiveSessions()`. Single setInterval at 30 s ticks across every active session, logging any drift at WARN level (so we can hunt root causes via Sentry) and running silently otherwise.
+- Stefan's "leave-and-rejoin" workaround is no longer needed — drift heals itself within 30 s.
+
+**2F — CI grep guard**
+- Two whole-tree pins added to `phase-2-state-machine-adoption.test.ts`:
+  - Zero direct `UPDATE session_participants SET (status|is_no_show)` outside the documented allow-list (`participant-state-machine.ts` itself, `identity.service.ts` deleteUser bulk path, `session.service.ts` registerParticipant in-tx + the documented `updateParticipantStatus` fallback).
+  - Zero direct `presenceMap.set/.delete` outside the state module.
+- Any future commit that adds a bypass path will fail CI — bypass becomes physically impossible to land silently.
+
+### Pre-existing test-pin updates (carried across the migration)
+
+- `t0-2-room-presence.test.ts` — two `roomParticipants.set/.delete` pins replaced with `setRoomAssignment/clearRoomParticipant` pins (function intent unchanged, just the assertion target).
+- `disconnect-rejoin.test.ts` — Fix A's two pins now accept either the old SQL form or the new JS-gated chokepoint form, so the precondition (match-check before reset) is preserved without locking the implementation to one shape.
+
+### Files
+
+**Modified**
+- `server/src/services/orchestration/state/participant-state-machine.ts` (new exports: `setPresence`, `reconcileSessionStates`, `startGlobalReconciler`, `stopGlobalReconciler`)
+- `server/src/services/orchestration/orchestration.service.ts` (wire reconciler at boot)
+- `server/src/services/identity/identity.service.ts`
+- `server/src/services/session/session.service.ts`
+- `server/src/services/orchestration/handlers/participant-flow.ts`
+- `server/src/services/orchestration/handlers/round-lifecycle.ts`
+- `server/src/services/orchestration/handlers/host-actions.ts`
+- `server/src/__tests__/services/orchestration/t0-2-room-presence.test.ts`
+- `server/src/__tests__/services/orchestration/disconnect-rejoin.test.ts`
+
+**New**
+- `server/src/__tests__/services/orchestration/phase-2-state-machine-adoption.test.ts` (22 architectural pins covering 2A–2F)
+- `docs/superpowers/plans/2026-05-05-phase-2-state-machine-adoption.md`
+
+### Verification
+
+- `npx tsc --noEmit` (server, client) — clean
+- `npx jest` — **1002 / 1002 tests pass across 76 suites** (was 980; +22 Phase 2)
+- Grep guards (in the test file): 0 offenders for `UPDATE session_participants SET (status|is_no_show)`, 0 for `presenceMap.set/.delete`
+- CI staging: pending push
+- CI main: pending push
+- Render deploy: pending
+- Sentry post-deploy: will watch for any spike in `illegal transition` or `no active session` warnings
+
+### What is NOT in this phase
+
+- `manuallyLeftRound` migration (deferred to Phase 2.7 — it's a per-session flag, not a participant state)
+- `disconnectTimeouts` migration (these are timer handles, not state — they stay where they are)
+- Pre-event session planning (Phase 2.5)
+- Future-only repair (Phase 2.7)
+- Fallback ladder (Phase 2.8)

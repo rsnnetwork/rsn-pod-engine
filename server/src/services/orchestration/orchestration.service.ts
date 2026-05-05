@@ -52,6 +52,8 @@ import {
 // Handlers — Chat
 import { handleChatSend, handleChatReact, handleReactionSend } from './handlers/chat-handlers';
 import { handleDmSend, handleDmRead, handleDmReact, handleDmUnreact } from './handlers/dm-handlers';
+// Phase 2E (5 May spec) — global state reconciler.
+import { startGlobalReconciler } from './state/participant-state-machine';
 
 // Handlers — Bulk Breakout (Task 14)
 import {
@@ -141,6 +143,11 @@ export function initOrchestration(socketServer: SocketServer): void {
   // ── Start heartbeat stale detection (FIX 5E) ──
 
   startHeartbeatStaleDetection(io);
+
+  // ── Phase 2E (5 May spec) — periodic state-machine reconciler ──
+  // Auto-heals participant-state drift every 30 s so users never need to
+  // leave-and-rejoin to recover from a wedged state.
+  startGlobalReconciler();
 
   // ── TTL cleanup (every 5 minutes, remove sessions older than 4 hours) ──
 

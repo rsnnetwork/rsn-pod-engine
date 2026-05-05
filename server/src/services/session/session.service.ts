@@ -214,7 +214,7 @@ export async function listSessions(params: {
 // ─── Participant Registration ───────────────────────────────────────────────
 
 export async function registerParticipant(sessionId: string, userId: string, userRole?: UserRole): Promise<SessionParticipant> {
-  return transaction(async (client) => {
+  const participant = await transaction(async (client) => {
     // Read session without lock — ON CONFLICT handles concurrent inserts safely.
     // FOR UPDATE was causing cascading timeouts when multiple users register simultaneously.
     const sessionResult = await client.query<Session>(
@@ -334,6 +334,24 @@ export async function registerParticipant(sessionId: string, userId: string, use
     logger.info({ sessionId, userId }, 'Participant registered');
     return participant;
   });
+
+  // Phase 2A (5 May spec) — if the session is currently live (has an active
+  // orchestrator), sync the in-memory state machine so reads observe the
+  // (re-)registration immediately. The DB row is already written above; we
+  // pass persistToDb:false to avoid a redundant UPDATE. Failure here is
+  // logged-but-ignored because the periodic reconciler will catch any drift
+  // on its next tick.
+  try {
+    const { activeSessions } = await import('../orchestration/state/session-state');
+    if (activeSessions.has(sessionId)) {
+      const { transitionParticipant, ParticipantState } = await import('../orchestration/state/participant-state-machine');
+      await transitionParticipant(sessionId, userId, ParticipantState.REGISTERED, { persistToDb: false });
+    }
+  } catch (err) {
+    logger.warn({ err, sessionId, userId }, 'registerParticipant: in-memory state-machine sync failed (DB write committed; reconciler will fix on next tick)');
+  }
+
+  return participant;
 }
 
 export async function unregisterParticipant(sessionId: string, userId: string): Promise<void> {

@@ -751,8 +751,36 @@ export async function deleteUser(userId: string): Promise<void> {
   // Remove from all pods
   await query(`UPDATE pod_members SET status = 'removed', left_at = NOW() WHERE user_id = $1 AND status = 'active'`, [userId]);
 
-  // Remove from all sessions
+  // Phase 2A (5 May spec) — capture the user's live-session footprint BEFORE
+  // the bulk update so we can sync each affected in-memory state machine.
+  // The bulk UPDATE below covers all session_participants rows (live + ended)
+  // efficiently in one round-trip; for live ones we additionally call the
+  // chokepoint with persistToDb:false to keep the in-memory state aligned.
+  const liveSessionsBefore = await query<{ session_id: string }>(
+    `SELECT session_id FROM session_participants WHERE user_id = $1 AND status NOT IN ('removed', 'left')`,
+    [userId],
+  );
+
+  // Remove from all sessions (DB-side bulk; covers everything including ended sessions)
   await query(`UPDATE session_participants SET status = 'removed', left_at = NOW() WHERE user_id = $1 AND status NOT IN ('removed', 'left')`, [userId]);
+
+  // Sync in-memory state machines for any sessions currently active in this
+  // process. Skipped for sessions not in activeSessions (already-ended events
+  // have no orchestrator to update). Best-effort: any failure is logged and
+  // the reconciler will catch it on the next tick.
+  if (liveSessionsBefore.rows.length > 0) {
+    try {
+      const { activeSessions } = await import('../orchestration/state/session-state');
+      const { transitionParticipant, ParticipantState } = await import('../orchestration/state/participant-state-machine');
+      for (const row of liveSessionsBefore.rows) {
+        if (activeSessions.has(row.session_id)) {
+          await transitionParticipant(row.session_id, userId, ParticipantState.REMOVED, { persistToDb: false });
+        }
+      }
+    } catch (err) {
+      logger.warn({ err, userId }, 'deleteUser: in-memory state-machine sync failed (DB write committed; reconciler will fix on next tick)');
+    }
+  }
 
   // Revoke all tokens
   await query(`UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL`, [userId]);

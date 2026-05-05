@@ -21,6 +21,8 @@ import * as ratingService from '../../rating/rating.service';
 import * as videoService from '../../video/video.service';
 import { clearRoomTimers } from './host-actions';
 import { findIsolatedParticipants } from '../../matching/isolated-participants';
+// Phase 2B (5 May spec) — chokepoint helpers for presence + state writes.
+import { transitionParticipant, setPresence, ParticipantState } from '../state/participant-state-machine';
 
 // ─── Cross-module references (wired in Task 7) ────────────────────────────
 // TODO: Import these from matching-flow.ts once it's created
@@ -105,7 +107,7 @@ export async function handleJoinSession(
       // If they're already in another session, remove them from the old one first.
       for (const [existingSessionId, existingSession] of activeSessions) {
         if (existingSessionId !== data.sessionId && existingSession.presenceMap.has(userId)) {
-          existingSession.presenceMap.delete(userId);
+          setPresence(existingSessionId, userId, null);
           socket.leave(sessionRoom(existingSessionId));
           logger.info({ userId, oldSessionId: existingSessionId, newSessionId: data.sessionId },
             'User moved to new session — removed from previous session presence');
@@ -170,7 +172,7 @@ export async function handleJoinSession(
 
       // Update presence — FIX 3C: set reconnectedAt so disconnect timeout can detect reconnect
       if (activeSession) {
-        activeSession.presenceMap.set(userId, {
+        setPresence(data.sessionId, userId, {
           lastHeartbeat: new Date(),
           socketId: socket.id,
           reconnectedAt: new Date(),
@@ -221,16 +223,27 @@ export async function handleJoinSession(
           [data.sessionId, userId],
         );
         if (userActiveMatch.rows.length === 0) {
-          const resetResult = await query<{ user_id: string }>(
-            `UPDATE session_participants SET status = 'in_lobby'
-             WHERE session_id = $1 AND user_id = $2
-               AND status IN ('disconnected', 'in_round')
-             RETURNING user_id`,
+          // Phase 2B (5 May spec) — route the reset through the chokepoint.
+          // Read current DB status, and only call transitionParticipant when
+          // the user is in a stuck state (disconnected/in_round). The
+          // chokepoint enforces legal transitions; both DISCONNECTED →
+          // IN_MAIN_ROOM and IN_BREAKOUT → IN_MAIN_ROOM are in the table.
+          const currentRow = await query<{ status: string }>(
+            `SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2`,
             [data.sessionId, userId],
           );
-          if (resetResult.rows.length > 0) {
-            logger.info({ sessionId: data.sessionId, userId },
-              'Fix A: reset stuck participant status (disconnected/in_round → in_lobby) on reconnect');
+          const currentStatus = currentRow.rows[0]?.status;
+          if (currentStatus === 'disconnected' || currentStatus === 'in_round') {
+            const result = await transitionParticipant(
+              data.sessionId, userId, ParticipantState.IN_MAIN_ROOM,
+            );
+            if (result.ok) {
+              logger.info({ sessionId: data.sessionId, userId, fromState: result.fromState },
+                'Fix A: reset stuck participant status (disconnected/in_round → in_main_room) on reconnect');
+            } else {
+              logger.warn({ sessionId: data.sessionId, userId, reason: result.reason, fromState: result.fromState },
+                'Fix A: state-machine refused reset transition — leaving DB status untouched');
+            }
           }
         }
       } catch (resetErr) {
@@ -482,10 +495,7 @@ export async function handleLeaveSession(
 
     socket.leave(sessionRoom(data.sessionId));
 
-    const activeSession = activeSessions.get(data.sessionId);
-    if (activeSession) {
-      activeSession.presenceMap.delete(userId);
-    }
+    setPresence(data.sessionId, userId, null);
 
     // Check if leaving user is host
     const session = await sessionService.getSessionById(data.sessionId).catch(() => null);
@@ -526,7 +536,7 @@ export function handleHeartbeat(
     // Preserve reconnectedAt — overwriting it causes the disconnect timeout
     // to miss the reconnection and falsely mark the user as no_show (FIX 15A)
     const existing = activeSession.presenceMap.get(userId);
-    activeSession.presenceMap.set(userId, {
+    setPresence(data.sessionId, userId, {
       lastHeartbeat: new Date(),
       socketId: socket.id,
       reconnectedAt: existing?.reconnectedAt,
@@ -574,14 +584,11 @@ export async function handleRoomJoined(
   const activeSession = activeSessions.get(data.sessionId);
   if (!activeSession) return;
 
-  if (!activeSession.roomParticipants) {
-    activeSession.roomParticipants = new Map();
-  }
-  activeSession.roomParticipants.set(userId, {
-    matchId: data.matchId,
-    roomId: data.roomId,
-    joinedAt: new Date(),
-  });
+  // Phase 2D (5 May spec) — single chokepoint for roomParticipants writes.
+  // setRoomAssignment is the existing wrapper that handles map init +
+  // overwrites on re-join; keeping mutations centralised so future Redis
+  // portability has one seam to swap.
+  setRoomAssignment(data.sessionId, data.matchId, data.roomId, [userId]);
 
   logger.debug({ sessionId: data.sessionId, userId, matchId: data.matchId },
     'presence:room_joined — participant confirmed in LiveKit room');
@@ -1149,10 +1156,11 @@ export async function handleDisconnect(
   for (const [sessionId, activeSession] of activeSessions) {
     if (activeSession.presenceMap.has(userId)) {
       handledSessionIds.add(sessionId);
-      activeSession.presenceMap.delete(userId);
+      setPresence(sessionId, userId, null);
       // T0-2 — also clear room-presence so dashboard reflects the actual
-      // LiveKit-room state, not just socket disconnect.
-      activeSession.roomParticipants?.delete(userId);
+      // LiveKit-room state, not just socket disconnect. Phase 2D — routed
+      // through the wrapper instead of mutating roomParticipants directly.
+      clearRoomParticipant(sessionId, userId);
 
       await sessionService.updateParticipantStatus(
         sessionId, userId, ParticipantStatus.DISCONNECTED
@@ -1389,7 +1397,7 @@ export function startHeartbeatStaleDetection(io: SocketServer): void {
       for (const [userId, presence] of session.presenceMap) {
         if (now - presence.lastHeartbeat.getTime() > STALE_HEARTBEAT_MS) {
           logger.warn({ userId, sessionId }, 'Stale heartbeat — triggering disconnect flow');
-          session.presenceMap.delete(userId);
+          setPresence(sessionId, userId, null);
           io.to(sessionRoom(sessionId)).emit('participant:left', { userId });
         }
       }

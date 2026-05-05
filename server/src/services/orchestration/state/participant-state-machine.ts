@@ -271,6 +271,121 @@ export async function transitionParticipant(
 }
 
 /**
+ * Phase 2B (5 May spec) — single chokepoint for presenceMap mutations.
+ * Pre-fix, presenceMap.set/.delete were called from 7 scattered sites
+ * across participant-flow.ts and host-actions.ts. Behaviour-preserving
+ * helper consolidates the writes so future Redis-portability has one
+ * seam. Pass `null` to clear, or a presence record to set/replace.
+ *
+ * Returns true if the underlying map actually changed (useful for caller
+ * logic that branches on "was the user already present"). Returns false
+ * when the session isn't active (safe no-op).
+ */
+export function setPresence(
+  sessionId: string,
+  userId: string,
+  presence: { lastHeartbeat: Date; socketId: string; reconnectedAt?: Date } | null,
+): boolean {
+  const activeSession = activeSessions.get(sessionId);
+  if (!activeSession) return false;
+  if (presence === null) {
+    return activeSession.presenceMap.delete(userId);
+  }
+  const existed = activeSession.presenceMap.has(userId);
+  activeSession.presenceMap.set(userId, presence);
+  return !existed;
+}
+
+/**
+ * Phase 2E (5 May spec) — periodic reconciler.
+ *
+ * Stefan's #1 + #13: state drift today requires the user to leave-and-rejoin
+ * to recover. This reconciler runs every 30 s and converges DB rows to the
+ * authoritative in-memory state for every active session, so drift heals
+ * itself without user intervention.
+ *
+ * Direction: in-memory wins. Per the spine doc, the in-memory map is the
+ * authoritative read source; the DB is a projection for cross-process
+ * visibility. So the reconciler reads BOTH, finds divergences, and writes
+ * the DB to match memory. Drift is logged at warn level so the root cause
+ * can be hunted (any frequent divergence indicates a missed migration).
+ *
+ * Cost: one SELECT per active session per tick (~30 active sessions × 1
+ * query/30s = 1 qps amortised). Safe for current and projected load.
+ */
+export async function reconcileSessionStates(sessionId: string): Promise<{
+  checked: number;
+  diverged: number;
+}> {
+  const activeSession = activeSessions.get(sessionId);
+  if (!activeSession) return { checked: 0, diverged: 0 };
+  if (!activeSession.participantStates) return { checked: 0, diverged: 0 };
+
+  const dbRows = await query<{ user_id: string; status: ParticipantStatus }>(
+    `SELECT user_id, status FROM session_participants WHERE session_id = $1`,
+    [sessionId],
+  );
+
+  let diverged = 0;
+  for (const row of dbRows.rows) {
+    const memState = activeSession.participantStates.get(row.user_id);
+    if (!memState) continue; // not tracked in memory yet — bootstrap will pick it up
+    const projected = projectToDbStatus(memState.state as ParticipantState);
+    if (projected !== row.status) {
+      diverged++;
+      logger.warn(
+        { sessionId, userId: row.user_id, dbStatus: row.status, memState: memState.state, projected },
+        'reconcileSessionStates: drift detected — converging DB to in-memory authoritative state',
+      );
+      try {
+        await query(
+          `UPDATE session_participants SET status = $1 WHERE session_id = $2 AND user_id = $3`,
+          [projected, sessionId, row.user_id],
+        );
+      } catch (err) {
+        logger.error({ err, sessionId, userId: row.user_id, projected },
+          'reconcileSessionStates: DB converge failed — will retry on next tick');
+      }
+    }
+  }
+
+  return { checked: dbRows.rows.length, diverged };
+}
+
+/**
+ * Phase 2E — global reconciler. One setInterval that iterates every active
+ * session on each tick. Tied to a stop handle returned to the caller so the
+ * orchestration shutdown path can clear it.
+ */
+let _globalReconcilerHandle: NodeJS.Timeout | null = null;
+const RECONCILER_INTERVAL_MS = 30_000;
+
+export function startGlobalReconciler(): void {
+  if (_globalReconcilerHandle) return;
+  _globalReconcilerHandle = setInterval(async () => {
+    for (const sessionId of activeSessions.keys()) {
+      try {
+        const result = await reconcileSessionStates(sessionId);
+        if (result.diverged > 0) {
+          logger.info({ sessionId, ...result }, 'Reconciler tick — drift converged');
+        }
+      } catch (err) {
+        logger.warn({ err, sessionId }, 'Reconciler tick failed for session — continuing');
+      }
+    }
+  }, RECONCILER_INTERVAL_MS);
+  logger.info({ intervalMs: RECONCILER_INTERVAL_MS }, 'Global state-reconciler started');
+}
+
+export function stopGlobalReconciler(): void {
+  if (_globalReconcilerHandle) {
+    clearInterval(_globalReconcilerHandle);
+    _globalReconcilerHandle = null;
+    logger.info('Global state-reconciler stopped');
+  }
+}
+
+/**
  * Snapshot all participant states for a session. Used by the host dashboard
  * and reconciliation snapshot.
  */
