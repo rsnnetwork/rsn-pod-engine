@@ -427,16 +427,22 @@ export async function handleHostRegenerateMatches(
 
     const roundNumber = activeSession.pendingRoundNumber;
 
-    // Delete existing scheduled/cancelled matches for this round
+    // Phase 1 (5 May spec) — wipe ALL matches for the pending round before
+    // regenerating, regardless of state. Previously this filtered by status
+    // IN ('scheduled', 'cancelled') which let confirmed/forced/duplicate
+    // rows survive and stack on every Re-match press (root cause of the
+    // 3fc21cbb round 4 duplicate-pair bug on 5 May 2026). pendingRoundNumber
+    // only exists during the preview phase, so this round is by definition
+    // pre-start; nothing live is being clobbered.
     await query(
-      `DELETE FROM matches WHERE session_id = $1 AND round_number = $2 AND status IN ('scheduled', 'cancelled')`,
+      `DELETE FROM matches WHERE session_id = $1 AND round_number = $2`,
       [data.sessionId, roundNumber]
     );
 
     // Re-generate (exclude host + co-hosts from matching, filter by presence)
     const allHostIds = await getAllHostIds(data.sessionId, activeSession.hostUserId);
     const presentUserIds = new Set(activeSession.presenceMap.keys());
-    await matchingService.generateSingleRound(data.sessionId, roundNumber, allHostIds, presentUserIds);
+    await matchingService.generateSingleRound(data.sessionId, roundNumber, allHostIds, presentUserIds, { regenerate: true });
 
     // Re-send preview
     await sendMatchPreview(io, socket, data.sessionId, roundNumber, activeSession.hostUserId);

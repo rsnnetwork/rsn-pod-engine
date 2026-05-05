@@ -20,11 +20,16 @@ interface Connection {
   roundNumber: number;
 }
 
+// Phase 1 (5 May 2026 spec compliance) — these stats are now derived
+// per-user from the recap endpoint instead of session-wide aggregates.
+// Each participant sees their own counts; "mutual matches" no longer
+// shows the same number for everyone.
 interface Stats {
-  totalRatings: number;
+  uniquePeopleMet: number;
+  totalMeetings: number;
+  mutualMatches: number;
   avgQualityScore: number;
   meetAgainRate: number;
-  mutualMeetAgainCount: number;
 }
 
 interface Props { sessionId: string; }
@@ -78,23 +83,36 @@ export default function SessionComplete({ sessionId }: Props) {
     setLoading(true);
     setFetchError(false);
     try {
-      const [peopleRes, statsRes] = await Promise.allSettled([
-        api.get(`/ratings/sessions/${sessionId}/people-met`),
-        api.get(`/ratings/sessions/${sessionId}/stats`),
-      ]);
-      if (peopleRes.status === 'fulfilled') {
-        const d = peopleRes.value.data.data;
-        setConnections(d?.connections || []);
-        setMutualConnections(d?.mutualConnections || []);
-        setTotalRounds(d?.totalRounds || 0);
-        setRoundsAttended(d?.roundsAttended || 0);
-      }
-      if (statsRes.status === 'fulfilled') {
-        setStats(statsRes.value.data.data || null);
-      }
-      if (peopleRes.status === 'rejected' && statsRes.status === 'rejected') {
-        setFetchError(true);
-      }
+      // Phase 1 (5 May spec) — single per-user endpoint covers everything
+      // we display. The old session-wide /ratings stats endpoint was
+      // showing the same "12 mutual matches" to every participant —
+      // recap returns per-user counts derived from meeting_records.
+      const peopleRes = await api.get(`/ratings/sessions/${sessionId}/people-met`);
+      const d = peopleRes.data.data;
+      const conns: Connection[] = d?.connections || [];
+      setConnections(conns);
+      setMutualConnections(d?.mutualConnections || []);
+      setTotalRounds(d?.totalRounds || 0);
+      setRoundsAttended(d?.roundsAttended || 0);
+
+      // Per-user derived stats. avgQualityScore and meetAgainRate are
+      // averaged across only THIS user's ratings (they gave), not the
+      // whole event. mutualMatches comes from the canonical aggregate.
+      const ratedConns = conns.filter(c => c.qualityScore > 0);
+      const avgQualityScore = ratedConns.length > 0
+        ? ratedConns.reduce((sum, c) => sum + c.qualityScore, 0) / ratedConns.length
+        : 0;
+      const meetAgainRate = ratedConns.length > 0
+        ? ratedConns.filter(c => c.meetAgain).length / ratedConns.length
+        : 0;
+
+      setStats({
+        uniquePeopleMet: d?.uniquePeopleMet ?? new Set(conns.map(c => c.userId)).size,
+        totalMeetings: d?.totalMeetings ?? conns.length,
+        mutualMatches: d?.mutualMatches ?? (d?.mutualConnections?.length || 0),
+        avgQualityScore,
+        meetAgainRate,
+      });
     } catch {
       setFetchError(true);
     }
@@ -141,12 +159,12 @@ export default function SessionComplete({ sessionId }: Props) {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div className="text-center py-3 bg-gray-50 rounded-xl p-4 border border-gray-200">
                   <Users className="h-5 w-5 text-blue-500 mx-auto mb-1" />
-                  <p className="text-2xl font-bold text-gray-900">{connections.length}</p>
+                  <p className="text-2xl font-bold text-gray-900">{stats.uniquePeopleMet}</p>
                   <p className="text-xs text-gray-500">People Met</p>
                 </div>
                 <div className="text-center py-3 bg-gray-50 rounded-xl p-4 border border-gray-200">
                   <Handshake className="h-5 w-5 text-indigo-500 mx-auto mb-1" />
-                  <p className="text-2xl font-bold text-gray-900">{stats.mutualMeetAgainCount}</p>
+                  <p className="text-2xl font-bold text-gray-900">{stats.mutualMatches}</p>
                   <p className="text-xs text-gray-500">Mutual Matches</p>
                 </div>
                 <div className="text-center py-3 bg-gray-50 rounded-xl p-4 border border-gray-200">

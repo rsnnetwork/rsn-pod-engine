@@ -27,6 +27,11 @@ export interface IMatchingEngine {
   /**
    * Generates pairings for a single round.
    * Used for on-demand round generation or reassignment.
+   *
+   * @param options.regenerate When true, applies small ±2.5% jitter to
+   *   pair scores so a Re-match press visibly produces a different
+   *   acceptable arrangement when the lobby is otherwise unchanged.
+   *   Initial Generate stays deterministic (regenerate=false).
    */
   generateRound(
     participants: MatchingParticipant[],
@@ -34,6 +39,7 @@ export interface IMatchingEngine {
     excludedPairs: Set<string>,
     encounterHistory: EncounterHistoryEntry[],
     roundNumber: number,
+    options?: { regenerate?: boolean },
   ): RoundAssignment;
 
   /**

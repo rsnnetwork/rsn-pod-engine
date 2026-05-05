@@ -158,7 +158,8 @@ export async function generateSingleRound(
   sessionId: string,
   roundNumber: number,
   excludeUserIds?: string[],
-  presentUserIds?: Set<string>
+  presentUserIds?: Set<string>,
+  options?: { regenerate?: boolean },
 ): Promise<RoundAssignment> {
   const session = await sessionService.getSessionById(sessionId);
   const sessionConfig = typeof session.config === 'string'
@@ -333,7 +334,8 @@ export async function generateSingleRound(
     config,
     excludedPairs,
     encounterHistory,
-    roundNumber
+    roundNumber,
+    { regenerate: options?.regenerate === true },
   );
 
   // SOFT exclusion: if the strict no-repeat constraint left us with zero pairs
@@ -351,7 +353,8 @@ export async function generateSingleRound(
       config,
       new Set(),  // empty exclusion — allow any pair
       encounterHistory,
-      roundNumber
+      roundNumber,
+      { regenerate: options?.regenerate === true },
     );
     // Matching Engine 1.0 spec, Section 10 — fallback path engaged.
     // Mark every pair this round as fallbackUsed AND repeatInEvent so admin

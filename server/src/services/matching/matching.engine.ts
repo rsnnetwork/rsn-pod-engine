@@ -123,12 +123,13 @@ export class MatchingEngineV1 implements IMatchingEngine {
     excludedPairs: Set<string>,
     encounterHistory: EncounterHistoryEntry[],
     roundNumber: number,
+    options?: { regenerate?: boolean },
   ): RoundAssignment {
     const encounterMap = this.buildEncounterMap(encounterHistory);
     const hardExclusions = this.buildHardExclusions(participants, config.hardConstraints);
 
     return this.generateSingleRound(
-      participants, config, excludedPairs, hardExclusions, encounterMap, roundNumber
+      participants, config, excludedPairs, hardExclusions, encounterMap, roundNumber, options,
     );
   }
 
@@ -156,8 +157,10 @@ export class MatchingEngineV1 implements IMatchingEngine {
     hardExclusions: Set<string>,
     encounterMap: Map<string, EncounterHistoryEntry>,
     roundNumber: number,
+    options?: { regenerate?: boolean },
   ): RoundAssignment {
     const n = participants.length;
+    const regenerate = options?.regenerate === true;
 
     // Build scored candidate matrix
     const candidates: Array<{
@@ -180,9 +183,18 @@ export class MatchingEngineV1 implements IMatchingEngine {
           participants[i], participants[j], config.weights, encounterMap
         );
 
+        // Phase 1 (5 May spec) — Re-match jitter. ±2.5% noise is small
+        // enough that clearly-best pairs still win on the first sort, but
+        // big enough that near-tied pairs can swap order, so the host
+        // sees the UI visibly do something on Re-match. Initial Generate
+        // (regenerate=false) stays deterministic.
+        const score = regenerate
+          ? r.score * (1 + (Math.random() - 0.5) * 0.05)
+          : r.score;
+
         candidates.push({
           aIdx: i, bIdx: j,
-          score: r.score,
+          score,
           reasonTags: r.reasonTags,
           premiumInfluenced: r.premiumInfluenced,
           isRepeatInEvent: false, // first pass — no repeats; flipped only if fallback engages
@@ -223,6 +235,48 @@ export class MatchingEngineV1 implements IMatchingEngine {
       // Stop when we have enough pairs
       if (pairs.length >= Math.floor(n / 2)) {
         break;
+      }
+    }
+
+    // Phase 1 (5 May spec) — Path 2 augmenting search.
+    // Greedy is locally optimal but not globally optimal: it can paint
+    // itself into a corner where a complete matching exists but greedy
+    // can't reach it. With 6 people in 3 rounds (e.g. session 3fc21cbb
+    // r3), greedy left 2 people on bye despite a complete matching
+    // existing. We brute-force search for a complete matching when:
+    //   - greedy left >=2 people unmatched (1 leftover is handled by
+    //     the trio path below; 0 leftover is already complete)
+    //   - participant count is even (a complete matching is even possible)
+    //   - participant count is small enough that backtracking is fast
+    //     (≤30 covers every realistic event; the search space stays
+    //     well under 100ms even at the cap)
+    // If a complete matching is found, it REPLACES the greedy result.
+    // If not, we fall through to trio/bye handling unchanged.
+    const greedyUnmatched = participants
+      .map((_, idx) => idx)
+      .filter(idx => !matched.has(idx));
+
+    if (greedyUnmatched.length >= 2 && n % 2 === 0 && n <= 30) {
+      const completeMatching = this.findCompleteMatching(
+        participants, candidates, usedPairs, hardExclusions,
+      );
+      if (completeMatching) {
+        logger.info(
+          { roundNumber, n, greedyByes: greedyUnmatched.length },
+          'Path 2 augmenting search found complete matching where greedy failed',
+        );
+        // Replace greedy result with the complete matching
+        pairs.length = 0;
+        matched.clear();
+        for (const p of completeMatching) {
+          pairs.push(p);
+          // Re-derive participant indices for the matched set so trio/bye
+          // logic below operates on the new matching consistently.
+          const aIdx = participants.findIndex(x => x.userId === p.participantAId);
+          const bIdx = participants.findIndex(x => x.userId === p.participantBId);
+          if (aIdx >= 0) matched.add(aIdx);
+          if (bIdx >= 0) matched.add(bIdx);
+        }
       }
     }
 
@@ -480,6 +534,83 @@ export class MatchingEngineV1 implements IMatchingEngine {
       map.set(pairKey(entry.userAId, entry.userBId), entry);
     }
     return map;
+  }
+
+  /**
+   * Phase 1 (5 May spec) — exact backtracking search for a complete
+   * matching when greedy fails. Used as a fallback only when greedy
+   * leaves >=2 participants unmatched. Bounded to ≤30 participants
+   * (caller guards) so the recursion stays under 100ms in practice.
+   *
+   * Algorithm: classic depth-first backtracking on perfect matchings.
+   * Picks the lowest-index unmatched participant, tries each valid
+   * partner in score-descending order, recurses on the remainder.
+   * Returns null if no complete matching exists in the candidate graph.
+   */
+  private findCompleteMatching(
+    participants: MatchingParticipant[],
+    candidates: Array<{
+      aIdx: number; bIdx: number;
+      score: number; reasonTags: string[];
+      premiumInfluenced: boolean;
+      isRepeatInEvent: boolean;
+    }>,
+    _usedPairs: Set<string>,
+    _hardExclusions: Set<string>,
+  ): MatchPair[] | null {
+    const n = participants.length;
+
+    // Build adjacency from candidates list. Candidates already exclude
+    // usedPairs and hardExclusions, so anything in here is a legal pair.
+    const adj = new Map<number, Array<{ partnerIdx: number; cand: typeof candidates[number] }>>();
+    for (let i = 0; i < n; i++) adj.set(i, []);
+    for (const cand of candidates) {
+      adj.get(cand.aIdx)!.push({ partnerIdx: cand.bIdx, cand });
+      adj.get(cand.bIdx)!.push({ partnerIdx: cand.aIdx, cand });
+    }
+    // Score-descending so we prefer high-quality matchings when one exists.
+    for (const list of adj.values()) {
+      list.sort((a, b) => b.cand.score - a.cand.score);
+    }
+
+    const matched = new Array<boolean>(n).fill(false);
+    const result: MatchPair[] = [];
+
+    const recurse = (): boolean => {
+      // Find the next unmatched participant (lowest index).
+      let nextIdx = -1;
+      for (let i = 0; i < n; i++) {
+        if (!matched[i]) { nextIdx = i; break; }
+      }
+      if (nextIdx === -1) return true; // all matched — success
+
+      for (const neighbour of adj.get(nextIdx)!) {
+        if (matched[neighbour.partnerIdx]) continue;
+
+        matched[nextIdx] = true;
+        matched[neighbour.partnerIdx] = true;
+        result.push({
+          participantAId: participants[nextIdx].userId,
+          participantBId: participants[neighbour.partnerIdx].userId,
+          score: neighbour.cand.score,
+          reasonTags: neighbour.cand.reasonTags,
+          matchReason: neighbour.cand.reasonTags[0] || 'best_available',
+          fallbackUsed: false,
+          repeatInEvent: neighbour.cand.isRepeatInEvent,
+          premiumInfluenced: neighbour.cand.premiumInfluenced,
+        });
+
+        if (recurse()) return true;
+
+        // Backtrack
+        matched[nextIdx] = false;
+        matched[neighbour.partnerIdx] = false;
+        result.pop();
+      }
+      return false;
+    };
+
+    return recurse() ? result : null;
   }
 
   private buildHardExclusions(

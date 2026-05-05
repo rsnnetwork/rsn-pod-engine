@@ -6557,3 +6557,74 @@ RajaSkill: "3 similar lines beats a wrong abstraction." The two chats share the 
 - Reaction shortcuts (e.g. typing `+1` → 👍)
 - Mass-react / undo all
 - Notification on reactions (would be too noisy; deliberately silent)
+
+---
+
+## Matching Spec Compliance — Phase 1 — 2026-05-05
+
+**Status:** Completed
+**Source:** `assets/Matching algorithm 1.0.pdf` (14-section spec) + `assets/5th may edits for rsn.pdf` (Stefan's stability items) + the audit on session `3fc21cbb-...`
+**Master plan:** `docs/superpowers/plans/2026-05-05-master-spec-compliance.md` (9 phases, ~26 days total)
+**Phase 1 plan:** `docs/superpowers/plans/2026-05-05-phase-1-quick-wins.md`
+
+### What changed
+
+**Item A — Per-user recap on `/live` post-event view**
+- `client/src/features/live/SessionComplete.tsx` now reads from the per-user `/ratings/sessions/:id/people-met` endpoint and derives `avgQualityScore` + `meetAgainRate` from the participant's own `connections[]` slice. The session-wide `/ratings/sessions/:id/stats` call is gone. Every participant now sees *their own* numbers — the "12 mutual matches same for everyone" bug from session `3fc21cbb` no longer reproduces.
+
+**Item B — Re-match SQL hardening + DB-level uniqueness**
+- Migration `057_matches_unique_pair_per_round.sql` adds a `UNIQUE` expression index on `(session_id, round_number, LEAST(a,b), GREATEST(a,b))` for 2-person matches. Includes a `RAISE EXCEPTION` pre-flight that aborts the migration if any duplicates already exist (forces explicit cleanup before the constraint applies — defence-in-depth).
+- `handleHostRegenerateMatches` (`server/src/services/orchestration/handlers/matching-flow.ts`) widens the pre-regenerate `DELETE` to **all** rows in the pending round (was filtered to `IN ('scheduled','cancelled')` which let confirmed/forced rows survive and stack on every Re-match — the root cause of the round 4 dups in `3fc21cbb`).
+
+**Item C — Surgical cleanup of session `3fc21cbb` round 4**
+- Transaction-wrapped DELETE removed all 6 round-4 matches in `3fc21cbb` (including the literal duplicate pair `5b0c7b21 ↔ c52d876d` and 4 other booked-twice rows). Cascade removed associated `meeting_records` and `ratings`. `sessions.current_round` reset 4 → 3.
+- Verified: round counts are now `r1: 3, r2: 3, r3: 2` (the legitimate event shape — c52 and ec had a bye in r3, which is also the bug Path 2 fixes for future events). Global duplicate-pair-per-round count: 0.
+
+**Item D — Re-match jitter (deterministic when not regenerating)**
+- `MatchingEngineV1.generateRound` now accepts `options?.regenerate`. When true, applies ±2.5 % multiplicative noise to each candidate score so near-tied pairs swap order — the host *sees* something change on Re-match. Initial Generate stays fully deterministic.
+- The `regenerate: true` flag is passed all the way down: `handleHostRegenerateMatches` → `generateSingleRound` → `engine.generateRound`.
+
+**Item E — Path 2 augmenting search for greedy completeness**
+- New private `findCompleteMatching()` method in `MatchingEngineV1` runs a depth-first backtracking search over the candidate graph when greedy leaves ≥2 participants unmatched and `n` is even and `n ≤ 30`. Score-descending traversal preserves match quality; finds a complete matching whenever one exists.
+- This closes the "greedy paints itself into a corner" failure mode. Regression test pins the actual `3fc21cbb` round 3 case (6 participants, 2 prior rounds of history) — engine now produces 3 pairs / 0 byes where the old greedy left 2 on bye. Multi-bye visibility was already wired (the `byeParticipants[]` field + warnings list from `sendMatchPreview`); banner already rendered in `HostControls.tsx`.
+
+### Files
+
+**New**
+- `server/src/db/migrations/057_matches_unique_pair_per_round.sql`
+- `server/src/__tests__/services/matching/phase-1-greedy-completeness.test.ts` (13 tests)
+- `docs/superpowers/plans/2026-05-05-master-spec-compliance.md`
+- `docs/superpowers/plans/2026-05-05-phase-1-quick-wins.md`
+
+**Modified**
+- `client/src/features/live/SessionComplete.tsx`
+- `server/src/services/orchestration/handlers/matching-flow.ts`
+- `server/src/services/matching/matching.engine.ts` (jitter + Path 2)
+- `server/src/services/matching/matching.interface.ts` (`options?` parameter)
+- `server/src/services/matching/matching.service.ts` (plumb `regenerate` option)
+
+### Verification
+
+- Server type-check: clean
+- Server tests: **980 / 980 across 75 suites** (was 967; +13 Phase 1)
+- Client type-check: clean
+- Client build: clean (13.82 s, 2735 modules)
+- Pre-flight duplicate check on Neon: **0 duplicates** post-cleanup → migration 057 will apply cleanly
+- Surgical cleanup on `3fc21cbb`: 6 matches deleted, cascades intact, current_round = 3, per-user counts now (3,3,3,3,2,2) ✓
+- CI staging: pending push
+- CI main: pending push
+- Render: pending deploy
+- Vercel: pending deploy
+- Sentry post-deploy check: pending
+- Browser-walk: pending
+
+### What is NOT in this phase
+
+- Pre-event session planning (Phase 2.5 — generates full event plan upfront per spec §5)
+- State machine adoption (Phase 2 — migrate ~24 callers to `transitionParticipant()`)
+- Future-only repair (Phase 2.7 — late-joiner / leaver / disconnect per spec §9)
+- Fallback ladder (Phase 2.8 — spec §10 "platform repeats → pod repeats → recent → event")
+- Real learning loop (Phase 5.5 — spec §8 + `pair_relationship` aggregate)
+- Test-mode UX (Phase 5)
+
+These are queued in the master plan and ship in subsequent phases, each with its own plan + approval cycle.
