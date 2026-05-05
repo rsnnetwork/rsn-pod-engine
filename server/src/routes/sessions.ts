@@ -540,4 +540,148 @@ router.get(
   }
 );
 
+// ─── GET /sessions/:id/plan — pre-event plan visibility (Phase 3 / 5 May spec) ─
+//
+// Returns aggregate per-round status for the host UI's plan-visibility strip.
+// Host-or-cohost auth (admins / super-admins also allowed). Non-host
+// participants get 403 — they don't need to see the future-round arrangement.
+//
+// Response shape:
+//   { rounds: [{ roundNumber, status, pairCount, byeCount, hasFallback }] }
+//
+// status maps from match.status:
+//   'completed' → all matches in this round are status='completed'
+//   'active'    → at least one match is status='active'
+//   'planned'   → all matches are status='scheduled' (pre-planned, not yet started)
+//   'cancelled' → all matches are status='cancelled'
+//   'mixed'     → otherwise
+
+router.get(
+  '/:id/plan',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const sessionId = req.params.id;
+      const userId = req.user!.userId;
+      const userRole = req.user!.role as UserRole;
+
+      const sessionResult = await query<{ host_user_id: string; pod_id: string; config: any }>(
+        `SELECT host_user_id, pod_id, config FROM sessions WHERE id = $1`,
+        [sessionId],
+      );
+      if (sessionResult.rows.length === 0) {
+        throw new NotFoundError('Session', sessionId);
+      }
+      const session = sessionResult.rows[0];
+
+      // Host-or-cohost-or-admin only.
+      const isAdmin = hasRoleAtLeast(userRole, UserRole.ADMIN);
+      const isHost = session.host_user_id === userId;
+      let isCohost = false;
+      if (!isHost && !isAdmin) {
+        const cohostRes = await query<{ id: string }>(
+          `SELECT id FROM session_participants WHERE session_id = $1 AND user_id = $2 AND role = 'co_host' LIMIT 1`,
+          [sessionId, userId],
+        ).catch(() => ({ rows: [] as { id: string }[] }));
+        isCohost = cohostRes.rows.length > 0;
+      }
+      if (!isHost && !isCohost && !isAdmin) {
+        throw new ForbiddenError('Only the host or a co-host can view the event plan');
+      }
+
+      const config = typeof session.config === 'string' ? JSON.parse(session.config as unknown as string) : session.config;
+      const totalRounds: number = config?.numberOfRounds || 5;
+
+      const matchesResult = await query<{
+        round_number: number;
+        status: string;
+        cnt: string;
+        fallback_count: string;
+      }>(
+        `SELECT round_number, status, COUNT(*)::text AS cnt,
+                SUM(CASE WHEN fallback_used THEN 1 ELSE 0 END)::text AS fallback_count
+         FROM matches
+         WHERE session_id = $1
+         GROUP BY round_number, status
+         ORDER BY round_number`,
+        [sessionId],
+      );
+
+      // Aggregate per round.
+      const byRound = new Map<number, { statuses: Map<string, number>; fallbackCount: number }>();
+      for (const row of matchesResult.rows) {
+        const r = row.round_number;
+        if (!byRound.has(r)) byRound.set(r, { statuses: new Map(), fallbackCount: 0 });
+        const entry = byRound.get(r)!;
+        entry.statuses.set(row.status, parseInt(row.cnt, 10));
+        entry.fallbackCount += parseInt(row.fallback_count || '0', 10);
+      }
+
+      // Get bye participants per round (those NOT in any match for that round).
+      // A participant is "byed" in round R if they have status NOT IN ('removed','left','no_show')
+      // AND no match in round R contains them.
+      const byeResult = await query<{ round_number: number; bye_count: string }>(
+        `WITH active_participants AS (
+           SELECT user_id FROM session_participants
+           WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')
+             AND user_id != $2
+         ),
+         round_participants AS (
+           SELECT m.round_number,
+                  unnest(ARRAY[m.participant_a_id, m.participant_b_id, m.participant_c_id]) AS user_id
+           FROM matches m
+           WHERE m.session_id = $1 AND m.status NOT IN ('cancelled')
+         )
+         SELECT r.round_number,
+                (SELECT COUNT(*)::text FROM active_participants ap
+                 WHERE NOT EXISTS (
+                   SELECT 1 FROM round_participants rp
+                   WHERE rp.round_number = r.round_number AND rp.user_id = ap.user_id
+                 )) AS bye_count
+         FROM (SELECT DISTINCT round_number FROM matches WHERE session_id = $1) r`,
+        [sessionId, session.host_user_id],
+      );
+      const byeByRound = new Map<number, number>();
+      for (const row of byeResult.rows) {
+        byeByRound.set(row.round_number, parseInt(row.bye_count || '0', 10));
+      }
+
+      // Build the response: include every round 1..totalRounds, even if not yet planned.
+      const rounds: { roundNumber: number; status: string; pairCount: number; byeCount: number; hasFallback: boolean }[] = [];
+      for (let r = 1; r <= totalRounds; r++) {
+        const entry = byRound.get(r);
+        if (!entry || entry.statuses.size === 0) {
+          rounds.push({ roundNumber: r, status: 'unplanned', pairCount: 0, byeCount: 0, hasFallback: false });
+          continue;
+        }
+        // Determine aggregate status. Priority: active > completed > planned > cancelled > mixed.
+        let aggregateStatus = 'mixed';
+        if (entry.statuses.has('active')) aggregateStatus = 'active';
+        else if (entry.statuses.has('completed') && entry.statuses.size === 1) aggregateStatus = 'completed';
+        else if (entry.statuses.has('completed')) aggregateStatus = 'completed';
+        else if (entry.statuses.has('scheduled') && entry.statuses.size === 1) aggregateStatus = 'planned';
+        else if (entry.statuses.has('cancelled') && entry.statuses.size === 1) aggregateStatus = 'cancelled';
+        const pairCount = Array.from(entry.statuses.entries())
+          .filter(([s]) => s !== 'cancelled')
+          .reduce((sum, [, c]) => sum + c, 0);
+        rounds.push({
+          roundNumber: r,
+          status: aggregateStatus,
+          pairCount,
+          byeCount: byeByRound.get(r) || 0,
+          hasFallback: entry.fallbackCount > 0,
+        });
+      }
+
+      const response: ApiResponse = {
+        success: true,
+        data: { rounds, totalRounds },
+      };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 export default router;

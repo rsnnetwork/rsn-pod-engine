@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { connectSocket, disconnectSocket, getSocket } from '@/lib/socket';
 import { useSessionStore } from '@/stores/sessionStore';
+import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
 
 // All socket event names we listen to — used for deterministic cleanup
@@ -15,6 +16,8 @@ const SOCKET_EVENTS = [
   'host:broadcast', 'lobby:token', 'host:participant_removed',
   'host:match_preview', 'lobby:mute_command',
   'host:round_dashboard', 'host:room_status_update',
+  // Phase 3 (5 May spec compliance) — pre-event plan + future-only repair events.
+  'host:event_plan_generated', 'host:event_plan_repaired',
   'chat:message', 'chat:history', 'chat:reaction_update',
   'timer:sync', 'error',
   'cohost:assigned', 'cohost:removed',
@@ -494,6 +497,35 @@ export default function useSessionSocket(sessionId: string) {
 
     // ── Host broadcasts ──
     socket.on('host:broadcast', (data: any) => store.addBroadcast(data.message));
+
+    // ── Phase 3 (5 May spec) — pre-event plan + future-only repair toasts ──
+    // Server emits these when generateSessionSchedule completes at event start
+    // and when repairFutureRounds runs after a late-joiner / leaver. Wired at
+    // the central socket hub so any client viewing a session sees the toast.
+    socket.on('host:event_plan_generated', (data: any) => {
+      const toast = useToastStore.getState().addToast;
+      const rc = data?.roundCount ?? 0;
+      const tp = data?.totalPairs ?? 0;
+      toast(`Event plan ready — ${rc} ${rc === 1 ? 'round' : 'rounds'}, ${tp} ${tp === 1 ? 'pair' : 'pairs'}`, 'success');
+      // Also store the headline numbers so the host UI can show them persistently.
+      store.setEventPlanSummary?.({ roundCount: rc, totalPairs: tp });
+    });
+
+    socket.on('host:event_plan_repaired', (data: any) => {
+      const toast = useToastStore.getState().addToast;
+      const reasonText: Record<string, string> = {
+        late_joiner: 'new participant joined',
+        left: 'participant left',
+        host_request: 'manual update',
+      };
+      const reason = reasonText[data?.reason] || 'plan updated';
+      const rounds: number[] = data?.regeneratedRounds || [];
+      if (rounds.length === 0) return; // nothing changed; skip toast
+      const range = rounds.length === 1
+        ? `round ${rounds[0]}`
+        : `rounds ${rounds[0]}–${rounds[rounds.length - 1]}`;
+      toast(`Plan updated for ${range} (${reason})`, 'info');
+    });
 
     // ── Lobby video ──
     socket.on('lobby:token', (data: any) => {

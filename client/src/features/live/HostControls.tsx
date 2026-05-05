@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/Button';
 import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, MessageSquare, UserMinus, RefreshCw, UserPlus, AlertTriangle, CheckCircle2, Clock } from 'lucide-react';
 import { getSocket } from '@/lib/socket';
 import { useState } from 'react';
+import EventPlanStrip from './EventPlanStrip';
 
 interface Props { sessionId: string; }
 
@@ -285,6 +286,11 @@ export default function HostControls({ sessionId }: Props) {
 
   return (
     <div className="border-t border-gray-200 bg-white">
+      {/* Phase 3 — pre-event plan visibility for the host. Shows when a plan
+          exists (event has started). Auto-hides for non-host viewers via
+          server-side auth on /sessions/:id/plan. */}
+      {sessionStarted && <EventPlanStrip sessionId={sessionId} />}
+
       {/* Match preview panel with interactive controls */}
       {matchPreview && (
         <div className="border-b border-gray-200 bg-emerald-50 px-4 py-3 max-h-72 overflow-y-auto animate-fade-in">

@@ -583,6 +583,11 @@ export async function handleHostRemoveParticipant(
 
     io.to(sessionRoom(data.sessionId)).emit('participant:left', { userId: data.userId });
 
+    // Phase 3 (5 May spec) — force-refresh canonical host dashboard after
+    // any participant-state mutation. Closes Stefan #9 gap where the host
+    // saw stale state until the next 5s dashboard tick.
+    if (_emitHostDashboard) await _emitHostDashboard(data.sessionId).catch(() => {});
+
     logger.info({ sessionId: data.sessionId, removedUserId: data.userId }, 'Participant removed by host');
   } catch (err: any) {
     socket.emit('error', { code: 'REMOVE_FAILED', message: err.message });

@@ -96,6 +96,10 @@ interface SessionLiveState {
   chatOpen: boolean;
   matchingOverlay: { roomCount: number; roundNumber: number } | null;
   preparingMatches: boolean;
+  // Phase 3 (5 May spec) — pre-event plan headline numbers, populated by the
+  // host:event_plan_generated socket event. Used by HostControls to show a
+  // persistent "Plan: 5 rounds, 15 pairs" badge after the host clicks Start.
+  eventPlanSummary: { roundCount: number; totalPairs: number } | null;
   lobbyDensity: 'compact' | 'normal' | 'spacious';
   cohosts: Set<string>;
   leftCurrentRound: boolean;
@@ -141,6 +145,7 @@ interface SessionLiveState {
   setTimerVisibility: (v: 'hidden' | 'always_visible' | 'last_10s' | 'last_30s' | 'last_60s' | 'last_120s') => void;
   setBreakoutTimerHidden: (v: boolean) => void;
   setMatchPreview: (preview: SessionLiveState['matchPreview']) => void;
+  setEventPlanSummary: (summary: SessionLiveState['eventPlanSummary']) => void;
   setHostMuteCommand: (muted: boolean | null) => void;
   setPartnerDisconnected: (v: boolean) => void;
   setRoundDashboard: (data: SessionLiveState['roundDashboard']) => void;
@@ -225,6 +230,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   timerVisibility: 'always_visible',
   breakoutTimerHidden: false,
   matchPreview: null,
+  eventPlanSummary: null,
   hostMuteCommand: null,
   partnerDisconnected: false,
   roundDashboard: null,
@@ -302,6 +308,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   setTimerVisibility: (timerVisibility) => set({ timerVisibility }),
   setBreakoutTimerHidden: (breakoutTimerHidden) => set({ breakoutTimerHidden }),
   setMatchPreview: (matchPreview) => set({ matchPreview }),
+  setEventPlanSummary: (eventPlanSummary) => set({ eventPlanSummary }),
   setHostMuteCommand: (muted) => set({ hostMuteCommand: muted }),
   setPartnerDisconnected: (partnerDisconnected) => set({ partnerDisconnected }),
   setRoundDashboard: (roundDashboard) => set({ roundDashboard }),
@@ -391,6 +398,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
     isReconnecting: false, isByeRound: false, liveKitToken: null, livekitUrl: null, currentRoomId: null,
     lobbyToken: null, lobbyUrl: null, lobbyRoomId: null,
     timerVisibility: 'always_visible', breakoutTimerHidden: false, matchPreview: null,
+    eventPlanSummary: null,
     hostMuteCommand: null, partnerDisconnected: false, roundDashboard: null,
     chatMessages: [], unreadChatCount: 0, chatOpen: false, matchingOverlay: null, preparingMatches: false, lobbyDensity: 'normal' as const,
     cohosts: new Set<string>(), leftCurrentRound: false, lastRatedRound: 0, isPaused: false,

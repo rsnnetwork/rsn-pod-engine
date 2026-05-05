@@ -6854,3 +6854,68 @@ Replaced the 1-step fallback (strict → drop excludedPairs) with a 5-level ladd
 - True per-level (L1/L2/L3) differentiation between platform / pod / recent repeats — deferred to Phase 5.5 alongside `pair_relationship` aggregate
 - Client UI for `participant:auto_left` toast (server-side LEFT transition emits via existing state-machine path; UI consumer is Phase 3 host dashboard work)
 - Configurable disconnect timing per pod template — deferred to Phase 5.5 polish
+
+---
+
+## Matching Spec Compliance — Phase 3 — 2026-05-06
+
+**Status:** Completed (server + client; first UI phase in this rebuild)
+**Plan:** `docs/superpowers/plans/2026-05-06-phase-3-host-dashboard-ui.md`
+**Why:** Closes Stefan #6, #7 (UX feedback), #9 (UI sync), #11 (visibility), #12 (host dashboard). Wires the client to consume the socket events Phase 2.5/2.7/2.8 already emit.
+
+### What changed for the host
+
+1. **Click Start Event → toast: "Event plan ready — N rounds, M pairs"** (success-style). Stored in `sessionStore.eventPlanSummary` so the headline persists.
+2. **Late-joiner / leaver mid-event → toast: "Plan updated for rounds X–Y (new participant joined / participant left)"** (info-style).
+3. **New "Event Plan" strip rendered above the match-preview block in HostControls** when the session has started. Each round shows as a card: number, status (Done / Active / Planned / Cancelled / Pending), pair count, bye count, fallback-ladder indicator. Auto-refreshes on `host:event_plan_generated` and `host:event_plan_repaired` via react-query invalidation.
+4. **Force-refresh after host removes a participant** — `handleHostRemoveParticipant` now calls `_emitHostDashboard` so the dashboard updates immediately instead of waiting for the next 5 s tick (Stefan #9 close-out).
+
+### Sub-phases
+
+**3A — Toast consumers in `useSessionSocket.ts`**
+- Wired `host:event_plan_generated` → addToast success "Event plan ready — N rounds, M pairs" + stores summary in `sessionStore.eventPlanSummary` (new field).
+- Wired `host:event_plan_repaired` → addToast info with friendly reason text mapping (`late_joiner` / `left` / `host_request`) and round range ("rounds 3–5").
+- Both events added to `SOCKET_EVENTS` cleanup list so they don't leak across session changes.
+
+**3B — `GET /sessions/:id/plan` endpoint + EventPlanStrip component**
+- New REST endpoint at `server/src/routes/sessions.ts`. Host-or-cohost-or-admin auth. Returns aggregate per-round status: `{ roundNumber, status, pairCount, byeCount, hasFallback }`. Includes every round 1..totalRounds even if not yet planned (status='unplanned') for consistent UI rendering.
+- New `client/src/features/live/EventPlanStrip.tsx` component. Uses `useQuery` against the new endpoint, refetches on the two new socket events. Renders horizontal scrollable strip with status icon + label per round.
+- HostControls.tsx imports + renders `<EventPlanStrip sessionId={sessionId} />` conditionally on `sessionStarted`.
+
+**3C — Force-refresh after host actions (audit + targeted fix)**
+- Audited every `handleHost*` mutation handler. Most already end with a canonical-state emit (`sendMatchPreview` for preview-phase actions, `_emitHostDashboard` for round-active actions).
+- Found gap: `handleHostRemoveParticipant` did not emit dashboard after the mutation. Added `await _emitHostDashboard(sessionId)` so removal reflects in host UI within 100 ms instead of next 5 s tick.
+
+### Files
+
+**New**
+- `server/src/__tests__/services/orchestration/phase-3-host-dashboard.test.ts` (21 architectural pins)
+- `client/src/features/live/EventPlanStrip.tsx` (plan-visibility component)
+- `docs/superpowers/plans/2026-05-06-phase-3-host-dashboard-ui.md`
+
+**Modified**
+- `server/src/routes/sessions.ts` (GET /:id/plan endpoint)
+- `server/src/services/orchestration/handlers/host-actions.ts` (handleHostRemoveParticipant emits dashboard)
+- `client/src/hooks/useSessionSocket.ts` (toast consumers + import + SOCKET_EVENTS)
+- `client/src/stores/sessionStore.ts` (eventPlanSummary field + setter)
+- `client/src/features/live/HostControls.tsx` (renders EventPlanStrip)
+
+### Verification
+
+- `npx tsc --noEmit` (server, client) — clean
+- `npx jest` — **1050 / 1050 across 79 suites** (was 1029; +21 Phase 3)
+- `npm run build` (client) — clean (22.91 s)
+- 21 architectural pins covering 3A (5 toast/store pins), 3B (8 endpoint + 4 component + 2 HostControls pins), 3C (2 emit pins)
+- CI staging: pending push
+- CI main: pending push
+- Render: pending deploy
+- Vercel: pending deploy
+- **Manual browser walk on staging: pending — first UI phase in rebuild requires this**
+
+### What is NOT in this phase
+
+- Hovering a planned round to preview which pairs are scheduled (deferred — current hover shows status only via title attribute)
+- Manual override of individual participant state (Stefan #12 nuance) — Phase 5
+- Atomic room creation (Stefan #6, #7 server-side) — Phase 4
+- Chat reliability (Stefan #8) — Phase 4
+- Test-mode UX (Stefan #2) — Phase 5
