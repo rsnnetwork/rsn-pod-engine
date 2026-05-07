@@ -51,7 +51,7 @@ interface ParticipantRow {
   display_name: string | null;
   email: string | null;
   status: string;
-  joined_at: Date;
+  joined_at: Date | null;
   is_cohost: boolean;
 }
 
@@ -61,20 +61,61 @@ export async function buildHostParticipantsView(opts: {
   presenceMap: Map<string, unknown>;
   activeMatches?: MatchLike[];
 }): Promise<HostParticipantSummary[]> {
+  // Phase 7-audit fix — the host is NOT a session_participants row (they
+  // own the session, they don't join it). Same for co-hosts who were
+  // promoted before joining as a participant. UNION pulls in:
+  //   1. Every session_participants row (with cohost flag).
+  //   2. The host as a synthetic row when missing from #1.
+  //   3. Each co-host as a synthetic row when missing from #1.
+  // status='in_main_room' for synthetic rows; presenceMap drives the
+  // final state below (in_room/disconnected/in_main_room).
   const rows = await query<ParticipantRow>(
-    `SELECT
-       sp.user_id,
-       u.display_name,
-       u.email,
-       sp.status,
-       sp.joined_at,
-       (sc.user_id IS NOT NULL) AS is_cohost
-     FROM session_participants sp
-     LEFT JOIN users u ON u.id = sp.user_id
-     LEFT JOIN session_cohosts sc
-       ON sc.session_id = sp.session_id AND sc.user_id = sp.user_id
-     WHERE sp.session_id = $1
-     ORDER BY sp.joined_at ASC`,
+    `SELECT user_id, display_name, email, status, joined_at, is_cohost FROM (
+       SELECT
+         sp.user_id,
+         u.display_name,
+         u.email,
+         sp.status::text AS status,
+         sp.joined_at,
+         (sc.user_id IS NOT NULL) AS is_cohost
+       FROM session_participants sp
+       LEFT JOIN users u ON u.id = sp.user_id
+       LEFT JOIN session_cohosts sc
+         ON sc.session_id = sp.session_id AND sc.user_id = sp.user_id
+       WHERE sp.session_id = $1
+       UNION ALL
+       SELECT
+         s.host_user_id AS user_id,
+         u.display_name,
+         u.email,
+         'in_lobby'::text AS status,
+         NULL::timestamptz AS joined_at,
+         FALSE AS is_cohost
+       FROM sessions s
+       LEFT JOIN users u ON u.id = s.host_user_id
+       WHERE s.id = $1
+         AND s.host_user_id IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM session_participants sp2
+           WHERE sp2.session_id = s.id AND sp2.user_id = s.host_user_id
+         )
+       UNION ALL
+       SELECT
+         sc.user_id,
+         u.display_name,
+         u.email,
+         'in_lobby'::text AS status,
+         NULL::timestamptz AS joined_at,
+         TRUE AS is_cohost
+       FROM session_cohosts sc
+       LEFT JOIN users u ON u.id = sc.user_id
+       WHERE sc.session_id = $1
+         AND NOT EXISTS (
+           SELECT 1 FROM session_participants sp2
+           WHERE sp2.session_id = sc.session_id AND sp2.user_id = sc.user_id
+         )
+     ) AS combined
+     ORDER BY joined_at NULLS FIRST, user_id`,
     [opts.sessionId],
   );
 
@@ -116,7 +157,7 @@ export async function buildHostParticipantsView(opts: {
       state,
       currentMatchId: inMatch?.matchId ?? null,
       currentRoomId: inMatch?.roomId ?? null,
-      joinedAt: r.joined_at.toISOString(),
+      joinedAt: r.joined_at ? r.joined_at.toISOString() : new Date(0).toISOString(),
     };
   });
 }
