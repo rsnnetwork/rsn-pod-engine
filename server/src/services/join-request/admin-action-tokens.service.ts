@@ -248,8 +248,12 @@ export async function confirmActionToken(rawToken: string): Promise<ConfirmResul
   }
 
   const decision = row.action === 'approve' ? 'approved' : 'declined';
+  const resetReminders = decision === 'approved';
 
   // Atomic check-and-set: only flips status if it's still 'pending'.
+  // $1 is the enum decision, $4 the boolean — separate params so Postgres
+  // doesn't have to deduce a single type for $1 across SET (enum) and
+  // CASE comparisons (boolean), which throws 'inconsistent types deduced'.
   const updated = await query<{
     id: string;
     full_name: string;
@@ -257,11 +261,11 @@ export async function confirmActionToken(rawToken: string): Promise<ConfirmResul
   }>(
     `UPDATE join_requests
         SET status = $1, reviewed_by = $2, reviewed_at = NOW(), updated_at = NOW(),
-            reminder_count = CASE WHEN $1 = 'approved' THEN 0 ELSE reminder_count END,
-            last_reminded_at = CASE WHEN $1 = 'approved' THEN NULL ELSE last_reminded_at END
+            reminder_count = CASE WHEN $4 THEN 0 ELSE reminder_count END,
+            last_reminded_at = CASE WHEN $4 THEN NULL ELSE last_reminded_at END
       WHERE id = $3 AND status = 'pending'
     RETURNING id, full_name, email`,
-    [decision, row.target_user_id, row.target_id],
+    [decision, row.target_user_id, row.target_id, resetReminders],
   );
 
   // Mark token used regardless — prevents replay even if the request was
