@@ -97,7 +97,54 @@ export async function createJoinRequest(input: CreateJoinRequestInput): Promise<
     logger.error({ err, email: input.email }, 'Failed to send join request confirmation')
   );
 
+  // Fan out the email-action review email to every admin (non-blocking).
+  // Each admin gets two signed single-use tokens (approve / reject) tied
+  // to (admin, request, action), 24h expiry. Click → confirmation page →
+  // confirm POST runs the same review flow as the dashboard.
+  fanOutAdminReviewEmails(result.rows[0].id, input.fullName, input.email, input.linkedinUrl, input.reason)
+    .catch(err => logger.error({ err, requestId: result.rows[0].id }, 'Admin review email fan-out failed (non-fatal)'));
+
   return mapRow(result.rows[0]);
+}
+
+async function fanOutAdminReviewEmails(
+  requestId: string,
+  fullName: string,
+  applicantEmail: string,
+  linkedinUrl: string | null | undefined,
+  reason: string | null | undefined,
+): Promise<void> {
+  const adminsResult = await query<{ id: string; email: string; display_name: string | null }>(
+    `SELECT id, email, display_name FROM users WHERE role IN ('admin', 'super_admin')`,
+  );
+  const admins = adminsResult.rows;
+  if (admins.length === 0) return;
+
+  const { issueReviewTokens } = await import('./admin-action-tokens.service');
+  const { sendJoinRequestAdminReviewEmail } = await import('../email/email.service');
+  const tokens = await issueReviewTokens(
+    requestId,
+    admins.map(a => ({ id: a.id, email: a.email })),
+  );
+
+  const dashboardUrl = `${config.clientUrl}/admin/join-requests`;
+  await Promise.allSettled(
+    admins.map(admin => {
+      const pair = tokens.get(admin.id);
+      if (!pair) return Promise.resolve();
+      return sendJoinRequestAdminReviewEmail(admin.email, {
+        adminDisplayName: admin.display_name || 'admin',
+        applicantName: fullName,
+        applicantEmail,
+        applicantLinkedinUrl: linkedinUrl || null,
+        applicantReason: reason || null,
+        approveUrl: pair.approveUrl,
+        rejectUrl: pair.rejectUrl,
+        dashboardUrl,
+        expiresInHours: 24,
+      });
+    }),
+  );
 }
 
 export async function listJoinRequests(options: {
@@ -380,13 +427,16 @@ async function generateApprovalMagicLink(email: string): Promise<string> {
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
   const expiresAt = new Date(Date.now() + APPROVAL_LINK_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
 
-  // Invalidate any existing magic links for this email
+  // Invalidate any existing magic links for this email.
+  // Phase 7-audit fix — scoped to purpose='login' so admin-action tokens
+  // aren't wiped when an approval login link is generated.
   await query(
-    `UPDATE magic_links SET used_at = NOW() WHERE email = $1 AND used_at IS NULL AND expires_at > NOW()`,
+    `UPDATE magic_links SET used_at = NOW()
+      WHERE email = $1 AND purpose = 'login' AND used_at IS NULL AND expires_at > NOW()`,
     [normalizedEmail]
   );
 
-  // Store the hashed token with 7-day expiry
+  // Store the hashed token with 7-day expiry (purpose defaults to 'login').
   await query(
     `INSERT INTO magic_links (email, token_hash, expires_at) VALUES ($1, $2, $3)`,
     [normalizedEmail, tokenHash, expiresAt]

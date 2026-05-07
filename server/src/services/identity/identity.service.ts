@@ -296,13 +296,17 @@ export async function sendMagicLink(email: string, requestedClientUrl?: string, 
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
   const expiresAt = new Date(Date.now() + config.magicLinkExpiryMinutes * 60 * 1000);
 
-  // Invalidate any existing magic links for this email
+  // Invalidate any existing magic links for this email.
+  // Phase 7-audit fix — scoped to purpose='login' so admin-action tokens
+  // (purpose='join_request_review') aren't wiped when the same admin
+  // requests a fresh login link.
   await query(
-    `UPDATE magic_links SET used_at = NOW() WHERE email = $1 AND used_at IS NULL AND expires_at > NOW()`,
+    `UPDATE magic_links SET used_at = NOW()
+      WHERE email = $1 AND purpose = 'login' AND used_at IS NULL AND expires_at > NOW()`,
     [normalizedEmail]
   );
 
-  // Store the hashed token
+  // Store the hashed token (purpose defaults to 'login').
   await query(
     `INSERT INTO magic_links (email, token_hash, expires_at) VALUES ($1, $2, $3)`,
     [normalizedEmail, tokenHash, expiresAt]

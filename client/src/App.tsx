@@ -23,6 +23,7 @@ import MessagesPage from '@/features/messages/MessagesPage';
 import EncounterHistoryPage from '@/features/sessions/EncounterHistoryPage';
 import AdminDashboardPage from '@/features/admin/AdminDashboardPage';
 import AdminAnalyticsPage from '@/features/admin/AdminAnalyticsPage';
+import AdminJoinRequestActionPage from '@/features/admin/AdminJoinRequestActionPage';
 import AdminUsersPage from '@/features/admin/AdminUsersPage';
 import AdminJoinRequestsPage from '@/features/admin/AdminJoinRequestsPage';
 import AdminPodsPage from '@/features/admin/AdminPodsPage';
@@ -53,6 +54,8 @@ export default function App() {
       <Route path="/request-to-join" element={<RequestToJoinPage />} />
       <Route path="/auth/verify" element={<VerifyPage />} />
       <Route path="/invite/:code" element={<InviteAcceptPage />} />
+      {/* Admin email-action page — token IS the auth, no session required. */}
+      <Route path="/admin/jr/:token" element={<AdminJoinRequestActionPage />} />
 
       {/* Protected with layout */}
       <Route element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>

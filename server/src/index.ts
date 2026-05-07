@@ -48,6 +48,7 @@ import ratingRoutes from './routes/ratings';
 import hostRoutes from './routes/host';
 import joinRequestRoutes from './routes/join-requests';
 import adminRoutes from './routes/admin';
+import adminActionRoutes from './routes/admin-actions';
 import notificationRoutes from './routes/notifications';
 import dmRoutes from './routes/dm';
 import pokeRoutes from './routes/pokes';
@@ -318,6 +319,8 @@ app.use('/api/ratings', ratingRoutes);
 app.use('/api/sessions', hostRoutes); // Host controls under /api/sessions/:id/host/*
 app.use('/api/join-requests', joinRequestRoutes);
 app.use('/api/admin', adminRoutes);
+// Admin email-action routes — unauthenticated by design (the token IS the auth).
+app.use('/api/admin/join-request-action', adminActionRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/dm', dmRoutes);
 app.use('/api/pokes', pokeRoutes);

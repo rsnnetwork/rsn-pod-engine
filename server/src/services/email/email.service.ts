@@ -741,3 +741,126 @@ export async function sendGenericEmail(
 
   logger.warn({ to }, 'No email provider — generic email skipped');
 }
+
+// ─── Join Request — Admin Review Email (one-click approve / reject) ────────
+
+export interface JoinRequestAdminReviewData {
+  adminDisplayName: string;
+  applicantName: string;
+  applicantEmail: string;
+  applicantLinkedinUrl: string | null;
+  applicantReason: string | null;
+  approveUrl: string;
+  rejectUrl: string;
+  dashboardUrl: string;
+  expiresInHours: number;
+}
+
+export async function sendJoinRequestAdminReviewEmail(
+  to: string,
+  data: JoinRequestAdminReviewData,
+): Promise<void> {
+  const subject = `New RSN join request — ${data.applicantName}`;
+  const reasonBlock = data.applicantReason
+    ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px;width:90px;">Why RSN</td>
+         <td style="padding:8px 0;color:#374151;font-size:14px;line-height:1.5;">${escapeHtml(data.applicantReason)}</td></tr>`
+    : '';
+  const linkedinBlock = data.applicantLinkedinUrl
+    ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px;width:90px;">LinkedIn</td>
+         <td style="padding:8px 0;font-size:14px;"><a href="${escapeAttr(data.applicantLinkedinUrl)}" style="color:#DE322E;text-decoration:none;">${escapeHtml(data.applicantLinkedinUrl)}</a></td></tr>`
+    : '';
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="referrer" content="no-referrer">
+    </head>
+    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="max-width:560px;margin:0 auto;padding:40px 24px;">
+        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
+          <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
+          <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
+
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
+            Hi ${escapeHtml(data.adminDisplayName)},
+          </p>
+          <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
+            A new request to join RSN just came in. You can approve or decline below — no need to open the dashboard.
+          </p>
+
+          <div style="background:#f8f9fa;border:1px solid #e5e7eb;border-radius:12px;padding:16px 20px;margin:0 0 28px 0;">
+            <table cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;">
+              <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;width:90px;">Name</td>
+                  <td style="padding:8px 0;color:#1a1a2e;font-size:15px;font-weight:600;">${escapeHtml(data.applicantName)}</td></tr>
+              <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;">Email</td>
+                  <td style="padding:8px 0;color:#374151;font-size:14px;">${escapeHtml(data.applicantEmail)}</td></tr>
+              ${linkedinBlock}
+              ${reasonBlock}
+            </table>
+          </div>
+
+          <table cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;margin:0 0 24px 0;">
+            <tr>
+              <td style="padding:0 6px 12px 0;width:50%;">
+                <a href="${escapeAttr(data.approveUrl)}"
+                   style="display:block;text-align:center;background:#DE322E;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 0;border-radius:10px;">
+                  Approve
+                </a>
+              </td>
+              <td style="padding:0 0 12px 6px;width:50%;">
+                <a href="${escapeAttr(data.rejectUrl)}"
+                   style="display:block;text-align:center;background:#ffffff;color:#1a1a2e;font-size:16px;font-weight:600;text-decoration:none;padding:13px 0;border-radius:10px;border:1px solid #d1d5db;">
+                  Decline
+                </a>
+              </td>
+            </tr>
+          </table>
+
+          <p style="color:#6b7280;font-size:13px;line-height:1.6;margin:0 0 8px 0;">
+            Each link takes you to a confirmation page so nothing is acted on until you click again. Links expire in ${data.expiresInHours} hours.
+          </p>
+          <p style="color:#6b7280;font-size:13px;line-height:1.6;margin:0;">
+            Prefer the dashboard? <a href="${escapeAttr(data.dashboardUrl)}" style="color:#DE322E;text-decoration:none;">Open it here</a>.
+          </p>
+        </div>
+        <p style="color:#475569;font-size:12px;text-align:center;margin:24px 0 0 0;">
+          RSN — Fast, focused, and human.
+        </p>
+      </div>
+    </body>
+    </html>
+  `;
+
+  if (config.resendApiKey) {
+    const linkedin = data.applicantLinkedinUrl ? `\nLinkedIn: ${data.applicantLinkedinUrl}` : '';
+    const reason = data.applicantReason ? `\nWhy RSN: ${data.applicantReason}` : '';
+    const text =
+      `Hi ${data.adminDisplayName},\n\n` +
+      `A new request to join RSN just came in.\n\n` +
+      `Name: ${data.applicantName}\nEmail: ${data.applicantEmail}${linkedin}${reason}\n\n` +
+      `Approve: ${data.approveUrl}\nDecline: ${data.rejectUrl}\n\n` +
+      `Each link opens a confirmation page so nothing happens until you click again. Links expire in ${data.expiresInHours} hours.\n\n` +
+      `Prefer the dashboard: ${data.dashboardUrl}\n\nRSN — Fast, focused, and human.`;
+    await sendEmail({ to, subject, html, text });
+    return;
+  }
+
+  logger.warn({ to, applicantEmail: data.applicantEmail }, 'No email provider — admin review email skipped');
+}
+
+// HTML-escape helpers for the admin review email. Other templates render
+// trusted internal copy; this one renders applicant-supplied free-text
+// (name + reason + linkedin URL) into HTML, so we escape every interpolation.
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+function escapeAttr(s: string): string {
+  return escapeHtml(s);
+}
