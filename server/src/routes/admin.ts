@@ -748,7 +748,7 @@ async function computeOverview() {
     ),
     query<{ dropped: string; total: string }>(
       `SELECT
-         COUNT(*) FILTER (WHERE status IN ('left','no_show','disconnected'))::text AS dropped,
+         COUNT(*) FILTER (WHERE sp.status IN ('left','no_show','disconnected'))::text AS dropped,
          COUNT(*)::text AS total
        FROM session_participants sp
        JOIN sessions s ON s.id = sp.session_id
@@ -816,7 +816,7 @@ async function computeEvents() {
   }>(
     `SELECT
        s.id,
-       s.name,
+       s.title AS name,
        s.scheduled_at,
        s.status,
        (SELECT COUNT(*)::text FROM session_participants sp WHERE sp.session_id = s.id) AS participants,
@@ -874,6 +874,10 @@ router.get(
 // Last 90 days.
 
 async function computeUsers() {
+  // Each meeting_records row is "user_id rated partner_id". So to compute
+  // the avg quality RECEIVED by user X, aggregate rating_given GROUP BY
+  // partner_id (= X). Simpler than joining ratings — meeting_records
+  // already stores the rating per (user, partner) edge.
   const result = await query<{
     user_id: string;
     display_name: string | null;
@@ -881,32 +885,21 @@ async function computeUsers() {
     avg_quality_received: string | null;
     meet_again_rate: string | null;
   }>(
-    `WITH stats AS (
-       SELECT
-         mr.partner_id AS user_id,
-         COUNT(*)::int AS total_meetings,
-         AVG(CASE
-           WHEN m.participant_a_id = mr.partner_id THEN r.quality_score
-           ELSE r2.quality_score END
-         )::numeric AS avg_quality_received,
-         AVG(CASE WHEN mr.is_mutual THEN 1.0 ELSE 0.0 END)::numeric AS meet_again_rate
-       FROM meeting_records mr
-       JOIN matches m ON m.id = mr.match_id
-       LEFT JOIN ratings r ON r.match_id = m.id AND r.rater_id = mr.user_id
-       LEFT JOIN ratings r2 ON r2.match_id = m.id AND r2.rater_id = mr.user_id
-       WHERE mr.recorded_at > NOW() - INTERVAL '90 days'
-       GROUP BY mr.partner_id
-       HAVING COUNT(*) >= 5
-     )
-     SELECT
-       s.user_id,
+    `SELECT
+       mr.partner_id AS user_id,
        u.display_name,
-       s.total_meetings::text,
-       ROUND(s.avg_quality_received, 2)::text AS avg_quality_received,
-       ROUND(s.meet_again_rate, 3)::text AS meet_again_rate
-     FROM stats s
-     LEFT JOIN users u ON u.id = s.user_id
-     ORDER BY (COALESCE(s.avg_quality_received, 0) / 5.0 + COALESCE(s.meet_again_rate, 0)) DESC
+       COUNT(*)::text AS total_meetings,
+       ROUND(AVG(mr.rating_given)::numeric, 2)::text AS avg_quality_received,
+       ROUND(AVG(CASE WHEN mr.is_mutual THEN 1.0 ELSE 0.0 END)::numeric, 3)::text AS meet_again_rate
+     FROM meeting_records mr
+     LEFT JOIN users u ON u.id = mr.partner_id
+     WHERE mr.recorded_at > NOW() - INTERVAL '90 days'
+     GROUP BY mr.partner_id, u.display_name
+     HAVING COUNT(*) >= 5
+     ORDER BY (
+       COALESCE(AVG(mr.rating_given) / 5.0, 0)
+       + COALESCE(AVG(CASE WHEN mr.is_mutual THEN 1.0 ELSE 0.0 END), 0)
+     ) DESC
      LIMIT 100`,
   );
 
