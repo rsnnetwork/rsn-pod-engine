@@ -7054,3 +7054,64 @@ Replaced the 1-step fallback (strict → drop excludedPairs) with a 5-level ladd
 - 100-user mock event in staging (would require dedicated load-test infrastructure; the existing `_loadtest-scratch/` work covers this and runs locally; not a CI gate)
 - Browser walk on staging — needs human hands; documented in the testing message for Stefan
 - Compensating LiveKit room cleanup (orphan empty rooms remain harmless; LiveKit auto-GC's them)
+
+---
+
+## Stefan's 7th May Feedback — Phase 7A — 2026-05-07
+
+**Status:** Server architectural fixes shipped (7A only; 7B + 7C queued for next session)
+**Plan:** `docs/superpowers/plans/2026-05-07-phase-7-stefan-7th-may-feedback.md`
+**Why:** Stefan's 7 May test surfaced 12 critical issues. Three of them traced to real holes in my prior phases:
+- #2 `stefan@avivson.com` sat in DISCONNECTED for 10 min, never matched (Phase 2.7 hole)
+- #5 mutual-match count could drift from list (Phase 1 incomplete fix)
+- #8 host included in matches via pre-plan path (Phase 2.5A bug I introduced)
+
+7A closes those four (plus 7A.4 atomic move-to-room which extends Phase 4A's pattern).
+
+### What changed
+
+**7A.1 — Stale-state escalation in `reconcileSessionStates`**
+- Reconciler now queries `session_participants` for users in DISCONNECTED state with `joined_at < NOW() - INTERVAL '90 seconds'` and no active match. Each is transitioned to LEFT via the chokepoint.
+- If any users escalated AND `currentRound >= 1`, fires `repairFutureRounds(sessionId, currentRound + 1, 'left')` so the pre-plan no longer counts them.
+- Closes Stefan #2: the canonical "registered → briefly connected → disconnected before any match" ghost user is now auto-cleaned within one 30 s reconciler tick after the 90 s grace window.
+
+**7A.2 — Pre-plan host/cohort exclusion**
+- `generateSessionSchedule(sessionId, customConfig?, excludeUserIds?)` accepts an exclusion list.
+- `handleHostStart` calls it with `getAllHostIds(sessionId, hostUserId)` so host + every cohost is filtered before pre-planning. Same shape `generateSingleRound` already had.
+- Closes Stefan #8: pre-planned rounds no longer include the host as a regular participant. Verified against today's event `02140b88` where match `bcae06f8` paired host with another participant; that won't repeat.
+
+**7A.3 — Single-source mutual stats**
+- `getPeopleMet` now derives `mutualConnections` (the LIST) from `meeting_records.is_mutual=TRUE` instead of `connections.filter(c => c.mutualMeetAgain)` (which used `encounter_history.mutual_meet_again`).
+- Both the count card and the connections list now read the same canonical aggregate. They cannot drift even if cross-session encounter writes lag.
+- Closes Stefan #5: the "displayed 3, list shows 2" inconsistency is structurally impossible from this commit forward.
+
+**7A.4 — Atomic move-to-room**
+- `handleHostMoveToRoom` reshaped: LiveKit room first (fail-fast), then end-current + end-target + insert-new wrapped in a single transaction. Partner-bye emit moved to after the transaction commits so we never tell someone "your partner left" for a move that rolled back.
+- Catches `23505` unique violation as `PARTICIPANT_ALREADY_MATCHED`, generic failures as `MATCH_CREATION_FAILED`. Both surfaced via the FRIENDLY toast mapping shipped in Phase 5A.
+- Closes Stefan #9 (the "manual room caused orphaned participants" case for the move flow).
+
+### What's NOT in 7A
+
+The remaining items from Stefan's doc — #1 (404 on join), #3 + #11 (host control center / unmatched-reassignment), #4 (frontend-backend sync), #6 (admin analytics), #7 (cohost UX), #10 (double-confirmation), #12 (test-mode banner v2) — are queued for **7B** (frontend safety net + click polish) and **7C** (UI new builds), per the Phase 7 plan doc. They are explicitly NOT shipped in this commit.
+
+### Files
+
+**Modified**
+- `server/src/services/orchestration/state/participant-state-machine.ts` (7A.1 stale-state escalation in reconciler)
+- `server/src/services/matching/matching.service.ts` (7A.2 generateSessionSchedule excludeUserIds + 7A.3 mutualPartnerIds query)
+- `server/src/services/rating/rating.service.ts` (7A.3 single-source mutualConnections)
+- `server/src/services/orchestration/handlers/host-actions.ts` (7A.2 pass excludeIds to generateSessionSchedule + 7A.4 atomic move-to-room)
+
+**New**
+- `server/src/__tests__/services/orchestration/phase-7a-stefan-7th-may-server-fixes.test.ts` (14 architectural pins covering all four 7A items)
+- `docs/superpowers/plans/2026-05-07-phase-7-stefan-7th-may-feedback.md` (plan for 7A + 7B + 7C)
+
+### Verification
+
+- `npx tsc --noEmit` (server) — clean
+- `npx jest` — **1102 / 1102 across 82 suites** (was 1088; +14 Phase 7A)
+- All prior Phase tests green — no regressions
+- CI staging: pending push
+- CI main: pending push
+- Render: pending deploy
+- Sentry post-deploy: will watch

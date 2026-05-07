@@ -316,13 +316,14 @@ export function setPresence(
 export async function reconcileSessionStates(sessionId: string): Promise<{
   checked: number;
   diverged: number;
+  staleEscalated: number;
 }> {
   const activeSession = activeSessions.get(sessionId);
-  if (!activeSession) return { checked: 0, diverged: 0 };
-  if (!activeSession.participantStates) return { checked: 0, diverged: 0 };
+  if (!activeSession) return { checked: 0, diverged: 0, staleEscalated: 0 };
+  if (!activeSession.participantStates) return { checked: 0, diverged: 0, staleEscalated: 0 };
 
-  const dbRows = await query<{ user_id: string; status: ParticipantStatus }>(
-    `SELECT user_id, status FROM session_participants WHERE session_id = $1`,
+  const dbRows = await query<{ user_id: string; status: ParticipantStatus; joined_at: Date | null }>(
+    `SELECT user_id, status, joined_at FROM session_participants WHERE session_id = $1`,
     [sessionId],
   );
 
@@ -349,7 +350,72 @@ export async function reconcileSessionStates(sessionId: string): Promise<{
     }
   }
 
-  return { checked: dbRows.rows.length, diverged };
+  // Phase 7A.1 (7 May spec) — stale-state escalation.
+  //
+  // Stefan #2: a user who registered → briefly connected → disconnected
+  // before any match never falls into Phase 2.7's 15s mid-match timer
+  // (no partner waiting) or 90s stale-heartbeat detector (not in
+  // presenceMap). They sit in DISCONNECTED forever, counted as a
+  // participant but never matched — exactly what happened to
+  // c43142d8 (stefan@avivson.com) in event 98e109af on 7 May.
+  //
+  // Fix: query session_participants for users in DISCONNECTED state
+  // for >90s with no active match, transition them to LEFT via the
+  // chokepoint, fire repair_future_rounds once per session.
+  let staleEscalated = 0;
+  try {
+    const staleRows = await query<{ user_id: string }>(
+      `SELECT sp.user_id
+         FROM session_participants sp
+        WHERE sp.session_id = $1
+          AND sp.status = 'disconnected'
+          AND sp.joined_at < NOW() - INTERVAL '90 seconds'
+          AND NOT EXISTS (
+            SELECT 1 FROM matches m
+             WHERE m.session_id = $1 AND m.status = 'active'
+               AND (m.participant_a_id = sp.user_id
+                    OR m.participant_b_id = sp.user_id
+                    OR m.participant_c_id = sp.user_id)
+          )`,
+      [sessionId],
+    );
+    for (const row of staleRows.rows) {
+      try {
+        const result = await transitionParticipant(sessionId, row.user_id, ParticipantState.LEFT);
+        if (result.ok) {
+          staleEscalated++;
+          logger.info(
+            { sessionId, userId: row.user_id, fromState: result.fromState },
+            'Phase 7A.1 — stale DISCONNECTED escalated to LEFT (>90s no match)',
+          );
+        }
+      } catch (err) {
+        logger.warn({ err, sessionId, userId: row.user_id },
+          'Phase 7A.1 — stale-state escalation failed for user (continuing)');
+      }
+    }
+
+    // If any users escalated, trigger one future-rounds repair so the
+    // pre-plan no longer includes them. Throttling lives inside
+    // repairFutureRounds itself + the maybeRepairFutureRounds wrapper
+    // in participant-flow.ts; calling matchingService directly here is
+    // safe because the reconciler ticks at 30s, well above the 5s
+    // repair throttle.
+    if (staleEscalated > 0 && activeSession.currentRound >= 1) {
+      try {
+        const fromRound = activeSession.currentRound + 1;
+        const matchingService = await import('../../matching/matching.service');
+        await matchingService.repairFutureRounds(sessionId, fromRound, 'left');
+      } catch (err) {
+        logger.warn({ err, sessionId, staleEscalated },
+          'Phase 7A.1 — future-rounds repair after stale escalation failed');
+      }
+    }
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'Phase 7A.1 — stale-state query failed');
+  }
+
+  return { checked: dbRows.rows.length, diverged, staleEscalated };
 }
 
 /**
@@ -366,8 +432,8 @@ export function startGlobalReconciler(): void {
     for (const sessionId of activeSessions.keys()) {
       try {
         const result = await reconcileSessionStates(sessionId);
-        if (result.diverged > 0) {
-          logger.info({ sessionId, ...result }, 'Reconciler tick — drift converged');
+        if (result.diverged > 0 || result.staleEscalated > 0) {
+          logger.info({ sessionId, ...result }, 'Reconciler tick — drift converged / stale escalated');
         }
       } catch (err) {
         logger.warn({ err, sessionId }, 'Reconciler tick failed for session — continuing');

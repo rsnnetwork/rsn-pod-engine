@@ -360,25 +360,44 @@ export async function getPeopleMet(
   );
 
   const connections = connectionsResult.rows;
-  const mutualConnections = connections.filter(c => c.mutualMeetAgain);
 
   // Phase 2 (1 May spec) — surface deterministic counts from meeting_records.
-  // The connections[] array above stays for the per-row UI rendering, but
-  // the headline numbers (people met / total meetings / mutual matches) come
-  // from the canonical stored aggregate so they don't drift between renders.
+  // Phase 7A.3 (7 May spec) — Stefan #5: pre-fix, the headline mutualMatches
+  // count came from meeting_records (canonical aggregate) but the
+  // mutualConnections LIST was derived from encounter_history's
+  // mutual_meet_again field on each connection row. Two sources →
+  // potential drift if encounter_history writes lag the meeting_records
+  // write. Fix: derive mutualConnections from meeting_records too.
+  // Both the count and the list now come from the same source — they
+  // can no longer disagree even if a rating writes mid-render.
   let counts = { uniquePeopleMet: 0, totalMeetings: 0, mutualMatches: 0 };
+  let mutualPartnerIds = new Set<string>();
   try {
     const { getMeetingCounts } = await import('../meeting-records/meeting-records.service');
     counts = await getMeetingCounts(userId, sessionId);
+    // Fetch the mutual partner IDs from the SAME aggregate so the list
+    // matches the count exactly.
+    const mutualRows = await query<{ partner_id: string }>(
+      `SELECT DISTINCT partner_id FROM meeting_records
+        WHERE user_id = $1 AND session_id = $2
+          AND is_mutual = TRUE AND is_recap_eligible = TRUE`,
+      [userId, sessionId],
+    );
+    mutualPartnerIds = new Set(mutualRows.rows.map(r => r.partner_id));
   } catch (err) {
     logger.warn({ err, userId, sessionId }, 'Falling back to derived counts (meeting_records read failed)');
-    // Derive from connections so the UI still works.
+    // Legacy fallback — unchanged behaviour.
+    const fallbackMutual = connections.filter(c => c.mutualMeetAgain);
     counts = {
       uniquePeopleMet: new Set(connections.map(c => c.userId)).size,
       totalMeetings: connections.length,
-      mutualMatches: mutualConnections.length,
+      mutualMatches: fallbackMutual.length,
     };
+    mutualPartnerIds = new Set(fallbackMutual.map(c => c.userId));
   }
+
+  // Filter the connections list using meeting_records as truth.
+  const mutualConnections = connections.filter(c => mutualPartnerIds.has(c.userId));
 
   return {
     sessionId,

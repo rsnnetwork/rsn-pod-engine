@@ -206,7 +206,10 @@ export async function handleHostStart(
     // engine. Failure here is non-fatal: if planning fails we log it, the
     // legacy per-round path still works, and Sentry will surface the issue.
     try {
-      const planOutput = await matchingService.generateSessionSchedule(data.sessionId);
+      // Phase 7A.2 (7 May spec) — exclude host + cohosts from the pre-plan
+      // so they don't end up paired as regular participants in any round.
+      const planExcludeIds = await getAllHostIds(data.sessionId, session.hostUserId);
+      const planOutput = await matchingService.generateSessionSchedule(data.sessionId, undefined, planExcludeIds);
       const totalPairs = planOutput.rounds.reduce((sum, r) => sum + r.pairs.length, 0);
       logger.info(
         { sessionId: data.sessionId, rounds: planOutput.rounds.length, totalPairs, durationMs: planOutput.durationMs },
@@ -1110,34 +1113,60 @@ export async function handleHostMoveToRoom(
     const targetMatch = targetMatchResult.rows[0];
     const targetParticipants = [targetMatch.participant_a_id, targetMatch.participant_b_id];
 
-    // End the user's current match
-    await query(`UPDATE matches SET status = 'completed', ended_at = NOW() WHERE id = $1`, [currentMatch.id]);
+    // Phase 7A.4 (7 May spec) — atomic move-to-room.
+    // Pre-fix: end-current + end-target + insert-new were independent
+    // DB writes. If insert-new failed, both source matches were stuck
+    // at 'completed' with no replacement → 3 participants orphaned.
+    // Now: LiveKit room first (fail-fast), all 3 DB writes wrapped in
+    // a single transaction. If insert fails, both ends roll back.
 
-    // Give the abandoned partner a bye
-    io.to(userRoom(currentPartnerId)).emit('match:return_to_lobby', { reason: 'partner_left' });
-
-    // Create new match: user joins the target room participants
+    // Step 1: LiveKit room first (fail-fast)
     const moveSlug = `move-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const newRoomId = `session-${sessionId}-round-${activeSession.currentRound}-${moveSlug}`;
     try {
       await videoService.createMatchRoom(sessionId, activeSession.currentRound, moveSlug);
     } catch (err) {
-      logger.warn({ err, newRoomId }, 'LiveKit room creation failed for move (may already exist)');
+      logger.error({ err, newRoomId }, 'Failed to create LiveKit room for host move-to-room');
+      socket.emit('error', { code: 'ROOM_CREATION_FAILED', message: 'Failed to create new room. Try again.' });
+      return;
     }
+
     const allParticipants = [...targetParticipants, userId];
     const [pA, pB] = allParticipants[0] < allParticipants[1]
       ? [allParticipants[0], allParticipants[1]] : [allParticipants[1], allParticipants[0]];
 
-    // End the old target match
-    await query(`UPDATE matches SET status = 'completed', ended_at = NOW() WHERE id = $1`, [targetMatchId]);
+    // Step 2: atomic DB transaction — end-current, end-target, insert-new
+    let newMatchId = '';
+    try {
+      await transaction(async (client) => {
+        await client.query(
+          `UPDATE matches SET status = 'completed', ended_at = NOW() WHERE id = $1`,
+          [currentMatch.id],
+        );
+        await client.query(
+          `UPDATE matches SET status = 'completed', ended_at = NOW() WHERE id = $1`,
+          [targetMatchId],
+        );
+        const ins = await client.query<{ id: string }>(
+          `INSERT INTO matches (session_id, round_number, participant_a_id, participant_b_id, participant_c_id, room_id, status, started_at)
+           VALUES ($1, $2, $3, $4, $5, $6, 'active', NOW()) RETURNING id`,
+          [sessionId, activeSession.currentRound, pA, pB, allParticipants.length > 2 ? allParticipants[2] : null, newRoomId],
+        );
+        newMatchId = ins.rows[0].id;
+      });
+    } catch (err: any) {
+      logger.error({ err }, 'Phase 7A.4 — atomic move-to-room transaction rolled back');
+      if (err?.code === '23505') {
+        socket.emit('error', { code: 'PARTICIPANT_ALREADY_MATCHED', message: 'One of the participants is already in another active match.' });
+      } else {
+        socket.emit('error', { code: 'MATCH_CREATION_FAILED', message: 'Could not move participant. Try again.' });
+      }
+      if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
+      return;
+    }
 
-    // Insert new match with all participants
-    const newMatchResult = await query<{ id: string }>(
-      `INSERT INTO matches (session_id, round_number, participant_a_id, participant_b_id, participant_c_id, room_id, status, started_at)
-       VALUES ($1, $2, $3, $4, $5, $6, 'active', NOW()) RETURNING id`,
-      [sessionId, activeSession.currentRound, pA, pB, allParticipants.length > 2 ? allParticipants[2] : null, newRoomId]
-    );
-    const newMatchId = newMatchResult.rows[0].id;
+    // Post-transaction: give the abandoned partner a bye notification.
+    io.to(userRoom(currentPartnerId)).emit('match:return_to_lobby', { reason: 'partner_left' });
 
     // Phase 0 (1 May spec) — server-canonical room assignment for host
     // move-to-room. Same architectural rule.

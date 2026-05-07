@@ -76,25 +76,43 @@ async function loadMatchRequestsForEvent(
 
 export async function generateSessionSchedule(
   sessionId: string,
-  customConfig?: Partial<MatchingConfig>
+  customConfig?: Partial<MatchingConfig>,
+  excludeUserIds?: string[],
 ): Promise<MatchingOutput> {
   const session = await sessionService.getSessionById(sessionId);
   const sessionConfig = typeof session.config === 'string'
     ? JSON.parse(session.config as unknown as string)
     : session.config;
 
-  // Get registered participants with profile data + Matching Engine 1.0
-  // spec Section 4 fields (premium flag, requested users).
-  const participantsResult = await query<MatchingParticipant>(
-    `SELECT u.id AS "userId", u.interests, u.reasons_to_connect AS "reasonsToConnect",
-            u.industry, u.company, u.languages, u.timezone,
-            '{}'::jsonb AS attributes,
-            COALESCE(u.is_premium, FALSE) AS "isPremium"
-     FROM session_participants sp
-     JOIN users u ON u.id = sp.user_id
-     WHERE sp.session_id = $1 AND sp.status NOT IN ('removed', 'left', 'no_show')`,
-    [sessionId]
-  );
+  // Phase 7A.2 (7 May spec) — host + cohorts must be excluded from
+  // pre-event planning. Stefan #8: pre-plan was including the host
+  // (and any cohorts) as regular participants because this query had
+  // no exclusion. The legacy generateSingleRound path correctly
+  // filtered via excludeUserIds; bringing the same behaviour here.
+  // Honours session_participants.role='co_host' + EXCLUDE_FROM_MATCHMAKING
+  // semantic via the caller building excludeUserIds with getAllHostIds().
+  const participantsResult = excludeUserIds && excludeUserIds.length > 0
+    ? await query<MatchingParticipant>(
+        `SELECT u.id AS "userId", u.interests, u.reasons_to_connect AS "reasonsToConnect",
+                u.industry, u.company, u.languages, u.timezone,
+                '{}'::jsonb AS attributes,
+                COALESCE(u.is_premium, FALSE) AS "isPremium"
+         FROM session_participants sp
+         JOIN users u ON u.id = sp.user_id
+         WHERE sp.session_id = $1 AND sp.status NOT IN ('removed', 'left', 'no_show')
+           AND sp.user_id != ALL($2::uuid[])`,
+        [sessionId, excludeUserIds]
+      )
+    : await query<MatchingParticipant>(
+        `SELECT u.id AS "userId", u.interests, u.reasons_to_connect AS "reasonsToConnect",
+                u.industry, u.company, u.languages, u.timezone,
+                '{}'::jsonb AS attributes,
+                COALESCE(u.is_premium, FALSE) AS "isPremium"
+         FROM session_participants sp
+         JOIN users u ON u.id = sp.user_id
+         WHERE sp.session_id = $1 AND sp.status NOT IN ('removed', 'left', 'no_show')`,
+        [sessionId]
+      );
 
   const participants = participantsResult.rows;
 
