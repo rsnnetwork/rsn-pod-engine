@@ -707,6 +707,18 @@ export default function useSessionSocket(sessionId: string) {
       fetchSessionStateSnapshot();
     }, 250);
 
+    // Phase 7B.1 (7 May spec) — periodic backend re-sync.
+    // Stefan #4: socket events are the primary state-change channel, but
+    // a missed event (network blip, server restart, race) can leave the
+    // client showing a stale state forever. Every 30s, fetch the
+    // authoritative snapshot from the backend; if anything differs from
+    // local, server wins (applyFullState reconciles atomically). This
+    // is a safety net BEHIND socket events, not a replacement.
+    const PERIODIC_RESYNC_MS = 30_000;
+    const periodicResyncInterval = setInterval(() => {
+      fetchSessionStateSnapshot();
+    }, PERIODIC_RESYNC_MS);
+
     // ── Reconnection ──
     const onReconnect = () => {
       store.setReconnecting(false);
@@ -742,6 +754,7 @@ export default function useSessionSocket(sessionId: string) {
       clearByeTimeout();
       clearInterval(heartbeatInterval);
       clearTimeout(initialSnapshotTimer);
+      clearInterval(periodicResyncInterval);
 
       // Remove ALL socket event listeners we attached
       for (const ev of SOCKET_EVENTS) socket.off(ev);

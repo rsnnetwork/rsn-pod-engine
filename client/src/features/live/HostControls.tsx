@@ -4,6 +4,7 @@ import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForw
 import { getSocket } from '@/lib/socket';
 import { useState } from 'react';
 import EventPlanStrip from './EventPlanStrip';
+import { useActionLock } from '@/hooks/useActionLock';
 
 interface Props { sessionId: string; }
 
@@ -45,18 +46,21 @@ export default function HostControls({ sessionId }: Props) {
   const allRoundsDone = currentRound >= totalRounds && totalRounds > 0;
   const isInRound = sessionStatus === 'round_active' || sessionStatus === 'round_rating' || phase === 'matched' || phase === 'rating';
 
-  const startSession = () => socket?.emit('host:start_session', { sessionId });
-  const endCurrentRound = () => {
+  // Phase 7B.3 — click-lock against double-fires (Stefan #10).
+  const { runLocked } = useActionLock();
+
+  const startSession = () => runLocked('start_session', () => { socket?.emit('host:start_session', { sessionId }); });
+  const endCurrentRound = () => runLocked('end_round', () => {
     if (!confirm('End this round early? Participants will move to the rating screen.')) return;
     socket?.emit('host:end_session', { sessionId });
-  };
-  const endEvent = () => {
+  });
+  const endEvent = () => runLocked('end_event', () => {
     const msg = isInRound
       ? 'A round is currently active. Ending the event will cut all conversations short. Are you sure?'
       : 'Are you sure you want to end this event? All participants will be disconnected.';
     if (!confirm(msg)) return;
     socket?.emit('host:end_session', { sessionId });
-  };
+  });
 
   // Count non-host/co-host participants for matching eligibility
   const cohosts = useSessionStore(s => s.cohosts);
@@ -81,24 +85,24 @@ export default function HostControls({ sessionId }: Props) {
     setTimeout(() => { setGenerating(false); socket?.off('error', onError); }, 10000);
   };
 
-  const confirmMatches = () => {
+  const confirmMatches = () => runLocked('confirm_matches', () => {
     socket?.emit('host:confirm_matches' as any, { sessionId });
     setMatchesConfirmed(true);
-  };
+  });
 
-  const confirmRound = () => {
+  const confirmRound = () => runLocked('confirm_round', () => {
     socket?.emit('host:confirm_round', { sessionId });
     setMatchPreview(null);
     setMatchesConfirmed(false);
     setSwapMode(null);
-  };
+  });
 
-  const cancelPreview = () => {
+  const cancelPreview = () => runLocked('cancel_preview', () => {
     socket?.emit('host:cancel_preview', { sessionId });
     setMatchPreview(null);
     setMatchesConfirmed(false);
     setSwapMode(null);
-  };
+  });
 
   const regenerateMatches = () => {
     setGenerating(true);

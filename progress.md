@@ -7111,7 +7111,47 @@ The remaining items from Stefan's doc — #1 (404 on join), #3 + #11 (host contr
 - `npx tsc --noEmit` (server) — clean
 - `npx jest` — **1102 / 1102 across 82 suites** (was 1088; +14 Phase 7A)
 - All prior Phase tests green — no regressions
-- CI staging: pending push
-- CI main: pending push
-- Render: pending deploy
-- Sentry post-deploy: will watch
+- CI staging green, CI main green, Render live at `75b6552`, API healthy, Sentry zero new errors
+
+---
+
+## Stefan's 7th May Feedback — Phase 7B — 2026-05-07
+
+**Status:** Frontend safety net + click polish shipped (7B; 7C UI builds queued)
+**Why:** Closes the three frontend-side items from Stefan's 7 May doc: #1 (404 on join), #4 (UI/backend desync after socket misses), #10 (double-confirmation).
+
+### What changed
+
+**7B.1 — Periodic backend re-sync (closes Stefan #4)**
+- `useSessionSocket.ts` now sets up `setInterval(30_000)` that calls `fetchSessionStateSnapshot()` — the same authoritative-snapshot fetch used on mount + reconnect. If a socket event was missed, the periodic re-sync converges client to server within 30 s.
+- Cleanup wired alongside the existing intervals.
+
+**7B.2 — 404-to-recovery wrapper (closes Stefan #1)**
+- New `<SessionGuard />` wraps `LiveSessionPage`. On mount, fetches `/sessions/:id`. If 200 renders children; if 404 shows "Reconnecting…" with retry backoff `1s → 2s → 4s`; after 3 failed retries, "This event no longer exists" with Back-to-Dashboard. Non-404 errors get "Couldn't load the event" with retry-or-back. Visibility-change re-validates.
+- Generic safety net: Stefan's exact bug + same-shape cases (stale URL, browser-back to ended event, tab-switch race).
+
+**7B.3 — Click-lock against double-fires (closes Stefan #10)**
+- New `useActionLock(lockMs = 1500)` hook returns `runLocked(key, fn)`. Subsequent calls with same key while locked are ignored. Auto-releases after lockMs (or promise + lockMs).
+- Wrapped: `startSession`, `endCurrentRound`, `endEvent`, `confirmMatches`, `confirmRound`, `cancelPreview` in `HostControls.tsx`. Generic by key.
+
+### Files
+
+**New**
+- `client/src/features/live/SessionGuard.tsx`
+- `client/src/hooks/useActionLock.ts`
+
+**Modified**
+- `client/src/hooks/useSessionSocket.ts` (periodic re-sync)
+- `client/src/App.tsx` (route wraps in `<SessionGuard>`)
+- `client/src/features/live/HostControls.tsx` (host actions in `runLocked`)
+
+### Verification
+
+- `npx tsc --noEmit` (client) — clean
+- `npm run build` (client) — clean (15.67 s)
+- All 1102 server tests still pass (no server changes in 7B)
+- CI + Render + Vercel: pending push
+
+### What is NOT in 7B
+
+#3, #6, #7, #11, #12 — queued for **7C** (UI new builds).

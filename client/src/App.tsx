@@ -16,6 +16,7 @@ import CreateSessionPage from '@/features/sessions/CreateSessionPage';
 import InvitesPage from '@/features/invites/InvitesPage';
 import InviteAcceptPage from '@/features/invites/InviteAcceptPage';
 import LiveSessionPage from '@/features/live/LiveSessionPage';
+import SessionGuard from '@/features/live/SessionGuard';
 import HostDashboardPage from '@/features/host/HostDashboardPage';
 import RecapPage from '@/features/sessions/RecapPage';
 import MessagesPage from '@/features/messages/MessagesPage';
@@ -83,7 +84,7 @@ export default function App() {
 
       {/* Protected without layout (full-screen) */}
       <Route path="/onboarding" element={<ProtectedRoute><OnboardingPage /></ProtectedRoute>} />
-      <Route path="/session/:sessionId/live" element={<ProtectedRoute><LiveSessionPage /></ProtectedRoute>} />
+      <Route path="/session/:sessionId/live" element={<ProtectedRoute><SessionGuard><LiveSessionPage /></SessionGuard></ProtectedRoute>} />
       <Route path="/session/:sessionId/host" element={<ProtectedRoute><HostDashboardPage /></ProtectedRoute>} />
 
       <Route path="*" element={<NotFoundPage />} />
