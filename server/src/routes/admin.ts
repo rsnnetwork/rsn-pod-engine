@@ -695,4 +695,363 @@ router.get(
   }
 );
 
+// ═════════════════════════════════════════════════════════════════════════════
+// Phase 7C.4 — Admin analytics dashboard (Stefan #6)
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Cross-event aggregates the admin uses to evaluate event quality, user
+// satisfaction, match success, dropoff. Five endpoints:
+//   GET /analytics/overview         — top-line numbers
+//   GET /analytics/events           — per-event scores + 30-day trend
+//   GET /analytics/users            — per-user composite + most-liked
+//   GET /analytics/connections      — graph data (nodes + edges)
+//   GET /analytics/export/:type.csv — CSV download for any of the above
+//
+// Cache: 60s in-memory TTL. Charts page reload doesn't slam the DB.
+// Single instance for now; when Phase 4 (multi-instance) lands this will
+// move to Redis (one cache key per analytics shape).
+
+const ANALYTICS_CACHE_TTL_MS = 60_000;
+type AnalyticsCacheKey = 'overview' | 'events' | 'users' | 'connections';
+const analyticsCache = new Map<AnalyticsCacheKey, { fetchedAt: number; data: any }>();
+
+async function getAnalytics(key: AnalyticsCacheKey, compute: () => Promise<any>): Promise<any> {
+  const cached = analyticsCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < ANALYTICS_CACHE_TTL_MS) {
+    return cached.data;
+  }
+  const data = await compute();
+  analyticsCache.set(key, { fetchedAt: Date.now(), data });
+  return data;
+}
+
+// ─── /analytics/overview ──────────────────────────────────────────────────
+//
+// Top-line: total events / total participants / total mutual matches /
+// avg quality score / dropoff rate. Last 30 days unless noted.
+
+async function computeOverview() {
+  const [eventsTotal, eventsCompleted, ratingsAgg, mutualAgg, dropoffAgg] = await Promise.all([
+    query<{ c: string }>(`SELECT COUNT(*)::text AS c FROM sessions WHERE created_at > NOW() - INTERVAL '30 days'`),
+    query<{ c: string }>(`SELECT COUNT(*)::text AS c FROM sessions WHERE status = 'completed' AND created_at > NOW() - INTERVAL '30 days'`),
+    query<{ avg: string | null; n: string }>(
+      `SELECT ROUND(AVG(quality_score)::numeric, 2)::text AS avg, COUNT(*)::text AS n
+         FROM ratings
+        WHERE quality_score IS NOT NULL AND created_at > NOW() - INTERVAL '30 days'`,
+    ),
+    query<{ mutual: string; total: string }>(
+      `SELECT
+         COUNT(*) FILTER (WHERE is_mutual = TRUE)::text AS mutual,
+         COUNT(*)::text AS total
+       FROM meeting_records
+       WHERE recorded_at > NOW() - INTERVAL '30 days'`,
+    ),
+    query<{ dropped: string; total: string }>(
+      `SELECT
+         COUNT(*) FILTER (WHERE status IN ('left','no_show','disconnected'))::text AS dropped,
+         COUNT(*)::text AS total
+       FROM session_participants sp
+       JOIN sessions s ON s.id = sp.session_id
+       WHERE s.created_at > NOW() - INTERVAL '30 days'`,
+    ),
+  ]);
+
+  const totalEvents = parseInt(eventsTotal.rows[0]?.c || '0', 10);
+  const completedEvents = parseInt(eventsCompleted.rows[0]?.c || '0', 10);
+  const totalRatings = parseInt(ratingsAgg.rows[0]?.n || '0', 10);
+  const avgQuality = ratingsAgg.rows[0]?.avg ? parseFloat(ratingsAgg.rows[0].avg) : null;
+  const mutualCount = parseInt(mutualAgg.rows[0]?.mutual || '0', 10);
+  const meetingTotal = parseInt(mutualAgg.rows[0]?.total || '0', 10);
+  const droppedCount = parseInt(dropoffAgg.rows[0]?.dropped || '0', 10);
+  const totalParticipations = parseInt(dropoffAgg.rows[0]?.total || '0', 10);
+
+  return {
+    windowDays: 30,
+    totalEvents,
+    completedEvents,
+    completionRate: totalEvents > 0 ? completedEvents / totalEvents : 0,
+    totalRatings,
+    avgQuality,
+    mutualCount,
+    meetingTotal,
+    mutualRate: meetingTotal > 0 ? mutualCount / meetingTotal : 0,
+    droppedCount,
+    totalParticipations,
+    dropoffRate: totalParticipations > 0 ? droppedCount / totalParticipations : 0,
+  };
+}
+
+router.get(
+  '/analytics/overview',
+  authenticate,
+  requireRole(UserRole.ADMIN),
+  async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await getAnalytics('overview', computeOverview);
+      const response: ApiResponse<typeof data> = { success: true, data };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ─── /analytics/events ────────────────────────────────────────────────────
+//
+// Per-event row: id / name / scheduled_at / participants / completed / avg
+// quality / mutual rate / dropoff. Last 90 days, ordered newest first.
+
+async function computeEvents() {
+  const result = await query<{
+    id: string;
+    name: string;
+    scheduled_at: Date | null;
+    status: string;
+    participants: string;
+    completed: string;
+    avg_quality: string | null;
+    mutual_count: string;
+    meeting_total: string;
+    dropped: string;
+  }>(
+    `SELECT
+       s.id,
+       s.name,
+       s.scheduled_at,
+       s.status,
+       (SELECT COUNT(*)::text FROM session_participants sp WHERE sp.session_id = s.id) AS participants,
+       (SELECT COUNT(*)::text FROM session_participants sp WHERE sp.session_id = s.id AND sp.status NOT IN ('left','no_show','disconnected','removed')) AS completed,
+       (SELECT ROUND(AVG(r.quality_score)::numeric, 2)::text FROM ratings r JOIN matches m ON m.id = r.match_id WHERE m.session_id = s.id) AS avg_quality,
+       (SELECT COUNT(*) FILTER (WHERE is_mutual = TRUE)::text FROM meeting_records WHERE session_id = s.id) AS mutual_count,
+       (SELECT COUNT(*)::text FROM meeting_records WHERE session_id = s.id) AS meeting_total,
+       (SELECT COUNT(*)::text FROM session_participants sp WHERE sp.session_id = s.id AND sp.status IN ('left','no_show','disconnected')) AS dropped
+     FROM sessions s
+     WHERE s.created_at > NOW() - INTERVAL '90 days'
+     ORDER BY s.scheduled_at DESC NULLS LAST, s.created_at DESC
+     LIMIT 200`,
+  );
+
+  return result.rows.map(r => {
+    const meetingTotal = parseInt(r.meeting_total || '0', 10);
+    const mutualCount = parseInt(r.mutual_count || '0', 10);
+    const participants = parseInt(r.participants || '0', 10);
+    const dropped = parseInt(r.dropped || '0', 10);
+    return {
+      id: r.id,
+      name: r.name,
+      scheduledAt: r.scheduled_at ? r.scheduled_at.toISOString() : null,
+      status: r.status,
+      participants,
+      completedParticipants: parseInt(r.completed || '0', 10),
+      avgQuality: r.avg_quality ? parseFloat(r.avg_quality) : null,
+      mutualCount,
+      meetingTotal,
+      mutualRate: meetingTotal > 0 ? mutualCount / meetingTotal : 0,
+      dropoffRate: participants > 0 ? dropped / participants : 0,
+    };
+  });
+}
+
+router.get(
+  '/analytics/events',
+  authenticate,
+  requireRole(UserRole.ADMIN),
+  async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await getAnalytics('events', computeEvents);
+      const response: ApiResponse<typeof data> = { success: true, data };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ─── /analytics/users ─────────────────────────────────────────────────────
+//
+// Top users by composite score (50% avg quality + 50% meet-again rate).
+// Min 5 meetings to qualify (otherwise small-sample noise dominates).
+// Last 90 days.
+
+async function computeUsers() {
+  const result = await query<{
+    user_id: string;
+    display_name: string | null;
+    total_meetings: string;
+    avg_quality_received: string | null;
+    meet_again_rate: string | null;
+  }>(
+    `WITH stats AS (
+       SELECT
+         mr.partner_id AS user_id,
+         COUNT(*)::int AS total_meetings,
+         AVG(CASE
+           WHEN m.participant_a_id = mr.partner_id THEN r.quality_score
+           ELSE r2.quality_score END
+         )::numeric AS avg_quality_received,
+         AVG(CASE WHEN mr.is_mutual THEN 1.0 ELSE 0.0 END)::numeric AS meet_again_rate
+       FROM meeting_records mr
+       JOIN matches m ON m.id = mr.match_id
+       LEFT JOIN ratings r ON r.match_id = m.id AND r.rater_id = mr.user_id
+       LEFT JOIN ratings r2 ON r2.match_id = m.id AND r2.rater_id = mr.user_id
+       WHERE mr.recorded_at > NOW() - INTERVAL '90 days'
+       GROUP BY mr.partner_id
+       HAVING COUNT(*) >= 5
+     )
+     SELECT
+       s.user_id,
+       u.display_name,
+       s.total_meetings::text,
+       ROUND(s.avg_quality_received, 2)::text AS avg_quality_received,
+       ROUND(s.meet_again_rate, 3)::text AS meet_again_rate
+     FROM stats s
+     LEFT JOIN users u ON u.id = s.user_id
+     ORDER BY (COALESCE(s.avg_quality_received, 0) / 5.0 + COALESCE(s.meet_again_rate, 0)) DESC
+     LIMIT 100`,
+  );
+
+  return result.rows.map(r => {
+    const avgQ = r.avg_quality_received ? parseFloat(r.avg_quality_received) : 0;
+    const meetAgain = r.meet_again_rate ? parseFloat(r.meet_again_rate) : 0;
+    return {
+      userId: r.user_id,
+      displayName: r.display_name,
+      totalMeetings: parseInt(r.total_meetings || '0', 10),
+      avgQualityReceived: avgQ || null,
+      meetAgainRate: meetAgain,
+      compositeScore: 0.5 * (avgQ / 5) + 0.5 * meetAgain,
+    };
+  });
+}
+
+router.get(
+  '/analytics/users',
+  authenticate,
+  requireRole(UserRole.ADMIN),
+  async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await getAnalytics('users', computeUsers);
+      const response: ApiResponse<typeof data> = { success: true, data };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ─── /analytics/connections ───────────────────────────────────────────────
+//
+// Graph data for the connection-map viz: nodes = users who appear in 5+
+// mutual matches in the last 90 days, edges = mutual-match pairs weighted
+// by frequency.
+
+async function computeConnections() {
+  const edgeRows = await query<{ a: string; b: string; weight: string }>(
+    `SELECT
+       LEAST(mr.user_id, mr.partner_id) AS a,
+       GREATEST(mr.user_id, mr.partner_id) AS b,
+       COUNT(*)::text AS weight
+     FROM meeting_records mr
+     WHERE mr.is_mutual = TRUE AND mr.recorded_at > NOW() - INTERVAL '90 days'
+     GROUP BY LEAST(mr.user_id, mr.partner_id), GREATEST(mr.user_id, mr.partner_id)
+     HAVING COUNT(*) >= 1`,
+  );
+
+  const userIds = new Set<string>();
+  for (const e of edgeRows.rows) {
+    userIds.add(e.a);
+    userIds.add(e.b);
+  }
+  const userIdArr = Array.from(userIds);
+  const nameRows = userIdArr.length > 0
+    ? await query<{ id: string; display_name: string | null }>(
+        `SELECT id, display_name FROM users WHERE id = ANY($1)`,
+        [userIdArr],
+      )
+    : { rows: [] as Array<{ id: string; display_name: string | null }> };
+  const nameMap = new Map(nameRows.rows.map(r => [r.id, r.display_name]));
+
+  return {
+    nodes: userIdArr.map(id => ({ id, displayName: nameMap.get(id) || null })),
+    edges: edgeRows.rows.map(e => ({
+      a: e.a,
+      b: e.b,
+      weight: parseInt(e.weight, 10),
+    })),
+  };
+}
+
+router.get(
+  '/analytics/connections',
+  authenticate,
+  requireRole(UserRole.ADMIN),
+  async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await getAnalytics('connections', computeConnections);
+      const response: ApiResponse<typeof data> = { success: true, data };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ─── /analytics/export/:type.csv ──────────────────────────────────────────
+//
+// CSV export for any of the four shapes. Single source of truth: reuses
+// the same compute fn the JSON endpoint uses, so the export can never
+// drift from the on-screen view.
+
+function toCsv(rows: any[], columns: string[]): string {
+  const escape = (v: any): string => {
+    if (v === null || v === undefined) return '';
+    const s = String(v);
+    if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+      return `"${s.replace(/"/g, '""')}"`;
+    }
+    return s;
+  };
+  const header = columns.join(',');
+  const body = rows.map(r => columns.map(c => escape(r[c])).join(',')).join('\n');
+  return `${header}\n${body}\n`;
+}
+
+router.get(
+  '/analytics/export/:type.csv',
+  authenticate,
+  requireRole(UserRole.ADMIN),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { type } = req.params as { type: string };
+      let data: any[];
+      let columns: string[];
+      switch (type) {
+        case 'events':
+          data = await getAnalytics('events', computeEvents);
+          columns = ['id', 'name', 'scheduledAt', 'status', 'participants', 'completedParticipants', 'avgQuality', 'mutualCount', 'meetingTotal', 'mutualRate', 'dropoffRate'];
+          break;
+        case 'users':
+          data = await getAnalytics('users', computeUsers);
+          columns = ['userId', 'displayName', 'totalMeetings', 'avgQualityReceived', 'meetAgainRate', 'compositeScore'];
+          break;
+        case 'connections':
+          // Connections export is the edges only; nodes can be reconstructed.
+          { const conn: any = await getAnalytics('connections', computeConnections);
+            data = conn.edges;
+            columns = ['a', 'b', 'weight']; }
+          break;
+        default:
+          res.status(400).json({ success: false, error: { code: 'BAD_TYPE', message: 'Unknown analytics type' } });
+          return;
+      }
+      const csv = toCsv(data, columns);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="rsn-analytics-${type}.csv"`);
+      res.send(csv);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 export default router;

@@ -18,7 +18,7 @@
 // other case of the same shape (stale session URL, race between
 // route-mount and backend-init, browser-back to ended event).
 
-import { useEffect, useState, useCallback, type ReactNode } from 'react';
+import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Loader2, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
@@ -38,16 +38,22 @@ export default function SessionGuard({ children }: { children: ReactNode }) {
   const { sessionId } = useParams();
   const navigate = useNavigate();
   const [state, setState] = useState<GuardState>({ kind: 'checking' });
+  // Phase 7-audit fix — mounted-ref so retry timers + visibility re-checks
+  // don't setState on unmounted components (fast back-nav races).
+  const mountedRef = useRef(true);
+  const safeSetState = useCallback((next: GuardState) => {
+    if (mountedRef.current) setState(next);
+  }, []);
 
   const checkSession = useCallback(async (attempt: number): Promise<void> => {
     if (!sessionId) {
-      setState({ kind: 'error', message: 'Missing session ID' });
+      safeSetState({ kind: 'error', message: 'Missing session ID' });
       return;
     }
     try {
       const res = await api.get(`/sessions/${sessionId}`);
       if (res?.data?.success) {
-        setState({ kind: 'ready' });
+        safeSetState({ kind: 'ready' });
         return;
       }
       throw new Error('Session response not ok');
@@ -58,31 +64,39 @@ export default function SessionGuard({ children }: { children: ReactNode }) {
       // ends in "gone"; sustained other errors end in a generic error.
       if (attempt >= RETRY_DELAYS_MS.length) {
         if (status === 404) {
-          setState({ kind: 'gone' });
+          safeSetState({ kind: 'gone' });
         } else {
-          setState({ kind: 'error', message: err?.message || 'Could not reach the event' });
+          safeSetState({ kind: 'error', message: err?.message || 'Could not reach the event' });
         }
         return;
       }
       const delay = RETRY_DELAYS_MS[attempt];
-      setState({ kind: 'retrying', attempt: attempt + 1 });
-      setTimeout(() => checkSession(attempt + 1), delay);
+      safeSetState({ kind: 'retrying', attempt: attempt + 1 });
+      setTimeout(() => {
+        if (mountedRef.current) checkSession(attempt + 1);
+      }, delay);
     }
-  }, [sessionId]);
+  }, [sessionId, safeSetState]);
 
   useEffect(() => {
+    mountedRef.current = true;
     checkSession(0);
-    // Re-check on tab focus — covers the "session ended in another tab" case
+    // Re-check on tab focus — covers the "session ended in another tab" case.
+    // Reads `state.kind === 'ready'` via closure — fine since the listener
+    // is re-registered on every effect run when `state` changes.
     const onVisibility = () => {
       if (document.visibilityState === 'visible' && state.kind === 'ready') {
         // Cheap re-validate: if it 404s now, we transition to gone.
         api.get(`/sessions/${sessionId}`).catch((err) => {
-          if (err?.response?.status === 404) setState({ kind: 'gone' });
+          if (err?.response?.status === 404) safeSetState({ kind: 'gone' });
         });
       }
     };
     document.addEventListener('visibilitychange', onVisibility);
-    return () => document.removeEventListener('visibilitychange', onVisibility);
+    return () => {
+      mountedRef.current = false;
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 

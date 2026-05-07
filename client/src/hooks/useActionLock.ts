@@ -14,22 +14,34 @@
 //
 // Generic by key — apply the same hook across every host action button
 // without per-button state plumbing.
+//
+// Phase 7-audit fix — ref-backed gate. Pre-fix the gate read from the
+// closed-over `locked` Set inside useCallback, so two clicks fired in
+// the same render frame both saw an empty Set and both passed. The
+// state copy is kept in sync for component-level disabled wiring; the
+// ref is the source of truth for the gate.
 
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 
 const DEFAULT_LOCK_MS = 1500;
 
 export function useActionLock(lockMs: number = DEFAULT_LOCK_MS) {
-  const [locked, setLocked] = useState<Set<string>>(new Set());
+  const lockedRef = useRef<Set<string>>(new Set());
+  const [lockedSet, setLockedSet] = useState<Set<string>>(new Set());
 
   const runLocked = useCallback(
     (key: string, fn: () => void | Promise<void>): void => {
-      if (locked.has(key)) return; // ignore double-click
-      setLocked((prev) => new Set(prev).add(key));
-      // Release the lock after lockMs even if fn errors (so buttons
-      // don't get permanently stuck).
+      if (lockedRef.current.has(key)) return;
+      lockedRef.current.add(key);
+      setLockedSet((prev) => {
+        if (prev.has(key)) return prev;
+        const next = new Set(prev);
+        next.add(key);
+        return next;
+      });
       const release = () => {
-        setLocked((prev) => {
+        lockedRef.current.delete(key);
+        setLockedSet((prev) => {
           if (!prev.has(key)) return prev;
           const next = new Set(prev);
           next.delete(key);
@@ -49,10 +61,10 @@ export function useActionLock(lockMs: number = DEFAULT_LOCK_MS) {
         window.setTimeout(release, lockMs);
       }
     },
-    [locked, lockMs],
+    [lockMs],
   );
 
-  const isLocked = useCallback((key: string) => locked.has(key), [locked]);
+  const isLocked = useCallback((key: string) => lockedSet.has(key), [lockedSet]);
 
   return { runLocked, isLocked };
 }

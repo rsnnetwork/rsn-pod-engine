@@ -22,7 +22,7 @@
 //   - host:move_to_room    — force into a specific active room
 //   - host:remove_participant  — kick from event
 
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/Button';
 import { useSessionStore } from '@/stores/sessionStore';
 import { getSocket } from '@/lib/socket';
@@ -78,7 +78,18 @@ export default function HostControlCenter({ sessionId, open, onClose }: Props) {
     if (open) setFilter('all');
   }, [open]);
 
-  const participants = roundDashboard?.participants ?? [];
+  // Phase 7-audit fix — when the server's helper throws, the dashboard
+  // emit carries participants=[]. Showing an empty list misleads the
+  // host into thinking nobody's here. Keep the last non-empty list as
+  // a fallback so the drawer survives a single-emit hiccup.
+  const lastParticipantsRef = useRef<NonNullable<typeof roundDashboard>['participants']>(undefined);
+  const incomingParticipants = roundDashboard?.participants;
+  if (incomingParticipants && incomingParticipants.length > 0) {
+    lastParticipantsRef.current = incomingParticipants;
+  }
+  const participants = (incomingParticipants && incomingParticipants.length > 0)
+    ? incomingParticipants
+    : (lastParticipantsRef.current ?? []);
   const rooms = roundDashboard?.rooms ?? [];
 
   const counts = useMemo(() => {
@@ -121,16 +132,21 @@ export default function HostControlCenter({ sessionId, open, onClose }: Props) {
     runLocked(`remove_cohost:${userId}`, () => {
       socket?.emit('host:remove_cohost', { sessionId, userId });
     });
-  const reassign = (userId: string) =>
+  // Phase 7-audit fix — confirm() lives outside runLocked so a Cancel
+  // doesn't burn the lock on a no-op. Lock acquisition only happens
+  // when the user actually committed to the action.
+  const reassign = (userId: string) => {
+    if (!confirm('Pull this person out of their current spot and re-match them?')) return;
     runLocked(`reassign:${userId}`, () => {
-      if (!confirm('Pull this person out of their current spot and re-match them?')) return;
       socket?.emit('host:reassign', { sessionId, participantId: userId });
     });
-  const kick = (userId: string, displayName: string) =>
+  };
+  const kick = (userId: string, displayName: string) => {
+    if (!confirm(`Remove ${displayName} from the event? They'll be disconnected immediately.`)) return;
     runLocked(`kick:${userId}`, () => {
-      if (!confirm(`Remove ${displayName} from the event? They'll be disconnected immediately.`)) return;
       socket?.emit('host:remove_participant', { sessionId, userId, reason: 'host_removed' });
     });
+  };
   const moveToRoom = (userId: string, targetMatchId: string) =>
     runLocked(`move_to_room:${userId}`, () => {
       socket?.emit('host:move_to_room', { sessionId, userId, targetMatchId });
@@ -211,9 +227,10 @@ export default function HostControlCenter({ sessionId, open, onClose }: Props) {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-0">
+        {/* Phase 7-audit fix — single column on tablet (md), 3-col only at lg+. */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-0 lg:divide-x divide-gray-200">
           {/* Participants list */}
-          <div className="lg:col-span-2 border-r border-gray-200 min-h-[300px]">
+          <div className="lg:col-span-2 min-h-[300px]">
             <div className="px-5 py-2 text-[11px] font-semibold uppercase tracking-wide text-gray-500 flex items-center gap-1.5">
               <Filter className="h-3 w-3" /> {STATE_LABEL[filter]}
               <span className="text-gray-400 normal-case font-normal">
@@ -522,7 +539,11 @@ function RowActions({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-      {state !== 'left' && state !== 'disconnected' && (
+      {/* Phase 7-audit fix — allow promoting/demoting a recently disconnected
+          participant. The host might want to assign co-host preemptively
+          before the user reconnects (e.g. a known co-host whose Wi-Fi
+          dropped). Server-side state checks still gate the action. */}
+      {state !== 'left' && (
         isCohost ? (
           <ActionButton onClick={onRemoveCohost} title="Remove co-host role">
             Remove co-host

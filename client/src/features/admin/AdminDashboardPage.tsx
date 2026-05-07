@@ -143,6 +143,7 @@ export default function AdminDashboardPage() {
           </h2>
           <div className="space-y-2">
             {([
+              { path: '/admin/analytics', icon: BarChart3, label: 'Analytics', badge: null },
               { path: '/admin/users', icon: Users, label: 'Manage Users', badge: null },
               { path: '/admin/join-requests', icon: Mail, label: 'Join Requests', badge: pendingRequests > 0 ? `${pendingRequests} pending` : null },
               { path: '/admin/pods', icon: Hexagon, label: 'Manage Pods', badge: null },

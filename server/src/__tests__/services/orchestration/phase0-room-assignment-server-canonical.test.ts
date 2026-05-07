@@ -98,7 +98,9 @@ describe('Phase 0 — server-canonical roomParticipants assignment', () => {
     it('host move-to-room calls setRoomAssignment', () => {
       const insertIdx = src.indexOf("INSERT INTO matches (session_id, round_number, participant_a_id, participant_b_id, participant_c_id, room_id, status, started_at)");
       expect(insertIdx).toBeGreaterThan(-1);
-      const after = src.slice(insertIdx, insertIdx + 1500);
+      // Phase 7-audit fix added the LiveKit cleanup catch block between the
+      // INSERT and the setRoomAssignment call; widened from 1500 to 3000.
+      const after = src.slice(insertIdx, insertIdx + 3000);
       expect(after).toMatch(/setRoomAssignment\(/);
     });
 

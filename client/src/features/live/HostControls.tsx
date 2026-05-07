@@ -1,6 +1,6 @@
 import { useSessionStore } from '@/stores/sessionStore';
 import { Button } from '@/components/ui/Button';
-import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, MessageSquare, UserMinus, RefreshCw, UserPlus, AlertTriangle, CheckCircle2, Clock, LayoutDashboard } from 'lucide-react';
+import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, MessageSquare, UserMinus, RefreshCw, UserPlus, AlertTriangle, CheckCircle2, Clock, LayoutDashboard, FlaskConical } from 'lucide-react';
 import { getSocket } from '@/lib/socket';
 import { useState } from 'react';
 import EventPlanStrip from './EventPlanStrip';
@@ -43,6 +43,9 @@ export default function HostControls({ sessionId }: Props) {
   const [bulkDurationValue, setBulkDurationValue] = useState(300);
   // Phase 7C.1 — Host Control Center drawer toggle.
   const [showControlCenter, setShowControlCenter] = useState(false);
+  // Phase 7C.3 — manual test-mode toggle (Stefan #12). Hook value read here;
+  // the click handler is defined below `runLocked`.
+  const testMode = useSessionStore(s => s.testMode);
 
   const sessionStarted = sessionStatus !== 'scheduled' || transitionStatus === 'starting_session' || currentRound > 0;
   const isSessionEnding = transitionStatus === 'session_ending';
@@ -51,6 +54,14 @@ export default function HostControls({ sessionId }: Props) {
 
   // Phase 7B.3 — click-lock against double-fires (Stefan #10).
   const { runLocked } = useActionLock();
+
+  // Phase 7C.3 — manual test-mode toggle. Optimistic flip; server's
+  // session:state re-emit corrects if the toggle was rejected.
+  const toggleTestMode = () => runLocked('toggle_test_mode', () => {
+    const next = !testMode;
+    useSessionStore.getState().setTestMode(next);
+    socket?.emit('host:set_test_mode', { sessionId, value: next });
+  });
 
   const startSession = () => runLocked('start_session', () => { socket?.emit('host:start_session', { sessionId }); });
   const endCurrentRound = () => runLocked('end_round', () => {
@@ -141,15 +152,18 @@ export default function HostControls({ sessionId }: Props) {
     setSwapMode(null);
   };
 
-  const togglePause = () => {
+  // Phase 7-audit fix — pause/resume locked too. Pre-fix a fast double-tap
+  // could fire pause then resume (or vice versa) before the server's
+  // session:status_changed echo arrived, leaving the local store flipped
+  // away from server truth.
+  const togglePause = () => runLocked('toggle_pause', () => {
     if (isPaused) {
       socket?.emit('host:resume_session', { sessionId });
     } else {
       socket?.emit('host:pause_session', { sessionId });
     }
-    // Optimistic update — server will confirm via session:status_changed
     setIsPaused(!isPaused);
-  };
+  });
 
   const sendBroadcast = () => {
     if (!broadcastMsg.trim()) return;
@@ -187,7 +201,9 @@ export default function HostControls({ sessionId }: Props) {
     (r: any) => r.status === 'active' && !r.isManual,
   );
 
-  const submitRoomCreate = () => {
+  // Phase 7-audit fix — bulk room ops locked so a double-tap doesn't fire
+  // create-breakout twice (would orphan a half-built batch) or end-all twice.
+  const submitRoomCreate = () => runLocked('create_breakout_bulk', () => {
     const roomsPayload = roomRows
       .filter(s => s.size >= 1)
       .map(s => ({ participantIds: Array.from(s) }));
@@ -205,21 +221,23 @@ export default function HostControls({ sessionId }: Props) {
     });
     setShowRoomModal(false);
     setRoomRows([new Set()]);
-  };
+  });
 
-  const bulkExtendAll = () => {
+  const bulkExtendAll = () => runLocked('bulk_extend_all', () => {
     socket?.emit('host:extend_breakout_all' as any, { sessionId, additionalSeconds: 120 });
-  };
+  });
 
   const bulkEndAll = () => {
     if (!confirm(`End all ${activeManualCount} manual breakout rooms? Participants will move to rating.`)) return;
-    socket?.emit('host:end_breakout_all' as any, { sessionId });
+    runLocked('bulk_end_all', () => {
+      socket?.emit('host:end_breakout_all' as any, { sessionId });
+    });
   };
 
-  const bulkSetDurationAll = () => {
+  const bulkSetDurationAll = () => runLocked('bulk_set_duration_all', () => {
     socket?.emit('host:set_breakout_duration_all' as any, { sessionId, durationSeconds: bulkDurationValue });
     setBulkDurationEdit(false);
-  };
+  });
 
   if (isSessionEnding) {
     return (
@@ -860,11 +878,12 @@ export default function HostControls({ sessionId }: Props) {
               </Button>
             )}
 
-            {/* Extend round by 2 minutes — same live-state rule */}
+            {/* Extend round by 2 minutes — same live-state rule.
+                Phase 7-audit fix — locked so a double-tap doesn't add 4 min. */}
             {hasActiveAlgorithmRound && (
-              <Button size="sm" variant="secondary" onClick={() => {
+              <Button size="sm" variant="secondary" onClick={() => runLocked('extend_round', () => {
                 socket?.emit('host:extend_round', { sessionId, additionalSeconds: 120 });
-              }} title="Add 2 minutes to the current round">
+              })} title="Add 2 minutes to the current round">
                 <Clock className="h-4 w-4 mr-1" /> +2 min
               </Button>
             )}
@@ -928,6 +947,19 @@ export default function HostControls({ sessionId }: Props) {
                 <LayoutDashboard className="h-4 w-4 mr-1" /> Control Center
               </Button>
             )}
+
+            {/* Phase 7C.3 — manual test-mode toggle (Stefan #12). Available
+                from the moment the host opens the page — false-positive
+                heuristic flag can be turned off pre-event. */}
+            <Button
+              size="sm"
+              variant={testMode ? 'secondary' : 'ghost'}
+              onClick={toggleTestMode}
+              title={testMode ? 'This event is currently flagged as a TEST. Click to mark as a real event.' : 'Mark this event as a TEST. Banners will show "Test event" to all participants.'}
+            >
+              <FlaskConical className={`h-4 w-4 mr-1 ${testMode ? 'text-amber-500' : ''}`} />
+              {testMode ? 'Test mode: ON' : 'Test mode'}
+            </Button>
 
             <Button size="sm" variant="danger" onClick={endEvent}>
               <Square className="h-4 w-4 mr-1" /> End Event

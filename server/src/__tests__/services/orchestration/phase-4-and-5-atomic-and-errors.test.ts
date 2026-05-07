@@ -160,11 +160,16 @@ describe('Phase 4 + 5 — Atomic room ops, chat reliability, error toasts, test 
       expect(fn).toMatch(/typeof\s+\(config\s+as\s+any\)\.testMode\s*===\s*['"]boolean['"]/);
     });
 
-    it('heuristic uses host email-username root (length ≥ 4) shared with participants', () => {
+    it('heuristic counts non-host participants matching the host on root/domain/name and triggers at 2+', () => {
+      // Phase 7C.3 (7 May spec) replaced the v1 heuristic — dropped the
+      // hostRoot.length >= 4 gate (false negatives for short real names)
+      // and added two new signals: email domain match and display-name
+      // first-name token match. Pin: hostRoot is computed and the 2+
+      // threshold remains.
       const fnStart = snapshotSrc.indexOf('export async function buildSessionStateSnapshot(');
       const fnEnd = snapshotSrc.indexOf('\n}\n', fnStart);
       const fn = snapshotSrc.slice(fnStart, fnEnd);
-      expect(fn).toMatch(/hostRoot\.length\s*>=\s*4/);
+      expect(fn).toMatch(/hostRoot/);
       expect(fn).toMatch(/matches\s*>=\s*2/);
     });
 

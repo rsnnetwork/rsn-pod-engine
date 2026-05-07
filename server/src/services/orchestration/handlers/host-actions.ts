@@ -1099,10 +1099,14 @@ export async function handleHostMoveToRoom(
     const currentPartnerId = currentMatch.participant_a_id === userId
       ? currentMatch.participant_b_id : currentMatch.participant_a_id;
 
-    // Find the target match
+    // Find the target match.
+    // Phase 7-audit fix — gate by session_id too. Pre-fix the query trusted
+    // a UUID alone, so a host who guessed a match UUID from another session
+    // could (theoretically) move a participant across session boundaries.
     const targetMatchResult = await query<{ id: string; participant_a_id: string; participant_b_id: string; room_id: string }>(
-      `SELECT id, participant_a_id, participant_b_id, room_id FROM matches WHERE id = $1 AND status = 'active'`,
-      [targetMatchId]
+      `SELECT id, participant_a_id, participant_b_id, room_id FROM matches
+        WHERE id = $1 AND session_id = $2 AND status = 'active'`,
+      [targetMatchId, sessionId]
     );
 
     if (targetMatchResult.rows.length === 0) {
@@ -1156,6 +1160,15 @@ export async function handleHostMoveToRoom(
       });
     } catch (err: any) {
       logger.error({ err }, 'Phase 7A.4 — atomic move-to-room transaction rolled back');
+      // Phase 7-audit fix — clean up the LiveKit room created in Step 1 so
+      // a TX rollback doesn't leak rooms (and quota). Best-effort: a close
+      // failure here is logged but doesn't override the original error
+      // surfaced to the host.
+      try {
+        await videoService.closeMatchRoom(sessionId, activeSession.currentRound, moveSlug);
+      } catch (cleanupErr) {
+        logger.warn({ err: cleanupErr, newRoomId }, 'Failed to clean up orphaned LiveKit room after TX rollback');
+      }
       if (err?.code === '23505') {
         socket.emit('error', { code: 'PARTICIPANT_ALREADY_MATCHED', message: 'One of the participants is already in another active match.' });
       } else {
@@ -1407,6 +1420,76 @@ export async function handleHostExtendBreakoutRoom(
       { sessionId, matchId, additionalSeconds, newEndsAt: newEndsAt.toISOString(), secondsRemaining },
       'Host extended breakout room timer',
     );
+  });
+}
+
+// ─── Test-Mode Toggle (Phase 7C.3) ──────────────────────────────────────────
+//
+// Stefan #12 (7 May spec) — host can manually flag the event as a test
+// (or as a real event), overriding the email/domain/name heuristic. The
+// flag persists in sessions.config.testMode (jsonb) and is read by
+// session-state-snapshot.service on every snapshot build, so all
+// participants' banners flip together.
+
+export async function handleHostSetTestMode(
+  io: SocketServer,
+  socket: Socket,
+  data: { sessionId: string; value: boolean }
+): Promise<void> {
+  return withSessionGuard(data.sessionId, async () => {
+    try {
+      if (!await verifyHost(socket, data.sessionId)) return;
+      const { sessionId, value } = data;
+
+      // jsonb_set creates the key path if missing; the third arg is the
+      // value JSON-encoded; the fourth is `true` to create the path. The
+      // surrounding ::jsonb cast on the value handles the literal boolean
+      // safely without driver-side json_build_object.
+      await query(
+        `UPDATE sessions
+            SET config = jsonb_set(
+              COALESCE(config, '{}'::jsonb),
+              '{testMode}',
+              to_jsonb($1::boolean),
+              true
+            )
+          WHERE id = $2`,
+        [value, sessionId],
+      );
+
+      // Re-emit a fresh snapshot so every connected participant's banner
+      // flips immediately. Best-effort — if the snapshot service throws,
+      // the next periodic re-sync (Phase 7B.1) catches up within 30s.
+      try {
+        const { buildSessionStateSnapshot } = await import('../../session/session-state-snapshot.service');
+        const snapshot = await buildSessionStateSnapshot(sessionId, io);
+        if (snapshot) {
+          io.to(sessionRoom(sessionId)).emit('session:state', {
+            participants: snapshot.connectedParticipants,
+            sessionStatus: snapshot.sessionStatus,
+            hostInLobby: snapshot.hostInLobby,
+            hostUserId: snapshot.hostUserId,
+            currentRound: snapshot.currentRound,
+            totalRounds: snapshot.totalRounds,
+            timerVisibility: snapshot.timerVisibility,
+            cohosts: snapshot.cohosts,
+            isPaused: snapshot.isPaused,
+            timerEndsAt: snapshot.timerEndsAt,
+            pausedTimeRemainingMs: snapshot.pausedTimeRemainingMs,
+            pendingRoundNumber: snapshot.pendingRoundNumber,
+            participantCounts: snapshot.participantCounts,
+            testMode: snapshot.testMode,
+          });
+        }
+      } catch (snapErr) {
+        logger.warn({ err: snapErr, sessionId }, 'Phase 7C.3 — snapshot re-emit failed after test-mode toggle');
+      }
+
+      logger.info({ sessionId, value }, 'Phase 7C.3 — test-mode toggled by host');
+    } catch (err) {
+      logger.error({ err, sessionId: data.sessionId }, 'handleHostSetTestMode error');
+      socket.emit('error', { code: 'SET_TEST_MODE_FAILED', message: 'Failed to update test mode' });
+    }
   });
 }
 

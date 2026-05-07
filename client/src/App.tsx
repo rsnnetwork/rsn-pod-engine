@@ -22,6 +22,7 @@ import RecapPage from '@/features/sessions/RecapPage';
 import MessagesPage from '@/features/messages/MessagesPage';
 import EncounterHistoryPage from '@/features/sessions/EncounterHistoryPage';
 import AdminDashboardPage from '@/features/admin/AdminDashboardPage';
+import AdminAnalyticsPage from '@/features/admin/AdminAnalyticsPage';
 import AdminUsersPage from '@/features/admin/AdminUsersPage';
 import AdminJoinRequestsPage from '@/features/admin/AdminJoinRequestsPage';
 import AdminPodsPage from '@/features/admin/AdminPodsPage';
@@ -72,6 +73,7 @@ export default function App() {
         <Route path="/billing" element={<BillingPage />} />
         <Route path="/support" element={<SupportPage />} />
         <Route path="/admin" element={<AdminDashboardPage />} />
+        <Route path="/admin/analytics" element={<AdminAnalyticsPage />} />
         <Route path="/admin/users" element={<AdminUsersPage />} />
         <Route path="/admin/join-requests" element={<AdminJoinRequestsPage />} />
         <Route path="/admin/pods" element={<AdminPodsPage />} />

@@ -7115,6 +7115,73 @@ The remaining items from Stefan's doc — #1 (404 on join), #3 + #11 (host contr
 
 ---
 
+## Stefan's 7th May Feedback — Phase 7C.3 + 7C.4 + audit fixes — 2026-05-07
+
+**Status:** Test-mode banner v2 + admin analytics + audit findings shipped. Phase 7 fully closed.
+
+### Phase 7-audit fixes (RajaSkill discipline pass)
+
+After 7C.1+7C.2 shipped, ran three parallel Explore-agent audits over the actual code (7A, 7B, 7C.1+7C.2). Triaged findings against real code — agents over-report, half were false alarms. Verified-real fixes:
+
+- `host-actions.ts` `handleHostMoveToRoom`: target-match query now gates by `session_id` too. Pre-fix a host who knew a UUID could (theoretically) move a participant across session boundaries. Plus: TX rollback now calls `videoService.closeMatchRoom(sessionId, currentRound, moveSlug)` to clean up the LiveKit room created in Step 1, so a 23505 conflict no longer leaks rooms (and quota).
+- `useActionLock.ts`: ref-backed gate. Pre-fix the gate read from the `locked` Set captured in the useCallback closure, so two clicks fired in the same render frame both saw an empty Set and both passed. Now `lockedRef.current` is the source of truth; the state copy stays in sync for component-level disabled wiring.
+- `HostControlCenter.tsx`: keep-last-known participants on error (server-side helper failure → empty array no longer wipes the drawer). Tablet layout `lg:grid-cols-3` only at lg+ (md collapses to single column). Make-cohost button now shown on `disconnected` participants (host can promote a co-host pre-emptively while their Wi-Fi is dropped). `confirm()` for kick / re-match moved outside `runLocked` so a Cancel doesn't burn the lock.
+- `HostControls.tsx`: extended `runLocked` coverage to togglePause, +2-min round, bulk room creation, bulk extend/end/set-duration. Pre-fix a fast double-tap could pause-then-resume the session before the server's `session:status_changed` echo arrived.
+- `SessionGuard.tsx`: mounted-ref guards against `setState`-on-unmounted during retry backoff timers and visibility-change re-checks (fast back-nav races).
+
+False alarms verified against code (no fix needed):
+- `handleAssignCohost` / `handleRemoveCohost` "missing verifyHost" — actually correct: manual `session.hostUserId !== hostId` check is intentional (only ORIGINAL host can assign/remove cohorts; stricter than verifyHost which would allow cohorts).
+- `session_cohosts` UNIQUE constraint — confirmed exists (ON CONFLICT clause at host-actions.ts:1437 proves it).
+- 30s `clearInterval` — already present at useSessionSocket.ts:757.
+- State derivation order in host-participants-view — actually correct (in_room beats disconnected).
+- `host:extend_breakout_room` wiring — already wired at orchestration.service.ts:217.
+
+### Phase 7C.3 — Test-mode banner v2 (Stefan #12)
+
+Backend (server/src/services/session/session-state-snapshot.service.ts):
+- Heuristic v2 drops the `hostRoot.length >= 4` gate (was producing false negatives for short real names) and adds two new signals: email domain match and display-name first-name token. Now: a non-host participant matches the host on ANY of (email-username root substring, email domain exact, first-name token equality). Threshold remains 2+ matches → testMode=true.
+- Manual override path: explicit `session.config.testMode` boolean still wins regardless of the heuristic.
+
+New manual toggle:
+- New socket event `host:set_test_mode { sessionId, value: boolean }`.
+- New handler `handleHostSetTestMode` in host-actions.ts: `verifyHost` guard, `UPDATE sessions SET config = jsonb_set(...)` to persist, then re-emit a fresh `session:state` snapshot to all participants in the session (banners flip together).
+- Wired in orchestration.service.ts.
+- Client: new "Test mode" toggle button in HostControls (FlaskConical icon). Optimistic UI flip; server's session:state re-emit corrects on rejection.
+
+Architectural pins: 8 new in `phase-7c3-test-mode-banner-v2.test.ts` covering shared event type, handler implementation, orchestration wiring, heuristic signals, length-gate removal, override path. All passing.
+
+### Phase 7C.4 — Admin analytics dashboard (Stefan #6, Option B approved)
+
+Server endpoints (server/src/routes/admin.ts) — all admin-only (`authenticate` + `requireRole(UserRole.ADMIN)`):
+- `GET /analytics/overview` — top-line: events/completion/ratings/avg quality/mutual rate/dropoff (last 30d).
+- `GET /analytics/events` — per-event row with sortable columns (last 90d, max 200).
+- `GET /analytics/users` — top users by composite score (50% avg quality + 50% meet-again rate, min 5 meetings).
+- `GET /analytics/connections` — graph data (nodes = users with any mutual match, edges weighted by mutual-pair frequency).
+- `GET /analytics/export/:type.csv` — CSV download for any of the above (single source of truth: reuses the same compute fn as the JSON endpoint).
+
+Caching: in-memory 60s TTL per analytics shape (`ANALYTICS_CACHE_TTL_MS`). Charts page reload doesn't slam the DB. Single-instance for now; will move to Redis in Phase 4.
+
+Client (`client/src/features/admin/AdminAnalyticsPage.tsx`):
+- 4 tabs: Overview / Events / Users / Connections.
+- Overview tab: 6 stat cards.
+- Events tab: sortable table (sort by name, date, participants, avg quality, mutual rate, dropoff). Click-through to event detail page.
+- Users tab: ranked top-100. Composite score visible. Click-through to public profile.
+- Connections tab: top 50 mutual pairs with frequency bars (no force-directed graph yet — data is shaped for that upgrade; today rendered as a sortable list).
+- CSV download button per panel.
+- Admin-only page guard with redirect for non-admins.
+- Linked from AdminDashboardPage Quick Actions.
+
+Architectural pins: 9 new in `phase-7c4-admin-analytics.test.ts` covering all 4 endpoints + auth chain, CSV export route, canonical source tables (sessions/ratings/meeting_records), TTL constant, cache-or-compute pattern. All passing.
+
+### Verification
+
+- Server tests: 1127/1128 passing (1102 baseline + 8 7C.1 + 8 7C.3 + 9 7C.4; 1 pre-existing skip).
+- Server TypeScript: clean.
+- Client TypeScript: clean.
+- Client build: clean.
+
+---
+
 ## Stefan's 7th May Feedback — Phase 7C.1+7C.2 — 2026-05-07
 
 **Status:** Host Control Center + Cohost UX shipped (7C.1 + 7C.2; 7C.3 + 7C.4 next)

@@ -181,6 +181,10 @@ export interface ClientToServerEvents {
   'host:mute_all': (data: { sessionId: string; muted: boolean }) => void;
   'host:remove_from_room': (data: { sessionId: string; matchId: string; userId: string }) => void;
 
+  // Phase 7C.3 — manual test-mode override. Persists into session.config.testMode.
+  // Wins over the email/domain/name heuristic in either direction.
+  'host:set_test_mode': (data: { sessionId: string; value: boolean }) => void;
+
   // Breakout room
   'participant:leave_conversation': (data: { sessionId: string }) => void;
 

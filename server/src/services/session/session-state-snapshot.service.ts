@@ -157,41 +157,63 @@ export async function buildSessionStateSnapshot(
     ? connectedParticipants.some(p => p.userId === session.hostUserId)
     : false;
 
-  // ── Phase 5B — test-mode detection ──────────────────────────────────────
-  // 1. Explicit override via session.config.testMode wins.
-  // 2. Heuristic: pull host email + non-host registered emails. If the host
-  //    email username root (first 4+ chars) appears in 2 or more non-host
-  //    participant emails, flag testMode=true.
+  // ── Phase 7C.3 — test-mode detection v2 ─────────────────────────────────
+  // 1. Explicit override via session.config.testMode wins. Set via the
+  //    host's manual toggle in HostControls (host:set_test_mode socket
+  //    event), so a host who knows it's a test event can flip it on
+  //    regardless of the heuristic, and a real event can override a
+  //    false positive.
+  // 2. Heuristic: a non-host participant matches the host on ANY of:
+  //      a) email-username root (alphabetic) — substring match either way
+  //      b) email domain — exact (catches multiple aliases on the same
+  //         workspace, e.g. all *@avivson.com)
+  //      c) display-name first-name token — case-insensitive equality
+  //    If 2+ non-host participants match on at least one signal, flag
+  //    testMode=true. Pre-fix the v1 heuristic required hostRoot length
+  //    ≥ 4, which produced false negatives for short real names — and
+  //    only checked the email root, missing same-domain workspace tests.
   let testMode = false;
   if (typeof (config as any).testMode === 'boolean') {
     testMode = (config as any).testMode;
   } else if (session.hostUserId && registeredIds.size > 0) {
     try {
-      const hostRow = await query<{ email: string | null }>(
-        `SELECT email FROM users WHERE id = $1`,
+      const hostRow = await query<{ email: string | null; display_name: string | null }>(
+        `SELECT email, display_name FROM users WHERE id = $1`,
         [session.hostUserId],
       );
-      const hostEmail = hostRow.rows[0]?.email || '';
-      const hostUsername = hostEmail.split('@')[0]?.toLowerCase() || '';
-      // Take the alphabetic root (drop digits / dots / underscores so
-      // "stefan_avivson" and "stefanavivson" both reduce to "stefan").
-      const hostRoot = hostUsername.replace(/[^a-z]+/g, '').slice(0, 5);
-      if (hostRoot.length >= 4) {
-        const partRows = await query<{ email: string }>(
-          `SELECT u.email FROM session_participants sp
-             JOIN users u ON u.id = sp.user_id
-            WHERE sp.session_id = $1
-              AND sp.user_id != $2
-              AND u.email IS NOT NULL`,
-          [sessionId, session.hostUserId],
-        );
-        let matches = 0;
-        for (const r of partRows.rows) {
-          const u = (r.email || '').toLowerCase().split('@')[0].replace(/[^a-z]+/g, '');
-          if (u.includes(hostRoot)) matches++;
-        }
-        if (matches >= 2) testMode = true;
+      const hostEmail = (hostRow.rows[0]?.email || '').toLowerCase();
+      const hostDisplay = (hostRow.rows[0]?.display_name || '').toLowerCase();
+      const [hostUserPart, hostDomain] = hostEmail.split('@');
+      const hostRoot = (hostUserPart || '').replace(/[^a-z]+/g, '');
+      const firstNameToken = hostDisplay.split(/\s+/)[0]?.replace(/[^a-z]+/g, '') || '';
+
+      const partRows = await query<{ email: string | null; display_name: string | null }>(
+        `SELECT u.email, u.display_name FROM session_participants sp
+           JOIN users u ON u.id = sp.user_id
+          WHERE sp.session_id = $1
+            AND sp.user_id != $2`,
+        [sessionId, session.hostUserId],
+      );
+      let matches = 0;
+      for (const r of partRows.rows) {
+        const partEmail = (r.email || '').toLowerCase();
+        const [partUserPart, partDomain] = partEmail.split('@');
+        const partRoot = (partUserPart || '').replace(/[^a-z]+/g, '');
+        const partDisplay = (r.display_name || '').toLowerCase();
+        const partFirstName = partDisplay.split(/\s+/)[0]?.replace(/[^a-z]+/g, '') || '';
+
+        const rootMatch =
+          hostRoot.length > 0 && partRoot.length > 0 &&
+          (partRoot.includes(hostRoot) || hostRoot.includes(partRoot));
+        const domainMatch =
+          !!hostDomain && !!partDomain && hostDomain === partDomain;
+        const nameTokenMatch =
+          firstNameToken.length > 0 && partFirstName.length > 0 &&
+          firstNameToken === partFirstName;
+
+        if (rootMatch || domainMatch || nameTokenMatch) matches++;
       }
+      if (matches >= 2) testMode = true;
     } catch {
       // Heuristic is best-effort; skip on any DB error.
     }
