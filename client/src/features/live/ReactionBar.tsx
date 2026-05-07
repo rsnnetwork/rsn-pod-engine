@@ -81,7 +81,7 @@ export default function ReactionBar({ sessionId }: { sessionId: string }) {
   return (
     <>
       {/* Floating reaction animations */}
-      <div className="fixed bottom-24 left-0 right-0 pointer-events-none z-30">
+      <div className={`fixed ${isHostOrCohost ? 'bottom-44' : 'bottom-24'} left-0 right-0 pointer-events-none z-30`}>
         {floatingReactions.map(r => (
           <div
             key={r.id}
@@ -94,9 +94,13 @@ export default function ReactionBar({ sessionId }: { sessionId: string }) {
         ))}
       </div>
 
-      {/* Reaction toggle button + popup panel */}
+      {/* Reaction toggle button + popup panel.
+          For hosts / co-hosts the EVENT PLAN strip + host action bar
+          stack at the bottom; bumping bottom-20 → bottom-44 keeps the
+          button clear. Participants don't see the EVENT PLAN strip,
+          so they keep the original tighter offset. */}
       {!reactionsDisabled && (
-        <div className="fixed bottom-20 left-4 z-20">
+        <div className={`fixed ${isHostOrCohost ? 'bottom-44' : 'bottom-20'} left-4 z-20`}>
           {showPanel && (
             <div className="absolute bottom-12 left-0 flex items-center gap-1 bg-white shadow-xl border border-gray-200 rounded-2xl px-2 py-1.5 mb-2">
               {REACTIONS.map(({ type, emoji, label }) => (
