@@ -70,7 +70,7 @@ export async function createJoinRequest(input: CreateJoinRequestInput): Promise<
     throw new AppError(409, ErrorCodes.INVALID_INPUT, 'You already have a pending request.');
   }
 
-  const result = await query(
+  const result = await query<{ id: string; [k: string]: unknown }>(
     `INSERT INTO join_requests (full_name, email, linkedin_url, reason)
      VALUES ($1, $2, $3, $4)
      RETURNING *`,
