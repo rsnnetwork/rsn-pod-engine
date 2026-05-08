@@ -1,10 +1,11 @@
 import { useSessionStore } from '@/stores/sessionStore';
 import { Button } from '@/components/ui/Button';
-import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, MessageSquare, UserMinus, RefreshCw, UserPlus, AlertTriangle, CheckCircle2, Clock, LayoutDashboard, FlaskConical } from 'lucide-react';
+import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, MessageSquare, UserMinus, RefreshCw, UserPlus, AlertTriangle, CheckCircle2, Clock, LayoutDashboard } from 'lucide-react';
 import { getSocket } from '@/lib/socket';
 import { useState } from 'react';
 import EventPlanStrip from './EventPlanStrip';
 import { useActionLock } from '@/hooks/useActionLock';
+import { useEscapeKey } from '@/hooks/useEscapeKey';
 import HostControlCenter from './HostControlCenter';
 
 interface Props { sessionId: string; }
@@ -43,9 +44,13 @@ export default function HostControls({ sessionId }: Props) {
   const [bulkDurationValue, setBulkDurationValue] = useState(300);
   // Phase 7C.1 — Host Control Center drawer toggle.
   const [showControlCenter, setShowControlCenter] = useState(false);
-  // Phase 7C.3 — manual test-mode toggle (Stefan #12). Hook value read here;
-  // the click handler is defined below `runLocked`.
-  const testMode = useSessionStore(s => s.testMode);
+
+  // Phase 8B.2 — Esc closes the Invite + Room modals.
+  useEscapeKey(() => { setShowInviteModal(false); setInviteLinkCopied(false); }, showInviteModal);
+  useEscapeKey(() => { setShowRoomModal(false); setRoomRows([new Set()]); }, showRoomModal);
+  // Phase 8C.3 (8 May spec) — Stefan #10: test-mode UI removed. The
+  // backend column stays (additive, harmless) but no UI surface remains
+  // until we have a defined product purpose.
 
   const sessionStarted = sessionStatus !== 'scheduled' || transitionStatus === 'starting_session' || currentRound > 0;
   const isSessionEnding = transitionStatus === 'session_ending';
@@ -54,14 +59,6 @@ export default function HostControls({ sessionId }: Props) {
 
   // Phase 7B.3 — click-lock against double-fires (Stefan #10).
   const { runLocked } = useActionLock();
-
-  // Phase 7C.3 — manual test-mode toggle. Optimistic flip; server's
-  // session:state re-emit corrects if the toggle was rejected.
-  const toggleTestMode = () => runLocked('toggle_test_mode', () => {
-    const next = !testMode;
-    useSessionStore.getState().setTestMode(next);
-    socket?.emit('host:set_test_mode', { sessionId, value: next });
-  });
 
   const startSession = () => runLocked('start_session', () => { socket?.emit('host:start_session', { sessionId }); });
   const endCurrentRound = () => runLocked('end_round', () => {
@@ -246,6 +243,14 @@ export default function HostControls({ sessionId }: Props) {
           sessionId={sessionId}
           open={showControlCenter}
           onClose={() => setShowControlCenter(false)}
+          onOpenInvite={() => setShowInviteModal(true)}
+          onOpenRoomCreate={() => { setShowRoomModal(true); setRoomRows([new Set()]); }}
+          onOpenBroadcast={() => setShowBroadcast(true)}
+          onBulkExtend={bulkExtendAll}
+          onBulkEnd={bulkEndAll}
+          onBulkSetDuration={() => setBulkDurationEdit(true)}
+          bulkActionsAvailable={hasActiveManualRooms}
+          inviteAvailable={sessionStatus === 'lobby_open' || sessionStatus === 'round_transition'}
         />
         {/* Announcement input — available in wrapping-up state */}
         {showBroadcast && (
@@ -901,49 +906,10 @@ export default function HostControls({ sessionId }: Props) {
               </Button>
             )}
 
-            {/* Room — opens unified modal (single or multiple breakout rooms with shared timer).
-                Replaces the old separate "Room" + "Bulk" buttons. */}
-            {sessionStarted && (
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => { setShowRoomModal(!showRoomModal); setRoomRows([new Set()]); }}
-                title="Create one or more breakout rooms"
-              >
-                <UserPlus className="h-4 w-4 mr-1" /> Room
-              </Button>
-            )}
-
-            {/* Task 14 — Bulk controls: only show when manual rooms are active */}
-            {sessionStarted && hasActiveManualRooms && (
-              <>
-                <Button size="sm" variant="secondary" onClick={bulkExtendAll} title={`Add 2 minutes to all ${activeManualCount} manual rooms`}>
-                  <Clock className="h-4 w-4 mr-1" /> +2 all
-                </Button>
-                <Button size="sm" variant="secondary" onClick={() => setBulkDurationEdit(!bulkDurationEdit)} title="Set shared duration for all manual rooms">
-                  <Clock className="h-4 w-4 mr-1" /> Set
-                </Button>
-                <Button size="sm" variant="danger" onClick={bulkEndAll} title={`End all ${activeManualCount} manual rooms`}>
-                  <Square className="h-4 w-4 mr-1" /> End all
-                </Button>
-              </>
-            )}
-
-            {/* Announcement */}
-            {sessionStarted && (
-              <Button size="sm" variant="ghost" onClick={() => setShowBroadcast(!showBroadcast)} title="Send announcement to all">
-                <MessageSquare className="h-4 w-4" />
-              </Button>
-            )}
-
-            {/* Bug 19 (April 19) — Invite modal (was opening the whole event
-                page in a popup window). Inline modal: invite link + copy +
-                close. Host stays in the live event. */}
-            {(sessionStatus === 'lobby_open' || sessionStatus === 'round_transition') && (
-              <Button size="sm" variant="secondary" onClick={() => setShowInviteModal(true)}>
-                <UserPlus className="h-4 w-4 mr-1" /> Invite
-              </Button>
-            )}
+            {/* Phase 8C.1 (8 May spec) — Stefan #5: bottom bar slimmed.
+                Invite, Room creation, Broadcast, and bulk room ops moved
+                into Control Center > Actions tab. The host now manages
+                the event from ONE operational surface. */}
 
             {/* Phase 7C.1 — Host Control Center toggle (Stefan #3 + #11) */}
             {sessionStarted && (
@@ -951,19 +917,6 @@ export default function HostControls({ sessionId }: Props) {
                 <LayoutDashboard className="h-4 w-4 mr-1" /> Control Center
               </Button>
             )}
-
-            {/* Phase 7C.3 — manual test-mode toggle (Stefan #12). Available
-                from the moment the host opens the page — false-positive
-                heuristic flag can be turned off pre-event. */}
-            <Button
-              size="sm"
-              variant={testMode ? 'secondary' : 'ghost'}
-              onClick={toggleTestMode}
-              title={testMode ? 'This event is currently flagged as a TEST. Click to mark as a real event.' : 'Mark this event as a TEST. Banners will show "Test event" to all participants.'}
-            >
-              <FlaskConical className={`h-4 w-4 mr-1 ${testMode ? 'text-amber-500' : ''}`} />
-              {testMode ? 'Test mode: ON' : 'Test mode'}
-            </Button>
 
             <Button size="sm" variant="danger" onClick={endEvent}>
               <Square className="h-4 w-4 mr-1" /> End Event

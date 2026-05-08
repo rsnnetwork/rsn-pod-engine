@@ -96,6 +96,19 @@ export async function validateMatchAssignment(
     errors.push('Participant IDs must be unique within a match (no duplicates)');
   }
 
+  // Phase 8A.3 (8 May spec) — Stefan #7: explicit self-match check. The
+  // schema CHECK no_self_match (migration 001:222) catches this at the
+  // DB layer, but only AFTER LiveKit tokens have been issued and
+  // match:assigned has been emitted. Failing fast here keeps clients
+  // from briefly seeing an invalid pairing they have to roll back.
+  if (
+    (participantAId && participantBId && participantAId === participantBId) ||
+    (participantAId && participantCId && participantAId === participantCId) ||
+    (participantBId && participantCId && participantBId === participantCId)
+  ) {
+    errors.push('A user cannot be matched with themselves');
+  }
+
   // ── Structural rule 3: minimum count (caller-configurable) ───────────────
   if (uniqueIds.length < minParticipants) {
     errors.push(

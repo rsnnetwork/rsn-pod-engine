@@ -137,14 +137,18 @@ export async function handleChatSend(
           if (info.roomId === senderRoomEntry.roomId) recipientIds.add(uid);
         }
       } else {
-        // Fallback: relaxed match query. status filter intentionally
-        // excludes only the truly-dead states. Pick most recent.
+        // Fallback: tightened to active/scheduled only.
+        // Phase 8A.4 (8 May spec) — Stefan #8: pre-fix the filter
+        // accepted 'completed'/'reassigned' rows too, so a chat sent
+        // mid-round-transition could be delivered to the OLD match's
+        // participants who had already moved on. Now: room-scope
+        // chat is only routed to active or about-to-start matches.
         const matchRes = await query<{ id: string; participant_a_id: string; participant_b_id: string | null; participant_c_id: string | null; room_id: string }>(
           `SELECT id, participant_a_id, participant_b_id, participant_c_id, room_id
            FROM matches
            WHERE session_id = $1
              AND (participant_a_id = $2 OR participant_b_id = $2 OR participant_c_id = $2)
-             AND status NOT IN ('cancelled', 'no_show')
+             AND status IN ('active', 'scheduled')
            ORDER BY started_at DESC NULLS LAST, created_at DESC
            LIMIT 1`,
           [sessionId, userId]
@@ -159,7 +163,9 @@ export async function handleChatSend(
       }
 
       if (resolvedRoomId !== null && recipientIds.size > 0) {
-        chatMsg.roomId = resolvedRoomId || undefined;
+        // Phase 8A.4 — guarantee non-undefined roomId for room-scope
+        // messages so reactions can resolve the parent match later.
+        chatMsg.roomId = resolvedRoomId || chatMsg.roomId || undefined;
         for (const pid of recipientIds) {
           io.to(userRoom(pid)).emit('chat:message', chatMsg);
         }

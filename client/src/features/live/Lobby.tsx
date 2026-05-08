@@ -104,11 +104,19 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
     const name = trackRef.participant.name || trackRef.participant.identity || 'User';
     const hasVideo = !!trackRef.publication?.track;
     const isLocal = trackRef.participant.sid === localParticipant.sid;
+    // Phase 8C.2 (8 May spec) — local tile gets self-prominence so each
+    // user clearly sees their own camera in the main room. Stefan #11
+    // is honoured by the sort (host first), so even in compact density
+    // the host always renders in the visible roster.
+    const isLocalTile = isLocal;
+    const tileIsHost = trackRef.participant.identity === hostUserId;
     const isMicOn = trackRef.participant.isMicrophoneEnabled;
     return (
       <div
         key={trackRef.participant.sid}
-        className={`relative rounded-xl overflow-hidden bg-[#3c4043] ${isPinned ? 'h-full w-full' : 'aspect-video'} flex items-center justify-center group cursor-pointer`}
+        data-self={isLocalTile ? 'true' : undefined}
+        data-host={tileIsHost ? 'true' : undefined}
+        className={`relative rounded-xl overflow-hidden bg-[#3c4043] ${isPinned ? 'h-full w-full' : isLocalTile ? 'aspect-video sm:col-span-2 sm:row-span-2 ring-2 ring-rsn-red/30' : 'aspect-video'} flex items-center justify-center group cursor-pointer`}
         onClick={onClick}
       >
         {hasVideo && isTrackReference(trackRef) ? (

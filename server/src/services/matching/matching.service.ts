@@ -78,6 +78,7 @@ export async function generateSessionSchedule(
   sessionId: string,
   customConfig?: Partial<MatchingConfig>,
   excludeUserIds?: string[],
+  presentUserIds?: Set<string>,
 ): Promise<MatchingOutput> {
   const session = await sessionService.getSessionById(sessionId);
   const sessionConfig = typeof session.config === 'string'
@@ -114,7 +115,14 @@ export async function generateSessionSchedule(
         [sessionId]
       );
 
-  const participants = participantsResult.rows;
+  // Phase 8A.2 (8 May spec) — Stefan #2 ("Wazim case"): pre-plan was
+  // including registered-but-never-connected users. Filter the DB rows
+  // by who is actually in presenceMap right now. Per-round generation
+  // already does this (Phase 7A.2 wired presentUserIds into
+  // generateSingleRound); the pre-plan path was the missing leg.
+  const participants = (presentUserIds && presentUserIds.size > 0)
+    ? participantsResult.rows.filter(p => presentUserIds.has(p.userId))
+    : participantsResult.rows;
 
   // Section 7 — load premium match requests scoped to this event. Engine
   // uses these to detect mutual requests (highest priority pairing).

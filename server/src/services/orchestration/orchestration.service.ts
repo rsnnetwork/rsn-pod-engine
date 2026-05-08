@@ -31,7 +31,7 @@ import {
   handleHostEnd, handleHostBroadcast, handleHostRemoveParticipant, handleHostReassign,
   handleHostMuteParticipant, handleHostMuteAll, handleHostRemoveFromRoom,
   handleHostMoveToRoom, handleAssignCohost, handleRemoveCohost, handlePromoteCohost, handleHostExtendRound,
-  handleHostExtendBreakoutRoom, handleHostCreateBreakout, handleHostSetTestMode,
+  handleHostExtendBreakoutRoom, handleHostCreateBreakout,
   startSession, pauseSession, resumeSession, endSession, broadcastMessage,
   setHostActionsIo, injectHostActionDeps,
 } from './handlers/host-actions';
@@ -215,8 +215,6 @@ export function initOrchestration(socketServer: SocketServer): void {
     wrapHandler('host:promote_cohost', socket, handlePromoteCohost);
     wrapHandler('host:extend_round', socket, handleHostExtendRound);
     wrapHandler('host:extend_breakout_room', socket, handleHostExtendBreakoutRoom);
-    // Phase 7C.3 — manual test-mode toggle.
-    wrapHandler('host:set_test_mode', socket, handleHostSetTestMode);
 
     // ── Bulk Manual Breakout (Task 14) ──
     wrapHandler('host:create_breakout_bulk', socket, handleHostCreateBreakoutBulk);

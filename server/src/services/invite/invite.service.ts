@@ -551,13 +551,18 @@ export async function acceptInvite(
   if (isIdempotent) {
     logger.info({ code, userId, type: invite.type }, 'Invite re-acceptance — effects re-applied');
     // Phase 4 (1 May spec) — read back participant status for idempotent path too.
+    // Phase 8A.1 (8 May spec) — Stefan #1: default to 'registered' when the
+    // SELECT misses (the row exists conceptually since applyInviteRegistration
+    // already ran above, but a transactional read window can return 0 rows).
+    // Pre-fix the undefined value made the client think the server failed
+    // and surface the false-negative "Failed to accept invite" toast.
     let participantStatusIdempotent: string | undefined;
     if (registered.sessionId) {
       const sr = await query<{ status: string }>(
         `SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2`,
         [registered.sessionId, userId],
       );
-      participantStatusIdempotent = sr.rows[0]?.status;
+      participantStatusIdempotent = sr.rows[0]?.status ?? 'registered';
     }
     return {
       invite,

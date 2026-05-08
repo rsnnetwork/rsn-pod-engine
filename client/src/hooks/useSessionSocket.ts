@@ -21,6 +21,10 @@ const SOCKET_EVENTS = [
   'chat:message', 'chat:history', 'chat:reaction_update',
   'timer:sync', 'error',
   'cohost:assigned', 'cohost:removed',
+  // Phase 8B.1 (8 May spec) — direct permission update so a newly-promoted
+  // co-host's UI gains host buttons immediately, without waiting for the
+  // 30s session:state re-sync.
+  'permissions:updated',
 ] as const;
 
 // ── LiveKit token fetch with retry ──
@@ -144,6 +148,20 @@ export default function useSessionSocket(sessionId: string) {
     // ── Co-host ──
     socket.on('cohost:assigned', (data: any) => { store.addCohost(data.userId); });
     socket.on('cohost:removed', (data: any) => { store.removeCohost(data.userId); });
+
+    // Phase 8B.1 (8 May spec) — Stefan #4 + #9: a newly-promoted/demoted
+    // co-host's UI must reflect their new role immediately, not after
+    // the 30-second session:state safety re-sync. Server sends
+    // permissions:updated to that user's userRoom on every cohost
+    // change. We trigger a fresh state-snapshot fetch so the local
+    // user's effective role + capabilities flip atomically with the
+    // cohosts Set.
+    socket.on('permissions:updated', () => {
+      // Re-pull authoritative state. The snapshot is the canonical
+      // source for the cohorts Set + the per-user effective role
+      // (computed from session_cohosts on every fetch).
+      fetchSessionStateSnapshot().catch(() => { /* best-effort */ });
+    });
 
     // ── Eviction (duplicate tab/device) ──
     socket.on('session:evicted', () => {

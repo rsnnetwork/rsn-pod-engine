@@ -68,6 +68,25 @@ function maybeAutoEndEmptyRound(sessionId: string): void {
   }
 }
 
+// Phase 8A.5 (8 May spec) — Stefan #4 + #9: cohost change re-shapes
+// upcoming rounds. Reuses the same matching service repair the
+// late-joiner / leaver path uses, with reason='host_request' since
+// the trigger is a host action. No throttling — cohost change is
+// a manual, low-frequency event.
+async function maybeRepairFutureRounds(io: SocketServer, sessionId: string): Promise<void> {
+  const activeSession = activeSessions.get(sessionId);
+  if (!activeSession || activeSession.currentRound < 1) return;
+  const fromRound = activeSession.currentRound + 1;
+  const result = await matchingService.repairFutureRounds(sessionId, fromRound, 'host_request');
+  if (result.regeneratedRounds.length > 0) {
+    io.to(sessionRoom(sessionId)).emit('host:event_plan_repaired', {
+      sessionId,
+      reason: 'host_request',
+      regeneratedRounds: result.regeneratedRounds,
+    });
+  }
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // HOST HELPERS
 // ═════════════════════════════════════════════════════════════════════════════
@@ -209,7 +228,22 @@ export async function handleHostStart(
       // Phase 7A.2 (7 May spec) — exclude host + cohosts from the pre-plan
       // so they don't end up paired as regular participants in any round.
       const planExcludeIds = await getAllHostIds(data.sessionId, session.hostUserId);
-      const planOutput = await matchingService.generateSessionSchedule(data.sessionId, undefined, planExcludeIds);
+      // Phase 8A.2 (8 May spec) — Stefan #2 (Wazim case): also pass the
+      // presenceMap so registered-but-never-connected users are filtered
+      // out of the schedule. Pre-fix the pre-plan only checked
+      // session_participants.status, so anyone whose status was still
+      // 'registered'/'in_lobby' got in even if they never opened the
+      // event page on a live socket.
+      const activeSessionForPlan = activeSessions.get(data.sessionId);
+      const presentForPlan = activeSessionForPlan?.presenceMap
+        ? new Set(activeSessionForPlan.presenceMap.keys())
+        : undefined;
+      const planOutput = await matchingService.generateSessionSchedule(
+        data.sessionId,
+        undefined,
+        planExcludeIds,
+        presentForPlan,
+      );
       const totalPairs = planOutput.rounds.reduce((sum, r) => sum + r.pairs.length, 0);
       logger.info(
         { sessionId: data.sessionId, rounds: planOutput.rounds.length, totalPairs, durationMs: planOutput.durationMs },
@@ -1423,76 +1457,6 @@ export async function handleHostExtendBreakoutRoom(
   });
 }
 
-// ─── Test-Mode Toggle (Phase 7C.3) ──────────────────────────────────────────
-//
-// Stefan #12 (7 May spec) — host can manually flag the event as a test
-// (or as a real event), overriding the email/domain/name heuristic. The
-// flag persists in sessions.config.testMode (jsonb) and is read by
-// session-state-snapshot.service on every snapshot build, so all
-// participants' banners flip together.
-
-export async function handleHostSetTestMode(
-  io: SocketServer,
-  socket: Socket,
-  data: { sessionId: string; value: boolean }
-): Promise<void> {
-  return withSessionGuard(data.sessionId, async () => {
-    try {
-      if (!await verifyHost(socket, data.sessionId)) return;
-      const { sessionId, value } = data;
-
-      // jsonb_set creates the key path if missing; the third arg is the
-      // value JSON-encoded; the fourth is `true` to create the path. The
-      // surrounding ::jsonb cast on the value handles the literal boolean
-      // safely without driver-side json_build_object.
-      await query(
-        `UPDATE sessions
-            SET config = jsonb_set(
-              COALESCE(config, '{}'::jsonb),
-              '{testMode}',
-              to_jsonb($1::boolean),
-              true
-            )
-          WHERE id = $2`,
-        [value, sessionId],
-      );
-
-      // Re-emit a fresh snapshot so every connected participant's banner
-      // flips immediately. Best-effort — if the snapshot service throws,
-      // the next periodic re-sync (Phase 7B.1) catches up within 30s.
-      try {
-        const { buildSessionStateSnapshot } = await import('../../session/session-state-snapshot.service');
-        const snapshot = await buildSessionStateSnapshot(sessionId, io);
-        if (snapshot) {
-          io.to(sessionRoom(sessionId)).emit('session:state', {
-            participants: snapshot.connectedParticipants,
-            sessionStatus: snapshot.sessionStatus,
-            hostInLobby: snapshot.hostInLobby,
-            hostUserId: snapshot.hostUserId,
-            currentRound: snapshot.currentRound,
-            totalRounds: snapshot.totalRounds,
-            timerVisibility: snapshot.timerVisibility,
-            cohosts: snapshot.cohosts,
-            isPaused: snapshot.isPaused,
-            timerEndsAt: snapshot.timerEndsAt,
-            pausedTimeRemainingMs: snapshot.pausedTimeRemainingMs,
-            pendingRoundNumber: snapshot.pendingRoundNumber,
-            participantCounts: snapshot.participantCounts,
-            testMode: snapshot.testMode,
-          });
-        }
-      } catch (snapErr) {
-        logger.warn({ err: snapErr, sessionId }, 'Phase 7C.3 — snapshot re-emit failed after test-mode toggle');
-      }
-
-      logger.info({ sessionId, value }, 'Phase 7C.3 — test-mode toggled by host');
-    } catch (err) {
-      logger.error({ err, sessionId: data.sessionId }, 'handleHostSetTestMode error');
-      socket.emit('error', { code: 'SET_TEST_MODE_FAILED', message: 'Failed to update test mode' });
-    }
-  });
-}
-
 // ─── Co-Host Management ─────────────────────────────────────────────────────
 
 export async function handleAssignCohost(
@@ -1536,6 +1500,17 @@ export async function handleAssignCohost(
         'start_round', 'pause', 'resume', 'broadcast', 'create_breakout',
       ],
     });
+
+    // Phase 8A.5 (8 May spec) — cohost change must re-shape upcoming
+    // rounds immediately. Pre-fix the schedule generated at Start
+    // included this user as a regular participant; promoting them
+    // mid-event left those upcoming rounds with the now-cohost
+    // matched as if they were attendees. Trigger repairFutureRounds
+    // so the plan re-runs without them.
+    maybeRepairFutureRounds(io, sessionId).catch(err =>
+      logger.warn({ err, sessionId }, 'Cohost-change plan repair failed (non-fatal)')
+    );
+
     logger.info({ sessionId, userId, role, grantedBy: hostId }, 'Co-host assigned');
   } catch (err) {
     logger.error({ err }, 'Error assigning co-host');
@@ -1575,6 +1550,14 @@ export async function handleRemoveCohost(
       effectiveRole: 'participant' as const,
       capabilities: [],
     });
+
+    // Phase 8A.5 (8 May spec) — demoted user re-enters the matching pool
+    // for upcoming rounds. Trigger plan repair so the schedule includes
+    // them again from the next round onward.
+    maybeRepairFutureRounds(io, sessionId).catch(err =>
+      logger.warn({ err, sessionId }, 'Cohost-change plan repair failed (non-fatal)')
+    );
+
     logger.info({ sessionId, userId, removedBy: hostId }, 'Co-host removed');
   } catch (err) {
     logger.error({ err }, 'Error removing co-host');

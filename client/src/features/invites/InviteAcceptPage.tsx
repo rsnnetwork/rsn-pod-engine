@@ -99,12 +99,12 @@ export default function InviteAcceptPage() {
       // participantStatus too; we trust it and only proceed if it's set
       // (or this is a pod-only invite).
       const sid = data?.registeredFor?.sessionId || invite?.sessionId;
-      const pStatus = data?.participantStatus;
-      if (sid && !pStatus) {
-        // Server didn't confirm participant — surface as soft error so user
-        // can retry rather than landing on a broken live page.
-        throw new Error('Registration not confirmed by server. Please retry.');
-      }
+      // Phase 8A.1 (8 May spec) — Stefan #1: trust the 200 response. The
+      // server now defaults participantStatus to 'registered' on the
+      // idempotent path, but even if a future code path forgets to set
+      // it, the backend has already written the registration row above.
+      // Pre-fix this throw fired on every idempotent re-accept and
+      // surfaced as the false-negative "Failed to accept invite" toast.
       await Promise.all([
         qc.refetchQueries({ queryKey: ['session-participants'] }),
         qc.refetchQueries({ queryKey: ['session', sid] }),

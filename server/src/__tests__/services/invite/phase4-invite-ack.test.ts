@@ -39,8 +39,10 @@ describe('Phase 4 — invite flow registered ack', () => {
     });
 
     it('idempotent re-acceptance also returns participantStatus', () => {
+      // Phase 8A.1 (8 May spec) — search a wider slice; the variable
+      // name lives ~3kb after the first isIdempotent reference.
       const idempIdx = src.indexOf('isIdempotent');
-      const slice = src.slice(idempIdx, idempIdx + 1500);
+      const slice = src.slice(idempIdx, idempIdx + 5000);
       expect(slice).toMatch(/participantStatusIdempotent/);
     });
   });
@@ -52,9 +54,14 @@ describe('Phase 4 — invite flow registered ack', () => {
       expect(src).toMatch(/await Promise\.all\(\[[\s\S]*?qc\.refetchQueries\([\s\S]*?session-participants[\s\S]*?qc\.refetchQueries\([\s\S]*?session/);
     });
 
-    it('refuses to navigate when server did not confirm participantStatus (session invite)', () => {
-      expect(src).toMatch(/if \(sid && !pStatus\)/);
-      expect(src).toMatch(/Registration not confirmed by server/);
+    it('trusts the 200 response — no false-negative throw on missing pStatus (Phase 8A.1, Stefan #1)', () => {
+      // Phase 8A.1 (8 May spec) — pre-fix the client threw a custom
+      // Error whenever the server's idempotent path returned no
+      // participantStatus, which surfaced as the false-negative
+      // "Failed to accept invite" toast even though the user WAS
+      // registered. Trust the 200 now; server defaults the field
+      // to 'registered' on the idempotent path.
+      expect(src).not.toMatch(/if \(sid && !pStatus\)\s*\{\s*throw new Error/);
     });
 
     it('still uses navigate (SPA transition, not window.location.href)', () => {

@@ -141,7 +141,11 @@ describe('Phase 0 — server-canonical roomParticipants assignment', () => {
       const fnEnd = src.indexOf('\n}', fnStart + 100);
       const fn = src.slice(fnStart, fnEnd);
       const roomMapIdx = fn.indexOf('roomParticipants?.get(userId)');
-      const fallbackIdx = fn.indexOf("status NOT IN ('cancelled', 'no_show')");
+      // Phase 8A.4 tightened the fallback from 'NOT IN (cancelled,
+      // no_show)' to 'IN (active, scheduled)'. Either form is fine —
+      // what we're pinning is that the fallback comes AFTER the
+      // in-memory primary read.
+      const fallbackIdx = fn.indexOf("status IN ('active', 'scheduled')");
       expect(roomMapIdx).toBeGreaterThan(-1);
       expect(fallbackIdx).toBeGreaterThan(-1);
       expect(roomMapIdx).toBeLessThan(fallbackIdx);

@@ -7057,6 +7057,39 @@ Replaced the 1-step fallback (strict → drop excludedPairs) with a 5-level ladd
 
 ---
 
+## Stefan's 8 May Review — Phase 8 (8A + 8B + 8C + 8D) — 2026-05-09
+
+**Status:** All 11 items from the 8 May doc closed. Test mode UI removed. New "Actions" tab in Control Center. Single commit, ready to push.
+
+**Audit before code (RajaSkill 1.4):** plan written to `docs/superpowers/plans/2026-05-08-stefan-8th-may-feedback.md`. Four parallel Explore agents audited invite + matching + state sync + drag/chat/validation/compact areas. Sentry server 24h: 0 errors. Sentry client: 1 LiveKit transport timeout (unrelated). Render level-50, 6h: 0 errors. The 11 issues are all state-sync, presence, and UX — the audit confirmed Stefan's diagnosis exactly.
+
+**8A — Server data integrity** (5 changes):
+- 8A.1 — invite idempotent path returns `participantStatus: 'registered'` instead of `undefined` when the SELECT misses; client no longer throws the false-negative "Failed to accept invite" toast.
+- 8A.2 — `generateSessionSchedule` accepts a `presentUserIds` parameter; `handleHostStart` passes the live `activeSession.presenceMap`. Wazim case (registered but never connected) is now filtered out of pre-event planning. Dashboard adds `presentMainRoomCount` alongside `eligibleMainRoomCount` so the host can see "X connected of Y registered" gap.
+- 8A.3 — match validator gains an explicit self-match check (no longer relying solely on the schema CHECK constraint, which only catches it at the DB layer after LiveKit tokens have been issued). `host:force_match` already enables `sessionWideActiveCheck: true` (verified).
+- 8A.4 — chat room-scope fallback tightened from `status NOT IN ('cancelled','no_show')` to `status IN ('active','scheduled')`. Pre-fix a chat sent during round transition could be delivered to a `completed`/`reassigned` match's participants. Room messages always carry a non-null `roomId` for reaction lookup.
+- 8A.5 — cohost change triggers `repairFutureRounds()`. Pre-fix promoting someone mid-event left the pre-plan with that user as a participant in upcoming rounds. Now: promote → upcoming rounds re-shape excluding them; demote → re-include them.
+
+**8B — Client state sync + Esc hygiene** (2 changes):
+- 8B.1 — client now listens to `permissions:updated` socket event (server has been emitting it since Phase 7A.5). Newly-promoted co-host's UI gains host buttons in < 1s instead of waiting 30s for the periodic re-sync.
+- 8B.2 — new `useEscapeKey(onEscape, isOpen)` hook. Wired into Invite modal, Room creation modal, HCC Move-to-room sub-modal, HCC drawer/window itself. Closes the "controls freeze" feel — every modal now responds to Esc.
+
+**8C — UX architecture** (3 changes):
+- 8C.1 — host bottom bar slimmed. Invite, Create rooms, Broadcast, +2 all, Set duration, End all moved into a new **Actions** strip at the top of the Control Center body. Bottom bar now keeps only essential hot actions (Start, Match People, Confirm, Pause, +2 min, End Round, Control Center, End Event). Stefan #5: ONE operational surface.
+- 8C.2 — local participant tile gains self-prominence styling (`sm:col-span-2 sm:row-span-2 ring-2 ring-rsn-red/30` in Lobby; `ring-2 ring-rsn-red/40` on the desktop grid in VideoRoom). Each user clearly sees their own camera. Sort still puts host first so the host is always in the visible roster (Stefan #11).
+- 8C.3 — test-mode UI removed: button gone from HostControls, `host:set_test_mode` handler unwired, shared event type removed, dead handler function deleted, Phase 7C.3 pin file deleted. Stefan #10 ("if you can't explain in one sentence, remove it"). The `session.config.testMode` DB column stays (additive, harmless) until we have a defined product purpose.
+
+**8D — Docs + cleanup**:
+- New `docs/co-host-rules.md`: written rules for what a co-host can and cannot do. Limit set to 8 (override of my default of 5, per Ali). No server-side enforcement yet — the doc is the contract.
+- Three pre-existing pins updated to match the new (correct) behaviour: phase4-invite-ack (now asserts the false-negative throw is gone), phase-7a-stefan-7th-may-server-fixes (allows 4-arg `generateSessionSchedule` call shape), phase0-room-assignment-server-canonical (chat fallback uses the new `IN ('active','scheduled')` filter).
+
+**TDD red→green (RajaSkill 2.1):**
+- 22 architectural pins written first; 16 red.
+- After implementation: 22/22 green for the new pins. Plus 3 pre-existing pins updated to match the new code.
+- Final full server suite: 1160 passing, 1 skipped, 89/89 suites. Server + client TypeScript clean. Client build clean.
+
+---
+
 ## Stefan's 7th May Feedback — Phase 7A — 2026-05-07
 
 **Status:** Server architectural fixes shipped (7A only; 7B + 7C queued for next session)

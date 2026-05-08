@@ -46,6 +46,7 @@ import {
   Copy,
 } from 'lucide-react';
 import { useActionLock } from '@/hooks/useActionLock';
+import { useEscapeKey } from '@/hooks/useEscapeKey';
 
 // Phase 7C.5 — windowed Host Control Center on desktop (md+).
 // Mobile keeps the original full-screen drawer (a draggable resizable
@@ -88,6 +89,17 @@ interface Props {
   sessionId: string;
   open: boolean;
   onClose: () => void;
+  // Phase 8C.1 (8 May spec) — Stefan #5: secondary actions live here now
+  // instead of cluttering the main host bar. HostControls passes these
+  // callbacks; HCC renders the "Actions" strip that triggers them.
+  onOpenInvite?: () => void;
+  onOpenRoomCreate?: () => void;
+  onOpenBroadcast?: () => void;
+  onBulkExtend?: () => void;
+  onBulkEnd?: () => void;
+  onBulkSetDuration?: () => void;
+  bulkActionsAvailable?: boolean;
+  inviteAvailable?: boolean;
 }
 
 type StateFilter =
@@ -105,7 +117,19 @@ const STATE_LABEL: Record<StateFilter, string> = {
   left: 'Left',
 };
 
-export default function HostControlCenter({ sessionId, open, onClose }: Props) {
+export default function HostControlCenter({
+  sessionId,
+  open,
+  onClose,
+  onOpenInvite,
+  onOpenRoomCreate,
+  onOpenBroadcast,
+  onBulkExtend,
+  onBulkEnd,
+  onBulkSetDuration,
+  bulkActionsAvailable = false,
+  inviteAvailable = false,
+}: Props) {
   const roundDashboard = useSessionStore((s) => s.roundDashboard);
   const hostUserId = useSessionStore((s) => s.hostUserId);
   const socket = getSocket();
@@ -146,6 +170,11 @@ export default function HostControlCenter({ sessionId, open, onClose }: Props) {
   useEffect(() => {
     if (open) setFilter('all');
   }, [open]);
+
+  // Phase 8B.2 — Esc closes the Move-to-room sub-modal AND the
+  // Control Center itself when in window/drawer mode.
+  useEscapeKey(() => setMoveTargetUserId(null), moveTargetUserId !== null);
+  useEscapeKey(onClose, open && moveTargetUserId === null);
 
   // Phase 7-audit fix — when the server's helper throws, the dashboard
   // emit carries participants=[]. Showing an empty list misleads the
@@ -291,6 +320,44 @@ export default function HostControlCenter({ sessionId, open, onClose }: Props) {
 
   const bodyContent: ReactNode = (
     <div className="flex flex-col h-full overflow-hidden">
+        {/* Phase 8C.1 (8 May spec) — Actions strip. Stefan #5: secondary
+            host actions live here now (not in the bottom bar) so the
+            host has ONE operational surface for event management. */}
+        <div data-section="actions" className="border-b border-gray-200 bg-white px-5 py-3 shrink-0">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] uppercase tracking-wide text-gray-400 mr-1">Actions</span>
+            {inviteAvailable && onOpenInvite && (
+              <button onClick={() => { onOpenInvite(); onClose(); }} className="text-xs px-2.5 py-1 rounded-md border border-gray-200 text-gray-700 hover:bg-gray-50">
+                Invite
+              </button>
+            )}
+            {onOpenRoomCreate && (
+              <button onClick={() => { onOpenRoomCreate(); onClose(); }} className="text-xs px-2.5 py-1 rounded-md border border-gray-200 text-gray-700 hover:bg-gray-50">
+                Create rooms
+              </button>
+            )}
+            {onOpenBroadcast && (
+              <button onClick={() => { onOpenBroadcast(); onClose(); }} className="text-xs px-2.5 py-1 rounded-md border border-gray-200 text-gray-700 hover:bg-gray-50">
+                Broadcast
+              </button>
+            )}
+            {bulkActionsAvailable && onBulkExtend && (
+              <button onClick={onBulkExtend} className="text-xs px-2.5 py-1 rounded-md border border-gray-200 text-gray-700 hover:bg-gray-50">
+                +2 min all rooms
+              </button>
+            )}
+            {bulkActionsAvailable && onBulkSetDuration && (
+              <button onClick={() => { onBulkSetDuration(); onClose(); }} className="text-xs px-2.5 py-1 rounded-md border border-gray-200 text-gray-700 hover:bg-gray-50">
+                Set duration
+              </button>
+            )}
+            {bulkActionsAvailable && onBulkEnd && (
+              <button onClick={onBulkEnd} className="text-xs px-2.5 py-1 rounded-md border border-red-200 text-red-700 hover:bg-red-50">
+                End all rooms
+              </button>
+            )}
+          </div>
+        </div>
         {/* Counts row */}
         <div className="border-b border-gray-200 bg-gray-50 px-5 py-3 shrink-0">
           <div className="flex flex-wrap items-center gap-2">

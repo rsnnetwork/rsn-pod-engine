@@ -86,7 +86,10 @@ describe('Phase 7A — Server architectural fixes for 7th May feedback', () => {
       const fnEnd = hostActionsSrc.indexOf('\n// ─── Host Start Round', fnStart);
       const fn = hostActionsSrc.slice(fnStart, fnEnd);
       expect(fn).toMatch(/getAllHostIds\(/);
-      expect(fn).toMatch(/generateSessionSchedule\([^)]+,[^)]+,\s*planExcludeIds\)/);
+      // Phase 8A.2 added a 4th argument (presentForPlan); allow either
+      // 3-arg or 4-arg call shape so this pin survives without losing
+      // the contract that planExcludeIds is in there.
+      expect(fn).toMatch(/generateSessionSchedule\([\s\S]+?planExcludeIds[\s\S]+?\)/);
     });
   });
 

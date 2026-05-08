@@ -1022,6 +1022,23 @@ async function emitHostDashboardImmediate(io: SocketServer, sessionId: string): 
     );
     const eligibleMainRoomCount = parseInt(eligibleMainRoomRes.rows[0]?.c || '0', 10);
 
+    // Phase 8A.2 (8 May spec) — Stefan #2: also surface how many of
+    // those eligible-by-DB are actually CONNECTED right now. Lets the
+    // host see the gap (e.g. "5 in main room out of 7 registered").
+    const presenceSet = activeSession.presenceMap;
+    const presentMainRoomCount = (await query<{ user_id: string }>(
+      `SELECT sp.user_id FROM session_participants sp
+       WHERE sp.session_id = $1
+         AND sp.status NOT IN ('removed', 'left', 'no_show')
+         AND sp.user_id != $2
+         AND NOT EXISTS (
+           SELECT 1 FROM matches m
+           WHERE m.session_id = $1 AND m.status = 'active'
+             AND (m.participant_a_id = sp.user_id OR m.participant_b_id = sp.user_id OR m.participant_c_id = sp.user_id)
+         )`,
+      [sessionId, activeSession.hostUserId],
+    )).rows.filter(r => presenceSet.has(r.user_id)).length;
+
     // Phase 7C.1 — backing data for the Host Control Center drawer.
     // Same query cadence as the dashboard, so opening the drawer never
     // shows stale state.
@@ -1048,6 +1065,7 @@ async function emitHostDashboardImmediate(io: SocketServer, sessionId: string): 
       // decremented locally → host always showed MORE time than participants.
       timerEndsAt: activeSession.timerEndsAt ? activeSession.timerEndsAt.toISOString() : null,
       eligibleMainRoomCount,
+      presentMainRoomCount,
       reassignmentInProgress: false,
       participants,
     });

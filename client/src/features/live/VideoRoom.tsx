@@ -136,6 +136,12 @@ const VideoStage = memo(function VideoStage() {
   const localTrack = cameraTracks.find(t => t.participant.sid === localParticipant.sid);
   const remoteTracks = cameraTracks.filter(t => t.participant.sid !== localParticipant.sid);
 
+  // Phase 8C.2 (8 May spec) — selector for self-tile prominence. Used
+  // below to add a subtle ring on the local participant's tile so the
+  // user can clearly identify their own camera in the desktop grid.
+  // (In 1:1 mobile, the partner stays full-screen — standard call UX.)
+  const isLocalTile = (sid: string) => sid === localParticipant.sid;
+
   const allTiles = [
     { trackRef: localTrack, label: 'You', sid: localParticipant.sid, userId: localParticipant.identity },
     ...remoteTracks.map((rt, i) => ({
@@ -216,8 +222,12 @@ const VideoStage = memo(function VideoStage() {
                 </div>
               </div>
             ))}
-            <div className="h-full flex items-center justify-center cursor-pointer" onClick={() => setPinnedSid(localParticipant.sid)}>
-              <div className="w-full" style={{ aspectRatio: '16 / 9', maxHeight: '100%' }}>
+            <div
+              data-self={isLocalTile(localParticipant.sid) ? 'true' : undefined}
+              className="h-full flex items-center justify-center cursor-pointer"
+              onClick={() => setPinnedSid(localParticipant.sid)}
+            >
+              <div className="w-full ring-2 ring-rsn-red/40 rounded-xl overflow-hidden" style={{ aspectRatio: '16 / 9', maxHeight: '100%' }}>
                 <VideoTile trackRef={localTrack} label="You" userId={localParticipant.identity} />
               </div>
             </div>
