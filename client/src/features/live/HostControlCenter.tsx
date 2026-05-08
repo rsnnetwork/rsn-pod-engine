@@ -48,13 +48,19 @@ import {
 import { useActionLock } from '@/hooks/useActionLock';
 import { useEscapeKey } from '@/hooks/useEscapeKey';
 
-// Phase 7C.5 — windowed Host Control Center on desktop (md+).
-// Mobile keeps the original full-screen drawer (a draggable resizable
-// window at 360 px is unusable). Position + size persist across
-// sessions so the host's pane stays where they left it.
+// 9 May iter (revised) — windowed Control Center on desktop with drag,
+// resize, minimize, maximize. Default size is intentionally LARGE so
+// the whole panel (counts row + participants list + rooms pane) is
+// visible without the host needing to drag or resize first. Per Ali:
+// "open it in the center of the screen where the host doesn't need to
+// drag to see everything — but dragging, minimize, maximize must
+// still be there as options." Mobile keeps the full-screen drawer.
 const HCC_WINDOW_KEY = 'rsn:hcc-window';
-const HCC_DEFAULT_W = 900;
-const HCC_DEFAULT_H = 700;
+// Default sizes pulled to fill ~92vw × 88vh (capped at 1280×900) the
+// first time the panel opens. Once the user resizes, localStorage
+// remembers it.
+const HCC_DEFAULT_W = 1280;
+const HCC_DEFAULT_H = 900;
 const HCC_MIN_W = 480;
 const HCC_MIN_H = 360;
 const HCC_DESKTOP_BREAKPOINT_PX = 768;
@@ -89,10 +95,6 @@ interface Props {
   sessionId: string;
   open: boolean;
   onClose: () => void;
-  // 8 May iter — onOpen lets the persistent red FAB (rendered when the
-  // panel is closed) raise `open` back to the parent without the host
-  // bar needing its own duplicate Control Center button.
-  onOpen?: () => void;
   // Phase 8C.1 (8 May spec) — Stefan #5: secondary actions live here now
   // instead of cluttering the main host bar. HostControls passes these
   // callbacks; HCC renders the "Actions" strip that triggers them.
@@ -125,7 +127,6 @@ export default function HostControlCenter({
   sessionId,
   open,
   onClose,
-  onOpen,
   onOpenInvite,
   onOpenRoomCreate,
   onOpenBroadcast,
@@ -142,26 +143,28 @@ export default function HostControlCenter({
   const [moveTargetUserId, setMoveTargetUserId] = useState<string | null>(null);
   const { runLocked } = useActionLock();
 
-  // ── Window mode (desktop) — drag, resize, maximize, minimize ──────────
   const [isMobile, setIsMobile] = useState<boolean>(() =>
     typeof window !== 'undefined' && window.innerWidth < HCC_DESKTOP_BREAKPOINT_PX
   );
+  // Default-large bounds: fill ~92vw × 88vh capped at 1280×900, centred.
+  // Persisted bounds win after the user resizes/moves once.
   const [bounds, setBounds] = useState<PersistedBounds>(() => {
     const persisted = readPersistedBounds();
     if (persisted) return persisted;
     if (typeof window === 'undefined') {
       return { x: 100, y: 100, width: HCC_DEFAULT_W, height: HCC_DEFAULT_H };
     }
+    const w = Math.min(HCC_DEFAULT_W, Math.floor(window.innerWidth * 0.92));
+    const h = Math.min(HCC_DEFAULT_H, Math.floor(window.innerHeight * 0.88));
     return {
-      x: Math.max(20, Math.floor((window.innerWidth - HCC_DEFAULT_W) / 2)),
-      y: Math.max(20, Math.floor((window.innerHeight - HCC_DEFAULT_H) / 2)),
-      width: Math.min(HCC_DEFAULT_W, window.innerWidth - 40),
-      height: Math.min(HCC_DEFAULT_H, window.innerHeight - 40),
+      x: Math.max(8, Math.floor((window.innerWidth - w) / 2)),
+      y: Math.max(8, Math.floor((window.innerHeight - h) / 2)),
+      width: w,
+      height: h,
     };
   });
   const [isMaximized, setIsMaximized] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
-  // Snapshot of bounds before maximize so Restore returns to the previous size.
   const preMaxBoundsRef = useRef<PersistedBounds | null>(null);
 
   useEffect(() => {
@@ -224,22 +227,7 @@ export default function HostControlCenter({
   const moveTargetUser = participants.find((p) => p.userId === moveTargetUserId) || null;
   const activeRoomsForMove = rooms.filter((r) => r.status === 'active');
 
-  // 8 May iter — when the panel is closed, render a persistent red FAB
-  // bottom-right so the host always has ONE obvious entry point. Removes
-  // the duplicate Control Center button that used to live in the host bar.
-  // Positioned above the host action bar + EVENT PLAN strip so it doesn't
-  // collide with their controls.
-  if (!open) {
-    return (
-      <button
-        onClick={onOpen}
-        className="fixed bottom-44 right-4 z-40 flex items-center gap-2 bg-rsn-red text-white rounded-full shadow-lg px-4 py-2 text-sm font-medium hover:opacity-90 transition-opacity"
-        aria-label="Open Host Control Center"
-      >
-        <Users className="h-4 w-4" /> Control Center
-      </button>
-    );
-  }
+  if (!open) return null;
 
   // ── Action wiring ─────────────────────────────────────────────────────
   const makeCohost = (userId: string) =>
@@ -275,30 +263,23 @@ export default function HostControlCenter({
       socket?.emit('host:extend_breakout_room' as any, { sessionId, matchId, additionalSeconds: 120 });
     });
 
-  // ── Window control handlers ───────────────────────────────────────────
+  // ── Window controls ───────────────────────────────────────────────────
   const toggleMaximize = () => {
     if (isMaximized) {
-      // Restore — pull bounds from snapshot, fall back to default if missing.
       const restored = preMaxBoundsRef.current ?? bounds;
       setBounds(restored);
       writePersistedBounds(restored);
       setIsMaximized(false);
     } else {
       preMaxBoundsRef.current = bounds;
-      const max: PersistedBounds = {
-        x: 0,
-        y: 0,
-        width: window.innerWidth,
-        height: window.innerHeight,
-      };
-      setBounds(max);
+      setBounds({ x: 0, y: 0, width: window.innerWidth, height: window.innerHeight });
       setIsMaximized(true);
     }
   };
   const minimize = () => setIsMinimized(true);
   const restoreFromMinimize = () => setIsMinimized(false);
 
-  // ── Body content (shared by drawer + window) ──────────────────────────
+  // ── Title bar — drag handle (hcc-drag-handle) + window controls ───────
   const titleBar: ReactNode = (
     <div className="hcc-drag-handle cursor-move bg-white border-b border-gray-200 px-4 py-2.5 flex items-center justify-between select-none">
       <div className="flex items-center gap-2">
@@ -592,6 +573,7 @@ export default function HostControlCenter({
   );
 
   // ── Render ────────────────────────────────────────────────────────────
+
   // Minimized — small floating pill bottom-right; click to restore.
   if (isMinimized) {
     return (
@@ -623,9 +605,12 @@ export default function HostControlCenter({
     );
   }
 
-  // Desktop — windowed: drag, resize, maximize, minimize.
+  // Desktop — drag/resize window with backdrop. Default size large
+  // (~92vw × 88vh, centred) so the host sees the whole view without
+  // having to drag or resize. Drag handle = the title bar.
   return (
     <>
+      <div className="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
       <Rnd
         bounds="window"
         minWidth={HCC_MIN_W}
@@ -650,7 +635,7 @@ export default function HostControlCenter({
         dragHandleClassName="hcc-drag-handle"
         disableDragging={isMaximized}
         enableResizing={!isMaximized}
-        className="z-40 bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden"
+        className="z-40 bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden flex flex-col"
       >
         {titleBar}
         {bodyContent}
