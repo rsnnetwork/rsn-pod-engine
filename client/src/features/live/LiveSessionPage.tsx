@@ -252,11 +252,15 @@ export default function LiveSessionPage() {
           <ReactionBar sessionId={sessionId} />
         )}
 
-        {/* Chat toggle button */}
+        {/* Chat toggle button. Phase C2 (10 May spec) — bottom offset accounts
+            for iOS safe-area inset so the button never sits underneath the
+            home-indicator bar on iPhone. min-h/min-w 44px = WCAG tap target. */}
         {!chatOpen && phase !== 'complete' && (
           <button
             onClick={() => setChatOpen(true)}
-            className="absolute bottom-20 right-4 z-20 p-3 bg-[#3c4043] text-white rounded-full shadow-lg hover:bg-[#4a4e51] transition-all"
+            style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 5rem)' }}
+            className="absolute right-4 z-20 min-w-[44px] min-h-[44px] p-3 bg-[#3c4043] text-white rounded-full shadow-lg hover:bg-[#4a4e51] transition-all flex items-center justify-center"
+            aria-label="Open chat"
           >
             <MessageCircle className="h-5 w-5" />
             {unreadChatCount > 0 && (

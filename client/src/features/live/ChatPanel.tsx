@@ -82,12 +82,20 @@ export default function ChatPanel({ sessionId, onClose }: ChatPanelProps) {
     }
   };
 
-  // Filter messages by scope: in breakout room show only room msgs, in lobby show only lobby msgs
-  const currentMatchId = useSessionStore(s => s.currentMatchId);
+  // Filter messages by scope: in breakout room show only room msgs, in lobby show only lobby msgs.
+  // Phase C1 (10 May spec) — server emits chat:message with `roomId = LiveKit
+  // room id`. Pre-fix, this code compared against `currentMatchId` (the DB
+  // match-record UUID). Different identifier spaces, so the filter NEVER
+  // matched and breakout chat was silently invisible (Stefan #13). Fixed by
+  // filtering on `currentRoomId` (the LiveKit room id captured from
+  // match:assigned and match:reassigned).
+  const currentRoomId = useSessionStore(s => s.currentRoomId);
   const visibleMessages = chatMessages.filter(msg => {
     if (phase === 'matched') {
-      // In a breakout room — only show messages from this specific room
-      return msg.scope === 'room' && (!msg.roomId || msg.roomId === currentMatchId || (msg as any).matchId === currentMatchId);
+      // In a breakout room — only show messages from this specific room.
+      // `!msg.roomId` keeps backward compat for messages sent before the
+      // server started stamping roomId; those still display.
+      return msg.scope === 'room' && (!msg.roomId || msg.roomId === currentRoomId);
     }
     // In lobby/main room — only show lobby messages
     return msg.scope === 'lobby' || !msg.scope;
@@ -268,18 +276,24 @@ function MessageBubble({ msg, isOwn, sessionId }: { msg: ChatMessage; isOwn: boo
           ))}
         </div>
       )}
-      {/* Reaction picker toggle */}
+      {/* Reaction picker toggle. Phase C2 (10 May spec) — picker is permanently
+          visible on touch devices (group-hover doesn't fire on tap), and
+          anchored on the same side as the bubble so it never clips off-screen
+          on small phones. max-w + the picker's anchored side ensure the popup
+          stays inside the viewport. */}
       <div className={`relative ${isOwn ? 'self-end' : 'self-start'}`}>
         <button
           onClick={() => setShowPicker(!showPicker)}
-          className="opacity-0 group-hover/msg:opacity-100 transition-opacity p-0.5 text-gray-500 hover:text-gray-300"
+          aria-label="Add reaction"
+          className="opacity-100 sm:opacity-0 sm:group-hover/msg:opacity-100 transition-opacity p-1 min-w-[28px] min-h-[28px] text-gray-500 hover:text-gray-300 flex items-center justify-center"
         >
           <SmilePlus className="h-3.5 w-3.5" />
         </button>
         {showPicker && (
-          <div className={`absolute bottom-6 ${isOwn ? 'right-0' : 'left-0'} flex gap-1 bg-white border border-gray-200 rounded-full px-2 py-1 shadow-lg z-10`}>
+          <div className={`absolute bottom-6 ${isOwn ? 'right-0' : 'left-0'} flex gap-1 bg-white border border-gray-200 rounded-full px-2 py-1 shadow-lg z-10 max-w-[calc(100vw-2rem)]`}>
             {CHAT_EMOJIS.map(e => (
-              <button key={e.type} onClick={() => handleReact(e.type)} className="hover:scale-125 transition-transform text-sm">
+              <button key={e.type} onClick={() => handleReact(e.type)} aria-label={`React with ${e.type}`}
+                className="hover:scale-125 transition-transform text-sm min-w-[28px] min-h-[28px] flex items-center justify-center">
                 {e.emoji}
               </button>
             ))}

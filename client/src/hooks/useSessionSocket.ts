@@ -379,6 +379,12 @@ export default function useSessionSocket(sessionId: string) {
       // Per-match timer visibility override (Task 14 — bulk manual breakouts)
       store.setBreakoutTimerHidden(data.timerVisibility === 'hidden');
       store.setMatch({ userId: data.newPartnerId, displayName: data.partnerDisplayName || data.newPartnerId }, data.matchId || null);
+      // Phase C1 (10 May spec) — capture the LiveKit room id for the new
+      // breakout. Pre-fix, only match:assigned called setRoomId, so a
+      // reassigned user kept the old roomId in store and the chat filter
+      // (which now keys on currentRoomId) silently dropped messages from
+      // the actual new room.
+      if (data.roomId) store.setRoomId(data.roomId);
       store.setPhase('matched');
       // Use inline token if server provided it, otherwise fall back to API fetch
       if (data.token && data.livekitUrl) {
