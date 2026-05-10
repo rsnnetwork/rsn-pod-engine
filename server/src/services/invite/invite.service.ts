@@ -449,7 +449,11 @@ async function applyInviteRegistration(
 
 function computeRedirectTo(_invite: Invite, registered: { sessionId?: string; podId?: string }): string {
   // Session invite → land in the live lobby. Pod invite → land on the pod page.
-  if (registered.sessionId) return `/sessions/${registered.sessionId}/live`;
+  // Route is `/session/:sessionId/live` (singular) — see client/src/App.tsx.
+  // Plural `/sessions/...` is the registration-list namespace; an email link
+  // pointing there fell into the SPA 404 catch-all. Kept regressing because
+  // tests pinned the broken URL — the route is now the source of truth.
+  if (registered.sessionId) return `/session/${registered.sessionId}/live`;
   if (registered.podId) return `/pods/${registered.podId}`;
   // Fallback for malformed invites (no podId or sessionId attached) — never
   // hit in practice, present for type completeness.

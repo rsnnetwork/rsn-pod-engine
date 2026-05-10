@@ -179,8 +179,13 @@ describe('T0-4 — atomic invite acceptance', () => {
   });
 
   describe('redirectTo computation', () => {
-    it('session invites land on /sessions/:id/live', () => {
-      expect(src).toMatch(/return\s*`\/sessions\/\$\{registered\.sessionId\}\/live`/);
+    // The route is `/session/:sessionId/live` (SINGULAR) — see client/src/App.tsx.
+    // Plural `/sessions/...` is the registration-list namespace and falls into
+    // the SPA NotFoundPage. Pre-fix this test pinned the broken plural URL,
+    // which is why every "fix" of the email-invite 404 regressed.
+    it('session invites land on /session/:id/live (singular — must match App.tsx Route)', () => {
+      expect(src).toMatch(/return\s*`\/session\/\$\{registered\.sessionId\}\/live`/);
+      expect(src).not.toMatch(/return\s*`\/sessions\/\$\{registered\.sessionId\}\/live`/);
     });
 
     it('pod invites land on /pods/:id', () => {
@@ -189,6 +194,19 @@ describe('T0-4 — atomic invite acceptance', () => {
 
     it('fallback to /dashboard for malformed invites (no podId or sessionId)', () => {
       expect(src).toMatch(/return\s*['"]\/dashboard['"]/);
+    });
+
+    // Invariant guard — pin the URL produced by computeRedirectTo against the
+    // actual <Route> registered in App.tsx so the two cannot drift again.
+    it('redirectTo URL pattern matches a route registered in client App.tsx', () => {
+      const appSrc = nodeFs.readFileSync(
+        nodePath.join(__dirname, '../../../../../client/src/App.tsx'),
+        'utf8',
+      );
+      // The live-session route in App.tsx
+      expect(appSrc).toMatch(/<Route\s+path="\/session\/:sessionId\/live"/);
+      // Backward-compat redirect for old plural-URL emails already in inboxes
+      expect(appSrc).toMatch(/<Route\s+path="\/sessions\/:sessionId\/live"\s+element=\{<LiveRedirectCompat/);
     });
   });
 

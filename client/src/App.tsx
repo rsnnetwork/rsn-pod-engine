@@ -1,5 +1,14 @@
 import { useEffect } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useParams } from 'react-router-dom';
+
+// Backward-compat: old invite emails (pre-cbcef30) pointed users at
+// `/sessions/:id/live` (plural). The actual route is `/session/:id/live`
+// (singular). Anyone who still has an old email in their inbox keeps
+// working forever because we redirect the bad URL to the right one.
+function LiveRedirectCompat() {
+  const { sessionId } = useParams();
+  return <Navigate to={`/session/${sessionId}/live`} replace />;
+}
 import { useAuthStore } from '@/stores/authStore';
 import AppLayout from '@/components/layout/AppLayout';
 import ProtectedRoute from '@/components/layout/ProtectedRoute';
@@ -91,6 +100,7 @@ export default function App() {
       <Route path="/onboarding" element={<ProtectedRoute><OnboardingPage /></ProtectedRoute>} />
       <Route path="/session/:sessionId/live" element={<ProtectedRoute><SessionGuard><LiveSessionPage /></SessionGuard></ProtectedRoute>} />
       <Route path="/session/:sessionId/host" element={<ProtectedRoute><HostDashboardPage /></ProtectedRoute>} />
+      <Route path="/sessions/:sessionId/live" element={<LiveRedirectCompat />} />
 
       <Route path="*" element={<NotFoundPage />} />
     </Routes>

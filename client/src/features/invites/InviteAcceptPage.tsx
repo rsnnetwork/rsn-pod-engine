@@ -69,7 +69,8 @@ export default function InviteAcceptPage() {
   // which the server now computes authoritatively (live lobby for session,
   // pod page for pod, dashboard for malformed invites).
   const fallbackDestination = useCallback(() => {
-    if (invite?.sessionId) return `/sessions/${invite.sessionId}/live`;
+    // Route is `/session/:sessionId/live` (singular) — see App.tsx.
+    if (invite?.sessionId) return `/session/${invite.sessionId}/live`;
     if (invite?.podId) return `/pods/${invite.podId}`;
     return '/sessions';
   }, [invite]);

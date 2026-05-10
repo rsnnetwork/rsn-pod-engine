@@ -9,8 +9,13 @@
 //   - New endpoint GET /api/pods/:id/active-session returns the live or
 //     imminent session for that pod (or { session: null }).
 //   - PodDetailPage.joinMutation.onSuccess calls the endpoint and auto-
-//     navigates to /sessions/:id/live for live, /sessions/:id for imminent.
+//     navigates to /session/:id/live for live, /sessions/:id for imminent.
 //   - Falls back to the original toast when no live/imminent session exists.
+//
+// NOTE on URL spelling: the live-event route is `/session/:id/live`
+// (SINGULAR). Plural `/sessions/...` is the registration-list namespace
+// — landing there falls into the SPA 404. This test previously asserted
+// the plural URL, which silently pinned the bug it was supposed to guard.
 
 import * as nodeFs from 'fs';
 import * as nodePath from 'path';
@@ -71,11 +76,12 @@ describe('T1-3 — pod active-session endpoint + auto-redirect', () => {
       expect(fn).toMatch(/api\.get\(`\/pods\/\$\{podId\}\/active-session`\)/);
     });
 
-    it('navigates to /sessions/:id/live for live statuses', () => {
+    it('navigates to /session/:id/live for live statuses (singular — matches App.tsx Route)', () => {
       const fnStart = src.indexOf('const joinMutation = useMutation');
       const fnEnd = src.indexOf('const requestJoinMutation', fnStart);
       const fn = src.slice(fnStart, fnEnd);
-      expect(fn).toMatch(/navigate\(`\/sessions\/\$\{session\.id\}\/live`\)/);
+      expect(fn).toMatch(/navigate\(`\/session\/\$\{session\.id\}\/live`\)/);
+      expect(fn).not.toMatch(/navigate\(`\/sessions\/\$\{session\.id\}\/live`\)/);
     });
 
     it('navigates to /sessions/:id (detail page) for imminent scheduled', () => {

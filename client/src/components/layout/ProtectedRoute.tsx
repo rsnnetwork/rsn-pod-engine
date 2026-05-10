@@ -31,7 +31,7 @@ export default function ProtectedRoute({ children }: { children?: ReactNode }) {
   // Legacy gate (env-flagged for emergency rollback only)
   if (import.meta.env.VITE_LEGACY_ONBOARDING_GATE === 'true') {
     const isOnboarding = location.pathname === '/onboarding';
-    const isLiveSession = location.pathname.startsWith('/sessions/') && location.pathname.includes('/live');
+    const isLiveSession = location.pathname.startsWith('/session/') && location.pathname.includes('/live');
     const isInviteLanding = location.pathname.startsWith('/invite/');
     const onboardingCompleted = (user as any).onboardingCompleted === true;
     // Even in legacy mode, exempt /invite/:code so the invite-acceptance

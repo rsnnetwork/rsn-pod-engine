@@ -240,7 +240,7 @@ export default function PodDetailPage() {
           // live (lobby_open, round_*, closing_lobby) → live lobby.
           const liveStatuses = ['lobby_open', 'round_active', 'round_rating', 'round_transition', 'closing_lobby'];
           if (liveStatuses.includes(session.status)) {
-            navigate(`/sessions/${session.id}/live`);
+            navigate(`/session/${session.id}/live`);
           } else {
             navigate(`/sessions/${session.id}`);
           }

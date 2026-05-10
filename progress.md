@@ -7292,3 +7292,45 @@ Architectural pins: 8 new tests in `phase-7c1-host-control-center.test.ts` cover
 ### What is NOT in 7B
 
 #3, #6, #7, #11, #12 — queued for **7C** (UI new builds).
+
+---
+
+## Email-invite 404 — singular vs plural URL fix — 2026-05-09
+
+**Status:** Shipped.
+**Symptom:** Users clicking the email invite for an event got a 404 page right after acceptance. Reported repeatedly; previous "fixes" appeared to work then regressed.
+
+### Root cause
+
+The server's `computeRedirectTo` returned `/sessions/${sessionId}/live` (PLURAL). The actual React Router route is `/session/:sessionId/live` (SINGULAR). The plural URL fell into the SPA `*` catch-all → `<NotFoundPage />` → user saw the 404.
+
+The bug kept regressing because two test files asserted the broken plural URL:
+- `server/src/__tests__/services/invite/t0-4-atomic-invite.test.ts:182-183`
+- `server/src/__tests__/routes/t1-3-pod-active-session.test.ts:74-78`
+
+Any developer correcting the URL got a red test, assumed they had introduced a regression, and reverted. The test was enforcing the bug.
+
+### What changed
+
+**Code fixes (singular URL where the live route actually lives)**
+- `server/src/services/invite/invite.service.ts:452` — `computeRedirectTo` now returns `/session/${id}/live`
+- `client/src/features/invites/InviteAcceptPage.tsx:72` — fallback destination uses singular
+- `client/src/features/pods/PodDetailPage.tsx:243` — pod-page "Join Live" navigation uses singular
+- `client/src/components/layout/ProtectedRoute.tsx:34` — legacy onboarding-gate `isLiveSession` check uses singular
+
+**Backward-compat for emails already in inboxes**
+- `client/src/App.tsx` — added `<Route path="/sessions/:sessionId/live" element={<LiveRedirectCompat />} />` that redirects the old plural URL to the singular one. Pre-existing emails keep working forever.
+
+**Test corrections + new invariant guard**
+- The two pinned-the-bug tests now assert the singular URL and explicitly forbid the plural.
+- New invariant test in `t0-4-atomic-invite.test.ts` reads `client/src/App.tsx` and asserts both the live-session route AND the backward-compat redirect are present — the route definition is now the source of truth, server and client are pinned to it, future drift fails CI.
+
+### Verification
+
+- `npx jest` on the three affected test files — 44 tests pass.
+- `npx tsc --noEmit` (client) — clean.
+- Grep for `/sessions/.../live` (plural) in `*.{ts,tsx}` — only the intentional backward-compat route + its explanatory comment remain.
+
+### Why it kept happening
+
+A regression-pinned-by-test pattern. The lesson: tests that assert URL strings should be paired with an invariant test that pins the URL against the actual route registration. The new invariant test in this commit does exactly that.
