@@ -118,18 +118,40 @@ export default function InviteAcceptPage() {
       navigate(destination, { replace: true });
     } catch (err: any) {
       const errCode = err?.response?.data?.error?.code;
-      // T0-4 — INVITE_ALREADY_USED for THIS user is now treated server-side
-      // as idempotent re-acceptance (returns success + redirectTo). So if we
-      // see INVITE_ALREADY_USED here, it means a DIFFERENT user already
-      // consumed it. EVENT_ENDED, INVITE_EXPIRED, INVITE_REVOKED are real
-      // errors. The old recovery chain (mark-accepted + register) is gone —
-      // the server transaction is the source of truth.
+      // Idempotent "already in" responses → treat as success and navigate.
+      // The server's invite-accept flow swallows ConflictError for these
+      // cases, but a stale-cached client bundle, a request landing on the
+      // old instance during a deploy swap, or an edge in the registration
+      // helper can still surface the error. Whatever the route, the user
+      // IS already in the underlying pod/session, so the right UX is to
+      // take them straight into the event — not to flash "navigating"
+      // without navigating. Pre-fix, the toast text said "navigating to
+      // the event" but the catch block did nothing else, leaving the user
+      // stuck behind a "Try Again" button that retried the same
+      // idempotent operation and got the same misleading toast.
+      if (
+        errCode === 'POD_MEMBER_EXISTS' ||
+        errCode === 'SESSION_ALREADY_REGISTERED' ||
+        errCode === 'INVITE_ALREADY_USED'
+      ) {
+        addToast("You're already in — taking you to the event", 'success');
+        const sid = invite?.sessionId;
+        await Promise.all([
+          qc.refetchQueries({ queryKey: ['session-participants'] }),
+          qc.refetchQueries({ queryKey: ['session', sid] }),
+        ]);
+        qc.invalidateQueries({ queryKey: ['session-detail'] });
+        qc.invalidateQueries({ queryKey: ['my-sessions'] });
+        qc.invalidateQueries({ queryKey: ['my-pods'] });
+        navigate(fallbackDestination(), { replace: true });
+        return;
+      }
+      // EVENT_ENDED, INVITE_EXPIRED, INVITE_REVOKED, IDENTITY_MISMATCH etc.
+      // are real errors and stay in the error UI.
       const { message } = getAcceptErrorMessage(err);
       setError(message);
       addToast(message, 'error');
       autoAcceptedRef.current = false; // allow user to retry
-      // Suppress unused-var lint
-      void errCode;
     } finally {
       setAccepting(false);
     }

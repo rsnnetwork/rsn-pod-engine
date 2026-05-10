@@ -267,5 +267,29 @@ describe('T0-4 — atomic invite acceptance', () => {
       const acceptFn = clientSrc.slice(acceptFnStart, acceptFnEnd);
       expect(acceptFn).not.toMatch(/api\.post\(`\/invites\/\$\{code\}\/mark-accepted`\)/);
     });
+
+    // Stefan/Shraddha 10 May 2026 — when the server returned POD_MEMBER_EXISTS
+    // (or SESSION_ALREADY_REGISTERED) for an already-registered user, the
+    // catch block set the toast text to "You're already a member — navigating
+    // to the event" but never actually navigated. The user got stuck on a
+    // "Try Again" button that retried the same idempotent op and saw the
+    // same misleading toast forever. This test pins the fix: those error
+    // codes are now treated as success and trigger navigation.
+    it('catch block treats POD_MEMBER_EXISTS / SESSION_ALREADY_REGISTERED / INVITE_ALREADY_USED as success (navigates to lobby)', () => {
+      const acceptFnStart = clientSrc.indexOf('const accept = useCallback');
+      const acceptFnEnd = clientSrc.indexOf('  // Pre-emptive check', acceptFnStart);
+      const acceptFn = clientSrc.slice(acceptFnStart, acceptFnEnd);
+      // The catch block must contain a code-equality check for all three codes
+      expect(acceptFn).toMatch(/errCode\s*===\s*['"]POD_MEMBER_EXISTS['"]/);
+      expect(acceptFn).toMatch(/errCode\s*===\s*['"]SESSION_ALREADY_REGISTERED['"]/);
+      expect(acceptFn).toMatch(/errCode\s*===\s*['"]INVITE_ALREADY_USED['"]/);
+      // And inside that branch it must navigate via fallbackDestination
+      const branchStart = acceptFn.indexOf("errCode === 'POD_MEMBER_EXISTS'");
+      const branchEnd = acceptFn.indexOf('// EVENT_ENDED', branchStart);
+      expect(branchEnd).toBeGreaterThan(branchStart);
+      const branch = acceptFn.slice(branchStart, branchEnd);
+      expect(branch).toMatch(/navigate\(fallbackDestination\(\)/);
+      expect(branch).toMatch(/return;/);
+    });
   });
 });
