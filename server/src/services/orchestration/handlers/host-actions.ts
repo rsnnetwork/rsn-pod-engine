@@ -1470,13 +1470,14 @@ export async function handleAssignCohost(
     if (!hostId) return;
 
     const { sessionId, userId, role } = data;
-    const session = await sessionService.getSessionById(sessionId);
 
-    // Only the original host (not co-hosts) can assign co-hosts
-    if (session.hostUserId !== hostId) {
-      socket.emit('error', { code: 'FORBIDDEN', message: 'Only the event host can assign co-hosts' });
-      return;
-    }
+    // Phase B1 (10 May spec) — co-hosts and admins can manage co-hosts.
+    // Only ownership transfer (handlePromoteCohost below) remains restricted
+    // to the original host. Pre-fix, the client UI showed Make/Remove
+    // co-host buttons for co-hosts but the server rejected with FORBIDDEN
+    // — Stefan #7: "Shradha's control center did not work". `verifyHost`
+    // routes through canActAsHost which accepts cohost + admin + super_admin.
+    if (!await verifyHost(socket, sessionId)) return;
 
     await query(
       `INSERT INTO session_cohosts (session_id, user_id, role, granted_by)
@@ -1530,12 +1531,11 @@ export async function handleRemoveCohost(
     if (!hostId) return;
 
     const { sessionId, userId } = data;
-    const session = await sessionService.getSessionById(sessionId);
 
-    if (session.hostUserId !== hostId) {
-      socket.emit('error', { code: 'FORBIDDEN', message: 'Only the event host can remove co-hosts' });
-      return;
-    }
+    // Phase B1 (10 May spec) — co-hosts and admins can remove co-hosts.
+    // Same pattern as handleAssignCohost above. Only handlePromoteCohost
+    // (ownership transfer) remains original-host-only.
+    if (!await verifyHost(socket, sessionId)) return;
 
     await query(
       `DELETE FROM session_cohosts WHERE session_id = $1 AND user_id = $2`,

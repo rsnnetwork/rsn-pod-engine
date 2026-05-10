@@ -67,7 +67,13 @@ export default function LiveSessionPage() {
   const cohosts = useSessionStore(s => s.cohosts);
   const isOriginalHost = session?.hostUserId === user?.id;
   const isCohost = !!user?.id && cohosts.has(user.id);
-  const isHost = isOriginalHost || isCohost;
+  // Phase B2 (10 May spec) — admins and super_admins also see host UI.
+  // Pre-fix Stefan (super_admin) couldn't open the Host Control Center
+  // even though the server-side gates already accepted his role via
+  // `canActAsHost` (which permits anyone with rank >= cohost, and admins
+  // outrank cohost). Same pattern used in HostDashboardPage.tsx:68.
+  const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
+  const isHost = isOriginalHost || isCohost || isAdmin;
 
   useSessionSocket(sessionId!);
 
