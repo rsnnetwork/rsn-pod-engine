@@ -140,8 +140,7 @@ router.post(
     try {
       const result = await orchestrationService.setHostVisibility(
         req.params.id,
-        req.user!.userId,
-        req.user!.role,
+        { userId: req.user!.userId, role: req.user!.role },
         req.body.userId,
         req.body.mode,
       );

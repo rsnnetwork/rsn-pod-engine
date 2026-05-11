@@ -196,12 +196,22 @@ export function initOrchestration(socketServer: SocketServer): void {
       );
       if (stale.rows.length === 0) return;
       logger.info({ count: stale.rows.length }, 'Orphan-lobby reaper: tearing down stale rooms');
-      for (const row of stale.rows) {
-        try {
+      // Phase H (10 May simplify pass) — clean each orphan in parallel.
+      // Pre-fix this awaited cleanupLiveKitRooms sequentially in a loop;
+      // a 50-row backlog × 500ms per LiveKit close = 25s of unnecessary
+      // serial work per tick. Promise.allSettled keeps per-row error
+      // isolation while letting LiveKit closes overlap.
+      const results = await Promise.allSettled(
+        stale.rows.map(async row => {
           await cleanupLiveKitRooms(row.id);
           await query(`UPDATE sessions SET lobby_room_id = NULL WHERE id = $1`, [row.id]);
-        } catch (err) {
-          logger.warn({ err, sessionId: row.id }, 'Orphan-lobby reaper: per-session cleanup failed (will retry next tick)');
+        }),
+      );
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i];
+        if (r.status === 'rejected') {
+          logger.warn({ err: r.reason, sessionId: stale.rows[i].id },
+            'Orphan-lobby reaper: per-session cleanup failed (will retry next tick)');
         }
       }
     } catch (err) {

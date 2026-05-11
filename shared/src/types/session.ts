@@ -93,6 +93,24 @@ export const DEFAULT_SESSION_CONFIG: SessionConfig = {
   matchingAlgorithmId: 'speed_networking_v1',
 };
 
+/**
+ * Phase G (10 May 2026 spec item 11) — host/co-host visibility mode.
+ * Controls how a host or co-host renders in the lobby/breakout video grid.
+ *  • big_speaker — pinned as the big tile
+ *  • normal      — regular participant tile (default)
+ *  • producer    — not visible in any video tile (off-camera operator)
+ *  • hidden      — not rendered anywhere (off-stage organiser)
+ *
+ * Mirrors the Postgres `host_visibility_mode` enum (migration 059).
+ */
+export type HostVisibilityMode = 'big_speaker' | 'normal' | 'producer' | 'hidden';
+export const HOST_VISIBILITY_MODES: readonly HostVisibilityMode[] = [
+  'big_speaker', 'normal', 'producer', 'hidden',
+] as const;
+export function isHostVisibilityMode(v: unknown): v is HostVisibilityMode {
+  return typeof v === 'string' && (HOST_VISIBILITY_MODES as readonly string[]).includes(v);
+}
+
 export interface Session {
   id: string;
   podId: string;
@@ -106,6 +124,7 @@ export interface Session {
   config: SessionConfig;
   hostUserId: string;
   lobbyRoomId: string | null;
+  hostVisibilityMode?: HostVisibilityMode;
   createdAt: Date;
   updatedAt: Date;
 }

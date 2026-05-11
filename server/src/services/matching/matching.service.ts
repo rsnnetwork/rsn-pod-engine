@@ -184,7 +184,6 @@ export async function generateSingleRound(
   sessionId: string,
   roundNumber: number,
   excludeUserIds?: string[],
-  presentUserIds?: Set<string>,
   options?: { regenerate?: boolean },
 ): Promise<RoundAssignment> {
   const session = await sessionService.getSessionById(sessionId);
@@ -228,13 +227,11 @@ export async function generateSingleRound(
         [sessionId]
       );
 
-  // Phase 2 (Redis): presentUserIds will come from Redis presence instead of in-memory map.
-  // Filter to only participants who are actually connected (prevents phantom matches).
-  if (presentUserIds && presentUserIds.size > 0) {
-    participantsResult.rows = participantsResult.rows.filter(
-      (p) => presentUserIds.has(p.userId)
-    );
-  }
+  // Phase H (10 May simplify pass) — the old in-memory `presentUserIds`
+  // filter is gone. Phase A1 made the DB query (with `disconnected`
+  // excluded) the single source of truth for eligibility, so an extra
+  // intersection here was dead code that just forced callers to pass
+  // `undefined` as a positional placeholder.
 
   // Phase 4 — same matching-policy resolution as generateSessionSchedule.
   const userIds = participantsResult.rows.map((p) => p.userId);

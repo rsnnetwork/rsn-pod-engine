@@ -67,3 +67,16 @@ e2e/node_modules/
 e2e/test-results/
 e2e/playwright-report/
 e2e/.jwt_secret
+
+# Local load-test scratchpad — never push
+_loadtest-scratch/
+
+# Local-only debug artifacts (moved to ../RSN-local-archive)
+logs_*.json
+*_dump.sql
+*BUG_REPORT*.md
+render logs*
+
+# Belt-and-braces: in case a backup ever lands inside the repo by mistake
+_backups/
+backups/

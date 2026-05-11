@@ -1681,24 +1681,27 @@ export function setHostActionsIo(io: SocketServer): void {
 //     room so all clients can re-render the lobby/video tiles. Hidden hosts
 //     are filtered out client-side; big_speaker hosts are pinned big.
 
-export type HostVisibilityMode = 'big_speaker' | 'normal' | 'producer' | 'hidden';
+// HostVisibilityMode + isHostVisibilityMode now live in `@rsn/shared` so the
+// server, client, and socket-event types all reference one source. Re-export
+// for the few existing callers that imported from this module.
+import { HostVisibilityMode, isHostVisibilityMode } from '@rsn/shared';
+export { isHostVisibilityMode };
+export type { HostVisibilityMode };
 
-const VISIBILITY_MODES: HostVisibilityMode[] = ['big_speaker', 'normal', 'producer', 'hidden'];
-
-export function isHostVisibilityMode(v: unknown): v is HostVisibilityMode {
-  return typeof v === 'string' && (VISIBILITY_MODES as string[]).includes(v);
+export interface RequesterContext {
+  userId: string;
+  role: UserRole | undefined;
 }
 
 export async function setHostVisibility(
   sessionId: string,
-  requesterUserId: string,
-  requesterRole: UserRole | undefined,
+  requester: RequesterContext,
   targetUserId: string,
   mode: HostVisibilityMode,
 ): Promise<{ userId: string; mode: HostVisibilityMode }> {
   // Auth: caller must be able to act as host.
   const { canActAsHost } = await import('../../roles/effective-role.service');
-  const { allowed } = await canActAsHost(requesterUserId, requesterRole, sessionId);
+  const { allowed } = await canActAsHost(requester.userId, requester.role, sessionId);
   if (!allowed) {
     throw new ForbiddenError('Only hosts, co-hosts, or admins can set visibility');
   }
@@ -1706,28 +1709,26 @@ export async function setHostVisibility(
     throw new ValidationError(`Invalid visibility mode: ${String(mode)}`);
   }
 
+  // Phase H (10 May simplify pass) — single UPDATE per target column with
+  // rowCount check. Pre-fix did SELECT-then-UPDATE on session_cohosts which
+  // was a needless round-trip (and a TOCTOU race in theory). Now: try the
+  // exact column the target identifies as, and only fail if no row matches.
   const session = await sessionService.getSessionById(sessionId);
   let updated = false;
 
   if (session.hostUserId === targetUserId) {
-    await query(
+    const r = await query(
       `UPDATE sessions SET host_visibility_mode = $1::host_visibility_mode WHERE id = $2`,
       [mode, sessionId],
     );
-    updated = true;
+    updated = (r.rowCount ?? 0) > 0;
   } else {
-    const cohost = await query<{ id: string }>(
-      `SELECT id FROM session_cohosts WHERE session_id = $1 AND user_id = $2`,
-      [sessionId, targetUserId],
+    const r = await query(
+      `UPDATE session_cohosts SET visibility_mode = $1::host_visibility_mode
+        WHERE session_id = $2 AND user_id = $3`,
+      [mode, sessionId, targetUserId],
     );
-    if (cohost.rows.length > 0) {
-      await query(
-        `UPDATE session_cohosts SET visibility_mode = $1::host_visibility_mode
-          WHERE session_id = $2 AND user_id = $3`,
-        [mode, sessionId, targetUserId],
-      );
-      updated = true;
-    }
+    updated = (r.rowCount ?? 0) > 0;
   }
 
   if (!updated) {
@@ -1742,7 +1743,8 @@ export async function setHostVisibility(
     });
   }
 
-  logger.info({ sessionId, targetUserId, mode, requesterUserId }, 'Host visibility mode updated');
+  logger.info({ sessionId, targetUserId, mode, requesterUserId: requester.userId },
+    'Host visibility mode updated');
   return { userId: targetUserId, mode };
 }
 

@@ -39,9 +39,15 @@ describe('Phase G — host visibility modes (item 11)', () => {
   describe('server — setHostVisibility service', () => {
     const src = readServer('services/orchestration/handlers/host-actions.ts');
 
-    it('exports setHostVisibility + HostVisibilityMode type', () => {
+    it('exports setHostVisibility + re-exports HostVisibilityMode type from shared', () => {
       expect(src).toMatch(/export async function setHostVisibility\(/);
-      expect(src).toMatch(/export type HostVisibilityMode/);
+      // Phase H — HostVisibilityMode now lives in @rsn/shared and is re-
+      // exported here for backward compat. Accept either the original local
+      // definition or the re-export form.
+      expect(src).toMatch(/export type \{?\s*HostVisibilityMode|export type HostVisibilityMode/);
+      // The shared definition exists.
+      const sharedSrc = readServer('../../shared/src/types/session.ts');
+      expect(sharedSrc).toMatch(/export type HostVisibilityMode\s*=\s*['"]big_speaker['"][\s\S]*?['"]hidden['"]/);
     });
 
     it('uses canActAsHost for authorisation (not original-host-only)', () => {

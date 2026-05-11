@@ -453,7 +453,7 @@ export async function handleHostRegenerateMatches(
     // — DB status is the single source of truth via getEligibleParticipants
     // inside the matching service; no in-memory presence intersection.
     const allHostIds = await getAllHostIds(data.sessionId, activeSession.hostUserId);
-    await matchingService.generateSingleRound(data.sessionId, roundNumber, allHostIds, undefined, { regenerate: true });
+    await matchingService.generateSingleRound(data.sessionId, roundNumber, allHostIds, { regenerate: true });
 
     // Re-send preview
     await sendMatchPreview(io, socket, data.sessionId, roundNumber, activeSession.hostUserId);
