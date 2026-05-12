@@ -44,9 +44,21 @@ describe('T1-5 — effective-role.service', () => {
   });
 
   describe('resolution layers', () => {
-    it('layer 1 — global ADMIN/SUPER_ADMIN short-circuit to pod_admin', () => {
-      expect(src).toMatch(/hasRoleAtLeast\(globalUserRole as UserRole,\s*UserRole\.ADMIN\)/);
+    it('layer 1 — global SUPER_ADMIN short-circuit to pod_admin (narrowed in Phase I)', () => {
+      // Phase I (10 May spec item 18) — narrowed from hasRoleAtLeast(ADMIN)
+      // to SUPER_ADMIN only. Regular admins are no longer auto-promoted to
+      // pod_admin; they fall through to the pod/event-scoped layers and
+      // typically resolve as 'participant' when joining a live event.
+      expect(src).toMatch(/globalUserRole\s*===\s*UserRole\.SUPER_ADMIN/);
       expect(src).toMatch(/return ['"]pod_admin['"]/);
+      // Forbid the old broad form so it can't silently regress.
+      const fnStart = src.indexOf('export async function getEffectiveRole');
+      const fnEnd = src.indexOf('\nexport ', fnStart + 1);
+      const fn = src.slice(fnStart, fnEnd);
+      const layerOneStart = fn.indexOf('Layer 1');
+      const layerOneEnd = fn.indexOf('Layer 2', layerOneStart);
+      const layerOne = fn.slice(layerOneStart, layerOneEnd);
+      expect(layerOne).not.toMatch(/hasRoleAtLeast\([^)]*UserRole\.ADMIN\)/);
     });
 
     it('layer 2 — pod creator OR pod_members.role=director maps to pod_admin', () => {

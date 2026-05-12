@@ -63,18 +63,25 @@ describe('Phase B — permission model unification', () => {
     });
   });
 
-  describe('LiveSessionPage isHost gate includes admin and super_admin', () => {
+  describe('LiveSessionPage isHost gate includes super_admin', () => {
     const liveSrc = readClient('features/live/LiveSessionPage.tsx');
 
-    it('isHost expression includes an admin/super_admin disjunct', () => {
-      // Match the form `const isHost = isOriginalHost || isCohost || isAdmin`
+    // Phase I (10 May refined) — narrowed from `admin OR super_admin` to
+    // `super_admin only`. Regular admins join events as participants, not
+    // auto-hosts. This test was updated to pin the new narrow.
+    it('isHost expression includes a super_admin disjunct (not admin+super_admin)', () => {
       expect(liveSrc).toMatch(
-        /const\s+isHost\s*=\s*isOriginalHost\s*\|\|\s*isCohost\s*\|\|\s*isAdmin/,
+        /const\s+isHost\s*=\s*isOriginalHost\s*\|\|\s*isCohost\s*\|\|\s*isSuperAdmin/,
       );
-      // And isAdmin is derived from the user role.
       expect(liveSrc).toMatch(
-        /const\s+isAdmin\s*=\s*user\?\.role\s*===\s*['"]admin['"]\s*\|\|\s*user\?\.role\s*===\s*['"]super_admin['"]/,
+        /const\s+isSuperAdmin\s*=\s*user\?\.role\s*===\s*['"]super_admin['"]/,
       );
+      // The broad `isAdmin = admin || super_admin` form must NOT appear in
+      // the isHost expression. (It can still exist elsewhere on the page
+      // for admin-only UI bits, but it does not fold into isHost.)
+      const isHostLine = liveSrc.match(/const\s+isHost\s*=[^;]+;/);
+      expect(isHostLine).toBeTruthy();
+      expect(isHostLine![0]).not.toMatch(/isAdmin/);
     });
   });
 });

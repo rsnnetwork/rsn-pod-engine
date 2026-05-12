@@ -10,7 +10,7 @@ import { auditMiddleware } from '../middleware/audit';
 import * as orchestrationService from '../services/orchestration/orchestration.service';
 import * as sessionService from '../services/session/session.service';
 import { ForbiddenError } from '../middleware/errors';
-import { UserRole, hasRoleAtLeast } from '@rsn/shared';
+import { UserRole } from '@rsn/shared';
 
 const router = Router();
 
@@ -27,10 +27,15 @@ const visibilitySchema = z.object({
 
 // ─── Host Verification Helper ───────────────────────────────────────────────
 
-async function verifyHostOrAdmin(req: Request, next: NextFunction): Promise<boolean> {
+// Phase I (10 May spec item 18) — narrowed from `hasRoleAtLeast(ADMIN)` to
+// `=== SUPER_ADMIN`. Regular admins are not auto-hosts on a live event; they
+// can be promoted to cohost by the host or super admin if intervention is
+// needed. The helper is named verifyHostOrSuperAdmin so the actual gate is
+// visible at call sites.
+async function verifyHostOrSuperAdmin(req: Request, next: NextFunction): Promise<boolean> {
   const session = await sessionService.getSessionById(req.params.id);
-  if (session.hostUserId !== req.user!.userId && !hasRoleAtLeast(req.user!.role, UserRole.ADMIN)) {
-    next(new ForbiddenError('Only the session host can perform this action'));
+  if (session.hostUserId !== req.user!.userId && req.user!.role !== UserRole.SUPER_ADMIN) {
+    next(new ForbiddenError('Only the session host or super admin can perform this action'));
     return false;
   }
   return true;
@@ -44,7 +49,7 @@ router.post(
   auditMiddleware('session:start', 'session'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      if (!await verifyHostOrAdmin(req, next)) return;
+      if (!await verifyHostOrSuperAdmin(req, next)) return;
       await orchestrationService.startSession(req.params.id, req.user!.userId);
       res.json({ success: true, data: { message: 'Session started' } });
     } catch (err) {
@@ -61,7 +66,7 @@ router.post(
   auditMiddleware('session:pause', 'session'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      if (!await verifyHostOrAdmin(req, next)) return;
+      if (!await verifyHostOrSuperAdmin(req, next)) return;
       await orchestrationService.pauseSession(req.params.id, req.user!.userId);
       res.json({ success: true, data: { message: 'Session paused' } });
     } catch (err) {
@@ -78,7 +83,7 @@ router.post(
   auditMiddleware('session:resume', 'session'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      if (!await verifyHostOrAdmin(req, next)) return;
+      if (!await verifyHostOrSuperAdmin(req, next)) return;
       await orchestrationService.resumeSession(req.params.id, req.user!.userId);
       res.json({ success: true, data: { message: 'Session resumed' } });
     } catch (err) {
@@ -95,7 +100,7 @@ router.post(
   auditMiddleware('session:end', 'session'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      if (!await verifyHostOrAdmin(req, next)) return;
+      if (!await verifyHostOrSuperAdmin(req, next)) return;
       await orchestrationService.endSession(req.params.id, req.user!.userId);
       res.json({ success: true, data: { message: 'Session ended' } });
     } catch (err) {
@@ -113,7 +118,7 @@ router.post(
   auditMiddleware('session:broadcast', 'session'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      if (!await verifyHostOrAdmin(req, next)) return;
+      if (!await verifyHostOrSuperAdmin(req, next)) return;
       await orchestrationService.broadcastMessage(
         req.params.id, req.user!.userId, req.body.message
       );
@@ -129,7 +134,8 @@ router.post(
 // Phase G (10 May spec item 11) — host visibility mode. Hosts and co-hosts
 // can choose how they appear in the live event: big_speaker | normal |
 // producer | hidden. Permission goes through canActAsHost (in the service)
-// so co-hosts and admins can also set modes for themselves or for the host.
+// so co-hosts, pod directors, and super_admin can set modes (Phase I
+// narrowed plain admin out of the auto-host set).
 
 router.post(
   '/:id/host/visibility',
@@ -158,7 +164,7 @@ router.get(
   authenticate,
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      if (!await verifyHostOrAdmin(req, next)) return;
+      if (!await verifyHostOrSuperAdmin(req, next)) return;
       const state = orchestrationService.getActiveSessionState(req.params.id);
       if (!state) {
         res.json({ success: true, data: { active: false } });

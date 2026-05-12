@@ -14,7 +14,7 @@
 //     → 'pod_admin' | 'event_host' | 'cohost' | 'participant' | 'unauthorized'
 //
 // Resolution order (highest privilege wins):
-//   1. globalUserRole >= ADMIN          → 'pod_admin'  (admins always pass any check)
+//   1. globalUserRole === SUPER_ADMIN    → 'pod_admin'  (only super admin auto-passes)
 //   2. pod's created_by === userId
 //      OR pod_members.role === 'director' → 'pod_admin'
 //   3. sessions.host_user_id === userId  → 'event_host'
@@ -31,7 +31,7 @@
 // other check sites continue working with their existing patterns.
 
 import { query } from '../../db';
-import { UserRole, hasRoleAtLeast } from '@rsn/shared';
+import { UserRole } from '@rsn/shared';
 import { ForbiddenError } from '../../middleware/errors';
 
 export type EffectiveRole =
@@ -63,8 +63,14 @@ export async function getEffectiveRole(
   globalUserRole: UserRole | string | undefined,
   context: ResolverContext,
 ): Promise<EffectiveRole> {
-  // Layer 1 — Platform admin always wins.
-  if (globalUserRole && hasRoleAtLeast(globalUserRole as UserRole, UserRole.ADMIN)) {
+  // Layer 1 — Super admin always wins.
+  // Phase I (10 May spec item 18) — narrowed from `hasRoleAtLeast(ADMIN)`
+  // to `=== SUPER_ADMIN`. Stefan asked for super_admin to have full host
+  // controls; regular admins (Shraddha, Raja) should join live events as
+  // participants and be promoted to cohost if intervention is needed.
+  // Pod-management endpoints use `hasRoleAtLeast(ADMIN)` directly via
+  // their own helpers and are unaffected by this narrowing.
+  if (globalUserRole === UserRole.SUPER_ADMIN) {
     return 'pod_admin';
   }
 
@@ -147,8 +153,10 @@ export async function requireEffectiveRole(
 
 /**
  * Convenience: returns true when the user can act as event host. Used by
- * verifyHost which also includes admin/cohost in its accepted set. Equivalent
- * to "effective role >= cohost in this session context".
+ * verifyHost. Accepted set: pod_admin (super_admin or pod director/creator),
+ * event_host (this session's owner), cohost (explicitly delegated). Plain
+ * admin is NOT in the set as of Phase I — they must be promoted to cohost
+ * to act as host on a specific event.
  */
 export async function canActAsHost(
   userId: string,

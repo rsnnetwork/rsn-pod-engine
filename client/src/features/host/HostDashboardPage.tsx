@@ -64,8 +64,12 @@ export default function HostDashboardPage() {
   if (isLoading) return <PageLoader />;
   if (!session) return <p className="text-gray-500 text-center py-20">Event not found</p>;
 
-  // Auth check: Only host or admin can access
-  const isHost = session.hostUserId === user?.id || user?.role === 'admin' || user?.role === 'super_admin';
+  // Auth check: Only the event host, an event cohost, or super_admin.
+  // Phase I (10 May spec item 18) — narrowed from `admin OR super_admin`.
+  // Regular admins are no longer auto-hosts; server-side host endpoints
+  // reject them too, so showing the dashboard to a regular admin would
+  // surface a 403 on every action. Match the gate to the server's reality.
+  const isHost = session.hostUserId === user?.id || user?.role === 'super_admin';
   if (!isHost) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-white p-4">

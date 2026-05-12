@@ -109,13 +109,12 @@ export async function verifyHost(socket: Socket, sessionId: string): Promise<boo
     return false;
   }
 
-  // T1-5 — delegated to the unified `getEffectiveRole` resolver. This
-  // adds pod-admin cascade (pod directors / pod creators can now act as
-  // session hosts even if they're not explicitly the session.host_user_id)
-  // alongside the existing host + admin + co-host paths. Behavior preserved
-  // for everyone who was already allowed: admins still pass, hosts still
-  // pass, co-hosts still pass. New: pod directors pass for sessions in
-  // their pod even without manual host assignment.
+  // T1-5 — delegated to the unified `getEffectiveRole` resolver. Allowed:
+  // event host, cohost, pod director / pod creator, and super_admin.
+  // Phase I (10 May spec item 18) — regular admins are no longer auto-
+  // passed here; they must be promoted to cohost to act as a host on a
+  // specific live event. Pod-management endpoints still accept admin via
+  // their own gates.
   const userRole = (socket.data as any)?.role as UserRole | undefined;
   const { canActAsHost } = await import('../../roles/effective-role.service');
   const { allowed, effectiveRole } = await canActAsHost(userId, userRole, sessionId);
@@ -1476,7 +1475,8 @@ export async function handleAssignCohost(
     // to the original host. Pre-fix, the client UI showed Make/Remove
     // co-host buttons for co-hosts but the server rejected with FORBIDDEN
     // — Stefan #7: "Shradha's control center did not work". `verifyHost`
-    // routes through canActAsHost which accepts cohost + admin + super_admin.
+    // routes through canActAsHost which accepts cohost + super_admin
+    // (Phase I narrowed regular admin out of the auto-host set).
     if (!await verifyHost(socket, sessionId)) return;
 
     await query(
@@ -1671,8 +1671,9 @@ export function setHostActionsIo(io: SocketServer): void {
 //
 // Rules
 //   • Caller must be able to act as host (verifyHost / canActAsHost — so
-//     original host, co-hosts, and admins/super-admins can all change any
-//     host's mode).
+//     original host, co-hosts, pod directors, and super-admins can all
+//     change any host's mode. Regular admins must be promoted to cohost
+//     first; Phase I narrowed them out of the auto-host set).
 //   • Target must be either the session's original host (sessions.host_user_id)
 //     or an active session_cohosts row. Anyone else → 400.
 //   • Persisted on the right column (sessions.host_visibility_mode for the
