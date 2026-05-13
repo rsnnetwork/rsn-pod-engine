@@ -7430,3 +7430,52 @@ Low. The fresh-pre-plan path is byte-identical in behaviour to pre-Phase-K. The 
 ### What's NOT in Phase K
 
 Items 1, 2, 6, 7 — separately scoped in Phases L, M, N, O per the plan doc.
+
+---
+
+## Stefan's 12 May Feedback — Phase L — 2026-05-13
+
+**Status:** Control center role-consistency audit complete (item 6). Pin-only, zero production code change.
+**Why:** Stefan reported on 12 May that Shradha and Stefan saw different live-event interfaces. Audit shows the proximate cause was the Phase B → Phase I gate-narrowing window (May 10–12): Phase B gave both `admin` and `super_admin` host UI; Phase I narrowed to `super_admin` only. Between the two commits any stale build could disagree with the server. Post-Phase-I both sides are aligned for the personas RSN actually has (Stefan = super_admin; Shradha/Raja = plain admin; event host; cohost). Phase L pins the alignment so future PRs cannot widen one side without the other.
+
+### Audit findings
+
+| Persona              | Client `isHost` (LiveSessionPage) | Server `canActAsHost` | Aligned? |
+| -------------------- | --------------------------------- | --------------------- | -------- |
+| Stefan (super_admin) | true (`isSuperAdmin`)             | true (`pod_admin`)    | ✓        |
+| Shradha (admin)      | false                             | false (`participant`) | ✓        |
+| Raja (admin)         | false                             | false (`participant`) | ✓        |
+| Event host           | true (`isOriginalHost`)           | true (`event_host`)   | ✓        |
+| Cohost               | true (`isCohost`)                 | true (`cohost`)       | ✓        |
+| Pod creator/director (theoretical, not event host) | false | true (`pod_admin` via layer 2) | ⚠ desync |
+
+The pod-creator-but-not-event-host case is theoretical on RSN today (pod creators are also their pod's event hosts in practice). Documented but unfixed; if a real user lands in this state, the client gate will need to widen to read pod context. Stefan's specific item-6 reports do not involve this persona.
+
+### What changed (Phase L)
+
+**No production code changes.** Phase L is verify-only.
+
+**New tests** — `server/src/__tests__/services/phase-l-control-center-role-consistency.test.ts`:
+
+- Client — LiveSessionPage canonical `isHost` form is `isOriginalHost || isCohost || isSuperAdmin` (no broad `isAdmin` disjunct).
+- Client — `<HostControls>` mounts only when `isHost` (transitive gate for `<HostControlCenter>`).
+- Client — `HostControlCenter` is imported by exactly one file (`HostControls.tsx`); no other component can render it outside the gate. Walks the entire client tree to confirm.
+- Server — Layer 1 of `getEffectiveRole` gates strictly on `UserRole.SUPER_ADMIN`, never broad `hasRoleAtLeast(ADMIN)`.
+- Server — `ROLE_RANK` pins the four-tier order (pod_admin=4, event_host=3, cohost=2, participant=1).
+- Server — `canActAsHost` returns allowed when role ≥ cohost.
+- Server — `routes/host.ts` declares `verifyHostOrSuperAdmin` (Phase I rename) and gates on `UserRole.SUPER_ADMIN` (===, !==, or equivalent), never broad `ADMIN`.
+- Cross-check — for each of the three accepted personas (event_host, cohost, super_admin), the client variable and the server resolver both accept the matching identity.
+
+### Files
+
+- New: `server/src/__tests__/services/phase-l-control-center-role-consistency.test.ts` — 9 pin tests across 5 describe blocks.
+- Modified: `progress.md` — this entry.
+
+### Verification
+
+- Server suite: **1247 passed, 1 skipped (pre-existing), 0 failed** across 100 suites (Phase L added 1 suite, 9 tests; one assertion was tightened mid-flight after first run to accept either `===` or `!==` shape for the SUPER_ADMIN gate in `routes/host.ts`).
+- No client / shared changes; no other verification needed.
+
+### What's NOT in Phase L
+
+Items 1, 2, 7 — separately scoped in Phases M, N, O.
