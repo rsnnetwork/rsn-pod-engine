@@ -7479,3 +7479,58 @@ The pod-creator-but-not-event-host case is theoretical on RSN today (pod creator
 ### What's NOT in Phase L
 
 Items 1, 2, 7 — separately scoped in Phases M, N, O.
+
+---
+
+## Stefan's 12 May Feedback — Phase N — 2026-05-13
+
+**Status:** Multi-host visibility UI shipped (item 2). Closes the follow-up Phase G (May 11) explicitly deferred.
+**Why:** Phase G shipped the FULL backend foundation (enum, migration 059, service, REST endpoint, socket broadcast, snapshot field, client store helpers) but left "HostControlCenter dropdown + Lobby/VideoRoom render effects" for a follow-up. Phase N is that follow-up — clients can now actually set + see the four visibility modes (big_speaker / normal / producer / hidden).
+
+### What changed
+
+**`client/src/features/live/HostControlCenter.tsx`** — visibility dropdown per host/cohost row:
+
+- `HostVisibilityMode` union + `HOST_VISIBILITY_LABELS` mapping declared at module scope (matches Phase G backend enum exactly).
+- `setVisibility(userId, mode)` handler — optimistic store update via `storeSetHostVisibility`, then `api.post('/sessions/:id/host/visibility', { userId, mode })`. On error, reverts the local state and console-errors. The server's `host:visibility_changed` broadcast (already wired in Phase G) confirms back to all clients including this one within 30 s via `session:state`.
+- `<VisibilitySelect>` native `<select>` component — 4 options, accessible, mobile-friendly. Rendered next to existing `RowActions` for any participant where `p.role === 'host' || p.role === 'cohost'`. Crucially placed OUTSIDE the `p.userId !== hostUserId` gate so the host can set their OWN visibility too.
+
+**`client/src/features/live/Lobby.tsx`** — render effects honour visibility:
+
+- New `visibilityFor(trackRef)` helper bucketing each LiveKit track into `big_speaker | normal | producer | hidden`. Defaults to `normal` for any participant without an explicit mode (i.e. non-hosts).
+- `cameraTracksSorted` (was `cameraTracks`) — all tracks sorted (host first) — kept for pin lookup and the pinned-mode strip.
+- `cameraTracks` — normal-only subset, used for the main grid.
+- `bigSpeakerTracks` / `producerTracks` — partitions for the dedicated stage row and producer strip.
+- Default layout restructured: stage row (only if big_speakers exist) → main grid → producer strip (only if producers exist). Hidden users dropped from all three.
+- Pin behaviour: pin can target any non-hidden user; auto-unpin if pinned user's mode flips to 'hidden'. Pinned-mode strip uses `cameraTracksSorted.filter(...)` so big_speakers and producers still appear (no dedicated rows render in pinned mode).
+
+**`client/src/features/live/VideoRoom.tsx`** — minimal hidden-filter for breakouts:
+
+- Reads `hostVisibilityModes` from store.
+- `allTiles` array filter drops tiles whose user is `hidden`, but NEVER drops the local tile (the user always sees their own preview).
+- Big_speaker / producer special-cased rendering deferred: the matching engine excludes hosts so a host in a breakout is the rare manual `host:move_to_room` path. If that becomes common, follow-up can add the stage/producer logic here.
+
+### Files
+
+- Modified: `client/src/features/live/HostControlCenter.tsx` — dropdown + handler + VisibilitySelect component.
+- Modified: `client/src/features/live/Lobby.tsx` — visibility filter + stage/producer rows + pin unpin-on-hidden.
+- Modified: `client/src/features/live/VideoRoom.tsx` — hidden-only filter.
+- New: `server/src/__tests__/services/phase-n-multi-host-visibility-ui.test.ts` — 14 pin tests across 4 describe blocks (HCC wiring, Lobby render effects, VideoRoom filter, Phase G dependency cross-ref).
+- Modified: `progress.md` — this entry.
+
+### Verification
+
+- Server suite: **1264 passed, 1 skipped (pre-existing), 0 failed** across 101 suites (Phase N added 1 suite, 14 tests).
+- Client TypeScript: clean (`npx tsc --noEmit`).
+- Client production build: clean — 1.59 MB main bundle / 436 KB gzip, no net bundle growth (a single dropdown + filter helpers).
+
+### Mobile-responsive note
+
+The dropdown uses Tailwind responsive classes (`hidden sm:inline` for the "View:" label). The stage row uses `grid-cols-1 sm:grid-cols-2` so it stacks on phones and pairs on tablets+. The producer strip uses `flex-wrap` so pills wrap on narrow widths. **Visual mobile verification on 360 / 414 / 768 / 1024 widths is recommended on staging before declaring item 2 done end-to-end** — no Playwright/MCP browser available in this dev environment to automate the check.
+
+### What's NOT in Phase N
+
+- Big_speaker / producer special-cased rendering INSIDE breakout rooms (VideoRoom). Deferred because matching excludes hosts and the manual `host:move_to_room` edge case is rare. If Stefan reports a real bug, follow-up can extend.
+- Toast notifications on REST failure. The current `console.error` is a stopgap; the live UI has no shared toast component yet.
+
+Items 1, 7 — Phases M, O.

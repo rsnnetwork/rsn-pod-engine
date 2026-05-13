@@ -27,6 +27,18 @@ import { Rnd } from 'react-rnd';
 import { Button } from '@/components/ui/Button';
 import { useSessionStore } from '@/stores/sessionStore';
 import { getSocket } from '@/lib/socket';
+import api from '@/lib/api';
+
+// Phase N (12 May spec item 2) — host visibility modes. The four-mode set
+// matches the server's host_visibility_mode enum and the client store's
+// hostVisibilityModes record. See migration 059 and session-state-snapshot.
+type HostVisibilityMode = 'big_speaker' | 'normal' | 'producer' | 'hidden';
+const HOST_VISIBILITY_LABELS: Record<HostVisibilityMode, string> = {
+  big_speaker: 'Big speaker',
+  normal: 'Normal',
+  producer: 'Producer (audio-only)',
+  hidden: 'Hidden',
+};
 import {
   X,
   Crown,
@@ -138,6 +150,12 @@ export default function HostControlCenter({
 }: Props) {
   const roundDashboard = useSessionStore((s) => s.roundDashboard);
   const hostUserId = useSessionStore((s) => s.hostUserId);
+  // Phase N (12 May spec item 2) — visibility modes per host/cohost.
+  // Server-authoritative via session:state snapshot + host:visibility_changed
+  // broadcasts (Phase G, May 11). Read for the dropdown's current value;
+  // set optimistically below, then await server confirmation.
+  const hostVisibilityModes = useSessionStore((s) => s.hostVisibilityModes);
+  const storeSetHostVisibility = useSessionStore((s) => s.setHostVisibility);
   const socket = getSocket();
   const [filter, setFilter] = useState<StateFilter>('all');
   const [moveTargetUserId, setMoveTargetUserId] = useState<string | null>(null);
@@ -261,6 +279,29 @@ export default function HostControlCenter({
   const extendRoom = (matchId: string) =>
     runLocked(`extend_room:${matchId}`, () => {
       socket?.emit('host:extend_breakout_room' as any, { sessionId, matchId, additionalSeconds: 120 });
+    });
+
+  // Phase N (12 May spec item 2) — set visibility mode for a host or co-host.
+  // Optimistic update on the local store so the dropdown reflects the choice
+  // immediately; if the REST call fails, revert. Server's
+  // host:visibility_changed broadcast (Phase G) confirms back to all clients
+  // including this one, so the eventual store value is server-authoritative.
+  const setVisibility = (userId: string, mode: HostVisibilityMode) =>
+    runLocked(`set_visibility:${userId}`, async () => {
+      const prev = hostVisibilityModes[userId] || 'normal';
+      if (prev === mode) return;
+      storeSetHostVisibility(userId, mode);
+      try {
+        await api.post(`/sessions/${sessionId}/host/visibility`, { userId, mode });
+      } catch (err) {
+        // Revert local state on server rejection.
+        storeSetHostVisibility(userId, prev);
+        // Surface to console; the server's session:state re-emit (every 30 s)
+        // will also resync. A future PR can route this through the toast
+        // system once one exists in the live UI.
+        // eslint-disable-next-line no-console
+        console.error('host:set_visibility failed', err);
+      }
     });
 
   // ── Window controls ───────────────────────────────────────────────────
@@ -444,18 +485,31 @@ export default function HostControlCenter({
                           <StateBadge state={p.state} matchId={p.currentMatchId} />
                         </div>
                       </div>
-                      {p.userId !== hostUserId && (
-                        <RowActions
-                          isCohost={p.role === 'cohost'}
-                          state={p.state}
-                          onMakeCohost={() => makeCohost(p.userId)}
-                          onRemoveCohost={() => removeCohost(p.userId)}
-                          onReassign={() => reassign(p.userId)}
-                          onMoveToRoom={() => setMoveTargetUserId(p.userId)}
-                          onKick={() => kick(p.userId, p.displayName)}
-                          activeRoomsAvailable={activeRoomsForMove.length > 0}
-                        />
-                      )}
+                      <div className="flex flex-col items-end gap-1.5 shrink-0">
+                        {/* Phase N (12 May item 2) — visibility dropdown for
+                            hosts and co-hosts only. The host can set their
+                            own visibility (so the same control appears on
+                            the host's own row, which is why this is OUTSIDE
+                            the `p.userId !== hostUserId` gate). */}
+                        {(p.role === 'host' || p.role === 'cohost') && (
+                          <VisibilitySelect
+                            value={(hostVisibilityModes[p.userId] as HostVisibilityMode) || 'normal'}
+                            onChange={(mode) => setVisibility(p.userId, mode)}
+                          />
+                        )}
+                        {p.userId !== hostUserId && (
+                          <RowActions
+                            isCohost={p.role === 'cohost'}
+                            state={p.state}
+                            onMakeCohost={() => makeCohost(p.userId)}
+                            onRemoveCohost={() => removeCohost(p.userId)}
+                            onReassign={() => reassign(p.userId)}
+                            onMoveToRoom={() => setMoveTargetUserId(p.userId)}
+                            onKick={() => kick(p.userId, p.displayName)}
+                            activeRoomsAvailable={activeRoomsForMove.length > 0}
+                          />
+                        )}
+                      </div>
                     </div>
                   </li>
                 ))}
@@ -849,5 +903,37 @@ function ActionButton({
     >
       {children}
     </button>
+  );
+}
+
+// Phase N (12 May spec item 2) — visibility mode selector for a single
+// host or co-host. Native <select> for accessibility and mobile-friendliness
+// (the browser's native picker is the most reliable cross-platform
+// pattern). Tailwind sizing matches the surrounding ActionButton density.
+function VisibilitySelect({
+  value,
+  onChange,
+}: {
+  value: HostVisibilityMode;
+  onChange: (mode: HostVisibilityMode) => void;
+}) {
+  return (
+    <label
+      className="text-[11px] flex items-center gap-1 text-gray-600"
+      title="How this host appears in the lobby and breakout rooms"
+    >
+      <span className="hidden sm:inline">View:</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as HostVisibilityMode)}
+        className="text-[11px] px-1.5 py-0.5 rounded-md border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-rsn-red/30"
+      >
+        {(Object.keys(HOST_VISIBILITY_LABELS) as HostVisibilityMode[]).map((mode) => (
+          <option key={mode} value={mode}>
+            {HOST_VISIBILITY_LABELS[mode]}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }

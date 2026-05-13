@@ -130,6 +130,12 @@ const VideoStage = memo(function VideoStage() {
   // updates, etc.) which propagated to MediaControls + Leave/Main Room
   // buttons, causing the visible "flashing" reported during live testing.
   const currentPartners = useSessionStore(s => s.currentPartners);
+  // Phase N (12 May spec item 2) — visibility modes apply in breakouts too,
+  // for the edge case where a host has been force-joined into a room. The
+  // matching engine excludes hosts so this only kicks in after a manual
+  // `host:move_to_room`. Hidden hosts get filtered out of allTiles entirely;
+  // the two-person breakout grid otherwise renders unchanged.
+  const hostVisibilityModes = useSessionStore(s => s.hostVisibilityModes);
   const [pinnedSid, setPinnedSid] = useState<string | null>(null);
 
   const cameraTracks = tracks.filter(t => t.source === Track.Source.Camera);
@@ -144,7 +150,13 @@ const VideoStage = memo(function VideoStage() {
       sid: rt.participant.sid,
       userId: rt.participant.identity,
     })),
-  ];
+  ].filter(tile => {
+    // Drop tiles whose user has been set to 'hidden'. Never hide the
+    // local tile — the participant needs to see their own preview.
+    if (tile.sid === localParticipant.sid) return true;
+    const mode = tile.userId ? hostVisibilityModes[tile.userId] : undefined;
+    return mode !== 'hidden';
+  });
 
   const pinnedTile = pinnedSid ? allTiles.find(t => t.sid === pinnedSid) : null;
   const unpinnedTiles = pinnedSid ? allTiles.filter(t => t.sid !== pinnedSid) : allTiles;

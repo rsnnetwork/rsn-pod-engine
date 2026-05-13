@@ -53,13 +53,40 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
   const { localParticipant } = useLocalParticipant();
   const hostUserId = useSessionStore(s => s.hostUserId);
   const lobbyDensity = useSessionStore(s => s.lobbyDensity);
+  // Phase N (12 May spec item 2) — host visibility mode per host/cohost.
+  // Read from the server-authoritative store; the 4 modes drive how each
+  // hostly user is rendered in the lobby (and breakout) grid.
+  const hostVisibilityModes = useSessionStore(s => s.hostVisibilityModes);
   const cameraTracksRaw = tracks.filter(t => t.source === Track.Source.Camera);
 
+  // Resolve visibility mode for a single track. Falls back to 'normal' so
+  // a participant without an explicit mode (i.e. anyone who is NOT a
+  // host or cohost) renders as a normal tile.
+  const visibilityFor = useCallback((trackRef: any): 'big_speaker' | 'normal' | 'producer' | 'hidden' => {
+    const id = trackRef.participant?.identity;
+    if (!id) return 'normal';
+    const mode = hostVisibilityModes[id];
+    return mode === 'big_speaker' || mode === 'producer' || mode === 'hidden'
+      ? mode
+      : 'normal';
+  }, [hostVisibilityModes]);
+
   // Sort: host (local) tile always first in the grid
-  const cameraTracks = [...cameraTracksRaw].sort((a, b) => {
+  const cameraTracksSorted = [...cameraTracksRaw].sort((a, b) => {
     const aIsLocal = a.participant.sid === localParticipant.sid ? 0 : 1;
     const bIsLocal = b.participant.sid === localParticipant.sid ? 0 : 1;
     return aIsLocal - bIsLocal;
+  });
+
+  // Phase N — partition tracks by visibility mode. Hidden users are
+  // dropped entirely; producers go to an audio-only strip (no video
+  // tile); big_speakers get a dedicated stage row above the main grid;
+  // everyone else (default 'normal') lands in the main grid.
+  const bigSpeakerTracks = cameraTracksSorted.filter(t => visibilityFor(t) === 'big_speaker');
+  const producerTracks = cameraTracksSorted.filter(t => visibilityFor(t) === 'producer');
+  const cameraTracks = cameraTracksSorted.filter(t => {
+    const v = visibilityFor(t);
+    return v === 'normal';
   });
 
   // Responsive grid based on density preference
@@ -92,12 +119,20 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
   // Pin/spotlight state — client-side only, no server interaction
   const [pinnedSid, setPinnedSid] = useState<string | null>(null);
 
-  // Auto-unpin if pinned participant leaves
+  // Auto-unpin if pinned participant leaves OR if their visibility mode
+  // is now 'hidden' (Phase N — host can hide themselves mid-event; a
+  // pinned-then-hidden user would otherwise leak as the big tile).
   useEffect(() => {
-    if (pinnedSid && !cameraTracks.find(t => t.participant.sid === pinnedSid)) {
+    if (!pinnedSid) return;
+    const pinned = cameraTracksSorted.find(t => t.participant.sid === pinnedSid);
+    if (!pinned) {
+      setPinnedSid(null);
+      return;
+    }
+    if (visibilityFor(pinned) === 'hidden') {
       setPinnedSid(null);
     }
-  }, [cameraTracks, pinnedSid]);
+  }, [cameraTracksSorted, pinnedSid, visibilityFor]);
 
   // Helper to render a single video tile with all overlays
   const renderTile = (trackRef: any, { isPinned = false, onClick }: { isPinned?: boolean; onClick?: () => void } = {}) => {
@@ -193,10 +228,17 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
     );
   };
 
-  // Pinned layout: large tile + small row at bottom
-  const pinnedTrack = pinnedSid ? cameraTracks.find(t => t.participant.sid === pinnedSid) : null;
+  // Pinned layout: large tile + small row at bottom.
+  // Pin can target any non-hidden user, so resolve against the full
+  // sorted set rather than the normal-only filtered grid array. The
+  // pinned-mode strip includes big_speaker and producer tracks (no
+  // dedicated stage/audio rows render in this layout); hidden tracks
+  // stay filtered out everywhere.
+  const pinnedTrack = pinnedSid ? cameraTracksSorted.find(t => t.participant.sid === pinnedSid) : null;
   if (pinnedTrack) {
-    const unpinnedTracks = cameraTracks.filter(t => t.participant.sid !== pinnedSid);
+    const unpinnedTracks = cameraTracksSorted.filter(
+      t => t.participant.sid !== pinnedSid && visibilityFor(t) !== 'hidden',
+    );
     return (
       <div className={`flex flex-col gap-3 w-full ${maxWClass} mx-auto h-full`}>
         <div className="flex-1 min-h-0">
@@ -215,18 +257,62 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
     );
   }
 
-  // Default grid layout (unchanged behavior when nothing is pinned)
+  // Default layout (no pin) — Phase N stacks three sections:
+  //   1. Big-speaker stage row (above the grid, only if any big_speaker
+  //      hosts exist). One tile per big_speaker, full-width row.
+  //   2. Main grid — all 'normal' tracks (default for non-hosts and
+  //      hosts without a chosen mode).
+  //   3. Producer strip (below the grid, only if any producers exist).
+  //      Pills with name + audio icon; no video tile.
+  // Hidden hosts/cohosts are filtered out entirely.
   return (
-    <div className={`grid ${gridCols} ${gapClass} w-full ${maxWClass} mx-auto`}>
-      {cameraTracks.map(trackRef =>
-        renderTile(trackRef, { onClick: () => setPinnedSid(trackRef.participant.sid) })
+    <div className={`flex flex-col gap-3 w-full ${maxWClass} mx-auto`}>
+      {bigSpeakerTracks.length > 0 && (
+        <div
+          data-testid="lobby-big-speaker-stage"
+          className={`grid gap-3 ${
+            bigSpeakerTracks.length === 1 ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2'
+          }`}
+        >
+          {bigSpeakerTracks.map(trackRef =>
+            renderTile(trackRef, {
+              isPinned: true,
+              onClick: () => setPinnedSid(trackRef.participant.sid),
+            }),
+          )}
+        </div>
       )}
-      {cameraTracks.length === 0 && (
-        <div className="col-span-full text-center py-12 text-gray-500 text-sm">
-          <div className="h-16 w-16 rounded-full bg-[#3c4043] flex items-center justify-center mx-auto mb-3">
-            <VideoOff className="h-6 w-6 text-gray-400" />
+      <div className={`grid ${gridCols} ${gapClass} w-full`}>
+        {cameraTracks.map(trackRef =>
+          renderTile(trackRef, { onClick: () => setPinnedSid(trackRef.participant.sid) })
+        )}
+        {cameraTracks.length === 0 && bigSpeakerTracks.length === 0 && (
+          <div className="col-span-full text-center py-12 text-gray-500 text-sm">
+            <div className="h-16 w-16 rounded-full bg-[#3c4043] flex items-center justify-center mx-auto mb-3">
+              <VideoOff className="h-6 w-6 text-gray-400" />
+            </div>
+            Waiting for participants to enable cameras...
           </div>
-          Waiting for participants to enable cameras...
+        )}
+      </div>
+      {producerTracks.length > 0 && (
+        <div
+          data-testid="lobby-producer-strip"
+          className="flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg bg-[#1f2024] border border-[#3c4043]"
+        >
+          <span className="text-[10px] uppercase tracking-wide text-gray-400 mr-1">
+            Producers
+          </span>
+          {producerTracks.map(t => (
+            <span
+              key={t.participant.sid}
+              className="inline-flex items-center gap-1 bg-black/40 text-white text-[11px] px-2 py-0.5 rounded-full"
+              title="Off-camera operator — audio-only"
+            >
+              <Mic className="h-3 w-3 text-gray-300" />
+              {t.participant.name || t.participant.identity || 'Producer'}
+            </span>
+          ))}
         </div>
       )}
     </div>
