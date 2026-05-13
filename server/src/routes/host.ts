@@ -25,6 +25,12 @@ const visibilitySchema = z.object({
   mode: z.enum(['big_speaker', 'normal', 'producer', 'hidden']),
 });
 
+// Phase M (12 May spec item 1) — acting-as-host toggle. value=null clears
+// the explicit override back to role default; true/false set the override.
+const actingAsHostSchema = z.object({
+  value: z.union([z.boolean(), z.null()]),
+});
+
 // ─── Host Verification Helper ───────────────────────────────────────────────
 
 // Phase I (10 May spec item 18) — narrowed from `hasRoleAtLeast(ADMIN)` to
@@ -151,6 +157,44 @@ router.post(
         req.body.mode,
       );
       res.json({ success: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /sessions/:id/host/acting-as-host — set acting-as-host override ──
+//
+// Phase M (12 May spec item 1) — per-event "Join as host" / "Join as
+// participant" toggle. Sets the caller's OWN acting_as_host column on
+// session_participants. The user must already be a registered participant
+// for the override to stick (the UPDATE is a no-op otherwise).
+//
+// Permission: caller can only set their own value. Other-user impersonation
+// is intentionally not supported here — the spec frames this as a per-user
+// self-toggle ("admins/super admins should have a toggle"). A future host-
+// initiated demote/promote would need a separate endpoint with a different
+// permission model.
+
+router.post(
+  '/:id/host/acting-as-host',
+  authenticate,
+  validate(actingAsHostSchema, 'body'),
+  auditMiddleware('session:acting_as_host', 'session'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const sessionId = req.params.id;
+      const userId = req.user!.userId;
+      await sessionService.setActingAsHost(sessionId, userId, req.body.value);
+      // Notify the user's own sockets so the snapshot resyncs the new
+      // override (and the UI re-derives isHost). Reuse permissions:updated
+      // — the existing client handler already calls fetchSessionStateSnapshot
+      // on this event.
+      await orchestrationService.notifyPermissionsUpdated(sessionId, userId);
+      res.json({
+        success: true,
+        data: { sessionId, userId, value: req.body.value },
+      });
     } catch (err) {
       next(err);
     }

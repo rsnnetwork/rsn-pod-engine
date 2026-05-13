@@ -832,3 +832,60 @@ export async function setPremiumSelections(sessionId: string, userId: string, se
     }
   });
 }
+
+// ─── Phase M (12 May spec item 1) — acting-as-host opt-in/opt-out ──────────
+//
+// Per-event toggle that lets a user override their role-derived host
+// status. NULL row in session_participants.acting_as_host means "use the
+// role default"; TRUE means "act as host on this event"; FALSE means
+// "join as participant".
+//
+// Consumed by:
+//   - getEffectiveRole (effective-role.service.ts) — read for the role
+//     resolution layer 1-4 path so canActAsHost stays in sync.
+//   - getAllHostIds (orchestration handlers/host-actions.ts) — read so
+//     matching exclusion respects the opt-out / opt-in.
+//   - session-state-snapshot — exposed as actingAsHostOverrides so
+//     clients see the map on cold-start / reconnect.
+
+export async function getActingAsHostOverride(
+  sessionId: string,
+  userId: string,
+): Promise<boolean | null> {
+  const result = await query<{ acting_as_host: boolean | null }>(
+    `SELECT acting_as_host FROM session_participants
+     WHERE session_id = $1 AND user_id = $2`,
+    [sessionId, userId],
+  );
+  if (result.rows.length === 0) return null;
+  return result.rows[0].acting_as_host;
+}
+
+export async function getActingAsHostOverrides(
+  sessionId: string,
+): Promise<Record<string, boolean>> {
+  const result = await query<{ user_id: string; acting_as_host: boolean | null }>(
+    `SELECT user_id, acting_as_host FROM session_participants
+     WHERE session_id = $1 AND acting_as_host IS NOT NULL`,
+    [sessionId],
+  );
+  const out: Record<string, boolean> = {};
+  for (const row of result.rows) {
+    if (row.acting_as_host !== null) out[row.user_id] = row.acting_as_host;
+  }
+  return out;
+}
+
+export async function setActingAsHost(
+  sessionId: string,
+  userId: string,
+  value: boolean | null,
+): Promise<void> {
+  // Upsert: the user must be a session_participant for the row to exist.
+  // If they're not registered, this is a no-op (handler should pre-check).
+  await query(
+    `UPDATE session_participants SET acting_as_host = $3
+     WHERE session_id = $1 AND user_id = $2`,
+    [sessionId, userId, value],
+  );
+}

@@ -26,6 +26,7 @@ import { useMemo, useState, useEffect, useRef, type ReactNode } from 'react';
 import { Rnd } from 'react-rnd';
 import { Button } from '@/components/ui/Button';
 import { useSessionStore } from '@/stores/sessionStore';
+import { useAuthStore } from '@/stores/authStore';
 import { getSocket } from '@/lib/socket';
 import api from '@/lib/api';
 
@@ -156,6 +157,16 @@ export default function HostControlCenter({
   // set optimistically below, then await server confirmation.
   const hostVisibilityModes = useSessionStore((s) => s.hostVisibilityModes);
   const storeSetHostVisibility = useSessionStore((s) => s.setHostVisibility);
+  // Phase M (12 May spec item 1) — acting-as-host overrides. Read so the
+  // toggle for the current user's own row reflects the live value; write
+  // optimistically through the local setter on toggle, then resync via
+  // the permissions:updated → fetchSessionStateSnapshot flow.
+  const actingAsHostOverrides = useSessionStore((s) => s.actingAsHostOverrides);
+  const setActingAsHostOverrides = useSessionStore((s) => s.setActingAsHostOverrides);
+  // Phase M — current user's identity, used to gate the per-row toggle to
+  // the viewer's OWN row (server only accepts a self-toggle).
+  const authUser = useAuthStore((s) => s.user);
+  const currentUserId = authUser?.id;
   const socket = getSocket();
   const [filter, setFilter] = useState<StateFilter>('all');
   const [moveTargetUserId, setMoveTargetUserId] = useState<string | null>(null);
@@ -304,6 +315,33 @@ export default function HostControlCenter({
       }
     });
 
+  // Phase M (12 May spec item 1) — toggle the current user's acting-as-host
+  // override. value=null clears back to role default. The REST endpoint
+  // only accepts the caller's own userId, so this toggle is wired to
+  // hostUserId (the user themselves) — the per-row UI gates display to
+  // the user's own row.
+  const setMyActingAsHost = (value: boolean | null) =>
+    runLocked(`set_acting_as_host`, async () => {
+      if (!currentUserId) return;
+      const prev = actingAsHostOverrides[currentUserId];
+      // Optimistic local update via the bulk setter.
+      const next = { ...actingAsHostOverrides };
+      if (value === null) delete next[currentUserId];
+      else next[currentUserId] = value;
+      setActingAsHostOverrides(next);
+      try {
+        await api.post(`/sessions/${sessionId}/host/acting-as-host`, { value });
+      } catch (err) {
+        // Revert on failure.
+        const reverted = { ...actingAsHostOverrides };
+        if (prev === undefined) delete reverted[currentUserId];
+        else reverted[currentUserId] = prev;
+        setActingAsHostOverrides(reverted);
+        // eslint-disable-next-line no-console
+        console.error('host:set_acting_as_host failed', err);
+      }
+    });
+
   // ── Window controls ───────────────────────────────────────────────────
   const toggleMaximize = () => {
     if (isMaximized) {
@@ -396,6 +434,31 @@ export default function HostControlCenter({
             {bulkActionsAvailable && onBulkEnd && (
               <button onClick={onBulkEnd} className="text-xs px-2.5 py-1 rounded-md border border-red-200 text-red-700 hover:bg-red-50">
                 End all rooms
+              </button>
+            )}
+            {/* Phase M (12 May item 1) — Join as participant / Join as host
+                toggle. Visible to any user already inside HCC (which is
+                gated on isHost upstream). Tied to the viewer's OWN
+                acting_as_host override; clears back to role default when
+                toggled twice. */}
+            {currentUserId && (
+              <button
+                onClick={() => {
+                  const current = actingAsHostOverrides[currentUserId];
+                  // From "host" → opt out (false). From "false" → clear (null).
+                  // Untouched (undefined) → opt out (false). Symmetric for opt-in via
+                  // any non-host viewer is intentionally not exposed here;
+                  // the spec scopes opt-in to admins via base-role check.
+                  if (current === false) setMyActingAsHost(null);
+                  else setMyActingAsHost(false);
+                }}
+                className="text-xs px-2.5 py-1 rounded-md border border-gray-200 text-gray-700 hover:bg-gray-50"
+                title="Switch between hosting the event and attending as a participant"
+                data-testid="hcc-join-as-toggle"
+              >
+                {actingAsHostOverrides[currentUserId] === false
+                  ? 'Switch back to host'
+                  : 'Switch to participant'}
               </button>
             )}
           </div>

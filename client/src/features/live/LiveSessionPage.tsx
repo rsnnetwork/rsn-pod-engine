@@ -65,6 +65,7 @@ export default function LiveSessionPage() {
   });
 
   const cohosts = useSessionStore(s => s.cohosts);
+  const actingAsHostOverrides = useSessionStore(s => s.actingAsHostOverrides);
   const isOriginalHost = session?.hostUserId === user?.id;
   const isCohost = !!user?.id && cohosts.has(user.id);
   // Phase I (10 May spec item 18 — refined) — only super_admin auto-sees
@@ -74,7 +75,24 @@ export default function LiveSessionPage() {
   // canActAsHost gate (effective-role.service.ts:67) which also narrowed
   // from admin+ to super_admin only.
   const isSuperAdmin = user?.role === 'super_admin';
-  const isHost = isOriginalHost || isCohost || isSuperAdmin;
+  // Phase L (12 May item 6) canonical base form — single disjunction of
+  // the three role-derived states that grant host UI. Kept as a named
+  // binding so the Phase L role-consistency pin stays valid AND so
+  // Phase M's override layer composes against a stable base value.
+  const baseIsHost = isOriginalHost || isCohost || isSuperAdmin;
+  // Phase M (12 May item 1) — per-event acting-as-host override. The
+  // current user's own override (if any) trumps the base role gate:
+  // FALSE means they explicitly chose to attend as a participant; TRUE
+  // means they explicitly opted in to host. Undefined / null = follow
+  // baseIsHost. Server's getEffectiveRole applies the same precedence.
+  const myActingAsHost: boolean | undefined =
+    user?.id ? actingAsHostOverrides[user.id] : undefined;
+  const isHost =
+    myActingAsHost === false
+      ? false
+      : myActingAsHost === true
+      ? true
+      : baseIsHost;
 
   useSessionSocket(sessionId!);
 
@@ -185,6 +203,35 @@ export default function LiveSessionPage() {
         <div className="bg-amber-500/15 px-4 py-2 flex items-center justify-center gap-2">
           <Loader2 className="h-4 w-4 text-amber-400" />
           <p className="text-sm text-amber-400 font-medium">Round paused by host</p>
+        </div>
+      )}
+
+      {/* Phase M (12 May item 1) — "Switch back to host" banner.
+          Visible only to users who have base host capability (super_admin /
+          event host / cohost) but have explicitly opted out for this event.
+          Without this banner, opting out via HCC would hide the Control
+          Center and leave the user with no path back to host UI. */}
+      {baseIsHost && myActingAsHost === false && (
+        <div
+          data-testid="acting-as-host-revert-banner"
+          className="bg-amber-50 border-b border-amber-200 px-4 py-2 flex items-center justify-between gap-3"
+        >
+          <p className="text-sm text-amber-800">
+            You're attending this event as a participant. Host controls hidden.
+          </p>
+          <button
+            onClick={async () => {
+              try {
+                await api.post(`/sessions/${sessionId}/host/acting-as-host`, { value: null });
+              } catch (err) {
+                // eslint-disable-next-line no-console
+                console.error('host:set_acting_as_host revert failed', err);
+              }
+            }}
+            className="text-xs px-2.5 py-1 rounded-md border border-amber-300 text-amber-800 hover:bg-amber-100"
+          >
+            Switch back to host
+          </button>
         </div>
       )}
 

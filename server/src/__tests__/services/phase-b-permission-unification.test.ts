@@ -68,20 +68,25 @@ describe('Phase B — permission model unification', () => {
 
     // Phase I (10 May refined) — narrowed from `admin OR super_admin` to
     // `super_admin only`. Regular admins join events as participants, not
-    // auto-hosts. This test was updated to pin the new narrow.
+    // auto-hosts. Phase M (12 May) layered an acting-as-host override on
+    // top, so the literal `const isHost = isOriginalHost || isCohost ||
+    // isSuperAdmin` line moved to a named binding `baseIsHost`. Pin both
+    // the base form (Phase I invariant) and the override-composition
+    // (Phase M layer).
     it('isHost expression includes a super_admin disjunct (not admin+super_admin)', () => {
+      // Base form (named binding for Phase M to layer onto):
       expect(liveSrc).toMatch(
-        /const\s+isHost\s*=\s*isOriginalHost\s*\|\|\s*isCohost\s*\|\|\s*isSuperAdmin/,
+        /const\s+baseIsHost\s*=\s*isOriginalHost\s*\|\|\s*isCohost\s*\|\|\s*isSuperAdmin/,
       );
       expect(liveSrc).toMatch(
         /const\s+isSuperAdmin\s*=\s*user\?\.role\s*===\s*['"]super_admin['"]/,
       );
-      // The broad `isAdmin = admin || super_admin` form must NOT appear in
-      // the isHost expression. (It can still exist elsewhere on the page
-      // for admin-only UI bits, but it does not fold into isHost.)
-      const isHostLine = liveSrc.match(/const\s+isHost\s*=[^;]+;/);
-      expect(isHostLine).toBeTruthy();
-      expect(isHostLine![0]).not.toMatch(/isAdmin/);
+      // The broad `isAdmin = admin || super_admin` form must NOT appear
+      // in the base form (Phase I narrow). It can still exist elsewhere
+      // on the page for admin-only UI bits, but it does not fold in.
+      const baseLine = liveSrc.match(/const\s+baseIsHost\s*=[^;]+;/);
+      expect(baseLine).toBeTruthy();
+      expect(baseLine![0]).not.toMatch(/isAdmin/);
     });
   });
 });

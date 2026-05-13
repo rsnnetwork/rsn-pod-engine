@@ -344,6 +344,31 @@ export function initOrchestration(socketServer: SocketServer): void {
   });
 }
 
+// ── Phase M (12 May spec item 1) — permissions:updated notifier ────────────
+//
+// REST handlers that change a user's effective role (acting_as_host toggle,
+// future opt-in / opt-out paths) emit through this helper so the client
+// re-fetches its session-state snapshot. The existing client handler at
+// useSessionSocket.ts:171 already calls fetchSessionStateSnapshot() on
+// permissions:updated — Phase M just reuses that path. The payload is
+// intentionally minimal: only the sessionId/userId/cause so the client can
+// route the resync; it does NOT carry the new effective role, because the
+// snapshot is the canonical source of truth.
+
+export async function notifyPermissionsUpdated(
+  sessionId: string,
+  userId: string,
+  cause: string = 'acting_as_host_changed',
+): Promise<void> {
+  if (!io) return;
+  const { userRoom } = await import('./state/session-state');
+  io.to(userRoom(userId)).emit('permissions:updated', {
+    sessionId,
+    userId,
+    cause,
+  });
+}
+
 // ── Get Active Session State (used by REST routes) ─────────────────────────
 
 export function getActiveSessionState(sessionId: string): {

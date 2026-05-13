@@ -63,6 +63,35 @@ export async function getEffectiveRole(
   globalUserRole: UserRole | string | undefined,
   context: ResolverContext,
 ): Promise<EffectiveRole> {
+  // Phase M (12 May spec item 1) — per-event acting_as_host override.
+  // Read the explicit toggle BEFORE applying role-based layers. FALSE means
+  // the user has chosen "Join as participant" for this event regardless of
+  // their global / pod / session role — they get the participant
+  // experience (matchable, in breakouts, no host UI). TRUE means the
+  // opposite — they've opted to act as host even if their base role
+  // wouldn't otherwise grant it.
+  // NULL (the default) preserves the existing role-based logic below.
+  let actingOverride: boolean | null = null;
+  if (context.sessionId) {
+    try {
+      const overrideRow = await query<{ acting_as_host: boolean | null }>(
+        `SELECT acting_as_host FROM session_participants
+         WHERE session_id = $1 AND user_id = $2`,
+        [context.sessionId, userId],
+      );
+      actingOverride = overrideRow.rows[0]?.acting_as_host ?? null;
+    } catch {
+      // Fall through with null — role defaults still apply, no regression.
+    }
+  }
+  if (actingOverride === false) {
+    // Honour the opt-out: regardless of base role, the user is acting as a
+    // participant on this event. The session_participants row must already
+    // exist for the override to be set (UPDATE is a no-op otherwise), so
+    // they ARE a participant; just downgrade the effective role.
+    return 'participant';
+  }
+
   // Layer 1 — Super admin always wins.
   // Phase I (10 May spec item 18) — narrowed from `hasRoleAtLeast(ADMIN)`
   // to `=== SUPER_ADMIN`. Stefan asked for super_admin to have full host
@@ -72,6 +101,17 @@ export async function getEffectiveRole(
   // their own helpers and are unaffected by this narrowing.
   if (globalUserRole === UserRole.SUPER_ADMIN) {
     return 'pod_admin';
+  }
+
+  // Phase M opt-in (acting_as_host === true) — if the user has explicitly
+  // opted in AND has a session_participants row, promote them to cohost
+  // tier so canActAsHost accepts them. This covers the "admin attends as
+  // host" path (uncommon; admin gets host UI without being formally
+  // assigned as a cohost). Pod-admin and event_host pass naturally
+  // through the layers below; cohost rank is the minimum useful upgrade.
+  if (actingOverride === true) {
+    // Continue through layers 2-4 so the highest natural rank wins; if
+    // none, fall through to cohost (the opt-in floor).
   }
 
   // Layer 2 — Pod admin (creator OR director). Pod context can come from
@@ -125,6 +165,12 @@ export async function getEffectiveRole(
       [context.sessionId, userId],
     );
     if (partRow.rows.length > 0) {
+      // Phase M opt-in floor: if the user explicitly opted in AND none of
+      // the higher layers (pod_admin / event_host / cohost) granted host
+      // capability, promote them to 'cohost'. The session_participants
+      // row guarantees they're entitled to be in the event; the override
+      // grants the host UI for the duration.
+      if (actingOverride === true) return 'cohost';
       return 'participant';
     }
   }

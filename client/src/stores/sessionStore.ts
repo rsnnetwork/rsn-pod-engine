@@ -126,6 +126,13 @@ interface SessionLiveState {
    * in video tiles; 'big_speaker' users are pinned big when present.
    */
   hostVisibilityModes: Record<string, 'big_speaker' | 'normal' | 'producer' | 'hidden'>;
+  /**
+   * Phase M (12 May spec item 1) — acting-as-host overrides per user.
+   * Map of userId → boolean. TRUE = opted-in to host, FALSE = opted-out
+   * to participant. Absent users follow the role default. LiveSessionPage
+   * factors this into `isHost` for the local user only.
+   */
+  actingAsHostOverrides: Record<string, boolean>;
   leftCurrentRound: boolean;
   lastRatedRound: number;
   isPaused: boolean;
@@ -189,6 +196,7 @@ interface SessionLiveState {
   removeCohost: (userId: string) => void;
   setHostVisibility: (userId: string, mode: 'big_speaker' | 'normal' | 'producer' | 'hidden') => void;
   setHostVisibilityModes: (modes: Record<string, 'big_speaker' | 'normal' | 'producer' | 'hidden'>) => void;
+  setActingAsHostOverrides: (overrides: Record<string, boolean>) => void;
   setLeftCurrentRound: (v: boolean) => void;
   setLastRatedRound: (r: number) => void;
   setIsPaused: (v: boolean) => void;
@@ -230,6 +238,8 @@ export interface SessionStateSnapshot {
   timerVisibility: string;
   /** Phase G — host/cohost visibility modes from snapshot. */
   hostVisibilityModes?: Record<string, string>;
+  /** Phase M — acting-as-host overrides from snapshot. */
+  actingAsHostOverrides?: Record<string, boolean>;
 }
 
 export const useSessionStore = create<SessionLiveState>((set) => ({
@@ -272,6 +282,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   lobbyDensity: 'normal' as const,
   cohosts: new Set<string>(),
   hostVisibilityModes: {},
+  actingAsHostOverrides: {},
   leftCurrentRound: false,
   lastRatedRound: 0,
   isPaused: false,
@@ -371,6 +382,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
     hostVisibilityModes: { ...s.hostVisibilityModes, [userId]: mode },
   })),
   setHostVisibilityModes: (modes) => set({ hostVisibilityModes: modes }),
+  setActingAsHostOverrides: (overrides) => set({ actingAsHostOverrides: overrides }),
   setLeftCurrentRound: (leftCurrentRound) => set({ leftCurrentRound }),
   setLastRatedRound: (lastRatedRound) => set({ lastRatedRound }),
   setIsPaused: (isPaused) => set({ isPaused }),
@@ -413,6 +425,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
       })),
       cohosts: new Set(snapshot.cohosts),
       hostVisibilityModes: (snapshot.hostVisibilityModes as any) || {},
+      actingAsHostOverrides: snapshot.actingAsHostOverrides || {},
       timerVisibility: (snapshot.timerVisibility as any) || 'last_10s',
     };
   }),
@@ -438,6 +451,6 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
     eventPlanSummary: null, testMode: false,
     hostMuteCommand: null, partnerDisconnected: false, roundDashboard: null,
     chatMessages: [], unreadChatCount: 0, chatOpen: false, matchingOverlay: null, preparingMatches: false, lobbyDensity: 'normal' as const,
-    cohosts: new Set<string>(), hostVisibilityModes: {}, leftCurrentRound: false, lastRatedRound: 0, isPaused: false,
+    cohosts: new Set<string>(), hostVisibilityModes: {}, actingAsHostOverrides: {}, leftCurrentRound: false, lastRatedRound: 0, isPaused: false,
   }),
 }));

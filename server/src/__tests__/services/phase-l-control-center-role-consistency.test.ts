@@ -53,16 +53,27 @@ describe('Phase L — control center role consistency (item 6)', () => {
       );
     });
 
-    it('isHost is exactly the canonical disjunction (no broad isAdmin)', () => {
+    it('baseIsHost is the canonical role-derived disjunction (no broad isAdmin)', () => {
+      // Phase M (12 May item 1) layered an acting-as-host override on top
+      // of the base form, so the literal `const isHost = isOriginalHost ||
+      // isCohost || isSuperAdmin` line moved to `baseIsHost`. The base
+      // form (no broad admin) is still the architectural invariant — pin
+      // it under its new name. `isHost` itself composes baseIsHost with
+      // the Phase M override; the override path is checked separately.
       expect(src).toMatch(
-        /const\s+isHost\s*=\s*isOriginalHost\s*\|\|\s*isCohost\s*\|\|\s*isSuperAdmin/,
+        /const\s+baseIsHost\s*=\s*isOriginalHost\s*\|\|\s*isCohost\s*\|\|\s*isSuperAdmin/,
       );
       // The broad isAdmin form (admin || super_admin) must NOT appear in
-      // the isHost expression. It can still exist elsewhere on the page
-      // for admin-only buttons, but does not fold into isHost.
-      const isHostLine = src.match(/const\s+isHost\s*=[^;]+;/);
-      expect(isHostLine).toBeTruthy();
-      expect(isHostLine![0]).not.toMatch(/isAdmin/);
+      // the baseIsHost expression. It can still exist elsewhere on the
+      // page for admin-only buttons, but does not fold into baseIsHost.
+      const baseLine = src.match(/const\s+baseIsHost\s*=[^;]+;/);
+      expect(baseLine).toBeTruthy();
+      expect(baseLine![0]).not.toMatch(/isAdmin/);
+      // And isHost composes baseIsHost with the Phase M override —
+      // factor that into the assertion so the layering is also pinned.
+      expect(src).toMatch(
+        /const\s+isHost\s*=[\s\S]{0,120}myActingAsHost[\s\S]{0,80}baseIsHost/,
+      );
     });
   });
 

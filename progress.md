@@ -7534,3 +7534,94 @@ The dropdown uses Tailwind responsive classes (`hidden sm:inline` for the "View:
 - Toast notifications on REST failure. The current `console.error` is a stopgap; the live UI has no shared toast component yet.
 
 Items 1, 7 — Phases M, O.
+
+---
+
+## Stefan's 12 May Feedback — Phase M — 2026-05-13
+
+**Status:** "Join as host" / "Join as participant" toggle shipped (item 1). Per-event override that lets super_admin (today auto-host) attend as a participant and lets regular admins (today auto-participant) opt in to host.
+**Why:** Phase I (May 12) narrowed auto-host capability to super_admin only, but there was still no way for super_admin to attend an event as a participant — they were stuck in host mode. Stefan's 12 May spec asked for a toggle. Phase M is that toggle, layered cleanly on top of the existing role resolution.
+
+### Data model
+
+Migration 060 adds `session_participants.acting_as_host BOOLEAN` (nullable). NULL = use role default (existing behavior, no row change); TRUE = explicit opt-in to host; FALSE = explicit opt-out to participant. Purely additive, safe on live DB.
+
+### Server changes
+
+**`getEffectiveRole` (effective-role.service.ts)** — reads `acting_as_host` BEFORE the role-based layers. Opt-out short-circuits to `'participant'` regardless of base role (so super_admin opting out is honoured). Opt-in falls through layers 2-5 to pick the highest natural rank, and uses `'cohost'` as a floor when none of the higher layers grant host capability (admin opting in gets cohost rank).
+
+**`getAllHostIds` (host-actions.ts)** — queries session_participants for non-NULL overrides, builds two sets (optedOut / optedIn), then adjusts the base host set: add opt-ins, delete opt-outs. Matching exclusion now respects the toggle.
+
+**`session.service.ts`** — three new helpers:
+- `getActingAsHostOverride(sessionId, userId): Promise<boolean | null>` — single-user lookup.
+- `getActingAsHostOverrides(sessionId): Promise<Record<string, boolean>>` — bulk lookup, filters non-NULL.
+- `setActingAsHost(sessionId, userId, value): Promise<void>` — UPDATE the column.
+
+**`session-state-snapshot.service.ts`** — `actingAsHostOverrides: Record<string, boolean>` field added to the snapshot interface and the returned shape. The override read piggybacks on the existing session_participants SELECT (T1-4 registered count), keeping the snapshot to a single round-trip per query group.
+
+**REST endpoint `POST /sessions/:id/host/acting-as-host` (routes/host.ts)** — accepts `{ value: boolean | null }`. Uses `req.user.userId` as the target (no impersonation — spec scopes the toggle to the caller themselves). Delegates to `sessionService.setActingAsHost`, then emits `permissions:updated` to the user's socket room so their snapshot resyncs.
+
+**`orchestration.service.ts`** — new `notifyPermissionsUpdated(sessionId, userId, cause?)` helper. Reuses the existing client-side handler that calls `fetchSessionStateSnapshot` on `permissions:updated`.
+
+### Client changes
+
+**`sessionStore.ts`** — new `actingAsHostOverrides: Record<string, boolean>` state field + `setActingAsHostOverrides` bulk setter. `applyFullState` pulls it from the snapshot; `reset()` clears it.
+
+**`LiveSessionPage.tsx`** — `isHost` now layers Phase M on top of the Phase L canonical base form:
+```ts
+const baseIsHost = isOriginalHost || isCohost || isSuperAdmin;
+const myActingAsHost = user?.id ? actingAsHostOverrides[user.id] : undefined;
+const isHost =
+  myActingAsHost === false ? false
+  : myActingAsHost === true ? true
+  : baseIsHost;
+```
+Phase L / Phase I / Phase B invariant tests updated to pin the new naming (`baseIsHost`) without weakening the "no broad admin" rule.
+
+**`LiveSessionPage.tsx` revert banner** — when `baseIsHost && myActingAsHost === false`, an amber banner renders at the top with a "Switch back to host" button. Without this, opting out via HCC would hide Host Control Center and leave the user no path back to host UI.
+
+**`HostControlCenter.tsx`** — new "Switch to participant" / "Switch back to host" button in the Actions strip. Wired to the viewer's own user ID via `useAuthStore`. Optimistic store update; reverts on REST failure. Data-testid `hcc-join-as-toggle`.
+
+### Files
+
+- New: `server/src/db/migrations/060_acting_as_host.sql`
+- New: `server/src/__tests__/services/phase-m-acting-as-host.test.ts` (24 pin tests across 10 describe blocks)
+- Modified: `server/src/services/session/session.service.ts` (3 new helpers)
+- Modified: `server/src/services/roles/effective-role.service.ts` (override read + opt-in floor)
+- Modified: `server/src/services/orchestration/handlers/host-actions.ts` (getAllHostIds rewrite)
+- Modified: `server/src/services/session/session-state-snapshot.service.ts` (new field + JOIN piggyback)
+- Modified: `server/src/routes/host.ts` (POST /:id/host/acting-as-host + actingAsHostSchema)
+- Modified: `server/src/services/orchestration/orchestration.service.ts` (notifyPermissionsUpdated)
+- Modified: `client/src/stores/sessionStore.ts` (new field + setter + reset)
+- Modified: `client/src/features/live/LiveSessionPage.tsx` (baseIsHost + override layer + banner)
+- Modified: `client/src/features/live/HostControlCenter.tsx` (toggle button + handler)
+- Modified: `server/src/__tests__/services/phase-b-permission-unification.test.ts` (renamed pin → baseIsHost)
+- Modified: `server/src/__tests__/services/phase-i-narrow-admin-host.test.ts` (renamed pin → baseIsHost)
+- Modified: `server/src/__tests__/services/phase-l-control-center-role-consistency.test.ts` (renamed pin → baseIsHost + composition pin)
+- Modified: `progress.md` — this entry.
+
+### Verification
+
+- Server suite: **1292 passed, 1 skipped (pre-existing), 0 failed** across 102 suites (Phase M added 1 suite, 24 tests; Phase L / Phase B / Phase I pins updated for the rename).
+- Client TypeScript: clean.
+- Client production build: clean — 1.59 MB main / 436 KB gzip, no net bundle growth.
+
+### Edge cases handled
+
+- **No-op on missing participant**: setActingAsHost is an UPDATE; if the user isn't registered as a session_participant, the call is a no-op. The REST endpoint silently succeeds (the spec scopes self-toggle to participants).
+- **Local state revert**: optimistic update reverts on REST 4xx/5xx; the server's `permissions:updated` → `session:state` snapshot is the canonical source of truth.
+- **Revert path**: the LiveSessionPage banner is the entry point back to host mode after opt-out (HCC is hidden when isHost=false).
+
+### Mobile
+
+- The HCC toggle button uses the same `text-xs px-2.5 py-1 rounded-md` density as the other Actions-strip buttons; wraps gracefully on narrow widths via the strip's `flex-wrap`.
+- The revert banner is a single flex row with `flex-wrap`-friendly contents.
+- **Visual mobile verification on staging is recommended** before declaring item 1 done end-to-end.
+
+### What's NOT in Phase M
+
+- **Host-initiated demote of a cohost** (host says "you join as participant for this round"). The REST endpoint scopes to self only — a future endpoint with a different permission model would be needed.
+- **Lobby pre-event banner** ("You're about to join this event as Host. Switch to Participant?"). The toggle today lives in HCC + revert banner; pre-event UX is a follow-up.
+- **Telemetry / audit log entries** beyond the existing `auditMiddleware('session:acting_as_host')`. Sufficient for now.
+
+Item 7 — Phase O next.

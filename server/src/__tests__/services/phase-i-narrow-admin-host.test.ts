@@ -78,15 +78,21 @@ describe('Phase I — narrow auto-host capability to super_admin only', () => {
   describe('client LiveSessionPage — admin no longer in isHost gate', () => {
     const src = readClient('features/live/LiveSessionPage.tsx');
 
-    it('isHost gate uses isSuperAdmin, not isAdmin', () => {
+    it('baseIsHost gate uses isSuperAdmin, not isAdmin', () => {
+      // Phase M (12 May) layered an acting-as-host override on top of the
+      // base form, so the literal `const isHost = isOriginalHost ||
+      // isCohost || isSuperAdmin` line moved to `baseIsHost`. The
+      // Phase I invariant (admin NOT in the role-derived host gate)
+      // continues to hold on the renamed binding.
       expect(src).toMatch(/const\s+isSuperAdmin\s*=\s*user\?\.role\s*===\s*['"]super_admin['"]/);
-      expect(src).toMatch(/const\s+isHost\s*=\s*isOriginalHost\s*\|\|\s*isCohost\s*\|\|\s*isSuperAdmin/);
-      // Forbid the broad form — admin should no longer fold into isHost here.
-      // (The old `const isAdmin = role === 'admin' || role === 'super_admin'`
-      // expression must not appear in the isHost calculation.)
-      const isHostLine = src.match(/const\s+isHost\s*=[^;]+;/);
-      expect(isHostLine).toBeTruthy();
-      expect(isHostLine![0]).not.toMatch(/isAdmin/);
+      expect(src).toMatch(/const\s+baseIsHost\s*=\s*isOriginalHost\s*\|\|\s*isCohost\s*\|\|\s*isSuperAdmin/);
+      // Forbid the broad form — admin should no longer fold into the
+      // role-derived host gate. (The old `const isAdmin = role === 'admin'
+      // || role === 'super_admin'` expression must not appear in the
+      // baseIsHost calculation.)
+      const baseLine = src.match(/const\s+baseIsHost\s*=[^;]+;/);
+      expect(baseLine).toBeTruthy();
+      expect(baseLine![0]).not.toMatch(/isAdmin/);
     });
   });
 });

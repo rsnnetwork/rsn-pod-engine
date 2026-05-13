@@ -71,6 +71,16 @@ export interface SessionStateSnapshot {
   hostVisibilityModes: Record<string, string>;
 
   /**
+   * Phase M (12 May spec item 1) — explicit acting-as-host overrides.
+   * Map of userId → boolean for users who have toggled "Join as host" /
+   * "Join as participant". Absent users follow the role default (super_admin
+   * and event_host auto-host; everyone else auto-participant). The client
+   * uses this to derive isHost for its own user without round-tripping to
+   * the server on every render.
+   */
+  actingAsHostOverrides: Record<string, boolean>;
+
+  /**
    * Phase 5B (5 May spec) — test-mode flag. Stefan's #2: when the host is
    * signed in across multiple accounts to test the system, display a
    * banner so it's visually clear this isn't a real production event.
@@ -153,8 +163,14 @@ export async function buildSessionStateSnapshot(
   // Active: registered AND connected — what hosts intuitively mean by
   //   "X participants right now".
   // hostConnected: separate boolean so UI can show "+1 host" explicitly.
-  const registeredRes = await query<{ user_id: string }>(
-    `SELECT sp.user_id
+  //
+  // Phase M (12 May spec item 1) piggybacks the acting_as_host column on
+  // this same SELECT so the snapshot remains a single round-trip for
+  // session_participants. Pull non-null overrides into the
+  // actingAsHostOverrides map; participants without an explicit toggle
+  // contribute nothing (they follow the role default).
+  const registeredRes = await query<{ user_id: string; acting_as_host: boolean | null }>(
+    `SELECT sp.user_id, sp.acting_as_host
      FROM session_participants sp
      JOIN users u ON u.id = sp.user_id
      WHERE sp.session_id = $1
@@ -162,6 +178,12 @@ export async function buildSessionStateSnapshot(
        AND u.email NOT LIKE 'loadtest_%@rsn-test.invalid'`,
     [sessionId],
   );
+  const actingAsHostOverrides: Record<string, boolean> = {};
+  for (const r of registeredRes.rows) {
+    if (r.acting_as_host !== null && r.acting_as_host !== undefined) {
+      actingAsHostOverrides[r.user_id] = r.acting_as_host;
+    }
+  }
   const registeredIds = new Set(registeredRes.rows.map(r => r.user_id));
   // Exclude host from the headline count — surfaced separately as hostConnected
   if (session.hostUserId) registeredIds.delete(session.hostUserId);
@@ -277,5 +299,6 @@ export async function buildSessionStateSnapshot(
     timerVisibility: (config as any).timerVisibility || 'last_10s',
     testMode,
     hostVisibilityModes,
+    actingAsHostOverrides,
   };
 }
