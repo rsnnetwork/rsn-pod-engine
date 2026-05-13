@@ -142,17 +142,19 @@ describe('Phase M — acting-as-host toggle (item 1)', () => {
     it('delegates to sessionService.setActingAsHost using the caller\'s own userId', () => {
       // The endpoint MUST use req.user.userId — not req.body.userId — so a
       // user cannot toggle someone else's override. The spec scopes this
-      // toggle to the caller themselves.
+      // toggle to the caller themselves. Window widened to 1500 chars to
+      // include the Phase P director-check guard inserted before the
+      // setActingAsHost call.
       const routeIdx = src.indexOf("'/:id/host/acting-as-host'");
       expect(routeIdx).toBeGreaterThan(-1);
-      const slice = src.slice(routeIdx, routeIdx + 800);
+      const slice = src.slice(routeIdx, routeIdx + 1500);
       expect(slice).toMatch(/sessionService\.setActingAsHost\(\s*sessionId,\s*userId,\s*req\.body\.value/);
       expect(slice).toMatch(/userId\s*=\s*req\.user!.userId/);
     });
 
     it('notifies the caller via permissions:updated so their snapshot resyncs', () => {
       const routeIdx = src.indexOf("'/:id/host/acting-as-host'");
-      const slice = src.slice(routeIdx, routeIdx + 800);
+      const slice = src.slice(routeIdx, routeIdx + 1500);
       expect(slice).toMatch(/orchestrationService\.notifyPermissionsUpdated/);
     });
   });

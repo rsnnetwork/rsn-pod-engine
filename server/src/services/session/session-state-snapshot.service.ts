@@ -44,18 +44,39 @@ export interface SessionStateSnapshot {
   /** Whether the host's socket is currently in the lobby room. */
   hostInLobby: boolean;
 
-  /** T1-4 — three canonical counts that disambiguate "X participants" UX. */
+  /** T1-4 — canonical counts that disambiguate "X participants" UX.
+   *
+   * Phase P (12 May spec — Ali's 13 May clarification) adds `hostsRegistered`
+   * and `hostsConnected` so the UI can render "N hosts + M participants"
+   * accurately when admins/super_admins toggle "Join as host". The existing
+   * `connected` / `registered` / `active` fields preserve their pre-Phase-P
+   * semantics for backward compat: they exclude only the director (the
+   * `session.host_user_id`), not cohosts or opt-ins. Clients that want a
+   * pure "non-host participants" count should derive it by subtracting
+   * `hostsConnected` from `connected` (or use `hostsRegistered` for the
+   * registered split).
+   */
   participantCounts: {
-    /** Real-time socket presence — users with an active socket in the session room. Excludes host by default. */
+    /** Real-time socket presence — users with an active socket in the session room. Excludes director by default. */
     connected: number;
-    /** DB rows in session_participants with status NOT IN ('removed','left','no_show'). Excludes host by default. */
+    /** DB rows in session_participants with status NOT IN ('removed','left','no_show'). Excludes director by default. */
     registered: number;
-    /** Subset of registered who are also currently connected — what hosts mean by "active right now". Excludes host by default. */
+    /** Subset of registered who are also currently connected — what hosts mean by "active right now". Excludes director by default. */
     active: number;
-    /** Whether the host is currently connected (for explicit display, NOT included in the counts above). */
+    /** Whether the director is currently connected (for explicit display, NOT included in the counts above). */
     hostConnected: boolean;
     /** True if test/loadtest accounts (email LIKE 'loadtest_%@rsn-test.invalid') were filtered out. Always true post-T1-4. */
     ghostFiltered: boolean;
+    /**
+     * Phase P — count of users currently acting as host on this event:
+     * director + cohosts (minus opt-outs) + admin/super_admin opt-ins.
+     * The director is always counted regardless of any stale opt-out
+     * row. INCLUDES the director, unlike `registered`/`connected`/`active`
+     * which exclude them.
+     */
+    hostsRegistered: number;
+    /** Phase P — subset of hostsRegistered who are currently connected via socket. */
+    hostsConnected: number;
   };
 
   /** UI hint propagated from session config. */
@@ -201,6 +222,14 @@ export async function buildSessionStateSnapshot(
   const actingAsHostOverrides: Record<string, boolean> = {};
   const hostMutedUserIds: string[] = [];
   for (const r of registeredRes.rows) {
+    // Phase P (Ali's 13 May clarification) — never expose the director's
+    // acting_as_host value. The director is permanently host of their
+    // own event; a stale FALSE row from pre-Phase-P or a malicious
+    // client must not leak into the snapshot. Filtering at the source
+    // means every consumer (client isHost, HCC role badge, banner
+    // visibility) sees a consistent "director is always host" view
+    // without each call site re-checking.
+    if (r.user_id === session.hostUserId) continue;
     if (r.acting_as_host !== null && r.acting_as_host !== undefined) {
       actingAsHostOverrides[r.user_id] = r.acting_as_host;
     }
@@ -221,6 +250,28 @@ export async function buildSessionStateSnapshot(
   const hostConnected = session.hostUserId
     ? connectedParticipants.some(p => p.userId === session.hostUserId)
     : false;
+
+  // ── Phase P (12 May spec — Ali's 13 May clarification) — host roster ───
+  //
+  // The system must read each user's role accurately so the UI can show
+  // "N hosts + M participants" honestly. The host roster is:
+  //   director + cohosts − opt-outs + opt-ins
+  // where the director is always counted regardless of any (stale or
+  // malicious) opt-out row. Phase P-A enforces this at multiple layers;
+  // here we just compute the snapshot view consistently.
+  const hostsRegisteredSet = new Set<string>();
+  if (session.hostUserId) hostsRegisteredSet.add(session.hostUserId);
+  for (const cohostId of cohosts) hostsRegisteredSet.add(cohostId);
+  for (const [uid, value] of Object.entries(actingAsHostOverrides)) {
+    if (value === true) hostsRegisteredSet.add(uid);
+    if (value === false) hostsRegisteredSet.delete(uid);
+  }
+  // Director defence in depth — always counted, never removable by override.
+  if (session.hostUserId) hostsRegisteredSet.add(session.hostUserId);
+  const hostsConnectedSet = new Set<string>();
+  for (const p of connectedParticipants) {
+    if (hostsRegisteredSet.has(p.userId)) hostsConnectedSet.add(p.userId);
+  }
 
   // ── Phase 7C.3 — test-mode detection v2 ─────────────────────────────────
   // 1. Explicit override via session.config.testMode wins. Set via the
@@ -316,6 +367,8 @@ export async function buildSessionStateSnapshot(
       active: activeCount,
       hostConnected,
       ghostFiltered: true,
+      hostsRegistered: hostsRegisteredSet.size,
+      hostsConnected: hostsConnectedSet.size,
     },
 
     timerVisibility: (config as any).timerVisibility || 'last_10s',

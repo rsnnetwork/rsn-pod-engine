@@ -94,6 +94,20 @@ export default function LiveSessionPage() {
       ? true
       : baseIsHost;
 
+  // Phase P (Ali's 13 May clarification) — eligibility for the "Join as
+  // host" / "Join as participant" toggle. Admins (Shraddha, Raja Ali) and
+  // super_admins (Stefan) get the toggle ONLY when they did NOT create
+  // the event. The event director is permanently the host of their own
+  // event. `isDirector` is the same identity check the server uses.
+  const isDirector = !!user?.id && session?.hostUserId === user?.id;
+  const isAdminOrSuperAdmin = user?.role === 'admin' || user?.role === 'super_admin';
+  const canToggleActingAsHost = isAdminOrSuperAdmin && !isDirector;
+  // Pre-event banner condition: eligible user, has not explicitly chosen
+  // yet for THIS event. Banner stays visible until they pick — it's a
+  // nudge, not a dismissable toast.
+  const showJoinAsBanner =
+    canToggleActingAsHost && myActingAsHost === undefined;
+
   useSessionSocket(sessionId!);
 
   // If session is already completed (e.g. page refresh), show complete phase
@@ -203,6 +217,52 @@ export default function LiveSessionPage() {
         <div className="bg-amber-500/15 px-4 py-2 flex items-center justify-center gap-2">
           <Loader2 className="h-4 w-4 text-amber-400" />
           <p className="text-sm text-amber-400 font-medium">Round paused by host</p>
+        </div>
+      )}
+
+      {/* Phase P (Ali's 13 May clarification) — pre-event "Join as" banner
+          for non-director admin/super_admin users who haven't chosen yet.
+          Two prominent buttons; the banner stays visible until they pick
+          so it's their explicit decision, not an auto-default. */}
+      {showJoinAsBanner && (
+        <div
+          data-testid="join-as-banner"
+          className="bg-indigo-50 border-b border-indigo-200 px-4 py-3 flex flex-wrap items-center justify-between gap-3"
+        >
+          <p className="text-sm text-indigo-900">
+            You're a {user?.role === 'super_admin' ? 'super admin' : 'admin'} and not the director of this event.
+            How are you joining?
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={async () => {
+                try {
+                  await api.post(`/sessions/${sessionId}/host/acting-as-host`, { value: true });
+                } catch (err) {
+                  // eslint-disable-next-line no-console
+                  console.error('host:set_acting_as_host (opt-in) failed', err);
+                }
+              }}
+              className="text-xs px-3 py-1.5 rounded-md border border-indigo-300 bg-white text-indigo-900 hover:bg-indigo-100 font-medium"
+              data-testid="join-as-banner-host"
+            >
+              Join as host
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  await api.post(`/sessions/${sessionId}/host/acting-as-host`, { value: false });
+                } catch (err) {
+                  // eslint-disable-next-line no-console
+                  console.error('host:set_acting_as_host (opt-out) failed', err);
+                }
+              }}
+              className="text-xs px-3 py-1.5 rounded-md border border-indigo-300 bg-white text-indigo-900 hover:bg-indigo-100 font-medium"
+              data-testid="join-as-banner-participant"
+            >
+              Join as participant
+            </button>
+          </div>
         </div>
       )}
 

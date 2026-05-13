@@ -771,6 +771,23 @@ function formatParticipantHeader(
 
 function HostParticipantPanel({ sessionId }: { sessionId?: string }) {
   const { participants, hostUserId, cohosts } = useSessionStore();
+  // Phase P (Ali's 13 May clarification) — host roster must factor in
+  // acting_as_host opt-ins (admins/super_admins joining as host) and
+  // opt-outs (cohosts/super_admins joining as participant), with the
+  // director always counted. Without this the header read "5 participants
+  // + 1 host" when Stefan opted in (he'd show as participant).
+  const actingAsHostOverrides = useSessionStore(s => s.actingAsHostOverrides);
+  const hostsSet = (() => {
+    const s = new Set<string>();
+    if (hostUserId) s.add(hostUserId);
+    for (const c of cohosts) s.add(c);
+    for (const [uid, v] of Object.entries(actingAsHostOverrides)) {
+      if (v === true) s.add(uid);
+      if (v === false) s.delete(uid);
+    }
+    if (hostUserId) s.add(hostUserId);
+    return s;
+  })();
   const [expanded, setExpanded] = useState(true);
 
   const handleKick = useCallback((userId: string, displayName: string) => {
@@ -788,11 +805,13 @@ function HostParticipantPanel({ sessionId }: { sessionId?: string }) {
       >
         <div className="flex items-center gap-2">
           <Users className="h-4 w-4 text-gray-400" />
-          {/* Phase D3 (10 May) — separate counts so "+ Hosts" reads correctly when cohosts present. */}
+          {/* Phase D3 (10 May) — separate counts so "+ Hosts" reads correctly when cohosts present.
+              Phase P (Ali's 13 May clarification) — counts now respect
+              acting_as_host opt-ins/opt-outs via hostsSet. */}
           <span>
-            Participants ({participants.filter(p => p.userId !== hostUserId && !cohosts.has(p.userId)).length})
+            Participants ({participants.filter(p => !hostsSet.has(p.userId)).length})
             {(() => {
-              const totalHosts = 1 + cohosts.size; // original host + cohosts
+              const totalHosts = hostsSet.size;
               return ` · ${totalHosts} ${totalHosts === 1 ? 'Host' : 'Hosts'}`;
             })()}
           </span>

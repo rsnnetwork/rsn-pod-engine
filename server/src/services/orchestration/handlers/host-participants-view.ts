@@ -53,6 +53,15 @@ interface ParticipantRow {
   status: string;
   joined_at: Date | null;
   is_cohost: boolean;
+  /**
+   * Phase P (12 May spec — Ali's 13 May clarification): per-event opt-in
+   * / opt-out. NULL for synthetic host + cohost rows (use base role).
+   * TRUE for admins/super_admin who chose "Join as host" → reclassify
+   * to 'cohost'. FALSE for cohosts/admins who chose "Join as participant"
+   * → reclassify to 'participant'. The director (host_user_id) ignores
+   * this column entirely.
+   */
+  acting_as_host: boolean | null;
 }
 
 export async function buildHostParticipantsView(opts: {
@@ -70,14 +79,15 @@ export async function buildHostParticipantsView(opts: {
   // status='in_main_room' for synthetic rows; presenceMap drives the
   // final state below (in_room/disconnected/in_main_room).
   const rows = await query<ParticipantRow>(
-    `SELECT user_id, display_name, email, status, joined_at, is_cohost FROM (
+    `SELECT user_id, display_name, email, status, joined_at, is_cohost, acting_as_host FROM (
        SELECT
          sp.user_id,
          u.display_name,
          u.email,
          sp.status::text AS status,
          sp.joined_at,
-         (sc.user_id IS NOT NULL) AS is_cohost
+         (sc.user_id IS NOT NULL) AS is_cohost,
+         sp.acting_as_host
        FROM session_participants sp
        LEFT JOIN users u ON u.id = sp.user_id
        LEFT JOIN session_cohosts sc
@@ -90,7 +100,8 @@ export async function buildHostParticipantsView(opts: {
          u.email,
          'in_lobby'::text AS status,
          NULL::timestamptz AS joined_at,
-         FALSE AS is_cohost
+         FALSE AS is_cohost,
+         NULL::boolean AS acting_as_host
        FROM sessions s
        LEFT JOIN users u ON u.id = s.host_user_id
        WHERE s.id = $1
@@ -106,7 +117,8 @@ export async function buildHostParticipantsView(opts: {
          u.email,
          'in_lobby'::text AS status,
          NULL::timestamptz AS joined_at,
-         TRUE AS is_cohost
+         TRUE AS is_cohost,
+         NULL::boolean AS acting_as_host
        FROM session_cohosts sc
        LEFT JOIN users u ON u.id = sc.user_id
        WHERE sc.session_id = $1
@@ -129,12 +141,30 @@ export async function buildHostParticipantsView(opts: {
   }
 
   return rows.rows.map((r: ParticipantRow) => {
-    const role: HostParticipantRole =
-      r.user_id === opts.hostUserId
-        ? 'host'
-        : r.is_cohost
-        ? 'cohost'
-        : 'participant';
+    // Role precedence (Phase P — Ali's 13 May clarification):
+    //   1. Director (hostUserId match) → 'host' ALWAYS, ignoring any
+    //      acting_as_host value (defence in depth — server REST refuses
+    //      the demote, but if a stale FALSE row exists from old data
+    //      we still classify the director correctly).
+    //   2. acting_as_host = FALSE → 'participant' (admin/super_admin/
+    //      cohost explicitly opted out for this event).
+    //   3. acting_as_host = TRUE → 'cohost' (admin/super_admin explicitly
+    //      opted in; cohost-level role grants host UI and excludes them
+    //      from matching).
+    //   4. is_cohost (session_cohosts row) → 'cohost'.
+    //   5. else → 'participant'.
+    let role: HostParticipantRole;
+    if (r.user_id === opts.hostUserId) {
+      role = 'host';
+    } else if (r.acting_as_host === false) {
+      role = 'participant';
+    } else if (r.acting_as_host === true) {
+      role = 'cohost';
+    } else if (r.is_cohost) {
+      role = 'cohost';
+    } else {
+      role = 'participant';
+    }
 
     const inMatch = userToMatch.get(r.user_id);
     let state: HostParticipantState;

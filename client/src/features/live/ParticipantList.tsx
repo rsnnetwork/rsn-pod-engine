@@ -13,8 +13,22 @@ export default function ParticipantList({ onClose, sessionId }: Props) {
   const participants = useSessionStore(s => s.participants);
   const hostUserId = useSessionStore(s => s.hostUserId);
   const cohosts = useSessionStore(s => s.cohosts);
+  // Phase P (Ali's 13 May clarification) — badges + sort must respect
+  // acting_as_host: admin/super_admin opt-ins show as Co-Host;
+  // cohost/super_admin opt-outs lose their Co-Host badge.
+  const actingAsHostOverrides = useSessionStore(s => s.actingAsHostOverrides);
   const { user } = useAuthStore();
   const isOriginalHost = user?.id === hostUserId;
+
+  // Helper: is this user currently acting as a co-host/host (not counting
+  // the director who has their own "Host" badge)?
+  const isActingCohost = (uid: string): boolean => {
+    if (uid === hostUserId) return false; // director gets the Host badge, not Co-Host
+    const override = actingAsHostOverrides[uid];
+    if (override === false) return false; // explicit opt-out
+    if (override === true) return true; // explicit opt-in
+    return cohosts.has(uid); // default cohost membership
+  };
 
   const toggleCohost = (userId: string) => {
     const socket = getSocket();
@@ -26,12 +40,14 @@ export default function ParticipantList({ onClose, sessionId }: Props) {
     }
   };
 
-  // Sort: host first, co-hosts second, then alphabetically
+  // Sort: host first, co-hosts second (including Phase P opt-ins), then alphabetically.
   const sorted = [...participants].sort((a, b) => {
     if (a.userId === hostUserId) return -1;
     if (b.userId === hostUserId) return 1;
-    if (cohosts.has(a.userId) && !cohosts.has(b.userId)) return -1;
-    if (!cohosts.has(a.userId) && cohosts.has(b.userId)) return 1;
+    const aIsCohost = isActingCohost(a.userId);
+    const bIsCohost = isActingCohost(b.userId);
+    if (aIsCohost && !bIsCohost) return -1;
+    if (!aIsCohost && bIsCohost) return 1;
     return (a.displayName || '').localeCompare(b.displayName || '');
   });
 
@@ -58,7 +74,7 @@ export default function ParticipantList({ onClose, sessionId }: Props) {
       <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
         {sorted.map(p => {
           const isPHost = p.userId === hostUserId;
-          const isCohost = cohosts.has(p.userId);
+          const isCohost = isActingCohost(p.userId);
           const isSelf = p.userId === user?.id;
 
           return (

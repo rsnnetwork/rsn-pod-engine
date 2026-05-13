@@ -185,6 +185,18 @@ router.post(
     try {
       const sessionId = req.params.id;
       const userId = req.user!.userId;
+      // Phase P (12 May spec — Ali's 13 May clarification): the event
+      // director (session.host_user_id) cannot toggle. They are
+      // permanently the host of their own event. Refuse the POST so a
+      // malicious or curious client cannot demote the director by
+      // calling the API directly.
+      const session = await sessionService.getSessionById(sessionId);
+      if (session.hostUserId === userId) {
+        next(new ForbiddenError(
+          'The event director cannot toggle their own host status. Promote a co-host instead.',
+        ));
+        return;
+      }
       await sessionService.setActingAsHost(sessionId, userId, req.body.value);
       // Notify the user's own sockets so the snapshot resyncs the new
       // override (and the UI re-derives isHost). Reuse permissions:updated

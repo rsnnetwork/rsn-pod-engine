@@ -71,7 +71,15 @@ export async function getEffectiveRole(
   // opposite — they've opted to act as host even if their base role
   // wouldn't otherwise grant it.
   // NULL (the default) preserves the existing role-based logic below.
+  //
+  // Phase P (Ali's 13 May clarification) — the event director CANNOT opt
+  // out. Their actingOverride is intentionally ignored: even if a stale
+  // FALSE row exists (from a buggy client or pre-Phase-P data), the
+  // director short-circuit below returns 'event_host'. The REST endpoint
+  // also refuses the demote attempt, but this resolver is defense in
+  // depth (e.g. for snapshot reads after a malformed UPDATE).
   let actingOverride: boolean | null = null;
+  let isDirector = false;
   if (context.sessionId) {
     try {
       const overrideRow = await query<{ acting_as_host: boolean | null }>(
@@ -83,6 +91,21 @@ export async function getEffectiveRole(
     } catch {
       // Fall through with null — role defaults still apply, no regression.
     }
+    try {
+      const sessRow = await query<{ host_user_id: string | null }>(
+        `SELECT host_user_id FROM sessions WHERE id = $1`,
+        [context.sessionId],
+      );
+      isDirector = sessRow.rows[0]?.host_user_id === userId;
+    } catch {
+      // Fall through with isDirector=false — the layer 3 check below
+      // will also catch this if the session row is readable later.
+    }
+  }
+  if (isDirector) {
+    // Director is permanently the host of their own event. Any
+    // actingOverride is ignored (Phase P enforcement).
+    return 'event_host';
   }
   if (actingOverride === false) {
     // Honour the opt-out: regardless of base role, the user is acting as a

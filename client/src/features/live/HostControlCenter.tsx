@@ -438,10 +438,12 @@ export default function HostControlCenter({
             )}
             {/* Phase M (12 May item 1) — Join as participant / Join as host
                 toggle. Visible to any user already inside HCC (which is
-                gated on isHost upstream). Tied to the viewer's OWN
-                acting_as_host override; clears back to role default when
-                toggled twice. */}
-            {currentUserId && (
+                gated on isHost upstream) EXCEPT the event director.
+                Phase P (Ali's 13 May clarification): the director cannot
+                toggle their own role — they are permanently the host of
+                their own event. The server REST endpoint refuses the
+                same combination as defence in depth. */}
+            {currentUserId && currentUserId !== hostUserId && (
               <button
                 onClick={() => {
                   const current = actingAsHostOverrides[currentUserId];

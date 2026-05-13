@@ -238,6 +238,9 @@ describe('T0-3 — buildSessionStateSnapshot', () => {
       active: expect.any(Number),
       hostConnected: expect.any(Boolean),
       ghostFiltered: true,
+      // Phase P — host count split (12 May spec, Ali's 13 May clarification).
+      hostsRegistered: expect.any(Number),
+      hostsConnected: expect.any(Number),
     });
   });
 

@@ -7703,3 +7703,76 @@ Purely additive; existing rows untouched. Safe on live DB.
 | O     | 7 (authoritative mute state)   | shipped 2026-05-13 |
 
 All 10 items from Stefan's 12 May feedback now closed end-to-end on staging + main.
+
+---
+
+## Stefan's 12 May Feedback — Phase P (Ali's 13 May clarification) — 2026-05-13
+
+**Status:** Toggle behaviour refined per Ali's 13 May clarification on top of Phase M. Director can no longer accidentally demote themselves; non-director admins/super_admins now get an explicit pre-event choice via a lobby banner; HCC + Lobby + ParticipantList all classify opt-ins/opt-outs correctly; snapshot exposes a hosts count split so the UI can read "N hosts + M participants" honestly.
+**Why:** Ali's clarification (saved to memory `project_rsn_acting_as_host_rules.md`): the toggle is available **only** to admin/super_admin who are **not** the event director. The director is permanently the host of their own event. Opt-ins count as hosts in every roster/badge/count. Phase M had the underlying mechanism but four UX gates were wrong.
+
+### Gaps closed
+
+**Gap A — Director cannot demote themselves (defense in depth, 4 layers):**
+1. `HostControlCenter.tsx`: toggle button hidden when `currentUserId === hostUserId`.
+2. `routes/host.ts`: POST `/sessions/:id/host/acting-as-host` refuses with 403 when `userId === session.host_user_id` (`ForbiddenError`).
+3. `effective-role.service.ts`: `getEffectiveRole` short-circuits to `'event_host'` for the director, ignoring any `acting_as_host` row (handles stale FALSE data from pre-Phase-P or malicious POSTs that bypassed the REST gate).
+4. `session-state-snapshot.service.ts`: filters the director out of `actingAsHostOverrides` at snapshot time, so no client ever sees a director-with-override view.
+
+**Gap B — Lobby pre-event "Join as" banner:**
+`LiveSessionPage.tsx` renders a prominent indigo banner when `(role === 'admin' || role === 'super_admin') && userId !== hostUserId && actingAsHostOverride === undefined`. Two buttons (data-testid `join-as-banner-host` + `join-as-banner-participant`) POST `{ value: true }` / `{ value: false }` to the REST endpoint. Stays visible until the user picks — it's their explicit decision, not an auto-default. Once chosen, the override becomes non-null and the banner dismisses naturally.
+
+**Gap C — HCC role classification respects override:**
+`host-participants-view.ts` SELECT now pulls `sp.acting_as_host`. Role precedence rewritten:
+1. `userId === hostUserId` → `'host'` (director ALWAYS, ignores override)
+2. `acting_as_host = FALSE` → `'participant'` (explicit opt-out wins over base role)
+3. `acting_as_host = TRUE` → `'cohost'` (admin/super_admin opt-in floor)
+4. `is_cohost` → `'cohost'` (default cohost)
+5. else → `'participant'`
+
+This means Stefan (super_admin, opted in) shows as `'cohost'` in HCC — counted as host in the chips at the top, not as participant.
+
+**Gap D — Snapshot exposes hostsRegistered + hostsConnected:**
+`SessionStateSnapshot.participantCounts` gains two new fields. `hostsRegistered` = director + cohosts + opt-ins − opt-outs (director defense-in-depth re-added at end of loop). `hostsConnected` = subset connected via socket. Existing `connected`/`registered`/`active` fields preserve their pre-Phase-P semantics for backward compat (they exclude only the director).
+
+### Audit fixes (client surfaces also honouring acting_as_host)
+
+- `Lobby.tsx` — `HostParticipantPanel` header was `Participants (count of non-host/non-cohost) · M Hosts` where M was hardcoded as `1 + cohosts.size`. Rewritten to compute `hostsSet` from director + cohosts + opt-ins − opt-outs; both numbers now derive from the same set.
+- `ParticipantList.tsx` — `isCohost` was `cohosts.has(p.userId)` (raw membership). Rewritten via `isActingCohost(uid)` helper that honours opt-out (returns false), opt-in (returns true), then falls back to cohost membership. The sort and the per-row "Co-Host" badge both use the helper.
+
+### Files
+
+- New: `server/src/__tests__/services/phase-p-acting-as-host-completeness.test.ts` (16 pin tests across 6 describe blocks)
+- Modified: `server/src/routes/host.ts` (director-block in REST handler)
+- Modified: `server/src/services/roles/effective-role.service.ts` (director short-circuit, ignores override)
+- Modified: `server/src/services/orchestration/handlers/host-participants-view.ts` (SQL + role ladder)
+- Modified: `server/src/services/session/session-state-snapshot.service.ts` (director filter + hostsRegistered/hostsConnected + interface)
+- Modified: `server/src/__tests__/services/phase-m-acting-as-host.test.ts` (widened REST window for the new director check)
+- Modified: `server/src/__tests__/services/session/session-state-snapshot.test.ts` (toEqual updated for new count fields)
+- Modified: `client/src/features/live/HostControlCenter.tsx` (director gate on toggle button)
+- Modified: `client/src/features/live/LiveSessionPage.tsx` (pre-event banner + canToggleActingAsHost derivation)
+- Modified: `client/src/features/live/Lobby.tsx` (`hostsSet`-based header count)
+- Modified: `client/src/features/live/ParticipantList.tsx` (`isActingCohost` helper for badges + sort)
+- Modified: `progress.md` — this entry.
+
+### Verification
+
+- Server suite: **1327 passed, 1 skipped (pre-existing), 0 failed** across 104 suites (Phase P added 1 suite, 16 tests; 2 existing tests in Phase M + 1 in session-state-snapshot updated for the new shape).
+- Client TypeScript: clean.
+- Client production build: clean — 1.59 MB main / 436 KB gzip, no net growth.
+
+### Decision log
+
+- **Director cannot opt in/out, ever.** Three independent enforcement layers + a snapshot filter. Even a stale row from pre-Phase-P or a malicious POST cannot mis-classify the director.
+- **Banner stays visible until the user chooses.** No "dismiss" button; their explicit pick is the only way to remove it. This forces the decision rather than auto-defaulting (which Ali specifically called out: "they will enter the event as 2 options").
+- **Cohorts can opt out via the same toggle.** Strictly the spec said admins/super_admins only, but the underlying mechanism is identical; if a cohost ever wants to attend as participant they can. The toggle is gated on `canToggleActingAsHost = isAdminOrSuperAdmin && !isDirector`, so cohost-who-is-also-admin/super_admin works; pure cohost (regular member promoted) sees the toggle inside HCC where they'd already be (the banner is gated on `isAdminOrSuperAdmin`).
+- **No backwards-compat shim for `cohosts.size` based math.** Lobby and ParticipantList were rewritten to derive from the override-aware set; old call sites with the wrong count are replaced, not wrapped.
+
+### What's still deferred (Phase O follow-up, not regression)
+
+- LiveKit `canPublishAudio` revocation when host_muted=TRUE (Phase O note).
+- Toast notifications on REST failures (multi-phase note).
+- Big-speaker / producer rendering inside breakouts (Phase N note).
+- Host-initiated demote of a cohost (new endpoint with different permission model).
+
+All 10 items from Stefan's 12 May feedback are now shipped per Ali's clarification, on staging + main, with full RajaSkill verification.
