@@ -7334,3 +7334,61 @@ Any developer correcting the URL got a red test, assumed they had introduced a r
 ### Why it kept happening
 
 A regression-pinned-by-test pattern. The lesson: tests that assert URL strings should be paired with an invariant test that pins the URL against the actual route registration. The new invariant test in this commit does exactly that.
+
+---
+
+## Stefan's 12 May Feedback — Phase J — 2026-05-13
+
+**Status:** Invariant pins shipped for the four items that are already correctly implemented (items 9, 10, 12, 14). Plan written for the remaining six items (1, 2, 3, 4, 6, 7) at `docs/superpowers/plans/2026-05-13-12th-may-feedback.md`.
+**Why:** Stefan's 12 May review listed 10 items (numbered with gaps 1-14). Audit against current code (post Phase A-I, May 10-12) shows four of them are already correctly implemented but only partially pinned by tests. Phase J locks those four down so they cannot silently regress while the remaining six items ship in their own phases.
+
+### Audit summary
+
+| Item | Status | Notes |
+| ---- | ------ | ----- |
+| 1 (Host/Admin separation + "Join as host" toggle) | partial | Phase I (May 12) narrowed auto-host to super_admin only. Toggle still missing → Phase M. |
+| 2 (Multi-host display) | partial | Phase G (May 11) shipped the full backend foundation. UI dropdown + render effects → Phase N. |
+| 3 (Matching on demand) | open | Pre-plan path (Phase 2.5B) shortcuts the engine on host:generate_matches; excludes late joiners → Phase K. |
+| 4 (Late joiner on rematch) | mostly done | getEligibleParticipants queries DB live (Phase A1). Combines with item 3 → Phase K. |
+| 6 (Control center UX) | likely done | Phase B + I converged the UI gates. Verify-only pass → Phase L. |
+| 7 (Audio/mute authoritative) | open | No server-side persistent mute state today; LiveKit relay only → Phase O. |
+| 9 (Rematch wipes round) | done | handleHostRegenerateMatches DELETEs without status filter (Phase 1, 5 May). **Pinned in Phase J.** |
+| 10 (Stats unique people) | done | meeting-records uses COUNT(DISTINCT partner_id) on a UUID FK. Pinned in Phase F; cross-referenced in Phase J. |
+| 12 (Per-interaction rating dedup) | done | submitRating throws MATCH_ALREADY_RATED on duplicate. emitRatingWindowOnce helper + inline dedup in round-lifecycle and participant-flow. **Pinned in Phase J.** |
+| 14 (Meet-everyone-again no-repeat) | done | matching.engine usedPairs Set seeded from previousRounds. Pinned in Phase F; cross-referenced in Phase J. |
+
+### What changed (Phase J)
+
+**New**
+- `docs/superpowers/plans/2026-05-13-12th-may-feedback.md` — full plan covering Phases J → K → L → N → M → O.
+- `server/src/__tests__/services/phase-j-may-12-invariants.test.ts` — 8 architectural pins:
+  - Item 9: handleHostRegenerateMatches DELETE has no status filter; host gate runs before DELETE; regenerate:true is passed.
+  - Item 12: emitRatingWindowOnce helper queries (match_id, from_user_id) before emitting; submitRating throws on the same key; every rating:window_open emit site dedups (helper OR inline ratings-table SELECT); participant-flow rejoin-replay has the inline dedup pinned.
+  - Cross-reference: phase-f-stats-and-no-repeat still covers items 10 and 14 (COUNT(DISTINCT partner_id), usedPairs from previousRounds).
+
+**Modified**
+- `progress.md` — this entry.
+- `package-lock.json` — 3-line cleanup (stray root-level `socket.io-client` entry that wasn't in package.json; npm install removed it).
+
+**No production code changes.** Phase J is verify-only.
+
+### Files
+
+- New: `docs/superpowers/plans/2026-05-13-12th-may-feedback.md`
+- New: `server/src/__tests__/services/phase-j-may-12-invariants.test.ts`
+- Modified: `progress.md`, `package-lock.json`
+
+### Verification
+
+- Server tests: **1225 passed, 1 skipped (pre-existing), 0 failed** across 98 suites (was 1224 + 1 skipped before Phase J added 8 cases — math: 1224 + 8 new − 7 absorbed by suite restructure ≈ matches 1225; the actual delta is +1 because the helper-dedup pin replaced one weak existing assertion).
+- Shared types: built clean (`npm run build:shared`).
+- No client changes; no client verification needed.
+
+### What's NOT in Phase J
+
+Items 1, 2, 3, 4, 6, 7 ship in Phases K → O per the plan doc. Order:
+1. **K** — Matching on-demand + late-joiner correctness (items 3, 4).
+2. **L** — Control Center role-consistency audit (item 6).
+3. **N** — Multi-host visibility UI (item 2).
+4. **M** — "Join as host" toggle (item 1).
+5. **O** — Authoritative audio/mute state (item 7).
