@@ -124,16 +124,71 @@ export async function handleHostGenerateMatches(
     // instead of running the engine again. The "Generate Matches" button
     // becomes "Show round N preview" (Option B): clicking it pulls the
     // pre-planned matches; pressing Re-match regenerates only this round.
+    //
+    // Phase K (12 May spec items 3, 4) — the pre-plan must be invalidated
+    // when the live eligible set has diverged from the planned set. Late
+    // joiners that arrived after the pre-plan was generated wouldn't have
+    // been included; using the stale plan would exclude them from this
+    // round, which is exactly what Stefan flagged ("matching pre-calculates
+    // before host presses Match People"). Also covers the inverse: someone
+    // planned-in has left, so the plan would reference a user the engine
+    // won't actually match. In both cases we wipe the scheduled pre-plan
+    // for this round and fall through to the legacy on-the-fly engine run
+    // which uses getEligibleParticipants (DB-authoritative, Phase A1).
     const existingPlanned = await matchingService.getMatchesByRound(data.sessionId, nextRound);
     const hasPrePlan = existingPlanned.some(m => m.status === 'scheduled');
     if (hasPrePlan) {
+      // `eligible` is string[] of user IDs (getEligibleParticipants's
+      // contract). Wrap directly into the Set without a .map.
+      const eligibleIds = new Set<string>(eligible);
+      const plannedIds = new Set<string>();
+      for (const m of existingPlanned) {
+        if (m.status !== 'scheduled') continue;
+        plannedIds.add(m.participantAId);
+        plannedIds.add(m.participantBId);
+        if (m.participantCId) plannedIds.add(m.participantCId);
+      }
+      const sameSize = eligibleIds.size === plannedIds.size;
+      const sameMembers = sameSize && [...eligibleIds].every(id => plannedIds.has(id));
+
+      if (sameMembers) {
+        logger.info(
+          {
+            sessionId: data.sessionId,
+            roundNumber: nextRound,
+            count: existingPlanned.filter(m => m.status === 'scheduled').length,
+          },
+          'Phase 2.5B — surfacing pre-planned matches as preview (eligibility unchanged, no engine re-run)',
+        );
+        activeSession.pendingRoundNumber = nextRound;
+        await sendMatchPreview(io, socket, data.sessionId, nextRound, activeSession.hostUserId);
+        return;
+      }
+
+      // Eligibility has shifted since the pre-plan was generated.
+      const addedLateJoiners = [...eligibleIds].filter(id => !plannedIds.has(id));
+      const removedLeavers = [...plannedIds].filter(id => !eligibleIds.has(id));
       logger.info(
-        { sessionId: data.sessionId, roundNumber: nextRound, count: existingPlanned.filter(m => m.status === 'scheduled').length },
-        'Phase 2.5B — surfacing pre-planned matches as preview (no engine re-run)',
+        {
+          sessionId: data.sessionId,
+          roundNumber: nextRound,
+          addedLateJoiners,
+          removedLeavers,
+          plannedCount: plannedIds.size,
+          eligibleCount: eligibleIds.size,
+        },
+        'Phase K — pre-plan stale (eligibility shifted), invalidating and regenerating',
       );
-      activeSession.pendingRoundNumber = nextRound;
-      await sendMatchPreview(io, socket, data.sessionId, nextRound, activeSession.hostUserId);
-      return;
+      // Scope the DELETE to status='scheduled' so completed/active matches
+      // from prior rounds are NEVER touched — the spec requires "preserve
+      // already completed rounds" (12 May item 4). pendingRoundNumber by
+      // definition exists only during preview phase, so this is safe.
+      await query(
+        `DELETE FROM matches WHERE session_id = $1 AND round_number = $2 AND status = 'scheduled'`,
+        [data.sessionId, nextRound],
+      );
+      // Fall through to the legacy on-the-fly path — engine will run on
+      // the current eligible set (which includes the late joiners).
     }
 
     // Legacy path — fires for sessions that started before pre-planning was

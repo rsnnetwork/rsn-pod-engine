@@ -7392,3 +7392,41 @@ Items 1, 2, 3, 4, 6, 7 ship in Phases K → O per the plan doc. Order:
 3. **N** — Multi-host visibility UI (item 2).
 4. **M** — "Join as host" toggle (item 1).
 5. **O** — Authoritative audio/mute state (item 7).
+
+---
+
+## Stefan's 12 May Feedback — Phase K — 2026-05-13
+
+**Status:** Matching on-demand + late-joiner correctness shipped (items 3 and 4 collapsed into one fix because they share a root cause).
+**Why:** Stefan flagged on 12 May that "matching pre-calculates before host presses Match People" and that late joiners weren't being included on rematch. Phase A1 (10 May) made `getEligibleParticipants` DB-authoritative, but `handleHostGenerateMatches` still surfaced the Phase 2.5B pre-plan unconditionally — so a host pressing Match People after late joiners had arrived saw a preview that excluded them.
+
+### What changed
+
+**`server/src/services/orchestration/handlers/matching-flow.ts`** — `handleHostGenerateMatches` now compares the live eligible set against the pre-plan's planned set before surfacing:
+
+- **Fresh pre-plan** (eligibility unchanged) → still uses the Phase 2.5B fast path (no engine re-run; sendMatchPreview + early return). The perf optimisation is preserved.
+- **Stale pre-plan** (eligibility shifted — late joiners arrived OR someone left) → logs the divergence with `addedLateJoiners` and `removedLeavers` arrays, DELETEs the pre-plan scoped to `status = 'scheduled'` (NEVER touches completed/active rows from prior rounds — item 4's "preserve already completed rounds" requirement), then falls through to the on-the-fly engine path which runs on the current eligible set.
+
+Set comparison: equal size AND every member of `eligibleIds` is in `plannedIds`. Both directions implicitly covered.
+
+The DELETE's narrow `status='scheduled'` filter is the critical safety property: it cannot regress to a broader form without the new pin test catching it.
+
+### Files
+
+- Modified: `server/src/services/orchestration/handlers/matching-flow.ts` — staleness check inserted between the `existingPlanned` fetch and the existing pre-plan surface path.
+- New: `server/src/__tests__/services/phase-k-matching-on-demand.test.ts` — 12 architectural pins covering Set construction, scheduled-only filter, set equality, fresh-path early return, stale-path DELETE scope, fall-through to engine, and call ordering (eligible-before-plan, verifyHost-before-DELETE).
+- Modified: `progress.md` — this entry.
+
+### Verification
+
+- Server suite: **1237 passed, 1 skipped (pre-existing), 0 failed** across 99 suites (Phase K added 1 suite, 12 tests).
+- Server TypeScript: clean (covered by ts-jest transform during test run; `orchestration.service.test.ts` + `routes.test.ts` both compile and pass against the new code).
+- Shared / client: untouched — no shared types changed, no client paths touched.
+
+### Risk
+
+Low. The fresh-pre-plan path is byte-identical in behaviour to pre-Phase-K. The stale-pre-plan path is new but only fires when set comparison shows divergence — a clearly-defined, logged condition. The DELETE is narrowly scoped; completed rounds cannot be wiped.
+
+### What's NOT in Phase K
+
+Items 1, 2, 6, 7 — separately scoped in Phases L, M, N, O per the plan doc.
