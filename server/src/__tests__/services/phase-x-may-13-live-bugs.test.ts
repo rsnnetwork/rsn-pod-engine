@@ -25,6 +25,47 @@ function readClientSource(rel: string): string {
 }
 
 describe('Phase X — 13 May live-test bug fixes', () => {
+  describe('Feature 17 — DM button on recap pages', () => {
+    const sessionComplete = readClientSource('features/live/SessionComplete.tsx');
+    const recapPage = readClientSource('features/sessions/RecapPage.tsx');
+
+    it('SessionComplete imports MessageSquare icon and useToastStore', () => {
+      expect(sessionComplete).toMatch(/MessageSquare/);
+      expect(sessionComplete).toMatch(/import\s*\{\s*useToastStore\s*\}/);
+    });
+
+    it('SessionComplete defines MessagePartnerButton helper', () => {
+      expect(sessionComplete).toMatch(/function\s+MessagePartnerButton/);
+      // Click flow: GET /dm/conversations → find existing → navigate, or
+      // POST /dm/messages with content → navigate. Both paths pinned.
+      expect(sessionComplete).toMatch(/api\.get\(['"]\/dm\/conversations['"]\)/);
+      expect(sessionComplete).toMatch(/api\.post\(['"]\/dm\/messages['"]/);
+      expect(sessionComplete).toMatch(/navigate\(`\/messages\/\$\{[\s\S]{0,40}conversationId/);
+    });
+
+    it('SessionComplete renders MessagePartnerButton in mutualConnections + per-round rows', () => {
+      // Two render sites: mutual matches list and the round-by-round list.
+      const renders = sessionComplete.match(/<MessagePartnerButton\b/g) || [];
+      expect(renders.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('RecapPage defines MessagePartnerButton helper too', () => {
+      expect(recapPage).toMatch(/function\s+MessagePartnerButton/);
+      expect(recapPage).toMatch(/api\.get\(['"]\/dm\/conversations['"]\)/);
+      expect(recapPage).toMatch(/api\.post\(['"]\/dm\/messages['"]/);
+    });
+
+    it('RecapPage renders MessagePartnerButton in mutualConnections + per-round rows', () => {
+      const renders = recapPage.match(/<MessagePartnerButton\b/g) || [];
+      expect(renders.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('Buttons carry data-testid for e2e selection', () => {
+      expect(sessionComplete).toMatch(/data-testid=\{\s*`recap-dm-button-\$\{userId\}`\s*\}/);
+      expect(recapPage).toMatch(/data-testid=\{\s*`recap-dm-button-\$\{userId\}`\s*\}/);
+    });
+  });
+
   describe('Bug 12 — Co-Host badge on lobby tiles for Phase M opt-ins', () => {
     const src = readClientSource('features/live/Lobby.tsx');
 

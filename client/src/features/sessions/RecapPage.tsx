@@ -5,7 +5,7 @@ import Card from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import Avatar from '@/components/ui/Avatar';
 import { Spinner } from '@/components/ui/Spinner';
-import { CheckCircle, Users, Star, Handshake, ArrowLeft, Calendar, Download, UserCheck, CircleDot } from 'lucide-react';
+import { CheckCircle, Users, Star, Handshake, ArrowLeft, Calendar, Download, UserCheck, CircleDot, MessageSquare } from 'lucide-react';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
@@ -42,6 +42,51 @@ interface PeopleMetData {
   uniquePeopleMet?: number;
   totalMeetings?: number;
   mutualMatches?: number;
+}
+
+// Feature 17 (13 May spec) — DM button on recap rows. Find an existing
+// conversation with this partner and navigate to it; if none exists,
+// prompt for an opener message and create the conversation. Same flow as
+// SessionComplete + PublicProfilePage so behaviour is consistent across
+// every place users see a "Message" button.
+function MessagePartnerButton({ userId, displayName }: { userId: string; displayName: string }) {
+  const navigate = useNavigate();
+  const { addToast } = useToastStore();
+  const [busy, setBusy] = useState(false);
+  const openConversation = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (busy) return;
+    setBusy(true);
+    try {
+      const list = await api.get('/dm/conversations').then(r => r.data.data as any[]);
+      const existing = list.find(c => c.otherUserId === userId);
+      if (existing) {
+        navigate(`/messages/${existing.conversationId}`);
+        return;
+      }
+      const content = prompt(`Send your first message to ${displayName || 'this user'}:`);
+      if (content && content.trim()) {
+        const res = await api.post('/dm/messages', { toUserId: userId, content: content.trim() });
+        navigate(`/messages/${res.data.data.conversationId}`);
+      }
+    } catch (err: any) {
+      addToast(err?.response?.data?.error?.message || 'Could not open conversation', 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button
+      onClick={openConversation}
+      disabled={busy}
+      title={`Message ${displayName || 'this user'}`}
+      className="shrink-0 inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded-md border border-indigo-200 hover:bg-indigo-50 transition-colors"
+      data-testid={`recap-dm-button-${userId}`}
+    >
+      <MessageSquare className="h-3.5 w-3.5" /> Message
+    </button>
+  );
 }
 
 function InterestBadge({ connection }: { connection: Connection }) {
@@ -376,23 +421,26 @@ export default function RecapPage() {
           </h3>
           <div className="space-y-3">
             {data.mutualConnections.map(c => (
-              <a key={c.userId} href={`/profile/${c.userId}`} className="flex items-center gap-3 p-3 rounded-lg bg-indigo-500/5 border border-indigo-500/20 hover:bg-indigo-500/10 transition-colors">
-                <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="md" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-gray-800 font-medium truncate">{c.displayName}</p>
-                  {(c.jobTitle || c.company) && (
-                    <p className="text-xs text-gray-400 truncate">
-                      {[c.jobTitle, c.company].filter(Boolean).join(' · ')}
-                    </p>
-                  )}
-                </div>
+              <div key={c.userId} className="flex items-center gap-3 p-3 rounded-lg bg-indigo-500/5 border border-indigo-500/20 hover:bg-indigo-500/10 transition-colors">
+                <a href={`/profile/${c.userId}`} className="flex items-center gap-3 flex-1 min-w-0">
+                  <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="md" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-gray-800 font-medium truncate">{c.displayName}</p>
+                    {(c.jobTitle || c.company) && (
+                      <p className="text-xs text-gray-400 truncate">
+                        {[c.jobTitle, c.company].filter(Boolean).join(' · ')}
+                      </p>
+                    )}
+                  </div>
+                </a>
                 <div className="flex items-center gap-2 shrink-0">
                   <div className="flex items-center gap-1 text-xs text-amber-400">
                     <Star className="h-3 w-3 fill-amber-400" />{c.qualityScore}
                   </div>
                   <Handshake className="h-4 w-4 text-indigo-500" />
                 </div>
-              </a>
+                <MessagePartnerButton userId={c.userId} displayName={c.displayName} />
+              </div>
             ))}
           </div>
         </Card>
@@ -414,18 +462,20 @@ export default function RecapPage() {
             </h3>
             <div className="space-y-2">
               {byRound[round].map(c => (
-                <a key={`${c.userId}-${c.roundNumber}`} href={`/profile/${c.userId}`} className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-100/40 transition-colors">
-                  <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-gray-800 font-medium truncate">{c.displayName}</p>
-                      <InterestBadge connection={c} />
+                <div key={`${c.userId}-${c.roundNumber}`} className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-100/40 transition-colors">
+                  <a href={`/profile/${c.userId}`} className="flex items-center gap-3 flex-1 min-w-0">
+                    <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-gray-800 font-medium truncate">{c.displayName}</p>
+                        <InterestBadge connection={c} />
+                      </div>
+                      <p className="text-xs text-gray-400">
+                        {c.jobTitle && `${c.jobTitle}`}
+                        {c.company && ` @ ${c.company}`}
+                      </p>
                     </div>
-                    <p className="text-xs text-gray-400">
-                      {c.jobTitle && `${c.jobTitle}`}
-                      {c.company && ` @ ${c.company}`}
-                    </p>
-                  </div>
+                  </a>
                   <div className="flex items-center gap-3 shrink-0">
                     {c.qualityScore > 0 && (
                       <div className="flex items-center gap-1 text-xs text-amber-400">
@@ -433,7 +483,8 @@ export default function RecapPage() {
                       </div>
                     )}
                   </div>
-                </a>
+                  <MessagePartnerButton userId={c.userId} displayName={c.displayName} />
+                </div>
               ))}
             </div>
           </Card>
