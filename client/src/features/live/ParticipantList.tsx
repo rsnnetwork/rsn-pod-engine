@@ -118,17 +118,28 @@ export default function ParticipantList({ onClose, sessionId }: Props) {
                   <ShieldCheck className="h-2.5 w-2.5" /> Co-Host
                 </span>
               )}
-              {isOriginalHost && !isPHost && !isSelf && (
-                <button
-                  onClick={() => toggleCohost(p.userId)}
-                  title={isCohost ? 'Remove co-host' : 'Make co-host'}
-                  className={`p-1 rounded-lg opacity-0 group-hover:opacity-100 transition-all shrink-0 ${
-                    isCohost ? 'text-blue-400 hover:bg-blue-500/10' : 'text-gray-500 hover:bg-gray-100'
-                  }`}
-                >
-                  <Shield className="h-3.5 w-3.5" />
-                </button>
-              )}
+              {/* Bug 13 (13 May live test) — when an admin used their own
+                  "Join as host" toggle (Phase M opt-in, NOT in formal
+                  session_cohosts), the director cannot override their
+                  choice. Only the admin themselves can switch back. The
+                  toggle button hides in that case so the UI doesn't dangle
+                  a control the director isn't allowed to use. */}
+              {(() => {
+                const isFormalCohost = cohosts.has(p.userId);
+                const isViaPhaseM = !isFormalCohost && actingAsHostOverrides[p.userId] === true;
+                if (!isOriginalHost || isPHost || isSelf || isViaPhaseM) return null;
+                return (
+                  <button
+                    onClick={() => toggleCohost(p.userId)}
+                    title={isCohost ? 'Remove co-host' : 'Make co-host'}
+                    className={`p-1 rounded-lg opacity-0 group-hover:opacity-100 transition-all shrink-0 ${
+                      isCohost ? 'text-blue-400 hover:bg-blue-500/10' : 'text-gray-500 hover:bg-gray-100'
+                    }`}
+                  >
+                    <Shield className="h-3.5 w-3.5" />
+                  </button>
+                );
+              })()}
             </div>
           );
         })}

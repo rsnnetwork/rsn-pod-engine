@@ -200,23 +200,32 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
             </div>
           </div>
         )}
-        {/* Name + controls: stacked on local tile to prevent overlap */}
+        {/* Name + controls: stacked on local tile to prevent overlap.
+            Bug 12 (13 May live test) — Phase M opt-in admins got the bigger
+            tile (Phase Q) but no badge. Now: director keeps (Host) in amber,
+            anyone else in hostsSet shows (Co-Host) in indigo. Mirrors the
+            ParticipantList badge styling so the role is obvious wherever
+            you look. */}
         {isLocal ? (
           <div className="absolute bottom-1.5 left-1.5 right-1.5 flex flex-col items-start gap-1" onClick={e => e.stopPropagation()}>
             <div className="bg-black/60 backdrop-blur-sm rounded px-2 py-0.5 text-[11px] text-white truncate max-w-[90%] flex items-center gap-1.5">
               {name}
-              {trackRef.participant.identity === hostUserId && (
+              {tileIsHost ? (
                 <span className="text-[9px] font-medium text-amber-300 ml-0.5">(Host)</span>
-              )}
+              ) : isActingHost ? (
+                <span className="text-[9px] font-medium text-indigo-300 ml-0.5">(Co-Host)</span>
+              ) : null}
             </div>
             <LobbyMediaControls isHost={isHost} sessionId={sessionId} />
           </div>
         ) : (
           <div className="absolute bottom-2 left-2 bg-black/60 backdrop-blur-sm rounded px-2 py-0.5 text-[11px] text-white truncate max-w-[90%] flex items-center gap-1.5">
             {name}
-            {trackRef.participant.identity === hostUserId && (
+            {tileIsHost ? (
               <span className="text-[9px] font-medium text-amber-300 ml-0.5">(Host)</span>
-            )}
+            ) : isActingHost ? (
+              <span className="text-[9px] font-medium text-indigo-300 ml-0.5">(Co-Host)</span>
+            ) : null}
           </div>
         )}
         {isPinned && (

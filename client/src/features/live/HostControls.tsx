@@ -73,10 +73,28 @@ export default function HostControls({ sessionId }: Props) {
     socket?.emit('host:end_session', { sessionId });
   });
 
-  // Count non-host/co-host participants for matching eligibility
+  // Count non-host/co-host participants for matching eligibility.
+  // Bug 14 (13 May live test) — pre-fix only excluded formal session_cohosts
+  // and the director, so an admin who opted in via the Phase M "Join as host"
+  // toggle still counted as eligible. The host clicked Match People with 1
+  // genuine participant + 1 admin-acting-as-host and the spinner spun
+  // forever because the server-side eligibility filter excluded the admin
+  // but the client didn't. Now both filters agree via hostsSet.
   const cohosts = useSessionStore(s => s.cohosts);
   const hostUserId = useSessionStore(s => s.hostUserId);
-  const eligibleCount = participants.filter(p => p.userId !== hostUserId && !cohosts.has(p.userId)).length;
+  const actingAsHostOverrides = useSessionStore(s => s.actingAsHostOverrides);
+  const hostsSet = (() => {
+    const s = new Set<string>();
+    if (hostUserId) s.add(hostUserId);
+    for (const c of cohosts) s.add(c);
+    for (const [uid, v] of Object.entries(actingAsHostOverrides)) {
+      if (v === true) s.add(uid);
+      if (v === false) s.delete(uid);
+    }
+    if (hostUserId) s.add(hostUserId);
+    return s;
+  })();
+  const eligibleCount = participants.filter(p => !hostsSet.has(p.userId)).length;
 
   const generateMatches = () => {
     setGenerating(true);

@@ -233,8 +233,10 @@ export default function LiveSessionPage() {
       {/* Phase P (Ali's 13 May clarification) — pre-event "Join as" banner
           for non-director admin/super_admin users who haven't chosen yet.
           Two prominent buttons; the banner stays visible until they pick
-          so it's their explicit decision, not an auto-default. */}
-      {showJoinAsBanner && (
+          so it's their explicit decision, not an auto-default.
+          Bug 16 (13 May live test) — also hidden on phase=complete so the
+          recap page is the only thing on screen after the host ends. */}
+      {showJoinAsBanner && phase !== 'complete' && (
         <div
           data-testid="join-as-banner"
           className="bg-indigo-50 border-b border-indigo-200 px-4 py-3 flex flex-wrap items-center justify-between gap-3"
@@ -284,7 +286,7 @@ export default function LiveSessionPage() {
           breaks the round invariants. While in a matched / rating phase
           the button stays visible (so the user knows the option is there)
           but disabled until they're back in the main room. */}
-      {baseIsHost && myActingAsHost === false && (() => {
+      {baseIsHost && myActingAsHost === false && phase !== 'complete' && (() => {
         const inBreakout = phase === 'matched' || phase === 'rating';
         return (
           <div

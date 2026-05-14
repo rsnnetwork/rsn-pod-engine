@@ -25,6 +25,53 @@ function readClientSource(rel: string): string {
 }
 
 describe('Phase X — 13 May live-test bug fixes', () => {
+  describe('Bug 12 — Co-Host badge on lobby tiles for Phase M opt-ins', () => {
+    const src = readClientSource('features/live/Lobby.tsx');
+
+    it('renders (Co-Host) label when isActingHost and not the director', () => {
+      // The tile name overlay must branch: director → (Host), other acting
+      // hosts → (Co-Host), regular participants → no badge. Pin both labels.
+      expect(src).toMatch(/\(Co-Host\)/);
+      expect(src).toMatch(/isActingHost\s*\?\s*\(\s*<span[^>]*>\(Co-Host\)/);
+    });
+  });
+
+  describe('Bug 13 — ParticipantList toggle hidden for Phase M opt-ins', () => {
+    const src = readClientSource('features/live/ParticipantList.tsx');
+
+    it('button visibility check excludes users acting via Phase M opt-in', () => {
+      expect(src).toMatch(/isViaPhaseM\s*=\s*!isFormalCohost\s*&&\s*actingAsHostOverrides\[p\.userId\]\s*===\s*true/);
+      expect(src).toMatch(/if\s*\(!isOriginalHost\s*\|\|\s*isPHost\s*\|\|\s*isSelf\s*\|\|\s*isViaPhaseM\)\s*return\s+null/);
+    });
+  });
+
+  describe('Bug 14 — Match People eligibility excludes Phase M opt-ins', () => {
+    const src = readClientSource('features/live/HostControls.tsx');
+
+    it('eligibleCount filters by hostsSet, not just cohosts + hostUserId', () => {
+      expect(src).toMatch(/eligibleCount\s*=\s*participants\.filter\(\s*p\s*=>\s*!hostsSet\.has\(p\.userId\)\s*\)\.length/);
+    });
+
+    it('hostsSet derivation includes acting_as_host opt-ins and excludes opt-outs', () => {
+      expect(src).toMatch(/actingAsHostOverrides/);
+      expect(src).toMatch(/v\s*===\s*true\)\s*s\.add\(uid\)/);
+      expect(src).toMatch(/v\s*===\s*false\)\s*s\.delete\(uid\)/);
+    });
+  });
+
+  describe('Bug 16 — Join-as + revert banners hidden on phase=complete', () => {
+    const src = readClientSource('features/live/LiveSessionPage.tsx');
+
+    it('join-as banner gated by phase !== complete', () => {
+      expect(src).toMatch(/showJoinAsBanner\s*&&\s*phase\s*!==\s*['"]complete['"]/);
+    });
+
+    it('acting-as-host revert banner gated by phase !== complete', () => {
+      expect(src).toMatch(/baseIsHost\s*&&\s*myActingAsHost\s*===\s*false\s*&&\s*phase\s*!==\s*['"]complete['"]/);
+    });
+  });
+
+
   describe('Bug 1 — mute-all keeps camera alive', () => {
     const src = readServerSource('services/video/livekit.provider.ts');
 
