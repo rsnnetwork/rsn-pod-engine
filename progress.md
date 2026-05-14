@@ -7878,3 +7878,57 @@ VideoRoom changes:
 - LiveKit `canPublishAudio` revocation (Phase O follow-up) — Phase U next.
 - Mobile responsive visual at 360 / 414 / 768 / 1024 widths — Phase V.
 - Sentry post-deploy spike check — Phase W (likely blocked, no API token).
+
+---
+
+## Stefan's 12 May Feedback — Phase U (LiveKit mute enforcement) — 2026-05-13
+
+**Status:** Phase O follow-up. Mute now enforced at the LiveKit SFU level via `RoomServiceClient.updateParticipant` permission update. A determined client cannot bypass mute by publishing audio frames — LiveKit refuses to accept them.
+**Why:** Phase O persisted `host_muted` in DB + relayed via socket; the client respected the flag via UI. But a custom or modified client could still publish audio at the WebRTC layer. Phase U closes that gap with server-enforced publish permission.
+
+### What changed
+
+**`server/src/services/video/video.interface.ts`** — new `setParticipantCanPublishAudio(roomId, userId, canPublishAudio)` method on `IVideoProvider`.
+
+**`server/src/services/video/livekit.provider.ts`** — implementation:
+- Calls `roomService.updateParticipant(roomId, userId, { permission: { canPublish, canSubscribe, canPublishData } })`.
+- Uses the options-object form (3rd arg) per livekit-server-sdk v2 typed contract; `Partial<ParticipantPermission>` cast via `as any` to allow the three-field minimal shape.
+- Swallows Twirp NotFound (code 5) + legacy "not found" / "does not exist" strings — participant not in room is non-fatal (mute is already persisted in DB and will apply when they re-issue a token).
+
+**`server/src/services/video/mock.provider.ts`** — no-op stub for the in-memory dev provider (no media plane).
+
+**`server/src/services/video/video.service.ts`** — facade wrapper.
+
+**`server/src/services/orchestration/handlers/host-actions.ts`** — new private helper `enforceLiveKitMute(sessionId, userId, canPublishAudio)`:
+- Queries `sessions.lobby_room_id` and any `active` match `room_id` for the user.
+- Calls `videoService.setParticipantCanPublishAudio` on both rooms (provider swallows NotFound for whichever the user isn't in).
+- Wraps in try/catch — non-fatal. If LiveKit is down, the DB persist + socket relay still happened; this enforcement is defence in depth.
+- Called from `handleHostMuteParticipant` after the DB UPDATE, and from `handleHostMuteAll` per non-host participant (fire-and-forget for parallelism).
+
+### Files
+
+- New: `server/src/__tests__/services/phase-u-livekit-mute-enforcement.test.ts` (12 pin tests across 5 describe blocks)
+- Modified: 4 video files (interface, livekit, mock, service)
+- Modified: 1 orchestration file (host-actions)
+- Modified: `progress.md` — this entry.
+
+### Verification
+
+- Server suite: **1372 passed, 1 skipped (pre-existing), 0 failed** across 108 suites.
+- Server TypeScript: clean.
+- Client untouched in Phase U.
+
+### Decision log
+
+- **Options-object form for `updateParticipant`**: livekit-server-sdk v2 has a `(room, identity, metadataOrOptions, maybePermission, maybeName)` signature. Passing `{ permission: {...} }` as the 3rd arg is the typed path; the positional form expected the 5th arg to be a string (`name`), which broke compilation.
+- **Revoke `canPublish` (audio + video) not just audio**: granular `canPublishSources` would let video continue while blocking audio, but RSN's mute UX is audio-only and revoking the broader publish is simpler + matches what a malicious client would attempt to bypass.
+- **Non-fatal failure handling**: the DB + socket layers are the canonical state; LiveKit enforcement is the SFU-level cherry on top. If LiveKit API throws, the host-mute still "worked" from the user's perspective (UI shows them muted; their client respects it). Log + continue.
+
+### What's NOT in Phase U
+
+- **Token issuance does NOT yet check `host_muted`**. If a user is muted and moves rooms (lobby → breakout via `host:move_to_room`), they get a fresh token that defaults to `canPublish: true`. The next mute event reapplies via `updateParticipant`. Worst-case window: ~1 second between room join and re-enforcement. Defer to Phase U.1 if Stefan reports a real issue.
+
+### Remaining deferred (after Phase U)
+
+- Mobile responsive visual at 360 / 414 / 768 / 1024 widths — Phase V.
+- Sentry post-deploy spike check — Phase W (likely blocked, no API token).

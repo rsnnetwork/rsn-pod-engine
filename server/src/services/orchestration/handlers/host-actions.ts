@@ -824,8 +824,54 @@ export async function handleHostMuteParticipant(
     byHost: true,
   });
 
+  // Phase U — LiveKit-level enforcement. Update publish permission on
+  // every room the user could currently be in (lobby + any active
+  // match). Provider swallows NotFound, so calling for both rooms is
+  // safe; the relevant one applies. canPublishAudio is the inverse of
+  // muted: false = revoke publish; true = restore.
+  await enforceLiveKitMute(data.sessionId, data.targetUserId, !data.muted);
+
   logger.info({ sessionId: data.sessionId, targetUserId: data.targetUserId, muted: data.muted },
-    'Phase O — Host mute/unmute command persisted + relayed');
+    'Phase O + U — Host mute/unmute persisted + relayed + LiveKit-enforced');
+}
+
+/**
+ * Phase U — apply LiveKit canPublishAudio to every room the user might
+ * be in: the session's lobby room + any active match they're in. The
+ * provider swallows NotFound for the room they're NOT in, so this is
+ * safe to call regardless of where they actually are.
+ */
+async function enforceLiveKitMute(
+  sessionId: string,
+  userId: string,
+  canPublishAudio: boolean,
+): Promise<void> {
+  try {
+    const sessRow = await query<{ lobby_room_id: string | null }>(
+      `SELECT lobby_room_id FROM sessions WHERE id = $1`,
+      [sessionId],
+    );
+    const lobbyRoom = sessRow.rows[0]?.lobby_room_id;
+    if (lobbyRoom) {
+      await videoService.setParticipantCanPublishAudio(lobbyRoom, userId, canPublishAudio);
+    }
+    const matchRow = await query<{ room_id: string | null }>(
+      `SELECT room_id FROM matches
+       WHERE session_id = $1
+         AND status = 'active'
+         AND (participant_a_id = $2 OR participant_b_id = $2 OR participant_c_id = $2)
+       LIMIT 1`,
+      [sessionId, userId],
+    );
+    const matchRoom = matchRow.rows[0]?.room_id;
+    if (matchRoom) {
+      await videoService.setParticipantCanPublishAudio(matchRoom, userId, canPublishAudio);
+    }
+  } catch (err) {
+    // Non-fatal: persistence + socket relay already happened; the
+    // LiveKit enforcement is defence in depth. Log and move on.
+    logger.warn({ err, sessionId, userId, canPublishAudio }, 'Phase U — LiveKit mute enforcement failed (non-fatal)');
+  }
 }
 
 // ─── Host: Mute/Unmute All ─────────────────────────────────────────────────
@@ -879,11 +925,17 @@ export async function handleHostMuteAll(
       muted: data.muted,
       byHost: true,
     });
+    // Phase U — LiveKit-level enforcement, mirroring DB + relay.
+    // Sequenced (not parallel) to be gentle with the LiveKit API; mute
+    // bulk is rare enough that the latency is acceptable.
+    enforceLiveKitMute(data.sessionId, participantId, !data.muted).catch(err =>
+      logger.warn({ err, participantId }, 'Phase U bulk mute enforcement failed (non-fatal)'),
+    );
     count++;
   }
 
   logger.info({ sessionId: data.sessionId, muted: data.muted, count },
-    'Phase O — Host mute/unmute all persisted + relayed');
+    'Phase O + U — Host mute/unmute all persisted + relayed + LiveKit-enforced');
 }
 
 // ─── Host: Remove participant from breakout room ────────────────────────────

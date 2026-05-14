@@ -24,4 +24,17 @@ export interface IVideoProvider {
 
   /** Check if a room exists. */
   roomExists(roomId: string): Promise<boolean>;
+
+  /**
+   * Phase U (12 May spec item 7 — LiveKit-level mute enforcement).
+   * Update a participant's publish permission on the live SFU. When
+   * `canPublishAudio = false`, the participant cannot publish audio
+   * tracks regardless of client UI state — true server-enforced mute.
+   * Re-grant with `true` on host unmute.
+   *
+   * No-op when the participant is not currently in the room (eg.
+   * disconnected or already removed). Implementations should swallow
+   * "participant not found" errors and return cleanly.
+   */
+  setParticipantCanPublishAudio(roomId: string, userId: string, canPublishAudio: boolean): Promise<void>;
 }

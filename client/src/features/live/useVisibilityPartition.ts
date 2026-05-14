@@ -8,18 +8,15 @@ import { useCallback, useMemo } from 'react';
 
 export type HostVisibilityMode = 'big_speaker' | 'normal' | 'producer' | 'hidden';
 
-// LiveKit track shape — we only need .participant.identity.
-type LikeTrackRef = { participant?: { identity?: string } | null } | any;
-
-export interface VisibilityPartition<T = LikeTrackRef> {
+export interface VisibilityPartition {
   /** Tracks to render as the dedicated stage row (above the main grid). */
-  bigSpeakerTracks: T[];
+  bigSpeakerTracks: any[];
   /** Tracks to render in the audio-only producer strip (no video tile). */
-  producerTracks: T[];
+  producerTracks: any[];
   /** Tracks for the main grid. */
-  normalTracks: T[];
+  normalTracks: any[];
   /** Resolve mode for a single track (hidden returns 'hidden'; absent => 'normal'). */
-  visibilityFor: (track: T) => HostVisibilityMode;
+  visibilityFor: (track: any) => HostVisibilityMode;
 }
 
 /**
@@ -28,13 +25,19 @@ export interface VisibilityPartition<T = LikeTrackRef> {
  * 'hidden' tracks are filtered out of all three buckets (callers that
  * need a self-protection exception — e.g. never hide the local user's
  * own tile — should bypass via their own filter).
+ *
+ * Type-erased to `any[]` rather than carrying a LiveKit track generic
+ * because the LiveKit track-reference types vary across @livekit/
+ * components-core versions and we only need
+ * `.participant.identity` for the partition. Type checking on the
+ * track refs happens at the call site (Lobby/VideoRoom).
  */
-export function useVisibilityPartition<T extends LikeTrackRef>(
-  tracks: T[],
+export function useVisibilityPartition(
+  tracks: any[],
   hostVisibilityModes: Record<string, string>,
-): VisibilityPartition<T> {
+): VisibilityPartition {
   const visibilityFor = useCallback(
-    (trackRef: T): HostVisibilityMode => {
+    (trackRef: any): HostVisibilityMode => {
       const id = trackRef?.participant?.identity;
       if (!id) return 'normal';
       const mode = hostVisibilityModes[id];
@@ -47,9 +50,9 @@ export function useVisibilityPartition<T extends LikeTrackRef>(
   );
 
   return useMemo(() => {
-    const big: T[] = [];
-    const prod: T[] = [];
-    const normal: T[] = [];
+    const big: any[] = [];
+    const prod: any[] = [];
+    const normal: any[] = [];
     for (const t of tracks) {
       const v = visibilityFor(t);
       if (v === 'big_speaker') big.push(t);

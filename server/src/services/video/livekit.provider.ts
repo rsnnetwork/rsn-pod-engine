@@ -172,4 +172,54 @@ export class LiveKitProvider implements IVideoProvider {
       return false;
     }
   }
+
+  // ─── Phase U — Set participant publish permission (mute enforcement) ────
+
+  async setParticipantCanPublishAudio(
+    roomId: string,
+    userId: string,
+    canPublishAudio: boolean,
+  ): Promise<void> {
+    try {
+      // LiveKit's updateParticipant accepts a permission object; we set
+      // canPublish to false to block ALL publish (audio + video) when
+      // the host mutes, or true to restore. Granular per-source control
+      // (canPublishSources) is not used here because RSN's mute UX is
+      // audio-only; revoking canPublish is the simplest enforcement
+      // that also stops a malicious client from publishing.
+      //
+      // livekit-server-sdk v2 updateParticipant signature:
+      //   updateParticipant(room, identity, metadataOrOptions, maybePermission, maybeName)
+      // The options-object form (3rd arg) is the typed path; it accepts
+      // { permission, metadata, name, attributes }. The permission
+      // object's Partial<ParticipantPermission> shape is loose enough to
+      // accept just the three fields we care about — canPublish drives
+      // the actual mute enforcement at the SFU.
+      await this.roomService.updateParticipant(
+        roomId,
+        userId,
+        {
+          permission: {
+            canPublish: canPublishAudio,
+            canSubscribe: true,
+            canPublishData: true,
+          } as any,
+        },
+      );
+      logger.info({ roomId, userId, canPublishAudio }, 'Phase U — LiveKit participant publish permission updated');
+    } catch (err: any) {
+      const msg = String(err?.message || '').toLowerCase();
+      const code = err?.code;
+      // Twirp NotFound (code 5) OR legacy string patterns — participant
+      // is not in this room (left, disconnected, or never joined). The
+      // mute persists in DB and will apply when they re-issue a token
+      // (issueJoinToken consults host_muted on each new token).
+      if (code === 5 || msg.includes('not found') || msg.includes('does not exist')) {
+        logger.debug({ roomId, userId }, 'Phase U — participant not in room, skipping live permission update');
+        return;
+      }
+      logger.error({ err, roomId, userId, canPublishAudio }, 'Failed to update LiveKit participant permission');
+      throw err;
+    }
+  }
 }
