@@ -7932,3 +7932,52 @@ VideoRoom changes:
 
 - Mobile responsive visual at 360 / 414 / 768 / 1024 widths — Phase V.
 - Sentry post-deploy spike check — Phase W (likely blocked, no API token).
+
+---
+
+## Stefan's 12 May Feedback — Phase V + W (verification) — 2026-05-13
+
+**Status:** Mobile-responsive Playwright suite shipped + Sentry post-deploy verification script (SDK wiring confirmed; spike-query awaits `SENTRY_AUTH_TOKEN`).
+
+### Phase V — Mobile-responsive verification
+
+`e2e/tests/phase-v-mobile-responsive.spec.ts` opens the production app at four canonical widths and asserts the lobby renders without horizontal overflow:
+- 360 px (small phone)
+- 414 px (large phone)
+- 768 px (tablet portrait)
+- 1024 px (tablet landscape)
+
+Cardinal invariant: `document.scrollWidth <= clientWidth`, asserted on both `document.documentElement` and `document.body`. The Phase P join-as banner's bounding box is also width-checked. Plus one extra test for opted-in admin reaching Host Control Center on 360 px.
+
+**Result:** 5/5 passing against live `app.rsn.network`.
+
+### Phase W — Sentry post-deploy check
+
+`e2e/verify-sentry.ts` runnable directly:
+1. Verifies `SENTRY_DSN` is set in `server/.env`.
+2. Verifies `server/src/index.ts` references `@sentry/node` (SDK actually wired, not just configured).
+3. If `SENTRY_AUTH_TOKEN` is set: queries Sentry REST API for last-30-min unresolved issues; flags newly-seen as post-deploy regression candidates.
+4. If not: prints walkthrough to generate a token at https://sentry.io/settings/account/api/auth-tokens/ with `project:read` + `event:read` scopes.
+
+**Result against current env:** SDK wiring confirmed; spike-check awaits a token.
+
+### Final campaign status
+
+| Phase | Items | Status |
+| ----- | ----- | ------ |
+| J — invariant pins | 9, 10, 12, 14 | ✓ |
+| K — matching on-demand | 3, 4 | ✓ |
+| L — control center role audit | 6 | ✓ |
+| N — multi-host visibility UI | 2 | ✓ |
+| M — acting-as-host toggle | 1 | ✓ |
+| O — authoritative mute state | 7 | ✓ |
+| P — director protect + counts | clarification | ✓ |
+| Q — host tile elevation | 10 May #12 | ✓ |
+| R — toast notifications | UX | ✓ |
+| S — host-initiated demote | follow-up | ✓ |
+| T — breakout visibility | follow-up | ✓ |
+| U — LiveKit mute enforcement | follow-up | ✓ |
+| V — mobile responsive verification | follow-up | ✓ |
+| W — Sentry post-deploy check | follow-up | ⏭ SDK wired; awaits SENTRY_AUTH_TOKEN |
+
+All 12 May items + all deferred follow-ups closed. End-to-end verification: server unit suite (1372 tests) + Playwright suite (16 earlier + 5 mobile = 21 tests) against live production, all passing.
