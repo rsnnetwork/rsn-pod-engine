@@ -156,20 +156,28 @@ export default function LiveSessionPage() {
           )}
           <h2 className="text-sm font-medium text-[#1a1a2e] truncate">{session?.title || 'Live Event'}</h2>
         </div>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setParticipantListOpen(!participantListOpen)}
-            className={`p-2 rounded-full transition-colors ${participantListOpen ? 'bg-gray-200 text-[#1a1a2e]' : 'text-gray-500 hover:text-[#1a1a2e] hover:bg-gray-100'}`}
-          >
-            <Users className="h-4 w-4" />
-          </button>
-          <button
-            onClick={handleLeave}
-            className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-red-500 transition-colors px-3 py-1.5 rounded-full hover:bg-gray-100"
-          >
-            <LogOut className="h-4 w-4" /> Leave
-          </button>
-        </div>
+        {/* Bug 10 (13 May live test) — once the event ends, the top-bar
+            participant + leave controls must vanish along with chat /
+            reactions / host controls. The recap page below has its own
+            navigation; keeping the event controls visible after the
+            event ended confuses users into thinking the event is still
+            running. */}
+        {phase !== 'complete' && (
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setParticipantListOpen(!participantListOpen)}
+              className={`p-2 rounded-full transition-colors ${participantListOpen ? 'bg-gray-200 text-[#1a1a2e]' : 'text-gray-500 hover:text-[#1a1a2e] hover:bg-gray-100'}`}
+            >
+              <Users className="h-4 w-4" />
+            </button>
+            <button
+              onClick={handleLeave}
+              className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-red-500 transition-colors px-3 py-1.5 rounded-full hover:bg-gray-100"
+            >
+              <LogOut className="h-4 w-4" /> Leave
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Persistent event state banner — hidden during breakout/rating (they have own UI) */}
@@ -340,15 +348,16 @@ export default function LiveSessionPage() {
           {phase === 'complete' && <SessionComplete sessionId={sessionId} />}
         </div>
 
-        {/* Participant list panel */}
-        {participantListOpen && !chatOpen && (
+        {/* Participant list panel — Bug 10: hidden once event is complete. */}
+        {participantListOpen && !chatOpen && phase !== 'complete' && (
           <div className="w-full sm:w-72 sm:min-w-[288px] flex-shrink-0 h-full border-l border-white/10">
             <ParticipantList onClose={() => setParticipantListOpen(false)} sessionId={sessionId} />
           </div>
         )}
 
-        {/* Chat panel -- side panel on desktop, full overlay on mobile */}
-        {chatOpen && (
+        {/* Chat panel -- side panel on desktop, full overlay on mobile.
+            Bug 10: hidden once event is complete. */}
+        {chatOpen && phase !== 'complete' && (
           <div className="w-full sm:w-80 sm:min-w-[320px] flex-shrink-0 h-full">
             <SectionErrorBoundary name="Chat"><ChatPanel sessionId={sessionId} onClose={() => setChatOpen(false)} /></SectionErrorBoundary>
           </div>

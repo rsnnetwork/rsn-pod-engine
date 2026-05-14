@@ -15,7 +15,13 @@
 //
 //   - getUniquePeopleMet: COUNT(DISTINCT partner_id)
 //   - getTotalMeetings:   COUNT(*)
-//   - getMutualMatches:   COUNT(*) WHERE is_mutual
+//   - getMutualMatches:   COUNT(DISTINCT partner_id) WHERE is_mutual
+//
+// Bug 5 (13 May live test) — getMutualMatches and getMeetingCounts.mutual
+// previously used COUNT(*) which counted one row per round-pair, so a pair
+// that hit mutual yes across N rounds showed as N mutual matches instead
+// of 1. The dedup matches getUniquePeopleMet: a mutual match is a unique
+// partner relationship, not a per-round occurrence.
 //
 // All recap consumers read from here. encounter_history becomes purely the
 // cross-session aggregate, no longer driving per-event counts.
@@ -145,10 +151,10 @@ export async function getTotalMeetings(userId: string, sessionId: string): Promi
   return parseInt(result.rows[0]?.count || '0', 10);
 }
 
-/** Mutual matches: both said yes (per Stefan's strict definition). */
+/** Mutual matches: distinct partners where both said yes in at least one round. */
 export async function getMutualMatches(userId: string, sessionId: string): Promise<number> {
   const result = await query<{ count: string }>(
-    `SELECT COUNT(*)::text AS count
+    `SELECT COUNT(DISTINCT partner_id)::text AS count
      FROM meeting_records
      WHERE user_id = $1 AND session_id = $2
        AND is_recap_eligible = TRUE AND is_mutual = TRUE`,
@@ -163,7 +169,7 @@ export async function getMeetingCounts(userId: string, sessionId: string): Promi
     `SELECT
        COUNT(DISTINCT partner_id)::text AS unique_people,
        COUNT(*)::text AS total,
-       COUNT(*) FILTER (WHERE is_mutual = TRUE)::text AS mutual
+       COUNT(DISTINCT partner_id) FILTER (WHERE is_mutual = TRUE)::text AS mutual
      FROM meeting_records
      WHERE user_id = $1 AND session_id = $2 AND is_recap_eligible = TRUE`,
     [userId, sessionId],
