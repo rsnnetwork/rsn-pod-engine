@@ -15,10 +15,21 @@ const router = Router();
 
 // ─── Validation schemas ────────────────────────────────────────────────────
 
+// Feature 19 (13 May spec) — Cloudinary image attachment. Content becomes
+// optional when an attachment is present; the service layer also enforces
+// the same rule and rejects payloads that have neither.
 const sendBodySchema = z.object({
   toUserId: z.string().uuid(),
-  content: z.string().min(1).max(4000),
-});
+  content: z.string().max(4000).optional().default(''),
+  attachment: z.object({
+    url: z.string().url(),
+    type: z.literal('image'),
+    meta: z.record(z.any()).optional().nullable(),
+  }).optional().nullable(),
+}).refine(
+  v => (v.content && v.content.trim().length > 0) || !!v.attachment?.url,
+  { message: 'Either content or attachment is required', path: ['content'] },
+);
 
 const listQuerySchema = z.object({
   page: z.string().regex(/^\d+$/).optional(),
@@ -102,7 +113,8 @@ router.post(
       const result = await dmService.sendMessage(
         req.user!.userId,
         req.body.toUserId,
-        req.body.content,
+        req.body.content || '',
+        req.body.attachment || null,
       );
       const response: ApiResponse = { success: true, data: result };
       res.status(201).json(response);

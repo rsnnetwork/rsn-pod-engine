@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare } from 'lucide-react';
+import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X } from 'lucide-react';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { PageLoader, Spinner } from '@/components/ui/Spinner';
@@ -18,6 +18,12 @@ import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { getSocket } from '@/lib/socket';
 import api from '@/lib/api';
+import {
+  isCloudinaryConfigured,
+  validateImageFile,
+  uploadImageToCloudinary,
+  type CloudinaryImageResult,
+} from '@/lib/cloudinary';
 
 interface ConversationSummary {
   conversationId: string;
@@ -39,6 +45,10 @@ interface DmMessage {
   createdAt: string;
   // Phase E — server returns aggregated reactions per emoji type
   reactions?: Record<string, string[]>;
+  // Feature 19 (13 May spec) — Cloudinary image attachment.
+  attachmentUrl?: string | null;
+  attachmentType?: string | null;
+  attachmentMeta?: { width?: number; height?: number; bytes?: number; format?: string } | null;
 }
 
 // Phase E — client-side reaction palette. Server stores type strings so the
@@ -141,6 +151,14 @@ export default function MessagesPage() {
   const myUserId = user?.id;
   const [draft, setDraft] = useState('');
   const [showEmoji, setShowEmoji] = useState(false);
+  // Feature 19 (13 May spec) — pending image attachment for the next send.
+  // pendingImage holds the file picked from the file dialog; previewUrl is
+  // an object URL so the user sees a thumbnail before the upload kicks off.
+  // uploadFraction drives the progress bar overlay on the thumbnail.
+  const [pendingImage, setPendingImage] = useState<{ file: File; previewUrl: string } | null>(null);
+  const [uploadFraction, setUploadFraction] = useState<number | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cloudinaryReady = isCloudinaryConfigured();
   // Phase E — which message the reaction picker is currently anchored to.
   const [reactionPickerFor, setReactionPickerFor] = useState<string | null>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
@@ -268,17 +286,35 @@ export default function MessagesPage() {
     = activeConv ?? composeTarget;
 
   const sendMutation = useMutation({
-    mutationFn: async (content: string) => {
-      // Compose-new path: POST creates the conversation; existing path: same
-      // endpoint with the inbox's otherUserId. Server returns the
-      // conversationId either way.
+    mutationFn: async (args: { content: string; image: { file: File } | null }) => {
       const toUserId = activeConv?.otherUserId ?? composeToUserId;
       if (!toUserId) throw new Error('No recipient');
-      const res = await api.post('/dm/messages', { toUserId, content });
+
+      // Feature 19 (13 May spec) — when an image is pending, upload it to
+      // Cloudinary first so the server only sees the resulting URL +
+      // metadata. Progress bar drives off the upload fraction; the server
+      // POST is the cheap part (just the URL string).
+      let attachment: { url: string; type: 'image'; meta: CloudinaryImageResult } | null = null;
+      if (args.image) {
+        setUploadFraction(0);
+        const result = await uploadImageToCloudinary(args.image.file, setUploadFraction);
+        attachment = { url: result.url, type: 'image', meta: result };
+        setUploadFraction(null);
+      }
+
+      const res = await api.post('/dm/messages', {
+        toUserId,
+        content: args.content,
+        attachment,
+      });
       return res.data.data as { conversationId: string };
     },
     onSuccess: (data) => {
       setDraft('');
+      if (pendingImage) {
+        URL.revokeObjectURL(pendingImage.previewUrl);
+        setPendingImage(null);
+      }
       qc.invalidateQueries({ queryKey: ['dm-messages', activeId ?? data.conversationId] });
       qc.invalidateQueries({ queryKey: ['dm-conversations'] });
       // Feature 18 — first send in compose-new mode flips the URL from
@@ -289,9 +325,40 @@ export default function MessagesPage() {
       }
     },
     onError: (err: any) => {
-      addToast(err?.response?.data?.error?.message || 'Failed to send message', 'error');
+      setUploadFraction(null);
+      addToast(err?.response?.data?.error?.message || err?.message || 'Failed to send message', 'error');
     },
   });
+
+  // Feature 19 — file picker handler. Validates client-side before showing
+  // the preview; server + Cloudinary preset are the authoritative gates.
+  const handleFilePicked: React.ChangeEventHandler<HTMLInputElement> = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const failure = validateImageFile(file);
+    if (failure) {
+      addToast(failure.message, 'error');
+      e.target.value = '';
+      return;
+    }
+    if (pendingImage) URL.revokeObjectURL(pendingImage.previewUrl);
+    setPendingImage({ file, previewUrl: URL.createObjectURL(file) });
+    e.target.value = '';
+  };
+
+  const clearPendingImage = () => {
+    if (pendingImage) URL.revokeObjectURL(pendingImage.previewUrl);
+    setPendingImage(null);
+  };
+
+  // Wraps both code-paths so the composer's submit + Enter handler stays
+  // simple. Either text, image, or both is accepted.
+  const submitMessage = () => {
+    const text = draft.trim();
+    if (!text && !pendingImage) return;
+    if (sendMutation.isPending) return;
+    sendMutation.mutate({ content: text, image: pendingImage });
+  };
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/dm/conversations/${id}`),
@@ -454,13 +521,32 @@ export default function MessagesPage() {
                                 className={`group/bubble relative flex ${fromMe ? 'flex-row-reverse' : 'flex-row'} items-center gap-1 ${idx > 0 ? 'mt-0.5' : ''} ${hasReactions ? 'mb-3' : ''}`}
                               >
                                 <div
-                                  className={`px-3.5 py-2 text-sm break-words whitespace-pre-wrap ${
+                                  className={`text-sm break-words whitespace-pre-wrap ${
                                     fromMe
                                       ? `bg-rsn-red text-white rounded-2xl ${isLast ? 'rounded-br-sm' : ''}`
                                       : `bg-gray-100 text-[#1a1a2e] rounded-2xl ${isLast ? 'rounded-bl-sm' : ''}`
-                                  }`}
+                                  } ${m.attachmentUrl ? 'overflow-hidden' : 'px-3.5 py-2'}`}
                                 >
-                                  {m.content}
+                                  {/* Feature 19 (13 May spec) — render the
+                                      image inside the bubble. The bubble's
+                                      padding is dropped when an image is
+                                      present so the image goes edge-to-edge;
+                                      a caption (if any) re-applies padding. */}
+                                  {m.attachmentUrl && m.attachmentType === 'image' && (
+                                    <a href={m.attachmentUrl} target="_blank" rel="noopener noreferrer" className="block">
+                                      <img
+                                        src={m.attachmentUrl}
+                                        alt={m.content || 'Image attachment'}
+                                        width={m.attachmentMeta?.width || undefined}
+                                        height={m.attachmentMeta?.height || undefined}
+                                        loading="lazy"
+                                        className="max-w-[280px] sm:max-w-[320px] max-h-[400px] w-auto h-auto object-contain block"
+                                      />
+                                    </a>
+                                  )}
+                                  {m.content && (
+                                    <div className={m.attachmentUrl ? 'px-3.5 py-2' : ''}>{m.content}</div>
+                                  )}
                                 </div>
                                 {/* Phase E — reaction trigger.
                                     Mobile: always at low opacity. Desktop: hover-revealed. */}
@@ -543,7 +629,12 @@ export default function MessagesPage() {
             {/* Composer — Phase A polish: 16px input on mobile (kills iOS auto-zoom),
                 safe-area padding so iPhone home indicator doesn't cover it,
                 44pt send button on mobile (Apple HIG touch target).
-                Phase B polish: emoji picker behind the smile icon. */}
+                Phase B polish: emoji picker behind the smile icon.
+                Feature 19 (13 May): image button + pending-image preview row
+                above the input. The pending image renders as a small thumb
+                with a remove button + an upload progress overlay when the
+                send is in flight. The picker is hidden if Cloudinary isn't
+                configured for this deployment. */}
             <div
               className="relative px-3 py-2 border-t border-gray-200"
               style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 0.5rem)' }}
@@ -570,6 +661,31 @@ export default function MessagesPage() {
                   ))}
                 </div>
               )}
+              {pendingImage && (
+                <div className="mb-2 inline-block relative">
+                  <img
+                    src={pendingImage.previewUrl}
+                    alt="Pending"
+                    className="max-h-32 max-w-full rounded-lg border border-gray-200"
+                  />
+                  {uploadFraction !== null && (
+                    <div className="absolute inset-0 bg-black/40 rounded-lg flex items-center justify-center text-white text-xs font-semibold">
+                      {Math.round(uploadFraction * 100)}%
+                    </div>
+                  )}
+                  {uploadFraction === null && (
+                    <button
+                      type="button"
+                      onClick={clearPendingImage}
+                      className="absolute -top-2 -right-2 bg-white border border-gray-300 rounded-full p-0.5 shadow hover:bg-gray-50"
+                      aria-label="Remove image"
+                      title="Remove image"
+                    >
+                      <X className="h-3.5 w-3.5 text-gray-600" />
+                    </button>
+                  )}
+                </div>
+              )}
               <div className="flex items-end gap-2">
                 <button
                   type="button"
@@ -580,6 +696,29 @@ export default function MessagesPage() {
                 >
                   <Smile className="h-5 w-5" />
                 </button>
+                {cloudinaryReady && (
+                  <>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/gif"
+                      className="hidden"
+                      onChange={handleFilePicked}
+                      data-testid="dm-image-input"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={sendMutation.isPending}
+                      className="w-11 h-11 sm:w-9 sm:h-9 flex items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                      aria-label="Attach image"
+                      title="Attach image"
+                      data-testid="dm-image-button"
+                    >
+                      <ImageIcon className="h-5 w-5" />
+                    </button>
+                  </>
+                )}
                 <textarea
                   ref={textareaRef}
                   value={draft}
@@ -593,18 +732,18 @@ export default function MessagesPage() {
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
-                      if (draft.trim() && !sendMutation.isPending) sendMutation.mutate(draft.trim());
+                      submitMessage();
                     }
                   }}
                   rows={1}
-                  placeholder="Type a message..."
+                  placeholder={pendingImage ? 'Add a caption (optional)...' : 'Type a message...'}
                   className="flex-1 resize-none px-3 py-2 text-base sm:text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-rsn-red max-h-32"
                   maxLength={4000}
                 />
                 <Button
                   size="sm"
-                  onClick={() => sendMutation.mutate(draft.trim())}
-                  disabled={!draft.trim() || sendMutation.isPending}
+                  onClick={submitMessage}
+                  disabled={(!draft.trim() && !pendingImage) || sendMutation.isPending}
                   isLoading={sendMutation.isPending}
                   className="!w-11 !h-11 sm:!w-9 sm:!h-9 !p-0 flex-shrink-0"
                   aria-label="Send message"

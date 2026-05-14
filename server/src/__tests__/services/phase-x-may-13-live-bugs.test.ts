@@ -64,6 +64,68 @@ describe('Phase X — 13 May live-test bug fixes', () => {
     });
   });
 
+  describe('Feature 19 — Cloudinary image attachments on DM messages', () => {
+    const migration = nodeFs.readFileSync(
+      nodePath.join(__dirname, '../../db/migrations/062_direct_messages_attachments.sql'),
+      'utf8',
+    );
+    const dmService = readServerSource('services/dm/dm.service.ts');
+    const dmRoute = readServerSource('routes/dm.ts');
+    const cloudinaryLib = readClientSource('lib/cloudinary.ts');
+    const messagesPage = readClientSource('features/messages/MessagesPage.tsx');
+
+    it('migration 062 adds attachment columns + content/attachment xor check', () => {
+      expect(migration).toMatch(/ADD COLUMN IF NOT EXISTS attachment_url\s+TEXT/);
+      expect(migration).toMatch(/ADD COLUMN IF NOT EXISTS attachment_type\s+TEXT/);
+      expect(migration).toMatch(/ADD COLUMN IF NOT EXISTS attachment_meta\s+JSONB/);
+      expect(migration).toMatch(/CHECK[\s\S]{0,300}content[\s\S]{0,200}attachment_url/);
+    });
+
+    it('dm.service.sendMessage accepts optional attachment and enforces Cloudinary host', () => {
+      expect(dmService).toMatch(/SendMessageAttachment/);
+      expect(dmService).toMatch(/attachment\?:\s*SendMessageAttachment\s*\|\s*null/);
+      // Defence-in-depth on the URL host.
+      expect(dmService).toMatch(/res\\\.cloudinary\\\.com/);
+      // INSERT writes the new columns.
+      expect(dmService).toMatch(/INSERT INTO direct_messages[\s\S]{0,300}attachment_url,\s*attachment_type,\s*attachment_meta/);
+    });
+
+    it('dm.service.listConversations falls back to "📷 Photo" preview for image-only sends', () => {
+      expect(dmService).toMatch(/last_attachment_type/);
+      expect(dmService).toMatch(/'📷 Photo'/);
+    });
+
+    it('dm route schema makes content optional but refines content-or-attachment', () => {
+      expect(dmRoute).toMatch(/content:\s*z\.string\(\)\.max\(4000\)\.optional\(\)\.default\(/);
+      expect(dmRoute).toMatch(/attachment:\s*z\.object/);
+      expect(dmRoute).toMatch(/\.refine\(/);
+    });
+
+    it('client cloudinary lib exposes isConfigured + validate + upload helpers', () => {
+      expect(cloudinaryLib).toMatch(/export function isCloudinaryConfigured/);
+      expect(cloudinaryLib).toMatch(/export function validateImageFile/);
+      expect(cloudinaryLib).toMatch(/export async function uploadImageToCloudinary/);
+      // 10 MB cap pinned so a future bump is intentional.
+      expect(cloudinaryLib).toMatch(/MAX_IMAGE_BYTES\s*=\s*10\s*\*\s*1024\s*\*\s*1024/);
+    });
+
+    it('MessagesPage shows the image button only when Cloudinary is configured', () => {
+      expect(messagesPage).toMatch(/cloudinaryReady\s*=\s*isCloudinaryConfigured\(\)/);
+      expect(messagesPage).toMatch(/cloudinaryReady\s*&&\s*\(/);
+      expect(messagesPage).toMatch(/data-testid=['"]dm-image-button['"]/);
+    });
+
+    it('MessagesPage send mutation uploads then POSTs with attachment payload', () => {
+      expect(messagesPage).toMatch(/uploadImageToCloudinary\(args\.image\.file/);
+      expect(messagesPage).toMatch(/attachment\s*=\s*\{[\s\S]{0,80}type:\s*['"]image['"]/);
+    });
+
+    it('MessagesPage renders <img> in the bubble when attachmentType is image', () => {
+      expect(messagesPage).toMatch(/m\.attachmentType\s*===\s*['"]image['"]/);
+      expect(messagesPage).toMatch(/<img\s+src=\{m\.attachmentUrl\}/);
+    });
+  });
+
   describe('Feature 17 + 18 — DM button navigates straight to /messages/new/:userId', () => {
     const sessionComplete = readClientSource('features/live/SessionComplete.tsx');
     const recapPage = readClientSource('features/sessions/RecapPage.tsx');

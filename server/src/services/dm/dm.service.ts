@@ -50,6 +50,14 @@ export interface DmMessage {
   // can never have reactions yet) don't have to supply an empty record.
   // listMessages always returns it as at least {}.
   reactions?: Record<string, string[]>;
+  // Feature 19 (13 May spec) — Cloudinary-hosted image attachment.
+  // attachmentType is 'image' for this release; reserved for 'audio' / 'file'
+  // in later features. attachmentMeta carries width/height/bytes/format so
+  // the client can render an aspect-correct thumbnail without an extra
+  // Cloudinary transform call. All three are null for text-only messages.
+  attachmentUrl?: string | null;
+  attachmentType?: string | null;
+  attachmentMeta?: Record<string, any> | null;
 }
 
 // ─── Reaction allow-list ───────────────────────────────────────────────────
@@ -130,21 +138,44 @@ export async function canMessage(
  * Authorization is re-checked here — the canMessage() guard at the UI
  * level is convenient but the source of truth is server-side.
  */
+export interface SendMessageAttachment {
+  url: string;
+  type: 'image';
+  meta?: Record<string, any> | null;
+}
+
 export async function sendMessage(
   fromUserId: string,
   toUserId: string,
   content: string,
+  attachment?: SendMessageAttachment | null,
 ): Promise<{ message: DmMessage; conversationId: string }> {
   if (fromUserId === toUserId) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'You cannot DM yourself');
   }
 
-  const trimmed = content.trim();
-  if (trimmed.length === 0) {
+  const trimmed = (content ?? '').trim();
+  const hasText = trimmed.length > 0;
+  const hasAttachment = !!attachment?.url;
+
+  // Feature 19 (13 May spec) — a message must carry text, an attachment, or
+  // both. Pure-empty submissions are still rejected.
+  if (!hasText && !hasAttachment) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Message cannot be empty');
   }
   if (trimmed.length > 4000) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Message too long (max 4000 characters)');
+  }
+  if (hasAttachment) {
+    if (attachment!.type !== 'image') {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Unsupported attachment type');
+    }
+    // Defence-in-depth: only accept Cloudinary URLs so a hostile client can't
+    // smuggle an arbitrary endpoint into the timeline. The unsigned upload
+    // preset already restricts file type and size on Cloudinary's side.
+    if (!/^https:\/\/res\.cloudinary\.com\//.test(attachment!.url)) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Attachment URL must be hosted on Cloudinary');
+    }
   }
 
   const auth = await canMessage(fromUserId, toUserId);
@@ -178,15 +209,27 @@ export async function sendMessage(
     const msgResult = await client.query<{
       id: string; conversation_id: string; from_user_id: string;
       content: string; read_at: Date | null; created_at: Date;
+      attachment_url: string | null; attachment_type: string | null;
+      attachment_meta: Record<string, any> | null;
     }>(
-      `INSERT INTO direct_messages (id, conversation_id, from_user_id, content)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, conversation_id, from_user_id, content, read_at, created_at`,
-      [uuid(), conversationId, fromUserId, trimmed],
+      `INSERT INTO direct_messages (
+         id, conversation_id, from_user_id, content,
+         attachment_url, attachment_type, attachment_meta
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, conversation_id, from_user_id, content, read_at, created_at,
+                 attachment_url, attachment_type, attachment_meta`,
+      [
+        uuid(), conversationId, fromUserId,
+        hasText ? trimmed : '',
+        hasAttachment ? attachment!.url : null,
+        hasAttachment ? attachment!.type : null,
+        hasAttachment ? (attachment!.meta ?? null) : null,
+      ],
     );
 
     const m = msgResult.rows[0];
-    logger.info({ fromUserId, toUserId, conversationId, messageId: m.id }, 'DM sent');
+    logger.info({ fromUserId, toUserId, conversationId, messageId: m.id, attachment: hasAttachment }, 'DM sent');
 
     return {
       conversationId,
@@ -197,6 +240,9 @@ export async function sendMessage(
         content: m.content,
         readAt: m.read_at,
         createdAt: m.created_at,
+        attachmentUrl: m.attachment_url,
+        attachmentType: m.attachment_type,
+        attachmentMeta: m.attachment_meta,
       },
     };
   });
@@ -238,8 +284,12 @@ export async function listConversations(
     last_message: string | null;
     last_message_at: Date | null;
     last_message_from: string | null;
+    last_attachment_type: string | null;
     unread_count: string;
   }>(
+    // Feature 19 (13 May spec) — also surface the last message's attachment
+    // type so the inbox can render "📷 Photo" when an image was the most
+    // recent send and there's no text caption.
     `SELECT
         c.id AS conversation_id,
         CASE WHEN c.user_a_id = $1 THEN c.user_b_id ELSE c.user_a_id END AS other_user_id,
@@ -248,11 +298,12 @@ export async function listConversations(
         last_msg.content    AS last_message,
         c.last_message_at,
         last_msg.from_user_id AS last_message_from,
+        last_msg.attachment_type AS last_attachment_type,
         COALESCE(unread.cnt, '0')::text AS unread_count
      FROM dm_conversations c
      JOIN users u ON u.id = (CASE WHEN c.user_a_id = $1 THEN c.user_b_id ELSE c.user_a_id END)
      LEFT JOIN LATERAL (
-       SELECT content, from_user_id
+       SELECT content, from_user_id, attachment_type
        FROM direct_messages
        WHERE conversation_id = c.id
        ORDER BY created_at DESC
@@ -273,16 +324,27 @@ export async function listConversations(
   );
 
   return {
-    conversations: result.rows.map(r => ({
-      conversationId: r.conversation_id,
-      otherUserId: r.other_user_id,
-      otherDisplayName: r.other_display_name,
-      otherAvatarUrl: r.other_avatar_url,
-      lastMessage: r.last_message,
-      lastMessageAt: r.last_message_at,
-      lastMessageFromMe: r.last_message_from === userId,
-      unreadCount: parseInt(r.unread_count, 10),
-    })),
+    conversations: result.rows.map(r => {
+      // Feature 19 — inbox preview falls back to a small icon-text when the
+      // last message is an attachment with no caption, so the recipient
+      // doesn't see an empty preview row.
+      const hasText = !!(r.last_message && r.last_message.trim().length > 0);
+      const previewText = hasText
+        ? r.last_message
+        : r.last_attachment_type === 'image'
+          ? '📷 Photo'
+          : null;
+      return {
+        conversationId: r.conversation_id,
+        otherUserId: r.other_user_id,
+        otherDisplayName: r.other_display_name,
+        otherAvatarUrl: r.other_avatar_url,
+        lastMessage: previewText,
+        lastMessageAt: r.last_message_at,
+        lastMessageFromMe: r.last_message_from === userId,
+        unreadCount: parseInt(r.unread_count, 10),
+      };
+    }),
     total,
   };
 }
@@ -335,10 +397,14 @@ export async function listMessages(
     id: string; conversation_id: string; from_user_id: string;
     content: string; read_at: Date | null; created_at: Date;
     reactions: Record<string, string[]> | null;
+    attachment_url: string | null;
+    attachment_type: string | null;
+    attachment_meta: Record<string, any> | null;
   }>(
     `SELECT
         m.id, m.conversation_id, m.from_user_id,
         m.content, m.read_at, m.created_at,
+        m.attachment_url, m.attachment_type, m.attachment_meta,
         COALESCE(r.reactions, '{}'::jsonb) AS reactions
      FROM direct_messages m
      LEFT JOIN LATERAL (
@@ -365,6 +431,9 @@ export async function listMessages(
       readAt: r.read_at,
       createdAt: r.created_at,
       reactions: r.reactions || {},
+      attachmentUrl: r.attachment_url,
+      attachmentType: r.attachment_type,
+      attachmentMeta: r.attachment_meta,
     })),
     total,
   };

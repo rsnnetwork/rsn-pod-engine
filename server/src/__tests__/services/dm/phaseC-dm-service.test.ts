@@ -223,7 +223,11 @@ describe('Phase C — DM data model + service + REST', () => {
     });
 
     it('content body validation caps length at 4000 chars', () => {
-      expect(src).toMatch(/content:\s*z\.string\(\)\.min\(1\)\.max\(4000\)/);
+      // Feature 19 (13 May) — content is optional now (an attachment-only
+      // message is valid). Length cap still pinned; the "at least one of
+      // content or attachment" rule is enforced via refine().
+      expect(src).toMatch(/content:\s*z\.string\(\)\.max\(4000\)/);
+      expect(src).toMatch(/\.refine\([\s\S]{0,200}content[\s\S]{0,200}attachment/);
     });
   });
 
