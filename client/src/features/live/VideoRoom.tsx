@@ -130,33 +130,50 @@ const VideoStage = memo(function VideoStage() {
   // updates, etc.) which propagated to MediaControls + Leave/Main Room
   // buttons, causing the visible "flashing" reported during live testing.
   const currentPartners = useSessionStore(s => s.currentPartners);
-  // Phase N (12 May spec item 2) — visibility modes apply in breakouts too,
-  // for the edge case where a host has been force-joined into a room. The
-  // matching engine excludes hosts so this only kicks in after a manual
-  // `host:move_to_room`. Hidden hosts get filtered out of allTiles entirely;
-  // the two-person breakout grid otherwise renders unchanged.
+  // Phase N + T (12 May spec item 2) — visibility modes apply in
+  // breakouts too. Phase N filtered hidden only; Phase T also handles
+  // 'producer' (audio-only pill row below the grid). 'big_speaker' in a
+  // 2-3 person breakout doesn't need a special render — the tile is
+  // already prominent. Local tile is exempt from filtering (the
+  // participant always sees their own preview).
   const hostVisibilityModes = useSessionStore(s => s.hostVisibilityModes);
   const [pinnedSid, setPinnedSid] = useState<string | null>(null);
 
   const cameraTracks = tracks.filter(t => t.source === Track.Source.Camera);
   const localTrack = cameraTracks.find(t => t.participant.sid === localParticipant.sid);
-  const remoteTracks = cameraTracks.filter(t => t.participant.sid !== localParticipant.sid);
+  // Phase T — filter remoteTracks BEFORE downstream render paths use them.
+  // Local tile is exempt (the participant always sees their own preview).
+  // Hidden users are dropped from the room entirely. Producer users get
+  // pulled into a separate audio-only pill row so they don't take up a
+  // video tile slot in the 2-3 person breakout grid.
+  const modeFor = (uid: string | undefined): 'big_speaker' | 'normal' | 'producer' | 'hidden' => {
+    if (!uid) return 'normal';
+    const m = hostVisibilityModes[uid];
+    return m === 'big_speaker' || m === 'producer' || m === 'hidden' ? m : 'normal';
+  };
+  const remoteTracksAll = cameraTracks.filter(t => t.participant.sid !== localParticipant.sid);
+  const producerTracks = remoteTracksAll.filter(t => modeFor(t.participant.identity) === 'producer');
+  const remoteTracks = remoteTracksAll.filter(t => {
+    const m = modeFor(t.participant.identity);
+    return m !== 'hidden' && m !== 'producer';
+  });
 
-  const allTiles = [
+  type Tile = {
+    trackRef: any;
+    label: string;
+    sid: string;
+    userId: string | undefined;
+  };
+
+  const allTiles: Tile[] = [
     { trackRef: localTrack, label: 'You', sid: localParticipant.sid, userId: localParticipant.identity },
     ...remoteTracks.map((rt, i) => ({
       trackRef: rt,
       label: userDisplayLabel(rt.participant.name || currentPartners[i]),
       sid: rt.participant.sid,
-      userId: rt.participant.identity,
+      userId: rt.participant.identity as string | undefined,
     })),
-  ].filter(tile => {
-    // Drop tiles whose user has been set to 'hidden'. Never hide the
-    // local tile — the participant needs to see their own preview.
-    if (tile.sid === localParticipant.sid) return true;
-    const mode = tile.userId ? hostVisibilityModes[tile.userId] : undefined;
-    return mode !== 'hidden';
-  });
+  ];
 
   const pinnedTile = pinnedSid ? allTiles.find(t => t.sid === pinnedSid) : null;
   const unpinnedTiles = pinnedSid ? allTiles.filter(t => t.sid !== pinnedSid) : allTiles;
@@ -318,6 +335,30 @@ const VideoStage = memo(function VideoStage() {
           <VideoTile trackRef={localTrack} label="You" userId={localParticipant.identity} />
           {currentPartners.map((p, i) => (
             <VideoTile key={p.userId || i} label={userDisplayLabel(p)} isWaiting userId={p.userId} />
+          ))}
+        </div>
+      )}
+      {/* Phase T — producer strip. Audio-only host(s) in the breakout
+          appear as small pills here; their video tile is suppressed so
+          the partner grid stays uncluttered. Rare in practice (matching
+          excludes hosts; producer-mode in breakouts requires a manual
+          host:move_to_room AFTER setting visibility to 'producer'). */}
+      {producerTracks.length > 0 && (
+        <div
+          data-testid="breakout-producer-strip"
+          className="absolute bottom-3 left-3 right-3 flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg bg-[#1f2024]/80 backdrop-blur border border-[#3c4043] pointer-events-none"
+        >
+          <span className="text-[10px] uppercase tracking-wide text-gray-400 mr-1">
+            Producers
+          </span>
+          {producerTracks.map(t => (
+            <span
+              key={t.participant.sid}
+              className="inline-flex items-center gap-1 bg-black/40 text-white text-[11px] px-2 py-0.5 rounded-full"
+              title="Off-camera operator — audio-only"
+            >
+              {t.participant.name || t.participant.identity || 'Producer'}
+            </span>
           ))}
         </div>
       )}

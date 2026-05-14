@@ -31,6 +31,11 @@ const actingAsHostSchema = z.object({
   value: z.union([z.boolean(), z.null()]),
 });
 
+// Phase S — host-initiated demote/promote of ANOTHER user.
+const actingAsHostForSchema = z.object({
+  value: z.union([z.boolean(), z.null()]),
+});
+
 // ─── Host Verification Helper ───────────────────────────────────────────────
 
 // Phase I (10 May spec item 18) — narrowed from `hasRoleAtLeast(ADMIN)` to
@@ -206,6 +211,59 @@ router.post(
       res.json({
         success: true,
         data: { sessionId, userId, value: req.body.value },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /sessions/:id/host/acting-as-host-for/:userId ────────────────────
+//
+// Phase S — host-initiated promote/demote. Caller must be acting host on
+// this session (verifyHostOrSuperAdmin); target cannot be the director
+// (Phase P invariant: director is permanently host). Self-toggle goes
+// through the other endpoint; this one is explicitly for managing other
+// people's acting_as_host override.
+
+router.post(
+  '/:id/host/acting-as-host-for/:userId',
+  authenticate,
+  validate(actingAsHostForSchema, 'body'),
+  auditMiddleware('session:acting_as_host_admin', 'session'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!await verifyHostOrSuperAdmin(req, next)) return;
+      const sessionId = req.params.id;
+      const targetUserId = req.params.userId;
+      const callerUserId = req.user!.userId;
+
+      // Director is permanently host of their own event — Phase P
+      // invariant. Refuse any attempt to demote them via this endpoint
+      // regardless of caller's role.
+      const session = await sessionService.getSessionById(sessionId);
+      if (session.hostUserId === targetUserId) {
+        next(new ForbiddenError(
+          'The event director cannot be demoted. They are permanently the host of their own event.',
+        ));
+        return;
+      }
+
+      // A caller using this endpoint to set their OWN row is a misuse —
+      // the self-toggle endpoint is the right path. Redirect them.
+      if (targetUserId === callerUserId) {
+        next(new ForbiddenError(
+          'Use POST /sessions/:id/host/acting-as-host (the self-toggle) for your own override.',
+        ));
+        return;
+      }
+
+      await sessionService.setActingAsHost(sessionId, targetUserId, req.body.value);
+      // Notify the affected user's sockets so their snapshot resyncs.
+      await orchestrationService.notifyPermissionsUpdated(sessionId, targetUserId);
+      res.json({
+        success: true,
+        data: { sessionId, userId: targetUserId, value: req.body.value },
       });
     } catch (err) {
       next(err);

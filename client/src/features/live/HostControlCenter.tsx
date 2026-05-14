@@ -27,6 +27,7 @@ import { Rnd } from 'react-rnd';
 import { Button } from '@/components/ui/Button';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
+import { useToastStore } from '@/stores/toastStore';
 import { getSocket } from '@/lib/socket';
 import api from '@/lib/api';
 
@@ -167,6 +168,8 @@ export default function HostControlCenter({
   // the viewer's OWN row (server only accepts a self-toggle).
   const authUser = useAuthStore((s) => s.user);
   const currentUserId = authUser?.id;
+  // Phase R — toast for REST failures (replaces console.error stopgaps).
+  const addToast = useToastStore((s) => s.addToast);
   const socket = getSocket();
   const [filter, setFilter] = useState<StateFilter>('all');
   const [moveTargetUserId, setMoveTargetUserId] = useState<string | null>(null);
@@ -304,14 +307,12 @@ export default function HostControlCenter({
       storeSetHostVisibility(userId, mode);
       try {
         await api.post(`/sessions/${sessionId}/host/visibility`, { userId, mode });
-      } catch (err) {
-        // Revert local state on server rejection.
+      } catch {
+        // Revert local state on server rejection. Toast surfaces the
+        // failure to the host so they can retry; server's session:state
+        // re-emit (every 30 s) is the eventual-consistency safety net.
         storeSetHostVisibility(userId, prev);
-        // Surface to console; the server's session:state re-emit (every 30 s)
-        // will also resync. A future PR can route this through the toast
-        // system once one exists in the live UI.
-        // eslint-disable-next-line no-console
-        console.error('host:set_visibility failed', err);
+        addToast("Couldn't change visibility. Try again.", 'error');
       }
     });
 
@@ -320,6 +321,35 @@ export default function HostControlCenter({
   // only accepts the caller's own userId, so this toggle is wired to
   // hostUserId (the user themselves) — the per-row UI gates display to
   // the user's own row.
+  // Phase S — host-initiated demote / promote for ANOTHER user. Same
+  // semantics as the self-toggle but targets a different userId via the
+  // per-user REST endpoint. Server gates: caller must have host
+  // capability, target cannot be the director, target cannot be self
+  // (use the self-toggle for that).
+  const setActingAsHostFor = (targetUserId: string, value: boolean | null) =>
+    runLocked(`set_acting_as_host_for:${targetUserId}`, async () => {
+      const prev = actingAsHostOverrides[targetUserId];
+      // Optimistic update so the row badge flips immediately; revert on
+      // failure. Server's permissions:updated emit to the TARGET (not
+      // the caller) eventually drives the canonical state via the snapshot.
+      const next = { ...actingAsHostOverrides };
+      if (value === null) delete next[targetUserId];
+      else next[targetUserId] = value;
+      setActingAsHostOverrides(next);
+      try {
+        await api.post(
+          `/sessions/${sessionId}/host/acting-as-host-for/${targetUserId}`,
+          { value },
+        );
+      } catch {
+        const reverted = { ...actingAsHostOverrides };
+        if (prev === undefined) delete reverted[targetUserId];
+        else reverted[targetUserId] = prev;
+        setActingAsHostOverrides(reverted);
+        addToast("Couldn't change that person's role. Try again.", 'error');
+      }
+    });
+
   const setMyActingAsHost = (value: boolean | null) =>
     runLocked(`set_acting_as_host`, async () => {
       if (!currentUserId) return;
@@ -331,14 +361,20 @@ export default function HostControlCenter({
       setActingAsHostOverrides(next);
       try {
         await api.post(`/sessions/${sessionId}/host/acting-as-host`, { value });
-      } catch (err) {
-        // Revert on failure.
+      } catch {
+        // Revert on failure. Toast surfaces the failure so the host
+        // knows the toggle didn't take; permissions:updated re-sync
+        // is the eventual safety net.
         const reverted = { ...actingAsHostOverrides };
         if (prev === undefined) delete reverted[currentUserId];
         else reverted[currentUserId] = prev;
         setActingAsHostOverrides(reverted);
-        // eslint-disable-next-line no-console
-        console.error('host:set_acting_as_host failed', err);
+        addToast(
+          value === false
+            ? "Couldn't switch to participant. Try again."
+            : "Couldn't switch role. Try again.",
+          'error',
+        );
       }
     });
 
@@ -572,6 +608,14 @@ export default function HostControlCenter({
                             onMoveToRoom={() => setMoveTargetUserId(p.userId)}
                             onKick={() => kick(p.userId, p.displayName)}
                             activeRoomsAvailable={activeRoomsForMove.length > 0}
+                            // Phase S — per-event role switch. Demote a
+                            // cohost to participant just for THIS event
+                            // (clears via acting_as_host override; does
+                            // NOT remove their permanent cohost grant —
+                            // that's onRemoveCohost above).
+                            onDemoteToParticipant={() => setActingAsHostFor(p.userId, false)}
+                            onPromoteToHost={() => setActingAsHostFor(p.userId, true)}
+                            actingAsHostValue={actingAsHostOverrides[p.userId]}
                           />
                         )}
                       </div>
@@ -899,6 +943,9 @@ function RowActions({
   onMoveToRoom,
   onKick,
   activeRoomsAvailable,
+  onDemoteToParticipant,
+  onPromoteToHost,
+  actingAsHostValue,
 }: {
   isCohost: boolean;
   state: 'in_main_room' | 'in_room' | 'disconnected' | 'left';
@@ -908,6 +955,11 @@ function RowActions({
   onMoveToRoom: () => void;
   onKick: () => void;
   activeRoomsAvailable: boolean;
+  // Phase S — per-event role switch. Separate from Make/Remove co-host
+  // (which manage the PERMANENT session_cohosts grant).
+  onDemoteToParticipant: () => void;
+  onPromoteToHost: () => void;
+  actingAsHostValue: boolean | undefined;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5 shrink-0">
@@ -923,6 +975,30 @@ function RowActions({
         ) : (
           <ActionButton onClick={onMakeCohost} title="Make this person a co-host">
             Make co-host
+          </ActionButton>
+        )
+      )}
+      {/* Phase S — per-event role switch. "Switch to participant" is
+          shown when the target is currently acting as host (cohost
+          membership OR opt-in). "Switch to host" is shown when they're
+          currently acting as participant (no cohost membership AND not
+          opted in). Excluded: a session_cohosts entry that's already
+          opted out — "Switch to host" would only restore them, which
+          is what they want. */}
+      {state !== 'left' && (
+        isCohost && actingAsHostValue !== false ? (
+          <ActionButton
+            onClick={onDemoteToParticipant}
+            title="Have them attend as a participant for this event (does NOT remove their permanent co-host role)"
+          >
+            Switch to participant
+          </ActionButton>
+        ) : (
+          <ActionButton
+            onClick={onPromoteToHost}
+            title="Have them attend as a host for this event"
+          >
+            Switch to host
           </ActionButton>
         )
       )}

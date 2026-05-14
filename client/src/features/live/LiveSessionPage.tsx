@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
+import { useToastStore } from '@/stores/toastStore';
 import useSessionSocket from '@/hooks/useSessionSocket';
 import Lobby from './Lobby';
 import VideoRoom from './VideoRoom';
@@ -36,6 +37,7 @@ export default function LiveSessionPage() {
   const matchingOverlay = useSessionStore(s => s.matchingOverlay);
   const { setError, setPhase, reset, setChatOpen } = useSessionStore.getState();
   const { user } = useAuthStore();
+  const addToast = useToastStore((s) => s.addToast);
   const mediaRequestedRef = useRef(false);
   const [participantListOpen, setParticipantListOpen] = useState(false);
 
@@ -238,9 +240,8 @@ export default function LiveSessionPage() {
               onClick={async () => {
                 try {
                   await api.post(`/sessions/${sessionId}/host/acting-as-host`, { value: true });
-                } catch (err) {
-                  // eslint-disable-next-line no-console
-                  console.error('host:set_acting_as_host (opt-in) failed', err);
+                } catch {
+                  addToast("Couldn't join as host. Try again.", 'error');
                 }
               }}
               className="text-xs px-3 py-1.5 rounded-md border border-indigo-300 bg-white text-indigo-900 hover:bg-indigo-100 font-medium"
@@ -252,9 +253,8 @@ export default function LiveSessionPage() {
               onClick={async () => {
                 try {
                   await api.post(`/sessions/${sessionId}/host/acting-as-host`, { value: false });
-                } catch (err) {
-                  // eslint-disable-next-line no-console
-                  console.error('host:set_acting_as_host (opt-out) failed', err);
+                } catch {
+                  addToast("Couldn't join as participant. Try again.", 'error');
                 }
               }}
               className="text-xs px-3 py-1.5 rounded-md border border-indigo-300 bg-white text-indigo-900 hover:bg-indigo-100 font-medium"
@@ -283,9 +283,8 @@ export default function LiveSessionPage() {
             onClick={async () => {
               try {
                 await api.post(`/sessions/${sessionId}/host/acting-as-host`, { value: null });
-              } catch (err) {
-                // eslint-disable-next-line no-console
-                console.error('host:set_acting_as_host revert failed', err);
+              } catch {
+                addToast("Couldn't switch back to host. Try again.", 'error');
               }
             }}
             className="text-xs px-2.5 py-1 rounded-md border border-amber-300 text-amber-800 hover:bg-amber-100"

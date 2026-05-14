@@ -18,6 +18,7 @@ async function loadBgProcessors() {
 import { useState, useEffect, useCallback, useRef, memo } from 'react';
 import { useSessionStore } from '@/stores/sessionStore';
 import { getSocket } from '@/lib/socket';
+import { useVisibilityPartition } from './useVisibilityPartition';
 import {
   LiveKitRoom,
   VideoTrack,
@@ -77,18 +78,6 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
   })();
   const cameraTracksRaw = tracks.filter(t => t.source === Track.Source.Camera);
 
-  // Resolve visibility mode for a single track. Falls back to 'normal' so
-  // a participant without an explicit mode (i.e. anyone who is NOT a
-  // host or cohost) renders as a normal tile.
-  const visibilityFor = useCallback((trackRef: any): 'big_speaker' | 'normal' | 'producer' | 'hidden' => {
-    const id = trackRef.participant?.identity;
-    if (!id) return 'normal';
-    const mode = hostVisibilityModes[id];
-    return mode === 'big_speaker' || mode === 'producer' || mode === 'hidden'
-      ? mode
-      : 'normal';
-  }, [hostVisibilityModes]);
-
   // Phase Q sort order: director first, then other acting hosts (cohorts
   // + opt-ins), then the local user, then everyone else. This guarantees
   // the #1 tile in the grid is ALWAYS the director's, regardless of
@@ -109,16 +98,17 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
     return aIsLocal - bIsLocal;
   });
 
-  // Phase N — partition tracks by visibility mode. Hidden users are
-  // dropped entirely; producers go to an audio-only strip (no video
-  // tile); big_speakers get a dedicated stage row above the main grid;
-  // everyone else (default 'normal') lands in the main grid.
-  const bigSpeakerTracks = cameraTracksSorted.filter(t => visibilityFor(t) === 'big_speaker');
-  const producerTracks = cameraTracksSorted.filter(t => visibilityFor(t) === 'producer');
-  const cameraTracks = cameraTracksSorted.filter(t => {
-    const v = visibilityFor(t);
-    return v === 'normal';
-  });
+  // Phase N + T — partition tracks by visibility mode via shared hook.
+  // Hidden users are dropped entirely; producers go to an audio-only
+  // strip; big_speakers get a dedicated stage row; everyone else
+  // (default 'normal') lands in the main grid. The hook is also used
+  // by VideoRoom for breakouts (Phase T).
+  const {
+    bigSpeakerTracks,
+    producerTracks,
+    normalTracks: cameraTracks,
+    visibilityFor,
+  } = useVisibilityPartition(cameraTracksSorted, hostVisibilityModes);
 
   // Responsive grid based on density preference
   const n = participants.length;

@@ -106,18 +106,35 @@ describe('Phase N — multi-host visibility UI (item 2)', () => {
     });
 
     it('exposes visibilityFor helper resolving each track to a four-mode value', () => {
-      expect(src).toMatch(/visibilityFor\s*=\s*useCallback/);
-      // The helper returns the four-mode union.
+      // Phase T refactor: visibilityFor moved INTO the shared
+      // useVisibilityPartition hook (returned in the destructure).
+      // Lobby still exposes it as a local binding via the destructuring.
       expect(src).toMatch(
+        /useVisibilityPartition\(\s*cameraTracksSorted,\s*hostVisibilityModes\s*\)/,
+      );
+      const hookSrc = nodeFs.readFileSync(
+        nodePath.join(__dirname, '../../../../client/src/features/live/useVisibilityPartition.ts'),
+        'utf8',
+      );
+      expect(hookSrc).toMatch(/visibilityFor\s*=\s*useCallback/);
+      // The hook's mode union has the four values.
+      expect(hookSrc).toMatch(
         /['"]big_speaker['"]\s*\|\s*['"]normal['"]\s*\|\s*['"]producer['"]\s*\|\s*['"]hidden['"]/,
       );
     });
 
     it('partitions sorted tracks into big_speaker / normal / producer (hidden dropped)', () => {
-      expect(src).toMatch(/bigSpeakerTracks\s*=\s*cameraTracksSorted\.filter\([\s\S]{0,80}['"]big_speaker['"]/);
-      expect(src).toMatch(/producerTracks\s*=\s*cameraTracksSorted\.filter\([\s\S]{0,80}['"]producer['"]/);
-      // The main grid uses `cameraTracks` which is the normal-only subset.
-      expect(src).toMatch(/cameraTracks\s*=\s*cameraTracksSorted\.filter/);
+      // Phase T refactor: partition lives in the shared hook, not
+      // inline in Lobby. The hook is called with cameraTracksSorted,
+      // and the destructured aliases drive the render exactly as
+      // before (cameraTracks ← normalTracks; bigSpeakerTracks and
+      // producerTracks unchanged).
+      expect(src).toMatch(
+        /useVisibilityPartition\(\s*cameraTracksSorted,\s*hostVisibilityModes\s*\)/,
+      );
+      expect(src).toMatch(/bigSpeakerTracks/);
+      expect(src).toMatch(/producerTracks/);
+      expect(src).toMatch(/normalTracks:\s*cameraTracks/);
     });
 
     it('renders a dedicated big-speaker stage row above the main grid (when any exist)', () => {
@@ -159,10 +176,18 @@ describe('Phase N — multi-host visibility UI (item 2)', () => {
     });
 
     it('filters hidden tiles out of allTiles (never hides the local tile)', () => {
-      // The filter clause must protect the local tile (always keep it)
-      // and drop tiles whose user is in 'hidden'.
+      // Phase T refactor: VideoRoom now does the hidden/producer split
+      // at the remoteTracks layer (BEFORE allTiles is built), using the
+      // modeFor helper. The 'never hide local tile' invariant is
+      // upheld because the filter is only applied to remoteTracks; the
+      // local track is unconditionally appended to allTiles.
+      expect(src).toMatch(/remoteTracksAll/);
       expect(src).toMatch(
-        /tile\.sid\s*===\s*localParticipant\.sid[\s\S]{0,150}hostVisibilityModes\[tile\.userId\][\s\S]{0,80}!==\s*['"]hidden['"]/,
+        /remoteTracks\s*=\s*remoteTracksAll\.filter[\s\S]{0,200}m\s*!==\s*['"]hidden['"]/,
+      );
+      // Local track is added without going through the filter.
+      expect(src).toMatch(
+        /allTiles[\s\S]{0,150}trackRef:\s*localTrack[\s\S]{0,80}label:\s*['"]You['"]/,
       );
     });
   });

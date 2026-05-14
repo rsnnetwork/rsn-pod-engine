@@ -7819,3 +7819,62 @@ The `big_speaker` visibility mode dropdown (Phase N) remains as a stronger "I do
 
 - VideoRoom (breakout): no change. Phase Q is lobby-only. Breakouts are 2-3 person rooms where size logic doesn't apply.
 - `big_speaker` dropdown: still works the same. Stronger override on top of auto-host elevation.
+
+---
+
+## Stefan's 12 May Feedback — Phase R + S + T (deferred follow-ups) — 2026-05-13
+
+**Status:** Three small follow-ups bundled into one ship — toast notifications on REST failures, host-initiated demote/promote of another user, and big-speaker/producer rendering inside breakouts.
+
+### Phase R — Toast notifications
+
+`useToastStore` already existed (used widely in admin pages). Phase R replaces 5 `console.error` stopgaps with `addToast(message, 'error')`:
+- `HostControlCenter.setVisibility` catch (Phase N visibility dropdown).
+- `HostControlCenter.setMyActingAsHost` catch (Phase M self-toggle).
+- `LiveSessionPage` join-as banner "Join as host" button.
+- `LiveSessionPage` join-as banner "Join as participant" button.
+- `LiveSessionPage` revert banner "Switch back to host" button.
+
+### Phase S — Host-initiated acting-as-host for another user
+
+New REST endpoint `POST /sessions/:id/host/acting-as-host-for/:userId` body `{ value: boolean | null }`. Permission ladder:
+- `verifyHostOrSuperAdmin` gates caller capability.
+- Refuses 403 when target is the director (Phase P invariant).
+- Refuses 403 when target is the caller (clear redirect: "use the self-toggle endpoint").
+
+`HostControlCenter` adds per-row "Switch to participant" / "Switch to host" buttons in `RowActions`. Separate from the existing "Make co-host" / "Remove co-host" buttons (which manage the PERMANENT `session_cohosts` grant; this endpoint is the per-event override).
+
+### Phase T — Breakout visibility
+
+New shared hook `client/src/features/live/useVisibilityPartition.ts` returning `{ bigSpeakerTracks, producerTracks, normalTracks, visibilityFor }`. Both Lobby (refactored from inline filters) and VideoRoom (new) consume it.
+
+VideoRoom changes:
+- `remoteTracks` filtered before downstream render paths use it: hidden dropped, producer moved to a separate strip.
+- New `data-testid="breakout-producer-strip"` absolute-positioned pill row at the bottom of the room.
+- Big_speaker has no special breakout render (2-3 person grids are already prominent).
+- Local tile is exempt from filtering (the participant always sees their own preview).
+
+### Files
+
+- New: `client/src/features/live/useVisibilityPartition.ts`
+- New: `server/src/__tests__/services/phase-r-s-toasts-and-host-demote.test.ts` (13 pin tests)
+- New: `server/src/__tests__/services/phase-t-breakout-visibility.test.ts` (10 pin tests)
+- Modified: `client/src/features/live/HostControlCenter.tsx` — toasts + setActingAsHostFor + RowActions buttons.
+- Modified: `client/src/features/live/LiveSessionPage.tsx` — toasts on banner buttons.
+- Modified: `client/src/features/live/Lobby.tsx` — refactored to use useVisibilityPartition.
+- Modified: `client/src/features/live/VideoRoom.tsx` — Phase T filter + producer strip.
+- Modified: `server/src/routes/host.ts` — new acting-as-host-for/:userId endpoint + schema.
+- Modified: `server/src/__tests__/services/phase-n-multi-host-visibility-ui.test.ts` — pins updated for the shared hook location.
+- Modified: `progress.md` — this entry.
+
+### Verification
+
+- Server suite: **1362 passed, 1 skipped (pre-existing), 0 failed** across 107 suites.
+- Client TypeScript: clean.
+- Client production build: clean — no net bundle growth.
+
+### Remaining deferred (after R/S/T)
+
+- LiveKit `canPublishAudio` revocation (Phase O follow-up) — Phase U next.
+- Mobile responsive visual at 360 / 414 / 768 / 1024 widths — Phase V.
+- Sentry post-deploy spike check — Phase W (likely blocked, no API token).
