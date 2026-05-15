@@ -5,10 +5,12 @@
 // block-gate) live inside dmService — these routes are thin wrappers.
 
 import { Router, Request, Response, NextFunction } from 'express';
+import { Server as SocketServer } from 'socket.io';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
 import * as dmService from '../services/dm/dm.service';
+import { broadcastDmMessage } from '../services/orchestration/handlers/dm-handlers';
 import { ApiResponse } from '@rsn/shared';
 
 const router = Router();
@@ -116,6 +118,21 @@ router.post(
         req.body.content || '',
         req.body.attachment || null,
       );
+      // Real-time fan-out (15 May fix) — pre-refactor only the socket
+      // handler emitted dm:message, so REST-path sends (which is what
+      // the MessagesPage composer actually uses) sat silently in the DB
+      // until the recipient refreshed. broadcastDmMessage now ships the
+      // same events from both transports.
+      const io = req.app.get('io') as SocketServer | null;
+      if (io) {
+        await broadcastDmMessage(
+          io,
+          req.user!.userId,
+          req.body.toUserId,
+          result.conversationId,
+          result.message,
+        );
+      }
       const response: ApiResponse = { success: true, data: result };
       res.status(201).json(response);
     } catch (err) {

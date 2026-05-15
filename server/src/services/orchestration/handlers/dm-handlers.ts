@@ -122,6 +122,131 @@ async function maybeSendDmEmail(
   }
 }
 
+// ─── Real-time broadcast helper ────────────────────────────────────────────
+//
+// Shared between handleDmSend (socket path) and the POST /dm/messages REST
+// route handler. Pre-refactor (pre-15 May) the broadcast logic lived only
+// inside handleDmSend — so when the client switched to the REST endpoint
+// (the path used by the Messages UI today) messages persisted to the DB
+// but never reached the recipient's open tab, who had to refresh to see
+// them. Ali called this out during the 15 May DM testing. Extracting the
+// helper makes both code paths fire the same `dm:message` +
+// `dm:conversation_updated` + `notification:new` fan-out so realtime
+// delivery works regardless of which transport sent the message.
+
+export interface BroadcastableDmMessage {
+  id: string;
+  conversationId: string;
+  fromUserId: string;
+  content: string | null;
+  readAt: Date | null;
+  createdAt: Date;
+  attachmentUrl?: string | null;
+  attachmentType?: string | null;
+  attachmentMeta?: Record<string, any> | null;
+}
+
+/**
+ * Fan out a new DM to both participants' user rooms, insert a bell-icon
+ * notification for the recipient, and email them if they're offline.
+ * Idempotent on the side-effects: emits + insert are best-effort and any
+ * failure is logged, never thrown — the caller has already persisted the
+ * message so we don't want a broadcast failure to look like a send failure.
+ */
+export async function broadcastDmMessage(
+  io: SocketServer,
+  fromUserId: string,
+  toUserId: string,
+  conversationId: string,
+  message: BroadcastableDmMessage,
+): Promise<void> {
+  // Real-time fan-out: emit to BOTH users' rooms so any open tab updates.
+  // Attachment fields included so the recipient renders the image / audio
+  // inline without needing to refetch the thread.
+  const payload = {
+    id: message.id,
+    conversationId: message.conversationId,
+    fromUserId: message.fromUserId,
+    content: message.content,
+    readAt: message.readAt,
+    createdAt: message.createdAt,
+    attachmentUrl: message.attachmentUrl ?? null,
+    attachmentType: message.attachmentType ?? null,
+    attachmentMeta: message.attachmentMeta ?? null,
+  };
+  io.to(userRoom(fromUserId)).emit('dm:message', payload);
+  io.to(userRoom(toUserId)).emit('dm:message', payload);
+
+  // Inbox sort hint: lastMessageAt updated for both users' inbox UIs.
+  // The client treats this event as an invalidation signal and refetches
+  // the conversation list, so the preview text comes from the server's
+  // listConversations (with the 📷 Photo / 🎤 Voice message fallback).
+  const updatedPayload = {
+    conversationId,
+    lastMessageAt: message.createdAt,
+    lastMessage: message.content ?? null,
+    lastMessageFromUserId: fromUserId,
+  };
+  io.to(userRoom(fromUserId)).emit('dm:conversation_updated', updatedPayload);
+  io.to(userRoom(toUserId)).emit('dm:conversation_updated', updatedPayload);
+
+  // Bell notification — same pattern as invites so the bell icon counts
+  // DMs alongside invite events consistently.
+  try {
+    const senderResult = await query<{ display_name: string | null }>(
+      `SELECT display_name FROM users WHERE id = $1`, [fromUserId],
+    );
+    const senderName = senderResult.rows[0]?.display_name || 'Someone';
+    const notifTitle = `${senderName} sent you a message`;
+    // For attachment-only messages, the bell body falls back to a short
+    // descriptor so the bell shows useful text instead of an empty bubble.
+    const notifBody = message.content && message.content.trim().length > 0
+      ? message.content.slice(0, 140)
+      : message.attachmentType === 'image'
+        ? '📷 Photo'
+        : message.attachmentType === 'audio'
+          ? '🎤 Voice message'
+          : 'New message';
+    const notifLink = `/messages/${conversationId}`;
+    const notifResult = await query<{ id: string; created_at: Date }>(
+      `INSERT INTO notifications (id, user_id, type, title, body, link)
+       VALUES ($1, $2, 'direct_message', $3, $4, $5)
+       RETURNING id, created_at`,
+      [uuid(), toUserId, notifTitle, notifBody, notifLink],
+    );
+    io.to(userRoom(toUserId)).emit('notification:new', {
+      id: notifResult.rows[0].id,
+      type: 'direct_message',
+      title: notifTitle,
+      body: notifBody,
+      link: notifLink,
+      isRead: false,
+      createdAt: notifResult.rows[0].created_at,
+    });
+  } catch (err) {
+    logger.warn({ err, fromUserId, toUserId }, 'DM notification insert failed (non-fatal)');
+  }
+
+  // Offline fallback: email the recipient (debounced) if they're not
+  // connected. Snippet uses the content if present; attachment-only sends
+  // get a small descriptor so the email body isn't empty.
+  try {
+    const recipientOnline = await isUserOnline(io, toUserId);
+    if (!recipientOnline) {
+      const snippet = message.content && message.content.trim().length > 0
+        ? message.content
+        : message.attachmentType === 'image'
+          ? '📷 Sent you a photo'
+          : message.attachmentType === 'audio'
+            ? '🎤 Sent you a voice message'
+            : 'New message';
+      void maybeSendDmEmail(fromUserId, toUserId, snippet, conversationId);
+    }
+  } catch (err) {
+    logger.warn({ err, fromUserId, toUserId }, 'DM offline-email check failed (non-fatal)');
+  }
+}
+
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
 export async function handleDmSend(
@@ -144,67 +269,7 @@ export async function handleDmSend(
       userId, data.toUserId, data.content,
     );
 
-    // Real-time fan-out: emit to BOTH users' rooms so any open tab updates.
-    const payload = {
-      id: message.id,
-      conversationId: message.conversationId,
-      fromUserId: message.fromUserId,
-      content: message.content,
-      readAt: message.readAt,
-      createdAt: message.createdAt,
-    };
-    io.to(userRoom(userId)).emit('dm:message', payload);
-    io.to(userRoom(data.toUserId)).emit('dm:message', payload);
-
-    // Inbox sort hint: lastMessageAt updated for both users' inbox UIs.
-    const updatedPayload = {
-      conversationId,
-      lastMessageAt: message.createdAt,
-      lastMessage: message.content,
-      lastMessageFromUserId: userId,
-    };
-    io.to(userRoom(userId)).emit('dm:conversation_updated', updatedPayload);
-    io.to(userRoom(data.toUserId)).emit('dm:conversation_updated', updatedPayload);
-
-    // Bell notification — write to notifications table, emit notification:new.
-    // Use the existing pattern from invites so the bell icon counts DMs
-    // alongside invites consistently.
-    const senderResult = await query<{ display_name: string | null }>(
-      `SELECT display_name FROM users WHERE id = $1`, [userId],
-    );
-    const senderName = senderResult.rows[0]?.display_name || 'Someone';
-    const notifId = uuid();
-    const notifTitle = `${senderName} sent you a message`;
-    const notifBody = data.content.slice(0, 140);
-    const notifLink = `/messages/${conversationId}`;
-
-    try {
-      const notifResult = await query<{ id: string; created_at: Date }>(
-        `INSERT INTO notifications (id, user_id, type, title, body, link)
-         VALUES ($1, $2, 'direct_message', $3, $4, $5)
-         RETURNING id, created_at`,
-        [notifId, data.toUserId, notifTitle, notifBody, notifLink],
-      );
-      io.to(userRoom(data.toUserId)).emit('notification:new', {
-        id: notifResult.rows[0].id,
-        type: 'direct_message',
-        title: notifTitle,
-        body: notifBody,
-        link: notifLink,
-        isRead: false,
-        createdAt: notifResult.rows[0].created_at,
-      });
-    } catch (err) {
-      logger.warn({ err, fromUserId: userId, toUserId: data.toUserId }, 'DM notification insert failed (non-fatal)');
-    }
-
-    // Offline fallback: email the recipient (debounced).
-    const recipientOnline = await isUserOnline(io, data.toUserId);
-    if (!recipientOnline) {
-      // Don't await — email send is best-effort and we don't want to block
-      // the socket response on it.
-      void maybeSendDmEmail(userId, data.toUserId, data.content, conversationId);
-    }
+    await broadcastDmMessage(io, userId, data.toUserId, conversationId, message);
   } catch (err: any) {
     const code = err?.code || 'DM_SEND_FAILED';
     const message = err?.message || 'Failed to send message';
