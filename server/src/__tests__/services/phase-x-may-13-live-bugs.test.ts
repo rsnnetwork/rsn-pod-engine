@@ -64,6 +64,57 @@ describe('Phase X — 13 May live-test bug fixes', () => {
     });
   });
 
+  describe('Feature 20 — voice messages in DM via MediaRecorder + Cloudinary', () => {
+    const dmService = readServerSource('services/dm/dm.service.ts');
+    const dmRoute = readServerSource('routes/dm.ts');
+    const cloudinaryLib = readClientSource('lib/cloudinary.ts');
+    const messagesPage = readClientSource('features/messages/MessagesPage.tsx');
+
+    it('attachment type union accepts audio on server + route', () => {
+      expect(dmService).toMatch(/type:\s*['"]image['"]\s*\|\s*['"]audio['"]/);
+      expect(dmRoute).toMatch(/z\.enum\(\['image',\s*'audio'\]\)/);
+    });
+
+    it('audio caption fallback in inbox preview', () => {
+      expect(dmService).toMatch(/'🎤 Voice message'/);
+    });
+
+    it('client cloudinary lib exposes audio upload + validation', () => {
+      expect(cloudinaryLib).toMatch(/export function validateAudioBlob/);
+      expect(cloudinaryLib).toMatch(/export async function uploadAudioToCloudinary/);
+      // Audio caps pinned so a future bump is intentional.
+      expect(cloudinaryLib).toMatch(/MAX_AUDIO_BYTES\s*=\s*5\s*\*\s*1024\s*\*\s*1024/);
+      expect(cloudinaryLib).toMatch(/MAX_AUDIO_DURATION_MS\s*=\s*5\s*\*\s*60\s*\*\s*1000/);
+      // Audio uploads use /auto/upload so the same preset works for both
+      // images and audio. Pin the endpoint.
+      expect(cloudinaryLib).toMatch(/\/auto\/upload/);
+    });
+
+    it('MessagesPage exposes the mic button + recording state machine', () => {
+      expect(messagesPage).toMatch(/data-testid=['"]dm-mic-button['"]/);
+      // Three states: idle | recording | preview.
+      expect(messagesPage).toMatch(/'idle'\s*\|\s*'recording'\s*\|\s*'preview'/);
+      // MediaRecorder lifecycle.
+      expect(messagesPage).toMatch(/new MediaRecorder/);
+      expect(messagesPage).toMatch(/recorder\.start\(100\)/);
+    });
+
+    it('MessagesPage renders a recording bar with cancel + stop while recording', () => {
+      expect(messagesPage).toMatch(/data-testid=['"]dm-recording-bar['"]/);
+      expect(messagesPage).toMatch(/data-testid=['"]dm-recording-stop['"]/);
+    });
+
+    it('MessagesPage send mutation accepts audio and posts attachment.type=audio', () => {
+      expect(messagesPage).toMatch(/uploadAudioToCloudinary\(args\.audio\.blob/);
+      expect(messagesPage).toMatch(/type:\s*['"]audio['"]/);
+    });
+
+    it('MessagesPage renders <audio controls> in the bubble when attachmentType=audio', () => {
+      expect(messagesPage).toMatch(/m\.attachmentType\s*===\s*['"]audio['"]/);
+      expect(messagesPage).toMatch(/<audio\b[\s\S]{0,80}controls/);
+    });
+  });
+
   describe('Feature 19 — Cloudinary image attachments on DM messages', () => {
     const migration = nodeFs.readFileSync(
       nodePath.join(__dirname, '../../db/migrations/062_direct_messages_attachments.sql'),

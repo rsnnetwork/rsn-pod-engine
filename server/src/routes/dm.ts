@@ -23,7 +23,7 @@ const sendBodySchema = z.object({
   content: z.string().max(4000).optional().default(''),
   attachment: z.object({
     url: z.string().url(),
-    type: z.literal('image'),
+    type: z.enum(['image', 'audio']),
     meta: z.record(z.any()).optional().nullable(),
   }).optional().nullable(),
 }).refine(

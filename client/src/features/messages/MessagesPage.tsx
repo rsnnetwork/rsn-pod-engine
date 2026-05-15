@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X } from 'lucide-react';
+import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare } from 'lucide-react';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { PageLoader, Spinner } from '@/components/ui/Spinner';
@@ -22,7 +22,10 @@ import {
   isCloudinaryConfigured,
   validateImageFile,
   uploadImageToCloudinary,
+  uploadAudioToCloudinary,
+  MAX_AUDIO_DURATION_MS,
   type CloudinaryImageResult,
+  type CloudinaryAudioResult,
 } from '@/lib/cloudinary';
 
 interface ConversationSummary {
@@ -45,10 +48,13 @@ interface DmMessage {
   createdAt: string;
   // Phase E — server returns aggregated reactions per emoji type
   reactions?: Record<string, string[]>;
-  // Feature 19 (13 May spec) — Cloudinary image attachment.
+  // Feature 19 + 20 (13 May spec) — Cloudinary image / audio attachment.
   attachmentUrl?: string | null;
-  attachmentType?: string | null;
-  attachmentMeta?: { width?: number; height?: number; bytes?: number; format?: string } | null;
+  attachmentType?: 'image' | 'audio' | string | null;
+  attachmentMeta?: {
+    width?: number; height?: number; bytes?: number; format?: string;
+    durationSec?: number;
+  } | null;
 }
 
 // Phase E — client-side reaction palette. Server stores type strings so the
@@ -159,6 +165,22 @@ export default function MessagesPage() {
   const [uploadFraction, setUploadFraction] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cloudinaryReady = isCloudinaryConfigured();
+
+  // Feature 20 (13 May spec) — voice-message recording state machine.
+  //   idle      → no recording in progress; mic button shows
+  //   recording → MediaRecorder is capturing; stop + cancel buttons + timer
+  //   preview   → user reviewed; can play it back, replace, or send
+  // pendingAudio carries the captured blob + duration + a preview URL so the
+  // user can scrub through their own voice message before sending.
+  const [recordingState, setRecordingState] = useState<'idle' | 'recording' | 'preview'>('idle');
+  const [pendingAudio, setPendingAudio] = useState<{
+    blob: Blob; durationMs: number; previewUrl: string;
+  } | null>(null);
+  const [recordingMs, setRecordingMs] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
+  const recordingStartRef = useRef<number>(0);
+  const recordingTimerRef = useRef<number | null>(null);
   // Phase E — which message the reaction picker is currently anchored to.
   const [reactionPickerFor, setReactionPickerFor] = useState<string | null>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
@@ -286,19 +308,30 @@ export default function MessagesPage() {
     = activeConv ?? composeTarget;
 
   const sendMutation = useMutation({
-    mutationFn: async (args: { content: string; image: { file: File } | null }) => {
+    mutationFn: async (args: {
+      content: string;
+      image: { file: File } | null;
+      audio: { blob: Blob; durationMs: number } | null;
+    }) => {
       const toUserId = activeConv?.otherUserId ?? composeToUserId;
       if (!toUserId) throw new Error('No recipient');
 
-      // Feature 19 (13 May spec) — when an image is pending, upload it to
-      // Cloudinary first so the server only sees the resulting URL +
-      // metadata. Progress bar drives off the upload fraction; the server
-      // POST is the cheap part (just the URL string).
-      let attachment: { url: string; type: 'image'; meta: CloudinaryImageResult } | null = null;
+      // Feature 19/20 (13 May spec) — at most one attachment per message.
+      // Image takes precedence if both are queued, but the UI disallows
+      // simultaneous capture so this is just a belt-and-braces guard.
+      let attachment:
+        | { url: string; type: 'image'; meta: CloudinaryImageResult }
+        | { url: string; type: 'audio'; meta: CloudinaryAudioResult }
+        | null = null;
       if (args.image) {
         setUploadFraction(0);
         const result = await uploadImageToCloudinary(args.image.file, setUploadFraction);
         attachment = { url: result.url, type: 'image', meta: result };
+        setUploadFraction(null);
+      } else if (args.audio) {
+        setUploadFraction(0);
+        const result = await uploadAudioToCloudinary(args.audio.blob, args.audio.durationMs, setUploadFraction);
+        attachment = { url: result.url, type: 'audio', meta: result };
         setUploadFraction(null);
       }
 
@@ -314,6 +347,11 @@ export default function MessagesPage() {
       if (pendingImage) {
         URL.revokeObjectURL(pendingImage.previewUrl);
         setPendingImage(null);
+      }
+      if (pendingAudio) {
+        URL.revokeObjectURL(pendingAudio.previewUrl);
+        setPendingAudio(null);
+        setRecordingState('idle');
       }
       qc.invalidateQueries({ queryKey: ['dm-messages', activeId ?? data.conversationId] });
       qc.invalidateQueries({ queryKey: ['dm-conversations'] });
@@ -352,13 +390,131 @@ export default function MessagesPage() {
   };
 
   // Wraps both code-paths so the composer's submit + Enter handler stays
-  // simple. Either text, image, or both is accepted.
+  // simple. Text, image, audio, or text+image/audio is accepted.
   const submitMessage = () => {
     const text = draft.trim();
-    if (!text && !pendingImage) return;
+    if (!text && !pendingImage && !pendingAudio) return;
     if (sendMutation.isPending) return;
-    sendMutation.mutate({ content: text, image: pendingImage });
+    sendMutation.mutate({
+      content: text,
+      image: pendingImage,
+      audio: pendingAudio ? { blob: pendingAudio.blob, durationMs: pendingAudio.durationMs } : null,
+    });
   };
+
+  // Feature 20 — recording lifecycle. startRecording requests mic permission
+  // and kicks off MediaRecorder; the 100ms timeslice keeps the chunks array
+  // streaming so a connection drop doesn't lose everything. stopRecording
+  // finalizes into pendingAudio + flips state to 'preview'. cancelRecording
+  // tears everything down without producing a blob.
+  const startRecording = async () => {
+    if (recordingState !== 'idle') return;
+    if (!cloudinaryReady) {
+      addToast('Voice messages are not configured for this deployment', 'error');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Prefer audio/webm (Chrome, Edge, Firefox), fall back to whatever the
+      // browser picks (Safari produces audio/mp4).
+      const mime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+      const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      recordingChunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) recordingChunksRef.current.push(e.data);
+      };
+      recorder.onstop = () => {
+        // Always tear down the mic stream regardless of how we got here so
+        // the browser's recording indicator clears.
+        stream.getTracks().forEach(t => t.stop());
+        if (recordingTimerRef.current !== null) {
+          window.clearInterval(recordingTimerRef.current);
+          recordingTimerRef.current = null;
+        }
+        const blob = new Blob(recordingChunksRef.current, { type: recorder.mimeType || mime || 'audio/webm' });
+        recordingChunksRef.current = [];
+        const durationMs = Date.now() - recordingStartRef.current;
+        if (blob.size === 0 || durationMs < 250) {
+          // Treat micro-recordings as cancellations — usually a misclick.
+          setRecordingState('idle');
+          setRecordingMs(0);
+          return;
+        }
+        const previewUrl = URL.createObjectURL(blob);
+        setPendingAudio({ blob, durationMs, previewUrl });
+        setRecordingState('preview');
+      };
+      recorder.start(100);
+      mediaRecorderRef.current = recorder;
+      recordingStartRef.current = Date.now();
+      setRecordingMs(0);
+      setRecordingState('recording');
+      recordingTimerRef.current = window.setInterval(() => {
+        const elapsed = Date.now() - recordingStartRef.current;
+        setRecordingMs(elapsed);
+        if (elapsed >= MAX_AUDIO_DURATION_MS) {
+          // Hard cap: auto-stop at 5 min.
+          recorder.state === 'recording' && recorder.stop();
+        }
+      }, 100);
+    } catch (err: any) {
+      addToast(
+        err?.name === 'NotAllowedError'
+          ? 'Microphone access denied. Check browser permissions.'
+          : 'Could not start recording',
+        'error',
+      );
+      setRecordingState('idle');
+    }
+  };
+
+  const stopRecording = () => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state === 'recording') recorder.stop();
+    mediaRecorderRef.current = null;
+  };
+
+  const cancelRecording = () => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state === 'recording') {
+      // Drop any captured chunks so onstop produces a 0-byte blob and
+      // short-circuits to idle.
+      recordingChunksRef.current = [];
+      recorder.stop();
+    }
+    mediaRecorderRef.current = null;
+    if (recordingTimerRef.current !== null) {
+      window.clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    setRecordingState('idle');
+    setRecordingMs(0);
+  };
+
+  const discardPendingAudio = () => {
+    if (pendingAudio) URL.revokeObjectURL(pendingAudio.previewUrl);
+    setPendingAudio(null);
+    setRecordingState('idle');
+    setRecordingMs(0);
+  };
+
+  // Clean up media stream on unmount in case the user navigates away mid-record.
+  useEffect(() => {
+    return () => {
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state === 'recording') recorder.stop();
+      if (recordingTimerRef.current !== null) window.clearInterval(recordingTimerRef.current);
+      if (pendingAudio) URL.revokeObjectURL(pendingAudio.previewUrl);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function formatRecordTime(ms: number): string {
+    const totalSec = Math.floor(ms / 1000);
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  }
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/dm/conversations/${id}`),
@@ -544,6 +700,23 @@ export default function MessagesPage() {
                                       />
                                     </a>
                                   )}
+                                  {/* Feature 20 (13 May spec) — audio bubble. Native
+                                      <audio controls> for v1 — the browser ships a
+                                      decent playback UI on every supported platform.
+                                      Padded inside the bubble so it doesn't run flush
+                                      to the rounded corner. */}
+                                  {m.attachmentUrl && m.attachmentType === 'audio' && (
+                                    <div className="px-3 py-2 flex items-center gap-2 min-w-[220px]">
+                                      <Mic className="h-4 w-4 shrink-0 opacity-70" />
+                                      <audio
+                                        src={m.attachmentUrl}
+                                        controls
+                                        preload="metadata"
+                                        className="flex-1 h-9 max-w-full"
+                                        data-testid={`dm-audio-message-${m.id}`}
+                                      />
+                                    </div>
+                                  )}
                                   {m.content && (
                                     <div className={m.attachmentUrl ? 'px-3.5 py-2' : ''}>{m.content}</div>
                                   )}
@@ -686,6 +859,67 @@ export default function MessagesPage() {
                   )}
                 </div>
               )}
+              {/* Feature 20 (13 May spec) — recorded audio preview row. The
+                  user can play it back, discard it, or hit Send to upload.
+                  Upload progress overlays as a percentage. */}
+              {pendingAudio && (
+                <div className="mb-2 flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                  <Mic className="h-4 w-4 text-rsn-red shrink-0" />
+                  <audio
+                    src={pendingAudio.previewUrl}
+                    controls
+                    className="flex-1 h-8 max-w-full"
+                    data-testid="dm-audio-preview"
+                  />
+                  {uploadFraction !== null ? (
+                    <span className="text-xs font-semibold text-gray-700 shrink-0">
+                      {Math.round(uploadFraction * 100)}%
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={discardPendingAudio}
+                      className="p-1 rounded hover:bg-gray-200 text-gray-500 shrink-0"
+                      aria-label="Discard voice message"
+                      title="Discard voice message"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+              )}
+              {/* Recording-active bar takes over the composer: full-width row
+                  with a pulsing red dot, elapsed time, a cancel button and a
+                  stop button. The normal textarea + buttons hide while
+                  recording so the user can't accidentally send half-formed
+                  state. */}
+              {recordingState === 'recording' && (
+                <div className="flex items-center gap-3 px-2" data-testid="dm-recording-bar">
+                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-rsn-red animate-pulse" />
+                  <span className="text-sm font-mono text-gray-700">{formatRecordTime(recordingMs)}</span>
+                  <span className="text-xs text-gray-400 flex-1 truncate hidden sm:inline">Recording voice message…</span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={cancelRecording}
+                    className="!h-9 !px-3 text-xs"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={stopRecording}
+                    className="!h-9 !px-3 text-xs"
+                    data-testid="dm-recording-stop"
+                  >
+                    <StopSquare className="h-3.5 w-3.5 mr-1" /> Stop
+                  </Button>
+                </div>
+              )}
+              {/* Normal composer hides while recording — the recording bar
+                  above takes its place so the user can't accidentally fire
+                  a send mid-record. */}
+              {recordingState !== 'recording' && (
               <div className="flex items-end gap-2">
                 <button
                   type="button"
@@ -709,13 +943,27 @@ export default function MessagesPage() {
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
-                      disabled={sendMutation.isPending}
+                      disabled={sendMutation.isPending || !!pendingAudio}
                       className="w-11 h-11 sm:w-9 sm:h-9 flex items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
                       aria-label="Attach image"
-                      title="Attach image"
+                      title={pendingAudio ? 'Discard the voice message first' : 'Attach image'}
                       data-testid="dm-image-button"
                     >
                       <ImageIcon className="h-5 w-5" />
+                    </button>
+                    {/* Feature 20 — mic button kicks off recording. Disabled
+                        while an image is queued so the user picks one or the
+                        other; cancellation flows clear the conflict. */}
+                    <button
+                      type="button"
+                      onClick={startRecording}
+                      disabled={sendMutation.isPending || !!pendingImage || !!pendingAudio}
+                      className="w-11 h-11 sm:w-9 sm:h-9 flex items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                      aria-label="Record voice message"
+                      title={pendingImage ? 'Discard the image first' : 'Record voice message'}
+                      data-testid="dm-mic-button"
+                    >
+                      <Mic className="h-5 w-5" />
                     </button>
                   </>
                 )}
@@ -743,7 +991,7 @@ export default function MessagesPage() {
                 <Button
                   size="sm"
                   onClick={submitMessage}
-                  disabled={(!draft.trim() && !pendingImage) || sendMutation.isPending}
+                  disabled={(!draft.trim() && !pendingImage && !pendingAudio) || sendMutation.isPending}
                   isLoading={sendMutation.isPending}
                   className="!w-11 !h-11 sm:!w-9 sm:!h-9 !p-0 flex-shrink-0"
                   aria-label="Send message"
@@ -751,6 +999,7 @@ export default function MessagesPage() {
                   <Send className="h-4 w-4" />
                 </Button>
               </div>
+              )}
             </div>
           </>
         )}

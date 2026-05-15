@@ -140,7 +140,10 @@ export async function canMessage(
  */
 export interface SendMessageAttachment {
   url: string;
-  type: 'image';
+  // Feature 20 (13 May) — audio voice messages join images as a supported
+  // attachment type. Both upload to Cloudinary via the same unsigned preset
+  // and live on res.cloudinary.com.
+  type: 'image' | 'audio';
   meta?: Record<string, any> | null;
 }
 
@@ -167,7 +170,7 @@ export async function sendMessage(
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Message too long (max 4000 characters)');
   }
   if (hasAttachment) {
-    if (attachment!.type !== 'image') {
+    if (attachment!.type !== 'image' && attachment!.type !== 'audio') {
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Unsupported attachment type');
     }
     // Defence-in-depth: only accept Cloudinary URLs so a hostile client can't
@@ -333,7 +336,9 @@ export async function listConversations(
         ? r.last_message
         : r.last_attachment_type === 'image'
           ? '📷 Photo'
-          : null;
+          : r.last_attachment_type === 'audio'
+            ? '🎤 Voice message'
+            : null;
       return {
         conversationId: r.conversation_id,
         otherUserId: r.other_user_id,
