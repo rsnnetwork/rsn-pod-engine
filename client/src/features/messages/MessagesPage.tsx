@@ -181,6 +181,16 @@ export default function MessagesPage() {
   const recordingChunksRef = useRef<Blob[]>([]);
   const recordingStartRef = useRef<number>(0);
   const recordingTimerRef = useRef<number | null>(null);
+  // Pass A (15 May follow-up) — Web Audio plumbing for the live waveform
+  // visualizer. AnalyserNode samples the mic stream in real time; the
+  // canvas draws a bar-meter that responds to volume. All of this is
+  // teardown-safe — startRecording resets the refs and stopRecording
+  // disconnects + closes the audio context.
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const waveformRafRef = useRef<number | null>(null);
+  const waveformCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const cancelRecordingRef = useRef<boolean>(false);
   // Phase E — which message the reaction picker is currently anchored to.
   const [reactionPickerFor, setReactionPickerFor] = useState<string | null>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
@@ -402,11 +412,21 @@ export default function MessagesPage() {
     });
   };
 
-  // Feature 20 — recording lifecycle. startRecording requests mic permission
-  // and kicks off MediaRecorder; the 100ms timeslice keeps the chunks array
-  // streaming so a connection drop doesn't lose everything. stopRecording
-  // finalizes into pendingAudio + flips state to 'preview'. cancelRecording
-  // tears everything down without producing a blob.
+  // Feature 20 + Pass A fix (15 May follow-up) — recording lifecycle.
+  //
+  // The previous implementation used `recorder.start(100)` to slice the
+  // recording into 100ms chunks, but that hit a known browser quirk where
+  // the final ~half-second of audio could land mid-slice and never make it
+  // into the chunks array before `onstop` fired. Voice messages came back
+  // truncated at the tail (Ali's "missing last seconds" report).
+  //
+  // The fix:
+  //   1. Drop the timeslice entirely → recorder buffers the whole take and
+  //      delivers it in a single `dataavailable` event on stop.
+  //   2. Call `recorder.requestData()` ~100ms before `stop()` to force any
+  //      pending buffer to flush as its own `dataavailable` event first.
+  //   3. Use a `cancelRecordingRef` so cancel can flip a flag the `onstop`
+  //      handler reads instead of clearing chunks underneath the recorder.
   const startRecording = async () => {
     if (recordingState !== 'idle') return;
     if (!cloudinaryReady) {
@@ -415,11 +435,11 @@ export default function MessagesPage() {
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      // Prefer audio/webm (Chrome, Edge, Firefox), fall back to whatever the
-      // browser picks (Safari produces audio/mp4).
       const mime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
       const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
       recordingChunksRef.current = [];
+      cancelRecordingRef.current = false;
+
       recorder.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) recordingChunksRef.current.push(e.data);
       };
@@ -431,11 +451,26 @@ export default function MessagesPage() {
           window.clearInterval(recordingTimerRef.current);
           recordingTimerRef.current = null;
         }
+        // Tear down the live-waveform plumbing.
+        if (waveformRafRef.current !== null) {
+          cancelAnimationFrame(waveformRafRef.current);
+          waveformRafRef.current = null;
+        }
+        if (analyserRef.current) {
+          try { analyserRef.current.disconnect(); } catch {}
+          analyserRef.current = null;
+        }
+        if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+          audioContextRef.current.close().catch(() => {});
+          audioContextRef.current = null;
+        }
+
+        const durationMs = Date.now() - recordingStartRef.current;
         const blob = new Blob(recordingChunksRef.current, { type: recorder.mimeType || mime || 'audio/webm' });
         recordingChunksRef.current = [];
-        const durationMs = Date.now() - recordingStartRef.current;
-        if (blob.size === 0 || durationMs < 250) {
-          // Treat micro-recordings as cancellations — usually a misclick.
+
+        if (cancelRecordingRef.current || blob.size === 0 || durationMs < 250) {
+          cancelRecordingRef.current = false;
           setRecordingState('idle');
           setRecordingMs(0);
           return;
@@ -444,7 +479,12 @@ export default function MessagesPage() {
         setPendingAudio({ blob, durationMs, previewUrl });
         setRecordingState('preview');
       };
-      recorder.start(100);
+
+      // Pass A — start with NO timeslice so the whole take streams into a
+      // single final chunk on stop. The 100ms requestData() in stopRecording
+      // belts-and-braces this against any browser that buffers the tail
+      // anyway.
+      recorder.start();
       mediaRecorderRef.current = recorder;
       recordingStartRef.current = Date.now();
       setRecordingMs(0);
@@ -453,10 +493,60 @@ export default function MessagesPage() {
         const elapsed = Date.now() - recordingStartRef.current;
         setRecordingMs(elapsed);
         if (elapsed >= MAX_AUDIO_DURATION_MS) {
-          // Hard cap: auto-stop at 5 min.
-          recorder.state === 'recording' && recorder.stop();
+          // Hard cap: auto-stop at 5 min. Use the wrapped helper so the
+          // requestData() flush still fires.
+          stopRecording();
         }
       }, 100);
+
+      // Pass A — live waveform visualizer. AnalyserNode taps the mic stream
+      // in real time; we draw a 40-bar meter to the canvas at requestAnimationFrame
+      // cadence. fftSize 256 → 128 freq bins; we down-sample to 40 bars so the
+      // bars are visibly wide on mobile. The canvas ref is set inside the JSX.
+      try {
+        const AudioCtor = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioCtor) {
+          const ctx = new AudioCtor();
+          const source = ctx.createMediaStreamSource(stream);
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 256;
+          analyser.smoothingTimeConstant = 0.6;
+          source.connect(analyser);
+          audioContextRef.current = ctx;
+          analyserRef.current = analyser;
+
+          const draw = () => {
+            const canvas = waveformCanvasRef.current;
+            if (!canvas || !analyserRef.current) return;
+            const a = analyserRef.current;
+            const data = new Uint8Array(a.frequencyBinCount);
+            a.getByteFrequencyData(data);
+            const c = canvas.getContext('2d');
+            if (!c) return;
+            const w = canvas.width;
+            const h = canvas.height;
+            c.clearRect(0, 0, w, h);
+            const bars = 40;
+            const stride = Math.floor(data.length / bars);
+            const barW = w / bars;
+            for (let i = 0; i < bars; i++) {
+              // Average a small slice for each bar so the visualization is
+              // smoother than picking one bin per bar.
+              let sum = 0;
+              for (let j = 0; j < stride; j++) sum += data[i * stride + j] || 0;
+              const v = sum / stride / 255; // 0..1
+              const barH = Math.max(2, v * h * 0.9);
+              c.fillStyle = '#e10600'; // rsn-red
+              c.fillRect(i * barW + barW * 0.15, (h - barH) / 2, barW * 0.7, barH);
+            }
+            waveformRafRef.current = requestAnimationFrame(draw);
+          };
+          waveformRafRef.current = requestAnimationFrame(draw);
+        }
+      } catch {
+        // Visualizer is purely cosmetic — silently skip if Web Audio API is
+        // unavailable or the user's browser blocks it.
+      }
     } catch (err: any) {
       addToast(
         err?.name === 'NotAllowedError'
@@ -470,17 +560,32 @@ export default function MessagesPage() {
 
   const stopRecording = () => {
     const recorder = mediaRecorderRef.current;
-    if (recorder && recorder.state === 'recording') recorder.stop();
-    mediaRecorderRef.current = null;
+    if (!recorder || recorder.state !== 'recording') {
+      mediaRecorderRef.current = null;
+      return;
+    }
+    // Pass A fix — force the recorder to emit any pending buffer as its own
+    // dataavailable event BEFORE we call stop. Without this, the last
+    // ~500ms of audio (between the most recent dataavailable and stop) can
+    // sit in the muxer buffer and never reach the chunks array. The 120ms
+    // delay gives the dataavailable event time to fire before stop runs.
+    try { recorder.requestData(); } catch {}
+    window.setTimeout(() => {
+      const r = mediaRecorderRef.current;
+      if (r && r.state === 'recording') r.stop();
+      mediaRecorderRef.current = null;
+    }, 120);
   };
 
   const cancelRecording = () => {
     const recorder = mediaRecorderRef.current;
     if (recorder && recorder.state === 'recording') {
-      // Drop any captured chunks so onstop produces a 0-byte blob and
-      // short-circuits to idle.
-      recordingChunksRef.current = [];
-      recorder.stop();
+      // Flip the cancel flag so onstop discards the blob instead of
+      // racing with chunk clearance. The previous implementation cleared
+      // chunks underneath the recorder which could leave the blob with
+      // a partial tail on some browsers.
+      cancelRecordingRef.current = true;
+      try { recorder.stop(); } catch {}
     }
     mediaRecorderRef.current = null;
     if (recordingTimerRef.current !== null) {
@@ -498,12 +603,23 @@ export default function MessagesPage() {
     setRecordingMs(0);
   };
 
-  // Clean up media stream on unmount in case the user navigates away mid-record.
+  // Clean up media stream + Web Audio plumbing on unmount in case the user
+  // navigates away mid-record. Each ref is teardown-safe on its own; the
+  // checks are belt-and-suspenders for unexpected state.
   useEffect(() => {
     return () => {
       const recorder = mediaRecorderRef.current;
-      if (recorder && recorder.state === 'recording') recorder.stop();
+      if (recorder && recorder.state === 'recording') {
+        try { recorder.stop(); } catch {}
+      }
       if (recordingTimerRef.current !== null) window.clearInterval(recordingTimerRef.current);
+      if (waveformRafRef.current !== null) cancelAnimationFrame(waveformRafRef.current);
+      if (analyserRef.current) {
+        try { analyserRef.current.disconnect(); } catch {}
+      }
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close().catch(() => {});
+      }
       if (pendingAudio) URL.revokeObjectURL(pendingAudio.previewUrl);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -888,32 +1004,47 @@ export default function MessagesPage() {
                   )}
                 </div>
               )}
-              {/* Recording-active bar takes over the composer: full-width row
-                  with a pulsing red dot, elapsed time, a cancel button and a
-                  stop button. The normal textarea + buttons hide while
-                  recording so the user can't accidentally send half-formed
-                  state. */}
+              {/* Recording-active bar takes over the composer: pulsing red
+                  dot, elapsed time, a live waveform visualizer, and the
+                  cancel/stop buttons. The normal textarea + buttons hide
+                  while recording so the user can't accidentally send a
+                  half-formed message. Mobile-first: gap shrinks, waveform
+                  flexes to fill, buttons stay 44pt tap targets. */}
               {recordingState === 'recording' && (
-                <div className="flex items-center gap-3 px-2" data-testid="dm-recording-bar">
-                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-rsn-red animate-pulse" />
-                  <span className="text-sm font-mono text-gray-700">{formatRecordTime(recordingMs)}</span>
-                  <span className="text-xs text-gray-400 flex-1 truncate hidden sm:inline">Recording voice message…</span>
-                  <Button
-                    size="sm"
-                    variant="ghost"
+                <div className="flex items-center gap-2 sm:gap-3 px-1 sm:px-2 py-1" data-testid="dm-recording-bar">
+                  <span className="inline-block h-2.5 w-2.5 rounded-full bg-rsn-red animate-pulse shrink-0" />
+                  <span className="text-sm font-mono text-gray-700 shrink-0 tabular-nums">
+                    {formatRecordTime(recordingMs)}
+                  </span>
+                  {/* Live waveform. Canvas resolution chosen for clarity at
+                      device pixel ratio 1; CSS scales it to fit the flex space. */}
+                  <canvas
+                    ref={waveformCanvasRef}
+                    width={400}
+                    height={36}
+                    className="flex-1 min-w-0 h-9 rounded-md bg-gray-50"
+                    aria-label="Recording waveform"
+                    data-testid="dm-recording-waveform"
+                  />
+                  <button
+                    type="button"
                     onClick={cancelRecording}
-                    className="!h-9 !px-3 text-xs"
+                    aria-label="Cancel recording"
+                    title="Cancel"
+                    className="w-11 h-11 sm:w-9 sm:h-9 flex items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex-shrink-0"
                   >
-                    Cancel
-                  </Button>
-                  <Button
-                    size="sm"
+                    <X className="h-5 w-5 sm:h-4 sm:w-4" />
+                  </button>
+                  <button
+                    type="button"
                     onClick={stopRecording}
-                    className="!h-9 !px-3 text-xs"
+                    aria-label="Stop and preview"
+                    title="Stop"
+                    className="w-11 h-11 sm:w-9 sm:h-9 flex items-center justify-center rounded-full bg-rsn-red text-white hover:bg-rsn-red/90 transition-colors flex-shrink-0"
                     data-testid="dm-recording-stop"
                   >
-                    <StopSquare className="h-3.5 w-3.5 mr-1" /> Stop
-                  </Button>
+                    <StopSquare className="h-5 w-5 sm:h-4 sm:w-4" />
+                  </button>
                 </div>
               )}
               {/* Normal composer hides while recording — the recording bar
