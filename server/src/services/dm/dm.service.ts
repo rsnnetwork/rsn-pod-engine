@@ -224,7 +224,10 @@ export async function sendMessage(
                  attachment_url, attachment_type, attachment_meta`,
       [
         uuid(), conversationId, fromUserId,
-        hasText ? trimmed : '',
+        // Migration 063 — content is now nullable. Empty string used to be
+        // legal but tripped the legacy per-column CHECK; NULL is the
+        // cleaner storage form for a captionless attachment message.
+        hasText ? trimmed : null,
         hasAttachment ? attachment!.url : null,
         hasAttachment ? attachment!.type : null,
         hasAttachment ? (attachment!.meta ?? null) : null,
