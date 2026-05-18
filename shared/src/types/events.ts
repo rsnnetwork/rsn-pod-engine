@@ -133,6 +133,12 @@ export interface ServerToClientEvents {
   // pinned (or unpinned, with pinnedUserId=null) a participant. Every
   // viewer renders that user as the big tile.
   'pin:changed': (data: { sessionId: string; pinnedUserId: string | null }) => void;
+  // 19 May Ali — generic realtime invalidator. Server emits the domain
+  // entities that just changed; every client's useEntityChangedHandler
+  // invalidates queries whose meta.entities intersects the payload.
+  // Replaces the bespoke per-event fan-out pattern over time (see
+  // docs/superpowers/plans/2026-05-19-realtime-architecture-migration.md).
+  'entity:changed': (data: { entities: string[] }) => void;
   // Bug 26 (19 May Ali) — director's per-user visual tile override has
   // changed. Visual-only: the listed users keep all cohost privileges,
   // but their tile renders at participant size with no host-ring.

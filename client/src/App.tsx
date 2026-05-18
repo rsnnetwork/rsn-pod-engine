@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { connectSocket, disconnectSocket, getSocket } from '@/lib/socket';
+import { useEntityChangedHandler } from '@/realtime/useEntityChangedHandler';
 
 // Backward-compat: old invite emails (pre-cbcef30) pointed users at
 // `/sessions/:id/live` (plural). The actual route is `/session/:id/live`
@@ -84,6 +85,13 @@ export default function App() {
       s.auth = { token: accessToken };
     }
   }, [accessToken, isAuthenticated]);
+
+  // Realtime migration Phase 1 (19 May Ali) — mount the generic
+  // entity:changed handler at the app root. Every query that declares
+  // meta.entities will be auto-invalidated when the server emits a
+  // matching entity. Replaces NotificationBell's hard-coded query-key
+  // list as queries migrate to the new pattern over Phases 3a–3g.
+  useEntityChangedHandler();
 
   return (
     <Routes>
