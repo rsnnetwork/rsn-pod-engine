@@ -85,6 +85,11 @@ export default function NotificationBell() {
     const handler = (data: Notification) => {
       setNotifications(prev => [data, ...prev].slice(0, 20));
       setUnreadCount(prev => prev + 1);
+      // Bug 30 (19 May Ali) — when the invitee receives a notification:new
+      // (only fan-out the invite service does directly to them), their
+      // own "Received Invites" list must also refetch so a pending invite
+      // appears live instead of waiting for the next page navigation.
+      qc.invalidateQueries({ queryKey: ['received-invites'] });
     };
     socket.on('notification:new', handler);
     // Bug 3 (18 May Stefan) — pod membership approval (and rejection)
@@ -98,6 +103,15 @@ export default function NotificationBell() {
       qc.invalidateQueries({ queryKey: ['my-pods'] });
       qc.invalidateQueries({ queryKey: ['pod'] });
       qc.invalidateQueries({ queryKey: ['pod-pending-members'] });
+      // Bug 30 (19 May Ali) — every invite mutation (send / accept /
+      // decline / revoke / mark-accepted / bulk) now fires
+      // pod:membership_updated for the affected pod. The pending-invites
+      // count, the received-invites list, and the inviter's "my-invites"
+      // tab all need to repaint. Adding these invalidations means each
+      // surface refetches in the same tick the broadcast lands.
+      qc.invalidateQueries({ queryKey: ['received-invites'] });
+      qc.invalidateQueries({ queryKey: ['my-invites'] });
+      qc.invalidateQueries({ queryKey: ['pod-invites'] });
       // Refetch the notification list so the approval/rejection notification
       // appears in the bell without waiting for the 30-second poll.
       fetchNotifications();
@@ -112,6 +126,11 @@ export default function NotificationBell() {
       qc.invalidateQueries({ queryKey: ['pod-sessions'] });
       qc.invalidateQueries({ queryKey: ['session-detail'] });
       qc.invalidateQueries({ queryKey: ['session-participants'] });
+      // Bug 30 (19 May Ali) — session invites mutate via the same socket
+      // event for session-typed invites; cover their list keys too.
+      qc.invalidateQueries({ queryKey: ['received-invites'] });
+      qc.invalidateQueries({ queryKey: ['my-invites'] });
+      qc.invalidateQueries({ queryKey: ['session-invites'] });
     };
     socket.on('session:list_changed', sessionListHandler);
     return () => {

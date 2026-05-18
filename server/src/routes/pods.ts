@@ -172,6 +172,10 @@ router.put(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const pod = await podService.updatePod(req.params.id, req.user!.userId, req.body, req.user!.role);
+      // Bug 30 (19 May Ali) — every other pod mutation fans out; the
+      // update route was missed. Renames, archive toggles, visibility
+      // changes etc. now propagate to every active member instantly.
+      orchestrationService.notifyPodChanged(req.params.id, 'pod_updated').catch(() => {});
       const response: ApiResponse = { success: true, data: pod };
       res.json(response);
     } catch (err) {
@@ -188,6 +192,12 @@ router.delete(
   auditMiddleware('delete_pod', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      // Bug 30 (19 May Ali) — fan out BEFORE the delete so notifyPodChanged
+      // can still resolve the active member list. After deletion the
+      // pod_members rows are gone (cascade) and the lookup would find no
+      // one to notify. notifyPodChanged is fire-and-forget, so this is
+      // safe to run before awaiting the deletePod call.
+      orchestrationService.notifyPodChanged(req.params.id, 'pod_deleted').catch(() => {});
       await podService.deletePod(req.params.id, req.user!.userId, req.user!.role);
       const response: ApiResponse = { success: true, data: { message: 'Pod deleted' } };
       res.json(response);

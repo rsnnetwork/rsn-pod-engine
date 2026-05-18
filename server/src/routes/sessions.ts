@@ -162,6 +162,12 @@ router.put(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const session = await sessionService.updateSession(req.params.id, req.user!.userId, req.body, req.user!.role);
+      // Bug 30 (19 May Ali) — fan out so every member's session list
+      // shows the updated title/time/status instantly.
+      try {
+        const { notifySessionListChanged } = await import('../services/orchestration/orchestration.service');
+        notifySessionListChanged(session.podId ?? null, session.id, 'session_updated').catch(() => {});
+      } catch { /* non-fatal */ }
       const response: ApiResponse = { success: true, data: session };
       res.json(response);
     } catch (err) {
@@ -178,7 +184,25 @@ router.delete(
   auditMiddleware('delete_session', 'session'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      // Bug 30 (19 May Ali) — fetch pod_id BEFORE deletion so we can fan
+      // out the right pod scope after. deleteSession itself is allowed to
+      // proceed even if this lookup fails (best-effort).
+      let podIdForNotify: string | null = null;
+      try {
+        const sessRow = await query<{ pod_id: string | null }>(
+          `SELECT pod_id FROM sessions WHERE id = $1`,
+          [req.params.id],
+        );
+        podIdForNotify = sessRow.rows[0]?.pod_id ?? null;
+      } catch { /* non-fatal */ }
+
       await sessionService.deleteSession(req.params.id, req.user!.userId, req.user!.role);
+
+      try {
+        const { notifySessionListChanged } = await import('../services/orchestration/orchestration.service');
+        notifySessionListChanged(podIdForNotify, req.params.id, 'session_deleted').catch(() => {});
+      } catch { /* non-fatal */ }
+
       const response: ApiResponse = { success: true, data: { message: 'Event deleted' } };
       res.json(response);
     } catch (err) {

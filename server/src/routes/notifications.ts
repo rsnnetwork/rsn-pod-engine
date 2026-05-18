@@ -29,6 +29,12 @@ router.get(
                   WHEN i.pod_id IS NOT NULL AND EXISTS (
                     SELECT 1 FROM pod_members pm
                     WHERE pm.pod_id = i.pod_id AND pm.user_id = $1
+                      -- Bug 30 (19 May Ali) — exclude history rows. A
+                      -- 'removed'/'left'/'declined' row means the user is
+                      -- NOT currently in the pod, so the new pending
+                      -- invite must NOT silently report as 'accepted'.
+                      -- Sessions branch above already mirrors this rule.
+                      AND pm.status NOT IN ('removed', 'left', 'declined')
                   ) THEN 'accepted'
                   ELSE i.status
                 END AS "inviteStatus",
