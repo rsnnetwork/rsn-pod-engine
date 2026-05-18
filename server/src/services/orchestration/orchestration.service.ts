@@ -11,6 +11,15 @@ import { Server as SocketServer, Socket } from 'socket.io';
 import logger from '../../config/logger';
 import { SessionStatus } from '@rsn/shared';
 
+// Phase 2 (19 May 2026) — realtime architecture migration dual-emit. Each
+// existing notify* fanout below ALSO calls emitEntities() with the matching
+// domain-entity tags so the client's generic predicate handler can
+// invalidate the right React-Query keys. The legacy emit stays until
+// Phase 5; both pathways coexist. See:
+//   docs/superpowers/plans/2026-05-19-realtime-architecture-migration.md
+import { emitEntities } from '../../realtime/emit';
+import { E } from '../../realtime/entities';
+
 // State
 import {
   activeSessions, getUserIdFromSocket, cleanupChatMessages,
@@ -385,6 +394,14 @@ export async function notifyPodMembershipChanged(
     userId,
     cause,
   });
+  // Phase 2 dual-emit — the target user's pod queries (pod, pod-members,
+  // my-pods) refetch. The user-specific user:pods covers their "Which pods
+  // do I belong to" UI.
+  emitEntities(
+    io,
+    [userId],
+    [E.pod(podId), E.podMembers(podId), E.userPods(userId)],
+  ).catch(() => {});
 }
 
 /**
@@ -417,6 +434,15 @@ export async function notifyPodChanged(podId: string, cause: string): Promise<vo
         cause,
       });
     }
+    // Phase 2 dual-emit — pod itself, member list, and invite list cover
+    // every pod-scoped query (membership, role, invite, settings changes
+    // all converge on these tags). Re-use the recipient list already
+    // resolved above so we don't re-query.
+    emitEntities(
+      io,
+      result.rows.map(r => r.user_id),
+      [E.pod(podId), E.podMembers(podId), E.podInvites(podId)],
+    ).catch(() => {});
   } catch (err) {
     logger.warn({ err, podId, cause }, 'notifyPodChanged: failed to fan out');
   }
@@ -457,6 +483,14 @@ export async function notifySessionListChanged(
         cause,
       });
     }
+    // Phase 2 dual-emit — session row + (optional) pod's session list +
+    // session participants. The session itself updates session/host-state/
+    // event-plan queries; pod:sessions covers pod-level session lists;
+    // sessionParticipants covers the participant-count surfaces that
+    // session-list mutations also affect.
+    const entities = [E.session(sessionId), E.sessionParticipants(sessionId)];
+    if (podId) entities.push(E.podSessions(podId));
+    emitEntities(io, result.rows.map(r => r.user_id), entities).catch(() => {});
   } catch (err) {
     logger.warn({ err, sessionId, cause }, 'notifySessionListChanged: failed to fan out');
   }
@@ -474,6 +508,14 @@ export async function notifyPermissionsUpdated(
     userId,
     cause,
   });
+  // Phase 2 dual-emit — session + participants list + this specific user.
+  // The user gets the entity tags so their session-detail / unrated-
+  // partners / user-scoped queries pick up the change in one tick.
+  emitEntities(
+    io,
+    [userId],
+    [E.session(sessionId), E.sessionParticipants(sessionId), E.user(userId)],
+  ).catch(() => {});
   // Bug 68 (18 May Stefan) — every roster mutation must be visible to
   // EVERY connected client without a refresh. Pre-fix, only the target
   // user received permissions:updated; other participants kept the stale
@@ -486,6 +528,26 @@ export async function notifyPermissionsUpdated(
     sessionId,
     cause,
   });
+  // Phase 2 dual-emit — roster:changed targets the WHOLE session room,
+  // so resolve the same audience (active session_participants) and emit
+  // session + participants entities so every client's session-scoped
+  // queries (session-participants, session-cohost, unrated-partners,
+  // session-participant-counts) refetch in the same tick.
+  try {
+    const { query } = await import('../../db');
+    const rosterRows = await query<{ user_id: string }>(
+      `SELECT user_id FROM session_participants
+        WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')`,
+      [sessionId],
+    );
+    emitEntities(
+      io,
+      rosterRows.rows.map(r => r.user_id),
+      [E.session(sessionId), E.sessionParticipants(sessionId)],
+    ).catch(() => {});
+  } catch {
+    /* roster fanout is best-effort */
+  }
   // Bug F + I (15 May Ali) — keep re-emitting the HCC dashboard so every
   // acting host sees the new role layout in the same tick. Force-variant
   // bypass the coalesce so a back-to-back acting-as-host toggle doesn't
@@ -535,6 +597,16 @@ export async function notifyAdminListChanged(
     for (const row of result.rows) {
       io.to(userRoom(row.id)).emit('admin:list_changed', { scope, cause });
     }
+    // Phase 2 dual-emit — the admin entity strings are simple `admin:<scope>`
+    // tags (admin:pods, admin:sessions, admin:users, admin:join-requests,
+    // admin:violations, admin:support-tickets, admin:analytics). Pass the
+    // raw `admin:${scope}` so a brand-new admin list plugged into the
+    // helper Just Works without a server-side enum bump.
+    emitEntities(
+      io,
+      result.rows.map(r => r.id),
+      [`admin:${scope}`],
+    ).catch(() => {});
   } catch (err) {
     logger.warn({ err, scope, cause }, 'notifyAdminListChanged: failed to fan out');
   }
@@ -554,6 +626,10 @@ export async function notifyOwnNotificationsChanged(
   try {
     const { userRoom } = await import('./state/session-state');
     io.to(userRoom(userId)).emit('notification:list_changed', { userId, cause });
+    // Phase 2 dual-emit — invalidate this user's notification queries
+    // (notification-prefs, notification list, bell counter) across every
+    // open tab/device.
+    emitEntities(io, [userId], [E.userNotifications(userId)]).catch(() => {});
   } catch (err) {
     logger.warn({ err, userId, cause }, 'notifyOwnNotificationsChanged: failed to fan out');
   }
@@ -576,6 +652,13 @@ export async function notifyUserBlocksChanged(
     const payload = { blockerId, blockedId, cause };
     io.to(userRoom(blockerId)).emit('user:blocks_changed', payload);
     io.to(userRoom(blockedId)).emit('user:blocks_changed', payload);
+    // Phase 2 dual-emit — both parties' block-list queries
+    // (blocked-users, user-block-status, can-message) need to refetch.
+    emitEntities(
+      io,
+      [blockerId, blockedId],
+      [E.userBlocks(blockerId), E.userBlocks(blockedId)],
+    ).catch(() => {});
   } catch (err) {
     logger.warn({ err, blockerId, blockedId, cause }, 'notifyUserBlocksChanged: failed to fan out');
   }
@@ -596,6 +679,9 @@ export async function notifyUserChanged(
   try {
     const { userRoom } = await import('./state/session-state');
     io.to(userRoom(userId)).emit('user:changed', { userId, cause });
+    // Phase 2 dual-emit — the user-scope entity covers profile, encounters,
+    // and any user-keyed query on the affected user's surfaces.
+    emitEntities(io, [userId], [E.user(userId)]).catch(() => {});
   } catch (err) {
     logger.warn({ err, userId, cause }, 'notifyUserChanged: failed to fan out');
   }
@@ -622,6 +708,13 @@ export async function notifyDmReactionChanged(
     const payload = { messageId, conversationId, userId, emoji };
     io.to(userRoom(userId)).emit(event, payload);
     io.to(userRoom(otherUserId)).emit(event, payload);
+    // Phase 2 dual-emit — both participants invalidate their dm-messages
+    // query for the affected conversation.
+    emitEntities(
+      io,
+      [userId, otherUserId],
+      [E.dmConversation(conversationId)],
+    ).catch(() => {});
   } catch (err) {
     logger.warn({ err, conversationId, messageId }, 'notifyDmReactionChanged: failed to fan out');
   }
@@ -651,6 +744,13 @@ export async function notifyDmReadReceipt(
     };
     io.to(userRoom(readerId)).emit('dm:read_receipt', payload);
     io.to(userRoom(otherUserId)).emit('dm:read_receipt', payload);
+    // Phase 2 dual-emit — dm-messages for this conversation refetches on
+    // both sides (the unread badge and read-receipts re-render).
+    emitEntities(
+      io,
+      [readerId, otherUserId],
+      [E.dmConversation(conversationId)],
+    ).catch(() => {});
   } catch (err) {
     logger.warn({ err, conversationId }, 'notifyDmReadReceipt: failed to fan out');
   }
@@ -681,6 +781,14 @@ export async function notifyGroupChanged(
         cause,
       });
     }
+    // Phase 2 dual-emit — group entity is not in the centralised E builder
+    // (groups are a niche surface). Use the raw string so DM/group queries
+    // can declare `group:${groupId}` in their meta.entities.
+    emitEntities(
+      io,
+      result.rows.map(r => r.user_id),
+      [`group:${groupId}`],
+    ).catch(() => {});
   } catch (err) {
     logger.warn({ err, groupId, cause }, 'notifyGroupChanged: failed to fan out');
   }

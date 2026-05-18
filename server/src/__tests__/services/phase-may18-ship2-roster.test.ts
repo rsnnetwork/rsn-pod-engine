@@ -139,7 +139,10 @@ describe('Stefan 18 May — Ship #2 architectural fixes', () => {
 
     it('notifyPermissionsUpdated also uses the force variant via dynamic import', () => {
       const fnStart = orchSrc.indexOf('export async function notifyPermissionsUpdated');
-      const fn = orchSrc.slice(fnStart, fnStart + 2000);
+      // Phase 2 / Bug 41 (19 May) — function body grew (added emitEntities
+      // dual-emit + extra fanout helpers); widen the slice so the
+      // emitHostDashboardForce pin still lands.
+      const fn = orchSrc.slice(fnStart, fnStart + 4000);
       expect(fn).toMatch(/emitHostDashboardForce/);
     });
   });

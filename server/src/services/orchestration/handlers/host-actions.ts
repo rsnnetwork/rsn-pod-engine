@@ -27,6 +27,14 @@ import * as matchingService from '../../matching/matching.service';
 // Phase 2B (5 May spec) — single chokepoint for presenceMap mutations.
 import { setPresence } from '../state/participant-state-machine';
 import { validateMatchAssignment } from '../../matching/match-validator.service';
+// Phase 2 (19 May 2026) — realtime migration dual-emit. Every legacy
+// in-handler broadcast (roster:changed, host:transferred, host:event_plan_*,
+// pin:changed, tile:size_changed, host:visibility_changed,
+// match:reassigned, match:partner_disconnected) gets a parallel
+// emitEntities() call with the matching domain-entity tags. See:
+//   docs/superpowers/plans/2026-05-19-realtime-architecture-migration.md
+import { emitEntities } from '../../../realtime/emit';
+import { E } from '../../../realtime/entities';
 
 // ─── Cross-module references (wired in Task 7) ────────────────────────────
 // Functions from round-lifecycle.ts that don't exist yet.
@@ -94,7 +102,30 @@ async function maybeRepairFutureRounds(io: SocketServer, sessionId: string): Pro
       reason: 'host_request',
       regeneratedRounds: result.regeneratedRounds,
     });
+    // Phase 2 dual-emit — plan + session entity covers every plan-aware
+    // surface (event-plan, host-state, session). Audience is the active
+    // session participants (same as the room broadcast above).
+    emitSessionRoomEntities(io, sessionId, [E.session(sessionId), E.sessionPlan(sessionId)]).catch(() => {});
   }
+}
+
+// Phase 2 (19 May 2026) — helper used by every in-handler dual-emit below.
+// Resolves the active session participants (same audience as
+// `io.to(sessionRoom(sessionId)).emit(...)`) and fans the given entity
+// tags to each via emitEntities. Wrapped in .catch() at every call site
+// so fanout failure can never break the user-facing handler response.
+async function emitSessionRoomEntities(
+  io: SocketServer,
+  sessionId: string,
+  entities: string[],
+): Promise<void> {
+  if (entities.length === 0) return;
+  const rows = await query<{ user_id: string }>(
+    `SELECT user_id FROM session_participants
+       WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')`,
+    [sessionId],
+  );
+  await emitEntities(io, rows.rows.map(r => r.user_id), entities);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -341,6 +372,12 @@ export async function handleHostStart(
         roundCount: planOutput.rounds.length,
         totalPairs,
       });
+      // Phase 2 dual-emit — plan + session for event-plan / host-state
+      // re-queries on every participant's open lobby.
+      emitSessionRoomEntities(
+        io, data.sessionId,
+        [E.session(data.sessionId), E.sessionPlan(data.sessionId)],
+      ).catch(() => {});
     } catch (planErr: any) {
       logger.warn(
         { err: planErr, sessionId: data.sessionId },
@@ -718,6 +755,17 @@ export async function handleHostRemoveParticipant(
       sessionId: data.sessionId,
       cause: 'participant_kicked',
     });
+    // Phase 2 dual-emit — session + participants entities; the kicked
+    // user also gets the entity tag so their own client invalidates the
+    // session queries (which now show "removed" status).
+    emitSessionRoomEntities(
+      io, data.sessionId,
+      [E.session(data.sessionId), E.sessionParticipants(data.sessionId)],
+    ).catch(() => {});
+    emitEntities(
+      io, [data.userId],
+      [E.session(data.sessionId), E.sessionParticipants(data.sessionId)],
+    ).catch(() => {});
 
     // Phase 3 (5 May spec) — force-refresh canonical host dashboard after
     // any participant-state mutation. Closes Stefan #9 gap where the host
@@ -833,6 +881,13 @@ export async function handleHostReassign(
         token: partnerToken,
         livekitUrl: appConfig.livekit.host,
       });
+
+      // Phase 2 dual-emit — session, participants list, and match entity
+      // for the two reassigned users so their live-event surfaces refetch.
+      emitEntities(
+        io, [targetId, partner],
+        [E.session(data.sessionId), E.sessionParticipants(data.sessionId), E.match(matchId)],
+      ).catch(() => {});
 
       logger.info({ sessionId: data.sessionId, targetId, partner }, 'Participant reassigned');
     } else {
@@ -1200,6 +1255,13 @@ export async function handleHostRemoveFromRoom(
       for (const partnerId of partnerIds) {
         io.to(userRoom(partnerId)).emit('match:partner_disconnected', { matchId: data.matchId });
       }
+      // Phase 2 dual-emit — affected partner(s) + the removed user.
+      // Match entity covers the in-event match surface; session +
+      // participants cover the lobby / participants list refresh.
+      emitEntities(
+        io, [...partnerIds, data.userId],
+        [E.session(data.sessionId), E.sessionParticipants(data.sessionId), E.match(data.matchId)],
+      ).catch(() => {});
 
       // Server-side 5s timeout: return partner to rating → lobby
       // (Client's auto-leave won't work because match is already 'no_show').
@@ -1456,6 +1518,12 @@ export async function handleHostMoveToRoom(
         livekitUrl: moveConfig.livekit.host,
       });
     }
+    // Phase 2 dual-emit — session, participants, match-id for everyone
+    // in the new room. Same audience as the per-pid emits above.
+    emitEntities(
+      io, allParticipants,
+      [E.session(sessionId), E.sessionParticipants(sessionId), E.match(newMatchId)],
+    ).catch(() => {});
 
     // Give abandoned partner a bye notification
     io.to(userRoom(currentPartnerId)).emit('match:bye_round', {
@@ -1868,6 +1936,22 @@ export async function handlePromoteCohost(
         newHostId: cohostUserId,
         newHostDisplayName: newHostName,
       });
+      // Phase 2 dual-emit — session row, participants list (cohost
+      // affiliation changed), and the pod (pod-level admin lists may
+      // surface the host). Audience: whole session room participants
+      // + both endpoints to make sure their user-scoped queries refresh.
+      try {
+        const podIdRes = await query<{ pod_id: string | null }>(
+          `SELECT pod_id FROM sessions WHERE id = $1`, [sessionId],
+        );
+        const podId = podIdRes.rows[0]?.pod_id ?? null;
+        const entities = [
+          E.session(sessionId), E.sessionParticipants(sessionId),
+        ];
+        if (podId) entities.push(E.pod(podId));
+        await emitSessionRoomEntities(io, sessionId, entities);
+        await emitEntities(io, [hostId, cohostUserId], entities);
+      } catch { /* dual-emit failure non-fatal */ }
 
       // Direct permission updates to both parties so UIs re-render.
       io.to(userRoom(cohostUserId)).emit('permissions:updated', {
@@ -1982,6 +2066,10 @@ export async function setHostVisibility(
       userId: targetUserId,
       mode,
     });
+    // Phase 2 dual-emit — session entity covers session-detail / host-state
+    // queries (which surface visibility modes) for every participant in
+    // the room.
+    emitSessionRoomEntities(_io, sessionId, [E.session(sessionId)]).catch(() => {});
   }
 
   logger.info({ sessionId, targetUserId, mode, requesterUserId: requester.userId },
@@ -2644,6 +2732,9 @@ export async function handleHostSetPin(
         sessionId,
         pinnedUserId,
       });
+      // Phase 2 dual-emit — session entity (host-state surfaces include
+      // the pinned user) for the whole audience.
+      emitSessionRoomEntities(io, sessionId, [E.session(sessionId)]).catch(() => {});
 
       logger.info(
         { sessionId, pinnedUserId, by: getUserIdFromSocket(socket) },
@@ -2711,6 +2802,9 @@ export async function handleHostSetTileSize(
         sessionId,
         tileDemotedUserIds: activeSession.tileDemotedUserIds,
       });
+      // Phase 2 dual-emit — session entity (the demoted-ids list is part
+      // of the session-state snapshot consumed by every viewer).
+      emitSessionRoomEntities(io, sessionId, [E.session(sessionId)]).catch(() => {});
 
       logger.info(
         { sessionId, targetUserId, size, by: callerId, total: after },

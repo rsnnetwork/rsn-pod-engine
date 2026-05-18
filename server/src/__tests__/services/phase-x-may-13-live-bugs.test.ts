@@ -240,12 +240,21 @@ describe('Phase X — 13 May live-test bug fixes', () => {
     });
   });
 
-  describe('Bug 13 — ParticipantList toggle hidden for Phase M opt-ins', () => {
+  describe('Bug 13 → superseded by Bug 43 (19 May Ali) — ParticipantList toggle now visible on Phase M opt-ins', () => {
     const src = readClientSource('features/live/ParticipantList.tsx');
 
-    it('button visibility check excludes users acting via Phase M opt-in', () => {
-      expect(src).toMatch(/isViaPhaseM\s*=\s*!isFormalCohost\s*&&\s*actingAsHostOverrides\[p\.userId\]\s*===\s*true/);
-      expect(src).toMatch(/if\s*\(!isOriginalHost\s*\|\|\s*isPHost\s*\|\|\s*isSelf\s*\|\|\s*isViaPhaseM\)\s*return\s+null/);
+    it('button visibility no longer gates on isViaPhaseM (director can demote any cohost)', () => {
+      // Bug 43 (19 May Ali) — director's supreme-host authority
+      // overrides the original Bug 13 carve-out. The Shield button is
+      // now shown for every cohost row when viewer is the director,
+      // including admins/super_admins who joined via Phase M opt-in.
+      // toggleCohost already handles both code paths (formal removeCohost
+      // socket emit + acting-as-host REST clear), so removing the
+      // visibility gate is safe.
+      expect(src).toMatch(/if\s*\(!isOriginalHost\s*\|\|\s*isPHost\s*\|\|\s*isSelf\)\s*return\s+null/);
+      // Anti-regression: the old isViaPhaseM check must NOT come back
+      // as a gating condition on the visibility check.
+      expect(src).not.toMatch(/\|\|\s*isViaPhaseM\)\s*return\s+null/);
     });
   });
 

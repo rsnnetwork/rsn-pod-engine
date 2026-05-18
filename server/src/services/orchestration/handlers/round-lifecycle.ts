@@ -22,6 +22,12 @@ import * as videoService from '../../video/video.service';
 // Phase 2C (5 May spec) — chokepoint for status writes.
 import { transitionParticipant, ParticipantState } from '../state/participant-state-machine';
 import * as emailService from '../../email/email.service';
+// Phase 2 (19 May 2026) — realtime migration dual-emit. Each round-
+// lifecycle broadcast (match:assigned, rating:window_open/closed) gets
+// a sibling emitEntities() call so the client's predicate invalidator
+// can refresh React-Query keys without bespoke listeners.
+import { emitEntities } from '../../../realtime/emit';
+import { E } from '../../../realtime/entities';
 
 // ─── Cross-module references (wired in Task 7) ────────────────────────────
 
@@ -370,6 +376,12 @@ export async function transitionToRound(
           token: tokenMap.get(pid) || null,
           livekitUrl: appConfig.livekit.host,
         });
+        // Phase 2 dual-emit — session + participants + match for each
+        // assigned participant so their live-event queries refresh.
+        emitEntities(
+          io, [pid],
+          [E.session(sessionId), E.sessionParticipants(sessionId), E.match(match.id)],
+        ).catch(() => {});
 
         statusUpdatePromises.push(
           sessionService.updateParticipantStatus(sessionId, pid, ParticipantStatus.IN_ROUND)
@@ -541,6 +553,13 @@ export async function endRound(
             durationSeconds: scaledDuration,
             partnerCount,
           });
+          // Phase 2 dual-emit — session + participants for the rater so
+          // unrated-partners / session-participants queries pick up the
+          // pending-rating state.
+          emitEntities(
+            io, [pid],
+            [E.session(sessionId), E.sessionParticipants(sessionId)],
+          ).catch(() => {});
         }
       }
 
@@ -618,6 +637,20 @@ export async function endRatingWindow(
     await ratingService.finalizeRoundRatings(sessionId, roundNumber);
 
     io.to(sessionRoom(sessionId)).emit('rating:window_closed', { roundNumber });
+    // Phase 2 dual-emit — session + participants refresh after rating
+    // window closes. Audience = active session participants (same as
+    // the room broadcast above).
+    try {
+      const rows = await query<{ user_id: string }>(
+        `SELECT user_id FROM session_participants
+           WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')`,
+        [sessionId],
+      );
+      emitEntities(
+        io, rows.rows.map(r => r.user_id),
+        [E.session(sessionId), E.sessionParticipants(sessionId)],
+      ).catch(() => {});
+    } catch { /* dual-emit failure non-fatal */ }
 
     // Check if there are more rounds
     if (roundNumber < activeSession.config.numberOfRounds) {

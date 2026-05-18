@@ -24,6 +24,11 @@ import * as matchingService from '../../matching/matching.service';
 import { validateMatchAssignment } from '../../matching/match-validator.service';
 // Phase 7C.1 (7 May spec) — backing data for the Host Control Center drawer.
 import { buildHostParticipantsView } from './host-participants-view';
+// Phase 2 (19 May 2026) — realtime migration dual-emit. The host:event_plan_*
+// broadcast in this module gets a sibling emitEntities() call. See:
+//   docs/superpowers/plans/2026-05-19-realtime-architecture-migration.md
+import { emitEntities } from '../../../realtime/emit';
+import { E } from '../../../realtime/entities';
 
 // ─── Cross-module references (wired in Task 7) ────────────────────────────
 // transitionToRound lives in round-lifecycle.ts.
@@ -151,6 +156,19 @@ export async function handleHostGenerateMatches(
         totalPairs: 0,
         bonusRoundsAdded,
       });
+      // Phase 2 dual-emit — session + plan entities for every viewer so
+      // event-plan / host-state queries refetch in the same tick.
+      try {
+        const rows = await query<{ user_id: string }>(
+          `SELECT user_id FROM session_participants
+             WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')`,
+          [data.sessionId],
+        );
+        emitEntities(
+          io, rows.rows.map(r => r.user_id),
+          [E.session(data.sessionId), E.sessionPlan(data.sessionId)],
+        ).catch(() => {});
+      } catch { /* dual-emit failure non-fatal */ }
       io.to(sessionRoom(data.sessionId)).emit('session:status_changed', {
         sessionId: data.sessionId,
         status: SessionStatus.ROUND_TRANSITION,

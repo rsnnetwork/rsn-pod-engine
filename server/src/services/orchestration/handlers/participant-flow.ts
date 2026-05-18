@@ -23,6 +23,32 @@ import { clearRoomTimers } from './host-actions';
 import { findIsolatedParticipants } from '../../matching/isolated-participants';
 // Phase 2B (5 May spec) — chokepoint helpers for presence + state writes.
 import { transitionParticipant, setPresence, ParticipantState } from '../state/participant-state-machine';
+// Phase 2 (19 May 2026) — realtime migration dual-emit. Each legacy
+// per-user / session-room broadcast picks up a sibling emitEntities() call
+// with domain-entity tags so the client's predicate-based invalidator
+// refreshes the right React-Query keys without bespoke listeners. See:
+//   docs/superpowers/plans/2026-05-19-realtime-architecture-migration.md
+import { emitEntities } from '../../../realtime/emit';
+import { E } from '../../../realtime/entities';
+
+/**
+ * Phase 2 helper — fan entity tags to every active session participant.
+ * Mirrors the audience of an `io.to(sessionRoom(...)).emit(...)` broadcast.
+ * Failures are swallowed by callers via `.catch(() => {})`.
+ */
+async function fanSessionRoomEntities(
+  io: SocketServer,
+  sessionId: string,
+  entities: string[],
+): Promise<void> {
+  if (entities.length === 0) return;
+  const rows = await query<{ user_id: string }>(
+    `SELECT user_id FROM session_participants
+       WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')`,
+    [sessionId],
+  );
+  await emitEntities(io, rows.rows.map(r => r.user_id), entities);
+}
 
 // Phase 2.5D (5 May spec) — future-only repair throttle keys per session.
 // One repair per 5 seconds per session prevents storms when many users
@@ -126,6 +152,11 @@ async function runRepair(
         roundCount,
         totalPairs,
       });
+      // Phase 2 dual-emit — session + plan entities so every viewer's
+      // event-plan / host-state queries refetch in the same tick.
+      fanSessionRoomEntities(
+        io, sessionId, [E.session(sessionId), E.sessionPlan(sessionId)],
+      ).catch(() => {});
     }
   } catch (err) {
     logger.warn({ err, sessionId, reason }, 'maybeRepairFutureRounds: repair failed');
@@ -391,6 +422,13 @@ export async function handleJoinSession(
         sessionId: data.sessionId,
         cause: 'participant_joined',
       });
+      // Phase 2 dual-emit — session + participants tags for everyone in
+      // the room. The joining user themselves gets it too so their
+      // sessions / session-participants queries refresh.
+      fanSessionRoomEntities(
+        io, data.sessionId,
+        [E.session(data.sessionId), E.sessionParticipants(data.sessionId)],
+      ).catch(() => {});
 
       // Send current participant count
       const count = await sessionService.getParticipantCount(data.sessionId);
@@ -585,6 +623,12 @@ export async function handleJoinSession(
             token: reconnectToken,
             livekitUrl: reconnectConfig.livekit.host,
           });
+          // Phase 2 dual-emit — session + participants + match entity
+          // for the reconnecting user so their live-event surfaces resync.
+          emitEntities(
+            io, [userId],
+            [E.session(data.sessionId), E.sessionParticipants(data.sessionId), E.match(userMatch.id)],
+          ).catch(() => {});
         }
       }
 
@@ -631,6 +675,12 @@ export async function handleJoinSession(
               roundNumber: activeSession.currentRound,
               durationSeconds: remainingSeconds,
             });
+            // Phase 2 dual-emit — session + participants for the reconnecting
+            // user picking up the rating screen replay.
+            emitEntities(
+              io, [userId],
+              [E.session(data.sessionId), E.sessionParticipants(data.sessionId)],
+            ).catch(() => {});
           }
         }
       }
@@ -689,6 +739,18 @@ export async function handleLeaveSession(
 
     const count = await sessionService.getParticipantCount(data.sessionId);
     io.to(sessionRoom(data.sessionId)).emit('participant:count', { count });
+
+    // Phase 2 dual-emit — every viewer's session/participants queries
+    // refresh. The leaving user gets the tag too so their own
+    // session-detail surfaces flip to "left" state.
+    fanSessionRoomEntities(
+      io, data.sessionId,
+      [E.session(data.sessionId), E.sessionParticipants(data.sessionId)],
+    ).catch(() => {});
+    emitEntities(
+      io, [userId],
+      [E.session(data.sessionId), E.sessionParticipants(data.sessionId)],
+    ).catch(() => {});
 
     logger.info({ sessionId: data.sessionId, userId }, 'User left session');
   });
@@ -1135,6 +1197,12 @@ export async function handleLeaveConversation(
         for (const partnerId of partnerIds) {
           io.to(userRoom(partnerId)).emit('match:partner_disconnected', { matchId: userMatch.id });
         }
+        // Phase 2 dual-emit — session + participants + match for the
+        // leaver and remaining partners.
+        emitEntities(
+          io, [userId, ...partnerIds],
+          [E.session(sessionId), E.sessionParticipants(sessionId), E.match(userMatch.id)],
+        ).catch(() => {});
       } else {
         // Solo in room — no one to rate, just return to lobby
         socket.emit('match:return_to_lobby', { reason: 'you_left' });
@@ -1255,6 +1323,12 @@ export async function handleLeaveConversation(
                 roomId: newRoomId, roundNumber: currentSession.currentRound,
                 token: candidateTk, livekitUrl: reassignConfig.livekit.host,
               });
+              // Phase 2 dual-emit — affected pair gets session + participants
+              // + match entity tags.
+              emitEntities(
+                io, [soloPartnerId, candidateUserId],
+                [E.session(sessionId), E.sessionParticipants(sessionId), E.match(matchId)],
+              ).catch(() => {});
 
               logger.info({ sessionId, soloPartnerId, candidateUserId, matchId },
                 'Auto-reassigned after early leave');
@@ -1342,6 +1416,12 @@ export async function handleDisconnect(
       // Always notify remaining participants that this user left
       const isHost = activeSession.hostUserId === userId;
       io.to(sessionRoom(sessionId)).emit('participant:left', { userId, isHost });
+      // Phase 2 dual-emit — every viewer's participants list refreshes
+      // (this branch fires on disconnect for users with an activeSession).
+      fanSessionRoomEntities(
+        io, sessionId,
+        [E.session(sessionId), E.sessionParticipants(sessionId)],
+      ).catch(() => {});
 
       // If mid-round, notify partner and attempt auto-reassignment
       if (activeSession.status === SessionStatus.ROUND_ACTIVE) {
@@ -1358,6 +1438,11 @@ export async function handleDisconnect(
             io.to(userRoom(partnerId)).emit('match:partner_disconnected', {
               matchId: userMatch.id,
             });
+            // Phase 2 dual-emit — partner's in-event match surface refetches.
+            emitEntities(
+              io, [partnerId],
+              [E.session(sessionId), E.sessionParticipants(sessionId), E.match(userMatch.id)],
+            ).catch(() => {});
 
             const disconnectRound = activeSession.currentRound;
             const disconnectMatchId = userMatch.id;
@@ -1391,6 +1476,11 @@ export async function handleDisconnect(
                   io.to(userRoom(partnerId)).emit('match:partner_reconnected', {
                     matchId: disconnectMatchId,
                   });
+                  // Phase 2 dual-emit — partner's match surface refreshes.
+                  emitEntities(
+                    io, [partnerId],
+                    [E.session(sessionId), E.sessionParticipants(sessionId), E.match(disconnectMatchId)],
+                  ).catch(() => {});
                   return;
                 }
 
@@ -1517,6 +1607,12 @@ export async function handleDisconnect(
                     roomId, roundNumber: disconnectRound,
                     token: candidateTk, livekitUrl: reassignConfig.livekit.host,
                   });
+                  // Phase 2 dual-emit — affected pair refreshes session +
+                  // participants + match entities.
+                  emitEntities(
+                    io, [partnerId, candidateUserId],
+                    [E.session(sessionId), E.sessionParticipants(sessionId), E.match(matchId)],
+                  ).catch(() => {});
 
                   logger.info({ sessionId, partnerId, candidateUserId, matchId },
                     'Auto-reassigned isolated participants after disconnect');
@@ -1565,6 +1661,12 @@ export async function handleDisconnect(
       const isHost = session.hostUserId === userId;
 
       io.to(sessionRoom(sessionId)).emit('participant:left', { userId, isHost });
+      // Phase 2 dual-emit — pre-lobby waiting room disconnect also flips
+      // every viewer's participants surface.
+      fanSessionRoomEntities(
+        io, sessionId,
+        [E.session(sessionId), E.sessionParticipants(sessionId)],
+      ).catch(() => {});
       logger.info({ sessionId, userId }, 'Participant disconnected from pre-lobby waiting room');
     }
   } catch (err) {
@@ -1596,6 +1698,11 @@ export function startHeartbeatStaleDetection(io: SocketServer): void {
           }
           void maybeRepairFutureRounds(io, sessionId, 'left');
           io.to(sessionRoom(sessionId)).emit('participant:left', { userId });
+          // Phase 2 dual-emit — every viewer's participants surface refetches.
+          fanSessionRoomEntities(
+            io, sessionId,
+            [E.session(sessionId), E.sessionParticipants(sessionId)],
+          ).catch(() => {});
         }
       }
     }

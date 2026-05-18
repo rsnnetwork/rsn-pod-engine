@@ -39,6 +39,12 @@ import * as emailService from '../../email/email.service';
 import * as prefsService from '../../notification-prefs/notification-prefs.service';
 import { getRedisClient } from '../../redis/redis.client';
 import config from '../../../config';
+// Phase 2 (19 May 2026) — realtime migration dual-emit. DM message /
+// reaction / read-receipt / notification:new fanouts get sibling
+// emitEntities() calls so the client's predicate invalidator refreshes
+// the right React-Query keys without bespoke listeners.
+import { emitEntities } from '../../../realtime/emit';
+import { E } from '../../../realtime/entities';
 
 const userRoom = (userId: string) => `user:${userId}`;
 
@@ -189,6 +195,13 @@ export async function broadcastDmMessage(
   };
   io.to(userRoom(fromUserId)).emit('dm:conversation_updated', updatedPayload);
   io.to(userRoom(toUserId)).emit('dm:conversation_updated', updatedPayload);
+  // Phase 2 dual-emit — both participants' dm-messages query refetches
+  // for the conversation; their dm-conversations / dm-unread-count
+  // queries refresh via user:<id>:dms.
+  emitEntities(
+    io, [fromUserId, toUserId],
+    [E.dmConversation(conversationId), E.userDms(fromUserId), E.userDms(toUserId)],
+  ).catch(() => {});
 
   // Bell notification — same pattern as invites so the bell icon counts
   // DMs alongside invite events consistently.
@@ -223,6 +236,12 @@ export async function broadcastDmMessage(
       isRead: false,
       createdAt: notifResult.rows[0].created_at,
     });
+    // Phase 2 dual-emit — notifications + invites entities so the bell
+    // counter + invites list refresh for the recipient.
+    emitEntities(
+      io, [toUserId],
+      [E.userNotifications(toUserId), E.userInvites(toUserId)],
+    ).catch(() => {});
   } catch (err) {
     logger.warn({ err, fromUserId, toUserId }, 'DM notification insert failed (non-fatal)');
   }
@@ -308,6 +327,12 @@ export async function handleDmReact(
     };
     io.to(userRoom(userId)).emit('dm:reaction_added', payload);
     io.to(userRoom(otherUserId)).emit('dm:reaction_added', payload);
+    // Phase 2 dual-emit — both participants' dm-messages query for the
+    // conversation refetches.
+    emitEntities(
+      io, [userId, otherUserId],
+      [E.dmConversation(conversationId)],
+    ).catch(() => {});
   } catch (err: any) {
     const code = err?.code || 'DM_REACT_FAILED';
     const message = err?.message || 'Failed to add reaction';
@@ -344,6 +369,11 @@ export async function handleDmUnreact(
     };
     io.to(userRoom(userId)).emit('dm:reaction_removed', payload);
     io.to(userRoom(otherUserId)).emit('dm:reaction_removed', payload);
+    // Phase 2 dual-emit — both participants' dm-messages query refetches.
+    emitEntities(
+      io, [userId, otherUserId],
+      [E.dmConversation(conversationId)],
+    ).catch(() => {});
   } catch (err: any) {
     const code = err?.code || 'DM_UNREACT_FAILED';
     const message = err?.message || 'Failed to remove reaction';
@@ -384,6 +414,12 @@ export async function handleDmRead(
         // local "unread = 0" state too.
         io.to(userRoom(otherUserId)).emit('dm:read_receipt', payload);
         io.to(userRoom(userId)).emit('dm:read_receipt', payload);
+        // Phase 2 dual-emit — both sides' dm-messages query (read state)
+        // and dm-unread-count surface refresh.
+        emitEntities(
+          io, [userId, otherUserId],
+          [E.dmConversation(data.conversationId), E.userDms(userId), E.userDms(otherUserId)],
+        ).catch(() => {});
       }
     }
   } catch (err: any) {

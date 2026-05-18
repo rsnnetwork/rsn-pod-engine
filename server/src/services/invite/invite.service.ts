@@ -287,7 +287,8 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
       if (notifResult && notifResult.rows.length > 0) {
         try {
           const { io } = await import('../../index');
-          io.to(`user:${inviteeUser.rows[0].id}`).emit('notification:new', {
+          const inviteeId = inviteeUser.rows[0].id;
+          io.to(`user:${inviteeId}`).emit('notification:new', {
             id: notifResult.rows[0].id,
             type: notifType,
             title: notifTitle,
@@ -299,6 +300,14 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
             podId: input.podId || null,
             sessionId: input.sessionId || null,
           });
+          // Phase 2 dual-emit — invitee's bell + received-invites surfaces
+          // refresh in the same tick as the bespoke event.
+          const { emitEntities } = await import('../../realtime/emit');
+          const { E } = await import('../../realtime/entities');
+          emitEntities(
+            io, [inviteeId],
+            [E.userNotifications(inviteeId), E.userInvites(inviteeId)],
+          ).catch(() => {});
         } catch { /* socket push is non-fatal */ }
       }
     }
