@@ -19,6 +19,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
 import { formatDateTime } from '@/lib/utils';
+import { E } from '@/realtime/entities';
 import CreatePodModal from './CreatePodModal';
 
 /** Map invite API error codes to user-friendly messages */
@@ -132,24 +133,28 @@ export default function PodDetailPage() {
       if (err?.response?.status === 404) return false;
       return failureCount < 3;
     },
+    meta: { entities: podId ? [E.pod(podId)] : [] },
   });
 
   const { data: members } = useQuery({
     queryKey: ['pod-members', podId],
     queryFn: () => api.get(`/pods/${podId}/members`).then(r => r.data.data ?? []),
     enabled: !!podId,
+    meta: { entities: podId ? [E.pod(podId), E.podMembers(podId)] : [] },
   });
 
   const { data: sessionCountData } = useQuery({
     queryKey: ['pod-session-count', podId],
     queryFn: () => api.get(`/pods/${podId}/session-count`).then(r => r.data.data?.count ?? 0),
     enabled: !!podId,
+    meta: { entities: podId ? [E.pod(podId), E.podSessions(podId)] : [] },
   });
 
   const { data: podSessions } = useQuery({
     queryKey: ['pod-sessions', podId],
     queryFn: () => api.get(`/sessions?podId=${podId}`).then(r => r.data.data ?? []),
     enabled: !!podId,
+    meta: { entities: podId ? [E.pod(podId), E.podSessions(podId)] : [] },
   });
 
   const { data: podSearchResults } = useQuery({
@@ -162,6 +167,7 @@ export default function PodDetailPage() {
     queryKey: ['pod-member-counts', podId],
     queryFn: () => api.get(`/pods/${podId}/member-counts`).then(r => r.data.data),
     enabled: !!podId,
+    meta: { entities: podId ? [E.pod(podId), E.podMembers(podId)] : [] },
   });
 
   const [showPodPendingInvites, setShowPodPendingInvites] = useState(false);
@@ -169,6 +175,7 @@ export default function PodDetailPage() {
     queryKey: ['pod-pending-invites', podId],
     queryFn: () => api.get(`/invites/pod/${podId}?status=pending`).then(r => r.data.data ?? []),
     enabled: !!podId && showPodPendingInvites,
+    meta: { entities: podId ? [E.pod(podId), E.podInvites(podId)] : [] },
   });
 
   // ─── Mutations ─────────────────────────────────────────────────────────────

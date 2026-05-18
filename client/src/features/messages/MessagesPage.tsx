@@ -18,6 +18,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { getSocket } from '@/lib/socket';
 import api from '@/lib/api';
+import { E } from '@/realtime/entities';
 import {
   isCloudinaryConfigured,
   validateImageFile,
@@ -211,6 +212,7 @@ export default function MessagesPage() {
     queryKey: ['dm-conversations'],
     queryFn: () => api.get('/dm/conversations').then(r => r.data.data as ConversationSummary[]),
     refetchOnWindowFocus: true,
+    meta: { entities: myUserId ? [E.userDms(myUserId)] : [] },
   });
 
   // Thread: messages in the active conversation.
@@ -218,6 +220,7 @@ export default function MessagesPage() {
     queryKey: ['dm-messages', activeId],
     queryFn: () => api.get(`/dm/conversations/${activeId}/messages`).then(r => r.data.data as DmMessage[]),
     enabled: !!activeId,
+    meta: { entities: activeId ? [E.dmConversation(activeId)] : [] },
   });
 
   // Feature 18 — compose-new mode: fetch the target user's profile for the
@@ -226,6 +229,7 @@ export default function MessagesPage() {
     queryKey: ['user', composeToUserId],
     queryFn: () => api.get(`/users/${composeToUserId}`).then(r => r.data.data),
     enabled: !!composeToUserId,
+    meta: { entities: composeToUserId ? [E.user(composeToUserId)] : [] },
   });
 
   // Feature 18 — if a conversation with this user already exists in the

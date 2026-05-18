@@ -21,6 +21,7 @@ import { CheckCircle2, Play, Clock, XCircle, AlertTriangle } from 'lucide-react'
 import api from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import { useSessionStore } from '@/stores/sessionStore';
+import { E } from '@/realtime/entities';
 
 interface PlanRound {
   roundNumber: number;
@@ -57,6 +58,7 @@ export default function EventPlanStrip({ sessionId }: Props) {
     // Treat plan as somewhat fresh — host actions invalidate explicitly.
     staleTime: 60_000,
     retry: 1,
+    meta: { entities: sessionId ? [E.session(sessionId), E.sessionPlan(sessionId)] : [] },
   });
 
   // Refetch when the server reports a plan event (generated or repaired).

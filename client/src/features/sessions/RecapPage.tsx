@@ -9,6 +9,7 @@ import { CheckCircle, Users, Star, Handshake, ArrowLeft, Calendar, Download, Use
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
+import { E } from '@/realtime/entities';
 
 interface Connection {
   userId: string;
@@ -180,12 +181,14 @@ export default function RecapPage() {
     queryKey: ['session', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}`).then(r => r.data.data),
     enabled: !!sessionId,
+    meta: { entities: sessionId ? [E.session(sessionId)] : [] },
   });
 
   const { data: cohostData } = useQuery({
     queryKey: ['session-cohost', sessionId, user?.id],
     queryFn: () => api.get(`/sessions/${sessionId}/cohosts/check`).then(r => r.data.data?.isCohost).catch(() => false),
     enabled: !!sessionId && !!user?.id && session?.hostUserId !== user?.id,
+    meta: { entities: sessionId ? [E.session(sessionId), E.sessionParticipants(sessionId)] : [] },
   });
   const isHost = session?.hostUserId === user?.id || cohostData === true;
 
@@ -193,6 +196,13 @@ export default function RecapPage() {
     queryKey: ['unrated-partners', sessionId],
     queryFn: () => api.get(`/ratings/unrated?sessionId=${sessionId}`).then(r => r.data.data),
     enabled: !!sessionId,
+    meta: {
+      entities: sessionId && user?.id
+        ? [E.session(sessionId), E.sessionParticipants(sessionId), E.user(user.id)]
+        : sessionId
+        ? [E.session(sessionId), E.sessionParticipants(sessionId)]
+        : [],
+    },
   });
 
   const [data, setData] = useState<PeopleMetData | null>(null);

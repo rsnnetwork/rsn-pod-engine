@@ -7,6 +7,8 @@ import { Button } from '@/components/ui/Button';
 import { useToastStore } from '@/stores/toastStore';
 import { Copy, Send, Link } from 'lucide-react';
 import api from '@/lib/api';
+import { useAuthStore } from '@/stores/authStore';
+import { E } from '@/realtime/entities';
 
 interface Props { open: boolean; onClose: () => void; }
 
@@ -44,9 +46,18 @@ function getInviteErrorMessage(err: any): string {
 export default function CreateInviteModal({ open, onClose }: Props) {
   const qc = useQueryClient();
   const { addToast } = useToastStore();
+  const currentUserId = useAuthStore((s) => s.user?.id);
   const [generatedLink, setGeneratedLink] = useState<string | null>(null);
-  const { data: pods } = useQuery({ queryKey: ['my-pods'], queryFn: () => api.get('/pods').then(r => r.data.data ?? []) });
-  const { data: sessions } = useQuery({ queryKey: ['my-sessions'], queryFn: () => api.get('/sessions').then(r => r.data.data ?? []) });
+  const { data: pods } = useQuery({
+    queryKey: ['my-pods'],
+    queryFn: () => api.get('/pods').then(r => r.data.data ?? []),
+    meta: { entities: currentUserId ? [E.userPods(currentUserId)] : [] },
+  });
+  const { data: sessions } = useQuery({
+    queryKey: ['my-sessions'],
+    queryFn: () => api.get('/sessions').then(r => r.data.data ?? []),
+    meta: { entities: currentUserId ? [E.userSessions(currentUserId)] : [] },
+  });
   const { register, handleSubmit, reset, control, getValues, formState: { errors } } = useForm<FormData>({
     defaultValues: { type: 'pod', maxUses: 10 }
   });

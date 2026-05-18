@@ -6,6 +6,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { CheckCircle, Users, Star, Handshake, ArrowRight, UserCheck, CircleDot, MessageSquare } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
+import { E } from '@/realtime/entities';
 
 // Feature 17 + 18 (13 May spec) — DM button on recap rows. One click lands
 // the user directly in the chat panel with the composer ready; no prompt,
@@ -101,6 +102,7 @@ export default function SessionComplete({ sessionId }: Props) {
     queryKey: ['session', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}`).then(r => r.data.data),
     enabled: !!sessionId,
+    meta: { entities: sessionId ? [E.session(sessionId)] : [] },
   });
   const podId = session?.podId;
 

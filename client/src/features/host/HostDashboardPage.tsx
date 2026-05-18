@@ -11,6 +11,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { formatDateTime } from '@/lib/utils';
 import api from '@/lib/api';
+import { E } from '@/realtime/entities';
 
 export default function HostDashboardPage() {
   const { sessionId } = useParams();
@@ -25,6 +26,7 @@ export default function HostDashboardPage() {
     queryKey: ['session', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}`).then(r => r.data.data),
     refetchInterval: 5000,
+    meta: { entities: sessionId ? [E.session(sessionId)] : [] },
   });
 
   const { data: participants } = useQuery({
@@ -32,6 +34,7 @@ export default function HostDashboardPage() {
     queryFn: () => api.get(`/sessions/${sessionId}/participants`).then(r => r.data.data ?? []),
     enabled: !!sessionId,
     refetchInterval: 5000,
+    meta: { entities: sessionId ? [E.session(sessionId), E.sessionParticipants(sessionId)] : [] },
   });
 
   const { data: liveState } = useQuery({
@@ -39,6 +42,7 @@ export default function HostDashboardPage() {
     queryFn: () => api.get(`/sessions/${sessionId}/host/state`).then(r => r.data.data),
     enabled: !!sessionId,
     refetchInterval: 3000,
+    meta: { entities: sessionId ? [E.session(sessionId), E.sessionParticipants(sessionId)] : [] },
   });
 
   const hostAction = async (action: string, body?: any) => {

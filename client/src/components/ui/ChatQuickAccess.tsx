@@ -16,6 +16,8 @@ import { MessageSquare, Loader2 } from 'lucide-react';
 import Avatar from '@/components/ui/Avatar';
 import { getSocket } from '@/lib/socket';
 import api from '@/lib/api';
+import { useAuthStore } from '@/stores/authStore';
+import { E } from '@/realtime/entities';
 
 interface ConversationSummary {
   conversationId: string;
@@ -47,6 +49,7 @@ function formatRelative(iso: string | null): string {
 
 export default function ChatQuickAccess() {
   const navigate = useNavigate();
+  const currentUserId = useAuthStore((s) => s.user?.id);
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -55,12 +58,14 @@ export default function ChatQuickAccess() {
     queryKey: ['dm-conversations'],
     queryFn: () => api.get('/dm/conversations').then(r => r.data.data as ConversationSummary[]),
     refetchOnWindowFocus: true,
+    meta: { entities: currentUserId ? [E.userDms(currentUserId)] : [] },
   });
 
   const { data: groups, refetch: refetchGroups } = useQuery({
     queryKey: ['dm-groups'],
     queryFn: () => api.get('/groups').then(r => r.data.data as GroupSummary[]).catch(() => [] as GroupSummary[]),
     refetchOnWindowFocus: true,
+    meta: { entities: currentUserId ? [E.userDms(currentUserId)] : [] },
   });
 
   // Real-time refresh on incoming socket events.

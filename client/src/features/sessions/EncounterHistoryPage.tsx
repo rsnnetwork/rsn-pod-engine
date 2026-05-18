@@ -8,13 +8,17 @@ import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
 import EmptyState from '@/components/ui/EmptyState';
 import api from '@/lib/api';
+import { useAuthStore } from '@/stores/authStore';
+import { E } from '@/realtime/entities';
 
 export default function EncounterHistoryPage() {
   const [mutualOnly, setMutualOnly] = useState(false);
+  const currentUserId = useAuthStore((s) => s.user?.id);
 
   const { data: encounters, isLoading } = useQuery({
     queryKey: ['encounters', mutualOnly],
     queryFn: () => api.get(`/ratings/encounters?mutualOnly=${mutualOnly}`).then(r => r.data.data ?? []),
+    meta: { entities: currentUserId ? [E.user(currentUserId)] : [] },
   });
 
   if (isLoading) return <PageLoader />;

@@ -11,6 +11,7 @@ import {
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
+import { E } from '@/realtime/entities';
 
 const EMPTY = <span className="text-sm italic text-gray-300">Not shared yet</span>;
 
@@ -19,6 +20,7 @@ export default function PublicProfilePage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { user: currentUser } = useAuthStore();
+  const currentUserId = currentUser?.id;
   const { addToast } = useToastStore();
   const isOwnProfile = currentUser?.id === userId;
 
@@ -26,6 +28,7 @@ export default function PublicProfilePage() {
     queryKey: ['user', userId],
     queryFn: () => api.get(`/users/${userId}`).then(r => r.data.data),
     enabled: !!userId,
+    meta: { entities: userId ? [E.user(userId)] : [] },
   });
 
   // Phase B (1 May 2026 spec) — fetch the block status so the profile renders
@@ -34,6 +37,11 @@ export default function PublicProfilePage() {
     queryKey: ['user-block-status', userId],
     queryFn: () => api.get(`/users/${userId}/block-status`).then(r => r.data.data),
     enabled: !!userId && !isOwnProfile && !!currentUser?.id,
+    meta: {
+      entities: currentUserId && userId
+        ? [E.userBlocks(currentUserId), E.userBlocks(userId)]
+        : [],
+    },
   });
   const isBlocked = blockStatus?.hasBlocked === true;
 
@@ -43,6 +51,11 @@ export default function PublicProfilePage() {
     queryKey: ['can-message', userId],
     queryFn: () => api.get(`/dm/can-message/${userId}`).then(r => r.data.data),
     enabled: !!userId && !isOwnProfile && !!currentUser?.id,
+    meta: {
+      entities: currentUserId && userId
+        ? [E.userBlocks(currentUserId), E.userBlocks(userId)]
+        : [],
+    },
   });
   const canMessage = dmGate?.allowed === true;
   const cantMessageReason = dmGate?.reason as string | undefined;

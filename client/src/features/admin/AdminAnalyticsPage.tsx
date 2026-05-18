@@ -31,6 +31,7 @@ import { Button } from '@/components/ui/Button';
 import { useAuthStore } from '@/stores/authStore';
 import api from '@/lib/api';
 import { isAdmin } from '@/lib/utils';
+import { E } from '@/realtime/entities';
 
 interface OverviewData {
   windowDays: number;
@@ -97,24 +98,28 @@ export default function AdminAnalyticsPage() {
     queryKey: ['admin-analytics-overview'],
     queryFn: async () => (await api.get('/admin/analytics/overview')).data.data,
     staleTime: 30_000,
+    meta: { entities: [E.adminAnalytics] },
   });
   const eventsQuery = useQuery<EventRow[]>({
     queryKey: ['admin-analytics-events'],
     queryFn: async () => (await api.get('/admin/analytics/events')).data.data,
     staleTime: 30_000,
     enabled: tab === 'events',
+    meta: { entities: [E.adminAnalytics] },
   });
   const usersQuery = useQuery<UserRow[]>({
     queryKey: ['admin-analytics-users'],
     queryFn: async () => (await api.get('/admin/analytics/users')).data.data,
     staleTime: 30_000,
     enabled: tab === 'users',
+    meta: { entities: [E.adminAnalytics] },
   });
   const connectionsQuery = useQuery<ConnectionsData>({
     queryKey: ['admin-analytics-connections'],
     queryFn: async () => (await api.get('/admin/analytics/connections')).data.data,
     staleTime: 30_000,
     enabled: tab === 'connections',
+    meta: { entities: [E.adminAnalytics] },
   });
 
   const downloadCsv = (type: 'events' | 'users' | 'connections') => {

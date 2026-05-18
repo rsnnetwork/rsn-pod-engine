@@ -14,6 +14,7 @@ import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
 import { formatDateTime, LOCAL_TIME_LABEL } from '@/lib/utils';
 import { useAuthStore } from '@/stores/authStore';
+import { E } from '@/realtime/entities';
 import { sessionStatusLabel, sessionStatusColor, sessionStatusPhase } from './statusConfig';
 
 function getInviteErrorMessage(err: any): string {
@@ -75,18 +76,21 @@ export default function SessionDetailPage() {
       if (err?.response?.status === 403) return false;
       return failureCount < 3;
     },
+    meta: { entities: sessionId ? [E.session(sessionId)] : [] },
   });
 
   const { data: pod } = useQuery({
     queryKey: ['pod', session?.podId],
     queryFn: () => api.get(`/pods/${session.podId}`).then(r => r.data.data),
     enabled: !!session?.podId,
+    meta: { entities: session?.podId ? [E.pod(session.podId)] : [] },
   });
 
   const { data: participants } = useQuery({
     queryKey: ['session-participants', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}/participants`).then(r => r.data.data ?? []),
     enabled: !!sessionId,
+    meta: { entities: sessionId ? [E.session(sessionId), E.sessionParticipants(sessionId)] : [] },
   });
 
   const { data: templates } = useQuery({
@@ -101,17 +105,20 @@ export default function SessionDetailPage() {
     queryKey: ['session-participant-counts', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}/participant-counts`).then(r => r.data.data),
     enabled: !!sessionId && (isHost || isAdmin),
+    meta: { entities: sessionId ? [E.session(sessionId), E.sessionParticipants(sessionId)] : [] },
   });
   const { data: pendingInvites } = useQuery({
     queryKey: ['session-pending-invites', sessionId],
     queryFn: () => api.get(`/invites/session/${sessionId}?status=pending`).then(r => r.data.data ?? []),
     enabled: !!sessionId && (isHost || isAdmin),
+    meta: { entities: sessionId ? [E.session(sessionId), E.sessionInvites(sessionId)] : [] },
   });
 
   const { data: podMembers, refetch: refetchPodMembers } = useQuery({
     queryKey: ['pod-members-for-invite', session?.podId, sessionId],
     queryFn: () => api.get(`/pods/${session?.podId}/members/for-invite?sessionId=${sessionId}`).then(r => r.data.data),
     enabled: !!session?.podId && !!sessionId && isHost,
+    meta: { entities: session?.podId ? [E.pod(session.podId), E.podMembers(session.podId)] : [] },
   });
 
   const invitePodMember = async (userId: string, email: string) => {

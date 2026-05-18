@@ -18,6 +18,7 @@ import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 import { PageLoader } from '@/components/ui/Spinner';
 import { AlertCircle, X, LogOut, WifiOff, Loader2, RefreshCw, MessageCircle, Radio, Users, Shuffle, Mic, ArrowLeftRight, CheckCircle2, Lock } from 'lucide-react';
 import api from '@/lib/api';
+import { E } from '@/realtime/entities';
 import { disconnectSocket, connectSocket, getSocket } from '@/lib/socket';
 
 export default function LiveSessionPage() {
@@ -65,6 +66,7 @@ export default function LiveSessionPage() {
     queryKey: ['session', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}`).then(r => r.data.data),
     enabled: !!sessionId,
+    meta: { entities: sessionId ? [E.session(sessionId)] : [] },
   });
 
   const cohosts = useSessionStore(s => s.cohosts);
