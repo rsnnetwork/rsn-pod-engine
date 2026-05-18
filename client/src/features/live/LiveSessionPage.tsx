@@ -16,7 +16,7 @@ import ReactionBar from './ReactionBar';
 import ParticipantList from './ParticipantList';
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 import { PageLoader } from '@/components/ui/Spinner';
-import { AlertCircle, X, LogOut, WifiOff, Loader2, RefreshCw, MessageCircle, Radio, Users, Shuffle, Mic, ArrowLeftRight, CheckCircle2 } from 'lucide-react';
+import { AlertCircle, X, LogOut, WifiOff, Loader2, RefreshCw, MessageCircle, Radio, Users, Shuffle, Mic, ArrowLeftRight, CheckCircle2, Lock } from 'lucide-react';
 import api from '@/lib/api';
 import { disconnectSocket, connectSocket, getSocket } from '@/lib/socket';
 
@@ -311,16 +311,21 @@ export default function LiveSessionPage() {
         return (
           <div
             data-testid="acting-as-host-revert-banner"
-            className="bg-amber-50 border-b border-amber-200 px-4 py-2 flex items-center justify-between gap-3"
+            className={`border-b px-4 py-2 flex items-center justify-between gap-3 ${inBreakout ? 'bg-amber-100/80 border-amber-300' : 'bg-amber-50 border-amber-200'}`}
           >
-            <p className="text-sm text-amber-800">
+            <p className="text-sm text-amber-900 flex items-center gap-1.5">
+              {/* Bug 14 (18 May Stefan) — when the role switch is blocked
+                  by an active breakout, prefix the text with a lock icon
+                  and a stronger background so the constraint reads at a
+                  glance instead of looking like a generic info banner. */}
+              {inBreakout && <Lock className="h-3.5 w-3.5 text-amber-700 shrink-0" aria-hidden="true" />}
               {inBreakout
-                ? "You're attending this event as a participant. You can switch back to host once you're out of the breakout."
+                ? <span><span className="font-semibold">Role switch locked during breakout.</span> You're attending this event as a participant — switch back to host once the round ends.</span>
                 : "You're attending this event as a participant. Host controls hidden."}
             </p>
             <button
               disabled={inBreakout}
-              title={inBreakout ? 'Available once the breakout ends' : undefined}
+              title={inBreakout ? 'Locked — wait for the breakout to end' : undefined}
               onClick={async () => {
                 if (inBreakout) return;
                 try {
@@ -329,7 +334,7 @@ export default function LiveSessionPage() {
                   addToast("Couldn't switch back to host. Try again.", 'error');
                 }
               }}
-              className={`text-xs px-2.5 py-1 rounded-md border ${inBreakout ? 'border-amber-200 text-amber-400 cursor-not-allowed' : 'border-amber-300 text-amber-800 hover:bg-amber-100'}`}
+              className={`text-xs px-2.5 py-1 rounded-md border ${inBreakout ? 'border-amber-300 text-amber-400 cursor-not-allowed bg-white/50' : 'border-amber-300 text-amber-800 hover:bg-amber-100'}`}
             >
               Switch back to host
             </button>
@@ -345,16 +350,19 @@ export default function LiveSessionPage() {
         return (
           <div
             data-testid="acting-as-participant-banner"
-            className="bg-indigo-50 border-b border-indigo-200 px-4 py-2 flex items-center justify-between gap-3"
+            className={`border-b px-4 py-2 flex items-center justify-between gap-3 ${inBreakout ? 'bg-indigo-100/80 border-indigo-300' : 'bg-indigo-50 border-indigo-200'}`}
           >
-            <p className="text-sm text-indigo-800">
+            <p className="text-sm text-indigo-900 flex items-center gap-1.5">
+              {/* Bug 14 (18 May Stefan) — explicit locked-state when an
+                  active breakout blocks the switch. */}
+              {inBreakout && <Lock className="h-3.5 w-3.5 text-indigo-700 shrink-0" aria-hidden="true" />}
               {inBreakout
-                ? "You're attending this event as a host. You can switch to participant once you're out of the breakout."
+                ? <span><span className="font-semibold">Role switch locked during breakout.</span> You're attending this event as a host — switch to participant once the round ends.</span>
                 : "You're attending this event as a host. Host controls visible."}
             </p>
             <button
               disabled={inBreakout}
-              title={inBreakout ? 'Available once the breakout ends' : undefined}
+              title={inBreakout ? 'Locked — wait for the breakout to end' : undefined}
               onClick={async () => {
                 if (inBreakout) return;
                 try {
@@ -363,7 +371,7 @@ export default function LiveSessionPage() {
                   addToast("Couldn't switch to participant. Try again.", 'error');
                 }
               }}
-              className={`text-xs px-2.5 py-1 rounded-md border ${inBreakout ? 'border-indigo-200 text-indigo-400 cursor-not-allowed' : 'border-indigo-300 text-indigo-800 hover:bg-indigo-100'}`}
+              className={`text-xs px-2.5 py-1 rounded-md border ${inBreakout ? 'border-indigo-300 text-indigo-400 cursor-not-allowed bg-white/50' : 'border-indigo-300 text-indigo-800 hover:bg-indigo-100'}`}
             >
               Switch to participant
             </button>

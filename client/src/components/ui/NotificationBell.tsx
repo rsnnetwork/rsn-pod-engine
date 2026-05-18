@@ -87,7 +87,26 @@ export default function NotificationBell() {
       setUnreadCount(prev => prev + 1);
     };
     socket.on('notification:new', handler);
-    return () => { socket.off('notification:new', handler); };
+    // Bug 3 (18 May Stefan) — pod membership approval (and rejection)
+    // must flip the requester's UI without a refresh. The server emits
+    // pod:membership_updated to the user's room; we invalidate the cached
+    // pod queries so PodsPage / PodDetailPage / NotificationBell counters
+    // all repaint on the next render. Hooking it on the globally-mounted
+    // NotificationBell means every page in the app gets the live update,
+    // not just whichever page happens to have its own socket listener.
+    const membershipHandler = () => {
+      qc.invalidateQueries({ queryKey: ['my-pods'] });
+      qc.invalidateQueries({ queryKey: ['pod'] });
+      qc.invalidateQueries({ queryKey: ['pod-pending-members'] });
+      // Refetch the notification list so the approval/rejection notification
+      // appears in the bell without waiting for the 30-second poll.
+      fetchNotifications();
+    };
+    socket.on('pod:membership_updated', membershipHandler);
+    return () => {
+      socket.off('notification:new', handler);
+      socket.off('pod:membership_updated', membershipHandler);
+    };
   }, []);
 
   const handleOpen = () => {

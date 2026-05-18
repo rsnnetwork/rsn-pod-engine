@@ -858,12 +858,16 @@ function formatParticipantHeader(
   hostOnline: boolean | null,
 ): string {
   // Bug E (15 May Ali) — count must reflect EVERYONE acting as host this
-  // event, not just formal session_cohosts. Build the same hostsSet the
-  // HostParticipantPanel + HostControls use: director + cohosts + opt-ins
-  // (acting_as_host=true) − opt-outs (acting_as_host=false), with the
-  // director always re-added. Image 21 reported "1 host" while Raja was
-  // acting as host via the Phase M toggle (NOT in session_cohosts), so
-  // the header undercounted.
+  // event, not just formal session_cohosts.
+  // Bug 15 (18 May Stefan) — break the count down further: host vs
+  // co-hosts vs regular participants, each as its own pill. Pre-fix the
+  // collapsed "X participants + Y hosts" string lumped the director and
+  // co-hosts into one count and obscured the actual makeup of the room.
+  // Stefan: "Participant counts must separate clearly: participants,
+  // hosts, co-hosts, unmatched, matched pairs, trios."
+  //
+  // hostsSet = director ∪ cohosts ∪ opt-ins − opt-outs (with director
+  // always re-added so a stale FALSE row can't demote them).
   const hostsSet = (() => {
     const s = new Set<string>();
     if (hostUserId) s.add(hostUserId);
@@ -875,19 +879,31 @@ function formatParticipantHeader(
     if (hostUserId) s.add(hostUserId);
     return s;
   })();
-  const hostsPresent = participants.filter(p => hostsSet.has(p.userId)).length;
-  const hostInList = !!hostUserId && participants.some(p => p.userId === hostUserId);
-  // Headline count excludes everyone acting as host.
-  const participantCount = participants.length - hostsPresent;
-  // "Hosts" reflects who is currently present + acting as host. The
-  // hostOnline branch keeps the OG host counted when they're connected
-  // but not yet in the participants array (e.g. the snapshot lags).
-  const totalHosts = (hostInList || hostOnline ? Math.max(1, hostsPresent) : hostsPresent);
-  const safeCount = Math.max(0, participantCount);
-  const partWord = `${safeCount} participant${safeCount !== 1 ? 's' : ''}`;
-  if (totalHosts === 0) return partWord;
-  const hostWord = `${totalHosts} ${totalHosts === 1 ? 'host' : 'hosts'}`;
-  return `${partWord} + ${hostWord}`;
+  const presentUserIds = new Set(participants.map(p => p.userId));
+  // Director counted ONLY when actually present, OR when hostOnline says
+  // the OG host is connected but missing from the participants list (the
+  // snapshot can lag a beat). Director-not-in-room ⇒ omit from the pill.
+  const directorPresent =
+    (hostUserId && presentUserIds.has(hostUserId)) || (hostUserId && hostOnline)
+      ? 1
+      : 0;
+  // Co-hosts = hostsSet ∖ {director}, intersected with the present roster.
+  let coHostCount = 0;
+  for (const uid of hostsSet) {
+    if (uid === hostUserId) continue;
+    if (presentUserIds.has(uid)) coHostCount++;
+  }
+  // Participants = everyone in the room who isn't acting as a host.
+  const participantCount = Math.max(
+    0,
+    participants.filter(p => !hostsSet.has(p.userId)).length,
+  );
+
+  const parts: string[] = [];
+  parts.push(`${participantCount} participant${participantCount !== 1 ? 's' : ''}`);
+  if (directorPresent === 1) parts.push('1 host');
+  if (coHostCount > 0) parts.push(`${coHostCount} co-host${coHostCount !== 1 ? 's' : ''}`);
+  return parts.join(' · ');
 }
 
 function HostParticipantPanel({ sessionId }: { sessionId?: string }) {

@@ -554,9 +554,16 @@ export default function HostControlCenter({
             on the participants <ul> so the last row isn't visually clipped
             by the bottom edge of the modal. Stefan #8: he couldn't see the
             last user in the control center on his standard window size. */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-0 lg:divide-x divide-gray-200 flex-1 min-h-0 overflow-y-auto">
+        {/* Bug 16 (18 May Stefan) — when there are NO active rooms, the
+            rooms pane sits empty in the right third and Stefan called the
+            drawer "Looks crap" with vast wasted space. Switch to a single-
+            column layout while rooms are empty so the participants list
+            uses the full drawer width; flip back to 2/3 + 1/3 the moment
+            a room opens. Keeps the host's attention on the only data
+            that's actually present. */}
+        <div className={`grid grid-cols-1 ${activeRoomsForMove.length > 0 ? 'lg:grid-cols-3 lg:divide-x divide-gray-200' : ''} gap-0 flex-1 min-h-0 overflow-y-auto`}>
           {/* Participants list */}
-          <div className="lg:col-span-2 min-h-[300px]">
+          <div className={`${activeRoomsForMove.length > 0 ? 'lg:col-span-2' : ''} min-h-[300px]`}>
             <div className="px-5 py-2 text-[11px] font-semibold uppercase tracking-wide text-gray-500 flex items-center gap-1.5">
               <Filter className="h-3 w-3" /> {STATE_LABEL[filter]}
               <span className="text-gray-400 normal-case font-normal">
@@ -568,11 +575,17 @@ export default function HostControlCenter({
                 No participants in this view.
               </div>
             ) : (
+              // Bug 16 (18 May Stefan) — tighter row padding (py-3 → py-2)
+              // and gap (gap-3 → gap-2.5) so more participants fit in the
+              // visible drawer height. Stefan's screenshot showed All=7 but
+              // only ~2 rows on-screen because each row was ~80px tall;
+              // trimming wasted vertical paddings gets ~5-6 rows visible
+              // in the same height without compromising readability.
               <ul className="divide-y divide-gray-100 pb-12">
                 {visibleParticipants.map((p) => (
-                  <li key={p.userId} className="px-5 py-3 hover:bg-gray-50">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-start gap-3 min-w-0">
+                  <li key={p.userId} className="px-4 py-2 hover:bg-gray-50">
+                    <div className="flex items-start justify-between gap-2.5">
+                      <div className="flex items-start gap-2.5 min-w-0">
                         <RoleBadge role={p.role} />
                         <div className="min-w-0">
                           <div className="text-sm font-medium text-gray-900 truncate flex items-center gap-1.5 flex-wrap">
@@ -649,67 +662,67 @@ export default function HostControlCenter({
             )}
           </div>
 
-          {/* Rooms pane */}
+          {/* Rooms pane — Bug 16 (18 May Stefan): only render when there
+              ARE rooms. An empty "No active rooms" panel just chews up
+              valuable horizontal real-estate; the host doesn't need to be
+              reminded that the breakouts they haven't created yet are,
+              in fact, not yet created. */}
+          {activeRoomsForMove.length > 0 && (
           <div className="bg-gray-50 min-h-[300px]">
             <div className="px-5 py-2 text-[11px] font-semibold uppercase tracking-wide text-gray-500 flex items-center gap-1.5">
               <DoorOpen className="h-3 w-3" /> Rooms ({activeRoomsForMove.length})
             </div>
-            {activeRoomsForMove.length === 0 ? (
-              <div className="px-5 py-8 text-center text-sm text-gray-500">
-                No active rooms.
-              </div>
-            ) : (
-              <ul className="px-3 pb-4 space-y-2">
-                {activeRoomsForMove.map((r) => (
-                  <li
-                    key={r.matchId}
-                    className="bg-white rounded-lg border border-gray-200 p-3"
-                  >
-                    <div className="flex items-center justify-between mb-1.5">
-                      <div className="text-xs font-medium text-gray-700 flex items-center gap-1.5">
-                        {r.isManual ? (
-                          <span className="text-purple-600">Manual</span>
-                        ) : (
-                          <span className="text-emerald-600">Algorithm</span>
-                        )}
-                        <span className="text-gray-400">·</span>
-                        <span>{r.participants.length} people</span>
-                        {r.isTrio && (
-                          <span className="text-[10px] bg-blue-100 text-blue-700 rounded px-1.5 py-0.5">
-                            Trio
-                          </span>
-                        )}
-                      </div>
-                      {r.isManual && (
-                        <button
-                          onClick={() => extendRoom(r.matchId)}
-                          className="text-[11px] text-gray-500 hover:text-emerald-700 flex items-center gap-1"
-                          title="Add 2 minutes to this room"
-                        >
-                          <RefreshCw className="h-3 w-3" /> +2 min
-                        </button>
+            <ul className="px-3 pb-4 space-y-2">
+              {activeRoomsForMove.map((r) => (
+                <li
+                  key={r.matchId}
+                  className="bg-white rounded-lg border border-gray-200 p-3"
+                >
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="text-xs font-medium text-gray-700 flex items-center gap-1.5">
+                      {r.isManual ? (
+                        <span className="text-purple-600">Manual</span>
+                      ) : (
+                        <span className="text-emerald-600">Algorithm</span>
+                      )}
+                      <span className="text-gray-400">·</span>
+                      <span>{r.participants.length} people</span>
+                      {r.isTrio && (
+                        <span className="text-[10px] bg-blue-100 text-blue-700 rounded px-1.5 py-0.5">
+                          Trio
+                        </span>
                       )}
                     </div>
-                    <div className="space-y-1">
-                      {r.participants.map((rp) => (
-                        <div
-                          key={rp.userId}
-                          className="flex items-center gap-2 text-xs text-gray-700"
-                        >
-                          {rp.isConnected ? (
-                            <Wifi className="h-3 w-3 text-emerald-500 shrink-0" />
-                          ) : (
-                            <WifiOff className="h-3 w-3 text-red-500 shrink-0" />
-                          )}
-                          <span className="truncate">{rp.displayName}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
+                    {r.isManual && (
+                      <button
+                        onClick={() => extendRoom(r.matchId)}
+                        className="text-[11px] text-gray-500 hover:text-emerald-700 flex items-center gap-1"
+                        title="Add 2 minutes to this room"
+                      >
+                        <RefreshCw className="h-3 w-3" /> +2 min
+                      </button>
+                    )}
+                  </div>
+                  <div className="space-y-1">
+                    {r.participants.map((rp) => (
+                      <div
+                        key={rp.userId}
+                        className="flex items-center gap-2 text-xs text-gray-700"
+                      >
+                        {rp.isConnected ? (
+                          <Wifi className="h-3 w-3 text-emerald-500 shrink-0" />
+                        ) : (
+                          <WifiOff className="h-3 w-3 text-red-500 shrink-0" />
+                        )}
+                        <span className="truncate">{rp.displayName}</span>
+                      </div>
+                    ))}
+                  </div>
+                </li>
+              ))}
+            </ul>
           </div>
+          )}
         </div>
 
     </div>

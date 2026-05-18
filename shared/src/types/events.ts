@@ -129,6 +129,13 @@ export interface ServerToClientEvents {
   // call. Replaces the per-event-per-mutation socket fan-out pattern with
   // a single coalescable refresh trigger.
   'roster:changed': (data: { sessionId: string; cause: string }) => void;
+  // Bug 3 (18 May Stefan) — pod-level membership status changed for a
+  // specific user (approval, rejection, removal). Emitted to that user's
+  // personal room so their UI flips from "Pending approval" to "Active"
+  // without needing a refresh. Pending count on the host's side also
+  // refreshes because the host's same listener re-fetches the pods
+  // pending-list query.
+  'pod:membership_updated': (data: { podId: string; userId: string; cause: string }) => void;
 
   // Reactions
   'reaction:received': (data: { userId: string; displayName: string; type: string; timestamp: string }) => void;

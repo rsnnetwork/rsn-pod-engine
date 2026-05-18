@@ -51,7 +51,15 @@ describe('Phase D — UI bug batch', () => {
       // The participants/rooms grid sits inside a flex column; without
       // min-h-0 the grid keeps its natural height and the parent's
       // overflow-hidden clips the bottom rows.
-      expect(src).toMatch(/grid grid-cols-1 lg:grid-cols-3[^"']*flex-1[^"']*min-h-0[^"']*overflow-y-auto/);
+      //
+      // Bug 16 (18 May Stefan) — the lg:grid-cols-3 class is now applied
+      // CONDITIONALLY (only when there are active rooms to render) so the
+      // participants list takes the full width when the rooms pane would
+      // otherwise be an empty third. The other utilities (flex-1, min-h-0,
+      // overflow-y-auto) still apply unconditionally.
+      expect(src).toMatch(/grid grid-cols-1/);
+      expect(src).toMatch(/lg:grid-cols-3 lg:divide-x divide-gray-200/);
+      expect(src).toMatch(/flex-1 min-h-0 overflow-y-auto/);
     });
 
     it('participants <ul> has bottom padding so the last row is not clipped', () => {
@@ -64,22 +72,27 @@ describe('Phase D — UI bug batch', () => {
   describe('D3 — participant count format (item 10)', () => {
     const src = readClient('features/live/Lobby.tsx');
 
-    it('formatParticipantHeader helper exists and counts acting hosts (cohosts + Phase M opt-ins)', () => {
+    it('formatParticipantHeader helper splits participants / host / co-hosts (Bug 15)', () => {
       const fnStart = src.indexOf('function formatParticipantHeader');
       expect(fnStart).toBeGreaterThan(-1);
       const fnEnd = src.indexOf('\nfunction ', fnStart + 1);
       const fn = src.slice(fnStart, fnEnd);
-      // Bug E (15 May Ali) — count must derive `hostsSet` from director +
-      // cohosts + Phase M opt-ins (minus opt-outs), then take the
-      // intersection with the present participants. Pre-Bug-E it just
-      // used cohosts + hostUserId, which under-counted when an admin used
-      // the "Join as host" toggle (their acting_as_host=true didn't roll
-      // up into the count).
+      // Bug E (15 May Ali) — `hostsSet` from director + cohosts +
+      // Phase M opt-ins (minus opt-outs), intersected with the present
+      // roster.
+      // Bug 15 (18 May Stefan) — separate counts pushed into a `parts`
+      // array so each role appears as its own pill: "N participants ·
+      // 1 host · M co-hosts". The legacy lump-sum "X + Y hosts" form
+      // is gone.
       expect(fn).toMatch(/hostsSet/);
       expect(fn).toMatch(/actingAsHostOverrides/);
-      expect(fn).toMatch(/hostsPresent\s*=\s*participants\.filter\(\s*p\s*=>\s*hostsSet\.has\(p\.userId\)\s*\)\.length/);
-      // Output uses "+ N hosts" not "+ host" lump.
-      expect(fn).toMatch(/totalHosts === 1\s*\?\s*['"]host['"]\s*:\s*['"]hosts['"]/);
+      // Director / co-host derivation.
+      expect(fn).toMatch(/directorPresent/);
+      expect(fn).toMatch(/coHostCount/);
+      // Pluralised output strings — pin both branches so the pluralisation
+      // doesn't quietly drift.
+      expect(fn).toMatch(/co-host\$\{coHostCount\s*!==\s*1\s*\?\s*'s'\s*:\s*''\}/);
+      expect(fn).toMatch(/participant\$\{participantCount\s*!==\s*1\s*\?\s*'s'\s*:\s*''\}/);
     });
 
     it('LobbyStatusOverlay uses the helper with actingAsHostOverrides (no inline duplicate logic)', () => {

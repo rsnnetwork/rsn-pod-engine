@@ -361,6 +361,29 @@ export function initOrchestration(socketServer: SocketServer): void {
 // route the resync; it does NOT carry the new effective role, because the
 // snapshot is the canonical source of truth.
 
+/**
+ * Bug 3 (18 May Stefan) — notify a single user that their pod
+ * membership status changed (approved / rejected / promoted / demoted /
+ * removed). Front-end listens on their personal room and refetches the
+ * pending-pods / my-pods queries so the UI flips from "Pending approval"
+ * to "Active member" without a refresh.
+ *
+ * cause: short reason string for analytics + client-side messaging.
+ */
+export async function notifyPodMembershipChanged(
+  podId: string,
+  userId: string,
+  cause: string,
+): Promise<void> {
+  if (!io) return;
+  const { userRoom } = await import('./state/session-state');
+  io.to(userRoom(userId)).emit('pod:membership_updated', {
+    podId,
+    userId,
+    cause,
+  });
+}
+
 export async function notifyPermissionsUpdated(
   sessionId: string,
   userId: string,

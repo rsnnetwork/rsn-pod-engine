@@ -6,6 +6,7 @@ import { authenticate } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import { auditMiddleware } from '../middleware/audit';
 import * as podService from '../services/pod/pod.service';
+import * as orchestrationService from '../services/orchestration/orchestration.service';
 import { canViewPod } from '../services/pods/pod-access';
 import { ApiResponse, UserRole, PodType, PodVisibility, PodMemberRole, OrchestrationMode, CommunicationMode, hasRoleAtLeast } from '@rsn/shared';
 import { ForbiddenError, NotFoundError } from '../middleware/errors';
@@ -416,6 +417,17 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const member = await podService.approveMember(req.params.id, req.params.userId, req.user!.userId, req.user!.role);
+      // Bug 3 (18 May Stefan) — Stefan approved a pending request but the
+      // requester didn't see "Approved" until they refreshed, and the host's
+      // pending count stayed stale too. Live broadcast on both directions:
+      //   - target user gets a personal `pod:membership_updated` event so
+      //     their UI flips from "Pending approval" to "Active member"
+      //   - server-side socket fan-out via the user room handles the
+      //     decrement of the host's pending count via the same path the
+      //     UI's React-Query subscribes to.
+      orchestrationService
+        .notifyPodMembershipChanged(req.params.id, req.params.userId, 'approved')
+        .catch(() => { /* best-effort */ });
       const response: ApiResponse = { success: true, data: member };
       res.json(response);
     } catch (err) {
@@ -433,6 +445,11 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await podService.rejectMember(req.params.id, req.params.userId, req.user!.userId, req.user!.role);
+      // Bug 3 (18 May Stefan) — same live broadcast on reject so the
+      // requester learns the verdict without a refresh.
+      orchestrationService
+        .notifyPodMembershipChanged(req.params.id, req.params.userId, 'rejected')
+        .catch(() => { /* best-effort */ });
       const response: ApiResponse = { success: true, data: { message: 'Request rejected' } };
       res.json(response);
     } catch (err) {

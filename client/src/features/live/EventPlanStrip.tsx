@@ -95,7 +95,7 @@ export default function EventPlanStrip({ sessionId }: Props) {
             <div
               key={r.roundNumber}
               className={`flex-shrink-0 min-w-[110px] border rounded-lg px-2.5 py-2 ${meta.cls} ${isActive ? 'ring-2 ring-blue-300' : ''}`}
-              title={`Round ${r.roundNumber}: ${meta.label}${r.byeCount > 0 ? ` · ${r.byeCount} on bye` : ''}${r.hasFallback ? ' · used fallback ladder' : ''}`}
+              title={`Round ${r.roundNumber}: ${meta.label}${r.byeCount > 0 ? ` · ${r.byeCount} not matched` : ''}${r.hasFallback ? ' · used fallback ladder' : ''}`}
             >
               <div className="flex items-center gap-1.5 mb-0.5">
                 <Icon className="h-3.5 w-3.5" />
