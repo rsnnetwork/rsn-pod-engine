@@ -405,8 +405,43 @@ export async function getPeopleMet(
     mutualPartnerIds = new Set(fallbackMutual.map(c => c.userId));
   }
 
-  // Filter the connections list using meeting_records as truth.
-  const mutualConnections = connections.filter(c => mutualPartnerIds.has(c.userId));
+  // Bug 24 (18 May Ali) — recap pages used to render TWO rows for the
+  // same partner when the pair matched in multiple rounds (fallback
+  // ladder, "Another Round" path, or explicit re-pair). Now we dedupe
+  // by userId, keep the best-quality row, and surface a meetCount so
+  // the UI can render "Met 2 times" on a single row instead.
+  const dedupeByUser = (rows: ConnectionResult[]): (ConnectionResult & { meetCount: number })[] => {
+    const byUser = new Map<string, ConnectionResult & { meetCount: number }>();
+    for (const r of rows) {
+      const existing = byUser.get(r.userId);
+      if (!existing) {
+        byUser.set(r.userId, { ...r, meetCount: 1 });
+        continue;
+      }
+      existing.meetCount += 1;
+      // Keep the highest quality + the most generous mutual signals so
+      // the single row reflects the best of the multiple meetings.
+      if ((r.qualityScore || 0) > (existing.qualityScore || 0)) {
+        existing.qualityScore = r.qualityScore;
+      }
+      if (r.meetAgain) existing.meetAgain = true;
+      if (r.theirMeetAgain) existing.theirMeetAgain = true;
+      if (r.mutualMeetAgain) existing.mutualMeetAgain = true;
+      // Latest round wins for the "you met them in round X" hint when
+      // the meetCount is 1; for meetCount > 1 the client renders the
+      // count badge instead, so this fallback is fine.
+      if ((r.roundNumber || 0) > (existing.roundNumber || 0)) {
+        existing.roundNumber = r.roundNumber;
+      }
+    }
+    return Array.from(byUser.values());
+  };
+
+  // Filter mutual rows from the dedup'd set so the Mutual Matches card
+  // never repeats a person, and each row carries the meet count.
+  const dedupedMutual = dedupeByUser(
+    connections.filter(c => mutualPartnerIds.has(c.userId)),
+  );
 
   return {
     sessionId,
@@ -414,8 +449,9 @@ export async function getPeopleMet(
     sessionDate: session.scheduledAt,
     totalRounds,
     roundsAttended,
+    // connections stays per-match so the per-round breakdown is intact.
     connections,
-    mutualConnections,
+    mutualConnections: dedupedMutual,
     // New Phase 2 fields. Existing clients that read connections.length and
     // mutualConnections.length keep working; new consumers use these.
     uniquePeopleMet: counts.uniquePeopleMet,

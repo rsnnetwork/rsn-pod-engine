@@ -21,6 +21,11 @@ interface Connection {
   theirMeetAgain: boolean;
   mutualMeetAgain: boolean;
   roundNumber: number;
+  // Bug 24 (18 May Ali) — set by the server's deduplication so the
+  // Mutual Matches card can show "Met 2 times" on a single row instead
+  // of two duplicate rows. Optional for backward compat with older
+  // payloads (defaults to 1 = met once, no badge).
+  meetCount?: number;
 }
 
 interface Stats {
@@ -404,7 +409,17 @@ export default function RecapPage() {
                 <a href={`/profile/${c.userId}`} className="flex items-center gap-3 flex-1 min-w-0">
                   <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="md" />
                   <div className="flex-1 min-w-0">
-                    <p className="text-gray-800 font-medium truncate">{c.displayName}</p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-gray-800 font-medium truncate">{c.displayName}</p>
+                      {/* Bug 24 (18 May Ali) — single row per partner; surface
+                          the meet count when > 1 so the host doesn't see the
+                          same person rendered twice. */}
+                      {(c.meetCount ?? 1) > 1 && (
+                        <span className="inline-flex items-center text-[10px] font-semibold text-indigo-700 bg-indigo-100 border border-indigo-200 rounded-full px-1.5 py-px">
+                          Met {c.meetCount} times
+                        </span>
+                      )}
+                    </div>
                     {(c.jobTitle || c.company) && (
                       <p className="text-xs text-gray-400 truncate">
                         {[c.jobTitle, c.company].filter(Boolean).join(' · ')}
