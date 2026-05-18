@@ -80,26 +80,15 @@ const HCC_MIN_W = 480;
 const HCC_MIN_H = 360;
 const HCC_DESKTOP_BREAKPOINT_PX = 768;
 
+// Bug 45 (19 May Ali) — persistence removed; modal re-centres every open.
+// Keeping HCC_WINDOW_KEY + the bounds shape around so the localStorage
+// cleanup below can find and erase any stale value left by previous builds,
+// and any other module that imports the bounds type still type-checks.
 interface PersistedBounds {
   x: number;
   y: number;
   width: number;
   height: number;
-}
-
-function readPersistedBounds(): PersistedBounds | null {
-  try {
-    const raw = localStorage.getItem(HCC_WINDOW_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (
-      typeof parsed?.x === 'number' &&
-      typeof parsed?.y === 'number' &&
-      typeof parsed?.width === 'number' &&
-      typeof parsed?.height === 'number'
-    ) return parsed;
-  } catch { /* ignore */ }
-  return null;
 }
 
 function writePersistedBounds(b: PersistedBounds): void {
@@ -190,40 +179,23 @@ export default function HostControlCenter({
     if (typeof window === 'undefined') {
       return { x: 100, y: 100, width: HCC_DEFAULT_W, height: HCC_DEFAULT_H };
     }
-    // Bug 39 (19 May Ali) — persisted bounds from a previous session
-    // (different window size, different monitor, accidental drag into
-    // a corner) could load with the title bar partly off-screen and
-    // no way to grab the drag handle. Clamp every loaded value into
-    // the current viewport: width/height capped, x/y kept inside the
-    // visible area so the title bar is always reachable.
-    const persisted = readPersistedBounds();
+    // Bug 39 / 42 / 45 (19 May Ali) — three iterations of "modal opens
+    // in the wrong place" eventually pointed at a simpler answer: don't
+    // persist position at all. Every open starts CENTRED. The user can
+    // drag/resize during a session via the title bar (hcc-drag-handle),
+    // but the next open re-centres. This kills the entire class of
+    // "bad persisted bounds" bugs — every cross-monitor, cross-viewport,
+    // accidental-bottom-drag scenario just resets to a known-good spot.
+    // Trade-off: position doesn't "remember" across sessions. Net gain:
+    // the modal is always reachable.
     const defaultW = Math.min(HCC_DEFAULT_W, Math.floor(window.innerWidth * 0.92));
     const defaultH = Math.min(HCC_DEFAULT_H, Math.floor(window.innerHeight * 0.88));
     const defaultX = Math.max(8, Math.floor((window.innerWidth - defaultW) / 2));
     const defaultY = Math.max(8, Math.floor((window.innerHeight - defaultH) / 2));
-    // Bug 39+42 (19 May Ali) — only honour persisted bounds when they
-    // ALREADY fit the current viewport without needing clamping. If a
-    // previous session left the dialog at a weird position (different
-    // monitor, accidental drag near the bottom, smaller window now),
-    // fall through to the centred defaults rather than clamping the
-    // bad position to "just barely visible at the bottom". Centred is
-    // always discoverable; an off-centre window that survived a clamp
-    // confused Ali into thinking the modal wasn't draggable.
-    if (persisted) {
-      const fits =
-        persisted.width >= HCC_MIN_W &&
-        persisted.height >= HCC_MIN_H &&
-        persisted.width <= window.innerWidth &&
-        persisted.height <= window.innerHeight &&
-        persisted.x >= 0 &&
-        persisted.y >= 0 &&
-        persisted.x + persisted.width <= window.innerWidth &&
-        persisted.y + persisted.height <= window.innerHeight;
-      if (fits) return persisted;
-      // Persisted bounds don't fit cleanly — discard them and use the
-      // centred defaults below. The next user-initiated drag/resize will
-      // re-persist a sensible value via writePersistedBounds.
-    }
+    // Clear any stale persisted bounds so a future re-introduction of
+    // persistence (or a build still running the older logic in another
+    // tab) doesn't pollute this tab. Safe no-op if the key doesn't exist.
+    try { localStorage.removeItem('hcc_window_bounds'); } catch { /* noop */ }
     return { x: defaultX, y: defaultY, width: defaultW, height: defaultH };
   });
   const [isMaximized, setIsMaximized] = useState(false);

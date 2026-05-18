@@ -393,14 +393,13 @@ export default function LiveSessionPage() {
           </button>
         </div>
       )}
+      {/* Bug 45 (19 May Ali) — every place that used to push to
+          sessionError now uses the toast store instead, so this red
+          banner shouldn't render in normal flow. Kept the conditional
+          so legacy code paths still surface SOMETHING, but auto-dismiss
+          after 3s and the X stays so you can close earlier. */}
       {sessionError && (
-        <div className="bg-red-500/15 px-4 py-2 flex items-center justify-center gap-2">
-          <AlertCircle className="h-4 w-4 text-red-400" />
-          <p className="text-sm text-red-400">{sessionError}</p>
-          <button onClick={() => setError(null)} className="ml-2 text-red-400 hover:text-red-300">
-            <X className="h-3 w-3" />
-          </button>
-        </div>
+        <AutoDismissErrorBanner message={sessionError} onClose={() => setError(null)} />
       )}
 
       {/* Matching confirmed overlay — full screen for participants, banner for host */}
@@ -542,6 +541,26 @@ function TestModeBanner() {
     <div className="px-4 py-1.5 flex items-center justify-center gap-2 text-xs font-semibold bg-amber-100 text-amber-900 border-b border-amber-300">
       <span aria-hidden="true">⚠</span>
       <span>Test mode — multiple accounts detected. This is not a real event.</span>
+    </div>
+  );
+}
+
+// Bug 45 (19 May Ali) — auto-dismiss the legacy red error banner so a
+// stale session error never sits there until manually closed. 3 seconds
+// (closer to Ali's preferred 1s but still readable). The X stays so the
+// user can dismiss faster if they want.
+function AutoDismissErrorBanner({ message, onClose }: { message: string; onClose: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onClose, 3000);
+    return () => clearTimeout(t);
+  }, [message, onClose]);
+  return (
+    <div className="bg-red-500/15 px-4 py-2 flex items-center justify-center gap-2">
+      <AlertCircle className="h-4 w-4 text-red-400" />
+      <p className="text-sm text-red-400">{message}</p>
+      <button onClick={onClose} className="ml-2 text-red-400 hover:text-red-300">
+        <X className="h-3 w-3" />
+      </button>
     </div>
   );
 }

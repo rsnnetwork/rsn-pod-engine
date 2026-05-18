@@ -109,20 +109,15 @@ export default function HostControls({ sessionId }: Props) {
     const unsub = useSessionStore.subscribe((state) => {
       if (state.matchPreview) cleanup();
     });
-    // Bug 35 (19 May Ali) — the spinner used to wedge in two cases:
-    // (a) server emits NO_ELIGIBLE_PAIRS but the client only listened
-    // for NOT_ENOUGH_PARTICIPANTS, so the error was ignored; (b) server
-    // emits session:matching_cancelled (when the engine returns 0
-    // matches and the round is rolled back) but generating had no
-    // listener for that event. Cover both: every realistic terminal
-    // state — match_preview arrives, OR any error code, OR
-    // matching_cancelled — clears the spinner.
+    // Bug 35 (19 May Ali) — clear spinner on any terminal state.
+    // Bug 45 (19 May Ali) — show errors as a toast (auto-dismiss),
+    // not the persistent top-of-page red banner that sat there until
+    // manually crossed. The banner was set via setError() and felt
+    // sticky / intrusive; an error toast disappears on its own in a
+    // few seconds and surfaces in the corner instead.
     const onError = (err: any) => {
-      // Any error from this socket session ends the attempt. We don't
-      // narrow on code because every error after a generate request
-      // means it didn't succeed.
       if (err?.message || err?.code) {
-        useSessionStore.getState().setError(err.message || 'Failed to generate matches');
+        useToastStore.getState().addToast(err.message || 'Failed to generate matches', 'error');
       }
       cleanup();
     };
@@ -165,10 +160,11 @@ export default function HostControls({ sessionId }: Props) {
     const unsub = useSessionStore.subscribe((state) => {
       if (state.matchPreview) cleanup();
     });
-    // Bug 35 (19 May Ali) — same wedge fix as generateMatches above.
+    // Bug 35 + Bug 45 (19 May Ali) — same wedge fix + toast-not-banner
+    // pattern as generateMatches above.
     const onError = (err: any) => {
       if (err?.message || err?.code) {
-        useSessionStore.getState().setError(err.message || 'Failed to re-match');
+        useToastStore.getState().addToast(err.message || 'Failed to re-match', 'error');
       }
       cleanup();
     };
