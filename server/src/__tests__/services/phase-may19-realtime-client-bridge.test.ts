@@ -179,8 +179,12 @@ describe('Phase May 19 — client realtime bridge (Bug 32)', () => {
         'encounters', 'dm-conversations', 'dm-groups', 'dm-unread-count',
         'host-state',
       ];
+      // Bug 41 (19 May Ali) — bridge expanded to ~40 listeners; keys
+      // now live in scoped const arrays (POD_QUERY_KEYS, etc.) instead
+      // of inline qc.invalidateQueries calls. Pin the keys-as-strings
+      // anywhere in the file so the test survives further refactors.
       for (const key of requiredKeys) {
-        const re = new RegExp(`queryKey:\\s*\\[\\s*['"]${key}['"]\\s*\\]`);
+        const re = new RegExp(`['"]${key}['"]`);
         expect(bridgeSrc).toMatch(re);
       }
     });
@@ -210,9 +214,35 @@ describe('Phase May 19 — client realtime bridge (Bug 32)', () => {
         'session-participants', 'session-pending-invites',
       ];
       for (const key of sessionKeys) {
-        const re = new RegExp(`queryKey:\\s*\\[\\s*['"]${key}['"]\\s*\\]`);
+        const re = new RegExp(`['"]${key}['"]`);
         expect(bridgeSrc).toMatch(re);
       }
+    });
+
+    it('Bug 41 — role/permissions/cohost/host-transfer events are listened for', () => {
+      // The exact gap that made Raja need to refresh after being promoted
+      // to host. These listeners did not exist in the previous bridge.
+      expect(bridgeSrc).toMatch(/socket\.on\(\s*['"]permissions:updated['"]/);
+      expect(bridgeSrc).toMatch(/socket\.on\(\s*['"]cohost:assigned['"]/);
+      expect(bridgeSrc).toMatch(/socket\.on\(\s*['"]cohost:removed['"]/);
+      expect(bridgeSrc).toMatch(/socket\.on\(\s*['"]host:transferred['"]/);
+    });
+
+    it('Bug 41 — session lifecycle + round events are listened for', () => {
+      expect(bridgeSrc).toMatch(/socket\.on\(\s*['"]session:status_changed['"]/);
+      expect(bridgeSrc).toMatch(/socket\.on\(\s*['"]session:round_started['"]/);
+      expect(bridgeSrc).toMatch(/socket\.on\(\s*['"]session:round_ended['"]/);
+      expect(bridgeSrc).toMatch(/socket\.on\(\s*['"]session:completed['"]/);
+      expect(bridgeSrc).toMatch(/socket\.on\(\s*['"]host:event_plan_generated['"]/);
+      expect(bridgeSrc).toMatch(/socket\.on\(\s*['"]host:event_plan_repaired['"]/);
+      expect(bridgeSrc).toMatch(/socket\.on\(\s*['"]roster:changed['"]/);
+    });
+
+    it('Bug 41 — match lifecycle events are listened for', () => {
+      expect(bridgeSrc).toMatch(/socket\.on\(\s*['"]match:assigned['"]/);
+      expect(bridgeSrc).toMatch(/socket\.on\(\s*['"]match:reassigned['"]/);
+      expect(bridgeSrc).toMatch(/socket\.on\(\s*['"]match:partner_disconnected['"]/);
+      expect(bridgeSrc).toMatch(/socket\.on\(\s*['"]match:partner_reconnected['"]/);
     });
   });
 

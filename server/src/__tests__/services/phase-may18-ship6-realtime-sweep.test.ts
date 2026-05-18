@@ -92,10 +92,12 @@ describe('Stefan 18 May — Ship #6 realtime sweep', () => {
     });
 
     it('App-root invalidation bridge subscribes to session:list_changed and invalidates session queries', () => {
-      expect(bridgeSrc).toMatch(/'session:list_changed'/);
-      expect(bridgeSrc).toMatch(/sessionListHandler[\s\S]{0,400}invalidateQueries\(\{\s*queryKey:\s*\['my-sessions'\]/);
-      expect(bridgeSrc).toMatch(/invalidateQueries\(\{\s*queryKey:\s*\['pod-sessions'\]/);
-      expect(bridgeSrc).toMatch(/invalidateQueries\(\{\s*queryKey:\s*\['session-detail'\]/);
+      // Bug 41 (19 May Ali) — bridge moved keys into scoped const
+      // arrays. Pin keys as string literals + the subscription.
+      expect(bridgeSrc).toMatch(/socket\.on\(\s*['"]session:list_changed['"]/);
+      expect(bridgeSrc).toMatch(/['"]my-sessions['"]/);
+      expect(bridgeSrc).toMatch(/['"]pod-sessions['"]/);
+      expect(bridgeSrc).toMatch(/['"]session-detail['"]/);
     });
   });
 
