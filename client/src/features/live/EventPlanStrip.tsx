@@ -107,7 +107,11 @@ export default function EventPlanStrip({ sessionId }: Props) {
                   <span className="ml-1">· {r.pairCount} {r.pairCount === 1 ? 'pair' : 'pairs'}</span>
                 )}
                 {r.byeCount > 0 && (
-                  <span className="ml-1">· {r.byeCount} bye</span>
+                  // Bug 40 (19 May Stefan, via Ali) — Stefan asked for
+                  // "no bye word" in user-facing copy. Standardised on
+                  // "not matched" which is what the same component's
+                  // tooltip + HostRoundDashboard already use.
+                  <span className="ml-1">· {r.byeCount} not matched</span>
                 )}
                 {r.hasFallback && (
                   <AlertTriangle className="h-3 w-3 inline ml-1 text-amber-500" aria-label="Used fallback ladder" />
