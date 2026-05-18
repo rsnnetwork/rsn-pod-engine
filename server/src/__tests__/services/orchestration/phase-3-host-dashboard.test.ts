@@ -51,11 +51,17 @@ describe('Phase 3 — Host dashboard UI + sync', () => {
     it('host:event_plan_repaired listener fires an info toast with reason text', () => {
       const startIdx = src.indexOf("socket.on('host:event_plan_repaired'");
       expect(startIdx).toBeGreaterThan(-1);
-      const slice = src.slice(startIdx, startIdx + 800);
+      // Bug 18 (18 May Stefan) — listener body grew (eventPlanSummary
+      // update on repair) so widen the slice past the new code.
+      const slice = src.slice(startIdx, startIdx + 1800);
       expect(slice).toMatch(/useToastStore\.getState\(\)\.addToast/);
       expect(slice).toMatch(/Plan updated/);
       expect(slice).toMatch(/late_joiner/);
       expect(slice).toMatch(/left/);
+      // Bug 18 also pins that the listener writes the new roundCount /
+      // totalPairs back into the store so the headline summary stays in
+      // sync with the per-round badges.
+      expect(slice).toMatch(/setEventPlanSummary/);
     });
 
     it('sessionStore exposes setEventPlanSummary action', () => {

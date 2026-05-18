@@ -28,6 +28,12 @@ import { transitionParticipant, setPresence, ParticipantState } from '../state/p
 // One repair per 5 seconds per session prevents storms when many users
 // join in quick succession (we only need ONE recompute that includes them all).
 const _futureRepairThrottle = new Map<string, number>();
+// Bug 18 (18 May Stefan) — trailing-edge tracking. When a request is
+// throttled, schedule a single trailing repair so the *most recent*
+// roster state is reflected in the plan. Without this a burst of joins
+// could leave the plan stuck with whoever was registered at the moment
+// of the first repair, plus all subsequent joiners silently dropped.
+const _futureRepairTrailing = new Map<string, NodeJS.Timeout>();
 const FUTURE_REPAIR_THROTTLE_MS = 5_000;
 
 async function maybeRepairFutureRounds(
@@ -37,27 +43,88 @@ async function maybeRepairFutureRounds(
 ): Promise<void> {
   const activeSession = activeSessions.get(sessionId);
   if (!activeSession) return;
-  // Only repair if the event has actually started rounds (currentRound >= 1).
-  // Pre-event joiners get covered by the regular pre-plan since the plan
-  // hasn't been generated yet.
-  if (activeSession.currentRound < 1) return;
+  // Bug 18 (18 May Stefan) — pre-fix the guard was `currentRound < 1`,
+  // which skipped recompute for joiners arriving between the host clicking
+  // Start (plan generated, LOBBY_OPEN) and round 1 actually starting. So
+  // an event that began with 6 participants and grew to 8 in the lobby
+  // kept showing "3 rounds · 3 pairs" — Stefan's exact complaint. New
+  // guard: skip only when the event hasn't started AT ALL (no plan).
+  // Once status flips past SCHEDULED the plan exists and must be repaired
+  // on every roster change. The "Pre-event joiners get covered by the
+  // regular pre-plan" assumption only holds while status === SCHEDULED.
+  if (activeSession.status === SessionStatus.SCHEDULED) return;
+  if (activeSession.status === SessionStatus.COMPLETED) return;
 
   const now = Date.now();
   const last = _futureRepairThrottle.get(sessionId) || 0;
   if (now - last < FUTURE_REPAIR_THROTTLE_MS) {
-    logger.debug({ sessionId, reason }, 'maybeRepairFutureRounds: throttled');
+    // Bug 18 (18 May Stefan) — trailing-edge repair so a burst of joins
+    // doesn't lose the late ones. The first call in the window already
+    // ran a repair; schedule ONE trailing repair that fires once the
+    // window closes, capturing the latest roster (including anyone who
+    // joined during the window).
+    if (!_futureRepairTrailing.has(sessionId)) {
+      const delay = FUTURE_REPAIR_THROTTLE_MS - (now - last) + 100;
+      const handle = setTimeout(() => {
+        _futureRepairTrailing.delete(sessionId);
+        void runRepair(io, sessionId, reason);
+      }, delay);
+      _futureRepairTrailing.set(sessionId, handle);
+    }
+    logger.debug({ sessionId, reason }, 'maybeRepairFutureRounds: throttled (trailing repair queued)');
     return;
   }
   _futureRepairThrottle.set(sessionId, now);
+  await runRepair(io, sessionId, reason);
+}
 
+/** Inner repair body — shared by the leading-edge call and the trailing-
+ *  edge setTimeout. Reads the latest activeSession at fire time so a
+ *  trailing repair captures the freshest roster.
+ *
+ *  Bug 18 (18 May Stefan) — emit also carries the fresh roundCount +
+ *  totalPairs so the host's "Plan: X rounds · Y pairs" headline matches
+ *  the per-round badges. Pre-fix the headline stuck at whatever
+ *  generateSessionSchedule reported at Start; after a late-joiner repair
+ *  the badges updated but the headline didn't, leaving the host with
+ *  contradictory numbers on the same strip. */
+async function runRepair(
+  io: SocketServer,
+  sessionId: string,
+  reason: 'late_joiner' | 'left',
+): Promise<void> {
+  const activeSession = activeSessions.get(sessionId);
+  if (!activeSession) return;
   try {
-    const fromRound = activeSession.currentRound + 1;
+    const fromRound = Math.max(1, activeSession.currentRound + 1);
     const result = await matchingService.repairFutureRounds(sessionId, fromRound, reason);
     if (result.regeneratedRounds.length > 0) {
+      // Pull post-repair totals so the host strip shows the correct
+      // roundCount + totalPairs. COUNT(*) over scheduled+active+completed
+      // matches covers every persisted round in the plan.
+      let roundCount = 0;
+      let totalPairs = 0;
+      try {
+        const totals = await query<{ round_count: string; total_pairs: string }>(
+          `SELECT
+             COUNT(DISTINCT round_number)::text AS round_count,
+             COUNT(*)::text AS total_pairs
+           FROM matches
+           WHERE session_id = $1 AND is_manual = FALSE AND status <> 'cancelled'`,
+          [sessionId],
+        );
+        roundCount = parseInt(totals.rows[0]?.round_count ?? '0', 10);
+        totalPairs = parseInt(totals.rows[0]?.total_pairs ?? '0', 10);
+      } catch {
+        // Non-fatal — the regeneratedRounds list is enough for the toast;
+        // the EventPlanStrip's React-Query refetch will catch any drift.
+      }
       io.to(sessionRoom(sessionId)).emit('host:event_plan_repaired', {
         sessionId,
         reason,
         regeneratedRounds: result.regeneratedRounds,
+        roundCount,
+        totalPairs,
       });
     }
   } catch (err) {

@@ -64,6 +64,12 @@ export interface ServerToClientEvents {
     sessionId: string;
     reason: 'late_joiner' | 'left' | 'host_request';
     regeneratedRounds: number[];
+    // Bug 18 (18 May Stefan) — server now also reports the post-repair
+    // totals so the host's headline summary updates alongside the
+    // per-round badges. Optional for backward compat with older servers;
+    // when missing the client just doesn't touch the summary store.
+    roundCount?: number;
+    totalPairs?: number;
   }) => void;
 
   // Host round dashboard (breakout room monitoring).

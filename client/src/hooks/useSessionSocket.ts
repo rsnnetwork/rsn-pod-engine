@@ -604,6 +604,17 @@ export default function useSessionSocket(sessionId: string) {
       const reason = reasonText[data?.reason] || 'plan updated';
       const rounds: number[] = data?.regeneratedRounds || [];
       if (rounds.length === 0) return; // nothing changed; skip toast
+      // Bug 18 (18 May Stefan) — sync the headline summary so the host
+      // sees the new round/pair totals in the EventPlan strip, not just
+      // the per-round badges. Pre-fix only host:event_plan_generated
+      // updated this store value, so post-repair the strip's "Plan: X
+      // rounds · Y pairs" kept showing the original Start-of-event
+      // numbers even when the badges underneath reflected the new plan.
+      const rc = typeof data?.roundCount === 'number' ? data.roundCount : null;
+      const tp = typeof data?.totalPairs === 'number' ? data.totalPairs : null;
+      if (rc !== null && tp !== null) {
+        store.setEventPlanSummary?.({ roundCount: rc, totalPairs: tp });
+      }
       const range = rounds.length === 1
         ? `round ${rounds[0]}`
         : `rounds ${rounds[0]}–${rounds[rounds.length - 1]}`;
