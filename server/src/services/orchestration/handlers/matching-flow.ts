@@ -78,16 +78,51 @@ export async function handleHostGenerateMatches(
     // cap so the new round is a legitimate round N+1 rather than tripping
     // the ">= numberOfRounds" end-of-event guard in endRatingWindow. Also
     // cancel the 10-min closing safety timer — host is continuing the event.
+    //
+    // Bug 22 (18 May Ali) — the bump used to live ONLY in
+    // activeSession.config (in-memory) + the Redis snapshot via the
+    // next persistSessionState call. The DB sessions.config row was
+    // never touched, which left the recap page reading "X of 3" even
+    // when the host actually ran 4 rounds. Now we also UPDATE the DB
+    // config so every downstream consumer — recap, REST /sessions/:id,
+    // post-event analytics, server restart recovery — agrees the
+    // event ran for N+1 rounds.
     if (activeSession.status === SessionStatus.CLOSING_LOBBY) {
       const { clearSessionTimers } = await import('./timer-manager');
       const sessionService = await import('../../session/session.service');
       clearSessionTimers(data.sessionId);
+      const bumpedRounds = (activeSession.config.numberOfRounds || 5) + 1;
       activeSession.config = {
         ...activeSession.config,
-        numberOfRounds: (activeSession.config.numberOfRounds || 5) + 1,
+        numberOfRounds: bumpedRounds,
       };
       activeSession.status = SessionStatus.ROUND_TRANSITION;
       await sessionService.updateSessionStatus(data.sessionId, SessionStatus.ROUND_TRANSITION);
+      // Bug 22 — durable persistence so a restart / recap / cold REST
+      // fetch sees the bumped round cap. jsonb_set rewrites only the
+      // numberOfRounds key; the rest of the config blob stays intact.
+      try {
+        await query(
+          `UPDATE sessions
+             SET config = jsonb_set(config, '{numberOfRounds}', to_jsonb($2::int), true)
+             WHERE id = $1`,
+          [data.sessionId, bumpedRounds],
+        );
+      } catch (err) {
+        logger.warn({ err, sessionId: data.sessionId, bumpedRounds }, 'Failed to persist bumped numberOfRounds to DB — non-fatal (in-memory + Redis still hold the bump)');
+      }
+      // Bug 22 — broadcast so EventPlanStrip + any UI showing the round
+      // count refetches and renders "N+1 rounds" instead of the old
+      // configured value.
+      io.to(sessionRoom(data.sessionId)).emit('host:event_plan_repaired', {
+        sessionId: data.sessionId,
+        reason: 'host_request',
+        regeneratedRounds: [activeSession.currentRound + 1],
+        roundCount: bumpedRounds,
+        // totalPairs will catch up on the next plan refetch from EventPlanStrip
+        // — the per-round badge query reads matches directly.
+        totalPairs: 0,
+      });
       io.to(sessionRoom(data.sessionId)).emit('session:status_changed', {
         sessionId: data.sessionId,
         status: SessionStatus.ROUND_TRANSITION,
