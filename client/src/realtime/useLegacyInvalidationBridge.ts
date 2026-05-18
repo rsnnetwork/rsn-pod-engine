@@ -207,13 +207,13 @@ export function useLegacyInvalidationBridge(): void {
       invalidatePodScope(qc);
     };
 
-    // Visibility / pin / tile-demote — all tweak session-level state
-    // that the host controls + lobby render. The actual visual update
-    // for the in-room tile happens via the LiveKit + dedicated session-
-    // store paths inside useSessionSocket; here we just refresh any
-    // surface that READS the new state.
+    // Visibility / pin / tile-demote / matching cancel — all tweak
+    // session-level state that the host controls + lobby render. Also
+    // hits event-plan because matching_cancelled flips the plan
+    // strip's round chip from "Planned · N pair" to "Cancelled · N
+    // not matched".
     const sessionMutationHandler = () => {
-      invalidateAll(qc, ['session', 'session-detail', 'host-state']);
+      invalidateAll(qc, ['session', 'session-detail', 'host-state', 'event-plan']);
     };
 
     // Match lifecycle — when a match starts / ends / partner connects /

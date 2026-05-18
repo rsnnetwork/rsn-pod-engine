@@ -201,12 +201,28 @@ export default function HostControlCenter({
     const defaultH = Math.min(HCC_DEFAULT_H, Math.floor(window.innerHeight * 0.88));
     const defaultX = Math.max(8, Math.floor((window.innerWidth - defaultW) / 2));
     const defaultY = Math.max(8, Math.floor((window.innerHeight - defaultH) / 2));
+    // Bug 39+42 (19 May Ali) — only honour persisted bounds when they
+    // ALREADY fit the current viewport without needing clamping. If a
+    // previous session left the dialog at a weird position (different
+    // monitor, accidental drag near the bottom, smaller window now),
+    // fall through to the centred defaults rather than clamping the
+    // bad position to "just barely visible at the bottom". Centred is
+    // always discoverable; an off-centre window that survived a clamp
+    // confused Ali into thinking the modal wasn't draggable.
     if (persisted) {
-      const clampedW = Math.min(Math.max(HCC_MIN_W, persisted.width), window.innerWidth);
-      const clampedH = Math.min(Math.max(HCC_MIN_H, persisted.height), window.innerHeight);
-      const clampedX = Math.max(0, Math.min(persisted.x, window.innerWidth - clampedW));
-      const clampedY = Math.max(0, Math.min(persisted.y, window.innerHeight - clampedH));
-      return { x: clampedX, y: clampedY, width: clampedW, height: clampedH };
+      const fits =
+        persisted.width >= HCC_MIN_W &&
+        persisted.height >= HCC_MIN_H &&
+        persisted.width <= window.innerWidth &&
+        persisted.height <= window.innerHeight &&
+        persisted.x >= 0 &&
+        persisted.y >= 0 &&
+        persisted.x + persisted.width <= window.innerWidth &&
+        persisted.y + persisted.height <= window.innerHeight;
+      if (fits) return persisted;
+      // Persisted bounds don't fit cleanly — discard them and use the
+      // centred defaults below. The next user-initiated drag/resize will
+      // re-persist a sensible value via writePersistedBounds.
     }
     return { x: defaultX, y: defaultY, width: defaultW, height: defaultH };
   });

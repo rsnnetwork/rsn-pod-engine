@@ -118,16 +118,18 @@ export default function ParticipantList({ onClose, sessionId }: Props) {
                   <ShieldCheck className="h-2.5 w-2.5" /> Co-Host
                 </span>
               )}
-              {/* Bug 13 (13 May live test) — when an admin used their own
-                  "Join as host" toggle (Phase M opt-in, NOT in formal
-                  session_cohosts), the director cannot override their
-                  choice. Only the admin themselves can switch back. The
-                  toggle button hides in that case so the UI doesn't dangle
-                  a control the director isn't allowed to use. */}
+              {/* Bug 13 (13 May live test) — original rule said only the
+                  admin themselves could untoggle Phase M opt-in.
+                  Bug 43 (19 May Ali) overrides that: director's supreme-
+                  host authority (Bug 2 principle) covers Phase M cohosts
+                  too. toggleCohost already handles both code paths
+                  (host:remove_cohost socket emit for formal cohosts +
+                  acting-as-host-for REST clear for opt-ins), so removing
+                  the isViaPhaseM gate is enough — the button is safe to
+                  show, and clicking it does the right thing for any
+                  cohost the director sees. */}
               {(() => {
-                const isFormalCohost = cohosts.has(p.userId);
-                const isViaPhaseM = !isFormalCohost && actingAsHostOverrides[p.userId] === true;
-                if (!isOriginalHost || isPHost || isSelf || isViaPhaseM) return null;
+                if (!isOriginalHost || isPHost || isSelf) return null;
                 // Bug 38 (19 May Ali) — was opacity-0 group-hover:opacity-100,
                 // which hid the toggle entirely on mobile (no hover) and made
                 // it easy to miss on desktop. Now always visible so the

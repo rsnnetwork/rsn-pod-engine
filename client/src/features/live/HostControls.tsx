@@ -1,4 +1,5 @@
 import { useSessionStore } from '@/stores/sessionStore';
+import { useToastStore } from '@/stores/toastStore';
 import { Button } from '@/components/ui/Button';
 import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, MessageSquare, UserMinus, RefreshCw, UserPlus, AlertTriangle, CheckCircle2, Clock, LayoutDashboard } from 'lucide-react';
 import { getSocket } from '@/lib/socket';
@@ -99,19 +100,38 @@ export default function HostControls({ sessionId }: Props) {
   const generateMatches = () => {
     setGenerating(true);
     socket?.emit('host:generate_matches', { sessionId });
+    const cleanup = () => {
+      setGenerating(false);
+      socket?.off('error', onError);
+      socket?.off('session:matching_cancelled', onCancelled);
+      unsub();
+    };
     const unsub = useSessionStore.subscribe((state) => {
-      if (state.matchPreview) { setGenerating(false); unsub(); }
+      if (state.matchPreview) cleanup();
     });
-    // Listen for error to stop spinner and show feedback
+    // Bug 35 (19 May Ali) — the spinner used to wedge in two cases:
+    // (a) server emits NO_ELIGIBLE_PAIRS but the client only listened
+    // for NOT_ENOUGH_PARTICIPANTS, so the error was ignored; (b) server
+    // emits session:matching_cancelled (when the engine returns 0
+    // matches and the round is rolled back) but generating had no
+    // listener for that event. Cover both: every realistic terminal
+    // state — match_preview arrives, OR any error code, OR
+    // matching_cancelled — clears the spinner.
     const onError = (err: any) => {
-      if (err?.code === 'GENERATE_FAILED' || err?.code === 'NOT_ENOUGH_PARTICIPANTS') {
-        setGenerating(false);
+      // Any error from this socket session ends the attempt. We don't
+      // narrow on code because every error after a generate request
+      // means it didn't succeed.
+      if (err?.message || err?.code) {
         useSessionStore.getState().setError(err.message || 'Failed to generate matches');
-        socket?.off('error', onError);
       }
+      cleanup();
+    };
+    const onCancelled = () => {
+      cleanup();
     };
     socket?.on('error', onError);
-    setTimeout(() => { setGenerating(false); socket?.off('error', onError); }, 10000);
+    socket?.on('session:matching_cancelled', onCancelled);
+    setTimeout(cleanup, 10000);
   };
 
   const confirmMatches = () => runLocked('confirm_matches', () => {
@@ -136,18 +156,28 @@ export default function HostControls({ sessionId }: Props) {
   const regenerateMatches = () => {
     setGenerating(true);
     socket?.emit('host:regenerate_matches' as any, { sessionId });
+    const cleanup = () => {
+      setGenerating(false);
+      socket?.off('error', onError);
+      socket?.off('session:matching_cancelled', onCancelled);
+      unsub();
+    };
     const unsub = useSessionStore.subscribe((state) => {
-      if (state.matchPreview) { setGenerating(false); unsub(); }
+      if (state.matchPreview) cleanup();
     });
+    // Bug 35 (19 May Ali) — same wedge fix as generateMatches above.
     const onError = (err: any) => {
-      if (err?.code === 'REGENERATE_FAILED') {
-        setGenerating(false);
+      if (err?.message || err?.code) {
         useSessionStore.getState().setError(err.message || 'Failed to re-match');
-        socket?.off('error', onError);
       }
+      cleanup();
+    };
+    const onCancelled = () => {
+      cleanup();
     };
     socket?.on('error', onError);
-    setTimeout(() => { setGenerating(false); socket?.off('error', onError); }, 10000);
+    socket?.on('session:matching_cancelled', onCancelled);
+    setTimeout(cleanup, 10000);
   };
 
   const handleParticipantClick = (userId: string) => {
@@ -873,13 +903,21 @@ export default function HostControls({ sessionId }: Props) {
                 ? `Need at least 2 participants in main room (currently ${eligibleMainRoomCount})`
                 : '';
               if (matchPeopleDisabled) {
+                // Bug 34 (19 May Ali) — was a non-interactive <span> with
+                // a title tooltip. Mobile has no hover state, so the
+                // host got no feedback on tap. Now a real button that
+                // fires a toast on click, so both desktop AND mobile
+                // get the same "why can't I match?" feedback.
                 return (
-                  <span
-                    className="text-xs text-gray-500 px-2 py-1.5 border border-gray-200 rounded-lg cursor-not-allowed inline-flex items-center gap-1"
+                  <button
+                    type="button"
+                    onClick={() => useToastStore.getState().addToast(matchPeopleHint, 'info')}
+                    className="text-xs text-gray-500 px-2 py-1.5 border border-gray-200 rounded-lg inline-flex items-center gap-1 hover:bg-gray-50"
                     title={matchPeopleHint}
+                    aria-label={matchPeopleHint}
                   >
                     <Shuffle className="h-3.5 w-3.5 opacity-50" /> Match People
-                  </span>
+                  </button>
                 );
               }
               return (
