@@ -42,7 +42,7 @@ import {
 import {
   handleHostGenerateMatches, handleHostConfirmRound, handleHostConfirmMatches,
   handleHostSwapMatch, handleHostExcludeFromRound, handleHostRegenerateMatches,
-  handleHostCancelPreview, handleHostForceMatch, emitHostDashboard, injectMatchingFlowDeps,
+  handleHostCancelPreview, handleHostForceMatch, emitHostDashboard, emitHostDashboardForce, injectMatchingFlowDeps,
 } from './handlers/matching-flow';
 
 // Handlers — Round Lifecycle
@@ -109,6 +109,8 @@ export function initOrchestration(socketServer: SocketServer): void {
     completeSession: (ioServer, sessionId) => completeSession(ioServer, sessionId),
     endRound: (ioServer, sessionId, roundNumber) => endRound(ioServer, sessionId, roundNumber),
     emitHostDashboard: (sessionId) => emitHostDashboard(io, sessionId),
+    // Bug 68 (18 May Stefan) — coalesce-bypass for cohost promote/demote.
+    emitHostDashboardForce: (sessionId) => emitHostDashboardForce(io, sessionId),
     timerCallbacks,
     // Bug 4 (April 18 Dr Arch): wire auto-end so host actions that end matches
     // can recover the session if every active match in the round is gone.
@@ -365,22 +367,31 @@ export async function notifyPermissionsUpdated(
   cause: string = 'acting_as_host_changed',
 ): Promise<void> {
   if (!io) return;
-  const { userRoom } = await import('./state/session-state');
+  const { userRoom, sessionRoom } = await import('./state/session-state');
   io.to(userRoom(userId)).emit('permissions:updated', {
     sessionId,
     userId,
     cause,
   });
-  // Bug F + I (15 May Ali) — when an admin opts in/out via the Phase M
-  // banner (or a host promotes someone via /acting-as-host-for/:userId),
-  // the host set changes. Re-emit the HCC dashboard so every acting host
-  // sees the new role layout immediately, without waiting for the next
-  // 5-second refresh and without anyone needing to reload the tab.
-  // matching-flow's emitHostDashboard fans out to every acting host
-  // already (Bug F fan-out fix); we just kick it off here.
+  // Bug 68 (18 May Stefan) — every roster mutation must be visible to
+  // EVERY connected client without a refresh. Pre-fix, only the target
+  // user received permissions:updated; other participants kept the stale
+  // count + stale badges until the next 30s session:state tick. The
+  // roster:changed broadcast tells the whole session room to re-pull the
+  // snapshot, which already includes the latest cohosts/overrides/counts/
+  // hccParticipants. One small event, one snapshot fetch per client —
+  // and everyone's UI is consistent within the same tick as the action.
+  io.to(sessionRoom(sessionId)).emit('roster:changed', {
+    sessionId,
+    cause,
+  });
+  // Bug F + I (15 May Ali) — keep re-emitting the HCC dashboard so every
+  // acting host sees the new role layout in the same tick. Force-variant
+  // bypass the coalesce so a back-to-back acting-as-host toggle doesn't
+  // defer the second emit.
   try {
-    const { emitHostDashboard } = await import('./handlers/matching-flow');
-    await emitHostDashboard(io, sessionId);
+    const { emitHostDashboardForce } = await import('./handlers/matching-flow');
+    await emitHostDashboardForce(io, sessionId);
   } catch {
     /* opportunistic refresh — non-fatal if the helper isn't ready */
   }

@@ -123,6 +123,31 @@ export interface SessionStateSnapshot {
   pinnedUserId: string | null;
 
   /**
+   * Bug 68 (18 May Stefan) — Host Control Center participants list, sourced
+   * from buildHostParticipantsView. Previously HCC was populated solely by
+   * the `host:round_dashboard` socket emit, which created a race when an
+   * admin was just promoted to co-host: their `isHost` flipped via
+   * `permissions:updated` → snapshot fetch, but their HCC drawer rendered
+   * empty until the next dashboard tick arrived. Including the same data
+   * on the snapshot makes the HCC drawer self-hydrating on every state
+   * transition — no socket dependency, no race window.
+   *
+   * Hidden when the snapshot is built before activeSessions is populated;
+   * the live emit then takes over once the host opens the drawer.
+   */
+  hccParticipants: Array<{
+    userId: string;
+    displayName: string;
+    email: string | null;
+    role: 'host' | 'cohost' | 'participant';
+    globalRole: 'user' | 'admin' | 'super_admin';
+    state: 'in_main_room' | 'in_room' | 'disconnected' | 'left';
+    currentMatchId: string | null;
+    currentRoomId: string | null;
+    joinedAt: string;
+  }>;
+
+  /**
    * Phase 5B (5 May spec) — test-mode flag. Stefan's #2: when the host is
    * signed in across multiple accounts to test the system, display a
    * banner so it's visually clear this isn't a real production event.
@@ -354,6 +379,27 @@ export async function buildSessionStateSnapshot(
     }
   }
 
+  // Bug 68 (18 May Stefan) — bundle the HCC participants list onto the
+  // snapshot so a newly-promoted cohost has a populated drawer on the
+  // very next snapshot fetch (which permissions:updated already triggers).
+  // Pure read — buildHostParticipantsView runs the canonical SELECT every
+  // time. Cheap enough to call on every snapshot since the round
+  // dashboard does the same call every 5 seconds.
+  let hccParticipants: any[] = [];
+  if (activeSession && session.hostUserId) {
+    try {
+      const { buildHostParticipantsView } = await import('../orchestration/handlers/host-participants-view');
+      hccParticipants = await buildHostParticipantsView({
+        sessionId,
+        hostUserId: session.hostUserId,
+        presenceMap: activeSession.presenceMap,
+      });
+    } catch {
+      // Best-effort. If the helper throws, the snapshot still returns;
+      // the HCC will populate from the live host:round_dashboard tick.
+    }
+  }
+
   // ── Compose snapshot ───────────────────────────────────────────────────
   return {
     sessionId,
@@ -390,5 +436,9 @@ export async function buildSessionStateSnapshot(
     // Missing on a fresh DB-only fetch (session not yet loaded into memory),
     // which is correct: there is no live pin when nobody's running it.
     pinnedUserId: activeSession?.pinnedUserId ?? null,
+    // Bug 68 (18 May Stefan) — HCC drawer data bundled directly with the
+    // snapshot so a newly-promoted cohost can render their drawer in the
+    // same tick as their isHost flips.
+    hccParticipants,
   };
 }

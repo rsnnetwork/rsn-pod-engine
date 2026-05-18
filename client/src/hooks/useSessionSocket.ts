@@ -32,6 +32,11 @@ const SOCKET_EVENTS = [
   // participant; everyone's lobby re-renders with that user as the big
   // tile.
   'pin:changed',
+  // Bug 68 (18 May Stefan) — server tells every client in the session
+  // room to refetch their snapshot because the roster mutated (cohost
+  // assigned/removed, acting-as-host toggled, kick, etc). One event
+  // covers all the cases where "everyone must see this change instantly".
+  'roster:changed',
 ] as const;
 
 // ── LiveKit token fetch with retry ──
@@ -188,6 +193,18 @@ export default function useSessionSocket(sessionId: string) {
     socket.on('pin:changed', (data: any) => {
       const next = typeof data?.pinnedUserId === 'string' ? data.pinnedUserId : null;
       store.setServerPinnedUserId(next);
+    });
+
+    // ── Bug 68 (18 May Stefan) — universal "no refresh needed" path ──
+    // The server fires roster:changed whenever ANY session-roster mutation
+    // happens (cohost assigned/removed, acting-as-host toggled, kick,
+    // participant join/leave, etc). Refetching the snapshot pulls down
+    // every derived state in one round-trip — cohorts Set, acting-as-host
+    // overrides, participant counts, hccParticipants for the HCC drawer.
+    // Result: every client's UI converges to the new state within one
+    // network round-trip of the mutation, no refresh ever needed.
+    socket.on('roster:changed', () => {
+      fetchSessionStateSnapshot().catch(() => { /* best-effort */ });
     });
 
     // Phase 8B.1 (8 May spec) — Stefan #4 + #9: a newly-promoted/demoted

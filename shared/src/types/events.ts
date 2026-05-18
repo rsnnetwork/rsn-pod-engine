@@ -121,6 +121,14 @@ export interface ServerToClientEvents {
   // pinned (or unpinned, with pinnedUserId=null) a participant. Every
   // viewer renders that user as the big tile.
   'pin:changed': (data: { sessionId: string; pinnedUserId: string | null }) => void;
+  // Bug 68 (18 May Stefan) — generic "session roster mutated" signal.
+  // Server emits to the session room on cohost assign/remove, acting-as-
+  // host toggle (self or director-initiated), kick, participant join/leave.
+  // Clients react by refetching the session snapshot — which holds every
+  // derived state (cohosts, overrides, counts, hccParticipants) in one
+  // call. Replaces the per-event-per-mutation socket fan-out pattern with
+  // a single coalescable refresh trigger.
+  'roster:changed': (data: { sessionId: string; cause: string }) => void;
 
   // Reactions
   'reaction:received': (data: { userId: string; displayName: string; type: string; timestamp: string }) => void;

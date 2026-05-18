@@ -226,14 +226,27 @@ export default function HostControlCenter({
   // emit carries participants=[]. Showing an empty list misleads the
   // host into thinking nobody's here. Keep the last non-empty list as
   // a fallback so the drawer survives a single-emit hiccup.
+  //
+  // Bug 68 (18 May Stefan) — when the host:round_dashboard event hasn't
+  // arrived yet (e.g. brand-new cohost opens HCC immediately after being
+  // promoted, before the next dashboard tick fans out to them), fall
+  // back to the snapshot's hccParticipants. The snapshot is fetched on
+  // every roster mutation (roster:changed) AND on permissions:updated,
+  // so a fresh cohost always has data on cold-render. The live dashboard
+  // still wins when it's present — it carries timer + room state the
+  // snapshot doesn't.
+  const snapshotHccParticipants = useSessionStore(s => s.hccParticipants);
   const lastParticipantsRef = useRef<NonNullable<typeof roundDashboard>['participants']>(undefined);
   const incomingParticipants = roundDashboard?.participants;
   if (incomingParticipants && incomingParticipants.length > 0) {
     lastParticipantsRef.current = incomingParticipants;
   }
-  const rawParticipants = (incomingParticipants && incomingParticipants.length > 0)
-    ? incomingParticipants
-    : (lastParticipantsRef.current ?? []);
+  const rawParticipants =
+    (incomingParticipants && incomingParticipants.length > 0)
+      ? incomingParticipants
+      : (lastParticipantsRef.current && lastParticipantsRef.current.length > 0
+          ? lastParticipantsRef.current
+          : (snapshotHccParticipants ?? []));
   // Bug C1 (15 May Shraddha) — overlay the live cohorts Set + acting-as-host
   // overrides onto each participant's role so the HCC reflects a fresh
   // assign/remove within milliseconds, not after the next 5s dashboard

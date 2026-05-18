@@ -35,6 +35,12 @@ let _transitionToRound: ((io: SocketServer, sessionId: string, roundNumber: numb
 let _completeSession: ((io: SocketServer, sessionId: string) => Promise<void>) | null = null;
 let _endRound: ((io: SocketServer, sessionId: string, roundNumber: number) => Promise<void>) | null = null;
 let _emitHostDashboard: ((sessionId: string) => Promise<void>) | null = null;
+// Bug 68 (18 May Stefan) — coalesce-bypass variant for cohost promote/
+// demote paths. The standard emitHostDashboard has a 1-second coalesce
+// window which delays a post-promote dashboard refresh; the force
+// variant skips it so the newly-promoted cohost sees their HCC populated
+// immediately, with no perceptible delay between click and render.
+let _emitHostDashboardForce: ((sessionId: string) => Promise<void>) | null = null;
 let _timerCallbacks: TimerCallbacks | null = null;
 let _maybeAutoEndEmptyRound: ((sessionId: string) => Promise<void>) | null = null;
 
@@ -47,6 +53,9 @@ export function injectHostActionDeps(deps: {
   completeSession: (io: SocketServer, sessionId: string) => Promise<void>;
   endRound: (io: SocketServer, sessionId: string, roundNumber: number) => Promise<void>;
   emitHostDashboard: (sessionId: string) => Promise<void>;
+  // Bug 68 (18 May Stefan) — force variant for host-action-triggered
+  // emits that must not be coalesced.
+  emitHostDashboardForce?: (sessionId: string) => Promise<void>;
   timerCallbacks: TimerCallbacks;
   maybeAutoEndEmptyRound?: (sessionId: string) => Promise<void>;
 }) {
@@ -54,6 +63,7 @@ export function injectHostActionDeps(deps: {
   _completeSession = deps.completeSession;
   _endRound = deps.endRound;
   _emitHostDashboard = deps.emitHostDashboard;
+  _emitHostDashboardForce = deps.emitHostDashboardForce || null;
   _timerCallbacks = deps.timerCallbacks;
   _maybeAutoEndEmptyRound = deps.maybeAutoEndEmptyRound || null;
 }
@@ -701,6 +711,13 @@ export async function handleHostRemoveParticipant(
     }
 
     io.to(sessionRoom(data.sessionId)).emit('participant:left', { userId: data.userId });
+    // Bug 68 (18 May Stefan) — broadcast roster mutation so every viewer
+    // refetches the snapshot and their lobby header count drops by one
+    // within the same tick as the kick.
+    io.to(sessionRoom(data.sessionId)).emit('roster:changed', {
+      sessionId: data.sessionId,
+      cause: 'participant_kicked',
+    });
 
     // Phase 3 (5 May spec) — force-refresh canonical host dashboard after
     // any participant-state mutation. Closes Stefan #9 gap where the host
@@ -1688,6 +1705,15 @@ export async function handleAssignCohost(
         'start_round', 'pause', 'resume', 'broadcast', 'create_breakout',
       ],
     });
+    // Bug 68 (18 May Stefan) — every participant (not just the new cohost)
+    // must see the roster change immediately: header count flips from
+    // "N participants + M hosts" to "N-1 + M+1", tile badges update, etc.
+    // roster:changed triggers each client to refetch the snapshot, which
+    // carries every derived state in one round-trip.
+    io.to(sessionRoom(sessionId)).emit('roster:changed', {
+      sessionId,
+      cause: 'cohost_assigned',
+    });
 
     // Phase 8A.5 (8 May spec) — cohost change must re-shape upcoming
     // rounds immediately. Pre-fix the schedule generated at Start
@@ -1699,12 +1725,14 @@ export async function handleAssignCohost(
       logger.warn({ err, sessionId }, 'Cohost-change plan repair failed (non-fatal)')
     );
 
-    // Bug F (15 May Ali) — immediately re-emit the host dashboard so the
-    // newly-promoted co-host sees the full HCC roster without waiting for
-    // the next 5-second tick. matching-flow's _emitHostDashboard now fans
-    // out to every acting host, so this single call refreshes the entire
-    // host audience including the new cohost.
-    if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
+    // Bug F (15 May Ali) + Bug 68 (18 May Stefan) — re-emit the host
+    // dashboard so the newly-promoted co-host sees a populated HCC with
+    // ZERO perceptible delay. Force variant bypasses the 1-second
+    // coalesce window that would otherwise defer this emit; matching-
+    // flow's emit fans out via getAllHostIds to every acting host,
+    // including the freshly-inserted cohost row.
+    if (_emitHostDashboardForce) await _emitHostDashboardForce(sessionId).catch(() => {});
+    else if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
 
     logger.info({ sessionId, userId, role, grantedBy: hostId }, 'Co-host assigned');
   } catch (err) {
@@ -1750,6 +1778,12 @@ export async function handleRemoveCohost(
       effectiveRole: 'participant' as const,
       capabilities: [],
     });
+    // Bug 68 (18 May Stefan) — broadcast the roster change so every
+    // viewer's count + badges update in the same tick.
+    io.to(sessionRoom(sessionId)).emit('roster:changed', {
+      sessionId,
+      cause: 'cohost_removed',
+    });
 
     // Phase 8A.5 (8 May spec) — demoted user re-enters the matching pool
     // for upcoming rounds. Trigger plan repair so the schedule includes
@@ -1758,10 +1792,11 @@ export async function handleRemoveCohost(
       logger.warn({ err, sessionId }, 'Cohost-change plan repair failed (non-fatal)')
     );
 
-    // Bug F (15 May Ali) — re-emit the host dashboard so the remaining
-    // hosts see the updated participant role within the same tick instead
-    // of having to wait for the next 5-second refresh.
-    if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
+    // Bug F (15 May Ali) + Bug 68 (18 May Stefan) — force-emit so the
+    // demoted user (and every other host) sees the role change with no
+    // coalesce-induced delay.
+    if (_emitHostDashboardForce) await _emitHostDashboardForce(sessionId).catch(() => {});
+    else if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
 
     logger.info({ sessionId, userId, removedBy: hostId }, 'Co-host removed');
   } catch (err) {

@@ -54,6 +54,22 @@ interface SessionLiveState {
   // pin (Lobby's pinnedSid useState) still exists but is overridden by
   // this value whenever it's set.
   serverPinnedUserId: string | null;
+  // Bug 68 (18 May Stefan) — HCC participants list bundled on the
+  // session snapshot. The HCC drawer prefers this when the live
+  // host:round_dashboard event hasn't arrived yet (e.g. cohost was just
+  // promoted and opens HCC before the dashboard tick lands), so the
+  // drawer never renders empty for a freshly-promoted user.
+  hccParticipants: Array<{
+    userId: string;
+    displayName: string;
+    email: string | null;
+    role: 'host' | 'cohost' | 'participant';
+    globalRole?: 'user' | 'admin' | 'super_admin';
+    state: 'in_main_room' | 'in_room' | 'disconnected' | 'left';
+    currentMatchId: string | null;
+    currentRoomId: string | null;
+    joinedAt: string;
+  }>;
   totalRounds: number;
   participants: Participant[];
   currentMatch: MatchPartner | null;
@@ -281,6 +297,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   hostInLobby: false, hostUserId: null,
   sessionStateLoaded: false,
   serverPinnedUserId: null,
+  hccParticipants: [],
   totalRounds: 5,
   participants: [],
   currentMatch: null,
@@ -469,6 +486,11 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
       // everyone else who's been here longer. Snapshot returns null when
       // no global pin is set.
       serverPinnedUserId: (snapshot as any).pinnedUserId ?? null,
+      // Bug 68 (18 May Stefan) — bundle the HCC participants list on
+      // every snapshot. A newly-promoted cohost's snapshot fetch (fired
+      // by permissions:updated) populates the drawer in the same tick
+      // that isHost flips to true, eliminating the empty-HCC race.
+      hccParticipants: (snapshot as any).hccParticipants ?? [],
       // Bug I (15 May Ali) — mark snapshot hydration complete so any UI
       // gated on "have we heard from the server yet" can render without
       // flickering between empty-state and hydrated state on refresh.
@@ -488,7 +510,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   }),
   reset: () => set({
     phase: 'lobby', connectionStatus: 'connecting', transitionStatus: null,
-    sessionStatus: 'scheduled', hostInLobby: false, hostUserId: null, sessionStateLoaded: false, serverPinnedUserId: null, totalRounds: 5,
+    sessionStatus: 'scheduled', hostInLobby: false, hostUserId: null, sessionStateLoaded: false, serverPinnedUserId: null, hccParticipants: [], totalRounds: 5,
     participants: [], currentMatch: null, currentPartners: [], currentMatchId: null,
     timerSeconds: 0, timerEndsAt: null, currentRound: 0, broadcasts: [], error: null, tileReactions: {},
     isReconnecting: false, isByeRound: false, liveKitToken: null, livekitUrl: null, currentRoomId: null,
