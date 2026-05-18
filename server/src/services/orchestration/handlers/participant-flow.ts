@@ -378,6 +378,20 @@ export async function handleJoinSession(
         isHost,
       });
 
+      // Bug 21 (18 May Stefan) — late joiners weren't appearing in
+      // OTHER participants' "X participants + Y hosts" banner. The
+      // existing participant:joined event only updates the local
+      // store; the lobby header derives from hostsSet + cohorts +
+      // actingAsHostOverrides which can be stale on remote clients.
+      // Broadcasting roster:changed forces every viewer to refetch
+      // the snapshot — same belt-and-braces pattern Ship #2 uses for
+      // cohost mutations, now extended to plain joins so a slow-internet
+      // join still converges all the other clients.
+      io.to(sessionRoom(data.sessionId)).emit('roster:changed', {
+        sessionId: data.sessionId,
+        cause: 'participant_joined',
+      });
+
       // Send current participant count
       const count = await sessionService.getParticipantCount(data.sessionId);
       io.to(sessionRoom(data.sessionId)).emit('participant:count', { count });
