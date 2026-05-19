@@ -8,10 +8,11 @@
 
 ### Stack
 - **Monorepo**: `shared/` (types) → `server/` (Express + Socket.IO) → `client/` (React + Vite)
-- **Server**: Express 4, Socket.IO 4, PostgreSQL (raw SQL via `pg`), Pino logger, Zod validation, JWT auth
+- **Server**: Express 4, Socket.IO 4, PostgreSQL (raw SQL via `pg`), Redis (ioredis), Pino logger, Zod validation, JWT auth, Sentry
 - **Client**: React 18, Vite 5, Zustand (local state), React Query (server state), Socket.IO client, LiveKit (video), Tailwind CSS
-- **Deploy**: Server on Render, Client on Vercel, DB on Neon/hosted PostgreSQL
-- **Real-time**: Socket.IO for all live state (orchestration, chat, presence, matches, DMs)
+- **Deploy**: Server on Render, Client on Vercel, DB on Neon/hosted PostgreSQL, Redis on Upstash
+- **Real-time**: Socket.IO with Redis adapter for multi-instance broadcasting, Redis-backed session state + chat persistence
+- **Monitoring**: Sentry for error tracking (server-side wired, client needs DSN)
 
 ### Critical Invariant: Real-Time First
 RSN is a LIVE platform. Every state change must propagate to every affected client within milliseconds WITHOUT requiring a page refresh. This is the #1 architectural rule.
@@ -189,7 +190,26 @@ RSN is a LIVE platform. Every state change must propagate to every affected clie
 
 ---
 
-## 9. Database Rules
+## 9. Redis Rules
+
+RSN uses Redis (ioredis + Upstash) for three critical functions:
+1. **Socket.IO adapter** — `@socket.io/redis-adapter` enables multi-instance broadcasting. Every `io.to(room).emit()` reaches ALL server instances.
+2. **Session state persistence** — `activeSessions` map is backed to Redis with TTL. Server restart recovers live sessions from Redis instead of losing them.
+3. **Rate limiting** — `rate-limit-redis` distributes rate limit counters across instances.
+
+### Rules:
+- Redis is **optional but expected** in production. The system gracefully degrades to in-memory if Redis is unavailable — but this means session state is lost on restart and multi-instance broadcasting breaks.
+- Always use `getRedisClient()` and check for `null` before Redis operations — never assume Redis is available.
+- All Redis keys must be prefixed with their domain (`rsn:session:`, `rsn:chat:`, etc.) to avoid collisions.
+- Always set TTL on Redis keys — never store data without expiry. Live session data: 4 hours. Chat messages: 4 hours. Rate limit counters: match the window.
+- Never store large objects in Redis — keep payloads under 1MB. If you need to store more, put it in PostgreSQL and cache a reference in Redis.
+- For new features that need caching: use Redis first, PostgreSQL as the source of truth. Cache invalidation must happen in the same transaction as the DB write.
+
+---
+
+---
+
+## 10. Database Rules
 
 - Migrations are append-only — never modify an existing migration file
 - New migration files: `NNN_descriptive_name.sql` (next number in sequence)
@@ -202,7 +222,7 @@ RSN is a LIVE platform. Every state change must propagate to every affected clie
 
 ---
 
-## 10. Deployment Rules
+## 11. Deployment Rules
 
 - Server deploys to Render from `main` branch — every push to main is a production deploy
 - Client deploys to Vercel from `main` branch — same
@@ -214,7 +234,7 @@ RSN is a LIVE platform. Every state change must propagate to every affected clie
 
 ---
 
-## 11. UI/UX Rules
+## 12. UI/UX Rules
 
 - Every action must have immediate visual feedback (button loading state, optimistic update, or toast)
 - Never show raw IDs, error codes, or technical strings to users
@@ -228,7 +248,7 @@ RSN is a LIVE platform. Every state change must propagate to every affected clie
 
 ---
 
-## 12. When Adding a New Feature
+## 13. When Adding a New Feature
 
 Follow this checklist for EVERY new feature:
 
@@ -247,7 +267,7 @@ Follow this checklist for EVERY new feature:
 
 ---
 
-## 13. What NOT to Do
+## 14. What NOT to Do
 
 - Don't add `window.location.reload()` or `router.refresh()` to fix stale data — fix the real-time flow
 - Don't add `setTimeout` or `setInterval` to poll for changes — use socket events
