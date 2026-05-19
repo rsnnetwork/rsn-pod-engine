@@ -268,11 +268,11 @@ describe('Realtime migration Phase 3 — client meta.entities', () => {
     });
   });
 
-  // ── Legacy bridge preservation ─────────────────────────────────────────
-  describe('Legacy bridge — kept alive through Phase 5', () => {
-    it('useLegacyInvalidationBridge.ts still exists (Phase 5 will delete it)', () => {
+  // ── Legacy bridge — deleted in Phase 5 ─────────────────────────────────
+  describe('Legacy bridge — deleted in Phase 5', () => {
+    it('useLegacyInvalidationBridge.ts no longer exists (Phase 5 removed it)', () => {
       const path = nodePath.join(__dirname, '../../../../client/src/realtime/useLegacyInvalidationBridge.ts');
-      expect(nodeFs.existsSync(path)).toBe(true);
+      expect(nodeFs.existsSync(path)).toBe(false);
     });
   });
 });

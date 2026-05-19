@@ -277,27 +277,15 @@ describe('Realtime migration Phase 4 — page-level listener prune', () => {
     });
   });
 
-  // ── Legacy bridge preservation — Phase 5's job to delete it ────────────
+  // ── Legacy bridge — deleted by Phase 5 ─────────────────────────────────
   //
-  // The bridge is the safety net carrying every cache-invalidation socket
-  // event until every React Query in client/src has meta.entities AND
-  // the entity-tag handler has been live in production for at least one
-  // full test pass. Phase 4 does NOT touch it; this test pins that.
-  describe('Legacy bridge — kept intact through Phase 4 (Phase 5 deletes it)', () => {
-    it('useLegacyInvalidationBridge.ts still exists', () => {
-      expect(nodeFs.existsSync(bridgePath)).toBe(true);
-    });
-
-    it('still subscribes to the pruned-from-useSessionSocket event family', () => {
-      const bridgeSrc = nodeFs.readFileSync(bridgePath, 'utf8').replace(/\r\n/g, '\n');
-      // These three event names are exactly the ones Phase 4's instructions
-      // flagged as cache-only and which the bridge must keep covering until
-      // Phase 5 lands.
-      expect(bridgeSrc).toMatch(/socket\.on\(\s*['"]pod:membership_updated['"]/);
-      expect(bridgeSrc).toMatch(/socket\.on\(\s*['"]session:list_changed['"]/);
-      expect(bridgeSrc).toMatch(/socket\.on\(\s*['"]roster:changed['"]/);
-      expect(bridgeSrc).toMatch(/socket\.on\(\s*['"]host:visibility_changed['"]/);
-      expect(bridgeSrc).toMatch(/socket\.on\(\s*['"]permissions:updated['"]/);
+  // Phase 4 kept the bridge intact as the cache-invalidation safety net.
+  // Phase 5 deletes it: every React Query now declares meta.entities and
+  // the entity-tag handler at the App root invalidates everything via
+  // the server's emitEntities() fanout. The bridge is obsolete.
+  describe('Legacy bridge — deleted by Phase 5', () => {
+    it('useLegacyInvalidationBridge.ts no longer exists', () => {
+      expect(nodeFs.existsSync(bridgePath)).toBe(false);
     });
   });
 });

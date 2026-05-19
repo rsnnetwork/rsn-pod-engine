@@ -6,7 +6,9 @@ import { authenticate, optionalAuth } from '../middleware/auth';
 import { inviteLimiter } from '../middleware/rateLimit';
 import { auditMiddleware } from '../middleware/audit';
 import * as inviteService from '../services/invite/invite.service';
-import * as orchestrationService from '../services/orchestration/orchestration.service';
+import { fanoutPodEntities, fanoutSessionEntities } from '../realtime/fanout';
+import { emitEntities, getRealtimeIo } from '../realtime/emit';
+import { E } from '../realtime/entities';
 import { query } from '../db';
 import { ApiResponse, InviteType, InviteStatus } from '@rsn/shared';
 
@@ -39,12 +41,10 @@ router.post(
       // pod page, sessions list) repaints without a refresh. Pre-fix the
       // sender's own dashboard didn't update after they hit "Send".
       if (invite.podId) {
-        orchestrationService.notifyPodChanged(invite.podId, 'invite_sent').catch(() => {});
+        fanoutPodEntities(invite.podId).catch(() => {});
       }
       if (invite.sessionId) {
-        orchestrationService
-          .notifySessionListChanged(invite.podId ?? null, invite.sessionId, 'invite_sent')
-          .catch(() => {});
+        fanoutSessionEntities(invite.podId ?? null, invite.sessionId, [E.sessionInvites(invite.sessionId)]).catch(() => {});
       }
       const response: ApiResponse = { success: true, data: invite };
       res.status(201).json(response);
@@ -458,27 +458,34 @@ router.post(
       );
       // Bug 29 (19 May Ali) — pod/session-list realtime fanout was missing
       // on the invite-accept path. Sister mutations in routes/pods.ts
-      // (add/remove/role-change/approve/reject) already call
-      // notifyPodChanged + notifySessionListChanged, but invites had no
-      // wiring of its own — Waseem's pod page kept showing "Pending
-      // Invite" for Raja even after Raja accepted, because no
-      // pod:membership_updated event ever fanned out to the other
-      // members. Fan out the same events here so accepting feels live
-      // for every member, not just the accepter.
+      // (add/remove/role-change/approve/reject) already fan out, but
+      // invites had no wiring of its own — Waseem's pod page kept showing
+      // "Pending Invite" for Raja even after Raja accepted. Fan out the
+      // entity tags here so accepting feels live for every member, not
+      // just the accepter. The accepter's userPods / userSessions entities
+      // ensure their own "My Pods" / "My Events" list flips too.
       if (result.registeredFor?.podId) {
-        orchestrationService
-          .notifyPodChanged(result.registeredFor.podId, 'invite_accepted')
-          .catch(() => {});
+        fanoutPodEntities(result.registeredFor.podId, [E.userPods(req.user!.userId)]).catch(() => {});
       }
       if (result.registeredFor?.sessionId) {
-        orchestrationService
-          .notifySessionListChanged(
-            result.registeredFor.podId ?? null,
-            result.registeredFor.sessionId,
-            'invite_accepted',
-          )
-          .catch(() => {});
+        fanoutSessionEntities(
+          result.registeredFor.podId ?? null,
+          result.registeredFor.sessionId,
+          [E.userSessions(req.user!.userId)],
+        ).catch(() => {});
       }
+      // Cover the accepter even if they're not yet in the active-member
+      // SELECT on a slow replica — invite list shrinks and they pick up
+      // the pod/session entity.
+      emitEntities(
+        getRealtimeIo(),
+        [req.user!.userId],
+        [
+          E.userInvites(req.user!.userId),
+          ...(result.registeredFor?.podId ? [E.pod(result.registeredFor.podId), E.userPods(req.user!.userId)] : []),
+          ...(result.registeredFor?.sessionId ? [E.session(result.registeredFor.sessionId), E.userSessions(req.user!.userId)] : []),
+        ],
+      ).catch(() => {});
       const response: ApiResponse = {
         success: true,
         data: {
@@ -522,13 +529,16 @@ router.post(
       // Bug 30 (19 May Ali) — same fanout as /accept so the affected
       // pod / session lists repaint everywhere instantly.
       if (row.pod_id) {
-        orchestrationService.notifyPodChanged(row.pod_id, 'invite_force_accepted').catch(() => {});
+        fanoutPodEntities(row.pod_id, [E.userPods(req.user!.userId)]).catch(() => {});
       }
       if (row.session_id) {
-        orchestrationService
-          .notifySessionListChanged(row.pod_id, row.session_id, 'invite_force_accepted')
-          .catch(() => {});
+        fanoutSessionEntities(row.pod_id, row.session_id, [E.userSessions(req.user!.userId)]).catch(() => {});
       }
+      emitEntities(
+        getRealtimeIo(),
+        [req.user!.userId],
+        [E.userInvites(req.user!.userId)],
+      ).catch(() => {});
       res.json({ success: true, data: { marked: true } });
     } catch (err) {
       next(err);
@@ -556,15 +566,19 @@ router.post(
       const declined = await inviteService.declineInvite(req.params.code, email);
       // Bug 30 (19 May Ali) — fan out so the inviter's "Pending Invites"
       // count drops to zero without a refresh, and any other pod member
-      // viewing the pod sees the badge update.
+      // viewing the pod sees the badge update. The decliner's own
+      // userInvites tag flips their notification bell.
       if (declined.podId) {
-        orchestrationService.notifyPodChanged(declined.podId, 'invite_declined').catch(() => {});
+        fanoutPodEntities(declined.podId).catch(() => {});
       }
       if (declined.sessionId) {
-        orchestrationService
-          .notifySessionListChanged(declined.podId, declined.sessionId, 'invite_declined')
-          .catch(() => {});
+        fanoutSessionEntities(declined.podId, declined.sessionId).catch(() => {});
       }
+      emitEntities(
+        getRealtimeIo(),
+        [req.user!.userId],
+        [E.userInvites(req.user!.userId)],
+      ).catch(() => {});
       const response: ApiResponse = { success: true, data: { message: 'Invite declined' } };
       return res.json(response);
     } catch (err) {
@@ -585,12 +599,10 @@ router.delete(
       // Bug 30 (19 May Ali) — same fanout so the pending-invites surface
       // repaints everywhere on revoke.
       if (revoked.podId) {
-        orchestrationService.notifyPodChanged(revoked.podId, 'invite_revoked').catch(() => {});
+        fanoutPodEntities(revoked.podId).catch(() => {});
       }
       if (revoked.sessionId) {
-        orchestrationService
-          .notifySessionListChanged(revoked.podId, revoked.sessionId, 'invite_revoked')
-          .catch(() => {});
+        fanoutSessionEntities(revoked.podId, revoked.sessionId).catch(() => {});
       }
       const response: ApiResponse = { success: true, data: { message: 'Invite revoked' } };
       res.json(response);
@@ -647,11 +659,9 @@ router.post(
             [sessionId],
           );
           const podId = sess.rows[0]?.pod_id ?? null;
-          orchestrationService
-            .notifySessionListChanged(podId, sessionId, 'invite_bulk_sent')
-            .catch(() => {});
+          fanoutSessionEntities(podId, sessionId, [E.sessionInvites(sessionId)]).catch(() => {});
           if (podId) {
-            orchestrationService.notifyPodChanged(podId, 'invite_bulk_sent').catch(() => {});
+            fanoutPodEntities(podId).catch(() => {});
           }
         } catch { /* non-fatal */ }
       }

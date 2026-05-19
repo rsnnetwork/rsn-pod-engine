@@ -7,7 +7,7 @@ import { requireRole } from '../middleware/rbac';
 import { query } from '../db';
 import { ApiResponse, UserRole } from '@rsn/shared';
 import * as joinRequestService from '../services/join-request/join-request.service';
-import * as orchestrationService from '../services/orchestration/orchestration.service';
+import { fanoutAdminEntities, fanoutUserEntity } from '../realtime/fanout';
 
 const router = Router();
 
@@ -158,8 +158,8 @@ router.put(
       // Phase May-19 realtime — fanout for the admin-users surface plus
       // the affected user's own room so their account-settings page
       // refetches entitlements without a refresh.
-      orchestrationService.notifyAdminListChanged('users', 'entitlements_updated').catch(() => {});
-      orchestrationService.notifyUserChanged(req.params.id, 'entitlements_updated').catch(() => {});
+      fanoutAdminEntities('users').catch(() => {});
+      fanoutUserEntity(req.params.id).catch(() => {});
       const response: ApiResponse = { success: true, data: result.rows[0] };
       return res.json(response);
     } catch (err) {
@@ -194,10 +194,10 @@ router.post(
           [value, userIds]
         );
         // Phase May-19 realtime — admin-users list refresh + per-user
-        // notify so each affected user's role badge updates immediately.
-        orchestrationService.notifyAdminListChanged('users', 'role_changed').catch(() => {});
+        // entity tag so each affected user's role badge updates immediately.
+        fanoutAdminEntities('users').catch(() => {});
         for (const row of result.rows) {
-          orchestrationService.notifyUserChanged(row.id, 'role_changed').catch(() => {});
+          fanoutUserEntity(row.id).catch(() => {});
         }
         const response: ApiResponse = { success: true, data: { affected: result.rowCount } };
         return res.json(response);
@@ -223,12 +223,12 @@ router.post(
         invalidateUserStatusCache(row.id);
       }
 
-      // Phase May-19 realtime — admin-users list + per-user notify so any
-      // currently-suspended/banned user's session-state listeners can
+      // Phase May-19 realtime — admin-users list + per-user entity tag so
+      // any currently-suspended/banned user's session-state listeners can
       // react immediately.
-      orchestrationService.notifyAdminListChanged('users', `bulk_${action}`).catch(() => {});
+      fanoutAdminEntities('users').catch(() => {});
       for (const row of result.rows) {
-        orchestrationService.notifyUserChanged(row.id, `bulk_${action}`).catch(() => {});
+        fanoutUserEntity(row.id).catch(() => {});
       }
 
       const response: ApiResponse = { success: true, data: { affected: result.rowCount } };
@@ -272,9 +272,7 @@ router.post(
       // Phase May-19 realtime — every admin dashboard viewing the
       // join-requests queue refetches as a batch after a bulk review.
       if (affected > 0) {
-        orchestrationService
-          .notifyAdminListChanged('join-requests', `bulk_${decision}`)
-          .catch(() => {});
+        fanoutAdminEntities('join-requests').catch(() => {});
       }
 
       const response: ApiResponse = { success: true, data: { affected } };
@@ -354,14 +352,14 @@ router.post(
           invalidateUserStatusCache(violation.rows[0].reported_user_id);
           // Phase May-19 realtime — also flip the target user's UI so
           // their session-state listeners react immediately.
-          orchestrationService.notifyUserChanged(violation.rows[0].reported_user_id, `violation_${action}`).catch(() => {});
-          orchestrationService.notifyAdminListChanged('users', `violation_${action}`).catch(() => {});
+          fanoutUserEntity(violation.rows[0].reported_user_id).catch(() => {});
+          fanoutAdminEntities('users').catch(() => {});
         }
       }
 
       // Phase May-19 realtime — admin-violations list refresh for every
       // open moderation dashboard.
-      orchestrationService.notifyAdminListChanged('violations', `violation_${newStatus}`).catch(() => {});
+      fanoutAdminEntities('violations').catch(() => {});
 
       const response: ApiResponse = { success: true, data: { message: `Violation ${newStatus}` } };
       res.json(response);
@@ -392,7 +390,7 @@ router.post(
       );
       // Phase May-19 realtime — every open admin moderation queue
       // refetches so the new violation appears without a refresh.
-      orchestrationService.notifyAdminListChanged('violations', 'violation_reported').catch(() => {});
+      fanoutAdminEntities('violations').catch(() => {});
       const response: ApiResponse = { success: true, data: { message: 'Report submitted' } };
       res.json(response);
     } catch (err) {
@@ -466,7 +464,7 @@ router.post(
          b.sameCompanyAllowed ?? false, b.fallbackStrategy ?? 'random', req.user!.userId]
       );
       // Phase May-19 realtime — admin-templates list refresh.
-      orchestrationService.notifyAdminListChanged('templates', 'template_created').catch(() => {});
+      fanoutAdminEntities('templates').catch(() => {});
       const response: ApiResponse = { success: true, data: result.rows[0] };
       res.json(response);
     } catch (err) {
@@ -495,7 +493,7 @@ router.put(
          b.sameCompanyAllowed ?? false, b.fallbackStrategy ?? 'random', req.params.id]
       );
       // Phase May-19 realtime — admin-templates list refresh.
-      orchestrationService.notifyAdminListChanged('templates', 'template_updated').catch(() => {});
+      fanoutAdminEntities('templates').catch(() => {});
       const response: ApiResponse = { success: true, data: { message: 'Template updated' } };
       res.json(response);
     } catch (err) {
@@ -513,7 +511,7 @@ router.delete(
     try {
       await query(`DELETE FROM matching_templates WHERE id = $1 AND is_default = FALSE`, [req.params.id]);
       // Phase May-19 realtime — admin-templates list refresh.
-      orchestrationService.notifyAdminListChanged('templates', 'template_deleted').catch(() => {});
+      fanoutAdminEntities('templates').catch(() => {});
       const response: ApiResponse = { success: true, data: { message: 'Template deleted' } };
       res.json(response);
     } catch (err) {
@@ -562,7 +560,7 @@ router.put(
         [req.body.enabled, req.user!.userId, req.params.id]
       );
       // Phase May-19 realtime — admin-email-config list refresh.
-      orchestrationService.notifyAdminListChanged('email-config', 'email_config_updated').catch(() => {});
+      fanoutAdminEntities('email-config').catch(() => {});
       const response: ApiResponse = { success: true, data: { message: 'Email config updated' } };
       res.json(response);
     } catch (err) {
@@ -655,14 +653,14 @@ router.patch(
       // Phase May-19 realtime — admin-support-tickets list refresh +
       // ping the ticket owner's room so their /support/my-tickets page
       // reflects status changes without a refresh.
-      orchestrationService.notifyAdminListChanged('support-tickets', 'ticket_updated').catch(() => {});
+      fanoutAdminEntities('support-tickets').catch(() => {});
       try {
         const ownerResult = await query<{ user_id: string }>(
           `SELECT user_id FROM support_tickets WHERE id = $1`,
           [req.params.id],
         );
         if (ownerResult.rows[0]?.user_id) {
-          orchestrationService.notifyUserChanged(ownerResult.rows[0].user_id, 'ticket_updated').catch(() => {});
+          fanoutUserEntity(ownerResult.rows[0].user_id).catch(() => {});
         }
       } catch { /* non-fatal */ }
 
@@ -693,7 +691,7 @@ router.post(
       );
       // Phase May-19 realtime — admin-support-tickets queue refresh so a
       // newly-filed ticket appears for every admin without a refresh.
-      orchestrationService.notifyAdminListChanged('support-tickets', 'ticket_created').catch(() => {});
+      fanoutAdminEntities('support-tickets').catch(() => {});
       const response: ApiResponse = { success: true, data: result.rows[0] };
       res.json(response);
     } catch (err) {

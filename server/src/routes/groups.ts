@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
 import * as groupService from '../services/dm/group.service';
-import * as orchestrationService from '../services/orchestration/orchestration.service';
+import { fanoutGroupEntities } from '../realtime/fanout';
 import { ApiResponse } from '@rsn/shared';
 
 const router = Router();
@@ -35,7 +35,7 @@ router.post(
       );
       // Phase May-19 realtime — fanout to every member's personal
       // room so the new group appears in their inbox without a refresh.
-      orchestrationService.notifyGroupChanged(result.id, 'group_created').catch(() => {});
+      fanoutGroupEntities(result.id).catch(() => {});
       const response: ApiResponse = { success: true, data: result };
       res.status(201).json(response);
     } catch (err) {
@@ -70,10 +70,9 @@ router.post(
         req.params.id, req.user!.userId, req.body.content,
       );
       // Phase May-19 realtime — fanout to every group member so their
-      // open thread / inbox surfaces refetch immediately. The actual
-      // message payload is delivered via the React-Query invalidation
-      // triggered by group:changed.
-      orchestrationService.notifyGroupChanged(req.params.id, 'message_sent').catch(() => {});
+      // open thread / inbox surfaces refetch immediately. The group
+      // entity tag invalidates the dm-groups / dm-messages queries.
+      fanoutGroupEntities(req.params.id).catch(() => {});
       const response: ApiResponse = { success: true, data: result };
       res.status(201).json(response);
     } catch (err) {

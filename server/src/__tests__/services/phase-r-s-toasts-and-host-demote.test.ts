@@ -106,10 +106,15 @@ describe('Phase S — host-initiated demote/promote endpoint', () => {
       const routeIdx = src.indexOf("'/:id/host/acting-as-host-for/:userId'");
       // Handler body is fairly long (two guards + setActingAsHost +
       // notify + res.json); widen the slice so the regex covers the
-      // notifyPermissionsUpdated call near the bottom.
+      // emitPermissionsUpdated call near the bottom.
       const block = src.slice(routeIdx, routeIdx + 3000);
+      // Phase 5: notifyPermissionsUpdated wrapper deleted from
+      // orchestration.service.ts; routes now call emitPermissionsUpdated
+      // directly from server/src/realtime/fanout.ts (the helper still emits
+      // the surviving permissions:updated socket event AND the entity-tag
+      // fanout for queries).
       expect(block).toMatch(
-        /orchestrationService\.notifyPermissionsUpdated\(\s*sessionId,\s*targetUserId/,
+        /emitPermissionsUpdated\(\s*sessionId,\s*targetUserId/,
       );
     });
 

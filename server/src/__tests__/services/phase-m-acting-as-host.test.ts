@@ -155,7 +155,10 @@ describe('Phase M — acting-as-host toggle (item 1)', () => {
     it('notifies the caller via permissions:updated so their snapshot resyncs', () => {
       const routeIdx = src.indexOf("'/:id/host/acting-as-host'");
       const slice = src.slice(routeIdx, routeIdx + 1500);
-      expect(slice).toMatch(/orchestrationService\.notifyPermissionsUpdated/);
+      // Phase 5: notifyPermissionsUpdated wrapper deleted from
+      // orchestration.service.ts; routes now call emitPermissionsUpdated
+      // directly from server/src/realtime/fanout.ts.
+      expect(slice).toMatch(/emitPermissionsUpdated\(/);
     });
   });
 
@@ -185,11 +188,16 @@ describe('Phase M — acting-as-host toggle (item 1)', () => {
     });
   });
 
-  describe('Server — notifyPermissionsUpdated helper', () => {
-    const src = readServer('services/orchestration/orchestration.service.ts');
+  describe('Server — emitPermissionsUpdated helper (Phase 5 relocation)', () => {
+    // Phase 5 relocated the helper out of orchestration.service.ts (which
+    // also dual-emitted the deleted legacy 'permissions:updated' event)
+    // into server/src/realtime/fanout.ts. The surviving 'permissions:updated'
+    // bespoke event still fires from emitPermissionsUpdated because
+    // useSessionSocket hydrates Zustand from the snapshot on receipt.
+    const src = readServer('realtime/fanout.ts');
 
-    it('exports notifyPermissionsUpdated for REST handlers to emit permissions:updated', () => {
-      expect(src).toMatch(/export async function notifyPermissionsUpdated\(/);
+    it('exports emitPermissionsUpdated for REST handlers to emit permissions:updated', () => {
+      expect(src).toMatch(/export async function emitPermissionsUpdated\(/);
       expect(src).toMatch(/['"]permissions:updated['"]/);
     });
   });

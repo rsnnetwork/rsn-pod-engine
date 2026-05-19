@@ -11,7 +11,7 @@ import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
 import * as dmService from '../services/dm/dm.service';
 import { broadcastDmMessage } from '../services/orchestration/handlers/dm-handlers';
-import * as orchestrationService from '../services/orchestration/orchestration.service';
+import { fanoutDmConversation } from '../realtime/fanout';
 import { query } from '../db';
 import { ApiResponse } from '@rsn/shared';
 
@@ -166,15 +166,7 @@ router.post(
             const otherUserId = conv.user_a_id === req.user!.userId
               ? conv.user_b_id
               : conv.user_a_id;
-            orchestrationService
-              .notifyDmReadReceipt(
-                req.params.id,
-                req.user!.userId,
-                otherUserId,
-                result.readAt,
-                result.markedCount,
-              )
-              .catch(() => {});
+            fanoutDmConversation(req.params.id, [req.user!.userId, otherUserId]).catch(() => {});
           }
         } catch { /* non-fatal */ }
       }
@@ -250,20 +242,11 @@ router.post(
         req.user!.userId,
         req.body.emoji,
       );
-      // Phase May-19 realtime — fan out dm:reaction_added to both
-      // participants so the sender's other tab and the recipient's
-      // open thread see the reaction without a refresh. Mirrors
-      // handleDmReact in dm-handlers.ts.
-      orchestrationService
-        .notifyDmReactionChanged(
-          result.conversationId,
-          req.params.id,
-          req.user!.userId,
-          result.otherUserId,
-          req.body.emoji,
-          true,
-        )
-        .catch(() => {});
+      // Phase May-19 realtime — fan out the dm-conversation entity to
+      // both participants so the sender's other tab and the recipient's
+      // open thread refetch the message list (with new reaction) without
+      // a refresh. Mirrors handleDmReact in dm-handlers.ts.
+      fanoutDmConversation(result.conversationId, [req.user!.userId, result.otherUserId]).catch(() => {});
       const response: ApiResponse = { success: true, data: result };
       res.status(201).json(response);
     } catch (err) {
@@ -284,18 +267,9 @@ router.delete(
         req.user!.userId,
         req.params.emoji,
       );
-      // Phase May-19 realtime — fan out dm:reaction_removed to both
-      // participants. Mirrors handleDmUnreact in dm-handlers.ts.
-      orchestrationService
-        .notifyDmReactionChanged(
-          result.conversationId,
-          req.params.id,
-          req.user!.userId,
-          result.otherUserId,
-          req.params.emoji,
-          false,
-        )
-        .catch(() => {});
+      // Phase May-19 realtime — fan out the dm-conversation entity to
+      // both participants. Mirrors handleDmUnreact in dm-handlers.ts.
+      fanoutDmConversation(result.conversationId, [req.user!.userId, result.otherUserId]).catch(() => {});
       const response: ApiResponse = { success: true, data: result };
       res.json(response);
     } catch (err) {

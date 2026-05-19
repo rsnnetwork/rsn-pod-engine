@@ -173,10 +173,13 @@ describe('Phase May-19 — Bugs 33 / 36 / 37 / 44', () => {
       expect(fn).toMatch(/_emitHostDashboardForce\(sessionId\)|_emitHostDashboard\(sessionId\)/);
     });
 
-    it('notifyPermissionsUpdated (acting-as-host toggle) calls emitHostDashboardForce', () => {
-      const orchSrc = readServer('services/orchestration/orchestration.service.ts');
-      const fn = slice(orchSrc, 'export async function notifyPermissionsUpdated',
-        '// ── Phase May-19 realtime gap closures');
+    it('emitPermissionsUpdated (acting-as-host toggle) calls emitHostDashboardForce', () => {
+      // Phase 5: the legacy notifyPermissionsUpdated wrapper was deleted from
+      // orchestration.service.ts and replaced by emitPermissionsUpdated in
+      // server/src/realtime/fanout.ts. The HCC force-refresh side-effect
+      // must survive the relocation.
+      const fanoutSrc = readServer('realtime/fanout.ts');
+      const fn = slice(fanoutSrc, 'export async function emitPermissionsUpdated');
       expect(fn).toMatch(/emitHostDashboardForce\(io,\s*sessionId\)/);
     });
 
