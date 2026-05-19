@@ -27,6 +27,7 @@ import { Rnd } from 'react-rnd';
 import { Button } from '@/components/ui/Button';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
+import { createPortal } from 'react-dom';
 import { useToastStore } from '@/stores/toastStore';
 import { getSocket } from '@/lib/socket';
 import api from '@/lib/api';
@@ -851,7 +852,19 @@ export default function HostControlCenter({
   // Desktop — drag/resize window with backdrop. Default size large
   // (~92vw × 88vh, centred) so the host sees the whole view without
   // having to drag or resize. Drag handle = the title bar.
-  return (
+  //
+  // CRITICAL — portal to document.body. The caller (HostControls) renders
+  // this component inside a `position: relative` bottom bar. react-rnd
+  // uses position:absolute and is positioned relative to the nearest
+  // positioned ancestor, so without the portal the modal's (x,y)
+  // coordinates would be relative to that bottom bar instead of the
+  // viewport. That made the modal open at the bottom of the screen and
+  // refuse to drag above the bottom bar's top edge — every mode of
+  // "HCC opens off screen" + "can't drag above this point" traces back
+  // to this. Portalling to document.body restores the viewport-relative
+  // coordinate space that `bounds="window"` expects.
+  if (typeof document === 'undefined') return null;
+  return createPortal(
     <>
       <div className="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
       <Rnd
@@ -884,7 +897,8 @@ export default function HostControlCenter({
         {bodyContent}
       </Rnd>
       {subModal}
-    </>
+    </>,
+    document.body,
   );
 }
 

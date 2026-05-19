@@ -888,10 +888,29 @@ export default function HostControls({ sessionId }: Props) {
                 disables only when an algorithm round is actually running
                 or there aren't enough eligible participants. */}
             {sessionStarted && phase === 'lobby' && !allRoundsDone && !matchPreview && (() => {
-              // Server-computed count of participants in the main room (not in any
-              // active match — manual or algorithm). Falls back to client-side
-              // count if dashboard not loaded yet.
-              const eligibleMainRoomCount = (roundDashboard as any)?.eligibleMainRoomCount ?? eligibleCount;
+              // Eligible-count source — use the LOCAL realtime count.
+              //
+              // Previous shape preferred `roundDashboard.eligibleMainRoomCount`
+              // (server-emitted via host:round_dashboard) and fell back to
+              // local only when the dashboard wasn't loaded yet. That made
+              // the button stale in both directions whenever the dashboard
+              // emit didn't fire for a state-relevant change (cohost role
+              // flip, late join while between rounds, opt-in/opt-out toggle):
+              // the button stayed disabled when it should have enabled, and
+              // vice versa, until the host pressed F5. The local count
+              // derives from live Zustand state (participants ∪ cohosts ∪
+              // hostUserId ∪ actingAsHostOverrides), each of which is
+              // already kept fresh by the realtime layer; trusting it makes
+              // the button respond within a second of any state change.
+              //
+              // In lobby phase, every listed participant is by definition in
+              // the main room — anyone mid-match would be in `matched` phase
+              // instead — so the server's "exclude active-match" filter is a
+              // no-op here. Between rounds we briefly stay in lobby phase
+              // while transitioning; if any participant somehow still shows
+              // status='in_room' in that window, the participant join/leave
+              // socket events will catch up before the next click.
+              const eligibleMainRoomCount = eligibleCount;
               const matchPeopleDisabled = hasActiveAlgorithmRound || eligibleMainRoomCount < 2;
               const matchPeopleHint = hasActiveAlgorithmRound
                 ? 'A round is in progress — wait for it to end'

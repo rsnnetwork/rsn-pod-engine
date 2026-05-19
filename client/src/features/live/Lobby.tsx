@@ -15,7 +15,7 @@ async function loadBgProcessors() {
     return { BackgroundBlur: _bgBlur, VirtualBackground: _vBg };
   } catch { return null; }
 }
-import { useState, useEffect, useCallback, useRef, memo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
 import { useSessionStore } from '@/stores/sessionStore';
 import { getSocket } from '@/lib/socket';
 import { useVisibilityPartition } from './useVisibilityPartition';
@@ -155,7 +155,16 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
   // Bug 26 (19 May Ali) — director's visual demote list. Cohosts whose
   // userId appears here render at participant tile size even though
   // hostsSet still contains them (privileges unchanged).
-  const tileDemotedSet = useSessionStore(s => new Set(s.tileDemotedUserIds));
+  //
+  // CRITICAL — read the raw array from Zustand (stable identity until the
+  // array itself changes), then memoise the Set. The earlier shape
+  // `useSessionStore(s => new Set(s.tileDemotedUserIds))` returned a fresh
+  // Set on every selector call; Zustand's default Object.is equality saw
+  // a "new" value every render and triggered another render in a loop,
+  // which surfaced in production as React error #185 ("Maximum update
+  // depth exceeded") and crashed the live Lobby behind an error boundary.
+  const tileDemotedUserIds = useSessionStore(s => s.tileDemotedUserIds);
+  const tileDemotedSet = useMemo(() => new Set(tileDemotedUserIds), [tileDemotedUserIds]);
   const serverPinnedSid = (() => {
     if (!serverPinnedUserId) return null;
     const t = cameraTracksSorted.find(
