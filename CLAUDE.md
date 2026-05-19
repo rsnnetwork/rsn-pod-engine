@@ -282,3 +282,37 @@ Follow this checklist for EVERY new feature:
 - Don't use `any` to make TypeScript errors go away — fix the type
 - Don't commit code that doesn't build
 - Don't deploy on Friday nights
+
+---
+
+## 15. Production Database — Destructive Operations (HARD RULES)
+
+These rules exist because over-broad "wipe everything" operations have caused data loss in this project. Every prod DB delete or truncate must obey ALL of the following — no exceptions, no interpretation, no "I think the user meant…".
+
+### Never delete (no matter what)
+- **`join_requests`** — especially `WHERE status = 'approved'`. Approvals are records of real human decisions made by directors; they cannot be regenerated. Treat them like audit data. If a pod is deleted, the rows are orphaned but harmless (no FK enforcement); leave them.
+- **`users`**, **`refresh_tokens`**, **`audit_log`** — preserved across every wipe, period.
+- **`user_subscriptions`**, **`user_entitlements`**, **`user_preferences`**, **`user_matching_fields`**, **`support_tickets`**, **`violations`**, **`email_config`**, **`matching_templates`** — none of these are ever in scope for a "clean up the test data" operation.
+- **Anything outside the exact tables the user named.** If the user says "delete pods", that means pods. Not pod_members (unless you also need to handle the cascade), not invites, not notifications, not encounter_history, not join_requests. The cascade behaviour of the DB doesn't license you to expand scope — it makes scope creep silent and harder to spot. The word "etc." in a user request is NOT a license to expand scope — it's a flag to STOP and ask which specific tables.
+
+### When the user says "delete pods" or "delete events"
+- They mean **specific pods or specific events**, not the entire table.
+- **STOP and ask**: which pod IDs / session IDs / titles? Never default to "all rows in the table".
+- The only exception is when the user explicitly says "all pods" or "every pod" — and even then, confirm with the list of pods you're about to touch first.
+
+### Before any prod DB DELETE / TRUNCATE / mass-UPDATE
+1. Run a SELECT and show the user the **exact rows** about to change (counts + sample), per table
+2. List every table you intend to touch with a one-line reason for each
+3. List every table you intend to **preserve**, especially the never-deletes above
+4. Get explicit confirmation
+5. Wrap the change in a transaction with a SAFETY check that compares users count before/after and ROLLBACKs on drift
+6. After commit, show the after-state counts for every touched table
+
+### When you've already over-deleted
+- Neon supports point-in-time branch recovery (history retention is set on the project — 6h at time of writing).
+- Create a branch via `neonctl branches create --parent <past-timestamp>` (use `--parent`, not `--timestamp`; use an explicit pre-incident ISO time). Verify the row counts on the branch, then INSERT … ON CONFLICT DO NOTHING from branch → main in FK-safe order.
+- Keep the recovery branch alive for at least 24h after the restore as a safety net.
+
+### Historical incidents (don't repeat)
+- **2026-03-31** — `join_requests` was included in a TRUNCATE during a DB cleanup. Real platform-join applications were permanently lost.
+- **2026-05-19** — User said "delete all pods, events, invites, etc." I interpreted "etc." as license to wipe `notifications`, `encounter_history`, `join_requests`, `invites`. User had to ask for restore from a Neon recovery branch. Lesson: "etc." is not a license; it's a flag to STOP and ask.
