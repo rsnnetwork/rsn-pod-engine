@@ -466,21 +466,46 @@ export default function LiveSessionPage() {
               </div>
             )}
 
-            {/* Chat panel — Bug 9 (18 May Stefan): on mobile, slide in as
-                a right-anchored overlay (75% width, full height) sitting
-                ON TOP of the video so the video stays visible behind +
-                tap-outside closes the panel. On sm+ screens it takes the
-                old layout (side-by-side, pushes content). Bug 10: hidden
-                once event is complete. */}
+            {/* Chat panel — Bug 9 (18 May Stefan) + Bug 50 (19 May Stefan):
+                two mobile layouts depending on phase.
+                  - Lobby phase: right-anchored overlay (78% width, full
+                    height) — original Bug 9 behaviour, preserved for the
+                    pre-event waiting room where the video tiles are small
+                    and the user mainly chats with the group.
+                  - Matched phase (breakout room): BOTTOM SHEET — chat
+                    takes the bottom 40% of the viewport, the breakout
+                    video occupies the top 60%. Stefan flagged 19 May:
+                    "the user is not able to see himself and the other
+                    participant while chatting". Bottom-sheet matches
+                    the standard mobile pattern (Meet, WhatsApp) and
+                    keeps the conversation visible during the call.
+                On sm+ screens both phases use the desktop side-by-side
+                layout (unchanged). Bug 10: hidden once event is complete. */}
             {chatOpen && phase !== 'complete' && (
               <>
+                {/* Mobile backdrop — covers the area NOT taken by the chat
+                    panel so a tap there closes the panel.
+                      - Lobby: full screen behind the 78% right panel, dimmed.
+                      - Matched: only the top 60% (above the bottom-sheet),
+                        transparent so the breakout video stays clearly
+                        visible (no dim over the live faces). */}
                 <div
                   data-testid="chat-mobile-backdrop"
-                  className="sm:hidden absolute inset-0 z-30 bg-black/30"
+                  className={`sm:hidden absolute z-30 ${
+                    phase === 'matched'
+                      ? 'left-0 right-0 top-0 bottom-[40%] bg-transparent'
+                      : 'inset-0 bg-black/30'
+                  }`}
                   onClick={() => setChatOpen(false)}
                   aria-hidden="true"
                 />
-                <div className="absolute right-0 top-0 bottom-0 z-40 w-[78%] max-w-sm h-full shadow-2xl sm:static sm:w-80 sm:min-w-[320px] sm:flex-shrink-0 sm:shadow-none sm:max-w-none">
+                <div
+                  className={`absolute z-40 shadow-2xl sm:static sm:w-80 sm:min-w-[320px] sm:h-auto sm:left-auto sm:right-auto sm:top-auto sm:bottom-auto sm:flex-shrink-0 sm:shadow-none sm:max-w-none ${
+                    phase === 'matched'
+                      ? 'left-0 right-0 bottom-0 h-[40%]'
+                      : 'right-0 top-0 bottom-0 w-[78%] max-w-sm h-full'
+                  }`}
+                >
                   <SectionErrorBoundary name="Chat"><ChatPanel sessionId={sessionId} onClose={() => setChatOpen(false)} /></SectionErrorBoundary>
                 </div>
               </>

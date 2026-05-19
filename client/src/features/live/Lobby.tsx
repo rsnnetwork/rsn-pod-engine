@@ -112,24 +112,38 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
 
   // Responsive grid based on density preference
   const n = participants.length;
-  // Bug 8 (18 May Stefan) — compact mode on mobile must be visibly more
-  // compact than normal. Pre-fix compact rendered 3 cols at sm: vs
-  // normal's 2 cols, which Stefan said "looked almost the same" on a
-  // phone. Now compact starts at 3 cols on the smallest phones (was 2)
-  // and goes to 4 cols at sm: + reduced gap to gap-1.5 (was gap-2) so
-  // the density change is unmistakable. Normal stays at 2 cols on
-  // mobile so the contrast between the two modes is obvious.
+  // Bug 8 (18 May Stefan) + Bug 49 (19 May Stefan) — three densities must be
+  // VISUALLY distinct on mobile, not just on desktop. Stefan flagged 19 May
+  // that normal and spacious looked "almost the same" on a phone — root
+  // cause: at n=2 (the most common test case) both rendered grid-cols-1 on
+  // mobile, identical layout. Now:
+  //   - compact:  3 cols (smallest tiles, tightest gap, info-dense)
+  //   - normal:   2 cols on mobile when n>=2 (so n=2 is side-by-side, not
+  //               one giant column tile that looks the same as spacious)
+  //   - spacious: 1 col with extra horizontal padding so the tile is
+  //               framed away from the screen edges (max-w-md auto-mx),
+  //               making the difference unmistakable vs normal at every n.
   const gridCols = lobbyDensity === 'compact'
     ? (n <= 4 ? 'grid-cols-3 sm:grid-cols-4' : 'grid-cols-3 sm:grid-cols-5 lg:grid-cols-6')
     : lobbyDensity === 'spacious'
-    ? (n <= 2 ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2')
-    : // normal (default)
-      n <= 2 ? 'grid-cols-1 sm:grid-cols-2'
+    ? 'grid-cols-1'
+    : // normal (default) — always at least 2 cols on mobile from n=2 up so
+      // it's distinct from spacious (which stays 1 col with framing).
+      n <= 1 ? 'grid-cols-1'
       : n <= 4 ? 'grid-cols-2 sm:grid-cols-2'
       : n <= 9 ? 'grid-cols-2 sm:grid-cols-3'
       : 'grid-cols-3 sm:grid-cols-4 lg:grid-cols-5';
   const gapClass = lobbyDensity === 'compact' ? 'gap-1.5' : lobbyDensity === 'spacious' ? 'gap-6' : 'gap-3';
-  const maxWClass = lobbyDensity === 'compact' ? 'max-w-5xl' : lobbyDensity === 'spacious' ? 'max-w-2xl' : 'max-w-4xl';
+  // Bug 49 — spacious mode on mobile needs an inner cap + auto-margins so
+  // the 1-col tile is visibly framed (not edge-to-edge identical to normal
+  // at n=2). max-w-md (~28rem / 448px) is wider than 360-414px mobile
+  // viewports so the tile is constrained by viewport minus horizontal
+  // padding on mobile, and centred with breathing room on tablet+.
+  const maxWClass = lobbyDensity === 'compact'
+    ? 'max-w-5xl'
+    : lobbyDensity === 'spacious'
+    ? 'max-w-md sm:max-w-2xl px-4 sm:px-0'
+    : 'max-w-4xl';
 
   const handleHostMute = useCallback((targetIdentity: string, mute: boolean) => {
     if (!sessionId) return;
@@ -614,6 +628,7 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
       <button
         onClick={toggleMic}
         title={micEnabled ? 'Click to mute' : 'Click to unmute'}
+        aria-label={micEnabled ? 'Mic on' : 'Mic off'}
         className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors backdrop-blur-sm ${
           micEnabled
             ? 'bg-black/40 text-white hover:bg-black/60'
@@ -621,11 +636,16 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
         }`}
       >
         {micEnabled ? <Mic className="h-3 w-3" /> : <MicOff className="h-3 w-3" />}
-        {micEnabled ? 'Mic On' : 'Mic Off'}
+        {/* Bug 51 (19 May Stefan) — text label hidden on mobile so the
+            three controls fit inside compact-mode tiles (~108 px wide
+            at 360 px viewport, 3 cols). Title + aria-label keep the
+            affordance accessible. */}
+        <span className="hidden sm:inline">{micEnabled ? 'Mic On' : 'Mic Off'}</span>
       </button>
       <button
         onClick={toggleCam}
         title={camEnabled ? 'Click to turn camera off' : 'Click to turn camera on'}
+        aria-label={camEnabled ? 'Camera on' : 'Camera off'}
         className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors backdrop-blur-sm ${
           camEnabled
             ? 'bg-black/40 text-white hover:bg-black/60'
@@ -633,19 +653,20 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
         }`}
       >
         {camEnabled ? <Video className="h-3 w-3" /> : <VideoOff className="h-3 w-3" />}
-        {camEnabled ? 'Cam On' : 'Cam Off'}
+        <span className="hidden sm:inline">{camEnabled ? 'Cam On' : 'Cam Off'}</span>
       </button>
       {/* Virtual background toggle */}
       <div className="relative">
         <button
           onClick={() => setShowBgPanel(!showBgPanel)}
+          aria-label="Background effects"
           className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors backdrop-blur-sm ${
             bgMode !== 'disabled' ? 'bg-indigo-500/80 text-white' : 'bg-black/40 text-white hover:bg-black/60'
           }`}
           title="Background effects"
         >
           <Sparkles className="h-3 w-3" />
-          BG
+          <span className="hidden sm:inline">BG</span>
         </button>
         {showBgPanel && (
           // Phase 7-audit fix — was `absolute bottom-full right-0` inside the
