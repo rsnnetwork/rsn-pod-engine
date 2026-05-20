@@ -300,6 +300,17 @@ export async function registerParticipant(sessionId: string, userId: string, use
       return result.rows[0];
     }
 
+    // Phase R8 (20 May 2026 — live-test post-mortem). For admin / super_admin
+    // users who are NOT the event director, default acting_as_host to FALSE
+    // (opt-in as participant) so they don't get stuck on the "Pick how
+    // you're joining first" Phase P picker. They can still flip to host
+    // mid-event via the Join-as banner. Pre-fix, the column stayed NULL
+    // and the LiveSessionPage blocked them behind the picker — Raja Ali
+    // King (super_admin) saw this in the 20 May test even after the event
+    // ended because the picker doesn't gate on session.status='completed'.
+    const isDirector = session.hostUserId === userId;
+    const defaultActingAsHost = (isAdmin && !isDirector) ? false : null;
+
     // ON CONFLICT DO NOTHING absorbs the race where a concurrent caller
     // inserted the same (session_id, user_id) between our SELECT-existing
     // check above and this INSERT. Pre-fix, the second caller hit the
@@ -308,11 +319,11 @@ export async function registerParticipant(sessionId: string, userId: string, use
     // auto-register fired alongside the invite-accept flow's nested
     // registerParticipant for the same user.
     const insertResult = await client.query<SessionParticipant>(
-      `INSERT INTO session_participants (session_id, user_id, status)
-       VALUES ($1, $2, 'registered')
+      `INSERT INTO session_participants (session_id, user_id, status, acting_as_host)
+       VALUES ($1, $2, 'registered', $3)
        ON CONFLICT (session_id, user_id) DO NOTHING
        RETURNING ${PARTICIPANT_COLUMNS}`,
-      [sessionId, userId]
+      [sessionId, userId, defaultActingAsHost]
     );
 
     let participant: SessionParticipant;

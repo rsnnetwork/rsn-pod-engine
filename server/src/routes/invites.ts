@@ -468,10 +468,20 @@ router.post(
         fanoutPodEntities(result.registeredFor.podId, [E.userPods(req.user!.userId)]).catch(() => {});
       }
       if (result.registeredFor?.sessionId) {
+        // R2-audit (20 May 2026 — live-test post-mortem). Also fanout
+        // E.sessionParticipants so every other client viewing the session's
+        // participants list invalidates and refetches. Pre-fix only
+        // E.userSessions fired, which updated the accepter's own session
+        // list but left other viewers stuck on a stale 3-person list until
+        // F5 — same root pattern as the POST /register fix in commit
+        // f3e59a8.
         fanoutSessionEntities(
           result.registeredFor.podId ?? null,
           result.registeredFor.sessionId,
-          [E.userSessions(req.user!.userId)],
+          [
+            E.userSessions(req.user!.userId),
+            E.sessionParticipants(result.registeredFor.sessionId),
+          ],
         ).catch(() => {});
       }
       // Cover the accepter even if they're not yet in the active-member
@@ -483,7 +493,11 @@ router.post(
         [
           E.userInvites(req.user!.userId),
           ...(result.registeredFor?.podId ? [E.pod(result.registeredFor.podId), E.userPods(req.user!.userId)] : []),
-          ...(result.registeredFor?.sessionId ? [E.session(result.registeredFor.sessionId), E.userSessions(req.user!.userId)] : []),
+          ...(result.registeredFor?.sessionId ? [
+            E.session(result.registeredFor.sessionId),
+            E.userSessions(req.user!.userId),
+            E.sessionParticipants(result.registeredFor.sessionId),
+          ] : []),
         ],
       ).catch(() => {});
       const response: ApiResponse = {

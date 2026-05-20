@@ -325,6 +325,30 @@ export async function handleHostGenerateMatches(
       // Store pending round number so confirm_round knows what to start
       activeSession.pendingRoundNumber = nextRound;
 
+      // R7 (20 May 2026 — live-test post-mortem). After fresh-generation
+      // for a new round, matches table now has 'scheduled' rows for this
+      // round. Invalidate EventPlanStrip for every viewer so the button
+      // strip switches from "Pending" to "Planned · N pairs" without F5.
+      io.to(sessionRoom(data.sessionId)).emit('host:event_plan_repaired', {
+        sessionId: data.sessionId,
+        reason: 'host_request',
+        regeneratedRounds: [nextRound],
+        roundCount: activeSession.config.numberOfRounds,
+        totalPairs: 0,
+        bonusRoundsAdded: activeSession.config.bonusRoundsAdded ?? 0,
+      });
+      try {
+        const rows = await query<{ user_id: string }>(
+          `SELECT user_id FROM session_participants
+             WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')`,
+          [data.sessionId],
+        );
+        emitEntities(
+          io, rows.rows.map(r => r.user_id),
+          [E.session(data.sessionId), E.sessionPlan(data.sessionId)],
+        ).catch(() => {});
+      } catch { /* dual-emit failure non-fatal */ }
+
       // Send preview to host only (includes trio support + encounter history)
       await sendMatchPreview(io, socket, data.sessionId, nextRound, activeSession.hostUserId);
 
@@ -595,6 +619,34 @@ export async function handleHostRegenerateMatches(
     // inside the matching service; no in-memory presence intersection.
     const allHostIds = await getAllHostIds(data.sessionId, activeSession.hostUserId);
     await matchingService.generateSingleRound(data.sessionId, roundNumber, allHostIds, { regenerate: true });
+
+    // R7 (20 May 2026 — live-test post-mortem). After regenerating a round
+    // (e.g. host clicked Re-match on a cancelled Round 3), the matches
+    // table has new 'scheduled' rows. Tell EventPlanStrip + every viewer
+    // to refetch their plan query so the round button switches from
+    // "Cancelled · 4 not matched" to "Planned · N pairs". Pre-fix the
+    // strip cache stayed stale because no event_plan_repaired emit fired
+    // on this path — only on CLOSING_LOBBY → Another Round bumps and on
+    // maybeRepairFutureRounds in host-actions.ts.
+    io.to(sessionRoom(data.sessionId)).emit('host:event_plan_repaired', {
+      sessionId: data.sessionId,
+      reason: 'host_request',
+      regeneratedRounds: [roundNumber],
+      roundCount: activeSession.config.numberOfRounds,
+      totalPairs: 0,
+      bonusRoundsAdded: activeSession.config.bonusRoundsAdded ?? 0,
+    });
+    try {
+      const rows = await query<{ user_id: string }>(
+        `SELECT user_id FROM session_participants
+           WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')`,
+        [data.sessionId],
+      );
+      emitEntities(
+        io, rows.rows.map(r => r.user_id),
+        [E.session(data.sessionId), E.sessionPlan(data.sessionId)],
+      ).catch(() => {});
+    } catch { /* dual-emit failure non-fatal */ }
 
     // Re-send preview
     await sendMatchPreview(io, socket, data.sessionId, roundNumber, activeSession.hostUserId);

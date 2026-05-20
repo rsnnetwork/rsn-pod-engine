@@ -117,8 +117,16 @@ export default function LiveSessionPage() {
   // sessionStateLoaded so the banner doesn't flash on refresh while the
   // snapshot is in-flight (Raja saw the toggle re-appear for a frame
   // after every refresh even though he'd already chosen).
+  //
+  // R8.2 (20 May 2026 — live-test post-mortem) — also gate on session
+  // status. After the event ends the picker / banner must NEVER block the
+  // recap. Pre-fix an admin / super_admin whose acting_as_host was never
+  // set saw "Pick how you're joining first" INSTEAD of the recap screen
+  // on a refreshed live page even though the event was over — observed
+  // live with Raja Ali King during the 20 May test.
+  const isEventOver = session?.status === 'completed' || session?.status === 'cancelled';
   const showJoinAsBanner =
-    canToggleActingAsHost && myActingAsHost === undefined && sessionStateLoaded;
+    canToggleActingAsHost && myActingAsHost === undefined && sessionStateLoaded && !isEventOver;
   // Bug D (15 May Ali) — when a toggle-eligible user hasn't picked yet,
   // BLOCK the content area entirely. The banner stays at the top, the
   // header stays, but the lobby / video / rating / complete views and the
@@ -126,9 +134,10 @@ export default function LiveSessionPage() {
   // immediately and admins saw host controls implicitly, which felt like
   // "auto-promoted" even though the count didn't agree. Bug I — also
   // gate on sessionStateLoaded so the blocker doesn't briefly cover the
-  // page right after refresh for someone who already picked.
+  // page right after refresh for someone who already picked. R8.2 — also
+  // gate on session status so the post-event recap always wins.
   const mustPickRole =
-    canToggleActingAsHost && myActingAsHost === undefined && sessionStateLoaded;
+    canToggleActingAsHost && myActingAsHost === undefined && sessionStateLoaded && !isEventOver;
 
   useSessionSocket(sessionId!);
 
