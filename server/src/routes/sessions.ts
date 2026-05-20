@@ -265,13 +265,22 @@ router.post(
       // Phase May-19 realtime — broadcast so every pod member +
       // registered participant sees the new self-registration without
       // a refresh (badge counts, "Registered" pill on the event card).
+      //
+      // Phase R2 (20 May 2026) — also fanout E.sessionParticipants so
+      // every other client viewing this session's participants list
+      // invalidates and refetches. Pre-fix, a tester who registered
+      // while another user already had the event open saw stale-3
+      // counts until F5; canonical entity-tag emit-miss.
       try {
         const sessRow = await query<{ pod_id: string | null }>(
           `SELECT pod_id FROM sessions WHERE id = $1`,
           [req.params.id],
         );
         const podId = sessRow.rows[0]?.pod_id ?? null;
-        fanoutSessionEntities(podId, req.params.id, [E.userSessions(req.user!.userId)]).catch(() => {});
+        fanoutSessionEntities(podId, req.params.id, [
+          E.userSessions(req.user!.userId),
+          E.sessionParticipants(req.params.id),
+        ]).catch(() => {});
       } catch { /* non-fatal */ }
       const response: ApiResponse = { success: true, data: participant };
       res.status(201).json(response);
@@ -302,7 +311,13 @@ router.delete(
       } catch { /* non-fatal */ }
 
       await sessionService.unregisterParticipant(req.params.id, req.user!.userId);
-      fanoutSessionEntities(podIdForNotify, req.params.id, [E.userSessions(req.user!.userId)]).catch(() => {});
+      // Phase R2 (20 May 2026) — also fanout E.sessionParticipants so
+      // other clients viewing this session's participants list see the
+      // user disappear without F5.
+      fanoutSessionEntities(podIdForNotify, req.params.id, [
+        E.userSessions(req.user!.userId),
+        E.sessionParticipants(req.params.id),
+      ]).catch(() => {});
       const response: ApiResponse = { success: true, data: { message: 'Unregistered successfully' } };
       res.json(response);
     } catch (err) {
