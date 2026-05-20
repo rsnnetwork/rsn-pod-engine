@@ -90,6 +90,15 @@ export default function SessionDetailPage() {
     queryKey: ['session-participants', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}/participants`).then(r => r.data.data ?? []),
     enabled: !!sessionId,
+    // R2 safety net (20 May 2026 — live-test post-mortem). Entity-tag
+    // fanout is the primary refresh path, but missed emits at scattered
+    // session_participants write sites left clients showing stale lists
+    // for minutes (e.g. Saif missing Wasim during the 20 May test).
+    // 30 s background refetch is a belt-and-braces guarantee that any
+    // missed emit self-heals within 30 s — one HTTP request per viewer
+    // per half-minute, negligible at RSN's scale.
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
     meta: { entities: sessionId ? [E.session(sessionId), E.sessionParticipants(sessionId)] : [] },
   });
 

@@ -58,6 +58,13 @@ export default function EventPlanStrip({ sessionId }: Props) {
     // Treat plan as somewhat fresh — host actions invalidate explicitly.
     staleTime: 60_000,
     retry: 1,
+    // R2 safety net (20 May 2026). Even though R7 fix now fires
+    // host:event_plan_repaired + E.sessionPlan on Re-match and fresh
+    // generation, a 30 s background refetch guarantees the round button
+    // strip self-heals if a server emit ever silently fails or a client
+    // misses one mid-reconnect.
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
     meta: { entities: sessionId ? [E.session(sessionId), E.sessionPlan(sessionId)] : [] },
   });
 

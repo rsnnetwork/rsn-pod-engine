@@ -964,6 +964,23 @@ export async function handleHostMuteParticipant(
     byHost: true,
   });
 
+  // R2-audit (20 May 2026 — live-test post-mortem). host_muted lives on
+  // session_participants and affects the participants list (muted icon).
+  // Fan out E.sessionParticipants so every viewer's list refreshes the
+  // mute state without F5. Pre-fix only the target user got the lobby
+  // mute relay; other viewers had to refresh to see the muted indicator.
+  try {
+    const rows = await query<{ user_id: string }>(
+      `SELECT user_id FROM session_participants
+         WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')`,
+      [data.sessionId],
+    );
+    emitEntities(
+      io, rows.rows.map(r => r.user_id),
+      [E.session(data.sessionId), E.sessionParticipants(data.sessionId)],
+    ).catch(() => {});
+  } catch { /* non-fatal */ }
+
   // Phase U — LiveKit-level enforcement. Update publish permission on
   // every room the user could currently be in (lobby + any active
   // match). Provider swallows NotFound, so calling for both rooms is

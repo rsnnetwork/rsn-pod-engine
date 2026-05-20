@@ -66,6 +66,12 @@ export default function LiveSessionPage() {
     queryKey: ['session', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}`).then(r => r.data.data),
     enabled: !!sessionId,
+    // R2 safety net (20 May 2026). The session query drives the
+    // mustPickRole gate (R8.2) and the "event ended" flip. A 30 s
+    // background refetch guarantees the recap shows up within 30 s
+    // even if the post-event entity-tag emit is missed for any reason.
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
     meta: { entities: sessionId ? [E.session(sessionId)] : [] },
   });
 
