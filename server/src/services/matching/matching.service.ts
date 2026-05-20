@@ -822,15 +822,33 @@ export async function repairFutureRounds(
   // in this loop (so cross-round no-repeat is preserved).
   const allHostIds: string[] = [];
   if (session.hostUserId) allHostIds.push(session.hostUserId);
-  // Co-hosts — fetch from session_participants where role = 'co_host' if any
+  // Phase R6 (20 May 2026) — session_cohosts is the canonical cohort table.
+  // Pre-fix queried session_participants.role which doesn't exist; the silent
+  // catch swallowed the missing-column error and returned [], so cohosts were
+  // never excluded from matching for any event with cohosts. Also honours
+  // Phase M (12 May spec) acting_as_host overrides so admin opt-ins get
+  // excluded too and admin opt-outs stay matchable.
   try {
     const cohostsRes = await query<{ user_id: string }>(
-      `SELECT user_id FROM session_participants WHERE session_id = $1 AND role = 'co_host'`,
+      `SELECT user_id FROM session_cohosts WHERE session_id = $1`,
       [sessionId],
     );
     for (const r of cohostsRes.rows) allHostIds.push(r.user_id);
-  } catch {
-    // Co-host column may not exist on older sessions — fall through with host only.
+    const overrideRes = await query<{ user_id: string; acting_as_host: boolean }>(
+      `SELECT user_id, acting_as_host FROM session_participants
+       WHERE session_id = $1 AND acting_as_host IS NOT NULL`,
+      [sessionId],
+    );
+    for (const r of overrideRes.rows) {
+      if (r.acting_as_host === true) {
+        if (!allHostIds.includes(r.user_id)) allHostIds.push(r.user_id);
+      } else if (r.acting_as_host === false) {
+        const idx = allHostIds.indexOf(r.user_id);
+        if (idx >= 0) allHostIds.splice(idx, 1);
+      }
+    }
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'Phase R6 — failed to fetch cohost / acting_as_host exclusions');
   }
 
   const regeneratedRounds: number[] = [];

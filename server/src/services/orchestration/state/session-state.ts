@@ -294,6 +294,30 @@ export async function emitRatingWindowOnce(
   matchId: string,
   payload: unknown,
 ): Promise<void> {
+  // Phase R4 (20 May 2026) — defense-in-depth. The event host's userId must
+  // never receive a rating prompt: the host is not matchable (Phase R1) and
+  // any rating prompt to them is the signature of a phantom match having
+  // been created. If we see this path fire for the host, the Phase R1 / R6
+  // guards earlier in the stack were bypassed and we should fail loud, not
+  // pop a rating modal in the host's UI mid-event.
+  try {
+    const hostRes = await query<{ host_user_id: string }>(
+      `SELECT s.host_user_id FROM matches m
+       JOIN sessions s ON s.id = m.session_id
+       WHERE m.id = $1`,
+      [matchId],
+    );
+    const hostUserId = hostRes.rows[0]?.host_user_id;
+    if (hostUserId && hostUserId === userId) {
+      logger.warn({ matchId, userId, hostUserId },
+        'Phase R4 — refused to open rating window for the event host. Upstream guard bypassed?');
+      return;
+    }
+  } catch (err) {
+    logger.warn({ err, matchId, userId },
+      'Phase R4 host-check failed — emitting anyway (fail-open)');
+  }
+
   try {
     const existing = await query<{ id: string }>(
       `SELECT id FROM ratings WHERE match_id = $1 AND from_user_id = $2 LIMIT 1`,

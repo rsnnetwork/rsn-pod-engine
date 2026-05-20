@@ -1343,6 +1343,16 @@ export async function handleLeaveConversation(
               const matchId = uuid();
               const normA = soloPartnerId < candidateUserId ? soloPartnerId : candidateUserId;
               const normB = soloPartnerId < candidateUserId ? candidateUserId : soloPartnerId;
+              // Phase R1 (20 May 2026) — belt-and-braces. findIsolatedParticipants
+              // already filters host/cohosts via SQL, but the INSERT site asserts
+              // again. If we ever reach this with a host_user_id in normA/normB,
+              // the upstream filter regressed and we must not create the phantom
+              // match. Skip and try the next candidate.
+              if (normA === currentSession.hostUserId || normB === currentSession.hostUserId) {
+                logger.error({ sessionId, normA, normB, hostUserId: currentSession.hostUserId },
+                  'Phase R1 — refused to INSERT host into leave-reassign match. Upstream filter regressed?');
+                continue;
+              }
               try {
                 await query(
                   `INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, room_id, status, started_at)
@@ -1649,6 +1659,16 @@ export async function handleDisconnect(
                   // Normalize participant order (lexicographic) for constraint consistency
                   const normA = partnerId < candidateUserId ? partnerId : candidateUserId;
                   const normB = partnerId < candidateUserId ? candidateUserId : partnerId;
+                  // Phase R1 (20 May 2026) — belt-and-braces. findIsolatedParticipants
+                  // filters host/cohost via SQL; this asserts at the INSERT.
+                  // If we reach here with a host_user_id, the SQL filter regressed
+                  // and we must not create the phantom match that caused the
+                  // 20 May Round-2 host-in-breakout incident.
+                  if (normA === currentSession.hostUserId || normB === currentSession.hostUserId) {
+                    logger.error({ sessionId, normA, normB, hostUserId: currentSession.hostUserId },
+                      'Phase R1 — refused to INSERT host into disconnect-reassign match. Upstream filter regressed?');
+                    continue;
+                  }
                   try {
                     await query(
                       `INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, room_id, status, started_at)

@@ -659,10 +659,14 @@ router.get(
       const isHost = session.host_user_id === userId;
       let isCohost = false;
       if (!isHost && !isAdmin) {
-        const cohostRes = await query<{ id: string }>(
-          `SELECT id FROM session_participants WHERE session_id = $1 AND user_id = $2 AND role = 'co_host' LIMIT 1`,
+        // Phase R6 (20 May 2026) — session_cohosts is the canonical cohost
+        // source. Pre-fix queried session_participants.role which doesn't
+        // exist; the silent catch returned [] so cohosts could never view
+        // the event plan they'd been added to.
+        const cohostRes = await query<{ user_id: string }>(
+          `SELECT user_id FROM session_cohosts WHERE session_id = $1 AND user_id = $2 LIMIT 1`,
           [sessionId, userId],
-        ).catch(() => ({ rows: [] as { id: string }[] }));
+        ).catch(() => ({ rows: [] as { user_id: string }[] }));
         isCohost = cohostRes.rows.length > 0;
       }
       if (!isHost && !isCohost && !isAdmin) {

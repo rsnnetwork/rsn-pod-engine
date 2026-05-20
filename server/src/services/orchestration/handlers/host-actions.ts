@@ -817,6 +817,19 @@ export async function handleHostReassign(
     const targetId = data.participantId;
     const partner = isolatedParticipants.find(id => id !== targetId);
 
+    // Phase R1 (20 May 2026) — belt-and-braces. Neither the host nor any
+    // cohort may end up in a reassign INSERT. The host UI shouldn't allow
+    // selecting them, but a malicious/buggy client could send the host's
+    // user_id as participantId.
+    if (targetId === activeSession.hostUserId ||
+        (partner && partner === activeSession.hostUserId)) {
+      logger.error({ sessionId: data.sessionId, targetId, partner,
+        hostUserId: activeSession.hostUserId },
+        'Phase R1 — refused host-driven reassign that would place the event host in a match');
+      socket.emit('error', { code: 'HOST_NOT_MATCHABLE', message: 'The event host cannot be reassigned into a match' });
+      return;
+    }
+
     if (partner) {
       // Create a new match for this round
       const reassignSlug = `reassign-${Date.now()}`;
