@@ -670,13 +670,40 @@ export default function SessionDetailPage() {
           </Card>
         ) : (
           <div className="grid gap-2">
+            {/* Host/Director card — always visible at the top of the list, for
+                every viewer (member, admin, host themselves). The host is
+                NOT a participant in the matching sense (they organise, they
+                don't get matched), but the UI must make their role obvious.
+                Resolved from session.hostUserId by looking up the matching
+                row in the participants array. Shown regardless of the host's
+                session_participants.status — if they briefly clicked Leave
+                during a pre-event lobby and their row is `left`, they're
+                still the event director.  May 21 Ali — "director still not
+                shown ... should be visible to every other participant too." */}
+            {(() => {
+              const hostRow = (participants || []).find((p: any) => p.userId === session.hostUserId);
+              if (!hostRow) return null;
+              return (
+                <Card key={`host-${hostRow.userId}`} className="!p-4 border-rsn-red/30 bg-rsn-red/5">
+                  <div className="flex items-center justify-between">
+                    <a href={`/profile/${hostRow.userId}`} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+                      <Avatar src={hostRow.avatarUrl} name={hostRow.displayName || hostRow.email || 'Host'} size="sm" />
+                      <div>
+                        <p className="text-sm font-medium text-gray-800">{hostRow.displayName || hostRow.email || 'Host'}</p>
+                        <p className="text-xs text-gray-400">Host / Director</p>
+                      </div>
+                    </a>
+                    <Badge variant="brand" className="text-xs">Host</Badge>
+                  </div>
+                </Card>
+              );
+            })()}
             {(participants || [])
               .filter((p: any) => p.status !== 'removed' && p.userId !== session.hostUserId)
               .filter((p: any) => statusFilter === null || p.status === statusFilter)
               .map((p: any) => {
-              const pIsHost = false;
-              const statusLabel = pIsHost ? 'Host'
-                : (p.status === 'registered' || p.status === 'left' || p.status === 'checked_in') ? 'Member'
+              const statusLabel =
+                  (p.status === 'registered' || p.status === 'left' || p.status === 'checked_in') ? 'Member'
                 : p.status === 'in_lobby' ? 'In Main Room'
                 : p.status === 'in_round' ? 'In Round'
                 : p.status === 'disconnected' ? 'Reconnecting...'
@@ -692,9 +719,6 @@ export default function SessionDetailPage() {
                         <p className="text-xs text-gray-400">{statusLabel}</p>
                       </div>
                     </a>
-                    {pIsHost && (
-                      <Badge variant="brand" className="text-xs">Host</Badge>
-                    )}
                   </div>
                 </Card>
               );
