@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { X, Send, SmilePlus, Smile } from 'lucide-react';
-import { useSessionStore, ChatMessage } from '@/stores/sessionStore';
+import { useSessionStore, ChatMessage, useInRoomParticipants } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
 import { getSocket } from '@/lib/socket';
 
@@ -26,7 +26,11 @@ export default function ChatPanel({ sessionId, onClose }: ChatPanelProps) {
   const hostInLobby = useSessionStore(s => s.hostInLobby);
   const hostUserId = useSessionStore(s => s.hostUserId);
   const cohosts = useSessionStore(s => s.cohosts);
-  const participants = useSessionStore(s => s.participants);
+  // F3 (21 May Ali) — chat-gate's host-presence check must use realtime
+  // LiveKit room presence so the gate flips for every viewer at the same
+  // time (Bug A's intent was already this, but socket roster drift left
+  // chat greyed-out for some viewers even after the host joined).
+  const participants = useInRoomParticipants();
   const { user } = useAuthStore();
 
   // Determine scope based on current phase

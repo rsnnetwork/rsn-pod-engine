@@ -1,5 +1,5 @@
 import { Users, X, Crown, Shield, ShieldCheck } from 'lucide-react';
-import { useSessionStore } from '@/stores/sessionStore';
+import { useSessionStore, useInRoomParticipants } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import Avatar from '@/components/ui/Avatar';
@@ -12,7 +12,12 @@ interface Props {
 }
 
 export default function ParticipantList({ onClose, sessionId }: Props) {
-  const participants = useSessionStore(s => s.participants);
+  // F3 (21 May Ali) — drawer roster shows REALTIME in-room presence from
+  // LiveKit's room state (every viewer subscribes to the same source so
+  // counts converge), not the socket-fed list which drifts when
+  // participant:joined/left fan-out misses a client. See sessionStore.ts
+  // useInRoomParticipants for the fallback behaviour pre-LiveKit.
+  const participants = useInRoomParticipants();
   const hostUserId = useSessionStore(s => s.hostUserId);
   const cohosts = useSessionStore(s => s.cohosts);
   // Phase P (Ali's 13 May clarification) — badges + sort must respect

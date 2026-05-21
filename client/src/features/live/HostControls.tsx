@@ -1,4 +1,4 @@
-import { useSessionStore } from '@/stores/sessionStore';
+import { useSessionStore, useInRoomParticipants } from '@/stores/sessionStore';
 import { useToastStore } from '@/stores/toastStore';
 import { Button } from '@/components/ui/Button';
 import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, UserMinus, RefreshCw, UserPlus, AlertTriangle, CheckCircle2, Clock, LayoutDashboard } from 'lucide-react';
@@ -12,7 +12,12 @@ import HostControlCenter from './HostControlCenter';
 interface Props { sessionId: string; }
 
 export default function HostControls({ sessionId }: Props) {
-  const participants = useSessionStore(s => s.participants);
+  // F3 (21 May Ali) — eligibility counts + the "in main room" tally must
+  // use realtime LiveKit room presence, not the drift-prone socket
+  // roster. Matching against a stale roster could let the host start a
+  // round with someone who isn't actually in the room, or miss someone
+  // who is.
+  const participants = useInRoomParticipants();
   const phase = useSessionStore(s => s.phase);
   const currentRound = useSessionStore(s => s.currentRound);
   const totalRounds = useSessionStore(s => s.totalRounds);

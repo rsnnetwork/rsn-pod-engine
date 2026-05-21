@@ -16,7 +16,7 @@ async function loadBgProcessors() {
   } catch { return null; }
 }
 import { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
-import { useSessionStore } from '@/stores/sessionStore';
+import { useSessionStore, useInRoomParticipants } from '@/stores/sessionStore';
 import { getSocket } from '@/lib/socket';
 import { useVisibilityPartition } from './useVisibilityPartition';
 import {
@@ -953,6 +953,51 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
 }
 
 /**
+ * F3 (21 May Ali) — mirrors LiveKit's room participant list into the
+ * Zustand store so every UI surface outside <LiveKitRoom> (the participant
+ * drawer, the lobby header counter, the host participant panel) can read
+ * a realtime "who is actually in the main room right now" list without
+ * needing to be inside the LiveKit context itself.
+ *
+ * Why this exists: socket-fanned participant:joined/left events miss some
+ * viewers (confirmed by the 21 May tests — refresh shows the correct
+ * count, but the live list drifts because not every browser receives
+ * every fan-out emit). LiveKit's room state is the only signal every
+ * browser subscribes to the same server-side source for, so it converges
+ * across viewers.
+ *
+ * Mount this once inside the lobby <LiveKitRoom> (after the user joins).
+ * Renders nothing; effect-only.
+ */
+function LiveKitPresenceSync() {
+  const livekitParticipants = useParticipants();
+  const setLiveRoomParticipants = useSessionStore(s => s.setLiveRoomParticipants);
+  const lastKeyRef = useRef<string>('');
+  useEffect(() => {
+    // Local + remote both come back from useParticipants(); identity is
+    // the LiveKit token's identity field, which the server sets to the
+    // userId (same invariant the tile-sort relies on at line ~122).
+    const list = livekitParticipants
+      .map(p => ({ userId: p.identity || '', displayName: p.name || '' }))
+      .filter(p => p.userId);
+    // Compose a stable key so the store write fires ONLY when room
+    // membership actually changes — not on every LiveKit metadata tick.
+    const key = list.map(p => p.userId).sort().join('|') + '#' + list.length;
+    if (key !== lastKeyRef.current) {
+      lastKeyRef.current = key;
+      setLiveRoomParticipants(list);
+    }
+  });
+  // Reset the store list when this component unmounts (user leaves the
+  // LiveKit room). The selector hook then falls back to the durable
+  // socket-fed roster.
+  useEffect(() => {
+    return () => setLiveRoomParticipants([]);
+  }, [setLiveRoomParticipants]);
+  return null;
+}
+
+/**
  * Hook: delays "host is offline" by a grace period to avoid flickering on brief disconnects.
  * Also checks participant list as a fallback.
  * - Starts as `null` (unknown) until session:state arrives
@@ -961,7 +1006,11 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
  */
 function useHostPresence(gracePeriodMs = 15000): boolean | null {
   const rawHostInLobby = useSessionStore(s => s.hostInLobby);
-  const participants = useSessionStore(s => s.participants);
+  // F3 (21 May Ali) — host-presence check must use the realtime in-room
+  // list, not the drift-prone socket roster. Otherwise the "host online"
+  // banner can be stuck on or off for some viewers when participant:left
+  // for the host gets missed.
+  const participants = useInRoomParticipants();
   const hostUserId = useSessionStore(s => s.hostUserId);
 
   const hostInParticipants = hostUserId ? participants.some(p => p.userId === hostUserId) : false;
@@ -999,7 +1048,13 @@ function useHostPresence(gracePeriodMs = 15000): boolean | null {
 }
 
 function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
-  const { participants, isByeRound, transitionStatus, sessionStatus, hostUserId, leftCurrentRound, cohosts } = useSessionStore();
+  // F3 (21 May Ali) — counter must reflect REALTIME LiveKit room presence,
+  // not the store's socket-fed roster which drifts per viewer when
+  // participant:joined/left fan-out misses a client. useInRoomParticipants
+  // returns the LiveKit identity set when the room is mounted, falling
+  // back to the durable roster pre-LiveKit.
+  const { isByeRound, transitionStatus, sessionStatus, hostUserId, leftCurrentRound, cohosts } = useSessionStore();
+  const participants = useInRoomParticipants();
   // Bug E (15 May Ali) — header count needs acting-as-host opt-ins.
   const actingAsHostOverrides = useSessionStore(s => s.actingAsHostOverrides);
   const hostOnline = useHostPresence();
@@ -1155,7 +1210,9 @@ function formatParticipantHeader(
 }
 
 function HostParticipantPanel({ sessionId }: { sessionId?: string }) {
-  const { participants, hostUserId, cohosts } = useSessionStore();
+  // F3 (21 May Ali) — same realtime-presence story as LobbyStatusOverlay.
+  const { hostUserId, cohosts } = useSessionStore();
+  const participants = useInRoomParticipants();
   // Phase P (Ali's 13 May clarification) — host roster must factor in
   // acting_as_host opt-ins (admins/super_admins joining as host) and
   // opt-outs (cohosts/super_admins joining as participant), with the
@@ -1472,6 +1529,12 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
             videoCaptureDefaults: { resolution: { width: 1280, height: 720, frameRate: 30 } },
           }}
         >
+          {/* F3 (21 May Ali) — sync LiveKit room presence into the store
+              so the participant drawer / counter / host panel (rendered
+              outside this <LiveKitRoom>) get realtime in-room presence
+              without depending on socket fan-out for participant
+              join/leave events. */}
+          <LiveKitPresenceSync />
           <RoomAudioRenderer />
           <LobbyMosaic isHost={isHost} sessionId={sessionId} />
         </LiveKitRoom>

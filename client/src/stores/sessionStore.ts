@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { useMemo } from 'react';
 
 interface Participant {
   userId: string;
@@ -82,6 +83,18 @@ interface SessionLiveState {
   // round beyond (totalRounds - bonusRoundsAdded). Default 0.
   bonusRoundsAdded: number;
   participants: Participant[];
+  // F3 (21 May Ali) — REALTIME in-room presence, sourced from LiveKit's
+  // useParticipants() inside the lobby <LiveKitRoom>. The Zustand
+  // `participants` array drifts across viewers when socket fan-out misses
+  // a client (Aug 21 morning test: 5 actual, viewer counts 5/4/3 — even
+  // after the M1 auto-LEFT removal, each browser had a different cached
+  // roster because participant:joined emits don't always reach every
+  // tab). LiveKit's room state is the only signal every viewer subscribes
+  // to the same server-of-truth for — so it becomes our authoritative
+  // "who is in the main room right now" list. Empty when no LiveKit room
+  // is mounted (pre-event waiting room, text-only fallback) — in that
+  // case the existing socket-fed `participants` array is used as-is.
+  liveRoomParticipants: Array<{ userId: string; displayName: string }>;
   currentMatch: MatchPartner | null;
   currentPartners: MatchPartner[];  // All partners (1 for pair, 2 for trio)
   currentMatchId: string | null;
@@ -205,6 +218,11 @@ interface SessionLiveState {
   setParticipants: (p: Participant[]) => void;
   addParticipant: (p: Participant) => void;
   removeParticipant: (userId: string) => void;
+  // F3 (21 May Ali) — push LiveKit room membership into the store from
+  // LiveKitPresenceSync (mounted inside <LiveKitRoom>). Identity = userId
+  // (server token generator uses userId as the LiveKit identity, see
+  // Lobby.tsx:122 which already relies on this invariant).
+  setLiveRoomParticipants: (list: Array<{ userId: string; displayName: string }>) => void;
   setMatch: (m: MatchPartner | null, matchId?: string | null, partners?: MatchPartner[]) => void;
   // Bug 8.5 (April 19) — Timer is now derived from server's authoritative
   // `endsAt` timestamp, NOT from a local 1s decrement. Local decrement was
@@ -316,6 +334,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   totalRounds: 5,
   bonusRoundsAdded: 0,
   participants: [],
+  liveRoomParticipants: [],
   currentMatch: null,
   currentPartners: [],
   currentMatchId: null,
@@ -370,6 +389,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   removeParticipant: (userId) => set((s) => ({
     participants: s.participants.filter(x => x.userId !== userId),
   })),
+  setLiveRoomParticipants: (list) => set({ liveRoomParticipants: list }),
   setMatch: (currentMatch, matchId = null, partners = []) => set({ currentMatch, currentMatchId: matchId, currentPartners: partners }),
   setTimer: (timerSeconds) => set({ timerSeconds }),
   setTimerEndsAt: (timerEndsAt) => set((s) => {
@@ -541,7 +561,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   reset: () => set({
     phase: 'lobby', connectionStatus: 'connecting', transitionStatus: null,
     sessionStatus: 'scheduled', hostInLobby: false, hostUserId: null, sessionStateLoaded: false, serverPinnedUserId: null, tileDemotedUserIds: [], hccParticipants: [], totalRounds: 5, bonusRoundsAdded: 0,
-    participants: [], currentMatch: null, currentPartners: [], currentMatchId: null,
+    participants: [], liveRoomParticipants: [], currentMatch: null, currentPartners: [], currentMatchId: null,
     timerSeconds: 0, timerEndsAt: null, currentRound: 0, broadcasts: [], error: null, tileReactions: {},
     isReconnecting: false, isByeRound: false, liveKitToken: null, livekitUrl: null, currentRoomId: null,
     lobbyToken: null, lobbyUrl: null, lobbyRoomId: null,
@@ -552,3 +572,34 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
     cohosts: new Set<string>(), hostVisibilityModes: {}, actingAsHostOverrides: {}, hostMutedUserIds: new Set<string>(), leftCurrentRound: false, lastRatedRound: 0, isPaused: false,
   }),
 }));
+
+// F3 (21 May Ali) — selector hook returning the REALTIME in-room
+// participant list. When LiveKit is connected the LiveKit identity set
+// is the authoritative "who is in the main room right now" signal (every
+// viewer's SDK subscribes to the same server-side room state, so no
+// socket-fan-out drift is possible). We still intersect with the
+// socket-fed roster so we get the right displayName for each user;
+// LiveKit-only users (server hasn't fan-broadcasted their join yet) fall
+// back to the name LiveKit publishes (set in the token by the server).
+// When LiveKit isn't mounted yet (pre-event waiting room, text-only
+// fallback, host on the scheduled-state path) `liveRoomParticipants` is
+// empty and the durable socket-fed roster is returned unchanged.
+//
+// Background: the 21 May tests showed counts drifting per viewer even
+// after the morning M1 fix removed aggressive auto-LEFT — user confirmed
+// "upon refresh the list works fine", meaning the snapshot is correct
+// but the post-snapshot socket events (participant:joined/left) miss
+// some clients. LiveKit room state is the only signal where every
+// browser converges to the same view without depending on our fan-out.
+export function useInRoomParticipants(): Participant[] {
+  const storeParticipants = useSessionStore(s => s.participants);
+  const liveRoomParticipants = useSessionStore(s => s.liveRoomParticipants);
+  return useMemo(() => {
+    if (liveRoomParticipants.length === 0) return storeParticipants;
+    const storeByUserId = new Map(storeParticipants.map(p => [p.userId, p]));
+    return liveRoomParticipants.map(lp => ({
+      userId: lp.userId,
+      displayName: storeByUserId.get(lp.userId)?.displayName || lp.displayName || '',
+    }));
+  }, [storeParticipants, liveRoomParticipants]);
+}
