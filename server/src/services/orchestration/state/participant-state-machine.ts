@@ -250,6 +250,16 @@ export async function transitionParticipant(
       }
       if (toState === ParticipantState.LEFT || toState === ParticipantState.REMOVED) {
         setClauses.push(`left_at = NOW()`);
+      } else {
+        // M1 fix (21 May Ali) — clearing left_at on any non-terminal transition
+        // keeps the (status, left_at) pair internally consistent. The 21 May
+        // event left two rows in a corrupt `status='checked_in' + left_at IS NOT NULL`
+        // state because the prior LEFT transition (now removed) was followed by
+        // a reset to CHECKED_IN that didn't symmetrically clear left_at. With this
+        // clause, the invariant `left_at IS NULL ⇔ status NOT IN ('left','removed')`
+        // is maintained by the state machine itself — downstream surfaces can
+        // trust either field as a presence indicator.
+        setClauses.push(`left_at = NULL`);
       }
       if (toState === ParticipantState.NO_SHOW) {
         setClauses.push(`is_no_show = TRUE`);

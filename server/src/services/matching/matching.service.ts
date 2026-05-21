@@ -259,10 +259,23 @@ export async function generateSingleRound(
   // Phase 4 — under matchingPolicy='none', this exclusion is disabled so
   // people CAN be re-paired even within the same event. Under 'within_event'
   // (default) and 'platform_wide' it stays on.
+  //
+  // M3 fix (21 May Ali) — also read participant_c_id and expand 3-way
+  // matches into all three pair-tuples (a,b) (a,c) (b,c). Pre-fix the
+  // query selected only a and b, so for a 3-way match {a, b, c} the engine
+  // only recorded that a met b; it never recorded a-c or b-c. During the
+  // 21 May event Alex was participant_c in three of four rounds and
+  // got re-paired with Saif (his perpetual co-occurrence partner) in
+  // every round — the exclusion never fired because the c column was
+  // invisible to this read.
   const excludedPairs = new Set<string>();
   if (matchingPolicy !== 'none') {
-    const excludedResult = await query<{ participant_a_id: string; participant_b_id: string }>(
-      `SELECT participant_a_id, participant_b_id FROM matches
+    const excludedResult = await query<{
+      participant_a_id: string;
+      participant_b_id: string;
+      participant_c_id: string | null;
+    }>(
+      `SELECT participant_a_id, participant_b_id, participant_c_id FROM matches
        WHERE session_id = $1 AND round_number != $2
          AND status NOT IN ('cancelled', 'no_show')
          AND is_manual = FALSE`,
@@ -270,6 +283,10 @@ export async function generateSingleRound(
     );
     for (const r of excludedResult.rows) {
       excludedPairs.add(pairKey(r.participant_a_id, r.participant_b_id));
+      if (r.participant_c_id) {
+        excludedPairs.add(pairKey(r.participant_a_id, r.participant_c_id));
+        excludedPairs.add(pairKey(r.participant_b_id, r.participant_c_id));
+      }
     }
   }
 

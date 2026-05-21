@@ -753,6 +753,29 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
     await sessionService.updateSessionStatus(sessionId, SessionStatus.COMPLETED);
     await query('UPDATE sessions SET ended_at = NOW() WHERE id = $1', [sessionId]);
 
+    // M1 sweep (21 May Ali) — close out the participant roster when the
+    // event truly ends. Pre-fix, disconnected participants were auto-
+    // transitioned to LEFT after a 15 s socket timeout, which removed
+    // them from every viewer's UI mid-event. That auto-LEFT is gone now
+    // (`participant-flow.ts` disconnect timeout); the new contract is
+    // that LEFT is set ONLY by:
+    //   1. Explicit user action (session:leave handler)
+    //   2. Host kick → REMOVED
+    //   3. Event end (this sweep)
+    // COALESCE preserves left_at on rows where it was already set
+    // legitimately (explicit leave), and stamps NOW() on rows that
+    // didn't have it.
+    await query(
+      `UPDATE session_participants
+         SET status = 'left',
+             left_at = COALESCE(left_at, NOW())
+       WHERE session_id = $1
+         AND status NOT IN ('left', 'removed', 'no_show')`,
+      [sessionId],
+    ).catch(err =>
+      logger.warn({ err, sessionId }, 'Event-end participant sweep failed (non-fatal)'),
+    );
+
     // Invalidate all pending invites for this session — no one can join a completed event
     await query(
       `UPDATE invites SET status = 'expired' WHERE session_id = $1 AND status = 'pending'`,

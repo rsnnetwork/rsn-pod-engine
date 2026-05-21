@@ -1563,44 +1563,34 @@ export async function handleDisconnect(
                   return;
                 }
 
-                // Phase 2.7 (5 May spec §9, 6 May per Ali's call) — confirmed
-                // gone after 15 s with no reconnect. Transition to LEFT and
-                // trigger repair_future_rounds so the user is removed from
-                // upcoming pre-planned rounds. Best-effort: failures are
-                // logged and the reassignment attempt below still runs so
-                // the partner gets a new pair / bye for THIS round.
+                // M1 fix (21 May Ali) — DO NOT auto-transition disconnected
+                // participants to LEFT. The original Phase 2.7 design fired a
+                // LEFT transition after 15 s of no reconnect, which permanently
+                // removed the user from the participant snapshot
+                // (`session-state-snapshot.service.ts` filters
+                // `status NOT IN ('left','removed','no_show')`). A typical phone
+                // hand-off or laptop screen-lock easily crosses 15 s, so during
+                // the 21 May live event 3 of 8 participants got silently kicked
+                // out of every other client's roster — UI showed 5 while
+                // matching engine still saw 8 → trust-killer mismatch.
                 //
-                // Bug 36 (19 May Ali) — host/cohost guard. The director and
-                // any cohost must NEVER be auto-transitioned to LEFT on
-                // their own event; they're a navigation-away, not a quit.
-                // Pre-fix this fired and the host showed up as "Left" in
-                // their own HCC, with no path back without a manual DB
-                // reset. The plan-repair fanout is skipped too — a host
-                // disappearing for a few seconds doesn't change the pool.
-                let isHostOrCohostDc = false;
-                try {
-                  const hcRow = await query<{ host_user_id: string; is_cohost: boolean }>(
-                    `SELECT s.host_user_id,
-                            EXISTS(SELECT 1 FROM session_cohosts sc
-                                    WHERE sc.session_id = $1 AND sc.user_id = $2) AS is_cohost
-                       FROM sessions s WHERE s.id = $1`,
-                    [sessionId, userId],
-                  );
-                  const r = hcRow.rows[0];
-                  isHostOrCohostDc = !!r && (r.host_user_id === userId || r.is_cohost);
-                } catch { /* on lookup failure, default to applying LEFT — safer for non-hosts */ }
-                if (isHostOrCohostDc) {
-                  logger.info({ sessionId, userId },
-                    'Bug 36: skipping LEFT transition for host/cohost on disconnect timeout');
-                } else {
-                  try {
-                    await transitionParticipant(sessionId, userId, ParticipantState.LEFT);
-                  } catch (transErr) {
-                    logger.warn({ err: transErr, sessionId, userId },
-                      'Phase 2.7: state-machine LEFT transition failed in disconnect timeout (continuing with reassignment)');
-                  }
-                  void maybeRepairFutureRounds(io, sessionId, 'left');
-                }
+                // New semantics: LEFT is reserved for explicit user action
+                // (Leave Event button), host kick (REMOVED), or event-end sweep
+                // (`completeSession` in round-lifecycle.ts). A network blip
+                // leaves the user as `disconnected` status — still visible in
+                // every roster, with a "disconnected" visual treatment. When
+                // they reconnect, the reset path (participant-flow.ts:436)
+                // heals their status. When the event truly ends, the sweep
+                // closes them out.
+                //
+                // The match-ending logic below (terminal status, auto-reassign)
+                // still runs — those are correct independent of whether the
+                // user gets marked LEFT. The partner needs to be reassigned or
+                // given a bye regardless.
+                //
+                // The Bug 36 host/cohost LEFT carve-out is now a no-op (no
+                // LEFT transition for ANYONE on disconnect timeout), so the
+                // hcRow query + guard are removed.
 
                 // Determine terminal status based on actual conversation state:
                 //   >30s OR ratings submitted → completed (real conversation)
@@ -1799,39 +1789,23 @@ export function startHeartbeatStaleDetection(io: SocketServer): void {
     for (const [sessionId, session] of activeSessions) {
       for (const [userId, presence] of session.presenceMap) {
         if (now - presence.lastHeartbeat.getTime() > STALE_HEARTBEAT_MS) {
-          logger.warn({ userId, sessionId }, 'Stale heartbeat — triggering disconnect flow');
+          logger.warn({ userId, sessionId }, 'Stale heartbeat — clearing presence');
           setPresence(sessionId, userId, null);
-          // Phase 2.7 — stale-heartbeat path also transitions to LEFT and
-          // triggers future-rounds repair so the user is consistently
-          // removed from the system, not stranded in DISCONNECTED state.
+          // M1 fix (21 May Ali) — same architectural change as the 15 s
+          // disconnect-timeout path above: a stale heartbeat must NOT
+          // auto-transition the user to LEFT. The presence map clear
+          // above is enough — the user is no longer counted as
+          // "connected" for active-match purposes (no_show / partner-
+          // disconnect logic still fires), but their session_participants
+          // row keeps a non-terminal status so they remain visible in
+          // every roster across reconnect attempts. LEFT is reserved for
+          // explicit user action, host kick (REMOVED), or event-end
+          // sweep (`completeSession`).
           //
-          // Bug 36 (19 May Ali) — same host/cohost guard as the
-          // disconnect-timeout path above. A flaky network on the host
-          // side must never auto-mark them LEFT on their own event.
-          let isHostOrCohostStale = false;
-          try {
-            const hcRow = await query<{ host_user_id: string; is_cohost: boolean }>(
-              `SELECT s.host_user_id,
-                      EXISTS(SELECT 1 FROM session_cohosts sc
-                              WHERE sc.session_id = $1 AND sc.user_id = $2) AS is_cohost
-                 FROM sessions s WHERE s.id = $1`,
-              [sessionId, userId],
-            );
-            const r = hcRow.rows[0];
-            isHostOrCohostStale = !!r && (r.host_user_id === userId || r.is_cohost);
-          } catch { /* default to applying LEFT — safer for non-hosts */ }
-          if (isHostOrCohostStale) {
-            logger.info({ sessionId, userId },
-              'Bug 36: skipping LEFT transition for host/cohost on stale heartbeat');
-          } else {
-            try {
-              await transitionParticipant(sessionId, userId, ParticipantState.LEFT);
-            } catch (err) {
-              logger.warn({ err, sessionId, userId },
-                'Phase 2.7: stale-heartbeat LEFT transition failed (continuing)');
-            }
-            void maybeRepairFutureRounds(io, sessionId, 'left');
-          }
+          // The participant:left socket emit + entity fanout still fire
+          // so other viewers see the "disconnected" visual treatment in
+          // real time — the difference is purely whether the DB row
+          // gets stamped 'left' (it doesn't here anymore).
           io.to(sessionRoom(sessionId)).emit('participant:left', { userId });
           // Phase 2 dual-emit — every viewer's participants surface refetches.
           fanSessionRoomEntities(

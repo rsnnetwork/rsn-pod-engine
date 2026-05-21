@@ -80,29 +80,33 @@ describe('Phase May-19 — Bugs 33 / 36 / 37 / 44', () => {
       expect(fn).toMatch(/Bug 36[\s\S]{0,200}LEFT[\s\S]{0,200}in_main_room/);
     });
 
-    it('disconnect-timeout LEFT transition is guarded with a host/cohost skip', () => {
-      // The 15-second disconnect callback in handleDisconnect transitions
-      // to LEFT — must skip for the director or any cohost.
-      const idx = participantFlowSrc.indexOf('Phase 2.7 (5 May spec §9, 6 May per Ali');
+    // M1 fix (21 May Ali) — Bug 36's host/cohost LEFT carve-out is now
+    // obsolete because auto-LEFT itself is removed from BOTH disconnect
+    // paths (the 15 s mid-match timeout and the 90 s stale-heartbeat
+    // detector). The DB-level invariant the original carve-out protected
+    // — "host should never be marked LEFT by a network blip" — is now
+    // upheld by the stronger property that NOBODY is auto-marked LEFT
+    // on a network blip. The two tests below pin the new shape: neither
+    // path contains the LEFT transition, the host/cohost lookup, or the
+    // plan-repair call.
+    it('disconnect-timeout no longer transitions to LEFT (replaces Bug 36 host/cohost guard)', () => {
+      const idx = participantFlowSrc.indexOf('M1 fix (21 May Ali)');
       expect(idx).toBeGreaterThan(-1);
-      const fn = participantFlowSrc.slice(idx, idx + 2500);
-      expect(fn).toMatch(/Bug 36[\s\S]{0,200}host\/cohost/);
-      expect(fn).toMatch(/session_cohosts[\s\S]{0,200}is_cohost/);
-      expect(fn).toMatch(/if\s*\(\s*isHostOrCohostDc\s*\)/);
-      // Inside the else branch the LEFT transition still happens for
-      // regular participants
-      expect(fn).toMatch(/else[\s\S]{0,300}transitionParticipant\([\s\S]{0,200}ParticipantState\.LEFT/);
+      const fn = participantFlowSrc.slice(idx, idx + 3000);
+      expect(fn).not.toMatch(/transitionParticipant\([^)]*ParticipantState\.LEFT/);
+      expect(fn).not.toMatch(/isHostOrCohostDc/);
+      expect(fn).not.toMatch(/maybeRepairFutureRounds\(io,\s*sessionId,\s*'left'\)/);
     });
 
-    it('stale-heartbeat LEFT transition is guarded with a host/cohost skip', () => {
-      // Anchor on the export — the line-7 docstring also mentions
-      // startHeartbeatStaleDetection so indexOf alone hits the wrong place.
+    it('stale-heartbeat no longer transitions to LEFT (replaces Bug 36 host/cohost guard)', () => {
       const idx = participantFlowSrc.indexOf('export function startHeartbeatStaleDetection');
       expect(idx).toBeGreaterThan(-1);
       const fn = participantFlowSrc.slice(idx, idx + 3500);
-      expect(fn).toMatch(/Bug 36[\s\S]{0,300}host\/cohost/);
-      expect(fn).toMatch(/if\s*\(\s*isHostOrCohostStale\s*\)/);
-      expect(fn).toMatch(/else[\s\S]{0,300}transitionParticipant\([\s\S]{0,200}ParticipantState\.LEFT/);
+      expect(fn).not.toMatch(/transitionParticipant\([^)]*ParticipantState\.LEFT/);
+      expect(fn).not.toMatch(/isHostOrCohostStale/);
+      expect(fn).not.toMatch(/maybeRepairFutureRounds\(io,\s*sessionId,\s*'left'\)/);
+      // Presence is still cleared so the partner-side flow can react.
+      expect(fn).toMatch(/setPresence\(sessionId,\s*userId,\s*null\)/);
     });
   });
 
