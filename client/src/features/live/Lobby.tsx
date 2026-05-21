@@ -20,6 +20,40 @@ import { useSessionStore } from '@/stores/sessionStore';
 import { getSocket } from '@/lib/socket';
 import { useVisibilityPartition } from './useVisibilityPartition';
 import {
+  saveBgPreference,
+  loadBgPreference,
+  applyBgPreference,
+  type BgPreference,
+} from '@/lib/bgPreference';
+
+// Lobby preset list. Module-scoped so both the picker UI and the
+// mount-time auto-apply effect see the same URLs (Issue 10).
+const LOBBY_BG_PRESETS: Array<{ label: string; mode: string; img?: string }> = [
+  { label: 'None', mode: 'disabled' },
+  { label: 'Blur', mode: 'blur' },
+  { label: 'Office', mode: 'office', img: 'https://images.unsplash.com/photo-1497366216548-37526070297c?w=200&q=60' },
+  { label: 'Nature', mode: 'nature', img: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=200&q=60' },
+  { label: 'City', mode: 'city', img: 'https://images.unsplash.com/photo-1480714378408-67cf0d13bc1b?w=200&q=60' },
+  { label: 'Abstract', mode: 'abstract', img: 'https://images.unsplash.com/photo-1557683316-973673baf926?w=200&q=60' },
+];
+
+// Map the Lobby preset onto the shared BgPreference shape (Issue 10).
+function presetToPreference(preset: { mode: string; img?: string }): BgPreference {
+  if (preset.mode === 'disabled') return { mode: 'disabled' };
+  if (preset.mode === 'blur') return { mode: 'blur' };
+  return { mode: 'image', imageUrl: (preset.img || '').replace('w=200', 'w=1280') };
+}
+
+// Reverse map a stored BgPreference to a Lobby preset.mode for UI
+// highlight. Image URLs go through the same w=200→w=1280 transform so
+// the saved 'image' value matches the in-list preset by URL equality.
+function preferenceToPresetMode(pref: BgPreference): string {
+  if (pref.mode === 'disabled') return 'disabled';
+  if (pref.mode === 'blur') return 'blur';
+  const match = LOBBY_BG_PRESETS.find(p => p.img && p.img.replace('w=200', 'w=1280') === pref.imageUrl);
+  return match?.mode ?? 'image';
+}
+import {
   LiveKitRoom,
   VideoTrack,
   useTracks,
@@ -255,6 +289,22 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
     }
   }, [cameraTracksSorted, pinnedSid, visibilityFor]);
 
+  // Issue 12 (20 May Stefan) — "Host tiles layout: when there are two or
+  // three hosts/co-hosts, they should appear next to each other in
+  // normal mode, not only compact mode." Phase Q's col-span-2 row-span-2
+  // treatment for each acting host worked at compact density (4+ cols
+  // → 2 hosts fit side-by-side in row 1) but collapsed at normal density
+  // (2 cols → each host took a full row, stacking them vertically). We
+  // keep the big-tile treatment when there's a SINGLE host (preserves
+  // director prominence) and drop down to a normal-sized tile (still
+  // ringed for role signal) once a second acting host enters the grid,
+  // so the sort order naturally places them adjacent in row 1.
+  const actingHostCountInGrid = cameraTracks.reduce((count, t) => {
+    const id = t.participant.identity;
+    return id && hostsSet.has(id) && !tileDemotedSet.has(id) ? count + 1 : count;
+  }, 0);
+  const useBigHostTiles = actingHostCountInGrid <= 1;
+
   // Helper to render a single video tile with all overlays
   const renderTile = (trackRef: any, { isPinned = false, onClick }: { isPinned?: boolean; onClick?: () => void } = {}) => {
     const name = trackRef.participant.name || trackRef.participant.identity || 'User';
@@ -282,7 +332,7 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
         data-self={isLocal ? 'true' : undefined}
         data-host={tileIsHost ? 'true' : undefined}
         data-acting-host={isActingHost ? 'true' : undefined}
-        className={`relative rounded-xl overflow-hidden bg-[#3c4043] ${isPinned ? 'h-full w-full' : isActingHost ? 'aspect-video col-span-2 row-span-2 ring-2 ring-rsn-red/30' : 'aspect-video'} flex items-center justify-center group cursor-pointer`}
+        className={`relative rounded-xl overflow-hidden bg-[#3c4043] ${isPinned ? 'h-full w-full' : isActingHost ? (useBigHostTiles ? 'aspect-video col-span-2 row-span-2 ring-2 ring-rsn-red/30' : 'aspect-video ring-2 ring-rsn-red/30') : 'aspect-video'} flex items-center justify-center group cursor-pointer`}
         onClick={onClick}
       >
         {hasVideo && isTrackReference(trackRef) ? (
@@ -354,6 +404,37 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
         >
           {isPinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
         </button>
+        {/* Issue 13 (20 May Stefan) — "Host should be able to unpin."
+            The director can shrink their OWN tile back to participant
+            size (and restore it later) directly from their tile. Visual
+            only — every director privilege is unchanged. Visible only
+            to the director themselves on their own tile, so cohosts and
+            participants don't see a control they can't actuate. */}
+        {isHost && isLocal && tileIsHost && (
+          <div className="absolute top-1.5 right-10 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
+            {tileDemotedSet.has(trackRef.participant.identity) ? (
+              <button
+                onClick={() => handleSetTileSize(trackRef.participant.identity, 'host')}
+                className="bg-black/50 backdrop-blur-sm rounded-full p-1.5 text-white hover:bg-indigo-600/70"
+                title="Restore your tile to host size"
+                aria-label="Restore your tile"
+                data-testid="tile-self-restore-button"
+              >
+                <Maximize2 className="h-3.5 w-3.5" />
+              </button>
+            ) : (
+              <button
+                onClick={() => handleSetTileSize(trackRef.participant.identity, 'participant')}
+                className="bg-black/50 backdrop-blur-sm rounded-full p-1.5 text-white hover:bg-black/70"
+                title="Shrink your tile to participant size (privileges unchanged)"
+                aria-label="Shrink your tile"
+                data-testid="tile-self-shrink-button"
+              >
+                <Minimize2 className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        )}
         {/* Host mute/unmute + kick buttons on remote participant tiles.
             18 May — shifted left to right-10 so the always-visible pin
             button (right-1.5) doesn't get covered when the host hovers.
@@ -538,8 +619,15 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
     const saved = sessionStorage.getItem('rsn_cam');
     return saved !== null ? saved === 'true' : true;
   });
-  const [bgMode, setBgMode] = useState('disabled');
+  // Issue 10 — restore last bg choice for the UI highlight. The actual
+  // processor is (re-)applied by a separate effect once the local camera
+  // track is ready.
+  const [bgMode, setBgMode] = useState<string>(() => {
+    const saved = loadBgPreference();
+    return saved ? preferenceToPresetMode(saved) : 'disabled';
+  });
   const [showBgPanel, setShowBgPanel] = useState(false);
+  const bgAutoAppliedRef = useRef(false);
 
   // Derive allMuted from actual remote participant mic state (host button label
   // must reflect reality, not a stale local flag that resets on remount).
@@ -585,6 +673,28 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
       }
     }
   }, [localParticipant, isHost]);
+
+  // Issue 10 (20 May Stefan) — re-apply the user's persisted background
+  // every time this control mounts (i.e. every main↔breakout transition
+  // and every fresh lobby join). Runs ONCE per mount after the local
+  // participant + camera track are ready. The persist write happens in
+  // the preset onClick below.
+  useEffect(() => {
+    if (!localParticipant || bgAutoAppliedRef.current) return;
+    const pref = loadBgPreference();
+    if (!pref || pref.mode === 'disabled') {
+      bgAutoAppliedRef.current = true;
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const mod = await loadBgProcessors();
+      if (cancelled || !mod) return;
+      await applyBgPreference(localParticipant, mod, pref);
+      if (!cancelled) bgAutoAppliedRef.current = true;
+    })();
+    return () => { cancelled = true; };
+  }, [localParticipant]);
 
   // Bug 11 (13 May live test) — sync local optimistic state with the hook's
   // reactive values. The hook re-renders the parent whenever the underlying
@@ -746,14 +856,7 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
                 </button>
               </div>
               <div className="grid grid-cols-3 gap-2">
-                {[
-                  { label: 'None', mode: 'disabled' },
-                  { label: 'Blur', mode: 'blur' },
-                  { label: 'Office', mode: 'office', img: 'https://images.unsplash.com/photo-1497366216548-37526070297c?w=200&q=60' },
-                  { label: 'Nature', mode: 'nature', img: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=200&q=60' },
-                  { label: 'City', mode: 'city', img: 'https://images.unsplash.com/photo-1480714378408-67cf0d13bc1b?w=200&q=60' },
-                  { label: 'Abstract', mode: 'abstract', img: 'https://images.unsplash.com/photo-1557683316-973673baf926?w=200&q=60' },
-                ].map(preset => (
+                {LOBBY_BG_PRESETS.map(preset => (
                   <button key={preset.mode} onClick={async () => {
                     // Bug 11 (18 May Stefan) — Claus's video went black /
                     // page hung after toggling a background effect. Two
@@ -785,6 +888,9 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
                       // T2-6 — bumped blur strength 10 → 25 for visible effect
                       else if (preset.mode === 'blur') { await withTimeout((camTrack as any).setProcessor(mod.BackgroundBlur(25))); setBgMode('blur'); }
                       else if (preset.img) { await withTimeout((camTrack as any).setProcessor(mod.VirtualBackground(preset.img.replace('w=200', 'w=1280')))); setBgMode(preset.mode); }
+                      // Issue 10 — persist for the next main↔breakout
+                      // transition / fresh lobby join in this tab.
+                      saveBgPreference(presetToPreference(preset));
                     } catch (err) {
                       console.error('BG effect failed:', err);
                       // Best-effort cleanup so the camera isn't stuck mid-processor.

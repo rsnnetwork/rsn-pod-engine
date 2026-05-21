@@ -37,7 +37,7 @@ export default function LiveSessionPage() {
   const chatOpen = useSessionStore(s => s.chatOpen);
   const unreadChatCount = useSessionStore(s => s.unreadChatCount);
   const matchingOverlay = useSessionStore(s => s.matchingOverlay);
-  const { setError, setPhase, reset, setChatOpen } = useSessionStore.getState();
+  const { setError, reset, setChatOpen } = useSessionStore.getState();
   const { user } = useAuthStore();
   const addToast = useToastStore((s) => s.addToast);
   const mediaRequestedRef = useRef(false);
@@ -147,12 +147,30 @@ export default function LiveSessionPage() {
 
   useSessionSocket(sessionId!);
 
-  // If session is already completed (e.g. page refresh), show complete phase
+  // Issue 9 (20 May Stefan) — "Event ended on one account while still
+  // inside room." Root cause: this effect previously did ONLY setPhase
+  // ('complete') when session.status flipped to 'completed' (initial
+  // mount after refresh, OR the 30 s safety-net refetch picking up a
+  // completed state the socket missed). LiveKit token, match, roomId,
+  // partner-disconnected, byeRound, etc. stayed populated, so the user
+  // saw the recap overlay while still publishing video into a defunct
+  // breakout. Now mirrors the session:completed socket handler so the
+  // teardown is identical regardless of which path detects the end.
+  // Idempotent: if phase is already 'complete' the store calls are no-ops.
   useEffect(() => {
-    if (session?.status === 'completed') {
-      setPhase('complete');
-    }
-  }, [session?.status, setPhase]);
+    if (session?.status !== 'completed') return;
+    const store = useSessionStore.getState();
+    if (store.phase === 'complete') return;
+    store.setLiveKitToken(null, null);
+    store.setMatch(null);
+    store.setRoomId(null);
+    store.setByeRound(false);
+    store.setPartnerDisconnected(false);
+    store.setLeftCurrentRound(false);
+    store.setMatchingOverlay(null);
+    store.setRoundDashboard(null);
+    store.setPhase('complete');
+  }, [session?.status]);
 
   const handleLeave = () => {
     const inActivePhase = phase === 'matched' || phase === 'rating';

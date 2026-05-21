@@ -57,8 +57,16 @@ describe('Bug 26 — Director can shrink cohost tile (visual only)', () => {
       // NOT route through verifyHost (which would let cohosts/super_admin
       // through).
       expect(fn).toMatch(/callerId\s*!==\s*activeSession\.hostUserId/);
-      // Director cannot demote their own tile.
-      expect(fn).toMatch(/targetUserId\s*===\s*activeSession\.hostUserId/);
+      // Issue 13 (20 May Stefan) — the director CAN now demote their own
+      // tile. The old `targetUserId === activeSession.hostUserId` reject
+      // guard was removed; tile demote is visual-only so it can't strip
+      // any privilege. Stefan asked for "Host should be able to unpin"
+      // in the 20 May doc and this is the server side of that. The new
+      // comment in the handler references Issue 13 explicitly.
+      expect(fn).toMatch(/Issue 13/);
+      // Confirm the reject path is gone — no INVALID_TARGET error
+      // anywhere in the handler tied to the hostUserId check.
+      expect(fn).not.toMatch(/Director cannot demote their own tile/);
       // Mutates the in-memory state.
       expect(fn).toMatch(/activeSession\.tileDemotedUserIds\s*=/);
       // Persists so it survives restart (mirrors Bug 1 pin pattern).

@@ -19,6 +19,26 @@ async function loadBgProcessors() {
 }
 import { getSocket, disconnectSocket } from '@/lib/socket';
 import {
+  saveBgPreference,
+  loadBgPreference,
+  applyBgPreference,
+  type BgPreference,
+} from '@/lib/bgPreference';
+
+// Map the VideoRoom internal (mode, imagePath) shape to the shared
+// BgPreference shape and back (Issue 10 — persists across main↔breakout).
+function videoRoomToPreference(mode: string, imagePath?: string): BgPreference {
+  if (mode === 'background-blur') return { mode: 'blur' };
+  if (mode === 'virtual-background' && imagePath) return { mode: 'image', imageUrl: imagePath };
+  return { mode: 'disabled' };
+}
+
+function preferenceToVideoRoomBgMode(pref: BgPreference): string {
+  if (pref.mode === 'blur') return 'background-blur';
+  if (pref.mode === 'image') return `virtual-background:${pref.imageUrl}`;
+  return 'disabled';
+}
+import {
   LiveKitRoom,
   VideoTrack,
   useTracks,
@@ -382,14 +402,42 @@ const MediaControls = memo(function MediaControls() {
   const { localParticipant } = useLocalParticipant();
   const [micEnabled, setMicEnabled] = useState(true);
   const [camEnabled, setCamEnabled] = useState(true);
-  const [bgMode, setBgMode] = useState<string>('disabled');
+  // Issue 10 — restore the user's last bg choice for the UI highlight.
+  // The actual processor is (re-)applied by the mount effect below once
+  // the local camera track is ready.
+  const [bgMode, setBgMode] = useState<string>(() => {
+    const saved = loadBgPreference();
+    return saved ? preferenceToVideoRoomBgMode(saved) : 'disabled';
+  });
   const [showBgPanel, setShowBgPanel] = useState(false);
   const processorRef = useRef<any>(null);
+  const bgAutoAppliedRef = useRef(false);
 
   useEffect(() => {
     if (localParticipant) {
       setCamEnabled(localParticipant.isCameraEnabled);
     }
+  }, [localParticipant]);
+
+  // Issue 10 (20 May Stefan) — re-apply the persisted background every
+  // time MediaControls mounts (every breakout join / every breakout↔
+  // lobby round trip). Runs ONCE per mount once the local participant
+  // has a camera track.
+  useEffect(() => {
+    if (!localParticipant || bgAutoAppliedRef.current) return;
+    const pref = loadBgPreference();
+    if (!pref || pref.mode === 'disabled') {
+      bgAutoAppliedRef.current = true;
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const mod = await loadBgProcessors();
+      if (cancelled || !mod) return;
+      await applyBgPreference(localParticipant, mod, pref);
+      if (!cancelled) bgAutoAppliedRef.current = true;
+    })();
+    return () => { cancelled = true; };
   }, [localParticipant]);
 
   const toggleMic = useCallback(async () => {
@@ -437,6 +485,7 @@ const MediaControls = memo(function MediaControls() {
         await (camTrack as any).stopProcessor?.();
         processorRef.current = null;
         setBgMode('disabled');
+        saveBgPreference({ mode: 'disabled' });
         return;
       }
 
@@ -455,6 +504,9 @@ const MediaControls = memo(function MediaControls() {
         processorRef.current = processor;
       }
       setBgMode(mode + (imagePath ? ':' + imagePath : ''));
+      // Issue 10 — persist so the same choice survives leaving/re-
+      // entering this breakout and the trip back to the lobby.
+      saveBgPreference(videoRoomToPreference(mode, imagePath));
     } catch (err) {
       console.error('Background effect failed:', err);
     }

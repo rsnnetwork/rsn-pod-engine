@@ -2845,13 +2845,14 @@ export async function handleHostSetTileSize(
         socket.emit('error', { code: 'INVALID_SIZE', message: "size must be 'participant' or 'host'" });
         return;
       }
-      // Don't let the director demote themselves — they can't be a
-      // "cohost" of their own event by definition.
-      if (targetUserId === activeSession.hostUserId) {
-        socket.emit('error', { code: 'INVALID_TARGET', message: 'Director cannot demote their own tile' });
-        return;
-      }
-
+      // Issue 13 (20 May Stefan) — "Host should be able to unpin." Phase Q
+      // auto-elevates the director's tile (col-span-2 row-span-2). The
+      // original Bug 26 handler refused self-demote on the rationale that
+      // a director "can't be cohost of their own event." Stefan disagreed
+      // on the live test: the director wants the option to drop their
+      // own tile back to participant size when they're producing rather
+      // than presenting. Visual-only — director still owns every host
+      // privilege. Cohost demote semantics are unchanged.
       const current = new Set(activeSession.tileDemotedUserIds ?? []);
       const before = current.size;
       if (size === 'participant') current.add(targetUserId);

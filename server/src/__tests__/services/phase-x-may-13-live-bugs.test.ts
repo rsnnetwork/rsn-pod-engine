@@ -399,7 +399,12 @@ describe('Phase X — 13 May live-test bug fixes', () => {
     const src = readClientSource('features/live/Lobby.tsx');
 
     it('isActingHost branch uses col-span-2 row-span-2 (no sm: prefix)', () => {
-      expect(src).toMatch(/isActingHost\s*\?\s*['"`]aspect-video\s+col-span-2\s+row-span-2/);
+      // Issue 12 (20 May Stefan) — the big-tile span is now gated on
+      // useBigHostTiles (1 host → big, 2+ → normal-size so they sit
+      // adjacent in row 1 even at the normal-density 2-col grid). The
+      // col-span-2 row-span-2 classes still appear, just inside the
+      // useBigHostTiles branch.
+      expect(src).toMatch(/useBigHostTiles\s*\?\s*['"`]aspect-video\s+col-span-2\s+row-span-2/);
       // Negative guard: forbid the regression to sm:col-span-2.
       expect(src).not.toMatch(/isActingHost\s*\?\s*['"`]aspect-video\s+sm:col-span-2/);
     });
