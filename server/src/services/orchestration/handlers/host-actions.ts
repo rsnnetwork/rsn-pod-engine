@@ -307,7 +307,14 @@ export async function handleHostStart(
       ? JSON.parse(session.config as unknown as string)
       : session.config;
 
-    // Create active session tracker
+    // M1 follow-up (21 May Ali) — preserve presenceMap if an ActiveSession
+    // already exists from the SCHEDULED phase. Participants who joined the
+    // pre-event lobby get tracked from their first join (see participant-
+    // flow.ts on-the-fly recovery), and replacing the Map on Start would
+    // wipe their presence — making them invisible until they re-emit a
+    // heartbeat. Same applies to participantStates if the state machine
+    // already started tracking anyone.
+    const existing = activeSessions.get(data.sessionId);
     const activeSession: ActiveSession = {
       sessionId: data.sessionId,
       hostUserId: session.hostUserId,
@@ -319,9 +326,10 @@ export async function handleHostStart(
       timerEndsAt: null,
       isPaused: false,
       pausedTimeRemaining: null,
-      presenceMap: new Map(),
+      presenceMap: existing?.presenceMap ?? new Map(),
       pendingRoundNumber: null,
-      manuallyLeftRound: new Set(),
+      manuallyLeftRound: existing?.manuallyLeftRound ?? new Set(),
+      participantStates: existing?.participantStates,
     };
 
     activeSessions.set(data.sessionId, activeSession);

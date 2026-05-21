@@ -271,10 +271,36 @@ export async function handleJoinSession(
       }
 
       // ── On-the-fly session recovery ──
-      // If activeSession is missing (server restarted/deployed) but session is active in DB,
-      // recreate the in-memory entry so all handlers work immediately
+      // If activeSession is missing (server restarted/deployed, OR the
+      // event is still SCHEDULED and nobody has triggered creation yet)
+      // we set one up so every downstream handler — presence map, state
+      // machine, chat-handlers gate — works the same way for a pre-event
+      // lobby as for a running event.
+      //
+      // M1 follow-up (21 May Ali) — `scheduled` was historically EXCLUDED
+      // from this list, on the rationale that "the event hasn't started,
+      // there's no live state to track yet." That assumption broke the
+      // pre-event lobby badly:
+      //   - presenceMap stayed empty for SCHEDULED sessions because
+      //     setPresence() below is guarded on `if (activeSession)`.
+      //   - chat-handlers.ts gate (`activeSession?.presenceMap.has(host)`)
+      //     therefore always failed → every non-host participant got
+      //     "Chat is available once the host joins" even when the host
+      //     was clearly present (UI showed the green "Host is here" pill
+      //     because that uses socket-room presence, a different signal).
+      //   - The Bug 36 LEFT → IN_MAIN_ROOM reset for a host who clicked
+      //     Leave and rejoined fell through with NO_ACTIVE_SESSION, so
+      //     the host's session_participants row stayed `status='left'`,
+      //     the snapshot filter excluded them from the participants list,
+      //     and the count read 2/8 instead of 3/8.
+      //
+      // Now: include SCHEDULED in the recovery list. The in-memory
+      // ActiveSession for a SCHEDULED event is mostly null fields plus
+      // an empty presenceMap that the very next setPresence() populates.
+      // handleStartSession preserves this presenceMap when promoting the
+      // session to LOBBY_OPEN (see preservePresenceFromExisting below).
       if (!activeSession) {
-        const activeStatuses = ['lobby_open', 'round_active', 'round_rating', 'round_transition', 'closing_lobby'];
+        const activeStatuses = ['scheduled', 'lobby_open', 'round_active', 'round_rating', 'round_transition', 'closing_lobby'];
         if (activeStatuses.includes(session.status)) {
           const config = typeof session.config === 'string' ? JSON.parse(session.config as unknown as string) : session.config || {};
           activeSession = {

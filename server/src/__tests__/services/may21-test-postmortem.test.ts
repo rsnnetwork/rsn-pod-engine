@@ -99,6 +99,30 @@ describe('May 21 test post-mortem — M1 + M3 architectural fixes', () => {
     });
   });
 
+  // ─── M1 follow-up — SCHEDULED sessions get an ActiveSession too ─────────
+  describe('M1 follow-up — pre-event lobby creates ActiveSession on first join', () => {
+    const flow = readServer('services/orchestration/handlers/participant-flow.ts');
+    const host = readServer('services/orchestration/handlers/host-actions.ts');
+
+    it("'scheduled' is in the on-the-fly activeStatuses recovery list", () => {
+      // Pre-fix the list was lobby_open/round_active/round_rating/
+      // round_transition/closing_lobby — scheduled was excluded, so
+      // pre-event lobbies had no presenceMap, no state machine, and
+      // chat-handlers' gate always failed for non-host users.
+      expect(flow).toMatch(/activeStatuses\s*=\s*\[\s*'scheduled'\s*,\s*'lobby_open'/);
+    });
+
+    it('handleStartSession preserves existing presenceMap when promoting SCHEDULED → LOBBY_OPEN', () => {
+      // Otherwise users who joined the pre-event lobby would lose presence
+      // the moment the host clicked Start. Pin the merge.
+      const idx = host.indexOf('M1 follow-up (21 May Ali) — preserve presenceMap');
+      expect(idx).toBeGreaterThan(-1);
+      const block = host.slice(idx, idx + 2000);
+      expect(block).toMatch(/presenceMap:\s*existing\?\.presenceMap\s*\?\?\s*new Map\(\)/);
+      expect(block).toMatch(/participantStates:\s*existing\?\.participantStates/);
+    });
+  });
+
   // ─── M3 — already-met query reads participant_c_id and expands triples ──
   describe('M3 — excluded-pairs query covers 3-way matches', () => {
     const src = readServer('services/matching/matching.service.ts');
