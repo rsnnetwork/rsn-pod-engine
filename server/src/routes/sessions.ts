@@ -31,7 +31,10 @@ const createSessionSchema = z.object({
     roundDurationSeconds: z.number().int().min(60).max(3600).optional(),
     lobbyDurationSeconds: z.number().int().min(30).max(3600).optional(),
     transitionDurationSeconds: z.number().int().min(10).max(120).optional(),
-    ratingWindowSeconds: z.number().int().min(10).max(120).optional(),
+    // F5 (21 May Ali) — min raised 10 → 20. 10 s left no headroom for
+    // users to read the rating form and submit; live test (21 May)
+    // showed users repeatedly missing the form. Ceiling unchanged.
+    ratingWindowSeconds: z.number().int().min(20).max(120).optional(),
     closingLobbyDurationSeconds: z.number().int().min(30).max(3600).optional(),
     noShowTimeoutSeconds: z.number().int().min(15).max(300).optional(),
     maxParticipants: z.number().int().min(2).max(10000).optional(),
@@ -50,7 +53,10 @@ const updateSessionSchema = z.object({
     roundDurationSeconds: z.number().int().min(60).max(3600).optional(),
     lobbyDurationSeconds: z.number().int().min(30).max(3600).optional(),
     transitionDurationSeconds: z.number().int().min(10).max(120).optional(),
-    ratingWindowSeconds: z.number().int().min(10).max(120).optional(),
+    // F5 (21 May Ali) — min raised 10 → 20. 10 s left no headroom for
+    // users to read the rating form and submit; live test (21 May)
+    // showed users repeatedly missing the form. Ceiling unchanged.
+    ratingWindowSeconds: z.number().int().min(20).max(120).optional(),
     closingLobbyDurationSeconds: z.number().int().min(30).max(3600).optional(),
     noShowTimeoutSeconds: z.number().int().min(15).max(300).optional(),
     maxParticipants: z.number().int().min(2).max(10000).optional(),

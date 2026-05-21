@@ -94,7 +94,15 @@ export const DEFAULT_SESSION_CONFIG: SessionConfig = {
   roundDurationSeconds: 480,         // 8 minutes
   lobbyDurationSeconds: 480,         // 8 minutes
   transitionDurationSeconds: 30,     // 30 seconds
-  ratingWindowSeconds: 10,           // 10 seconds (safety net — early-exit fires when all rated)
+  // F5 (21 May Ali) — bumped 10 → 30. 10 s was too short for users to
+  // read the form, pick stars + connect toggle, and submit; live test
+  // (21 May) had users repeatedly miss the form because the timer
+  // expired mid-click. 30 s is paired with the trio doubling
+  // (round-lifecycle.ts: scaledDuration = base × maxPartnerCount), so
+  // pairs get 30 s, trios get 60 s. The early-exit-when-all-rated
+  // safety net still fires, so this is the ceiling not the floor —
+  // empirically rated within 5–10 s the round still ends fast.
+  ratingWindowSeconds: 30,
   closingLobbyDurationSeconds: 480,  // 8 minutes
   noShowTimeoutSeconds: 60,          // 60 seconds
   maxParticipants: 500,

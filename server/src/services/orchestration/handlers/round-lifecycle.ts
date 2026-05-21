@@ -313,7 +313,8 @@ export async function transitionToRound(
     const sessionConfig = activeSession.config;
     const roundsRemaining = Math.max(1, (sessionConfig.numberOfRounds || 5) - roundNumber);
     const roundDuration = sessionConfig.roundDurationSeconds || 480;
-    const ratingWindow = sessionConfig.ratingWindowSeconds || 10;
+    // F5 (21 May Ali) — fallback aligned with DEFAULT_SESSION_CONFIG (30 s).
+    const ratingWindow = sessionConfig.ratingWindowSeconds || 30;
     const estimatedRemainingSeconds = roundsRemaining * (roundDuration + ratingWindow + 30) + 600;
     const tokenTtl = Math.max(1800, Math.min(14400, estimatedRemainingSeconds));
 
@@ -670,7 +671,8 @@ export async function endRatingWindow(
       if (session.lobbyRoomId) {
         const lobbyRoundsRemaining = Math.max(1, (activeSession.config.numberOfRounds || 5) - roundNumber);
         const lobbyRoundDuration = activeSession.config.roundDurationSeconds || 480;
-        const lobbyRatingWindow = activeSession.config.ratingWindowSeconds || 10;
+        // F5 (21 May Ali) — fallback aligned with DEFAULT_SESSION_CONFIG (30 s).
+        const lobbyRatingWindow = activeSession.config.ratingWindowSeconds || 30;
         const lobbyTtl = Math.max(1800, Math.min(14400, lobbyRoundsRemaining * (lobbyRoundDuration + lobbyRatingWindow + 30) + 600));
 
         const socketsInRoom = await io.in(sessionRoom(sessionId)).fetchSockets();

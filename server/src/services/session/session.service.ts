@@ -715,7 +715,8 @@ export async function generateLiveKitToken(sessionId: string, userId: string, ro
     const sessionConfig = typeof session.config === 'string' ? JSON.parse(session.config as unknown as string) : session.config;
     const roundsRemaining = Math.max(1, (sessionConfig?.numberOfRounds || 5) - (session.currentRound || 0));
     const roundDuration = sessionConfig?.roundDurationSeconds || 480;
-    const ratingWindow = sessionConfig?.ratingWindowSeconds || 10;
+    // F5 (21 May Ali) — fallback aligned with DEFAULT_SESSION_CONFIG (30 s).
+    const ratingWindow = sessionConfig?.ratingWindowSeconds || 30;
     const estimatedRemainingSeconds = roundsRemaining * (roundDuration + ratingWindow + 30) + 600;
     const ttl = Math.max(1800, Math.min(14400, estimatedRemainingSeconds)); // 30 min to 4 hours
 
