@@ -749,9 +749,44 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
     // FIX 5D: Clear ALL timers (main + sync interval)
     clearSessionTimers(sessionId);
 
-    // Update session status
+    // F4 (21 May Ali) — minimise time-to-emit so the host stops seeing
+    // a stale UI after they click End Event. Pre-fix the ordering was:
+    //   1. updateSessionStatus            (DB,  ~30 ms)
+    //   2. ended_at update                (DB,  ~30 ms)
+    //   3. M1 participant sweep           (DB,  ~30 ms)
+    //   4. invite expiry                  (DB,  ~30 ms)
+    //   5. finalizeSessionEncounters      (DB,  N sequential awaited queries —
+    //                                          400 ms–several seconds for a
+    //                                          multi-round event)
+    //   6. EMIT session:completed         ← host's client doesn't transition
+    //                                       until this point
+    //   7. await cleanupLiveKitRooms      (≈2–5 s, but post-emit so OK)
+    // Live test (21 May) recorded a 10 s "stale host screen" after End
+    // Event with 4 participants × multi-round event. Encounter
+    // finalization was the dominant cost in steps 1–5 because the inner
+    // loop awaited each INSERT serially.
+    //
+    // New ordering: emit IMMEDIATELY after the minimum DB writes the
+    // client cares about (sessions.status=COMPLETED + ended_at). All
+    // other housekeeping runs afterward in parallel; the recap page
+    // reads from rows that have been written by the time the client's
+    // 1.5 s post-emit transition timer fires. cleanupLiveKitRooms is
+    // STILL awaited (Phase A4 — must complete before activeSessions
+    // delete in finally, else the lobby room outlives the in-memory
+    // state).
     await sessionService.updateSessionStatus(sessionId, SessionStatus.COMPLETED);
     await query('UPDATE sessions SET ended_at = NOW() WHERE id = $1', [sessionId]);
+
+    // EMIT FIRST. Host's UI transitions on this; everything below is
+    // background housekeeping.
+    io.to(sessionRoom(sessionId)).emit('session:completed', { sessionId });
+    io.to(sessionRoom(sessionId)).emit('session:status_changed', {
+      sessionId,
+      status: SessionStatus.COMPLETED,
+      currentRound: activeSession?.currentRound || 0,
+    });
+
+    logger.info({ sessionId }, 'Session completed (clients signaled)');
 
     // M1 sweep (21 May Ali) — close out the participant roster when the
     // event truly ends. Pre-fix, disconnected participants were auto-
@@ -764,8 +799,10 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
     //   3. Event end (this sweep)
     // COALESCE preserves left_at on rows where it was already set
     // legitimately (explicit leave), and stamps NOW() on rows that
-    // didn't have it.
-    await query(
+    // didn't have it. F4 (21 May) — moved post-emit so it doesn't gate
+    // the host's UI transition; the recap doesn't depend on
+    // session_participants.status for anything time-critical.
+    query(
       `UPDATE session_participants
          SET status = 'left',
              left_at = COALESCE(left_at, NOW())
@@ -776,27 +813,23 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
       logger.warn({ err, sessionId }, 'Event-end participant sweep failed (non-fatal)'),
     );
 
-    // Invalidate all pending invites for this session — no one can join a completed event
-    await query(
+    // Invalidate all pending invites for this session — no one can join a completed event.
+    // F4 — also moved post-emit; an invite can't race a completed event because the
+    // join handler short-circuits on session.status='completed' regardless of invite state.
+    query(
       `UPDATE invites SET status = 'expired' WHERE session_id = $1 AND status = 'pending'`,
       [sessionId]
     ).catch(err => logger.warn({ err, sessionId }, 'Failed to expire session invites (non-fatal)'));
 
-    // Finalize encounter history for any unrated matches
-    try {
-      await ratingService.finalizeSessionEncounters(sessionId);
-    } catch (encErr) {
-      logger.error({ err: encErr, sessionId }, 'Error finalizing session encounters (non-fatal)');
-    }
-
-    io.to(sessionRoom(sessionId)).emit('session:completed', { sessionId });
-    io.to(sessionRoom(sessionId)).emit('session:status_changed', {
-      sessionId,
-      status: SessionStatus.COMPLETED,
-      currentRound: activeSession?.currentRound || 0,
-    });
-
-    logger.info({ sessionId }, 'Session completed');
+    // Finalize encounter history for any unrated matches. F4 — moved post-emit
+    // AND parallelised inside (was the dominant cost — see
+    // rating.service.ts:finalizeSessionEncounters for the loop change).
+    // Treated as fire-and-forget here so the host doesn't wait on this;
+    // the recap reads encounter rows but the function is idempotent so
+    // a refresh after a few hundred ms always reflects the final state.
+    ratingService.finalizeSessionEncounters(sessionId).catch(encErr =>
+      logger.error({ err: encErr, sessionId }, 'Error finalizing session encounters (non-fatal)'),
+    );
 
     // Fire-and-forget: send recap emails to all participants
     sendRecapEmails(sessionId).catch(emailErr => {

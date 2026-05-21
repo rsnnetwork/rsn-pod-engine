@@ -841,21 +841,32 @@ export async function finalizeSessionEncounters(sessionId: string): Promise<numb
     [sessionId]
   );
 
+  // F4 (21 May Ali) — pre-fix this loop awaited each INSERT serially, so
+  // for an N-match event the function took N × DB-roundtrip-ms before
+  // returning. completeSession used to await this before emitting
+  // session:completed, contributing the bulk of the observed 10 s
+  // "stale host UI after End Event". completeSession now fires-and-
+  // forgets this call, AND the inserts run in parallel here so the
+  // background work also clears in a few hundred ms rather than seconds.
+  // Promise.allSettled because each row is independent — one failure
+  // shouldn't poison the others.
+  const results = await Promise.allSettled(
+    matchesResult.rows.map(match => {
+      const [userAId, userBId] = match.participantAId < match.participantBId
+        ? [match.participantAId, match.participantBId]
+        : [match.participantBId, match.participantAId];
+      return query(
+        `INSERT INTO encounter_history (id, user_a_id, user_b_id, times_met, last_met_at, last_session_id)
+         VALUES ($1, $2, $3, 1, NOW(), $4)
+         ON CONFLICT (user_a_id, user_b_id) DO NOTHING`,
+        [uuid(), userAId, userBId, sessionId],
+      );
+    }),
+  );
+
   let created = 0;
-
-  for (const match of matchesResult.rows) {
-    const [userAId, userBId] = match.participantAId < match.participantBId
-      ? [match.participantAId, match.participantBId]
-      : [match.participantBId, match.participantAId];
-
-    // Ensure an encounter_history row exists (INSERT ... ON CONFLICT DO NOTHING)
-    const result = await query(
-      `INSERT INTO encounter_history (id, user_a_id, user_b_id, times_met, last_met_at, last_session_id)
-       VALUES ($1, $2, $3, 1, NOW(), $4)
-       ON CONFLICT (user_a_id, user_b_id) DO NOTHING`,
-      [uuid(), userAId, userBId, sessionId]
-    );
-    if (result.rowCount && result.rowCount > 0) created++;
+  for (const r of results) {
+    if (r.status === 'fulfilled' && r.value.rowCount && r.value.rowCount > 0) created++;
   }
 
   logger.info({ sessionId, totalMatches: matchesResult.rows.length, newEncounters: created },
