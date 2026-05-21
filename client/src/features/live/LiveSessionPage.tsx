@@ -517,18 +517,17 @@ export default function LiveSessionPage() {
             {chatOpen && phase !== 'complete' && (
               <>
                 {/* Mobile backdrop — covers the area NOT taken by the chat
-                    panel so a tap there closes the panel.
-                      - Lobby: full screen behind the 78% right panel, dimmed.
-                      - Matched: only the top 60% (above the bottom-sheet),
-                        transparent so the breakout video stays clearly
-                        visible (no dim over the live faces). */}
+                    bottom-sheet so a tap there closes the panel. Transparent
+                    in both phases so the content underneath (lobby roster /
+                    breakout video) stays clearly visible while the user
+                    chats. May 21 Ali — "chat must cover less area on phone
+                    so users can see all the elements on screen when
+                    chatting."  */}
                 <div
                   data-testid="chat-mobile-backdrop"
-                  className={`sm:hidden absolute z-30 ${
-                    phase === 'matched'
-                      ? 'left-0 right-0 top-0 bottom-[40%] bg-transparent'
-                      : 'inset-0 bg-black/30'
-                  }`}
+                  className={`sm:hidden absolute z-30 left-0 right-0 top-0 ${
+                    phase === 'matched' ? 'bottom-[40%]' : 'bottom-[50%]'
+                  } bg-transparent`}
                   onClick={() => setChatOpen(false)}
                   aria-hidden="true"
                 />
@@ -536,7 +535,7 @@ export default function LiveSessionPage() {
                   className={`absolute z-40 shadow-2xl sm:static sm:w-80 sm:min-w-[320px] sm:h-auto sm:left-auto sm:right-auto sm:top-auto sm:bottom-auto sm:flex-shrink-0 sm:shadow-none sm:max-w-none ${
                     phase === 'matched'
                       ? 'left-0 right-0 bottom-0 h-[40%]'
-                      : 'right-0 top-0 bottom-0 w-[78%] max-w-sm h-full'
+                      : 'left-0 right-0 bottom-0 h-[50%]'
                   }`}
                 >
                   <SectionErrorBoundary name="Chat"><ChatPanel sessionId={sessionId} onClose={() => setChatOpen(false)} /></SectionErrorBoundary>
