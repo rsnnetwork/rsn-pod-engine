@@ -398,13 +398,16 @@ describe('Phase X — 13 May live-test bug fixes', () => {
   describe('Bug 8 — host tile elevation works at mobile widths', () => {
     const src = readClientSource('features/live/Lobby.tsx');
 
-    it('isActingHost branch uses col-span-2 row-span-2 (no sm: prefix)', () => {
-      // Issue 12 (20 May Stefan) — the big-tile span is now gated on
-      // useBigHostTiles (1 host → big, 2+ → normal-size so they sit
-      // adjacent in row 1 even at the normal-density 2-col grid). The
-      // col-span-2 row-span-2 classes still appear, just inside the
-      // useBigHostTiles branch.
-      expect(src).toMatch(/useBigHostTiles\s*\?\s*['"`]aspect-video\s+col-span-2\s+row-span-2/);
+    it('isActingHost branch references the big-tile className constant (Issue 12)', () => {
+      // Issue 12 (21 May Stefan re-test) — the actual `col-span-2
+      // row-span-2 aspect-video ring-2 ring-rsn-red/30` literal now
+      // lives in a module-scoped constant `soloOrCompactHostTileClass`
+      // so the className expression in renderTile references the
+      // constant instead of the inline literal. The constant is what
+      // gets pinned by phase-q-host-tile-elevation.test.ts; this test
+      // confirms the renderTile branch routes through it.
+      expect(src).toMatch(/useBigHostTiles\s*\?\s*soloOrCompactHostTileClass/);
+      expect(src).toMatch(/soloOrCompactHostTileClass\s*=\s*['"`]aspect-video\s+col-span-2\s+row-span-2/);
       // Negative guard: forbid the regression to sm:col-span-2.
       expect(src).not.toMatch(/isActingHost\s*\?\s*['"`]aspect-video\s+sm:col-span-2/);
     });

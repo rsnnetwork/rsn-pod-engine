@@ -289,21 +289,36 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
     }
   }, [cameraTracksSorted, pinnedSid, visibilityFor]);
 
-  // Issue 12 (20 May Stefan) — "Host tiles layout: when there are two or
-  // three hosts/co-hosts, they should appear next to each other in
-  // normal mode, not only compact mode." Phase Q's col-span-2 row-span-2
-  // treatment for each acting host worked at compact density (4+ cols
-  // → 2 hosts fit side-by-side in row 1) but collapsed at normal density
-  // (2 cols → each host took a full row, stacking them vertically). We
-  // keep the big-tile treatment when there's a SINGLE host (preserves
-  // director prominence) and drop down to a normal-sized tile (still
-  // ringed for role signal) once a second acting host enters the grid,
-  // so the sort order naturally places them adjacent in row 1.
+  // Issue 12 (21 May Stefan re-test) — "Host tiles must REMAIN LARGER
+  // than other participants, and also sit next to each other." Phase Q's
+  // col-span-2 row-span-2 worked at compact density (4+ cols → two hosts
+  // at col-span-2 each fit side-by-side in row 1) but collapsed at
+  // normal density (2 cols → col-span-2 = full row, so two hosts
+  // stacked). The first attempted fix (cc09a19) dropped multi-host
+  // tiles to `aspect-video` (same size as participants), which Stefan
+  // re-flagged as wrong: hosts must stay visually bigger even when
+  // there are two or three of them.
+  //
+  // Final shape:
+  //   • 1 host in any density        → col-span-2 row-span-2 (hero / Phase Q)
+  //   • 2+ hosts in compact density  → col-span-2 row-span-2 (works there
+  //                                    because the grid is ≥4 cols, so
+  //                                    two col-span-2 tiles share row 1)
+  //   • 2+ hosts in narrow density   → col-span-1 with `aspect-[4/3]`
+  //     (normal + spacious — 2-col)    instead of aspect-video. Same width
+  //                                    as a participant tile but ~1.33×
+  //                                    taller, so hosts remain visibly
+  //                                    bigger AND adjacent in row 1.
   const actingHostCountInGrid = cameraTracks.reduce((count, t) => {
     const id = t.participant.identity;
     return id && hostsSet.has(id) && !tileDemotedSet.has(id) ? count + 1 : count;
   }, 0);
-  const useBigHostTiles = actingHostCountInGrid <= 1;
+  const narrowGrid = lobbyDensity === 'normal' || lobbyDensity === 'spacious';
+  const useBigHostTiles = actingHostCountInGrid <= 1 || !narrowGrid;
+  // Multi-host narrow-grid path — taller-than-participant aspect ratio
+  // keeps the visual hierarchy while col-span-1 lets them sit adjacent.
+  const multiHostNarrowTileClass = 'aspect-[4/3] col-span-1 row-span-1 ring-2 ring-rsn-red/30';
+  const soloOrCompactHostTileClass = 'aspect-video col-span-2 row-span-2 ring-2 ring-rsn-red/30';
 
   // Helper to render a single video tile with all overlays
   const renderTile = (trackRef: any, { isPinned = false, onClick }: { isPinned?: boolean; onClick?: () => void } = {}) => {
@@ -332,7 +347,7 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
         data-self={isLocal ? 'true' : undefined}
         data-host={tileIsHost ? 'true' : undefined}
         data-acting-host={isActingHost ? 'true' : undefined}
-        className={`relative rounded-xl overflow-hidden bg-[#3c4043] ${isPinned ? 'h-full w-full' : isActingHost ? (useBigHostTiles ? 'aspect-video col-span-2 row-span-2 ring-2 ring-rsn-red/30' : 'aspect-video ring-2 ring-rsn-red/30') : 'aspect-video'} flex items-center justify-center group cursor-pointer`}
+        className={`relative rounded-xl overflow-hidden bg-[#3c4043] ${isPinned ? 'h-full w-full' : isActingHost ? (useBigHostTiles ? soloOrCompactHostTileClass : multiHostNarrowTileClass) : 'aspect-video'} flex items-center justify-center group cursor-pointer`}
         onClick={onClick}
       >
         {hasVideo && isTrackReference(trackRef) ? (
@@ -627,7 +642,6 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
     return saved ? preferenceToPresetMode(saved) : 'disabled';
   });
   const [showBgPanel, setShowBgPanel] = useState(false);
-  const bgAutoAppliedRef = useRef(false);
 
   // Derive allMuted from actual remote participant mic state (host button label
   // must reflect reality, not a stale local flag that resets on remount).
@@ -674,27 +688,30 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
     }
   }, [localParticipant, isHost]);
 
-  // Issue 10 (20 May Stefan) — re-apply the user's persisted background
-  // every time this control mounts (i.e. every main↔breakout transition
-  // and every fresh lobby join). Runs ONCE per mount after the local
-  // participant + camera track are ready. The persist write happens in
-  // the preset onClick below.
+  // Issue 10 (21 May Stefan re-test) — re-apply the user's persisted
+  // background every time the local camera is published (every fresh
+  // lobby join, every breakout↔lobby return, every camera off→on toggle).
+  // The first fix (cc09a19) had a one-shot ref guard that flipped to
+  // "applied" the moment the effect ran — but `useLocalParticipant`
+  // returns localParticipant BEFORE its camera track publishes, so the
+  // apply call saw an empty trackPublications, no-op'd, and the guard
+  // locked us out from retrying. Now the dep array depends on
+  // `hookCamEnabled` (the reactive value that flips true the instant
+  // a camera track is published+unmuted) so the apply re-fires exactly
+  // when the track is actually queryable. setProcessor is idempotent
+  // (stopProcessor first) — safe to re-run.
   useEffect(() => {
-    if (!localParticipant || bgAutoAppliedRef.current) return;
+    if (!localParticipant || !hookCamEnabled) return;
     const pref = loadBgPreference();
-    if (!pref || pref.mode === 'disabled') {
-      bgAutoAppliedRef.current = true;
-      return;
-    }
+    if (!pref || pref.mode === 'disabled') return;
     let cancelled = false;
     (async () => {
       const mod = await loadBgProcessors();
       if (cancelled || !mod) return;
       await applyBgPreference(localParticipant, mod, pref);
-      if (!cancelled) bgAutoAppliedRef.current = true;
     })();
     return () => { cancelled = true; };
-  }, [localParticipant]);
+  }, [localParticipant, hookCamEnabled]);
 
   // Bug 11 (13 May live test) — sync local optimistic state with the hook's
   // reactive values. The hook re-renders the parent whenever the underlying

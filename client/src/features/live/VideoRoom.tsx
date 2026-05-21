@@ -399,7 +399,7 @@ const BG_PRESETS = [
 // (mic/cam/bg toggles) and doesn't depend on parent props. Memoization
 // stops the toolbar from re-rendering on every timer tick.
 const MediaControls = memo(function MediaControls() {
-  const { localParticipant } = useLocalParticipant();
+  const { localParticipant, isCameraEnabled: hookCamEnabled } = useLocalParticipant();
   const [micEnabled, setMicEnabled] = useState(true);
   const [camEnabled, setCamEnabled] = useState(true);
   // Issue 10 — restore the user's last bg choice for the UI highlight.
@@ -411,7 +411,6 @@ const MediaControls = memo(function MediaControls() {
   });
   const [showBgPanel, setShowBgPanel] = useState(false);
   const processorRef = useRef<any>(null);
-  const bgAutoAppliedRef = useRef(false);
 
   useEffect(() => {
     if (localParticipant) {
@@ -419,26 +418,30 @@ const MediaControls = memo(function MediaControls() {
     }
   }, [localParticipant]);
 
-  // Issue 10 (20 May Stefan) — re-apply the persisted background every
-  // time MediaControls mounts (every breakout join / every breakout↔
-  // lobby round trip). Runs ONCE per mount once the local participant
-  // has a camera track.
+  // Issue 10 (21 May Stefan re-test) — re-apply the persisted background
+  // every time the camera is published (every breakout join, every
+  // breakout↔lobby round trip, even camera toggle off→on). The first
+  // fix (cc09a19) had a one-shot guard that flipped to "applied" the
+  // moment the effect ran — but `useLocalParticipant()` returns a
+  // localParticipant ref BEFORE the camera track publishes, so the
+  // apply call saw an empty trackPublications, returned silently, and
+  // the guard locked us out from retrying. The guard is gone; instead
+  // the dep array now also depends on `isCameraEnabled`, which is the
+  // reactive hook value that flips true exactly when LiveKit has a
+  // published, unmuted local camera track. setProcessor is idempotent
+  // (it stopProcessor first) so re-runs are safe.
   useEffect(() => {
-    if (!localParticipant || bgAutoAppliedRef.current) return;
+    if (!localParticipant || !hookCamEnabled) return;
     const pref = loadBgPreference();
-    if (!pref || pref.mode === 'disabled') {
-      bgAutoAppliedRef.current = true;
-      return;
-    }
+    if (!pref || pref.mode === 'disabled') return;
     let cancelled = false;
     (async () => {
       const mod = await loadBgProcessors();
       if (cancelled || !mod) return;
       await applyBgPreference(localParticipant, mod, pref);
-      if (!cancelled) bgAutoAppliedRef.current = true;
     })();
     return () => { cancelled = true; };
-  }, [localParticipant]);
+  }, [localParticipant, hookCamEnabled]);
 
   const toggleMic = useCallback(async () => {
     await localParticipant.setMicrophoneEnabled(!micEnabled);

@@ -75,12 +75,21 @@ describe('May 20 doc — final batch (Issues 9, 10, 12, 13)', () => {
       expect(lobby).toMatch(/saveBgPreference\(\s*presetToPreference\(\s*preset\s*\)\s*\)/);
     });
 
-    it('Lobby re-applies the saved preference on mount', () => {
-      // The mount effect uses applyBgPreference once localParticipant is
-      // present and the saved mode is not 'disabled'.
+    it('Lobby re-applies the saved preference whenever the camera is enabled', () => {
+      // Issue 10 follow-up (21 May Stefan re-test) — the first fix used
+      // a one-shot ref guard that flipped to "applied" the moment the
+      // effect ran, BEFORE the camera track had published. The apply
+      // call no-op'd silently and the guard locked us out from
+      // retrying. The fix: drop the ref guard entirely; the dep array
+      // now depends on `hookCamEnabled` so the apply re-fires the
+      // instant the camera publishes (and every camera off→on toggle).
       expect(lobby).toMatch(/loadBgPreference\(\)/);
       expect(lobby).toMatch(/applyBgPreference\(\s*localParticipant\s*,\s*mod\s*,\s*pref\s*\)/);
-      expect(lobby).toMatch(/bgAutoAppliedRef/);
+      // The dep array must include hookCamEnabled — that's the reactive
+      // signal that flips true when the local camera track is published.
+      expect(lobby).toMatch(/\}, \[localParticipant, hookCamEnabled\]\);/);
+      // The one-shot ref guard is GONE.
+      expect(lobby).not.toMatch(/bgAutoAppliedRef/);
     });
 
     it('VideoRoom saves preference inside applyBackground', () => {
@@ -89,10 +98,16 @@ describe('May 20 doc — final batch (Issues 9, 10, 12, 13)', () => {
       expect(videoRoom).toMatch(/saveBgPreference\(\s*\{\s*mode:\s*['"`]disabled['"`]\s*\}\s*\)/);
     });
 
-    it('VideoRoom re-applies the saved preference on mount', () => {
+    it('VideoRoom re-applies the saved preference whenever the camera is enabled', () => {
+      // Same fix as Lobby — drop the one-shot ref, depend on
+      // `hookCamEnabled` so the apply re-runs once the breakout's
+      // camera track has actually published. This is the path that
+      // failed Stefan's main↔breakout re-test on 21 May.
       expect(videoRoom).toMatch(/loadBgPreference\(\)/);
       expect(videoRoom).toMatch(/applyBgPreference\(\s*localParticipant\s*,\s*mod\s*,\s*pref\s*\)/);
-      expect(videoRoom).toMatch(/bgAutoAppliedRef/);
+      expect(videoRoom).toMatch(/isCameraEnabled:\s*hookCamEnabled/);
+      expect(videoRoom).toMatch(/\}, \[localParticipant, hookCamEnabled\]\);/);
+      expect(videoRoom).not.toMatch(/bgAutoAppliedRef/);
     });
   });
 
