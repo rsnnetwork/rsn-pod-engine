@@ -1813,6 +1813,18 @@ export async function handleAssignCohost(
       cause: 'cohost_assigned',
     });
 
+    // F3 (20 May 2026 — live-test post-mortem). Defensive entity-tag
+    // fanout so any client viewing session_participants / event-plan
+    // queries invalidates and refetches. roster:changed already triggers
+    // the full snapshot refetch, but tagging gives React-Query-based
+    // surfaces (SessionDetailPage participants, EventPlanStrip) a direct
+    // refresh signal too — covers admin / pod-page surfaces that don't
+    // subscribe to the live session room.
+    emitSessionRoomEntities(
+      io, sessionId,
+      [E.session(sessionId), E.sessionParticipants(sessionId), E.sessionPlan(sessionId)],
+    ).catch(() => {});
+
     // Phase 8A.5 (8 May spec) — cohost change must re-shape upcoming
     // rounds immediately. Pre-fix the schedule generated at Start
     // included this user as a regular participant; promoting them
@@ -1882,6 +1894,15 @@ export async function handleRemoveCohost(
       sessionId,
       cause: 'cohost_removed',
     });
+
+    // F3 (20 May 2026 — live-test post-mortem). Same defensive fanout as
+    // handleAssignCohost — covers React-Query surfaces (admin / pod
+    // pages, SessionDetailPage participants) that don't listen on the
+    // live session room socket.
+    emitSessionRoomEntities(
+      io, sessionId,
+      [E.session(sessionId), E.sessionParticipants(sessionId), E.sessionPlan(sessionId)],
+    ).catch(() => {});
 
     // Phase 8A.5 (8 May spec) — demoted user re-enters the matching pool
     // for upcoming rounds. Trigger plan repair so the schedule includes

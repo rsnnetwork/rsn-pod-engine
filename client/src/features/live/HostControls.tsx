@@ -1,7 +1,7 @@
 import { useSessionStore } from '@/stores/sessionStore';
 import { useToastStore } from '@/stores/toastStore';
 import { Button } from '@/components/ui/Button';
-import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, MessageSquare, UserMinus, RefreshCw, UserPlus, AlertTriangle, CheckCircle2, Clock, LayoutDashboard } from 'lucide-react';
+import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, UserMinus, RefreshCw, UserPlus, AlertTriangle, CheckCircle2, Clock, LayoutDashboard } from 'lucide-react';
 import { getSocket } from '@/lib/socket';
 import { useState } from 'react';
 import EventPlanStrip from './EventPlanStrip';
@@ -54,7 +54,6 @@ export default function HostControls({ sessionId }: Props) {
   // until we have a defined product purpose.
 
   const sessionStarted = sessionStatus !== 'scheduled' || transitionStatus === 'starting_session' || currentRound > 0;
-  const isSessionEnding = transitionStatus === 'session_ending';
   const allRoundsDone = currentRound >= totalRounds && totalRounds > 0;
   const isInRound = sessionStatus === 'round_active' || sessionStatus === 'round_rating' || phase === 'matched' || phase === 'rating';
 
@@ -280,93 +279,16 @@ export default function HostControls({ sessionId }: Props) {
     setBulkDurationEdit(false);
   });
 
-  if (isSessionEnding) {
-    return (
-      <div className="border-t border-gray-200 bg-white">
-        <HostControlCenter
-          sessionId={sessionId}
-          open={showControlCenter}
-          onClose={() => setShowControlCenter(false)}
-          onOpenInvite={() => setShowInviteModal(true)}
-          onOpenRoomCreate={() => { setShowRoomModal(true); setRoomRows([new Set()]); }}
-          onOpenBroadcast={() => setShowBroadcast(true)}
-          onBulkExtend={bulkExtendAll}
-          onBulkEnd={bulkEndAll}
-          onBulkSetDuration={() => setBulkDurationEdit(true)}
-          bulkActionsAvailable={hasActiveManualRooms}
-          inviteAvailable={sessionStarted}
-        />
-        {/* Announcement input — available in wrapping-up state */}
-        {showBroadcast && (
-          <div className="border-b border-gray-200 bg-amber-500/10 px-4 py-3">
-            <p className="text-xs font-semibold text-amber-400 mb-2 max-w-4xl mx-auto">Announcement — visible as a banner to all participants</p>
-            <div className="max-w-4xl mx-auto flex gap-2">
-              <input
-                type="text"
-                value={broadcastMsg}
-                onChange={e => setBroadcastMsg(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && sendBroadcast()}
-                placeholder="Type an announcement..."
-                style={{ color: '#000000' }}
-                className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
-                autoFocus
-              />
-              <Button size="sm" onClick={sendBroadcast} disabled={!broadcastMsg.trim()}>Send</Button>
-              <Button size="sm" variant="ghost" onClick={() => setShowBroadcast(false)}>
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-        )}
-        <div className="p-4">
-          <div className="max-w-4xl mx-auto flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-              <p className="text-sm text-gray-700 font-medium">All rounds complete</p>
-            </div>
-            <div className="flex gap-2">
-              <Button size="sm" variant="ghost" onClick={() => setShowBroadcast(!showBroadcast)} title="Send announcement to all">
-                <MessageSquare className="h-4 w-4" />
-              </Button>
-              {/* 9 May iter — Control Center available in the wrapping-up
-                  state too (red variant matches the live-bar version). */}
-              <Button size="sm" variant="danger" onClick={() => setShowControlCenter(true)} title="Open Host Control Center">
-                <LayoutDashboard className="h-4 w-4 mr-1" /> Control Center
-              </Button>
-              <Button size="sm" onClick={() => {
-                // Bug 9 (April 19) — Another Round must follow the same flow as
-                // Round 1/2: Match People → preview → confirm → Start Round.
-                if (eligibleCount < 2) {
-                  alert(`Need at least 2 participants to start a round (currently ${eligibleCount})`);
-                  return;
-                }
-                socket?.emit('host:generate_matches', { sessionId });
-              }}>
-                <Shuffle className="h-4 w-4 mr-1" /> Another Round
-              </Button>
-              {/* Bug 12 (April 19) — Room (manual breakout) button must be
-                  available at EVERY stage: lobby, mid-round, between rounds,
-                  AND on the all-rounds-complete screen. Was hidden in the
-                  isSessionEnding block; participants are still connected
-                  here and the host might want a final manual breakout
-                  before End Event. */}
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => { setShowRoomModal(!showRoomModal); setRoomRows([new Set()]); }}
-                title="Create one or more breakout rooms"
-              >
-                <UserPlus className="h-4 w-4 mr-1" /> Room
-              </Button>
-              <Button size="sm" variant="danger" onClick={() => socket?.emit('host:end_session', { sessionId })}>
-                <Square className="h-4 w-4 mr-1" /> End Event
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // F1 (20 May 2026 — user spec): the "All rounds complete" wrapping-up
+  // screen used to be a dedicated isSessionEnding early-return that
+  // replaced the entire host bar. Side effect: the moment the host
+  // clicked Another Round and the event left the closing_lobby state,
+  // the button vanished — exactly during the round when the host wants
+  // to see "yes I queued a bonus round". Now the main bar renders in
+  // all states; an inline "All rounds complete" badge appears when
+  // allRoundsDone, and the Match People button stays visible (labelled
+  // "Another Round" in this state) — disabled while the round runs,
+  // re-enabled when it ends.
 
   return (
     // Bug G (15 May Ali) — host bottom bar must render ABOVE the floating
@@ -393,6 +315,30 @@ export default function HostControls({ sessionId }: Props) {
           exists (event has started). Auto-hides for non-host viewers via
           server-side auth on /sessions/:id/plan. */}
       {sessionStarted && <EventPlanStrip sessionId={sessionId} />}
+
+      {/* F1 (20 May 2026) — inline "All rounds complete" decoration. Used
+          to live in the now-removed isSessionEnding early-return; preserves
+          the visible cue + Bug 12 (Dr Arch Apr 19) Room button. Inline so
+          the host bar's Another Round / End Event buttons remain visible
+          below, satisfying the user's "button must always be here" spec. */}
+      {allRoundsDone && (
+        <div className="border-b border-gray-200 bg-emerald-50 px-4 py-2">
+          <div className="max-w-4xl mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+              <p className="text-sm text-gray-700 font-medium">All rounds complete</p>
+            </div>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => { setShowRoomModal(!showRoomModal); setRoomRows([new Set()]); }}
+              title="Create one or more breakout rooms"
+            >
+              <UserPlus className="h-4 w-4 mr-1" /> Room
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Match preview panel with interactive controls */}
       {matchPreview && (
@@ -886,8 +832,18 @@ export default function HostControls({ sessionId }: Props) {
                 (matching-flow.ts:60-69), so disabling on round_transition
                 blocked the legit "start next round" path. The new rule
                 disables only when an algorithm round is actually running
-                or there aren't enough eligible participants. */}
-            {sessionStarted && phase === 'lobby' && !allRoundsDone && !matchPreview && (() => {
+                or there aren't enough eligible participants.
+                F1 (20 May 2026): render condition broadened so the button
+                stays visible across all event phases except match-preview
+                (which has its own Confirm/Cancel buttons in its place)
+                and post-event terminal states. Label flips to "Another
+                Round" once the originally-configured rounds are done; the
+                disabled state during an active round gives the host a
+                continuous visual cue. */}
+            {sessionStarted
+              && sessionStatus !== 'completed'
+              && sessionStatus !== 'cancelled'
+              && !matchPreview && (() => {
               // Eligible-count source — use the LOCAL realtime count.
               //
               // Previous shape preferred `roundDashboard.eligibleMainRoomCount`
@@ -912,6 +868,12 @@ export default function HostControls({ sessionId }: Props) {
               // socket events will catch up before the next click.
               const eligibleMainRoomCount = eligibleCount;
               const matchPeopleDisabled = hasActiveAlgorithmRound || eligibleMainRoomCount < 2;
+              // F1 (20 May 2026) — label flips after the originally-scheduled
+              // rounds have all run. "Another Round" reads as "give the host
+              // a bonus round on top of the configured count," which is the
+              // semantic that the CLOSING_LOBBY-bump path on the server
+              // implements (matching-flow.ts:107-158).
+              const buttonLabel = allRoundsDone ? 'Another Round' : 'Match People';
               const matchPeopleHint = hasActiveAlgorithmRound
                 ? 'A round is in progress — wait for it to end'
                 : eligibleMainRoomCount < 2
@@ -931,7 +893,7 @@ export default function HostControls({ sessionId }: Props) {
                     title={matchPeopleHint}
                     aria-label={matchPeopleHint}
                   >
-                    <Shuffle className="h-3.5 w-3.5 opacity-50" /> Match People
+                    <Shuffle className="h-3.5 w-3.5 opacity-50" /> {buttonLabel}
                   </button>
                 );
               }
@@ -940,7 +902,7 @@ export default function HostControls({ sessionId }: Props) {
                   {generating ? (
                     <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Matching...</>
                   ) : (
-                    <><Shuffle className="h-4 w-4 mr-1" /> Match People</>
+                    <><Shuffle className="h-4 w-4 mr-1" /> {buttonLabel}</>
                   )}
                 </Button>
               );

@@ -1,4 +1,4 @@
-import { Users, Loader2, Video, VideoOff, Sparkles, ChevronDown, ChevronUp, Mic, MicOff, Volume2, VolumeX, UserX, Camera, X, Pin, PinOff } from 'lucide-react';
+import { Users, Loader2, Video, VideoOff, Sparkles, ChevronDown, ChevronUp, Mic, MicOff, Volume2, VolumeX, UserX, Camera, X, Pin, PinOff, Minimize2, Maximize2 } from 'lucide-react';
 import HostRoundDashboard from './HostRoundDashboard';
 
 // Lazy-load track processors (may not be available in all environments)
@@ -157,6 +157,25 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
     const socket = getSocket();
     socket?.emit('host:remove_participant', { sessionId, userId: targetIdentity, reason: 'Removed by host' });
   }, [sessionId]);
+
+  // F2 (20 May 2026 — user spec): host can shrink a cohost's tile back to
+  // participant size without opening HCC. Visual only; cohost privileges
+  // (mute-others, HCC access, etc.) are unchanged. Same handler the HCC
+  // "Small tile / Restore tile" button calls — server-side handler at
+  // host-actions.ts:handleSetTileSize verifies the caller is the actual
+  // event director.
+  const handleSetTileSize = useCallback(
+    (targetIdentity: string, size: 'participant' | 'host') => {
+      if (!sessionId) return;
+      const socket = getSocket();
+      socket?.emit('host:set_tile_size', {
+        sessionId,
+        targetUserId: targetIdentity,
+        size,
+      });
+    },
+    [sessionId],
+  );
 
   // Pin/spotlight state — client-side only, no server interaction
   const [pinnedSid, setPinnedSid] = useState<string | null>(null);
@@ -337,9 +356,38 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
         </button>
         {/* Host mute/unmute + kick buttons on remote participant tiles.
             18 May — shifted left to right-10 so the always-visible pin
-            button (right-1.5) doesn't get covered when the host hovers. */}
+            button (right-1.5) doesn't get covered when the host hovers.
+            F2 (20 May 2026) — when the target is a cohost (acting host
+            other than the director), the director also gets a Small
+            tile / Restore tile toggle directly on the tile, mirroring
+            the HCC button. Cohost keeps all privileges; only visual. */}
         {isHost && !isLocal && (
           <div className="absolute top-1.5 right-10 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
+            {trackRef.participant.identity
+              && hostsSet.has(trackRef.participant.identity)
+              && trackRef.participant.identity !== hostUserId && (
+                tileDemotedSet.has(trackRef.participant.identity) ? (
+                  <button
+                    onClick={() => handleSetTileSize(trackRef.participant.identity, 'host')}
+                    className="bg-black/50 backdrop-blur-sm rounded-full p-1.5 text-white hover:bg-indigo-600/70"
+                    title={`Restore ${name}'s tile to host size`}
+                    aria-label={`Restore ${name}'s tile`}
+                    data-testid="tile-restore-button"
+                  >
+                    <Maximize2 className="h-3.5 w-3.5" />
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleSetTileSize(trackRef.participant.identity, 'participant')}
+                    className="bg-black/50 backdrop-blur-sm rounded-full p-1.5 text-white hover:bg-black/70"
+                    title={`Shrink ${name}'s tile to participant size (privileges unchanged)`}
+                    aria-label={`Shrink ${name}'s tile`}
+                    data-testid="tile-shrink-button"
+                  >
+                    <Minimize2 className="h-3.5 w-3.5" />
+                  </button>
+                )
+              )}
             <button
               onClick={() => handleHostMute(trackRef.participant.identity, !!isMicOn)}
               className="bg-black/50 backdrop-blur-sm rounded-full p-1.5 text-white hover:bg-black/70"
