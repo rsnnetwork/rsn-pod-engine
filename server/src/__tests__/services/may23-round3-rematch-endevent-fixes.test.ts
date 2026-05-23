@@ -197,6 +197,27 @@ describe('23 May 2nd-test fixes — round-3 repeats, re-match rotation, end-even
     });
   });
 
+  // ── #14 — host preview edits re-plan future rounds (live journey strip)
+  describe('#14 — swap/exclude/re-match re-plan the future rounds', () => {
+    it('exposes replanRoundsAfterPreviewEdit, repairing from previewedRound+1 (preserves the edited round)', () => {
+      const src = flowSrc();
+      expect(src).toMatch(/async function replanRoundsAfterPreviewEdit/);
+      const helper = src.slice(src.indexOf('async function replanRoundsAfterPreviewEdit'));
+      // Repair starts AFTER the previewed round so the host's swap/exclude is kept.
+      expect(helper).toMatch(/repairFutureRounds\(\s*sessionId\s*,\s*previewedRound\s*\+\s*1/);
+      expect(helper).toMatch(/host:event_plan_repaired/);
+    });
+
+    it('swap, exclude, and re-match each trigger the future-round re-plan', () => {
+      const swap = fnSlice(flowSrc(), 'export async function handleHostSwapMatch');
+      const excl = fnSlice(flowSrc(), 'export async function handleHostExcludeFromRound');
+      const regen = fnSlice(flowSrc(), 'export async function handleHostRegenerateMatches');
+      expect(swap).toMatch(/replanRoundsAfterPreviewEdit\(/);
+      expect(excl).toMatch(/replanRoundsAfterPreviewEdit\(/);
+      expect(regen).toMatch(/replanRoundsAfterPreviewEdit\(/);
+    });
+  });
+
   // ── #13 — round start must not false-no-show present-but-stale participants
   describe('#13 — detectNoShows reconciles presence against live sockets', () => {
     it('checks live sockets in the session room before marking no-show', () => {

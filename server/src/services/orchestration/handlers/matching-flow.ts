@@ -111,6 +111,39 @@ function arrangementPairKeys(ms: { participantAId: string; participantBId: strin
   return keys;
 }
 
+// #14 (23 May, Ali) — after the host edits the CURRENT preview round (swap,
+// exclude, re-match), re-plan the rounds AFTER it so the EVENT PLAN strip's
+// future rounds (and the no-repeat journey) update live, instead of only when
+// that round is later opened. Repairs from previewedRound+1 so the host's edit
+// to the previewed round itself is preserved; repairFutureRounds only rewrites
+// 'scheduled' rounds >= fromRound (active/completed are immutable). Non-fatal.
+async function replanRoundsAfterPreviewEdit(
+  io: SocketServer,
+  sessionId: string,
+  previewedRound: number,
+): Promise<void> {
+  try {
+    const result = await matchingService.repairFutureRounds(sessionId, previewedRound + 1, 'host_request');
+    if (result.regeneratedRounds.length === 0) return;
+    io.to(sessionRoom(sessionId)).emit('host:event_plan_repaired', {
+      sessionId,
+      reason: 'host_request',
+      regeneratedRounds: result.regeneratedRounds,
+    });
+    const rows = await query<{ user_id: string }>(
+      `SELECT user_id FROM session_participants
+         WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')`,
+      [sessionId],
+    );
+    emitEntities(
+      io, rows.rows.map(r => r.user_id),
+      [E.session(sessionId), E.sessionPlan(sessionId)],
+    ).catch(() => {});
+  } catch (err) {
+    logger.warn({ err, sessionId, previewedRound }, '#14 replan after preview edit failed (non-fatal)');
+  }
+}
+
 // ─── Host Generate Matches (preview step) ──────────────────────────────────
 
 export async function handleHostGenerateMatches(
@@ -568,6 +601,9 @@ export async function handleHostSwapMatch(
     // Re-send updated preview (pass hostUserId so host is excluded from bye list)
     await sendMatchPreview(io, socket, data.sessionId, roundNumber, activeSession.hostUserId);
 
+    // #14 — re-plan later rounds around the swapped round so the strip stays live.
+    await replanRoundsAfterPreviewEdit(io, data.sessionId, roundNumber);
+
     logger.info({ sessionId: data.sessionId, userA: data.userA, userB: data.userB }, 'Host swapped match participants');
   } catch (err: any) {
     socket.emit('error', { code: 'SWAP_FAILED', message: err.message });
@@ -655,6 +691,9 @@ export async function handleHostExcludeFromRound(
 
     // Re-send updated preview (pass hostUserId so host is excluded from bye list)
     await sendMatchPreview(io, socket, data.sessionId, roundNumber, activeSession.hostUserId);
+
+    // #14 — re-plan later rounds around the edited round so the strip stays live.
+    await replanRoundsAfterPreviewEdit(io, data.sessionId, roundNumber);
 
     logger.info({ sessionId: data.sessionId, excludedUser: data.userId }, 'Host excluded participant from round');
   } catch (err: any) {
@@ -767,6 +806,9 @@ export async function handleHostRegenerateMatches(
 
     // Re-send preview
     await sendMatchPreview(io, socket, data.sessionId, roundNumber, activeSession.hostUserId);
+
+    // #14 — re-plan later rounds around the re-matched round so the strip stays live.
+    await replanRoundsAfterPreviewEdit(io, data.sessionId, roundNumber);
 
     // 23 May (#5b) — the only time Re-match can't change anything is a single
     // possible pairing (e.g. exactly 2 participants). Tell the host plainly
