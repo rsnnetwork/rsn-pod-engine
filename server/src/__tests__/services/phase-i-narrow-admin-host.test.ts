@@ -96,11 +96,10 @@ describe('Phase I — narrow auto-host capability to super_admin only', () => {
       expect(baseLine).toBeTruthy();
       expect(baseLine![0]).not.toMatch(/isAdmin/);
       expect(baseLine![0]).not.toMatch(/isSuperAdmin/);
-      // Phase M opt-in path: canToggleActingAsHost is the gate that lets
-      // admins/super_admins toggle into host UI for THIS event.
-      expect(src).toMatch(
-        /isAdminOrSuperAdmin\s*=\s*user\?\.role\s*===\s*['"]admin['"]\s*\|\|\s*user\?\.role\s*===\s*['"]super_admin['"]/,
-      );
+      // 23 May (Stefan + Ali) — acting-as-host removed; there is no longer a
+      // Phase M opt-in pathway. The Phase I invariant is now absolute: admins
+      // and super-admins are plain participants in events, isHost = baseIsHost.
+      expect(src).toMatch(/const\s+isHost\s*=\s*baseIsHost\s*;/);
     });
   });
 });

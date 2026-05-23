@@ -433,42 +433,27 @@ export async function handleJoinSession(
           // DB enum value to 'in_lobby' and clears left_at. Regular
           // participants who explicitly Leave still keep LEFT — only
           // hosts/cohosts get the reset here.
-          if (currentStatus === 'left') {
-            const isHostOrCohost = await query<{ is_host: boolean; is_cohost: boolean }>(
-              `SELECT
-                 (s.host_user_id = $2) AS is_host,
-                 EXISTS(SELECT 1 FROM session_cohosts sc
-                         WHERE sc.session_id = $1 AND sc.user_id = $2) AS is_cohost
-               FROM sessions s WHERE s.id = $1`,
-              [data.sessionId, userId],
-            );
-            const row = isHostOrCohost.rows[0];
-            if (row && (row.is_host || row.is_cohost)) {
-              const result = await transitionParticipant(
-                data.sessionId, userId, ParticipantState.IN_MAIN_ROOM,
-              );
-              if (result.ok) {
-                logger.info(
-                  { sessionId: data.sessionId, userId, isHost: row.is_host, isCohost: row.is_cohost },
-                  'Bug 36: reset host/cohost from LEFT → in_main_room on reconnect (audit)',
-                );
-              } else {
-                logger.warn(
-                  { sessionId: data.sessionId, userId, reason: result.reason, fromState: result.fromState, isHost: row.is_host, isCohost: row.is_cohost },
-                  'Bug 36: state-machine refused host/cohost LEFT → in_main_room reset',
-                );
-              }
-            }
-          } else if (currentStatus === 'disconnected' || currentStatus === 'in_round') {
+          // 23 May (Stefan + Ali) — this block runs ONLY on presence:ready,
+          // i.e. the user is actively (re-)entering the live page, so they
+          // ARE present right now. Any present user with no active match must
+          // be matchable. Pre-fix only the director/cohost were reset from
+          // LEFT (Bug 36 carve-out); a regular participant whose mobile
+          // dropped and reconnected stayed 'left'/'disconnected' — still
+          // counted in the roster but invisible to getEligibleParticipants,
+          // so the engine never matched them (observed live with Ali Hamza on
+          // mobile). Reset every present user back to the main room
+          // regardless of role. LEFT → IN_MAIN_ROOM is the state machine's
+          // "explicit re-entry" edge, which presence:ready is by definition.
+          if (currentStatus === 'left' || currentStatus === 'disconnected' || currentStatus === 'in_round') {
             const result = await transitionParticipant(
               data.sessionId, userId, ParticipantState.IN_MAIN_ROOM,
             );
             if (result.ok) {
               logger.info({ sessionId: data.sessionId, userId, fromState: result.fromState },
-                'Fix A: reset stuck participant status (disconnected/in_round → in_main_room) on reconnect');
+                'Reconnect reset: present participant → in_main_room (was left/disconnected/in_round)');
             } else {
               logger.warn({ sessionId: data.sessionId, userId, reason: result.reason, fromState: result.fromState },
-                'Fix A: state-machine refused reset transition — leaving DB status untouched');
+                'Reconnect reset: state-machine refused transition — leaving DB status untouched');
             }
           }
         }

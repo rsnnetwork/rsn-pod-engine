@@ -49,6 +49,26 @@ export function injectMatchingFlowDeps(deps: {
 
 const MATCHING_TIMEOUT_MS = 60_000;
 
+// 23 May (Stefan + Ali) — recover the previewed round from the DB when the
+// in-memory pendingRoundNumber was lost (e.g. a deploy/restart between the
+// host pressing "Match People" and a follow-up preview action like Swap or
+// Re-match). The preview is persisted as 'scheduled' match rows, so the
+// highest scheduled round is the one currently on screen. Pre-fix the guard
+// returned silently and those buttons appeared to do nothing.
+async function resolvePendingRound(
+  activeSession: { pendingRoundNumber: number | null },
+  sessionId: string,
+): Promise<number | null> {
+  if (activeSession.pendingRoundNumber) return activeSession.pendingRoundNumber;
+  const sched = await query<{ round_number: number | null }>(
+    `SELECT MAX(round_number) AS round_number FROM matches WHERE session_id = $1 AND status = 'scheduled'`,
+    [sessionId],
+  );
+  const recovered = sched.rows[0]?.round_number ?? null;
+  if (recovered) activeSession.pendingRoundNumber = recovered;
+  return recovered;
+}
+
 // ─── Host Generate Matches (preview step) ──────────────────────────────────
 
 export async function handleHostGenerateMatches(
@@ -425,12 +445,15 @@ export async function handleHostSwapMatch(
     if (!await verifyHost(socket, data.sessionId)) return;
 
     const activeSession = activeSessions.get(data.sessionId);
-    if (!activeSession || !activeSession.pendingRoundNumber) {
-      socket.emit('error', { code: 'INVALID_STATE', message: 'No pending match preview to edit' });
+    if (!activeSession) {
+      socket.emit('error', { code: 'INVALID_STATE', message: 'Session is not active' });
       return;
     }
-
-    const roundNumber = activeSession.pendingRoundNumber;
+    const roundNumber = await resolvePendingRound(activeSession, data.sessionId);
+    if (!roundNumber) {
+      socket.emit('error', { code: 'INVALID_STATE', message: 'No pending match preview to edit. Click "Match People" first.' });
+      return;
+    }
 
     // Swap the two users between their respective matches
     // Find match containing userA and match containing userB
@@ -595,12 +618,15 @@ export async function handleHostRegenerateMatches(
     if (!await verifyHost(socket, data.sessionId)) return;
 
     const activeSession = activeSessions.get(data.sessionId);
-    if (!activeSession || !activeSession.pendingRoundNumber) {
-      socket.emit('error', { code: 'INVALID_STATE', message: 'No pending match preview to regenerate' });
+    if (!activeSession) {
+      socket.emit('error', { code: 'INVALID_STATE', message: 'Session is not active' });
       return;
     }
-
-    const roundNumber = activeSession.pendingRoundNumber;
+    const roundNumber = await resolvePendingRound(activeSession, data.sessionId);
+    if (!roundNumber) {
+      socket.emit('error', { code: 'INVALID_STATE', message: 'No pending match preview to regenerate. Click "Match People" first.' });
+      return;
+    }
 
     // Phase 1 (5 May spec) — wipe ALL matches for the pending round before
     // regenerating, regardless of state. Previously this filtered by status

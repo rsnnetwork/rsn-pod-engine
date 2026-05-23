@@ -76,13 +76,6 @@ export default function LiveSessionPage() {
   });
 
   const cohosts = useSessionStore(s => s.cohosts);
-  const actingAsHostOverrides = useSessionStore(s => s.actingAsHostOverrides);
-  // Bug I (15 May Ali) — wait for the session-state snapshot to land
-  // before showing any role-gated banner. Without this the page shows
-  // the "Join as host / participant" banner for a single frame on
-  // refresh even if the admin already opted in, because the store starts
-  // with actingAsHostOverrides={} until applyFullState fires.
-  const sessionStateLoaded = useSessionStore(s => s.sessionStateLoaded);
   const isOriginalHost = session?.hostUserId === user?.id;
   const isCohost = !!user?.id && cohosts.has(user.id);
   // Bug D (15 May Ali) — super_admins no longer auto-default to host.
@@ -95,55 +88,18 @@ export default function LiveSessionPage() {
   // super_admin and admin both pass through Phase M (explicit pick + per-
   // event override) just like everyone else with the toggle.
   const baseIsHost = isOriginalHost || isCohost;
-  // Phase M (12 May item 1) — per-event acting-as-host override. The
-  // current user's own override (if any) trumps the base role gate:
-  // FALSE means they explicitly chose to attend as a participant; TRUE
-  // means they explicitly opted in to host. Undefined / null = follow
-  // baseIsHost. Server's getEffectiveRole applies the same precedence.
-  const myActingAsHost: boolean | undefined =
-    user?.id ? actingAsHostOverrides[user.id] : undefined;
-  const isHost =
-    myActingAsHost === false
-      ? false
-      : myActingAsHost === true
-      ? true
-      : baseIsHost;
-
-  // Phase P (Ali's 13 May clarification) — eligibility for the "Join as
-  // host" / "Join as participant" toggle. Admins (Shraddha, Raja Ali) and
-  // super_admins (Stefan) get the toggle ONLY when they did NOT create
-  // the event. The event director is permanently the host of their own
-  // event. `isDirector` is the same identity check the server uses.
-  const isDirector = !!user?.id && session?.hostUserId === user?.id;
-  const isAdminOrSuperAdmin = user?.role === 'admin' || user?.role === 'super_admin';
-  const canToggleActingAsHost = isAdminOrSuperAdmin && !isDirector;
-  // Pre-event banner condition: eligible user, has not explicitly chosen
-  // yet for THIS event. Banner stays visible until they pick — it's a
-  // nudge, not a dismissable toast. Bug I (15 May Ali) — also gate on
-  // sessionStateLoaded so the banner doesn't flash on refresh while the
-  // snapshot is in-flight (Raja saw the toggle re-appear for a frame
-  // after every refresh even though he'd already chosen).
-  //
-  // R8.2 (20 May 2026 — live-test post-mortem) — also gate on session
-  // status. After the event ends the picker / banner must NEVER block the
-  // recap. Pre-fix an admin / super_admin whose acting_as_host was never
-  // set saw "Pick how you're joining first" INSTEAD of the recap screen
-  // on a refreshed live page even though the event was over — observed
-  // live with Raja Ali King during the 20 May test.
-  const isEventOver = session?.status === 'completed' || session?.status === 'cancelled';
-  const showJoinAsBanner =
-    canToggleActingAsHost && myActingAsHost === undefined && sessionStateLoaded && !isEventOver;
-  // Bug D (15 May Ali) — when a toggle-eligible user hasn't picked yet,
-  // BLOCK the content area entirely. The banner stays at the top, the
-  // header stays, but the lobby / video / rating / complete views and the
-  // side panels all hide until they choose. Pre-fix the lobby rendered
-  // immediately and admins saw host controls implicitly, which felt like
-  // "auto-promoted" even though the count didn't agree. Bug I — also
-  // gate on sessionStateLoaded so the blocker doesn't briefly cover the
-  // page right after refresh for someone who already picked. R8.2 — also
-  // gate on session status so the post-event recap always wins.
-  const mustPickRole =
-    canToggleActingAsHost && myActingAsHost === undefined && sessionStateLoaded && !isEventOver;
+  // 23 May (Stefan + Ali) — the "Join as host / participant" picker is
+  // removed. Only the event director and formally-assigned cohosts are
+  // hosts; everyone else (including admins / super-admins who merely open
+  // someone else's event) joins straight as a participant. These four
+  // values are pinned so the role banners + the must-pick blocker below
+  // never render and the content always shows. Kept as no-ops rather than
+  // ripping out the JSX mid-fix; the dead banner markup is pruned later.
+  const isHost = baseIsHost;
+  const myActingAsHost: boolean | undefined = undefined;
+  const canToggleActingAsHost = false;
+  const showJoinAsBanner = false;
+  const mustPickRole = false;
 
   useSessionSocket(sessionId!);
 

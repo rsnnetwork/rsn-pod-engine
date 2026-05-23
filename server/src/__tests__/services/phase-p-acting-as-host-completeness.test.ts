@@ -97,20 +97,13 @@ describe('Phase P — acting-as-host completeness (Ali 13 May clarification)', (
   describe('Gap B — Lobby pre-event Join-as banner', () => {
     const src = readClient('features/live/LiveSessionPage.tsx');
 
-    it('canToggleActingAsHost = (admin OR super_admin) AND NOT director', () => {
-      expect(src).toMatch(
-        /isAdminOrSuperAdmin\s*=\s*user\?\.role\s*===\s*['"]admin['"]\s*\|\|\s*user\?\.role\s*===\s*['"]super_admin['"]/,
-      );
-      expect(src).toMatch(/isDirector\s*=[\s\S]{0,80}session\?\.hostUserId\s*===\s*user\?\.id/);
-      expect(src).toMatch(
-        /canToggleActingAsHost\s*=\s*isAdminOrSuperAdmin\s*&&\s*!isDirector/,
-      );
+    it('the join-as picker is disabled — non-directors always join as participants (23 May)', () => {
+      // 23 May (Stefan + Ali) — the per-event Join-as-host picker was removed.
+      expect(src).toMatch(/const\s+canToggleActingAsHost\s*=\s*false\s*;/);
     });
 
-    it('showJoinAsBanner gates on canToggleActingAsHost AND override === undefined', () => {
-      expect(src).toMatch(
-        /showJoinAsBanner\s*=[\s\S]{0,80}canToggleActingAsHost[\s\S]{0,80}myActingAsHost\s*===\s*undefined/,
-      );
+    it('showJoinAsBanner is pinned off so the popup never renders', () => {
+      expect(src).toMatch(/const\s+showJoinAsBanner\s*=\s*false\s*;/);
     });
 
     it('renders join-as-banner with both host + participant buttons', () => {
@@ -238,15 +231,13 @@ describe('Phase P — acting-as-host completeness (Ali 13 May clarification)', (
       expect(sql).toMatch(/ADD\s+COLUMN\s+acting_as_host\s+BOOLEAN\s*;/i);
     });
 
-    it('getAllHostIds still applies opt-in / opt-out from Phase M', () => {
+    it('getAllHostIds no longer applies opt-in / opt-out (acting-as-host removed 23 May)', () => {
       const src = readServer('services/orchestration/handlers/host-actions.ts');
       const fnStart = src.indexOf('export async function getAllHostIds');
       const fnEnd = src.indexOf('\nexport ', fnStart + 1);
       const fn = src.slice(fnStart, fnEnd > -1 ? fnEnd : src.length);
-      expect(fn).toMatch(/optedIn/);
-      expect(fn).toMatch(/optedOut/);
-      expect(fn).toMatch(/baseHosts\.add\(/);
-      expect(fn).toMatch(/baseHosts\.delete\(/);
+      expect(fn).not.toMatch(/optedIn/);
+      expect(fn).not.toMatch(/optedOut/);
     });
   });
 });

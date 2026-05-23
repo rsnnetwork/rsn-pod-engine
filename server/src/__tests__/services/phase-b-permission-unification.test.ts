@@ -80,15 +80,9 @@ describe('Phase B — permission model unification', () => {
       expect(liveSrc).toMatch(
         /const\s+baseIsHost\s*=\s*isOriginalHost\s*\|\|\s*isCohost\s*;/,
       );
-      // canToggleActingAsHost gates super_admin into the host UI via the
-      // Phase M override pathway — pin its derivation so the layering
-      // can't drift.
-      expect(liveSrc).toMatch(
-        /isAdminOrSuperAdmin\s*=\s*user\?\.role\s*===\s*['"]admin['"]\s*\|\|\s*user\?\.role\s*===\s*['"]super_admin['"]/,
-      );
-      expect(liveSrc).toMatch(
-        /canToggleActingAsHost\s*=\s*isAdminOrSuperAdmin\s*&&\s*!isDirector/,
-      );
+      // 23 May (Stefan + Ali) — acting-as-host removed; no Phase M opt-in
+      // pathway remains. isHost is now just baseIsHost.
+      expect(liveSrc).toMatch(/const\s+isHost\s*=\s*baseIsHost\s*;/);
       // The broad `isAdmin = admin || super_admin` form must NOT appear
       // in the baseIsHost expression (Phase I narrow still holds — under
       // its new, stricter Bug D shape).

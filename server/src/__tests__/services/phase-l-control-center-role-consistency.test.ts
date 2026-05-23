@@ -43,17 +43,15 @@ describe('Phase L — control center role consistency (item 6)', () => {
   describe('Client — LiveSessionPage canonical isHost form', () => {
     const src = readClient('features/live/LiveSessionPage.tsx');
 
-    it('declares isOriginalHost, isCohost, isAdminOrSuperAdmin separately', () => {
+    it('declares isOriginalHost and isCohost separately', () => {
       expect(src).toMatch(
         /const\s+isOriginalHost\s*=\s*session\?\.hostUserId\s*===\s*user\?\.id/,
       );
       expect(src).toMatch(/const\s+isCohost\s*=/);
-      // Bug D (15 May Ali) — super_admin no longer auto-passes the host
-      // gate. The relevant binding is now isAdminOrSuperAdmin, which gates
-      // the Phase M opt-in toggle, NOT the host UI directly.
-      expect(src).toMatch(
-        /const\s+isAdminOrSuperAdmin\s*=\s*user\?\.role\s*===\s*['"]admin['"]\s*\|\|\s*user\?\.role\s*===\s*['"]super_admin['"]/,
-      );
+      // 23 May (Stefan + Ali) — acting-as-host removed, so the
+      // isAdminOrSuperAdmin gate is deleted. Admins / super-admins are plain
+      // participants in events; host powers stay role-derived (director +
+      // formal cohosts only).
     });
 
     it('baseIsHost is the canonical role-derived disjunction (no broad isAdmin, no super_admin auto-pass)', () => {
@@ -73,11 +71,9 @@ describe('Phase L — control center role consistency (item 6)', () => {
       expect(baseLine).toBeTruthy();
       expect(baseLine![0]).not.toMatch(/isAdmin/);
       expect(baseLine![0]).not.toMatch(/isSuperAdmin/);
-      // And isHost composes baseIsHost with the Phase M override —
-      // factor that into the assertion so the layering is also pinned.
-      expect(src).toMatch(
-        /const\s+isHost\s*=[\s\S]{0,120}myActingAsHost[\s\S]{0,80}baseIsHost/,
-      );
+      // 23 May (Stefan + Ali) — isHost is now just baseIsHost; the
+      // acting-as-host override layer was removed.
+      expect(src).toMatch(/const\s+isHost\s*=\s*baseIsHost\s*;/);
     });
   });
 
@@ -207,24 +203,16 @@ describe('Phase L — control center role consistency (item 6)', () => {
       );
     });
 
-    it('client and server both accept super_admin via Phase M opt-in (no auto-pass on either side)', () => {
+    it('client no longer grants host to admin/super_admin (acting-as-host removed 23 May); server tier intact', () => {
       const clientSrc = readClient('features/live/LiveSessionPage.tsx');
       const serverSrc = readServer('services/roles/effective-role.service.ts');
-      // Bug D (15 May Ali) — client no longer auto-promotes super_admin
-      // to host. The recognition of the global tier is preserved through
-      // isAdminOrSuperAdmin / canToggleActingAsHost, which gates the
-      // Phase M "Join as host" pathway.
-      expect(clientSrc).toMatch(
-        /isAdminOrSuperAdmin\s*=\s*user\?\.role\s*===\s*['"]admin['"]\s*\|\|\s*user\?\.role\s*===\s*['"]super_admin['"]/,
-      );
-      expect(clientSrc).toMatch(
-        /canToggleActingAsHost\s*=\s*isAdminOrSuperAdmin\s*&&\s*!isDirector/,
-      );
-      // Server: globalUserRole === SUPER_ADMIN → 'pod_admin' (highest
-      // tier). The auto-pass at the server is intentionally retained so
-      // a super_admin who DID opt in (acting_as_host=true) is still
-      // accepted; without the auto-pass, the override would have nothing
-      // to elevate from.
+      // 23 May (Stefan + Ali) — the client picker is removed. Non-directors
+      // (including admins / super-admins) are plain participants; isHost is
+      // role-derived only.
+      expect(clientSrc).toMatch(/const\s+isHost\s*=\s*baseIsHost\s*;/);
+      expect(clientSrc).not.toMatch(/canToggleActingAsHost\s*=\s*isAdminOrSuperAdmin/);
+      // Server still recognises SUPER_ADMIN as pod_admin (untouched), so
+      // platform-level admin powers outside live-event hosting are intact.
       expect(serverSrc).toMatch(
         /globalUserRole\s*===\s*UserRole\.SUPER_ADMIN[\s\S]{0,100}return\s*['"]pod_admin['"]/,
       );

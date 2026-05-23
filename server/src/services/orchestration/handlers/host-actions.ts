@@ -133,40 +133,22 @@ async function emitSessionRoomEntities(
 // ═════════════════════════════════════════════════════════════════════════════
 
 /**
- * Get all user IDs that should be excluded from matching: original host +
- * co-hosts, with Phase M (12 May spec item 1) acting-as-host overrides
- * applied.
+ * Get all user IDs that should be excluded from matching: the event
+ * director + any formally-assigned co-hosts.
  *
- *   acting_as_host = TRUE  → add to the host set (admin opt-in)
- *   acting_as_host = FALSE → remove from the host set (super_admin or
- *                            event_host attending as participant)
- *   acting_as_host = NULL  → use role default (existing behavior)
- *
- * The opt-out is the operationally important case: a super_admin or
- * cohost wants to be matched on their own event. Pre-Phase-M they were
- * unconditionally excluded; now they are included when they've opted
- * out explicitly.
+ * 23 May (Stefan + Ali) — the acting-as-host opt-in/opt-out picker is
+ * removed. No participant can self-select host any more, so an admin or
+ * super-admin who merely opens someone else's event is now an ordinary,
+ * matchable participant. This is the root fix for "admin shows in the
+ * room but the engine never matches them" — they were landing in this
+ * host set via the old picker (acting_as_host = TRUE).
  */
 export async function getAllHostIds(sessionId: string, hostUserId: string): Promise<string[]> {
   const cohostResult = await query<{ user_id: string }>(
     `SELECT user_id FROM session_cohosts WHERE session_id = $1`,
     [sessionId]
   );
-  const overrideResult = await query<{ user_id: string; acting_as_host: boolean }>(
-    `SELECT user_id, acting_as_host FROM session_participants
-     WHERE session_id = $1 AND acting_as_host IS NOT NULL`,
-    [sessionId]
-  );
-  const optedOut = new Set<string>();
-  const optedIn = new Set<string>();
-  for (const row of overrideResult.rows) {
-    if (row.acting_as_host === false) optedOut.add(row.user_id);
-    else if (row.acting_as_host === true) optedIn.add(row.user_id);
-  }
-  const baseHosts = new Set<string>([hostUserId, ...cohostResult.rows.map(r => r.user_id)]);
-  for (const id of optedIn) baseHosts.add(id);
-  for (const id of optedOut) baseHosts.delete(id);
-  return Array.from(baseHosts);
+  return Array.from(new Set<string>([hostUserId, ...cohostResult.rows.map(r => r.user_id)]));
 }
 
 // ─── Verify Host ────────────────────────────────────────────────────────────

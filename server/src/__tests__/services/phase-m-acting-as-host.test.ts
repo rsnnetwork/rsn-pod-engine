@@ -106,27 +106,24 @@ describe('Phase M — acting-as-host toggle (item 1)', () => {
     });
   });
 
-  describe('Server — getAllHostIds applies overrides', () => {
+  describe('Server — getAllHostIds (acting-as-host removed 23 May Stefan + Ali)', () => {
     const src = readServer('services/orchestration/handlers/host-actions.ts');
     const fnStart = src.indexOf('export async function getAllHostIds');
     const fnEnd = src.indexOf('\nexport ', fnStart + 1);
     const fn = src.slice(fnStart, fnEnd > -1 ? fnEnd : src.length);
 
-    it('queries session_participants for explicit overrides', () => {
-      expect(fn).toMatch(
-        /SELECT\s+user_id,\s+acting_as_host\s+FROM\s+session_participants[\s\S]{0,200}IS\s+NOT\s+NULL/i,
-      );
+    it('returns the director plus formally-assigned cohosts', () => {
+      expect(fn).toMatch(/SELECT\s+user_id\s+FROM\s+session_cohosts\s+WHERE\s+session_id\s*=\s*\$1/i);
+      expect(fn).toMatch(/\[hostUserId,\s*\.\.\.cohostResult\.rows\.map/);
     });
 
-    it('excludes opted-out users (acting_as_host === false) from the host set', () => {
-      // Pin: a Set tracks opt-outs; the final result deletes them.
-      expect(fn).toMatch(/optedOut/);
-      expect(fn).toMatch(/baseHosts\.delete\(/);
-    });
-
-    it('includes opted-in users (acting_as_host === true) in the host set', () => {
-      expect(fn).toMatch(/optedIn/);
-      expect(fn).toMatch(/baseHosts\.add\(/);
+    it('no longer applies acting-as-host opt-in / opt-out overrides', () => {
+      // 23 May — the self-select picker was removed, so the host set is
+      // role-derived only. Pin the ABSENCE of the override logic so it can't
+      // silently creep back and re-exclude admins from matching.
+      expect(fn).not.toMatch(/optedIn/);
+      expect(fn).not.toMatch(/optedOut/);
+      expect(fn).not.toMatch(/acting_as_host/);
     });
   });
 
@@ -227,26 +224,18 @@ describe('Phase M — acting-as-host toggle (item 1)', () => {
   describe('Client — LiveSessionPage isHost factors in myActingAsHost', () => {
     const src = readClient('features/live/LiveSessionPage.tsx');
 
-    it('reads actingAsHostOverrides from the store and resolves the current user\'s value', () => {
-      expect(src).toMatch(/actingAsHostOverrides\s*=\s*useSessionStore\(/);
-      expect(src).toMatch(/myActingAsHost[\s\S]{0,80}actingAsHostOverrides\[user\.id\]/);
+    it('isHost is role-derived only — acting-as-host picker removed (23 May Stefan + Ali)', () => {
+      // Non-directors always join as participants; the per-user override no
+      // longer factors into isHost.
+      expect(src).toMatch(/const\s+isHost\s*=\s*baseIsHost\s*;/);
     });
 
-    it('isHost composes baseIsHost with the Phase M override', () => {
-      // FALSE override → false; TRUE override → true; else → baseIsHost.
-      expect(src).toMatch(/const\s+isHost\s*=[\s\S]{0,180}myActingAsHost[\s\S]{0,80}baseIsHost/);
-    });
-
-    it('Bug D — when admin/super_admin has not picked, content area is blocked behind must-pick-role gate', () => {
-      // Bug D (15 May Ali) — toggle-eligible users (admins/super_admins
-      // not directing the event) must explicitly pick "Join as host" or
-      // "Join as participant" BEFORE the lobby/video/chat/participant-list
-      // surfaces render. Pin the gating expression + the blocker UI so a
-      // future refactor can't accidentally drop the requirement.
-      expect(src).toMatch(
-        /mustPickRole\s*=\s*canToggleActingAsHost\s*&&\s*myActingAsHost\s*===\s*undefined/,
-      );
-      expect(src).toMatch(/data-testid="must-pick-role-blocker"/);
+    it('the join-as picker, banners, and must-pick blocker are pinned off', () => {
+      // The role flags are forced to constants so no popup / blocker ever
+      // renders and the event content always shows.
+      expect(src).toMatch(/const\s+canToggleActingAsHost\s*=\s*false\s*;/);
+      expect(src).toMatch(/const\s+showJoinAsBanner\s*=\s*false\s*;/);
+      expect(src).toMatch(/const\s+mustPickRole\s*=\s*false\s*;/);
     });
 
     it('Bug D — mirror banner persists for users currently opted in (acting as host)', () => {

@@ -69,15 +69,16 @@ describe('Phase May-19 — Bugs 33 / 36 / 37 / 44', () => {
   // ── Bug 36 — host/cohost never stuck in LEFT on their own event ──────
 
   describe('Bug 36 — host/cohost LEFT carve-out', () => {
-    it('handleJoinSession defensive-reset block handles status="left" for hosts/cohosts', () => {
+    it('handleJoinSession defensive-reset restores ANY present user (left/disconnected/in_round) on reconnect', () => {
       const fn = slice(participantFlowSrc, 'export async function handleJoinSession',
         '// Notify others — include isHost flag');
-      // Looks up host_user_id + session_cohosts for the rejoining user
-      expect(fn).toMatch(/SELECT[\s\S]{0,400}host_user_id[\s\S]{0,400}session_cohosts/);
-      // And resets via the state machine LEFT → IN_MAIN_ROOM
+      // 23 May (Stefan + Ali) — the host/cohost-only LEFT carve-out is gone.
+      // This block runs on presence:ready (explicit re-entry), so EVERY
+      // present user with no active match is reset to the main room — pre-fix
+      // a regular participant whose mobile dropped stayed 'left'/'disconnected'
+      // and the matching engine never saw them (Ali Hamza on mobile).
+      expect(fn).toMatch(/currentStatus\s*===\s*'left'\s*\|\|\s*currentStatus\s*===\s*'disconnected'\s*\|\|\s*currentStatus\s*===\s*'in_round'/);
       expect(fn).toMatch(/transitionParticipant\([\s\S]{0,200}ParticipantState\.IN_MAIN_ROOM/);
-      // Audit log line names Bug 36 for visibility
-      expect(fn).toMatch(/Bug 36[\s\S]{0,200}LEFT[\s\S]{0,200}in_main_room/);
     });
 
     // M1 fix (21 May Ali) — Bug 36's host/cohost LEFT carve-out is now
