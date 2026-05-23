@@ -74,7 +74,11 @@ export default function HostControls({ sessionId }: Props) {
       ? 'A round is currently active. Ending the event will cut all conversations short. Are you sure?'
       : 'Are you sure you want to end this event? All participants will be disconnected.';
     if (!confirm(msg)) return;
-    socket?.emit('host:end_session', { sessionId });
+    // #11 (23 May) — endEvent:true marks this as a whole-event end. "End Round"
+    // (endCurrentRound above) emits the same socket event WITHOUT this flag, so
+    // the server ends just the round and continues. Without the flag, ending a
+    // round early killed the entire event (a 3-round event ended after round 1).
+    socket?.emit('host:end_session', { sessionId, endEvent: true });
   });
 
   // Count non-host/co-host participants for matching eligibility.

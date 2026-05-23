@@ -143,9 +143,20 @@ describe('23 May 2nd-test fixes — round-3 repeats, re-match rotation, end-even
       expect(stateSrc()).toMatch(/endRequested\?:\s*boolean/);
     });
 
-    it('handleHostEnd sets endRequested when ending during an active round', () => {
+    it('handleHostEnd sets endRequested ONLY when the End Event flag is set (not on End Round)', () => {
       const fn = fnSlice(hostActionsSrc(), 'export async function handleHostEnd');
-      expect(fn).toMatch(/endRequested\s*=\s*true/);
+      // Regression guard (23 May): "End Round" and "End Event" share the
+      // host:end_session event; whole-event completion must be gated on
+      // data.endEvent, or ending a round early kills the event (a 3-round
+      // event ended after round 1).
+      expect(fn).toMatch(/if\s*\(\s*data\.endEvent\s*\)\s*activeSession\.endRequested\s*=\s*true/);
+    });
+
+    it('only the End Event button sends endEvent:true; End Round does not', () => {
+      const src = readClient('features/live/HostControls.tsx');
+      expect(src).toMatch(/host:end_session['"]\s*,\s*\{\s*sessionId\s*,\s*endEvent:\s*true\s*\}/);
+      // End Round still emits the bare event (ends round, continues).
+      expect(src).toMatch(/host:end_session['"]\s*,\s*\{\s*sessionId\s*\}\s*\)/);
     });
 
     it('endRatingWindow completes the event when endRequested is set', () => {

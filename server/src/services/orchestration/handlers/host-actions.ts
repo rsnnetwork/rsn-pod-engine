@@ -616,7 +616,7 @@ export async function handleHostResume(
 export async function handleHostEnd(
   io: SocketServer,
   socket: Socket,
-  data: { sessionId: string }
+  data: { sessionId: string; endEvent?: boolean }
 ): Promise<void> {
   return withSessionGuard(data.sessionId, async () => {
   try {
@@ -632,13 +632,14 @@ export async function handleHostEnd(
       // Clear any existing timer
       if (activeSession.timer) clearTimeout(activeSession.timer);
 
-      // #11 (23 May, Waseem host) — End Event during an active round used to
-      // ONLY end the round (rating window → next-round transition), so the host
-      // had to press End Event a second (and third) time to actually end the
-      // event. Record the intent now; endRatingWindow checks endRequested and
-      // completes the event after THIS round's rating instead of opening the
-      // next round. One press ends the event.
-      activeSession.endRequested = true;
+      // #11 (23 May) — distinguish "End Round" from "End Event". BOTH buttons
+      // emit host:end_session; only the End Event button carries endEvent:true.
+      // When the host explicitly ends the EVENT during a round, flag it so
+      // endRatingWindow completes the event after this round's rating (one
+      // press, instead of the old "press End Event 3×"). Plain "End Round" must
+      // NOT set this — otherwise ending a round early kills the whole event
+      // (regression 23 May: a 3-round event ended after round 1).
+      if (data.endEvent) activeSession.endRequested = true;
 
       if (!_endRound) {
         logger.error({ sessionId: data.sessionId }, 'endRound not injected — cannot end round');

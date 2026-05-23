@@ -230,7 +230,7 @@ export interface ClientToServerEvents {
   'host:start_round': (data: { sessionId: string }) => void;
   'host:pause_session': (data: { sessionId: string }) => void;
   'host:resume_session': (data: { sessionId: string }) => void;
-  'host:end_session': (data: { sessionId: string }) => void;
+  'host:end_session': (data: { sessionId: string; endEvent?: boolean }) => void;
   'host:broadcast_message': (data: { sessionId: string; message: string }) => void;
   'host:remove_participant': (data: { sessionId: string; userId: string; reason: string }) => void;
   'host:reassign': (data: { sessionId: string; participantId: string }) => void;
