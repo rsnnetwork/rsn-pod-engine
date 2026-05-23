@@ -22,6 +22,8 @@ import {
 import { verifyHost, getAllHostIds } from './host-actions';
 import * as matchingService from '../../matching/matching.service';
 import { validateMatchAssignment } from '../../matching/match-validator.service';
+// 23 May — match-time presence reconcile routes status resets through the chokepoint.
+import { transitionParticipant, ParticipantState } from '../state/participant-state-machine';
 // Phase 7C.1 (7 May spec) — backing data for the Host Control Center drawer.
 import { buildHostParticipantsView } from './host-participants-view';
 // Phase 2 (19 May 2026) — realtime migration dual-emit. The host:event_plan_*
@@ -124,57 +126,29 @@ export async function handleHostGenerateMatches(
     // + 1 so the guard rejects every subsequent click until the new round
     // actually completes — clicking "Another Round" three times in a row
     // still adds exactly one round.
-    const alreadyBumpedForThisAttempt =
-      (activeSession.config.numberOfRounds || 5) > activeSession.currentRound;
-    if (
-      activeSession.status === SessionStatus.CLOSING_LOBBY
-      && !alreadyBumpedForThisAttempt
-    ) {
+    // 23 May (Stefan live test) — the round-count bump MOVED to actual round
+    // start (transitionToRound). Pre-fix, opening a bonus-round preview here
+    // optimistically bumped numberOfRounds (+bonusRoundsAdded) BEFORE the round
+    // ran; if the host then cancelled or ended, the count stayed inflated and
+    // the recap read "3 of 4" for a round that never happened. Now we only
+    // re-open the preview phase here; the bump happens when the host actually
+    // Confirms -> Starts the round.
+    if (activeSession.status === SessionStatus.CLOSING_LOBBY) {
       const { clearSessionTimers } = await import('./timer-manager');
       const sessionService = await import('../../session/session.service');
       clearSessionTimers(data.sessionId);
-      const bumpedRounds = (activeSession.config.numberOfRounds || 5) + 1;
-      // Bug 28 (19 May Ali + Stefan) — track bonus-round count alongside
-      // the bumped total so UI can render "Bonus" badges and recap can
-      // report "3 + 1 bonus" honestly.
-      const bonusRoundsAdded = (activeSession.config.bonusRoundsAdded ?? 0) + 1;
-      activeSession.config = {
-        ...activeSession.config,
-        numberOfRounds: bumpedRounds,
-        bonusRoundsAdded,
-      };
       activeSession.status = SessionStatus.ROUND_TRANSITION;
       await sessionService.updateSessionStatus(data.sessionId, SessionStatus.ROUND_TRANSITION);
-      // Bug 22 + Bug 28 — durable persistence of BOTH the new total and
-      // the bonus count so a restart / recap / cold REST fetch sees them.
-      // Nested jsonb_set rewrites the two keys; the rest of the config
-      // blob stays intact.
-      try {
-        await query(
-          `UPDATE sessions
-             SET config = jsonb_set(
-               jsonb_set(config, '{numberOfRounds}', to_jsonb($2::int), true),
-               '{bonusRoundsAdded}', to_jsonb($3::int), true
-             )
-             WHERE id = $1`,
-          [data.sessionId, bumpedRounds, bonusRoundsAdded],
-        );
-      } catch (err) {
-        logger.warn({ err, sessionId: data.sessionId, bumpedRounds, bonusRoundsAdded }, 'Failed to persist bumped numberOfRounds/bonusRoundsAdded to DB — non-fatal (in-memory + Redis still hold the bump)');
-      }
-      // Bug 22 + Bug 28 — broadcast so EventPlanStrip + any UI showing
-      // the round count refetches and renders the new total. The
-      // bonusRoundsAdded field lets clients flag bonus rounds without
-      // a snapshot refetch.
+      // 23 May — refresh the host's plan strip so it picks up the new preview
+      // round. No round-count bump here (moved to round start), so the strip
+      // shows the current total until the bonus round is actually started.
       io.to(sessionRoom(data.sessionId)).emit('host:event_plan_repaired', {
         sessionId: data.sessionId,
         reason: 'host_request',
         regeneratedRounds: [activeSession.currentRound + 1],
-        roundCount: bumpedRounds,
-        // totalPairs will catch up on the next plan refetch from EventPlanStrip
-        // — the per-round badge query reads matches directly.
+        roundCount: activeSession.config.numberOfRounds,
         totalPairs: 0,
-        bonusRoundsAdded,
+        bonusRoundsAdded: activeSession.config.bonusRoundsAdded ?? 0,
       });
       // Phase 2 dual-emit — session + plan entities for every viewer so
       // event-plan / host-state queries refetch in the same tick.
@@ -196,16 +170,43 @@ export async function handleHostGenerateMatches(
       });
     }
 
-    // Phase A1 (10 May spec) — DB is the single source of truth for who can
-    // be matched. Pre-fix this code intersected DB eligibility with the
-    // in-memory presenceMap; whenever the two diverged (user left but DB
-    // status update lagged, OR DB status was stale and presenceMap was
-    // empty) the host either saw ghost users in the preview or got a
-    // misleading "Not enough participants" error. The state-machine
-    // chokepoint now keeps DB status accurate: leave→LEFT, disconnect→
-    // DISCONNECTED, both excluded by getEligibleParticipants. So one query
-    // covers both checks — count + filter, single source.
+    // Phase A1 (10 May) — DB status is the source of truth for matching.
+    // 23 May (Stefan live test) — but a transient socket/heartbeat blip (a
+    // phone locking, a tab backgrounding, a Wi-Fi hiccup) flags a still-present
+    // participant 'disconnected'. The host's room count includes 'disconnected'
+    // while getEligibleParticipants excludes it, so present people went
+    // unmatched — the host saw "4 in room" but got a trio/pair, and only a full
+    // browser refresh fixed it. Reconcile first: anyone whose socket is live in
+    // the room right now (or has a fresh heartbeat in presenceMap) has their
+    // stale 'disconnected' cleared, so eligibility equals what the host sees.
     const allHostIds = await getAllHostIds(data.sessionId, activeSession.hostUserId);
+
+    try {
+      const presentUserIds = new Set<string>();
+      const socketsInRoom = await io.in(sessionRoom(data.sessionId)).fetchSockets();
+      for (const s of socketsInRoom) {
+        const uid = (s.data as any)?.userId;
+        if (uid) presentUserIds.add(uid);
+      }
+      for (const uid of activeSession.presenceMap.keys()) presentUserIds.add(uid);
+      if (presentUserIds.size > 0) {
+        const stale = await query<{ user_id: string }>(
+          `SELECT user_id FROM session_participants
+             WHERE session_id = $1 AND status = 'disconnected' AND user_id = ANY($2)`,
+          [data.sessionId, Array.from(presentUserIds)],
+        );
+        for (const r of stale.rows) {
+          await transitionParticipant(data.sessionId, r.user_id, ParticipantState.IN_MAIN_ROOM);
+        }
+        if (stale.rows.length > 0) {
+          logger.info({ sessionId: data.sessionId, reconciled: stale.rows.length },
+            'Reconciled present-but-disconnected participants before matching');
+        }
+      }
+    } catch (err) {
+      logger.warn({ err, sessionId: data.sessionId }, 'Presence reconcile before matching failed (non-fatal)');
+    }
+
     const eligible = await matchingService.getEligibleParticipants(data.sessionId, allHostIds);
     if (eligible.length < 2) {
       socket.emit('error', {
@@ -479,10 +480,11 @@ export async function handleHostSwapMatch(
     const newA = replaceInMatch(matchA, data.userA, data.userB);
     const newB = replaceInMatch(matchB, data.userB, data.userA);
 
-    // T0-1: validate the resulting matches before UPDATE. The swap is in
-    // preview phase (status='scheduled' for both), so we check conflicts
-    // against scheduled+active rows; excludeMatchId lets each validation
-    // ignore the match it's updating.
+    // T0-1: validate the resulting matches before UPDATE. 23 May (Stefan live
+    // test) — a swap rewrites BOTH rooms, so each validation must exclude both
+    // matchA and matchB. Pre-fix it excluded only the room being checked, so
+    // the swap-partner still sitting in the other room read as "already in
+    // another match" and every two-room swap was rejected.
     for (const [check, label] of [
       [{ result: newA, matchId: matchA.id }, 'matchA'] as const,
       [{ result: newB, matchId: matchB.id }, 'matchB'] as const,
@@ -493,7 +495,7 @@ export async function handleHostSwapMatch(
         participantAId: check.result.a,
         participantBId: check.result.b,
         participantCId: check.result.c,
-        excludeMatchId: check.matchId,
+        excludeMatchIds: [matchA.id, matchB.id],
         conflictingStatuses: ['scheduled', 'active'],
       });
       if (!validation.valid) {
@@ -628,6 +630,13 @@ export async function handleHostRegenerateMatches(
       return;
     }
 
+    // 23 May (Stefan live test) — capture the current arrangement so we can
+    // tell the host when Re-match couldn't produce a DIFFERENT one (out of
+    // fresh no-repeat options) instead of the button silently doing nothing.
+    const arrangementKey = (ms: { participantAId: string; participantBId: string; participantCId?: string | null }[]) =>
+      ms.map(m => [m.participantAId, m.participantBId, m.participantCId].filter(Boolean).sort().join('+')).sort().join('|');
+    const beforeArrangement = arrangementKey(await matchingService.getMatchesByRound(data.sessionId, roundNumber));
+
     // Phase 1 (5 May spec) — wipe ALL matches for the pending round before
     // regenerating, regardless of state. Previously this filtered by status
     // IN ('scheduled', 'cancelled') which let confirmed/forced/duplicate
@@ -676,6 +685,18 @@ export async function handleHostRegenerateMatches(
 
     // Re-send preview
     await sendMatchPreview(io, socket, data.sessionId, roundNumber, activeSession.hostUserId);
+
+    // 23 May (Stefan live test) — if Re-match landed on the SAME arrangement,
+    // there are no other no-repeat options left for this round; tell the host
+    // so the button never looks dead. Surfaced as an info toast on the client
+    // (REMATCH_NO_ALTERNATIVE).
+    const afterArrangement = arrangementKey(await matchingService.getMatchesByRound(data.sessionId, roundNumber));
+    if (afterArrangement === beforeArrangement && beforeArrangement.length > 0) {
+      socket.emit('error', {
+        code: 'REMATCH_NO_ALTERNATIVE',
+        message: 'No other no-repeat pairing is possible for this round — these are the only fresh matches left.',
+      });
+    }
 
     logger.info({ sessionId: data.sessionId, roundNumber }, 'Host regenerated matches');
   } catch (err: any) {

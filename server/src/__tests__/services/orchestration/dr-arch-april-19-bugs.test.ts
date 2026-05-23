@@ -223,13 +223,13 @@ describe('Dr Arch April 19 — Bug 9: "Another Round" routes through Match Peopl
     const src = readSource('../../../services/orchestration/handlers/matching-flow.ts');
     const handlerStart = src.indexOf('export async function handleHostGenerateMatches');
     expect(handlerStart).toBeGreaterThan(-1);
-    const handler = src.slice(handlerStart, handlerStart + 3000);
+    const handler = src.slice(handlerStart, handlerStart + 4500);
     // State guard now includes CLOSING_LOBBY
     expect(handler).toMatch(/SessionStatus\.CLOSING_LOBBY/);
     // Transition back to ROUND_TRANSITION when entering from CLOSING_LOBBY
     expect(handler).toMatch(/CLOSING_LOBBY[\s\S]*?ROUND_TRANSITION/);
-    // Bump numberOfRounds so the new round is a valid round N+1
-    expect(handler).toMatch(/numberOfRounds[\s\S]*?\+\s*1/);
+    // 23 May — the round-count bump moved to round start (transitionToRound),
+    // so it is no longer in this handler; the preview just re-opens the round.
     // Cancel the closing-lobby safety timer
     expect(handler).toMatch(/clearSessionTimers/);
   });

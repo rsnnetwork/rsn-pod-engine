@@ -18,36 +18,29 @@ function readServer(rel: string): string {
   return nodeFs.readFileSync(nodePath.join(__dirname, '../../', rel), 'utf8');
 }
 
-describe('Bug 22 — Extra round persists everywhere', () => {
+describe('Bug 22 / 23 May — bonus round counted only when actually started', () => {
   const flowSrc = readServer('services/orchestration/handlers/matching-flow.ts');
+  const lifecycleSrc = readServer('services/orchestration/handlers/round-lifecycle.ts');
 
-  it('CLOSING_LOBBY → "Another Round" bumps numberOfRounds in-memory AND in sessions.config DB', () => {
-    // Locate the CLOSING_LOBBY branch in handleHostGenerateMatches.
-    const idx = flowSrc.indexOf("activeSession.status === SessionStatus.CLOSING_LOBBY");
+  it('the round-count bump lives at round START (transitionToRound), not the preview', () => {
+    // 23 May (Stefan live test) — moved out of the CLOSING_LOBBY "Another
+    // Round" preview into actual round start, so a previewed-but-never-started
+    // round never inflates the recap "X of N". Idempotent (only when this round
+    // exceeds the configured count) and still persisted to sessions.config.
+    const idx = lifecycleSrc.indexOf('export async function transitionToRound');
     expect(idx).toBeGreaterThan(-1);
-    const block = flowSrc.slice(idx, idx + 3500);
-
-    // In-memory bump goes through the bumpedRounds variable so both the
-    // local activeSession.config update AND the DB UPDATE use the same
-    // value.
-    expect(block).toMatch(
-      /const\s+bumpedRounds\s*=\s*\(activeSession\.config\.numberOfRounds[\s\S]{0,80}\+\s*1/,
-    );
-    expect(block).toMatch(/numberOfRounds:\s*bumpedRounds/);
-
-    // Bug 22: jsonb_set updates the DB config so recap, REST fetches, and
-    // a server restart all see the bumped value.
-    expect(block).toMatch(/jsonb_set\(config,\s*'\{numberOfRounds\}'/);
-    expect(block).toMatch(/UPDATE sessions[\s\S]{0,200}SET config = jsonb_set/);
+    const block = lifecycleSrc.slice(idx, idx + 2500);
+    expect(block).toMatch(/roundNumber\s*>\s*\(activeSession\.config\.numberOfRounds/);
+    expect(block).toMatch(/numberOfRounds:\s*roundNumber/);
+    expect(block).toMatch(/jsonb_set\([\s\S]{0,160}'\{numberOfRounds\}'/);
   });
 
-  it('CLOSING_LOBBY → "Another Round" emits host:event_plan_repaired with the new roundCount', () => {
+  it('the CLOSING_LOBBY "Another Round" preview no longer bumps the count', () => {
     const idx = flowSrc.indexOf("activeSession.status === SessionStatus.CLOSING_LOBBY");
-    const block = flowSrc.slice(idx, idx + 3500);
-    // The broadcast tells EventPlanStrip / lobby header to repaint the
-    // round count from the new bumpedRounds value.
-    expect(block).toMatch(
-      /emit\(\s*'host:event_plan_repaired'[\s\S]{0,400}roundCount:\s*bumpedRounds/,
-    );
+    expect(idx).toBeGreaterThan(-1);
+    const block = flowSrc.slice(idx, idx + 2000);
+    // No optimistic bump here anymore — the preview just re-opens the round.
+    expect(block).not.toMatch(/const\s+bumpedRounds/);
+    expect(block).not.toMatch(/numberOfRounds:\s*bumpedRounds/);
   });
 });

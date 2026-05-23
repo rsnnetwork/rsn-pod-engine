@@ -795,9 +795,16 @@ export default function useSessionSocket(sessionId: string) {
         NO_ELIGIBLE_PAIRS: { msg: 'Everyone has already been matched. End the event or wait for new participants.', severity: 'info' },
         GENERATE_FAILED: { msg: 'Could not generate matches. Try again.', severity: 'error' },
         REGENERATE_FAILED: { msg: 'Re-match failed. Try again.', severity: 'error' },
+        // 23 May (Stefan live test) — Re-match couldn't produce a different
+        // no-repeat arrangement; show the server's reason as an info toast so
+        // the button never looks dead.
+        REMATCH_NO_ALTERNATIVE: { msg: rawMsg, severity: 'info' },
         ROOM_CREATION_FAILED: { msg: 'Could not create breakout room. Try again.', severity: 'error' },
         MATCH_CREATION_FAILED: { msg: 'Could not assign participants to the room. Try again.', severity: 'error' },
-        PARTICIPANT_ALREADY_MATCHED: { msg: 'One or more participants are already in another active match.', severity: 'info' },
+        // 23 May — surface the server's detailed "X and Y are already in another
+        // room — use Swap" guidance instead of a generic line, so Manual Match
+        // explains why it refused and which tool to use.
+        PARTICIPANT_ALREADY_MATCHED: { msg: rawMsg, severity: 'info' },
         FORCE_MATCH_FAILED: { msg: 'Force-match failed. Try again.', severity: 'error' },
         REMOVE_FAILED: { msg: 'Could not remove that participant. Try again.', severity: 'error' },
         DM_SEND_FAILED: { msg: 'Message could not be sent. Try again.', severity: 'error' },

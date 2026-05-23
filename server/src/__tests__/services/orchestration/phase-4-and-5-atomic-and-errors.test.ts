@@ -119,7 +119,7 @@ describe('Phase 4 + 5 — Atomic room ops, chat reliability, error toasts, test 
     it('error listener fires useToastStore.addToast with friendly mapping', () => {
       const startIdx = src.indexOf("socket.on('error',");
       expect(startIdx).toBeGreaterThan(-1);
-      const slice = src.slice(startIdx, startIdx + 2200);
+      const slice = src.slice(startIdx, startIdx + 3000);
       expect(slice).toMatch(/useToastStore\.getState\(\)\.addToast/);
       expect(slice).toMatch(/FRIENDLY/);
     });
@@ -139,7 +139,7 @@ describe('Phase 4 + 5 — Atomic room ops, chat reliability, error toasts, test 
 
     it('unrecognised codes fall through to the raw server message', () => {
       const startIdx = src.indexOf("socket.on('error',");
-      const slice = src.slice(startIdx, startIdx + 2200);
+      const slice = src.slice(startIdx, startIdx + 3000);
       expect(slice).toMatch(/FRIENDLY\[code\]\s*\|\|\s*\{\s*msg:\s*rawMsg/);
     });
   });

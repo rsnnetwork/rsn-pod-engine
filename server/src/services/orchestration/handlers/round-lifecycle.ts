@@ -209,6 +209,25 @@ export async function transitionToRound(
   if (!activeSession) return;
 
   try {
+    // 23 May (Stefan live test) — bump the round count when a bonus round
+    // actually STARTS. Moved here from the "Another Round" preview action so a
+    // previewed-but-never-started round never inflates the recap's "X of N".
+    // Idempotent: only bumps when this round exceeds the configured count.
+    if (roundNumber > (activeSession.config.numberOfRounds || 0)) {
+      const bonusRoundsAdded = (activeSession.config.bonusRoundsAdded ?? 0) + 1;
+      activeSession.config = {
+        ...activeSession.config,
+        numberOfRounds: roundNumber,
+        bonusRoundsAdded,
+      };
+      await query(
+        `UPDATE sessions SET config = jsonb_set(
+           jsonb_set(config, '{numberOfRounds}', to_jsonb($2::int), true),
+           '{bonusRoundsAdded}', to_jsonb($3::int), true) WHERE id = $1`,
+        [sessionId, roundNumber, bonusRoundsAdded],
+      ).catch(err => logger.warn({ err, sessionId, roundNumber }, 'Failed to persist bonus-round bump (non-fatal)'));
+    }
+
     // Update session state
     activeSession.currentRound = roundNumber;
     activeSession.status = SessionStatus.ROUND_ACTIVE;
@@ -427,6 +446,20 @@ export async function transitionToRound(
       currentRound: roundNumber,
     });
 
+    // 23 May (Stefan live test) — refresh the host's Event Plan strip on round
+    // start so the active round flips to amber immediately. The strip is
+    // host-only and otherwise only refetches on its 30s timer / participant
+    // entity emits (which don't reach the host), so it stayed "Planned" — and
+    // for a short round never showed amber at all.
+    io.to(sessionRoom(sessionId)).emit('host:event_plan_repaired', {
+      sessionId,
+      reason: 'round_started',
+      regeneratedRounds: [roundNumber],
+      roundCount: activeSession.config.numberOfRounds,
+      totalPairs: 0,
+      bonusRoundsAdded: activeSession.config.bonusRoundsAdded ?? 0,
+    });
+
     // Start round timer
     startSegmentTimer(io, sessionId, activeSession.config.roundDurationSeconds, () => {
       endRound(io, sessionId, roundNumber);
@@ -494,6 +527,18 @@ export async function endRound(
       sessionId,
       status: SessionStatus.ROUND_RATING,
       currentRound: roundNumber,
+    });
+
+    // 23 May (Stefan live test) — refresh the host's Event Plan strip on round
+    // end so the finished round flips to green "Done" without waiting for the
+    // strip's 30s timer.
+    io.to(sessionRoom(sessionId)).emit('host:event_plan_repaired', {
+      sessionId,
+      reason: 'round_ended',
+      regeneratedRounds: [roundNumber],
+      roundCount: activeSession.config.numberOfRounds,
+      totalPairs: 0,
+      bonusRoundsAdded: activeSession.config.bonusRoundsAdded ?? 0,
     });
 
     // Get matches for rating window notifications

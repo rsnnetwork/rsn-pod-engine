@@ -730,6 +730,11 @@ router.get(
            SELECT user_id FROM session_participants
            WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')
              AND user_id != $2
+             -- 23 May (Stefan live test): cohosts are hosts too (excluded from
+             -- matching), so they must not be counted as "not matched" either.
+             -- Pre-fix, promoting someone to co-host made them show up in the
+             -- "N not matched" tally, confusing the host.
+             AND user_id NOT IN (SELECT user_id FROM session_cohosts WHERE session_id = $1)
          ),
          round_participants AS (
            SELECT m.round_number,
