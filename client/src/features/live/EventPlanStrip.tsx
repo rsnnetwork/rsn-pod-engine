@@ -104,7 +104,11 @@ export default function EventPlanStrip({ sessionId }: Props) {
             <div
               key={r.roundNumber}
               className={`flex-shrink-0 min-w-[110px] border rounded-lg px-2.5 py-2 ${meta.cls} ${isActive ? 'ring-2 ring-amber-400' : ''}`}
-              title={`Round ${r.roundNumber}: ${meta.label}${r.byeCount > 0 ? ` · ${r.byeCount} not matched` : ''}${r.hasFallback ? ' · used fallback ladder' : ''}`}
+              title={
+                r.status === 'cancelled'
+                  ? `Round ${r.roundNumber} was cancelled — its matches were cleared (e.g. after a re-match, a host/co-host change, or ending the round early). Click "Match People" to plan this round again.`
+                  : `Round ${r.roundNumber}: ${meta.label}${r.byeCount > 0 ? ` · ${r.byeCount} not matched` : ''}${r.hasFallback ? ' · used fallback ladder' : ''}`
+              }
             >
               <div className="flex items-center gap-1.5 mb-0.5">
                 <Icon className="h-3.5 w-3.5" />
@@ -112,10 +116,10 @@ export default function EventPlanStrip({ sessionId }: Props) {
               </div>
               <div className="text-[11px] opacity-90 leading-tight">
                 {meta.label}
-                {r.pairCount > 0 && (
+                {r.status !== 'cancelled' && r.pairCount > 0 && (
                   <span className="ml-1">· {r.pairCount} {r.pairCount === 1 ? 'pair' : 'pairs'}</span>
                 )}
-                {r.byeCount > 0 && (
+                {r.status !== 'cancelled' && r.byeCount > 0 && (
                   // Bug 40 (19 May Stefan, via Ali) — Stefan asked for
                   // "no bye word" in user-facing copy. Standardised on
                   // "not matched" which is what the same component's
@@ -126,6 +130,14 @@ export default function EventPlanStrip({ sessionId }: Props) {
                   <AlertTriangle className="h-3 w-3 inline ml-1 text-amber-500" aria-label="Used fallback ladder" />
                 )}
               </div>
+              {/* #7b (23 May) — a bare "Cancelled · N not matched" left the host
+                  guessing why. Say plainly what happened and the one action
+                  that fixes it, instead of a cryptic count. */}
+              {r.status === 'cancelled' && (
+                <div className="text-[10px] opacity-80 leading-tight mt-0.5">
+                  Matches cleared — press “Match People” to re-plan
+                </div>
+              )}
             </div>
           );
         })}
