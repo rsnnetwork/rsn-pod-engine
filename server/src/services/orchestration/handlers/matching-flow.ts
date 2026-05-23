@@ -708,33 +708,33 @@ export async function handleHostRegenerateMatches(
     // — DB status is the single source of truth via getEligibleParticipants
     // inside the matching service; no in-memory presence intersection.
     const allHostIds = await getAllHostIds(data.sessionId, activeSession.hostUserId);
-    await matchingService.generateSingleRound(data.sessionId, roundNumber, allHostIds, { regenerate: true });
 
-    // 23 May (#5b) — Re-match must reliably ROTATE to a different fresh
-    // arrangement when one exists. The jitter alone often re-lands on the same
-    // pairing (near-equal scores), which made Re-match look dead. If we got the
-    // same arrangement back, FORCE a different one by excluding the current
-    // pairs, and keep it only if it stayed fresh (no prior-round repeat). If no
-    // other fresh arrangement exists, restore the original and report below.
-    let afterArrangement = arrangementKey(await matchingService.getMatchesByRound(data.sessionId, roundNumber));
-    if (afterArrangement === beforeArrangement && beforePairKeys.length > 0) {
+    // 23 May (#5b, refined per Ali) — Re-match must ALWAYS rotate to a DIFFERENT
+    // arrangement, every press. Hard-exclude the CURRENT preview pairs so the
+    // engine cannot reproduce them; the no-repeat ladder inside generateSingleRound
+    // still prefers fresh pairings while any remain, then falls into already-met
+    // pairs (Met 1x, Met 2x…) once fresh is exhausted — but it always changes.
+    //
+    // Pre-fix a "fresh-only" gate restored the original whenever the rotated
+    // arrangement repeated a prior round. On round 1 that gate counted the
+    // PRE-PLANNED future rounds (2, 3) as history, so the only alternatives
+    // looked like "repeats" and Re-match did nothing until a swap shifted state.
+    await query(`DELETE FROM matches WHERE session_id = $1 AND round_number = $2`, [data.sessionId, roundNumber]);
+    await matchingService.generateSingleRound(
+      data.sessionId, roundNumber, allHostIds,
+      { regenerate: true, excludePairKeys: beforePairKeys },
+    );
+    const afterMatches = await matchingService.getMatchesByRound(data.sessionId, roundNumber);
+    const afterArrangement = arrangementKey(afterMatches);
+
+    // The ONLY case Re-match genuinely can't change is a single possible pairing
+    // (e.g. exactly 2 participants): excluding the current arrangement then either
+    // reproduces it or leaves someone unmatched. Restore the original and report.
+    const noOtherArrangement = beforePairKeys.length > 0 &&
+      (afterArrangement === beforeArrangement || afterMatches.length < beforeMatches.length);
+    if (noOtherArrangement) {
       await query(`DELETE FROM matches WHERE session_id = $1 AND round_number = $2`, [data.sessionId, roundNumber]);
-      await matchingService.generateSingleRound(
-        data.sessionId, roundNumber, allHostIds,
-        { regenerate: true, excludePairKeys: beforePairKeys },
-      );
-      const forced = await matchingService.getMatchesByRound(data.sessionId, roundNumber);
-      const forcedArrangement = arrangementKey(forced);
-      const priorKeysForRound = await priorRoundPairKeys(data.sessionId, roundNumber);
-      const forcedRepeatsPrior = arrangementPairKeys(forced).some(k => priorKeysForRound.has(k));
-      if (forcedArrangement !== beforeArrangement && !forcedRepeatsPrior) {
-        afterArrangement = forcedArrangement; // kept the fresh rotation
-      } else {
-        // No other FRESH arrangement — restore the original and report it below.
-        await query(`DELETE FROM matches WHERE session_id = $1 AND round_number = $2`, [data.sessionId, roundNumber]);
-        await matchingService.generateSingleRound(data.sessionId, roundNumber, allHostIds, { regenerate: false });
-        afterArrangement = beforeArrangement;
-      }
+      await matchingService.generateSingleRound(data.sessionId, roundNumber, allHostIds, { regenerate: false });
     }
 
     // R7 (20 May 2026 — live-test post-mortem). After regenerating a round
@@ -768,14 +768,13 @@ export async function handleHostRegenerateMatches(
     // Re-send preview
     await sendMatchPreview(io, socket, data.sessionId, roundNumber, activeSession.hostUserId);
 
-    // 23 May (#5b) — if even the forced retry couldn't reach a different fresh
-    // arrangement, afterArrangement still equals beforeArrangement: there are
-    // no other no-repeat options left for this round. Tell the host so the
-    // button never looks dead (info toast: REMATCH_NO_ALTERNATIVE).
-    if (afterArrangement === beforeArrangement && beforeArrangement.length > 0) {
+    // 23 May (#5b) — the only time Re-match can't change anything is a single
+    // possible pairing (e.g. exactly 2 participants). Tell the host plainly
+    // instead of the button looking dead (info toast: REMATCH_NO_ALTERNATIVE).
+    if (noOtherArrangement) {
       socket.emit('error', {
         code: 'REMATCH_NO_ALTERNATIVE',
-        message: 'No other no-repeat pairing is possible for this round — these are the only fresh matches left.',
+        message: "These participants only have one possible pairing, so Re-match can't change it.",
       });
     }
 

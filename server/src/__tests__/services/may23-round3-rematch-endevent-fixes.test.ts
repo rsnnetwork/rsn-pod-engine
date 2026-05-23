@@ -121,18 +121,23 @@ describe('23 May 2nd-test fixes — round-3 repeats, re-match rotation, end-even
 
   // ── #5b — re-match actively rotates
   describe('#5b — Re-match forces a different fresh arrangement before giving up', () => {
-    it('generateSingleRound accepts excludePairKeys and unions them into excludedPairs', () => {
+    it('generateSingleRound applies excludePairKeys as a HARD exclusion at every fallback level', () => {
       const src = serviceSrc();
       expect(src).toMatch(/excludePairKeys\?:\s*string\[\]/);
-      expect(src).toMatch(/excludePairKeys[\s\S]{0,120}excludedPairs\.add\(k\)/);
+      // Unioned into EACH level's exclusion set (never relaxed), so Re-match
+      // always rotates even when the no-repeat ladder relaxes at L3/L4.
+      expect(src).toMatch(/\[\.\.\.baseExcluded,\s*\.\.\.options\.excludePairKeys\]/);
     });
 
-    it('handleHostRegenerateMatches retries with the current arrangement excluded', () => {
+    it('handleHostRegenerateMatches always forces a different arrangement (no fresh-only gate)', () => {
       const fn = fnSlice(flowSrc(), 'export async function handleHostRegenerateMatches');
-      expect(fn).toMatch(/excludePairKeys/);
-      // Freshness gate — only accept the forced retry if it doesn't repeat a prior round.
-      expect(fn).toMatch(/priorRoundPairKeys/);
-      // Still reports the genuine dead-end.
+      // Every press hard-excludes the current arrangement and accepts whatever
+      // different arrangement results (fresh first, then repeats).
+      expect(fn).toMatch(/excludePairKeys:\s*beforePairKeys/);
+      // No fresh-only gate that counted future pre-planned rounds as history.
+      expect(fn).not.toMatch(/forcedRepeatsPrior/);
+      // Only reports when a single pairing exists.
+      expect(fn).toMatch(/noOtherArrangement/);
       expect(fn).toMatch(/REMATCH_NO_ALTERNATIVE/);
     });
   });

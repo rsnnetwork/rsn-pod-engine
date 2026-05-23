@@ -290,11 +290,12 @@ export async function generateSingleRound(
     }
   }
 
-  // 23 May (#5b) — Re-match rotation. The host pressed Re-match and the engine
-  // returned the SAME arrangement; the caller re-invokes us with the current
-  // pairs in excludePairKeys to FORCE a different one. Unioned in regardless of
-  // policy — the host explicitly asked for a reshuffle.
-  for (const k of options?.excludePairKeys ?? []) excludedPairs.add(k);
+  // 23 May (#5b) — Re-match rotation. excludePairKeys carries the CURRENT
+  // preview arrangement; Re-match must always produce a DIFFERENT one. These are
+  // applied as a HARD exclusion at EVERY fallback level below (unlike the
+  // no-repeat history, which the ladder relaxes), so the engine can never
+  // reproduce the current arrangement: it rotates to a fresh pairing while fresh
+  // options exist, then to a different already-met pairing once they're gone.
 
   // Build hard constraints: inviter-invitee avoidance + user-block exclusions.
   const inviterInviteeResult = await query<{ inviter_id: string; accepted_by_user_id: string }>(
@@ -413,9 +414,14 @@ export async function generateSingleRound(
   let landedAtLevel = 0;
 
   for (let level = 0; level <= 4; level++) {
-    const levelExcluded = level >= 4 ? new Set<string>()
-                        : level >= 3 ? halfExcludedPairs
-                        : excludedPairs;
+    const baseExcluded = level >= 4 ? new Set<string>()
+                       : level >= 3 ? halfExcludedPairs
+                       : excludedPairs;
+    // #5b — excludePairKeys (the current preview arrangement) is NEVER relaxed,
+    // even at L4, so Re-match always rotates to a different arrangement.
+    const levelExcluded = options?.excludePairKeys?.length
+      ? new Set<string>([...baseExcluded, ...options.excludePairKeys])
+      : baseExcluded;
     const freshnessScale = level >= 2 ? 0
                          : level >= 1 ? 0.5
                          : 1;
