@@ -69,12 +69,14 @@ describe('Phase K — matching on-demand + late-joiner correctness', () => {
       // The Phase 2.5B optimisation — skip the engine when the pre-plan is
       // still accurate — is retained. We pin the early-return path uses
       // sendMatchPreview and exits without re-running the engine.
-      expect(fn).toMatch(/if\s*\(\s*sameMembers\s*\)/);
+      // 23 May (#10) — the fresh-pre-plan early return is now also gated on the
+      // plan not repeating a prior round (an earlier-round swap can stale it).
+      expect(fn).toMatch(/if\s*\(\s*sameMembers\s*&&\s*!planRepeatsPriorRound\s*\)/);
       // The "no engine re-run" log message marks the fresh-pre-plan branch.
       expect(fn).toMatch(/no\s+engine\s+re-run/i);
       // sendMatchPreview is called in this branch (and the legacy path).
-      const sameMembersIdx = fn.indexOf('if (sameMembers)');
-      const fallthroughIdx = fn.indexOf('Phase K — pre-plan stale');
+      const sameMembersIdx = fn.indexOf('if (sameMembers && !planRepeatsPriorRound)');
+      const fallthroughIdx = fn.indexOf('Phase K / #10 — pre-plan stale');
       expect(sameMembersIdx).toBeGreaterThan(-1);
       expect(fallthroughIdx).toBeGreaterThan(sameMembersIdx);
       const branch = fn.slice(sameMembersIdx, fallthroughIdx);
@@ -87,14 +89,14 @@ describe('Phase K — matching on-demand + late-joiner correctness', () => {
     it('logs the divergence with addedLateJoiners and removedLeavers for audit trail', () => {
       expect(fn).toMatch(/addedLateJoiners/);
       expect(fn).toMatch(/removedLeavers/);
-      expect(fn).toMatch(/Phase K — pre-plan stale/);
+      expect(fn).toMatch(/Phase K \/ #10 — pre-plan stale/);
     });
 
     it("DELETEs the pre-plan scoped to status='scheduled' (preserves completed rounds — item 4)", () => {
       // The completed/active rows must NEVER be wiped — item 4 says
       // "preserve already completed rounds". Pin the status='scheduled'
       // filter so a future PR cannot accidentally broaden the DELETE.
-      const staleIdx = fn.indexOf('Phase K — pre-plan stale');
+      const staleIdx = fn.indexOf('Phase K / #10 — pre-plan stale');
       expect(staleIdx).toBeGreaterThan(-1);
       const afterStaleBlock = fn.slice(staleIdx);
       expect(afterStaleBlock).toMatch(
@@ -106,7 +108,7 @@ describe('Phase K — matching on-demand + late-joiner correctness', () => {
       // After the stale-pre-plan DELETE, control must reach
       // generateSingleRound — that's the engine run on the current eligible
       // set, which includes late joiners.
-      const staleIdx = fn.indexOf('Phase K — pre-plan stale');
+      const staleIdx = fn.indexOf('Phase K / #10 — pre-plan stale');
       const generateIdx = fn.indexOf(
         'matchingService.generateSingleRound',
         staleIdx,

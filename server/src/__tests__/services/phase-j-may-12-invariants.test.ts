@@ -102,11 +102,12 @@ describe('Phase J — 12 May invariants (items 9, 12; cross-ref 10, 14)', () => 
 
     it('every file emitting rating:window_open dedups (helper import OR inline ratings-table SELECT)', () => {
       // Phase 7B converted host-actions, breakout-bulk, and participant-flow to
-      // import the centralised helper. round-lifecycle uses an equivalent
-      // inline dedup at the round-end loop (SELECT from_user_id FROM ratings +
-      // a ratedUserIds Set + skip-if-already-rated guard). Both forms are
-      // architecturally equivalent — pin the rule (dedup exists), not the
-      // specific implementation.
+      // import the centralised helper. round-lifecycle uses an equivalent inline
+      // dedup at the round-end loop — 23 May (#6) it became round-scoped and
+      // partner-keyed (FROM ratings r JOIN matches m, matching the rater→partner
+      // edge across the round) so it survives a match-id change from a pull-back.
+      // All forms are architecturally equivalent — pin the rule (dedup exists),
+      // not the specific implementation.
       const files = [
         'services/orchestration/handlers/host-actions.ts',
         'services/orchestration/handlers/breakout-bulk.ts',
@@ -121,6 +122,12 @@ describe('Phase J — 12 May invariants (items 9, 12; cross-ref 10, 14)', () => 
             src,
           ) ||
           /SELECT\s+id\s+FROM\s+ratings\s+WHERE\s+match_id\s*=\s*\$1\s+AND\s+from_user_id\s*=\s*\$2/i.test(
+            src,
+          ) ||
+          // 23 May (#6) — round-lifecycle now uses a round-scoped, partner-keyed
+          // dedup (FROM ratings r JOIN matches m … r.from_user_id / r.to_user_id)
+          // that survives a match-id change from a pull-back / reassign.
+          /FROM\s+ratings\s+r\s+JOIN\s+matches\s+m[\s\S]{0,200}from_user_id/i.test(
             src,
           );
         // Helpful failure label: the file path, so a regression reads cleanly.

@@ -21,6 +21,7 @@ import {
 } from '../state/session-state';
 import { verifyHost, getAllHostIds } from './host-actions';
 import * as matchingService from '../../matching/matching.service';
+import { pairKey } from '../../matching/matching.interface';
 import { validateMatchAssignment } from '../../matching/match-validator.service';
 // 23 May — match-time presence reconcile routes status resets through the chokepoint.
 import { transitionParticipant, ParticipantState } from '../state/participant-state-machine';
@@ -69,6 +70,45 @@ async function resolvePendingRound(
   const recovered = sched.rows[0]?.round_number ?? null;
   if (recovered) activeSession.pendingRoundNumber = recovered;
   return recovered;
+}
+
+// 23 May (#10/#5b) — the set of pair keys already used by OTHER rounds of this
+// session (the engine's within-event no-repeat history). Mirrors the exclusion
+// query in matching.service.generateSingleRound EXACTLY (other rounds,
+// non-cancelled, non-manual) so the handler's "is this a repeat?" check agrees
+// with what the engine would exclude. Used to (a) detect a pre-plan gone stale
+// because an earlier round was swapped, and (b) verify a forced Re-match stayed
+// fresh.
+async function priorRoundPairKeys(sessionId: string, exceptRound: number): Promise<Set<string>> {
+  const res = await query<{ participant_a_id: string; participant_b_id: string; participant_c_id: string | null }>(
+    `SELECT participant_a_id, participant_b_id, participant_c_id FROM matches
+       WHERE session_id = $1 AND round_number != $2
+         AND status NOT IN ('cancelled', 'no_show')
+         AND is_manual = FALSE`,
+    [sessionId, exceptRound],
+  );
+  const keys = new Set<string>();
+  for (const r of res.rows) {
+    keys.add(pairKey(r.participant_a_id, r.participant_b_id));
+    if (r.participant_c_id) {
+      keys.add(pairKey(r.participant_a_id, r.participant_c_id));
+      keys.add(pairKey(r.participant_b_id, r.participant_c_id));
+    }
+  }
+  return keys;
+}
+
+// Pair keys for a single round's matches (each pair, plus the three edges of a trio).
+function arrangementPairKeys(ms: { participantAId: string; participantBId: string; participantCId?: string | null }[]): string[] {
+  const keys: string[] = [];
+  for (const m of ms) {
+    keys.push(pairKey(m.participantAId, m.participantBId));
+    if (m.participantCId) {
+      keys.push(pairKey(m.participantAId, m.participantCId));
+      keys.push(pairKey(m.participantBId, m.participantCId));
+    }
+  }
+  return keys;
 }
 
 // ─── Host Generate Matches (preview step) ──────────────────────────────────
@@ -253,7 +293,19 @@ export async function handleHostGenerateMatches(
       const sameSize = eligibleIds.size === plannedIds.size;
       const sameMembers = sameSize && [...eligibleIds].every(id => plannedIds.has(id));
 
-      if (sameMembers) {
+      // 23 May (#10) — membership equality is NOT enough. If the host swapped
+      // an EARLIER round after this pre-plan was generated, the planned pairs
+      // can now repeat that round (R2 swapped → R3's pre-plan duplicates R2)
+      // even though the same people are in the round. The eligibility check
+      // misses this (member set unchanged), so the stale repeating pre-plan was
+      // surfaced verbatim ("Met 1x"). Detect it and route through the same
+      // wipe-and-regenerate path so the engine produces a fresh arrangement.
+      const priorKeys = await priorRoundPairKeys(data.sessionId, nextRound);
+      const planRepeatsPriorRound = priorKeys.size > 0 &&
+        arrangementPairKeys(existingPlanned.filter(m => m.status === 'scheduled'))
+          .some(k => priorKeys.has(k));
+
+      if (sameMembers && !planRepeatsPriorRound) {
         logger.info(
           {
             sessionId: data.sessionId,
@@ -278,8 +330,9 @@ export async function handleHostGenerateMatches(
           removedLeavers,
           plannedCount: plannedIds.size,
           eligibleCount: eligibleIds.size,
+          planRepeatsPriorRound,
         },
-        'Phase K — pre-plan stale (eligibility shifted), invalidating and regenerating',
+        'Phase K / #10 — pre-plan stale (eligibility shift or now-repeating after an earlier-round edit), invalidating and regenerating',
       );
       // Scope the DELETE to status='scheduled' so completed/active matches
       // from prior rounds are NEVER touched — the spec requires "preserve
@@ -635,7 +688,9 @@ export async function handleHostRegenerateMatches(
     // fresh no-repeat options) instead of the button silently doing nothing.
     const arrangementKey = (ms: { participantAId: string; participantBId: string; participantCId?: string | null }[]) =>
       ms.map(m => [m.participantAId, m.participantBId, m.participantCId].filter(Boolean).sort().join('+')).sort().join('|');
-    const beforeArrangement = arrangementKey(await matchingService.getMatchesByRound(data.sessionId, roundNumber));
+    const beforeMatches = await matchingService.getMatchesByRound(data.sessionId, roundNumber);
+    const beforeArrangement = arrangementKey(beforeMatches);
+    const beforePairKeys = arrangementPairKeys(beforeMatches);
 
     // Phase 1 (5 May spec) — wipe ALL matches for the pending round before
     // regenerating, regardless of state. Previously this filtered by status
@@ -654,6 +709,33 @@ export async function handleHostRegenerateMatches(
     // inside the matching service; no in-memory presence intersection.
     const allHostIds = await getAllHostIds(data.sessionId, activeSession.hostUserId);
     await matchingService.generateSingleRound(data.sessionId, roundNumber, allHostIds, { regenerate: true });
+
+    // 23 May (#5b) — Re-match must reliably ROTATE to a different fresh
+    // arrangement when one exists. The jitter alone often re-lands on the same
+    // pairing (near-equal scores), which made Re-match look dead. If we got the
+    // same arrangement back, FORCE a different one by excluding the current
+    // pairs, and keep it only if it stayed fresh (no prior-round repeat). If no
+    // other fresh arrangement exists, restore the original and report below.
+    let afterArrangement = arrangementKey(await matchingService.getMatchesByRound(data.sessionId, roundNumber));
+    if (afterArrangement === beforeArrangement && beforePairKeys.length > 0) {
+      await query(`DELETE FROM matches WHERE session_id = $1 AND round_number = $2`, [data.sessionId, roundNumber]);
+      await matchingService.generateSingleRound(
+        data.sessionId, roundNumber, allHostIds,
+        { regenerate: true, excludePairKeys: beforePairKeys },
+      );
+      const forced = await matchingService.getMatchesByRound(data.sessionId, roundNumber);
+      const forcedArrangement = arrangementKey(forced);
+      const priorKeysForRound = await priorRoundPairKeys(data.sessionId, roundNumber);
+      const forcedRepeatsPrior = arrangementPairKeys(forced).some(k => priorKeysForRound.has(k));
+      if (forcedArrangement !== beforeArrangement && !forcedRepeatsPrior) {
+        afterArrangement = forcedArrangement; // kept the fresh rotation
+      } else {
+        // No other FRESH arrangement — restore the original and report it below.
+        await query(`DELETE FROM matches WHERE session_id = $1 AND round_number = $2`, [data.sessionId, roundNumber]);
+        await matchingService.generateSingleRound(data.sessionId, roundNumber, allHostIds, { regenerate: false });
+        afterArrangement = beforeArrangement;
+      }
+    }
 
     // R7 (20 May 2026 — live-test post-mortem). After regenerating a round
     // (e.g. host clicked Re-match on a cancelled Round 3), the matches
@@ -686,11 +768,10 @@ export async function handleHostRegenerateMatches(
     // Re-send preview
     await sendMatchPreview(io, socket, data.sessionId, roundNumber, activeSession.hostUserId);
 
-    // 23 May (Stefan live test) — if Re-match landed on the SAME arrangement,
-    // there are no other no-repeat options left for this round; tell the host
-    // so the button never looks dead. Surfaced as an info toast on the client
-    // (REMATCH_NO_ALTERNATIVE).
-    const afterArrangement = arrangementKey(await matchingService.getMatchesByRound(data.sessionId, roundNumber));
+    // 23 May (#5b) — if even the forced retry couldn't reach a different fresh
+    // arrangement, afterArrangement still equals beforeArrangement: there are
+    // no other no-repeat options left for this round. Tell the host so the
+    // button never looks dead (info toast: REMATCH_NO_ALTERNATIVE).
     if (afterArrangement === beforeArrangement && beforeArrangement.length > 0) {
       socket.emit('error', {
         code: 'REMATCH_NO_ALTERNATIVE',
@@ -704,93 +785,9 @@ export async function handleHostRegenerateMatches(
   }
 }
 
-// ─── Host Force Match (manually pair two specific participants) ──────────────
-
-export async function handleHostForceMatch(
-  io: SocketServer,
-  socket: Socket,
-  data: { sessionId: string; userIdA: string; userIdB: string }
-): Promise<void> {
-  try {
-    if (!await verifyHost(socket, data.sessionId)) return;
-
-    const activeSession = activeSessions.get(data.sessionId);
-    if (!activeSession) {
-      socket.emit('error', { code: 'INVALID_STATE', message: 'Event is not active' });
-      return;
-    }
-
-    const roundNumber = activeSession.pendingRoundNumber;
-    if (roundNumber == null) {
-      socket.emit('error', { code: 'INVALID_STATE', message: 'No pending round to add matches to' });
-      return;
-    }
-
-    // Normalize IDs (A < B for consistency)
-    const normA = data.userIdA < data.userIdB ? data.userIdA : data.userIdB;
-    const normB = data.userIdA < data.userIdB ? data.userIdB : data.userIdA;
-
-    // Phase 2 (29 April 2026 spec) — hard-block force_match when either user
-    // is already in another pair for this round. Pre-fix, this handler would
-    // SILENTLY cancel the user's existing pair and create a new one, leaving
-    // the host's preview screen rearranged with no warning. The user
-    // explicitly asked for the system to STOP the action with a clear
-    // message naming the conflict, and pointed out that Swap is the right
-    // way to move someone between existing pairs:
-    //   "one user one room, always. system must stops hosts and tells why."
-    // We also check session-wide for any *active* match (i.e. a manual
-    // breakout in progress in another round number) so the host can't put
-    // someone into a preview pair while they're physically inside another
-    // breakout room having a conversation.
-    const validation = await validateMatchAssignment({
-      sessionId: data.sessionId,
-      roundNumber,
-      participantAId: normA,
-      participantBId: normB,
-      conflictingStatuses: ['scheduled', 'active'],
-      sessionWideActiveCheck: true,
-    });
-    if (!validation.valid) {
-      const namesResult = await query<{ id: string; displayName: string | null; email: string | null }>(
-        `SELECT id, display_name AS "displayName", email FROM users WHERE id = ANY($1)`,
-        [validation.conflictingUserIds]
-      );
-      // Phase 5 (1 May spec) — single-source displayName helper.
-      const conflictNames = namesResult.rows.map(r => resolveDisplayName(r.id, r.displayName, r.email));
-      const who = conflictNames.length > 0
-        ? conflictNames.join(' and ')
-        : `${validation.conflictingUserIds.length} participant(s)`;
-      const verb = validation.conflictingUserIds.length > 1 ? 'are' : 'is';
-      socket.emit('error', {
-        code: 'PARTICIPANT_ALREADY_MATCHED',
-        message: `${who} ${verb} already in another room. Use Swap to move them between pairs, or move them back to the lobby first.`,
-        conflictingUserIds: validation.conflictingUserIds,
-      });
-      logger.info(
-        { sessionId: data.sessionId, userA: normA, userB: normB, conflictingUserIds: validation.conflictingUserIds },
-        'Manual force-match rejected: participants already in another room',
-      );
-      return;
-    }
-
-    // No conflicts — safe to create the preview pair (status='scheduled').
-    const { v4: uuid } = await import('uuid');
-    const matchId = uuid();
-    await query(
-      `INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, status)
-       VALUES ($1, $2, $3, $4, $5, 'scheduled')`,
-      [matchId, data.sessionId, roundNumber, normA, normB]
-    );
-
-    logger.info({ sessionId: data.sessionId, matchId, userA: normA, userB: normB }, 'Manual match created by host');
-
-    // Re-send updated preview
-    await sendMatchPreview(io, socket, data.sessionId, roundNumber, activeSession.hostUserId);
-  } catch (err: any) {
-    logger.error({ err }, 'Error creating manual match');
-    socket.emit('error', { code: 'FORCE_MATCH_FAILED', message: err.message });
-  }
-}
+// 23 May (#12) — handleHostForceMatch (manual pairing) removed per Stefan.
+// Swap rearranges the preview; manual room creation (breakout-bulk) covers
+// ad-hoc grouping. The host:force_match socket event + client UI are gone too.
 
 // ─── Host Cancel Preview ────────────────────────────────────────────────────
 

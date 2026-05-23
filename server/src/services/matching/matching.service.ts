@@ -184,7 +184,7 @@ export async function generateSingleRound(
   sessionId: string,
   roundNumber: number,
   excludeUserIds?: string[],
-  options?: { regenerate?: boolean },
+  options?: { regenerate?: boolean; excludePairKeys?: string[] },
 ): Promise<RoundAssignment> {
   const session = await sessionService.getSessionById(sessionId);
   const sessionConfig = typeof session.config === 'string'
@@ -289,6 +289,12 @@ export async function generateSingleRound(
       }
     }
   }
+
+  // 23 May (#5b) — Re-match rotation. The host pressed Re-match and the engine
+  // returned the SAME arrangement; the caller re-invokes us with the current
+  // pairs in excludePairKeys to FORCE a different one. Unioned in regardless of
+  // policy — the host explicitly asked for a reshuffle.
+  for (const k of options?.excludePairKeys ?? []) excludedPairs.add(k);
 
   // Build hard constraints: inviter-invitee avoidance + user-block exclusions.
   const inviterInviteeResult = await query<{ inviter_id: string; accepted_by_user_id: string }>(

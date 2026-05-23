@@ -62,7 +62,7 @@ export default function LiveSessionPage() {
       });
   }, []);
 
-  const { data: session } = useQuery({
+  const { data: session, refetch } = useQuery({
     queryKey: ['session', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}`).then(r => r.data.data),
     enabled: !!sessionId,
@@ -127,6 +127,20 @@ export default function LiveSessionPage() {
     store.setRoundDashboard(null);
     store.setPhase('complete');
   }, [session?.status]);
+
+  // #11 (23 May, Waseem host) — COMPLETION_SELF_HEAL. The host pressed End Event
+  // and stayed stuck on the main-room screen: the session:completed socket event
+  // missed his socket (dropped out of the session room on a reconnect) and the
+  // 30 s background refetch above doesn't fire while the tab is blurred
+  // (refetchIntervalInBackground: false). Poll the session status every 8 s for
+  // the host until the event completes, so a missed completion self-heals in
+  // seconds rather than up to 30 s. Host-only and stops at completion, so the
+  // cost is negligible; the effect above does the actual transition to recap.
+  useEffect(() => {
+    if (!isHost || session?.status === 'completed') return;
+    const id = setInterval(() => { refetch(); }, 8_000);
+    return () => clearInterval(id);
+  }, [isHost, session?.status, refetch]);
 
   const handleLeave = () => {
     const inActivePhase = phase === 'matched' || phase === 'rating';

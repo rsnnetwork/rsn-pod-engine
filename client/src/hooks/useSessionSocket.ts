@@ -802,10 +802,9 @@ export default function useSessionSocket(sessionId: string) {
         ROOM_CREATION_FAILED: { msg: 'Could not create breakout room. Try again.', severity: 'error' },
         MATCH_CREATION_FAILED: { msg: 'Could not assign participants to the room. Try again.', severity: 'error' },
         // 23 May — surface the server's detailed "X and Y are already in another
-        // room — use Swap" guidance instead of a generic line, so Manual Match
-        // explains why it refused and which tool to use.
+        // room — use Swap" guidance instead of a generic line (raised by manual
+        // breakout-room creation when a participant is already placed).
         PARTICIPANT_ALREADY_MATCHED: { msg: rawMsg, severity: 'info' },
-        FORCE_MATCH_FAILED: { msg: 'Force-match failed. Try again.', severity: 'error' },
         REMOVE_FAILED: { msg: 'Could not remove that participant. Try again.', severity: 'error' },
         DM_SEND_FAILED: { msg: 'Message could not be sent. Try again.', severity: 'error' },
         DM_REACT_FAILED: { msg: 'Reaction could not be added. Try again.', severity: 'info' },

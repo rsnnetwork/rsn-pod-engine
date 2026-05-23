@@ -166,17 +166,12 @@ describe('Phase 3 — Host dashboard UI + sync', () => {
 
     it('handleHostRegenerateMatches ends with sendMatchPreview', () => {
       const fnStart = matchingFlowSrc.indexOf('export async function handleHostRegenerateMatches(');
-      const fnEnd = matchingFlowSrc.indexOf('\n// ─── Host Force Match', fnStart);
+      const fnEnd = matchingFlowSrc.indexOf('\n// 23 May (#12)', fnStart);
       const fn = matchingFlowSrc.slice(fnStart, fnEnd);
       expect(fn).toMatch(/sendMatchPreview\(/);
     });
 
-    it('handleHostForceMatch ends with sendMatchPreview', () => {
-      const fnStart = matchingFlowSrc.indexOf('export async function handleHostForceMatch(');
-      const fnEnd = matchingFlowSrc.indexOf('\n// ─── Host Cancel Preview', fnStart);
-      const fn = matchingFlowSrc.slice(fnStart, fnEnd);
-      expect(fn).toMatch(/sendMatchPreview\(/);
-    });
+    // 23 May (#12) — handleHostForceMatch (manual pairing) removed per Stefan.
 
     it('handleHostRemoveParticipant calls emitHostDashboard', () => {
       const fnStart = hostActionsSrc.indexOf('export async function handleHostRemoveParticipant(');

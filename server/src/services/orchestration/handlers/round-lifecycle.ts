@@ -570,17 +570,32 @@ export async function endRound(
         // this match. Primary emit sites (voluntary leave, host remove, auto-
         // reassign timeout) fire on first-entry to rating state — this guard
         // prevents endRound from re-firing for users who already saw the form.
-        const alreadyRated = await query<{ from_user_id: string }>(
-          `SELECT DISTINCT from_user_id FROM ratings WHERE match_id = $1 AND from_user_id = ANY($2)`,
-          [match.id, participantIds],
+        // 23 May (#6) — partner-keyed dedup, round-scoped. A participant pulled
+        // back early (or reassigned) rates their partner, but that rating is
+        // filed under whatever match they were in at the time, which differs
+        // from THIS round's match.id after a reassign (handleHostReassign
+        // INSERTs a fresh match row). Keying the dedup on match_id alone missed
+        // it and re-opened the form at round end. Match the actual (rater →
+        // partner) edge across ALL of this round's matches instead, so an
+        // already-rated partner is never re-prompted regardless of which match
+        // id recorded the rating.
+        const alreadyRatedEdges = await query<{ from_user_id: string; to_user_id: string }>(
+          `SELECT DISTINCT r.from_user_id, r.to_user_id
+             FROM ratings r
+             JOIN matches m ON m.id = r.match_id
+            WHERE m.session_id = $1 AND m.round_number = $2
+              AND r.from_user_id = ANY($3)`,
+          [sessionId, roundNumber, participantIds],
         );
-        const ratedUserIds = new Set(alreadyRated.rows.map(r => r.from_user_id));
+        const ratedEdges = new Set(alreadyRatedEdges.rows.map(r => `${r.from_user_id}:${r.to_user_id}`));
 
         // Notify each participant to rate their partner(s) — include display names
         for (const pid of participantIds) {
-          if (ratedUserIds.has(pid)) continue; // Already rated — skip double-form
-
           const partnerIds = participantIds.filter(id => id !== pid);
+          // Skip the form only when this user has already rated EVERY partner in
+          // this match. Trios where one partner is still unrated still get a form.
+          if (partnerIds.every(partnerId => ratedEdges.has(`${pid}:${partnerId}`))) continue;
+
           const partnersWithNames = partnerIds.map(id => ({
             userId: id,
             displayName: ratingNameMap.get(id) || 'Partner',
@@ -697,6 +712,15 @@ export async function endRatingWindow(
         [E.session(sessionId), E.sessionParticipants(sessionId)],
       ).catch(() => {});
     } catch { /* dual-emit failure non-fatal */ }
+
+    // #11 (23 May) — host pressed End Event during the round. Now that this
+    // round's rating window has closed, complete the event in ONE step rather
+    // than opening the next round or sitting in the closing lobby.
+    if (activeSession.endRequested) {
+      logger.info({ sessionId, roundNumber }, '#11 endRequested — completing event after rating window');
+      await completeSession(io, sessionId);
+      return;
+    }
 
     // Check if there are more rounds
     if (roundNumber < activeSession.config.numberOfRounds) {
@@ -832,6 +856,25 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
       status: SessionStatus.COMPLETED,
       currentRound: activeSession?.currentRound || 0,
     });
+
+    // #11 (23 May, Waseem host) — belt-and-braces delivery. The host pressed
+    // End Event and stayed stuck on the main-room screen; only a refresh moved
+    // him to recap. His socket had dropped out of sessionRoom (a mid-event
+    // reconnect re-joined his per-socket userRoom but not the session room), so
+    // the broadcast above missed him. userRoom is far more stable, so also fan
+    // the completion signal out per participant.
+    try {
+      const completedParts = await query<{ user_id: string }>(
+        `SELECT user_id FROM session_participants
+           WHERE session_id = $1 AND status NOT IN ('removed', 'no_show')`,
+        [sessionId],
+      );
+      for (const r of completedParts.rows) {
+        io.to(userRoom(r.user_id)).emit('session:completed', { sessionId });
+      }
+    } catch (err) {
+      logger.warn({ err, sessionId }, '#11 per-user session:completed fan-out failed (non-fatal)');
+    }
 
     logger.info({ sessionId }, 'Session completed (clients signaled)');
 
@@ -1150,14 +1193,33 @@ export async function detectNoShows(
   if (!activeSession || activeSession.status !== SessionStatus.ROUND_ACTIVE) return;
 
   try {
+    // #13 (23 May, Waseem live test) — reconcile presence against LIVE sockets
+    // before declaring no-shows. detectNoShows previously trusted the heartbeat
+    // presenceMap alone, which goes stale during a long preview/swap/rematch
+    // setup (idle or backgrounded tabs drop out of presenceMap). On a round
+    // start that followed such a setup, still-present participants were falsely
+    // no-show'd → every match cancelled → maybeAutoEndEmptyRound → and because
+    // this was the FINAL round, the event jumped straight to "all rounds
+    // completed" without the round ever really running. Treat a participant as
+    // present if they have a heartbeat OR a live socket in the session room.
+    const liveSocketUserIds = new Set<string>();
+    try {
+      const socketsInRoom = await io.in(sessionRoom(sessionId)).fetchSockets();
+      for (const s of socketsInRoom) {
+        const uid = (s.data as any)?.userId;
+        if (uid) liveSocketUserIds.add(uid);
+      }
+    } catch { /* fetchSockets failure non-fatal — fall back to presenceMap */ }
+    const isPresent = (uid: string) => activeSession.presenceMap.has(uid) || liveSocketUserIds.has(uid);
+
     const matches = await matchingService.getMatchesByRound(sessionId, roundNumber);
     let anyTransition = false;
 
     for (const match of matches) {
       if (match.status !== 'active') continue;
 
-      const aPresent = activeSession.presenceMap.has(match.participantAId);
-      const bPresent = activeSession.presenceMap.has(match.participantBId);
+      const aPresent = isPresent(match.participantAId);
+      const bPresent = isPresent(match.participantBId);
 
       if (!aPresent && !bPresent) {
         // Both absent — mark both no-show, cancel match

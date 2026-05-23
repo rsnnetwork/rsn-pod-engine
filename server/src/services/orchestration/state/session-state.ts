@@ -23,6 +23,7 @@ export interface ActiveSession {
   pausedTimeRemaining: number | null;
   presenceMap: Map<string, { lastHeartbeat: Date; socketId: string; reconnectedAt?: Date }>;
   pendingRoundNumber: number | null;  // Round number for pre-generated matches awaiting host confirmation
+  endRequested?: boolean;             // #11 (23 May) — host pressed End Event during an active round; complete the event after this round's rating instead of opening the next round
   manuallyLeftRound: Set<string>;     // Users who clicked "Leave Conversation" — skip in reconnect/reassignment
   // Tier-1 A1: per-session cache for display names used by emitHostDashboard
   // and sendMatchPreview. Names don't change during an event, so we populate

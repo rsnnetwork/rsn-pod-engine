@@ -632,6 +632,14 @@ export async function handleHostEnd(
       // Clear any existing timer
       if (activeSession.timer) clearTimeout(activeSession.timer);
 
+      // #11 (23 May, Waseem host) — End Event during an active round used to
+      // ONLY end the round (rating window → next-round transition), so the host
+      // had to press End Event a second (and third) time to actually end the
+      // event. Record the intent now; endRatingWindow checks endRequested and
+      // completes the event after THIS round's rating instead of opening the
+      // next round. One press ends the event.
+      activeSession.endRequested = true;
+
       if (!_endRound) {
         logger.error({ sessionId: data.sessionId }, 'endRound not injected — cannot end round');
         socket.emit('error', { code: 'INTERNAL_ERROR', message: 'Round end not available' });
