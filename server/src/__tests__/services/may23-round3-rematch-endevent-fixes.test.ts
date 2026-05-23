@@ -218,6 +218,23 @@ describe('23 May 2nd-test fixes — round-3 repeats, re-match rotation, end-even
     });
   });
 
+  // ── #15 — recap labels bonus rounds
+  describe('#15 — recap marks bonus rounds (added via Another Round)', () => {
+    it('SessionComplete labels bonus rounds + splits the total, from the recap bonusRoundsAdded', () => {
+      const sc = readClient('features/live/SessionComplete.tsx');
+      expect(sc).toMatch(/setBonusRoundsAdded\(d\?\.bonusRoundsAdded/);
+      expect(sc).toMatch(/isBonusRound/);
+      expect(sc).toMatch(/Bonus round/);
+      expect(sc).toMatch(/original \+ /);
+    });
+
+    it('RecapPage (Full Recap) also badges bonus rounds in the per-round breakdown', () => {
+      const rp = readClient('features/sessions/RecapPage.tsx');
+      expect(rp).toMatch(/Bonus round/);
+      expect(rp).toMatch(/data\.totalRounds\s*-\s*bonusAdded/);
+    });
+  });
+
   // ── #13 — round start must not false-no-show present-but-stale participants
   describe('#13 — detectNoShows reconciles presence against live sockets', () => {
     it('checks live sockets in the session room before marking no-show', () => {

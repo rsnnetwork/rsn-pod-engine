@@ -95,6 +95,9 @@ export default function SessionComplete({ sessionId }: Props) {
   const [stats, setStats] = useState<Stats | null>(null);
   const [totalRounds, setTotalRounds] = useState(0);
   const [roundsAttended, setRoundsAttended] = useState(0);
+  // #15 (23 May) — bonus rounds added live via "Another Round" (same recap-
+  // endpoint field the Full Recap uses, so both views agree).
+  const [bonusRoundsAdded, setBonusRoundsAdded] = useState(0);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(false);
 
@@ -105,6 +108,12 @@ export default function SessionComplete({ sessionId }: Props) {
     meta: { entities: sessionId ? [E.session(sessionId)] : [] },
   });
   const podId = session?.podId;
+
+  // #15 (23 May, Ali) — a bonus round is one added live via "Another Round".
+  // The recap reports how many were added (bonusRoundsAdded); any round beyond
+  // (totalRounds − bonusRoundsAdded) is therefore a bonus round.
+  const isBonusRound = (r: number) =>
+    bonusRoundsAdded > 0 && totalRounds > 0 && r > totalRounds - bonusRoundsAdded;
 
   const fetchRecap = async () => {
     setLoading(true);
@@ -121,6 +130,7 @@ export default function SessionComplete({ sessionId }: Props) {
       setMutualConnections(d?.mutualConnections || []);
       setTotalRounds(d?.totalRounds || 0);
       setRoundsAttended(d?.roundsAttended || 0);
+      setBonusRoundsAdded(d?.bonusRoundsAdded || 0);
 
       // Per-user derived stats. avgQualityScore and meetAgainRate are
       // averaged across only THIS user's ratings (they gave), not the
@@ -177,6 +187,9 @@ export default function SessionComplete({ sessionId }: Props) {
                 <CircleDot className="h-4 w-4 text-blue-500 shrink-0" />
                 <p className="text-sm text-gray-500">
                   You attended <span className="font-semibold text-gray-900">{roundsAttended}</span> round{roundsAttended !== 1 ? 's' : ''} out of <span className="font-semibold text-gray-900">{totalRounds}</span> total
+                  {bonusRoundsAdded > 0 && (
+                    <> <span className="text-xs text-gray-500">({totalRounds - bonusRoundsAdded} original + {bonusRoundsAdded} bonus)</span></>
+                  )}
                 </p>
               </div>
             )}
@@ -247,6 +260,9 @@ export default function SessionComplete({ sessionId }: Props) {
                   <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-2">
                     <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-50 text-blue-600 text-[10px] font-bold">{round}</span>
                     Round {round}
+                    {isBonusRound(round) && (
+                      <span className="ml-1 inline-flex items-center rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-[10px] font-semibold normal-case tracking-normal">Bonus round</span>
+                    )}
                   </h3>
                   <div className="space-y-2">
                     {byRound[round].map(c => (

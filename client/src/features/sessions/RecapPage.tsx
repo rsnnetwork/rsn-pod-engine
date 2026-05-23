@@ -473,11 +473,17 @@ export default function RecapPage() {
           return acc;
         }, {});
         const rounds = Object.keys(byRound).map(Number).sort((a, b) => a - b);
+        // #15 (23 May) — flag rounds added live via "Another Round" as bonus.
+        const bonusAdded = data.bonusRoundsAdded ?? 0;
+        const isBonus = (r: number) => bonusAdded > 0 && data.totalRounds > 0 && r > data.totalRounds - bonusAdded;
         return rounds.map(round => (
           <Card key={round}>
             <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">
               <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-rsn-red/10 text-rsn-red text-xs font-bold">{round}</span>
               Round {round}
+              {isBonus(round) && (
+                <span className="ml-1 inline-flex items-center rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-[10px] font-semibold normal-case tracking-normal">Bonus round</span>
+              )}
               <span className="text-xs font-normal text-gray-400">· {byRound[round].length} {byRound[round].length === 1 ? 'person' : 'people'}</span>
             </h3>
             <div className="space-y-2">
