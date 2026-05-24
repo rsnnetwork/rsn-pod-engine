@@ -224,6 +224,9 @@ export interface ClientToServerEvents {
 
   // Rating
   'rating:submit': (data: { matchId: string; qualityScore: number; meetAgain: boolean; feedback?: string }) => void;
+  // #6 (25 May) — user dismissed the rating via "Skip". Recorded so the round-end
+  // emit + reconnect rating-replay don't re-prompt them (skip = "saw it, declined").
+  'rating:skip': (data: { sessionId: string; matchId: string }) => void;
 
   // Host controls
   'host:start_session': (data: { sessionId: string }) => void;

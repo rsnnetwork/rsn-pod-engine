@@ -4,6 +4,7 @@ import { useSessionStore } from '@/stores/sessionStore';
 import { useToastStore } from '@/stores/toastStore';
 import { Star, CheckCircle, Loader2, Clock, Handshake } from 'lucide-react';
 import api from '@/lib/api';
+import { getSocket } from '@/lib/socket';
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 interface Props { sessionId: string; }
@@ -141,7 +142,7 @@ function RatingConfirmation({ meetAgain, isLastPartner, isLastRound, onContinue 
   );
 }
 
-export default function RatingPrompt(_props: Props) {
+export default function RatingPrompt(props: Props) {
   const currentMatch = useSessionStore(s => s.currentMatch);
   const currentMatchId = useSessionStore(s => s.currentMatchId);
   const currentPartners = useSessionStore(s => s.currentPartners);
@@ -215,6 +216,14 @@ export default function RatingPrompt(_props: Props) {
   };
 
   const advance = () => setCurrentPartnerIdx(prev => prev + 1);
+  // #6 (25 May, Ali) — Skip = "saw it, don't want to rate". Tell the server so
+  // the round-end emit + reconnect rating-replay never re-prompt this match.
+  const skip = () => {
+    if (currentMatchId) {
+      try { getSocket().emit('rating:skip', { sessionId: props.sessionId, matchId: currentMatchId }); } catch { /* non-fatal */ }
+    }
+    advance();
+  };
 
   return (
     <div className="flex-1 flex items-center justify-center p-4 bg-[#202124]">
@@ -230,7 +239,7 @@ export default function RatingPrompt(_props: Props) {
         toUserId={partner.userId}
         matchId={currentMatchId}
         onSubmitted={handleSubmitted}
-        onSkip={advance}
+        onSkip={skip}
         partnerIndex={currentPartnerIdx}
         totalPartners={partners.length}
       />

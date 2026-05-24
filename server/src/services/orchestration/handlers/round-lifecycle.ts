@@ -592,6 +592,8 @@ export async function endRound(
         // Notify each participant to rate their partner(s) — include display names
         for (const pid of participantIds) {
           const partnerIds = participantIds.filter(id => id !== pid);
+          // #6 (25 May) — an explicit Skip closes the rating for this match.
+          if (activeSession.ratingSkips?.has(`${pid}:${match.id}`)) continue;
           // Skip the form only when this user has already rated EVERY partner in
           // this match. Trios where one partner is still unrated still get a form.
           if (partnerIds.every(partnerId => ratedEdges.has(`${pid}:${partnerId}`))) continue;

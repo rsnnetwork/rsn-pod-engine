@@ -729,7 +729,10 @@ export async function handleJoinSession(
             `SELECT id FROM ratings WHERE match_id = $1 AND from_user_id = $2 LIMIT 1`,
             [userMatch.id, userId]
           );
-          if (existingRating.rows.length === 0) {
+          // #6 (25 May) — a skip closes this match's rating: don't re-send the
+          // form to someone who explicitly skipped it (reconnect/refresh).
+          const skipped = activeSession.ratingSkips?.has(`${userId}:${userMatch.id}`) ?? false;
+          if (existingRating.rows.length === 0 && !skipped) {
             const participantIds = [userMatch.participantAId, userMatch.participantBId];
             if (userMatch.participantCId) participantIds.push(userMatch.participantCId);
             const partnerIds = participantIds.filter(id => id !== userId);
@@ -1020,6 +1023,25 @@ export async function handleRatingSubmit(
     // Fallback: run without guard if we can't determine sessionId
     await guardFn();
   }
+}
+
+// #6 (25 May, Ali) — record that a user dismissed the rating form via "Skip" for
+// a given match. A skip means "I saw it and chose not to rate" — distinct from
+// "never saw it." Without this, the round-end emit + the reconnect rating-replay
+// (which key off "no rating row") re-prompt skippers on every refresh/reconnect.
+// Kept in-memory per session (a restart re-prompting once is acceptable). The
+// rating-replay below + the endRound dedup both consult ratingSkips.
+export async function handleRatingSkip(
+  _io: SocketServer,
+  socket: Socket,
+  data: { sessionId: string; matchId: string }
+): Promise<void> {
+  const userId = getUserIdFromSocket(socket);
+  if (!userId || !data?.sessionId || !data?.matchId) return;
+  const activeSession = activeSessions.get(data.sessionId);
+  if (!activeSession) return;
+  (activeSession.ratingSkips ??= new Set<string>()).add(`${userId}:${data.matchId}`);
+  logger.info({ sessionId: data.sessionId, userId, matchId: data.matchId }, '#6 — rating skipped (recorded)');
 }
 
 /**

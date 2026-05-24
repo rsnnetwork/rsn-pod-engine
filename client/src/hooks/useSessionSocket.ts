@@ -898,15 +898,15 @@ export default function useSessionSocket(sessionId: string) {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       if (resyncDebounce) return;
       resyncDebounce = setTimeout(() => { resyncDebounce = null; }, 2000);
-      // 24 May (#2/#6 fix) — refresh presence WITHOUT re-running session:join's
-      // heavy side-effects in handleJoinSession (the in_round→in_main_room reset
-      // and the rating-replay). Firing session:join on every tab-foreground was
-      // flipping in-breakout users to the main room (Saif in two places) and
-      // re-prompting users who had skipped their rating. A genuine socket drop
-      // still rejoins via Socket.IO auto-reconnect + the onReconnect handler;
-      // here we only nudge a heartbeat so the server keeps counting us present
-      // (the heartbeat handler updates presenceMap only — no reset, no replay).
-      if (!socket.connected) { socket.connect(); return; }
+      // 25 May (A) — on return, RE-REGISTER via session:join so a backgrounded /
+      // dropped user is counted by the matcher again (exactly what a manual
+      // refresh does). The earlier heartbeat-only attempt did NOT re-register and
+      // left present people unmatched until they refreshed. This is safe now:
+      // skips are recorded server-side (#6 — no rating re-prompt), and the
+      // reconnect-reset only fires for users with no active match, so an
+      // in-breakout user is never flipped to the main room (#B).
+      if (!socket.connected) socket.connect();
+      socket.emit('session:join', { sessionId });
       socket.emit('presence:heartbeat', { sessionId });
     };
     document.addEventListener('visibilitychange', resyncPresenceOnReturn);

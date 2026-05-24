@@ -25,6 +25,7 @@ export interface ActiveSession {
   pendingRoundNumber: number | null;  // Round number for pre-generated matches awaiting host confirmation
   endRequested?: boolean;             // #11 (23 May) — host pressed End Event during an active round; complete the event after this round's rating instead of opening the next round
   manuallyLeftRound: Set<string>;     // Users who clicked "Leave Conversation" — skip in reconnect/reassignment
+  ratingSkips?: Set<string>;          // #6 (25 May) — `${userId}:${matchId}` for users who skipped that match's rating; replay + endRound dedup honor it so a skip is never re-prompted
   // Tier-1 A1: per-session cache for display names used by emitHostDashboard
   // and sendMatchPreview. Names don't change during an event, so we populate
   // on first lookup and reuse until the session ends.

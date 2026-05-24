@@ -33,7 +33,7 @@ import {
 // Handlers — Participant Flow
 import {
   handleJoinSession, handleLeaveSession, handleHeartbeat, handleReady,
-  handleDisconnect, handleRatingSubmit, handleLeaveConversation,
+  handleDisconnect, handleRatingSubmit, handleRatingSkip, handleLeaveConversation,
   handleRoomJoined,
   startHeartbeatStaleDetection, notifyRatingSubmitted,
   injectDependencies as injectParticipantDeps,
@@ -251,6 +251,7 @@ export function initOrchestration(socketServer: SocketServer): void {
     wrapHandler('session:join', socket, handleJoinSession);
     wrapHandler('session:leave', socket, handleLeaveSession);
     wrapHandler('rating:submit', socket, handleRatingSubmit);
+    wrapHandler('rating:skip', socket, handleRatingSkip);
     wrapHandler('participant:leave_conversation', socket, handleLeaveConversation);
 
     // ── Participant Events (unguarded) ──

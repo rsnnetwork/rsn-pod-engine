@@ -68,8 +68,9 @@ describe('#16 — matcher includes everyone visibly in the main room (LiveKit ro
     // NOT emit session:join (which re-runs handleJoinSession's in_round→main
     // reset + rating-replay, the cause of "Saif in two places" + skip re-prompt).
     const i = src.indexOf('resyncPresenceOnReturn =');
-    expect(src.slice(i, i + 1000)).toMatch(/presence:heartbeat/);
-    // must NOT EMIT session:join (a code comment may reference it; the emit is what matters)
-    expect(src.slice(i, i + 1000)).not.toMatch(/emit\(\s*['"]session:join/);
+    // 25 May (A) — on return the client RE-REGISTERS via session:join so a
+    // dropped user is matchable again (revert of the heartbeat-only attempt that
+    // left present people unmatched). Safe: skips recorded (#6) + active-match guard (#B).
+    expect(src.slice(i, i + 1000)).toMatch(/emit\(\s*['"]session:join/);
   });
 });
