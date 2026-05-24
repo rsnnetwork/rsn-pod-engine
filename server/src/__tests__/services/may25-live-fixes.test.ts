@@ -75,33 +75,39 @@ describe('25 May live-test fixes', () => {
     });
   });
 
-  describe('F/G — timer:sync scoped to context (breakout vs session)', () => {
-    it('manual breakout timer:sync emits are tagged segmentType "breakout"', () => {
-      const src = readServer('services/orchestration/handlers/breakout-bulk.ts');
-      // Every per-user timer:sync from the breakout handlers carries the breakout tag.
-      const syncs = src.match(/emit\('timer:sync', \{[^}]*\}/g) || [];
-      expect(syncs.length).toBeGreaterThanOrEqual(4);
-      for (const s of syncs) expect(s).toMatch(/segmentType: 'breakout'/);
+  describe('F/G — timer:sync scoped to context (self-healing breakout ownership)', () => {
+    it('every per-user (breakout) timer:sync is tagged segmentType "breakout"', () => {
+      // Session timers use sessionRoom(...) + a session-status segmentType; manual
+      // room timers use userRoom(pid) and MUST carry segmentType 'breakout' so the
+      // client can tell them apart. No per-user emit may go out untagged.
+      for (const f of [
+        'services/orchestration/handlers/breakout-bulk.ts',
+        'services/orchestration/handlers/host-actions.ts',
+      ]) {
+        const src = readServer(f);
+        expect(src).not.toMatch(/userRoom\([^)]*\)\)\.emit\('timer:sync', \{ secondsRemaining/);
+      }
     });
     it('manual match:reassigned carries isManual:true', () => {
       const src = readServer('services/orchestration/handlers/breakout-bulk.ts');
       expect(src).toMatch(/emit\('match:reassigned', \{[\s\S]{0,800}isManual: true/);
     });
-    it('client store tracks inManualBreakout', () => {
-      const store = readClient('stores/sessionStore.ts');
-      expect(store).toMatch(/inManualBreakout: boolean/);
-      expect(store).toMatch(/setInManualBreakout:/);
-    });
-    it('client timer:sync ignores session-level syncs while in a manual breakout', () => {
+    it('client gates session timer:sync on breakout-sync recency (no flag to lose on refresh)', () => {
       const src = readClient('hooks/useSessionSocket.ts');
+      expect(src).toMatch(/lastBreakoutSyncRef/);
+      expect(src).toMatch(/BREAKOUT_OWNERSHIP_MS/);
       const i = src.indexOf("socket.on('timer:sync'");
       expect(i).toBeGreaterThan(-1);
-      // guard lives a bit past the long Bug 17 comment — search the handler body generously
-      expect(src.slice(i, i + 2500)).toMatch(/state\.inManualBreakout && data\.segmentType && data\.segmentType !== 'breakout'/);
+      const body = src.slice(i, i + 2600);
+      expect(body).toMatch(/data\.segmentType === 'breakout'/);
+      expect(body).toMatch(/lastBreakoutSyncRef\.current < BREAKOUT_OWNERSHIP_MS/);
     });
-    it('client sets the breakout flag from match:reassigned isManual', () => {
+    it('breakout ownership is released the instant the user leaves the breakout', () => {
       const src = readClient('hooks/useSessionSocket.ts');
-      expect(src).toMatch(/setInManualBreakout\(data\.isManual === true\)/);
+      const rw = src.indexOf("socket.on('rating:window_open'");
+      expect(src.slice(rw, rw + 1200)).toMatch(/lastBreakoutSyncRef\.current = 0/);
+      const rl = src.indexOf("socket.on('match:return_to_lobby'");
+      expect(src.slice(rl, rl + 600)).toMatch(/lastBreakoutSyncRef\.current = 0/);
     });
   });
 

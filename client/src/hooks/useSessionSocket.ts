@@ -70,6 +70,12 @@ export default function useSessionSocket(sessionId: string) {
   const ratingFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const byeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initializedRef = useRef<string | null>(null);
+  // 25 May (F/G) — timestamp of the last manual-breakout timer:sync. While these
+  // arrive (every 5s server-side), the breakout owns this client's timer and we
+  // drop session-wide round/rating ticks. Self-healing: keyed on the live stream,
+  // so it recovers after a refresh without any flag to restore. Window > 5s + margin.
+  const lastBreakoutSyncRef = useRef(0);
+  const BREAKOUT_OWNERSHIP_MS = 12_000;
 
   const clearTimer = () => {
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
@@ -257,7 +263,7 @@ export default function useSessionSocket(sessionId: string) {
           }
         }
       }
-      if (data.status === 'completed') { clearTimer(); clearByeTimeout(); store.setLiveKitToken(null, null); store.setMatch(null); store.setRoomId(null); store.setMatchingOverlay(null); store.setRoundDashboard(null); store.setByeRound(false); store.setPartnerDisconnected(false); store.setLeftCurrentRound(false); store.setInManualBreakout(false); store.setTransitionStatus('session_ending'); setTimeout(() => { store.setTransitionStatus(null); store.setPhase('complete'); }, 1500); }
+      if (data.status === 'completed') { clearTimer(); clearByeTimeout(); store.setLiveKitToken(null, null); store.setMatch(null); store.setRoomId(null); store.setMatchingOverlay(null); store.setRoundDashboard(null); store.setByeRound(false); store.setPartnerDisconnected(false); store.setLeftCurrentRound(false); lastBreakoutSyncRef.current = 0; store.setTransitionStatus('session_ending'); setTimeout(() => { store.setTransitionStatus(null); store.setPhase('complete'); }, 1500); }
       if (data.status === 'lobby_open') { store.setTransitionStatus(null); store.setHostInLobby(true); }
       if (data.status === 'round_active') { store.setLeftCurrentRound(false); } // New round — clear flag so match:assigned is accepted
       if (data.status === 'closing_lobby') {
@@ -420,9 +426,9 @@ export default function useSessionSocket(sessionId: string) {
       store.setPartnerDisconnected(false);
       // Per-match timer visibility override (Task 14 — bulk manual breakouts)
       store.setBreakoutTimerHidden(data.timerVisibility === 'hidden');
-      // 25 May (F/G) — an algorithm-round match is NOT a manual breakout, so the
-      // session round timer (timer:sync) is authoritative for this user again.
-      store.setInManualBreakout(false);
+      // 25 May (F/G) — an algorithm-round match is NOT a manual breakout; hand the
+      // timer back to the session round timer (timer:sync) for this user now.
+      lastBreakoutSyncRef.current = 0;
       const partners = data.partners || [{ userId: data.partnerId, displayName: data.partnerDisplayName || data.partnerId }];
       store.setMatch({ userId: data.partnerId, displayName: data.partnerDisplayName || data.partnerId }, data.matchId, partners);
       store.setPhase('matched');
@@ -452,11 +458,10 @@ export default function useSessionSocket(sessionId: string) {
       store.setPartnerDisconnected(false);
       // Per-match timer visibility override (Task 14 — bulk manual breakouts)
       store.setBreakoutTimerHidden(data.timerVisibility === 'hidden');
-      // 25 May (F/G) — manual breakouts arrive as match:reassigned with isManual.
-      // Flag it so the timer:sync handler scopes to the per-room countdown and
-      // ignores session-wide round/rating broadcasts. Algorithm re-pairs (partner
-      // reconnect) omit isManual → false → session timer stays authoritative.
-      store.setInManualBreakout(data.isManual === true);
+      // 25 May (F/G) — manual breakouts arrive as match:reassigned with isManual,
+      // immediately followed by the room's first 'breakout' timer:sync, which the
+      // recency gate picks up. Algorithm re-pairs omit isManual → no breakout ticks
+      // → the session timer keeps ownership. No explicit flag needed here.
       store.setMatch({ userId: data.newPartnerId, displayName: data.partnerDisplayName || data.newPartnerId }, data.matchId || null);
       // Phase C1 (10 May spec) — capture the LiveKit room id for the new
       // breakout. Pre-fix, only match:assigned called setRoomId, so a
@@ -499,7 +504,7 @@ export default function useSessionSocket(sessionId: string) {
       store.setTransitionStatus(null);
       store.setTimer(0); // Clear displayed timer
       store.setBreakoutTimerHidden(false); // Reset per-match visibility override
-      store.setInManualBreakout(false); // 25 May (F/G) — out of the breakout; session timer authoritative again
+      lastBreakoutSyncRef.current = 0; // 25 May (F/G) — left the breakout; session timer owns again
       store.setLeftCurrentRound(true); // Prevent re-entry via stale match:assigned
       store.setPhase('lobby');
     });
@@ -530,9 +535,9 @@ export default function useSessionSocket(sessionId: string) {
       const currentState = useSessionStore.getState();
       if (currentState.sessionStatus === 'completed') return;
       // 25 May (F/G) — rating opens AFTER a breakout ends (incl. host End-all-rooms,
-      // which routes participants straight to rating). Clear the breakout flag so the
-      // session-level rating countdown (segmentType 'round_rating') is honored.
-      store.setInManualBreakout(false);
+      // which routes participants straight to rating). Release breakout ownership so
+      // the session-level rating countdown (segmentType 'round_rating') shows at once.
+      lastBreakoutSyncRef.current = 0;
       if (data.partners && data.partners.length > 0) {
         // Server sent full partner info (reconnect or trio) — use it
         const primaryPartner = data.partners[0];
@@ -753,15 +758,21 @@ export default function useSessionSocket(sessionId: string) {
       const state = useSessionStore.getState();
       const isPauseSnapshot = data.paused === true || data.paused === false;
 
-      // 25 May (F/G) — timer SCOPE. Round/rating timers broadcast to the whole
-      // sessionRoom tagged with segmentType = a session status (round_active,
-      // round_rating, lobby_open, round_transition). Manual breakout timers are
-      // emitted per-user tagged segmentType 'breakout'. A user inside a manual
-      // breakout is ALSO in the sessionRoom, so without this guard the session
-      // broadcast (incl. its pause snapshot) overwrites their per-room countdown
-      // every 2s. While in a manual breakout, ignore any session-level
-      // (non-'breakout') sync. Untagged syncs (legacy/rolling deploy) still pass.
-      if (state.inManualBreakout && data.segmentType && data.segmentType !== 'breakout') {
+      // 25 May (F/G) — timer SCOPE, self-healing. Manual breakout rooms emit a
+      // per-user timer:sync tagged segmentType 'breakout' every 5s (a server-side
+      // interval that keeps running across a participant's refresh). Round/rating
+      // timers are broadcast to the whole sessionRoom tagged with a session status.
+      // A user in a breakout is also in the sessionRoom, so the session broadcast
+      // would otherwise clobber the per-room countdown (the 158↔43 / 4:23↔8:23
+      // flicker). While breakout ticks are actively arriving, the breakout owns
+      // this client's timer — drop session-level ticks (incl. their pause snapshot).
+      // Keyed on the live stream, NOT a flag, so it recovers automatically after
+      // a refresh. Explicit resets (below) hand the timer back the instant a user
+      // leaves the breakout (rating opens / return to lobby / new round).
+      const nowMs = Date.now();
+      if (data.segmentType === 'breakout') {
+        lastBreakoutSyncRef.current = nowMs;
+      } else if (nowMs - lastBreakoutSyncRef.current < BREAKOUT_OWNERSHIP_MS) {
         return;
       }
 

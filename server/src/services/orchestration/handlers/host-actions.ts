@@ -1726,7 +1726,7 @@ export async function handleHostExtendBreakoutRoom(
     const secondsRemaining = Math.ceil(msRemaining / 1000);
     const newEndsAtIso = newEndsAt.toISOString();
     for (const pid of roomTimer.participantIds) {
-      io.to(userRoom(pid)).emit('timer:sync', { secondsRemaining, endsAt: newEndsAtIso });
+      io.to(userRoom(pid)).emit('timer:sync', { segmentType: 'breakout', secondsRemaining, endsAt: newEndsAtIso });
     }
 
     // Refresh host dashboard
@@ -2644,7 +2644,7 @@ export async function handleHostCreateBreakout(
           }
           const remaining = Math.max(0, Math.ceil((state.endsAt.getTime() - Date.now()) / 1000));
           for (const pid of state.participantIds) {
-            io.to(userRoom(pid)).emit('timer:sync', { secondsRemaining: remaining });
+            io.to(userRoom(pid)).emit('timer:sync', { segmentType: 'breakout', secondsRemaining: remaining });
           }
           if (remaining <= 0) {
             const iv = roomSyncIntervals.get(matchId);
@@ -2725,7 +2725,7 @@ export async function handleHostCreateBreakout(
 
         // Send timer:sync to participants in this room so they see countdown
         for (const pid of participantIds) {
-          io.to(userRoom(pid)).emit('timer:sync', { secondsRemaining: duration });
+          io.to(userRoom(pid)).emit('timer:sync', { segmentType: 'breakout', secondsRemaining: duration });
         }
       }
 
