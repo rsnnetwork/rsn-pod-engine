@@ -350,7 +350,8 @@ export async function getPeopleMet(
        COALESCE(r_given.meet_again, FALSE) AS "meetAgain",
        COALESCE(r_received.meet_again, FALSE) AS "theirMeetAgain",
        COALESCE(eh.mutual_meet_again, FALSE) AS "mutualMeetAgain",
-       m.round_number AS "roundNumber"
+       m.round_number AS "roundNumber",
+       COALESCE(m.is_manual, FALSE) AS "isManual"
      FROM matches m
      CROSS JOIN LATERAL (
        SELECT unnest(ARRAY[

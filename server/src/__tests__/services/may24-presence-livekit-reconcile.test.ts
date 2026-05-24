@@ -45,14 +45,31 @@ describe('#16 — matcher includes everyone visibly in the main room (LiveKit ro
     expect(genFn).toMatch(/Promise\.race|timeout/i);
   });
 
+  it('#5 — recap returns is_manual and renders a separate Manual rooms section', () => {
+    const ratingSrc = readServer('services/rating/rating.service.ts');
+    expect(ratingSrc).toMatch(/is_manual[\s\S]{0,30}AS "isManual"/);
+    const sharedSrc = nodeFs.readFileSync(nodePath.join(__dirname, '../../../../shared/src/types/match.ts'), 'utf8');
+    expect(sharedSrc).toMatch(/isManual: boolean/);
+    const sc = readClient('features/live/SessionComplete.tsx');
+    const rp = readClient('features/sessions/RecapPage.tsx');
+    expect(sc).toMatch(/Manual rooms/);
+    expect(sc).toMatch(/c\.isManual/);
+    expect(rp).toMatch(/Manual rooms/);
+    expect(rp).toMatch(/c\.isManual/);
+  });
+
   it('client re-registers presence on return to foreground (visibilitychange / focus / online)', () => {
     const src = readClient('hooks/useSessionSocket.ts');
     expect(src).toMatch(/resyncPresenceOnReturn/);
     expect(src).toMatch(/visibilitychange/);
     expect(src).toMatch(/addEventListener\(\s*['"]focus['"]/);
     expect(src).toMatch(/addEventListener\(\s*['"]online['"]/);
-    // re-registers via the same session:join the reconnect handler uses
+    // 24 May (#2/#6 fix) — the foreground resync must be heartbeat-ONLY: it must
+    // NOT emit session:join (which re-runs handleJoinSession's in_round→main
+    // reset + rating-replay, the cause of "Saif in two places" + skip re-prompt).
     const i = src.indexOf('resyncPresenceOnReturn =');
-    expect(src.slice(i, i + 400)).toMatch(/session:join/);
+    expect(src.slice(i, i + 1000)).toMatch(/presence:heartbeat/);
+    // must NOT EMIT session:join (a code comment may reference it; the emit is what matters)
+    expect(src.slice(i, i + 1000)).not.toMatch(/emit\(\s*['"]session:join/);
   });
 });

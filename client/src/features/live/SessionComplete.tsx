@@ -44,6 +44,7 @@ interface Connection {
   theirMeetAgain: boolean;
   mutualMeetAgain: boolean;
   roundNumber: number;
+  isManual: boolean;
 }
 
 // Phase 1 (5 May 2026 spec compliance) — these stats are now derived
@@ -248,46 +249,61 @@ export default function SessionComplete({ sessionId }: Props) {
               </div>
             )}
 
-            {/* All people met — grouped by round */}
+            {/* All people met — grouped by round, with manual rooms separate (#5) */}
             {connections.length > 0 && (() => {
-              const byRound = connections.reduce<Record<number, Connection[]>>((acc, c) => {
+              const roundConns = connections.filter(c => !c.isManual);
+              const manualConns = connections.filter(c => c.isManual);
+              const byRound = roundConns.reduce<Record<number, Connection[]>>((acc, c) => {
                 (acc[c.roundNumber] ||= []).push(c);
                 return acc;
               }, {});
               const rounds = Object.keys(byRound).map(Number).sort((a, b) => a - b);
-              return rounds.map(round => (
-                <div key={round} className="bg-gray-50 rounded-2xl p-6 border border-gray-200">
-                  <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-2">
-                    <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-50 text-blue-600 text-[10px] font-bold">{round}</span>
-                    Round {round}
-                    {isBonusRound(round) && (
-                      <span className="ml-1 inline-flex items-center rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-[10px] font-semibold normal-case tracking-normal">Bonus round</span>
-                    )}
-                  </h3>
-                  <div className="space-y-2">
-                    {byRound[round].map(c => (
-                      <div key={`${c.userId}-${c.roundNumber}`} className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-100">
-                        <a href={`/profile/${c.userId}`} className="flex items-center gap-3 flex-1 min-w-0">
-                          <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <p className="text-gray-900 font-medium truncate">{c.displayName}</p>
-                              <InterestBadge connection={c} />
-                            </div>
-                          </div>
-                        </a>
-                        {c.qualityScore > 0 && (
-                          <div className="flex items-center gap-1 text-xs text-amber-500">
-                            <Star className="h-3 w-3 fill-amber-400" />
-                            {c.qualityScore}
-                          </div>
-                        )}
-                        <MessagePartnerButton userId={c.userId} displayName={c.displayName} />
+              const row = (c: Connection) => (
+                <div key={`${c.userId}-${c.roundNumber}`} className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-100">
+                  <a href={`/profile/${c.userId}`} className="flex items-center gap-3 flex-1 min-w-0">
+                    <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-gray-900 font-medium truncate">{c.displayName}</p>
+                        <InterestBadge connection={c} />
                       </div>
-                    ))}
-                  </div>
+                    </div>
+                  </a>
+                  {c.qualityScore > 0 && (
+                    <div className="flex items-center gap-1 text-xs text-amber-500">
+                      <Star className="h-3 w-3 fill-amber-400" />
+                      {c.qualityScore}
+                    </div>
+                  )}
+                  <MessagePartnerButton userId={c.userId} displayName={c.displayName} />
                 </div>
-              ));
+              );
+              return (
+                <>
+                  {rounds.map(round => (
+                    <div key={round} className="bg-gray-50 rounded-2xl p-6 border border-gray-200">
+                      <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-2">
+                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-50 text-blue-600 text-[10px] font-bold">{round}</span>
+                        Round {round}
+                        {isBonusRound(round) && (
+                          <span className="ml-1 inline-flex items-center rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-[10px] font-semibold normal-case tracking-normal">Bonus round</span>
+                        )}
+                      </h3>
+                      <div className="space-y-2">{byRound[round].map(row)}</div>
+                    </div>
+                  ))}
+                  {/* #5 (24 May) — manual breakout rooms are NOT a numbered round */}
+                  {manualConns.length > 0 && (
+                    <div className="bg-gray-50 rounded-2xl p-6 border border-gray-200">
+                      <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-2">
+                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-emerald-50 text-emerald-600 text-[10px] font-bold">M</span>
+                        Manual rooms
+                      </h3>
+                      <div className="space-y-2">{manualConns.map(row)}</div>
+                    </div>
+                  )}
+                </>
+              );
             })()}
           </>
         )}

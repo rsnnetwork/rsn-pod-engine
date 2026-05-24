@@ -22,6 +22,7 @@ interface Connection {
   theirMeetAgain: boolean;
   mutualMeetAgain: boolean;
   roundNumber: number;
+  isManual?: boolean; // #5 (24 May) — manual breakout rooms render in their own recap section
   // Bug 24 (18 May Ali) — set by the server's deduplication so the
   // Mutual Matches card can show "Met 2 times" on a single row instead
   // of two duplicate rows. Optional for backward compat with older
@@ -468,7 +469,9 @@ export default function RecapPage() {
 
       {/* All connections grouped by round */}
       {data && data.connections.length > 0 && (() => {
-        const byRound = data.connections.reduce<Record<number, typeof data.connections>>((acc, c) => {
+        const roundConns = data.connections.filter(c => !c.isManual);
+        const manualConns = data.connections.filter(c => c.isManual);
+        const byRound = roundConns.reduce<Record<number, typeof data.connections>>((acc, c) => {
           (acc[c.roundNumber] ||= []).push(c);
           return acc;
         }, {});
@@ -476,45 +479,59 @@ export default function RecapPage() {
         // #15 (23 May) — flag rounds added live via "Another Round" as bonus.
         const bonusAdded = data.bonusRoundsAdded ?? 0;
         const isBonus = (r: number) => bonusAdded > 0 && data.totalRounds > 0 && r > data.totalRounds - bonusAdded;
-        return rounds.map(round => (
-          <Card key={round}>
-            <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">
-              <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-rsn-red/10 text-rsn-red text-xs font-bold">{round}</span>
-              Round {round}
-              {isBonus(round) && (
-                <span className="ml-1 inline-flex items-center rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-[10px] font-semibold normal-case tracking-normal">Bonus round</span>
-              )}
-              <span className="text-xs font-normal text-gray-400">· {byRound[round].length} {byRound[round].length === 1 ? 'person' : 'people'}</span>
-            </h3>
-            <div className="space-y-2">
-              {byRound[round].map(c => (
-                <div key={`${c.userId}-${c.roundNumber}`} className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-100/40 transition-colors">
-                  <a href={`/profile/${c.userId}`} className="flex items-center gap-3 flex-1 min-w-0">
-                    <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="text-gray-800 font-medium truncate">{c.displayName}</p>
-                        <InterestBadge connection={c} />
-                      </div>
-                      <p className="text-xs text-gray-400">
-                        {c.jobTitle && `${c.jobTitle}`}
-                        {c.company && ` @ ${c.company}`}
-                      </p>
-                    </div>
-                  </a>
-                  <div className="flex items-center gap-3 shrink-0">
-                    {c.qualityScore > 0 && (
-                      <div className="flex items-center gap-1 text-xs text-amber-400">
-                        <Star className="h-3 w-3 fill-amber-400" />{c.qualityScore}
-                      </div>
-                    )}
-                  </div>
-                  <MessagePartnerButton userId={c.userId} displayName={c.displayName} />
+        const row = (c: typeof data.connections[number]) => (
+          <div key={`${c.userId}-${c.roundNumber}`} className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-100/40 transition-colors">
+            <a href={`/profile/${c.userId}`} className="flex items-center gap-3 flex-1 min-w-0">
+              <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-gray-800 font-medium truncate">{c.displayName}</p>
+                  <InterestBadge connection={c} />
                 </div>
-              ))}
+                <p className="text-xs text-gray-400">
+                  {c.jobTitle && `${c.jobTitle}`}
+                  {c.company && ` @ ${c.company}`}
+                </p>
+              </div>
+            </a>
+            <div className="flex items-center gap-3 shrink-0">
+              {c.qualityScore > 0 && (
+                <div className="flex items-center gap-1 text-xs text-amber-400">
+                  <Star className="h-3 w-3 fill-amber-400" />{c.qualityScore}
+                </div>
+              )}
             </div>
-          </Card>
-        ));
+            <MessagePartnerButton userId={c.userId} displayName={c.displayName} />
+          </div>
+        );
+        return (
+          <>
+            {rounds.map(round => (
+              <Card key={round}>
+                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                  <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-rsn-red/10 text-rsn-red text-xs font-bold">{round}</span>
+                  Round {round}
+                  {isBonus(round) && (
+                    <span className="ml-1 inline-flex items-center rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-[10px] font-semibold normal-case tracking-normal">Bonus round</span>
+                  )}
+                  <span className="text-xs font-normal text-gray-400">· {byRound[round].length} {byRound[round].length === 1 ? 'person' : 'people'}</span>
+                </h3>
+                <div className="space-y-2">{byRound[round].map(row)}</div>
+              </Card>
+            ))}
+            {/* #5 (24 May) — manual breakout rooms are NOT a numbered round */}
+            {manualConns.length > 0 && (
+              <Card>
+                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                  <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-emerald-500/10 text-emerald-600 text-xs font-bold">M</span>
+                  Manual rooms
+                  <span className="text-xs font-normal text-gray-400">· {manualConns.length} {manualConns.length === 1 ? 'person' : 'people'}</span>
+                </h3>
+                <div className="space-y-2">{manualConns.map(row)}</div>
+              </Card>
+            )}
+          </>
+        );
       })()}
 
       {/* Empty state */}

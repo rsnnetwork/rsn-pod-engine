@@ -70,6 +70,10 @@ export interface ConnectionResult {
   theirMeetAgain: boolean;
   mutualMeetAgain: boolean;
   roundNumber: number;
+  // #5 (24 May, Ali) — manual breakout rooms are stamped with the current
+  // round_number; this flag lets the recap render them in a separate
+  // "Manual rooms" section instead of folding them into a numbered round.
+  isManual: boolean;
 }
 
 export interface PeopleMet {
