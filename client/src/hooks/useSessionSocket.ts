@@ -886,7 +886,31 @@ export default function useSessionSocket(sessionId: string) {
     socket.io.on('reconnect_attempt', onReconnectAttempt);
     socket.io.on('reconnect_failed', onReconnectFailed);
 
+    // #16 (24 May, Ali — pre-event hardening) — when the user returns from the
+    // background (phone call, tab switch, screen lock, app switch) the OS may
+    // have throttled the heartbeat or dropped the socket, leaving the server
+    // thinking they're gone. The moment they're foregrounded, re-register
+    // presence so the server (and the matcher) counts them as present again —
+    // no button, no refresh. Debounced so a burst of focus/visibility flips
+    // fires once. Uses the same session:join the reconnect handler uses.
+    let resyncDebounce: ReturnType<typeof setTimeout> | null = null;
+    const resyncPresenceOnReturn = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (resyncDebounce) return;
+      resyncDebounce = setTimeout(() => { resyncDebounce = null; }, 2000);
+      if (!socket.connected) socket.connect();
+      socket.emit('session:join', { sessionId });
+      socket.emit('presence:heartbeat', { sessionId });
+    };
+    document.addEventListener('visibilitychange', resyncPresenceOnReturn);
+    window.addEventListener('focus', resyncPresenceOnReturn);
+    window.addEventListener('online', resyncPresenceOnReturn);
+
     return () => {
+      if (resyncDebounce) clearTimeout(resyncDebounce);
+      document.removeEventListener('visibilitychange', resyncPresenceOnReturn);
+      window.removeEventListener('focus', resyncPresenceOnReturn);
+      window.removeEventListener('online', resyncPresenceOnReturn);
       clearTimer();
       clearRatingFallback();
       clearByeTimeout();

@@ -262,6 +262,33 @@ export async function handleHostGenerateMatches(
         if (uid) presentUserIds.add(uid);
       }
       for (const uid of activeSession.presenceMap.keys()) presentUserIds.add(uid);
+
+      // #16 (24 May, Ali — pre-event hardening) — the authoritative "who is
+      // visibly in the main room" signal is LiveKit's OWN room roster: the video
+      // connection that renders the host's tiles, which survives a backgrounded
+      // tab / phone call / screen lock / laggy control socket (the 15s heartbeat
+      // does NOT). Add it to the present set so a participant who is genuinely in
+      // the room is never excluded from matching for a socket blip — the exact
+      // "7 in room, only 5 matched" gap. Fail-open in its OWN try/catch + 4s
+      // timeout: a LiveKit error must never abort the socket/heartbeat reconcile
+      // below or delay the host's match action.
+      try {
+        const sessionForRoom = await (await import('../../session/session.service')).getSessionById(data.sessionId);
+        if (sessionForRoom?.lobbyRoomId) {
+          const videoSvc = await import('../../video/video.service');
+          const roster = await Promise.race([
+            videoSvc.listParticipants(sessionForRoom.lobbyRoomId),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('listParticipants timeout')), 4000)),
+          ]);
+          for (const p of roster) if (p.userId) presentUserIds.add(p.userId);
+          logger.info({ sessionId: data.sessionId, livekitPresent: roster.length },
+            '#16 — reconciled main-room presence against LiveKit roster');
+        }
+      } catch (lkErr) {
+        logger.warn({ err: lkErr, sessionId: data.sessionId },
+          '#16 — LiveKit roster reconcile failed (non-fatal, using socket/heartbeat presence)');
+      }
+
       if (presentUserIds.size > 0) {
         const stale = await query<{ user_id: string }>(
           `SELECT user_id FROM session_participants
