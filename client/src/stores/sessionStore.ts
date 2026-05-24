@@ -114,6 +114,12 @@ interface SessionLiveState {
   // Per-match override from bulk manual breakouts (Task 14). When true, countdown
   // is completely hidden for THIS breakout room regardless of session-level setting.
   breakoutTimerHidden: boolean;
+  // 25 May (F/G) — true while this user is inside a MANUAL breakout room. Manual
+  // rooms have their own per-room countdown (timer:sync segmentType 'breakout');
+  // session-wide round/rating timer:sync broadcasts (segmentType = a session
+  // status) must NOT overwrite it. Set on a manual match:reassigned, cleared on
+  // return-to-lobby / rating-window-open / a fresh algorithm match.
+  inManualBreakout: boolean;
   matchPreview: {
     roundNumber: number;
     matches: { participantA: { userId: string; displayName: string }; participantB: { userId: string; displayName: string }; participantC?: { userId: string; displayName: string }; isTrio?: boolean; metBefore?: boolean; timesMet?: number }[];
@@ -247,6 +253,7 @@ interface SessionLiveState {
   setLobbyToken: (token: string | null, url?: string | null, roomId?: string | null) => void;
   setTimerVisibility: (v: 'hidden' | 'always_visible' | 'last_10s' | 'last_30s' | 'last_60s' | 'last_120s') => void;
   setBreakoutTimerHidden: (v: boolean) => void;
+  setInManualBreakout: (v: boolean) => void;
   setMatchPreview: (preview: SessionLiveState['matchPreview']) => void;
   setEventPlanSummary: (summary: SessionLiveState['eventPlanSummary']) => void;
   setTestMode: (testMode: boolean) => void;
@@ -353,6 +360,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   lobbyRoomId: null,
   timerVisibility: 'always_visible',
   breakoutTimerHidden: false,
+  inManualBreakout: false,
   matchPreview: null,
   eventPlanSummary: null,
   testMode: false,
@@ -437,6 +445,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   setLobbyToken: (lobbyToken, lobbyUrl = null, lobbyRoomId = null) => set({ lobbyToken, lobbyUrl, lobbyRoomId }),
   setTimerVisibility: (timerVisibility) => set({ timerVisibility }),
   setBreakoutTimerHidden: (breakoutTimerHidden) => set({ breakoutTimerHidden }),
+  setInManualBreakout: (inManualBreakout) => set({ inManualBreakout }),
   setMatchPreview: (matchPreview) => set({ matchPreview }),
   setEventPlanSummary: (eventPlanSummary) => set({ eventPlanSummary }),
   setTestMode: (testMode) => set({ testMode }),
@@ -565,7 +574,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
     timerSeconds: 0, timerEndsAt: null, currentRound: 0, broadcasts: [], error: null, tileReactions: {},
     isReconnecting: false, isByeRound: false, liveKitToken: null, livekitUrl: null, currentRoomId: null,
     lobbyToken: null, lobbyUrl: null, lobbyRoomId: null,
-    timerVisibility: 'always_visible', breakoutTimerHidden: false, matchPreview: null,
+    timerVisibility: 'always_visible', breakoutTimerHidden: false, inManualBreakout: false, matchPreview: null,
     eventPlanSummary: null, testMode: false,
     hostMuteCommand: null, partnerDisconnected: false, roundDashboard: null,
     chatMessages: [], unreadChatCount: 0, chatOpen: false, matchingOverlay: null, preparingMatches: false, lobbyDensity: 'normal' as const,

@@ -75,6 +75,16 @@ export default function HostRoundDashboard({ sessionId }: Props) {
     });
   };
 
+  // 25 May (Ali) — end ALL manual breakout rooms straight from the manual-rooms
+  // panel (was only reachable inside Control Center). Mirrors HostControls'
+  // bulkEndAll → host:end_breakout_all (server ends is_manual rooms only;
+  // algorithm rooms are untouched). Participants are routed to rating.
+  const endAllManualRooms = () => {
+    const count = roundDashboard?.rooms.filter(r => r.status === 'active' && (r as any).isManual).length ?? 0;
+    if (!confirm(`End all ${count} manual breakout room${count !== 1 ? 's' : ''}? Participants will move to rating.`)) return;
+    socket?.emit('host:end_breakout_all' as any, { sessionId });
+  };
+
   const moveToRoom = (targetMatchId: string) => {
     if (!moveMode) return;
     if (!confirm(`Move ${moveMode.displayName} to this room?`)) return;
@@ -296,19 +306,32 @@ export default function HostRoundDashboard({ sessionId }: Props) {
                   {activeManualRooms.length} room{activeManualRooms.length !== 1 ? 's' : ''}
                 </span>
               </div>
-              {/* Shared timer if every manual room has the same endsAt */}
-              {manualSharedEndsAt && (
-                <span className="inline-flex items-center gap-1 text-sm font-mono font-semibold text-purple-900">
-                  <Clock className="h-4 w-4 text-purple-500" />
-                  {formatMSS(remainingSeconds(manualSharedEndsAt.toISOString()))}
-                </span>
-              )}
-              {!manualSharedEndsAt && manualHasAnyTimer && (
-                <span className="text-[11px] text-purple-600 font-medium">per-room timer</span>
-              )}
-              {!manualHasAnyTimer && (
-                <span className="text-[11px] text-purple-500 italic">no time limit</span>
-              )}
+              <div className="flex items-center gap-2.5">
+                {/* Shared timer if every manual room has the same endsAt */}
+                {manualSharedEndsAt && (
+                  <span className="inline-flex items-center gap-1 text-sm font-mono font-semibold text-purple-900">
+                    <Clock className="h-4 w-4 text-purple-500" />
+                    {formatMSS(remainingSeconds(manualSharedEndsAt.toISOString()))}
+                  </span>
+                )}
+                {!manualSharedEndsAt && manualHasAnyTimer && (
+                  <span className="text-[11px] text-purple-600 font-medium">per-room timer</span>
+                )}
+                {!manualHasAnyTimer && (
+                  <span className="text-[11px] text-purple-500 italic">no time limit</span>
+                )}
+                {/* 25 May (Ali) — end-all directly from the manual panel (was Control
+                    Center only). Host can close every manual room in one click. */}
+                {!moveMode && (
+                  <button
+                    onClick={endAllManualRooms}
+                    className="text-xs font-medium px-2.5 py-1 rounded-md border border-red-200 text-red-700 hover:bg-red-100 transition-colors"
+                    title="End every manual breakout room and move participants to rating"
+                  >
+                    End all rooms
+                  </button>
+                )}
+              </div>
             </div>
           );
 

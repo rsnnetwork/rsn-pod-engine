@@ -13,7 +13,7 @@ export interface ServerToClientEvents {
   // Matching & routing
   'match:assigned': (data: { matchId: string; partnerId: string; partnerDisplayName?: string; partners?: { userId: string; displayName: string }[]; roomId: string; roundNumber: number }) => void;
   'match:bye_round': (data: { roundNumber: number; reason: string }) => void;
-  'match:reassigned': (data: { matchId: string; newPartnerId: string; partnerDisplayName?: string; roomId: string; roundNumber?: number }) => void;
+  'match:reassigned': (data: { matchId: string; newPartnerId: string; partnerDisplayName?: string; roomId: string; roundNumber?: number; isManual?: boolean }) => void;
   'match:partner_disconnected': (data: { matchId?: string }) => void;
   'match:partner_reconnected': (data: { matchId?: string }) => void;
 

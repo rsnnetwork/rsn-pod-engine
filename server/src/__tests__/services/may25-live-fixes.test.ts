@@ -58,4 +58,61 @@ describe('25 May live-test fixes', () => {
       expect(readClient('features/live/RatingPrompt.tsx')).toMatch(/emit\('rating:skip'/);
     });
   });
+
+  describe('I — EVENT PLAN strip ignores manual breakout matches', () => {
+    // A manual room created after a round ended inherits that round_number and is
+    // status='active', which was flipping the round chip back to amber "Active".
+    const src = readServer('routes/sessions.ts');
+    const planFn = src.slice(src.indexOf("'/:id/plan'"));
+    it('the per-round status query excludes manual matches', () => {
+      // matchesResult (round status + pairCount) must filter is_manual.
+      expect(planFn).toMatch(/GROUP BY round_number, status/);
+      const statusQ = planFn.slice(0, planFn.indexOf('GROUP BY round_number, status'));
+      expect(statusQ).toMatch(/COALESCE\(is_manual, FALSE\) = FALSE/);
+    });
+    it('the bye-count round source excludes manual matches', () => {
+      expect(planFn).toMatch(/round_participants AS[\s\S]{0,400}COALESCE\(m\.is_manual, FALSE\) = FALSE/);
+    });
+  });
+
+  describe('F/G — timer:sync scoped to context (breakout vs session)', () => {
+    it('manual breakout timer:sync emits are tagged segmentType "breakout"', () => {
+      const src = readServer('services/orchestration/handlers/breakout-bulk.ts');
+      // Every per-user timer:sync from the breakout handlers carries the breakout tag.
+      const syncs = src.match(/emit\('timer:sync', \{[^}]*\}/g) || [];
+      expect(syncs.length).toBeGreaterThanOrEqual(4);
+      for (const s of syncs) expect(s).toMatch(/segmentType: 'breakout'/);
+    });
+    it('manual match:reassigned carries isManual:true', () => {
+      const src = readServer('services/orchestration/handlers/breakout-bulk.ts');
+      expect(src).toMatch(/emit\('match:reassigned', \{[\s\S]{0,800}isManual: true/);
+    });
+    it('client store tracks inManualBreakout', () => {
+      const store = readClient('stores/sessionStore.ts');
+      expect(store).toMatch(/inManualBreakout: boolean/);
+      expect(store).toMatch(/setInManualBreakout:/);
+    });
+    it('client timer:sync ignores session-level syncs while in a manual breakout', () => {
+      const src = readClient('hooks/useSessionSocket.ts');
+      const i = src.indexOf("socket.on('timer:sync'");
+      expect(i).toBeGreaterThan(-1);
+      // guard lives a bit past the long Bug 17 comment — search the handler body generously
+      expect(src.slice(i, i + 2500)).toMatch(/state\.inManualBreakout && data\.segmentType && data\.segmentType !== 'breakout'/);
+    });
+    it('client sets the breakout flag from match:reassigned isManual', () => {
+      const src = readClient('hooks/useSessionSocket.ts');
+      expect(src).toMatch(/setInManualBreakout\(data\.isManual === true\)/);
+    });
+  });
+
+  describe('J — End-all-rooms button on the manual-rooms panel', () => {
+    const src = readClient('features/live/HostRoundDashboard.tsx');
+    it('has an end-all handler emitting host:end_breakout_all', () => {
+      expect(src).toMatch(/endAllManualRooms/);
+      expect(src).toMatch(/emit\('host:end_breakout_all'/);
+    });
+    it('renders an "End all rooms" button', () => {
+      expect(src).toMatch(/End all rooms/);
+    });
+  });
 });

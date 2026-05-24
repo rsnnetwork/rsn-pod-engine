@@ -703,10 +703,16 @@ router.get(
         cnt: string;
         fallback_count: string;
       }>(
+        // 25 May (Ali live test) — the EVENT PLAN strip reflects ALGORITHM
+        // rounds only. Manual breakout rooms inherit the current round_number
+        // (host-actions INSERTs use activeSession.currentRound) and are
+        // status='active', so a manual room created AFTER a round ended was
+        // flipping that round's chip back to amber "Active". Exclude manual.
         `SELECT round_number, status, COUNT(*)::text AS cnt,
                 SUM(CASE WHEN fallback_used THEN 1 ELSE 0 END)::text AS fallback_count
          FROM matches
          WHERE session_id = $1
+           AND COALESCE(is_manual, FALSE) = FALSE
          GROUP BY round_number, status
          ORDER BY round_number`,
         [sessionId],
@@ -741,6 +747,7 @@ router.get(
                   unnest(ARRAY[m.participant_a_id, m.participant_b_id, m.participant_c_id]) AS user_id
            FROM matches m
            WHERE m.session_id = $1 AND m.status NOT IN ('cancelled')
+             AND COALESCE(m.is_manual, FALSE) = FALSE
          )
          SELECT r.round_number,
                 (SELECT COUNT(*)::text FROM active_participants ap
@@ -748,7 +755,8 @@ router.get(
                    SELECT 1 FROM round_participants rp
                    WHERE rp.round_number = r.round_number AND rp.user_id = ap.user_id
                  )) AS bye_count
-         FROM (SELECT DISTINCT round_number FROM matches WHERE session_id = $1) r`,
+         FROM (SELECT DISTINCT round_number FROM matches
+               WHERE session_id = $1 AND COALESCE(is_manual, FALSE) = FALSE) r`,
         [sessionId, session.host_user_id],
       );
       const byeByRound = new Map<number, number>();
