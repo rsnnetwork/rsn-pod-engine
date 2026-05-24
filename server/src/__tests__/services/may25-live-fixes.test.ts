@@ -121,4 +121,36 @@ describe('25 May live-test fixes', () => {
       expect(src).toMatch(/End all rooms/);
     });
   });
+
+  describe('D — LiveKit reconnect on return to foreground', () => {
+    const src = readClient('features/live/VideoRoom.tsx');
+    it('imports the room-context + connection-state primitives', () => {
+      expect(src).toMatch(/useRoomContext/);
+      expect(src).toMatch(/ConnectionState/);
+    });
+    it('ReconnectOnReturn fires only on a hard Disconnected state, on return/online', () => {
+      const i = src.indexOf('function ReconnectOnReturn');
+      expect(i).toBeGreaterThan(-1);
+      const body = src.slice(i, i + 1200);
+      expect(body).toMatch(/room\.state !== ConnectionState\.Disconnected\) return/);
+      expect(body).toMatch(/visibilitychange/);
+      expect(body).toMatch(/addEventListener\('online'/);
+      expect(body).toMatch(/debounceRef/);
+    });
+    it('reconnect refreshes a clean attempt and is gated to the matched phase', () => {
+      const i = src.indexOf('const reconnectRoom');
+      expect(i).toBeGreaterThan(-1);
+      const body = src.slice(i, i + 400);
+      expect(body).toMatch(/phase !== 'matched'\) return/);
+      expect(body).toMatch(/retryCountRef\.current = 0/);
+      expect(body).toMatch(/setLiveKitToken\(null, null\)/);
+    });
+    it('a successful connect resets the retry budget (no permanent kick over a long event)', () => {
+      const i = src.indexOf('onConnected={');
+      expect(src.slice(i, i + 900)).toMatch(/retryCountRef\.current = 0/);
+    });
+    it('ReconnectOnReturn is mounted inside the LiveKitRoom', () => {
+      expect(src).toMatch(/<ReconnectOnReturn onReconnect=\{reconnectRoom\}/);
+    });
+  });
 });

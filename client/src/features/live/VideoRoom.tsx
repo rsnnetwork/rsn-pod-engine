@@ -44,10 +44,11 @@ import {
   useTracks,
   useParticipants,
   useLocalParticipant,
+  useRoomContext,
   RoomAudioRenderer,
 } from '@livekit/components-react';
 import '@livekit/components-styles';
-import { Track } from 'livekit-client';
+import { Track, ConnectionState } from 'livekit-client';
 import api from '@/lib/api';
 
 // Prefer displayName → name → email local-part → "Partner".
@@ -607,6 +608,43 @@ function PartnerLeftAutoReturn({ sessionId }: { sessionId: string }) {
   );
 }
 
+// D (25 May Ali) — recover the LiveKit connection when the user returns to the
+// foreground. iOS Safari suspends WebRTC while a tab is backgrounded (a phone
+// call, the lock screen); the SDK's own reconnect frequently times out
+// (Sentry "NegotiationError: negotiation timed out"), leaving the participant
+// with frozen/black video and a stale "ghost" tile to everyone else (the
+// "Saif in two places" report). Mount once inside a <LiveKitRoom>: on return to
+// the foreground / regained network, if the room has actually GIVEN UP
+// (state === Disconnected), trigger the parent's reconnect. We act ONLY on a
+// hard Disconnected state — transient blips are left to the SDK's own
+// auto-reconnect so we never thrash a healthy or already-reconnecting link.
+// Debounced so a burst of focus/visibility/online events fires at most once.
+function ReconnectOnReturn({ onReconnect }: { onReconnect: () => void }) {
+  const room = useRoomContext();
+  const cbRef = useRef(onReconnect);
+  cbRef.current = onReconnect;
+  const debounceRef = useRef(false);
+  useEffect(() => {
+    const maybeReconnect = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (room.state !== ConnectionState.Disconnected) return;
+      if (debounceRef.current) return;
+      debounceRef.current = true;
+      setTimeout(() => { debounceRef.current = false; }, 3000);
+      cbRef.current();
+    };
+    document.addEventListener('visibilitychange', maybeReconnect);
+    window.addEventListener('focus', maybeReconnect);
+    window.addEventListener('online', maybeReconnect);
+    return () => {
+      document.removeEventListener('visibilitychange', maybeReconnect);
+      window.removeEventListener('focus', maybeReconnect);
+      window.removeEventListener('online', maybeReconnect);
+    };
+  }, [room]);
+  return null;
+}
+
 export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
   const timerSeconds = useSessionStore(s => s.timerSeconds);
   const currentRound = useSessionStore(s => s.currentRound);
@@ -651,6 +689,20 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
 
   const handleReturnToLobby = () => {
     if (sessionId) getSocket()?.emit('participant:leave_conversation', { sessionId });
+  };
+
+  // D (25 May) — force a fresh LiveKit reconnect when the room has gone dead
+  // after a suspended tab. Reuses the proven token-clear path: null token →
+  // the backup fetch above pulls a fresh token → <LiveKitRoom> remounts and
+  // reconnects. retryCount is reset because the user is actively back, so they
+  // always get a clean attempt (rather than being kicked to lobby on an
+  // exhausted budget after several drops over a long event).
+  const reconnectRoom = () => {
+    if (useSessionStore.getState().phase !== 'matched') return;
+    retryCountRef.current = 0;
+    setRetrying(true);
+    setLiveKitToken(null, null);
+    setTimeout(() => setRetrying(false), 1500);
   };
 
   if (isByeRound) {
@@ -711,6 +763,10 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
             roomId: currentRoomId,
           });
         }
+        // D (25 May) — a successful (re)connect refreshes the retry budget so a
+        // user who drops several times over a long event always gets a clean
+        // reconnect attempt instead of being permanently bounced to the lobby.
+        retryCountRef.current = 0;
       }}
       onDisconnected={() => {
         if (useSessionStore.getState().phase !== 'matched') return;
@@ -742,6 +798,9 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
       }}
       className="flex-1 flex flex-col"
     >
+      {/* D (25 May Ali) — recover the connection (and the user's matchability +
+          video) when they return to the foreground after a suspended tab. */}
+      <ReconnectOnReturn onReconnect={reconnectRoom} />
       {/* Partner disconnected — auto-return to main room */}
       {partnerDisconnected && sessionId && (
         <PartnerLeftAutoReturn sessionId={sessionId} />
