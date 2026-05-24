@@ -235,6 +235,19 @@ describe('23 May 2nd-test fixes — round-3 repeats, re-match rotation, end-even
     });
   });
 
+  // ── #6b — early-leaver who already rated must not be re-prompted at round end
+  describe('#6b — rating done is recorded on completion, not only on window_closed', () => {
+    it('RatingPrompt sets lastRatedRound when all partners are rated (allDone)', () => {
+      const src = readClient('features/live/RatingPrompt.tsx');
+      // The allDone completion path must record the round so the round_rating
+      // phase transition (which skips when currentRound <= lastRatedRound) does
+      // not re-open the form for an early-leaver who already rated.
+      const i = src.indexOf('allDone && !hasRedirected');
+      expect(i).toBeGreaterThan(-1);
+      expect(src.slice(i, i + 900)).toMatch(/setLastRatedRound\(currentRound\)/);
+    });
+  });
+
   // ── #13 — round start must not false-no-show present-but-stale participants
   describe('#13 — detectNoShows reconciles presence against live sockets', () => {
     it('checks live sockets in the session room before marking no-show', () => {

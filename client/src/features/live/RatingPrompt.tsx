@@ -175,9 +175,18 @@ export default function RatingPrompt(_props: Props) {
   useEffect(() => {
     if (allDone && !hasRedirected.current) {
       hasRedirected.current = true;
+      // #6 (24 May, Ali) — mark this round's rating as done so a later
+      // round_rating phase transition does NOT re-open the form. An early-leaver
+      // who already rated (their form returns them to lobby, then the round
+      // ends) was re-prompted because lastRatedRound was only set on
+      // rating:window_closed. allDone fires after the LAST partner, so a trio
+      // still gets both forms first and a pair gets exactly one. Server-driven
+      // rating:window_open (genuine reassignment to a new partner) bypasses the
+      // round_rating guard, so legitimate re-prompts still work.
+      if (currentRound > 0) useSessionStore.getState().setLastRatedRound(currentRound);
       setPhase('lobby');
     }
-  }, [allDone, setPhase]);
+  }, [allDone, setPhase, currentRound]);
 
   if (noMatchData) return null;
   if (allDone) return null;
