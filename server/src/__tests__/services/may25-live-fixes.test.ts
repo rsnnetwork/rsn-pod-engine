@@ -31,6 +31,14 @@ describe('25 May live-test fixes', () => {
     });
   });
 
+  describe('F — manual-room timers cleared on event end (no cross-event leak)', () => {
+    it('completeSession clears room timers for the session matches', () => {
+      const fn = fnSlice(readServer('services/orchestration/handlers/round-lifecycle.ts'), 'export async function completeSession');
+      expect(fn).toMatch(/clearRoomTimers/);
+      expect(fn).toMatch(/FROM matches WHERE session_id/);
+    });
+  });
+
   describe('C — rating skip recorded + honored', () => {
     const pfSrc = readServer('services/orchestration/handlers/participant-flow.ts');
 

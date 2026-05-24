@@ -822,6 +822,23 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
     // FIX 5D: Clear ALL timers (main + sync interval)
     clearSessionTimers(sessionId);
 
+    // #F (25 May, Ali) — clearSessionTimers only kills the session segment timer.
+    // Manual breakout rooms keep their OWN per-match setInterval (roomTimers /
+    // roomSyncIntervals in host-actions). If the event ends while a manual room
+    // is active, that interval is never cleared and keeps emitting timer:sync to
+    // those users' rooms — leaking a stale countdown into the NEXT event (the
+    // "8:20 from a previous event" Ali saw). Clear every room timer for this
+    // session's matches on event end. Non-fatal.
+    try {
+      const { clearRoomTimers } = await import('./host-actions');
+      const matchRows = await query<{ id: string }>(
+        `SELECT id FROM matches WHERE session_id = $1`, [sessionId],
+      );
+      for (const m of matchRows.rows) clearRoomTimers(m.id);
+    } catch (timerErr) {
+      logger.warn({ err: timerErr, sessionId }, '#F — clearing manual-room timers on event end failed (non-fatal)');
+    }
+
     // F4 (21 May Ali) — minimise time-to-emit so the host stops seeing
     // a stale UI after they click End Event. Pre-fix the ordering was:
     //   1. updateSessionStatus            (DB,  ~30 ms)
