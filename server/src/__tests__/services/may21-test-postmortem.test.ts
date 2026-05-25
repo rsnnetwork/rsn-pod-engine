@@ -71,7 +71,7 @@ describe('May 21 test post-mortem — M1 + M3 architectural fixes', () => {
     it('completeSession includes a session_participants sweep with COALESCE(left_at, NOW())', () => {
       const idx = src.indexOf('export async function completeSession');
       expect(idx).toBeGreaterThan(-1);
-      const body = src.slice(idx, idx + 5500);
+      const body = src.slice(idx, idx + 6500);
       // The sweep updates session_participants for the ending session.
       expect(body).toMatch(/UPDATE session_participants[\s\S]{0,400}left_at\s*=\s*COALESCE\(\s*left_at\s*,\s*NOW\(\)/);
       // Status set to 'left'.
