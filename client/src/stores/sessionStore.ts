@@ -206,6 +206,10 @@ interface SessionLiveState {
   // people can actually see WHO reacted.
   tileReactions: Record<string, { emoji: string; displayName: string; expiresAt: number }>;
 
+  // Phase 5 — monotonic seq for the versioned state:snapshot channel.
+  // Initialized to -1 so the first snapshot (seq ≥ 0) is always accepted.
+  snapshotSeq: number;
+
   setPhase: (phase: SessionPhase) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setTransitionStatus: (status: TransitionStatus) => void;
@@ -286,6 +290,11 @@ interface SessionLiveState {
   // authoritative state in one shot. Prevents the partial-update tearing
   // that broadcast-based recovery used to produce.
   applyFullState: (snapshot: SessionStateSnapshot) => void;
+
+  // Phase 5 — seq-guarded consumer of the versioned state:snapshot push.
+  // Out-of-order or replayed snapshots are dropped (seq-guard). Does NOT
+  // replace applyFullState or touch fields that snapshot doesn't carry.
+  applyStateSnapshot: (snap: { seq: number; participants: Array<{ userId: string; displayName?: string }> }) => void;
 
   reset: () => void;
 }
@@ -373,6 +382,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   lastRatedRound: 0,
   isPaused: false,
   tileReactions: {},
+  snapshotSeq: -1,
 
   setPhase: (phase) => set({ phase }),
   setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
@@ -489,6 +499,19 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
     delete next[userId];
     return { tileReactions: next };
   }),
+  // Phase 5 — seq-guarded consumer of the versioned state:snapshot push.
+  // Ignores stale/duplicate snapshots so out-of-order or replayed pushes
+  // can never regress the participant list (monotonic-version contract).
+  // The visible lobby tiles still come from the LiveKit-presence override
+  // (useInRoomParticipants); this updates the store-backed list used where
+  // LiveKit isn't mounted and establishes the seq-guarded channel.
+  applyStateSnapshot: (snap) => set((s) => {
+    if (!snap || typeof snap.seq !== 'number' || snap.seq <= s.snapshotSeq) return {};
+    return {
+      snapshotSeq: snap.seq,
+      participants: snap.participants.map(p => ({ userId: p.userId, displayName: p.displayName })),
+    };
+  }),
   // T0-3 — apply server's authoritative session-state snapshot atomically.
   // Recomputes timer locally from the server's `endsAt` (clock-skew immune).
   // Does NOT touch fields the snapshot doesn't carry (currentMatch, broadcasts,
@@ -570,6 +593,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
     hostMuteCommand: null, partnerDisconnected: false, roundDashboard: null,
     chatMessages: [], unreadChatCount: 0, chatOpen: false, matchingOverlay: null, preparingMatches: false, lobbyDensity: 'normal' as const,
     cohosts: new Set<string>(), hostVisibilityModes: {}, actingAsHostOverrides: {}, hostMutedUserIds: new Set<string>(), leftCurrentRound: false, lastRatedRound: 0, isPaused: false,
+    snapshotSeq: -1,
   }),
 }));
 

@@ -40,6 +40,9 @@ const SOCKET_EVENTS = [
   // assigned/removed, acting-as-host toggled, kick, etc). One event
   // covers all the cases where "everyone must see this change instantly".
   'roster:changed',
+  // Phase 5 — versioned participant-state snapshot, seq-guarded. Additive;
+  // existing handlers (session:state, participant:joined/left) unchanged.
+  'state:snapshot',
 ] as const;
 
 // ── LiveKit token fetch with retry ──
@@ -224,6 +227,13 @@ export default function useSessionSocket(sessionId: string) {
     // network round-trip of the mutation, no refresh ever needed.
     socket.on('roster:changed', () => {
       fetchSessionStateSnapshot().catch(() => { /* best-effort */ });
+    });
+
+    // ── Phase 5 — versioned state:snapshot (seq-guarded, additive) ──
+    // Seq-guard lives in the store; stale/duplicate pushes are ignored.
+    // Existing handlers (session:state, participant:joined/left) unchanged.
+    socket.on('state:snapshot', (data: any) => {
+      store.applyStateSnapshot(data);
     });
 
     // Phase 8B.1 (8 May spec) — Stefan #4 + #9: a newly-promoted/demoted

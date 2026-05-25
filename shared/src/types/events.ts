@@ -153,6 +153,24 @@ export interface ServerToClientEvents {
   // call. Replaces the per-event-per-mutation socket fan-out pattern with
   // a single coalescable refresh trigger.
   'roster:changed': (data: { sessionId: string; cause: string }) => void;
+  // Phase 5 — versioned participant-state snapshot. Monotonically sequenced
+  // (seq); clients use a seq-guard to ignore stale/duplicate pushes. Emitted
+  // on every emitHostDashboard cycle when SNAPSHOT_EMIT_ENABLED=true.
+  // Purely additive — existing events (session:state, participant:joined/left)
+  // are unchanged and remain the primary channel.
+  'state:snapshot': (data: {
+    sessionId: string;
+    seq: number;
+    status: string;
+    currentRound: number;
+    participants: Array<{
+      userId: string;
+      displayName: string;
+      role: 'host' | 'cohost' | 'participant';
+      connState: string;
+      state: 'in_room' | 'in_main_room' | 'disconnected' | 'left';
+    }>;
+  }) => void;
   // Bug 3 (18 May Stefan) — pod-level membership status changed for a
   // specific user (approval, rejection, removal). Emitted to that user's
   // personal room so their UI flips from "Pending approval" to "Active"
@@ -214,6 +232,9 @@ export interface ClientToServerEvents {
   // Session
   'session:join': (data: { sessionId: string }) => void;
   'session:leave': (data: { sessionId: string }) => void;
+  // Phase 5 — request a fresh state:snapshot. Server replies to the
+  // requesting socket only (no broadcast). No-op when flag is off.
+  'session:resync': (data: { sessionId: string }) => void;
 
   // Presence
   'presence:heartbeat': (data: { sessionId: string }) => void;
