@@ -20,7 +20,7 @@ const router = Router();
 
 // ─── Validation Schemas ─────────────────────────────────────────────────────
 
-const createSessionSchema = z.object({
+export const createSessionSchema = z.object({
   podId: z.string().uuid(),
   title: z.string().min(1).max(300),
   description: z.string().max(2000).optional(),
@@ -40,10 +40,15 @@ const createSessionSchema = z.object({
     maxParticipants: z.number().int().min(2).max(10000).optional(),
     timerVisibility: z.string().optional(),
     matchingTemplateId: z.string().optional(),
+    // 26 May — without this, zod stripped the host's "Platform-wide no
+    // rematch" selection, so sessions silently persisted matchingPolicy=
+    // within_event and prior-event pairs were re-matched. Must be listed to
+    // survive validation.
+    matchingPolicy: z.enum(['platform_wide', 'within_event', 'none']).optional(),
   }).optional(),
 });
 
-const updateSessionSchema = z.object({
+export const updateSessionSchema = z.object({
   title: z.string().min(1).max(300).optional(),
   description: z.string().max(2000).optional(),
   scheduledAt: z.string().datetime().optional(),
@@ -62,6 +67,11 @@ const updateSessionSchema = z.object({
     maxParticipants: z.number().int().min(2).max(10000).optional(),
     timerVisibility: z.string().optional(),
     matchingTemplateId: z.string().optional(),
+    // 26 May — without this, zod stripped the host's "Platform-wide no
+    // rematch" selection, so sessions silently persisted matchingPolicy=
+    // within_event and prior-event pairs were re-matched. Must be listed to
+    // survive validation.
+    matchingPolicy: z.enum(['platform_wide', 'within_event', 'none']).optional(),
   }).optional(),
 });
 
