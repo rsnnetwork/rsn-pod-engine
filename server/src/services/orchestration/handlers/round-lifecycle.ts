@@ -14,6 +14,7 @@ import {
   sessionRoom, userRoom, persistSessionState, clearPersistedState,
   cleanupChatMessages,
 } from '../state/session-state';
+import { canTransitionSession } from '../state/session-fsm';
 import { startSegmentTimer, clearSessionTimers, getTimerCallbackForState, TimerCallbacks } from './timer-manager';
 import * as sessionService from '../../session/session.service';
 import * as matchingService from '../../matching/matching.service';
@@ -500,6 +501,16 @@ export async function endRound(
   if (!activeSession) return;
 
   try {
+    // C2 (Phase 2) — precondition: ROUND_ACTIVE is the only legal source for
+    // ending a round. A duplicate fire (host "End Round" racing the round
+    // timer) finds status already past ROUND_ACTIVE and no-ops, so it cannot
+    // re-emit round_ended, re-arm the rating timer, or re-complete matches.
+    if (!canTransitionSession(activeSession.status, SessionStatus.ROUND_RATING)) {
+      logger.warn({ sessionId, currentStatus: activeSession.status, roundNumber },
+        'endRound: not in ROUND_ACTIVE — skipping duplicate/illegal transition (C2)');
+      return;
+    }
+
     // Complete all active matches for this round
     await query(
       `UPDATE matches SET status = 'completed', ended_at = NOW()
