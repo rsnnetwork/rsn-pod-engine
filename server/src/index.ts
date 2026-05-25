@@ -55,6 +55,7 @@ import pokeRoutes from './routes/pokes';
 import reportRoutes from './routes/reports';
 import groupRoutes from './routes/groups';
 import notificationPrefsRoutes from './routes/notification-prefs';
+import { webhooksRouter } from './routes/webhooks';
 
 // Services
 import { initOrchestration } from './services/orchestration/orchestration.service';
@@ -327,6 +328,10 @@ app.use('/api/pokes', pokeRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/groups', groupRoutes);
 app.use('/api/notification-prefs', notificationPrefsRoutes);
+// Phase 4 — LiveKit webhook receiver (raw body; must come before error handlers).
+// express.json() only processes application/json so application/webhook+json is
+// still raw when this per-route raw() middleware runs.
+app.use('/api/webhooks', webhooksRouter);
 
 // ─── Error Handling ─────────────────────────────────────────────────────────
 
