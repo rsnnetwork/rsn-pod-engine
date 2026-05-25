@@ -561,17 +561,11 @@ export default function useSessionSocket(sessionId: string) {
         store.setMatch(currentState.currentMatch, data.matchId, currentState.currentPartners);
       }
       store.setTransitionStatus(null); // Clear "Round ending — wrapping up" banner
-      // 25 May (rating flicker) — the rating window owns the timer outright. Set
-      // timerEndsAt to the rating end (this also sets timerSeconds). Without it,
-      // the 1s tick keeps recomputing from a STALE endsAt left by the previous
-      // segment: a manual breakout ended early leaves timerEndsAt at ~now+180s, so
-      // the rating countdown jumps from 20s up to the breakout's ~178s and counts
-      // down from there (the "rating timer flashes 20s then 178s" report). This
-      // path emits no session round_rating timer:sync, so the client sets it itself.
-      const ratingDurationSecs = data.durationSeconds || 30;
-      store.setTimerEndsAt(new Date(Date.now() + ratingDurationSecs * 1000));
+      // B (26 May) — rating window has no countdown. Stop the local tick so
+      // no stale timer from a prior segment stays running. Clear timerEndsAt so
+      // the 1s recompute path doesn't count from a leftover breakout endsAt.
       clearTimer();
-      intervalRef.current = setInterval(() => store.tickTimer(), 1000);
+      store.setTimerEndsAt(null);
 
       // Early leave: user left breakout mid-round — clear video, prevent re-entry
       if (data.earlyLeave) {
@@ -585,9 +579,10 @@ export default function useSessionSocket(sessionId: string) {
 
       // ── Fallback safety timer ──
       // If rating:window_closed is missed (network issue, socket drop), auto-return
-      // to lobby after rating duration + 30s buffer. Prevents users getting stuck.
+      // to lobby after 210s (server backstop 180s + 30s grace). Prevents users
+      // getting stuck if the socket event is lost. Generous so no one is cut off.
       clearRatingFallback();
-      const fallbackMs = ((data.durationSeconds || 30) + 30) * 1000;
+      const fallbackMs = 210_000;
       ratingFallbackRef.current = setTimeout(() => {
         const currentPhase = useSessionStore.getState().phase;
         if (currentPhase === 'rating') {

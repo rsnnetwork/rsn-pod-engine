@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/Button';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useToastStore } from '@/stores/toastStore';
-import { Star, CheckCircle, Loader2, Clock, Handshake } from 'lucide-react';
+import { Star, CheckCircle, Loader2, Handshake } from 'lucide-react';
 import api from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 
@@ -146,7 +146,6 @@ export default function RatingPrompt(props: Props) {
   const currentMatch = useSessionStore(s => s.currentMatch);
   const currentMatchId = useSessionStore(s => s.currentMatchId);
   const currentPartners = useSessionStore(s => s.currentPartners);
-  const timerSeconds = useSessionStore(s => s.timerSeconds);
   const currentRound = useSessionStore(s => s.currentRound);
   const totalRounds = useSessionStore(s => s.totalRounds);
   const { setPhase } = useSessionStore.getState();
@@ -232,12 +231,6 @@ export default function RatingPrompt(props: Props) {
 
   return (
     <div className="flex-1 flex items-center justify-center p-4 bg-[#202124]">
-      {timerSeconds > 0 && (
-        <div className="absolute top-4 right-4 flex items-center gap-1.5 text-sm text-gray-400 bg-[#292a2d]/80 backdrop-blur-sm rounded-full px-3 py-1">
-          <Clock className="h-3.5 w-3.5" />
-          <span>{timerSeconds}s</span>
-        </div>
-      )}
       <PartnerRatingForm
         key={partner.userId}
         partnerName={partner.displayName || 'your partner'}

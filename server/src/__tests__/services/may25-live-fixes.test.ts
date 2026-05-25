@@ -109,14 +109,19 @@ describe('25 May live-test fixes', () => {
       const rl = src.indexOf("socket.on('match:return_to_lobby'");
       expect(src.slice(rl, rl + 600)).toMatch(/lastBreakoutSyncRef\.current = 0/);
     });
-    it('rating:window_open sets timerEndsAt so the rating countdown ignores a stale breakout end', () => {
-      // The breakout-ends-early -> rating path sends no session timer:sync, so the
-      // client must set timerEndsAt itself or the 1s tick recomputes from the stale
-      // breakout endsAt (rating jumps 20s -> ~178s). Verified live in browser-rating-timer.spec.ts.
+    it('rating:window_open clears the timer and nulls timerEndsAt (no rating countdown shown)', () => {
+      // B (26 May) — the rating window has no visible countdown. On window_open we
+      // stop the 1s tick (clearTimer) and null out timerEndsAt so the recompute
+      // path never drives a display during rating. The previous fix set timerEndsAt
+      // to suppress stale-breakout flicker; that flicker is now moot because the
+      // rating phase renders no timer at all.
       const src = readClient('hooks/useSessionSocket.ts');
       const rw = src.indexOf("socket.on('rating:window_open'");
       const body = src.slice(rw, rw + 2400);
-      expect(body).toMatch(/setTimerEndsAt\(new Date\(Date\.now\(\) \+ ratingDurationSecs \* 1000\)\)/);
+      expect(body).toMatch(/clearTimer\(\)/);
+      expect(body).toMatch(/setTimerEndsAt\(null\)/);
+      // Must NOT start a new countdown interval for the rating phase
+      expect(body).not.toMatch(/intervalRef\.current = setInterval[\s\S]{0,40}tickTimer/);
     });
   });
 
@@ -160,6 +165,46 @@ describe('25 May live-test fixes', () => {
     });
     it('ReconnectOnReturn is mounted inside the LiveKitRoom', () => {
       expect(src).toMatch(/<ReconnectOnReturn onReconnect=\{reconnectRoom\}/);
+    });
+  });
+
+  describe('B (26 May) — rating-window backstop and no client countdown', () => {
+    it('endRound uses a plain setTimeout backstop (no startSegmentTimer for rating)', () => {
+      const src = readServer('services/orchestration/handlers/round-lifecycle.ts');
+      const fn = fnSlice(src, 'export async function endRound');
+      // The rating backstop must NOT call startSegmentTimer — that would broadcast timer:sync
+      expect(fn).not.toMatch(/startSegmentTimer[\s\S]{0,60}endRatingWindow/);
+      // It must use a plain setTimeout storing on activeSession.timer
+      expect(fn).toMatch(/activeSession\.timer = setTimeout/);
+      expect(fn).toMatch(/endRatingWindow/);
+    });
+    it('backstop is fixed at 180 000 ms (generous, non-disruptive)', () => {
+      const src = readServer('services/orchestration/handlers/round-lifecycle.ts');
+      expect(src).toMatch(/RATING_BACKSTOP_MS\s*=\s*180_000/);
+    });
+    it('backstop uses clearSessionTimers before arming so prior timers do not leak', () => {
+      const src = readServer('services/orchestration/handlers/round-lifecycle.ts');
+      const fn = fnSlice(src, 'export async function endRound');
+      expect(fn).toMatch(/clearSessionTimers\(sessionId\)/);
+    });
+    it('all-rated early-close (checkAllRatingsCompleteByUserId) is untouched', () => {
+      const src = readServer('services/orchestration/handlers/participant-flow.ts');
+      expect(src).toMatch(/checkAllRatingsCompleteByUserId/);
+      expect(src).toMatch(/All ratings submitted — ending rating window early/);
+      // Still clears the timer before scheduling the 3s grace
+      expect(src).toMatch(/activeSession\.timer\s*=\s*null/);
+    });
+    it('RatingPrompt has no countdown display (no Clock import, no timerSeconds)', () => {
+      const src = readClient('features/live/RatingPrompt.tsx');
+      expect(src).not.toMatch(/import.*Clock.*from 'lucide-react'/);
+      expect(src).not.toMatch(/timerSeconds/);
+    });
+    it('client fallback returns-to-lobby after generous fixed 210s (backstop 180s + 30s grace)', () => {
+      const src = readClient('hooks/useSessionSocket.ts');
+      const rw = src.indexOf("socket.on('rating:window_open'");
+      const body = src.slice(rw, rw + 2400);
+      expect(body).toMatch(/210_000/);
+      expect(body).not.toMatch(/durationSeconds.*\+\s*30.*\*\s*1000/);
     });
   });
 

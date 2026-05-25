@@ -691,22 +691,22 @@ export async function endRound(
       await transitionParticipant(sessionId, userId, ParticipantState.IN_MAIN_ROOM);
     }
 
-    // Find the max partner count across all completed matches
-    // Each match has participant_a, participant_b, and optionally participant_c
-    const completedMatches = matches.filter((m: any) => m.status === 'completed');
-    const maxPartnerCount = Math.max(
-      ...completedMatches.map((m: any) => {
-        const parts = [m.participantAId, m.participantBId, m.participantCId].filter(Boolean);
-        return parts.length - 1; // subtract self = number of partners
-      }),
-      1 // minimum 1
-    );
-    const ratingDuration = (activeSession.config.ratingWindowSeconds || 30) * maxPartnerCount;
-
-    // Start rating window timer (scaled by max partner count so trios have enough time)
-    startSegmentTimer(io, sessionId, ratingDuration, () => {
+    // Generous safety-net backstop — fires endRatingWindow if stragglers never
+    // finish. Fixed at 180 s so slow raters are never cut off mid-form.
+    // No timer:sync is broadcast: the client shows no countdown during rating.
+    // The primary advance path is checkAllRatingsCompleteByUserId (all-rated
+    // early-close, participant-flow.ts) which clears this timer before it fires.
+    // clearSessionTimers() (called by endRatingWindow and session teardown)
+    // cancels it the same way as a startSegmentTimer-based timer.
+    const RATING_BACKSTOP_MS = 180_000;
+    clearSessionTimers(sessionId);
+    activeSession.timerEndsAt = new Date(Date.now() + RATING_BACKSTOP_MS);
+    activeSession.timer = setTimeout(() => {
+      const s = activeSessions.get(sessionId) ?? activeSession;
+      s.timer = null;
+      s.timerEndsAt = null;
       endRatingWindow(io, sessionId, roundNumber);
-    });
+    }, RATING_BACKSTOP_MS);
 
     logger.info({ sessionId, roundNumber }, 'Round ended → ROUND_RATING');
   } catch (err) {
