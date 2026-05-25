@@ -7,6 +7,7 @@
 
 import { Server as SocketServer } from 'socket.io';
 import logger from '../../../config/logger';
+import { config } from '../../../config';
 import { query } from '../../../db';
 import { SessionStatus, ParticipantStatus } from '@rsn/shared';
 import {
@@ -48,6 +49,16 @@ export function injectRoundLifecycleDeps(deps: {
 }) {
   _timerCallbacks = deps.timerCallbacks;
   _emitHostDashboard = deps.emitHostDashboard;
+}
+
+// ─── Phase 4 (G1, flag-gated) ─────────────────────────────────────────────
+
+/** Phase 4 (G1, flag-gated) — sever matched users' lobby presence at round
+ *  start so they cannot be in the main room AND a breakout simultaneously. */
+export async function evictMatchedFromLobby(sessionId: string, userIds: string[]): Promise<void> {
+  if (!config.roomEvictionEnabled) return;
+  const lobby = videoService.lobbyRoomId(sessionId);
+  await Promise.all(userIds.map(uid => videoService.evictFromRoom(uid, lobby)));
 }
 
 // ─── Helper: emit host dashboard (delegates to injected fn or no-op) ──────
@@ -426,6 +437,9 @@ export async function transitionToRound(
     // Fire all status updates in parallel (these are independent writes)
     await Promise.allSettled(statusUpdatePromises);
 
+    // Phase 4 (G1) — server-side eviction from the lobby room (dark unless ROOM_EVICTION_ENABLED).
+    await evictMatchedFromLobby(sessionId, Array.from(matchedUserIds));
+
     // Notify bye participants (unmatched due to odd count — exclude host, they stay in lobby)
     const allParticipants = await query<{ user_id: string }>(
       `SELECT user_id FROM session_participants WHERE session_id = $1 AND status IN ('in_lobby', 'checked_in', 'registered')
@@ -786,6 +800,10 @@ export async function endRatingWindow(
               livekitUrl: appConfig.livekit.host,
               roomId: session.lobbyRoomId,
             });
+            if (config.roomEvictionEnabled) {
+              const rp = activeSession.roomParticipants?.get(uid);
+              if (rp?.roomId) await videoService.evictFromRoom(uid, rp.roomId);
+            }
           } catch { /* skip */ }
         }
       }
