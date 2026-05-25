@@ -444,6 +444,22 @@ const MediaControls = memo(function MediaControls() {
     return () => { cancelled = true; };
   }, [localParticipant, hookCamEnabled]);
 
+  // #7 (25 May Stefan) — dispose the background processor on unmount. Each
+  // breakout join/leave previously ORPHANED the processor: its WASM/GPU
+  // worker kept running on the detached camera track because nothing stopped
+  // it when MediaControls unmounted. After a few room transitions the
+  // accumulated workers exhausted memory and crashed the tab (the
+  // "background-change crash"). ProcessorWrapper.destroy() releases the
+  // underlying transformer/worker. Re-apply on the next room mounts a fresh
+  // one, so there is exactly one live processor at a time.
+  useEffect(() => {
+    return () => {
+      const p = processorRef.current;
+      processorRef.current = null;
+      if (p?.destroy) { Promise.resolve(p.destroy()).catch(() => {}); }
+    };
+  }, []);
+
   const toggleMic = useCallback(async () => {
     await localParticipant.setMicrophoneEnabled(!micEnabled);
     setMicEnabled(!micEnabled);
