@@ -162,4 +162,25 @@ describe('25 May live-test fixes', () => {
       expect(src).toMatch(/<ReconnectOnReturn onReconnect=\{reconnectRoom\}/);
     });
   });
+
+  describe('round-rating / pulled-out fixes (25 May pm)', () => {
+    it('#1 — a rater ignores the session segment broadcast (per-user rating window is authoritative)', () => {
+      const src = readClient('hooks/useSessionSocket.ts');
+      const i = src.indexOf("socket.on('timer:sync'");
+      expect(i).toBeGreaterThan(-1);
+      expect(src.slice(i, i + 3600)).toMatch(/state\.phase === 'rating' && data\.segmentType && data\.segmentType !== 'breakout'/);
+    });
+    it('#2 — RatingPrompt records lastRatedRound on the last-partner submit (no re-prompt mid-confirmation)', () => {
+      const src = readClient('features/live/RatingPrompt.tsx');
+      const i = src.indexOf('const handleSubmitted');
+      expect(i).toBeGreaterThan(-1);
+      expect(src.slice(i, i + 700)).toMatch(/isLastPartner && currentRound > 0\) useSessionStore\.getState\(\)\.setLastRatedRound\(currentRound\)/);
+    });
+    it('#2/#3 — a pulled-out (sent-to-rate) match is completed, not cancelled', () => {
+      const src = readServer('services/orchestration/handlers/host-actions.ts');
+      // the removal terminal status is now a hard 'completed' (was the durationS>30 heuristic)
+      expect(src).toMatch(/const terminalStatus: 'completed' = 'completed'/);
+      expect(src).not.toMatch(/terminalStatus = \(durationS > 30 \|\| ratingCount > 0\)/);
+    });
+  });
 });

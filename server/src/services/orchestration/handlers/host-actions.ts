@@ -1128,7 +1128,14 @@ export async function handleHostRemoveFromRoom(
     );
     const durationS = parseFloat(matchInfoRes.rows[0]?.seconds || '0');
     const ratingCount = parseInt(matchInfoRes.rows[0]?.rating_count || '0', 10);
-    const terminalStatus = (durationS > 30 || ratingCount > 0) ? 'completed' : 'cancelled';
+    // 25 May (#2 + #3, Ali) — a participant the host pulls out of a live room is
+    // SENT TO RATE, so the match genuinely happened and must count as completed.
+    // The old heuristic marked it 'cancelled' when the room was <30s with no
+    // rating YET at removal time (ratings come AFTER the pull) — which made
+    // matched+rated pairs show as "N not matched" in the round count, and let
+    // them slip past the round-end re-prompt dedup (which only scans completed
+    // matches), re-opening the rating form for people who'd already rated.
+    const terminalStatus: 'completed' = 'completed';
 
     // Phase 3 (29 April 2026 spec) — trio-aware demotion. Pre-fix the entire
     // match was terminated when the host removed ONE participant from a

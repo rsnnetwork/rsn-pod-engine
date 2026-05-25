@@ -127,9 +127,9 @@ describe('Bug #1 — Pause timer sync (no drift between host and participants)',
       );
 
       const handlerIdx = content.indexOf("socket.on('timer:sync'");
-      // Bumped from 1200 to 3000 chars after Bug 17 comment expansion
-      // pushed setIsPaused past the original window.
-      const block = content.slice(handlerIdx, handlerIdx + 3000);
+      // Bumped 1200 → 3000 → 3800 as the timer:sync handler grew (Bug 17 comment,
+      // then the breakout recency gate + the rating-phase scope guard).
+      const block = content.slice(handlerIdx, handlerIdx + 3800);
       // Should call setIsPaused to keep paused state coherent across refreshes / reconnects
       expect(block).toMatch(/setIsPaused/);
     });

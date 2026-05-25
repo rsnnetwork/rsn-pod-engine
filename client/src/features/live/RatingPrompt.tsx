@@ -212,6 +212,11 @@ export default function RatingPrompt(props: Props) {
   const partner = partners[currentPartnerIdx];
 
   const handleSubmitted = (meetAgain: boolean) => {
+    // #2 (25 May, Ali) — record the round as rated the MOMENT the last partner is
+    // submitted, not after the user clicks through the confirmation screen.
+    // Otherwise a round ending while the confirmation is up re-opens the form via
+    // the round_rating phase transition (the "already rated, prompted again" bug).
+    if (isLastPartner && currentRound > 0) useSessionStore.getState().setLastRatedRound(currentRound);
     setSubmissionState({ meetAgain });
   };
 

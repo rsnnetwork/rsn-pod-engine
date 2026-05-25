@@ -784,6 +784,15 @@ export default function useSessionSocket(sessionId: string) {
         return;
       }
 
+      // 25 May (#1) — while rating, the per-user rating:window_open countdown
+      // (pair 30s / trio 60s) is authoritative. endRound also broadcasts a session
+      // round_rating segment timer scaled to the round's MAX partner count, which
+      // for a pair user in a trio-containing round flips 30s<->60s. Ignore
+      // session-level (non-breakout) ticks while rating.
+      if (state.phase === 'rating' && data.segmentType && data.segmentType !== 'breakout') {
+        return;
+      }
+
       if (!isPauseSnapshot) {
         if (state.phase === 'complete') return;
         if (state.currentRound === 0 && state.phase === 'lobby') return;
