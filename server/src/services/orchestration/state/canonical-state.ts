@@ -68,3 +68,49 @@ export async function writeCanonical(state: CanonicalSessionState): Promise<void
     logger.warn({ err, sessionId: state.sessionId }, 'writeCanonical failed');
   }
 }
+
+/**
+ * Patch a single participant in the canonical doc and bump seq. Read-modify-
+ * write of the one key; callers MUST hold withSessionGuard for the session
+ * (the transition chokepoint does). Best-effort: no-op if Redis down or the
+ * doc doesn't exist yet (the periodic shadow projection backfills it).
+ */
+export async function updateCanonicalParticipant(
+  sessionId: string,
+  userId: string,
+  patch: Partial<CanonicalParticipant>,
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+  try {
+    const doc = await readCanonical(sessionId);
+    if (!doc) return;
+    const prev = doc.participants[userId] ?? {
+      role: 'participant', connState: 'disconnected',
+      location: { type: 'main' }, lastSeenAt: 0, userSeq: doc.seq,
+    } as CanonicalParticipant;
+    doc.participants[userId] = { ...prev, ...patch, userSeq: doc.seq + 1 };
+    doc.seq += 1;
+    await redis.setex(canonicalKey(sessionId), CANONICAL_TTL, JSON.stringify(doc));
+  } catch (err) {
+    logger.warn({ err, sessionId, userId }, 'updateCanonicalParticipant failed');
+  }
+}
+
+/** Set the canonical session status and bump seq. Same guard/best-effort rules. */
+export async function updateCanonicalSessionStatus(
+  sessionId: string,
+  status: SessionStatus,
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+  try {
+    const doc = await readCanonical(sessionId);
+    if (!doc) return;
+    doc.status = status;
+    doc.seq += 1;
+    await redis.setex(canonicalKey(sessionId), CANONICAL_TTL, JSON.stringify(doc));
+  } catch (err) {
+    logger.warn({ err, sessionId, status }, 'updateCanonicalSessionStatus failed');
+  }
+}
