@@ -168,6 +168,10 @@ export default function PublicProfilePage() {
                 >
                   <MessageSquare className="h-3.5 w-3.5 mr-1.5" /> Message
                 </Button>
+              ) : cantMessageReason === 'not_mutual' ? (
+                <Button size="sm" variant="ghost" disabled className="text-xs cursor-not-allowed" title="DMs unlock when you both say 'meet again'">
+                  <MessageSquare className="h-3.5 w-3.5 mr-1.5" /> Message — meet again first
+                </Button>
               ) : cantMessageReason === 'no_encounter' ? (
                 <Button size="sm" variant="ghost" disabled className="text-xs cursor-not-allowed" title="DMs unlock after you share a room in an event">
                   <MessageSquare className="h-3.5 w-3.5 mr-1.5" /> Message — meet first

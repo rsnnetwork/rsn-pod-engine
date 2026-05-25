@@ -6,6 +6,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { CheckCircle, Users, Star, Handshake, ArrowRight, UserCheck, CircleDot, MessageSquare } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
+import { useAuthStore } from '@/stores/authStore';
 import { E } from '@/realtime/entities';
 
 // Feature 17 + 18 (13 May spec) — DM button on recap rows. One click lands
@@ -91,6 +92,10 @@ function InterestBadge({ connection }: { connection: Connection }) {
 
 export default function SessionComplete({ sessionId }: Props) {
   const navigate = useNavigate();
+  // Button visibility only — server gate is authoritative. Admins see Message
+  // on every person; members only see it on mutual matches.
+  const currentUserRole = useAuthStore((s) => s.user?.role);
+  const isAdmin = currentUserRole === 'admin' || currentUserRole === 'super_admin';
   const [connections, setConnections] = useState<Connection[]>([]);
   const [mutualConnections, setMutualConnections] = useState<Connection[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -279,7 +284,10 @@ export default function SessionComplete({ sessionId }: Props) {
                       {c.qualityScore}
                     </div>
                   )}
-                  <MessagePartnerButton userId={c.userId} displayName={c.displayName} />
+                  {/* Message button: mutual rows always qualify; non-mutual rows only for admins */}
+                  {(c.mutualMeetAgain || isAdmin) && (
+                    <MessagePartnerButton userId={c.userId} displayName={c.displayName} />
+                  )}
                 </div>
               );
               return (

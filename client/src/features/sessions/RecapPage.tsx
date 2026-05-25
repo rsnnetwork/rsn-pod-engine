@@ -177,6 +177,9 @@ export default function RecapPage() {
   const { sessionId } = useParams();
   const navigate = useNavigate();
   const { user } = useAuthStore();
+  // Button visibility only — server gate is authoritative. Admins see Message
+  // on every person; members only see it on mutual matches.
+  const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
 
   const { data: session } = useQuery({
     queryKey: ['session', sessionId],
@@ -501,7 +504,10 @@ export default function RecapPage() {
                 </div>
               )}
             </div>
-            <MessagePartnerButton userId={c.userId} displayName={c.displayName} />
+            {/* Message button: mutual rows always qualify; non-mutual rows only for admins */}
+            {(c.mutualMeetAgain || isAdmin) && (
+              <MessagePartnerButton userId={c.userId} displayName={c.displayName} />
+            )}
           </div>
         );
         return (
