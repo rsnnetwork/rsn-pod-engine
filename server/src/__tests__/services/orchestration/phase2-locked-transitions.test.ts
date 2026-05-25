@@ -43,6 +43,15 @@ describe('Phase 2 — timer callbacks are guarded (C1)', () => {
   });
 });
 
+describe('Phase 2 — disconnect timeout is guarded (C3)', () => {
+  it('runs the disconnect-timeout body under withSessionGuard', () => {
+    const src = fs.readFileSync(
+      path.join(__dirname, '../../../services/orchestration/handlers/participant-flow.ts'), 'utf8');
+    // The setTimeout callback should delegate its body to withSessionGuard.
+    expect(src).toMatch(/setTimeout\(async \(\) => \{\s*disconnectTimeouts\.delete\(timeoutKey\);\s*await withSessionGuard\(/);
+  });
+});
+
 describe('Phase 2 — transitionToRound precondition (C2)', () => {
   it('is a no-op when already ROUND_ACTIVE (duplicate start)', async () => {
     makeSession(SessionStatus.ROUND_ACTIVE);

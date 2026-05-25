@@ -1572,6 +1572,7 @@ export async function handleDisconnect(
             // Step 2: After 15 seconds, try auto-reassignment or fall back to bye
             const timeoutId = setTimeout(async () => {
               disconnectTimeouts.delete(timeoutKey);
+              await withSessionGuard(sessionId, async () => {
               try {
                 const currentSession = activeSessions.get(sessionId);
                 if (!currentSession || currentSession.currentRound !== disconnectRound) return;
@@ -1769,6 +1770,7 @@ export async function handleDisconnect(
               } catch (err) {
                 logger.warn({ err, sessionId, userId }, 'Error in disconnect timeout handler');
               }
+              });
             }, 15000);
             disconnectTimeouts.set(timeoutKey, timeoutId);
           }
