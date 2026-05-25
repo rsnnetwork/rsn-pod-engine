@@ -7,6 +7,7 @@ import logger from '../../../config/logger';
 import { query } from '../../../db';
 import { SessionStatus, SessionConfig } from '@rsn/shared';
 import { getRedisClient } from '../../redis/redis.client';
+import { shadowWriteCanonical } from './canonical-shadow';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -141,6 +142,10 @@ export async function persistSessionState(sessionId: string, activeSession: Acti
 
   // Redis write-through (async, non-blocking)
   persistToRedis(sessionId, activeSession).catch(() => {});
+  // Canonical-room-state Phase 1 (shadow) — additive, non-blocking. Populates
+  // rsn:canonical:{id} so the new model can be validated against reality before
+  // any read path is switched (Phase 3).
+  shadowWriteCanonical(activeSession).catch(() => {});
 }
 
 export async function clearPersistedState(sessionId: string): Promise<void> {
