@@ -27,7 +27,8 @@ jest.mock('../../../services/orchestration/state/session-state', () => ({
 }));
 import { writeCanonical, readCanonical, updateCanonicalParticipant, updateCanonicalSessionStatus, CanonicalSessionState } from '../../../services/orchestration/state/canonical-state';
 import { activeSessions } from '../../../services/orchestration/state/session-state';
-import { transitionParticipant, setPresence, ParticipantState } from '../../../services/orchestration/state/participant-state-machine';
+import { transitionParticipant, setPresence, reconcileSessionStates, ParticipantState } from '../../../services/orchestration/state/participant-state-machine';
+import { query } from '../../../db';
 import { SessionStatus as SS } from '@rsn/shared';
 
 const base: CanonicalSessionState = { sessionId:'s3', status:SessionStatus.ROUND_ACTIVE, currentRound:1, seq:1, hostUserId:'h', timer:null, participants:{ u1:{role:'participant',connState:'connected',location:{type:'main'},lastSeenAt:1,userSeq:1} } };
@@ -109,5 +110,33 @@ describe('Phase 3 — lifecycle transitions write canonical status (M1)', () => 
     await new Promise(r => setImmediate(r));
     const doc = await readCanonical('s3');
     expect(doc!.status).toBe(SS.ROUND_RATING);
+  });
+});
+
+describe('Phase 3 — reconciler re-checks live presence before LEFT (C4)', () => {
+  beforeEach(() => {
+    handle = fakeRedis;
+    activeSessions.set('s3', {
+      sessionId: 's3', hostUserId: 'h', config: { numberOfRounds: 3 } as any,
+      currentRound: 1, status: SS.ROUND_ACTIVE, timer: null, timerSyncInterval: null,
+      timerEndsAt: null, isPaused: false, pausedTimeRemaining: null,
+      // u1 reconnected: present in presenceMap AND in-memory IN_MAIN_ROOM.
+      presenceMap: new Map([['u1', { lastHeartbeat: new Date(), socketId: 'x' }]]),
+      pendingRoundNumber: null, manuallyLeftRound: new Set(),
+      participantStates: new Map([['u1', { state: ParticipantState.IN_MAIN_ROOM, currentRoomId: null, updatedAt: new Date() }]]),
+    } as any);
+  });
+  afterEach(() => { activeSessions.delete('s3'); });
+
+  it('does NOT escalate a stale-DISCONNECTED user who has reconnected', async () => {
+    // Divergence SELECT → empty; stale-DISCONNECTED SELECT → returns u1.
+    (query as jest.Mock).mockImplementation(async (sql: string) => {
+      if (typeof sql === 'string' && sql.includes("'disconnected'") && sql.includes("90 seconds")) {
+        return { rows: [{ user_id: 'u1' }] };
+      }
+      return { rows: [] };
+    });
+    const res = await reconcileSessionStates('s3');
+    expect(res.staleEscalated).toBe(0);
   });
 });

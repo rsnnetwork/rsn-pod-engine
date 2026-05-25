@@ -409,6 +409,15 @@ export async function reconcileSessionStates(sessionId: string): Promise<{
       [sessionId],
     );
     for (const row of staleRows.rows) {
+      // C4 (Phase 3) — the stale SELECT is a snapshot; re-check live state
+      // before escalating. If the user reconnected in the window (present in
+      // presenceMap, or in-memory state already non-DISCONNECTED), skip —
+      // escalating here would wrongly mark a present user as LEFT.
+      const live = activeSession.participantStates?.get(row.user_id);
+      if (activeSession.presenceMap.has(row.user_id) ||
+          (live && live.state !== ParticipantState.DISCONNECTED)) {
+        continue;
+      }
       try {
         const result = await transitionParticipant(sessionId, row.user_id, ParticipantState.LEFT);
         if (result.ok) {
