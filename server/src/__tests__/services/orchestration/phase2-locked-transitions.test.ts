@@ -17,7 +17,7 @@ jest.mock('../../../services/matching/matching.service', () => ({
 
 const io: any = { to: () => ({ emit: () => {} }), in: () => ({ fetchSockets: async () => [] }) };
 
-import { endRound } from '../../../services/orchestration/handlers/round-lifecycle';
+import { endRound, transitionToRound, completeSession } from '../../../services/orchestration/handlers/round-lifecycle';
 
 function makeSession(status: SessionStatus) {
   activeSessions.set('s2', {
@@ -28,6 +28,24 @@ function makeSession(status: SessionStatus) {
   } as any);
 }
 afterEach(() => { activeSessions.delete('s2'); jest.clearAllMocks(); });
+
+describe('Phase 2 — transitionToRound precondition (C2)', () => {
+  it('is a no-op when already ROUND_ACTIVE (duplicate start)', async () => {
+    makeSession(SessionStatus.ROUND_ACTIVE);
+    const sessionService = require('../../../services/session/session.service');
+    await transitionToRound(io, 's2', 1);
+    expect(sessionService.updateSessionStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe('Phase 2 — completeSession idempotency (C2)', () => {
+  it('is a no-op when already COMPLETED', async () => {
+    makeSession(SessionStatus.COMPLETED);
+    const sessionService = require('../../../services/session/session.service');
+    await completeSession(io, 's2');
+    expect(sessionService.updateSessionStatus).not.toHaveBeenCalled();
+  });
+});
 
 describe('Phase 2 — endRound precondition (C2)', () => {
   it('transitions to ROUND_RATING from ROUND_ACTIVE', async () => {

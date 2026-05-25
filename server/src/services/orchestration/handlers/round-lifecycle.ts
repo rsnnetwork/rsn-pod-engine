@@ -210,6 +210,16 @@ export async function transitionToRound(
   if (!activeSession) return;
 
   try {
+    // C2 (Phase 2) — precondition: ROUND_ACTIVE is reachable only from
+    // LOBBY_OPEN (round 1) or ROUND_TRANSITION (round n+1). A duplicate start
+    // (host "Start Round" racing a transition timer) finds status already
+    // ROUND_ACTIVE and no-ops, preventing a double match-generation.
+    if (!canTransitionSession(activeSession.status, SessionStatus.ROUND_ACTIVE)) {
+      logger.warn({ sessionId, currentStatus: activeSession.status, roundNumber },
+        'transitionToRound: illegal/duplicate start — skipping (C2)');
+      return;
+    }
+
     // 23 May (Stefan live test) — bump the round count when a bonus round
     // actually STARTS. Moved here from the "Another Round" preview action so a
     // previewed-but-never-started round never inflates the recap's "X of N".
@@ -828,6 +838,15 @@ export async function endRatingWindow(
 
 export async function completeSession(io: SocketServer, sessionId: string): Promise<void> {
   const activeSession = activeSessions.get(sessionId);
+
+  // C2 (Phase 2) — idempotency guard only. completeSession is legitimately
+  // reached from several states (CLOSING_LOBBY, the #11 endRequested path
+  // from ROUND_RATING, host End-Event), so it is NOT FSM-gated; we only
+  // refuse a re-entrant completion.
+  if (activeSession && activeSession.status === SessionStatus.COMPLETED) {
+    logger.warn({ sessionId }, 'completeSession: already COMPLETED — skipping (C2)');
+    return;
+  }
 
   try {
     // FIX 5D: Clear ALL timers (main + sync interval)
