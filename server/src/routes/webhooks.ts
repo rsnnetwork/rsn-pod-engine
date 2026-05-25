@@ -33,6 +33,10 @@ webhooksRouter.post('/livekit', raw({ type: 'application/webhook+json' }), async
     const event = await receiver.receive(body, req.get('Authorization'));
     const room = event.room?.name;
     const identity = event.participant?.identity;
+    // Observability — a verified webhook would otherwise be silent. info-level
+    // so the success path is visible in Render logs (signature failures still
+    // surface via the catch below).
+    logger.info({ event: event.event, room, identity }, 'LiveKit webhook received');
     if (room && identity) {
       const sessionId = sessionIdFromRoom(room);
       if (sessionId) {
