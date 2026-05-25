@@ -140,3 +140,54 @@ describe('Phase 3 — reconciler re-checks live presence before LEFT (C4)', () =
     expect(res.staleEscalated).toBe(0);
   });
 });
+
+describe('Phase 3 — host participant view reads canonical with fallback (M1)', () => {
+  // The host-view SQL is a single SELECT; return both participants.
+  const participantRows = {
+    rows: [
+      { user_id: 'u1', display_name: 'U One', email: 'u1@x.com', status: 'in_lobby',
+        joined_at: new Date(0), is_cohost: false, acting_as_host: null, user_role: 'user' },
+      { user_id: 'u2', display_name: 'U Two', email: 'u2@x.com', status: 'in_lobby',
+        joined_at: new Date(0), is_cohost: false, acting_as_host: null, user_role: 'user' },
+    ],
+  };
+  beforeEach(() => {
+    store.clear();
+    handle = fakeRedis;
+    (query as jest.Mock).mockImplementation(async () => participantRows);
+  });
+
+  it('canonical wins: breakout→in_room, disconnected→disconnected (legacy would disagree)', async () => {
+    const { buildHostParticipantsView } = await import('../../../services/orchestration/handlers/host-participants-view');
+    await writeCanonical({
+      sessionId: 's3', status: SS.ROUND_ACTIVE, currentRound: 1, seq: 1, hostUserId: 'h', timer: null,
+      participants: {
+        u1: { role: 'participant', connState: 'connected', location: { type: 'breakout', roomId: 'r1', matchId: 'm1' }, lastSeenAt: 1, userSeq: 1 },
+        u2: { role: 'participant', connState: 'disconnected', location: { type: 'main' }, lastSeenAt: 1, userSeq: 1 },
+      },
+    } as any);
+    // Legacy would say: u1 in presenceMap, no active match → in_main_room;
+    // u2 in presenceMap → in_main_room. Canonical must override both.
+    const view = await buildHostParticipantsView({
+      sessionId: 's3', hostUserId: 'h',
+      presenceMap: new Map([['u1', {}], ['u2', {}]]),
+      activeMatches: [],
+    });
+    const byId = Object.fromEntries(view.map(v => [v.userId, v.state]));
+    expect(byId.u1).toBe('in_room');
+    expect(byId.u2).toBe('disconnected');
+  });
+
+  it('fallback when no canonical doc: identical to legacy derivation', async () => {
+    handle = null; // getRedisClient() → null → readCanonical null → fallback path
+    const { buildHostParticipantsView } = await import('../../../services/orchestration/handlers/host-participants-view');
+    const view = await buildHostParticipantsView({
+      sessionId: 's3', hostUserId: 'h',
+      presenceMap: new Map([['u1', {}]]), // u1 present → in_main_room; u2 absent → disconnected
+      activeMatches: [],
+    });
+    const byId = Object.fromEntries(view.map(v => [v.userId, v.state]));
+    expect(byId.u1).toBe('in_main_room');
+    expect(byId.u2).toBe('disconnected');
+  });
+});

@@ -17,6 +17,10 @@
 // session_cohosts is the canonical source post-Phase 7A.5.
 
 import { query } from '../../../db';
+// Phase 3 (M1) — canonical Redis doc is authoritative for per-user
+// location/connState when present. Falls back to the legacy presence/match/DB
+// derivation below when the doc is absent (Redis down or not yet projected).
+import { readCanonical } from '../state/canonical-state';
 
 export type HostParticipantState =
   | 'in_main_room'
@@ -151,6 +155,10 @@ export async function buildHostParticipantsView(opts: {
     [opts.sessionId],
   );
 
+  // Phase 3 (M1) — load the canonical doc once. When present it is the
+  // authority for per-user state; null → fall back to the legacy derivation.
+  const canon = await readCanonical(opts.sessionId);
+
   const userToMatch = new Map<string, { matchId: string; roomId: string | null }>();
   for (const m of opts.activeMatches || []) {
     if (m.status !== 'active') continue;
@@ -187,24 +195,34 @@ export async function buildHostParticipantsView(opts: {
     }
 
     const inMatch = userToMatch.get(r.user_id);
-    const isPresent = opts.presenceMap.has(r.user_id);
+    const c = canon?.participants[r.user_id];
     let state: HostParticipantState;
-    // Bug 36 (19 May Ali) — presenceMap is the live source of truth. If
-    // the user has an active socket connection RIGHT NOW, they cannot
-    // be displayed as 'left' or 'disconnected', regardless of what the
-    // session_participants.status DB column says. The DB status is a
-    // projection that lags reality — most commonly because the state
-    // machine transitions to LEFT on a Leave click or disconnect
-    // timeout but doesn't reset on reconnect. UI override here keeps
-    // the "Left" tab honest: it only shows users who are actually gone.
-    if (inMatch) {
-      state = 'in_room';
-    } else if (isPresent) {
-      state = 'in_main_room';
-    } else if (r.status === 'left' || r.status === 'no_show' || r.status === 'removed') {
-      state = 'left';
+    if (c) {
+      // Phase 3 (M1) — canonical is authoritative when present.
+      if (c.location.type === 'breakout') state = 'in_room';
+      else if (c.connState === 'connected') state = 'in_main_room';
+      else if (c.connState === 'left' || c.connState === 'removed' || c.connState === 'no_show') state = 'left';
+      else state = 'disconnected';
     } else {
-      state = 'disconnected';
+      // Fallback: existing presence/match/DB derivation (unchanged).
+      // Bug 36 (19 May Ali) — presenceMap is the live source of truth. If
+      // the user has an active socket connection RIGHT NOW, they cannot
+      // be displayed as 'left' or 'disconnected', regardless of what the
+      // session_participants.status DB column says. The DB status is a
+      // projection that lags reality — most commonly because the state
+      // machine transitions to LEFT on a Leave click or disconnect
+      // timeout but doesn't reset on reconnect. UI override here keeps
+      // the "Left" tab honest: it only shows users who are actually gone.
+      const isPresent = opts.presenceMap.has(r.user_id);
+      if (inMatch) {
+        state = 'in_room';
+      } else if (isPresent) {
+        state = 'in_main_room';
+      } else if (r.status === 'left' || r.status === 'no_show' || r.status === 'removed') {
+        state = 'left';
+      } else {
+        state = 'disconnected';
+      }
     }
 
     const fallback = r.email ? r.email.split('@')[0] : 'Participant';
