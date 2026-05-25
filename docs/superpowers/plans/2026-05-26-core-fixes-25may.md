@@ -85,6 +85,38 @@
 
 ---
 
+## Follow-ups from 26 May live re-test (Ali)
+
+### #9-UI — host banner + toast on fallback/repeat
+When matches are generated/re-matched and the engine had to use the fallback ladder (repeats), the host must get a **persistent banner** ("This round reuses some past pairings — no fresh matches were possible") AND a **toast** at the moment of the action. The engine already returns `fallbackLevel`/`usedRepeats` (shipped in `ef23dea`); wire it through `matching-flow.ts` preview → host UI. **Effort: M (client + small server thread-through).**
+
+### A — round warning: suppress on ended rounds + explicit wording + hover tooltip
+`EventPlanStrip.tsx:129-131` shows `<AlertTriangle aria-label="Used fallback ladder"/>` whenever `hasFallback` (from `GET /sessions/:id/plan`, `sessions.ts:790`, which sums `matches.fallback_used` across ALL statuses). Decisions (Ali):
+- **Suppress the warning once a round has ENDED/completed** — only show it on the active/current round(s). (Don't badge done rounds.)
+- **Explicit, host-readable wording + a real hover tooltip** giving the exact reason (replace the cryptic "used fallback ladder"). Expose the per-round fallback reason from the plan endpoint (the `match_reason` `fallback_l1…l4` / `repeat_in_event` data exists but isn't surfaced) so the tooltip can say e.g. "2 pairs had already met — no fresh pairing was possible this round."
+**Effort: M (plan endpoint reason + client warning gating/tooltip).**
+
+### B — remove the rating-window timer (no visible countdown)
+Decision (Ali): the rating form shows **no countdown** — the user fills the form(s) at their own pace and returns to the main room. Root cause of the old flicker = three colliding `timer:sync` streams (session-level scaled timer + per-user `rating:window_open` + leftover breakout timer) plus the client's 12s breakout-ownership drop.
+- **Client `RatingPrompt.tsx`:** remove the timer display entirely; stop consuming rating `timer:sync`/`durationSeconds` for any countdown. User flow unchanged otherwise (rate → next form → return to lobby on done).
+- **Server `round-lifecycle.ts`:** the round still advances via the EXISTING all-rated early-close (`checkAllRatingsCompleteByUserId` → `endRatingWindow`, `participant-flow.ts:1059-1104`). Replace the visible scaled 30/60s segment timer with a **generous, non-broadcasting safety-net timeout** (e.g. fixed ~180s, plain `setTimeout`, no `timer:sync`) that fires `endRatingWindow` only if stragglers never finish. Drop the per-user `rating:window_open.durationSeconds` countdown.
+- Net: no rating countdown shown, no flicker, round still advances (all-rated early-close + hidden backstop). **Effort: M.**
+
+## Live-test-2 fixes (26 May, post-event — root causes confirmed)
+
+**#3 policy persistence — DONE (`beda546`, on main):** create/update session zod config schema omitted `matchingPolicy`; zod stripped it → sessions saved `within_event`. Added the enum to both schemas. Engine #1 now receives `platform_wide`.
+
+**#4 stuck-at-rating after last round — ROOT CAUSE:** `checkAllRatingsCompleteByUserId` (`participant-flow.ts:1097-1103`) computes `expectedRatings = Σ pCount*(pCount-1)` assuming EVERY participant rates EVERY partner. It does NOT subtract **skips** (`activeSession.ratingSkips`), **leavers** (not present), or **re-match duplicate matches** (round had extra completed matches from the churn). So `totalRatings < expectedRatings` forever → early-close never fires → event sits on the (B-change) **180s silent backstop**. Rounds 1-2 had clean full ratings → fired; round 3's re-match churn inflated `expectedRatings` → stuck. No host escape hatch.
+- **Fix:** (a) make the early-close robust — a participant counts as "done" when they've **rated OR skipped** each partner of their *current* (latest, non-superseded) match, and only count **present** participants; close when all done. (b) Add a **host force-advance**: allow the host to end the rating window / start the next round / end the event from `ROUND_RATING` (don't block on pending ratings). (c) Lower the silent backstop from 180s (e.g. 90s) since the real close is the all-rated/host path. Server-side; TDD.
+
+**#2 double-rating — ROOT CAUSE:** the client `rating:window_open` handler (`useSessionSocket.ts:542`) sets `phase='rating'` and shows the form **unconditionally** — no check whether the user already rated/skipped that match. A re-emit during re-match churn re-prompts; server correctly `409`s but the user sees "rate again."
+- **Fix:** client tracks matches it has already rated/skipped (a set keyed by matchId, e.g. in the store); on `rating:window_open` for an already-handled match, skip straight to lobby/next instead of re-showing the form. Server `409` stays as backstop. Verify by build + Playwright.
+
+**#67% recap meet-again-rate — ROOT CAUSE:** `getPeopleMet` returns `connections` **per-match** (`theirMeetAgain` = partner's vote for THAT match, `rating.service.ts:351`, kept per-match by design for the round breakdown). My #3 client calc dedups by userId keeping the **last** row — so Saif's r3 re-match with 85e59ae1 (not re-rated → `theirMeetAgain=false`) overwrote the r2 `true` → 2/3 = 67%, even though `encounter_history.mutual=true` for all 3.
+- **Fix:** in `SessionComplete.tsx`, when computing `meetAgainRate`, **aggregate `theirMeetAgain` per user (OR across that user's connection rows)** — a person counts if they said meet-again in ANY of their encounters this event — rather than last-wins. Denominator = unique people met. (Optionally source from `mutualConnections`/aggregate.) Verify by build + Playwright + the known data (should be 100% for Saif).
+
+**#1 host breakout-timer flicker — INVESTIGATE-THEN-FIX:** host dashboard shows a "shared" manual-breakout timer (`HostRoundDashboard.tsx:311`, `manualSharedEndsAt`) only when all rooms share `endsAt`; per-room `timer:sync` goes to participants, not the host. Flicker (59→110→56) likely = the dashboard recomputing from changing per-room `endsAt` across coalesced `emitHostDashboard` refreshes, or a per-room tick fed by multiple rooms. Confirm the exact mechanism (the `manualSharedEndsAt` derivation + the 1s `remainingSeconds` tick + dashboard refresh cadence) before fixing; then drive the host timer from a single stable source with one steady tick. Lowest severity (cosmetic, host-only).
+
 ## Fix order (tight timeline)
 
 1. **#4** wording (S, certain, no risk) — first.
