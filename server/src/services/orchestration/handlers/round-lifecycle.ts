@@ -22,6 +22,9 @@ import * as ratingService from '../../rating/rating.service';
 import * as videoService from '../../video/video.service';
 // Phase 2C (5 May spec) — chokepoint for status writes.
 import { transitionParticipant, ParticipantState } from '../state/participant-state-machine';
+// Phase 3 — make the canonical Redis doc authoritative for session status.
+// Best-effort direct write next to each in-memory status assignment.
+import { updateCanonicalSessionStatus } from '../state/canonical-state';
 import * as emailService from '../../email/email.service';
 // Phase 2 (19 May 2026) — realtime migration dual-emit. Each round-
 // lifecycle broadcast (match:assigned, rating:window_open/closed) gets
@@ -245,6 +248,7 @@ export async function transitionToRound(
     activeSession.manuallyLeftRound.clear();
 
     await sessionService.updateSessionStatus(sessionId, SessionStatus.ROUND_ACTIVE);
+    void updateCanonicalSessionStatus(sessionId, SessionStatus.ROUND_ACTIVE);
     await query('UPDATE sessions SET current_round = $1 WHERE id = $2', [roundNumber, sessionId]);
     persistSessionState(sessionId, activeSession).catch(() => {});
 
@@ -542,6 +546,7 @@ export async function endRound(
     // Move to rating phase
     activeSession.status = SessionStatus.ROUND_RATING;
     await sessionService.updateSessionStatus(sessionId, SessionStatus.ROUND_RATING);
+    void updateCanonicalSessionStatus(sessionId, SessionStatus.ROUND_RATING);
     persistSessionState(sessionId, activeSession).catch(() => {});
 
     io.to(sessionRoom(sessionId)).emit('session:status_changed', {
@@ -750,6 +755,7 @@ export async function endRatingWindow(
       // Transition phase
       activeSession.status = SessionStatus.ROUND_TRANSITION;
       await sessionService.updateSessionStatus(sessionId, SessionStatus.ROUND_TRANSITION);
+      void updateCanonicalSessionStatus(sessionId, SessionStatus.ROUND_TRANSITION);
       persistSessionState(sessionId, activeSession).catch(() => {});
 
       io.to(sessionRoom(sessionId)).emit('session:status_changed', {
@@ -790,6 +796,7 @@ export async function endRatingWindow(
       // Last round done → transition to closing lobby for goodbyes
       activeSession.status = SessionStatus.CLOSING_LOBBY;
       await sessionService.updateSessionStatus(sessionId, SessionStatus.CLOSING_LOBBY);
+      void updateCanonicalSessionStatus(sessionId, SessionStatus.CLOSING_LOBBY);
       persistSessionState(sessionId, activeSession).catch(() => {});
 
       io.to(sessionRoom(sessionId)).emit('session:status_changed', {
@@ -895,6 +902,7 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
     // delete in finally, else the lobby room outlives the in-memory
     // state).
     await sessionService.updateSessionStatus(sessionId, SessionStatus.COMPLETED);
+    void updateCanonicalSessionStatus(sessionId, SessionStatus.COMPLETED);
     await query('UPDATE sessions SET ended_at = NOW() WHERE id = $1', [sessionId]);
 
     // EMIT FIRST. Host's UI transitions on this; everything below is

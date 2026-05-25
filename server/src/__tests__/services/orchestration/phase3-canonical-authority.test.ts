@@ -8,6 +8,23 @@ const fakeRedis = {
 let handle:any = fakeRedis;
 jest.mock('../../../services/redis/redis.client', () => ({ getRedisClient: () => handle }));
 jest.mock('../../../db', () => ({ query: jest.fn(async () => ({ rows: [] })) }));
+jest.mock('../../../services/session/session.service', () => ({
+  updateSessionStatus: jest.fn(async () => {}),
+  getSessionById: jest.fn(async () => ({ lobbyRoomId: null })),
+  incrementRoundsCompletedBatch: jest.fn(async () => {}),
+  updateParticipantStatus: jest.fn(async () => {}),
+}));
+jest.mock('../../../services/matching/matching.service', () => ({
+  getMatchesByRound: jest.fn(async () => []),
+}));
+// Suppress the Phase-1 shadow projection so the only path that can move the
+// canonical *status* in these tests is the Phase-3 direct write. Keep the real
+// activeSessions singleton + everything else intact.
+jest.mock('../../../services/orchestration/state/session-state', () => ({
+  ...jest.requireActual('../../../services/orchestration/state/session-state'),
+  persistSessionState: jest.fn(async () => {}),
+  clearPersistedState: jest.fn(async () => {}),
+}));
 import { writeCanonical, readCanonical, updateCanonicalParticipant, updateCanonicalSessionStatus, CanonicalSessionState } from '../../../services/orchestration/state/canonical-state';
 import { activeSessions } from '../../../services/orchestration/state/session-state';
 import { transitionParticipant, setPresence, ParticipantState } from '../../../services/orchestration/state/participant-state-machine';
@@ -77,5 +94,20 @@ describe('Phase 3 — transitionParticipant writes canonical (M1)', () => {
     await new Promise(r => setImmediate(r));
     const doc = await readCanonical('s3');
     expect(doc!.participants.u1.connState).toBe('connected');
+  });
+});
+
+describe('Phase 3 — lifecycle transitions write canonical status (M1)', () => {
+  const io: any = { to: () => ({ emit: () => {} }), in: () => ({ fetchSockets: async () => [] }) };
+  beforeEach(() => { store.clear(); handle = fakeRedis; seedActiveSession(); });
+  afterEach(() => { activeSessions.delete('s3'); });
+
+  it('endRound sets canonical status round_rating', async () => {
+    const { endRound } = await import('../../../services/orchestration/handlers/round-lifecycle');
+    await writeCanonical(base);
+    await endRound(io, 's3', 1);
+    await new Promise(r => setImmediate(r));
+    const doc = await readCanonical('s3');
+    expect(doc!.status).toBe(SS.ROUND_RATING);
   });
 });
