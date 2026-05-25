@@ -109,6 +109,15 @@ describe('25 May live-test fixes', () => {
       const rl = src.indexOf("socket.on('match:return_to_lobby'");
       expect(src.slice(rl, rl + 600)).toMatch(/lastBreakoutSyncRef\.current = 0/);
     });
+    it('rating:window_open sets timerEndsAt so the rating countdown ignores a stale breakout end', () => {
+      // The breakout-ends-early -> rating path sends no session timer:sync, so the
+      // client must set timerEndsAt itself or the 1s tick recomputes from the stale
+      // breakout endsAt (rating jumps 20s -> ~178s). Verified live in browser-rating-timer.spec.ts.
+      const src = readClient('hooks/useSessionSocket.ts');
+      const rw = src.indexOf("socket.on('rating:window_open'");
+      const body = src.slice(rw, rw + 2400);
+      expect(body).toMatch(/setTimerEndsAt\(new Date\(Date\.now\(\) \+ ratingDurationSecs \* 1000\)\)/);
+    });
   });
 
   describe('J — End-all-rooms button on the manual-rooms panel', () => {

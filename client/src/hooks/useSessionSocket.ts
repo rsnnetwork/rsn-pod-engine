@@ -551,7 +551,15 @@ export default function useSessionSocket(sessionId: string) {
         store.setMatch(currentState.currentMatch, data.matchId, currentState.currentPartners);
       }
       store.setTransitionStatus(null); // Clear "Round ending — wrapping up" banner
-      store.setTimer(data.durationSeconds || 30);
+      // 25 May (rating flicker) — the rating window owns the timer outright. Set
+      // timerEndsAt to the rating end (this also sets timerSeconds). Without it,
+      // the 1s tick keeps recomputing from a STALE endsAt left by the previous
+      // segment: a manual breakout ended early leaves timerEndsAt at ~now+180s, so
+      // the rating countdown jumps from 20s up to the breakout's ~178s and counts
+      // down from there (the "rating timer flashes 20s then 178s" report). This
+      // path emits no session round_rating timer:sync, so the client sets it itself.
+      const ratingDurationSecs = data.durationSeconds || 30;
+      store.setTimerEndsAt(new Date(Date.now() + ratingDurationSecs * 1000));
       clearTimer();
       intervalRef.current = setInterval(() => store.tickTimer(), 1000);
 
