@@ -32,6 +32,8 @@ import { buildHostParticipantsView } from './host-participants-view';
 //   docs/superpowers/plans/2026-05-19-realtime-architecture-migration.md
 import { emitEntities } from '../../../realtime/emit';
 import { E } from '../../../realtime/entities';
+// Phase 5 — flag-gated versioned snapshot co-emit.
+import { emitStateSnapshot } from '../state/state-snapshot';
 
 // ─── Cross-module references (wired in Task 7) ────────────────────────────
 // transitionToRound lives in round-lifecycle.ts.
@@ -1479,6 +1481,8 @@ async function emitHostDashboardImmediate(io: SocketServer, sessionId: string): 
     for (const hostId of hostIds) {
       io.to(userRoom(hostId)).emit('host:round_dashboard', dashboardPayload);
     }
+    // Phase 5 — co-emit versioned snapshot. Self-gates on flag; no-op when off.
+    void emitStateSnapshot(io, sessionId);
   } catch (err) {
     logger.warn({ err, sessionId }, 'Failed to emit host dashboard');
   }

@@ -70,6 +70,8 @@ import { handleChatSend, handleChatReact, handleReactionSend, handleChatRequestH
 import { handleDmSend, handleDmRead, handleDmReact, handleDmUnreact } from './handlers/dm-handlers';
 // Phase 2E (5 May spec) — global state reconciler.
 import { startGlobalReconciler } from './state/participant-state-machine';
+// Phase 5 — resync handler for session:resync socket event.
+import { handleResync } from './state/state-snapshot';
 
 // Handlers — Bulk Breakout (Task 14)
 import {
@@ -258,6 +260,9 @@ export function initOrchestration(socketServer: SocketServer): void {
     wrapHandler('rating:submit', socket, handleRatingSubmit);
     wrapHandler('rating:skip', socket, handleRatingSkip);
     wrapHandler('participant:leave_conversation', socket, handleLeaveConversation);
+
+    // ── Phase 5 — client resync request (unguarded, flag-gated in handler) ──
+    socket.on('session:resync', (data) => handleResync(io, socket, data));
 
     // ── Participant Events (unguarded) ──
     socket.on('presence:heartbeat', (data) => {
