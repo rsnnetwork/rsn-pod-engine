@@ -6,7 +6,7 @@
 
 **Architecture:** A single canonical session document in Redis (namespace `rsn:canonical:`, distinct from the existing `rsn:session:` write-through blob), a pure session-status FSM mirroring the existing participant FSM, and a pure projection function that maps today's four in-process stores (`presenceMap`, `roomParticipants`, `participantStates`, `hostUserId`) onto the orthogonal `location` + `connState` model. The shadow write is fired (best-effort, non-blocking) from the existing `persistSessionState`. Reads stay on the current code; this phase only *populates and validates* the new model.
 
-**Tech Stack:** TypeScript, Node, ioredis (already wired with graceful fallback in `server/src/services/redis/redis.client.ts`), Jest + ts-jest. Test command: `npm test` (runs the `server` + `shared` workspaces).
+**Tech Stack:** TypeScript, Node, ioredis (already wired with graceful fallback in `server/src/services/redis/redis.client.ts`), Jest + ts-jest. Test command: `npm test` (root script runs the **server** workspace only — `npm run test --workspace=server`).
 
 **Spec:** `docs/superpowers/specs/2026-05-25-canonical-room-state-design.md`
 

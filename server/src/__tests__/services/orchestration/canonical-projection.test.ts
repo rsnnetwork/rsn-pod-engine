@@ -60,13 +60,41 @@ describe('projectActiveSessionToCanonical', () => {
       participantStates: new Map([
         ['u3', { state: 'left', currentRoomId: null, updatedAt: new Date() }],
         ['u4', { state: 'no_show', currentRoomId: null, updatedAt: new Date() }],
+        ['u7', { state: 'removed', currentRoomId: null, updatedAt: new Date() }],
       ]),
     });
     const doc = projectActiveSessionToCanonical(s, 9);
     expect(doc.participants.u3.connState).toBe('left');
     expect(doc.participants.u4.connState).toBe('no_show');
+    expect(doc.participants.u7.connState).toBe('removed');
     expect(doc.participants.host1.role).toBe('host');
     expect(doc.participants.host1.location).toEqual({ type: 'main' });
+  });
+
+  it('lets live presence win over a stale terminal DB state', () => {
+    // Design decision: presenceMap (a live socket NOW) takes precedence over a
+    // stale terminal participantStates row. A future refactor must not silently
+    // invert this — a user with an active socket is 'connected', not 'left'.
+    const s = baseSession({
+      presenceMap: new Map([['u5', { lastHeartbeat: new Date(), socketId: 'z' }]]),
+      participantStates: new Map([
+        ['u5', { state: 'left', currentRoomId: null, updatedAt: new Date() }],
+      ]),
+    });
+    const doc = projectActiveSessionToCanonical(s, 0);
+    expect(doc.participants.u5.connState).toBe('connected');
+  });
+
+  it('falls to disconnected for a non-present user in a non-terminal state', () => {
+    // Default branch: present-less + non-terminal (e.g. in_breakout) → disconnected.
+    const s = baseSession({
+      presenceMap: new Map(), // u6 NOT present
+      participantStates: new Map([
+        ['u6', { state: 'in_breakout', currentRoomId: 'match-s1-r2-xyz', updatedAt: new Date() }],
+      ]),
+    });
+    const doc = projectActiveSessionToCanonical(s, 0);
+    expect(doc.participants.u6.connState).toBe('disconnected');
   });
 
   it('stamps seq = prevSeq + 1, status, currentRound and timer.endsAt', () => {
