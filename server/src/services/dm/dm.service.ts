@@ -94,9 +94,18 @@ function normalizePair(userA: string, userB: string): [string, string] {
 // ─── Authorization ─────────────────────────────────────────────────────────
 
 /**
- * canMessage(a, b) — true iff a and b are allowed to DM each other right
- * now. Encounter-gate + block-gate. The DM UI's "Message" button calls
- * this so we render the right state on the profile page.
+ * canMessage(userA, userB) — authorization gate for 1:1 DMs.
+ *
+ * Evaluation order (spec #5, 26 May 2026):
+ *   1. self              → {allowed:false, reason:'self'}
+ *   2. blocked           → {allowed:false, reason:'blocked'}
+ *   3. admin override    → {allowed:true} if userA's global role is admin/super_admin
+ *                          (role read from DB — never trusted from client)
+ *   4. grandfather       → {allowed:true} if a thread with ≥1 message already exists
+ *                          (forward-only: don't break in-progress conversations)
+ *   5. mutual gate       → {allowed:true} if encounter_history.mutual_meet_again = TRUE
+ *                          else {allowed:false, reason:'not_mutual'}
+ *   6. no encounter row  → {allowed:false, reason:'no_encounter'}
  */
 export async function canMessage(
   userA: string,
@@ -106,24 +115,53 @@ export async function canMessage(
     return { allowed: false, reason: 'self' };
   }
 
-  // Block gate first — cheaper query, more common rejection.
+  // Block gate first — cheaper query, most common non-trivial rejection.
   if (await blockService.areBlocked(userA, userB)) {
     return { allowed: false, reason: 'blocked' };
   }
 
-  // Encounter gate: must share at least one encounter_history row.
+  // Admin override (step 3) — role must come from the DB, never the client.
+  const roleResult = await query<{ role: string }>(
+    `SELECT role FROM users WHERE id = $1 LIMIT 1`,
+    [userA],
+  );
+  const fromRole = roleResult.rows[0]?.role;
+  if (fromRole === 'admin' || fromRole === 'super_admin') {
+    return { allowed: true };
+  }
+
+  // Grandfather existing threads (step 4) — if a conversation with ≥1 message
+  // already exists, preserve it regardless of current mutual status. This
+  // is forward-only: it keeps in-progress conversations alive but does NOT
+  // allow *new* first messages from non-mutual pairs.
   const [orderedA, orderedB] = normalizePair(userA, userB);
-  const result = await query<{ id: string }>(
-    `SELECT id FROM encounter_history
+  const threadResult = await query<{ msg_count: string }>(
+    `SELECT COUNT(dm.id)::text AS msg_count
+     FROM dm_conversations c
+     JOIN direct_messages dm ON dm.conversation_id = c.id
+     WHERE c.user_a_id = $1 AND c.user_b_id = $2
+     LIMIT 1`,
+    [orderedA, orderedB],
+  );
+  const msgCount = parseInt(threadResult.rows[0]?.msg_count || '0', 10);
+  if (msgCount > 0) {
+    return { allowed: true };
+  }
+
+  // Mutual gate (step 5) — both users must have mutual_meet_again = TRUE.
+  const encounterResult = await query<{ mutual_meet_again: boolean }>(
+    `SELECT mutual_meet_again FROM encounter_history
      WHERE user_a_id = $1 AND user_b_id = $2
      LIMIT 1`,
     [orderedA, orderedB],
   );
-  if (result.rows.length === 0) {
+  if (encounterResult.rows.length === 0) {
     return { allowed: false, reason: 'no_encounter' };
   }
-
-  return { allowed: true };
+  if (encounterResult.rows[0].mutual_meet_again) {
+    return { allowed: true };
+  }
+  return { allowed: false, reason: 'not_mutual' };
 }
 
 // ─── Sending ───────────────────────────────────────────────────────────────
@@ -184,7 +222,8 @@ export async function sendMessage(
   const auth = await canMessage(fromUserId, toUserId);
   if (!auth.allowed) {
     const message =
-      auth.reason === 'blocked' ? 'You can no longer message this user'
+      auth.reason === 'blocked'     ? 'You can no longer message this user'
+      : auth.reason === 'not_mutual'  ? "You can message once you both say 'meet again'"
       : auth.reason === 'no_encounter' ? "You can't DM someone you haven't met yet"
       : 'You cannot DM this user';
     throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, message);
