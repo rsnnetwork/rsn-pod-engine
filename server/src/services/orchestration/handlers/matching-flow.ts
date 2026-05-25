@@ -1132,10 +1132,18 @@ export async function sendMatchPreview(
     roundWarnings.push(`All participants have already met — ${policyByes.length} will sit this round out. Need new participants for fresh matches.`);
   }
 
+  // 26 May (#9-UI) — surface whether this preview round contains any repeat
+  // pairs so the host UI can show a persistent banner + fire a toast.
+  // Derived from the matchPreview we already built: any pair with metBefore=true
+  // (computed from encounterMap above) counts as a repeat. This avoids an extra
+  // DB round-trip — encounterMap was already populated per the session policy.
+  const usedRepeats = matchPreview.some(m => m.metBefore === true);
+
   socket.emit('host:match_preview', {
     roundNumber,
     matches: matchPreview,
     byeParticipants,
+    usedRepeats,
     ...(roundWarnings.length > 0 && { warnings: roundWarnings }),
   });
 }

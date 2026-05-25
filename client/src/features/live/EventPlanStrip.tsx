@@ -29,6 +29,9 @@ interface PlanRound {
   pairCount: number;
   byeCount: number;
   hasFallback: boolean;
+  // 26 May (Item A) — count of algorithm pairs where a person had already met
+  // their partner in a prior round of this event. Drives the fallback tooltip.
+  repeatPairCount?: number;
 }
 
 interface PlanResponse {
@@ -107,7 +110,7 @@ export default function EventPlanStrip({ sessionId }: Props) {
               title={
                 r.status === 'cancelled'
                   ? `Round ${r.roundNumber} was cancelled — its matches were cleared (e.g. after a re-match, a host/co-host change, or ending the round early). Click "Match People" to plan this round again.`
-                  : `Round ${r.roundNumber}: ${meta.label}${r.byeCount > 0 ? ` · ${r.byeCount} not matched` : ''}${r.hasFallback ? ' · used fallback ladder' : ''}`
+                  : `Round ${r.roundNumber}: ${meta.label}${r.byeCount > 0 ? ` · ${r.byeCount} not matched` : ''}`
               }
             >
               <div className="flex items-center gap-1.5 mb-0.5">
@@ -126,8 +129,24 @@ export default function EventPlanStrip({ sessionId }: Props) {
                   // tooltip + HostRoundDashboard already use.
                   <span className="ml-1">· {r.byeCount} not matched</span>
                 )}
-                {r.hasFallback && (
-                  <AlertTriangle className="h-3 w-3 inline ml-1 text-amber-500" aria-label="Used fallback ladder" />
+                {/* 26 May (Item A) — only show the warning on live/upcoming rounds.
+                    Completed and cancelled rounds are done — the host can't act
+                    on the fallback badge at that point, so don't distract them. */}
+                {r.hasFallback
+                  && r.status !== 'completed'
+                  && r.status !== 'cancelled'
+                  && (
+                  <span
+                    title={
+                      r.repeatPairCount && r.repeatPairCount > 0
+                        ? `${r.repeatPairCount} ${r.repeatPairCount === 1 ? 'pair reused a past partner' : 'pairs reused past partners'} — no fresh matching was possible this round`
+                        : 'Some pairs had already met — no fresh pairing was possible this round'
+                    }
+                    aria-label="Some pairs reuse past partners this round"
+                    className="inline-flex items-center"
+                  >
+                    <AlertTriangle className="h-3 w-3 text-amber-500" />
+                  </span>
                 )}
               </div>
               {/* #7b (23 May) — a bare "Cancelled · N not matched" left the host

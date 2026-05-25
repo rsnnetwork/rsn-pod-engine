@@ -701,6 +701,16 @@ export default function useSessionSocket(sessionId: string) {
 
     socket.on('host:match_preview', (data: any) => {
       store.setMatchPreview(data);
+      // 26 May (#9-UI) — when the engine had to reuse already-met pairs, fire a
+      // transient toast so the host notices immediately, then the persistent
+      // banner (rendered in HostControls while matchPreview.usedRepeats is true)
+      // stays visible until the preview is regenerated or confirmed.
+      if (data?.usedRepeats) {
+        useToastStore.getState().addToast(
+          'No fresh pairings left — this round reuses some past partners',
+          'info',
+        );
+      }
     });
 
     // ── Host round dashboard (breakout room monitoring) ──

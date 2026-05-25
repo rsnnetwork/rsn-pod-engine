@@ -382,6 +382,19 @@ export default function HostControls({ sessionId }: Props) {
                 </div>
               </div>
             )}
+            {/* 26 May (#9-UI) — persistent repeat-pairs banner. Stays visible
+                as long as the current preview has usedRepeats=true. Cleared
+                automatically when the host re-matches (new preview replaces
+                the old one) or confirms matches. Toast fires on receive in
+                useSessionSocket; this banner handles the persistent state. */}
+            {matchPreview.usedRepeats && (
+              <div className="flex items-start gap-2 rounded-lg bg-orange-500/10 border border-orange-400/30 px-3 py-2 mb-2">
+                <AlertTriangle className="h-3.5 w-3.5 text-orange-400 mt-0.5 shrink-0" />
+                <p className="text-xs text-orange-300">
+                  Some pairs reuse past partners — no fresh matches were possible. Re-match to try a different arrangement.
+                </p>
+              </div>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
               {matchPreview.matches.map((m, i) => (
                 <div key={i} className="flex items-center gap-1 text-xs bg-gray-50 rounded-lg px-2 py-1.5">

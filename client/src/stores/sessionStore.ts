@@ -119,6 +119,9 @@ interface SessionLiveState {
     matches: { participantA: { userId: string; displayName: string }; participantB: { userId: string; displayName: string }; participantC?: { userId: string; displayName: string }; isTrio?: boolean; metBefore?: boolean; timesMet?: number }[];
     byeParticipants: { userId: string; displayName: string }[];
     warnings?: string[];
+    // 26 May (#9-UI) — true when the engine had to reuse already-met pairs.
+    // Drives persistent banner + toast in the host preview UI.
+    usedRepeats?: boolean;
   } | null;
   hostMuteCommand: boolean | null; // null=no command, true=muted by host, false=unmuted by host
   partnerDisconnected: boolean;

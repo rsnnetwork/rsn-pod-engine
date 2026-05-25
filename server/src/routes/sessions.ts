@@ -702,14 +702,18 @@ router.get(
         status: string;
         cnt: string;
         fallback_count: string;
+        repeat_count: string;
       }>(
         // 25 May (Ali live test) — the EVENT PLAN strip reflects ALGORITHM
         // rounds only. Manual breakout rooms inherit the current round_number
         // (host-actions INSERTs use activeSession.currentRound) and are
         // status='active', so a manual room created AFTER a round ended was
         // flipping that round's chip back to amber "Active". Exclude manual.
+        // 26 May — also sum repeat_in_event so the host tooltip can report
+        // "N pairs reused a past partner" (Item A tooltip spec).
         `SELECT round_number, status, COUNT(*)::text AS cnt,
-                SUM(CASE WHEN fallback_used THEN 1 ELSE 0 END)::text AS fallback_count
+                SUM(CASE WHEN fallback_used THEN 1 ELSE 0 END)::text AS fallback_count,
+                SUM(CASE WHEN repeat_in_event AND COALESCE(is_manual, FALSE) = FALSE THEN 1 ELSE 0 END)::text AS repeat_count
          FROM matches
          WHERE session_id = $1
            AND COALESCE(is_manual, FALSE) = FALSE
@@ -719,13 +723,14 @@ router.get(
       );
 
       // Aggregate per round.
-      const byRound = new Map<number, { statuses: Map<string, number>; fallbackCount: number }>();
+      const byRound = new Map<number, { statuses: Map<string, number>; fallbackCount: number; repeatCount: number }>();
       for (const row of matchesResult.rows) {
         const r = row.round_number;
-        if (!byRound.has(r)) byRound.set(r, { statuses: new Map(), fallbackCount: 0 });
+        if (!byRound.has(r)) byRound.set(r, { statuses: new Map(), fallbackCount: 0, repeatCount: 0 });
         const entry = byRound.get(r)!;
         entry.statuses.set(row.status, parseInt(row.cnt, 10));
         entry.fallbackCount += parseInt(row.fallback_count || '0', 10);
+        entry.repeatCount += parseInt(row.repeat_count || '0', 10);
       }
 
       // Get bye participants per round (those NOT in any match for that round).
@@ -765,11 +770,11 @@ router.get(
       }
 
       // Build the response: include every round 1..totalRounds, even if not yet planned.
-      const rounds: { roundNumber: number; status: string; pairCount: number; byeCount: number; hasFallback: boolean }[] = [];
+      const rounds: { roundNumber: number; status: string; pairCount: number; byeCount: number; hasFallback: boolean; repeatPairCount: number }[] = [];
       for (let r = 1; r <= totalRounds; r++) {
         const entry = byRound.get(r);
         if (!entry || entry.statuses.size === 0) {
-          rounds.push({ roundNumber: r, status: 'unplanned', pairCount: 0, byeCount: 0, hasFallback: false });
+          rounds.push({ roundNumber: r, status: 'unplanned', pairCount: 0, byeCount: 0, hasFallback: false, repeatPairCount: 0 });
           continue;
         }
         // Determine aggregate status. Priority: active > completed > planned > cancelled > mixed.
@@ -788,6 +793,10 @@ router.get(
           pairCount,
           byeCount: byeByRound.get(r) || 0,
           hasFallback: entry.fallbackCount > 0,
+          // 26 May — count of algorithm pairs where at least one person had
+          // already met their partner in a prior round of this event. Drives
+          // the host tooltip: "N pairs reused a past partner this round."
+          repeatPairCount: entry.repeatCount,
         });
       }
 
