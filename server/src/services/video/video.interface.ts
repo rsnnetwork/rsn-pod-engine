@@ -37,4 +37,12 @@ export interface IVideoProvider {
    * "participant not found" errors and return cleanly.
    */
   setParticipantCanPublishAudio(roomId: string, userId: string, canPublishAudio: boolean): Promise<void>;
+
+  /**
+   * Phase 4 (G1) — evict a single participant from a room.
+   * Used by evictFromRoom() as a best-effort server-side kick.
+   * Implementations must swallow "not found" — the common case is the
+   * participant has already left by the time eviction fires.
+   */
+  removeParticipant(roomId: string, userId: string): Promise<void>;
 }

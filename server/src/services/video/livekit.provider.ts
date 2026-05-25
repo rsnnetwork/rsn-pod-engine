@@ -174,6 +174,12 @@ export class LiveKitProvider implements IVideoProvider {
     }
   }
 
+  // ─── Phase 4 — Remove participant (eviction) ───────────────────────────
+
+  async removeParticipant(roomId: string, userId: string): Promise<void> {
+    await this.roomService.removeParticipant(roomId, userId);
+  }
+
   // ─── Phase U — Set participant publish permission (mute enforcement) ────
 
   async setParticipantCanPublishAudio(

@@ -111,6 +111,16 @@ export async function roomExists(roomId: string): Promise<boolean> {
   return p.roomExists(roomId);
 }
 
+/** Best-effort eviction of a participant from a LiveKit room (Phase 4, G1).
+ *  Never throws — a participant who already left the room is the common case. */
+export async function evictFromRoom(userId: string, roomId: string): Promise<void> {
+  try {
+    await getVideoProvider().removeParticipant(roomId, userId);
+  } catch (err) {
+    logger.warn({ err, userId, roomId }, 'evictFromRoom failed (non-fatal)');
+  }
+}
+
 /**
  * Phase U — LiveKit-level mute enforcement.
  * Sets a participant's publish permission live on the SFU. Called from

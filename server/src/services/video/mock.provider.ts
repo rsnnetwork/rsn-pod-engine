@@ -47,4 +47,7 @@ export class MockVideoProvider implements IVideoProvider {
   async setParticipantCanPublishAudio(roomId: string, userId: string, canPublishAudio: boolean): Promise<void> {
     logger.debug({ roomId, userId, canPublishAudio }, 'MockVideo: setParticipantCanPublishAudio');
   }
+
+  // Phase 4 (G1) — no-op mock; real eviction handled by LiveKitProvider.
+  async removeParticipant(_roomId: string, _userId: string): Promise<void> { /* no-op */ }
 }
