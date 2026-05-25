@@ -277,6 +277,20 @@ export async function transitionParticipant(
     }
   }
 
+  // Phase 3 — canonical authoritative write. Mirror the state → location/
+  // connState mapping. Best-effort; caller holds withSessionGuard.
+  const canonConn =
+    toState === ParticipantState.DISCONNECTED ? 'disconnected' :
+    toState === ParticipantState.LEFT ? 'left' :
+    toState === ParticipantState.REMOVED ? 'removed' :
+    toState === ParticipantState.NO_SHOW ? 'no_show' : 'connected';
+  const canonLoc: import('./canonical-state').ParticipantLocation =
+    toState === ParticipantState.IN_BREAKOUT && currentRoomId
+      ? { type: 'breakout', roomId: currentRoomId, matchId: '' }
+      : { type: 'main' };
+  void (await import('./canonical-state')).updateCanonicalParticipant(
+    sessionId, userId, { connState: canonConn as any, location: canonLoc });
+
   return { ok: true, fromState, toState };
 }
 
@@ -303,6 +317,11 @@ export function setPresence(
   }
   const existed = activeSession.presenceMap.has(userId);
   activeSession.presenceMap.set(userId, presence);
+  // Phase 3 — best-effort canonical presence write. Caller holds the session
+  // guard for the heartbeat path; no-op when Redis is down or doc absent.
+  void import('./canonical-state').then(m =>
+    m.updateCanonicalParticipant(sessionId, userId,
+      { connState: 'connected', lastSeenAt: presence.lastHeartbeat.getTime() }));
   return !existed;
 }
 
