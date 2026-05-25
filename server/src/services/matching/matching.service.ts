@@ -290,6 +290,22 @@ export async function generateSingleRound(
     }
   }
 
+  // Fix #1 (25 May Stefan) — platform_wide = HARD exclusion of prior meetings.
+  // The UI promises "never matched again", so under platform_wide every pair
+  // that has met in ANY prior event (loaded into encounterHistory above; it's
+  // empty for within_event/none) must become a HARD exclusion, identical to
+  // within-event prior-round pairs — not just the soft encounterFreshness
+  // score penalty it used to be. Adding them to the SAME excludedPairs set
+  // means the engine's candidate-build skip covers them AND the fallback
+  // ladder (L0→L4) is the only relaxation: L3/L4 relax these cross-event
+  // pairs exactly when no complete fresh matching is possible. within_event
+  // and none load no cross-event history, so their behaviour is unchanged.
+  if (matchingPolicy === 'platform_wide') {
+    for (const e of encounterHistory) {
+      excludedPairs.add(pairKey(e.userAId, e.userBId));
+    }
+  }
+
   // 23 May (#5b) — Re-match rotation. excludePairKeys carries the CURRENT
   // preview arrangement; Re-match must always produce a DIFFERENT one. These are
   // applied as a HARD exclusion at EVERY fallback level below (unlike the
@@ -486,6 +502,22 @@ export async function generateSingleRound(
     // Defensive — should never happen since the loop always assigns at L0.
     throw new Error('Fallback ladder produced no round — engine misconfigured');
   }
+
+  // Fix #9 (25 May Stefan) — surface the fallback level to the caller so the
+  // host can be told "no fresh pairings left — showing closest available"
+  // instead of the Re-match button silently re-rolling. usedRepeats is true
+  // whenever any pair this round reused an excluded (already-met) pair —
+  // either a within-event prior round or, under platform_wide, a prior-event
+  // pair (Fix #1). At L0 every pair is fresh, so both stay clean.
+  round.fallbackLevel = landedAtLevel;
+  round.usedRepeats = round.pairs.some(
+    p => excludedPairs.has(pairKey(p.participantAId, p.participantBId)),
+  );
+  // TODO (Fix #9 UI): thread round.fallbackLevel / round.usedRepeats through
+  // matching-flow.ts (host:matches_ready / Re-match emit) into the host
+  // preview so the client can render the "No fresh pairings left — showing
+  // closest available" banner + a "finding next person" state on Re-match.
+  // The return-value plumbing lands here; the client string is a follow-up.
 
   // Persist this round's matches
   await persistMatches(sessionId, [round]);

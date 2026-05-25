@@ -193,6 +193,14 @@ export interface RoundAssignment {
   byeParticipant: string | null;  // odd count handling
   byeParticipants?: string[];     // multiple bye participants when unique pairs exhausted
   warnings?: string[];            // matching warnings (e.g. all unique pairs exhausted)
+  // Fix #9 (25 May Stefan) — fallback feedback. The matching SERVICE
+  // (generateSingleRound) sets these after running the L0→L4 fallback ladder
+  // so callers can tell the host "no fresh pairings left — showing closest
+  // available" instead of the Re-match button silently re-rolling. The engine
+  // itself does not set these (it has no concept of the ladder); they're a
+  // service-level annotation on the returned round.
+  fallbackLevel?: number;         // 0 = strict/all-fresh; 1-4 = ladder relaxed
+  usedRepeats?: boolean;          // true when the round had to reuse an excluded (already-met) pair
 }
 
 export interface MatchPair {
