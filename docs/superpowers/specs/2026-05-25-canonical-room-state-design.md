@@ -121,14 +121,17 @@ then, OUTSIDE the locks:
 A legal-transition table; every transition (host / timer / disconnect / reconciler) goes through `applyTransition`.
 
 ```
-SCHEDULED        → LOBBY_OPEN
-LOBBY_OPEN       → ROUND_ACTIVE | CLOSING_LOBBY
-ROUND_ACTIVE     → ROUND_RATING | CLOSING_LOBBY
-ROUND_RATING     → ROUND_TRANSITION | CLOSING_LOBBY
-ROUND_TRANSITION → ROUND_ACTIVE | CLOSING_LOBBY
-CLOSING_LOBBY    → COMPLETED
+SCHEDULED        → LOBBY_OPEN | CANCELLED
+LOBBY_OPEN       → ROUND_ACTIVE | CLOSING_LOBBY | CANCELLED
+ROUND_ACTIVE     → ROUND_RATING | CLOSING_LOBBY | CANCELLED
+ROUND_RATING     → ROUND_TRANSITION | CLOSING_LOBBY | CANCELLED
+ROUND_TRANSITION → ROUND_ACTIVE | CLOSING_LOBBY | CANCELLED
+CLOSING_LOBBY    → COMPLETED | CANCELLED
 COMPLETED        → (terminal)
+CANCELLED        → (terminal)
 ```
+
+`CANCELLED` (an existing `SessionStatus` value — host aborts the event) is reachable from any non-terminal state and is terminal.
 
 Each intent carries its precondition. `endRound(n)` = "`ROUND_ACTIVE(n)` → `ROUND_RATING(n)`". A duplicate timer firing after the host already ended the round finds status already `ROUND_RATING`; the precondition fails → **no-op**. This is what makes the C1 double-fire harmless: the second invocation cannot re-emit, re-arm the rating timer, or re-generate matches. Idempotent self-transitions are allowed and logged.
 
