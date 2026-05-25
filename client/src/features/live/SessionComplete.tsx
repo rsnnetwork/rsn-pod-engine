@@ -66,7 +66,7 @@ function InterestBadge({ connection }: { connection: Connection }) {
     return (
       <div className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-600 font-medium">
         <Handshake className="h-3 w-3 text-indigo-500" />
-        <span>Mutual Match!</span>
+        <span>Mutual interest</span>
       </div>
     );
   }
@@ -74,7 +74,7 @@ function InterestBadge({ connection }: { connection: Connection }) {
     return (
       <div className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-600">
         <UserCheck className="h-3 w-3" />
-        <span>You expressed interest</span>
+        <span>You wanted to meet again</span>
       </div>
     );
   }
@@ -82,7 +82,7 @@ function InterestBadge({ connection }: { connection: Connection }) {
     return (
       <div className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-blue-600">
         <UserCheck className="h-3 w-3" />
-        <span>They expressed interest</span>
+        <span>They wanted to meet again</span>
       </div>
     );
   }
@@ -140,8 +140,12 @@ export default function SessionComplete({ sessionId }: Props) {
       const avgQualityScore = ratedConns.length > 0
         ? ratedConns.reduce((sum, c) => sum + c.qualityScore, 0) / ratedConns.length
         : 0;
-      const meetAgainRate = ratedConns.length > 0
-        ? ratedConns.filter(c => c.meetAgain).length / ratedConns.length
+      // #3 — Meet Again Rate = how many of the people you MET want to meet you
+      // again (their vote), over total unique people met. Was dividing by people
+      // YOU rated off your own field, so zero ratings could read 100%.
+      const uniqueMet = Array.from(new Map(conns.map(c => [c.userId, c])).values());
+      const meetAgainRate = uniqueMet.length > 0
+        ? uniqueMet.filter(c => c.theirMeetAgain).length / uniqueMet.length
         : 0;
 
       setStats({

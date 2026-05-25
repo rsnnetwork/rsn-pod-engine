@@ -83,7 +83,7 @@ function InterestBadge({ connection }: { connection: Connection }) {
     return (
       <div className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-rsn-red/10 border border-rsn-red/20 text-rsn-red font-medium">
         <Handshake className="h-3 w-3 text-indigo-500" />
-        <span>Mutual Match!</span>
+        <span>Mutual interest</span>
       </div>
     );
   }
@@ -91,7 +91,7 @@ function InterestBadge({ connection }: { connection: Connection }) {
     return (
       <div className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-600">
         <UserCheck className="h-3 w-3" />
-        <span>You expressed interest</span>
+        <span>You wanted to meet again</span>
       </div>
     );
   }
@@ -99,7 +99,7 @@ function InterestBadge({ connection }: { connection: Connection }) {
     return (
       <div className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-blue-600">
         <UserCheck className="h-3 w-3" />
-        <span>They expressed interest</span>
+        <span>They wanted to meet again</span>
       </div>
     );
   }
