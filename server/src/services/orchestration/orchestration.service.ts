@@ -27,7 +27,7 @@ import { setRealtimeIo } from '../../realtime/emit';
 
 // State
 import {
-  activeSessions, getUserIdFromSocket, cleanupChatMessages,
+  activeSessions, getUserIdFromSocket, cleanupChatMessages, withSessionGuard,
 } from './state/session-state';
 
 // Handlers — Participant Flow
@@ -116,11 +116,16 @@ export function initOrchestration(socketServer: SocketServer): void {
 
   // ── Wire cross-module dependencies ──
 
+  // C1 (Phase 2) — timer-fired transitions run OUTSIDE any host guard. Wrap
+  // each in withSessionGuard so a timer firing cannot run concurrently with a
+  // host-clicked transition on the same session. Safe (non-re-entrant): the
+  // lifecycle fns never acquire the guard themselves (host handlers already
+  // call them while holding it).
   const timerCallbacks: TimerCallbacks = {
-    transitionToRound: (sessionId, roundNumber) => transitionToRound(io, sessionId, roundNumber),
-    endRound: (sessionId, roundNumber) => endRound(io, sessionId, roundNumber),
-    endRatingWindow: (sessionId, roundNumber) => endRatingWindow(io, sessionId, roundNumber),
-    completeSession: (sessionId) => completeSession(io, sessionId),
+    transitionToRound: (sessionId, roundNumber) => withSessionGuard(sessionId, () => transitionToRound(io, sessionId, roundNumber)),
+    endRound: (sessionId, roundNumber) => withSessionGuard(sessionId, () => endRound(io, sessionId, roundNumber)),
+    endRatingWindow: (sessionId, roundNumber) => withSessionGuard(sessionId, () => endRatingWindow(io, sessionId, roundNumber)),
+    completeSession: (sessionId) => withSessionGuard(sessionId, () => completeSession(io, sessionId)),
   };
 
   injectHostActionDeps({

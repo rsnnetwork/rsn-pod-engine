@@ -29,6 +29,20 @@ function makeSession(status: SessionStatus) {
 }
 afterEach(() => { activeSessions.delete('s2'); jest.clearAllMocks(); });
 
+import * as fs from 'fs';
+import * as path from 'path';
+describe('Phase 2 — timer callbacks are guarded (C1)', () => {
+  it('wraps each timer callback in withSessionGuard', () => {
+    const src = fs.readFileSync(
+      path.join(__dirname, '../../../services/orchestration/orchestration.service.ts'), 'utf8');
+    const block = src.slice(src.indexOf('const timerCallbacks'), src.indexOf('const timerCallbacks') + 600);
+    expect(block).toMatch(/transitionToRound:\s*\(sessionId, roundNumber\)\s*=>\s*withSessionGuard\(/);
+    expect(block).toMatch(/endRound:\s*\(sessionId, roundNumber\)\s*=>\s*withSessionGuard\(/);
+    expect(block).toMatch(/endRatingWindow:\s*\(sessionId, roundNumber\)\s*=>\s*withSessionGuard\(/);
+    expect(block).toMatch(/completeSession:\s*\(sessionId\)\s*=>\s*withSessionGuard\(/);
+  });
+});
+
 describe('Phase 2 — transitionToRound precondition (C2)', () => {
   it('is a no-op when already ROUND_ACTIVE (duplicate start)', async () => {
     makeSession(SessionStatus.ROUND_ACTIVE);
