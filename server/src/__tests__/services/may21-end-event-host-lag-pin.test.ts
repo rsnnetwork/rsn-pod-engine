@@ -35,8 +35,13 @@ describe('F4 (21 May Ali) — End Event host lag fix', () => {
     const src = readServer('services/orchestration/handlers/round-lifecycle.ts');
     const fnStart = src.indexOf('export async function completeSession');
     // completeSession runs ~80 lines; take a generous slice to make sure
-    // we capture every step in the body (and the trailing finally).
-    const body = src.slice(fnStart, fnStart + 8000);
+    // we capture every step in the body (and the trailing finally). Slice
+    // to the next top-level function so the window grows with the body
+    // rather than relying on a fixed char count (Phase 3 added one
+    // canonical-status write line, which pushed the prior fixed 8000-char
+    // window one line short of `await cleanupLiveKitRooms`).
+    const nextFnStart = src.indexOf('export async function cleanupLiveKitRooms');
+    const body = src.slice(fnStart, nextFnStart > fnStart ? nextFnStart : fnStart + 9000);
 
     function locate(re: RegExp): number {
       const m = re.exec(body);
