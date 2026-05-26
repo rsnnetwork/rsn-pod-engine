@@ -19,6 +19,7 @@ import {
   createBackgroundProcessor,
   getCameraTrack,
   isBackgroundSupported,
+  prewarmBackground,
 } from '@/lib/backgroundEffects';
 import {
   createFrameHealthMonitor,
@@ -213,10 +214,16 @@ export function useBackgroundEffects(
     };
   }, [localParticipant, buildProcessor, destroyProcessor, stopStallWatchdog]);
 
-  // Capability probe (once).
+  // Capability probe (once). When supported, prewarm the MediaPipe module +
+  // assets so the first apply is instant and doesn't trip the processor's
+  // play-retry race.
   useEffect(() => {
     let mounted = true;
-    isBackgroundSupported().then((s) => { if (mounted) setSupported(s); });
+    isBackgroundSupported().then((s) => {
+      if (!mounted) return;
+      setSupported(s);
+      if (s) void prewarmBackground();
+    });
     return () => { mounted = false; };
   }, []);
 

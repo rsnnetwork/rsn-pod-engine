@@ -107,6 +107,29 @@ export async function resolveAssetPaths(): Promise<typeof SELF_HOSTED_ASSETS | u
   return _assetPaths ?? undefined;
 }
 
+let _prewarmed = false;
+/** Warm the lazy module + HTTP-cache the MediaPipe WASM/model the moment the
+ *  room mounts, so the FIRST setProcessor() doesn't pay the ~9.7MB download
+ *  inside the user's click. That download delay is what pushes the processor's
+ *  internal <video> play() late and trips the "failed to play processor element,
+ *  retrying" path — making the first apply flaky. Best-effort; ignores failures. */
+export async function prewarmBackground(): Promise<void> {
+  if (_prewarmed) return;
+  _prewarmed = true;
+  const mod = await loadBgProcessors();
+  if (!mod) return;
+  const paths = await resolveAssetPaths();
+  const urls: string[] = [];
+  if (paths?.tasksVisionFileSet) {
+    urls.push(
+      `${paths.tasksVisionFileSet}/vision_wasm_internal.js`,
+      `${paths.tasksVisionFileSet}/vision_wasm_internal.wasm`,
+    );
+  }
+  if (paths?.modelAssetPath) urls.push(paths.modelAssetPath);
+  await Promise.all(urls.map((u) => fetch(u, { cache: 'force-cache' }).catch(() => {})));
+}
+
 export interface CreateProcessorOptions {
   pref: Exclude<BgPreference, { mode: 'disabled' }>;
   maxFps?: number;
