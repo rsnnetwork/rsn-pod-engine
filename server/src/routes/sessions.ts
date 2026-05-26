@@ -14,6 +14,10 @@ import { buildSessionStateSnapshot } from '../services/session/session-state-sna
 import { ApiResponse, SessionStatus, UserRole, hasRoleAtLeast } from '@rsn/shared';
 import { ForbiddenError, NotFoundError } from '../middleware/errors';
 import { query } from '../db';
+import config from '../config';
+import logger from '../config/logger';
+import * as emailService from '../services/email/email.service';
+import { buildSessionCalendarEvent } from '../services/calendar/calendar.service';
 import type { Server as SocketServer } from 'socket.io';
 
 const router = Router();
@@ -298,6 +302,32 @@ router.post(
           E.sessionParticipants(req.params.id),
         ]).catch(() => {});
       } catch { /* non-fatal */ }
+
+      // 26 May (Stefan) — self-registration now sends a "you're registered"
+      // confirmation with a calendar invite (.ics) attached, mirroring what
+      // emailed host-invites already do. Best-effort + fire-and-forget so email
+      // latency never delays the 201. Invite-accepts register via a different
+      // path (and already got the invite email + calendar), so no double-send.
+      void (async () => {
+        try {
+          const u = (await query<{ email: string; display_name: string | null }>(
+            `SELECT email, display_name FROM users WHERE id = $1`,
+            [req.user!.userId],
+          )).rows[0];
+          if (!u?.email) return;
+          const calendarEvent = await buildSessionCalendarEvent(req.params.id);
+          await emailService.sendSessionRegistrationConfirmationEmail(u.email, {
+            recipientName: u.display_name || undefined,
+            sessionTitle: calendarEvent?.title ?? 'your RSN event',
+            sessionUrl: `${config.clientUrl}/sessions/${req.params.id}`,
+            calendarEvent,
+          });
+        } catch (err) {
+          logger.warn({ err, sessionId: req.params.id, userId: req.user!.userId },
+            'registration confirmation email failed (non-fatal)');
+        }
+      })();
+
       const response: ApiResponse = { success: true, data: participant };
       res.status(201).json(response);
     } catch (err) {
