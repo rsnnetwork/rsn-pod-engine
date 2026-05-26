@@ -217,6 +217,53 @@ describe('#4 stuck-at-rating — robust early-close', () => {
     expect(endRatingWindowSpy).toHaveBeenCalledWith(SID, 3);
   });
 
+  // 26 May (Ali, 2nd live test) — a round where EVERY participant SKIPS must
+  // still early-close. The skip path now triggers the check, and a skip settles
+  // the participant regardless of presence — so an empty/stale presenceMap can
+  // no longer wedge the window onto the silent backstop.
+  it('all participants SKIP → closes even with an empty (stale) presenceMap', async () => {
+    makeRatingSession({ presentUserIds: [], ratingSkips: ['A:m1', 'B:m1'] });
+    srGetMatchesByRound.mockResolvedValue([
+      { id: 'm1', participantAId: 'A', participantBId: 'B', participantCId: null, status: 'completed', createdAt: new Date(1000) },
+    ]);
+    mockRatingEdges([]); // nobody rated — everyone skipped
+    // sessionId passed explicitly (the skip socket event carries it), so the
+    // lookup does not depend on the stale presenceMap.
+    await checkAllRatingsCompleteByUserId('A', SID);
+
+    const s = activeSessions.get(SID)!;
+    expect(s.timer).not.toBeNull();
+    jest.advanceTimersByTime(3000);
+    expect(endRatingWindowSpy).toHaveBeenCalledWith(SID, 3);
+  });
+
+  it('a non-rater present only via a LIVE socket (presenceMap stale) still blocks the close', async () => {
+    makeRatingSession({ presentUserIds: [] }); // presenceMap empty/stale
+    srGetMatchesByRound.mockResolvedValue([
+      { id: 'm1', participantAId: 'A', participantBId: 'B', participantCId: null, status: 'completed', createdAt: new Date(1000) },
+    ]);
+    mockRatingEdges(['A:B']); // A rated B; B has neither rated nor skipped
+    // B is not in presenceMap but DOES have a live socket — must be treated as
+    // present and still owing, so the window must NOT close yet.
+    const io: any = { in: () => ({ fetchSockets: async () => [{ data: { userId: 'B' } }] }) };
+    await checkAllRatingsCompleteByUserId('A', SID, io);
+
+    const s = activeSessions.get(SID)!;
+    expect(s.timer).toBeNull();
+    jest.advanceTimersByTime(5000);
+    expect(endRatingWindowSpy).not.toHaveBeenCalled();
+  });
+
+  it('handleRatingSkip triggers the completeness check (so an all-skip round early-closes)', () => {
+    const fs = require('fs'); const path = require('path');
+    const src: string = fs.readFileSync(path.join(__dirname, '../../../services/orchestration/handlers/participant-flow.ts'), 'utf8');
+    const i = src.indexOf('export async function handleRatingSkip');
+    expect(i).toBeGreaterThan(-1);
+    const end = src.indexOf('\nexport ', i + 1);
+    const fn = src.slice(i, end > -1 ? end : src.length);
+    expect(fn).toMatch(/checkAllRatingsCompleteByUserId\(/);
+  });
+
   it('is a no-op when the session is not in ROUND_RATING', async () => {
     const s = makeRatingSession({ presentUserIds: ['A', 'B'] });
     s.status = SessionStatus.ROUND_ACTIVE;

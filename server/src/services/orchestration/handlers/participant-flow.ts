@@ -1011,7 +1011,7 @@ export async function handleRatingSubmit(
       });
 
       // ─── Early exit: if ALL participants in this round have rated, skip remaining timer ───
-      await checkAllRatingsCompleteByUserId(userId);
+      await checkAllRatingsCompleteByUserId(userId, sessionId, _io);
     } catch (err: any) {
       socket.emit('error', { code: 'RATING_FAILED', message: err.message });
     }
@@ -1042,6 +1042,12 @@ export async function handleRatingSkip(
   if (!activeSession) return;
   (activeSession.ratingSkips ??= new Set<string>()).add(`${userId}:${data.matchId}`);
   logger.info({ sessionId: data.sessionId, userId, matchId: data.matchId }, '#6 — rating skipped (recorded)');
+  // A skip SETTLES this match for the user exactly like a submitted rating, so it
+  // must also trigger the all-done check. Without this, a round where EVERY user
+  // skips never early-closes — nothing fires the check — and it limps to the
+  // silent backstop (Ali, 26 May: "stuck at rating >1min after I skipped from
+  // every user"). The rate path already calls this; the skip path did not.
+  await checkAllRatingsCompleteByUserId(userId, data.sessionId, _io);
 }
 
 /**
@@ -1080,16 +1086,28 @@ export async function notifyRatingSubmitted(userId: string): Promise<void> {
  * Exported for the #4 behavioral test suite (stuck-at-rating.test.ts); the
  * production entry points are handleRatingSubmit and notifyRatingSubmitted.
  */
-export async function checkAllRatingsCompleteByUserId(userId: string): Promise<void> {
+export async function checkAllRatingsCompleteByUserId(
+  userId: string,
+  sessionId?: string,
+  io?: SocketServer,
+): Promise<void> {
   try {
-    // Find which session this user is in
-    let sessionId: string | null = null;
+    // Resolve the session. Prefer the caller-supplied id (the rating/skip socket
+    // events carry it) and do NOT depend on presenceMap for the lookup — a stale
+    // heartbeat map was making this miss, so all-rated/skipped was never detected
+    // and the round limped to the silent backstop (Ali, 26 May: "stuck >1min").
     let activeSession: ActiveSession | null = null;
-    for (const [sid, s] of activeSessions) {
-      if (s.presenceMap.has(userId) && s.status === SessionStatus.ROUND_RATING) {
-        sessionId = sid;
-        activeSession = s;
-        break;
+    if (sessionId) {
+      const s = activeSessions.get(sessionId);
+      if (s && s.status === SessionStatus.ROUND_RATING) activeSession = s;
+    }
+    if (!activeSession) {
+      for (const [sid, s] of activeSessions) {
+        if (s.presenceMap.has(userId) && s.status === SessionStatus.ROUND_RATING) {
+          sessionId = sid;
+          activeSession = s;
+          break;
+        }
       }
     }
     if (!sessionId || !activeSession) return;
@@ -1138,28 +1156,41 @@ export async function checkAllRatingsCompleteByUserId(userId: string): Promise<v
     const ratedEdges = new Set(edgeResult.rows.map(r => `${r.from_user_id}:${r.to_user_id}`));
     const skips = activeSession.ratingSkips ?? new Set<string>();
 
-    // A present participant is "done" when, for their latest match, they have
-    // rated OR skipped every partner. Leavers (absent from presenceMap) are not
-    // required and never block. The host is never a rating participant.
-    let anyPresentEligible = false;
-    let allPresentDone = true;
-    for (const [pid, m] of latestMatchFor) {
-      if (!activeSession.presenceMap.has(pid)) continue; // leaver — does not block
-      // endRound opens the rating form ONLY for 'completed' matches. A latest
-      // match that is no_show (partner never connected) — or active/reassigned,
-      // which never get a round-end form either — gives this participant
-      // nothing to rate, so it cannot make them "owe" a rating. Don't require
-      // it (else a present no-show partner would block the close forever).
-      if (m.status !== 'completed') continue;
-      const partners = participantsOf(m).filter(id => id !== pid);
-      if (partners.length === 0) continue; // solo (partner(s) gone before pairing) — nothing to rate
-      anyPresentEligible = true;
-      if (skips.has(`${pid}:${m.id}`)) continue; // explicit Skip closes this match for pid
-      const done = partners.every(partnerId => ratedEdges.has(`${pid}:${partnerId}`));
-      if (!done) { allPresentDone = false; break; }
+    // Who is ACTUALLY still here. presenceMap (heartbeat) drifts stale, so union
+    // it with live socket-room membership (ground truth) before deciding who can
+    // still block the close — same staleness class as the LEFT-escalation fix.
+    const connected = new Set<string>(activeSession.presenceMap.keys());
+    if (io) {
+      try {
+        const liveSockets = await io.in(sessionRoom(sessionId)).fetchSockets();
+        for (const sk of liveSockets) {
+          const uid = (sk.data as { userId?: string } | undefined)?.userId;
+          if (uid) connected.add(uid);
+        }
+      } catch { /* fall back to presenceMap only */ }
     }
 
-    if (anyPresentEligible && allPresentDone) {
+    // Complete when every completed-match participant has rated-or-skipped their
+    // partner(s). A rating/skip SETTLES that participant regardless of presence
+    // (so an all-skip round closes immediately, never on the backstop). endRound
+    // opens a form ONLY for 'completed' matches — a no_show/active/reassigned
+    // latest match gives nothing to rate, so it never makes a participant "owe".
+    // A not-yet-settled participant blocks the close ONLY while still connected;
+    // a disconnected non-rater is a leaver and must not wedge the window.
+    let anyEligible = false;
+    let allSettled = true;
+    for (const [pid, m] of latestMatchFor) {
+      if (m.status !== 'completed') continue;
+      const partners = participantsOf(m).filter(id => id !== pid);
+      if (partners.length === 0) continue; // solo — nothing to rate
+      anyEligible = true;
+      const settled = skips.has(`${pid}:${m.id}`) ||
+        partners.every(partnerId => ratedEdges.has(`${pid}:${partnerId}`));
+      if (settled) continue;
+      if (connected.has(pid)) { allSettled = false; break; } // present & still owes
+    }
+
+    if (anyEligible && allSettled) {
       logger.info(
         { sessionId, roundNumber, edges: ratedEdges.size, skips: skips.size },
         'All ratings submitted — ending rating window early'
