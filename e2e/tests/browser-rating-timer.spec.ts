@@ -3,11 +3,13 @@ import { io, Socket } from 'socket.io-client';
 import { createTestUser, cleanupTestData, pool, TestUser, closePool } from '../helpers/auth';
 import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
 
-// HEADED browser proof of the RATING timer across the breakout->rating transition
-// (the "rating timer flashes 158 then 43" report). A real browser runs the deployed
-// client: alice sits in a manual breakout, the host ends all rooms, alice is routed
-// to the rating window, and we read the rating countdown pill ("Ns") over time and
-// assert it ticks DOWN steadily — i.e. leftover breakout ticks no longer fight it.
+// HEADED browser proof of the breakout->rating transition on the DEPLOYED client.
+// The old "rating timer flashes 158 then 43" flicker was fixed at the ROOT by
+// REMOVING the rating countdown entirely (06a8e79, Ali's decision — the user fills
+// the rating form at their own pace). So the assertion flipped: alice sits in a
+// manual breakout, the host ends all rooms, alice is routed to the rating FORM,
+// and we assert the form opens and NO countdown pill ever renders — there is no
+// rating timer left to clobber, so the flicker is structurally impossible.
 
 const SERVER = process.env.E2E_SERVER_URL || 'https://api.rsn.network';
 const APP = process.env.E2E_APP_URL || 'https://app.rsn.network';
@@ -76,7 +78,7 @@ test.afterAll(async () => {
   await closePool();
 });
 
-test('real browser: rating timer after a breakout ends counts down steadily (no flicker)', async () => {
+test('real browser: rating form opens after a breakout ends with NO countdown (flicker structurally impossible)', async () => {
   const context = await browser.newContext();
   await context.addInitScript((toks: { a: string; r: string }) => {
     localStorage.setItem('rsn_access', toks.a);
@@ -113,31 +115,22 @@ test('real browser: rating timer after a breakout ends counts down steadily (no 
   // Host ends all manual rooms -> participants are routed to the rating window.
   hostSock.emit('host:end_breakout_all', { sessionId });
 
-  // Wait for the rating pill ("Ns") to appear.
-  let firstRating: number | null = null;
-  for (let i = 0; i < 20 && firstRating === null; i++) {
-    await page.waitForTimeout(1000);
-    firstRating = await readRatingSeconds(page);
-  }
-  expect(firstRating, 'rating countdown pill should appear after the breakout ends').not.toBeNull();
-  console.log(`  rating window opened at ${firstRating}s`);
+  // The rating FORM must appear. The rating phase intentionally shows NO countdown
+  // (removed in 06a8e79 — the user rates at their own pace), so the old
+  // "rating pill flickers 158->43" failure mode is now structurally impossible:
+  // there is no rating timer to be clobbered by a leftover breakout tick.
+  const ratingHeading = page.getByText('Rate your conversation', { exact: false });
+  await expect(ratingHeading).toBeVisible({ timeout: 20_000 });
+  console.log('  rating form opened (no countdown — by design)');
 
-  // Sample the rating countdown — it must only ever decrease (the flicker was an
-  // upward jump). A breakout tick leaking in would show as a jump or a freeze.
-  const readings: number[] = [firstRating!];
-  for (let i = 0; i < 5; i++) {
-    await page.waitForTimeout(2000);
-    const v = await readRatingSeconds(page);
-    if (v !== null) readings.push(v);
+  // Regression guard: no "Ns" rating-countdown pill should EVER render during the
+  // rating phase. Sample repeatedly to catch any pill that might flash in.
+  for (let i = 0; i < 4; i++) {
+    await page.waitForTimeout(1500);
+    const pill = await readRatingSeconds(page);
+    expect(pill, `rating phase must show NO countdown pill (saw ${pill}s)`).toBeNull();
   }
-  console.log('  rating readings (s):', readings.join(' -> '));
-
-  expect(readings.length).toBeGreaterThanOrEqual(3);
-  for (let i = 1; i < readings.length; i++) {
-    expect(readings[i], `rating tick ${i} must not jump up`).toBeLessThanOrEqual(readings[i - 1] + 1);
-  }
-  expect(readings[readings.length - 1]).toBeLessThan(readings[0]);
-  console.log('✓ rating countdown steady & monotonic after breakout end — no flicker');
+  console.log('✓ rating form steady, zero countdown rendered — no timer left to flicker');
 
   await context.close();
 });
