@@ -145,6 +145,10 @@ interface SessionLiveState {
     // Algorithm round endsAt — top-level. null when no algorithm round
     // is active (e.g. between rounds, or only manual breakouts running).
     timerEndsAt?: string | null;
+    // Server-RELATIVE round seconds remaining (clock-skew-immune). The host
+    // dashboard seeds a local countdown from this instead of subtracting the
+    // host clock from the absolute timerEndsAt (which inflated under skew).
+    timerSecondsRemaining?: number | null;
     // Phase 7C.1 (7 May spec) — Host Control Center backing data.
     // Optional for forward-compat with reconnect/older payloads.
     participants?: Array<{

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSessionStore } from '@/stores/sessionStore';
 import { Clock, Wifi, WifiOff, UserMinus, Radio, AlertTriangle, ArrowRightLeft } from 'lucide-react';
 import { getSocket } from '@/lib/socket';
@@ -41,6 +41,23 @@ export default function HostRoundDashboard({ sessionId }: Props) {
     const interval = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(interval);
   }, []);
+
+  // #1 timer fix (26 May) — clock-skew-immune round countdown. The host clock
+  // can lag the server; computing remaining from the ABSOLUTE server endsAt
+  // inflated the display (Ali saw 1:53 on a 60s round). The dashboard payload
+  // carries the server-RELATIVE timerSecondsRemaining, so we seed a LOCAL endsAt
+  // (clientNow + remaining) from it and tick locally — the same Bug-16 pattern
+  // every other timer uses. Reseed whenever the server value changes (~5s) to
+  // correct drift. Still session-scoped (round timer only), so it is also immune
+  // to the breakout-tick pollution of the shared `timerSeconds`.
+  const roundLocalEndsAtRef = useRef<number | null>(null);
+  const dashRemaining = roundDashboard?.timerSecondsRemaining ?? null;
+  useEffect(() => {
+    roundLocalEndsAtRef.current =
+      typeof dashRemaining === 'number' && dashRemaining > 0
+        ? Date.now() + dashRemaining * 1000
+        : null;
+  }, [dashRemaining]);
 
   // Phase 8 (1 May spec) — host action receipts.
   // Server emits host:action_confirmed after destructive/state-changing
@@ -134,22 +151,19 @@ export default function HostRoundDashboard({ sessionId }: Props) {
   })();
   const manualHasAnyTimer = activeManualRooms.some((r: any) => r.roomEndsAt);
 
-  // #1 (26 May, Ali) — host round-timer flicker root cause + fix.
-  // The global/algorithm round timer must come from the dashboard's
-  // session-scoped `timerEndsAt`, NOT the shared `timerSeconds` store field.
-  // `timerSeconds` is written by EVERY `timer:sync` source, including the
-  // per-user 'breakout' ticks a host receives while acting-as-host (a
-  // participant inside a breakout). That cross-write flipped the host's round
-  // timer between the round countdown and the breakout countdown — the
-  // 59↔110↔56 flicker Ali reported, same collision class as the documented
-  // 158↔43 in useSessionSocket. `roundDashboard.timerEndsAt` is ONLY ever the
-  // session round timer (matching-flow sets it from activeSession.timerEndsAt),
-  // so a breakout tick can never clobber it. We recompute each second off the
-  // existing 1s `setNow` tick. On pause the server nulls timerEndsAt (Bug 8.6)
-  // and `timerSeconds` holds the frozen snapshot, so we read the frozen value.
+  // #1 (26 May, Ali) — host round-timer source. The global/algorithm round
+  // timer must NOT read the shared `timerSeconds` store field: it is written by
+  // EVERY `timer:sync` source, including the per-user 'breakout' ticks a host
+  // receives while acting-as-host, which flipped the displayed value between the
+  // round and breakout countdowns. We instead drive it from the session-scoped,
+  // server-RELATIVE round timer seeded above (roundLocalEndsAtRef) — skew-immune
+  // AND breakout-immune. On pause the server nulls the round timer and
+  // `timerSeconds` holds the frozen snapshot, so we read the frozen value then.
   const roundTimerSeconds = isPaused
     ? timerSeconds
-    : remainingSeconds(roundDashboard.timerEndsAt);
+    : roundLocalEndsAtRef.current != null
+      ? Math.max(0, Math.ceil((roundLocalEndsAtRef.current - Date.now()) / 1000))
+      : 0;
 
   return (
     <div className="flex-1 overflow-y-auto p-4 bg-white">

@@ -233,14 +233,21 @@ describe('25 May live-test fixes', () => {
     });
   });
 
-  describe('#1 (26 May) — host round-timer flicker (session-scoped source, not shared timerSeconds)', () => {
+  describe('#1 (26 May) — host round-timer source (skew-immune + breakout-immune)', () => {
     const dash = () => readClient('features/live/HostRoundDashboard.tsx');
-    it('derives the round timer from roundDashboard.timerEndsAt (running) with a frozen-snapshot pause fallback', () => {
-      // Root cause: the dashboard read the shared `timerSeconds` store field,
-      // which every timer:sync source writes — incl. per-user 'breakout' ticks
-      // while acting-as-host. roundDashboard.timerEndsAt is ONLY the session
-      // round timer, so it can't be clobbered by a breakout tick.
-      expect(dash()).toMatch(/roundTimerSeconds\s*=\s*isPaused[\s\S]{0,80}remainingSeconds\(roundDashboard\.timerEndsAt\)/);
+    it('drives the round timer from the server-RELATIVE timerSecondsRemaining (clock-skew-immune), not the absolute endsAt', () => {
+      const s = dash();
+      // Root cause #1: the shared `timerSeconds` is cross-written by per-user
+      // 'breakout' ticks while acting-as-host. Root cause #2 (the 1:53-on-a-60s
+      // -round Ali saw): computing remaining from the ABSOLUTE server endsAt is
+      // clock-skew-vulnerable. Fix: seed a LOCAL endsAt from the server-relative
+      // timerSecondsRemaining and tick locally.
+      expect(s).toMatch(/roundLocalEndsAtRef\.current\s*=[\s\S]{0,140}dashRemaining\s*\*\s*1000/);
+      expect(s).toMatch(/timerSecondsRemaining/);
+      // must NOT subtract the host clock from the absolute server endsAt
+      expect(s).not.toMatch(/remainingSeconds\(roundDashboard\.timerEndsAt\)/);
+      // pause still shows the server-computed frozen snapshot
+      expect(s).toMatch(/roundTimerSeconds\s*=\s*isPaused\s*\?\s*timerSeconds/);
     });
     it('renders BOTH the global header and the algorithm-section header from roundTimerSeconds', () => {
       const s = dash();
