@@ -53,7 +53,12 @@ export function createFrameHealthMonitor(handlers: {
   /** Start already stepped-down — the processor was rebuilt at reduced fps, so
    *  the next sustained breach should disable rather than reduce again. */
   startReduced?: boolean;
+  /** Per-frame budget in ms. Defaults to the 15fps budget; when the processor
+   *  has been rebuilt at the reduced fps, pass the larger (10fps) budget so a
+   *  frame that fits the reduced rate is not still counted as a breach. */
+  budgetMs?: number;
 }): (stats: FrameStats) => void {
+  const budget = handlers.budgetMs ?? BG_FRAME_BUDGET_MS;
   const breaches: number[] = [];
   let reduced = handlers.startReduced ?? false;
   let finished = false;
@@ -68,7 +73,7 @@ export function createFrameHealthMonitor(handlers: {
       return;
     }
 
-    breaches.push(stats.processingTimeMs > BG_FRAME_BUDGET_MS ? 1 : 0);
+    breaches.push(stats.processingTimeMs > budget ? 1 : 0);
     if (breaches.length < BG_HEALTH_WINDOW) return;
     while (breaches.length > BG_HEALTH_WINDOW) breaches.shift();
 

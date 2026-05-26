@@ -39,6 +39,19 @@ const withTimeout = <T,>(p: Promise<T>, ms = APPLY_TIMEOUT_MS): Promise<T> =>
     new Promise<T>((_, rej) => setTimeout(() => rej(new Error('bg_timeout')), ms)),
   ]);
 
+// Opt-in diagnostics: set localStorage.rsn_bg_debug = "1" to log frame timing
+// and the reason the effect stepped down / disabled. Off (silent) otherwise.
+function bgDebug(...args: unknown[]): void {
+  try {
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('rsn_bg_debug')) {
+      // eslint-disable-next-line no-console
+      console.log('[bg]', ...args);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 interface LocalParticipantLike {
   trackPublications: Map<string, any> | { values(): IterableIterator<any> };
   isCameraEnabled?: boolean;
@@ -86,7 +99,7 @@ export function useBackgroundEffects(
 
   // Forward declarations via refs so the monitor callbacks can reach the latest
   // builders without a dependency cycle.
-  const autoDisableRef = useRef<() => Promise<void>>(async () => {});
+  const autoDisableRef = useRef<(reason: string) => Promise<void>>(async () => {});
   const rebuildReducedRef = useRef<() => Promise<void>>(async () => {});
 
   const startStallWatchdog = useCallback(() => {
@@ -96,7 +109,7 @@ export function useBackgroundEffects(
       if (!processorRef.current) return;
       if (localParticipant?.isCameraEnabled === false) return; // camera off: silence is expected
       if (Date.now() - lastFrameAtRef.current > BG_STALL_MS) {
-        void autoDisableRef.current();
+        void autoDisableRef.current('stall');
       }
     }, 1000);
   }, [localParticipant, stopStallWatchdog]);
@@ -108,11 +121,16 @@ export function useBackgroundEffects(
       const assetPaths = await resolveAssetPaths();
       const monitor = createFrameHealthMonitor({
         startReduced,
-        onReduce: () => { reducedRef.current = true; void rebuildReducedRef.current(); },
-        onDisable: () => { void autoDisableRef.current(); },
+        budgetMs: startReduced ? 1000 / BG_REDUCED_MAX_FPS : undefined,
+        onReduce: () => { bgDebug('reduce → ' + BG_REDUCED_MAX_FPS + 'fps'); reducedRef.current = true; void rebuildReducedRef.current(); },
+        onDisable: () => { void autoDisableRef.current('degrade'); },
       });
+      let frameN = 0;
+      let frameSum = 0;
       const onFrameProcessed = (stats: FrameStats) => {
         lastFrameAtRef.current = Date.now();
+        frameN++; frameSum += stats.processingTimeMs;
+        if (frameN % 30 === 0) { bgDebug(`avg processingTimeMs over 30 frames: ${(frameSum / 30).toFixed(1)} (fps=${startReduced ? BG_REDUCED_MAX_FPS : BG_MAX_FPS})`); frameSum = 0; }
         monitor(stats);
       };
       const proc = createBackgroundProcessor(mod, {
@@ -179,7 +197,8 @@ export function useBackgroundEffects(
       await destroyProcessor();
       await buildProcessor(track, pref, true);
     };
-    autoDisableRef.current = async () => {
+    autoDisableRef.current = async (reason: string) => {
+      bgDebug('auto-disable:', reason);
       const track = getCameraTrack(localParticipant as any);
       stopStallWatchdog();
       try { await withTimeout(track?.stopProcessor?.() ?? Promise.resolve(), 5000); } catch { /* noop */ }
