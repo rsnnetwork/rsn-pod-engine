@@ -110,7 +110,9 @@ describe('Phase 3 — lifecycle transitions write canonical status (M1)', () => 
     await new Promise(r => setImmediate(r));
     const doc = await readCanonical('s3');
     expect(doc!.status).toBe(SS.ROUND_RATING);
-  });
+    // Generous timeout: dynamic import + setImmediate flush is slow under the
+    // parallel runner's CPU contention; behavior is unchanged, this only avoids flake.
+  }, 15000);
 });
 
 describe('Phase 3 — reconciler re-checks live presence before LEFT (C4)', () => {

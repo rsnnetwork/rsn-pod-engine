@@ -105,7 +105,7 @@ describe('25 May live-test fixes', () => {
     it('breakout ownership is released the instant the user leaves the breakout', () => {
       const src = readClient('hooks/useSessionSocket.ts');
       const rw = src.indexOf("socket.on('rating:window_open'");
-      expect(src.slice(rw, rw + 1200)).toMatch(/lastBreakoutSyncRef\.current = 0/);
+      expect(src.slice(rw, rw + 2400)).toMatch(/lastBreakoutSyncRef\.current = 0/);
       const rl = src.indexOf("socket.on('match:return_to_lobby'");
       expect(src.slice(rl, rl + 600)).toMatch(/lastBreakoutSyncRef\.current = 0/);
     });
@@ -199,11 +199,15 @@ describe('25 May live-test fixes', () => {
       expect(src).not.toMatch(/import.*Clock.*from 'lucide-react'/);
       expect(src).not.toMatch(/timerSeconds/);
     });
-    it('client fallback returns-to-lobby after generous fixed 210s (backstop 180s + 30s grace)', () => {
+    it('client fallback returns-to-lobby after fixed 120s (backstop 90s + 30s grace)', () => {
       const src = readClient('hooks/useSessionSocket.ts');
       const rw = src.indexOf("socket.on('rating:window_open'");
-      const body = src.slice(rw, rw + 2400);
-      expect(body).toMatch(/210_000/);
+      // Bound the slice to exactly this handler (up to the next socket.on) so
+      // additive edits above the fallback timer don't push it out of a fixed
+      // window — this pin broke once already from that recurring fragility.
+      const nextHandler = src.indexOf('socket.on(', rw + 20);
+      const body = src.slice(rw, nextHandler > rw ? nextHandler : rw + 4000);
+      expect(body).toMatch(/120_000/);
       expect(body).not.toMatch(/durationSeconds.*\+\s*30.*\*\s*1000/);
     });
   });
@@ -226,6 +230,24 @@ describe('25 May live-test fixes', () => {
       // the removal terminal status is now a hard 'completed' (was the durationS>30 heuristic)
       expect(src).toMatch(/const terminalStatus: 'completed' = 'completed'/);
       expect(src).not.toMatch(/terminalStatus = \(durationS > 30 \|\| ratingCount > 0\)/);
+    });
+  });
+
+  describe('#1 (26 May) — host round-timer flicker (session-scoped source, not shared timerSeconds)', () => {
+    const dash = () => readClient('features/live/HostRoundDashboard.tsx');
+    it('derives the round timer from roundDashboard.timerEndsAt (running) with a frozen-snapshot pause fallback', () => {
+      // Root cause: the dashboard read the shared `timerSeconds` store field,
+      // which every timer:sync source writes — incl. per-user 'breakout' ticks
+      // while acting-as-host. roundDashboard.timerEndsAt is ONLY the session
+      // round timer, so it can't be clobbered by a breakout tick.
+      expect(dash()).toMatch(/roundTimerSeconds\s*=\s*isPaused[\s\S]{0,80}remainingSeconds\(roundDashboard\.timerEndsAt\)/);
+    });
+    it('renders BOTH the global header and the algorithm-section header from roundTimerSeconds', () => {
+      const s = dash();
+      const renders = s.match(/formatMSS\(roundTimerSeconds\)/g) || [];
+      expect(renders.length).toBeGreaterThanOrEqual(2);
+      // the round-timer display must NOT read the breakout-pollutable field directly
+      expect(s).not.toMatch(/formatMSS\(timerSeconds\)/);
     });
   });
 });

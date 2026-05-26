@@ -134,6 +134,23 @@ export default function HostRoundDashboard({ sessionId }: Props) {
   })();
   const manualHasAnyTimer = activeManualRooms.some((r: any) => r.roomEndsAt);
 
+  // #1 (26 May, Ali) — host round-timer flicker root cause + fix.
+  // The global/algorithm round timer must come from the dashboard's
+  // session-scoped `timerEndsAt`, NOT the shared `timerSeconds` store field.
+  // `timerSeconds` is written by EVERY `timer:sync` source, including the
+  // per-user 'breakout' ticks a host receives while acting-as-host (a
+  // participant inside a breakout). That cross-write flipped the host's round
+  // timer between the round countdown and the breakout countdown — the
+  // 59↔110↔56 flicker Ali reported, same collision class as the documented
+  // 158↔43 in useSessionSocket. `roundDashboard.timerEndsAt` is ONLY ever the
+  // session round timer (matching-flow sets it from activeSession.timerEndsAt),
+  // so a breakout tick can never clobber it. We recompute each second off the
+  // existing 1s `setNow` tick. On pause the server nulls timerEndsAt (Bug 8.6)
+  // and `timerSeconds` holds the frozen snapshot, so we read the frozen value.
+  const roundTimerSeconds = isPaused
+    ? timerSeconds
+    : remainingSeconds(roundDashboard.timerEndsAt);
+
   return (
     <div className="flex-1 overflow-y-auto p-4 bg-white">
       {/* Phase 8 (1 May spec) — host action receipts.
@@ -174,10 +191,10 @@ export default function HostRoundDashboard({ sessionId }: Props) {
           {/* Bug 18 — global top-right timer ONLY for algorithm round.
               Hidden when only manual breakouts are active so the manual
               room timer doesn't bleed into this slot. */}
-          {isAlgorithmActive && currentRound > 0 && timerSeconds > 0 && (
+          {isAlgorithmActive && currentRound > 0 && roundTimerSeconds > 0 && (
             <div className="flex items-center gap-2 text-lg font-mono font-bold text-[#1a1a2e]">
               <Clock className="h-5 w-5 text-gray-400" />
-              {formatMSS(timerSeconds)}
+              {formatMSS(roundTimerSeconds)}
               {isPaused && <span className="text-xs text-amber-500 font-sans font-medium ml-1">paused</span>}
             </div>
           )}
@@ -346,10 +363,10 @@ export default function HostRoundDashboard({ sessionId }: Props) {
                   {activeAlgorithmRooms.length} room{activeAlgorithmRooms.length !== 1 ? 's' : ''}
                 </span>
               </div>
-              {timerSeconds > 0 && (
+              {roundTimerSeconds > 0 && (
                 <span className="inline-flex items-center gap-1 text-sm font-mono font-semibold text-emerald-900">
                   <Clock className="h-4 w-4 text-emerald-500" />
-                  {formatMSS(timerSeconds)}
+                  {formatMSS(roundTimerSeconds)}
                   {isPaused && <span className="text-[10px] text-amber-600 font-sans ml-1">paused</span>}
                 </span>
               )}

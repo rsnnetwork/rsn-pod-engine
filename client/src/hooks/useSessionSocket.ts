@@ -599,10 +599,11 @@ export default function useSessionSocket(sessionId: string) {
 
       // ── Fallback safety timer ──
       // If rating:window_closed is missed (network issue, socket drop), auto-return
-      // to lobby after 210s (server backstop 180s + 30s grace). Prevents users
-      // getting stuck if the socket event is lost. Generous so no one is cut off.
+      // to lobby after 120s (server backstop 90s + 30s grace). Prevents users
+      // getting stuck if the socket event is lost. Kept in lockstep with the
+      // server-side RATING_BACKSTOP_MS so a dropped close event recovers promptly.
       clearRatingFallback();
-      const fallbackMs = 210_000;
+      const fallbackMs = 120_000;
       ratingFallbackRef.current = setTimeout(() => {
         const currentPhase = useSessionStore.getState().phase;
         if (currentPhase === 'rating') {
