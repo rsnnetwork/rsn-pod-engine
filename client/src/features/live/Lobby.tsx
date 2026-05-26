@@ -1,59 +1,17 @@
 import { Users, Loader2, Video, VideoOff, Sparkles, ChevronDown, ChevronUp, Mic, MicOff, Volume2, VolumeX, UserX, Camera, X, Pin, PinOff, Minimize2, Maximize2 } from 'lucide-react';
-import { BACKGROUND_EFFECTS_ENABLED } from '@/lib/featureFlags';
 import HostRoundDashboard from './HostRoundDashboard';
-
-// Lazy-load track processors (may not be available in all environments)
-let _bgBlur: any = null;
-let _vBg: any = null;
-let _bgLoaded = false;
-async function loadBgProcessors() {
-  if (_bgLoaded) return { BackgroundBlur: _bgBlur, VirtualBackground: _vBg };
-  try {
-    const mod = await import(/* @vite-ignore */ '@livekit/track-processors');
-    _bgBlur = mod.BackgroundBlur;
-    _vBg = mod.VirtualBackground;
-    _bgLoaded = true;
-    return { BackgroundBlur: _bgBlur, VirtualBackground: _vBg };
-  } catch { return null; }
-}
+import { useBackgroundEffects } from '@/hooks/useBackgroundEffects';
+import {
+  BG_PRESETS,
+  presetToPreference,
+  isActivePreset,
+  isCustomActive,
+  BG_CAPTURE_RESOLUTION,
+} from '@/lib/backgroundEffects';
 import { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
 import { useSessionStore, useInRoomParticipants } from '@/stores/sessionStore';
 import { getSocket } from '@/lib/socket';
 import { useVisibilityPartition } from './useVisibilityPartition';
-import {
-  saveBgPreference,
-  loadBgPreference,
-  applyBgPreference,
-  type BgPreference,
-} from '@/lib/bgPreference';
-
-// Lobby preset list. Module-scoped so both the picker UI and the
-// mount-time auto-apply effect see the same URLs (Issue 10).
-const LOBBY_BG_PRESETS: Array<{ label: string; mode: string; img?: string }> = [
-  { label: 'None', mode: 'disabled' },
-  { label: 'Blur', mode: 'blur' },
-  { label: 'Office', mode: 'office', img: 'https://images.unsplash.com/photo-1497366216548-37526070297c?w=200&q=60' },
-  { label: 'Nature', mode: 'nature', img: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=200&q=60' },
-  { label: 'City', mode: 'city', img: 'https://images.unsplash.com/photo-1480714378408-67cf0d13bc1b?w=200&q=60' },
-  { label: 'Abstract', mode: 'abstract', img: 'https://images.unsplash.com/photo-1557683316-973673baf926?w=200&q=60' },
-];
-
-// Map the Lobby preset onto the shared BgPreference shape (Issue 10).
-function presetToPreference(preset: { mode: string; img?: string }): BgPreference {
-  if (preset.mode === 'disabled') return { mode: 'disabled' };
-  if (preset.mode === 'blur') return { mode: 'blur' };
-  return { mode: 'image', imageUrl: (preset.img || '').replace('w=200', 'w=1280') };
-}
-
-// Reverse map a stored BgPreference to a Lobby preset.mode for UI
-// highlight. Image URLs go through the same w=200→w=1280 transform so
-// the saved 'image' value matches the in-list preset by URL equality.
-function preferenceToPresetMode(pref: BgPreference): string {
-  if (pref.mode === 'disabled') return 'disabled';
-  if (pref.mode === 'blur') return 'blur';
-  const match = LOBBY_BG_PRESETS.find(p => p.img && p.img.replace('w=200', 'w=1280') === pref.imageUrl);
-  return match?.mode ?? 'image';
-}
 import {
   LiveKitRoom,
   VideoTrack,
@@ -638,11 +596,10 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
   // Issue 10 — restore last bg choice for the UI highlight. The actual
   // processor is (re-)applied by a separate effect once the local camera
   // track is ready.
-  const [bgMode, setBgMode] = useState<string>(() => {
-    const saved = loadBgPreference();
-    return saved ? preferenceToPresetMode(saved) : 'disabled';
-  });
   const [showBgPanel, setShowBgPanel] = useState(false);
+  // Shared BG lifecycle: capability gate, persist-across-rooms, degrade→disable,
+  // destroy-on-unmount. hookCamEnabled flips true the instant the camera publishes.
+  const bg = useBackgroundEffects(localParticipant, hookCamEnabled);
 
   // Derive allMuted from actual remote participant mic state (host button label
   // must reflect reality, not a stale local flag that resets on remount).
@@ -689,31 +646,9 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
     }
   }, [localParticipant, isHost]);
 
-  // Issue 10 (21 May Stefan re-test) — re-apply the user's persisted
-  // background every time the local camera is published (every fresh
-  // lobby join, every breakout↔lobby return, every camera off→on toggle).
-  // The first fix (cc09a19) had a one-shot ref guard that flipped to
-  // "applied" the moment the effect ran — but `useLocalParticipant`
-  // returns localParticipant BEFORE its camera track publishes, so the
-  // apply call saw an empty trackPublications, no-op'd, and the guard
-  // locked us out from retrying. Now the dep array depends on
-  // `hookCamEnabled` (the reactive value that flips true the instant
-  // a camera track is published+unmuted) so the apply re-fires exactly
-  // when the track is actually queryable. setProcessor is idempotent
-  // (stopProcessor first) — safe to re-run.
-  useEffect(() => {
-    if (!BACKGROUND_EFFECTS_ENABLED) return; // background effects disabled for events
-    if (!localParticipant || !hookCamEnabled) return;
-    const pref = loadBgPreference();
-    if (!pref || pref.mode === 'disabled') return;
-    let cancelled = false;
-    (async () => {
-      const mod = await loadBgProcessors();
-      if (cancelled || !mod) return;
-      await applyBgPreference(localParticipant, mod, pref);
-    })();
-    return () => { cancelled = true; };
-  }, [localParticipant, hookCamEnabled]);
+  // (Background persistence across main↔breakout is now handled inside
+  // useBackgroundEffects — it re-applies the saved preference whenever the
+  // camera publishes, and destroys the processor on unmount.)
 
   // Bug 11 (13 May live test) — sync local optimistic state with the hook's
   // reactive values. The hook re-renders the parent whenever the underlying
@@ -834,12 +769,12 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
       </button>
       {/* Virtual background toggle */}
       <div className="relative">
-        {BACKGROUND_EFFECTS_ENABLED && (
+        {bg.supported && (
         <button
           onClick={() => setShowBgPanel(!showBgPanel)}
           aria-label="Background effects"
           className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors backdrop-blur-sm ${
-            bgMode !== 'disabled' ? 'bg-indigo-500/80 text-white' : 'bg-black/40 text-white hover:bg-black/60'
+            bg.current.mode !== 'disabled' ? 'bg-indigo-500/80 text-white' : 'bg-black/40 text-white hover:bg-black/60'
           }`}
           title="Background effects"
         >
@@ -847,13 +782,10 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
           <span className="hidden sm:inline">BG</span>
         </button>
         )}
-        {showBgPanel && (
-          // Phase 7-audit fix — was `absolute bottom-full right-0` inside the
-          // camera tile which has `overflow-hidden` for rounded corners,
-          // clipping the popup ("ACKGROUND" with the B cut off + bottom
-          // overlap with control bar). Now: viewport-fixed centered card
-          // on desktop, full-width bottom sheet on mobile. Click-out + Esc
-          // both close. Same UX pattern as the Invite / Room modals.
+        {showBgPanel && bg.supported && (
+          // Phase 7-audit fix — viewport-fixed centered card on desktop,
+          // full-width bottom sheet on mobile. Click-out + Esc both close.
+          // Same UX pattern as the Invite / Room modals.
           <>
             <div
               className="fixed inset-0 z-50 bg-black/30 backdrop-blur-sm"
@@ -876,57 +808,19 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
                   <X className="h-4 w-4" />
                 </button>
               </div>
+              {bg.degraded && (
+                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5 mb-3 leading-snug">
+                  Background turned off — your device couldn't keep up. You can try again, but video may be smoother without it.
+                </p>
+              )}
               <div className="grid grid-cols-3 gap-2">
-                {LOBBY_BG_PRESETS.map(preset => (
-                  <button key={preset.mode} onClick={async () => {
-                    // Bug 11 (18 May Stefan) — Claus's video went black /
-                    // page hung after toggling a background effect. Two
-                    // root causes the new code defends against:
-                    //   1. setProcessor() can hang forever on devices
-                    //      where the WASM worker fails to start; race it
-                    //      against an 8-second timeout so the UI doesn't
-                    //      freeze waiting for a never-resolving promise.
-                    //   2. After a failure the camera track can be left
-                    //      with a partially-attached processor; force
-                    //      another stopProcessor in the catch path and
-                    //      reset bgMode to 'disabled' so the UI matches
-                    //      reality + the user can recover by toggling
-                    //      camera off/on.
-                    const withTimeout = <T,>(p: Promise<T>, ms = 8000): Promise<T> =>
-                      Promise.race<T>([
-                        p,
-                        new Promise<T>((_, rej) => setTimeout(() => rej(new Error('bg_processor_timeout')), ms)),
-                      ]);
-                    try {
-                      const mod = await loadBgProcessors();
-                      if (!mod) { console.error('Background processors not available'); return; }
-                      // T2-6 (Issue 15) — Track.Source enum (was string 'camera' = always undefined → silent no-op)
-                      const camPub = Array.from(localParticipant.trackPublications.values()).find(p => p.source === Track.Source.Camera);
-                      const camTrack = camPub?.track;
-                      if (!camTrack) return;
-                      await withTimeout((camTrack as any).stopProcessor?.() ?? Promise.resolve(), 5000).catch(() => {});
-                      if (preset.mode === 'disabled') { setBgMode('disabled'); }
-                      // T2-6 — bumped blur strength 10 → 25 for visible effect
-                      else if (preset.mode === 'blur') { await withTimeout((camTrack as any).setProcessor(mod.BackgroundBlur(25))); setBgMode('blur'); }
-                      else if (preset.img) { await withTimeout((camTrack as any).setProcessor(mod.VirtualBackground(preset.img.replace('w=200', 'w=1280')))); setBgMode(preset.mode); }
-                      // Issue 10 — persist for the next main↔breakout
-                      // transition / fresh lobby join in this tab.
-                      saveBgPreference(presetToPreference(preset));
-                    } catch (err) {
-                      console.error('BG effect failed:', err);
-                      // Best-effort cleanup so the camera isn't stuck mid-processor.
-                      try {
-                        const camPub = Array.from(localParticipant.trackPublications.values()).find(p => p.source === Track.Source.Camera);
-                        await withTimeout((camPub?.track as any)?.stopProcessor?.() ?? Promise.resolve(), 3000).catch(() => {});
-                      } catch { /* swallow — already in the error path */ }
-                      setBgMode('disabled');
-                    }
-                    setShowBgPanel(false);
-                  }}
-                  className={`rounded-lg border-2 overflow-hidden transition-colors ${bgMode === preset.mode ? 'border-rsn-red ring-2 ring-rsn-red/20' : 'border-gray-200 hover:border-gray-400'}`}>
-                    {preset.img ? (
+                {BG_PRESETS.map(preset => (
+                  <button key={preset.label}
+                    onClick={() => { bg.apply(presetToPreference(preset)); setShowBgPanel(false); }}
+                    className={`rounded-lg border-2 overflow-hidden transition-colors ${isActivePreset(preset, bg.current) ? 'border-rsn-red ring-2 ring-rsn-red/20' : 'border-gray-200 hover:border-gray-400'}`}>
+                    {preset.image ? (
                       <div className="relative">
-                        <img src={preset.img} alt={preset.label} className="w-full h-20 object-cover" />
+                        <img src={preset.image} alt={preset.label} className="w-full h-20 object-cover" loading="lazy" />
                         <span className="absolute bottom-0 inset-x-0 bg-black/50 text-white text-[10px] font-medium py-0.5 text-center">{preset.label}</span>
                       </div>
                     ) : (
@@ -934,6 +828,23 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
                     )}
                   </button>
                 ))}
+                {/* Custom upload */}
+                <button
+                  onClick={() => {
+                    const input = document.createElement('input');
+                    input.type = 'file';
+                    input.accept = 'image/*';
+                    input.onchange = (e) => {
+                      const file = (e.target as HTMLInputElement).files?.[0];
+                      if (!file) return;
+                      bg.apply({ mode: 'image', imageUrl: URL.createObjectURL(file) });
+                      setShowBgPanel(false);
+                    };
+                    input.click();
+                  }}
+                  className={`rounded-lg border-2 border-dashed overflow-hidden transition-colors ${isCustomActive(bg.current) ? 'border-rsn-red ring-2 ring-rsn-red/20' : 'border-gray-300 hover:border-gray-400'}`}>
+                  <div className="w-full h-20 flex items-center justify-center text-xs font-medium text-gray-400">+ Upload</div>
+                </button>
               </div>
             </div>
           </>
@@ -1530,7 +1441,7 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
           audio={isHost}
           className="flex-1 w-full max-w-4xl"
           options={{
-            videoCaptureDefaults: { resolution: { width: 1280, height: 720, frameRate: 30 } },
+            videoCaptureDefaults: { resolution: { ...BG_CAPTURE_RESOLUTION } },
           }}
         >
           {/* F3 (21 May Ali) — sync LiveKit room presence into the store

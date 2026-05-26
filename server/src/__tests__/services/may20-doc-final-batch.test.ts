@@ -55,59 +55,41 @@ describe('May 20 doc — final batch (Issues 9, 10, 12, 13)', () => {
 
   // ─── Issue 10 — "Background does not persist between main and breakout" ──
   describe('Issue 10 — Background preference persists across main↔breakout', () => {
-    const helper = readClient('lib/bgPreference.ts');
+    // The persistence REQUIREMENT is unchanged; the implementation was rebuilt
+    // (27 May) into a shared hook + localStorage. These pins follow it there.
+    const pref = readClient('lib/bgPreference.ts');
+    const hook = readClient('hooks/useBackgroundEffects.ts');
     const lobby = readClient('features/live/Lobby.tsx');
     const videoRoom = readClient('features/live/VideoRoom.tsx');
 
-    it('shared bgPreference module exports save/load/apply', () => {
-      expect(helper).toMatch(/export\s+function\s+saveBgPreference/);
-      expect(helper).toMatch(/export\s+function\s+loadBgPreference/);
-      expect(helper).toMatch(/export\s+async\s+function\s+applyBgPreference/);
-      expect(helper).toMatch(/export\s+type\s+BgPreference/);
-      // Uses sessionStorage (tab-scoped) and the documented key.
-      expect(helper).toMatch(/sessionStorage/);
-      expect(helper).toMatch(/rsn_bg_preference/);
+    it('bgPreference persists to localStorage under the documented key', () => {
+      expect(pref).toMatch(/export\s+function\s+saveBgPreference/);
+      expect(pref).toMatch(/export\s+function\s+loadBgPreference/);
+      expect(pref).toMatch(/export\s+type\s+BgPreference/);
+      // localStorage so the choice also survives a refresh, not just a room hop.
+      expect(pref).toMatch(/localStorage/);
+      expect(pref).not.toMatch(/sessionStorage/);
+      expect(pref).toMatch(/rsn_bg_preference/);
     });
 
-    it('Lobby saves preference on preset click', () => {
-      // The picker onClick handler must persist after a successful apply
-      // so the same choice flows into VideoRoom on the next breakout.
-      expect(lobby).toMatch(/saveBgPreference\(\s*presetToPreference\(\s*preset\s*\)\s*\)/);
+    it('the shared hook re-applies the saved preference whenever the camera publishes', () => {
+      // This is what makes the effect survive main→breakout→main: load the
+      // persisted pref and re-apply it on the cameraReady signal; persist every
+      // change; and destroy the processor on unmount so no worker leaks per hop.
+      expect(hook).toMatch(/loadBgPreference\(\)/);
+      expect(hook).toMatch(/saveBgPreference\(/);
+      expect(hook).toMatch(/\}, \[localParticipant, cameraReady\]\);/);
+      expect(hook).toMatch(/p\.destroy/);
     });
 
-    it('Lobby re-applies the saved preference whenever the camera is enabled', () => {
-      // Issue 10 follow-up (21 May Stefan re-test) — the first fix used
-      // a one-shot ref guard that flipped to "applied" the moment the
-      // effect ran, BEFORE the camera track had published. The apply
-      // call no-op'd silently and the guard locked us out from
-      // retrying. The fix: drop the ref guard entirely; the dep array
-      // now depends on `hookCamEnabled` so the apply re-fires the
-      // instant the camera publishes (and every camera off→on toggle).
-      expect(lobby).toMatch(/loadBgPreference\(\)/);
-      expect(lobby).toMatch(/applyBgPreference\(\s*localParticipant\s*,\s*mod\s*,\s*pref\s*\)/);
-      // The dep array must include hookCamEnabled — that's the reactive
-      // signal that flips true when the local camera track is published.
-      expect(lobby).toMatch(/\}, \[localParticipant, hookCamEnabled\]\);/);
-      // The one-shot ref guard is GONE.
+    it('both rooms drive background through the shared hook (no divergent copies)', () => {
+      expect(lobby).toMatch(/useBackgroundEffects\(localParticipant, hookCamEnabled\)/);
+      expect(videoRoom).toMatch(/useBackgroundEffects\(localParticipant, hookCamEnabled\)/);
+      // picker persists by applying a preset → the hook saves it
+      expect(lobby).toMatch(/bg\.apply\(presetToPreference\(preset\)\)/);
+      // the old per-room inline apply + one-shot guard are gone
       expect(lobby).not.toMatch(/bgAutoAppliedRef/);
-    });
-
-    it('VideoRoom saves preference inside applyBackground', () => {
-      expect(videoRoom).toMatch(/saveBgPreference\(\s*videoRoomToPreference\(\s*mode\s*,\s*imagePath\s*\)\s*\)/);
-      // 'disabled' branch also saves so opting out persists.
-      expect(videoRoom).toMatch(/saveBgPreference\(\s*\{\s*mode:\s*['"`]disabled['"`]\s*\}\s*\)/);
-    });
-
-    it('VideoRoom re-applies the saved preference whenever the camera is enabled', () => {
-      // Same fix as Lobby — drop the one-shot ref, depend on
-      // `hookCamEnabled` so the apply re-runs once the breakout's
-      // camera track has actually published. This is the path that
-      // failed Stefan's main↔breakout re-test on 21 May.
-      expect(videoRoom).toMatch(/loadBgPreference\(\)/);
-      expect(videoRoom).toMatch(/applyBgPreference\(\s*localParticipant\s*,\s*mod\s*,\s*pref\s*\)/);
-      expect(videoRoom).toMatch(/isCameraEnabled:\s*hookCamEnabled/);
-      expect(videoRoom).toMatch(/\}, \[localParticipant, hookCamEnabled\]\);/);
-      expect(videoRoom).not.toMatch(/bgAutoAppliedRef/);
+      expect(videoRoom).not.toMatch(/videoRoomToPreference/);
     });
   });
 

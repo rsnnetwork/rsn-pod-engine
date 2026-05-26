@@ -3,42 +3,10 @@ import { useParams } from 'react-router-dom';
 import { useSessionStore } from '@/stores/sessionStore';
 import { formatTime } from '@/lib/utils';
 import { Video, Clock, Mic, MicOff, VideoOff, Wifi, UserX, ArrowLeft, Sparkles } from 'lucide-react';
-import { BACKGROUND_EFFECTS_ENABLED } from '@/lib/featureFlags';
-// Lazy-load track processors (may not be available in all environments)
-let _bgBlur: any = null;
-let _vBg: any = null;
-let _bgLoaded = false;
-async function loadBgProcessors() {
-  if (_bgLoaded) return { BackgroundBlur: _bgBlur, VirtualBackground: _vBg };
-  try {
-    const mod = await import(/* @vite-ignore */ '@livekit/track-processors');
-    _bgBlur = mod.BackgroundBlur;
-    _vBg = mod.VirtualBackground;
-    _bgLoaded = true;
-    return { BackgroundBlur: _bgBlur, VirtualBackground: _vBg };
-  } catch { return null; }
-}
+import { useBackgroundEffects } from '@/hooks/useBackgroundEffects';
+import { BackgroundPanel } from './BackgroundPanel';
+import { BG_CAPTURE_RESOLUTION } from '@/lib/backgroundEffects';
 import { getSocket, disconnectSocket } from '@/lib/socket';
-import {
-  saveBgPreference,
-  loadBgPreference,
-  applyBgPreference,
-  type BgPreference,
-} from '@/lib/bgPreference';
-
-// Map the VideoRoom internal (mode, imagePath) shape to the shared
-// BgPreference shape and back (Issue 10 — persists across main↔breakout).
-function videoRoomToPreference(mode: string, imagePath?: string): BgPreference {
-  if (mode === 'background-blur') return { mode: 'blur' };
-  if (mode === 'virtual-background' && imagePath) return { mode: 'image', imageUrl: imagePath };
-  return { mode: 'disabled' };
-}
-
-function preferenceToVideoRoomBgMode(pref: BgPreference): string {
-  if (pref.mode === 'blur') return 'background-blur';
-  if (pref.mode === 'image') return `virtual-background:${pref.imageUrl}`;
-  return 'disabled';
-}
 import {
   LiveKitRoom,
   VideoTrack,
@@ -388,15 +356,6 @@ const VideoStage = memo(function VideoStage() {
   );
 });
 
-const BG_PRESETS = [
-  { label: 'None', mode: 'disabled' as const, preview: null },
-  { label: 'Blur', mode: 'background-blur' as const, preview: null },
-  { label: 'Office', mode: 'virtual-background' as const, preview: 'https://images.unsplash.com/photo-1497366216548-37526070297c?w=400&q=80', image: 'https://images.unsplash.com/photo-1497366216548-37526070297c?w=1280&q=80' },
-  { label: 'Nature', mode: 'virtual-background' as const, preview: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=400&q=80', image: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=1280&q=80' },
-  { label: 'City', mode: 'virtual-background' as const, preview: 'https://images.unsplash.com/photo-1480714378408-67cf0d13bc1b?w=400&q=80', image: 'https://images.unsplash.com/photo-1480714378408-67cf0d13bc1b?w=1280&q=80' },
-  { label: 'Abstract', mode: 'virtual-background' as const, preview: 'https://images.unsplash.com/photo-1557683316-973673baf926?w=400&q=80', image: 'https://images.unsplash.com/photo-1557683316-973673baf926?w=1280&q=80' },
-];
-
 // Bug 8.7 (April 19) — memo'd. MediaControls has its own internal state
 // (mic/cam/bg toggles) and doesn't depend on parent props. Memoization
 // stops the toolbar from re-rendering on every timer tick.
@@ -404,63 +363,16 @@ const MediaControls = memo(function MediaControls() {
   const { localParticipant, isCameraEnabled: hookCamEnabled } = useLocalParticipant();
   const [micEnabled, setMicEnabled] = useState(true);
   const [camEnabled, setCamEnabled] = useState(true);
-  // Issue 10 — restore the user's last bg choice for the UI highlight.
-  // The actual processor is (re-)applied by the mount effect below once
-  // the local camera track is ready.
-  const [bgMode, setBgMode] = useState<string>(() => {
-    const saved = loadBgPreference();
-    return saved ? preferenceToVideoRoomBgMode(saved) : 'disabled';
-  });
   const [showBgPanel, setShowBgPanel] = useState(false);
-  const processorRef = useRef<any>(null);
+  // All background-effect lifecycle (capability, persist-across-rooms,
+  // degrade-then-disable, destroy-on-unmount) lives in this shared hook.
+  const bg = useBackgroundEffects(localParticipant, hookCamEnabled);
 
   useEffect(() => {
     if (localParticipant) {
       setCamEnabled(localParticipant.isCameraEnabled);
     }
   }, [localParticipant]);
-
-  // Issue 10 (21 May Stefan re-test) — re-apply the persisted background
-  // every time the camera is published (every breakout join, every
-  // breakout↔lobby round trip, even camera toggle off→on). The first
-  // fix (cc09a19) had a one-shot guard that flipped to "applied" the
-  // moment the effect ran — but `useLocalParticipant()` returns a
-  // localParticipant ref BEFORE the camera track publishes, so the
-  // apply call saw an empty trackPublications, returned silently, and
-  // the guard locked us out from retrying. The guard is gone; instead
-  // the dep array now also depends on `isCameraEnabled`, which is the
-  // reactive hook value that flips true exactly when LiveKit has a
-  // published, unmuted local camera track. setProcessor is idempotent
-  // (it stopProcessor first) so re-runs are safe.
-  useEffect(() => {
-    if (!BACKGROUND_EFFECTS_ENABLED) return; // background effects disabled for events
-    if (!localParticipant || !hookCamEnabled) return;
-    const pref = loadBgPreference();
-    if (!pref || pref.mode === 'disabled') return;
-    let cancelled = false;
-    (async () => {
-      const mod = await loadBgProcessors();
-      if (cancelled || !mod) return;
-      await applyBgPreference(localParticipant, mod, pref);
-    })();
-    return () => { cancelled = true; };
-  }, [localParticipant, hookCamEnabled]);
-
-  // #7 (25 May Stefan) — dispose the background processor on unmount. Each
-  // breakout join/leave previously ORPHANED the processor: its WASM/GPU
-  // worker kept running on the detached camera track because nothing stopped
-  // it when MediaControls unmounted. After a few room transitions the
-  // accumulated workers exhausted memory and crashed the tab (the
-  // "background-change crash"). ProcessorWrapper.destroy() releases the
-  // underlying transformer/worker. Re-apply on the next room mounts a fresh
-  // one, so there is exactly one live processor at a time.
-  useEffect(() => {
-    return () => {
-      const p = processorRef.current;
-      processorRef.current = null;
-      if (p?.destroy) { Promise.resolve(p.destroy()).catch(() => {}); }
-    };
-  }, []);
 
   const toggleMic = useCallback(async () => {
     await localParticipant.setMicrophoneEnabled(!micEnabled);
@@ -490,64 +402,6 @@ const MediaControls = memo(function MediaControls() {
     }
   }, [localParticipant, camEnabled]);
 
-  const applyBackground = useCallback(async (mode: string, imagePath?: string) => {
-    try {
-      const mod = await loadBgProcessors();
-      if (!mod) { console.error('Background processors not available'); return; }
-      // T2-6 (Issue 15) — fix Track.Source enum mismatch. Pre-fix:
-      // `p.source === 'camera'` compared the Track.Source enum value to a
-      // raw string, which never matched, so camPub was always undefined
-      // and the blur silently no-op'd. Now uses Track.Source.Camera enum
-      // properly (Track is already imported from 'livekit-client').
-      const camPub = Array.from(localParticipant.trackPublications.values()).find(p => p.source === Track.Source.Camera);
-      const camTrack = camPub?.track;
-      if (!camTrack) return;
-
-      if (mode === 'disabled') {
-        await (camTrack as any).stopProcessor?.();
-        processorRef.current = null;
-        setBgMode('disabled');
-        saveBgPreference({ mode: 'disabled' });
-        return;
-      }
-
-      // Stop existing processor first
-      await (camTrack as any).stopProcessor?.();
-
-      if (mode === 'background-blur') {
-        // T2-6: bumped strength 10 → 25 for visible effect (10 was so light
-        // users perceived no blur even when wired correctly).
-        const processor = mod.BackgroundBlur(25);
-        await (camTrack as any).setProcessor(processor);
-        processorRef.current = processor;
-      } else if (mode === 'virtual-background' && imagePath) {
-        const processor = mod.VirtualBackground(imagePath);
-        await (camTrack as any).setProcessor(processor);
-        processorRef.current = processor;
-      }
-      setBgMode(mode + (imagePath ? ':' + imagePath : ''));
-      // Issue 10 — persist so the same choice survives leaving/re-
-      // entering this breakout and the trip back to the lobby.
-      saveBgPreference(videoRoomToPreference(mode, imagePath));
-    } catch (err) {
-      console.error('Background effect failed:', err);
-    }
-  }, [localParticipant]);
-
-  const handleCustomUpload = useCallback(async () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*';
-    input.onchange = async (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) return;
-      const url = URL.createObjectURL(file);
-      await applyBackground('virtual-background', url);
-      setShowBgPanel(false);
-    };
-    input.click();
-  }, [applyBackground]);
-
   return (
     <div className="flex items-center gap-3 relative">
       <button onClick={toggleMic}
@@ -558,48 +412,21 @@ const MediaControls = memo(function MediaControls() {
         className={`p-2 rounded-full transition-colors ${camEnabled ? 'bg-gray-200 hover:bg-gray-300 text-gray-700' : 'bg-red-100 text-red-500 hover:bg-red-200'}`}>
         {camEnabled ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
       </button>
-      {BACKGROUND_EFFECTS_ENABLED && (
+      {bg.supported && (
         <button onClick={() => setShowBgPanel(!showBgPanel)} title="Background effects"
-          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium transition-colors ${bgMode !== 'disabled' ? 'bg-indigo-500/80 text-white' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}>
+          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium transition-colors ${bg.current.mode !== 'disabled' ? 'bg-indigo-500/80 text-white' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}>
           <Sparkles className="h-4 w-4" />
           BG
         </button>
       )}
 
-      {/* Background effects panel */}
-      {showBgPanel && (
-        <div className="absolute top-full left-0 mt-2 bg-white rounded-xl shadow-xl border border-gray-200 p-3 w-56 sm:w-72 max-w-[calc(100vw-2rem)] z-50">
-          <p className="text-xs font-semibold text-gray-500 uppercase mb-2">Background Effects</p>
-          <div className="grid grid-cols-3 gap-2">
-            {BG_PRESETS.map(preset => (
-              <button key={preset.label}
-                onClick={() => { applyBackground(preset.mode, preset.image); if (preset.mode === 'disabled') setBgMode('disabled'); setShowBgPanel(false); }}
-                className={`rounded-lg border-2 overflow-hidden transition-all ${
-                  (preset.mode === 'disabled' && bgMode === 'disabled') || bgMode.includes(preset.image || '__none__')
-                    ? 'border-rsn-red ring-2 ring-rsn-red/30' : 'border-gray-200 hover:border-gray-400'
-                }`}>
-                {preset.preview ? (
-                  <img src={preset.preview} alt={preset.label} className="w-full h-14 object-cover" />
-                ) : (
-                  <div className={`w-full h-14 flex items-center justify-center text-xs font-medium ${
-                    preset.mode === 'disabled' ? 'bg-gray-100 text-gray-500' : 'bg-indigo-50 text-indigo-600'
-                  }`}>
-                    {preset.label}
-                  </div>
-                )}
-                <p className="text-[10px] text-gray-500 py-0.5 text-center">{preset.label}</p>
-              </button>
-            ))}
-            {/* Custom upload */}
-            <button onClick={() => { handleCustomUpload(); }}
-              className="rounded-lg border-2 border-dashed border-gray-300 hover:border-gray-400 transition-all">
-              <div className="w-full h-14 flex items-center justify-center text-xs font-medium text-gray-400">
-                + Upload
-              </div>
-              <p className="text-[10px] text-gray-400 py-0.5 text-center">Custom</p>
-            </button>
-          </div>
-        </div>
+      {showBgPanel && bg.supported && (
+        <BackgroundPanel
+          current={bg.current}
+          degraded={bg.degraded}
+          onApply={bg.apply}
+          onClose={() => setShowBgPanel(false)}
+        />
       )}
     </div>
   );
@@ -769,7 +596,7 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
       video={true}
       audio={true}
       options={{
-        videoCaptureDefaults: { resolution: { width: 1280, height: 720, frameRate: 30 } },
+        videoCaptureDefaults: { resolution: { ...BG_CAPTURE_RESOLUTION } },
       }}
       onConnected={() => {
         // T0-2 (Issue 7) — confirm LiveKit room membership to the server so
