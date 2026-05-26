@@ -277,14 +277,28 @@ describe('Identity Service', () => {
         .rejects.toThrow('Invalid magic link');
     });
 
-    it('should throw when magic link has already been used', async () => {
+    it('should throw when a link was used beyond the reuse grace window', async () => {
+      // used 5 minutes ago — well past the ~2-min grace → genuinely stale reuse.
       mockQuery.mockResolvedValueOnce({
-        rows: [{ id: 'ml-1', email: 'test@example.com', expires_at: new Date(Date.now() + 60000), used_at: new Date() }],
+        rows: [{ id: 'ml-1', email: 'test@example.com', expires_at: new Date(Date.now() + 60000), used_at: new Date(Date.now() - 5 * 60 * 1000) }],
         rowCount: 1,
       });
 
       await expect(identityService.verifyMagicLink('some-token'))
         .rejects.toThrow('already been used');
+    });
+
+    it('should RE-VERIFY a link used within the grace window (corporate scanner pre-fetch / double-click)', async () => {
+      mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+      mockQuery
+        // magic_links row — used 30s ago (within grace), not expired
+        .mockResolvedValueOnce({ rows: [{ id: 'ml-1', email: 'test@example.com', expires_at: new Date(Date.now() + 60 * 60 * 1000), used_at: new Date(Date.now() - 30 * 1000) }], rowCount: 1 })
+        // getUserByEmail → existing user (so no createUser chain)
+        .mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 });
+
+      const result = await identityService.verifyMagicLink('some-token');
+      expect(result.accessToken).toBeDefined();
+      expect(result.refreshToken).toBeDefined();
     });
 
     it('should throw when magic link has expired', async () => {
@@ -295,6 +309,26 @@ describe('Identity Service', () => {
 
       await expect(identityService.verifyMagicLink('some-token'))
         .rejects.toThrow('expired');
+    });
+
+    it('should create the user + issue tokens for a NEW email with no verify-time registration gate (shared-invite signup)', async () => {
+      // The fix: a fresh link for a never-seen email must NOT be re-gated at verify
+      // (the send-time gate already permitted it via the shared invite). On the old
+      // code this threw "Registration requires…"; now it creates the user.
+      mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 'ml-1', email: 'newcomer@eideticdigital.com', expires_at: new Date(Date.now() + 60 * 60 * 1000), used_at: null }], rowCount: 1 }) // 1 SELECT magic_links
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 2 UPDATE used_at
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 3 getUserByEmail (verify) → null
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 4 getUserByEmail (createUser) → null
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 5 INSERT users
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 6 INSERT subscription
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 7 INSERT entitlements
+        .mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 }); // 8 getUserById → created user
+
+      const result = await identityService.verifyMagicLink('some-token');
+      expect(result.accessToken).toBeDefined();
+      // crucially: it did NOT throw the registration gate
     });
   });
 
