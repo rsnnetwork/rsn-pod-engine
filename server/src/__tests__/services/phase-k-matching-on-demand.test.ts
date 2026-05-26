@@ -69,13 +69,14 @@ describe('Phase K — matching on-demand + late-joiner correctness', () => {
       // The Phase 2.5B optimisation — skip the engine when the pre-plan is
       // still accurate — is retained. We pin the early-return path uses
       // sendMatchPreview and exits without re-running the engine.
-      // 23 May (#10) — the fresh-pre-plan early return is now also gated on the
-      // plan not repeating a prior round (an earlier-round swap can stale it).
-      expect(fn).toMatch(/if\s*\(\s*sameMembers\s*&&\s*!planRepeatsPriorRound\s*\)/);
+      // 23 May (#10) — also gated on the plan not repeating a prior round.
+      // 26 May (#A) — and gated off for platform_wide (the pre-plan lacks the
+      // cross-event hard-exclusion), via canSurfacePrePlan.
+      expect(fn).toMatch(/canSurfacePrePlan\s*=\s*sameMembers\s*&&\s*!planRepeatsPriorRound\s*&&\s*matchingPolicy\s*!==\s*'platform_wide'/);
       // The "no engine re-run" log message marks the fresh-pre-plan branch.
       expect(fn).toMatch(/no\s+engine\s+re-run/i);
       // sendMatchPreview is called in this branch (and the legacy path).
-      const sameMembersIdx = fn.indexOf('if (sameMembers && !planRepeatsPriorRound)');
+      const sameMembersIdx = fn.indexOf('if (canSurfacePrePlan)');
       const fallthroughIdx = fn.indexOf('Phase K / #10 — pre-plan stale');
       expect(sameMembersIdx).toBeGreaterThan(-1);
       expect(fallthroughIdx).toBeGreaterThan(sameMembersIdx);

@@ -367,7 +367,19 @@ export async function handleHostGenerateMatches(
         arrangementPairKeys(existingPlanned.filter(m => m.status === 'scheduled'))
           .some(k => priorKeys.has(k));
 
-      if (sameMembers && !planRepeatsPriorRound) {
+      // #A (26 May, Ali) — platform_wide must NEVER surface the pre-plan. The
+      // pre-plan (generateSessionSchedule) does NOT apply the cross-event HARD
+      // exclusion that the live engine (generateSingleRound) does, so it can
+      // surface "Met 1×" pairs that Re-match (live) would exclude — the exact
+      // "met first, fresh on re-match" Ali saw. Route platform_wide through the
+      // regenerate path so "Match People" runs the live engine with the same
+      // relaxable cross-event exclusion + fallback ladder, fresh on the first
+      // click. (within_event/none load no cross-event history, so the pre-plan
+      // is already correct for them — keep their instant-surface path.)
+      const matchingPolicy = matchingService.resolveMatchingPolicy(activeSession.config);
+      const canSurfacePrePlan = sameMembers && !planRepeatsPriorRound && matchingPolicy !== 'platform_wide';
+
+      if (canSurfacePrePlan) {
         logger.info(
           {
             sessionId: data.sessionId,

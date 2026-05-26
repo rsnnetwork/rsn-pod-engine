@@ -63,7 +63,13 @@ interface Stats {
 interface Props { sessionId: string; }
 
 function InterestBadge({ connection }: { connection: Connection }) {
-  if (connection.mutualMeetAgain) {
+  // "Mutual interest" on a per-round recap row must reflect THIS event: both
+  // people rated meet-again here. `connection.mutualMeetAgain` is the LIFETIME
+  // encounter_history.mutual_meet_again (true from a PRIOR event), so using it
+  // showed "Mutual interest" on rows even when this event had 0 mutual matches
+  // (Ali, 26 May). The DM/Message gate below intentionally stays on the lifetime
+  // flag; only this visual badge moves to the this-event signal.
+  if (connection.meetAgain && connection.theirMeetAgain) {
     return (
       <div className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-600 font-medium">
         <Handshake className="h-3 w-3 text-indigo-500" />

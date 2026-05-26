@@ -148,6 +148,7 @@ export default function RatingPrompt(props: Props) {
   const currentPartners = useSessionStore(s => s.currentPartners);
   const currentRound = useSessionStore(s => s.currentRound);
   const totalRounds = useSessionStore(s => s.totalRounds);
+  const ratedMatchIds = useSessionStore(s => s.ratedMatchIds);
   const { setPhase } = useSessionStore.getState();
   const { addToast } = useToastStore();
   const [currentPartnerIdx, setCurrentPartnerIdx] = useState(0);
@@ -159,6 +160,13 @@ export default function RatingPrompt(props: Props) {
     : currentMatch ? [currentMatch] : [];
 
   const noMatchData = !currentMatchId || partners.length === 0;
+  // #C (26 May, live-test-3) — this match was already fully rated/skipped (it's
+  // in ratedMatchIds). The #2 guard covered the rating:window_open path, but
+  // session:round_ended sets phase='rating' DIRECTLY for everyone, re-showing
+  // the form for a pulled-out pair who already rated (Ali: "I press End Round
+  // and they have to rate again"). Match-keyed, so a GENUINE re-match (new
+  // matchId, not in the set) still prompts normally.
+  const alreadySettledMatch = !!currentMatchId && ratedMatchIds.has(currentMatchId);
   const isLastRound = currentRound >= totalRounds && totalRounds > 0;
   const isLastPartner = currentPartnerIdx >= partners.length - 1;
   const allDone = currentPartnerIdx >= partners.length && submissionState === null;
@@ -195,7 +203,19 @@ export default function RatingPrompt(props: Props) {
     }
   }, [allDone, setPhase, currentRound, currentMatchId]);
 
+  // #C (26 May) — if we were dropped into the rating phase for a match we've
+  // already settled (e.g. End Round broadcasting session:round_ended after a
+  // pulled-out pair already rated), leave straight back to the lobby instead of
+  // re-showing the form.
+  useEffect(() => {
+    if (alreadySettledMatch && !hasRedirected.current) {
+      hasRedirected.current = true;
+      setPhase('lobby');
+    }
+  }, [alreadySettledMatch, setPhase]);
+
   if (noMatchData) return null;
+  if (alreadySettledMatch) return null;
   if (allDone) return null;
 
   // Show the brief confirmation after submitting a rating

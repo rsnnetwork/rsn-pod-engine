@@ -79,7 +79,10 @@ function MessagePartnerButton({ userId, displayName }: { userId: string; display
 }
 
 function InterestBadge({ connection }: { connection: Connection }) {
-  if (connection.mutualMeetAgain) {
+  // This-event mutual interest (both rated meet-again here), NOT the lifetime
+  // encounter_history.mutual_meet_again — otherwise the badge shows on a recap
+  // that reports 0 mutual matches (Ali, 26 May). DM gate below stays lifetime.
+  if (connection.meetAgain && connection.theirMeetAgain) {
     return (
       <div className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-rsn-red/10 border border-rsn-red/20 text-rsn-red font-medium">
         <Handshake className="h-3 w-3 text-indigo-500" />
