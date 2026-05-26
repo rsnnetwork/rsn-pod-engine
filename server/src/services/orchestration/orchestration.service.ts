@@ -134,6 +134,10 @@ export function initOrchestration(socketServer: SocketServer): void {
     transitionToRound: (ioServer, sessionId, roundNumber) => transitionToRound(ioServer, sessionId, roundNumber),
     completeSession: (ioServer, sessionId) => completeSession(ioServer, sessionId),
     endRound: (ioServer, sessionId, roundNumber) => endRound(ioServer, sessionId, roundNumber),
+    // #4 (26 May) — direct (non-guard-wrapped) endRatingWindow for host
+    // force-advance from ROUND_RATING. Host handlers already hold the session
+    // guard, so they must NOT use the guard-wrapped timerCallbacks variant.
+    endRatingWindow: (ioServer, sessionId, roundNumber) => endRatingWindow(ioServer, sessionId, roundNumber),
     emitHostDashboard: (sessionId) => emitHostDashboard(io, sessionId),
     // Bug 68 (18 May Stefan) — coalesce-bypass for cohost promote/demote.
     emitHostDashboardForce: (sessionId) => emitHostDashboardForce(io, sessionId),

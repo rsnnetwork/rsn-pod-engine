@@ -691,14 +691,19 @@ export async function endRound(
       await transitionParticipant(sessionId, userId, ParticipantState.IN_MAIN_ROOM);
     }
 
-    // Generous safety-net backstop — fires endRatingWindow if stragglers never
-    // finish. Fixed at 180 s so slow raters are never cut off mid-form.
+    // Safety-net backstop — fires endRatingWindow if stragglers never finish.
     // No timer:sync is broadcast: the client shows no countdown during rating.
-    // The primary advance path is checkAllRatingsCompleteByUserId (all-rated
-    // early-close, participant-flow.ts) which clears this timer before it fires.
-    // clearSessionTimers() (called by endRatingWindow and session teardown)
-    // cancels it the same way as a startSegmentTimer-based timer.
-    const RATING_BACKSTOP_MS = 180_000;
+    // The primary advance path is the all-rated early-close
+    // (checkAllRatingsCompleteByUserId, participant-flow.ts) OR the host
+    // force-advance (handleHostStartRound / handleHostEnd from ROUND_RATING),
+    // both of which close the window before this fires. clearSessionTimers()
+    // (called by endRatingWindow and session teardown) cancels it the same way
+    // as a startSegmentTimer-based timer.
+    // #4 (26 May live test) — lowered 180 s → 90 s. The robust early-close now
+    // accounts for skips / leavers / re-match churn (so it actually fires), and
+    // the host has an escape hatch; 90 s is a safer ceiling so a stuck state
+    // self-heals roughly twice as fast while still leaving slow raters time.
+    const RATING_BACKSTOP_MS = 90_000;
     clearSessionTimers(sessionId);
     activeSession.timerEndsAt = new Date(Date.now() + RATING_BACKSTOP_MS);
     activeSession.timer = setTimeout(() => {

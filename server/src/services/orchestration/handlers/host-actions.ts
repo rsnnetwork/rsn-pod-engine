@@ -42,6 +42,12 @@ import { E } from '../../../realtime/entities';
 let _transitionToRound: ((io: SocketServer, sessionId: string, roundNumber: number) => Promise<void>) | null = null;
 let _completeSession: ((io: SocketServer, sessionId: string) => Promise<void>) | null = null;
 let _endRound: ((io: SocketServer, sessionId: string, roundNumber: number) => Promise<void>) | null = null;
+// #4 (26 May live test) — DIRECT (non-guard-wrapped) endRatingWindow for the
+// host force-advance path. Host handlers already run inside withSessionGuard,
+// so they MUST use the direct lifecycle fns (like _endRound / _transitionToRound
+// above) — the guard-wrapped timerCallbacks.endRatingWindow would re-acquire the
+// same session lock and deadlock.
+let _endRatingWindow: ((io: SocketServer, sessionId: string, roundNumber: number) => Promise<void>) | null = null;
 let _emitHostDashboard: ((sessionId: string) => Promise<void>) | null = null;
 // Bug 68 (18 May Stefan) — coalesce-bypass variant for cohost promote/
 // demote paths. The standard emitHostDashboard has a 1-second coalesce
@@ -60,6 +66,8 @@ export function injectHostActionDeps(deps: {
   transitionToRound: (io: SocketServer, sessionId: string, roundNumber: number) => Promise<void>;
   completeSession: (io: SocketServer, sessionId: string) => Promise<void>;
   endRound: (io: SocketServer, sessionId: string, roundNumber: number) => Promise<void>;
+  // #4 (26 May) — direct endRatingWindow for the host force-advance path.
+  endRatingWindow: (io: SocketServer, sessionId: string, roundNumber: number) => Promise<void>;
   emitHostDashboard: (sessionId: string) => Promise<void>;
   // Bug 68 (18 May Stefan) — force variant for host-action-triggered
   // emits that must not be coalesced.
@@ -70,6 +78,7 @@ export function injectHostActionDeps(deps: {
   _transitionToRound = deps.transitionToRound;
   _completeSession = deps.completeSession;
   _endRound = deps.endRound;
+  _endRatingWindow = deps.endRatingWindow;
   _emitHostDashboard = deps.emitHostDashboard;
   _emitHostDashboardForce = deps.emitHostDashboardForce || null;
   _timerCallbacks = deps.timerCallbacks;
@@ -403,6 +412,28 @@ export async function handleHostStartRound(
       return;
     }
 
+    // #4 (26 May live test) — host force-advance from a stuck ROUND_RATING.
+    // If the all-rated early-close never fired (skips / leavers / re-match
+    // churn inflating the expected count), the host's "Start Round" / "Next
+    // Round" click must still advance. Close the rating window first — that
+    // transitions ROUND_RATING → ROUND_TRANSITION (the round was not the last,
+    // else the host would be in CLOSING_LOBBY) — then fall through to the
+    // normal start-round flow, which already accepts ROUND_TRANSITION. The
+    // normal ROUND_TRANSITION → start path is untouched.
+    if (activeSession.status === SessionStatus.ROUND_RATING) {
+      if (_endRatingWindow) {
+        logger.info({ sessionId: data.sessionId, roundNumber: activeSession.currentRound },
+          '#4 — host force-advance: closing rating window before starting next round');
+        // Direct (non-guard-wrapped) call — we already hold the session guard.
+        await _endRatingWindow(io, data.sessionId, activeSession.currentRound);
+      } else {
+        logger.error({ sessionId: data.sessionId },
+          'endRatingWindow not injected — cannot force-advance from rating');
+        socket.emit('error', { code: 'INTERNAL_ERROR', message: 'Cannot advance from rating right now' });
+        return;
+      }
+    }
+
     // Allow starting round from lobby, transition, or closing_lobby (dynamic round extension)
     if (
       activeSession.status !== SessionStatus.LOBBY_OPEN &&
@@ -651,6 +682,29 @@ export async function handleHostEnd(
       // which in turn calls endRatingWindow() → multi-round transition logic
       await _endRound(io, data.sessionId, activeSession.currentRound);
       logger.info({ sessionId: data.sessionId }, 'Host ended active round — rating window started, normal flow continues');
+      return;
+    }
+
+    // #4 (26 May live test) — host pressed End Round / End Event while the
+    // session is already in ROUND_RATING (round over, ratings in progress) and
+    // the all-rated early-close never fired. Don't drop straight into
+    // completeSession (that would skip finalizeRoundRatings + the proper
+    // transition); close the rating window through the normal path instead.
+    // With endEvent the endRequested flag makes endRatingWindow complete the
+    // event in one press (same one-press semantics as the #11 ROUND_ACTIVE
+    // path); a plain End Round just advances to ROUND_TRANSITION / closing.
+    if (activeSession && activeSession.status === SessionStatus.ROUND_RATING) {
+      if (data.endEvent) activeSession.endRequested = true;
+      if (!_endRatingWindow) {
+        logger.error({ sessionId: data.sessionId },
+          'endRatingWindow not injected — cannot end rating window');
+        socket.emit('error', { code: 'INTERNAL_ERROR', message: 'Rating window end not available' });
+        return;
+      }
+      logger.info({ sessionId: data.sessionId, endEvent: !!data.endEvent },
+        '#4 — host ended during rating: closing rating window');
+      // Direct (non-guard-wrapped) call — we already hold the session guard.
+      await _endRatingWindow(io, data.sessionId, activeSession.currentRound);
       return;
     }
 

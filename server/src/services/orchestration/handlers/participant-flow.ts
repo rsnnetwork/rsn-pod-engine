@@ -1054,9 +1054,33 @@ export async function notifyRatingSubmitted(userId: string): Promise<void> {
 
 /**
  * After each rating submission, check if all participants in the current round
- * have finished rating. If so, cancel the rating window timer and advance immediately.
+ * have finished rating. If so, cancel the rating window timer and advance early.
+ *
+ * #4 (26 May live test, "stuck at rating") — the pre-fix version computed
+ *   expectedRatings = Σ pCount*(pCount-1) over the round's completed matches
+ * and compared it to a raw COUNT(*) of ratings. That assumed EVERY participant
+ * rates EVERY partner, which is wrong whenever a round has any of:
+ *   - skips    — a Skip records no `ratings` row (it's tracked in
+ *                activeSession.ratingSkips as `${userId}:${matchId}`),
+ *   - leavers  — a participant who left isn't going to rate at all,
+ *   - re-match dupes — a churned round has BOTH the superseded match
+ *                (status 'reassigned') AND the new match in this round, so the
+ *                naive sum over-counts (it expected ratings for the dead pair).
+ * Any of these made totalRatings < expectedRatings forever → the early-close
+ * never fired → the event sat on the 180/90s silent backstop ("stuck").
+ *
+ * Robust rule: a participant is "done" for the round when, for every partner in
+ * their LATEST (most-recently-created, non-superseded) match this round, they
+ * have EITHER submitted a rating OR skipped it. We only require this of
+ * participants who are still PRESENT (presenceMap) — leavers never block. Each
+ * participant is counted against their latest match only, so a re-match's
+ * superseded match never inflates the requirement. Close (3s grace →
+ * endRatingWindow) once every present, rated-eligible participant is done.
+ *
+ * Exported for the #4 behavioral test suite (stuck-at-rating.test.ts); the
+ * production entry points are handleRatingSubmit and notifyRatingSubmitted.
  */
-async function checkAllRatingsCompleteByUserId(userId: string): Promise<void> {
+export async function checkAllRatingsCompleteByUserId(userId: string): Promise<void> {
   try {
     // Find which session this user is in
     let sessionId: string | null = null;
@@ -1072,38 +1096,76 @@ async function checkAllRatingsCompleteByUserId(userId: string): Promise<void> {
 
     const roundNumber = activeSession.currentRound;
 
-    // Get all matches for this round
+    // Ratable real-conversation matches for this round. 'reassigned' is included
+    // because a superseded match was a real (brief) meeting that may carry a
+    // rating — but we only ever require the LATEST match per participant below,
+    // so a stale 'reassigned' pair can never *block* the close.
     const matches = await matchingService.getMatchesByRound(sessionId, roundNumber);
-    const completedMatches = matches.filter(m => m.status === 'completed' || m.status === 'no_show');
+    const ratable = matches.filter(
+      m => m.status === 'completed' || m.status === 'reassigned' ||
+           m.status === 'active' || m.status === 'no_show'
+    );
+    if (ratable.length === 0) return;
 
-    // Collect all participant IDs who need to rate
-    const participantIds = new Set<string>();
-    for (const m of completedMatches) {
-      participantIds.add(m.participantAId);
-      participantIds.add(m.participantBId);
-      if (m.participantCId) participantIds.add(m.participantCId);
+    // For each participant, find their LATEST match this round (max createdAt).
+    // getMatchesByRound returns rows ORDER BY created_at, so a later row wins
+    // ties; we compare createdAt defensively in case ordering ever changes.
+    const latestMatchFor = new Map<string, typeof ratable[number]>();
+    const participantsOf = (m: typeof ratable[number]): string[] => {
+      const ids = [m.participantAId, m.participantBId];
+      if (m.participantCId) ids.push(m.participantCId);
+      return ids.filter((id): id is string => !!id);
+    };
+    for (const m of ratable) {
+      for (const pid of participantsOf(m)) {
+        const cur = latestMatchFor.get(pid);
+        if (!cur || new Date(m.createdAt).getTime() >= new Date(cur.createdAt).getTime()) {
+          latestMatchFor.set(pid, m);
+        }
+      }
     }
 
-    // Count how many ratings exist for this round
-    const ratingCountResult = await query<{ count: string }>(
-      `SELECT COUNT(*)::text AS count FROM ratings r
-       JOIN matches m ON r.match_id = m.id
-       WHERE m.session_id = $1 AND m.round_number = $2`,
+    // The set of (rater → partner) rating edges that exist this round. Keyed on
+    // the partner (not the match id) so a rating filed under a superseded match
+    // after a reassign still counts toward the rater's latest-match partner.
+    const edgeResult = await query<{ from_user_id: string; to_user_id: string }>(
+      `SELECT DISTINCT r.from_user_id, r.to_user_id
+         FROM ratings r
+         JOIN matches m ON m.id = r.match_id
+        WHERE m.session_id = $1 AND m.round_number = $2`,
       [sessionId, roundNumber]
     );
-    const totalRatings = parseInt(ratingCountResult.rows[0]?.count || '0', 10);
+    const ratedEdges = new Set(edgeResult.rows.map(r => `${r.from_user_id}:${r.to_user_id}`));
+    const skips = activeSession.ratingSkips ?? new Set<string>();
 
-    // Each participant rates each partner: pairs = 2 ratings, trios = 6 ratings
-    let expectedRatings = 0;
-    for (const m of completedMatches) {
-      const pCount = m.participantCId ? 3 : 2;
-      expectedRatings += pCount * (pCount - 1); // each rates each other
+    // A present participant is "done" when, for their latest match, they have
+    // rated OR skipped every partner. Leavers (absent from presenceMap) are not
+    // required and never block. The host is never a rating participant.
+    let anyPresentEligible = false;
+    let allPresentDone = true;
+    for (const [pid, m] of latestMatchFor) {
+      if (!activeSession.presenceMap.has(pid)) continue; // leaver — does not block
+      // endRound opens the rating form ONLY for 'completed' matches. A latest
+      // match that is no_show (partner never connected) — or active/reassigned,
+      // which never get a round-end form either — gives this participant
+      // nothing to rate, so it cannot make them "owe" a rating. Don't require
+      // it (else a present no-show partner would block the close forever).
+      if (m.status !== 'completed') continue;
+      const partners = participantsOf(m).filter(id => id !== pid);
+      if (partners.length === 0) continue; // solo (partner(s) gone before pairing) — nothing to rate
+      anyPresentEligible = true;
+      if (skips.has(`${pid}:${m.id}`)) continue; // explicit Skip closes this match for pid
+      const done = partners.every(partnerId => ratedEdges.has(`${pid}:${partnerId}`));
+      if (!done) { allPresentDone = false; break; }
     }
 
-    if (totalRatings >= expectedRatings && expectedRatings > 0) {
-      logger.info({ sessionId, roundNumber, totalRatings, expectedRatings }, 'All ratings submitted — ending rating window early');
+    if (anyPresentEligible && allPresentDone) {
+      logger.info(
+        { sessionId, roundNumber, edges: ratedEdges.size, skips: skips.size },
+        'All ratings submitted — ending rating window early'
+      );
 
-      // Cancel the existing round timer
+      // Cancel the existing round timer (the silent backstop)
       if (activeSession.timer) {
         clearTimeout(activeSession.timer);
         activeSession.timer = null;
@@ -1113,9 +1175,12 @@ async function checkAllRatingsCompleteByUserId(userId: string): Promise<void> {
       // 3-second grace period: allow in-flight rating submissions to land
       // before advancing. This prevents race conditions where the last
       // rating triggers early-exit while another user is mid-submission.
+      const sid = sessionId;
+      const rn = roundNumber;
       activeSession.timer = setTimeout(() => {
-        activeSession.timer = null;
-        endRatingWindow(sessionId, roundNumber);
+        const s = activeSessions.get(sid) ?? activeSession!;
+        s.timer = null;
+        endRatingWindow(sid, rn);
       }, 3000);
     }
   } catch (err) {

@@ -178,9 +178,9 @@ describe('25 May live-test fixes', () => {
       expect(fn).toMatch(/activeSession\.timer = setTimeout/);
       expect(fn).toMatch(/endRatingWindow/);
     });
-    it('backstop is fixed at 180 000 ms (generous, non-disruptive)', () => {
+    it('backstop is fixed at 90 000 ms (#4 26 May — lowered from 180s so a stuck rating self-heals faster; real close is all-rated/host)', () => {
       const src = readServer('services/orchestration/handlers/round-lifecycle.ts');
-      expect(src).toMatch(/RATING_BACKSTOP_MS\s*=\s*180_000/);
+      expect(src).toMatch(/RATING_BACKSTOP_MS\s*=\s*90_000/);
     });
     it('backstop uses clearSessionTimers before arming so prior timers do not leak', () => {
       const src = readServer('services/orchestration/handlers/round-lifecycle.ts');
