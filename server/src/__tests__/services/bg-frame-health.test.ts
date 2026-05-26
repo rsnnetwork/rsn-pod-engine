@@ -8,7 +8,14 @@ import {
   BG_HEALTH_WINDOW,
   BG_FRAME_BUDGET_MS,
   BG_WATCHDOG_MS,
+  BG_WARMUP_FRAMES,
 } from '../../../../client/src/lib/bgFrameHealth';
+
+// All monitor scenarios must first get past the warmup grace (the first frames
+// are ignored). Feed benign warmup frames before exercising the real behaviour.
+const warmup = (mon: (s: { processingTimeMs: number }) => void) => {
+  for (let i = 0; i < BG_WARMUP_FRAMES; i++) mon({ processingTimeMs: 5 });
+};
 
 describe('evaluateFrameHealth (pure ladder)', () => {
   it('stays ok while breach ratio is within budget', () => {
@@ -32,7 +39,20 @@ describe('createFrameHealthMonitor', () => {
     const onReduce = jest.fn();
     const onDisable = jest.fn();
     const mon = createFrameHealthMonitor({ onReduce, onDisable });
+    warmup(mon);
     feed(mon, BG_FRAME_BUDGET_MS - 10, BG_HEALTH_WINDOW * 3);
+    expect(onReduce).not.toHaveBeenCalled();
+    expect(onDisable).not.toHaveBeenCalled();
+  });
+
+  it('ignores slow warmup frames (cold start must not disable the effect)', () => {
+    const onReduce = jest.fn();
+    const onDisable = jest.fn();
+    const mon = createFrameHealthMonitor({ onReduce, onDisable });
+    // Every warmup frame is catastrophically slow (model load / shader compile)...
+    for (let i = 0; i < BG_WARMUP_FRAMES; i++) mon({ processingTimeMs: BG_WATCHDOG_MS + 200 });
+    // ...then it settles fast. Nothing should have fired.
+    feed(mon, 12, BG_HEALTH_WINDOW * 2);
     expect(onReduce).not.toHaveBeenCalled();
     expect(onDisable).not.toHaveBeenCalled();
   });
@@ -41,6 +61,7 @@ describe('createFrameHealthMonitor', () => {
     const onReduce = jest.fn();
     const onDisable = jest.fn();
     const mon = createFrameHealthMonitor({ onReduce, onDisable });
+    warmup(mon);
 
     // First full window of over-budget frames → one reduce, no disable yet.
     feed(mon, BG_FRAME_BUDGET_MS + 30, BG_HEALTH_WINDOW);
@@ -57,6 +78,7 @@ describe('createFrameHealthMonitor', () => {
     const onReduce = jest.fn();
     const onDisable = jest.fn();
     const mon = createFrameHealthMonitor({ onReduce, onDisable });
+    warmup(mon);
     // 20% of frames over budget (< 30% threshold) → no action.
     for (let i = 0; i < BG_HEALTH_WINDOW * 2; i++) {
       mon({ processingTimeMs: i % 5 === 0 ? BG_FRAME_BUDGET_MS + 40 : 10 });
@@ -65,10 +87,11 @@ describe('createFrameHealthMonitor', () => {
     expect(onDisable).not.toHaveBeenCalled();
   });
 
-  it('hard watchdog: a single catastrophic frame disables immediately, skipping reduce', () => {
+  it('after warmup, a single catastrophic frame disables immediately, skipping reduce', () => {
     const onReduce = jest.fn();
     const onDisable = jest.fn();
     const mon = createFrameHealthMonitor({ onReduce, onDisable });
+    warmup(mon);
     mon({ processingTimeMs: BG_WATCHDOG_MS + 50 });
     expect(onDisable).toHaveBeenCalledTimes(1);
     expect(onReduce).not.toHaveBeenCalled();
@@ -78,6 +101,7 @@ describe('createFrameHealthMonitor', () => {
     const onReduce = jest.fn();
     const onDisable = jest.fn();
     const mon = createFrameHealthMonitor({ onReduce, onDisable });
+    warmup(mon);
     mon({ processingTimeMs: BG_WATCHDOG_MS + 50 });
     feed(mon, BG_WATCHDOG_MS + 50, 100);
     expect(onDisable).toHaveBeenCalledTimes(1);

@@ -20,6 +20,10 @@ export const BG_HEALTH_WINDOW = 45;
 export const BG_BREACH_RATIO = 0.3;
 /** Catastrophic single frame ⇒ kill immediately (true never-freeze backstop). */
 export const BG_WATCHDOG_MS = 250;
+/** Ignore the first frames after a processor starts — MediaPipe model load,
+ *  shader compile and the first inference are always slow even on fast GPUs, and
+ *  must not trip the watchdog/ladder and disable the effect at cold start. */
+export const BG_WARMUP_FRAMES = 20;
 
 export type FrameHealthAction = 'ok' | 'reduce' | 'disable';
 
@@ -62,9 +66,15 @@ export function createFrameHealthMonitor(handlers: {
   const breaches: number[] = [];
   let reduced = handlers.startReduced ?? false;
   let finished = false;
+  let total = 0;
 
   return (stats: FrameStats) => {
     if (finished) return;
+
+    // Warmup grace: the first frames (model load / shader compile / first
+    // inference) are always slow — never let them disable the effect.
+    total++;
+    if (total <= BG_WARMUP_FRAMES) return;
 
     // Hard watchdog — one catastrophic frame ends it now.
     if (stats.processingTimeMs >= BG_WATCHDOG_MS) {
