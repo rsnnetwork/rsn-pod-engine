@@ -181,7 +181,7 @@ export function initOrchestration(socketServer: SocketServer): void {
   // ── Phase 2E (5 May spec) — periodic state-machine reconciler ──
   // Auto-heals participant-state drift every 30 s so users never need to
   // leave-and-rejoin to recover from a wedged state.
-  startGlobalReconciler();
+  startGlobalReconciler(io);
 
   // ── TTL cleanup (every 5 minutes, remove sessions older than 4 hours) ──
 

@@ -143,6 +143,58 @@ describe('Phase 3 — reconciler re-checks live presence before LEFT (C4)', () =
   });
 });
 
+describe('26 May — false-LEFT escalation fixes (disconnect-time grace + live-socket ground truth)', () => {
+  const SID = 's3';
+  function seed(memUpdatedAt: Date, opts: { inPresence?: boolean } = {}) {
+    activeSessions.set(SID, {
+      sessionId: SID, hostUserId: 'h', config: { numberOfRounds: 3 } as any,
+      currentRound: 1, status: SS.ROUND_ACTIVE, timer: null, timerSyncInterval: null,
+      timerEndsAt: null, isPaused: false, pausedTimeRemaining: null,
+      presenceMap: opts.inPresence ? new Map([['u1', { lastHeartbeat: new Date(), socketId: 'x' }]]) : new Map(),
+      pendingRoundNumber: null, manuallyLeftRound: new Set(),
+      participantStates: new Map([['u1', { state: ParticipantState.DISCONNECTED, currentRoomId: null, updatedAt: memUpdatedAt }]]),
+    } as any);
+  }
+  beforeEach(() => {
+    store.clear(); handle = fakeRedis;
+    (query as jest.Mock).mockImplementation(async (sql: string) => {
+      if (typeof sql === 'string' && sql.includes("'disconnected'") && sql.includes('90 seconds')) {
+        return { rows: [{ user_id: 'u1' }] };
+      }
+      return { rows: [] };
+    });
+  });
+  afterEach(() => { activeSessions.delete(SID); });
+
+  // The bug: a participant who completed a round then had a transient disconnect
+  // was escalated to LEFT on the very next 30s tick, because the grace was
+  // measured from joined_at (always old), not from the disconnect moment.
+  it('does NOT escalate a participant who disconnected <90s ago (grace from disconnect time)', async () => {
+    seed(new Date()); // memState DISCONNECTED, just now
+    const res = await reconcileSessionStates(SID);
+    expect(res.staleEscalated).toBe(0);
+  });
+
+  // Preserve Stefan #2: a never-recovered ghost (disconnected long ago, no socket)
+  // must still be escalated so they stop being counted as an unmatched participant.
+  it('STILL escalates a genuine ghost disconnected >90s ago with no live socket', async () => {
+    seed(new Date(Date.now() - 120_000));
+    const res = await reconcileSessionStates(SID);
+    expect(res.staleEscalated).toBe(1);
+  });
+
+  // presenceMap drifts stale (heartbeat gaps), so a still-connected user can be
+  // absent from it. Before the terminal LEFT, ask the adapter who is ACTUALLY
+  // connected; a live socket means present — refresh presence and skip.
+  it('does NOT escalate a >90s-DISCONNECTED user who has a live socket; restores presence', async () => {
+    seed(new Date(Date.now() - 120_000));
+    const io: any = { in: () => ({ fetchSockets: async () => [{ data: { userId: 'u1' } }] }) };
+    const res = await reconcileSessionStates(SID, io);
+    expect(res.staleEscalated).toBe(0);
+    expect(activeSessions.get(SID)!.presenceMap.has('u1')).toBe(true);
+  });
+});
+
 describe('Phase 3 — host participant view reads canonical with fallback (M1)', () => {
   // The host-view SQL is a single SELECT; return both participants.
   const participantRows = {
