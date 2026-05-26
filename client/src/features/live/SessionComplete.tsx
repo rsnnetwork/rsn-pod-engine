@@ -148,9 +148,18 @@ export default function SessionComplete({ sessionId }: Props) {
       // #3 — Meet Again Rate = how many of the people you MET want to meet you
       // again (their vote), over total unique people met. Was dividing by people
       // YOU rated off your own field, so zero ratings could read 100%.
-      const uniqueMet = Array.from(new Map(conns.map(c => [c.userId, c])).values());
-      const meetAgainRate = uniqueMet.length > 0
-        ? uniqueMet.filter(c => c.theirMeetAgain).length / uniqueMet.length
+      // #67% (26 May, live-test-2) — connections are PER-MATCH, so someone met
+      // twice this event has two rows. Deduping last-wins (new Map keeps the
+      // LAST row) meant a later un-re-rated re-match (theirMeetAgain=false)
+      // overwrote an earlier true → undercount (showed 67% when all were
+      // mutual). Aggregate per UNIQUE user with OR: a person counts if they
+      // said meet-again in ANY of their rows. Denominator = unique people met.
+      const metUserIds = new Set(conns.map(c => c.userId));
+      const userWantsMeetAgain = new Set(
+        conns.filter(c => c.theirMeetAgain).map(c => c.userId)
+      );
+      const meetAgainRate = metUserIds.size > 0
+        ? userWantsMeetAgain.size / metUserIds.size
         : 0;
 
       setStats({
