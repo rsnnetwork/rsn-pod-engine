@@ -1,4 +1,5 @@
 import { Users, Loader2, Video, VideoOff, Sparkles, ChevronDown, ChevronUp, Mic, MicOff, Volume2, VolumeX, UserX, Camera, X, Pin, PinOff, Minimize2, Maximize2 } from 'lucide-react';
+import { BACKGROUND_EFFECTS_ENABLED } from '@/lib/featureFlags';
 import HostRoundDashboard from './HostRoundDashboard';
 
 // Lazy-load track processors (may not be available in all environments)
@@ -701,6 +702,7 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
   // when the track is actually queryable. setProcessor is idempotent
   // (stopProcessor first) — safe to re-run.
   useEffect(() => {
+    if (!BACKGROUND_EFFECTS_ENABLED) return; // background effects disabled for events
     if (!localParticipant || !hookCamEnabled) return;
     const pref = loadBgPreference();
     if (!pref || pref.mode === 'disabled') return;
@@ -832,6 +834,7 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
       </button>
       {/* Virtual background toggle */}
       <div className="relative">
+        {BACKGROUND_EFFECTS_ENABLED && (
         <button
           onClick={() => setShowBgPanel(!showBgPanel)}
           aria-label="Background effects"
@@ -843,6 +846,7 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
           <Sparkles className="h-3 w-3" />
           <span className="hidden sm:inline">BG</span>
         </button>
+        )}
         {showBgPanel && (
           // Phase 7-audit fix — was `absolute bottom-full right-0` inside the
           // camera tile which has `overflow-hidden` for rounded corners,

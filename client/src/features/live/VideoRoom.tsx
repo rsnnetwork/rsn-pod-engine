@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { useSessionStore } from '@/stores/sessionStore';
 import { formatTime } from '@/lib/utils';
 import { Video, Clock, Mic, MicOff, VideoOff, Wifi, UserX, ArrowLeft, Sparkles } from 'lucide-react';
+import { BACKGROUND_EFFECTS_ENABLED } from '@/lib/featureFlags';
 // Lazy-load track processors (may not be available in all environments)
 let _bgBlur: any = null;
 let _vBg: any = null;
@@ -432,6 +433,7 @@ const MediaControls = memo(function MediaControls() {
   // published, unmuted local camera track. setProcessor is idempotent
   // (it stopProcessor first) so re-runs are safe.
   useEffect(() => {
+    if (!BACKGROUND_EFFECTS_ENABLED) return; // background effects disabled for events
     if (!localParticipant || !hookCamEnabled) return;
     const pref = loadBgPreference();
     if (!pref || pref.mode === 'disabled') return;
@@ -556,11 +558,13 @@ const MediaControls = memo(function MediaControls() {
         className={`p-2 rounded-full transition-colors ${camEnabled ? 'bg-gray-200 hover:bg-gray-300 text-gray-700' : 'bg-red-100 text-red-500 hover:bg-red-200'}`}>
         {camEnabled ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
       </button>
-      <button onClick={() => setShowBgPanel(!showBgPanel)} title="Background effects"
-        className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium transition-colors ${bgMode !== 'disabled' ? 'bg-indigo-500/80 text-white' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}>
-        <Sparkles className="h-4 w-4" />
-        BG
-      </button>
+      {BACKGROUND_EFFECTS_ENABLED && (
+        <button onClick={() => setShowBgPanel(!showBgPanel)} title="Background effects"
+          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium transition-colors ${bgMode !== 'disabled' ? 'bg-indigo-500/80 text-white' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}>
+          <Sparkles className="h-4 w-4" />
+          BG
+        </button>
+      )}
 
       {/* Background effects panel */}
       {showBgPanel && (
