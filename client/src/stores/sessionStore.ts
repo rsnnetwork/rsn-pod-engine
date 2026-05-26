@@ -203,6 +203,13 @@ interface SessionLiveState {
   hostMutedUserIds: Set<string>;
   leftCurrentRound: boolean;
   lastRatedRound: number;
+  // #2 (26 May, live-test-2) — matchIds the user has already FULLY handled
+  // (rated or skipped every partner of that match). The rating:window_open
+  // handler suppresses re-prompting a match in this set so a re-emit during
+  // re-match churn can't re-open a form for a match the user already finished
+  // (server 409s the duplicate POST, but the user still saw "rate again").
+  // Keyed by matchId so a genuinely NEW match (new matchId) still shows the form.
+  ratedMatchIds: Set<string>;
   isPaused: boolean;
   // Bug 10 (April 19) — Meet/Zoom-style reactions anchored to the
   // participant's tile. Replaces the floating-animation-only UX so
@@ -283,6 +290,8 @@ interface SessionLiveState {
   setTileDemotedUserIds: (ids: string[]) => void;
   setLeftCurrentRound: (v: boolean) => void;
   setLastRatedRound: (r: number) => void;
+  // #2 (26 May) — mark a match fully handled so it's never re-prompted.
+  addRatedMatchId: (matchId: string) => void;
   setIsPaused: (v: boolean) => void;
   // Bug 10 — reaction anchored to a participant tile for ~8s.
   setTileReaction: (userId: string, emoji: string, displayName: string) => void;
@@ -383,6 +392,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   hostMutedUserIds: new Set<string>(),
   leftCurrentRound: false,
   lastRatedRound: 0,
+  ratedMatchIds: new Set<string>(),
   isPaused: false,
   tileReactions: {},
   snapshotSeq: -1,
@@ -489,6 +499,12 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   setTileDemotedUserIds: (ids) => set({ tileDemotedUserIds: Array.isArray(ids) ? ids : [] }),
   setLeftCurrentRound: (leftCurrentRound) => set({ leftCurrentRound }),
   setLastRatedRound: (lastRatedRound) => set({ lastRatedRound }),
+  addRatedMatchId: (matchId) => set((s) => {
+    if (!matchId || s.ratedMatchIds.has(matchId)) return {};
+    const next = new Set(s.ratedMatchIds);
+    next.add(matchId);
+    return { ratedMatchIds: next };
+  }),
   setIsPaused: (isPaused) => set({ isPaused }),
   setTileReaction: (userId, emoji, displayName) => set((s) => ({
     tileReactions: {
@@ -595,7 +611,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
     eventPlanSummary: null, testMode: false,
     hostMuteCommand: null, partnerDisconnected: false, roundDashboard: null,
     chatMessages: [], unreadChatCount: 0, chatOpen: false, matchingOverlay: null, preparingMatches: false, lobbyDensity: 'normal' as const,
-    cohosts: new Set<string>(), hostVisibilityModes: {}, actingAsHostOverrides: {}, hostMutedUserIds: new Set<string>(), leftCurrentRound: false, lastRatedRound: 0, isPaused: false,
+    cohosts: new Set<string>(), hostVisibilityModes: {}, actingAsHostOverrides: {}, hostMutedUserIds: new Set<string>(), leftCurrentRound: false, lastRatedRound: 0, ratedMatchIds: new Set<string>(), isPaused: false,
     snapshotSeq: -1,
   }),
 }));

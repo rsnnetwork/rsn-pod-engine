@@ -544,6 +544,26 @@ export default function useSessionSocket(sessionId: string) {
       // events can arrive out of order after reconnect, so don't gate on sessionStatus
       const currentState = useSessionStore.getState();
       if (currentState.sessionStatus === 'completed') return;
+      // #2 (26 May, live-test-2) — if the user already FULLY handled this exact
+      // match (rated or skipped every partner — recorded in ratedMatchIds when
+      // RatingPrompt hit allDone), a re-emitted rating:window_open during
+      // re-match churn must NOT re-show the form. The user already rated; the
+      // server 409s the duplicate POST, but the form re-appearing read as
+      // "rate again." Skip straight back to lobby (same cleanup as the fallback
+      // path) instead of setting phase='rating'. Suppress ONLY for the same
+      // matchId — a genuine re-match has a new matchId and still prompts.
+      if (data.matchId && currentState.ratedMatchIds.has(data.matchId)) {
+        clearTimer();
+        clearRatingFallback();
+        store.setTimerEndsAt(null);
+        store.setLiveKitToken(null, null);
+        store.setMatch(null);
+        store.setRoomId(null);
+        store.setTransitionStatus(null);
+        store.setPhase('lobby');
+        lastBreakoutSyncRef.current = 0;
+        return;
+      }
       // 25 May (F/G) — rating opens AFTER a breakout ends (incl. host End-all-rooms,
       // which routes participants straight to rating). Release breakout ownership so
       // the session-level rating countdown (segmentType 'round_rating') shows at once.

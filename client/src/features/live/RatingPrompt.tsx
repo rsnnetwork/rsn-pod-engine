@@ -184,9 +184,16 @@ export default function RatingPrompt(props: Props) {
       // rating:window_open (genuine reassignment to a new partner) bypasses the
       // round_rating guard, so legitimate re-prompts still work.
       if (currentRound > 0) useSessionStore.getState().setLastRatedRound(currentRound);
+      // #2 (26 May, live-test-2) — this match is now FULLY handled (every
+      // partner rated or skipped). Record its matchId so a re-emitted
+      // rating:window_open for the SAME match during re-match churn is
+      // suppressed instead of re-showing the form (which the user then
+      // re-rated → server 409 → "rate again"). A genuine re-match has a new
+      // matchId and is not in this set, so it still prompts normally.
+      if (currentMatchId) useSessionStore.getState().addRatedMatchId(currentMatchId);
       setPhase('lobby');
     }
-  }, [allDone, setPhase, currentRound]);
+  }, [allDone, setPhase, currentRound, currentMatchId]);
 
   if (noMatchData) return null;
   if (allDone) return null;
