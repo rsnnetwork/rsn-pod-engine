@@ -293,6 +293,108 @@ export async function sendMessage(
   });
 }
 
+// ─── Broadcast send (no mutual gate) ──────────────────────────────────────
+
+/**
+ * Shared transaction body used by both sendMessage (after auth) and
+ * sendBroadcastMessage (auth enforced at job-creation time).
+ *
+ * Upserts the dm_conversations row, inserts into direct_messages, and
+ * returns the same { message, conversationId } shape used throughout the
+ * service. Runs inside a single Postgres transaction.
+ */
+async function insertDirectMessage(
+  fromUserId: string,
+  toUserId: string,
+  content: string | null,
+  attachment: SendMessageAttachment | null,
+): Promise<{ message: DmMessage; conversationId: string }> {
+  return transaction(async (client) => {
+    const [orderedA, orderedB] = normalizePair(fromUserId, toUserId);
+
+    const isSenderA = fromUserId === orderedA;
+    const clearDeletedColumn = isSenderA ? 'user_a_deleted_at' : 'user_b_deleted_at';
+
+    const convResult = await client.query<{ id: string }>(
+      `INSERT INTO dm_conversations (id, user_a_id, user_b_id, last_message_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (user_a_id, user_b_id) DO UPDATE
+         SET last_message_at = NOW(),
+             ${clearDeletedColumn} = NULL
+       RETURNING id`,
+      [uuid(), orderedA, orderedB],
+    );
+    const conversationId = convResult.rows[0].id;
+
+    const hasText = content !== null && content.length > 0;
+    const hasAttachment = !!attachment?.url;
+
+    const msgResult = await client.query<{
+      id: string; conversation_id: string; from_user_id: string;
+      content: string; read_at: Date | null; created_at: Date;
+      attachment_url: string | null; attachment_type: string | null;
+      attachment_meta: Record<string, any> | null;
+    }>(
+      `INSERT INTO direct_messages (
+         id, conversation_id, from_user_id, content,
+         attachment_url, attachment_type, attachment_meta
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, conversation_id, from_user_id, content, read_at, created_at,
+                 attachment_url, attachment_type, attachment_meta`,
+      [
+        uuid(), conversationId, fromUserId,
+        hasText ? content : null,
+        hasAttachment ? attachment!.url : null,
+        hasAttachment ? attachment!.type : null,
+        hasAttachment ? (attachment!.meta ?? null) : null,
+      ],
+    );
+
+    const m = msgResult.rows[0];
+    logger.info({ fromUserId, toUserId, conversationId, messageId: m.id, attachment: hasAttachment }, 'DM sent');
+
+    return {
+      conversationId,
+      message: {
+        id: m.id,
+        conversationId: m.conversation_id,
+        fromUserId: m.from_user_id,
+        content: m.content,
+        readAt: m.read_at,
+        createdAt: m.created_at,
+        attachmentUrl: m.attachment_url,
+        attachmentType: m.attachment_type,
+        attachmentMeta: m.attachment_meta,
+      },
+    };
+  });
+}
+
+/**
+ * Send a DM as part of an authorized broadcast. Skips canMessage() because the
+ * caller (post-event-message job creation) has already authorized the sender
+ * for this audience. Still validates content length. Returns the same shape as
+ * sendMessage so the caller can broadcast via broadcastDmMessage().
+ */
+export async function sendBroadcastMessage(
+  fromUserId: string,
+  toUserId: string,
+  content: string,
+): Promise<{ message: DmMessage; conversationId: string }> {
+  if (fromUserId === toUserId) {
+    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'You cannot DM yourself');
+  }
+  const trimmed = (content ?? '').trim();
+  if (trimmed.length === 0) {
+    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Message cannot be empty');
+  }
+  if (trimmed.length > 4000) {
+    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Message too long (max 4000 characters)');
+  }
+  return insertDirectMessage(fromUserId, toUserId, trimmed, null);
+}
+
 // ─── Reading ───────────────────────────────────────────────────────────────
 
 /**
