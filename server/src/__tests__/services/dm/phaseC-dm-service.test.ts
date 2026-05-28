@@ -134,25 +134,25 @@ describe('Phase C — DM data model + service + REST', () => {
       expect(fn).toMatch(/canMessage\(/);
     });
 
-    it('sendMessage uses ON CONFLICT to upsert the conversation row', () => {
-      const fnStart = src.indexOf('export async function sendMessage(');
+    it('insertDirectMessage uses ON CONFLICT to upsert the conversation row', () => {
+      const fnStart = src.indexOf('async function insertDirectMessage(');
       const fnEnd = src.indexOf('\n}\n', fnStart);
       const fn = src.slice(fnStart, fnEnd);
       expect(fn).toMatch(/ON CONFLICT \(user_a_id, user_b_id\) DO UPDATE/);
     });
 
-    it('sendMessage clears the SENDER side soft-delete on incoming send', () => {
+    it('insertDirectMessage clears the SENDER side soft-delete on incoming send', () => {
       // When the sender previously deleted the conversation, sending again
       // should re-show it in their inbox by clearing user_x_deleted_at.
-      const fnStart = src.indexOf('export async function sendMessage(');
+      const fnStart = src.indexOf('async function insertDirectMessage(');
       const fnEnd = src.indexOf('\n}\n', fnStart);
       const fn = src.slice(fnStart, fnEnd);
       expect(fn).toMatch(/clearDeletedColumn/);
       expect(fn).toMatch(/user_a_deleted_at|user_b_deleted_at/);
     });
 
-    it('sendMessage runs in a transaction (conversation upsert + message insert atomic)', () => {
-      const fnStart = src.indexOf('export async function sendMessage(');
+    it('insertDirectMessage runs in a transaction (conversation upsert + message insert atomic)', () => {
+      const fnStart = src.indexOf('async function insertDirectMessage(');
       const fnEnd = src.indexOf('\n}\n', fnStart);
       const fn = src.slice(fnStart, fnEnd);
       expect(fn).toMatch(/return transaction\(/);

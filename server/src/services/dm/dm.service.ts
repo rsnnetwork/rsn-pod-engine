@@ -229,75 +229,16 @@ export async function sendMessage(
     throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, message);
   }
 
-  return transaction(async (client) => {
-    const [orderedA, orderedB] = normalizePair(fromUserId, toUserId);
-
-    // Upsert the conversation row. The deleter side's timestamp is cleared
-    // on the sender's edge so their inbox re-shows the conversation.
-    const isSenderA = fromUserId === orderedA;
-    const clearDeletedColumn = isSenderA ? 'user_a_deleted_at' : 'user_b_deleted_at';
-
-    const convResult = await client.query<{ id: string }>(
-      `INSERT INTO dm_conversations (id, user_a_id, user_b_id, last_message_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT (user_a_id, user_b_id) DO UPDATE
-         SET last_message_at = NOW(),
-             ${clearDeletedColumn} = NULL
-       RETURNING id`,
-      [uuid(), orderedA, orderedB],
-    );
-    const conversationId = convResult.rows[0].id;
-
-    const msgResult = await client.query<{
-      id: string; conversation_id: string; from_user_id: string;
-      content: string; read_at: Date | null; created_at: Date;
-      attachment_url: string | null; attachment_type: string | null;
-      attachment_meta: Record<string, any> | null;
-    }>(
-      `INSERT INTO direct_messages (
-         id, conversation_id, from_user_id, content,
-         attachment_url, attachment_type, attachment_meta
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, conversation_id, from_user_id, content, read_at, created_at,
-                 attachment_url, attachment_type, attachment_meta`,
-      [
-        uuid(), conversationId, fromUserId,
-        // Migration 063 — content is now nullable. Empty string used to be
-        // legal but tripped the legacy per-column CHECK; NULL is the
-        // cleaner storage form for a captionless attachment message.
-        hasText ? trimmed : null,
-        hasAttachment ? attachment!.url : null,
-        hasAttachment ? attachment!.type : null,
-        hasAttachment ? (attachment!.meta ?? null) : null,
-      ],
-    );
-
-    const m = msgResult.rows[0];
-    logger.info({ fromUserId, toUserId, conversationId, messageId: m.id, attachment: hasAttachment }, 'DM sent');
-
-    return {
-      conversationId,
-      message: {
-        id: m.id,
-        conversationId: m.conversation_id,
-        fromUserId: m.from_user_id,
-        content: m.content,
-        readAt: m.read_at,
-        createdAt: m.created_at,
-        attachmentUrl: m.attachment_url,
-        attachmentType: m.attachment_type,
-        attachmentMeta: m.attachment_meta,
-      },
-    };
-  });
+  return insertDirectMessage(fromUserId, toUserId, hasText ? trimmed : null, hasAttachment ? attachment! : null);
 }
 
 // ─── Broadcast send (no mutual gate) ──────────────────────────────────────
 
 /**
- * Shared transaction body used by both sendMessage (after auth) and
- * sendBroadcastMessage (auth enforced at job-creation time).
+ * Shared transaction body used by BOTH sendMessage (after auth gates pass)
+ * and sendBroadcastMessage (auth enforced at job-creation time). This is
+ * the single canonical place where the conversation upsert + message insert
+ * SQL lives; neither caller duplicates it.
  *
  * Upserts the dm_conversations row, inserts into direct_messages, and
  * returns the same { message, conversationId } shape used throughout the
