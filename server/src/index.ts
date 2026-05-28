@@ -57,6 +57,7 @@ import reportRoutes from './routes/reports';
 import groupRoutes from './routes/groups';
 import notificationPrefsRoutes from './routes/notification-prefs';
 import { webhooksRouter } from './routes/webhooks';
+import postEventMessageRoutes from './routes/post-event-message';
 
 // Services
 import { initOrchestration } from './services/orchestration/orchestration.service';
@@ -319,6 +320,7 @@ app.use('/api/sessions', sessionRoutes);
 app.use('/api/invites', inviteRoutes);
 app.use('/api/ratings', ratingRoutes);
 app.use('/api/sessions', hostRoutes); // Host controls under /api/sessions/:id/host/*
+app.use('/api/sessions', postEventMessageRoutes); // Post-event broadcast message endpoints
 app.use('/api/join-requests', joinRequestRoutes);
 app.use('/api/admin', adminRoutes);
 // Admin email-action routes — unauthenticated by design (the token IS the auth).
