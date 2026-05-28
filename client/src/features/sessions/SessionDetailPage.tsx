@@ -16,6 +16,7 @@ import { formatDateTime, LOCAL_TIME_LABEL } from '@/lib/utils';
 import { useAuthStore } from '@/stores/authStore';
 import { E } from '@/realtime/entities';
 import { sessionStatusLabel, sessionStatusColor, sessionStatusPhase } from './statusConfig';
+import MessageParticipantsButton from './MessageParticipantsButton';
 
 function getInviteErrorMessage(err: any): string {
   const code = err?.response?.data?.error?.code;
@@ -511,6 +512,9 @@ export default function SessionDetailPage() {
               live host controls live inside the /live page once the host clicks Enter Live Event. */}
           {(isHost || isAdmin) && sessionStatusPhase(session.status) !== 'cancelled' && (
             <div className="ml-auto flex items-center gap-2 flex-wrap">
+              {session.status === 'completed' && sessionId && (
+                <MessageParticipantsButton sessionId={sessionId} />
+              )}
               {sessionStatusPhase(session.status) !== 'done' && (
                 <button
                   type="button"
