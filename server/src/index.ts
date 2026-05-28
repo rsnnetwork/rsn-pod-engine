@@ -37,6 +37,7 @@ import { isUserActive } from './middleware/auth';
 
 // Services
 import { processAutoReminders } from './services/join-request/join-request.service';
+import { processPendingJobs } from './services/post-event-message/post-event-message.worker';
 
 // Routes
 import authRoutes from './routes/auth';
@@ -374,6 +375,13 @@ async function start(): Promise<void> {
 
     // Initialise orchestration with Socket.IO
     initOrchestration(io);
+
+    // Drain post-event broadcast message jobs every 10s.
+    const POST_EVENT_MSG_INTERVAL = 10_000;
+    setInterval(() => {
+      processPendingJobs(io).catch(err =>
+        logger.error({ err }, 'Post-event message worker cycle failed'));
+    }, POST_EVENT_MSG_INTERVAL);
 
     // Start auto-reminder engine for join requests (runs every 6 hours)
     const SIX_HOURS = 6 * 60 * 60 * 1000;
