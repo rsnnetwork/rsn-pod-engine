@@ -43,9 +43,7 @@ describe('Disconnect-rejoin bug fixes', () => {
 
     it('emits rating:window_open when user has NOT rated this match', async () => {
       const { emitRatingWindowOnce } = await import('../../../services/orchestration/state/session-state');
-      // Phase R4 (20 May 2026): host-check query fires first. user-a is NOT the host.
-      dcMockQuery.mockResolvedValueOnce({ rows: [{ host_user_id: 'other-host' }] });
-      // Existing rating dedup query — no prior rating.
+      // No existing rating
       dcMockQuery.mockResolvedValueOnce({ rows: [] });
 
       const emit = jest.fn();
@@ -56,18 +54,15 @@ describe('Disconnect-rejoin bug fixes', () => {
 
       await emitRatingWindowOnce(io, 'user-a', 'match-1', payload);
 
-      expect(dcMockQuery).toHaveBeenCalledTimes(2);
-      expect(dcMockQuery.mock.calls[0][0]).toMatch(/host_user_id FROM matches/);
-      expect(dcMockQuery.mock.calls[1][0]).toMatch(/SELECT id FROM ratings/);
+      expect(dcMockQuery).toHaveBeenCalledTimes(1);
+      expect(dcMockQuery.mock.calls[0][0]).toMatch(/SELECT id FROM ratings/);
       expect(io.to).toHaveBeenCalledWith('user:user-a');
       expect(emit).toHaveBeenCalledWith('rating:window_open', payload);
     });
 
     it('skips emit when user has ALREADY rated this match', async () => {
       const { emitRatingWindowOnce } = await import('../../../services/orchestration/state/session-state');
-      // Host-check: user-a is NOT the host.
-      dcMockQuery.mockResolvedValueOnce({ rows: [{ host_user_id: 'other-host' }] });
-      // Ratings dedup: existing rating present.
+      // Existing rating present
       dcMockQuery.mockResolvedValueOnce({ rows: [{ id: 'rating-existing' }] });
 
       const emit = jest.fn();
@@ -77,15 +72,13 @@ describe('Disconnect-rejoin bug fixes', () => {
 
       await emitRatingWindowOnce(io, 'user-a', 'match-1', { matchId: 'match-1' });
 
-      expect(dcMockQuery).toHaveBeenCalledTimes(2);
+      expect(dcMockQuery).toHaveBeenCalledTimes(1);
       expect(io.to).not.toHaveBeenCalled();
       expect(emit).not.toHaveBeenCalled();
     });
 
     it('emits when DB query fails (fail-open — better duplicate prompt than missing one)', async () => {
       const { emitRatingWindowOnce } = await import('../../../services/orchestration/state/session-state');
-      // Both queries reject — host-check fail-open, then ratings dedup fail-open.
-      dcMockQuery.mockRejectedValueOnce(new Error('DB down'));
       dcMockQuery.mockRejectedValueOnce(new Error('DB down'));
 
       const emit = jest.fn();
@@ -96,29 +89,6 @@ describe('Disconnect-rejoin bug fixes', () => {
       await emitRatingWindowOnce(io, 'user-a', 'match-1', { matchId: 'match-1' });
 
       expect(emit).toHaveBeenCalledWith('rating:window_open', { matchId: 'match-1' });
-    });
-
-    // Phase R4 (20 May 2026 — live-test post-mortem). The event host must
-    // never receive a rating prompt. If they do, an upstream guard (Phase R1)
-    // was bypassed and a phantom match was created.
-    it('refuses to emit rating:window_open for the event host', async () => {
-      const { emitRatingWindowOnce } = await import('../../../services/orchestration/state/session-state');
-      // user-a IS the host of the match's session.
-      dcMockQuery.mockResolvedValueOnce({ rows: [{ host_user_id: 'user-a' }] });
-
-      const emit = jest.fn();
-      const io: any = {
-        to: jest.fn(() => ({ emit })),
-      };
-
-      await emitRatingWindowOnce(io, 'user-a', 'match-1', { matchId: 'match-1' });
-
-      // Only the host-check query fires; the ratings dedup is short-circuited
-      // because the function returns before reaching it.
-      expect(dcMockQuery).toHaveBeenCalledTimes(1);
-      expect(dcMockQuery.mock.calls[0][0]).toMatch(/host_user_id FROM matches/);
-      expect(io.to).not.toHaveBeenCalled();
-      expect(emit).not.toHaveBeenCalled();
     });
   });
 

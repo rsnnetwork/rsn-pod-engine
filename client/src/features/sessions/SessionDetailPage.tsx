@@ -14,9 +14,7 @@ import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
 import { formatDateTime, LOCAL_TIME_LABEL } from '@/lib/utils';
 import { useAuthStore } from '@/stores/authStore';
-import { E } from '@/realtime/entities';
 import { sessionStatusLabel, sessionStatusColor, sessionStatusPhase } from './statusConfig';
-import MessageParticipantsButton from './MessageParticipantsButton';
 
 function getInviteErrorMessage(err: any): string {
   const code = err?.response?.data?.error?.code;
@@ -77,30 +75,18 @@ export default function SessionDetailPage() {
       if (err?.response?.status === 403) return false;
       return failureCount < 3;
     },
-    meta: { entities: sessionId ? [E.session(sessionId)] : [] },
   });
 
   const { data: pod } = useQuery({
     queryKey: ['pod', session?.podId],
     queryFn: () => api.get(`/pods/${session.podId}`).then(r => r.data.data),
     enabled: !!session?.podId,
-    meta: { entities: session?.podId ? [E.pod(session.podId)] : [] },
   });
 
   const { data: participants } = useQuery({
     queryKey: ['session-participants', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}/participants`).then(r => r.data.data ?? []),
     enabled: !!sessionId,
-    // R2 safety net (20 May 2026 — live-test post-mortem). Entity-tag
-    // fanout is the primary refresh path, but missed emits at scattered
-    // session_participants write sites left clients showing stale lists
-    // for minutes (e.g. Saif missing Wasim during the 20 May test).
-    // 30 s background refetch is a belt-and-braces guarantee that any
-    // missed emit self-heals within 30 s — one HTTP request per viewer
-    // per half-minute, negligible at RSN's scale.
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
-    meta: { entities: sessionId ? [E.session(sessionId), E.sessionParticipants(sessionId)] : [] },
   });
 
   const { data: templates } = useQuery({
@@ -115,20 +101,17 @@ export default function SessionDetailPage() {
     queryKey: ['session-participant-counts', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}/participant-counts`).then(r => r.data.data),
     enabled: !!sessionId && (isHost || isAdmin),
-    meta: { entities: sessionId ? [E.session(sessionId), E.sessionParticipants(sessionId)] : [] },
   });
   const { data: pendingInvites } = useQuery({
     queryKey: ['session-pending-invites', sessionId],
     queryFn: () => api.get(`/invites/session/${sessionId}?status=pending`).then(r => r.data.data ?? []),
     enabled: !!sessionId && (isHost || isAdmin),
-    meta: { entities: sessionId ? [E.session(sessionId), E.sessionInvites(sessionId)] : [] },
   });
 
   const { data: podMembers, refetch: refetchPodMembers } = useQuery({
     queryKey: ['pod-members-for-invite', session?.podId, sessionId],
     queryFn: () => api.get(`/pods/${session?.podId}/members/for-invite?sessionId=${sessionId}`).then(r => r.data.data),
     enabled: !!session?.podId && !!sessionId && isHost,
-    meta: { entities: session?.podId ? [E.pod(session.podId), E.podMembers(session.podId)] : [] },
   });
 
   const invitePodMember = async (userId: string, email: string) => {
@@ -512,9 +495,6 @@ export default function SessionDetailPage() {
               live host controls live inside the /live page once the host clicks Enter Live Event. */}
           {(isHost || isAdmin) && sessionStatusPhase(session.status) !== 'cancelled' && (
             <div className="ml-auto flex items-center gap-2 flex-wrap">
-              {session.status === 'completed' && sessionId && (
-                <MessageParticipantsButton sessionId={sessionId} />
-              )}
               {sessionStatusPhase(session.status) !== 'done' && (
                 <button
                   type="button"
@@ -674,40 +654,13 @@ export default function SessionDetailPage() {
           </Card>
         ) : (
           <div className="grid gap-2">
-            {/* Host/Director card — always visible at the top of the list, for
-                every viewer (member, admin, host themselves). The host is
-                NOT a participant in the matching sense (they organise, they
-                don't get matched), but the UI must make their role obvious.
-                Resolved from session.hostUserId by looking up the matching
-                row in the participants array. Shown regardless of the host's
-                session_participants.status — if they briefly clicked Leave
-                during a pre-event lobby and their row is `left`, they're
-                still the event director.  May 21 Ali — "director still not
-                shown ... should be visible to every other participant too." */}
-            {(() => {
-              const hostRow = (participants || []).find((p: any) => p.userId === session.hostUserId);
-              if (!hostRow) return null;
-              return (
-                <Card key={`host-${hostRow.userId}`} className="!p-4 border-rsn-red/30 bg-rsn-red/5">
-                  <div className="flex items-center justify-between">
-                    <a href={`/profile/${hostRow.userId}`} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
-                      <Avatar src={hostRow.avatarUrl} name={hostRow.displayName || hostRow.email || 'Host'} size="sm" />
-                      <div>
-                        <p className="text-sm font-medium text-gray-800">{hostRow.displayName || hostRow.email || 'Host'}</p>
-                        <p className="text-xs text-gray-400">Host / Director</p>
-                      </div>
-                    </a>
-                    <Badge variant="brand" className="text-xs">Host</Badge>
-                  </div>
-                </Card>
-              );
-            })()}
             {(participants || [])
               .filter((p: any) => p.status !== 'removed' && p.userId !== session.hostUserId)
               .filter((p: any) => statusFilter === null || p.status === statusFilter)
               .map((p: any) => {
-              const statusLabel =
-                  (p.status === 'registered' || p.status === 'left' || p.status === 'checked_in') ? 'Member'
+              const pIsHost = false;
+              const statusLabel = pIsHost ? 'Host'
+                : (p.status === 'registered' || p.status === 'left' || p.status === 'checked_in') ? 'Member'
                 : p.status === 'in_lobby' ? 'In Main Room'
                 : p.status === 'in_round' ? 'In Round'
                 : p.status === 'disconnected' ? 'Reconnecting...'
@@ -723,6 +676,9 @@ export default function SessionDetailPage() {
                         <p className="text-xs text-gray-400">{statusLabel}</p>
                       </div>
                     </a>
+                    {pIsHost && (
+                      <Badge variant="brand" className="text-xs">Host</Badge>
+                    )}
                   </div>
                 </Card>
               );

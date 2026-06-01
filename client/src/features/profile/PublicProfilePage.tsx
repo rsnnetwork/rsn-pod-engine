@@ -11,7 +11,6 @@ import {
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
-import { E } from '@/realtime/entities';
 
 const EMPTY = <span className="text-sm italic text-gray-300">Not shared yet</span>;
 
@@ -20,7 +19,6 @@ export default function PublicProfilePage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { user: currentUser } = useAuthStore();
-  const currentUserId = currentUser?.id;
   const { addToast } = useToastStore();
   const isOwnProfile = currentUser?.id === userId;
 
@@ -28,7 +26,6 @@ export default function PublicProfilePage() {
     queryKey: ['user', userId],
     queryFn: () => api.get(`/users/${userId}`).then(r => r.data.data),
     enabled: !!userId,
-    meta: { entities: userId ? [E.user(userId)] : [] },
   });
 
   // Phase B (1 May 2026 spec) — fetch the block status so the profile renders
@@ -37,11 +34,6 @@ export default function PublicProfilePage() {
     queryKey: ['user-block-status', userId],
     queryFn: () => api.get(`/users/${userId}/block-status`).then(r => r.data.data),
     enabled: !!userId && !isOwnProfile && !!currentUser?.id,
-    meta: {
-      entities: currentUserId && userId
-        ? [E.userBlocks(currentUserId), E.userBlocks(userId)]
-        : [],
-    },
   });
   const isBlocked = blockStatus?.hasBlocked === true;
 
@@ -51,11 +43,6 @@ export default function PublicProfilePage() {
     queryKey: ['can-message', userId],
     queryFn: () => api.get(`/dm/can-message/${userId}`).then(r => r.data.data),
     enabled: !!userId && !isOwnProfile && !!currentUser?.id,
-    meta: {
-      entities: currentUserId && userId
-        ? [E.userBlocks(currentUserId), E.userBlocks(userId)]
-        : [],
-    },
   });
   const canMessage = dmGate?.allowed === true;
   const cantMessageReason = dmGate?.reason as string | undefined;
@@ -156,21 +143,33 @@ export default function PublicProfilePage() {
           {!isOwnProfile && currentUser?.id && !isBlocked && (
             <div className="mt-4">
               {canMessage ? (
-                // Feature 18 (13 May spec) — one-click message. Navigates to
-                // /messages/new/:userId; MessagesPage handles the routing
-                // for both the existing-conversation and compose-new cases.
-                // No prompt; the user types their first message in the
-                // chat panel like any other message.
                 <Button
                   size="sm"
-                  onClick={() => navigate(`/messages/new/${userId}`)}
+                  onClick={async () => {
+                    // Send a zero-content "open conversation" by posting an
+                    // empty message? No — just navigate to /messages. The
+                    // first send creates the conversation server-side.
+                    // For better UX, find existing conversation if any.
+                    try {
+                      const list = await api.get('/dm/conversations').then(r => r.data.data as any[]);
+                      const existing = list.find(c => c.otherUserId === userId);
+                      if (existing) {
+                        navigate(`/messages/${existing.conversationId}`);
+                      } else {
+                        // Send an opener so the conversation is created.
+                        const content = prompt(`Send your first message to ${user.displayName || 'this user'}:`);
+                        if (content && content.trim()) {
+                          const res = await api.post('/dm/messages', { toUserId: userId, content: content.trim() });
+                          navigate(`/messages/${res.data.data.conversationId}`);
+                        }
+                      }
+                    } catch (err: any) {
+                      addToast(err?.response?.data?.error?.message || 'Failed to open conversation', 'error');
+                    }
+                  }}
                   className="text-xs"
                 >
                   <MessageSquare className="h-3.5 w-3.5 mr-1.5" /> Message
-                </Button>
-              ) : cantMessageReason === 'not_mutual' ? (
-                <Button size="sm" variant="ghost" disabled className="text-xs cursor-not-allowed" title="DMs unlock when you both say 'meet again'">
-                  <MessageSquare className="h-3.5 w-3.5 mr-1.5" /> Message — meet again first
                 </Button>
               ) : cantMessageReason === 'no_encounter' ? (
                 <Button size="sm" variant="ghost" disabled className="text-xs cursor-not-allowed" title="DMs unlock after you share a room in an event">

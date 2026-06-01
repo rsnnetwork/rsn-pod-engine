@@ -10,7 +10,6 @@ import { useToastStore } from '@/stores/toastStore';
 import { useAuthStore } from '@/stores/authStore';
 import { isAdmin } from '@/lib/utils';
 import api from '@/lib/api';
-import { E } from '@/realtime/entities';
 
 export default function AdminPodsPage() {
   const { user } = useAuthStore();
@@ -23,7 +22,6 @@ export default function AdminPodsPage() {
     queryKey: ['admin-pods', filter],
     queryFn: () => api.get(`/pods?pageSize=100&admin=true${filter !== 'all' ? `&status=${filter}` : ''}`).then(r => r.data.data ?? []),
     enabled: isAdmin(user?.role),
-    meta: { entities: [E.adminPods] },
   });
 
   const archiveMutation = useMutation({

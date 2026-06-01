@@ -1,23 +1,15 @@
-// ─── Phase 2.7 + 2.8 — Disconnect handling + fallback ladder ──────────
+// ─── Phase 2.7 + 2.8 — Disconnect hardening + fallback ladder ──────────
 //
-// Original Phase 2.7 design (6 May 2026 spec) auto-transitioned users
-// to LEFT after a 15 s mid-match disconnect or a 90 s stale heartbeat,
-// and triggered maybeRepairFutureRounds on the assumption that "host
-// shouldn't see stale presence." That design was reverted on 21 May
-// after Ali's live test showed the trust-killer mismatch: 8 actual
-// participants in the room, UI showing 5 because three of them had
-// 16-second network blips and got permanently marked LEFT. This file
-// now pins the REVISED contract:
+// Pins the architectural changes shipped in 2.7 (auto-LEFT on confirmed
+// disconnect via existing 15 s mid-match timer + 90 s stale-heartbeat path)
+// and 2.8 (5-level fallback ladder per Spec §10).
 //
-//   1. The 15 s disconnect timeout still fires — it still cleans up the
-//      match (terminal status, auto-reassign partner) — but it does NOT
-//      transition the disconnected user to LEFT, and it does NOT call
-//      maybeRepairFutureRounds('left'). The user stays in a non-terminal
-//      session_participants status so every roster keeps showing them.
-//   2. The 90 s stale-heartbeat path clears presence but does NOT
-//      transition the user to LEFT either. Same reasoning.
-//   3. LEFT is set ONLY by: explicit session:leave handler (Phase A1),
-//      host kick → REMOVED, or the event-end sweep in completeSession.
+// Phase 2.7 — both the 15 s disconnect timeout AND the stale-heartbeat
+// detector now transition the user to LEFT and trigger
+// maybeRepairFutureRounds when no reconnect happens. Per Ali's call on
+// 6 May 2026: holding the user in DISCONNECTED state for 3 minutes
+// (spec's literal interpretation) is bad UX — host sees stale presence
+// and matching system pretends they're still there. 15 s decisive cut.
 //
 // Phase 2.8 — service layer iterates levels 0 → 4, stops at the first
 // level producing a complete matching, tags pairs with the level reason.
@@ -29,75 +21,41 @@ function readServer(rel: string): string {
   return nodeFs.readFileSync(nodePath.join(__dirname, '../../../', rel), 'utf8');
 }
 
-describe('Phase 2.7 — Disconnect handling (M1 21 May fix: no auto-LEFT)', () => {
+describe('Phase 2.7 — Disconnect hardening (auto-LEFT at 15 s + stale-heartbeat)', () => {
   const src = readServer('services/orchestration/handlers/participant-flow.ts');
 
   describe('15 s mid-match disconnect timeout', () => {
     it('the 15-second timeout still exists at its original cadence', () => {
-      // The reassignment-decision timer at 15 s is preserved — it still
-      // fires the partner-reassignment OR bye flow for the CURRENT round.
-      // The change is what it does AFTER deciding the user didn't reconnect.
+      // The reassignment-decision timer at 15 s is preserved — it fires the
+      // partner-reassignment OR bye flow for the CURRENT round.
       expect(src).toMatch(/setTimeout\([\s\S]*?,\s*15000\)/);
     });
 
-    it('the M1-fix comment block is present in the disconnect-timeout body', () => {
+    it('after no-reconnect check, transitions user to LEFT via the chokepoint', () => {
       const fnStart = src.indexOf('export async function handleDisconnect(');
       const fnEnd = src.indexOf('\nexport ', fnStart + 1);
       const fn = src.slice(fnStart, fnEnd);
-      expect(fn).toMatch(/M1 fix \(21 May Ali\)/);
-    });
-
-    it('the disconnect-timeout body does NOT transition the user to LEFT', () => {
-      const fnStart = src.indexOf('export async function handleDisconnect(');
-      const fnEnd = src.indexOf('\nexport ', fnStart + 1);
-      const fn = src.slice(fnStart, fnEnd);
-      expect(fn).not.toMatch(/transitionParticipant\([^)]*ParticipantState\.LEFT/);
-    });
-
-    it('the disconnect-timeout body does NOT trigger maybeRepairFutureRounds(left)', () => {
-      const fnStart = src.indexOf('export async function handleDisconnect(');
-      const fnEnd = src.indexOf('\nexport ', fnStart + 1);
-      const fn = src.slice(fnStart, fnEnd);
-      expect(fn).not.toMatch(/maybeRepairFutureRounds\(io,\s*sessionId,\s*'left'\)/);
-    });
-
-    it('the match-ending logic (terminal status + auto-reassign) still runs', () => {
-      const fnStart = src.indexOf('export async function handleDisconnect(');
-      const fnEnd = src.indexOf('\nexport ', fnStart + 1);
-      const fn = src.slice(fnStart, fnEnd);
-      // Partner-side reassignment is preserved.
-      expect(fn).toMatch(/findIsolatedParticipants/);
-      // Terminal-status decision is preserved.
-      expect(fn).toMatch(/Determine terminal status based on actual conversation state/);
+      // The auto-LEFT block sits inside the timeout body, after the
+      // reconnect check, before reassignment. Pin: it calls
+      // transitionParticipant with LEFT and triggers repair.
+      expect(fn).toMatch(/transitionParticipant\([\s\S]+?ParticipantState\.LEFT/);
+      expect(fn).toMatch(/maybeRepairFutureRounds\(io,\s*sessionId,\s*'left'\)/);
     });
   });
 
   describe('90 s stale-heartbeat detector', () => {
-    it('stale-heartbeat path clears presence but does NOT mark user LEFT', () => {
+    it('stale-heartbeat path also transitions to LEFT + repairs future rounds', () => {
       const fnStart = src.indexOf('export function startHeartbeatStaleDetection(');
       const fnEnd = src.indexOf('\n}\n', fnStart);
       const fn = src.slice(fnStart, fnEnd);
-      // Still clears presence (so partner-side disconnect logic can react).
-      expect(fn).toMatch(/setPresence\(sessionId,\s*userId,\s*null\)/);
-      // No LEFT transition.
-      expect(fn).not.toMatch(/transitionParticipant\([^)]*ParticipantState\.LEFT/);
-      // No plan-repair with 'left' reason.
-      expect(fn).not.toMatch(/maybeRepairFutureRounds\(io,\s*sessionId,\s*'left'\)/);
-      // The M1 fix comment is present.
-      expect(fn).toMatch(/M1 fix \(21 May Ali\)/);
-    });
-
-    it('participant:left socket emit still fires (visual "disconnected" treatment)', () => {
-      // The roster still notifies viewers that the user's presence dropped —
-      // the DB just doesn't get a terminal status stamped on the row.
-      const fnStart = src.indexOf('export function startHeartbeatStaleDetection(');
-      const fnEnd = src.indexOf('\n}\n', fnStart);
-      const fn = src.slice(fnStart, fnEnd);
-      expect(fn).toMatch(/emit\(\s*['"]participant:left['"]/);
+      expect(fn).toMatch(/transitionParticipant\([\s\S]+?ParticipantState\.LEFT/);
+      expect(fn).toMatch(/maybeRepairFutureRounds\(io,\s*sessionId,\s*'left'\)/);
     });
 
     it('STALE_HEARTBEAT_MS unchanged at 90s (network-blip tolerance)', () => {
-      // 90 s is right for stable-connection users on flaky networks.
+      // 90 s is right for stable-connection users on flaky networks. The
+      // 15 s mid-match path is for users who are in an active match and
+      // need a faster decision because their partner is waiting.
       expect(src).toMatch(/STALE_HEARTBEAT_MS\s*=\s*90_000/);
     });
   });

@@ -7,7 +7,6 @@
 
 import { Server as SocketServer } from 'socket.io';
 import logger from '../../../config/logger';
-import { config } from '../../../config';
 import { query } from '../../../db';
 import { SessionStatus, ParticipantStatus } from '@rsn/shared';
 import {
@@ -15,7 +14,6 @@ import {
   sessionRoom, userRoom, persistSessionState, clearPersistedState,
   cleanupChatMessages,
 } from '../state/session-state';
-import { canTransitionSession } from '../state/session-fsm';
 import { startSegmentTimer, clearSessionTimers, getTimerCallbackForState, TimerCallbacks } from './timer-manager';
 import * as sessionService from '../../session/session.service';
 import * as matchingService from '../../matching/matching.service';
@@ -23,16 +21,7 @@ import * as ratingService from '../../rating/rating.service';
 import * as videoService from '../../video/video.service';
 // Phase 2C (5 May spec) — chokepoint for status writes.
 import { transitionParticipant, ParticipantState } from '../state/participant-state-machine';
-// Phase 3 — make the canonical Redis doc authoritative for session status.
-// Best-effort direct write next to each in-memory status assignment.
-import { updateCanonicalSessionStatus } from '../state/canonical-state';
 import * as emailService from '../../email/email.service';
-// Phase 2 (19 May 2026) — realtime migration dual-emit. Each round-
-// lifecycle broadcast (match:assigned, rating:window_open/closed) gets
-// a sibling emitEntities() call so the client's predicate invalidator
-// can refresh React-Query keys without bespoke listeners.
-import { emitEntities } from '../../../realtime/emit';
-import { E } from '../../../realtime/entities';
 
 // ─── Cross-module references (wired in Task 7) ────────────────────────────
 
@@ -49,16 +38,6 @@ export function injectRoundLifecycleDeps(deps: {
 }) {
   _timerCallbacks = deps.timerCallbacks;
   _emitHostDashboard = deps.emitHostDashboard;
-}
-
-// ─── Phase 4 (G1, flag-gated) ─────────────────────────────────────────────
-
-/** Phase 4 (G1, flag-gated) — sever matched users' lobby presence at round
- *  start so they cannot be in the main room AND a breakout simultaneously. */
-export async function evictMatchedFromLobby(sessionId: string, userIds: string[]): Promise<void> {
-  if (!config.roomEvictionEnabled) return;
-  const lobby = videoService.lobbyRoomId(sessionId);
-  await Promise.all(userIds.map(uid => videoService.evictFromRoom(uid, lobby)));
 }
 
 // ─── Helper: emit host dashboard (delegates to injected fn or no-op) ──────
@@ -224,42 +203,12 @@ export async function transitionToRound(
   if (!activeSession) return;
 
   try {
-    // C2 (Phase 2) — precondition: ROUND_ACTIVE is reachable only from
-    // LOBBY_OPEN (round 1) or ROUND_TRANSITION (round n+1). A duplicate start
-    // (host "Start Round" racing a transition timer) finds status already
-    // ROUND_ACTIVE and no-ops, preventing a double match-generation.
-    if (!canTransitionSession(activeSession.status, SessionStatus.ROUND_ACTIVE)) {
-      logger.warn({ sessionId, currentStatus: activeSession.status, roundNumber },
-        'transitionToRound: illegal/duplicate start — skipping (C2)');
-      return;
-    }
-
-    // 23 May (Stefan live test) — bump the round count when a bonus round
-    // actually STARTS. Moved here from the "Another Round" preview action so a
-    // previewed-but-never-started round never inflates the recap's "X of N".
-    // Idempotent: only bumps when this round exceeds the configured count.
-    if (roundNumber > (activeSession.config.numberOfRounds || 0)) {
-      const bonusRoundsAdded = (activeSession.config.bonusRoundsAdded ?? 0) + 1;
-      activeSession.config = {
-        ...activeSession.config,
-        numberOfRounds: roundNumber,
-        bonusRoundsAdded,
-      };
-      await query(
-        `UPDATE sessions SET config = jsonb_set(
-           jsonb_set(config, '{numberOfRounds}', to_jsonb($2::int), true),
-           '{bonusRoundsAdded}', to_jsonb($3::int), true) WHERE id = $1`,
-        [sessionId, roundNumber, bonusRoundsAdded],
-      ).catch(err => logger.warn({ err, sessionId, roundNumber }, 'Failed to persist bonus-round bump (non-fatal)'));
-    }
-
     // Update session state
     activeSession.currentRound = roundNumber;
     activeSession.status = SessionStatus.ROUND_ACTIVE;
     activeSession.manuallyLeftRound.clear();
 
     await sessionService.updateSessionStatus(sessionId, SessionStatus.ROUND_ACTIVE);
-    void updateCanonicalSessionStatus(sessionId, SessionStatus.ROUND_ACTIVE);
     await query('UPDATE sessions SET current_round = $1 WHERE id = $2', [roundNumber, sessionId]);
     persistSessionState(sessionId, activeSession).catch(() => {});
 
@@ -358,8 +307,7 @@ export async function transitionToRound(
     const sessionConfig = activeSession.config;
     const roundsRemaining = Math.max(1, (sessionConfig.numberOfRounds || 5) - roundNumber);
     const roundDuration = sessionConfig.roundDurationSeconds || 480;
-    // F5 (21 May Ali) — fallback aligned with DEFAULT_SESSION_CONFIG (30 s).
-    const ratingWindow = sessionConfig.ratingWindowSeconds || 30;
+    const ratingWindow = sessionConfig.ratingWindowSeconds || 10;
     const estimatedRemainingSeconds = roundsRemaining * (roundDuration + ratingWindow + 30) + 600;
     const tokenTtl = Math.max(1800, Math.min(14400, estimatedRemainingSeconds));
 
@@ -422,12 +370,6 @@ export async function transitionToRound(
           token: tokenMap.get(pid) || null,
           livekitUrl: appConfig.livekit.host,
         });
-        // Phase 2 dual-emit — session + participants + match for each
-        // assigned participant so their live-event queries refresh.
-        emitEntities(
-          io, [pid],
-          [E.session(sessionId), E.sessionParticipants(sessionId), E.match(match.id)],
-        ).catch(() => {});
 
         statusUpdatePromises.push(
           sessionService.updateParticipantStatus(sessionId, pid, ParticipantStatus.IN_ROUND)
@@ -436,9 +378,6 @@ export async function transitionToRound(
     }
     // Fire all status updates in parallel (these are independent writes)
     await Promise.allSettled(statusUpdatePromises);
-
-    // Phase 4 (G1) — server-side eviction from the lobby room (dark unless ROOM_EVICTION_ENABLED).
-    await evictMatchedFromLobby(sessionId, Array.from(matchedUserIds));
 
     // Notify bye participants (unmatched due to odd count — exclude host, they stay in lobby)
     const allParticipants = await query<{ user_id: string }>(
@@ -473,20 +412,6 @@ export async function transitionToRound(
       sessionId,
       status: SessionStatus.ROUND_ACTIVE,
       currentRound: roundNumber,
-    });
-
-    // 23 May (Stefan live test) — refresh the host's Event Plan strip on round
-    // start so the active round flips to amber immediately. The strip is
-    // host-only and otherwise only refetches on its 30s timer / participant
-    // entity emits (which don't reach the host), so it stayed "Planned" — and
-    // for a short round never showed amber at all.
-    io.to(sessionRoom(sessionId)).emit('host:event_plan_repaired', {
-      sessionId,
-      reason: 'round_started',
-      regeneratedRounds: [roundNumber],
-      roundCount: activeSession.config.numberOfRounds,
-      totalPairs: 0,
-      bonusRoundsAdded: activeSession.config.bonusRoundsAdded ?? 0,
     });
 
     // Start round timer
@@ -529,16 +454,6 @@ export async function endRound(
   if (!activeSession) return;
 
   try {
-    // C2 (Phase 2) — precondition: ROUND_ACTIVE is the only legal source for
-    // ending a round. A duplicate fire (host "End Round" racing the round
-    // timer) finds status already past ROUND_ACTIVE and no-ops, so it cannot
-    // re-emit round_ended, re-arm the rating timer, or re-complete matches.
-    if (!canTransitionSession(activeSession.status, SessionStatus.ROUND_RATING)) {
-      logger.warn({ sessionId, currentStatus: activeSession.status, roundNumber },
-        'endRound: not in ROUND_ACTIVE — skipping duplicate/illegal transition (C2)');
-      return;
-    }
-
     // Complete all active matches for this round
     await query(
       `UPDATE matches SET status = 'completed', ended_at = NOW()
@@ -560,25 +475,12 @@ export async function endRound(
     // Move to rating phase
     activeSession.status = SessionStatus.ROUND_RATING;
     await sessionService.updateSessionStatus(sessionId, SessionStatus.ROUND_RATING);
-    void updateCanonicalSessionStatus(sessionId, SessionStatus.ROUND_RATING);
     persistSessionState(sessionId, activeSession).catch(() => {});
 
     io.to(sessionRoom(sessionId)).emit('session:status_changed', {
       sessionId,
       status: SessionStatus.ROUND_RATING,
       currentRound: roundNumber,
-    });
-
-    // 23 May (Stefan live test) — refresh the host's Event Plan strip on round
-    // end so the finished round flips to green "Done" without waiting for the
-    // strip's 30s timer.
-    io.to(sessionRoom(sessionId)).emit('host:event_plan_repaired', {
-      sessionId,
-      reason: 'round_ended',
-      regeneratedRounds: [roundNumber],
-      roundCount: activeSession.config.numberOfRounds,
-      totalPairs: 0,
-      bonusRoundsAdded: activeSession.config.bonusRoundsAdded ?? 0,
     });
 
     // Get matches for rating window notifications
@@ -610,34 +512,17 @@ export async function endRound(
         // this match. Primary emit sites (voluntary leave, host remove, auto-
         // reassign timeout) fire on first-entry to rating state — this guard
         // prevents endRound from re-firing for users who already saw the form.
-        // 23 May (#6) — partner-keyed dedup, round-scoped. A participant pulled
-        // back early (or reassigned) rates their partner, but that rating is
-        // filed under whatever match they were in at the time, which differs
-        // from THIS round's match.id after a reassign (handleHostReassign
-        // INSERTs a fresh match row). Keying the dedup on match_id alone missed
-        // it and re-opened the form at round end. Match the actual (rater →
-        // partner) edge across ALL of this round's matches instead, so an
-        // already-rated partner is never re-prompted regardless of which match
-        // id recorded the rating.
-        const alreadyRatedEdges = await query<{ from_user_id: string; to_user_id: string }>(
-          `SELECT DISTINCT r.from_user_id, r.to_user_id
-             FROM ratings r
-             JOIN matches m ON m.id = r.match_id
-            WHERE m.session_id = $1 AND m.round_number = $2
-              AND r.from_user_id = ANY($3)`,
-          [sessionId, roundNumber, participantIds],
+        const alreadyRated = await query<{ from_user_id: string }>(
+          `SELECT DISTINCT from_user_id FROM ratings WHERE match_id = $1 AND from_user_id = ANY($2)`,
+          [match.id, participantIds],
         );
-        const ratedEdges = new Set(alreadyRatedEdges.rows.map(r => `${r.from_user_id}:${r.to_user_id}`));
+        const ratedUserIds = new Set(alreadyRated.rows.map(r => r.from_user_id));
 
         // Notify each participant to rate their partner(s) — include display names
         for (const pid of participantIds) {
-          const partnerIds = participantIds.filter(id => id !== pid);
-          // #6 (25 May) — an explicit Skip closes the rating for this match.
-          if (activeSession.ratingSkips?.has(`${pid}:${match.id}`)) continue;
-          // Skip the form only when this user has already rated EVERY partner in
-          // this match. Trios where one partner is still unrated still get a form.
-          if (partnerIds.every(partnerId => ratedEdges.has(`${pid}:${partnerId}`))) continue;
+          if (ratedUserIds.has(pid)) continue; // Already rated — skip double-form
 
+          const partnerIds = participantIds.filter(id => id !== pid);
           const partnersWithNames = partnerIds.map(id => ({
             userId: id,
             displayName: ratingNameMap.get(id) || 'Partner',
@@ -656,13 +541,6 @@ export async function endRound(
             durationSeconds: scaledDuration,
             partnerCount,
           });
-          // Phase 2 dual-emit — session + participants for the rater so
-          // unrated-partners / session-participants queries pick up the
-          // pending-rating state.
-          emitEntities(
-            io, [pid],
-            [E.session(sessionId), E.sessionParticipants(sessionId)],
-          ).catch(() => {});
         }
       }
 
@@ -691,27 +569,22 @@ export async function endRound(
       await transitionParticipant(sessionId, userId, ParticipantState.IN_MAIN_ROOM);
     }
 
-    // Safety-net backstop — fires endRatingWindow if stragglers never finish.
-    // No timer:sync is broadcast: the client shows no countdown during rating.
-    // The primary advance path is the all-rated early-close
-    // (checkAllRatingsCompleteByUserId, participant-flow.ts) OR the host
-    // force-advance (handleHostStartRound / handleHostEnd from ROUND_RATING),
-    // both of which close the window before this fires. clearSessionTimers()
-    // (called by endRatingWindow and session teardown) cancels it the same way
-    // as a startSegmentTimer-based timer.
-    // #4 (26 May live test) — lowered 180 s → 90 s. The robust early-close now
-    // accounts for skips / leavers / re-match churn (so it actually fires), and
-    // the host has an escape hatch; 90 s is a safer ceiling so a stuck state
-    // self-heals roughly twice as fast while still leaving slow raters time.
-    const RATING_BACKSTOP_MS = 90_000;
-    clearSessionTimers(sessionId);
-    activeSession.timerEndsAt = new Date(Date.now() + RATING_BACKSTOP_MS);
-    activeSession.timer = setTimeout(() => {
-      const s = activeSessions.get(sessionId) ?? activeSession;
-      s.timer = null;
-      s.timerEndsAt = null;
+    // Find the max partner count across all completed matches
+    // Each match has participant_a, participant_b, and optionally participant_c
+    const completedMatches = matches.filter((m: any) => m.status === 'completed');
+    const maxPartnerCount = Math.max(
+      ...completedMatches.map((m: any) => {
+        const parts = [m.participantAId, m.participantBId, m.participantCId].filter(Boolean);
+        return parts.length - 1; // subtract self = number of partners
+      }),
+      1 // minimum 1
+    );
+    const ratingDuration = (activeSession.config.ratingWindowSeconds || 30) * maxPartnerCount;
+
+    // Start rating window timer (scaled by max partner count so trios have enough time)
+    startSegmentTimer(io, sessionId, ratingDuration, () => {
       endRatingWindow(io, sessionId, roundNumber);
-    }, RATING_BACKSTOP_MS);
+    });
 
     logger.info({ sessionId, roundNumber }, 'Round ended → ROUND_RATING');
   } catch (err) {
@@ -745,36 +618,12 @@ export async function endRatingWindow(
     await ratingService.finalizeRoundRatings(sessionId, roundNumber);
 
     io.to(sessionRoom(sessionId)).emit('rating:window_closed', { roundNumber });
-    // Phase 2 dual-emit — session + participants refresh after rating
-    // window closes. Audience = active session participants (same as
-    // the room broadcast above).
-    try {
-      const rows = await query<{ user_id: string }>(
-        `SELECT user_id FROM session_participants
-           WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')`,
-        [sessionId],
-      );
-      emitEntities(
-        io, rows.rows.map(r => r.user_id),
-        [E.session(sessionId), E.sessionParticipants(sessionId)],
-      ).catch(() => {});
-    } catch { /* dual-emit failure non-fatal */ }
-
-    // #11 (23 May) — host pressed End Event during the round. Now that this
-    // round's rating window has closed, complete the event in ONE step rather
-    // than opening the next round or sitting in the closing lobby.
-    if (activeSession.endRequested) {
-      logger.info({ sessionId, roundNumber }, '#11 endRequested — completing event after rating window');
-      await completeSession(io, sessionId);
-      return;
-    }
 
     // Check if there are more rounds
     if (roundNumber < activeSession.config.numberOfRounds) {
       // Transition phase
       activeSession.status = SessionStatus.ROUND_TRANSITION;
       await sessionService.updateSessionStatus(sessionId, SessionStatus.ROUND_TRANSITION);
-      void updateCanonicalSessionStatus(sessionId, SessionStatus.ROUND_TRANSITION);
       persistSessionState(sessionId, activeSession).catch(() => {});
 
       io.to(sessionRoom(sessionId)).emit('session:status_changed', {
@@ -788,8 +637,7 @@ export async function endRatingWindow(
       if (session.lobbyRoomId) {
         const lobbyRoundsRemaining = Math.max(1, (activeSession.config.numberOfRounds || 5) - roundNumber);
         const lobbyRoundDuration = activeSession.config.roundDurationSeconds || 480;
-        // F5 (21 May Ali) — fallback aligned with DEFAULT_SESSION_CONFIG (30 s).
-        const lobbyRatingWindow = activeSession.config.ratingWindowSeconds || 30;
+        const lobbyRatingWindow = activeSession.config.ratingWindowSeconds || 10;
         const lobbyTtl = Math.max(1800, Math.min(14400, lobbyRoundsRemaining * (lobbyRoundDuration + lobbyRatingWindow + 30) + 600));
 
         const socketsInRoom = await io.in(sessionRoom(sessionId)).fetchSockets();
@@ -805,10 +653,6 @@ export async function endRatingWindow(
               livekitUrl: appConfig.livekit.host,
               roomId: session.lobbyRoomId,
             });
-            if (config.roomEvictionEnabled) {
-              const rp = activeSession.roomParticipants?.get(uid);
-              if (rp?.roomId) await videoService.evictFromRoom(uid, rp.roomId);
-            }
           } catch { /* skip */ }
         }
       }
@@ -819,7 +663,6 @@ export async function endRatingWindow(
       // Last round done → transition to closing lobby for goodbyes
       activeSession.status = SessionStatus.CLOSING_LOBBY;
       await sessionService.updateSessionStatus(sessionId, SessionStatus.CLOSING_LOBBY);
-      void updateCanonicalSessionStatus(sessionId, SessionStatus.CLOSING_LOBBY);
       persistSessionState(sessionId, activeSession).catch(() => {});
 
       io.to(sessionRoom(sessionId)).emit('session:status_changed', {
@@ -869,67 +712,27 @@ export async function endRatingWindow(
 export async function completeSession(io: SocketServer, sessionId: string): Promise<void> {
   const activeSession = activeSessions.get(sessionId);
 
-  // C2 (Phase 2) — idempotency guard only. completeSession is legitimately
-  // reached from several states (CLOSING_LOBBY, the #11 endRequested path
-  // from ROUND_RATING, host End-Event), so it is NOT FSM-gated; we only
-  // refuse a re-entrant completion.
-  if (activeSession && activeSession.status === SessionStatus.COMPLETED) {
-    logger.warn({ sessionId }, 'completeSession: already COMPLETED — skipping (C2)');
-    return;
-  }
-
   try {
     // FIX 5D: Clear ALL timers (main + sync interval)
     clearSessionTimers(sessionId);
 
-    // #F (25 May, Ali) — clearSessionTimers only kills the session segment timer.
-    // Manual breakout rooms keep their OWN per-match setInterval (roomTimers /
-    // roomSyncIntervals in host-actions). If the event ends while a manual room
-    // is active, that interval is never cleared and keeps emitting timer:sync to
-    // those users' rooms — leaking a stale countdown into the NEXT event (the
-    // "8:20 from a previous event" Ali saw). Clear every room timer for this
-    // session's matches on event end. Non-fatal.
-    try {
-      const { clearRoomTimers } = await import('./host-actions');
-      const matchRows = await query<{ id: string }>(
-        `SELECT id FROM matches WHERE session_id = $1`, [sessionId],
-      );
-      for (const m of matchRows.rows) clearRoomTimers(m.id);
-    } catch (timerErr) {
-      logger.warn({ err: timerErr, sessionId }, '#F — clearing manual-room timers on event end failed (non-fatal)');
-    }
-
-    // F4 (21 May Ali) — minimise time-to-emit so the host stops seeing
-    // a stale UI after they click End Event. Pre-fix the ordering was:
-    //   1. updateSessionStatus            (DB,  ~30 ms)
-    //   2. ended_at update                (DB,  ~30 ms)
-    //   3. M1 participant sweep           (DB,  ~30 ms)
-    //   4. invite expiry                  (DB,  ~30 ms)
-    //   5. finalizeSessionEncounters      (DB,  N sequential awaited queries —
-    //                                          400 ms–several seconds for a
-    //                                          multi-round event)
-    //   6. EMIT session:completed         ← host's client doesn't transition
-    //                                       until this point
-    //   7. await cleanupLiveKitRooms      (≈2–5 s, but post-emit so OK)
-    // Live test (21 May) recorded a 10 s "stale host screen" after End
-    // Event with 4 participants × multi-round event. Encounter
-    // finalization was the dominant cost in steps 1–5 because the inner
-    // loop awaited each INSERT serially.
-    //
-    // New ordering: emit IMMEDIATELY after the minimum DB writes the
-    // client cares about (sessions.status=COMPLETED + ended_at). All
-    // other housekeeping runs afterward in parallel; the recap page
-    // reads from rows that have been written by the time the client's
-    // 1.5 s post-emit transition timer fires. cleanupLiveKitRooms is
-    // STILL awaited (Phase A4 — must complete before activeSessions
-    // delete in finally, else the lobby room outlives the in-memory
-    // state).
+    // Update session status
     await sessionService.updateSessionStatus(sessionId, SessionStatus.COMPLETED);
-    void updateCanonicalSessionStatus(sessionId, SessionStatus.COMPLETED);
     await query('UPDATE sessions SET ended_at = NOW() WHERE id = $1', [sessionId]);
 
-    // EMIT FIRST. Host's UI transitions on this; everything below is
-    // background housekeeping.
+    // Invalidate all pending invites for this session — no one can join a completed event
+    await query(
+      `UPDATE invites SET status = 'expired' WHERE session_id = $1 AND status = 'pending'`,
+      [sessionId]
+    ).catch(err => logger.warn({ err, sessionId }, 'Failed to expire session invites (non-fatal)'));
+
+    // Finalize encounter history for any unrated matches
+    try {
+      await ratingService.finalizeSessionEncounters(sessionId);
+    } catch (encErr) {
+      logger.error({ err: encErr, sessionId }, 'Error finalizing session encounters (non-fatal)');
+    }
+
     io.to(sessionRoom(sessionId)).emit('session:completed', { sessionId });
     io.to(sessionRoom(sessionId)).emit('session:status_changed', {
       sessionId,
@@ -937,69 +740,7 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
       currentRound: activeSession?.currentRound || 0,
     });
 
-    // #11 (23 May, Waseem host) — belt-and-braces delivery. The host pressed
-    // End Event and stayed stuck on the main-room screen; only a refresh moved
-    // him to recap. His socket had dropped out of sessionRoom (a mid-event
-    // reconnect re-joined his per-socket userRoom but not the session room), so
-    // the broadcast above missed him. userRoom is far more stable, so also fan
-    // the completion signal out per participant.
-    try {
-      const completedParts = await query<{ user_id: string }>(
-        `SELECT user_id FROM session_participants
-           WHERE session_id = $1 AND status NOT IN ('removed', 'no_show')`,
-        [sessionId],
-      );
-      for (const r of completedParts.rows) {
-        io.to(userRoom(r.user_id)).emit('session:completed', { sessionId });
-      }
-    } catch (err) {
-      logger.warn({ err, sessionId }, '#11 per-user session:completed fan-out failed (non-fatal)');
-    }
-
-    logger.info({ sessionId }, 'Session completed (clients signaled)');
-
-    // M1 sweep (21 May Ali) — close out the participant roster when the
-    // event truly ends. Pre-fix, disconnected participants were auto-
-    // transitioned to LEFT after a 15 s socket timeout, which removed
-    // them from every viewer's UI mid-event. That auto-LEFT is gone now
-    // (`participant-flow.ts` disconnect timeout); the new contract is
-    // that LEFT is set ONLY by:
-    //   1. Explicit user action (session:leave handler)
-    //   2. Host kick → REMOVED
-    //   3. Event end (this sweep)
-    // COALESCE preserves left_at on rows where it was already set
-    // legitimately (explicit leave), and stamps NOW() on rows that
-    // didn't have it. F4 (21 May) — moved post-emit so it doesn't gate
-    // the host's UI transition; the recap doesn't depend on
-    // session_participants.status for anything time-critical.
-    query(
-      `UPDATE session_participants
-         SET status = 'left',
-             left_at = COALESCE(left_at, NOW())
-       WHERE session_id = $1
-         AND status NOT IN ('left', 'removed', 'no_show')`,
-      [sessionId],
-    ).catch(err =>
-      logger.warn({ err, sessionId }, 'Event-end participant sweep failed (non-fatal)'),
-    );
-
-    // Invalidate all pending invites for this session — no one can join a completed event.
-    // F4 — also moved post-emit; an invite can't race a completed event because the
-    // join handler short-circuits on session.status='completed' regardless of invite state.
-    query(
-      `UPDATE invites SET status = 'expired' WHERE session_id = $1 AND status = 'pending'`,
-      [sessionId]
-    ).catch(err => logger.warn({ err, sessionId }, 'Failed to expire session invites (non-fatal)'));
-
-    // Finalize encounter history for any unrated matches. F4 — moved post-emit
-    // AND parallelised inside (was the dominant cost — see
-    // rating.service.ts:finalizeSessionEncounters for the loop change).
-    // Treated as fire-and-forget here so the host doesn't wait on this;
-    // the recap reads encounter rows but the function is idempotent so
-    // a refresh after a few hundred ms always reflects the final state.
-    ratingService.finalizeSessionEncounters(sessionId).catch(encErr =>
-      logger.error({ err: encErr, sessionId }, 'Error finalizing session encounters (non-fatal)'),
-    );
+    logger.info({ sessionId }, 'Session completed');
 
     // Fire-and-forget: send recap emails to all participants
     sendRecapEmails(sessionId).catch(emailErr => {
@@ -1273,33 +1014,14 @@ export async function detectNoShows(
   if (!activeSession || activeSession.status !== SessionStatus.ROUND_ACTIVE) return;
 
   try {
-    // #13 (23 May, Waseem live test) — reconcile presence against LIVE sockets
-    // before declaring no-shows. detectNoShows previously trusted the heartbeat
-    // presenceMap alone, which goes stale during a long preview/swap/rematch
-    // setup (idle or backgrounded tabs drop out of presenceMap). On a round
-    // start that followed such a setup, still-present participants were falsely
-    // no-show'd → every match cancelled → maybeAutoEndEmptyRound → and because
-    // this was the FINAL round, the event jumped straight to "all rounds
-    // completed" without the round ever really running. Treat a participant as
-    // present if they have a heartbeat OR a live socket in the session room.
-    const liveSocketUserIds = new Set<string>();
-    try {
-      const socketsInRoom = await io.in(sessionRoom(sessionId)).fetchSockets();
-      for (const s of socketsInRoom) {
-        const uid = (s.data as any)?.userId;
-        if (uid) liveSocketUserIds.add(uid);
-      }
-    } catch { /* fetchSockets failure non-fatal — fall back to presenceMap */ }
-    const isPresent = (uid: string) => activeSession.presenceMap.has(uid) || liveSocketUserIds.has(uid);
-
     const matches = await matchingService.getMatchesByRound(sessionId, roundNumber);
     let anyTransition = false;
 
     for (const match of matches) {
       if (match.status !== 'active') continue;
 
-      const aPresent = isPresent(match.participantAId);
-      const bPresent = isPresent(match.participantBId);
+      const aPresent = activeSession.presenceMap.has(match.participantAId);
+      const bPresent = activeSession.presenceMap.has(match.participantBId);
 
       if (!aPresent && !bPresent) {
         // Both absent — mark both no-show, cancel match

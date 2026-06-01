@@ -7,7 +7,6 @@ import logger from '../../../config/logger';
 import { query } from '../../../db';
 import { SessionStatus, SessionConfig } from '@rsn/shared';
 import { getRedisClient } from '../../redis/redis.client';
-import { shadowWriteCanonical } from './canonical-shadow';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -24,9 +23,7 @@ export interface ActiveSession {
   pausedTimeRemaining: number | null;
   presenceMap: Map<string, { lastHeartbeat: Date; socketId: string; reconnectedAt?: Date }>;
   pendingRoundNumber: number | null;  // Round number for pre-generated matches awaiting host confirmation
-  endRequested?: boolean;             // #11 (23 May) — host pressed End Event during an active round; complete the event after this round's rating instead of opening the next round
   manuallyLeftRound: Set<string>;     // Users who clicked "Leave Conversation" — skip in reconnect/reassignment
-  ratingSkips?: Set<string>;          // #6 (25 May) — `${userId}:${matchId}` for users who skipped that match's rating; replay + endRound dedup honor it so a skip is never re-prompted
   // Tier-1 A1: per-session cache for display names used by emitHostDashboard
   // and sendMatchPreview. Names don't change during an event, so we populate
   // on first lookup and reuse until the session ends.
@@ -50,26 +47,6 @@ export interface ActiveSession {
     currentRoomId: string | null;
     updatedAt: Date;
   }>;
-  /**
-   * Bug 1 (18 May Stefan) — global pin set by an acting host. When non-null,
-   * every participant's lobby view switches to pinned-mode with this user as
-   * the big tile. Participant-side local pins (yesterday's per-viewer pin)
-   * are overridden while a server pin is in effect. null means "no global
-   * pin — each viewer can use their own local pin if they want".
-   *
-   * Stored in-memory + persisted on the next persistSessionState call so it
-   * survives server restarts within the Redis TTL window.
-   */
-  pinnedUserId?: string | null;
-  /**
-   * Bug 26 (19 May Ali) — event-director visual demote list. User IDs in
-   * this set keep all their cohost privileges (HCC access, mute-other,
-   * etc.) but their tile renders at participant size with no host-ring.
-   * Director-only authority; cohosts cannot mutate this. Persists in
-   * Redis so a refresh / server restart doesn't reset the visual layout
-   * mid-event.
-   */
-  tileDemotedUserIds?: string[];
 }
 
 export interface ChatMessage {
@@ -142,10 +119,6 @@ export async function persistSessionState(sessionId: string, activeSession: Acti
 
   // Redis write-through (async, non-blocking)
   persistToRedis(sessionId, activeSession).catch(() => {});
-  // Canonical-room-state Phase 1 (shadow) — additive, non-blocking. Populates
-  // rsn:canonical:{id} so the new model can be validated against reality before
-  // any read path is switched (Phase 3).
-  shadowWriteCanonical(activeSession).catch(() => {});
 }
 
 export async function clearPersistedState(sessionId: string): Promise<void> {
@@ -180,12 +153,6 @@ async function persistToRedis(sessionId: string, session: ActiveSession): Promis
         }])
       ),
       manuallyLeftRound: Array.from(session.manuallyLeftRound),
-      // Bug 1 (18 May Stefan) — survive server restart so the global pin
-      // doesn't reset to null when the API process recycles mid-event.
-      pinnedUserId: session.pinnedUserId ?? null,
-      // Bug 26 (19 May Ali) — director's visual demote list survives the
-      // same way the pin does. Empty array if unset.
-      tileDemotedUserIds: session.tileDemotedUserIds ?? [],
     });
     await redis.setex(`${REDIS_SESSION_PREFIX}${sessionId}`, REDIS_TTL, serialized);
   } catch (err) {
@@ -301,30 +268,6 @@ export async function emitRatingWindowOnce(
   matchId: string,
   payload: unknown,
 ): Promise<void> {
-  // Phase R4 (20 May 2026) — defense-in-depth. The event host's userId must
-  // never receive a rating prompt: the host is not matchable (Phase R1) and
-  // any rating prompt to them is the signature of a phantom match having
-  // been created. If we see this path fire for the host, the Phase R1 / R6
-  // guards earlier in the stack were bypassed and we should fail loud, not
-  // pop a rating modal in the host's UI mid-event.
-  try {
-    const hostRes = await query<{ host_user_id: string }>(
-      `SELECT s.host_user_id FROM matches m
-       JOIN sessions s ON s.id = m.session_id
-       WHERE m.id = $1`,
-      [matchId],
-    );
-    const hostUserId = hostRes.rows[0]?.host_user_id;
-    if (hostUserId && hostUserId === userId) {
-      logger.warn({ matchId, userId, hostUserId },
-        'Phase R4 — refused to open rating window for the event host. Upstream guard bypassed?');
-      return;
-    }
-  } catch (err) {
-    logger.warn({ err, matchId, userId },
-      'Phase R4 host-check failed — emitting anyway (fail-open)');
-  }
-
   try {
     const existing = await query<{ id: string }>(
       `SELECT id FROM ratings WHERE match_id = $1 AND from_user_id = $2 LIMIT 1`,

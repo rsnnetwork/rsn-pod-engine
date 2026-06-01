@@ -287,8 +287,7 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
       if (notifResult && notifResult.rows.length > 0) {
         try {
           const { io } = await import('../../index');
-          const inviteeId = inviteeUser.rows[0].id;
-          io.to(`user:${inviteeId}`).emit('notification:new', {
+          io.to(`user:${inviteeUser.rows[0].id}`).emit('notification:new', {
             id: notifResult.rows[0].id,
             type: notifType,
             title: notifTitle,
@@ -300,14 +299,6 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
             podId: input.podId || null,
             sessionId: input.sessionId || null,
           });
-          // Phase 2 dual-emit — invitee's bell + received-invites surfaces
-          // refresh in the same tick as the bespoke event.
-          const { emitEntities } = await import('../../realtime/emit');
-          const { E } = await import('../../realtime/entities');
-          emitEntities(
-            io, [inviteeId],
-            [E.userNotifications(inviteeId), E.userInvites(inviteeId)],
-          ).catch(() => {});
         } catch { /* socket push is non-fatal */ }
       }
     }
@@ -735,10 +726,6 @@ export async function listReceivedInvites(userEmail: string, userId?: string): P
        AND (i.pod_id IS NULL OR NOT EXISTS (
          SELECT 1 FROM pod_members pm
          WHERE pm.pod_id = i.pod_id AND pm.user_id = $2
-           -- Bug 30 (19 May Ali) — only currently-in-pod rows should
-           -- mask a new pending invite. A removed/left/declined row is
-           -- history and the new invite is legitimately pending.
-           AND pm.status NOT IN ('removed', 'left', 'declined')
        ))`
     : '';
   const params = userId
@@ -818,16 +805,10 @@ export async function listPodInvites(
 
 // ─── Decline Invite ─────────────────────────────────────────────────────────
 
-// Bug 30 (19 May Ali) — return the affected invite's podId/sessionId so the
-// route can fan out the realtime events without re-querying.
-export async function declineInvite(
-  code: string,
-  userEmail: string,
-): Promise<{ podId: string | null; sessionId: string | null }> {
-  const result = await query<{ pod_id: string | null; session_id: string | null }>(
+export async function declineInvite(code: string, userEmail: string): Promise<void> {
+  const result = await query(
     `UPDATE invites SET status = 'revoked'
-     WHERE code = $1 AND invitee_email = $2 AND status = 'pending'
-     RETURNING pod_id, session_id`,
+     WHERE code = $1 AND invitee_email = $2 AND status = 'pending'`,
     [code, userEmail.toLowerCase()]
   );
 
@@ -847,32 +828,19 @@ export async function declineInvite(
   } catch { /* non-fatal */ }
 
   logger.info({ code, userEmail }, 'Invite declined by recipient');
-  return {
-    podId: result.rows[0]?.pod_id ?? null,
-    sessionId: result.rows[0]?.session_id ?? null,
-  };
 }
 
 // ─── Revoke Invite ──────────────────────────────────────────────────────────
 
-// Bug 30 (19 May Ali) — same pattern as declineInvite: return the affected
-// IDs so the route can fan out realtime events.
-export async function revokeInvite(
-  inviteId: string,
-  userId: string,
-): Promise<{ podId: string | null; sessionId: string | null }> {
-  const result = await query<{ pod_id: string | null; session_id: string | null }>(
-    `UPDATE invites SET status = 'revoked' WHERE id = $1 AND inviter_id = $2 AND status = 'pending'
-     RETURNING pod_id, session_id`,
+export async function revokeInvite(inviteId: string, userId: string): Promise<void> {
+  const result = await query(
+    `UPDATE invites SET status = 'revoked' WHERE id = $1 AND inviter_id = $2 AND status = 'pending'`,
     [inviteId, userId]
   );
 
   if (result.rowCount === 0) {
     throw new NotFoundError('Invite', inviteId);
   }
+
   logger.info({ inviteId, userId }, 'Invite revoked');
-  return {
-    podId: result.rows[0]?.pod_id ?? null,
-    sessionId: result.rows[0]?.session_id ?? null,
-  };
 }

@@ -289,30 +289,6 @@ export async function removeMember(podId: string, userId: string, removedBy: str
     [podId, userId]
   );
 
-  // Bug 30 (19 May Ali) — when a member is removed, the OLD invite they
-  // accepted to join the pod stays in the DB as status='accepted'. The
-  // accept route's addMember call would happily reactivate their pod
-  // membership on a re-click of that link, effectively undoing the
-  // removal. Revoke every accepted-and-pending invite for this
-  // (pod, user) so the only way back in is a fresh invite from the
-  // director. Best-effort: a failure here doesn't undo the removal.
-  try {
-    const userEmailRow = await query<{ email: string }>(
-      `SELECT email FROM users WHERE id = $1`,
-      [userId],
-    );
-    const email = userEmailRow.rows[0]?.email;
-    if (email) {
-      await query(
-        `UPDATE invites SET status = 'revoked'
-         WHERE pod_id = $1
-           AND status IN ('accepted', 'pending')
-           AND (accepted_by_user_id = $2 OR LOWER(invitee_email) = LOWER($3))`,
-        [podId, userId, email],
-      );
-    }
-  } catch { /* non-fatal — removal already committed */ }
-
   if (result.rowCount === 0) {
     throw new NotFoundError('PodMember');
   }

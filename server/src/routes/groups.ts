@@ -9,7 +9,6 @@ import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
 import * as groupService from '../services/dm/group.service';
-import { fanoutGroupEntities } from '../realtime/fanout';
 import { ApiResponse } from '@rsn/shared';
 
 const router = Router();
@@ -33,9 +32,6 @@ router.post(
       const result = await groupService.createCustomGroup(
         req.user!.userId, req.body.name, req.body.memberIds,
       );
-      // Phase May-19 realtime — fanout to every member's personal
-      // room so the new group appears in their inbox without a refresh.
-      fanoutGroupEntities(result.id).catch(() => {});
       const response: ApiResponse = { success: true, data: result };
       res.status(201).json(response);
     } catch (err) {
@@ -69,10 +65,6 @@ router.post(
       const result = await groupService.sendGroupMessage(
         req.params.id, req.user!.userId, req.body.content,
       );
-      // Phase May-19 realtime — fanout to every group member so their
-      // open thread / inbox surfaces refetch immediately. The group
-      // entity tag invalidates the dm-groups / dm-messages queries.
-      fanoutGroupEntities(req.params.id).catch(() => {});
       const response: ApiResponse = { success: true, data: result };
       res.status(201).json(response);
     } catch (err) {

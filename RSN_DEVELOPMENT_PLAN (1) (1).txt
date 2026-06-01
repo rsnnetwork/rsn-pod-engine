@@ -1,0 +1,1783 @@
+RSN Platform Development Plan
+Comprehensive Engineering Roadmap & Scaling Analysis
+Version: 1.0
+Date: January 12, 2026
+Target: 10,000+ Paid Members by End of 2026
+Table of Contents
+1. Executive Summary
+2. Vision Alignment
+3. Current State Analysis
+4. Gap Analysis
+5. System Architecture
+6. Architectural Decisions & Technical Strategy
+7. Scaling Risks & Engineering Challenges
+8. Development Phases
+9. Technical Specifications
+10. Risk Mitigations
+11. Success Metrics
+12. Missing Systems Deep-Dive
+13. Infrastructure Cost Projections
+14. Internationalization & Compliance
+15. Migration Strategy
+16. Appendix
+1. Executive Summary
+Platform Identity
+RSN (Pods of Reason) is a Connection Operating System — not social media, not a community feed, not just an
+event platform. It encodes a social contract enabling intentional, trust-based, non-transactional human connection at
+scale.
+Core Principle
+"If a feature increases noise, performance pressure, or selling behaviour, it is wrong by default."
+Growth Target
+Milestone Members Timeline
+Founders 150 Week 1
+The Circle 1,000 Month 1
+Expansion 4,000-7,000 Months 2-3
+Scale 10,000+ Month 4
+Revenue Model
+Pricing: $19/month or $199/year
+First 500: Free for life (cultural anchors)
+Entry: Events are always free
+Conversion: After 3rd participation → Invite 3-5 OR pay OR both
+2. Vision Alignment
+The Three I's (Growth Engine)
+Every member operates through this compass:
+1. Intention — What they want to grow or discuss
+2. Invitation — Who they bring into the network (3 people minimum)
+3. Impact — How they contribute and share RSN forward
+Pod Structure (Core Product)
+Pod Type Size Purpose
+DUO 2 Deep exchange, high trust, fast movement
+TRIO 3 Stable, personal, intimate
+KVARTET 4 Creative tension, balanced perspectives
+BAND 5-12 Mastermind format, shared acceleration
+ORCHESTRA 100+ Masterclasses, Raw Talks, workshops
+CONCERT 1,000+ Large-scale events
+Six Connected Systems (Per Operating Canvas)
+1. Identity and Trust
+2. Invitations and Growth
+3. Events as Ignition
+4. Pods as Core Product
+5. Governance and Stewardship
+6. Subscriptions and Sustainability
+3. Current State Analysis
+Existing Tech Stack
+Layer Technology Status
+Framework React 18 + TypeScript ✅ Implemented
+Build Tool Vite ✅ Implemented
+Styling Tailwind CSS + shadcn/ui ✅ Implemented
+State TanStack Query + React Context ✅ Implemented
+Routing React Router v6 ✅ Implemented
+Forms React Hook Form + Zod ⚠️ Partial
+Backend Supabase (PostgreSQL, Auth, Edge Functions, RLS) ✅ Implemented
+Email Resend ⚠️ Partial
+Payments Stripe ✅ Implemented
+Hosting GitHub Pages / Netlify ✅ Implemented
+Current Database Schema
+Implemented Tables:
+users — User profiles with ban status, admin flag
+invites — Invite codes and tracking
+pods — Pod groups (basic structure)
+pod_members — Pod membership (leader/member roles only)
+events — Speed networking events
+event_registrations — Event attendance
+support_tickets — Support requests
+support_ticket_messages — Ticket threads
+user_violations — Strike tracking
+user_subscriptions — Stripe subscription data
+Current Features
+Feature Status Notes
+Magic Link Auth ✅ Email-only authentication
+User Profiles ✅ Basic profile fields
+Invite System ⚠️ Basic, missing viral mechanics
+Pod Creation ⚠️ Missing Director role, lifecycle states
+Events ⚠️ Basic CRUD, missing calendar integration
+Billing/Stripe ✅ Checkout, portal, webhooks
+Admin Dashboard ⚠️ Placeholder pages
+Violations/Bans ⚠️ Basic structure
+4. Gap Analysis
+Critical Missing Features
+4.1 Identity & Trust System
+Required Current Gap
+LinkedIn URL (mandatory) Optional field Must enforce at signup
+Intention statement Not implemented New feature
+"What I offer" / "What I seek" Not implemented New feature
+Conversation boundaries Not implemented New feature
+Region preference (EU/US/both) Not implemented New feature
+Reason Score Not implemented Complex feature
+4.2 Invitation System
+Required Current Gap
+Personal invite link per user Basic Needs enhancement
+Invite states (Sent→Opened→Accepted→Joined→Expired) Basic accepted_at only Major gap
+Inviter notifications on milestones Not implemented New feature
+Daily invite caps with trust scaling Not implemented New feature
+Anti-spam rules Not implemented Critical for scale
+Invite attribution chain Basic Needs full tracking
+4.3 Pod System
+Required Current Gap
+Pod roles (Owner, Director, Member) Only leader/member Missing Director role
+Pod lifecycle (Draft→Active→Paused→Archived→Dissolved) is_active boolean only Major gap
+Pod access types (Invite only, Request to join, Open) Not implemented New feature
+Pod size presets (DUO, TRIO, etc.) max_members integer Needs presets
+Pod rules (configurable) Not implemented New feature
+Pod chat Not implemented Major feature
+Pod meetings with calendar Not implemented Major feature
+Recording capability Not implemented Future feature
+Pod discovery (intention-based) Not implemented Future feature
+4.4 Events System
+Required Current Gap
+Calendar invite generation (ICS) Not implemented Critical
+Google Calendar integration Not implemented Critical
+Pre-event reminders Not implemented Critical
+Post-event follow-ups Not implemented Important
+Pod-specific events Not clear separation Needs clarification
+Event capacity/waitlist max_attendees exists Needs waitlist logic
+4.5 Governance System
+Required Current Gap
+3-strike system user_violations exists Needs automation
+Strike 1: Warning Not implemented New feature
+Strike 2: Final warning Not implemented New feature
+Strike 3: Permanent ban Manual only Needs automation
+Reporting (named/anonymous) Not implemented New feature
+Evidence capture Not implemented New feature
+Admin review queue Not implemented New feature
+4.6 Subscription System
+Required Current Gap
+Free tier entitlements Not defined Needs definition
+Paid tier entitlements Not defined Needs definition
+Pod limits by tier Not implemented Critical
+Director assignments by tier Not implemented Critical
+Feature flags by tier Not implemented Critical
+5. System Architecture
+High-Level Architecture
+┌─────────────────────────────────────────────────────────────────┐
+│ CLIENT LAYER │
+│ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ │
+│ │ Web App │ │ Mobile Web │ │ Admin UI │ │
+│ │ (React) │ │ (PWA) │ │ (React) │ │
+│ └─────────────┘ └─────────────┘ └─────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+│
+▼
+┌─────────────────────────────────────────────────────────────────┐
+│ API LAYER │
+│ ┌─────────────────────────────────────────────────────────┐ │
+│ │ Supabase Edge Functions │ │
+│ │ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ │ │
+│ │ │ Auth │ │ Invites │ │ Notify │ │ Stripe │ │ │
+│ │ └─────────┘ └─────────┘ └─────────┘ └─────────┘ │ │
+│ └─────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+│
+▼
+┌─────────────────────────────────────────────────────────────────┐
+│ DATA LAYER │
+│ ┌─────────────────────────────────────────────────────────┐ │
+│ │ Supabase PostgreSQL │ │
+│ │ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ │ │
+│ │ │ Users │ │ Pods │ │ Events │ │Invites │ │ │
+│ │ └────────┘ └────────┘ └────────┘ └────────┘ │ │
+│ │ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ │ │
+│ │ │Tickets │ │Violate │ │Subscr. │ │ Logs │ │ │
+│ │ └────────┘ └────────┘ └────────┘ └────────┘ │ │
+│ └─────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+│
+▼
+┌─────────────────────────────────────────────────────────────────┐
+│ EXTERNAL SERVICES │
+│ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ │
+│ │ Resend │ │ Stripe │ │Circle.so│ │ Zoom │ │LinkedIn │ │
+│ │ (Email) │ │(Payment)│ │(Legacy) │ │(Events) │ │ (Auth) │ │
+│ └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+Database Schema Enhancements
+-- Enhanced Users Table
+ALTER TABLE users ADD COLUMN IF NOT EXISTS
+linkedin_url TEXT NOT NULL, -- MANDATORY
+intention_statement TEXT,
+what_i_offer TEXT,
+what_i_seek TEXT,
+conversation_boundaries TEXT,
+region_preference TEXT DEFAULT 'both' CHECK (region_preference IN ('eu', 'us', 'both')),
+reason_score DECIMAL(3,2) DEFAULT 0.00,
+participation_count INTEGER DEFAULT 0,
+invite_cap INTEGER DEFAULT 3,
+trust_level INTEGER DEFAULT 1;
+-- Enhanced Invites Table
+ALTER TABLE invites ADD COLUMN IF NOT EXISTS
+status TEXT DEFAULT 'sent' CHECK (status IN ('sent', 'opened', 'accepted', 'joined',
+'expired')),
+opened_at TIMESTAMPTZ,
+joined_at TIMESTAMPTZ,
+first_event_at TIMESTAMPTZ,
+first_pod_at TIMESTAMPTZ;
+-- Enhanced Pods Table
+ALTER TABLE pods ADD COLUMN IF NOT EXISTS
+pod_type TEXT DEFAULT 'band' CHECK (pod_type IN ('duo', 'trio', 'kvartet', 'band',
+'orchestra', 'concert')),
+lifecycle_state TEXT DEFAULT 'draft' CHECK (lifecycle_state IN ('draft', 'active',
+'paused', 'archived', 'dissolved')),
+access_type TEXT DEFAULT 'invite_only' CHECK (access_type IN ('invite_only',
+'request_to_join', 'open')),
+reason TEXT NOT NULL, -- Pod intention
+rules JSONB DEFAULT '{"no_selling": true, "no_pitching": true}',
+meeting_frequency TEXT,
+meeting_format TEXT,
+chat_enabled BOOLEAN DEFAULT false,
+recording_enabled BOOLEAN DEFAULT false;
+-- New: Pod Directors Table
+CREATE TABLE pod_directors (
+id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+pod_id UUID REFERENCES pods(id) ON DELETE CASCADE,
+user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+assigned_by UUID REFERENCES users(id),
+assigned_at TIMESTAMPTZ DEFAULT NOW(),
+UNIQUE(pod_id, user_id)
+);
+-- New: Pod Join Requests Table
+CREATE TABLE pod_join_requests (
+id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+pod_id UUID REFERENCES pods(id) ON DELETE CASCADE,
+user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+message TEXT,
+reviewed_by UUID REFERENCES users(id),
+created_at TIMESTAMPTZ DEFAULT NOW(),
+reviewed_at TIMESTAMPTZ,
+UNIQUE(pod_id, user_id)
+);
+-- New: Pod Meetings Table
+CREATE TABLE pod_meetings (
+id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+pod_id UUID REFERENCES pods(id) ON DELETE CASCADE,
+title TEXT NOT NULL,
+description TEXT,
+scheduled_at TIMESTAMPTZ NOT NULL,
+duration_minutes INTEGER DEFAULT 60,
+meeting_url TEXT,
+meeting_type TEXT DEFAULT 'zoom' CHECK (meeting_type IN ('zoom', 'google_meet', 'other')),
+created_by UUID REFERENCES users(id),
+created_at TIMESTAMPTZ DEFAULT NOW(),
+ics_data TEXT -- Generated ICS for download
+);
+-- New: Pod Chat Messages Table
+CREATE TABLE pod_chat_messages (
+id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+pod_id UUID REFERENCES pods(id) ON DELETE CASCADE,
+user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+message TEXT NOT NULL,
+created_at TIMESTAMPTZ DEFAULT NOW(),
+edited_at TIMESTAMPTZ,
+deleted_at TIMESTAMPTZ
+);
+-- New: Violation Reports Table
+CREATE TABLE violation_reports (
+id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+reported_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+reporter_id UUID REFERENCES users(id) ON DELETE SET NULL,
+is_anonymous BOOLEAN DEFAULT false,
+violation_type TEXT NOT NULL,
+context TEXT NOT NULL, -- Where it happened (pod, event, etc.)
+context_id UUID, -- Reference to pod/event
+evidence TEXT,
+status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'reviewing', 'action_taken',
+'dismissed')),
+strike_issued BOOLEAN DEFAULT false,
+admin_notes TEXT,
+created_at TIMESTAMPTZ DEFAULT NOW(),
+reviewed_at TIMESTAMPTZ,
+reviewed_by UUID REFERENCES users(id)
+);
+-- New: User Strikes Table (separate from violations for clarity)
+CREATE TABLE user_strikes (
+id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+violation_report_id UUID REFERENCES violation_reports(id),
+strike_number INTEGER NOT NULL CHECK (strike_number BETWEEN 1 AND 3),
+reason TEXT NOT NULL,
+issued_by UUID REFERENCES users(id),
+issued_at TIMESTAMPTZ DEFAULT NOW(),
+UNIQUE(user_id, strike_number)
+);
+-- New: User Entitlements Table
+CREATE TABLE user_entitlements (
+id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+user_id UUID REFERENCES users(id) ON DELETE CASCADE UNIQUE,
+tier TEXT DEFAULT 'free' CHECK (tier IN ('free', 'founder', 'circle', 'pro')),
+max_pods_owned INTEGER DEFAULT 1,
+max_pod_size INTEGER DEFAULT 6,
+max_directors_per_pod INTEGER DEFAULT 0,
+can_create_orchestra BOOLEAN DEFAULT false,
+can_enable_recording BOOLEAN DEFAULT false,
+is_lifetime_free BOOLEAN DEFAULT false, -- First 500
+created_at TIMESTAMPTZ DEFAULT NOW(),
+updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+-- New: Activity Log Table (for Reason Score calculation)
+CREATE TABLE user_activity_log (
+id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+activity_type TEXT NOT NULL,
+activity_data JSONB,
+created_at TIMESTAMPTZ DEFAULT NOW()
+);
+-- Create indexes for performance
+CREATE INDEX idx_pod_chat_messages_pod ON pod_chat_messages(pod_id);
+CREATE INDEX idx_pod_chat_messages_created ON pod_chat_messages(created_at DESC);
+CREATE INDEX idx_violation_reports_status ON violation_reports(status);
+CREATE INDEX idx_user_strikes_user ON user_strikes(user_id);
+CREATE INDEX idx_user_activity_log_user ON user_activity_log(user_id);
+CREATE INDEX idx_user_activity_log_created ON user_activity_log(created_at DESC);
+6. Architectural Decisions & Technical Strategy
+This section documents critical architectural decisions that require engineering alignment before implementation.
+Each decision includes options analysis, recommendations, scale thresholds, migration paths, and cost implications.
+6.1 Decision Framework
+How to Evaluate Options
+Criteria Weight Description
+Simplicity 25% Ease of implementation and maintenance
+Scalability 25% Ability to handle 10K+ users
+Cost 20% Total cost of ownership at scale
+Vendor Risk 15% Dependency and lock-in concerns
+Team Expertise 15% Existing knowledge and learning curve
+Decision Ownership
+Decision Type Owner Approver
+Infrastructure Engineering Lead CTO/Architect
+Integrations Engineering Lead Product + Engineering
+Security Security Lead CTO
+Data/Storage Engineering Lead CTO/Architect
+6.2 Infrastructure Decisions
+Decision 1: Real-Time Chat Architecture
+Option Pros Cons
+Supabase Realtime Built-in, simple, no extra
+cost
+Connection limits (500 concurrent on
+Pro)
+Dedicated Service
+(Ably/Pusher) Highly scalable, reliable $50-500/mo additional cost, complexity
+Polling for large pods Simple, reliable, no limits Not instant (5s delay), higher DB load
+Recommendation: Start with Supabase Realtime, add polling fallback for pods > 50 members.
+Scale Threshold Action Required
+< 2,000 users Supabase Realtime sufficient
+2,000-5,000 users Implement polling fallback
+> 5,000 users Evaluate Ably/Pusher migration
+Migration Path:
+1. Abstract real-time layer behind interface
+2. Implement polling as fallback (already needed)
+3. Add Ably/Pusher as drop-in replacement when needed
+Cost Implications:
+Users Supabase Only + Ably/Pusher
+1,000 $0 N/A
+5,000 $0 +$100/mo
+10,000 $0 +$250/mo
+Implementation Effort: 3 dev days (abstraction layer)
+Risk Assessment:
+Connection drops during high activity: MEDIUM
+Message ordering issues: LOW
+Vendor outage impact: HIGH (mitigate with polling fallback)
+Decision 2: File Storage (Recordings, Resources)
+Option Pros Cons
+Supabase Storage Integrated, simple auth $0.021/GB egress, limited features
+Cloudflare R2 Free egress, S3-compatible Additional setup, separate auth
+AWS S3 Industry standard, feature-rich $0.09/GB egress, complex pricing
+Recommendation: Supabase Storage for Phase 1-2, migrate recordings to R2 at scale.
+Scale Threshold Action Required
+< 100 recordings Supabase Storage
+100-1,000 recordings Monitor egress costs
+> 1,000 recordings Migrate to Cloudflare R2
+Migration Path:
+1. Use Supabase Storage for all uploads initially
+2. Implement storage abstraction layer
+3. Migrate large files (recordings) to R2 when egress > $50/mo
+4. Keep small files (avatars, documents) in Supabase
+Cost Implications (assuming 1GB avg recording):
+Recordings Supabase Storage Cloudflare R2
+100 ~$50/mo egress ~$5/mo storage
+500 ~$250/mo egress ~$25/mo storage
+1,000 ~$500/mo egress ~$50/mo storage
+Implementation Effort: 5 dev days (abstraction + migration)
+Risk Assessment:
+Storage unavailability: LOW (both highly reliable)
+Migration data loss: LOW (copy, don't move)
+Auth complexity with R2: MEDIUM
+Decision 3: CDN Strategy
+Option Pros Cons
+Cloudflare (Free) Free, global, excellent performance Limited analytics on free tier
+Vercel Edge Integrated with deployment Tied to Vercel hosting
+AWS CloudFront Feature-rich, reliable Complex pricing, overkill for our needs
+Recommendation: Cloudflare Free tier for static assets and edge caching.
+Asset Type CDN Strategy
+Static JS/CSS Cache indefinitely (hashed filenames)
+Images Cache 1 week, optimize with Cloudflare Polish
+API responses No cache (use Supabase directly)
+User uploads Cache 1 day
+Implementation:
+# Cloudflare Page Rules
+*.js, *.css → Cache Everything, Edge TTL: 1 year
+/images/* → Cache Everything, Edge TTL: 7 days
+/api/* → Bypass Cache
+Cost Implications: $0 (Cloudflare Free tier sufficient for 10K users)
+Implementation Effort: 1 dev day
+Risk Assessment:
+Cache invalidation issues: LOW (hashed filenames)
+Regional availability: LOW (Cloudflare is global)
+Decision 4: Caching Layer
+Option Pros Cons
+No Cache (Supabase direct) Simple, always fresh Higher latency, more DB load
+Supabase Edge Functions cache Built-in, simple Limited control, cold starts
+Upstash Redis Fast, serverless Redis Additional service ($10-50/mo)
+In-memory (per request) Free, simple No persistence between requests
+Recommendation: Start with in-memory request caching, add Upstash Redis for rate limiting and sessions when
+needed.
+Use Case Caching Strategy
+Rate limiting Upstash Redis (required at scale)
+Session data Supabase Auth (built-in)
+User entitlements In-memory + short TTL
+Hot data (active pods) In-memory per request
+Search results No cache (always fresh)
+Scale Threshold:
+Users Strategy
+< 1,000 In-memory only
+1,000-5,000 Add Upstash for rate limiting
+> 5,000 Full Redis caching layer
+Cost Implications:
+Users Upstash Cost
+1,000 $10/mo
+5,000 $25/mo
+10,000 $50/mo
+Implementation Effort: 2 dev days (rate limiting), 5 dev days (full caching)
+Risk Assessment:
+Cache stampede: MEDIUM (implement locks)
+Stale data served: LOW (short TTLs)
+Redis unavailability: LOW (graceful degradation)
+6.3 Integration Decisions
+Decision 5: Video/Meeting Integration
+Option Pros Cons
+Keep Zoom + Twine Proven, working, users know it Manual coordination, not branded
+Zoom SDK Embedded Branded experience, in-app $10/host/mo, Zoom dependency
+Daily.co Full control, custom UI $0.004/min, development cost
+100ms Low latency, good SDK Less mature, $0.0036/min
+Recommendation: Keep Zoom + Twine for Phase 1-2, evaluate Zoom SDK for Phase 3+.
+Phase Integration
+Phase 1-2 Zoom links + Twine for speed networking
+Phase 3 Evaluate Zoom SDK for pod meetings
+Phase 4+ Consider Daily.co for full customization
+Migration Path:
+1. Continue with current Zoom + Twine workflow
+2. Build meeting abstraction layer in Phase 2
+3. Pilot Zoom SDK with select pods in Phase 3
+4. Evaluate custom video (Daily.co) based on feedback
+Cost Implications:
+Solution 1,000 users 5,000 users 10,000 users
+Zoom + Twine $0 $0 $0
+Zoom SDK $100/mo $500/mo $1,000/mo
+Daily.co ~$200/mo ~$800/mo ~$1,500/mo
+Implementation Effort:
+Zoom SDK: 10 dev days
+Daily.co: 20 dev days
+Risk Assessment:
+User confusion during transition: MEDIUM
+Zoom API changes: LOW
+Twine discontinuation: MEDIUM (have backup plan)
+Decision 6: Email Service
+Option Pros Cons
+Resend Modern API, good DX, React Email Newer service, smaller company
+SendGrid Established, feature-rich Complex pricing, legacy API
+Postmark Excellent deliverability Higher cost ($15/10K emails)
+AWS SES Cheapest at scale Complex setup, less features
+Recommendation: Continue with Resend, monitor deliverability closely.
+Email Type Priority Fallback Strategy
+Magic link auth CRITICAL Queue + retry 3x
+Invite emails HIGH Queue + retry 3x
+Event reminders MEDIUM Retry 2x
+Digest emails LOW No retry
+Scale Threshold:
+Emails/month Service
+< 3,000 Resend Free
+3,000-50,000 Resend Pro ($20/mo)
+> 50,000 Evaluate AWS SES migration
+Deliverability Checklist:
+ Dedicated sending domain (rsn.com)
+ SPF, DKIM, DMARC configured
+ Warm-up period (2 weeks before launch)
+ Bounce handling implemented
+ Unsubscribe links in all emails
+Cost Implications:
+Emails/mo Resend SendGrid Postmark
+10,000 $20 $20 $15
+50,000 $40 $50 $50
+100,000 $80 $90 $100
+Implementation Effort: Already implemented, 1 dev day for monitoring
+Risk Assessment:
+Deliverability issues: MEDIUM (monitor closely)
+Service outage: LOW (queue with retry)
+Resend company risk: LOW (easy to migrate)
+6.4 Data & Search Decisions
+Decision 7: Search Implementation
+Option Pros Cons
+PostgreSQL Full-Text Built-in, simple Limited relevance ranking
+pg_trgm Extension Fuzzy matching, typo tolerance Performance degrades at scale
+Meilisearch Fast, typo-tolerant, faceted Additional service, sync complexity
+Algolia Best-in-class, instant Expensive ($35+ /mo)
+Recommendation: Start with pg_trgm, migrate to Meilisearch if needed at 10K+ users.
+Search Use Case Implementation
+User search by name pg_trgm
+Intention matching pg_trgm + custom scoring
+Pod discovery pg_trgm + filters
+Full-text in chat Defer (not MVP)
+Scale Threshold:
+Users Documents Strategy
+< 5,000 < 50K pg_trgm
+5,000-10,000 50K-200K Monitor performance
+> 10,000 > 200K Migrate to Meilisearch
+Migration Path:
+1. Implement search abstraction layer
+2. Use pg_trgm for all searches
+3. Add Meilisearch when search latency > 200ms
+4. Sync data via database triggers
+Cost Implications:
+Solution Cost
+pg_trgm $0 (included in Supabase)
+Meilisearch Cloud $30-100/mo
+Self-hosted Meilisearch $20-50/mo (VPS)
+Implementation Effort: 3 dev days (pg_trgm), 5 dev days (Meilisearch migration)
+Risk Assessment:
+Slow search at scale: MEDIUM (monitor)
+Sync lag with external search: LOW
+Search relevance issues: MEDIUM
+Decision 8: Database Connection Strategy
+Option Pros Cons
+Direct connections Simple, low latency Connection exhaustion at scale
+Supabase Pooler (PgBouncer) Built-in, handles scale Slight latency increase
+Read replicas Separate read/write load Additional cost, complexity
+Recommendation: Use Supabase Pooler from day 1, add read replicas at 10K+ users.
+Connection Type Pool Mode
+Transactions Transaction mode (default)
+Long-running queries Session mode
+Migrations Direct connection
+Configuration:
+# Supabase connection string patterns
+# Transaction pool (most queries)
+postgresql://[user]:[pass]@[host]:6543/postgres?pgbouncer=true
+# Direct (migrations only)
+postgresql://[user]:[pass]@[host]:5432/postgres
+Scale Threshold:
+Users Connections Strategy
+< 2,000 < 50 Pooler sufficient
+2,000-5,000 50-100 Monitor connection usage
+> 5,000 > 100 Consider read replica
+Cost Implications:
+Pooler: Included in Supabase
+Read replica: +$50-100/mo (Supabase Team plan)
+Implementation Effort: 1 dev day (pooler config), 3 dev days (read replica setup)
+Risk Assessment:
+Connection exhaustion: LOW (pooler prevents)
+Replication lag: LOW (< 100ms typical)
+6.5 Security & API Decisions
+Decision 9: Authentication Token Strategy
+Option Pros Cons
+Supabase Auth (JWT) Built-in, secure, handles refresh Tied to Supabase
+Custom JWT Full control Security responsibility, complexity
+Session cookies Simple, secure Not suitable for mobile/API
+Recommendation: Use Supabase Auth with JWT, leverage built-in refresh token handling.
+Token Type Lifetime Storage
+Access token 1 hour Memory
+Refresh token 7 days Secure cookie
+Magic link 1 hour Email only
+Security Measures:
+ HttpOnly cookies for refresh tokens
+ CSRF protection on state-changing requests
+ Rate limiting on auth endpoints (5/min)
+ Session invalidation on password change
+ Max 5 concurrent sessions per user
+Implementation Effort: Already implemented via Supabase Auth
+Risk Assessment:
+Token theft: LOW (HttpOnly, short lifetime)
+Refresh token abuse: LOW (rotation on use)
+Session fixation: LOW (Supabase handles)
+Decision 10: API Versioning
+Option Pros Cons
+No versioning Simple Breaking changes affect all clients
+URL versioning (/v1/) Clear, easy routing URL pollution
+Header versioning Clean URLs Less discoverable
+Query param (?v=1) Simple to add Not RESTful
+Recommendation: No versioning initially (SPA only), add URL versioning if mobile app or third-party API needed.
+Client Type Versioning Strategy
+Web SPA No version (deploys together)
+Mobile app URL versioning when released
+Third-party URL versioning
+Deprecation Policy (when needed):
+1. Announce deprecation 90 days in advance
+2. Add deprecation header to responses
+3. Support old version for 6 months minimum
+4. Provide migration guide
+Implementation Effort: 0 dev days now, 2 dev days when needed
+Risk Assessment:
+Breaking changes: LOW (SPA deploys with API)
+Mobile app compatibility: N/A (no mobile yet)
+6.6 Observability Decisions
+Decision 11: Monitoring & Observability Stack
+Component Option Recommendation
+Error Tracking Sentry, Bugsnag, Rollbar Sentry (free tier sufficient)
+Logging Supabase Logs, Logflare, Datadog Supabase Logs + Logflare
+Metrics Supabase Dashboard, Grafana Cloud Supabase Dashboard
+Uptime UptimeRobot, Better Uptime UptimeRobot (free)
+APM None, Datadog, New Relic None initially
+Recommended Stack:
+Errors → Sentry (free: 5K events/mo)
+Logs → Supabase Logs + Logflare (free)
+Metrics → Supabase Dashboard
+Uptime → UptimeRobot (free: 50 monitors)
+Alerting → Sentry + UptimeRobot → Slack
+What to Monitor:
+Metric Threshold Alert
+Error rate > 1% Slack immediate
+API latency p95 > 500ms Slack immediate
+Database connections > 80% Slack warning
+Failed logins > 10/min Slack warning
+Signup failures > 5% Slack immediate
+Stripe webhook failures Any Slack immediate
+Scale Threshold:
+Users Stack
+< 5,000 Free tier everything
+5,000-10,000 Sentry Pro ($26/mo)
+> 10,000 Add Datadog APM
+Cost Implications:
+Users Monthly Cost
+1,000 $0
+5,000 $26 (Sentry Pro)
+10,000 $100 (+ Datadog)
+Implementation Effort: 2 dev days
+Risk Assessment:
+Blind spots in monitoring: MEDIUM
+Alert fatigue: LOW (conservative thresholds)
+Cost overruns: LOW (free tiers generous)
+6.7 Decision Log Template
+Use this template to document future architectural decisions:
+### Decision [N]: [Title]
+**Date:** YYYY-MM-DD
+**Status:** Proposed | Accepted | Deprecated | Superseded
+**Deciders:** [Names]
+#### Context
+[Why is this decision needed?]
+#### Options Considered
+| Option | Pros | Cons |
+|--------|------|------|
+| ... | ... | ... |
+#### Decision
+[What was decided and why]
+#### Consequences
+- Positive: [Benefits]
+- Negative: [Trade-offs]
+- Risks: [What could go wrong]
+#### Scale Thresholds
+[When to revisit this decision]
+#### Migration Path
+[How to change direction if needed]
+7. Scaling Risks & Engineering Challenges
+Critical Risk Assessment
+6.1 Database Scaling Risks
+Risk Severity Impact Current State
+Single PostgreSQL instance HIGH
+Bottleneck at 10K+ concurrent
+users
+Using Supabase
+managed
+No read replicas MEDIUM Slow reads during peak times Not configured
+Missing indexes HIGH Query performance degradation Partially indexed
+No connection pooling
+config
+MEDIUM Connection exhaustion Default Supabase
+Chat messages volume HIGH Rapid table growth Not implemented yet
+Mitigation Strategies:
+1. Enable Supabase connection pooling (PgBouncer)
+2. Implement read replicas for analytics/reporting queries
+3. Partition chat_messages by pod_id and date
+4. Archive old messages to cold storage after 90 days
+5. Implement aggressive indexing strategy
+6. Consider Supabase Pro/Team for higher limits
+6.2 Real-Time Features Scaling
+Risk Severity Impact
+Pod chat real-time HIGH Supabase Realtime has connection limits
+Presence indicators MEDIUM High frequency updates
+Notification storms HIGH Mass events trigger thousands of notifications
+Mitigation Strategies:
+1. Implement chat batching (aggregate messages every 2s)
+2. Use presence channels sparingly (only active pod views)
+3. Queue notifications through edge function
+4. Implement notification digest (batch every 5 minutes)
+5. Consider dedicated real-time service (Ably, Pusher) for 10K+ users
+6.3 Email Deliverability at Scale
+Risk Severity Impact
+Resend rate limits HIGH Failed invite/notification emails
+Spam classification HIGH Invites going to spam
+Bounce handling MEDIUM Invalid emails degrading reputation
+Mitigation Strategies:
+1. Implement email queuing with retry logic
+2. Set up dedicated sending domain with proper DNS (SPF, DKIM, DMARC)
+3. Monitor bounce rates and auto-disable bad addresses
+4. Implement email verification at signup
+5. Consider dedicated IP as volume grows
+6. Rate limit: max 100 emails/user/day
+6.4 Invite System Abuse
+Risk Severity Impact
+Spam invites HIGH Platform reputation damage
+Fake account farms HIGH Inflate numbers, degrade trust
+Invite manipulation MEDIUM Gaming the system for benefits
+Mitigation Strategies:
+1. Daily invite caps (start: 3/day, scale with trust)
+2. Invite cooldown (1 hour between invites to same domain)
+3. LinkedIn verification required (blocks throwaway accounts)
+4. IP-based rate limiting
+5. Machine learning fraud detection (Phase 2)
+6. Manual review queue for suspicious patterns
+6.5 Pod Chat Architecture
+Risk Severity Impact
+Message storage growth HIGH 10K users × 10 pods × 100 messages/week = 10M rows/week
+Real-time sync HIGH Supabase Realtime limits
+Search functionality MEDIUM Full-text search at scale
+Mitigation Strategies:
+1. Implement message pagination (load last 50, lazy load older)
+2. Archive messages > 90 days to separate table
+3. Use Supabase Realtime for small pods only (< 50 members)
+4. Larger pods: polling every 5 seconds
+5. Implement full-text search using pg_trgm extension
+6. Consider message size limits (5KB max)
+6.6 Authentication Scaling
+Risk Severity Impact
+Magic link spam MEDIUM Email rate limits, user frustration
+Session management LOW JWT token handling
+Concurrent sessions LOW Multiple device handling
+Mitigation Strategies:
+1. Rate limit magic link requests (1 per minute per email)
+2. Implement captcha after 3 failed attempts
+3. Session invalidation on password reset
+4. Limit concurrent sessions to 5 per user
+6.7 Event System Scaling
+Risk Severity Impact
+Large event registrations HIGH 1000+ concurrent registrations
+Calendar sync MEDIUM ICS generation at scale
+Waitlist management MEDIUM Fair ordering, race conditions
+Mitigation Strategies:
+1. Implement database-level locking for registration
+2. Queue-based registration for large events
+3. Pre-generate ICS files on event creation
+4. Implement fair waitlist with timestamp ordering
+5. Use database transactions for atomic operations
+6.8 Subscription System Scaling
+Risk Severity Impact
+Webhook volume MEDIUM Stripe webhook processing
+Entitlement sync HIGH Delayed feature access
+Failed payments MEDIUM User experience degradation
+Mitigation Strategies:
+1. Implement idempotent webhook handlers
+2. Cache entitlements in local storage (refresh on login)
+3. Graceful degradation (allow access during sync delays)
+4. Implement dunning emails for failed payments
+5. Webhook retry with exponential backoff
+Performance Benchmarks Required
+Metric Target (10K users) Current Baseline
+Page load time < 2s TBD
+API response time < 200ms (p95) TBD
+Real-time message latency < 500ms N/A
+Database query time < 50ms (p95) TBD
+Concurrent WebSocket connections 5,000 N/A
+8. Development Phases
+Phase 1: Foundation Hardening (Weeks 1-2)
+Goal: Solidify existing infrastructure, prepare for scale
+1.1 Database Enhancements
+ Run schema migrations for new tables
+ Add missing indexes
+ Enable Supabase connection pooling
+ Set up database monitoring (Supabase dashboard)
+ Implement automated backups verification
+1.2 Authentication Improvements
+ Enforce LinkedIn URL at signup
+ Add email verification step
+ Implement rate limiting for magic links
+ Add region preference to signup flow
+ Create onboarding completion tracking
+1.3 Core Infrastructure
+ Set up proper error tracking (Sentry)
+ Implement structured logging
+ Configure CDN for static assets
+ Set up staging environment
+ Implement feature flags system
+Deliverables:
+Enhanced user signup with mandatory fields
+Database ready for scaling
+Monitoring and logging in place
+Phase 2: Identity & Trust System (Weeks 3-4)
+Goal: Implement the identity layer per Operating Canvas
+2.1 Profile Enhancements
+ Intention statement field (UI + storage)
+ "What I offer" / "What I seek" fields
+ Conversation boundaries (optional)
+ Profile completeness indicator
+ LinkedIn profile preview/validation
+ RSN Identity Card generation
+ Profile photo upload (fallback from LinkedIn)
+2.2 Three I's Onboarding Form
+ Three Intentions capture
+ Three Invitations prompt (with skip option)
+ Three Impact Actions selection
+ Onboarding progress tracking
+ Reminder to complete if skipped
+2.3 Trust Metrics
+ Implement basic Reason Score calculation
+ Track participation count
+ Track invite success rate
+ Display trust indicators on profiles (non-numeric)
+ Admin dashboard for trust metrics
+2.4 Network Orientation
+ "People I Met" view
+ "People Who Invited Me" chain
+ "People I Invited" with status
+ Shared pods display
+ Shared events display
+2.5 Privacy Controls
+ Notification preferences UI
+ Event participation preferences
+ Pod participation preferences
+ Profile visibility settings
+ Consent management for recordings
+Deliverables:
+Complete profile system with Identity Card
+Three I's onboarding flow
+Network Orientation system
+Reason Score v1
+Privacy controls
+Phase 3: Enhanced Invitation System (Weeks 5-6)
+Goal: Build viral growth engine with trust preservation
+3.1 Invite Mechanics
+ Personal invite link per user
+ Invite states tracking (Sent→Opened→Accepted→Joined→Expired)
+ Email invite templates (Resend)
+ Invite link tracking (opens, clicks)
+ Invite expiration handling
+3.2 Growth Tracking
+ Inviter dashboard (see invite status)
+ Notification on invite milestones
+ Invite chain visualization
+ Daily invite cap enforcement
+ Cap scaling with trust level
+3.3 Anti-Spam
+ Rate limiting (3/day initial)
+ Domain-based cooldowns
+ Suspicious pattern detection
+ Admin alert system
+ Blocklist management
+Deliverables:
+Complete invite system
+Viral loop tracking
+Anti-spam protection
+Phase 4: Pod System Overhaul (Weeks 7-10)
+Goal: Transform pods into the core product
+4.1 Pod Roles & Permissions
+ Implement Director role (delegated admin for assistants/matchmakers)
+ Permission matrix (Owner/Director/Member/Platform Admin)
+ Role assignment UI
+ Ownership transfer functionality
+ Director can prepare pods in draft state
+ Audit logging for role changes
+4.2 Pod Lifecycle
+ Lifecycle states (Draft→Active→Paused→Archived→Dissolved)
+ State transition rules and validations
+ Archive/restore functionality
+ Dissolution flow with member notifications
+ Admin override capabilities
+ Inactivity detection and auto-pause
+4.3 Pod Types & Access
+ Pod type presets (DUO, TRIO, KVARTET, BAND, ORCHESTRA, CONCERT)
+ Access type settings (Invite only, Request to join, Open)
+ Join request workflow with approval queue
+ Member invite permissions (configurable per pod)
+ Pod rules configuration (default + custom)
+ Inactivity thresholds (configurable)
+ Pod discovery (optional, intention-based)
+4.4 Pod Governance
+ Default rules enforcement (no selling, no pitching)
+ Configurable additional rules
+ Pod-level conflict handling (Owner first line)
+ Escalation to Platform Admin
+ "Respect the stated reason" enforcement
+4.5 Pod Meetings
+ Meeting scheduling UI
+ Calendar integration (ICS generation)
+ Google Calendar add button
+ Outlook Calendar support
+ Meeting reminders (email)
+ Meeting history
+ Recurring meeting support
+ Meeting attendance tracking
+4.6 Pod Chat (If enabled)
+ Real-time messaging (Supabase Realtime)
+ Message persistence with pagination
+ Chat moderation tools (delete, mute)
+ Message editing/deletion
+ Typing indicators
+ @mentions
+ Chat enable/disable toggle (Owner/Director)
+4.7 Pod Invitations
+ Email invites
+ RSN network invites
+ Pod-specific invite link
+ Invite shows: who invited, pod reason, expectations
+ Pending invite management
+Deliverables:
+Complete pod management system
+Meeting scheduling with calendar integration
+Pod governance framework
+Basic chat functionality
+Phase 5: Events System Enhancement (Weeks 11-12)
+Goal: Events as ignition layer with full calendar integration
+5.1 Event Management
+ Event creation with all fields
+ Event types (EU, US, Both)
+ Pod-specific events
+ Capacity management
+ Waitlist system
+5.2 Calendar Integration
+ ICS file generation
+ Google Calendar integration
+ Outlook Calendar support
+ Calendar acceptance tracking
+ Event updates sync
+5.3 Notifications
+ Pre-event reminders (24h, 1h)
+ Post-event follow-ups
+ Registration confirmations
+ Waitlist notifications
+ Cancellation notices
+Deliverables:
+Full event system
+Calendar integration
+Notification system
+Phase 6: Governance & Enforcement (Weeks 13-14)
+Goal: Protect culture before scale breaks it
+6.1 Reporting System
+ Report button in pods and events
+ Report form (named/anonymous option)
+ Evidence attachment
+ Report categories (selling, harassment, spam, etc.)
+ Reporter notifications
+6.2 Admin Review
+ Report review queue
+ Evidence viewer
+ Action buttons (warn, strike, dismiss)
+ Bulk actions
+ Report history
+6.3 Strike System
+ Automated strike issuance
+ Strike 1: Warning email
+ Strike 2: Final warning + temporary restrictions
+ Strike 3: Automatic permanent ban
+ Appeal process (manual review)
+6.4 Ban Management
+ Ban dashboard
+ Ban reasons tracking
+ Unban workflow
+ Ban history
+ IP tracking (prevent re-registration)
+Deliverables:
+Complete governance system
+Automated enforcement
+Admin tools
+Phase 7: Subscription, Entitlements & Status (Weeks 15-16)
+Goal: Monetization with fair tier structure and status incentives
+7.1 Status Tier Implementation
+ Founder status (first 150, from events)
+ Circle status (first 1,000)
+ Early Adopter status (1,001-5,000)
+ Member status (5,001+)
+ Status display on profiles
+ Status-based pricing enforcement
+7.2 Entitlement Definition
+Tier Pods Owned Max Pod Size Directors ORCHESTRA Recording
+Free 1 6 0 No No
+Founder Unlimited 12 2 Yes Yes
+Circle 5 12 1 No Yes
+Pro 3 12 1 No Yes
+7.3 Badge System
+ Founder Badge (first 150)
+ Circle Badge (first 1,000)
+ Ambassador Badge (10+ successful invites)
+ Pod Pioneer Badge (3+ active pods created)
+ Event Host Badge (5+ events hosted)
+ Trusted Voice Badge (Reason Score > 0.8)
+ Badge display on profile cards
+ Badge notification when earned
+7.4 Entitlement Enforcement
+ Pod creation limits by tier
+ Pod size limits by tier
+ Director assignment limits
+ Feature gating (ORCHESTRA, recording)
+ Upgrade prompts at limit
+7.5 Billing Management
+ Current subscription display
+ Upgrade/downgrade flows
+ Cancellation flow with retention offer
+ Invoice history
+ Payment method management
+ Failed payment handling (dunning)
+7.6 Conversion Flow (3rd Participation Rule)
+ Participation count tracking
+ After 3rd event: prompt "Invite 3-5 OR Subscribe"
+ Invite completion tracking
+ Conversion tracking and analytics
+ A/B testing infrastructure
+Deliverables:
+Complete subscription system
+Status tier implementation
+Badge system
+Tier enforcement
+Conversion optimization
+Phase 8: Admin & Analytics (Weeks 17-18)
+Goal: Operational visibility and control
+8.1 Admin Role Hierarchy
+Role Capabilities
+Platform Admin Full system access, user bans, feature flags
+Support Admin Ticket management, limited user view, escalation
+Growth Admin Analytics, invite management, tier management
+Event Admin Event creation, registration management
+8.2 Admin Dashboard
+ Key metrics overview (users, pods, events, revenue)
+ User growth charts (daily, weekly, monthly)
+ Pod analytics (creation rate, activity, churn)
+ Event analytics (registrations, attendance, conversion)
+ Revenue metrics (MRR, churn, LTV)
+ Real-time activity feed
+8.3 User Management
+ User search and filters (status, tier, region)
+ User detail view with full history
+ Manual tier/status assignment
+ User impersonation for support (with audit)
+ Bulk actions (email, status change)
+ Export user data (GDPR compliance)
+8.4 Growth Tools
+ Signup funnel analytics (drop-off points)
+ Invite chain visualization (network graph)
+ Conversion funnel (event → signup → paid)
+ Cohort analysis (retention by signup week)
+ Feature flag management
+ A/B test results viewer
+8.5 Matching Tools
+ Intention-based matching algorithm
+ Manual pod assignment interface
+ Match quality metrics
+ Recommendation engine v1
+ "Stuck users" detection (incomplete onboarding)
+8.6 Notification Controls (Scale-Aware)
+ Global notification toggle by type
+ Scale stage configuration (< 100, 100-500, 500-1000, 1000+)
+ Default digest frequency settings
+ High-priority override capability
+Deliverables:
+Complete admin suite with role hierarchy
+Analytics dashboard
+Growth tools
+Scale-aware notification system
+Phase 9: Polish & Optimization (Weeks 19-20)
+Goal: Production readiness
+9.1 Performance Optimization
+ Lighthouse audit (target: 90+)
+ Bundle size optimization (< 500KB initial)
+ Image optimization (WebP, lazy load)
+ Code splitting verification
+ Database query optimization (< 50ms p95)
+9.2 UX Polish
+ Loading states everywhere
+ Error handling improvements
+ Empty states for all lists
+ Mobile responsive audit
+ Accessibility audit (WCAG 2.1 AA)
+ Keyboard navigation
+9.3 Testing
+ Critical path E2E tests (Playwright)
+ Load testing (simulate 1000 concurrent users)
+ Security audit (OWASP Top 10)
+ Penetration testing
+ GDPR compliance check
+ Cross-browser testing
+9.4 Documentation
+ API documentation (OpenAPI spec)
+ Admin user guide
+ Developer onboarding guide
+ Incident response runbook
+ Architecture decision records (ADRs)
+ Data dictionary
+Deliverables:
+Production-ready platform
+Performance benchmarks met
+Documentation complete
+Phase 10: Advanced Features (Weeks 21+)
+Goal: Scale features and ORCHESTRA/Masterclass system
+10.1 Masterclass System (ORCHESTRA Pods)
+ Masterclass event type
+ One-to-many hosting format
+ Q&A queue with moderation
+ Resource/slide attachments
+ Recording with consent
+ Replay access management
+ Masterclass discovery
+10.2 CONCERT Events (1000+)
+ Large-scale event infrastructure
+ Tiered registration (paid members first)
+ Breakout rooms integration
+ Post-event pod formation
+10.3 Advanced Matching
+ ML-based intention matching
+ Automatic pod suggestions
+ "You should meet" recommendations
+ Conversation starter generation
+10.4 Social Sharing Tracking
+ Share tracking dashboard
+ Verified share badges
+ Impact leaderboard (private, for admins)
+ Social proof collection
+10.5 Mobile Experience
+ PWA optimization
+ Push notifications
+ Offline mode (view-only)
+ Native app evaluation
+Deliverables:
+Masterclass/ORCHESTRA system
+Advanced matching
+Mobile-optimized experience
+9. Technical Specifications
+API Endpoints Required
+Authentication
+POST /auth/magic-link - Request magic link
+POST /auth/verify - Verify magic link token
+POST /auth/logout - End session
+GET /auth/session - Get current session
+Users
+GET /users/me - Get current user profile
+PUT /users/me - Update profile
+GET /users/:id - Get user by ID (public fields)
+GET /users/search - Search users by intention
+Invites
+GET /invites - List my invites
+POST /invites - Create invite
+GET /invites/:code - Get invite by code
+POST /invites/:code/accept - Accept invite
+DELETE /invites/:id - Cancel invite
+GET /invites/stats - Invite statistics
+Pods
+GET /pods - List my pods
+POST /pods - Create pod
+GET /pods/:id - Get pod details
+PUT /pods/:id - Update pod
+DELETE /pods/:id - Delete pod
+POST /pods/:id/join - Request to join
+POST /pods/:id/leave - Leave pod
+GET /pods/:id/members - List members
+POST /pods/:id/members - Invite member
+DELETE /pods/:id/members/:userId - Remove member
+POST /pods/:id/directors - Assign director
+DELETE /pods/:id/directors/:userId - Remove director
+GET /pods/:id/meetings - List meetings
+POST /pods/:id/meetings - Schedule meeting
+GET /pods/:id/chat - Get chat messages
+POST /pods/:id/chat - Send message
+Events
+GET /events - List events
+GET /events/:id - Get event details
+POST /events/:id/register - Register for event
+DELETE /events/:id/register - Cancel registration
+GET /events/:id/ics - Download ICS file
+GET /events/:id/attendees - List attendees (admin)
+Reports & Violations
+POST /reports - Submit report
+GET /reports - List reports (admin)
+GET /reports/:id - Get report details (admin)
+PUT /reports/:id - Update report (admin)
+POST /reports/:id/strike - Issue strike (admin)
+Subscriptions
+GET /subscriptions/me - Get my subscription
+POST /subscriptions/checkout - Create checkout session
+POST /subscriptions/portal - Create billing portal session
+Admin
+GET /admin/stats - Platform statistics
+GET /admin/users - List all users
+PUT /admin/users/:id - Update user (admin)
+POST /admin/users/:id/ban - Ban user
+POST /admin/users/:id/unban - Unban user
+GET /admin/logs - Activity logs
+Reason Score Algorithm
+Purpose: Measure member contribution and trustworthiness without creating popularity dynamics.
+Scoring Components (0.0 - 1.0 scale)
+Factor Weight Calculation
+Profile Completeness 10% Fields filled / Total fields
+Event Participation 20% Events attended / Events available (capped at 1.0)
+Pod Engagement 25% Active days in pods / Total membership days
+Invite Quality 20% (Invites that became active members) / Total invites
+Governance Record 15% 1.0 - (Strikes * 0.33)
+Tenure Bonus 10% min(1.0, Months as member / 12)
+Calculation Formula
+reason_score = (
+(profile_completeness * 0.10) +
+(event_participation * 0.20) +
+(pod_engagement * 0.25) +
+(invite_quality * 0.20) +
+(governance_record * 0.15) +
+(tenure_bonus * 0.10)
+)
+Display Rules
+Never show numeric score to users
+Use qualitative indicators: "Trusted", "Active", "New"
+Admin can see exact scores
+Score updates daily via scheduled function
+Score Thresholds
+Score Display Benefits
+0.0 - 0.3 New Member Standard access
+0.3 - 0.6 Active Increased invite cap
+0.6 - 0.8 Trusted Director eligibility
+0.8 - 1.0 Trusted Voice Badge, priority matching
+Edge Functions Required
+Function Purpose Trigger
+send-auth-email Magic link emails User request
+send-invite-email Invite notifications Invite creation
+send-event-reminder Event reminders Scheduled (cron)
+send-pod-notification Pod activity notifications Real-time
+process-stripe-webhook Payment processing Stripe webhook
+calculate-reason-score Update Reason Scores Scheduled (daily)
+process-reports Report notification Report creation
+enforce-strikes Auto-ban on 3 strikes Strike creation
+generate-ics Calendar file generation Event creation/update
+linkedin-validate Verify LinkedIn URLs Signup
+archive-old-messages Move old chat messages Scheduled (weekly)
+detect-inactivity Flag inactive pods Scheduled (daily)
+send-digest-email Notification digest Scheduled (configurable)
+Real-Time Subscriptions
+// Pod chat real-time subscription
+supabase
+.channel('pod-chat')
+.on('postgres_changes', {
+event: 'INSERT',
+schema: 'public',
+table: 'pod_chat_messages',
+filter: `pod_id=eq.${podId}`
+}, handleNewMessage)
+.subscribe()
+// User notifications
+supabase
+.channel('user-notifications')
+.on('postgres_changes', {
+event: 'INSERT',
+schema: 'public',
+table: 'notifications',
+filter: `user_id=eq.${userId}`
+}, handleNotification)
+.subscribe()
+Critical Path & Dependencies
+Phase Dependencies (Cannot be Parallelized)
+Phase 1 (Foundation) ─┬─> Phase 2 (Identity)
+└─> Phase 3 (Invites)
+Phase 2 ─────────────────> Phase 4 (Pods)
+Phase 3 ─────────────────> Phase 4 (Pods)
+Phase 4 ─┬─> Phase 5 (Events)
+└─> Phase 6 (Governance)
+Phase 5 + 6 ─────────────> Phase 7 (Subscriptions)
+Phase 7 ─────────────────> Phase 8 (Admin)
+Phase 8 ─────────────────> Phase 9 (Polish)
+Phase 9 ─────────────────> Phase 10 (Advanced)
+Parallelization Opportunities
+Can Run in Parallel Reason
+Phase 2 + Phase 3 Independent systems
+Phase 5 + Phase 6 Independent but both need Phase 4
+UI polish + Documentation Different skill sets
+Load testing + Security audit Independent
+Critical Path Items (Blockers)
+1. Database schema migrations - Must complete before any feature work
+2. Authentication hardening - Security baseline for everything
+3. Pod roles implementation - Required for governance
+4. Stripe webhook reliability - Revenue depends on it
+5. Email deliverability setup - Invites depend on it
+Scaling Milestone Risks
+At 500 Users (Month 1)
+Risk Likelihood Impact Mitigation
+Founder expectations too high HIGH User churn Clear communication, iterate fast
+Email deliverability issues MEDIUM Invite failure Dedicated domain, warm-up
+Manual operations overload HIGH Support backlog Self-service tools
+At 2,000 Users (Month 2)
+Risk Likelihood Impact Mitigation
+Database query slowdown MEDIUM Poor UX Indexing, query optimization
+Invite spam HIGH Reputation damage Rate limiting, review queue
+Support ticket volume HIGH Response delay FAQ, AI assist, hire support
+At 5,000 Users (Month 3)
+Risk Likelihood Impact Mitigation
+Supabase plan limits HIGH Cost spike Monitor, optimize, upgrade
+Real-time connection limits HIGH Chat failures Polling fallback
+Culture dilution MEDIUM Quality decline Strict governance, strikes
+At 10,000 Users (Month 4)
+Risk Likelihood Impact Mitigation
+Infrastructure cost explosion HIGH Margin pressure Cost optimization, tiering
+Team scaling HIGH Velocity decrease Documentation, automation
+Feature requests overload MEDIUM Distraction Stick to Operating Canvas
+10. Risk Mitigations
+Technical Risks
+Risk Probability Impact Mitigation
+Supabase outage Low Critical Implement offline mode, cache critical data
+Database scaling limits Medium High Plan migration path to dedicated Postgres
+Real-time connection limits High Medium Implement fallback polling
+Email deliverability issues Medium High Dedicated domain, monitoring, fallback
+Stripe integration failures Low High Graceful degradation, manual processing
+Business Risks
+Risk Probability Impact Mitigation
+Slow initial adoption Medium High Focus on founder engagement, iterate fast
+Spam/abuse at scale High Critical Proactive governance, ML detection
+Feature creep Medium Medium Stick to Operating Canvas principles
+Team scaling delays Medium Medium Prioritize core features, defer nice-to-haves
+Operational Risks
+Risk Probability Impact Mitigation
+Single point of failure (team) High Critical Document everything, cross-train
+Support volume High Medium Self-service tools, FAQ, AI assist
+Incident response Medium High Runbooks, on-call rotation
+11. Success Metrics
+Growth Metrics
+Metric Week 4 Month 2 Month 4
+Total Users 500 2,000 10,000
+Paid Members 100 500 2,000
+Active Pods 50 200 800
+Events Held 12 30 60
+Invite Conversion 30% 35% 40%
+Engagement Metrics
+Metric Target
+Weekly Active Users > 60%
+Pod Meeting Attendance > 75%
+Event Attendance > 80% of registrations
+Invite Success Rate > 25%
+Churn Rate < 5% monthly
+Technical Metrics
+Metric Target
+Uptime > 99.9%
+Page Load Time < 2 seconds
+API Response Time (p95) < 200ms
+Error Rate < 0.1%
+Customer Support Response < 24 hours
+12. Missing Systems Deep-Dive
+11.1 Network Orientation System
+Per Operating Canvas: Users need to understand their trusted graph without popularity dynamics.
+Required Features
+Feature Description Priority
+People I Met List of users encountered in events/pods HIGH
+People Who Invited Me Invite chain upward HIGH
+People I Invited Invite chain downward with status HIGH
+Shared Pods Common pod membership MEDIUM
+Shared Events Events attended together MEDIUM
+Connection Strength Based on interactions (not public) LOW
+What NOT to Build
+No follower counts
+No reach metrics
+No popularity rankings
+No "most connected" leaderboards
+Database Schema Addition
+-- Connection tracking (for Network Orientation)
+CREATE TABLE user_connections (
+id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+user_a_id UUID REFERENCES users(id) ON DELETE CASCADE,
+user_b_id UUID REFERENCES users(id) ON DELETE CASCADE,
+connection_type TEXT CHECK (connection_type IN ('invite', 'event', 'pod', 'meeting')),
+context_id UUID, -- Event/Pod ID where connection formed
+first_connected_at TIMESTAMPTZ DEFAULT NOW(),
+interaction_count INTEGER DEFAULT 1,
+last_interaction_at TIMESTAMPTZ DEFAULT NOW(),
+UNIQUE(user_a_id, user_b_id, connection_type)
+);
+CREATE INDEX idx_connections_user_a ON user_connections(user_a_id);
+CREATE INDEX idx_connections_user_b ON user_connections(user_b_id);
+11.2 Onboarding Flow (The Three I's Form)
+Per GTM Plan: Every member completes a structured onboarding form.
+Form Structure
+Section 1: Three Intentions
+Question: "What do you want to grow, discuss, or work on during the next months?"
+- Intention 1: [Free text, 200 char max]
+- Intention 2: [Free text, 200 char max]
+- Intention 3: [Free text, 200 char max]
+Section 2: Three Invitations
+Question: "Who are the three people you believe belong in a space like this?"
+- Invite 1: [Name + Email]
+- Invite 2: [Name + Email]
+- Invite 3: [Name + Email]
+(Can skip, but prompted to complete later)
+Section 3: Three Impact Actions
+Question: "How will you help RSN grow? Choose three ways you are willing to contribute."
+Options:
+- [ ] Write a public review or testimonial
+- [ ] Like, comment, and share RSN posts on social platforms
+- [ ] Share RSN in WhatsApp/Facebook groups or private communities
+- [ ] Invite peers through personal messages
+- [ ] Host or co-host a micro-pod conversation
+- [ ] Bring RSN into your company or professional circle
+- [ ] Recommend RSN privately to leaders who need connection
+- [ ] Introduce RSN on social media
+Database Schema Addition
+-- User onboarding responses
+CREATE TABLE user_onboarding (
+id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+user_id UUID REFERENCES users(id) ON DELETE CASCADE UNIQUE,
+intention_1 TEXT,
+intention_2 TEXT,
+intention_3 TEXT,
+impact_actions TEXT[], -- Array of selected actions
+onboarding_completed_at TIMESTAMPTZ,
+created_at TIMESTAMPTZ DEFAULT NOW()
+);
+-- Track impact action fulfillment
+CREATE TABLE user_impact_actions (
+id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+action_type TEXT NOT NULL,
+completed_at TIMESTAMPTZ,
+evidence_url TEXT, -- Link to review, social post, etc.
+verified BOOLEAN DEFAULT false,
+created_at TIMESTAMPTZ DEFAULT NOW()
+);
+11.3 Badge & Status System
+Per GTM Plan: Status incentives drive engagement and growth.
+Badge Types
+Badge Criteria Visual
+Founder First 150 members (event attendees) Gold shield
+Circle First 1,000 members Silver ring
+Ambassador 10+ successful invites Star icon
+Pod Pioneer Created 3+ active pods Pod icon
+Event Host Hosted 5+ events Calendar icon
+Trusted Voice Reason Score > 0.8 Verified check
+Veteran Member for 1+ year Clock icon
+Status Tiers
+Tier Members Benefits
+Founder 1-150 Lifetime free, all features, special badge
+Circle 151-1,000 Early pricing ($19/mo), Circle badge
+Early Adopter 1,001-5,000 Standard pricing, priority support
+Member 5,001+ Standard pricing
+Database Schema Addition
+-- User badges
+CREATE TABLE user_badges (
+id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+badge_type TEXT NOT NULL,
+earned_at TIMESTAMPTZ DEFAULT NOW(),
+is_displayed BOOLEAN DEFAULT true, -- User can hide badges
+UNIQUE(user_id, badge_type)
+);
+-- Badge definitions
+CREATE TABLE badge_definitions (
+id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+badge_type TEXT UNIQUE NOT NULL,
+display_name TEXT NOT NULL,
+description TEXT,
+icon_url TEXT,
+criteria JSONB, -- Machine-readable criteria
+is_active BOOLEAN DEFAULT true
+);
+11.4 RSN Identity Card System
+Per Blueprint: AI generates an RSN Identity Card from LinkedIn + user input.
+Identity Card Components
+Field Source Display
+Name User input Always visible
+Photo LinkedIn or upload Always visible
+Headline LinkedIn or custom Always visible
+Intentions Onboarding form Always visible
+What I Offer User input Always visible
+What I Seek User input Always visible
+Location LinkedIn or custom Visible
+Badges Earned badges Visible
+Reason Score Calculated Visible (not numeric)
+Pods Current memberships Visible
+Timezone User setting For scheduling
+AI Enhancement (Future Phase)
+Extract skills from LinkedIn automatically
+Suggest intention categories
+Match similar profiles
+Generate conversation starters
+11.5 Masterclass System (ORCHESTRA Pods)
+Per GTM Plan: ORCHESTRA pods (100+) host masterclasses, workshops, and Raw Talks.
+Masterclass Features
+Feature Description
+One-to-Many Format Single host, many attendees
+Registration Separate from regular events
+Capacity Management Tiered access (paid first)
+Recording Auto-record with consent
+Q&A Moderated question queue
+Resources Attach materials, slides
+Replay Access Available after event
+Monetization Options (Future)
+Free for members
+Paid for non-members
+Premium masterclasses (separate fee)
+Replay purchases
+Database Schema Addition
+-- Masterclasses (extends events)
+CREATE TABLE masterclasses (
+id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+event_id UUID REFERENCES events(id) ON DELETE CASCADE UNIQUE,
+host_id UUID REFERENCES users(id),
+pod_id UUID REFERENCES pods(id), -- ORCHESTRA pod
+is_recorded BOOLEAN DEFAULT false,
+recording_url TEXT,
+resources JSONB, -- {slides: url, materials: [urls]}
+replay_available BOOLEAN DEFAULT false,
+created_at TIMESTAMPTZ DEFAULT NOW()
+);
+-- Masterclass questions (Q&A)
+CREATE TABLE masterclass_questions (
+id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+masterclass_id UUID REFERENCES masterclasses(id) ON DELETE CASCADE,
+user_id UUID REFERENCES users(id),
+question TEXT NOT NULL,
+status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'answered', 'dismissed')),
+upvotes INTEGER DEFAULT 0,
+created_at TIMESTAMPTZ DEFAULT NOW()
+);
+11.6 Social Sharing & Impact Tracking
+Per GTM Plan: Track how members share RSN across platforms.
+Tracking Requirements
+Action Tracking Method
+Social media posts User-submitted links + verification
+Reviews/Testimonials User-submitted + admin approval
+Private recommendations Self-reported (trust-based)
+WhatsApp/Group shares Self-reported
+Company introductions Self-reported + outcome tracking
+Implementation
+-- Social sharing tracking
+CREATE TABLE social_shares (
+id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+platform TEXT CHECK (platform IN ('twitter', 'linkedin', 'instagram', 'facebook',
+'whatsapp', 'other')),
+share_type TEXT CHECK (share_type IN ('post', 'review', 'testimonial', 'recommendation',
+'group_share')),
+url TEXT, -- Link to post if public
+content TEXT, -- Content shared
+verified BOOLEAN DEFAULT false,
+admin_notes TEXT,
+created_at TIMESTAMPTZ DEFAULT NOW()
+);
+11.7 Consent Management System
+Per Operating Canvas: Recording requires explicit consent.
+Consent Types
+Consent Context Storage
+Recording Consent Pod meetings/masterclasses Per-event
+Photo/Video Consent In-person events Per-event
+Testimonial Consent Marketing use Permanent until revoked
+Data Processing GDPR requirement Signup + changes
+Marketing Emails Promotional content User preferences
+Implementation
+-- User consents
+CREATE TABLE user_consents (
+id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+consent_type TEXT NOT NULL,
+granted BOOLEAN NOT NULL,
+context_id UUID, -- Event/Pod ID if contextual
+granted_at TIMESTAMPTZ DEFAULT NOW(),
+revoked_at TIMESTAMPTZ,
+ip_address TEXT,
+UNIQUE(user_id, consent_type, context_id)
+);
+11.8 Notification System (Scale-Aware)
+Per Operating Canvas: Admin controls for notification tone/frequency by scale stage.
+Scale Stages
+Stage Users Notification Strategy
+< 100 Founders High-touch, personal, immediate
+100-500 Early Circle Personal, same-day digest option
+500-1,000 Circle Balanced, digest default
+1,000+ Scale Digest default, user preferences
+Notification Types
+Type Channel Frequency Control
+Invite accepted Email + In-app Immediate
+Event reminder Email 24h, 1h before
+Pod meeting Email + Calendar 24h before
+Strike warning Email Immediate
+New pod message In-app only Real-time or digest
+Weekly summary Email Weekly
+Admin Controls
+Toggle notification types on/off globally
+Set default digest frequency
+Override for high-priority messages
+A/B test notification copy
+13. Infrastructure Cost Projections
+Supabase Costs (Primary)
+Users Plan Monthly Cost Notes
+0-500 Free $0 500MB DB, 2GB bandwidth
+500-2,000 Pro $25 8GB DB, 50GB bandwidth
+2,000-5,000 Pro $25 + overages ~$50-100
+5,000-10,000 Team $599 Enterprise features
+10,000+ Enterprise Custom Dedicated support
+Additional Services
+Service Cost Scale Trigger
+Resend (Email) Free → $20/mo 3,000 emails/mo
+Sentry (Errors) Free → $26/mo 5K events/mo
+Vercel/Netlify Free → $20/mo High traffic
+CDN (Cloudflare) Free Always free tier
+Monitoring (Grafana) Free Self-hosted
+Projected Monthly Costs
+Month Users Infra Cost Notes
+1 500 $50 Supabase Pro + buffer
+2 2,000 $150 Email + error tracking
+3 5,000 $300 Scaling overages
+4 10,000 $700 Team plan + services
+Cost Optimization Strategies
+1. Use Supabase free tier as long as possible
+2. Implement aggressive caching to reduce DB queries
+3. Archive old data to reduce storage costs
+4. Use edge functions sparingly (compute costs)
+5. Optimize image sizes before storage
+14. Internationalization & Compliance
+13.1 Timezone Handling
+Critical for EU/US dual operation.
+Implementation Requirements
+Store all times in UTC
+Store user timezone preference
+Display times in user's local timezone
+Event creation: explicit timezone selection
+Meeting scheduling: show multiple timezones
+// Timezone handling utility
+const formatEventTime = (utcTime: string, userTimezone: string) => {
+return new Intl.DateTimeFormat('en-US', {
+timeZone: userTimezone,
+dateStyle: 'full',
+timeStyle: 'short'
+}).format(new Date(utcTime));
+};
+13.2 Multi-Language Support (Future)
+Priority Language Timeline
+P0 English Launch
+P1 German Month 6
+P2 Spanish Month 9
+P3 French Month 12
+Implementation Strategy
+Use i18n library (react-i18next)
+Extract all strings to translation files
+Support RTL layouts (future)
+Localize dates, numbers, currencies
+13.3 GDPR Compliance
+Required Features
+Requirement Implementation
+Consent Collection Explicit opt-in at signup
+Data Access Request Self-service export button
+Right to Erasure Account deletion with data purge
+Data Portability JSON export of user data
+Breach Notification Admin alerting system
+Privacy Policy Legal page with version history
+Cookie Consent Banner for non-essential cookies
+Data Retention Policy
+Active user data: Indefinite
+Deleted user data: 30-day grace period, then purge
+Chat messages: 1 year, then archive
+Activity logs: 2 years, then anonymize
+Stripe data: Follow Stripe retention
+13.4 Accessibility (WCAG 2.1 AA)
+Category Requirements
+Perceivable Alt text, color contrast, captions
+Operable Keyboard navigation, focus management
+Understandable Clear labels, error messages
+Robust Screen reader compatibility
+15. Migration Strategy
+14.1 Circle.so Migration (If Applicable)
+Per GTM Plan: Circle.so is used in Phase 1, custom platform in Phase 2.
+Migration Steps
+1. Data Export from Circle.so
+Member list (name, email, join date)
+Community structure (spaces → pods)
+Messages (if available via API)
+2. Data Mapping
+Circle Spaces → RSN Pods
+Circle Members → RSN Users
+Circle Events → RSN Events
+3. Member Communication
+Announce migration 30 days ahead
+Send invite links to RSN platform
+Provide onboarding assistance
+Keep Circle.so read-only during transition
+4. Cutover Plan
+Parallel operation for 2 weeks
+Redirect Circle.so to RSN
+Archive Circle.so after 30 days
+14.2 Zoom/Twine Integration
+Current: Events use Zoom + Twine for speed networking.
+Integration Options
+Option Pros Cons
+Keep Zoom + Twine Known, working Manual coordination
+Native Video Integrated High development cost
+Zoom SDK Embedded experience Zoom dependency
+Twine API Automated matching Limited API
+Recommendation
+Phase 1: Keep Zoom + Twine (proven)
+Phase 2: Evaluate Zoom SDK for embedded experience
+Phase 3: Consider native video for pods (not events)
+16. Appendix
+A. Technology Decision Records
+ADR-001: Supabase as Backend
+Context: Need managed backend with auth, database, real-time
+Decision: Use Supabase (PostgreSQL, Auth, Edge Functions, Realtime)
+Consequences: Vendor lock-in, but rapid development and built-in scaling
+ADR-002: React + Vite for Frontend
+Context: Need modern, fast frontend with good DX
+Decision: React 18 with Vite build tool
+Consequences: Large ecosystem, easy hiring, fast development
+ADR-003: shadcn/ui for Components
+Context: Need accessible, customizable component library
+Decision: Use shadcn/ui (copy-paste components)
+Consequences: Full control, no dependency lock-in, Tailwind required
+ADR-004: Stripe for Payments
+Context: Need reliable subscription billing
+Decision: Stripe with Customer Portal
+Consequences: Industry standard, easy integration, higher fees
+B. Glossary
+Term Definition
+Pod A structured container for ongoing intentional human connection
+Director Delegated pod administrator (can manage on behalf of Owner)
+Reason Score Trust metric based on engagement, helpfulness, reliability
+The Circle First 1,000 members with special pricing/status
+Founder First 500 members (lifetime free)
+Strike Warning for violating no-selling rule (3 = ban)
+Three I's Intention, Invitation, Impact (growth engine)
+C. Reference Documents
+1. RSN - Pods of Reason GTM - Growth strategy
+2. RSN Blueprint - Core philosophy
+3. RSN Operating Canvas - Technical requirements
+4. Stripe Setup - Payment integration
+D. Contact & Ownership
+Area Owner
+Product Stefan (Mister Raw)
+Engineering TBD
+Operations Shradha
+Architecture Michael
+Document History
+Version Date Author Changes
+1.0
+2026-
+01-12
+AI
+Analysis
+Initial comprehensive plan
+1.1
+2026-
+01-12
+AI
+Analysis
+Added missing systems: Network Orientation, Onboarding Flow, Badge
+System, Masterclass System, Consent Management, Reason Score
+Algorithm. Added infrastructure costs, internationalization, migration
+strategy, critical path analysis, and scaling milestone risks.
+1.2
+2026-
+01-12
+AI
+Analysis
+Promoted Architectural Decisions to Section 6. Added 6 new decisions
+(CDN, Caching, Database Connections, Auth Tokens, API Versioning,
+Monitoring). Expanded all 11 decisions with scale thresholds, migration
+paths, cost implications, and risk assessments. Added decision framework
+and log template.
+Open Questions for Stakeholder Review
+1. Pod Size Limits: Are the proposed tier limits (Free: 6, Paid: 12) appropriate?
+2. Invite Caps: Should initial invite cap be 3/day or 5/day?
+3. Reason Score Visibility: Should users see their own score (even qualitatively)?
+4. Recording Policy: Default opt-in or opt-out for meeting recordings?
+5. ORCHESTRA Pods: Free for members or separate pricing?
+6. Twine Integration: Priority to replace or keep?
+7. Mobile App: PWA sufficient or native app needed for launch?
+8. Support Hours: 24/7 coverage needed or business hours only?
+This document should be reviewed weekly and updated as the platform evolves.

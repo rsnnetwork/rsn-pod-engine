@@ -10,5 +10,4 @@ export * from './types/subscription';
 export * from './types/video';
 export * from './types/events';
 export * from './types/api';
-export * from './types/post-event-message';
 export * from './identity/displayName';

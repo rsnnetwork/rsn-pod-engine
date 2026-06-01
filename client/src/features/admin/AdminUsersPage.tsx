@@ -13,7 +13,6 @@ import { useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
 import { isAdmin } from '@/lib/utils';
 import { useToastStore } from '@/stores/toastStore';
-import { E } from '@/realtime/entities';
 
 type StatusTab = 'active' | 'removed' | 'banned';
 
@@ -51,7 +50,6 @@ export default function AdminUsersPage() {
       return api.get(`/users?${params.toString()}`).then(r => r.data);
     },
     enabled: isAdmin(user?.role),
-    meta: { entities: [E.adminUsers] },
   });
 
   if (!isAdmin(user?.role)) {

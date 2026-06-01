@@ -47,7 +47,7 @@ export async function createSession(host: TestUser, podId: string, title: string
       numberOfRounds: 3,
       maxParticipants: 50,
       timerVisibility: 'always_visible',
-      ratingWindowSeconds: 30,
+      ratingWindowSeconds: 10,
       lobbyDurationSeconds: 300,
       noShowTimeoutSeconds: 60,
       roundDurationSeconds: 60,

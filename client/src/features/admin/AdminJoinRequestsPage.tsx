@@ -11,7 +11,6 @@ import { useToastStore } from '@/stores/toastStore';
 import { useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
 import { isAdmin } from '@/lib/utils';
-import { E } from '@/realtime/entities';
 
 interface JoinRequest {
   id: string;
@@ -79,7 +78,6 @@ export default function AdminJoinRequestsPage() {
       return api.get(`/join-requests?${params.toString()}`).then(r => r.data);
     },
     enabled: isAdmin(user?.role),
-    meta: { entities: [E.adminJoinRequests] },
   });
 
   const reviewMutation = useMutation({

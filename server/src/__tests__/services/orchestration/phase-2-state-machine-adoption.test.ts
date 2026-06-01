@@ -173,9 +173,9 @@ describe('Phase 2 — State machine adoption', () => {
       expect(src).toMatch(/RECONCILER_INTERVAL_MS\s*=\s*30_000/);
     });
 
-    it('orchestration.service.ts wires startGlobalReconciler at boot (with io for live-socket reconciliation)', () => {
+    it('orchestration.service.ts wires startGlobalReconciler at boot', () => {
       const orch = readServer('services/orchestration/orchestration.service.ts');
-      expect(orch).toMatch(/startGlobalReconciler\(io\)/);
+      expect(orch).toMatch(/startGlobalReconciler\(\)/);
     });
   });
 

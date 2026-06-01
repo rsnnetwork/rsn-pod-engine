@@ -7,8 +7,6 @@ import Badge from '@/components/ui/Badge';
 import { useToastStore } from '@/stores/toastStore';
 import { HelpCircle, MessageSquare, Mail, ChevronRight, Clock, CheckCircle, Loader2 } from 'lucide-react';
 import api from '@/lib/api';
-import { useAuthStore } from '@/stores/authStore';
-import { E } from '@/realtime/entities';
 
 const faqs = [
   { q: 'How do I join a pod?', a: 'Go to the Pods page, browse available pods, and click "Join" on one that interests you. Or create your own pod.' },
@@ -28,7 +26,6 @@ const STATUS_BADGE: Record<string, { variant: 'warning' | 'info' | 'success' | '
 export default function SupportPage() {
   const { addToast } = useToastStore();
   const qc = useQueryClient();
-  const currentUserId = useAuthStore((s) => s.user?.id);
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
@@ -36,7 +33,6 @@ export default function SupportPage() {
   const { data: myTickets } = useQuery({
     queryKey: ['my-support-tickets'],
     queryFn: () => api.get('/admin/support-tickets/mine').then(r => r.data.data ?? []),
-    meta: { entities: currentUserId ? [E.user(currentUserId)] : [] },
   });
 
   const submitMutation = useMutation({

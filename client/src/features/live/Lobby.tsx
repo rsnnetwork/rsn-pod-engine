@@ -1,17 +1,23 @@
-import { Users, Loader2, Video, VideoOff, Sparkles, ChevronDown, ChevronUp, Mic, MicOff, Volume2, VolumeX, UserX, Camera, X, Pin, PinOff, Minimize2, Maximize2 } from 'lucide-react';
+import { Users, Loader2, Video, VideoOff, Sparkles, ChevronDown, ChevronUp, Mic, MicOff, Volume2, VolumeX, UserX, Camera, X } from 'lucide-react';
 import HostRoundDashboard from './HostRoundDashboard';
-import { useBackgroundEffects } from '@/hooks/useBackgroundEffects';
-import {
-  BG_PRESETS,
-  presetToPreference,
-  isActivePreset,
-  isCustomActive,
-  BG_CAPTURE_RESOLUTION,
-} from '@/lib/backgroundEffects';
-import { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
-import { useSessionStore, useInRoomParticipants } from '@/stores/sessionStore';
+
+// Lazy-load track processors (may not be available in all environments)
+let _bgBlur: any = null;
+let _vBg: any = null;
+let _bgLoaded = false;
+async function loadBgProcessors() {
+  if (_bgLoaded) return { BackgroundBlur: _bgBlur, VirtualBackground: _vBg };
+  try {
+    const mod = await import(/* @vite-ignore */ '@livekit/track-processors');
+    _bgBlur = mod.BackgroundBlur;
+    _vBg = mod.VirtualBackground;
+    _bgLoaded = true;
+    return { BackgroundBlur: _bgBlur, VirtualBackground: _vBg };
+  } catch { return null; }
+}
+import { useState, useEffect, useCallback, useRef, memo } from 'react';
+import { useSessionStore } from '@/stores/sessionStore';
 import { getSocket } from '@/lib/socket';
-import { useVisibilityPartition } from './useVisibilityPartition';
 import {
   LiveKitRoom,
   VideoTrack,
@@ -47,96 +53,28 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
   const { localParticipant } = useLocalParticipant();
   const hostUserId = useSessionStore(s => s.hostUserId);
   const lobbyDensity = useSessionStore(s => s.lobbyDensity);
-  // Phase N (12 May spec item 2) — host visibility mode per host/cohost.
-  // Read from the server-authoritative store; the 4 modes drive how each
-  // hostly user is rendered in the lobby (and breakout) grid.
-  const hostVisibilityModes = useSessionStore(s => s.hostVisibilityModes);
-  // Phase Q (12 May spec item 2 — Ali's clarification): hosts get bigger
-  // tiles automatically (not "self" — that was the wrong pre-Phase-Q
-  // behaviour). Build the acting-host set from director + cohorts +
-  // opt-ins minus opt-outs; the director is always counted regardless
-  // of any stale row. Same shape as HostParticipantPanel uses.
-  const cohosts = useSessionStore(s => s.cohosts);
-  const actingAsHostOverrides = useSessionStore(s => s.actingAsHostOverrides);
-  const hostsSet = (() => {
-    const s = new Set<string>();
-    if (hostUserId) s.add(hostUserId);
-    for (const c of cohosts) s.add(c);
-    for (const [uid, v] of Object.entries(actingAsHostOverrides)) {
-      if (v === true) s.add(uid);
-      if (v === false) s.delete(uid);
-    }
-    if (hostUserId) s.add(hostUserId);
-    return s;
-  })();
   const cameraTracksRaw = tracks.filter(t => t.source === Track.Source.Camera);
 
-  // Phase Q sort order: director first, then other acting hosts (cohorts
-  // + opt-ins), then the local user, then everyone else. This guarantees
-  // the #1 tile in the grid is ALWAYS the director's, regardless of
-  // viewer — matching Ali's 13 May clarification on Stefan's spec.
-  const cameraTracksSorted = [...cameraTracksRaw].sort((a, b) => {
-    const aId = a.participant.identity;
-    const bId = b.participant.identity;
-    const aIsDirector = aId === hostUserId;
-    const bIsDirector = bId === hostUserId;
-    if (aIsDirector && !bIsDirector) return -1;
-    if (!aIsDirector && bIsDirector) return 1;
-    const aIsHost = !!aId && hostsSet.has(aId);
-    const bIsHost = !!bId && hostsSet.has(bId);
-    if (aIsHost && !bIsHost) return -1;
-    if (!aIsHost && bIsHost) return 1;
+  // Sort: host (local) tile always first in the grid
+  const cameraTracks = [...cameraTracksRaw].sort((a, b) => {
     const aIsLocal = a.participant.sid === localParticipant.sid ? 0 : 1;
     const bIsLocal = b.participant.sid === localParticipant.sid ? 0 : 1;
     return aIsLocal - bIsLocal;
   });
 
-  // Phase N + T — partition tracks by visibility mode via shared hook.
-  // Hidden users are dropped entirely; producers go to an audio-only
-  // strip; big_speakers get a dedicated stage row; everyone else
-  // (default 'normal') lands in the main grid. The hook is also used
-  // by VideoRoom for breakouts (Phase T).
-  const {
-    bigSpeakerTracks,
-    producerTracks,
-    normalTracks: cameraTracks,
-    visibilityFor,
-  } = useVisibilityPartition(cameraTracksSorted, hostVisibilityModes);
-
   // Responsive grid based on density preference
   const n = participants.length;
-  // Bug 8 (18 May Stefan) + Bug 49 (19 May Stefan) — three densities must be
-  // VISUALLY distinct on mobile, not just on desktop. Stefan flagged 19 May
-  // that normal and spacious looked "almost the same" on a phone — root
-  // cause: at n=2 (the most common test case) both rendered grid-cols-1 on
-  // mobile, identical layout. Now:
-  //   - compact:  3 cols (smallest tiles, tightest gap, info-dense)
-  //   - normal:   2 cols on mobile when n>=2 (so n=2 is side-by-side, not
-  //               one giant column tile that looks the same as spacious)
-  //   - spacious: 1 col with extra horizontal padding so the tile is
-  //               framed away from the screen edges (max-w-md auto-mx),
-  //               making the difference unmistakable vs normal at every n.
   const gridCols = lobbyDensity === 'compact'
-    ? (n <= 4 ? 'grid-cols-3 sm:grid-cols-4' : 'grid-cols-3 sm:grid-cols-5 lg:grid-cols-6')
+    ? (n <= 4 ? 'grid-cols-2 sm:grid-cols-3' : 'grid-cols-3 sm:grid-cols-4 lg:grid-cols-6')
     : lobbyDensity === 'spacious'
-    ? 'grid-cols-1'
-    : // normal (default) — always at least 2 cols on mobile from n=2 up so
-      // it's distinct from spacious (which stays 1 col with framing).
-      n <= 1 ? 'grid-cols-1'
+    ? (n <= 2 ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2')
+    : // normal (default)
+      n <= 2 ? 'grid-cols-1 sm:grid-cols-2'
       : n <= 4 ? 'grid-cols-2 sm:grid-cols-2'
       : n <= 9 ? 'grid-cols-2 sm:grid-cols-3'
       : 'grid-cols-3 sm:grid-cols-4 lg:grid-cols-5';
-  const gapClass = lobbyDensity === 'compact' ? 'gap-1.5' : lobbyDensity === 'spacious' ? 'gap-6' : 'gap-3';
-  // Bug 49 — spacious mode on mobile needs an inner cap + auto-margins so
-  // the 1-col tile is visibly framed (not edge-to-edge identical to normal
-  // at n=2). max-w-md (~28rem / 448px) is wider than 360-414px mobile
-  // viewports so the tile is constrained by viewport minus horizontal
-  // padding on mobile, and centred with breathing room on tablet+.
-  const maxWClass = lobbyDensity === 'compact'
-    ? 'max-w-5xl'
-    : lobbyDensity === 'spacious'
-    ? 'max-w-md sm:max-w-2xl px-4 sm:px-0'
-    : 'max-w-4xl';
+  const gapClass = lobbyDensity === 'compact' ? 'gap-2' : lobbyDensity === 'spacious' ? 'gap-6' : 'gap-3';
+  const maxWClass = lobbyDensity === 'compact' ? 'max-w-5xl' : lobbyDensity === 'spacious' ? 'max-w-2xl' : 'max-w-4xl';
 
   const handleHostMute = useCallback((targetIdentity: string, mute: boolean) => {
     if (!sessionId) return;
@@ -151,162 +89,34 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
     socket?.emit('host:remove_participant', { sessionId, userId: targetIdentity, reason: 'Removed by host' });
   }, [sessionId]);
 
-  // F2 (20 May 2026 — user spec): host can shrink a cohost's tile back to
-  // participant size without opening HCC. Visual only; cohost privileges
-  // (mute-others, HCC access, etc.) are unchanged. Same handler the HCC
-  // "Small tile / Restore tile" button calls — server-side handler at
-  // host-actions.ts:handleSetTileSize verifies the caller is the actual
-  // event director.
-  const handleSetTileSize = useCallback(
-    (targetIdentity: string, size: 'participant' | 'host') => {
-      if (!sessionId) return;
-      const socket = getSocket();
-      socket?.emit('host:set_tile_size', {
-        sessionId,
-        targetUserId: targetIdentity,
-        size,
-      });
-    },
-    [sessionId],
-  );
-
   // Pin/spotlight state — client-side only, no server interaction
   const [pinnedSid, setPinnedSid] = useState<string | null>(null);
 
-  // Bug 1 (18 May Stefan) — global pin set by an acting host on the
-  // server. When non-null, this overrides every viewer's local pin: the
-  // named user becomes the big tile for everyone. The server pin is
-  // userId-based (canonical), so we resolve it to a LiveKit sid here.
-  const serverPinnedUserId = useSessionStore(s => s.serverPinnedUserId);
-  // Bug 26 (19 May Ali) — director's visual demote list. Cohosts whose
-  // userId appears here render at participant tile size even though
-  // hostsSet still contains them (privileges unchanged).
-  //
-  // CRITICAL — read the raw array from Zustand (stable identity until the
-  // array itself changes), then memoise the Set. The earlier shape
-  // `useSessionStore(s => new Set(s.tileDemotedUserIds))` returned a fresh
-  // Set on every selector call; Zustand's default Object.is equality saw
-  // a "new" value every render and triggered another render in a loop,
-  // which surfaced in production as React error #185 ("Maximum update
-  // depth exceeded") and crashed the live Lobby behind an error boundary.
-  const tileDemotedUserIds = useSessionStore(s => s.tileDemotedUserIds);
-  const tileDemotedSet = useMemo(() => new Set(tileDemotedUserIds), [tileDemotedUserIds]);
-  const serverPinnedSid = (() => {
-    if (!serverPinnedUserId) return null;
-    const t = cameraTracksSorted.find(
-      tr => tr.participant.identity === serverPinnedUserId,
-    );
-    return t?.participant.sid ?? null;
-  })();
-  // Effective pin: server wins when set, otherwise per-viewer local pin.
-  // The renderer + button-click handlers read this single value so the
-  // two code paths can't drift.
-  const effectivePinnedSid = serverPinnedSid ?? pinnedSid;
-
-  // setEffectivePin handles both branches in one place:
-  //   - Acting host viewer → call host:set_pin (global broadcast)
-  //   - Participant viewer → fall back to per-viewer local pin
-  // Mapping back from sid → userId for the server uses the LiveKit
-  // participant identity (which IS the userId by our token convention).
-  const setEffectivePin = useCallback(
-    (sid: string | null) => {
-      if (isHost && sessionId) {
-        // Global. Find the userId from the sid (or pass null to clear).
-        let targetUserId: string | null = null;
-        if (sid) {
-          const t = cameraTracksSorted.find(tr => tr.participant.sid === sid);
-          targetUserId = t?.participant.identity ?? null;
-        }
-        const socket = getSocket();
-        socket?.emit('host:set_pin', { sessionId, pinnedUserId: targetUserId });
-        // Server will fan out pin:changed to us too; no optimistic local
-        // write needed. Keeping the local-pin slot null avoids confusion
-        // if the host later loses host role mid-event.
-        setPinnedSid(null);
-      } else {
-        // Local-only — yesterday's behaviour preserved for participants.
-        setPinnedSid(sid);
-      }
-    },
-    [isHost, cameraTracksSorted, sessionId],
-  );
-
-  // Auto-unpin if pinned participant leaves OR if their visibility mode
-  // is now 'hidden' (Phase N — host can hide themselves mid-event; a
-  // pinned-then-hidden user would otherwise leak as the big tile). Only
-  // clears the local pin — the server pin is host-managed and self-
-  // recovers via the server-side cleanup on participant removal.
+  // Auto-unpin if pinned participant leaves
   useEffect(() => {
-    if (!pinnedSid) return;
-    const pinned = cameraTracksSorted.find(t => t.participant.sid === pinnedSid);
-    if (!pinned) {
-      setPinnedSid(null);
-      return;
-    }
-    if (visibilityFor(pinned) === 'hidden') {
+    if (pinnedSid && !cameraTracks.find(t => t.participant.sid === pinnedSid)) {
       setPinnedSid(null);
     }
-  }, [cameraTracksSorted, pinnedSid, visibilityFor]);
-
-  // Issue 12 (21 May Stefan re-test) — "Host tiles must REMAIN LARGER
-  // than other participants, and also sit next to each other." Phase Q's
-  // col-span-2 row-span-2 worked at compact density (4+ cols → two hosts
-  // at col-span-2 each fit side-by-side in row 1) but collapsed at
-  // normal density (2 cols → col-span-2 = full row, so two hosts
-  // stacked). The first attempted fix (cc09a19) dropped multi-host
-  // tiles to `aspect-video` (same size as participants), which Stefan
-  // re-flagged as wrong: hosts must stay visually bigger even when
-  // there are two or three of them.
-  //
-  // Final shape:
-  //   • 1 host in any density        → col-span-2 row-span-2 (hero / Phase Q)
-  //   • 2+ hosts in compact density  → col-span-2 row-span-2 (works there
-  //                                    because the grid is ≥4 cols, so
-  //                                    two col-span-2 tiles share row 1)
-  //   • 2+ hosts in narrow density   → col-span-1 with `aspect-[4/3]`
-  //     (normal + spacious — 2-col)    instead of aspect-video. Same width
-  //                                    as a participant tile but ~1.33×
-  //                                    taller, so hosts remain visibly
-  //                                    bigger AND adjacent in row 1.
-  const actingHostCountInGrid = cameraTracks.reduce((count, t) => {
-    const id = t.participant.identity;
-    return id && hostsSet.has(id) && !tileDemotedSet.has(id) ? count + 1 : count;
-  }, 0);
-  const narrowGrid = lobbyDensity === 'normal' || lobbyDensity === 'spacious';
-  const useBigHostTiles = actingHostCountInGrid <= 1 || !narrowGrid;
-  // Multi-host narrow-grid path — taller-than-participant aspect ratio
-  // keeps the visual hierarchy while col-span-1 lets them sit adjacent.
-  const multiHostNarrowTileClass = 'aspect-[4/3] col-span-1 row-span-1 ring-2 ring-rsn-red/30';
-  const soloOrCompactHostTileClass = 'aspect-video col-span-2 row-span-2 ring-2 ring-rsn-red/30';
+  }, [cameraTracks, pinnedSid]);
 
   // Helper to render a single video tile with all overlays
   const renderTile = (trackRef: any, { isPinned = false, onClick }: { isPinned?: boolean; onClick?: () => void } = {}) => {
     const name = trackRef.participant.name || trackRef.participant.identity || 'User';
     const hasVideo = !!trackRef.publication?.track;
     const isLocal = trackRef.participant.sid === localParticipant.sid;
+    // Phase 8C.2 (8 May spec) — local tile gets self-prominence so each
+    // user clearly sees their own camera in the main room. Stefan #11
+    // is honoured by the sort (host first), so even in compact density
+    // the host always renders in the visible roster.
+    const isLocalTile = isLocal;
     const tileIsHost = trackRef.participant.identity === hostUserId;
-    // Phase Q (12 May spec item 2 — Ali's 13 May clarification) — hosts
-    // get the bigger tile automatically. Pre-Phase-Q this was tied to
-    // `isLocal` (Phase 8C.2 self-prominence rule), which made each user
-    // see THEMSELVES as the big tile regardless of role — exactly the
-    // behaviour Stefan called out in the 12 May test. Now the elevation
-    // follows the host roster (director + cohosts + opt-ins), so every
-    // viewer sees the host(s) as the big tile(s) and #1 is always the
-    // director.
-    // Bug 26 (19 May Ali) — if the director has demoted this cohost's
-    // tile, we strip the host-tile treatment here while keeping every
-    // server-side privilege intact (mute-others, HCC, etc. still work).
-    const isActingHost = !!trackRef.participant.identity
-      && hostsSet.has(trackRef.participant.identity)
-      && !tileDemotedSet.has(trackRef.participant.identity);
     const isMicOn = trackRef.participant.isMicrophoneEnabled;
     return (
       <div
         key={trackRef.participant.sid}
-        data-self={isLocal ? 'true' : undefined}
+        data-self={isLocalTile ? 'true' : undefined}
         data-host={tileIsHost ? 'true' : undefined}
-        data-acting-host={isActingHost ? 'true' : undefined}
-        className={`relative rounded-xl overflow-hidden bg-[#3c4043] ${isPinned ? 'h-full w-full' : isActingHost ? (useBigHostTiles ? soloOrCompactHostTileClass : multiHostNarrowTileClass) : 'aspect-video'} flex items-center justify-center group cursor-pointer`}
+        className={`relative rounded-xl overflow-hidden bg-[#3c4043] ${isPinned ? 'h-full w-full' : isLocalTile ? 'aspect-video sm:col-span-2 sm:row-span-2 ring-2 ring-rsn-red/30' : 'aspect-video'} flex items-center justify-center group cursor-pointer`}
         onClick={onClick}
       >
         {hasVideo && isTrackReference(trackRef) ? (
@@ -328,121 +138,33 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
             </div>
           </div>
         )}
-        {/* Name + controls: stacked on local tile to prevent overlap.
-            Bug 12 (13 May live test) — Phase M opt-in admins got the bigger
-            tile (Phase Q) but no badge. Now: director keeps (Host) in amber,
-            anyone else in hostsSet shows (Co-Host) in indigo. Mirrors the
-            ParticipantList badge styling so the role is obvious wherever
-            you look. */}
+        {/* Name + controls: stacked on local tile to prevent overlap */}
         {isLocal ? (
           <div className="absolute bottom-1.5 left-1.5 right-1.5 flex flex-col items-start gap-1" onClick={e => e.stopPropagation()}>
             <div className="bg-black/60 backdrop-blur-sm rounded px-2 py-0.5 text-[11px] text-white truncate max-w-[90%] flex items-center gap-1.5">
               {name}
-              {tileIsHost ? (
+              {trackRef.participant.identity === hostUserId && (
                 <span className="text-[9px] font-medium text-amber-300 ml-0.5">(Host)</span>
-              ) : isActingHost ? (
-                <span className="text-[9px] font-medium text-indigo-300 ml-0.5">(Co-Host)</span>
-              ) : null}
+              )}
             </div>
             <LobbyMediaControls isHost={isHost} sessionId={sessionId} />
           </div>
         ) : (
           <div className="absolute bottom-2 left-2 bg-black/60 backdrop-blur-sm rounded px-2 py-0.5 text-[11px] text-white truncate max-w-[90%] flex items-center gap-1.5">
             {name}
-            {tileIsHost ? (
+            {trackRef.participant.identity === hostUserId && (
               <span className="text-[9px] font-medium text-amber-300 ml-0.5">(Host)</span>
-            ) : isActingHost ? (
-              <span className="text-[9px] font-medium text-indigo-300 ml-0.5">(Co-Host)</span>
-            ) : null}
-          </div>
-        )}
-        {/* Bug 1 (18 May Stefan) — explicit pin / unpin button on every
-            tile. Click semantics depend on viewer role:
-              - Acting host  → emits host:set_pin (broadcast to all
-                participants; server fans out pin:changed).
-              - Participant  → toggles local-only pin (per-viewer).
-            setEffectivePin routes either path; the visible button label
-            stays "Pin / Unpin" for both. The amber ring on the active
-            pin uses the EFFECTIVE pinned sid (whichever path set it)
-            so the button correctly reflects what the viewer sees. */}
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            setEffectivePin(isPinned ? null : trackRef.participant.sid);
-          }}
-          title={isPinned ? `Unpin ${name}` : `Pin ${name} as spotlight`}
-          aria-label={isPinned ? `Unpin ${name}` : `Pin ${name}`}
-          data-testid={isPinned ? 'tile-unpin-button' : 'tile-pin-button'}
-          className={`absolute ${isLocal ? 'top-1.5' : 'top-1.5'} right-1.5 z-10 bg-black/55 hover:bg-black/75 backdrop-blur-sm rounded-full p-1.5 text-white transition-colors ${isPinned ? 'ring-1 ring-amber-300/70 text-amber-200' : ''}`}
-        >
-          {isPinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
-        </button>
-        {/* Issue 13 (20 May Stefan) — "Host should be able to unpin."
-            The director can shrink their OWN tile back to participant
-            size (and restore it later) directly from their tile. Visual
-            only — every director privilege is unchanged. Visible only
-            to the director themselves on their own tile, so cohosts and
-            participants don't see a control they can't actuate. */}
-        {isHost && isLocal && tileIsHost && (
-          <div className="absolute top-1.5 right-10 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
-            {tileDemotedSet.has(trackRef.participant.identity) ? (
-              <button
-                onClick={() => handleSetTileSize(trackRef.participant.identity, 'host')}
-                className="bg-black/50 backdrop-blur-sm rounded-full p-1.5 text-white hover:bg-indigo-600/70"
-                title="Restore your tile to host size"
-                aria-label="Restore your tile"
-                data-testid="tile-self-restore-button"
-              >
-                <Maximize2 className="h-3.5 w-3.5" />
-              </button>
-            ) : (
-              <button
-                onClick={() => handleSetTileSize(trackRef.participant.identity, 'participant')}
-                className="bg-black/50 backdrop-blur-sm rounded-full p-1.5 text-white hover:bg-black/70"
-                title="Shrink your tile to participant size (privileges unchanged)"
-                aria-label="Shrink your tile"
-                data-testid="tile-self-shrink-button"
-              >
-                <Minimize2 className="h-3.5 w-3.5" />
-              </button>
             )}
           </div>
         )}
-        {/* Host mute/unmute + kick buttons on remote participant tiles.
-            18 May — shifted left to right-10 so the always-visible pin
-            button (right-1.5) doesn't get covered when the host hovers.
-            F2 (20 May 2026) — when the target is a cohost (acting host
-            other than the director), the director also gets a Small
-            tile / Restore tile toggle directly on the tile, mirroring
-            the HCC button. Cohost keeps all privileges; only visual. */}
+        {isPinned && (
+          <div className="absolute top-2 right-2 bg-black/60 text-white text-[10px] px-2 py-0.5 rounded-full">
+            Pinned · click to unpin
+          </div>
+        )}
+        {/* Host mute/unmute + kick buttons on remote participant tiles */}
         {isHost && !isLocal && (
-          <div className="absolute top-1.5 right-10 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
-            {trackRef.participant.identity
-              && hostsSet.has(trackRef.participant.identity)
-              && trackRef.participant.identity !== hostUserId && (
-                tileDemotedSet.has(trackRef.participant.identity) ? (
-                  <button
-                    onClick={() => handleSetTileSize(trackRef.participant.identity, 'host')}
-                    className="bg-black/50 backdrop-blur-sm rounded-full p-1.5 text-white hover:bg-indigo-600/70"
-                    title={`Restore ${name}'s tile to host size`}
-                    aria-label={`Restore ${name}'s tile`}
-                    data-testid="tile-restore-button"
-                  >
-                    <Maximize2 className="h-3.5 w-3.5" />
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => handleSetTileSize(trackRef.participant.identity, 'participant')}
-                    className="bg-black/50 backdrop-blur-sm rounded-full p-1.5 text-white hover:bg-black/70"
-                    title={`Shrink ${name}'s tile to participant size (privileges unchanged)`}
-                    aria-label={`Shrink ${name}'s tile`}
-                    data-testid="tile-shrink-button"
-                  >
-                    <Minimize2 className="h-3.5 w-3.5" />
-                  </button>
-                )
-              )}
+          <div className="absolute top-1.5 right-1.5 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
             <button
               onClick={() => handleHostMute(trackRef.participant.identity, !!isMicOn)}
               className="bg-black/50 backdrop-blur-sm rounded-full p-1.5 text-white hover:bg-black/70"
@@ -459,14 +181,8 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
             </button>
           </div>
         )}
-        {/* Mic status indicator. Bug 10 (18 May Stefan) — hidden on the
-            local tile because LobbyMediaControls already renders an
-            explicit Mic Off / Cam Off button right below the name; the
-            duplicate icon at top-left + the labeled button at bottom-left
-            is what Claus called "duplicated mute/camera indicators". For
-            remote tiles the top-left icon is still the only mic signal
-            so it stays. */}
-        {!isMicOn && !isLocal && (
+        {/* Mic status indicator */}
+        {!isMicOn && (
           <div className="absolute top-2 left-2 bg-red-500/90 rounded-full p-1">
             <MicOff className="h-2.5 w-2.5 text-[#1a1a2e]" />
           </div>
@@ -477,29 +193,20 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
     );
   };
 
-  // Pinned layout: large tile + small row at bottom.
-  // Bug 1 (18 May Stefan) — render against EFFECTIVE pin (server > local)
-  // so a host's global pin shows the same big tile to every participant.
-  // The pinned-mode strip includes big_speaker and producer tracks (no
-  // dedicated stage/audio rows render in this layout); hidden tracks
-  // stay filtered out everywhere.
-  const pinnedTrack = effectivePinnedSid
-    ? cameraTracksSorted.find(t => t.participant.sid === effectivePinnedSid)
-    : null;
+  // Pinned layout: large tile + small row at bottom
+  const pinnedTrack = pinnedSid ? cameraTracks.find(t => t.participant.sid === pinnedSid) : null;
   if (pinnedTrack) {
-    const unpinnedTracks = cameraTracksSorted.filter(
-      t => t.participant.sid !== effectivePinnedSid && visibilityFor(t) !== 'hidden',
-    );
+    const unpinnedTracks = cameraTracks.filter(t => t.participant.sid !== pinnedSid);
     return (
       <div className={`flex flex-col gap-3 w-full ${maxWClass} mx-auto h-full`}>
         <div className="flex-1 min-h-0">
-          {renderTile(pinnedTrack, { isPinned: true, onClick: () => setEffectivePin(null) })}
+          {renderTile(pinnedTrack, { isPinned: true, onClick: () => setPinnedSid(null) })}
         </div>
         {unpinnedTracks.length > 0 && (
           <div className="flex gap-2 h-24 shrink-0 overflow-x-auto">
             {unpinnedTracks.map(t => (
               <div key={t.participant.sid} className="flex-shrink-0 w-32">
-                {renderTile(t, { onClick: () => setEffectivePin(t.participant.sid) })}
+                {renderTile(t, { onClick: () => setPinnedSid(t.participant.sid) })}
               </div>
             ))}
           </div>
@@ -508,62 +215,18 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
     );
   }
 
-  // Default layout (no pin) — Phase N stacks three sections:
-  //   1. Big-speaker stage row (above the grid, only if any big_speaker
-  //      hosts exist). One tile per big_speaker, full-width row.
-  //   2. Main grid — all 'normal' tracks (default for non-hosts and
-  //      hosts without a chosen mode).
-  //   3. Producer strip (below the grid, only if any producers exist).
-  //      Pills with name + audio icon; no video tile.
-  // Hidden hosts/cohosts are filtered out entirely.
+  // Default grid layout (unchanged behavior when nothing is pinned)
   return (
-    <div className={`flex flex-col gap-3 w-full ${maxWClass} mx-auto`}>
-      {bigSpeakerTracks.length > 0 && (
-        <div
-          data-testid="lobby-big-speaker-stage"
-          className={`grid gap-3 ${
-            bigSpeakerTracks.length === 1 ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2'
-          }`}
-        >
-          {bigSpeakerTracks.map(trackRef =>
-            renderTile(trackRef, {
-              isPinned: true,
-              onClick: () => setEffectivePin(trackRef.participant.sid),
-            }),
-          )}
-        </div>
+    <div className={`grid ${gridCols} ${gapClass} w-full ${maxWClass} mx-auto`}>
+      {cameraTracks.map(trackRef =>
+        renderTile(trackRef, { onClick: () => setPinnedSid(trackRef.participant.sid) })
       )}
-      <div className={`grid ${gridCols} ${gapClass} w-full`}>
-        {cameraTracks.map(trackRef =>
-          renderTile(trackRef, { onClick: () => setEffectivePin(trackRef.participant.sid) })
-        )}
-        {cameraTracks.length === 0 && bigSpeakerTracks.length === 0 && (
-          <div className="col-span-full text-center py-12 text-gray-500 text-sm">
-            <div className="h-16 w-16 rounded-full bg-[#3c4043] flex items-center justify-center mx-auto mb-3">
-              <VideoOff className="h-6 w-6 text-gray-400" />
-            </div>
-            Waiting for participants to enable cameras...
+      {cameraTracks.length === 0 && (
+        <div className="col-span-full text-center py-12 text-gray-500 text-sm">
+          <div className="h-16 w-16 rounded-full bg-[#3c4043] flex items-center justify-center mx-auto mb-3">
+            <VideoOff className="h-6 w-6 text-gray-400" />
           </div>
-        )}
-      </div>
-      {producerTracks.length > 0 && (
-        <div
-          data-testid="lobby-producer-strip"
-          className="flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg bg-[#1f2024] border border-[#3c4043]"
-        >
-          <span className="text-[10px] uppercase tracking-wide text-gray-400 mr-1">
-            Producers
-          </span>
-          {producerTracks.map(t => (
-            <span
-              key={t.participant.sid}
-              className="inline-flex items-center gap-1 bg-black/40 text-white text-[11px] px-2 py-0.5 rounded-full"
-              title="Off-camera operator — audio-only"
-            >
-              <Mic className="h-3 w-3 text-gray-300" />
-              {t.participant.name || t.participant.identity || 'Producer'}
-            </span>
-          ))}
+          Waiting for participants to enable cameras...
         </div>
       )}
     </div>
@@ -571,17 +234,7 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
 }
 
 function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?: string }) {
-  // Bug 11 (13 May live test) — destructure the reactive isMicrophoneEnabled /
-  // isCameraEnabled values from useLocalParticipant directly. Pre-fix the
-  // component relied on manual `localParticipant.on('trackPublished', ...)`
-  // listeners + a stale React state mirror, but in livekit-client v2 the
-  // LocalParticipant emits `localTrackPublished` (not `trackPublished`) for
-  // its own publishes, so the listener never fired and the React state drifted
-  // out of sync with reality — "Cam Off" appeared while the camera was clearly
-  // publishing video. The components-react hook subscribes to the right event
-  // matrix internally, so we use those values as the source of truth and only
-  // mirror them into local state for the optimistic-toggle UX.
-  const { localParticipant, isMicrophoneEnabled: hookMicEnabled, isCameraEnabled: hookCamEnabled } = useLocalParticipant();
+  const { localParticipant } = useLocalParticipant();
   const allParticipants = useParticipants();
   const { hostMuteCommand, setHostMuteCommand } = useSessionStore();
   // Restore camera/mic preference from sessionStorage (FIX 15D — survives refresh)
@@ -593,13 +246,8 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
     const saved = sessionStorage.getItem('rsn_cam');
     return saved !== null ? saved === 'true' : true;
   });
-  // Issue 10 — restore last bg choice for the UI highlight. The actual
-  // processor is (re-)applied by a separate effect once the local camera
-  // track is ready.
+  const [bgMode, setBgMode] = useState('disabled');
   const [showBgPanel, setShowBgPanel] = useState(false);
-  // Shared BG lifecycle: capability gate, persist-across-rooms, degrade→disable,
-  // destroy-on-unmount. hookCamEnabled flips true the instant the camera publishes.
-  const bg = useBackgroundEffects(localParticipant, hookCamEnabled);
 
   // Derive allMuted from actual remote participant mic state (host button label
   // must reflect reality, not a stale local flag that resets on remount).
@@ -646,23 +294,30 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
     }
   }, [localParticipant, isHost]);
 
-  // (Background persistence across main↔breakout is now handled inside
-  // useBackgroundEffects — it re-applies the saved preference whenever the
-  // camera publishes, and destroys the processor on unmount.)
-
-  // Bug 11 (13 May live test) — sync local optimistic state with the hook's
-  // reactive values. The hook re-renders the parent whenever the underlying
-  // track state changes (any source: user toggle, host mute, network
-  // reconnect, server-side permission update). This replaces the manual
-  // `localParticipant.on('trackPublished', ...)` listeners that were silent
-  // for LocalParticipant in livekit-client v2 (it emits `localTrackPublished`
-  // not `trackPublished` for self publishes).
+  // Phase 7-audit fix — keep local camEnabled / micEnabled in sync with the
+  // actual LiveKit track state. Pre-fix the toggle handlers updated React
+  // state optimistically, but a) the LiveKit auto-publish on join and
+  // b) any external state change (host mute, network reconnect) would
+  // not flow back into the React state. Result: button label said "Cam Off"
+  // while the camera was actually publishing video.
   useEffect(() => {
-    setMicEnabled(hookMicEnabled);
-  }, [hookMicEnabled]);
-  useEffect(() => {
-    setCamEnabled(hookCamEnabled);
-  }, [hookCamEnabled]);
+    if (!localParticipant) return;
+    const sync = () => {
+      setCamEnabled(localParticipant.isCameraEnabled);
+      setMicEnabled(localParticipant.isMicrophoneEnabled);
+    };
+    sync();
+    localParticipant.on('trackPublished' as any, sync);
+    localParticipant.on('trackUnpublished' as any, sync);
+    localParticipant.on('trackMuted' as any, sync);
+    localParticipant.on('trackUnmuted' as any, sync);
+    return () => {
+      localParticipant.off('trackPublished' as any, sync);
+      localParticipant.off('trackUnpublished' as any, sync);
+      localParticipant.off('trackMuted' as any, sync);
+      localParticipant.off('trackUnmuted' as any, sync);
+    };
+  }, [localParticipant]);
 
   // Guard: prevent user toggle while host mute command is being applied (race condition)
   const [hostMuteProcessing, setHostMuteProcessing] = useState(false);
@@ -740,7 +395,6 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
       <button
         onClick={toggleMic}
         title={micEnabled ? 'Click to mute' : 'Click to unmute'}
-        aria-label={micEnabled ? 'Mic on' : 'Mic off'}
         className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors backdrop-blur-sm ${
           micEnabled
             ? 'bg-black/40 text-white hover:bg-black/60'
@@ -748,16 +402,11 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
         }`}
       >
         {micEnabled ? <Mic className="h-3 w-3" /> : <MicOff className="h-3 w-3" />}
-        {/* Bug 51 (19 May Stefan) — text label hidden on mobile so the
-            three controls fit inside compact-mode tiles (~108 px wide
-            at 360 px viewport, 3 cols). Title + aria-label keep the
-            affordance accessible. */}
-        <span className="hidden sm:inline">{micEnabled ? 'Mic On' : 'Mic Off'}</span>
+        {micEnabled ? 'Mic On' : 'Mic Off'}
       </button>
       <button
         onClick={toggleCam}
         title={camEnabled ? 'Click to turn camera off' : 'Click to turn camera on'}
-        aria-label={camEnabled ? 'Camera on' : 'Camera off'}
         className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors backdrop-blur-sm ${
           camEnabled
             ? 'bg-black/40 text-white hover:bg-black/60'
@@ -765,27 +414,27 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
         }`}
       >
         {camEnabled ? <Video className="h-3 w-3" /> : <VideoOff className="h-3 w-3" />}
-        <span className="hidden sm:inline">{camEnabled ? 'Cam On' : 'Cam Off'}</span>
+        {camEnabled ? 'Cam On' : 'Cam Off'}
       </button>
       {/* Virtual background toggle */}
       <div className="relative">
-        {bg.supported && (
         <button
           onClick={() => setShowBgPanel(!showBgPanel)}
-          aria-label="Background effects"
           className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors backdrop-blur-sm ${
-            bg.current.mode !== 'disabled' ? 'bg-indigo-500/80 text-white' : 'bg-black/40 text-white hover:bg-black/60'
+            bgMode !== 'disabled' ? 'bg-indigo-500/80 text-white' : 'bg-black/40 text-white hover:bg-black/60'
           }`}
           title="Background effects"
         >
           <Sparkles className="h-3 w-3" />
-          <span className="hidden sm:inline">BG</span>
+          BG
         </button>
-        )}
-        {showBgPanel && bg.supported && (
-          // Phase 7-audit fix — viewport-fixed centered card on desktop,
-          // full-width bottom sheet on mobile. Click-out + Esc both close.
-          // Same UX pattern as the Invite / Room modals.
+        {showBgPanel && (
+          // Phase 7-audit fix — was `absolute bottom-full right-0` inside the
+          // camera tile which has `overflow-hidden` for rounded corners,
+          // clipping the popup ("ACKGROUND" with the B cut off + bottom
+          // overlap with control bar). Now: viewport-fixed centered card
+          // on desktop, full-width bottom sheet on mobile. Click-out + Esc
+          // both close. Same UX pattern as the Invite / Room modals.
           <>
             <div
               className="fixed inset-0 z-50 bg-black/30 backdrop-blur-sm"
@@ -808,19 +457,35 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
                   <X className="h-4 w-4" />
                 </button>
               </div>
-              {bg.degraded && (
-                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5 mb-3 leading-snug">
-                  Background turned off — your device couldn't keep up. You can try again, but video may be smoother without it.
-                </p>
-              )}
               <div className="grid grid-cols-3 gap-2">
-                {BG_PRESETS.map(preset => (
-                  <button key={preset.label}
-                    onClick={() => { bg.apply(presetToPreference(preset)); setShowBgPanel(false); }}
-                    className={`rounded-lg border-2 overflow-hidden transition-colors ${isActivePreset(preset, bg.current) ? 'border-rsn-red ring-2 ring-rsn-red/20' : 'border-gray-200 hover:border-gray-400'}`}>
-                    {preset.image ? (
+                {[
+                  { label: 'None', mode: 'disabled' },
+                  { label: 'Blur', mode: 'blur' },
+                  { label: 'Office', mode: 'office', img: 'https://images.unsplash.com/photo-1497366216548-37526070297c?w=200&q=60' },
+                  { label: 'Nature', mode: 'nature', img: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=200&q=60' },
+                  { label: 'City', mode: 'city', img: 'https://images.unsplash.com/photo-1480714378408-67cf0d13bc1b?w=200&q=60' },
+                  { label: 'Abstract', mode: 'abstract', img: 'https://images.unsplash.com/photo-1557683316-973673baf926?w=200&q=60' },
+                ].map(preset => (
+                  <button key={preset.mode} onClick={async () => {
+                    try {
+                      const mod = await loadBgProcessors();
+                      if (!mod) { console.error('Background processors not available'); return; }
+                      // T2-6 (Issue 15) — Track.Source enum (was string 'camera' = always undefined → silent no-op)
+                      const camPub = Array.from(localParticipant.trackPublications.values()).find(p => p.source === Track.Source.Camera);
+                      const camTrack = camPub?.track;
+                      if (!camTrack) return;
+                      await (camTrack as any).stopProcessor?.();
+                      if (preset.mode === 'disabled') { setBgMode('disabled'); }
+                      // T2-6 — bumped blur strength 10 → 25 for visible effect
+                      else if (preset.mode === 'blur') { await (camTrack as any).setProcessor(mod.BackgroundBlur(25)); setBgMode('blur'); }
+                      else if (preset.img) { await (camTrack as any).setProcessor(mod.VirtualBackground(preset.img.replace('w=200', 'w=1280'))); setBgMode(preset.mode); }
+                    } catch (err) { console.error('BG effect failed:', err); }
+                    setShowBgPanel(false);
+                  }}
+                  className={`rounded-lg border-2 overflow-hidden transition-colors ${bgMode === preset.mode ? 'border-rsn-red ring-2 ring-rsn-red/20' : 'border-gray-200 hover:border-gray-400'}`}>
+                    {preset.img ? (
                       <div className="relative">
-                        <img src={preset.image} alt={preset.label} className="w-full h-20 object-cover" loading="lazy" />
+                        <img src={preset.img} alt={preset.label} className="w-full h-20 object-cover" />
                         <span className="absolute bottom-0 inset-x-0 bg-black/50 text-white text-[10px] font-medium py-0.5 text-center">{preset.label}</span>
                       </div>
                     ) : (
@@ -828,23 +493,6 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
                     )}
                   </button>
                 ))}
-                {/* Custom upload */}
-                <button
-                  onClick={() => {
-                    const input = document.createElement('input');
-                    input.type = 'file';
-                    input.accept = 'image/*';
-                    input.onchange = (e) => {
-                      const file = (e.target as HTMLInputElement).files?.[0];
-                      if (!file) return;
-                      bg.apply({ mode: 'image', imageUrl: URL.createObjectURL(file) });
-                      setShowBgPanel(false);
-                    };
-                    input.click();
-                  }}
-                  className={`rounded-lg border-2 border-dashed overflow-hidden transition-colors ${isCustomActive(bg.current) ? 'border-rsn-red ring-2 ring-rsn-red/20' : 'border-gray-300 hover:border-gray-400'}`}>
-                  <div className="w-full h-20 flex items-center justify-center text-xs font-medium text-gray-400">+ Upload</div>
-                </button>
               </div>
             </div>
           </>
@@ -868,51 +516,6 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
 }
 
 /**
- * F3 (21 May Ali) — mirrors LiveKit's room participant list into the
- * Zustand store so every UI surface outside <LiveKitRoom> (the participant
- * drawer, the lobby header counter, the host participant panel) can read
- * a realtime "who is actually in the main room right now" list without
- * needing to be inside the LiveKit context itself.
- *
- * Why this exists: socket-fanned participant:joined/left events miss some
- * viewers (confirmed by the 21 May tests — refresh shows the correct
- * count, but the live list drifts because not every browser receives
- * every fan-out emit). LiveKit's room state is the only signal every
- * browser subscribes to the same server-side source for, so it converges
- * across viewers.
- *
- * Mount this once inside the lobby <LiveKitRoom> (after the user joins).
- * Renders nothing; effect-only.
- */
-function LiveKitPresenceSync() {
-  const livekitParticipants = useParticipants();
-  const setLiveRoomParticipants = useSessionStore(s => s.setLiveRoomParticipants);
-  const lastKeyRef = useRef<string>('');
-  useEffect(() => {
-    // Local + remote both come back from useParticipants(); identity is
-    // the LiveKit token's identity field, which the server sets to the
-    // userId (same invariant the tile-sort relies on at line ~122).
-    const list = livekitParticipants
-      .map(p => ({ userId: p.identity || '', displayName: p.name || '' }))
-      .filter(p => p.userId);
-    // Compose a stable key so the store write fires ONLY when room
-    // membership actually changes — not on every LiveKit metadata tick.
-    const key = list.map(p => p.userId).sort().join('|') + '#' + list.length;
-    if (key !== lastKeyRef.current) {
-      lastKeyRef.current = key;
-      setLiveRoomParticipants(list);
-    }
-  });
-  // Reset the store list when this component unmounts (user leaves the
-  // LiveKit room). The selector hook then falls back to the durable
-  // socket-fed roster.
-  useEffect(() => {
-    return () => setLiveRoomParticipants([]);
-  }, [setLiveRoomParticipants]);
-  return null;
-}
-
-/**
  * Hook: delays "host is offline" by a grace period to avoid flickering on brief disconnects.
  * Also checks participant list as a fallback.
  * - Starts as `null` (unknown) until session:state arrives
@@ -921,11 +524,7 @@ function LiveKitPresenceSync() {
  */
 function useHostPresence(gracePeriodMs = 15000): boolean | null {
   const rawHostInLobby = useSessionStore(s => s.hostInLobby);
-  // F3 (21 May Ali) — host-presence check must use the realtime in-room
-  // list, not the drift-prone socket roster. Otherwise the "host online"
-  // banner can be stuck on or off for some viewers when participant:left
-  // for the host gets missed.
-  const participants = useInRoomParticipants();
+  const participants = useSessionStore(s => s.participants);
   const hostUserId = useSessionStore(s => s.hostUserId);
 
   const hostInParticipants = hostUserId ? participants.some(p => p.userId === hostUserId) : false;
@@ -963,15 +562,7 @@ function useHostPresence(gracePeriodMs = 15000): boolean | null {
 }
 
 function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
-  // F3 (21 May Ali) — counter must reflect REALTIME LiveKit room presence,
-  // not the store's socket-fed roster which drifts per viewer when
-  // participant:joined/left fan-out misses a client. useInRoomParticipants
-  // returns the LiveKit identity set when the room is mounted, falling
-  // back to the durable roster pre-LiveKit.
-  const { isByeRound, transitionStatus, sessionStatus, hostUserId, leftCurrentRound, cohosts } = useSessionStore();
-  const participants = useInRoomParticipants();
-  // Bug E (15 May Ali) — header count needs acting-as-host opt-ins.
-  const actingAsHostOverrides = useSessionStore(s => s.actingAsHostOverrides);
+  const { participants, isByeRound, transitionStatus, sessionStatus, hostUserId, leftCurrentRound, cohosts } = useSessionStore();
   const hostOnline = useHostPresence();
 
   // Session hasn't been started yet by host
@@ -1053,7 +644,7 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
       <div className="flex items-center justify-center gap-1.5 text-gray-500 text-xs">
         <Users className="h-3 w-3" />
         <span>
-          {formatParticipantHeader(participants, hostUserId, cohosts, actingAsHostOverrides, hostOnline)}
+          {formatParticipantHeader(participants, hostUserId, cohosts, hostOnline)}
         </span>
       </div>
     </div>
@@ -1072,79 +663,28 @@ function formatParticipantHeader(
   participants: { userId: string }[],
   hostUserId: string | null,
   cohosts: Set<string>,
-  actingAsHostOverrides: Record<string, boolean | null>,
   hostOnline: boolean | null,
 ): string {
-  // Bug E (15 May Ali) — count must reflect EVERYONE acting as host this
-  // event, not just formal session_cohosts.
-  // Bug 15 (18 May Stefan) — break the count down further: host vs
-  // co-hosts vs regular participants, each as its own pill. Pre-fix the
-  // collapsed "X participants + Y hosts" string lumped the director and
-  // co-hosts into one count and obscured the actual makeup of the room.
-  // Stefan: "Participant counts must separate clearly: participants,
-  // hosts, co-hosts, unmatched, matched pairs, trios."
-  //
-  // hostsSet = director ∪ cohosts ∪ opt-ins − opt-outs (with director
-  // always re-added so a stale FALSE row can't demote them).
-  const hostsSet = (() => {
-    const s = new Set<string>();
-    if (hostUserId) s.add(hostUserId);
-    for (const c of cohosts) s.add(c);
-    for (const [uid, v] of Object.entries(actingAsHostOverrides)) {
-      if (v === true) s.add(uid);
-      if (v === false) s.delete(uid);
-    }
-    if (hostUserId) s.add(hostUserId);
-    return s;
-  })();
-  const presentUserIds = new Set(participants.map(p => p.userId));
-  // Director counted ONLY when actually present, OR when hostOnline says
-  // the OG host is connected but missing from the participants list (the
-  // snapshot can lag a beat). Director-not-in-room ⇒ omit from the pill.
-  const directorPresent =
-    (hostUserId && presentUserIds.has(hostUserId)) || (hostUserId && hostOnline)
-      ? 1
-      : 0;
-  // Co-hosts = hostsSet ∖ {director}, intersected with the present roster.
-  let coHostCount = 0;
-  for (const uid of hostsSet) {
-    if (uid === hostUserId) continue;
-    if (presentUserIds.has(uid)) coHostCount++;
-  }
-  // Participants = everyone in the room who isn't acting as a host.
-  const participantCount = Math.max(
-    0,
-    participants.filter(p => !hostsSet.has(p.userId)).length,
-  );
-
-  const parts: string[] = [];
-  parts.push(`${participantCount} participant${participantCount !== 1 ? 's' : ''}`);
-  if (directorPresent === 1) parts.push('1 host');
-  if (coHostCount > 0) parts.push(`${coHostCount} co-host${coHostCount !== 1 ? 's' : ''}`);
-  return parts.join(' · ');
+  const hostInList = !!hostUserId && participants.some(p => p.userId === hostUserId);
+  const cohostsPresent = participants.filter(p => cohosts.has(p.userId)).length;
+  // Headline count excludes BOTH the host and any co-hosts.
+  const participantCount = participants.length
+    - (hostInList ? 1 : 0)
+    - cohostsPresent;
+  // "Hosts" includes the original host if online OR present, plus any
+  // co-hosts in the room. We collapse to a single count so the string
+  // stays compact and doesn't say "+ host + 2 cohosts" — Stefan asked
+  // for "X participants and Y hosts" specifically.
+  const totalHosts = (hostOnline || hostInList ? 1 : 0) + cohostsPresent;
+  const safeCount = Math.max(0, participantCount);
+  const partWord = `${safeCount} participant${safeCount !== 1 ? 's' : ''}`;
+  if (totalHosts === 0) return partWord;
+  const hostWord = `${totalHosts} ${totalHosts === 1 ? 'host' : 'hosts'}`;
+  return `${partWord} + ${hostWord}`;
 }
 
 function HostParticipantPanel({ sessionId }: { sessionId?: string }) {
-  // F3 (21 May Ali) — same realtime-presence story as LobbyStatusOverlay.
-  const { hostUserId, cohosts } = useSessionStore();
-  const participants = useInRoomParticipants();
-  // Phase P (Ali's 13 May clarification) — host roster must factor in
-  // acting_as_host opt-ins (admins/super_admins joining as host) and
-  // opt-outs (cohosts/super_admins joining as participant), with the
-  // director always counted. Without this the header read "5 participants
-  // + 1 host" when Stefan opted in (he'd show as participant).
-  const actingAsHostOverrides = useSessionStore(s => s.actingAsHostOverrides);
-  const hostsSet = (() => {
-    const s = new Set<string>();
-    if (hostUserId) s.add(hostUserId);
-    for (const c of cohosts) s.add(c);
-    for (const [uid, v] of Object.entries(actingAsHostOverrides)) {
-      if (v === true) s.add(uid);
-      if (v === false) s.delete(uid);
-    }
-    if (hostUserId) s.add(hostUserId);
-    return s;
-  })();
+  const { participants, hostUserId, cohosts } = useSessionStore();
   const [expanded, setExpanded] = useState(true);
 
   const handleKick = useCallback((userId: string, displayName: string) => {
@@ -1162,18 +702,11 @@ function HostParticipantPanel({ sessionId }: { sessionId?: string }) {
       >
         <div className="flex items-center gap-2">
           <Users className="h-4 w-4 text-gray-400" />
-          {/* Phase D3 (10 May) — separate counts so "+ Hosts" reads correctly when cohosts present.
-              Phase P (Ali's 13 May clarification) — counts now respect
-              acting_as_host opt-ins/opt-outs via hostsSet.
-              Bug 7 (13 May live test) — hostsSet is the *registered* roster.
-              The lobby header is about who is in the room *right now*, so
-              intersect with the participants array. Pre-fix it read
-              hostsSet.size which counted a configured cohost even when
-              they hadn't joined yet (showed "2 Hosts" with only 1 present). */}
+          {/* Phase D3 (10 May) — separate counts so "+ Hosts" reads correctly when cohosts present. */}
           <span>
-            Participants ({participants.filter(p => !hostsSet.has(p.userId)).length})
+            Participants ({participants.filter(p => p.userId !== hostUserId && !cohosts.has(p.userId)).length})
             {(() => {
-              const totalHosts = participants.filter(p => hostsSet.has(p.userId)).length;
+              const totalHosts = 1 + cohosts.size; // original host + cohosts
               return ` · ${totalHosts} ${totalHosts === 1 ? 'Host' : 'Hosts'}`;
             })()}
           </span>
@@ -1335,8 +868,6 @@ function DeviceTest() {
  */
 function PreLobbyWaitingRoom({ isHost = false }: { isHost?: boolean }) {
   const { participants, hostUserId, cohosts } = useSessionStore();
-  // Bug E (15 May Ali) — count acting hosts (Phase M opt-ins) too.
-  const actingAsHostOverrides = useSessionStore(s => s.actingAsHostOverrides);
   const hostOnline = useHostPresence();
 
   return (
@@ -1374,7 +905,7 @@ function PreLobbyWaitingRoom({ isHost = false }: { isHost?: boolean }) {
               <div className="flex items-center gap-2 text-gray-500 text-xs">
                 <Users className="h-3.5 w-3.5" />
                 <span>
-                  {formatParticipantHeader(participants, hostUserId, cohosts, actingAsHostOverrides, hostOnline)} waiting
+                  {formatParticipantHeader(participants, hostUserId, cohosts, hostOnline)} waiting
                 </span>
               </div>
             )}
@@ -1441,15 +972,9 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
           audio={isHost}
           className="flex-1 w-full max-w-4xl"
           options={{
-            videoCaptureDefaults: { resolution: { ...BG_CAPTURE_RESOLUTION } },
+            videoCaptureDefaults: { resolution: { width: 1280, height: 720, frameRate: 30 } },
           }}
         >
-          {/* F3 (21 May Ali) — sync LiveKit room presence into the store
-              so the participant drawer / counter / host panel (rendered
-              outside this <LiveKitRoom>) get realtime in-room presence
-              without depending on socket fan-out for participant
-              join/leave events. */}
-          <LiveKitPresenceSync />
           <RoomAudioRenderer />
           <LobbyMosaic isHost={isHost} sessionId={sessionId} />
         </LiveKitRoom>

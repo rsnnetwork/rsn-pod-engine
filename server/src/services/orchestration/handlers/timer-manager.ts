@@ -66,19 +66,12 @@ export function startSegmentTimer(
 
   // Main segment timeout
   activeSession.timer = setTimeout(() => {
-    // M2 (Phase 6) — re-fetch the live session by id rather than mutating the
-    // ActiveSession reference captured at arm time. If the object was replaced
-    // in the map (e.g. recreated on reconnect when missing), the captured ref
-    // is orphaned and clearing its fields would leak this timer on the new
-    // object. Operate on the current object; fall back to the captured ref so
-    // a removed session still has its timer fields cleared.
-    const s = activeSessions.get(sessionId) ?? activeSession;
-    s.timer = null;
-    s.timerEndsAt = null;
+    activeSession.timer = null;
+    activeSession.timerEndsAt = null;
     // Also clear the sync interval when the timer fires
-    if (s.timerSyncInterval) {
-      clearInterval(s.timerSyncInterval);
-      s.timerSyncInterval = null;
+    if (activeSession.timerSyncInterval) {
+      clearInterval(activeSession.timerSyncInterval);
+      activeSession.timerSyncInterval = null;
     }
     callback();
   }, durationMs);

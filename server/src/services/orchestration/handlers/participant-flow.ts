@@ -23,43 +23,11 @@ import { clearRoomTimers } from './host-actions';
 import { findIsolatedParticipants } from '../../matching/isolated-participants';
 // Phase 2B (5 May spec) — chokepoint helpers for presence + state writes.
 import { transitionParticipant, setPresence, ParticipantState } from '../state/participant-state-machine';
-// Phase 2 (19 May 2026) — realtime migration dual-emit. Each legacy
-// per-user / session-room broadcast picks up a sibling emitEntities() call
-// with domain-entity tags so the client's predicate-based invalidator
-// refreshes the right React-Query keys without bespoke listeners. See:
-//   docs/superpowers/plans/2026-05-19-realtime-architecture-migration.md
-import { emitEntities } from '../../../realtime/emit';
-import { E } from '../../../realtime/entities';
-
-/**
- * Phase 2 helper — fan entity tags to every active session participant.
- * Mirrors the audience of an `io.to(sessionRoom(...)).emit(...)` broadcast.
- * Failures are swallowed by callers via `.catch(() => {})`.
- */
-async function fanSessionRoomEntities(
-  io: SocketServer,
-  sessionId: string,
-  entities: string[],
-): Promise<void> {
-  if (entities.length === 0) return;
-  const rows = await query<{ user_id: string }>(
-    `SELECT user_id FROM session_participants
-       WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')`,
-    [sessionId],
-  );
-  await emitEntities(io, rows.rows.map(r => r.user_id), entities);
-}
 
 // Phase 2.5D (5 May spec) — future-only repair throttle keys per session.
 // One repair per 5 seconds per session prevents storms when many users
 // join in quick succession (we only need ONE recompute that includes them all).
 const _futureRepairThrottle = new Map<string, number>();
-// Bug 18 (18 May Stefan) — trailing-edge tracking. When a request is
-// throttled, schedule a single trailing repair so the *most recent*
-// roster state is reflected in the plan. Without this a burst of joins
-// could leave the plan stuck with whoever was registered at the moment
-// of the first repair, plus all subsequent joiners silently dropped.
-const _futureRepairTrailing = new Map<string, NodeJS.Timeout>();
 const FUTURE_REPAIR_THROTTLE_MS = 5_000;
 
 async function maybeRepairFutureRounds(
@@ -69,94 +37,28 @@ async function maybeRepairFutureRounds(
 ): Promise<void> {
   const activeSession = activeSessions.get(sessionId);
   if (!activeSession) return;
-  // Bug 18 (18 May Stefan) — pre-fix the guard was `currentRound < 1`,
-  // which skipped recompute for joiners arriving between the host clicking
-  // Start (plan generated, LOBBY_OPEN) and round 1 actually starting. So
-  // an event that began with 6 participants and grew to 8 in the lobby
-  // kept showing "3 rounds · 3 pairs" — Stefan's exact complaint. New
-  // guard: skip only when the event hasn't started AT ALL (no plan).
-  // Once status flips past SCHEDULED the plan exists and must be repaired
-  // on every roster change. The "Pre-event joiners get covered by the
-  // regular pre-plan" assumption only holds while status === SCHEDULED.
-  if (activeSession.status === SessionStatus.SCHEDULED) return;
-  if (activeSession.status === SessionStatus.COMPLETED) return;
+  // Only repair if the event has actually started rounds (currentRound >= 1).
+  // Pre-event joiners get covered by the regular pre-plan since the plan
+  // hasn't been generated yet.
+  if (activeSession.currentRound < 1) return;
 
   const now = Date.now();
   const last = _futureRepairThrottle.get(sessionId) || 0;
   if (now - last < FUTURE_REPAIR_THROTTLE_MS) {
-    // Bug 18 (18 May Stefan) — trailing-edge repair so a burst of joins
-    // doesn't lose the late ones. The first call in the window already
-    // ran a repair; schedule ONE trailing repair that fires once the
-    // window closes, capturing the latest roster (including anyone who
-    // joined during the window).
-    if (!_futureRepairTrailing.has(sessionId)) {
-      const delay = FUTURE_REPAIR_THROTTLE_MS - (now - last) + 100;
-      const handle = setTimeout(() => {
-        _futureRepairTrailing.delete(sessionId);
-        void runRepair(io, sessionId, reason);
-      }, delay);
-      _futureRepairTrailing.set(sessionId, handle);
-    }
-    logger.debug({ sessionId, reason }, 'maybeRepairFutureRounds: throttled (trailing repair queued)');
+    logger.debug({ sessionId, reason }, 'maybeRepairFutureRounds: throttled');
     return;
   }
   _futureRepairThrottle.set(sessionId, now);
-  await runRepair(io, sessionId, reason);
-}
 
-/** Inner repair body — shared by the leading-edge call and the trailing-
- *  edge setTimeout. Reads the latest activeSession at fire time so a
- *  trailing repair captures the freshest roster.
- *
- *  Bug 18 (18 May Stefan) — emit also carries the fresh roundCount +
- *  totalPairs so the host's "Plan: X rounds · Y pairs" headline matches
- *  the per-round badges. Pre-fix the headline stuck at whatever
- *  generateSessionSchedule reported at Start; after a late-joiner repair
- *  the badges updated but the headline didn't, leaving the host with
- *  contradictory numbers on the same strip. */
-async function runRepair(
-  io: SocketServer,
-  sessionId: string,
-  reason: 'late_joiner' | 'left',
-): Promise<void> {
-  const activeSession = activeSessions.get(sessionId);
-  if (!activeSession) return;
   try {
-    const fromRound = Math.max(1, activeSession.currentRound + 1);
+    const fromRound = activeSession.currentRound + 1;
     const result = await matchingService.repairFutureRounds(sessionId, fromRound, reason);
     if (result.regeneratedRounds.length > 0) {
-      // Pull post-repair totals so the host strip shows the correct
-      // roundCount + totalPairs. COUNT(*) over scheduled+active+completed
-      // matches covers every persisted round in the plan.
-      let roundCount = 0;
-      let totalPairs = 0;
-      try {
-        const totals = await query<{ round_count: string; total_pairs: string }>(
-          `SELECT
-             COUNT(DISTINCT round_number)::text AS round_count,
-             COUNT(*)::text AS total_pairs
-           FROM matches
-           WHERE session_id = $1 AND is_manual = FALSE AND status <> 'cancelled'`,
-          [sessionId],
-        );
-        roundCount = parseInt(totals.rows[0]?.round_count ?? '0', 10);
-        totalPairs = parseInt(totals.rows[0]?.total_pairs ?? '0', 10);
-      } catch {
-        // Non-fatal — the regeneratedRounds list is enough for the toast;
-        // the EventPlanStrip's React-Query refetch will catch any drift.
-      }
       io.to(sessionRoom(sessionId)).emit('host:event_plan_repaired', {
         sessionId,
         reason,
         regeneratedRounds: result.regeneratedRounds,
-        roundCount,
-        totalPairs,
       });
-      // Phase 2 dual-emit — session + plan entities so every viewer's
-      // event-plan / host-state queries refetch in the same tick.
-      fanSessionRoomEntities(
-        io, sessionId, [E.session(sessionId), E.sessionPlan(sessionId)],
-      ).catch(() => {});
     }
   } catch (err) {
     logger.warn({ err, sessionId, reason }, 'maybeRepairFutureRounds: repair failed');
@@ -271,36 +173,10 @@ export async function handleJoinSession(
       }
 
       // ── On-the-fly session recovery ──
-      // If activeSession is missing (server restarted/deployed, OR the
-      // event is still SCHEDULED and nobody has triggered creation yet)
-      // we set one up so every downstream handler — presence map, state
-      // machine, chat-handlers gate — works the same way for a pre-event
-      // lobby as for a running event.
-      //
-      // M1 follow-up (21 May Ali) — `scheduled` was historically EXCLUDED
-      // from this list, on the rationale that "the event hasn't started,
-      // there's no live state to track yet." That assumption broke the
-      // pre-event lobby badly:
-      //   - presenceMap stayed empty for SCHEDULED sessions because
-      //     setPresence() below is guarded on `if (activeSession)`.
-      //   - chat-handlers.ts gate (`activeSession?.presenceMap.has(host)`)
-      //     therefore always failed → every non-host participant got
-      //     "Chat is available once the host joins" even when the host
-      //     was clearly present (UI showed the green "Host is here" pill
-      //     because that uses socket-room presence, a different signal).
-      //   - The Bug 36 LEFT → IN_MAIN_ROOM reset for a host who clicked
-      //     Leave and rejoined fell through with NO_ACTIVE_SESSION, so
-      //     the host's session_participants row stayed `status='left'`,
-      //     the snapshot filter excluded them from the participants list,
-      //     and the count read 2/8 instead of 3/8.
-      //
-      // Now: include SCHEDULED in the recovery list. The in-memory
-      // ActiveSession for a SCHEDULED event is mostly null fields plus
-      // an empty presenceMap that the very next setPresence() populates.
-      // handleStartSession preserves this presenceMap when promoting the
-      // session to LOBBY_OPEN (see preservePresenceFromExisting below).
+      // If activeSession is missing (server restarted/deployed) but session is active in DB,
+      // recreate the in-memory entry so all handlers work immediately
       if (!activeSession) {
-        const activeStatuses = ['scheduled', 'lobby_open', 'round_active', 'round_rating', 'round_transition', 'closing_lobby'];
+        const activeStatuses = ['lobby_open', 'round_active', 'round_rating', 'round_transition', 'closing_lobby'];
         if (activeStatuses.includes(session.status)) {
           const config = typeof session.config === 'string' ? JSON.parse(session.config as unknown as string) : session.config || {};
           activeSession = {
@@ -365,31 +241,17 @@ export async function handleJoinSession(
         void maybeRepairFutureRounds(io, data.sessionId, 'late_joiner');
       }
 
-      // Update participant status based on current session state.
-      //
-      // Bug 37.1 (19 May Ali) — accept-invite redirect → /session/.../live
-      // must NOT auto-flip status to CHECKED_IN when the event is still
-      // SCHEDULED (hasn't started). Status should stay 'registered' until
-      // the host actually starts the event. Pre-fix, viewing the live page
-      // a day early would jump everyone to CHECKED_IN, breaking pre-event
-      // counts ("Will attend" vs "Checked in") in the HCC and reports.
-      // Once status flips past SCHEDULED (LOBBY_OPEN / ROUND_*), the
-      // auto-checkin is correct: arriving means "actually showed up".
+      // Update participant status based on current session state
       try {
-        const effectiveStatus = (activeSession?.status ?? session.status) as SessionStatus;
         if (activeSession && activeSession.status === SessionStatus.ROUND_ACTIVE) {
           // Will be updated to IN_ROUND below if they have an active match
           await sessionService.updateParticipantStatus(
             data.sessionId, userId, ParticipantStatus.IN_LOBBY
           );
-        } else if (effectiveStatus === SessionStatus.SCHEDULED) {
-          // Pre-start: do NOT auto-checkin. registerParticipant above
-          // already inserted a 'registered' row if the user was new;
-          // existing rows keep whatever status they had.
         } else {
           await sessionService.updateParticipantStatus(
             data.sessionId, userId,
-            effectiveStatus === SessionStatus.LOBBY_OPEN ? ParticipantStatus.IN_LOBBY : ParticipantStatus.CHECKED_IN
+            session.status === SessionStatus.LOBBY_OPEN ? ParticipantStatus.IN_LOBBY : ParticipantStatus.CHECKED_IN
           );
         }
       } catch {
@@ -423,37 +285,16 @@ export async function handleJoinSession(
             [data.sessionId, userId],
           );
           const currentStatus = currentRow.rows[0]?.status;
-          // Bug 36 (19 May Ali) — host/cohost LEFT carve-out. The director
-          // (sessions.host_user_id) and any session_cohosts row must never
-          // be stuck in LEFT on their own event: they navigated away (or
-          // a stale disconnect-timeout fired against them pre-fix) but
-          // reconnecting must put them straight back in the main room.
-          // The state machine allows LEFT → IN_MAIN_ROOM as "explicit
-          // re-entry only" (participant-state-machine.ts) which maps the
-          // DB enum value to 'in_lobby' and clears left_at. Regular
-          // participants who explicitly Leave still keep LEFT — only
-          // hosts/cohosts get the reset here.
-          // 23 May (Stefan + Ali) — this block runs ONLY on presence:ready,
-          // i.e. the user is actively (re-)entering the live page, so they
-          // ARE present right now. Any present user with no active match must
-          // be matchable. Pre-fix only the director/cohost were reset from
-          // LEFT (Bug 36 carve-out); a regular participant whose mobile
-          // dropped and reconnected stayed 'left'/'disconnected' — still
-          // counted in the roster but invisible to getEligibleParticipants,
-          // so the engine never matched them (observed live with Ali Hamza on
-          // mobile). Reset every present user back to the main room
-          // regardless of role. LEFT → IN_MAIN_ROOM is the state machine's
-          // "explicit re-entry" edge, which presence:ready is by definition.
-          if (currentStatus === 'left' || currentStatus === 'disconnected' || currentStatus === 'in_round') {
+          if (currentStatus === 'disconnected' || currentStatus === 'in_round') {
             const result = await transitionParticipant(
               data.sessionId, userId, ParticipantState.IN_MAIN_ROOM,
             );
             if (result.ok) {
               logger.info({ sessionId: data.sessionId, userId, fromState: result.fromState },
-                'Reconnect reset: present participant → in_main_room (was left/disconnected/in_round)');
+                'Fix A: reset stuck participant status (disconnected/in_round → in_main_room) on reconnect');
             } else {
               logger.warn({ sessionId: data.sessionId, userId, reason: result.reason, fromState: result.fromState },
-                'Reconnect reset: state-machine refused transition — leaving DB status untouched');
+                'Fix A: state-machine refused reset transition — leaving DB status untouched');
             }
           }
         }
@@ -469,27 +310,6 @@ export async function handleJoinSession(
         displayName: (socket.data as any)?.displayName || 'Unknown',
         isHost,
       });
-
-      // Bug 21 (18 May Stefan) — late joiners weren't appearing in
-      // OTHER participants' "X participants + Y hosts" banner. The
-      // existing participant:joined event only updates the local
-      // store; the lobby header derives from hostsSet + cohorts +
-      // actingAsHostOverrides which can be stale on remote clients.
-      // Broadcasting roster:changed forces every viewer to refetch
-      // the snapshot — same belt-and-braces pattern Ship #2 uses for
-      // cohost mutations, now extended to plain joins so a slow-internet
-      // join still converges all the other clients.
-      io.to(sessionRoom(data.sessionId)).emit('roster:changed', {
-        sessionId: data.sessionId,
-        cause: 'participant_joined',
-      });
-      // Phase 2 dual-emit — session + participants tags for everyone in
-      // the room. The joining user themselves gets it too so their
-      // sessions / session-participants queries refresh.
-      fanSessionRoomEntities(
-        io, data.sessionId,
-        [E.session(data.sessionId), E.sessionParticipants(data.sessionId)],
-      ).catch(() => {});
 
       // Send current participant count
       const count = await sessionService.getParticipantCount(data.sessionId);
@@ -630,25 +450,6 @@ export async function handleJoinSession(
         emitHostDashboard(data.sessionId);
       }
 
-      // Bug 44 (19 May Ali) — emit host:round_dashboard on every host
-      // join, not just ROUND_ACTIVE. Pre-fix, the host's
-      // `roundDashboard.eligibleMainRoomCount` was only populated after
-      // round 1 became active, so Match People button label and HCC
-      // counts fell back to local computation that didn't account for
-      // Phase M cohost opt-ins. Calling emitHostDashboard on join
-      // fans the dashboard (with the post-Phase-M eligibility count) to
-      // every acting host's room immediately, so even pre-round-1 the
-      // host strip + Match People badge are accurate. Covers LOBBY_OPEN,
-      // ROUND_RATING, ROUND_TRANSITION, CLOSING_LOBBY — ROUND_ACTIVE is
-      // already handled by the block above; this branch fires only when
-      // that one didn't, so the dashboard isn't emitted twice.
-      if (
-        activeSession && isHost &&
-        activeSession.status !== SessionStatus.ROUND_ACTIVE
-      ) {
-        emitHostDashboard(data.sessionId);
-      }
-
       // Clear manuallyLeftRound on rejoin — user chose to come back, let them participate
       if (activeSession && activeSession.manuallyLeftRound.has(userId)) {
         activeSession.manuallyLeftRound.delete(userId);
@@ -703,12 +504,6 @@ export async function handleJoinSession(
             token: reconnectToken,
             livekitUrl: reconnectConfig.livekit.host,
           });
-          // Phase 2 dual-emit — session + participants + match entity
-          // for the reconnecting user so their live-event surfaces resync.
-          emitEntities(
-            io, [userId],
-            [E.session(data.sessionId), E.sessionParticipants(data.sessionId), E.match(userMatch.id)],
-          ).catch(() => {});
         }
       }
 
@@ -729,10 +524,7 @@ export async function handleJoinSession(
             `SELECT id FROM ratings WHERE match_id = $1 AND from_user_id = $2 LIMIT 1`,
             [userMatch.id, userId]
           );
-          // #6 (25 May) — a skip closes this match's rating: don't re-send the
-          // form to someone who explicitly skipped it (reconnect/refresh).
-          const skipped = activeSession.ratingSkips?.has(`${userId}:${userMatch.id}`) ?? false;
-          if (existingRating.rows.length === 0 && !skipped) {
+          if (existingRating.rows.length === 0) {
             const participantIds = [userMatch.participantAId, userMatch.participantBId];
             if (userMatch.participantCId) participantIds.push(userMatch.participantCId);
             const partnerIds = participantIds.filter(id => id !== userId);
@@ -758,12 +550,6 @@ export async function handleJoinSession(
               roundNumber: activeSession.currentRound,
               durationSeconds: remainingSeconds,
             });
-            // Phase 2 dual-emit — session + participants for the reconnecting
-            // user picking up the rating screen replay.
-            emitEntities(
-              io, [userId],
-              [E.session(data.sessionId), E.sessionParticipants(data.sessionId)],
-            ).catch(() => {});
           }
         }
       }
@@ -822,18 +608,6 @@ export async function handleLeaveSession(
 
     const count = await sessionService.getParticipantCount(data.sessionId);
     io.to(sessionRoom(data.sessionId)).emit('participant:count', { count });
-
-    // Phase 2 dual-emit — every viewer's session/participants queries
-    // refresh. The leaving user gets the tag too so their own
-    // session-detail surfaces flip to "left" state.
-    fanSessionRoomEntities(
-      io, data.sessionId,
-      [E.session(data.sessionId), E.sessionParticipants(data.sessionId)],
-    ).catch(() => {});
-    emitEntities(
-      io, [userId],
-      [E.session(data.sessionId), E.sessionParticipants(data.sessionId)],
-    ).catch(() => {});
 
     logger.info({ sessionId: data.sessionId, userId }, 'User left session');
   });
@@ -1011,7 +785,7 @@ export async function handleRatingSubmit(
       });
 
       // ─── Early exit: if ALL participants in this round have rated, skip remaining timer ───
-      await checkAllRatingsCompleteByUserId(userId, sessionId, _io);
+      await checkAllRatingsCompleteByUserId(userId);
     } catch (err: any) {
       socket.emit('error', { code: 'RATING_FAILED', message: err.message });
     }
@@ -1025,31 +799,6 @@ export async function handleRatingSubmit(
   }
 }
 
-// #6 (25 May, Ali) — record that a user dismissed the rating form via "Skip" for
-// a given match. A skip means "I saw it and chose not to rate" — distinct from
-// "never saw it." Without this, the round-end emit + the reconnect rating-replay
-// (which key off "no rating row") re-prompt skippers on every refresh/reconnect.
-// Kept in-memory per session (a restart re-prompting once is acceptable). The
-// rating-replay below + the endRound dedup both consult ratingSkips.
-export async function handleRatingSkip(
-  _io: SocketServer,
-  socket: Socket,
-  data: { sessionId: string; matchId: string }
-): Promise<void> {
-  const userId = getUserIdFromSocket(socket);
-  if (!userId || !data?.sessionId || !data?.matchId) return;
-  const activeSession = activeSessions.get(data.sessionId);
-  if (!activeSession) return;
-  (activeSession.ratingSkips ??= new Set<string>()).add(`${userId}:${data.matchId}`);
-  logger.info({ sessionId: data.sessionId, userId, matchId: data.matchId }, '#6 — rating skipped (recorded)');
-  // A skip SETTLES this match for the user exactly like a submitted rating, so it
-  // must also trigger the all-done check. Without this, a round where EVERY user
-  // skips never early-closes — nothing fires the check — and it limps to the
-  // silent backstop (Ali, 26 May: "stuck at rating >1min after I skipped from
-  // every user"). The rate path already calls this; the skip path did not.
-  await checkAllRatingsCompleteByUserId(userId, data.sessionId, _io);
-}
-
 /**
  * Called from the REST ratings endpoint after a rating is submitted.
  * Triggers the early-exit check to end the rating window if all participants have rated.
@@ -1060,143 +809,56 @@ export async function notifyRatingSubmitted(userId: string): Promise<void> {
 
 /**
  * After each rating submission, check if all participants in the current round
- * have finished rating. If so, cancel the rating window timer and advance early.
- *
- * #4 (26 May live test, "stuck at rating") — the pre-fix version computed
- *   expectedRatings = Σ pCount*(pCount-1) over the round's completed matches
- * and compared it to a raw COUNT(*) of ratings. That assumed EVERY participant
- * rates EVERY partner, which is wrong whenever a round has any of:
- *   - skips    — a Skip records no `ratings` row (it's tracked in
- *                activeSession.ratingSkips as `${userId}:${matchId}`),
- *   - leavers  — a participant who left isn't going to rate at all,
- *   - re-match dupes — a churned round has BOTH the superseded match
- *                (status 'reassigned') AND the new match in this round, so the
- *                naive sum over-counts (it expected ratings for the dead pair).
- * Any of these made totalRatings < expectedRatings forever → the early-close
- * never fired → the event sat on the 180/90s silent backstop ("stuck").
- *
- * Robust rule: a participant is "done" for the round when, for every partner in
- * their LATEST (most-recently-created, non-superseded) match this round, they
- * have EITHER submitted a rating OR skipped it. We only require this of
- * participants who are still PRESENT (presenceMap) — leavers never block. Each
- * participant is counted against their latest match only, so a re-match's
- * superseded match never inflates the requirement. Close (3s grace →
- * endRatingWindow) once every present, rated-eligible participant is done.
- *
- * Exported for the #4 behavioral test suite (stuck-at-rating.test.ts); the
- * production entry points are handleRatingSubmit and notifyRatingSubmitted.
+ * have finished rating. If so, cancel the rating window timer and advance immediately.
  */
-export async function checkAllRatingsCompleteByUserId(
-  userId: string,
-  sessionId?: string,
-  io?: SocketServer,
-): Promise<void> {
+async function checkAllRatingsCompleteByUserId(userId: string): Promise<void> {
   try {
-    // Resolve the session. Prefer the caller-supplied id (the rating/skip socket
-    // events carry it) and do NOT depend on presenceMap for the lookup — a stale
-    // heartbeat map was making this miss, so all-rated/skipped was never detected
-    // and the round limped to the silent backstop (Ali, 26 May: "stuck >1min").
+    // Find which session this user is in
+    let sessionId: string | null = null;
     let activeSession: ActiveSession | null = null;
-    if (sessionId) {
-      const s = activeSessions.get(sessionId);
-      if (s && s.status === SessionStatus.ROUND_RATING) activeSession = s;
-    }
-    if (!activeSession) {
-      for (const [sid, s] of activeSessions) {
-        if (s.presenceMap.has(userId) && s.status === SessionStatus.ROUND_RATING) {
-          sessionId = sid;
-          activeSession = s;
-          break;
-        }
+    for (const [sid, s] of activeSessions) {
+      if (s.presenceMap.has(userId) && s.status === SessionStatus.ROUND_RATING) {
+        sessionId = sid;
+        activeSession = s;
+        break;
       }
     }
     if (!sessionId || !activeSession) return;
 
     const roundNumber = activeSession.currentRound;
 
-    // Ratable real-conversation matches for this round. 'reassigned' is included
-    // because a superseded match was a real (brief) meeting that may carry a
-    // rating — but we only ever require the LATEST match per participant below,
-    // so a stale 'reassigned' pair can never *block* the close.
+    // Get all matches for this round
     const matches = await matchingService.getMatchesByRound(sessionId, roundNumber);
-    const ratable = matches.filter(
-      m => m.status === 'completed' || m.status === 'reassigned' ||
-           m.status === 'active' || m.status === 'no_show'
-    );
-    if (ratable.length === 0) return;
+    const completedMatches = matches.filter(m => m.status === 'completed' || m.status === 'no_show');
 
-    // For each participant, find their LATEST match this round (max createdAt).
-    // getMatchesByRound returns rows ORDER BY created_at, so a later row wins
-    // ties; we compare createdAt defensively in case ordering ever changes.
-    const latestMatchFor = new Map<string, typeof ratable[number]>();
-    const participantsOf = (m: typeof ratable[number]): string[] => {
-      const ids = [m.participantAId, m.participantBId];
-      if (m.participantCId) ids.push(m.participantCId);
-      return ids.filter((id): id is string => !!id);
-    };
-    for (const m of ratable) {
-      for (const pid of participantsOf(m)) {
-        const cur = latestMatchFor.get(pid);
-        if (!cur || new Date(m.createdAt).getTime() >= new Date(cur.createdAt).getTime()) {
-          latestMatchFor.set(pid, m);
-        }
-      }
+    // Collect all participant IDs who need to rate
+    const participantIds = new Set<string>();
+    for (const m of completedMatches) {
+      participantIds.add(m.participantAId);
+      participantIds.add(m.participantBId);
+      if (m.participantCId) participantIds.add(m.participantCId);
     }
 
-    // The set of (rater → partner) rating edges that exist this round. Keyed on
-    // the partner (not the match id) so a rating filed under a superseded match
-    // after a reassign still counts toward the rater's latest-match partner.
-    const edgeResult = await query<{ from_user_id: string; to_user_id: string }>(
-      `SELECT DISTINCT r.from_user_id, r.to_user_id
-         FROM ratings r
-         JOIN matches m ON m.id = r.match_id
-        WHERE m.session_id = $1 AND m.round_number = $2`,
+    // Count how many ratings exist for this round
+    const ratingCountResult = await query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM ratings r
+       JOIN matches m ON r.match_id = m.id
+       WHERE m.session_id = $1 AND m.round_number = $2`,
       [sessionId, roundNumber]
     );
-    const ratedEdges = new Set(edgeResult.rows.map(r => `${r.from_user_id}:${r.to_user_id}`));
-    const skips = activeSession.ratingSkips ?? new Set<string>();
+    const totalRatings = parseInt(ratingCountResult.rows[0]?.count || '0', 10);
 
-    // Who is ACTUALLY still here. presenceMap (heartbeat) drifts stale, so union
-    // it with live socket-room membership (ground truth) before deciding who can
-    // still block the close — same staleness class as the LEFT-escalation fix.
-    const connected = new Set<string>(activeSession.presenceMap.keys());
-    if (io) {
-      try {
-        const liveSockets = await io.in(sessionRoom(sessionId)).fetchSockets();
-        for (const sk of liveSockets) {
-          const uid = (sk.data as { userId?: string } | undefined)?.userId;
-          if (uid) connected.add(uid);
-        }
-      } catch { /* fall back to presenceMap only */ }
+    // Each participant rates each partner: pairs = 2 ratings, trios = 6 ratings
+    let expectedRatings = 0;
+    for (const m of completedMatches) {
+      const pCount = m.participantCId ? 3 : 2;
+      expectedRatings += pCount * (pCount - 1); // each rates each other
     }
 
-    // Complete when every completed-match participant has rated-or-skipped their
-    // partner(s). A rating/skip SETTLES that participant regardless of presence
-    // (so an all-skip round closes immediately, never on the backstop). endRound
-    // opens a form ONLY for 'completed' matches — a no_show/active/reassigned
-    // latest match gives nothing to rate, so it never makes a participant "owe".
-    // A not-yet-settled participant blocks the close ONLY while still connected;
-    // a disconnected non-rater is a leaver and must not wedge the window.
-    let anyEligible = false;
-    let allSettled = true;
-    for (const [pid, m] of latestMatchFor) {
-      if (m.status !== 'completed') continue;
-      const partners = participantsOf(m).filter(id => id !== pid);
-      if (partners.length === 0) continue; // solo — nothing to rate
-      anyEligible = true;
-      const settled = skips.has(`${pid}:${m.id}`) ||
-        partners.every(partnerId => ratedEdges.has(`${pid}:${partnerId}`));
-      if (settled) continue;
-      if (connected.has(pid)) { allSettled = false; break; } // present & still owes
-    }
+    if (totalRatings >= expectedRatings && expectedRatings > 0) {
+      logger.info({ sessionId, roundNumber, totalRatings, expectedRatings }, 'All ratings submitted — ending rating window early');
 
-    if (anyEligible && allSettled) {
-      logger.info(
-        { sessionId, roundNumber, edges: ratedEdges.size, skips: skips.size },
-        'All ratings submitted — ending rating window early'
-      );
-
-      // Cancel the existing round timer (the silent backstop)
+      // Cancel the existing round timer
       if (activeSession.timer) {
         clearTimeout(activeSession.timer);
         activeSession.timer = null;
@@ -1206,12 +868,9 @@ export async function checkAllRatingsCompleteByUserId(
       // 3-second grace period: allow in-flight rating submissions to land
       // before advancing. This prevents race conditions where the last
       // rating triggers early-exit while another user is mid-submission.
-      const sid = sessionId;
-      const rn = roundNumber;
       activeSession.timer = setTimeout(() => {
-        const s = activeSessions.get(sid) ?? activeSession!;
-        s.timer = null;
-        endRatingWindow(sid, rn);
+        activeSession.timer = null;
+        endRatingWindow(sessionId, roundNumber);
       }, 3000);
     }
   } catch (err) {
@@ -1395,12 +1054,6 @@ export async function handleLeaveConversation(
         for (const partnerId of partnerIds) {
           io.to(userRoom(partnerId)).emit('match:partner_disconnected', { matchId: userMatch.id });
         }
-        // Phase 2 dual-emit — session + participants + match for the
-        // leaver and remaining partners.
-        emitEntities(
-          io, [userId, ...partnerIds],
-          [E.session(sessionId), E.sessionParticipants(sessionId), E.match(userMatch.id)],
-        ).catch(() => {});
       } else {
         // Solo in room — no one to rate, just return to lobby
         socket.emit('match:return_to_lobby', { reason: 'you_left' });
@@ -1472,16 +1125,6 @@ export async function handleLeaveConversation(
               const matchId = uuid();
               const normA = soloPartnerId < candidateUserId ? soloPartnerId : candidateUserId;
               const normB = soloPartnerId < candidateUserId ? candidateUserId : soloPartnerId;
-              // Phase R1 (20 May 2026) — belt-and-braces. findIsolatedParticipants
-              // already filters host/cohosts via SQL, but the INSERT site asserts
-              // again. If we ever reach this with a host_user_id in normA/normB,
-              // the upstream filter regressed and we must not create the phantom
-              // match. Skip and try the next candidate.
-              if (normA === currentSession.hostUserId || normB === currentSession.hostUserId) {
-                logger.error({ sessionId, normA, normB, hostUserId: currentSession.hostUserId },
-                  'Phase R1 — refused to INSERT host into leave-reassign match. Upstream filter regressed?');
-                continue;
-              }
               try {
                 await query(
                   `INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, room_id, status, started_at)
@@ -1531,12 +1174,6 @@ export async function handleLeaveConversation(
                 roomId: newRoomId, roundNumber: currentSession.currentRound,
                 token: candidateTk, livekitUrl: reassignConfig.livekit.host,
               });
-              // Phase 2 dual-emit — affected pair gets session + participants
-              // + match entity tags.
-              emitEntities(
-                io, [soloPartnerId, candidateUserId],
-                [E.session(sessionId), E.sessionParticipants(sessionId), E.match(matchId)],
-              ).catch(() => {});
 
               logger.info({ sessionId, soloPartnerId, candidateUserId, matchId },
                 'Auto-reassigned after early leave');
@@ -1624,12 +1261,6 @@ export async function handleDisconnect(
       // Always notify remaining participants that this user left
       const isHost = activeSession.hostUserId === userId;
       io.to(sessionRoom(sessionId)).emit('participant:left', { userId, isHost });
-      // Phase 2 dual-emit — every viewer's participants list refreshes
-      // (this branch fires on disconnect for users with an activeSession).
-      fanSessionRoomEntities(
-        io, sessionId,
-        [E.session(sessionId), E.sessionParticipants(sessionId)],
-      ).catch(() => {});
 
       // If mid-round, notify partner and attempt auto-reassignment
       if (activeSession.status === SessionStatus.ROUND_ACTIVE) {
@@ -1646,11 +1277,6 @@ export async function handleDisconnect(
             io.to(userRoom(partnerId)).emit('match:partner_disconnected', {
               matchId: userMatch.id,
             });
-            // Phase 2 dual-emit — partner's in-event match surface refetches.
-            emitEntities(
-              io, [partnerId],
-              [E.session(sessionId), E.sessionParticipants(sessionId), E.match(userMatch.id)],
-            ).catch(() => {});
 
             const disconnectRound = activeSession.currentRound;
             const disconnectMatchId = userMatch.id;
@@ -1668,7 +1294,6 @@ export async function handleDisconnect(
             // Step 2: After 15 seconds, try auto-reassignment or fall back to bye
             const timeoutId = setTimeout(async () => {
               disconnectTimeouts.delete(timeoutKey);
-              await withSessionGuard(sessionId, async () => {
               try {
                 const currentSession = activeSessions.get(sessionId);
                 if (!currentSession || currentSession.currentRound !== disconnectRound) return;
@@ -1685,42 +1310,22 @@ export async function handleDisconnect(
                   io.to(userRoom(partnerId)).emit('match:partner_reconnected', {
                     matchId: disconnectMatchId,
                   });
-                  // Phase 2 dual-emit — partner's match surface refreshes.
-                  emitEntities(
-                    io, [partnerId],
-                    [E.session(sessionId), E.sessionParticipants(sessionId), E.match(disconnectMatchId)],
-                  ).catch(() => {});
                   return;
                 }
 
-                // M1 fix (21 May Ali) — DO NOT auto-transition disconnected
-                // participants to LEFT. The original Phase 2.7 design fired a
-                // LEFT transition after 15 s of no reconnect, which permanently
-                // removed the user from the participant snapshot
-                // (`session-state-snapshot.service.ts` filters
-                // `status NOT IN ('left','removed','no_show')`). A typical phone
-                // hand-off or laptop screen-lock easily crosses 15 s, so during
-                // the 21 May live event 3 of 8 participants got silently kicked
-                // out of every other client's roster — UI showed 5 while
-                // matching engine still saw 8 → trust-killer mismatch.
-                //
-                // New semantics: LEFT is reserved for explicit user action
-                // (Leave Event button), host kick (REMOVED), or event-end sweep
-                // (`completeSession` in round-lifecycle.ts). A network blip
-                // leaves the user as `disconnected` status — still visible in
-                // every roster, with a "disconnected" visual treatment. When
-                // they reconnect, the reset path (participant-flow.ts:436)
-                // heals their status. When the event truly ends, the sweep
-                // closes them out.
-                //
-                // The match-ending logic below (terminal status, auto-reassign)
-                // still runs — those are correct independent of whether the
-                // user gets marked LEFT. The partner needs to be reassigned or
-                // given a bye regardless.
-                //
-                // The Bug 36 host/cohost LEFT carve-out is now a no-op (no
-                // LEFT transition for ANYONE on disconnect timeout), so the
-                // hcRow query + guard are removed.
+                // Phase 2.7 (5 May spec §9, 6 May per Ali's call) — confirmed
+                // gone after 15 s with no reconnect. Transition to LEFT and
+                // trigger repair_future_rounds so the user is removed from
+                // upcoming pre-planned rounds. Best-effort: failures are
+                // logged and the reassignment attempt below still runs so
+                // the partner gets a new pair / bye for THIS round.
+                try {
+                  await transitionParticipant(sessionId, userId, ParticipantState.LEFT);
+                } catch (transErr) {
+                  logger.warn({ err: transErr, sessionId, userId },
+                    'Phase 2.7: state-machine LEFT transition failed in disconnect timeout (continuing with reassignment)');
+                }
+                void maybeRepairFutureRounds(io, sessionId, 'left');
 
                 // Determine terminal status based on actual conversation state:
                 //   >30s OR ratings submitted → completed (real conversation)
@@ -1779,16 +1384,6 @@ export async function handleDisconnect(
                   // Normalize participant order (lexicographic) for constraint consistency
                   const normA = partnerId < candidateUserId ? partnerId : candidateUserId;
                   const normB = partnerId < candidateUserId ? candidateUserId : partnerId;
-                  // Phase R1 (20 May 2026) — belt-and-braces. findIsolatedParticipants
-                  // filters host/cohost via SQL; this asserts at the INSERT.
-                  // If we reach here with a host_user_id, the SQL filter regressed
-                  // and we must not create the phantom match that caused the
-                  // 20 May Round-2 host-in-breakout incident.
-                  if (normA === currentSession.hostUserId || normB === currentSession.hostUserId) {
-                    logger.error({ sessionId, normA, normB, hostUserId: currentSession.hostUserId },
-                      'Phase R1 — refused to INSERT host into disconnect-reassign match. Upstream filter regressed?');
-                    continue;
-                  }
                   try {
                     await query(
                       `INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, room_id, status, started_at)
@@ -1841,12 +1436,6 @@ export async function handleDisconnect(
                     roomId, roundNumber: disconnectRound,
                     token: candidateTk, livekitUrl: reassignConfig.livekit.host,
                   });
-                  // Phase 2 dual-emit — affected pair refreshes session +
-                  // participants + match entities.
-                  emitEntities(
-                    io, [partnerId, candidateUserId],
-                    [E.session(sessionId), E.sessionParticipants(sessionId), E.match(matchId)],
-                  ).catch(() => {});
 
                   logger.info({ sessionId, partnerId, candidateUserId, matchId },
                     'Auto-reassigned isolated participants after disconnect');
@@ -1866,7 +1455,6 @@ export async function handleDisconnect(
               } catch (err) {
                 logger.warn({ err, sessionId, userId }, 'Error in disconnect timeout handler');
               }
-              });
             }, 15000);
             disconnectTimeouts.set(timeoutKey, timeoutId);
           }
@@ -1896,12 +1484,6 @@ export async function handleDisconnect(
       const isHost = session.hostUserId === userId;
 
       io.to(sessionRoom(sessionId)).emit('participant:left', { userId, isHost });
-      // Phase 2 dual-emit — pre-lobby waiting room disconnect also flips
-      // every viewer's participants surface.
-      fanSessionRoomEntities(
-        io, sessionId,
-        [E.session(sessionId), E.sessionParticipants(sessionId)],
-      ).catch(() => {});
       logger.info({ sessionId, userId }, 'Participant disconnected from pre-lobby waiting room');
     }
   } catch (err) {
@@ -1920,29 +1502,19 @@ export function startHeartbeatStaleDetection(io: SocketServer): void {
     for (const [sessionId, session] of activeSessions) {
       for (const [userId, presence] of session.presenceMap) {
         if (now - presence.lastHeartbeat.getTime() > STALE_HEARTBEAT_MS) {
-          logger.warn({ userId, sessionId }, 'Stale heartbeat — clearing presence');
+          logger.warn({ userId, sessionId }, 'Stale heartbeat — triggering disconnect flow');
           setPresence(sessionId, userId, null);
-          // M1 fix (21 May Ali) — same architectural change as the 15 s
-          // disconnect-timeout path above: a stale heartbeat must NOT
-          // auto-transition the user to LEFT. The presence map clear
-          // above is enough — the user is no longer counted as
-          // "connected" for active-match purposes (no_show / partner-
-          // disconnect logic still fires), but their session_participants
-          // row keeps a non-terminal status so they remain visible in
-          // every roster across reconnect attempts. LEFT is reserved for
-          // explicit user action, host kick (REMOVED), or event-end
-          // sweep (`completeSession`).
-          //
-          // The participant:left socket emit + entity fanout still fire
-          // so other viewers see the "disconnected" visual treatment in
-          // real time — the difference is purely whether the DB row
-          // gets stamped 'left' (it doesn't here anymore).
+          // Phase 2.7 — stale-heartbeat path also transitions to LEFT and
+          // triggers future-rounds repair so the user is consistently
+          // removed from the system, not stranded in DISCONNECTED state.
+          try {
+            await transitionParticipant(sessionId, userId, ParticipantState.LEFT);
+          } catch (err) {
+            logger.warn({ err, sessionId, userId },
+              'Phase 2.7: stale-heartbeat LEFT transition failed (continuing)');
+          }
+          void maybeRepairFutureRounds(io, sessionId, 'left');
           io.to(sessionRoom(sessionId)).emit('participant:left', { userId });
-          // Phase 2 dual-emit — every viewer's participants surface refetches.
-          fanSessionRoomEntities(
-            io, sessionId,
-            [E.session(sessionId), E.sessionParticipants(sessionId)],
-          ).catch(() => {});
         }
       }
     }

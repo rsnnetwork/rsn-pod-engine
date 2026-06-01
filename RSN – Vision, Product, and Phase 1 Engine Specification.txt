@@ -1,0 +1,221 @@
+RSN – Vision, Product, and Phase 1
+Engine Specification
+This document intentionally separates three layers:
+1. Vision Layer – What RSN fundamentally is
+2. Product Layer – What RSN becomes as a platform
+3. Phase 1 Engine Layer – What must be built now
+Confusing these layers creates architectural mistakes.
+They must stay distinct.
+Vision Layer – What RSN Is
+RSN is a structured social architecture for intentional human connection.
+It is not a networking tool.
+It is not a video product.
+It is not a speed-dating clone.
+It is a protected environment where people meet for a declared reason, inside a
+designed structure that prioritizes signal over noise.
+RSN introduces:
+• Reason-based participation
+• Structured rituals of meeting
+• Controlled environments (Pods)
+• Intentional matching
+• Shared presence
+• Meeting memory
+The long-term goal is to create a new foundational infrastructure for how humans
+connect with purpose.
+Product Layer – What RSN Becomes
+RSN as a product is a modular platform that enables:
+• Secure Pods (controlled environments)
+• Structured live events
+• Intelligent matching
+• Identity and reputation memory
+• Host governance
+• Subscription-based access
+Pods are configurable environments with defined rules of interaction.
+Raw Speed Networking is one Pod type.
+There will be others.
+The system must be generic enough to support multiple use cases:
+• Business networking
+• Investor–founder matchmaking
+• Corporate internal networking
+• Recruiting events
+• Alumni communities
+• Speed dating
+• Conferences
+• Private member communities
+The product layer is extensible.
+Phase 1 is not the full platform.
+Phase 1 – Engine Layer (What Must Be
+Built Now)
+Phase 1 builds the live structured matching engine that powers the first Pod type:
+Raw Speed Networking.
+Purpose of Phase 1:
+Design and implement a scalable, configurable live event engine that enables
+structured, high-quality 1:1 human matching at scale.
+This engine is infrastructure.
+It powers RSN.
+It is not RSN itself.
+1. Core System Architecture
+The system must be modular and separated into the following logical layers:
+1. Identity Layer
+2. Event Configuration Layer
+3. Matching Engine
+4. Real-Time Orchestration Engine
+5. Video Abstraction Layer
+6. Persistence Layer
+7. Admin and Host Controls
+Each layer must be independently testable.
+2. Domain Model
+Define the following primary entities.
+USER
+• id
+• email
+• authentication method
+• profile attributes (configurable key-value schema)
+• participation history
+• invite history
+• subscription status (Stripe-ready)
+EVENT_TEMPLATE
+• id
+• name
+• number_of_rounds
+• round_duration_seconds
+• lobby_duration_seconds
+• transition_duration_seconds
+• matching_configuration
+• feature_flags
+EVENT_INSTANCE
+• id
+• template_id
+• start_time
+• participant_list
+• state (scheduled / live / completed)
+MATCH
+• event_id
+• round_number
+• participant_a
+• participant_b
+• status (scheduled / active / completed / no_show / flagged)
+INVITE
+• inviter_id
+• invitee_email
+• status
+SUBSCRIPTION
+• user_id
+• plan
+• stripe_customer_id
+• stripe_subscription_id
+• status
+The data model must allow extension without migration-heavy redesign.
+3. Event Execution Model
+Default template example (configurable):
+• 8 minutes – Lobby (Mosaic)
+• 5 rounds × 8 minutes – Timed 1:1
+• 20–40 seconds – Mosaic reset between rounds
+• 5–8 minutes – Closing Lobby
+All durations must be configurable via template.
+The system must support multiple segment types in the future.
+Segment types for MVP:
+• LOBBY_MOSAIC
+• TIMED_ONE_TO_ONE
+Future extensibility must be preserved.
+4. Real-Time Orchestration Flow
+Participant flow:
+1. Login
+2. Join event
+3. Enter Mosaic Lobby
+4. Countdown to round start
+5. Automatic routing to 1:1 room
+6. Visible timer in room
+7. Automatic transition at round end
+8. Return to Mosaic
+9. Repeat
+10. Closing Mosaic
+No manual link navigation between meetings.
+System must handle:
+• Reconnection logic
+• Late joiners
+• Participants leaving mid-round
+• Host manual override
+5. Matching Engine Requirements
+Input: list of participants with profile attributes.
+Matching must:
+• Avoid duplicate pairings within event
+• Respect exclusion rules
+• Use weighted scoring based on configurable attributes
+• Optimize across all rounds, not greedily per round
+• Handle odd numbers
+• Generate full schedule under 30 seconds for 300 participants
+Weighted scoring logic must be configurable via event template.
+Random pairing is not acceptable.
+6. No-Show Handling
+If one participant does not join a round:
+System must:
+• Detect absence within configurable timeout
+• Attempt reassignment within 60 seconds
+• Or place participant into floating reassignment pool
+• Or allow host override
+Isolation time must be minimized.
+7. Admin and Host Controls
+Admin must be able to:
+• Create event templates
+• Configure round counts and durations
+• Upload participant list (CSV acceptable for MVP)
+• Configure matching weights
+• View post-event reports
+Host must be able to:
+• View live attendance
+• See current round
+• Broadcast message
+• Remove participant
+• Trigger manual reassignment
+8. Post-Event Data
+Participants must be able to see:
+• List of people they met
+Feedback options:
+• Positive
+• Neutral
+• Negative
+Admin export:
+• Match schedule
+• Attendance
+• Feedback
+• No-shows
+9. Video Layer Requirements
+Video provider must be abstracted behind an interface.
+Requirements:
+• Create and destroy rooms dynamically
+• Support mosaic room and 1:1 rooms
+• Fast room transitions
+• Low latency
+• Rejoin logic
+The orchestration engine must not be tightly coupled to a specific vendor.
+10. Invitations and Stripe Readiness
+Users must be able to:
+• Invite others
+• Track invite status
+System must be Stripe-ready:
+• Data model supports subscription state
+• Feature gating possible via subscription status
+• Admin override allowed
+Full billing logic not required for MVP.
+11. Performance Requirements
+• Support 500 concurrent participants
+• Matching computation under 30 seconds
+• Real-time transitions under 2 seconds
+• Stable under reconnect conditions
+12. Deliverables
+• Hosted working MVP
+• Source code
+• Deployment instructions
+• Technical architecture documentation
+13. Required Response
+Provide:
+1. Proposed architecture diagram or structured explanation
+2. Matching algorithm design
+3. Video integration approach
+4. Scaling strategy
+5. Timeline with milestones
+6. Cost structure
+7. Key risks and tradeoffs
+This is a system build.
+Clarity of architecture matters more than stack preference.

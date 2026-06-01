@@ -3,7 +3,6 @@
 // Works with Google Calendar, Outlook, Apple Calendar — no API keys needed.
 
 import { v4 as uuid } from 'uuid';
-import { query } from '../../db';
 
 interface CalendarEventData {
   title: string;
@@ -63,66 +62,6 @@ export function generateIcsContent(data: CalendarEventData): string {
   );
 
   return lines.join('\r\n');
-}
-
-export interface SessionCalendarEvent {
-  title: string;
-  description?: string;
-  startTime: Date;
-  durationMinutes: number;
-  organizerName?: string;
-  organizerEmail?: string;
-  sessionId?: string;
-}
-
-/**
- * Estimate a session's wall-clock duration in minutes from its round config:
- * rounds × (round + rating) + (rounds − 1) transitions + closing lobby.
- * Mirrors the computation the emailed-invite path uses so the invite and the
- * self-registration confirmation produce the same calendar block.
- */
-export function computeSessionDurationMinutes(cfg: any): number {
-  const rounds = cfg?.numberOfRounds || 5;
-  const roundDuration = cfg?.roundDurationSeconds || 480;
-  const ratingWindow = cfg?.ratingWindowSeconds || 30;
-  const transitionDuration = cfg?.transitionDurationSeconds || 30;
-  const closingLobby = cfg?.closingLobbyDurationSeconds || 120;
-  const totalSeconds =
-    (rounds * roundDuration) +
-    (rounds * ratingWindow) +
-    (Math.max(0, rounds - 1) * transitionDuration) +
-    closingLobby;
-  return Math.ceil(totalSeconds / 60);
-}
-
-/**
- * Build a calendar-event payload for a scheduled session (title, start time,
- * estimated duration, organizer = host). Returns undefined when the session has
- * no scheduled time (nothing to put on a calendar) or does not exist. Used by
- * the self-registration confirmation email.
- */
-export async function buildSessionCalendarEvent(sessionId: string): Promise<SessionCalendarEvent | undefined> {
-  const r = await query<{ title: string; scheduled_at: string | null; host_user_id: string; config: any }>(
-    'SELECT title, scheduled_at, host_user_id, config FROM sessions WHERE id = $1',
-    [sessionId],
-  );
-  const session = r.rows[0];
-  if (!session || !session.scheduled_at) return undefined;
-
-  const host = (await query<{ display_name: string; email: string }>(
-    'SELECT display_name, email FROM users WHERE id = $1',
-    [session.host_user_id],
-  )).rows[0];
-
-  return {
-    title: session.title,
-    description: `RSN Event — ${session.title}`,
-    startTime: new Date(session.scheduled_at),
-    durationMinutes: computeSessionDurationMinutes(session.config || {}),
-    organizerName: host?.display_name || 'RSN Host',
-    organizerEmail: host?.email,
-    sessionId,
-  };
 }
 
 function formatIcsDate(date: Date): string {

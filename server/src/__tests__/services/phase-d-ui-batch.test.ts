@@ -51,15 +51,7 @@ describe('Phase D — UI bug batch', () => {
       // The participants/rooms grid sits inside a flex column; without
       // min-h-0 the grid keeps its natural height and the parent's
       // overflow-hidden clips the bottom rows.
-      //
-      // Bug 16 (18 May Stefan) — the lg:grid-cols-3 class is now applied
-      // CONDITIONALLY (only when there are active rooms to render) so the
-      // participants list takes the full width when the rooms pane would
-      // otherwise be an empty third. The other utilities (flex-1, min-h-0,
-      // overflow-y-auto) still apply unconditionally.
-      expect(src).toMatch(/grid grid-cols-1/);
-      expect(src).toMatch(/lg:grid-cols-3 lg:divide-x divide-gray-200/);
-      expect(src).toMatch(/flex-1 min-h-0 overflow-y-auto/);
+      expect(src).toMatch(/grid grid-cols-1 lg:grid-cols-3[^"']*flex-1[^"']*min-h-0[^"']*overflow-y-auto/);
     });
 
     it('participants <ul> has bottom padding so the last row is not clipped', () => {
@@ -72,37 +64,24 @@ describe('Phase D — UI bug batch', () => {
   describe('D3 — participant count format (item 10)', () => {
     const src = readClient('features/live/Lobby.tsx');
 
-    it('formatParticipantHeader helper splits participants / host / co-hosts (Bug 15)', () => {
+    it('formatParticipantHeader helper exists and excludes co-hosts from participant count', () => {
       const fnStart = src.indexOf('function formatParticipantHeader');
       expect(fnStart).toBeGreaterThan(-1);
       const fnEnd = src.indexOf('\nfunction ', fnStart + 1);
       const fn = src.slice(fnStart, fnEnd);
-      // Bug E (15 May Ali) — `hostsSet` from director + cohosts +
-      // Phase M opt-ins (minus opt-outs), intersected with the present
-      // roster.
-      // Bug 15 (18 May Stefan) — separate counts pushed into a `parts`
-      // array so each role appears as its own pill: "N participants ·
-      // 1 host · M co-hosts". The legacy lump-sum "X + Y hosts" form
-      // is gone.
-      expect(fn).toMatch(/hostsSet/);
-      expect(fn).toMatch(/actingAsHostOverrides/);
-      // Director / co-host derivation.
-      expect(fn).toMatch(/directorPresent/);
-      expect(fn).toMatch(/coHostCount/);
-      // Pluralised output strings — pin both branches so the pluralisation
-      // doesn't quietly drift.
-      expect(fn).toMatch(/co-host\$\{coHostCount\s*!==\s*1\s*\?\s*'s'\s*:\s*''\}/);
-      expect(fn).toMatch(/participant\$\{participantCount\s*!==\s*1\s*\?\s*'s'\s*:\s*''\}/);
+      // Participant count subtracts both host AND cohosts.
+      expect(fn).toMatch(/cohostsPresent/);
+      expect(fn).toMatch(/participants\.length\s*\n?\s*-\s*\(hostInList\s*\?\s*1\s*:\s*0\)\s*\n?\s*-\s*cohostsPresent/);
+      // Output uses "+ N hosts" not "+ host" lump.
+      expect(fn).toMatch(/totalHosts === 1\s*\?\s*['"]host['"]\s*:\s*['"]hosts['"]/);
     });
 
-    it('LobbyStatusOverlay uses the helper with actingAsHostOverrides (no inline duplicate logic)', () => {
+    it('LobbyStatusOverlay uses the helper (no inline duplicate logic)', () => {
       const fnStart = src.indexOf('function LobbyStatusOverlay');
       expect(fnStart).toBeGreaterThan(-1);
       const fnEnd = src.indexOf('\nfunction ', fnStart + 1);
       const fn = src.slice(fnStart, fnEnd);
-      expect(fn).toMatch(
-        /formatParticipantHeader\(\s*participants,\s*hostUserId,\s*cohosts,\s*actingAsHostOverrides,\s*hostOnline\s*\)/,
-      );
+      expect(fn).toMatch(/formatParticipantHeader\(participants,\s*hostUserId,\s*cohosts,\s*hostOnline\)/);
       // No inline `+ host` string concatenation should remain in this fn.
       expect(fn).not.toMatch(/\?\s*['"][^'"]*\+\s*host['"]/);
     });
@@ -112,9 +91,7 @@ describe('Phase D — UI bug batch', () => {
       expect(fnStart).toBeGreaterThan(-1);
       const fnEnd = src.indexOf('\nfunction ', fnStart + 1);
       const fn = src.slice(fnStart, fnEnd);
-      expect(fn).toMatch(
-        /formatParticipantHeader\(\s*participants,\s*hostUserId,\s*cohosts,\s*actingAsHostOverrides,\s*hostOnline\s*\)/,
-      );
+      expect(fn).toMatch(/formatParticipantHeader\(participants,\s*hostUserId,\s*cohosts,\s*hostOnline\)/);
     });
 
     it('HostParticipantPanel header counts hosts separately from participants', () => {
