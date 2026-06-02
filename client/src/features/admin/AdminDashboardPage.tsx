@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/Button';
 import { useAuthStore } from '@/stores/authStore';
 import api from '@/lib/api';
 import { isAdmin } from '@/lib/utils';
+import { E } from '@/realtime/entities';
 
 function StatCard({ label, value, subtitle, icon: Icon, color }: { label: string; value: string | number; subtitle?: string; icon: any; color: string }) {
   return (
@@ -65,18 +66,21 @@ export default function AdminDashboardPage() {
     queryKey: ['admin-stats'],
     queryFn: () => api.get('/admin/stats').then(r => r.data.data),
     enabled: isAdmin(user?.role),
+    meta: { entities: [E.adminAnalytics] },
   });
 
   const { data: joinRequestsData } = useQuery({
     queryKey: ['admin-join-requests-pending'],
     queryFn: () => api.get('/join-requests?status=pending&pageSize=1').then(r => r.data),
     enabled: isAdmin(user?.role),
+    meta: { entities: [E.adminJoinRequests] },
   });
 
   const { data: recentMatches } = useQuery({
     queryKey: ['admin-recent-matches'],
     queryFn: () => api.get('/admin/matches?limit=10').then(r => r.data.data ?? []),
     enabled: isAdmin(user?.role),
+    meta: { entities: [E.adminAnalytics] },
   });
 
   const { data: healthData } = useQuery({

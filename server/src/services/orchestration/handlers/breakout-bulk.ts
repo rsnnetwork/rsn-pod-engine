@@ -315,6 +315,10 @@ export async function handleHostCreateBreakoutBulk(
           token,
           livekitUrl: appConfig.livekit.host,
           timerVisibility,
+          // 25 May (F/G) — flags this as a MANUAL breakout so the client scopes
+          // its timer to the per-room countdown and ignores session-wide
+          // round/rating timer:sync broadcasts (which would otherwise clobber it).
+          isManual: true,
         });
       }
 
@@ -342,7 +346,7 @@ export async function handleHostCreateBreakoutBulk(
             // showing in the breakout window — reported during live test).
             const endsAtIso = state.endsAt.toISOString();
             for (const pid of state.participantIds) {
-              io.to(userRoom(pid)).emit('timer:sync', { secondsRemaining: remaining, endsAt: endsAtIso });
+              io.to(userRoom(pid)).emit('timer:sync', { segmentType: 'breakout', secondsRemaining: remaining, endsAt: endsAtIso });
             }
           }
           if (remaining <= 0) {
@@ -425,7 +429,7 @@ export async function handleHostCreateBreakoutBulk(
           // frozen at sharedDurationSeconds and never ticks).
           const initEndsAtIso = endsAt.toISOString();
           for (const pid of participantIds) {
-            io.to(userRoom(pid)).emit('timer:sync', { secondsRemaining: sharedDurationSeconds, endsAt: initEndsAtIso });
+            io.to(userRoom(pid)).emit('timer:sync', { segmentType: 'breakout', secondsRemaining: sharedDurationSeconds, endsAt: initEndsAtIso });
           }
         }
       }
@@ -495,7 +499,7 @@ export async function handleHostExtendBreakoutAll(
 
       const secondsRemaining = Math.ceil(msRemaining / 1000);
       for (const pid of roomTimer.participantIds) {
-        io.to(userRoom(pid)).emit('timer:sync', { secondsRemaining });
+        io.to(userRoom(pid)).emit('timer:sync', { segmentType: 'breakout', secondsRemaining });
       }
       extendedCount++;
     }
@@ -649,7 +653,7 @@ export async function handleHostSetBreakoutDurationAll(
 
       const secondsRemaining = Math.ceil(msRemaining / 1000);
       for (const pid of roomTimer.participantIds) {
-        io.to(userRoom(pid)).emit('timer:sync', { secondsRemaining });
+        io.to(userRoom(pid)).emit('timer:sync', { segmentType: 'breakout', secondsRemaining });
       }
       updatedCount++;
     }

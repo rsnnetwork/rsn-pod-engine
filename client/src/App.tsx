@@ -1,5 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Routes, Route, Navigate, useParams } from 'react-router-dom';
+import { connectSocket, disconnectSocket, getSocket, reconnectSocket } from '@/lib/socket';
+import { useEntityChangedHandler } from '@/realtime/useEntityChangedHandler';
+import { useToastStore } from '@/stores/toastStore';
 
 // Backward-compat: old invite emails (pre-cbcef30) pointed users at
 // `/sessions/:id/live` (plural). The actual route is `/session/:id/live`
@@ -50,10 +53,104 @@ import OnboardingPage from '@/features/onboarding/OnboardingPage';
 
 export default function App() {
   const { checkSession } = useAuthStore();
+  // Bug 32 (19 May Ali) — keep ONE Socket.IO connection alive for the
+  // user's whole authenticated session. Pre-fix the socket was created
+  // with autoConnect:false and only connectSocket()-ed by
+  // useSessionSocket inside live event pages. On every other page
+  // (Home, Pods, Invites, etc.) the WebSocket was never opened — so the
+  // server's pod:membership_updated / entity:changed broadcasts had
+  // nowhere to land in the browser. NotificationBell registered
+  // listeners on a socket that wasn't connected; nothing fired. Connect
+  // here on app boot whenever a token is present, refresh when it
+  // changes, disconnect on logout. Live-event pages call connectSocket
+  // again, which is a no-op when already connected.
+  const accessToken = useAuthStore((s) => s.accessToken);
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const isSessionChecked = useAuthStore((s) => s.isSessionChecked);
+  const addToast = useToastStore((s) => s.addToast);
+
+  // Track the last token we handed the socket so we can distinguish "first
+  // connect" from "token rotated" — the latter needs a hard
+  // disconnect+connect to escape socket.io's reconnect-retry state if a
+  // stale token put us there.
+  const lastConnectedTokenRef = useRef<string | null>(null);
+  const connectErrorBannerShownRef = useRef(false);
 
   useEffect(() => {
     checkSession();
   }, []);
+
+  useEffect(() => {
+    // Bug 32 (19 May Ali) — do NOT connect until checkSession has finished
+    // validating whatever token came out of localStorage. Connecting with a
+    // stale token sends socket.io into reconnect-backoff, after which
+    // subsequent connect() calls are no-ops and the new token (when refresh
+    // succeeds) keeps trying to ride the dead connection.
+    if (!isSessionChecked) return;
+
+    if (!(isAuthenticated && accessToken)) {
+      disconnectSocket();
+      lastConnectedTokenRef.current = null;
+      connectErrorBannerShownRef.current = false;
+      return;
+    }
+
+    const previousToken = lastConnectedTokenRef.current;
+    if (previousToken && previousToken !== accessToken) {
+      // Token rotated mid-session (refresh path). Force a fresh handshake
+      // — plain connect() is a no-op while the engine is in retry-backoff.
+      reconnectSocket(accessToken);
+    } else {
+      connectSocket(accessToken);
+    }
+    lastConnectedTokenRef.current = accessToken;
+    // Reset the banner suppression — a new token means we're allowed to
+    // notify the user again if THIS one also fails.
+    connectErrorBannerShownRef.current = false;
+  }, [accessToken, isAuthenticated, isSessionChecked]);
+
+  // Bug 32 (19 May Ali) — surface persistent socket failures to the user.
+  // socket.io retries silently up to 20× by default; without this listener
+  // the UI just looks "frozen" while realtime is dead. Console-log every
+  // attempt for dev visibility, toast a single banner after N failures so
+  // we don't spam.
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+    const CONNECT_ERROR_THRESHOLD = 3;
+    let attempts = 0;
+
+    const onConnect = () => {
+      attempts = 0;
+      connectErrorBannerShownRef.current = false;
+    };
+    const onConnectError = (err: Error) => {
+      attempts += 1;
+      // eslint-disable-next-line no-console
+      console.warn(`[socket] connect_error (attempt ${attempts}):`, err?.message ?? err);
+      if (attempts >= CONNECT_ERROR_THRESHOLD && !connectErrorBannerShownRef.current) {
+        connectErrorBannerShownRef.current = true;
+        addToast('Live updates disconnected — trying to reconnect…', 'error');
+      }
+    };
+
+    socket.on('connect', onConnect);
+    socket.on('connect_error', onConnectError);
+    return () => {
+      socket.off('connect', onConnect);
+      socket.off('connect_error', onConnectError);
+    };
+  }, [addToast]);
+
+  // Realtime migration Phase 1 (19 May Ali) — mount the generic
+  // entity:changed handler at the app root. Every query that declares
+  // meta.entities will be auto-invalidated when the server emits a
+  // matching entity. Replaces NotificationBell's hard-coded query-key
+  // list as queries migrate to the new pattern over Phases 3a–3g.
+  // Phase 5 — useLegacyInvalidationBridge deleted. useEntityChangedHandler
+  // now owns all realtime cache invalidation; every query declares
+  // meta.entities and the server emits entity:changed for every mutation.
+  useEntityChangedHandler();
 
   return (
     <Routes>
@@ -79,6 +176,12 @@ export default function App() {
         <Route path="/sessions/:sessionId/recap" element={<RecapPage />} />
         <Route path="/encounters" element={<EncounterHistoryPage />} />
         <Route path="/messages" element={<MessagesPage />} />
+        {/* Feature 18 (13 May spec) — one-click DM open. The recap, profile,
+            and post-event pages send users to /messages/new/:userId, which
+            renders the same page in "compose new" mode for that target user.
+            Order matters: this must precede /:conversationId so "new" isn't
+            interpreted as a conversation id. */}
+        <Route path="/messages/new/:userId" element={<MessagesPage />} />
         <Route path="/messages/:conversationId" element={<MessagesPage />} />
         <Route path="/invites" element={<InvitesPage />} />
         <Route path="/settings" element={<SettingsPage />} />

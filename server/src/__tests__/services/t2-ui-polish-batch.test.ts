@@ -94,24 +94,19 @@ describe('T2 UI polish batch', () => {
     });
   });
 
-  describe('T2-6 — background blur Track.Source enum + bumped strength', () => {
-    const vr = readClient('features/live/VideoRoom.tsx');
-    const lobby = readClient('features/live/Lobby.tsx');
+  describe('T2-6 — background segmentation uses Track.Source enum + visible blur', () => {
+    // The camera-track lookup + blur strength moved into the shared
+    // backgroundEffects module (both rooms now go through it).
+    const bg = readClient('lib/backgroundEffects.ts');
 
-    it('VideoRoom uses Track.Source.Camera enum (not string "camera")', () => {
-      expect(vr).toMatch(/p\.source\s*===\s*Track\.Source\.Camera/);
+    it('camera-track lookup uses Track.Source.Camera enum (not the string "camera")', () => {
+      expect(bg).toMatch(/p\.source\s*===\s*Track\.Source\.Camera/);
     });
 
-    it('Lobby uses Track.Source.Camera enum (not string "camera")', () => {
-      expect(lobby).toMatch(/p\.source\s*===\s*Track\.Source\.Camera/);
-    });
-
-    it('blur strength bumped from 10 to 25 in VideoRoom', () => {
-      expect(vr).toMatch(/BackgroundBlur\(25\)/);
-    });
-
-    it('blur strength bumped from 10 to 25 in Lobby', () => {
-      expect(lobby).toMatch(/BackgroundBlur\(25\)/);
+    it('blur is strong enough to read as a real blur (radius 18)', () => {
+      // History: radius 10 was perceived as "no blur" (bumped to 25); now 18 at
+      // 540p — cheap enough per-frame, strong enough to hide a soft mask edge.
+      expect(bg).toMatch(/BG_BLUR_RADIUS\s*=\s*18/);
     });
   });
 });

@@ -70,6 +70,10 @@ export interface ConnectionResult {
   theirMeetAgain: boolean;
   mutualMeetAgain: boolean;
   roundNumber: number;
+  // #5 (24 May, Ali) — manual breakout rooms are stamped with the current
+  // round_number; this flag lets the recap render them in a separate
+  // "Manual rooms" section instead of folding them into a numbered round.
+  isManual: boolean;
 }
 
 export interface PeopleMet {
@@ -78,6 +82,11 @@ export interface PeopleMet {
   sessionDate: Date;
   totalRounds: number;
   roundsAttended: number;
+  // Bug 28 (19 May Ali + Stefan) — how many of `totalRounds` were added
+  // mid-event via "Another Round". Recap uses this to render an honest
+  // "3 rounds + 1 bonus" split. Defaults to 0 for events that ran their
+  // original plan.
+  bonusRoundsAdded?: number;
   connections: ConnectionResult[];
   mutualConnections: ConnectionResult[];
   // Phase 2 (1 May spec) — deterministic stored counts from meeting_records.
@@ -184,6 +193,14 @@ export interface RoundAssignment {
   byeParticipant: string | null;  // odd count handling
   byeParticipants?: string[];     // multiple bye participants when unique pairs exhausted
   warnings?: string[];            // matching warnings (e.g. all unique pairs exhausted)
+  // Fix #9 (25 May Stefan) — fallback feedback. The matching SERVICE
+  // (generateSingleRound) sets these after running the L0→L4 fallback ladder
+  // so callers can tell the host "no fresh pairings left — showing closest
+  // available" instead of the Re-match button silently re-rolling. The engine
+  // itself does not set these (it has no concept of the ladder); they're a
+  // service-level annotation on the returned round.
+  fallbackLevel?: number;         // 0 = strict/all-fresh; 1-4 = ladder relaxed
+  usedRepeats?: boolean;          // true when the round had to reuse an excluded (already-met) pair
 }
 
 export interface MatchPair {

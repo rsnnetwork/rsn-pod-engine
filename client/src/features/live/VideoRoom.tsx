@@ -3,20 +3,9 @@ import { useParams } from 'react-router-dom';
 import { useSessionStore } from '@/stores/sessionStore';
 import { formatTime } from '@/lib/utils';
 import { Video, Clock, Mic, MicOff, VideoOff, Wifi, UserX, ArrowLeft, Sparkles } from 'lucide-react';
-// Lazy-load track processors (may not be available in all environments)
-let _bgBlur: any = null;
-let _vBg: any = null;
-let _bgLoaded = false;
-async function loadBgProcessors() {
-  if (_bgLoaded) return { BackgroundBlur: _bgBlur, VirtualBackground: _vBg };
-  try {
-    const mod = await import(/* @vite-ignore */ '@livekit/track-processors');
-    _bgBlur = mod.BackgroundBlur;
-    _vBg = mod.VirtualBackground;
-    _bgLoaded = true;
-    return { BackgroundBlur: _bgBlur, VirtualBackground: _vBg };
-  } catch { return null; }
-}
+import { useBackgroundEffects } from '@/hooks/useBackgroundEffects';
+import { BackgroundPanel } from './BackgroundPanel';
+import { BG_CAPTURE_RESOLUTION } from '@/lib/backgroundEffects';
 import { getSocket, disconnectSocket } from '@/lib/socket';
 import {
   LiveKitRoom,
@@ -24,10 +13,11 @@ import {
   useTracks,
   useParticipants,
   useLocalParticipant,
+  useRoomContext,
   RoomAudioRenderer,
 } from '@livekit/components-react';
 import '@livekit/components-styles';
-import { Track } from 'livekit-client';
+import { Track, ConnectionState } from 'livekit-client';
 import api from '@/lib/api';
 
 // Prefer displayName → name → email local-part → "Partner".
@@ -130,19 +120,48 @@ const VideoStage = memo(function VideoStage() {
   // updates, etc.) which propagated to MediaControls + Leave/Main Room
   // buttons, causing the visible "flashing" reported during live testing.
   const currentPartners = useSessionStore(s => s.currentPartners);
+  // Phase N + T (12 May spec item 2) — visibility modes apply in
+  // breakouts too. Phase N filtered hidden only; Phase T also handles
+  // 'producer' (audio-only pill row below the grid). 'big_speaker' in a
+  // 2-3 person breakout doesn't need a special render — the tile is
+  // already prominent. Local tile is exempt from filtering (the
+  // participant always sees their own preview).
+  const hostVisibilityModes = useSessionStore(s => s.hostVisibilityModes);
   const [pinnedSid, setPinnedSid] = useState<string | null>(null);
 
   const cameraTracks = tracks.filter(t => t.source === Track.Source.Camera);
   const localTrack = cameraTracks.find(t => t.participant.sid === localParticipant.sid);
-  const remoteTracks = cameraTracks.filter(t => t.participant.sid !== localParticipant.sid);
+  // Phase T — filter remoteTracks BEFORE downstream render paths use them.
+  // Local tile is exempt (the participant always sees their own preview).
+  // Hidden users are dropped from the room entirely. Producer users get
+  // pulled into a separate audio-only pill row so they don't take up a
+  // video tile slot in the 2-3 person breakout grid.
+  const modeFor = (uid: string | undefined): 'big_speaker' | 'normal' | 'producer' | 'hidden' => {
+    if (!uid) return 'normal';
+    const m = hostVisibilityModes[uid];
+    return m === 'big_speaker' || m === 'producer' || m === 'hidden' ? m : 'normal';
+  };
+  const remoteTracksAll = cameraTracks.filter(t => t.participant.sid !== localParticipant.sid);
+  const producerTracks = remoteTracksAll.filter(t => modeFor(t.participant.identity) === 'producer');
+  const remoteTracks = remoteTracksAll.filter(t => {
+    const m = modeFor(t.participant.identity);
+    return m !== 'hidden' && m !== 'producer';
+  });
 
-  const allTiles = [
+  type Tile = {
+    trackRef: any;
+    label: string;
+    sid: string;
+    userId: string | undefined;
+  };
+
+  const allTiles: Tile[] = [
     { trackRef: localTrack, label: 'You', sid: localParticipant.sid, userId: localParticipant.identity },
     ...remoteTracks.map((rt, i) => ({
       trackRef: rt,
       label: userDisplayLabel(rt.participant.name || currentPartners[i]),
       sid: rt.participant.sid,
-      userId: rt.participant.identity,
+      userId: rt.participant.identity as string | undefined,
     })),
   ];
 
@@ -309,29 +328,45 @@ const VideoStage = memo(function VideoStage() {
           ))}
         </div>
       )}
+      {/* Phase T — producer strip. Audio-only host(s) in the breakout
+          appear as small pills here; their video tile is suppressed so
+          the partner grid stays uncluttered. Rare in practice (matching
+          excludes hosts; producer-mode in breakouts requires a manual
+          host:move_to_room AFTER setting visibility to 'producer'). */}
+      {producerTracks.length > 0 && (
+        <div
+          data-testid="breakout-producer-strip"
+          className="absolute bottom-3 left-3 right-3 flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg bg-[#1f2024]/80 backdrop-blur border border-[#3c4043] pointer-events-none"
+        >
+          <span className="text-[10px] uppercase tracking-wide text-gray-400 mr-1">
+            Producers
+          </span>
+          {producerTracks.map(t => (
+            <span
+              key={t.participant.sid}
+              className="inline-flex items-center gap-1 bg-black/40 text-white text-[11px] px-2 py-0.5 rounded-full"
+              title="Off-camera operator — audio-only"
+            >
+              {t.participant.name || t.participant.identity || 'Producer'}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 });
-
-const BG_PRESETS = [
-  { label: 'None', mode: 'disabled' as const, preview: null },
-  { label: 'Blur', mode: 'background-blur' as const, preview: null },
-  { label: 'Office', mode: 'virtual-background' as const, preview: 'https://images.unsplash.com/photo-1497366216548-37526070297c?w=400&q=80', image: 'https://images.unsplash.com/photo-1497366216548-37526070297c?w=1280&q=80' },
-  { label: 'Nature', mode: 'virtual-background' as const, preview: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=400&q=80', image: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=1280&q=80' },
-  { label: 'City', mode: 'virtual-background' as const, preview: 'https://images.unsplash.com/photo-1480714378408-67cf0d13bc1b?w=400&q=80', image: 'https://images.unsplash.com/photo-1480714378408-67cf0d13bc1b?w=1280&q=80' },
-  { label: 'Abstract', mode: 'virtual-background' as const, preview: 'https://images.unsplash.com/photo-1557683316-973673baf926?w=400&q=80', image: 'https://images.unsplash.com/photo-1557683316-973673baf926?w=1280&q=80' },
-];
 
 // Bug 8.7 (April 19) — memo'd. MediaControls has its own internal state
 // (mic/cam/bg toggles) and doesn't depend on parent props. Memoization
 // stops the toolbar from re-rendering on every timer tick.
 const MediaControls = memo(function MediaControls() {
-  const { localParticipant } = useLocalParticipant();
+  const { localParticipant, isCameraEnabled: hookCamEnabled } = useLocalParticipant();
   const [micEnabled, setMicEnabled] = useState(true);
   const [camEnabled, setCamEnabled] = useState(true);
-  const [bgMode, setBgMode] = useState<string>('disabled');
   const [showBgPanel, setShowBgPanel] = useState(false);
-  const processorRef = useRef<any>(null);
+  // All background-effect lifecycle (capability, persist-across-rooms,
+  // degrade-then-disable, destroy-on-unmount) lives in this shared hook.
+  const bg = useBackgroundEffects(localParticipant, hookCamEnabled);
 
   useEffect(() => {
     if (localParticipant) {
@@ -367,60 +402,6 @@ const MediaControls = memo(function MediaControls() {
     }
   }, [localParticipant, camEnabled]);
 
-  const applyBackground = useCallback(async (mode: string, imagePath?: string) => {
-    try {
-      const mod = await loadBgProcessors();
-      if (!mod) { console.error('Background processors not available'); return; }
-      // T2-6 (Issue 15) — fix Track.Source enum mismatch. Pre-fix:
-      // `p.source === 'camera'` compared the Track.Source enum value to a
-      // raw string, which never matched, so camPub was always undefined
-      // and the blur silently no-op'd. Now uses Track.Source.Camera enum
-      // properly (Track is already imported from 'livekit-client').
-      const camPub = Array.from(localParticipant.trackPublications.values()).find(p => p.source === Track.Source.Camera);
-      const camTrack = camPub?.track;
-      if (!camTrack) return;
-
-      if (mode === 'disabled') {
-        await (camTrack as any).stopProcessor?.();
-        processorRef.current = null;
-        setBgMode('disabled');
-        return;
-      }
-
-      // Stop existing processor first
-      await (camTrack as any).stopProcessor?.();
-
-      if (mode === 'background-blur') {
-        // T2-6: bumped strength 10 → 25 for visible effect (10 was so light
-        // users perceived no blur even when wired correctly).
-        const processor = mod.BackgroundBlur(25);
-        await (camTrack as any).setProcessor(processor);
-        processorRef.current = processor;
-      } else if (mode === 'virtual-background' && imagePath) {
-        const processor = mod.VirtualBackground(imagePath);
-        await (camTrack as any).setProcessor(processor);
-        processorRef.current = processor;
-      }
-      setBgMode(mode + (imagePath ? ':' + imagePath : ''));
-    } catch (err) {
-      console.error('Background effect failed:', err);
-    }
-  }, [localParticipant]);
-
-  const handleCustomUpload = useCallback(async () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*';
-    input.onchange = async (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) return;
-      const url = URL.createObjectURL(file);
-      await applyBackground('virtual-background', url);
-      setShowBgPanel(false);
-    };
-    input.click();
-  }, [applyBackground]);
-
   return (
     <div className="flex items-center gap-3 relative">
       <button onClick={toggleMic}
@@ -431,46 +412,21 @@ const MediaControls = memo(function MediaControls() {
         className={`p-2 rounded-full transition-colors ${camEnabled ? 'bg-gray-200 hover:bg-gray-300 text-gray-700' : 'bg-red-100 text-red-500 hover:bg-red-200'}`}>
         {camEnabled ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
       </button>
-      <button onClick={() => setShowBgPanel(!showBgPanel)} title="Background effects"
-        className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium transition-colors ${bgMode !== 'disabled' ? 'bg-indigo-500/80 text-white' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}>
-        <Sparkles className="h-4 w-4" />
-        BG
-      </button>
+      {bg.supported && (
+        <button onClick={() => setShowBgPanel(!showBgPanel)} title="Background effects"
+          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium transition-colors ${bg.current.mode !== 'disabled' ? 'bg-indigo-500/80 text-white' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}>
+          <Sparkles className="h-4 w-4" />
+          BG
+        </button>
+      )}
 
-      {/* Background effects panel */}
-      {showBgPanel && (
-        <div className="absolute top-full left-0 mt-2 bg-white rounded-xl shadow-xl border border-gray-200 p-3 w-56 sm:w-72 max-w-[calc(100vw-2rem)] z-50">
-          <p className="text-xs font-semibold text-gray-500 uppercase mb-2">Background Effects</p>
-          <div className="grid grid-cols-3 gap-2">
-            {BG_PRESETS.map(preset => (
-              <button key={preset.label}
-                onClick={() => { applyBackground(preset.mode, preset.image); if (preset.mode === 'disabled') setBgMode('disabled'); setShowBgPanel(false); }}
-                className={`rounded-lg border-2 overflow-hidden transition-all ${
-                  (preset.mode === 'disabled' && bgMode === 'disabled') || bgMode.includes(preset.image || '__none__')
-                    ? 'border-rsn-red ring-2 ring-rsn-red/30' : 'border-gray-200 hover:border-gray-400'
-                }`}>
-                {preset.preview ? (
-                  <img src={preset.preview} alt={preset.label} className="w-full h-14 object-cover" />
-                ) : (
-                  <div className={`w-full h-14 flex items-center justify-center text-xs font-medium ${
-                    preset.mode === 'disabled' ? 'bg-gray-100 text-gray-500' : 'bg-indigo-50 text-indigo-600'
-                  }`}>
-                    {preset.label}
-                  </div>
-                )}
-                <p className="text-[10px] text-gray-500 py-0.5 text-center">{preset.label}</p>
-              </button>
-            ))}
-            {/* Custom upload */}
-            <button onClick={() => { handleCustomUpload(); }}
-              className="rounded-lg border-2 border-dashed border-gray-300 hover:border-gray-400 transition-all">
-              <div className="w-full h-14 flex items-center justify-center text-xs font-medium text-gray-400">
-                + Upload
-              </div>
-              <p className="text-[10px] text-gray-400 py-0.5 text-center">Custom</p>
-            </button>
-          </div>
-        </div>
+      {showBgPanel && bg.supported && (
+        <BackgroundPanel
+          current={bg.current}
+          degraded={bg.degraded}
+          onApply={bg.apply}
+          onClose={() => setShowBgPanel(false)}
+        />
       )}
     </div>
   );
@@ -497,6 +453,43 @@ function PartnerLeftAutoReturn({ sessionId }: { sessionId: string }) {
       </button>
     </div>
   );
+}
+
+// D (25 May Ali) — recover the LiveKit connection when the user returns to the
+// foreground. iOS Safari suspends WebRTC while a tab is backgrounded (a phone
+// call, the lock screen); the SDK's own reconnect frequently times out
+// (Sentry "NegotiationError: negotiation timed out"), leaving the participant
+// with frozen/black video and a stale "ghost" tile to everyone else (the
+// "Saif in two places" report). Mount once inside a <LiveKitRoom>: on return to
+// the foreground / regained network, if the room has actually GIVEN UP
+// (state === Disconnected), trigger the parent's reconnect. We act ONLY on a
+// hard Disconnected state — transient blips are left to the SDK's own
+// auto-reconnect so we never thrash a healthy or already-reconnecting link.
+// Debounced so a burst of focus/visibility/online events fires at most once.
+function ReconnectOnReturn({ onReconnect }: { onReconnect: () => void }) {
+  const room = useRoomContext();
+  const cbRef = useRef(onReconnect);
+  cbRef.current = onReconnect;
+  const debounceRef = useRef(false);
+  useEffect(() => {
+    const maybeReconnect = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (room.state !== ConnectionState.Disconnected) return;
+      if (debounceRef.current) return;
+      debounceRef.current = true;
+      setTimeout(() => { debounceRef.current = false; }, 3000);
+      cbRef.current();
+    };
+    document.addEventListener('visibilitychange', maybeReconnect);
+    window.addEventListener('focus', maybeReconnect);
+    window.addEventListener('online', maybeReconnect);
+    return () => {
+      document.removeEventListener('visibilitychange', maybeReconnect);
+      window.removeEventListener('focus', maybeReconnect);
+      window.removeEventListener('online', maybeReconnect);
+    };
+  }, [room]);
+  return null;
 }
 
 export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
@@ -545,6 +538,20 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
     if (sessionId) getSocket()?.emit('participant:leave_conversation', { sessionId });
   };
 
+  // D (25 May) — force a fresh LiveKit reconnect when the room has gone dead
+  // after a suspended tab. Reuses the proven token-clear path: null token →
+  // the backup fetch above pulls a fresh token → <LiveKitRoom> remounts and
+  // reconnects. retryCount is reset because the user is actively back, so they
+  // always get a clean attempt (rather than being kicked to lobby on an
+  // exhausted budget after several drops over a long event).
+  const reconnectRoom = () => {
+    if (useSessionStore.getState().phase !== 'matched') return;
+    retryCountRef.current = 0;
+    setRetrying(true);
+    setLiveKitToken(null, null);
+    setTimeout(() => setRetrying(false), 1500);
+  };
+
   if (isByeRound) {
     return (
       <div className="flex-1 flex items-center justify-center p-4 bg-[#202124]">
@@ -589,7 +596,7 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
       video={true}
       audio={true}
       options={{
-        videoCaptureDefaults: { resolution: { width: 1280, height: 720, frameRate: 30 } },
+        videoCaptureDefaults: { resolution: { ...BG_CAPTURE_RESOLUTION } },
       }}
       onConnected={() => {
         // T0-2 (Issue 7) — confirm LiveKit room membership to the server so
@@ -603,6 +610,10 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
             roomId: currentRoomId,
           });
         }
+        // D (25 May) — a successful (re)connect refreshes the retry budget so a
+        // user who drops several times over a long event always gets a clean
+        // reconnect attempt instead of being permanently bounced to the lobby.
+        retryCountRef.current = 0;
       }}
       onDisconnected={() => {
         if (useSessionStore.getState().phase !== 'matched') return;
@@ -634,6 +645,9 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
       }}
       className="flex-1 flex flex-col"
     >
+      {/* D (25 May Ali) — recover the connection (and the user's matchability +
+          video) when they return to the foreground after a suspended tab. */}
+      <ReconnectOnReturn onReconnect={reconnectRoom} />
       {/* Partner disconnected — auto-return to main room */}
       {partnerDisconnected && sessionId && (
         <PartnerLeftAutoReturn sessionId={sessionId} />

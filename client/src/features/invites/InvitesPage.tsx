@@ -13,6 +13,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { isAdmin } from '@/lib/utils';
 import api from '@/lib/api';
+import { E } from '@/realtime/entities';
 
 const TYPE_CONFIG: Record<string, { label: string; icon: typeof Users; variant: 'info' | 'warning' | 'default' }> = {
   pod: { label: 'Pod Invite', icon: Users, variant: 'info' },
@@ -25,6 +26,7 @@ export default function InvitesPage() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'accepted' | 'revoked'>('all');
   const { user } = useAuthStore();
+  const currentUserId = user?.id;
   const { addToast } = useToastStore();
   const userIsAdmin = isAdmin(user?.role);
   const qc = useQueryClient();
@@ -43,16 +45,19 @@ export default function InvitesPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['my-invites'],
     queryFn: () => api.get('/invites').then(r => r.data.data ?? []),
+    meta: { entities: currentUserId ? [E.userInvites(currentUserId)] : [] },
   });
 
   const { data: pods } = useQuery({
     queryKey: ['my-pods'],
     queryFn: () => api.get('/pods').then(r => r.data.data ?? []),
+    meta: { entities: currentUserId ? [E.userPods(currentUserId)] : [] },
   });
 
   const { data: sessions } = useQuery({
     queryKey: ['my-sessions'],
     queryFn: () => api.get('/sessions').then(r => r.data.data ?? []),
+    meta: { entities: currentUserId ? [E.userSessions(currentUserId)] : [] },
   });
 
   const { data: searchResults } = useQuery({
@@ -66,18 +71,21 @@ export default function InvitesPage() {
     queryKey: ['pod-members', podId],
     queryFn: () => api.get(`/pods/${podId}/members`).then(r => r.data.data ?? []),
     enabled: inviteType === 'pod' && !!podId,
+    meta: { entities: podId ? [E.pod(podId), E.podMembers(podId)] : [] },
   });
 
   const { data: sessionParticipants } = useQuery({
     queryKey: ['session-participants', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}/participants`).then(r => r.data.data ?? []),
     enabled: inviteType === 'session' && !!sessionId,
+    meta: { entities: sessionId ? [E.session(sessionId), E.sessionParticipants(sessionId)] : [] },
   });
 
   // Invites sent TO this user (pod/event invites from directors/hosts/admins)
   const { data: receivedInvites } = useQuery({
     queryKey: ['received-invites'],
     queryFn: () => api.get('/invites/received').then(r => r.data.data ?? []),
+    meta: { entities: currentUserId ? [E.userInvites(currentUserId)] : [] },
   });
 
   // Track the invite being accepted so error handler can navigate

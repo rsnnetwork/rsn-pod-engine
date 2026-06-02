@@ -476,6 +476,97 @@ export async function sendInviteEmail(
   logger.warn({ to, type: data.type }, 'No email provider — invite email skipped');
 }
 
+// ─── Session Registration Confirmation Email ─────────────────────────────────
+// Sent when a user SELF-registers for an event (no host invite). Mirrors the
+// invite email's calendar attachment so a self-signup also lands the event on
+// the user's calendar with a 15-minute reminder.
+
+interface RegistrationConfirmationData {
+  recipientName?: string;
+  sessionTitle: string;
+  sessionUrl: string;
+  calendarEvent?: {
+    title: string;
+    description?: string;
+    startTime: Date;
+    durationMinutes: number;
+    organizerName?: string;
+    organizerEmail?: string;
+    sessionId?: string;
+  };
+}
+
+export async function sendSessionRegistrationConfirmationEmail(
+  to: string,
+  data: RegistrationConfirmationData,
+): Promise<void> {
+  const greetingName = data.recipientName ? ` ${data.recipientName}` : '';
+  const whenLine = data.calendarEvent
+    ? `<p style="color:#475569;font-size:14px;line-height:1.6;margin:0 0 8px 0;text-align:center;">${data.calendarEvent.startTime.toUTCString()}</p>`
+    : '';
+  const calendarNote = data.calendarEvent
+    ? `<p style="color:#64748b;font-size:13px;line-height:1.5;margin:20px 0 0 0;text-align:center;">A calendar invite is attached — add it to get a reminder 15 minutes before.</p>`
+    : '';
+  const subject = `You're registered — ${data.sessionTitle}`;
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
+        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
+          <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
+          <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
+          <h1 style="color:#1a1a2e;font-size:22px;font-weight:700;margin:0 0 16px 0;text-align:center;">You're registered${greetingName}!</h1>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;text-align:center;">
+            You're all set for <strong>${data.sessionTitle}</strong>.
+          </p>
+          ${whenLine}
+          <div style="text-align:center;margin:32px 0;">
+            <a href="${data.sessionUrl}"
+               style="display:inline-block;background:#DE322E;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
+              View Event
+            </a>
+          </div>
+          ${calendarNote}
+        </div>
+        <p style="color:#475569;font-size:12px;text-align:center;margin:24px 0 0 0;">
+          RSN — Connect with Reason
+        </p>
+      </div>
+    </body>
+    </html>
+  `;
+
+  if (config.resendApiKey) {
+    const text = `You're registered for ${data.sessionTitle}.${data.calendarEvent ? ' A calendar invite is attached.' : ''}\n\nView event: ${data.sessionUrl}\n\nRSN — Connect with Reason`;
+    const attachments: { filename: string; content: string }[] = [];
+
+    if (data.calendarEvent) {
+      const icsContent = generateIcsContent({
+        title: data.calendarEvent.title,
+        description: data.calendarEvent.description || `RSN Event — ${data.calendarEvent.title}`,
+        startTime: data.calendarEvent.startTime,
+        durationMinutes: data.calendarEvent.durationMinutes,
+        organizerName: data.calendarEvent.organizerName,
+        organizerEmail: data.calendarEvent.organizerEmail,
+        location: data.calendarEvent.sessionId
+          ? `${config.clientUrl}/sessions/${data.calendarEvent.sessionId}`
+          : undefined,
+      });
+      attachments.push({ filename: 'event.ics', content: icsContent });
+    }
+
+    await sendEmail({ to, subject, html, text, attachments: attachments.length > 0 ? attachments : undefined });
+    return;
+  }
+
+  logger.warn({ to, sessionTitle: data.sessionTitle }, 'No email provider — registration confirmation skipped');
+}
+
 // ─── Join Request Confirmation Email ────────────────────────────────────────
 
 export async function sendJoinRequestConfirmationEmail(

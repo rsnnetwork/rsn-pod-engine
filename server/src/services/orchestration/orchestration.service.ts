@@ -11,15 +11,29 @@ import { Server as SocketServer, Socket } from 'socket.io';
 import logger from '../../config/logger';
 import { SessionStatus } from '@rsn/shared';
 
+// Phase 5 (19 May 2026) — realtime architecture migration complete. The
+// legacy notify* helpers (notifyPodChanged / notifySessionListChanged /
+// notifyAdminListChanged / notifyPodMembershipChanged / notifyUserChanged /
+// notifyUserBlocksChanged / notifyOwnNotificationsChanged /
+// notifyDmReactionChanged / notifyDmReadReceipt / notifyGroupChanged /
+// notifyPermissionsUpdated) have all been deleted from this module. Routes
+// now call the entity-only fanout helpers in ../../realtime/fanout
+// directly. The two surviving bespoke events — permissions:updated and
+// roster:changed — live in emitPermissionsUpdated (also in fanout.ts) and
+// are kept solely because useSessionSocket needs them to hydrate Zustand
+// state. See:
+//   docs/superpowers/plans/2026-05-19-realtime-architecture-migration.md
+import { setRealtimeIo } from '../../realtime/emit';
+
 // State
 import {
-  activeSessions, getUserIdFromSocket, cleanupChatMessages,
+  activeSessions, getUserIdFromSocket, cleanupChatMessages, withSessionGuard,
 } from './state/session-state';
 
 // Handlers — Participant Flow
 import {
   handleJoinSession, handleLeaveSession, handleHeartbeat, handleReady,
-  handleDisconnect, handleRatingSubmit, handleLeaveConversation,
+  handleDisconnect, handleRatingSubmit, handleRatingSkip, handleLeaveConversation,
   handleRoomJoined,
   startHeartbeatStaleDetection, notifyRatingSubmitted,
   injectDependencies as injectParticipantDeps,
@@ -32,6 +46,7 @@ import {
   handleHostMuteParticipant, handleHostMuteAll, handleHostRemoveFromRoom,
   handleHostMoveToRoom, handleAssignCohost, handleRemoveCohost, handlePromoteCohost, handleHostExtendRound,
   handleHostExtendBreakoutRoom, handleHostCreateBreakout,
+  handleHostSetPin, handleHostSetTileSize,
   startSession, pauseSession, resumeSession, endSession, broadcastMessage,
   setHostVisibility,
   setHostActionsIo, injectHostActionDeps,
@@ -41,7 +56,7 @@ import {
 import {
   handleHostGenerateMatches, handleHostConfirmRound, handleHostConfirmMatches,
   handleHostSwapMatch, handleHostExcludeFromRound, handleHostRegenerateMatches,
-  handleHostCancelPreview, handleHostForceMatch, emitHostDashboard, injectMatchingFlowDeps,
+  handleHostCancelPreview, emitHostDashboard, emitHostDashboardForce, injectMatchingFlowDeps,
 } from './handlers/matching-flow';
 
 // Handlers — Round Lifecycle
@@ -55,6 +70,8 @@ import { handleChatSend, handleChatReact, handleReactionSend, handleChatRequestH
 import { handleDmSend, handleDmRead, handleDmReact, handleDmUnreact } from './handlers/dm-handlers';
 // Phase 2E (5 May spec) — global state reconciler.
 import { startGlobalReconciler } from './state/participant-state-machine';
+// Phase 5 — resync handler for session:resync socket event.
+import { handleResync } from './state/state-snapshot';
 
 // Handlers — Bulk Breakout (Task 14)
 import {
@@ -94,20 +111,36 @@ export function initOrchestration(socketServer: SocketServer): void {
   // Give host-actions module access to io for REST API helpers
   setHostActionsIo(io);
 
+  // Phase 5 (19 May 2026) — wire the realtime fanout module's cached io so
+  // the entity-only fanout helpers in ../../realtime/fanout can emit
+  // without each caller threading an SocketServer through.
+  setRealtimeIo(io);
+
   // ── Wire cross-module dependencies ──
 
+  // C1 (Phase 2) — timer-fired transitions run OUTSIDE any host guard. Wrap
+  // each in withSessionGuard so a timer firing cannot run concurrently with a
+  // host-clicked transition on the same session. Safe (non-re-entrant): the
+  // lifecycle fns never acquire the guard themselves (host handlers already
+  // call them while holding it).
   const timerCallbacks: TimerCallbacks = {
-    transitionToRound: (sessionId, roundNumber) => transitionToRound(io, sessionId, roundNumber),
-    endRound: (sessionId, roundNumber) => endRound(io, sessionId, roundNumber),
-    endRatingWindow: (sessionId, roundNumber) => endRatingWindow(io, sessionId, roundNumber),
-    completeSession: (sessionId) => completeSession(io, sessionId),
+    transitionToRound: (sessionId, roundNumber) => withSessionGuard(sessionId, () => transitionToRound(io, sessionId, roundNumber)),
+    endRound: (sessionId, roundNumber) => withSessionGuard(sessionId, () => endRound(io, sessionId, roundNumber)),
+    endRatingWindow: (sessionId, roundNumber) => withSessionGuard(sessionId, () => endRatingWindow(io, sessionId, roundNumber)),
+    completeSession: (sessionId) => withSessionGuard(sessionId, () => completeSession(io, sessionId)),
   };
 
   injectHostActionDeps({
     transitionToRound: (ioServer, sessionId, roundNumber) => transitionToRound(ioServer, sessionId, roundNumber),
     completeSession: (ioServer, sessionId) => completeSession(ioServer, sessionId),
     endRound: (ioServer, sessionId, roundNumber) => endRound(ioServer, sessionId, roundNumber),
+    // #4 (26 May) — direct (non-guard-wrapped) endRatingWindow for host
+    // force-advance from ROUND_RATING. Host handlers already hold the session
+    // guard, so they must NOT use the guard-wrapped timerCallbacks variant.
+    endRatingWindow: (ioServer, sessionId, roundNumber) => endRatingWindow(ioServer, sessionId, roundNumber),
     emitHostDashboard: (sessionId) => emitHostDashboard(io, sessionId),
+    // Bug 68 (18 May Stefan) — coalesce-bypass for cohost promote/demote.
+    emitHostDashboardForce: (sessionId) => emitHostDashboardForce(io, sessionId),
     timerCallbacks,
     // Bug 4 (April 18 Dr Arch): wire auto-end so host actions that end matches
     // can recover the session if every active match in the round is gone.
@@ -148,7 +181,7 @@ export function initOrchestration(socketServer: SocketServer): void {
   // ── Phase 2E (5 May spec) — periodic state-machine reconciler ──
   // Auto-heals participant-state drift every 30 s so users never need to
   // leave-and-rejoin to recover from a wedged state.
-  startGlobalReconciler();
+  startGlobalReconciler(io);
 
   // ── TTL cleanup (every 5 minutes, remove sessions older than 4 hours) ──
 
@@ -229,7 +262,11 @@ export function initOrchestration(socketServer: SocketServer): void {
     wrapHandler('session:join', socket, handleJoinSession);
     wrapHandler('session:leave', socket, handleLeaveSession);
     wrapHandler('rating:submit', socket, handleRatingSubmit);
+    wrapHandler('rating:skip', socket, handleRatingSkip);
     wrapHandler('participant:leave_conversation', socket, handleLeaveConversation);
+
+    // ── Phase 5 — client resync request (unguarded, flag-gated in handler) ──
+    socket.on('session:resync', (data) => handleResync(io, socket, data));
 
     // ── Participant Events (unguarded) ──
     socket.on('presence:heartbeat', (data) => {
@@ -262,6 +299,12 @@ export function initOrchestration(socketServer: SocketServer): void {
     wrapHandler('host:create_breakout', socket, handleHostCreateBreakout);
     wrapHandler('host:assign_cohost', socket, handleAssignCohost);
     wrapHandler('host:remove_cohost', socket, handleRemoveCohost);
+    // Bug 1 (18 May Stefan) — global pin broadcast. Acting hosts can set
+    // a pin that every participant's lobby honours.
+    wrapHandler('host:set_pin', socket, handleHostSetPin);
+    // Bug 26 (19 May Ali) — director can flatten a cohost's tile to
+    // participant size (visual only; cohost keeps all privileges).
+    wrapHandler('host:set_tile_size', socket, handleHostSetTileSize);
     // T1-5 — host can pass the baton to an existing co-host
     wrapHandler('host:promote_cohost', socket, handlePromoteCohost);
     wrapHandler('host:extend_round', socket, handleHostExtendRound);
@@ -295,7 +338,6 @@ export function initOrchestration(socketServer: SocketServer): void {
     wrapHandler('host:exclude_participant', socket, handleHostExcludeFromRound);
     wrapHandler('host:regenerate_matches', socket, handleHostRegenerateMatches);
     wrapHandler('host:cancel_preview', socket, handleHostCancelPreview);
-    wrapHandler('host:force_match', socket, handleHostForceMatch);
 
     // ── Chat Events (unguarded) ──
     socket.on('chat:send', async (data) => {

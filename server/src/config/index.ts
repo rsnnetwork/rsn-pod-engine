@@ -66,6 +66,12 @@ export const config = {
     host: process.env.LIVEKIT_URL || 'ws://localhost:7880',
   },
 
+  // Phase 4 — server-side room eviction (G1). Dark by default; enable per env.
+  roomEvictionEnabled: process.env.ROOM_EVICTION_ENABLED === 'true',
+
+  // Phase 5 — emit versioned state:snapshot to clients. Dark by default.
+  snapshotEmitEnabled: process.env.SNAPSHOT_EMIT_ENABLED === 'true',
+
   // Computed
   isDev: (process.env.NODE_ENV || 'development') === 'development',
   isProd: process.env.NODE_ENV === 'production',

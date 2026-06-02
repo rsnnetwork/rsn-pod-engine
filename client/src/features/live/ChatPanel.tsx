@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { X, Send, SmilePlus, Smile } from 'lucide-react';
-import { useSessionStore, ChatMessage } from '@/stores/sessionStore';
+import { useSessionStore, ChatMessage, useInRoomParticipants } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
 import { getSocket } from '@/lib/socket';
 
@@ -26,14 +26,28 @@ export default function ChatPanel({ sessionId, onClose }: ChatPanelProps) {
   const hostInLobby = useSessionStore(s => s.hostInLobby);
   const hostUserId = useSessionStore(s => s.hostUserId);
   const cohosts = useSessionStore(s => s.cohosts);
+  // F3 (21 May Ali) — chat-gate's host-presence check must use realtime
+  // LiveKit room presence so the gate flips for every viewer at the same
+  // time (Bug A's intent was already this, but socket roster drift left
+  // chat greyed-out for some viewers even after the host joined).
+  const participants = useInRoomParticipants();
   const { user } = useAuthStore();
 
   // Determine scope based on current phase
   const scope: 'lobby' | 'room' = phase === 'matched' ? 'room' : 'lobby';
 
-  // Chat disabled in lobby when host is not present (host/co-hosts always allowed)
+  // Chat disabled in lobby when host is not present (host/co-hosts always allowed).
+  // Bug A (15 May Shraddha) — the lobby banner uses useHostPresence() which
+  // treats the host as present if `hostInLobby` OR they appear in the
+  // participants array. The chat gate previously only checked the raw flag,
+  // so the banner could say "Host is here — event starting soon" while chat
+  // stayed greyed out (the server's hostInLobby flag doesn't always flip the
+  // moment the host renders in the participants snapshot). Align the gate
+  // with the same derived check.
+  const hostInParticipants = !!hostUserId && participants.some(p => p.userId === hostUserId);
+  const hostPresent = hostInLobby || hostInParticipants;
   const isHostOrCohost = user?.id === hostUserId || (!!user?.id && cohosts.has(user.id));
-  const chatDisabled = scope === 'lobby' && !hostInLobby && !isHostOrCohost;
+  const chatDisabled = scope === 'lobby' && !hostPresent && !isHostOrCohost;
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -45,17 +59,25 @@ export default function ChatPanel({ sessionId, onClose }: ChatPanelProps) {
     useSessionStore.getState().resetUnreadChat();
   }, []);
 
-  // Phase 4B (5 May spec) — force-fetch chat history on panel open.
-  // Closes Stefan #8: if a message arrived but the local store missed it
-  // (race / disconnect / scope filter), the panel opens with stale
-  // chat. This emits chat:request_history so the server replays the
-  // current authoritative history for the session, scoped to the user's
-  // current breakout match if any.
+  // Bug 15 (13 May live test) — only fetch chat history when we don't already
+  // have messages for the current scope. Pre-fix, every panel mount fired
+  // chat:request_history and the server's reply REPLACED the local array
+  // via store.setChatMessages — if the reply was empty (e.g. during a round
+  // transition, scope mismatch, or before the server has indexed the just-
+  // sent breakout message) the local messages visibly vanished. Closing and
+  // reopening the chat triggered this wipe every time. Now: keep the
+  // accumulated array, only fetch when we have nothing for this scope, and
+  // rely on socket.on('chat:message') to keep us live.
   useEffect(() => {
     const socket = getSocket();
     if (!socket) return;
-    const matchId = useSessionStore.getState().currentMatchId || undefined;
-    socket.emit('chat:request_history', { sessionId, matchId });
+    const { currentMatchId, currentRoomId, chatMessages: cur } = useSessionStore.getState();
+    const inBreakout = useSessionStore.getState().phase === 'matched';
+    const haveScopeMessages = inBreakout
+      ? cur.some(m => m.scope === 'room' && (!m.roomId || m.roomId === currentRoomId))
+      : cur.some(m => m.scope === 'lobby' || !m.scope);
+    if (haveScopeMessages) return;
+    socket.emit('chat:request_history', { sessionId, matchId: currentMatchId || undefined });
   }, [sessionId]);
 
   // Focus input on mount

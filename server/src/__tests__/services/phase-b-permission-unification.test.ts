@@ -63,25 +63,33 @@ describe('Phase B — permission model unification', () => {
     });
   });
 
-  describe('LiveSessionPage isHost gate includes super_admin', () => {
+  describe('LiveSessionPage isHost gate composes baseIsHost + Phase M override', () => {
     const liveSrc = readClient('features/live/LiveSessionPage.tsx');
 
     // Phase I (10 May refined) — narrowed from `admin OR super_admin` to
     // `super_admin only`. Regular admins join events as participants, not
-    // auto-hosts. This test was updated to pin the new narrow.
-    it('isHost expression includes a super_admin disjunct (not admin+super_admin)', () => {
+    // auto-hosts. Phase M (12 May) layered an acting-as-host override on
+    // top of baseIsHost so super_admins / admins flip role per event.
+    // Bug D (15 May Ali) — even SUPER_ADMIN no longer auto-passes the
+    // role-derived host gate. baseIsHost is now strictly formal roles
+    // (director + session_cohosts), and admin/super_admin reach the host
+    // UI only via Phase M opt-in (explicit "Join as host" click). The
+    // narrow-admin invariant from Phase I still holds in the new shape:
+    // the broad `admin || super_admin` form never folds in.
+    it('baseIsHost is the formal role-derived disjunction (no admin, no super_admin auto-pass)', () => {
       expect(liveSrc).toMatch(
-        /const\s+isHost\s*=\s*isOriginalHost\s*\|\|\s*isCohost\s*\|\|\s*isSuperAdmin/,
+        /const\s+baseIsHost\s*=\s*isOriginalHost\s*\|\|\s*isCohost\s*;/,
       );
-      expect(liveSrc).toMatch(
-        /const\s+isSuperAdmin\s*=\s*user\?\.role\s*===\s*['"]super_admin['"]/,
-      );
-      // The broad `isAdmin = admin || super_admin` form must NOT appear in
-      // the isHost expression. (It can still exist elsewhere on the page
-      // for admin-only UI bits, but it does not fold into isHost.)
-      const isHostLine = liveSrc.match(/const\s+isHost\s*=[^;]+;/);
-      expect(isHostLine).toBeTruthy();
-      expect(isHostLine![0]).not.toMatch(/isAdmin/);
+      // 23 May (Stefan + Ali) — acting-as-host removed; no Phase M opt-in
+      // pathway remains. isHost is now just baseIsHost.
+      expect(liveSrc).toMatch(/const\s+isHost\s*=\s*baseIsHost\s*;/);
+      // The broad `isAdmin = admin || super_admin` form must NOT appear
+      // in the baseIsHost expression (Phase I narrow still holds — under
+      // its new, stricter Bug D shape).
+      const baseLine = liveSrc.match(/const\s+baseIsHost\s*=[^;]+;/);
+      expect(baseLine).toBeTruthy();
+      expect(baseLine![0]).not.toMatch(/isAdmin/);
+      expect(baseLine![0]).not.toMatch(/isSuperAdmin/);
     });
   });
 });

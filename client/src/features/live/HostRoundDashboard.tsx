@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSessionStore } from '@/stores/sessionStore';
 import { Clock, Wifi, WifiOff, UserMinus, Radio, AlertTriangle, ArrowRightLeft } from 'lucide-react';
 import { getSocket } from '@/lib/socket';
@@ -42,6 +42,23 @@ export default function HostRoundDashboard({ sessionId }: Props) {
     return () => clearInterval(interval);
   }, []);
 
+  // #1 timer fix (26 May) — clock-skew-immune round countdown. The host clock
+  // can lag the server; computing remaining from the ABSOLUTE server endsAt
+  // inflated the display (Ali saw 1:53 on a 60s round). The dashboard payload
+  // carries the server-RELATIVE timerSecondsRemaining, so we seed a LOCAL endsAt
+  // (clientNow + remaining) from it and tick locally — the same Bug-16 pattern
+  // every other timer uses. Reseed whenever the server value changes (~5s) to
+  // correct drift. Still session-scoped (round timer only), so it is also immune
+  // to the breakout-tick pollution of the shared `timerSeconds`.
+  const roundLocalEndsAtRef = useRef<number | null>(null);
+  const dashRemaining = roundDashboard?.timerSecondsRemaining ?? null;
+  useEffect(() => {
+    roundLocalEndsAtRef.current =
+      typeof dashRemaining === 'number' && dashRemaining > 0
+        ? Date.now() + dashRemaining * 1000
+        : null;
+  }, [dashRemaining]);
+
   // Phase 8 (1 May spec) — host action receipts.
   // Server emits host:action_confirmed after destructive/state-changing
   // actions. We render a transient toast (3s) and keep the last 5 in an
@@ -73,6 +90,16 @@ export default function HostRoundDashboard({ sessionId }: Props) {
       matchId,
       additionalSeconds: 120,
     });
+  };
+
+  // 25 May (Ali) — end ALL manual breakout rooms straight from the manual-rooms
+  // panel (was only reachable inside Control Center). Mirrors HostControls'
+  // bulkEndAll → host:end_breakout_all (server ends is_manual rooms only;
+  // algorithm rooms are untouched). Participants are routed to rating.
+  const endAllManualRooms = () => {
+    const count = roundDashboard?.rooms.filter(r => r.status === 'active' && (r as any).isManual).length ?? 0;
+    if (!confirm(`End all ${count} manual breakout room${count !== 1 ? 's' : ''}? Participants will move to rating.`)) return;
+    socket?.emit('host:end_breakout_all' as any, { sessionId });
   };
 
   const moveToRoom = (targetMatchId: string) => {
@@ -124,6 +151,20 @@ export default function HostRoundDashboard({ sessionId }: Props) {
   })();
   const manualHasAnyTimer = activeManualRooms.some((r: any) => r.roomEndsAt);
 
+  // #1 (26 May, Ali) — host round-timer source. The global/algorithm round
+  // timer must NOT read the shared `timerSeconds` store field: it is written by
+  // EVERY `timer:sync` source, including the per-user 'breakout' ticks a host
+  // receives while acting-as-host, which flipped the displayed value between the
+  // round and breakout countdowns. We instead drive it from the session-scoped,
+  // server-RELATIVE round timer seeded above (roundLocalEndsAtRef) — skew-immune
+  // AND breakout-immune. On pause the server nulls the round timer and
+  // `timerSeconds` holds the frozen snapshot, so we read the frozen value then.
+  const roundTimerSeconds = isPaused
+    ? timerSeconds
+    : roundLocalEndsAtRef.current != null
+      ? Math.max(0, Math.ceil((roundLocalEndsAtRef.current - Date.now()) / 1000))
+      : 0;
+
   return (
     <div className="flex-1 overflow-y-auto p-4 bg-white">
       {/* Phase 8 (1 May spec) — host action receipts.
@@ -164,10 +205,10 @@ export default function HostRoundDashboard({ sessionId }: Props) {
           {/* Bug 18 — global top-right timer ONLY for algorithm round.
               Hidden when only manual breakouts are active so the manual
               room timer doesn't bleed into this slot. */}
-          {isAlgorithmActive && currentRound > 0 && timerSeconds > 0 && (
+          {isAlgorithmActive && currentRound > 0 && roundTimerSeconds > 0 && (
             <div className="flex items-center gap-2 text-lg font-mono font-bold text-[#1a1a2e]">
               <Clock className="h-5 w-5 text-gray-400" />
-              {formatMSS(timerSeconds)}
+              {formatMSS(roundTimerSeconds)}
               {isPaused && <span className="text-xs text-amber-500 font-sans font-medium ml-1">paused</span>}
             </div>
           )}
@@ -296,19 +337,32 @@ export default function HostRoundDashboard({ sessionId }: Props) {
                   {activeManualRooms.length} room{activeManualRooms.length !== 1 ? 's' : ''}
                 </span>
               </div>
-              {/* Shared timer if every manual room has the same endsAt */}
-              {manualSharedEndsAt && (
-                <span className="inline-flex items-center gap-1 text-sm font-mono font-semibold text-purple-900">
-                  <Clock className="h-4 w-4 text-purple-500" />
-                  {formatMSS(remainingSeconds(manualSharedEndsAt.toISOString()))}
-                </span>
-              )}
-              {!manualSharedEndsAt && manualHasAnyTimer && (
-                <span className="text-[11px] text-purple-600 font-medium">per-room timer</span>
-              )}
-              {!manualHasAnyTimer && (
-                <span className="text-[11px] text-purple-500 italic">no time limit</span>
-              )}
+              <div className="flex items-center gap-2.5">
+                {/* Shared timer if every manual room has the same endsAt */}
+                {manualSharedEndsAt && (
+                  <span className="inline-flex items-center gap-1 text-sm font-mono font-semibold text-purple-900">
+                    <Clock className="h-4 w-4 text-purple-500" />
+                    {formatMSS(remainingSeconds(manualSharedEndsAt.toISOString()))}
+                  </span>
+                )}
+                {!manualSharedEndsAt && manualHasAnyTimer && (
+                  <span className="text-[11px] text-purple-600 font-medium">per-room timer</span>
+                )}
+                {!manualHasAnyTimer && (
+                  <span className="text-[11px] text-purple-500 italic">no time limit</span>
+                )}
+                {/* 25 May (Ali) — end-all directly from the manual panel (was Control
+                    Center only). Host can close every manual room in one click. */}
+                {!moveMode && (
+                  <button
+                    onClick={endAllManualRooms}
+                    className="text-xs font-medium px-2.5 py-1 rounded-md border border-red-200 text-red-700 hover:bg-red-100 transition-colors"
+                    title="End every manual breakout room and move participants to rating"
+                  >
+                    End all rooms
+                  </button>
+                )}
+              </div>
             </div>
           );
 
@@ -323,10 +377,10 @@ export default function HostRoundDashboard({ sessionId }: Props) {
                   {activeAlgorithmRooms.length} room{activeAlgorithmRooms.length !== 1 ? 's' : ''}
                 </span>
               </div>
-              {timerSeconds > 0 && (
+              {roundTimerSeconds > 0 && (
                 <span className="inline-flex items-center gap-1 text-sm font-mono font-semibold text-emerald-900">
                   <Clock className="h-4 w-4 text-emerald-500" />
-                  {formatMSS(timerSeconds)}
+                  {formatMSS(roundTimerSeconds)}
                   {isPaused && <span className="text-[10px] text-amber-600 font-sans ml-1">paused</span>}
                 </span>
               )}

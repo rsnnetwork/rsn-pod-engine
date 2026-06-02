@@ -5,10 +5,11 @@ import Card from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import Avatar from '@/components/ui/Avatar';
 import { Spinner } from '@/components/ui/Spinner';
-import { CheckCircle, Users, Star, Handshake, ArrowLeft, Calendar, Download, UserCheck, CircleDot } from 'lucide-react';
+import { CheckCircle, Users, Star, Handshake, ArrowLeft, Calendar, Download, UserCheck, CircleDot, MessageSquare } from 'lucide-react';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
+import { E } from '@/realtime/entities';
 
 interface Connection {
   userId: string;
@@ -21,6 +22,12 @@ interface Connection {
   theirMeetAgain: boolean;
   mutualMeetAgain: boolean;
   roundNumber: number;
+  isManual?: boolean; // #5 (24 May) — manual breakout rooms render in their own recap section
+  // Bug 24 (18 May Ali) — set by the server's deduplication so the
+  // Mutual Matches card can show "Met 2 times" on a single row instead
+  // of two duplicate rows. Optional for backward compat with older
+  // payloads (defaults to 1 = met once, no badge).
+  meetCount?: number;
 }
 
 interface Stats {
@@ -36,6 +43,9 @@ interface PeopleMetData {
   sessionDate: string;
   totalRounds: number;
   roundsAttended: number;
+  // Bug 28 (19 May Ali + Stefan) — count of bonus rounds added during the
+  // event. Recap line below splits `totalRounds` into "original + bonus".
+  bonusRoundsAdded?: number;
   connections: Connection[];
   mutualConnections: Connection[];
   // Phase 2 (1 May spec) — deterministic counts from server's meeting_records.
@@ -44,12 +54,39 @@ interface PeopleMetData {
   mutualMatches?: number;
 }
 
+// Feature 17 + 18 (13 May spec) — DM button on recap rows. One click lands
+// the user directly in the chat panel with the composer ready; no prompt,
+// no API round-trip from the recap. MessagesPage handles the routing for
+// both the "existing conversation" and "compose new" cases via the
+// /messages/new/:userId route.
+function MessagePartnerButton({ userId, displayName }: { userId: string; displayName: string }) {
+  const navigate = useNavigate();
+  const openConversation = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    navigate(`/messages/new/${userId}`);
+  };
+  return (
+    <button
+      onClick={openConversation}
+      title={`Message ${displayName || 'this user'}`}
+      className="shrink-0 inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded-md border border-indigo-200 hover:bg-indigo-50 transition-colors"
+      data-testid={`recap-dm-button-${userId}`}
+    >
+      <MessageSquare className="h-3.5 w-3.5" /> Message
+    </button>
+  );
+}
+
 function InterestBadge({ connection }: { connection: Connection }) {
-  if (connection.mutualMeetAgain) {
+  // This-event mutual interest (both rated meet-again here), NOT the lifetime
+  // encounter_history.mutual_meet_again — otherwise the badge shows on a recap
+  // that reports 0 mutual matches (Ali, 26 May). DM gate below stays lifetime.
+  if (connection.meetAgain && connection.theirMeetAgain) {
     return (
       <div className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-rsn-red/10 border border-rsn-red/20 text-rsn-red font-medium">
         <Handshake className="h-3 w-3 text-indigo-500" />
-        <span>Mutual Match!</span>
+        <span>Mutual interest</span>
       </div>
     );
   }
@@ -57,7 +94,7 @@ function InterestBadge({ connection }: { connection: Connection }) {
     return (
       <div className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-600">
         <UserCheck className="h-3 w-3" />
-        <span>You expressed interest</span>
+        <span>You wanted to meet again</span>
       </div>
     );
   }
@@ -65,7 +102,7 @@ function InterestBadge({ connection }: { connection: Connection }) {
     return (
       <div className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-blue-600">
         <UserCheck className="h-3 w-3" />
-        <span>They expressed interest</span>
+        <span>They wanted to meet again</span>
       </div>
     );
   }
@@ -143,17 +180,22 @@ export default function RecapPage() {
   const { sessionId } = useParams();
   const navigate = useNavigate();
   const { user } = useAuthStore();
+  // Button visibility only — server gate is authoritative. Admins see Message
+  // on every person; members only see it on mutual matches.
+  const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
 
   const { data: session } = useQuery({
     queryKey: ['session', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}`).then(r => r.data.data),
     enabled: !!sessionId,
+    meta: { entities: sessionId ? [E.session(sessionId)] : [] },
   });
 
   const { data: cohostData } = useQuery({
     queryKey: ['session-cohost', sessionId, user?.id],
     queryFn: () => api.get(`/sessions/${sessionId}/cohosts/check`).then(r => r.data.data?.isCohost).catch(() => false),
     enabled: !!sessionId && !!user?.id && session?.hostUserId !== user?.id,
+    meta: { entities: sessionId ? [E.session(sessionId), E.sessionParticipants(sessionId)] : [] },
   });
   const isHost = session?.hostUserId === user?.id || cohostData === true;
 
@@ -161,6 +203,13 @@ export default function RecapPage() {
     queryKey: ['unrated-partners', sessionId],
     queryFn: () => api.get(`/ratings/unrated?sessionId=${sessionId}`).then(r => r.data.data),
     enabled: !!sessionId,
+    meta: {
+      entities: sessionId && user?.id
+        ? [E.session(sessionId), E.sessionParticipants(sessionId), E.user(user.id)]
+        : sessionId
+        ? [E.session(sessionId), E.sessionParticipants(sessionId)]
+        : [],
+    },
   });
 
   const [data, setData] = useState<PeopleMetData | null>(null);
@@ -276,6 +325,19 @@ export default function RecapPage() {
           <CircleDot className="h-4 w-4 text-rsn-red shrink-0" />
           <p className="text-sm text-gray-600">
             You attended <span className="font-semibold text-[#1a1a2e]">{data.roundsAttended}</span> round{data.roundsAttended !== 1 ? 's' : ''} out of <span className="font-semibold text-[#1a1a2e]">{data.totalRounds}</span> total
+            {/* Bug 28 (19 May Ali + Stefan) — honestly split the total
+                into "original rounds + bonus" so the report reads
+                "3 + 1 bonus = 4" instead of just "4". Only renders
+                when at least one bonus round was added. */}
+            {(data.bonusRoundsAdded ?? 0) > 0 && (
+              <>
+                {' '}
+                <span className="text-xs text-gray-500">
+                  ({data.totalRounds - (data.bonusRoundsAdded ?? 0)} original + {data.bonusRoundsAdded}
+                  {' '}bonus)
+                </span>
+              </>
+            )}
           </p>
         </div>
       )}
@@ -376,23 +438,36 @@ export default function RecapPage() {
           </h3>
           <div className="space-y-3">
             {data.mutualConnections.map(c => (
-              <a key={c.userId} href={`/profile/${c.userId}`} className="flex items-center gap-3 p-3 rounded-lg bg-indigo-500/5 border border-indigo-500/20 hover:bg-indigo-500/10 transition-colors">
-                <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="md" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-gray-800 font-medium truncate">{c.displayName}</p>
-                  {(c.jobTitle || c.company) && (
-                    <p className="text-xs text-gray-400 truncate">
-                      {[c.jobTitle, c.company].filter(Boolean).join(' · ')}
-                    </p>
-                  )}
-                </div>
+              <div key={c.userId} className="flex items-center gap-3 p-3 rounded-lg bg-indigo-500/5 border border-indigo-500/20 hover:bg-indigo-500/10 transition-colors">
+                <a href={`/profile/${c.userId}`} className="flex items-center gap-3 flex-1 min-w-0">
+                  <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="md" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-gray-800 font-medium truncate">{c.displayName}</p>
+                      {/* Bug 24 (18 May Ali) — single row per partner; surface
+                          the meet count when > 1 so the host doesn't see the
+                          same person rendered twice. */}
+                      {(c.meetCount ?? 1) > 1 && (
+                        <span className="inline-flex items-center text-[10px] font-semibold text-indigo-700 bg-indigo-100 border border-indigo-200 rounded-full px-1.5 py-px">
+                          Met {c.meetCount} times
+                        </span>
+                      )}
+                    </div>
+                    {(c.jobTitle || c.company) && (
+                      <p className="text-xs text-gray-400 truncate">
+                        {[c.jobTitle, c.company].filter(Boolean).join(' · ')}
+                      </p>
+                    )}
+                  </div>
+                </a>
                 <div className="flex items-center gap-2 shrink-0">
                   <div className="flex items-center gap-1 text-xs text-amber-400">
                     <Star className="h-3 w-3 fill-amber-400" />{c.qualityScore}
                   </div>
                   <Handshake className="h-4 w-4 text-indigo-500" />
                 </div>
-              </a>
+                <MessagePartnerButton userId={c.userId} displayName={c.displayName} />
+              </div>
             ))}
           </div>
         </Card>
@@ -400,44 +475,72 @@ export default function RecapPage() {
 
       {/* All connections grouped by round */}
       {data && data.connections.length > 0 && (() => {
-        const byRound = data.connections.reduce<Record<number, typeof data.connections>>((acc, c) => {
+        const roundConns = data.connections.filter(c => !c.isManual);
+        const manualConns = data.connections.filter(c => c.isManual);
+        const byRound = roundConns.reduce<Record<number, typeof data.connections>>((acc, c) => {
           (acc[c.roundNumber] ||= []).push(c);
           return acc;
         }, {});
         const rounds = Object.keys(byRound).map(Number).sort((a, b) => a - b);
-        return rounds.map(round => (
-          <Card key={round}>
-            <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">
-              <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-rsn-red/10 text-rsn-red text-xs font-bold">{round}</span>
-              Round {round}
-              <span className="text-xs font-normal text-gray-400">· {byRound[round].length} {byRound[round].length === 1 ? 'person' : 'people'}</span>
-            </h3>
-            <div className="space-y-2">
-              {byRound[round].map(c => (
-                <a key={`${c.userId}-${c.roundNumber}`} href={`/profile/${c.userId}`} className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-100/40 transition-colors">
-                  <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-gray-800 font-medium truncate">{c.displayName}</p>
-                      <InterestBadge connection={c} />
-                    </div>
-                    <p className="text-xs text-gray-400">
-                      {c.jobTitle && `${c.jobTitle}`}
-                      {c.company && ` @ ${c.company}`}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    {c.qualityScore > 0 && (
-                      <div className="flex items-center gap-1 text-xs text-amber-400">
-                        <Star className="h-3 w-3 fill-amber-400" />{c.qualityScore}
-                      </div>
-                    )}
-                  </div>
-                </a>
-              ))}
+        // #15 (23 May) — flag rounds added live via "Another Round" as bonus.
+        const bonusAdded = data.bonusRoundsAdded ?? 0;
+        const isBonus = (r: number) => bonusAdded > 0 && data.totalRounds > 0 && r > data.totalRounds - bonusAdded;
+        const row = (c: typeof data.connections[number]) => (
+          <div key={`${c.userId}-${c.roundNumber}`} className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-100/40 transition-colors">
+            <a href={`/profile/${c.userId}`} className="flex items-center gap-3 flex-1 min-w-0">
+              <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-gray-800 font-medium truncate">{c.displayName}</p>
+                  <InterestBadge connection={c} />
+                </div>
+                <p className="text-xs text-gray-400">
+                  {c.jobTitle && `${c.jobTitle}`}
+                  {c.company && ` @ ${c.company}`}
+                </p>
+              </div>
+            </a>
+            <div className="flex items-center gap-3 shrink-0">
+              {c.qualityScore > 0 && (
+                <div className="flex items-center gap-1 text-xs text-amber-400">
+                  <Star className="h-3 w-3 fill-amber-400" />{c.qualityScore}
+                </div>
+              )}
             </div>
-          </Card>
-        ));
+            {/* Message button: mutual rows always qualify; non-mutual rows only for admins */}
+            {(c.mutualMeetAgain || isAdmin) && (
+              <MessagePartnerButton userId={c.userId} displayName={c.displayName} />
+            )}
+          </div>
+        );
+        return (
+          <>
+            {rounds.map(round => (
+              <Card key={round}>
+                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                  <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-rsn-red/10 text-rsn-red text-xs font-bold">{round}</span>
+                  Round {round}
+                  {isBonus(round) && (
+                    <span className="ml-1 inline-flex items-center rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-[10px] font-semibold normal-case tracking-normal">Bonus round</span>
+                  )}
+                  <span className="text-xs font-normal text-gray-400">· {byRound[round].length} {byRound[round].length === 1 ? 'person' : 'people'}</span>
+                </h3>
+                <div className="space-y-2">{byRound[round].map(row)}</div>
+              </Card>
+            ))}
+            {/* #5 (24 May) — manual breakout rooms are NOT a numbered round */}
+            {manualConns.length > 0 && (
+              <Card>
+                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                  <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-emerald-500/10 text-emerald-600 text-xs font-bold">M</span>
+                  Manual rooms
+                  <span className="text-xs font-normal text-gray-400">· {manualConns.length} {manualConns.length === 1 ? 'person' : 'people'}</span>
+                </h3>
+                <div className="space-y-2">{manualConns.map(row)}</div>
+              </Card>
+            )}
+          </>
+        );
       })()}
 
       {/* Empty state */}

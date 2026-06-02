@@ -37,6 +37,7 @@ import { isUserActive } from './middleware/auth';
 
 // Services
 import { processAutoReminders } from './services/join-request/join-request.service';
+import { processPendingJobs } from './services/post-event-message/post-event-message.worker';
 
 // Routes
 import authRoutes from './routes/auth';
@@ -55,6 +56,8 @@ import pokeRoutes from './routes/pokes';
 import reportRoutes from './routes/reports';
 import groupRoutes from './routes/groups';
 import notificationPrefsRoutes from './routes/notification-prefs';
+import { webhooksRouter } from './routes/webhooks';
+import postEventMessageRoutes from './routes/post-event-message';
 
 // Services
 import { initOrchestration } from './services/orchestration/orchestration.service';
@@ -317,6 +320,7 @@ app.use('/api/sessions', sessionRoutes);
 app.use('/api/invites', inviteRoutes);
 app.use('/api/ratings', ratingRoutes);
 app.use('/api/sessions', hostRoutes); // Host controls under /api/sessions/:id/host/*
+app.use('/api/sessions', postEventMessageRoutes); // Post-event broadcast message endpoints
 app.use('/api/join-requests', joinRequestRoutes);
 app.use('/api/admin', adminRoutes);
 // Admin email-action routes — unauthenticated by design (the token IS the auth).
@@ -327,6 +331,10 @@ app.use('/api/pokes', pokeRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/groups', groupRoutes);
 app.use('/api/notification-prefs', notificationPrefsRoutes);
+// Phase 4 — LiveKit webhook receiver (raw body; must come before error handlers).
+// express.json() only processes application/json so application/webhook+json is
+// still raw when this per-route raw() middleware runs.
+app.use('/api/webhooks', webhooksRouter);
 
 // ─── Error Handling ─────────────────────────────────────────────────────────
 
@@ -369,6 +377,13 @@ async function start(): Promise<void> {
 
     // Initialise orchestration with Socket.IO
     initOrchestration(io);
+
+    // Drain post-event broadcast message jobs every 10s.
+    const POST_EVENT_MSG_INTERVAL = 10_000;
+    setInterval(() => {
+      processPendingJobs(io).catch(err =>
+        logger.error({ err }, 'Post-event message worker cycle failed'));
+    }, POST_EVENT_MSG_INTERVAL);
 
     // Start auto-reminder engine for join requests (runs every 6 hours)
     const SIX_HOURS = 6 * 60 * 60 * 1000;

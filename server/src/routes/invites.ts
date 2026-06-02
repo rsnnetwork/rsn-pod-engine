@@ -6,6 +6,9 @@ import { authenticate, optionalAuth } from '../middleware/auth';
 import { inviteLimiter } from '../middleware/rateLimit';
 import { auditMiddleware } from '../middleware/audit';
 import * as inviteService from '../services/invite/invite.service';
+import { fanoutPodEntities, fanoutSessionEntities } from '../realtime/fanout';
+import { emitEntities, getRealtimeIo } from '../realtime/emit';
+import { E } from '../realtime/entities';
 import { query } from '../db';
 import { ApiResponse, InviteType, InviteStatus } from '@rsn/shared';
 
@@ -33,6 +36,16 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const invite = await inviteService.createInvite(req.user!.userId, req.body, req.user!.role);
+      // Bug 30 (19 May Ali) — every invite mutation fans out so each
+      // surface that reads pod or session lists ("Pending Invites" count,
+      // pod page, sessions list) repaints without a refresh. Pre-fix the
+      // sender's own dashboard didn't update after they hit "Send".
+      if (invite.podId) {
+        fanoutPodEntities(invite.podId).catch(() => {});
+      }
+      if (invite.sessionId) {
+        fanoutSessionEntities(invite.podId ?? null, invite.sessionId, [E.sessionInvites(invite.sessionId)]).catch(() => {});
+      }
       const response: ApiResponse = { success: true, data: invite };
       res.status(201).json(response);
     } catch (err) {
@@ -443,6 +456,50 @@ router.post(
         req.user!.userId,
         req.user!.email,
       );
+      // Bug 29 (19 May Ali) — pod/session-list realtime fanout was missing
+      // on the invite-accept path. Sister mutations in routes/pods.ts
+      // (add/remove/role-change/approve/reject) already fan out, but
+      // invites had no wiring of its own — Waseem's pod page kept showing
+      // "Pending Invite" for Raja even after Raja accepted. Fan out the
+      // entity tags here so accepting feels live for every member, not
+      // just the accepter. The accepter's userPods / userSessions entities
+      // ensure their own "My Pods" / "My Events" list flips too.
+      if (result.registeredFor?.podId) {
+        fanoutPodEntities(result.registeredFor.podId, [E.userPods(req.user!.userId)]).catch(() => {});
+      }
+      if (result.registeredFor?.sessionId) {
+        // R2-audit (20 May 2026 — live-test post-mortem). Also fanout
+        // E.sessionParticipants so every other client viewing the session's
+        // participants list invalidates and refetches. Pre-fix only
+        // E.userSessions fired, which updated the accepter's own session
+        // list but left other viewers stuck on a stale 3-person list until
+        // F5 — same root pattern as the POST /register fix in commit
+        // f3e59a8.
+        fanoutSessionEntities(
+          result.registeredFor.podId ?? null,
+          result.registeredFor.sessionId,
+          [
+            E.userSessions(req.user!.userId),
+            E.sessionParticipants(result.registeredFor.sessionId),
+          ],
+        ).catch(() => {});
+      }
+      // Cover the accepter even if they're not yet in the active-member
+      // SELECT on a slow replica — invite list shrinks and they pick up
+      // the pod/session entity.
+      emitEntities(
+        getRealtimeIo(),
+        [req.user!.userId],
+        [
+          E.userInvites(req.user!.userId),
+          ...(result.registeredFor?.podId ? [E.pod(result.registeredFor.podId), E.userPods(req.user!.userId)] : []),
+          ...(result.registeredFor?.sessionId ? [
+            E.session(result.registeredFor.sessionId),
+            E.userSessions(req.user!.userId),
+            E.sessionParticipants(result.registeredFor.sessionId),
+          ] : []),
+        ],
+      ).catch(() => {});
       const response: ApiResponse = {
         success: true,
         data: {
@@ -469,19 +526,33 @@ router.post(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const inviteResult = await query<{ id: string; status: string }>(
-        `SELECT id, status FROM invites WHERE code = $1`,
+      const inviteResult = await query<{ id: string; status: string; pod_id: string | null; session_id: string | null }>(
+        `SELECT id, status, pod_id, session_id FROM invites WHERE code = $1`,
         [req.params.code]
       );
       if (inviteResult.rows.length === 0) {
         res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Invite not found' } });
         return;
       }
+      const row = inviteResult.rows[0];
       // Update invite status to accepted and record accepting user
       await query(
         `UPDATE invites SET status = 'accepted', accepted_by_user_id = $1, accepted_at = COALESCE(accepted_at, NOW()) WHERE id = $2`,
-        [req.user!.userId, inviteResult.rows[0].id]
+        [req.user!.userId, row.id]
       );
+      // Bug 30 (19 May Ali) — same fanout as /accept so the affected
+      // pod / session lists repaint everywhere instantly.
+      if (row.pod_id) {
+        fanoutPodEntities(row.pod_id, [E.userPods(req.user!.userId)]).catch(() => {});
+      }
+      if (row.session_id) {
+        fanoutSessionEntities(row.pod_id, row.session_id, [E.userSessions(req.user!.userId)]).catch(() => {});
+      }
+      emitEntities(
+        getRealtimeIo(),
+        [req.user!.userId],
+        [E.userInvites(req.user!.userId)],
+      ).catch(() => {});
       res.json({ success: true, data: { marked: true } });
     } catch (err) {
       next(err);
@@ -506,7 +577,22 @@ router.post(
         return res.status(404).json(response);
       }
 
-      await inviteService.declineInvite(req.params.code, email);
+      const declined = await inviteService.declineInvite(req.params.code, email);
+      // Bug 30 (19 May Ali) — fan out so the inviter's "Pending Invites"
+      // count drops to zero without a refresh, and any other pod member
+      // viewing the pod sees the badge update. The decliner's own
+      // userInvites tag flips their notification bell.
+      if (declined.podId) {
+        fanoutPodEntities(declined.podId).catch(() => {});
+      }
+      if (declined.sessionId) {
+        fanoutSessionEntities(declined.podId, declined.sessionId).catch(() => {});
+      }
+      emitEntities(
+        getRealtimeIo(),
+        [req.user!.userId],
+        [E.userInvites(req.user!.userId)],
+      ).catch(() => {});
       const response: ApiResponse = { success: true, data: { message: 'Invite declined' } };
       return res.json(response);
     } catch (err) {
@@ -523,7 +609,15 @@ router.delete(
   auditMiddleware('revoke_invite', 'invite'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await inviteService.revokeInvite(req.params.id, req.user!.userId);
+      const revoked = await inviteService.revokeInvite(req.params.id, req.user!.userId);
+      // Bug 30 (19 May Ali) — same fanout so the pending-invites surface
+      // repaints everywhere on revoke.
+      if (revoked.podId) {
+        fanoutPodEntities(revoked.podId).catch(() => {});
+      }
+      if (revoked.sessionId) {
+        fanoutSessionEntities(revoked.podId, revoked.sessionId).catch(() => {});
+      }
       const response: ApiResponse = { success: true, data: { message: 'Invite revoked' } };
       res.json(response);
     } catch (err) {
@@ -566,6 +660,24 @@ router.post(
             results.errors++;
           }
         }
+      }
+
+      // Bug 30 (19 May Ali) — single fanout per session after the bulk
+      // completes. One broadcast covers every pod member's pending-invites
+      // list and the session's invite list. Looking up podId once instead
+      // of per-row keeps it cheap. Best-effort: silent on failure.
+      if (results.sent > 0) {
+        try {
+          const sess = await query<{ pod_id: string | null }>(
+            `SELECT pod_id FROM sessions WHERE id = $1`,
+            [sessionId],
+          );
+          const podId = sess.rows[0]?.pod_id ?? null;
+          fanoutSessionEntities(podId, sessionId, [E.sessionInvites(sessionId)]).catch(() => {});
+          if (podId) {
+            fanoutPodEntities(podId).catch(() => {});
+          }
+        } catch { /* non-fatal */ }
       }
 
       const response: ApiResponse = { success: true, data: results };

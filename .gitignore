@@ -29,6 +29,12 @@ pnpm-debug.log*
 .env.production
 .env.*.local
 
+# Render env dumps (JSON output of `render env list ...`) — contain prod secrets
+render-env.json
+render-env*.json
+**/render-env.json
+**/render-env*.json
+
 # Testing
 coverage/
 *.lcov
@@ -80,7 +86,3 @@ render logs*
 # Belt-and-braces: in case a backup ever lands inside the repo by mistake
 _backups/
 backups/
-
-# Render env exports — contain live secrets, never commit
-render-env.json
-**/render-env.json

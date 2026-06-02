@@ -168,6 +168,7 @@ export class MatchingEngineV1 implements IMatchingEngine {
       score: number; reasonTags: string[];
       premiumInfluenced: boolean;
       isRepeatInEvent: boolean;
+      timesMet: number;
     }> = [];
 
     for (let i = 0; i < n; i++) {
@@ -198,12 +199,25 @@ export class MatchingEngineV1 implements IMatchingEngine {
           reasonTags: r.reasonTags,
           premiumInfluenced: r.premiumInfluenced,
           isRepeatInEvent: false, // first pass — no repeats; flipped only if fallback engages
+          // Fix #2/#9 (25 May Stefan) — freshness tier for selection.
+          // 0 = never met. Drives the fresh-first sort below.
+          timesMet: encounterMap.get(key)?.timesMet ?? 0,
         });
       }
     }
 
-    // Sort by score descending (greedy with global awareness via usedPairs)
-    candidates.sort((a, b) => b.score - a.score);
+    // Fix #2/#9 (25 May Stefan) — fresh-first selection. Freshness is the
+    // DOMINANT tier: never-met pairs (timesMet 0) sort ahead of any
+    // already-met pair, then least-met-first; the weighted score is only
+    // the tiebreaker WITHIN a freshness tier. Pre-fix this was a pure
+    // score sort, so a high-interest already-met pair outranked a
+    // never-met pair and the first preview showed "Met 1x" while fresh
+    // pairs were still available. Because both the greedy path and
+    // findCompleteMatching iterate candidates in this order (and
+    // findCompleteMatching's adjacency re-sort uses the same key), a
+    // complete matching using only never-met pairs is now chosen whenever
+    // one exists; repeats are used only when forced, least-met-first.
+    candidates.sort((a, b) => (a.timesMet - b.timesMet) || (b.score - a.score));
 
     // Phase 2.5E (5 May spec §10 + §14) — for typical event sizes (≤30
     // participants), use the exact backtracking matcher as the PRIMARY
@@ -581,6 +595,7 @@ export class MatchingEngineV1 implements IMatchingEngine {
       score: number; reasonTags: string[];
       premiumInfluenced: boolean;
       isRepeatInEvent: boolean;
+      timesMet: number;
     }>,
     _usedPairs: Set<string>,
     _hardExclusions: Set<string>,
@@ -595,9 +610,13 @@ export class MatchingEngineV1 implements IMatchingEngine {
       adj.get(cand.aIdx)!.push({ partnerIdx: cand.bIdx, cand });
       adj.get(cand.bIdx)!.push({ partnerIdx: cand.aIdx, cand });
     }
-    // Score-descending so we prefer high-quality matchings when one exists.
+    // Fix #2/#9 (25 May Stefan) — fresh-first, same key as the candidate
+    // sort: try never-met partners first, then least-met, with score as the
+    // within-tier tiebreaker. The backtracker picks the lowest-index
+    // unmatched participant and tries partners in this order, so the first
+    // complete matching it finds is the freshest one available.
     for (const list of adj.values()) {
-      list.sort((a, b) => b.cand.score - a.cand.score);
+      list.sort((a, b) => (a.cand.timesMet - b.cand.timesMet) || (b.cand.score - a.cand.score));
     }
 
     const matched = new Array<boolean>(n).fill(false);

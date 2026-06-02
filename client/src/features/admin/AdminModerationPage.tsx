@@ -11,6 +11,7 @@ import { useToastStore } from '@/stores/toastStore';
 import { useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
 import { isAdmin } from '@/lib/utils';
+import { E } from '@/realtime/entities';
 
 type ViolationStatus = 'open' | 'reviewed' | 'dismissed' | 'actioned' | '';
 
@@ -28,6 +29,7 @@ export default function AdminModerationPage() {
     queryKey: ['admin-violations', statusFilter],
     queryFn: () => api.get(`/admin/violations?status=${statusFilter}`).then(r => r.data.data ?? []),
     enabled: isAdmin(user?.role),
+    meta: { entities: [E.adminViolations] },
   });
 
   const resolveMutation = useMutation({

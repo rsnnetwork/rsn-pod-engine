@@ -1,6 +1,7 @@
-import { useSessionStore } from '@/stores/sessionStore';
+import { useSessionStore, useInRoomParticipants } from '@/stores/sessionStore';
+import { useToastStore } from '@/stores/toastStore';
 import { Button } from '@/components/ui/Button';
-import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, MessageSquare, UserMinus, RefreshCw, UserPlus, AlertTriangle, CheckCircle2, Clock, LayoutDashboard } from 'lucide-react';
+import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, UserMinus, RefreshCw, UserPlus, AlertTriangle, CheckCircle2, Clock, LayoutDashboard } from 'lucide-react';
 import { getSocket } from '@/lib/socket';
 import { useState } from 'react';
 import EventPlanStrip from './EventPlanStrip';
@@ -11,7 +12,12 @@ import HostControlCenter from './HostControlCenter';
 interface Props { sessionId: string; }
 
 export default function HostControls({ sessionId }: Props) {
-  const participants = useSessionStore(s => s.participants);
+  // F3 (21 May Ali) — eligibility counts + the "in main room" tally must
+  // use realtime LiveKit room presence, not the drift-prone socket
+  // roster. Matching against a stale roster could let the host start a
+  // round with someone who isn't actually in the room, or miss someone
+  // who is.
+  const participants = useInRoomParticipants();
   const phase = useSessionStore(s => s.phase);
   const currentRound = useSessionStore(s => s.currentRound);
   const totalRounds = useSessionStore(s => s.totalRounds);
@@ -28,9 +34,8 @@ export default function HostControls({ sessionId }: Props) {
   const [broadcastMsg, setBroadcastMsg] = useState('');
   const [showBroadcast, setShowBroadcast] = useState(false);
   const [swapMode, setSwapMode] = useState<string | null>(null); // userId of first selected participant for swap
-  const [manualMatchMode, setManualMatchMode] = useState(false);
-  const [manualA, setManualA] = useState<string | null>(null);
-  const [manualB, setManualB] = useState<string | null>(null);
+  // 23 May (#12) — Manual Match (force-pair) removed per Stefan. Swap covers
+  // rearranging the preview; manual room creation covers ad-hoc grouping.
   // Unified breakout-room creation modal (replaces separate "Room" + "Bulk" buttons).
   // Always submits via host:create_breakout_bulk — single-room is N=1.
   const [showRoomModal, setShowRoomModal] = useState(false);
@@ -53,7 +58,6 @@ export default function HostControls({ sessionId }: Props) {
   // until we have a defined product purpose.
 
   const sessionStarted = sessionStatus !== 'scheduled' || transitionStatus === 'starting_session' || currentRound > 0;
-  const isSessionEnding = transitionStatus === 'session_ending';
   const allRoundsDone = currentRound >= totalRounds && totalRounds > 0;
   const isInRound = sessionStatus === 'round_active' || sessionStatus === 'round_rating' || phase === 'matched' || phase === 'rating';
 
@@ -70,30 +74,66 @@ export default function HostControls({ sessionId }: Props) {
       ? 'A round is currently active. Ending the event will cut all conversations short. Are you sure?'
       : 'Are you sure you want to end this event? All participants will be disconnected.';
     if (!confirm(msg)) return;
-    socket?.emit('host:end_session', { sessionId });
+    // #11 (23 May) — endEvent:true marks this as a whole-event end. "End Round"
+    // (endCurrentRound above) emits the same socket event WITHOUT this flag, so
+    // the server ends just the round and continues. Without the flag, ending a
+    // round early killed the entire event (a 3-round event ended after round 1).
+    socket?.emit('host:end_session', { sessionId, endEvent: true });
   });
 
-  // Count non-host/co-host participants for matching eligibility
+  // Count non-host/co-host participants for matching eligibility.
+  // Bug 14 (13 May live test) — pre-fix only excluded formal session_cohosts
+  // and the director, so an admin who opted in via the Phase M "Join as host"
+  // toggle still counted as eligible. The host clicked Match People with 1
+  // genuine participant + 1 admin-acting-as-host and the spinner spun
+  // forever because the server-side eligibility filter excluded the admin
+  // but the client didn't. Now both filters agree via hostsSet.
   const cohosts = useSessionStore(s => s.cohosts);
   const hostUserId = useSessionStore(s => s.hostUserId);
-  const eligibleCount = participants.filter(p => p.userId !== hostUserId && !cohosts.has(p.userId)).length;
+  const actingAsHostOverrides = useSessionStore(s => s.actingAsHostOverrides);
+  const hostsSet = (() => {
+    const s = new Set<string>();
+    if (hostUserId) s.add(hostUserId);
+    for (const c of cohosts) s.add(c);
+    for (const [uid, v] of Object.entries(actingAsHostOverrides)) {
+      if (v === true) s.add(uid);
+      if (v === false) s.delete(uid);
+    }
+    if (hostUserId) s.add(hostUserId);
+    return s;
+  })();
+  const eligibleCount = participants.filter(p => !hostsSet.has(p.userId)).length;
 
   const generateMatches = () => {
     setGenerating(true);
     socket?.emit('host:generate_matches', { sessionId });
+    const cleanup = () => {
+      setGenerating(false);
+      socket?.off('error', onError);
+      socket?.off('session:matching_cancelled', onCancelled);
+      unsub();
+    };
     const unsub = useSessionStore.subscribe((state) => {
-      if (state.matchPreview) { setGenerating(false); unsub(); }
+      if (state.matchPreview) cleanup();
     });
-    // Listen for error to stop spinner and show feedback
+    // Bug 35 (19 May Ali) — clear spinner on any terminal state.
+    // Bug 45 (19 May Ali) — show errors as a toast (auto-dismiss),
+    // not the persistent top-of-page red banner that sat there until
+    // manually crossed. The banner was set via setError() and felt
+    // sticky / intrusive; an error toast disappears on its own in a
+    // few seconds and surfaces in the corner instead.
     const onError = (err: any) => {
-      if (err?.code === 'GENERATE_FAILED' || err?.code === 'NOT_ENOUGH_PARTICIPANTS') {
-        setGenerating(false);
-        useSessionStore.getState().setError(err.message || 'Failed to generate matches');
-        socket?.off('error', onError);
+      if (err?.message || err?.code) {
+        useToastStore.getState().addToast(err.message || 'Failed to generate matches', 'error');
       }
+      cleanup();
+    };
+    const onCancelled = () => {
+      cleanup();
     };
     socket?.on('error', onError);
-    setTimeout(() => { setGenerating(false); socket?.off('error', onError); }, 10000);
+    socket?.on('session:matching_cancelled', onCancelled);
+    setTimeout(cleanup, 10000);
   };
 
   const confirmMatches = () => runLocked('confirm_matches', () => {
@@ -118,18 +158,29 @@ export default function HostControls({ sessionId }: Props) {
   const regenerateMatches = () => {
     setGenerating(true);
     socket?.emit('host:regenerate_matches' as any, { sessionId });
+    const cleanup = () => {
+      setGenerating(false);
+      socket?.off('error', onError);
+      socket?.off('session:matching_cancelled', onCancelled);
+      unsub();
+    };
     const unsub = useSessionStore.subscribe((state) => {
-      if (state.matchPreview) { setGenerating(false); unsub(); }
+      if (state.matchPreview) cleanup();
     });
+    // Bug 35 + Bug 45 (19 May Ali) — same wedge fix + toast-not-banner
+    // pattern as generateMatches above.
     const onError = (err: any) => {
-      if (err?.code === 'REGENERATE_FAILED') {
-        setGenerating(false);
-        useSessionStore.getState().setError(err.message || 'Failed to re-match');
-        socket?.off('error', onError);
+      if (err?.message || err?.code) {
+        useToastStore.getState().addToast(err.message || 'Failed to re-match', 'error');
       }
+      cleanup();
+    };
+    const onCancelled = () => {
+      cleanup();
     };
     socket?.on('error', onError);
-    setTimeout(() => { setGenerating(false); socket?.off('error', onError); }, 10000);
+    socket?.on('session:matching_cancelled', onCancelled);
+    setTimeout(cleanup, 10000);
   };
 
   const handleParticipantClick = (userId: string) => {
@@ -236,96 +287,25 @@ export default function HostControls({ sessionId }: Props) {
     setBulkDurationEdit(false);
   });
 
-  if (isSessionEnding) {
-    return (
-      <div className="border-t border-gray-200 bg-white">
-        <HostControlCenter
-          sessionId={sessionId}
-          open={showControlCenter}
-          onClose={() => setShowControlCenter(false)}
-          onOpenInvite={() => setShowInviteModal(true)}
-          onOpenRoomCreate={() => { setShowRoomModal(true); setRoomRows([new Set()]); }}
-          onOpenBroadcast={() => setShowBroadcast(true)}
-          onBulkExtend={bulkExtendAll}
-          onBulkEnd={bulkEndAll}
-          onBulkSetDuration={() => setBulkDurationEdit(true)}
-          bulkActionsAvailable={hasActiveManualRooms}
-          inviteAvailable={sessionStarted}
-        />
-        {/* Announcement input — available in wrapping-up state */}
-        {showBroadcast && (
-          <div className="border-b border-gray-200 bg-amber-500/10 px-4 py-3">
-            <p className="text-xs font-semibold text-amber-400 mb-2 max-w-4xl mx-auto">Announcement — visible as a banner to all participants</p>
-            <div className="max-w-4xl mx-auto flex gap-2">
-              <input
-                type="text"
-                value={broadcastMsg}
-                onChange={e => setBroadcastMsg(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && sendBroadcast()}
-                placeholder="Type an announcement..."
-                style={{ color: '#000000' }}
-                className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
-                autoFocus
-              />
-              <Button size="sm" onClick={sendBroadcast} disabled={!broadcastMsg.trim()}>Send</Button>
-              <Button size="sm" variant="ghost" onClick={() => setShowBroadcast(false)}>
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-        )}
-        <div className="p-4">
-          <div className="max-w-4xl mx-auto flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-              <p className="text-sm text-gray-700 font-medium">All rounds complete</p>
-            </div>
-            <div className="flex gap-2">
-              <Button size="sm" variant="ghost" onClick={() => setShowBroadcast(!showBroadcast)} title="Send announcement to all">
-                <MessageSquare className="h-4 w-4" />
-              </Button>
-              {/* 9 May iter — Control Center available in the wrapping-up
-                  state too (red variant matches the live-bar version). */}
-              <Button size="sm" variant="danger" onClick={() => setShowControlCenter(true)} title="Open Host Control Center">
-                <LayoutDashboard className="h-4 w-4 mr-1" /> Control Center
-              </Button>
-              <Button size="sm" onClick={() => {
-                // Bug 9 (April 19) — Another Round must follow the same flow as
-                // Round 1/2: Match People → preview → confirm → Start Round.
-                if (eligibleCount < 2) {
-                  alert(`Need at least 2 participants to start a round (currently ${eligibleCount})`);
-                  return;
-                }
-                socket?.emit('host:generate_matches', { sessionId });
-              }}>
-                <Shuffle className="h-4 w-4 mr-1" /> Another Round
-              </Button>
-              {/* Bug 12 (April 19) — Room (manual breakout) button must be
-                  available at EVERY stage: lobby, mid-round, between rounds,
-                  AND on the all-rounds-complete screen. Was hidden in the
-                  isSessionEnding block; participants are still connected
-                  here and the host might want a final manual breakout
-                  before End Event. */}
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => { setShowRoomModal(!showRoomModal); setRoomRows([new Set()]); }}
-                title="Create one or more breakout rooms"
-              >
-                <UserPlus className="h-4 w-4 mr-1" /> Room
-              </Button>
-              <Button size="sm" variant="danger" onClick={() => socket?.emit('host:end_session', { sessionId })}>
-                <Square className="h-4 w-4 mr-1" /> End Event
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // F1 (20 May 2026 — user spec): the "All rounds complete" wrapping-up
+  // screen used to be a dedicated isSessionEnding early-return that
+  // replaced the entire host bar. Side effect: the moment the host
+  // clicked Another Round and the event left the closing_lobby state,
+  // the button vanished — exactly during the round when the host wants
+  // to see "yes I queued a bonus round". Now the main bar renders in
+  // all states; an inline "All rounds complete" badge appears when
+  // allRoundsDone, and the Match People button stays visible (labelled
+  // "Another Round" in this state) — disabled while the round runs,
+  // re-enabled when it ends.
 
   return (
-    <div className="border-t border-gray-200 bg-white">
+    // Bug G (15 May Ali) — host bottom bar must render ABOVE the floating
+    // reaction emojis (z-30, fixed). Without `relative z-40` the host bar
+    // sits in normal flow and a fixed-positioned reaction floats over the
+    // Event Plan strip. Promoting the bar to its own stacking context with
+    // a higher z-index keeps reactions tucked behind the EP strip + button
+    // row instead of obscuring the round status badges.
+    <div className="relative z-40 border-t border-gray-200 bg-white">
       <HostControlCenter
         sessionId={sessionId}
         open={showControlCenter}
@@ -343,6 +323,30 @@ export default function HostControls({ sessionId }: Props) {
           exists (event has started). Auto-hides for non-host viewers via
           server-side auth on /sessions/:id/plan. */}
       {sessionStarted && <EventPlanStrip sessionId={sessionId} />}
+
+      {/* F1 (20 May 2026) — inline "All rounds complete" decoration. Used
+          to live in the now-removed isSessionEnding early-return; preserves
+          the visible cue + Bug 12 (Dr Arch Apr 19) Room button. Inline so
+          the host bar's Another Round / End Event buttons remain visible
+          below, satisfying the user's "button must always be here" spec. */}
+      {allRoundsDone && (
+        <div className="border-b border-gray-200 bg-emerald-50 px-4 py-2">
+          <div className="max-w-4xl mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+              <p className="text-sm text-gray-700 font-medium">All rounds complete</p>
+            </div>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => { setShowRoomModal(!showRoomModal); setRoomRows([new Set()]); }}
+              title="Create one or more breakout rooms"
+            >
+              <UserPlus className="h-4 w-4 mr-1" /> Room
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Match preview panel with interactive controls */}
       {matchPreview && (
@@ -368,58 +372,27 @@ export default function HostControls({ sessionId }: Props) {
                   {generating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
                   Re-match
                 </button>
-                <button
-                  onClick={() => { setManualMatchMode(!manualMatchMode); setManualA(null); setManualB(null); }}
-                  className="flex items-center gap-1 text-xs text-gray-500 hover:text-emerald-600 transition-colors px-2 py-1 rounded hover:bg-emerald-50"
-                  title="Manually pair two participants"
-                >
-                  <UserPlus className="h-3 w-3" />
-                  Manual Match
-                </button>
               </div>
             </div>
-            {manualMatchMode && (
-              <div className="flex items-center gap-2 mb-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-                <select
-                  value={manualA || ''}
-                  onChange={e => setManualA(e.target.value || null)}
-                  className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 focus:outline-none focus:ring-1 focus:ring-emerald-400"
-                >
-                  <option value="">Select person 1</option>
-                  {participants.filter(p => p.userId !== hostUserId && !cohosts.has(p.userId)).map(p => (
-                    <option key={p.userId} value={p.userId}>{p.displayName}</option>
-                  ))}
-                </select>
-                <span className="text-gray-400 text-xs">+</span>
-                <select
-                  value={manualB || ''}
-                  onChange={e => setManualB(e.target.value || null)}
-                  className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 focus:outline-none focus:ring-1 focus:ring-emerald-400"
-                >
-                  <option value="">Select person 2</option>
-                  {participants.filter(p => p.userId !== hostUserId && !cohosts.has(p.userId) && p.userId !== manualA).map(p => (
-                    <option key={p.userId} value={p.userId}>{p.displayName}</option>
-                  ))}
-                </select>
-                <Button size="sm" disabled={!manualA || !manualB} onClick={() => {
-                  socket?.emit('host:force_match' as any, { sessionId, userIdA: manualA, userIdB: manualB });
-                  setManualMatchMode(false);
-                  setManualA(null);
-                  setManualB(null);
-                }}>
-                  Pair
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => { setManualMatchMode(false); setManualA(null); setManualB(null); }}>
-                  <X className="h-3 w-3" />
-                </Button>
-              </div>
-            )}
             {matchPreview.warnings && matchPreview.warnings.length > 0 && (
               <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 mb-2">
                 <AlertTriangle className="h-3.5 w-3.5 text-amber-400 mt-0.5 shrink-0" />
                 <div className="text-xs text-amber-300">
                   {matchPreview.warnings.map((w, i) => <p key={i}>{w}</p>)}
                 </div>
+              </div>
+            )}
+            {/* 26 May (#9-UI) — persistent repeat-pairs banner. Stays visible
+                as long as the current preview has usedRepeats=true. Cleared
+                automatically when the host re-matches (new preview replaces
+                the old one) or confirms matches. Toast fires on receive in
+                useSessionSocket; this banner handles the persistent state. */}
+            {matchPreview.usedRepeats && (
+              <div className="flex items-start gap-2 rounded-lg bg-orange-500/10 border border-orange-400/30 px-3 py-2 mb-2">
+                <AlertTriangle className="h-3.5 w-3.5 text-orange-400 mt-0.5 shrink-0" />
+                <p className="text-xs text-orange-300">
+                  Some pairs reuse past partners — no fresh matches were possible. Re-match to try a different arrangement.
+                </p>
               </div>
             )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
@@ -504,7 +477,13 @@ export default function HostControls({ sessionId }: Props) {
             </div>
             {matchPreview.byeParticipants.length > 0 && (
               <p className="text-xs text-amber-400 mt-2">
-                Not matched: {matchPreview.byeParticipants.map(p => p.displayName).join(', ')}
+                Not matched: {matchPreview.byeParticipants.map(p => {
+                  // Bug B (15 May Shraddha) — surface the exclusion reason
+                  // inline so the host sees WHY someone wasn't matched
+                  // (typically: they're a co-host / acting as host).
+                  const reason = (p as any).reason;
+                  return reason ? `${p.displayName} (${reason})` : p.displayName;
+                }).join(', ')}
               </p>
             )}
             <p className="text-[10px] text-gray-500 mt-1.5">
@@ -830,26 +809,69 @@ export default function HostControls({ sessionId }: Props) {
                 (matching-flow.ts:60-69), so disabling on round_transition
                 blocked the legit "start next round" path. The new rule
                 disables only when an algorithm round is actually running
-                or there aren't enough eligible participants. */}
-            {sessionStarted && phase === 'lobby' && !allRoundsDone && !matchPreview && (() => {
-              // Server-computed count of participants in the main room (not in any
-              // active match — manual or algorithm). Falls back to client-side
-              // count if dashboard not loaded yet.
-              const eligibleMainRoomCount = (roundDashboard as any)?.eligibleMainRoomCount ?? eligibleCount;
+                or there aren't enough eligible participants.
+                F1 (20 May 2026): render condition broadened so the button
+                stays visible across all event phases except match-preview
+                (which has its own Confirm/Cancel buttons in its place)
+                and post-event terminal states. Label flips to "Another
+                Round" once the originally-configured rounds are done; the
+                disabled state during an active round gives the host a
+                continuous visual cue. */}
+            {sessionStarted
+              && sessionStatus !== 'completed'
+              && sessionStatus !== 'cancelled'
+              && !matchPreview && (() => {
+              // Eligible-count source — use the LOCAL realtime count.
+              //
+              // Previous shape preferred `roundDashboard.eligibleMainRoomCount`
+              // (server-emitted via host:round_dashboard) and fell back to
+              // local only when the dashboard wasn't loaded yet. That made
+              // the button stale in both directions whenever the dashboard
+              // emit didn't fire for a state-relevant change (cohost role
+              // flip, late join while between rounds, opt-in/opt-out toggle):
+              // the button stayed disabled when it should have enabled, and
+              // vice versa, until the host pressed F5. The local count
+              // derives from live Zustand state (participants ∪ cohosts ∪
+              // hostUserId ∪ actingAsHostOverrides), each of which is
+              // already kept fresh by the realtime layer; trusting it makes
+              // the button respond within a second of any state change.
+              //
+              // In lobby phase, every listed participant is by definition in
+              // the main room — anyone mid-match would be in `matched` phase
+              // instead — so the server's "exclude active-match" filter is a
+              // no-op here. Between rounds we briefly stay in lobby phase
+              // while transitioning; if any participant somehow still shows
+              // status='in_room' in that window, the participant join/leave
+              // socket events will catch up before the next click.
+              const eligibleMainRoomCount = eligibleCount;
               const matchPeopleDisabled = hasActiveAlgorithmRound || eligibleMainRoomCount < 2;
+              // F1 (20 May 2026) — label flips after the originally-scheduled
+              // rounds have all run. "Another Round" reads as "give the host
+              // a bonus round on top of the configured count," which is the
+              // semantic that the CLOSING_LOBBY-bump path on the server
+              // implements (matching-flow.ts:107-158).
+              const buttonLabel = allRoundsDone ? 'Another Round' : 'Match People';
               const matchPeopleHint = hasActiveAlgorithmRound
                 ? 'A round is in progress — wait for it to end'
                 : eligibleMainRoomCount < 2
                 ? `Need at least 2 participants in main room (currently ${eligibleMainRoomCount})`
                 : '';
               if (matchPeopleDisabled) {
+                // Bug 34 (19 May Ali) — was a non-interactive <span> with
+                // a title tooltip. Mobile has no hover state, so the
+                // host got no feedback on tap. Now a real button that
+                // fires a toast on click, so both desktop AND mobile
+                // get the same "why can't I match?" feedback.
                 return (
-                  <span
-                    className="text-xs text-gray-500 px-2 py-1.5 border border-gray-200 rounded-lg cursor-not-allowed inline-flex items-center gap-1"
+                  <button
+                    type="button"
+                    onClick={() => useToastStore.getState().addToast(matchPeopleHint, 'info')}
+                    className="text-xs text-gray-500 px-2 py-1.5 border border-gray-200 rounded-lg inline-flex items-center gap-1 hover:bg-gray-50"
                     title={matchPeopleHint}
+                    aria-label={matchPeopleHint}
                   >
-                    <Shuffle className="h-3.5 w-3.5 opacity-50" /> Match People
-                  </span>
+                    <Shuffle className="h-3.5 w-3.5 opacity-50" /> {buttonLabel}
+                  </button>
                 );
               }
               return (
@@ -857,7 +879,7 @@ export default function HostControls({ sessionId }: Props) {
                   {generating ? (
                     <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Matching...</>
                   ) : (
-                    <><Shuffle className="h-4 w-4 mr-1" /> Match People</>
+                    <><Shuffle className="h-4 w-4 mr-1" /> {buttonLabel}</>
                   )}
                 </Button>
               );

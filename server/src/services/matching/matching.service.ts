@@ -184,7 +184,7 @@ export async function generateSingleRound(
   sessionId: string,
   roundNumber: number,
   excludeUserIds?: string[],
-  options?: { regenerate?: boolean },
+  options?: { regenerate?: boolean; excludePairKeys?: string[] },
 ): Promise<RoundAssignment> {
   const session = await sessionService.getSessionById(sessionId);
   const sessionConfig = typeof session.config === 'string'
@@ -194,6 +194,16 @@ export async function generateSingleRound(
   // Get active participants (excluding host/co-hosts and any users currently in
   // active matches — including manual breakout rooms). This guarantees the
   // algorithm never double-pairs someone who's already in a manual room.
+  //
+  // Bug 4 (18 May Stefan) — eligibility filter widened to include
+  // `disconnected`. Pre-fix the narrow `IN ('in_lobby','checked_in',
+  // 'registered')` excluded anyone whose DB status was momentarily
+  // 'disconnected' even though their socket had already reconnected.
+  // Result: the lobby header counted them (status NOT IN
+  // 'removed/left/no_show') but matching skipped them. Shradha Uni and
+  // Wazim were both in the room but not matched until they refreshed.
+  // The broader rule mirrors the header rule; the matching engine
+  // already handles late-no-show via match status='no_show' post-start.
   const participantsResult = excludeUserIds && excludeUserIds.length > 0
     ? await query<MatchingParticipant>(
         `SELECT u.id AS "userId", u.interests, u.reasons_to_connect AS "reasonsToConnect",
@@ -202,7 +212,7 @@ export async function generateSingleRound(
                 COALESCE(u.is_premium, FALSE) AS "isPremium"
          FROM session_participants sp
          JOIN users u ON u.id = sp.user_id
-         WHERE sp.session_id = $1 AND sp.status IN ('in_lobby', 'checked_in', 'registered')
+         WHERE sp.session_id = $1 AND sp.status NOT IN ('removed', 'left', 'no_show')
            AND sp.user_id != ALL($2::uuid[])
            AND NOT EXISTS (
              SELECT 1 FROM matches m
@@ -218,7 +228,7 @@ export async function generateSingleRound(
                 COALESCE(u.is_premium, FALSE) AS "isPremium"
          FROM session_participants sp
          JOIN users u ON u.id = sp.user_id
-         WHERE sp.session_id = $1 AND sp.status IN ('in_lobby', 'checked_in', 'registered')
+         WHERE sp.session_id = $1 AND sp.status NOT IN ('removed', 'left', 'no_show')
            AND NOT EXISTS (
              SELECT 1 FROM matches m
              WHERE m.session_id = $1 AND m.status = 'active'
@@ -249,10 +259,23 @@ export async function generateSingleRound(
   // Phase 4 — under matchingPolicy='none', this exclusion is disabled so
   // people CAN be re-paired even within the same event. Under 'within_event'
   // (default) and 'platform_wide' it stays on.
+  //
+  // M3 fix (21 May Ali) — also read participant_c_id and expand 3-way
+  // matches into all three pair-tuples (a,b) (a,c) (b,c). Pre-fix the
+  // query selected only a and b, so for a 3-way match {a, b, c} the engine
+  // only recorded that a met b; it never recorded a-c or b-c. During the
+  // 21 May event Alex was participant_c in three of four rounds and
+  // got re-paired with Saif (his perpetual co-occurrence partner) in
+  // every round — the exclusion never fired because the c column was
+  // invisible to this read.
   const excludedPairs = new Set<string>();
   if (matchingPolicy !== 'none') {
-    const excludedResult = await query<{ participant_a_id: string; participant_b_id: string }>(
-      `SELECT participant_a_id, participant_b_id FROM matches
+    const excludedResult = await query<{
+      participant_a_id: string;
+      participant_b_id: string;
+      participant_c_id: string | null;
+    }>(
+      `SELECT participant_a_id, participant_b_id, participant_c_id FROM matches
        WHERE session_id = $1 AND round_number != $2
          AND status NOT IN ('cancelled', 'no_show')
          AND is_manual = FALSE`,
@@ -260,8 +283,35 @@ export async function generateSingleRound(
     );
     for (const r of excludedResult.rows) {
       excludedPairs.add(pairKey(r.participant_a_id, r.participant_b_id));
+      if (r.participant_c_id) {
+        excludedPairs.add(pairKey(r.participant_a_id, r.participant_c_id));
+        excludedPairs.add(pairKey(r.participant_b_id, r.participant_c_id));
+      }
     }
   }
+
+  // Fix #1 (25 May Stefan) — platform_wide = HARD exclusion of prior meetings.
+  // The UI promises "never matched again", so under platform_wide every pair
+  // that has met in ANY prior event (loaded into encounterHistory above; it's
+  // empty for within_event/none) must become a HARD exclusion, identical to
+  // within-event prior-round pairs — not just the soft encounterFreshness
+  // score penalty it used to be. Adding them to the SAME excludedPairs set
+  // means the engine's candidate-build skip covers them AND the fallback
+  // ladder (L0→L4) is the only relaxation: L3/L4 relax these cross-event
+  // pairs exactly when no complete fresh matching is possible. within_event
+  // and none load no cross-event history, so their behaviour is unchanged.
+  if (matchingPolicy === 'platform_wide') {
+    for (const e of encounterHistory) {
+      excludedPairs.add(pairKey(e.userAId, e.userBId));
+    }
+  }
+
+  // 23 May (#5b) — Re-match rotation. excludePairKeys carries the CURRENT
+  // preview arrangement; Re-match must always produce a DIFFERENT one. These are
+  // applied as a HARD exclusion at EVERY fallback level below (unlike the
+  // no-repeat history, which the ladder relaxes), so the engine can never
+  // reproduce the current arrangement: it rotates to a fresh pairing while fresh
+  // options exist, then to a different already-met pairing once they're gone.
 
   // Build hard constraints: inviter-invitee avoidance + user-block exclusions.
   const inviterInviteeResult = await query<{ inviter_id: string; accepted_by_user_id: string }>(
@@ -380,9 +430,14 @@ export async function generateSingleRound(
   let landedAtLevel = 0;
 
   for (let level = 0; level <= 4; level++) {
-    const levelExcluded = level >= 4 ? new Set<string>()
-                        : level >= 3 ? halfExcludedPairs
-                        : excludedPairs;
+    const baseExcluded = level >= 4 ? new Set<string>()
+                       : level >= 3 ? halfExcludedPairs
+                       : excludedPairs;
+    // #5b — excludePairKeys (the current preview arrangement) is NEVER relaxed,
+    // even at L4, so Re-match always rotates to a different arrangement.
+    const levelExcluded = options?.excludePairKeys?.length
+      ? new Set<string>([...baseExcluded, ...options.excludePairKeys])
+      : baseExcluded;
     const freshnessScale = level >= 2 ? 0
                          : level >= 1 ? 0.5
                          : 1;
@@ -447,6 +502,22 @@ export async function generateSingleRound(
     // Defensive — should never happen since the loop always assigns at L0.
     throw new Error('Fallback ladder produced no round — engine misconfigured');
   }
+
+  // Fix #9 (25 May Stefan) — surface the fallback level to the caller so the
+  // host can be told "no fresh pairings left — showing closest available"
+  // instead of the Re-match button silently re-rolling. usedRepeats is true
+  // whenever any pair this round reused an excluded (already-met) pair —
+  // either a within-event prior round or, under platform_wide, a prior-event
+  // pair (Fix #1). At L0 every pair is fresh, so both stay clean.
+  round.fallbackLevel = landedAtLevel;
+  round.usedRepeats = round.pairs.some(
+    p => excludedPairs.has(pairKey(p.participantAId, p.participantBId)),
+  );
+  // TODO (Fix #9 UI): thread round.fallbackLevel / round.usedRepeats through
+  // matching-flow.ts (host:matches_ready / Re-match emit) into the host
+  // preview so the client can render the "No fresh pairings left — showing
+  // closest available" banner + a "finding next person" state on Re-match.
+  // The return-value plumbing lands here; the client string is a follow-up.
 
   // Persist this round's matches
   await persistMatches(sessionId, [round]);
@@ -812,15 +883,33 @@ export async function repairFutureRounds(
   // in this loop (so cross-round no-repeat is preserved).
   const allHostIds: string[] = [];
   if (session.hostUserId) allHostIds.push(session.hostUserId);
-  // Co-hosts — fetch from session_participants where role = 'co_host' if any
+  // Phase R6 (20 May 2026) — session_cohosts is the canonical cohort table.
+  // Pre-fix queried session_participants.role which doesn't exist; the silent
+  // catch swallowed the missing-column error and returned [], so cohosts were
+  // never excluded from matching for any event with cohosts. Also honours
+  // Phase M (12 May spec) acting_as_host overrides so admin opt-ins get
+  // excluded too and admin opt-outs stay matchable.
   try {
     const cohostsRes = await query<{ user_id: string }>(
-      `SELECT user_id FROM session_participants WHERE session_id = $1 AND role = 'co_host'`,
+      `SELECT user_id FROM session_cohosts WHERE session_id = $1`,
       [sessionId],
     );
     for (const r of cohostsRes.rows) allHostIds.push(r.user_id);
-  } catch {
-    // Co-host column may not exist on older sessions — fall through with host only.
+    const overrideRes = await query<{ user_id: string; acting_as_host: boolean }>(
+      `SELECT user_id, acting_as_host FROM session_participants
+       WHERE session_id = $1 AND acting_as_host IS NOT NULL`,
+      [sessionId],
+    );
+    for (const r of overrideRes.rows) {
+      if (r.acting_as_host === true) {
+        if (!allHostIds.includes(r.user_id)) allHostIds.push(r.user_id);
+      } else if (r.acting_as_host === false) {
+        const idx = allHostIds.indexOf(r.user_id);
+        if (idx >= 0) allHostIds.splice(idx, 1);
+      }
+    }
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'Phase R6 — failed to fetch cohost / acting_as_host exclusions');
   }
 
   const regeneratedRounds: number[] = [];

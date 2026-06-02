@@ -264,8 +264,12 @@ export async function sendMagicLink(email: string, requestedClientUrl?: string, 
   const existingUser = await getUserByEmail(normalizedEmail);
   let hasValidInvite = false;
 
-  // Invite codes are optional - validate only if provided
-  if (inviteCode) {
+  // Invite codes are optional, and only gate NEW users. An existing user who
+  // signs in again through their (now-used, single-use) invite link must not be
+  // re-blocked by the "invite already used" check — that locks returning users
+  // out of login entirely. Existing accounts skip invite validation here; the
+  // !existingUser gate below is the only registration check that applies to them.
+  if (inviteCode && !existingUser) {
     const invResult = await query<{ id: string; status: string; use_count: number; max_uses: number; expires_at: Date | null }>(
       `SELECT id, status, use_count, max_uses, expires_at FROM invites WHERE code = $1`,
       [inviteCode]
@@ -336,6 +340,16 @@ export async function sendMagicLink(email: string, requestedClientUrl?: string, 
   return { sent: true };
 }
 
+// Short window during which an ALREADY-USED magic link may still be re-verified.
+// Corporate email security scanners (Microsoft Defender/SafeLinks, Mimecast,
+// Proofpoint, etc.) PRE-FETCH every link in an email to scan it — that fetch runs
+// the verify and burns the one-time token seconds before the human clicks, so the
+// real click would otherwise fail with "already used" on a brand-new link (exactly
+// what blocked corporate attendees). Within this window we re-verify idempotently
+// (same email → same login). The 60-min expiry is still the real lifetime; this
+// only tolerates a near-simultaneous second hit (scanner pre-fetch / double-click).
+const MAGIC_LINK_REUSE_GRACE_MS = 2 * 60 * 1000;
+
 export async function verifyMagicLink(token: string): Promise<AuthTokenPair> {
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
 
@@ -351,22 +365,36 @@ export async function verifyMagicLink(token: string): Promise<AuthTokenPair> {
 
   const magicLink = result.rows[0];
 
-  if (magicLink.used_at) {
-    throw new AppError(400, 'AUTH_MAGIC_LINK_USED', 'This magic link has already been used');
-  }
-
+  // Time expiry is always enforced.
   if (new Date(magicLink.expires_at) < new Date()) {
     throw new AppError(400, 'AUTH_MAGIC_LINK_EXPIRED', 'This magic link has expired');
   }
 
-  // Mark the magic link as used
-  await query('UPDATE magic_links SET used_at = NOW() WHERE id = $1', [magicLink.id]);
+  // Single-use, but tolerant of a near-simultaneous second hit (scanner pre-fetch
+  // / double-click) within the reuse grace — see MAGIC_LINK_REUSE_GRACE_MS.
+  if (magicLink.used_at) {
+    const usedAgoMs = Date.now() - new Date(magicLink.used_at).getTime();
+    if (usedAgoMs > MAGIC_LINK_REUSE_GRACE_MS) {
+      throw new AppError(400, 'AUTH_MAGIC_LINK_USED', 'This magic link has already been used');
+    }
+    // within grace → idempotent re-verify; don't re-stamp used_at, fall through
+  } else {
+    await query('UPDATE magic_links SET used_at = NOW() WHERE id = $1', [magicLink.id]);
+  }
 
-  // Find or create the user (handle concurrent verify race condition)
+  // Find or create the user (handle concurrent verify race condition).
+  //
+  // NO registration gate here. sendMagicLink already enforces assertRegistration
+  // Allowed at SEND time WITH the invite context — a magic link is only ever
+  // issued to a NEW email when registration was permitted (a valid invite,
+  // including an open/shared event link, or an approved join request). Re-running
+  // the gate here with hasValidInvite=false cannot see the invite the user arrived
+  // through, so it wrongly rejected legitimate signups via the shared link — the
+  // account was never created and the user saw a fresh link as "expired". The
+  // send-time gate is the single source of truth; the link's existence is proof
+  // registration was allowed.
   let user = await getUserByEmail(magicLink.email);
   if (!user) {
-    // Safety net: block new user creation if not approved and no invite
-    await assertRegistrationAllowed(magicLink.email, false);
     try {
       user = await createUser({
         email: magicLink.email,

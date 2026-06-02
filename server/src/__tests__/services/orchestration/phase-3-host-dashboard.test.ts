@@ -51,11 +51,19 @@ describe('Phase 3 — Host dashboard UI + sync', () => {
     it('host:event_plan_repaired listener fires an info toast with reason text', () => {
       const startIdx = src.indexOf("socket.on('host:event_plan_repaired'");
       expect(startIdx).toBeGreaterThan(-1);
-      const slice = src.slice(startIdx, startIdx + 800);
+      // Bug 18 (18 May Stefan) — listener body grew (eventPlanSummary
+      // update on repair) so widen the slice past the new code.
+      // Bug 27 (19 May Ali) — listener grew again (setTotalRounds path);
+      // widen again so the toast pins still land.
+      const slice = src.slice(startIdx, startIdx + 2800);
       expect(slice).toMatch(/useToastStore\.getState\(\)\.addToast/);
       expect(slice).toMatch(/Plan updated/);
       expect(slice).toMatch(/late_joiner/);
       expect(slice).toMatch(/left/);
+      // Bug 18 also pins that the listener writes the new roundCount /
+      // totalPairs back into the store so the headline summary stays in
+      // sync with the per-round badges.
+      expect(slice).toMatch(/setEventPlanSummary/);
     });
 
     it('sessionStore exposes setEventPlanSummary action', () => {
@@ -158,17 +166,12 @@ describe('Phase 3 — Host dashboard UI + sync', () => {
 
     it('handleHostRegenerateMatches ends with sendMatchPreview', () => {
       const fnStart = matchingFlowSrc.indexOf('export async function handleHostRegenerateMatches(');
-      const fnEnd = matchingFlowSrc.indexOf('\n// ─── Host Force Match', fnStart);
+      const fnEnd = matchingFlowSrc.indexOf('\n// 23 May (#12)', fnStart);
       const fn = matchingFlowSrc.slice(fnStart, fnEnd);
       expect(fn).toMatch(/sendMatchPreview\(/);
     });
 
-    it('handleHostForceMatch ends with sendMatchPreview', () => {
-      const fnStart = matchingFlowSrc.indexOf('export async function handleHostForceMatch(');
-      const fnEnd = matchingFlowSrc.indexOf('\n// ─── Host Cancel Preview', fnStart);
-      const fn = matchingFlowSrc.slice(fnStart, fnEnd);
-      expect(fn).toMatch(/sendMatchPreview\(/);
-    });
+    // 23 May (#12) — handleHostForceMatch (manual pairing) removed per Stefan.
 
     it('handleHostRemoveParticipant calls emitHostDashboard', () => {
       const fnStart = hostActionsSrc.indexOf('export async function handleHostRemoveParticipant(');

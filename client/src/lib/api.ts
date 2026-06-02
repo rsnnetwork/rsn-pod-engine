@@ -5,7 +5,11 @@ import { API_BASE_URL } from '@/lib/runtimeEndpoints';
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: { 'Content-Type': 'application/json' },
-  timeout: 30000,
+  // Bug 9 (13 May) — Render free-tier cold starts can take 45-55s after a
+  // 15-min idle window. 30s was failing the first request on a wake cycle
+  // and bubbling AxiosError to Sentry. 60s rides out the cold start so the
+  // user sees the spinner instead of an error toast.
+  timeout: 60000,
 });
 
 // Attach JWT

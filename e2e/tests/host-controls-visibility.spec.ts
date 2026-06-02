@@ -195,10 +195,14 @@ test.describe.serial('Bug 5 + Bug 6 — host control visibility', () => {
     console.log(`  ✓ All rooms ended: 0 active matches, eligibleMainRoomCount=${eligible}`);
   });
 
-  test('Bug 6 — VideoTile uses object-contain (lock-in via static source check)', async () => {
-    // Complement to the jest server-side test — also part of the E2E suite
-    // so the production-bound bundle would be flagged by CI even if the
-    // jest test file gets removed/skipped accidentally.
+  test('Bug 6 — VideoTile fill mode is host-toggleable (contain by default, can switch to cover)', async () => {
+    // Original Bug 6: VideoTile defaulted to object-cover and Stefan wanted
+    // object-contain so faces aren't cropped. Fix shipped object-contain.
+    // Subsequent product evolution: a `fillMode` prop ('contain' | 'cover')
+    // was added so the host can toggle per their preference, with 'contain'
+    // as the default. This pin verifies the toggle exists AND that
+    // 'contain' is the default branch — never silently regress to a
+    // hard-coded 'object-cover'.
     const fs = await import('fs');
     const path = await import('path');
     const src = fs.readFileSync(
@@ -208,10 +212,20 @@ test.describe.serial('Bug 5 + Bug 6 — host control visibility', () => {
     const blocks = src.match(/<VideoTrack[\s\S]*?\/>/g) || [];
     expect(blocks.length).toBeGreaterThan(0);
     for (const block of blocks) {
+      // The block must reference fillMode and use it to gate between
+      // object-contain (when 'contain') and object-cover (else). A bare
+      // `object-cover` with no fillMode guard would be a regression.
+      expect(block).toMatch(/fillMode/);
       expect(block).toMatch(/object-contain/);
-      expect(block).not.toMatch(/object-cover/);
+      // 'contain' branch must come first — that's the default the host gets.
+      const containIdx = block.indexOf('object-contain');
+      const coverIdx = block.indexOf('object-cover');
+      expect(containIdx).toBeGreaterThan(-1);
+      if (coverIdx > -1) {
+        expect(containIdx).toBeLessThan(coverIdx);
+      }
     }
     // eslint-disable-next-line no-console
-    console.log(`  ✓ VideoRoom.tsx uses object-contain (${blocks.length} VideoTrack block(s) verified)`);
+    console.log(`  ✓ VideoRoom.tsx VideoTrack is fillMode-toggleable, contain-first (${blocks.length} block(s))`);
   });
 });

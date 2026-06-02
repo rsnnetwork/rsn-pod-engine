@@ -87,9 +87,10 @@ describe('T0-1 wiring — validator called from every match-write handler', () =
       const fnStart = src.indexOf('export async function handleHostSwapMatch(');
       const fnEnd = src.indexOf('\nexport ', fnStart + 1);
       const fn = src.slice(fnStart, fnEnd);
-      // Should reference matchA and matchB inside the validation loop
+      // Should reference matchA and matchB inside the validation loop. 23 May —
+      // a swap rewrites both rooms, so each validation excludes BOTH match IDs.
       expect(fn).toMatch(/validateMatchAssignment/);
-      expect(fn).toMatch(/excludeMatchId:\s*check\.matchId/);
+      expect(fn).toMatch(/excludeMatchIds:\s*\[matchA\.id,\s*matchB\.id\]/);
       expect(fn).toMatch(/conflictingStatuses:\s*\[['"]scheduled['"]\s*,\s*['"]active['"]\]/);
     });
 

@@ -204,32 +204,36 @@ describe('Dr Arch April 19 — Bug 12: Room button visible at every stage', () =
 });
 
 describe('Dr Arch April 19 — Bug 9: "Another Round" routes through Match People flow', () => {
-  it('HostControls "Another Round" button emits host:generate_matches (not host:start_round)', () => {
+  it('HostControls renders a Shuffle button labelled "Another Round" when allRoundsDone, and it routes to host:generate_matches', () => {
     const src = readSource('../../../../../client/src/features/live/HostControls.tsx');
-    // Locate the actual JSX button (not the comment above it) via the
-    // Shuffle icon + label on the same line.
-    const labelMatch = src.match(/<Shuffle[^>]*\/>\s*Another Round/);
-    expect(labelMatch).not.toBeNull();
-    const labelIdx = src.indexOf(labelMatch![0]);
-    expect(labelIdx).toBeGreaterThan(-1);
-    // Look ~1500 chars BEFORE the label — the onClick handler is above it.
-    const block = src.slice(Math.max(0, labelIdx - 1500), labelIdx + 100);
-    expect(block).toMatch(/host:generate_matches/);
-    // Must NOT emit host:start_round in this handler.
-    expect(block).not.toMatch(/socket\?\.emit\(['"]host:start_round/);
+    // F1 (20 May 2026) — the Another Round label is now a dynamic
+    // ternary on the allRoundsDone flag, so a single persistent button
+    // shows "Match People" pre-final-round and flips to "Another Round"
+    // after. Verify the ternary first, then verify the button delegates
+    // to the centralised generateMatches() helper which emits
+    // host:generate_matches.
+    expect(src).toMatch(/buttonLabel\s*=\s*allRoundsDone\s*\?\s*['"]Another Round['"]/);
+    // The enabled-state JSX uses generateMatches as onClick handler,
+    // and generateMatches' body emits host:generate_matches.
+    expect(src).toMatch(/<Button[\s\S]{0,200}onClick=\{generateMatches\}/);
+    const helperIdx = src.indexOf('const generateMatches = () =>');
+    expect(helperIdx).toBeGreaterThan(-1);
+    const helper = src.slice(helperIdx, helperIdx + 500);
+    expect(helper).toMatch(/host:generate_matches/);
+    expect(helper).not.toMatch(/host:start_round/);
   });
 
   it('handleHostGenerateMatches accepts CLOSING_LOBBY state', () => {
     const src = readSource('../../../services/orchestration/handlers/matching-flow.ts');
     const handlerStart = src.indexOf('export async function handleHostGenerateMatches');
     expect(handlerStart).toBeGreaterThan(-1);
-    const handler = src.slice(handlerStart, handlerStart + 3000);
+    const handler = src.slice(handlerStart, handlerStart + 4500);
     // State guard now includes CLOSING_LOBBY
     expect(handler).toMatch(/SessionStatus\.CLOSING_LOBBY/);
     // Transition back to ROUND_TRANSITION when entering from CLOSING_LOBBY
     expect(handler).toMatch(/CLOSING_LOBBY[\s\S]*?ROUND_TRANSITION/);
-    // Bump numberOfRounds so the new round is a valid round N+1
-    expect(handler).toMatch(/numberOfRounds[\s\S]*?\+\s*1/);
+    // 23 May — the round-count bump moved to round start (transitionToRound),
+    // so it is no longer in this handler; the preview just re-opens the round.
     // Cancel the closing-lobby safety timer
     expect(handler).toMatch(/clearSessionTimers/);
   });

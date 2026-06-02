@@ -89,7 +89,10 @@ for file in $STAGED_FILES; do
   fi
 
   for pattern in "${SECRET_PATTERNS[@]}"; do
-    MATCH=$(echo "$CONTENT" | grep -nE "$pattern" | head -3)
+    # `grep -- -E ...` doesn't work when -E precedes the dash-pattern arg;
+    # `grep -nE -- "$pattern"` stops option parsing so leading `-` in patterns
+    # like `-----BEGIN ... PRIVATE KEY-----` doesn't get treated as a flag.
+    MATCH=$(echo "$CONTENT" | grep -nE -- "$pattern" | head -3)
     if [ -n "$MATCH" ]; then
       # Skip .env.example placeholder lines (already handled above)
       if echo "$file" | grep -q '\.env\.example$'; then
@@ -115,6 +118,35 @@ if [ -n "$ENV_FILES" ]; then
   echo -e "    Fix: git reset HEAD <file> to unstage"
   FAILED=1
 fi
+
+# ─── 4. Block Render env dumps (JSON format) from being committed ────────────
+# `render env list ... --output json` produces an array of {envVar:{key,value}}
+# objects that bypass the KEY=value scanner in section 2. Block by filename AND
+# by content shape so they can't sneak in under a different name.
+RENDER_ENV_FILES=$(git diff --cached --name-only | grep -E '(^|/)render-env([._-].*)?\.json$')
+if [ -n "$RENDER_ENV_FILES" ]; then
+  echo -e "${RED}  ✖ BLOCKED: Render env dump file(s) staged for commit:${NC}"
+  echo "$RENDER_ENV_FILES" | while read -r f; do
+    echo -e "    $f"
+  done
+  echo -e "    Fix: git reset HEAD <file> to unstage. These files contain prod secrets."
+  FAILED=1
+fi
+
+# Content shape: any staged file containing the Render-dump signature.
+for file in $STAGED_FILES; do
+  CONTENT=$(git show ":$file" 2>/dev/null)
+  if [ -z "$CONTENT" ]; then
+    continue
+  fi
+  # Match the {"envVar":{"key":"...","value":"..."}} shape for sensitive keys.
+  if echo "$CONTENT" | grep -qE '"envVar"[[:space:]]*:[[:space:]]*\{[[:space:]]*"key"[[:space:]]*:[[:space:]]*"(JWT_SECRET|DATABASE_URL|REDIS_URL|MAGIC_LINK_SECRET|RESEND_API_KEY|LIVEKIT_API_SECRET|STRIPE_SECRET_KEY|GOOGLE_CLIENT_SECRET|SMTP_PASS)"'; then
+    echo -e "${RED}  ✖ BLOCKED: $file contains a Render env dump with sensitive keys${NC}"
+    echo -e "    Looks like the JSON output of 'render env list'. These dumps contain prod secrets."
+    echo -e "    Fix: git reset HEAD $file to unstage, then add the file pattern to .gitignore."
+    FAILED=1
+  fi
+done
 
 # ─── Result ──────────────────────────────────────────────────────────────────
 if [ $FAILED -ne 0 ]; then

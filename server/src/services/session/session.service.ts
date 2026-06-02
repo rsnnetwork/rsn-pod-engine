@@ -300,6 +300,17 @@ export async function registerParticipant(sessionId: string, userId: string, use
       return result.rows[0];
     }
 
+    // Phase R8 (20 May 2026 — live-test post-mortem). For admin / super_admin
+    // users who are NOT the event director, default acting_as_host to FALSE
+    // (opt-in as participant) so they don't get stuck on the "Pick how
+    // you're joining first" Phase P picker. They can still flip to host
+    // mid-event via the Join-as banner. Pre-fix, the column stayed NULL
+    // and the LiveSessionPage blocked them behind the picker — Raja Ali
+    // King (super_admin) saw this in the 20 May test even after the event
+    // ended because the picker doesn't gate on session.status='completed'.
+    const isDirector = session.hostUserId === userId;
+    const defaultActingAsHost = (isAdmin && !isDirector) ? false : null;
+
     // ON CONFLICT DO NOTHING absorbs the race where a concurrent caller
     // inserted the same (session_id, user_id) between our SELECT-existing
     // check above and this INSERT. Pre-fix, the second caller hit the
@@ -308,11 +319,11 @@ export async function registerParticipant(sessionId: string, userId: string, use
     // auto-register fired alongside the invite-accept flow's nested
     // registerParticipant for the same user.
     const insertResult = await client.query<SessionParticipant>(
-      `INSERT INTO session_participants (session_id, user_id, status)
-       VALUES ($1, $2, 'registered')
+      `INSERT INTO session_participants (session_id, user_id, status, acting_as_host)
+       VALUES ($1, $2, 'registered', $3)
        ON CONFLICT (session_id, user_id) DO NOTHING
        RETURNING ${PARTICIPANT_COLUMNS}`,
-      [sessionId, userId]
+      [sessionId, userId, defaultActingAsHost]
     );
 
     let participant: SessionParticipant;
@@ -704,7 +715,8 @@ export async function generateLiveKitToken(sessionId: string, userId: string, ro
     const sessionConfig = typeof session.config === 'string' ? JSON.parse(session.config as unknown as string) : session.config;
     const roundsRemaining = Math.max(1, (sessionConfig?.numberOfRounds || 5) - (session.currentRound || 0));
     const roundDuration = sessionConfig?.roundDurationSeconds || 480;
-    const ratingWindow = sessionConfig?.ratingWindowSeconds || 10;
+    // F5 (21 May Ali) — fallback aligned with DEFAULT_SESSION_CONFIG (30 s).
+    const ratingWindow = sessionConfig?.ratingWindowSeconds || 30;
     const estimatedRemainingSeconds = roundsRemaining * (roundDuration + ratingWindow + 30) + 600;
     const ttl = Math.max(1800, Math.min(14400, estimatedRemainingSeconds)); // 30 min to 4 hours
 
@@ -743,7 +755,13 @@ export async function getParticipantStatusCounts(sessionId: string): Promise<{
   total: number;
   pendingInvites: number;
 }> {
-  // Get host user ID so we can exclude them from participant counts
+  // Bug 37.3 (19 May Ali) — include the director exactly once. Pre-fix
+  // the host was excluded entirely (`user_id != $2`), so HCC counts and
+  // any "Total attendees" surface read N-1. The director attends their
+  // own event — they should appear in the count. They appear once and
+  // only once: if a session_participants row exists for them, count
+  // that row's status; if not, synthesize one as IN_LOBBY (mirrors the
+  // host-participants-view UNION ALL fallback for the same case).
   const sessionResult = await query<{ host_user_id: string }>(
     `SELECT host_user_id FROM sessions WHERE id = $1`, [sessionId]
   );
@@ -752,9 +770,9 @@ export async function getParticipantStatusCounts(sessionId: string): Promise<{
   const statusResult = await query<{ status: string; count: string }>(
     `SELECT status, COUNT(*)::text AS count
      FROM session_participants
-     WHERE session_id = $1${hostUserId ? ` AND user_id != $2` : ''}
+     WHERE session_id = $1
      GROUP BY status`,
-    hostUserId ? [sessionId, hostUserId] : [sessionId]
+    [sessionId]
   );
 
   const counts: Record<string, number> = {};
@@ -763,6 +781,23 @@ export async function getParticipantStatusCounts(sessionId: string): Promise<{
     counts[row.status] = parseInt(row.count, 10);
     if (row.status !== 'removed') {
       activeTotal += parseInt(row.count, 10);
+    }
+  }
+
+  // Synthesize the director row when missing. Counted once: either we
+  // already counted them above (the SELECT used to filter them out,
+  // post-fix it doesn't) OR we add one IN_LOBBY here when they have
+  // no session_participants row yet. The EXISTS check below is the
+  // dedupe — never both.
+  if (hostUserId) {
+    const hostRow = await query<{ status: string }>(
+      `SELECT status::text AS status FROM session_participants
+        WHERE session_id = $1 AND user_id = $2`,
+      [sessionId, hostUserId],
+    );
+    if (hostRow.rows.length === 0) {
+      counts['in_lobby'] = (counts['in_lobby'] || 0) + 1;
+      activeTotal += 1;
     }
   }
 
@@ -831,4 +866,61 @@ export async function setPremiumSelections(sessionId: string, userId: string, se
       );
     }
   });
+}
+
+// ─── Phase M (12 May spec item 1) — acting-as-host opt-in/opt-out ──────────
+//
+// Per-event toggle that lets a user override their role-derived host
+// status. NULL row in session_participants.acting_as_host means "use the
+// role default"; TRUE means "act as host on this event"; FALSE means
+// "join as participant".
+//
+// Consumed by:
+//   - getEffectiveRole (effective-role.service.ts) — read for the role
+//     resolution layer 1-4 path so canActAsHost stays in sync.
+//   - getAllHostIds (orchestration handlers/host-actions.ts) — read so
+//     matching exclusion respects the opt-out / opt-in.
+//   - session-state-snapshot — exposed as actingAsHostOverrides so
+//     clients see the map on cold-start / reconnect.
+
+export async function getActingAsHostOverride(
+  sessionId: string,
+  userId: string,
+): Promise<boolean | null> {
+  const result = await query<{ acting_as_host: boolean | null }>(
+    `SELECT acting_as_host FROM session_participants
+     WHERE session_id = $1 AND user_id = $2`,
+    [sessionId, userId],
+  );
+  if (result.rows.length === 0) return null;
+  return result.rows[0].acting_as_host;
+}
+
+export async function getActingAsHostOverrides(
+  sessionId: string,
+): Promise<Record<string, boolean>> {
+  const result = await query<{ user_id: string; acting_as_host: boolean | null }>(
+    `SELECT user_id, acting_as_host FROM session_participants
+     WHERE session_id = $1 AND acting_as_host IS NOT NULL`,
+    [sessionId],
+  );
+  const out: Record<string, boolean> = {};
+  for (const row of result.rows) {
+    if (row.acting_as_host !== null) out[row.user_id] = row.acting_as_host;
+  }
+  return out;
+}
+
+export async function setActingAsHost(
+  sessionId: string,
+  userId: string,
+  value: boolean | null,
+): Promise<void> {
+  // Upsert: the user must be a session_participant for the row to exist.
+  // If they're not registered, this is a no-op (handler should pre-check).
+  await query(
+    `UPDATE session_participants SET acting_as_host = $3
+     WHERE session_id = $1 AND user_id = $2`,
+    [sessionId, userId, value],
+  );
 }

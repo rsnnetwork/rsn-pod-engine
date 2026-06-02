@@ -7,6 +7,13 @@ interface AuthState {
   refreshToken: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  // Bug 32 (19 May Ali) — true once checkSession() has finished its first
+  // pass (success OR failure). App.tsx gates the socket handshake on this
+  // so we never connect with a stale localStorage token that hasn't been
+  // validated yet. Without this flag the socket enters its retry-backoff
+  // state on a 401 handshake and refuses to honour subsequent connect()
+  // calls until the natural reconnect timer fires.
+  isSessionChecked: boolean;
 
   login: (email: string, clientUrl?: string, inviteCode?: string) => Promise<any>;
   verify: (token: string) => Promise<void>;
@@ -69,6 +76,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   refreshToken: localStorage.getItem('rsn_refresh') || null,
   isAuthenticated: !!localStorage.getItem('rsn_access'),
   isLoading: true,
+  isSessionChecked: false,
 
   login: async (email: string, clientUrl?: string, inviteCode?: string) => {
     const { data } = await api.post('/auth/magic-link', { email, clientUrl, inviteCode });
@@ -96,12 +104,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   checkSession: async () => {
     const token = get().accessToken;
     if (!token) {
-      set({ isLoading: false, isAuthenticated: false, user: null });
+      set({ isLoading: false, isAuthenticated: false, user: null, isSessionChecked: true });
       return;
     }
     try {
       const { data } = await api.get('/auth/session', { timeout: 15000 });
-      set({ user: data.data.user, isAuthenticated: true, isLoading: false });
+      set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true });
       // Schedule proactive refresh if we haven't already (e.g. app init)
       scheduleProactiveRefresh(token);
     } catch (err: any) {
@@ -113,16 +121,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           await get().refreshAccessToken();
           // Refresh succeeded — retry checkSession with new token
           const { data } = await api.get('/auth/session', { timeout: 15000 });
-          set({ user: data.data.user, isAuthenticated: true, isLoading: false });
+          set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true });
           scheduleProactiveRefresh(get().accessToken!);
         } catch {
           // Refresh also failed — token is genuinely dead, clear auth
-          set({ isLoading: false, isAuthenticated: false, user: null });
+          set({ isLoading: false, isAuthenticated: false, user: null, isSessionChecked: true });
           clearRefreshTimer();
         }
       } else {
-        // Network errors, timeouts, 5xx — keep user logged in
-        set({ isLoading: false });
+        // Network errors, timeouts, 5xx — keep user logged in. Still flip
+        // isSessionChecked so the socket layer stops waiting; the cached
+        // token is the best we have until the next attempt.
+        set({ isLoading: false, isSessionChecked: true });
       }
     }
   },

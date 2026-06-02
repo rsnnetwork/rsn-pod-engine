@@ -77,6 +77,16 @@ export interface SessionConfig {
    * server matching.registry.ts and pick a different ID here.
    */
   matchingAlgorithmId?: string;
+  /**
+   * Bug 28 (19 May Ali + Stefan) — count of "Another Round" presses that
+   * extended the event past its originally-configured numberOfRounds.
+   * Stefan called these "bonus rounds". UI uses this to:
+   *   • render a small "Bonus" badge on the round header for any round
+   *     beyond (numberOfRounds - bonusRoundsAdded)
+   *   • report the total honestly in the recap ("3 rounds + 1 bonus")
+   * Default 0; bumped by +1 every successful "Another Round" click.
+   */
+  bonusRoundsAdded?: number;
 }
 
 export const DEFAULT_SESSION_CONFIG: SessionConfig = {
@@ -84,7 +94,15 @@ export const DEFAULT_SESSION_CONFIG: SessionConfig = {
   roundDurationSeconds: 480,         // 8 minutes
   lobbyDurationSeconds: 480,         // 8 minutes
   transitionDurationSeconds: 30,     // 30 seconds
-  ratingWindowSeconds: 10,           // 10 seconds (safety net — early-exit fires when all rated)
+  // F5 (21 May Ali) — bumped 10 → 30. 10 s was too short for users to
+  // read the form, pick stars + connect toggle, and submit; live test
+  // (21 May) had users repeatedly miss the form because the timer
+  // expired mid-click. 30 s is paired with the trio doubling
+  // (round-lifecycle.ts: scaledDuration = base × maxPartnerCount), so
+  // pairs get 30 s, trios get 60 s. The early-exit-when-all-rated
+  // safety net still fires, so this is the ceiling not the floor —
+  // empirically rated within 5–10 s the round still ends fast.
+  ratingWindowSeconds: 30,
   closingLobbyDurationSeconds: 480,  // 8 minutes
   noShowTimeoutSeconds: 60,          // 60 seconds
   maxParticipants: 500,
