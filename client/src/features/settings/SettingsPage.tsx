@@ -7,7 +7,6 @@ import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { Bell, Shield, Eye, CreditCard, Check, Lock, Zap, MessageSquare } from 'lucide-react';
 import api from '@/lib/api';
-import { E } from '@/realtime/entities';
 
 /**
  * Phase J (1 May 2026 spec) — per-channel toggles for chat notifications.
@@ -15,11 +14,9 @@ import { E } from '@/realtime/entities';
  */
 function MessageNotificationPrefsCard() {
   const { addToast } = useToastStore();
-  const currentUserId = useAuthStore((s) => s.user?.id);
   const { data: prefs, refetch } = useQuery({
     queryKey: ['notification-prefs'],
     queryFn: () => api.get('/notification-prefs').then(r => r.data.data),
-    meta: { entities: currentUserId ? [E.userNotifications(currentUserId)] : [] },
   });
 
   const updateMutation = useMutation({

@@ -7,24 +7,18 @@ import { requireRole } from '../middleware/rbac';
 import { auditMiddleware } from '../middleware/audit';
 import * as sessionService from '../services/session/session.service';
 import * as podService from '../services/pod/pod.service';
-import { fanoutSessionEntities, fanoutUserEntity } from '../realtime/fanout';
-import { E } from '../realtime/entities';
 import { canViewSession } from '../services/session/session-access';
 import { buildSessionStateSnapshot } from '../services/session/session-state-snapshot.service';
 import { ApiResponse, SessionStatus, UserRole, hasRoleAtLeast } from '@rsn/shared';
 import { ForbiddenError, NotFoundError } from '../middleware/errors';
 import { query } from '../db';
-import config from '../config';
-import logger from '../config/logger';
-import * as emailService from '../services/email/email.service';
-import { buildSessionCalendarEvent } from '../services/calendar/calendar.service';
 import type { Server as SocketServer } from 'socket.io';
 
 const router = Router();
 
 // ─── Validation Schemas ─────────────────────────────────────────────────────
 
-export const createSessionSchema = z.object({
+const createSessionSchema = z.object({
   podId: z.string().uuid(),
   title: z.string().min(1).max(300),
   description: z.string().max(2000).optional(),
@@ -35,24 +29,16 @@ export const createSessionSchema = z.object({
     roundDurationSeconds: z.number().int().min(60).max(3600).optional(),
     lobbyDurationSeconds: z.number().int().min(30).max(3600).optional(),
     transitionDurationSeconds: z.number().int().min(10).max(120).optional(),
-    // F5 (21 May Ali) — min raised 10 → 20. 10 s left no headroom for
-    // users to read the rating form and submit; live test (21 May)
-    // showed users repeatedly missing the form. Ceiling unchanged.
-    ratingWindowSeconds: z.number().int().min(20).max(120).optional(),
+    ratingWindowSeconds: z.number().int().min(10).max(120).optional(),
     closingLobbyDurationSeconds: z.number().int().min(30).max(3600).optional(),
     noShowTimeoutSeconds: z.number().int().min(15).max(300).optional(),
     maxParticipants: z.number().int().min(2).max(10000).optional(),
     timerVisibility: z.string().optional(),
     matchingTemplateId: z.string().optional(),
-    // 26 May — without this, zod stripped the host's "Platform-wide no
-    // rematch" selection, so sessions silently persisted matchingPolicy=
-    // within_event and prior-event pairs were re-matched. Must be listed to
-    // survive validation.
-    matchingPolicy: z.enum(['platform_wide', 'within_event', 'none']).optional(),
   }).optional(),
 });
 
-export const updateSessionSchema = z.object({
+const updateSessionSchema = z.object({
   title: z.string().min(1).max(300).optional(),
   description: z.string().max(2000).optional(),
   scheduledAt: z.string().datetime().optional(),
@@ -62,20 +48,12 @@ export const updateSessionSchema = z.object({
     roundDurationSeconds: z.number().int().min(60).max(3600).optional(),
     lobbyDurationSeconds: z.number().int().min(30).max(3600).optional(),
     transitionDurationSeconds: z.number().int().min(10).max(120).optional(),
-    // F5 (21 May Ali) — min raised 10 → 20. 10 s left no headroom for
-    // users to read the rating form and submit; live test (21 May)
-    // showed users repeatedly missing the form. Ceiling unchanged.
-    ratingWindowSeconds: z.number().int().min(20).max(120).optional(),
+    ratingWindowSeconds: z.number().int().min(10).max(120).optional(),
     closingLobbyDurationSeconds: z.number().int().min(30).max(3600).optional(),
     noShowTimeoutSeconds: z.number().int().min(15).max(300).optional(),
     maxParticipants: z.number().int().min(2).max(10000).optional(),
     timerVisibility: z.string().optional(),
     matchingTemplateId: z.string().optional(),
-    // 26 May — without this, zod stripped the host's "Platform-wide no
-    // rematch" selection, so sessions silently persisted matchingPolicy=
-    // within_event and prior-event pairs were re-matched. Must be listed to
-    // survive validation.
-    matchingPolicy: z.enum(['platform_wide', 'within_event', 'none']).optional(),
   }).optional(),
 });
 
@@ -94,11 +72,6 @@ router.post(
       try {
         await sessionService.registerParticipant(session.id, req.user!.userId);
       } catch { /* ignore if already registered */ }
-
-      // Bug 20 (18 May Stefan) — broadcast so every pod member's events
-      // list refetches and sees the new session immediately (no refresh
-      // needed). Phase 5 — entity tags carry it via fanoutSessionEntities.
-      fanoutSessionEntities(session.podId ?? null, session.id).catch(() => {});
 
       const response: ApiResponse = { success: true, data: session };
       res.status(201).json(response);
@@ -181,9 +154,6 @@ router.put(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const session = await sessionService.updateSession(req.params.id, req.user!.userId, req.body, req.user!.role);
-      // Bug 30 (19 May Ali) — fan out so every member's session list
-      // shows the updated title/time/status instantly.
-      fanoutSessionEntities(session.podId ?? null, session.id).catch(() => {});
       const response: ApiResponse = { success: true, data: session };
       res.json(response);
     } catch (err) {
@@ -200,22 +170,7 @@ router.delete(
   auditMiddleware('delete_session', 'session'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Bug 30 (19 May Ali) — fetch pod_id BEFORE deletion so we can fan
-      // out the right pod scope after. deleteSession itself is allowed to
-      // proceed even if this lookup fails (best-effort).
-      let podIdForNotify: string | null = null;
-      try {
-        const sessRow = await query<{ pod_id: string | null }>(
-          `SELECT pod_id FROM sessions WHERE id = $1`,
-          [req.params.id],
-        );
-        podIdForNotify = sessRow.rows[0]?.pod_id ?? null;
-      } catch { /* non-fatal */ }
-
       await sessionService.deleteSession(req.params.id, req.user!.userId, req.user!.role);
-
-      fanoutSessionEntities(podIdForNotify, req.params.id).catch(() => {});
-
       const response: ApiResponse = { success: true, data: { message: 'Event deleted' } };
       res.json(response);
     } catch (err) {
@@ -282,52 +237,6 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const participant = await sessionService.registerParticipant(req.params.id, req.user!.userId, req.user!.role);
-      // Phase May-19 realtime — broadcast so every pod member +
-      // registered participant sees the new self-registration without
-      // a refresh (badge counts, "Registered" pill on the event card).
-      //
-      // Phase R2 (20 May 2026) — also fanout E.sessionParticipants so
-      // every other client viewing this session's participants list
-      // invalidates and refetches. Pre-fix, a tester who registered
-      // while another user already had the event open saw stale-3
-      // counts until F5; canonical entity-tag emit-miss.
-      try {
-        const sessRow = await query<{ pod_id: string | null }>(
-          `SELECT pod_id FROM sessions WHERE id = $1`,
-          [req.params.id],
-        );
-        const podId = sessRow.rows[0]?.pod_id ?? null;
-        fanoutSessionEntities(podId, req.params.id, [
-          E.userSessions(req.user!.userId),
-          E.sessionParticipants(req.params.id),
-        ]).catch(() => {});
-      } catch { /* non-fatal */ }
-
-      // 26 May (Stefan) — self-registration now sends a "you're registered"
-      // confirmation with a calendar invite (.ics) attached, mirroring what
-      // emailed host-invites already do. Best-effort + fire-and-forget so email
-      // latency never delays the 201. Invite-accepts register via a different
-      // path (and already got the invite email + calendar), so no double-send.
-      void (async () => {
-        try {
-          const u = (await query<{ email: string; display_name: string | null }>(
-            `SELECT email, display_name FROM users WHERE id = $1`,
-            [req.user!.userId],
-          )).rows[0];
-          if (!u?.email) return;
-          const calendarEvent = await buildSessionCalendarEvent(req.params.id);
-          await emailService.sendSessionRegistrationConfirmationEmail(u.email, {
-            recipientName: u.display_name || undefined,
-            sessionTitle: calendarEvent?.title ?? 'your RSN event',
-            sessionUrl: `${config.clientUrl}/sessions/${req.params.id}`,
-            calendarEvent,
-          });
-        } catch (err) {
-          logger.warn({ err, sessionId: req.params.id, userId: req.user!.userId },
-            'registration confirmation email failed (non-fatal)');
-        }
-      })();
-
       const response: ApiResponse = { success: true, data: participant };
       res.status(201).json(response);
     } catch (err) {
@@ -343,27 +252,7 @@ router.delete(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Phase May-19 realtime — look up podId BEFORE unregister so
-      // the fanout still resolves the right pod scope (unregister
-      // itself updates session_participants.status='left' which the
-      // notifier query excludes, so this is just to capture pod_id).
-      let podIdForNotify: string | null = null;
-      try {
-        const sessRow = await query<{ pod_id: string | null }>(
-          `SELECT pod_id FROM sessions WHERE id = $1`,
-          [req.params.id],
-        );
-        podIdForNotify = sessRow.rows[0]?.pod_id ?? null;
-      } catch { /* non-fatal */ }
-
       await sessionService.unregisterParticipant(req.params.id, req.user!.userId);
-      // Phase R2 (20 May 2026) — also fanout E.sessionParticipants so
-      // other clients viewing this session's participants list see the
-      // user disappear without F5.
-      fanoutSessionEntities(podIdForNotify, req.params.id, [
-        E.userSessions(req.user!.userId),
-        E.sessionParticipants(req.params.id),
-      ]).catch(() => {});
       const response: ApiResponse = { success: true, data: { message: 'Unregistered successfully' } };
       res.json(response);
     } catch (err) {
@@ -452,19 +341,6 @@ router.delete(
   auditMiddleware('hard_delete_session', 'session'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Phase May-19 realtime — fan out BEFORE the hard delete so the
-      // fanout's pod/participant lookup still finds rows. Mirrors
-      // the soft DELETE /sessions/:id pattern above.
-      let podIdForNotify: string | null = null;
-      try {
-        const sessRow = await query<{ pod_id: string | null }>(
-          `SELECT pod_id FROM sessions WHERE id = $1`,
-          [req.params.id],
-        );
-        podIdForNotify = sessRow.rows[0]?.pod_id ?? null;
-      } catch { /* non-fatal */ }
-      fanoutSessionEntities(podIdForNotify, req.params.id).catch(() => {});
-
       await sessionService.hardDeleteSession(req.params.id);
       const response: ApiResponse = { success: true, data: { message: 'Event permanently deleted' } };
       return res.json(response);
@@ -502,9 +378,6 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       await sessionService.setPremiumSelections(req.params.id, req.user!.userId, req.body.selectedUserIds);
-      // Phase May-19 realtime — ping the current user's own room so
-      // any other tabs they have open see the updated selections.
-      fanoutUserEntity(req.user!.userId).catch(() => {});
       const response: ApiResponse = { success: true, data: { message: 'Preferred people saved' } };
       res.json(response);
     } catch (err) {
@@ -532,20 +405,6 @@ router.post(
          ON CONFLICT (session_id, user_id) DO UPDATE SET feedback = $3, created_at = NOW()`,
         [req.params.id, req.user!.userId, feedback.trim().slice(0, 2000)]
       );
-
-      // Phase May-19 realtime — fan out so host's "Feedback received"
-      // count + recap view updates instantly. Look up pod_id once so
-      // fanoutSessionEntities can address the right scope.
-      try {
-        const sessRow = await query<{ pod_id: string | null }>(
-          `SELECT pod_id FROM sessions WHERE id = $1`,
-          [req.params.id],
-        );
-        fanoutSessionEntities(
-          sessRow.rows[0]?.pod_id ?? null,
-          req.params.id,
-        ).catch(() => {});
-      } catch { /* non-fatal */ }
 
       const response: ApiResponse = { success: true, data: { submitted: true } };
       res.json(response);
@@ -720,14 +579,10 @@ router.get(
       const isHost = session.host_user_id === userId;
       let isCohost = false;
       if (!isHost && !isAdmin) {
-        // Phase R6 (20 May 2026) — session_cohosts is the canonical cohost
-        // source. Pre-fix queried session_participants.role which doesn't
-        // exist; the silent catch returned [] so cohosts could never view
-        // the event plan they'd been added to.
-        const cohostRes = await query<{ user_id: string }>(
-          `SELECT user_id FROM session_cohosts WHERE session_id = $1 AND user_id = $2 LIMIT 1`,
+        const cohostRes = await query<{ id: string }>(
+          `SELECT id FROM session_participants WHERE session_id = $1 AND user_id = $2 AND role = 'co_host' LIMIT 1`,
           [sessionId, userId],
-        ).catch(() => ({ rows: [] as { user_id: string }[] }));
+        ).catch(() => ({ rows: [] as { id: string }[] }));
         isCohost = cohostRes.rows.length > 0;
       }
       if (!isHost && !isCohost && !isAdmin) {
@@ -742,35 +597,24 @@ router.get(
         status: string;
         cnt: string;
         fallback_count: string;
-        repeat_count: string;
       }>(
-        // 25 May (Ali live test) — the EVENT PLAN strip reflects ALGORITHM
-        // rounds only. Manual breakout rooms inherit the current round_number
-        // (host-actions INSERTs use activeSession.currentRound) and are
-        // status='active', so a manual room created AFTER a round ended was
-        // flipping that round's chip back to amber "Active". Exclude manual.
-        // 26 May — also sum repeat_in_event so the host tooltip can report
-        // "N pairs reused a past partner" (Item A tooltip spec).
         `SELECT round_number, status, COUNT(*)::text AS cnt,
-                SUM(CASE WHEN fallback_used THEN 1 ELSE 0 END)::text AS fallback_count,
-                SUM(CASE WHEN repeat_in_event AND COALESCE(is_manual, FALSE) = FALSE THEN 1 ELSE 0 END)::text AS repeat_count
+                SUM(CASE WHEN fallback_used THEN 1 ELSE 0 END)::text AS fallback_count
          FROM matches
          WHERE session_id = $1
-           AND COALESCE(is_manual, FALSE) = FALSE
          GROUP BY round_number, status
          ORDER BY round_number`,
         [sessionId],
       );
 
       // Aggregate per round.
-      const byRound = new Map<number, { statuses: Map<string, number>; fallbackCount: number; repeatCount: number }>();
+      const byRound = new Map<number, { statuses: Map<string, number>; fallbackCount: number }>();
       for (const row of matchesResult.rows) {
         const r = row.round_number;
-        if (!byRound.has(r)) byRound.set(r, { statuses: new Map(), fallbackCount: 0, repeatCount: 0 });
+        if (!byRound.has(r)) byRound.set(r, { statuses: new Map(), fallbackCount: 0 });
         const entry = byRound.get(r)!;
         entry.statuses.set(row.status, parseInt(row.cnt, 10));
         entry.fallbackCount += parseInt(row.fallback_count || '0', 10);
-        entry.repeatCount += parseInt(row.repeat_count || '0', 10);
       }
 
       // Get bye participants per round (those NOT in any match for that round).
@@ -781,18 +625,12 @@ router.get(
            SELECT user_id FROM session_participants
            WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')
              AND user_id != $2
-             -- 23 May (Stefan live test): cohosts are hosts too (excluded from
-             -- matching), so they must not be counted as "not matched" either.
-             -- Pre-fix, promoting someone to co-host made them show up in the
-             -- "N not matched" tally, confusing the host.
-             AND user_id NOT IN (SELECT user_id FROM session_cohosts WHERE session_id = $1)
          ),
          round_participants AS (
            SELECT m.round_number,
                   unnest(ARRAY[m.participant_a_id, m.participant_b_id, m.participant_c_id]) AS user_id
            FROM matches m
            WHERE m.session_id = $1 AND m.status NOT IN ('cancelled')
-             AND COALESCE(m.is_manual, FALSE) = FALSE
          )
          SELECT r.round_number,
                 (SELECT COUNT(*)::text FROM active_participants ap
@@ -800,8 +638,7 @@ router.get(
                    SELECT 1 FROM round_participants rp
                    WHERE rp.round_number = r.round_number AND rp.user_id = ap.user_id
                  )) AS bye_count
-         FROM (SELECT DISTINCT round_number FROM matches
-               WHERE session_id = $1 AND COALESCE(is_manual, FALSE) = FALSE) r`,
+         FROM (SELECT DISTINCT round_number FROM matches WHERE session_id = $1) r`,
         [sessionId, session.host_user_id],
       );
       const byeByRound = new Map<number, number>();
@@ -810,11 +647,11 @@ router.get(
       }
 
       // Build the response: include every round 1..totalRounds, even if not yet planned.
-      const rounds: { roundNumber: number; status: string; pairCount: number; byeCount: number; hasFallback: boolean; repeatPairCount: number }[] = [];
+      const rounds: { roundNumber: number; status: string; pairCount: number; byeCount: number; hasFallback: boolean }[] = [];
       for (let r = 1; r <= totalRounds; r++) {
         const entry = byRound.get(r);
         if (!entry || entry.statuses.size === 0) {
-          rounds.push({ roundNumber: r, status: 'unplanned', pairCount: 0, byeCount: 0, hasFallback: false, repeatPairCount: 0 });
+          rounds.push({ roundNumber: r, status: 'unplanned', pairCount: 0, byeCount: 0, hasFallback: false });
           continue;
         }
         // Determine aggregate status. Priority: active > completed > planned > cancelled > mixed.
@@ -833,10 +670,6 @@ router.get(
           pairCount,
           byeCount: byeByRound.get(r) || 0,
           hasFallback: entry.fallbackCount > 0,
-          // 26 May — count of algorithm pairs where at least one person had
-          // already met their partner in a prior round of this event. Drives
-          // the host tooltip: "N pairs reused a past partner this round."
-          repeatPairCount: entry.repeatCount,
         });
       }
 

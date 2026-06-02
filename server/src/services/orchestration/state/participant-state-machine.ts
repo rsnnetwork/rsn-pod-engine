@@ -27,12 +27,7 @@
 import logger from '../../../config/logger';
 import { query } from '../../../db';
 import { ParticipantStatus } from '@rsn/shared';
-import { activeSessions, sessionRoom } from './session-state';
-import type { Server as SocketIOServer } from 'socket.io';
-
-// 26 May (Ali live test) — reconnection grace for the stale-DISCONNECTED→LEFT
-// escalation, measured from the actual disconnect moment (memState.updatedAt).
-const STALE_DISCONNECT_GRACE_MS = 90_000;
+import { activeSessions } from './session-state';
 
 /**
  * Stefan's full state set from 1 May spec, plus the existing DB enum values.
@@ -255,16 +250,6 @@ export async function transitionParticipant(
       }
       if (toState === ParticipantState.LEFT || toState === ParticipantState.REMOVED) {
         setClauses.push(`left_at = NOW()`);
-      } else {
-        // M1 fix (21 May Ali) — clearing left_at on any non-terminal transition
-        // keeps the (status, left_at) pair internally consistent. The 21 May
-        // event left two rows in a corrupt `status='checked_in' + left_at IS NOT NULL`
-        // state because the prior LEFT transition (now removed) was followed by
-        // a reset to CHECKED_IN that didn't symmetrically clear left_at. With this
-        // clause, the invariant `left_at IS NULL ⇔ status NOT IN ('left','removed')`
-        // is maintained by the state machine itself — downstream surfaces can
-        // trust either field as a presence indicator.
-        setClauses.push(`left_at = NULL`);
       }
       if (toState === ParticipantState.NO_SHOW) {
         setClauses.push(`is_no_show = TRUE`);
@@ -281,20 +266,6 @@ export async function transitionParticipant(
       // Continue — in-memory state is still authoritative.
     }
   }
-
-  // Phase 3 — canonical authoritative write. Mirror the state → location/
-  // connState mapping. Best-effort; caller holds withSessionGuard.
-  const canonConn =
-    toState === ParticipantState.DISCONNECTED ? 'disconnected' :
-    toState === ParticipantState.LEFT ? 'left' :
-    toState === ParticipantState.REMOVED ? 'removed' :
-    toState === ParticipantState.NO_SHOW ? 'no_show' : 'connected';
-  const canonLoc: import('./canonical-state').ParticipantLocation =
-    toState === ParticipantState.IN_BREAKOUT && currentRoomId
-      ? { type: 'breakout', roomId: currentRoomId, matchId: '' }
-      : { type: 'main' };
-  void (await import('./canonical-state')).updateCanonicalParticipant(
-    sessionId, userId, { connState: canonConn as any, location: canonLoc });
 
   return { ok: true, fromState, toState };
 }
@@ -322,11 +293,6 @@ export function setPresence(
   }
   const existed = activeSession.presenceMap.has(userId);
   activeSession.presenceMap.set(userId, presence);
-  // Phase 3 — best-effort canonical presence write. Caller holds the session
-  // guard for the heartbeat path; no-op when Redis is down or doc absent.
-  void import('./canonical-state').then(m =>
-    m.updateCanonicalParticipant(sessionId, userId,
-      { connState: 'connected', lastSeenAt: presence.lastHeartbeat.getTime() }));
   return !existed;
 }
 
@@ -347,7 +313,7 @@ export function setPresence(
  * Cost: one SELECT per active session per tick (~30 active sessions × 1
  * query/30s = 1 qps amortised). Safe for current and projected load.
  */
-export async function reconcileSessionStates(sessionId: string, io?: SocketIOServer): Promise<{
+export async function reconcileSessionStates(sessionId: string): Promise<{
   checked: number;
   diverged: number;
   staleEscalated: number;
@@ -414,49 +380,6 @@ export async function reconcileSessionStates(sessionId: string, io?: SocketIOSer
       [sessionId],
     );
     for (const row of staleRows.rows) {
-      // C4 (Phase 3) — the stale SELECT is a snapshot; re-check live state
-      // before escalating. If the user reconnected in the window (present in
-      // presenceMap, or in-memory state already non-DISCONNECTED), skip —
-      // escalating here would wrongly mark a present user as LEFT.
-      const live = activeSession.participantStates?.get(row.user_id);
-      if (activeSession.presenceMap.has(row.user_id) ||
-          (live && live.state !== ParticipantState.DISCONNECTED)) {
-        continue;
-      }
-      // 26 May (Ali live test) — real reconnection grace, measured from the
-      // DISCONNECT moment, not joined_at. The SQL gate uses joined_at, which is
-      // always >90s for an established participant, so someone who completed a
-      // round and then had a transient disconnect (flaky wifi) was escalated to
-      // LEFT on the very next 30s tick — no grace at all, then stuck in the
-      // terminal LEFT state (the "illegal transition" storm + vanished roster
-      // Ali saw). memState.updatedAt is stamped by the transitionParticipant
-      // chokepoint when they ENTERED DISCONNECTED, so it is the true disconnect
-      // time. A never-recovered ghost (Stefan #2) has an old updatedAt and still
-      // escalates.
-      if (live && live.state === ParticipantState.DISCONNECTED && live.updatedAt &&
-          Date.now() - new Date(live.updatedAt).getTime() < STALE_DISCONNECT_GRACE_MS) {
-        continue;
-      }
-      // 26 May — live-socket ground truth. presenceMap drifts stale (heartbeat
-      // gaps / breakout↔main churn), so a still-connected user can be absent
-      // from it; escalating them to LEFT is the recurring "present people
-      // removed / round died" bug. Before the terminal LEFT, ask the socket.io
-      // adapter who is ACTUALLY connected in this session room. A live socket
-      // means present — restore presence and skip the escalation.
-      if (io) {
-        try {
-          const liveSockets = await io.in(sessionRoom(sessionId)).fetchSockets();
-          if (liveSockets.some(s => (s.data as { userId?: string } | undefined)?.userId === row.user_id)) {
-            setPresence(sessionId, row.user_id, { lastHeartbeat: new Date(), socketId: 'reconciled' });
-            logger.info({ sessionId, userId: row.user_id },
-              'Phase 7A.1 — skipped LEFT escalation: live socket present (presenceMap was stale)');
-            continue;
-          }
-        } catch (err) {
-          logger.warn({ err, sessionId, userId: row.user_id },
-            'Phase 7A.1 — fetchSockets liveness check failed; proceeding to escalation');
-        }
-      }
       try {
         const result = await transitionParticipant(sessionId, row.user_id, ParticipantState.LEFT);
         if (result.ok) {
@@ -480,9 +403,17 @@ export async function reconcileSessionStates(sessionId: string, io?: SocketIOSer
     // repair throttle.
     if (staleEscalated > 0 && activeSession.currentRound >= 1) {
       try {
-        const fromRound = activeSession.currentRound + 1;
         const matchingService = await import('../../matching/matching.service');
-        await matchingService.repairFutureRounds(sessionId, fromRound, 'left');
+        // Serialize with the join/leave/host repair paths — the reconciler
+        // ticks independently (30s) and must not race a regeneration that's
+        // mid-flight, or it would clobber freshly-written pairings. Dedicated
+        // match-generation lock so it doesn't block presence updates.
+        const { withMatchGenerationLock } = await import('./session-state');
+        await withMatchGenerationLock(sessionId, () =>
+          // currentRound read inside the lock callback so a round that advanced
+          // while we were queued isn't repaired as if it were still future.
+          matchingService.repairFutureRounds(sessionId, activeSession.currentRound + 1, 'left'),
+        );
       } catch (err) {
         logger.warn({ err, sessionId, staleEscalated },
           'Phase 7A.1 — future-rounds repair after stale escalation failed');
@@ -503,12 +434,12 @@ export async function reconcileSessionStates(sessionId: string, io?: SocketIOSer
 let _globalReconcilerHandle: NodeJS.Timeout | null = null;
 const RECONCILER_INTERVAL_MS = 30_000;
 
-export function startGlobalReconciler(io?: SocketIOServer): void {
+export function startGlobalReconciler(): void {
   if (_globalReconcilerHandle) return;
   _globalReconcilerHandle = setInterval(async () => {
     for (const sessionId of activeSessions.keys()) {
       try {
-        const result = await reconcileSessionStates(sessionId, io);
+        const result = await reconcileSessionStates(sessionId);
         if (result.diverged > 0 || result.staleEscalated > 0) {
           logger.info({ sessionId, ...result }, 'Reconciler tick — drift converged / stale escalated');
         }

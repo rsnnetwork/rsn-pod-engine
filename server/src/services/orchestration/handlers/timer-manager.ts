@@ -66,19 +66,12 @@ export function startSegmentTimer(
 
   // Main segment timeout
   activeSession.timer = setTimeout(() => {
-    // M2 (Phase 6) — re-fetch the live session by id rather than mutating the
-    // ActiveSession reference captured at arm time. If the object was replaced
-    // in the map (e.g. recreated on reconnect when missing), the captured ref
-    // is orphaned and clearing its fields would leak this timer on the new
-    // object. Operate on the current object; fall back to the captured ref so
-    // a removed session still has its timer fields cleared.
-    const s = activeSessions.get(sessionId) ?? activeSession;
-    s.timer = null;
-    s.timerEndsAt = null;
+    activeSession.timer = null;
+    activeSession.timerEndsAt = null;
     // Also clear the sync interval when the timer fires
-    if (s.timerSyncInterval) {
-      clearInterval(s.timerSyncInterval);
-      s.timerSyncInterval = null;
+    if (activeSession.timerSyncInterval) {
+      clearInterval(activeSession.timerSyncInterval);
+      activeSession.timerSyncInterval = null;
     }
     callback();
   }, durationMs);
@@ -121,6 +114,13 @@ export function startSegmentTimer(
       // their own display from a single source of truth instead of
       // decrementing a fragile local counter (caused 60s+ drift).
       endsAt: session.timerEndsAt!.toISOString(),
+      // Clock-offset anchor: the server's wall-clock at emit time. Clients
+      // diff this against their own Date.now() to derive a per-client clock
+      // offset, then anchor the timer off the absolute `endsAt` corrected by
+      // that offset. Without it, a client whose system clock is skewed (or
+      // that misses syncs) ticks from a wrong base and shows a different
+      // countdown than its peers — the "everyone sees a different timer" bug.
+      serverNow: new Date().toISOString(),
     });
   }, 2000);
 

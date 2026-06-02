@@ -50,14 +50,6 @@ export interface DmMessage {
   // can never have reactions yet) don't have to supply an empty record.
   // listMessages always returns it as at least {}.
   reactions?: Record<string, string[]>;
-  // Feature 19 (13 May spec) — Cloudinary-hosted image attachment.
-  // attachmentType is 'image' for this release; reserved for 'audio' / 'file'
-  // in later features. attachmentMeta carries width/height/bytes/format so
-  // the client can render an aspect-correct thumbnail without an extra
-  // Cloudinary transform call. All three are null for text-only messages.
-  attachmentUrl?: string | null;
-  attachmentType?: string | null;
-  attachmentMeta?: Record<string, any> | null;
 }
 
 // ─── Reaction allow-list ───────────────────────────────────────────────────
@@ -94,18 +86,9 @@ function normalizePair(userA: string, userB: string): [string, string] {
 // ─── Authorization ─────────────────────────────────────────────────────────
 
 /**
- * canMessage(userA, userB) — authorization gate for 1:1 DMs.
- *
- * Evaluation order (spec #5, 26 May 2026):
- *   1. self              → {allowed:false, reason:'self'}
- *   2. blocked           → {allowed:false, reason:'blocked'}
- *   3. admin override    → {allowed:true} if userA's global role is admin/super_admin
- *                          (role read from DB — never trusted from client)
- *   4. grandfather       → {allowed:true} if a thread with ≥1 message already exists
- *                          (forward-only: don't break in-progress conversations)
- *   5. mutual gate       → {allowed:true} if encounter_history.mutual_meet_again = TRUE
- *                          else {allowed:false, reason:'not_mutual'}
- *   6. no encounter row  → {allowed:false, reason:'no_encounter'}
+ * canMessage(a, b) — true iff a and b are allowed to DM each other right
+ * now. Encounter-gate + block-gate. The DM UI's "Message" button calls
+ * this so we render the right state on the profile page.
  */
 export async function canMessage(
   userA: string,
@@ -115,53 +98,24 @@ export async function canMessage(
     return { allowed: false, reason: 'self' };
   }
 
-  // Block gate first — cheaper query, most common non-trivial rejection.
+  // Block gate first — cheaper query, more common rejection.
   if (await blockService.areBlocked(userA, userB)) {
     return { allowed: false, reason: 'blocked' };
   }
 
-  // Admin override (step 3) — role must come from the DB, never the client.
-  const roleResult = await query<{ role: string }>(
-    `SELECT role FROM users WHERE id = $1 LIMIT 1`,
-    [userA],
-  );
-  const fromRole = roleResult.rows[0]?.role;
-  if (fromRole === 'admin' || fromRole === 'super_admin') {
-    return { allowed: true };
-  }
-
-  // Grandfather existing threads (step 4) — if a conversation with ≥1 message
-  // already exists, preserve it regardless of current mutual status. This
-  // is forward-only: it keeps in-progress conversations alive but does NOT
-  // allow *new* first messages from non-mutual pairs.
+  // Encounter gate: must share at least one encounter_history row.
   const [orderedA, orderedB] = normalizePair(userA, userB);
-  const threadResult = await query<{ msg_count: string }>(
-    `SELECT COUNT(dm.id)::text AS msg_count
-     FROM dm_conversations c
-     JOIN direct_messages dm ON dm.conversation_id = c.id
-     WHERE c.user_a_id = $1 AND c.user_b_id = $2
-     LIMIT 1`,
-    [orderedA, orderedB],
-  );
-  const msgCount = parseInt(threadResult.rows[0]?.msg_count || '0', 10);
-  if (msgCount > 0) {
-    return { allowed: true };
-  }
-
-  // Mutual gate (step 5) — both users must have mutual_meet_again = TRUE.
-  const encounterResult = await query<{ mutual_meet_again: boolean }>(
-    `SELECT mutual_meet_again FROM encounter_history
+  const result = await query<{ id: string }>(
+    `SELECT id FROM encounter_history
      WHERE user_a_id = $1 AND user_b_id = $2
      LIMIT 1`,
     [orderedA, orderedB],
   );
-  if (encounterResult.rows.length === 0) {
+  if (result.rows.length === 0) {
     return { allowed: false, reason: 'no_encounter' };
   }
-  if (encounterResult.rows[0].mutual_meet_again) {
-    return { allowed: true };
-  }
-  return { allowed: false, reason: 'not_mutual' };
+
+  return { allowed: true };
 }
 
 // ─── Sending ───────────────────────────────────────────────────────────────
@@ -176,83 +130,37 @@ export async function canMessage(
  * Authorization is re-checked here — the canMessage() guard at the UI
  * level is convenient but the source of truth is server-side.
  */
-export interface SendMessageAttachment {
-  url: string;
-  // Feature 20 (13 May) — audio voice messages join images as a supported
-  // attachment type. Both upload to Cloudinary via the same unsigned preset
-  // and live on res.cloudinary.com.
-  type: 'image' | 'audio';
-  meta?: Record<string, any> | null;
-}
-
 export async function sendMessage(
   fromUserId: string,
   toUserId: string,
   content: string,
-  attachment?: SendMessageAttachment | null,
 ): Promise<{ message: DmMessage; conversationId: string }> {
   if (fromUserId === toUserId) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'You cannot DM yourself');
   }
 
-  const trimmed = (content ?? '').trim();
-  const hasText = trimmed.length > 0;
-  const hasAttachment = !!attachment?.url;
-
-  // Feature 19 (13 May spec) — a message must carry text, an attachment, or
-  // both. Pure-empty submissions are still rejected.
-  if (!hasText && !hasAttachment) {
+  const trimmed = content.trim();
+  if (trimmed.length === 0) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Message cannot be empty');
   }
   if (trimmed.length > 4000) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Message too long (max 4000 characters)');
   }
-  if (hasAttachment) {
-    if (attachment!.type !== 'image' && attachment!.type !== 'audio') {
-      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Unsupported attachment type');
-    }
-    // Defence-in-depth: only accept Cloudinary URLs so a hostile client can't
-    // smuggle an arbitrary endpoint into the timeline. The unsigned upload
-    // preset already restricts file type and size on Cloudinary's side.
-    if (!/^https:\/\/res\.cloudinary\.com\//.test(attachment!.url)) {
-      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Attachment URL must be hosted on Cloudinary');
-    }
-  }
 
   const auth = await canMessage(fromUserId, toUserId);
   if (!auth.allowed) {
     const message =
-      auth.reason === 'blocked'     ? 'You can no longer message this user'
-      : auth.reason === 'not_mutual'  ? "You can message once you both say 'meet again'"
+      auth.reason === 'blocked' ? 'You can no longer message this user'
       : auth.reason === 'no_encounter' ? "You can't DM someone you haven't met yet"
       : 'You cannot DM this user';
     throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, message);
   }
 
-  return insertDirectMessage(fromUserId, toUserId, hasText ? trimmed : null, hasAttachment ? attachment! : null);
-}
-
-// ─── Broadcast send (no mutual gate) ──────────────────────────────────────
-
-/**
- * Shared transaction body used by BOTH sendMessage (after auth gates pass)
- * and sendBroadcastMessage (auth enforced at job-creation time). This is
- * the single canonical place where the conversation upsert + message insert
- * SQL lives; neither caller duplicates it.
- *
- * Upserts the dm_conversations row, inserts into direct_messages, and
- * returns the same { message, conversationId } shape used throughout the
- * service. Runs inside a single Postgres transaction.
- */
-async function insertDirectMessage(
-  fromUserId: string,
-  toUserId: string,
-  content: string | null,
-  attachment: SendMessageAttachment | null,
-): Promise<{ message: DmMessage; conversationId: string }> {
   return transaction(async (client) => {
     const [orderedA, orderedB] = normalizePair(fromUserId, toUserId);
 
+    // Upsert the conversation row. The deleter side's timestamp is cleared
+    // on the sender's edge so their inbox re-shows the conversation.
     const isSenderA = fromUserId === orderedA;
     const clearDeletedColumn = isSenderA ? 'user_a_deleted_at' : 'user_b_deleted_at';
 
@@ -267,33 +175,18 @@ async function insertDirectMessage(
     );
     const conversationId = convResult.rows[0].id;
 
-    const hasText = content !== null && content.length > 0;
-    const hasAttachment = !!attachment?.url;
-
     const msgResult = await client.query<{
       id: string; conversation_id: string; from_user_id: string;
       content: string; read_at: Date | null; created_at: Date;
-      attachment_url: string | null; attachment_type: string | null;
-      attachment_meta: Record<string, any> | null;
     }>(
-      `INSERT INTO direct_messages (
-         id, conversation_id, from_user_id, content,
-         attachment_url, attachment_type, attachment_meta
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, conversation_id, from_user_id, content, read_at, created_at,
-                 attachment_url, attachment_type, attachment_meta`,
-      [
-        uuid(), conversationId, fromUserId,
-        hasText ? content : null,
-        hasAttachment ? attachment!.url : null,
-        hasAttachment ? attachment!.type : null,
-        hasAttachment ? (attachment!.meta ?? null) : null,
-      ],
+      `INSERT INTO direct_messages (id, conversation_id, from_user_id, content)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, conversation_id, from_user_id, content, read_at, created_at`,
+      [uuid(), conversationId, fromUserId, trimmed],
     );
 
     const m = msgResult.rows[0];
-    logger.info({ fromUserId, toUserId, conversationId, messageId: m.id, attachment: hasAttachment }, 'DM sent');
+    logger.info({ fromUserId, toUserId, conversationId, messageId: m.id }, 'DM sent');
 
     return {
       conversationId,
@@ -304,36 +197,9 @@ async function insertDirectMessage(
         content: m.content,
         readAt: m.read_at,
         createdAt: m.created_at,
-        attachmentUrl: m.attachment_url,
-        attachmentType: m.attachment_type,
-        attachmentMeta: m.attachment_meta,
       },
     };
   });
-}
-
-/**
- * Send a DM as part of an authorized broadcast. Skips canMessage() because the
- * caller (post-event-message job creation) has already authorized the sender
- * for this audience. Still validates content length. Returns the same shape as
- * sendMessage so the caller can broadcast via broadcastDmMessage().
- */
-export async function sendBroadcastMessage(
-  fromUserId: string,
-  toUserId: string,
-  content: string,
-): Promise<{ message: DmMessage; conversationId: string }> {
-  if (fromUserId === toUserId) {
-    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'You cannot DM yourself');
-  }
-  const trimmed = (content ?? '').trim();
-  if (trimmed.length === 0) {
-    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Message cannot be empty');
-  }
-  if (trimmed.length > 4000) {
-    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Message too long (max 4000 characters)');
-  }
-  return insertDirectMessage(fromUserId, toUserId, trimmed, null);
 }
 
 // ─── Reading ───────────────────────────────────────────────────────────────
@@ -372,12 +238,8 @@ export async function listConversations(
     last_message: string | null;
     last_message_at: Date | null;
     last_message_from: string | null;
-    last_attachment_type: string | null;
     unread_count: string;
   }>(
-    // Feature 19 (13 May spec) — also surface the last message's attachment
-    // type so the inbox can render "📷 Photo" when an image was the most
-    // recent send and there's no text caption.
     `SELECT
         c.id AS conversation_id,
         CASE WHEN c.user_a_id = $1 THEN c.user_b_id ELSE c.user_a_id END AS other_user_id,
@@ -386,12 +248,11 @@ export async function listConversations(
         last_msg.content    AS last_message,
         c.last_message_at,
         last_msg.from_user_id AS last_message_from,
-        last_msg.attachment_type AS last_attachment_type,
         COALESCE(unread.cnt, '0')::text AS unread_count
      FROM dm_conversations c
      JOIN users u ON u.id = (CASE WHEN c.user_a_id = $1 THEN c.user_b_id ELSE c.user_a_id END)
      LEFT JOIN LATERAL (
-       SELECT content, from_user_id, attachment_type
+       SELECT content, from_user_id
        FROM direct_messages
        WHERE conversation_id = c.id
        ORDER BY created_at DESC
@@ -412,29 +273,16 @@ export async function listConversations(
   );
 
   return {
-    conversations: result.rows.map(r => {
-      // Feature 19 — inbox preview falls back to a small icon-text when the
-      // last message is an attachment with no caption, so the recipient
-      // doesn't see an empty preview row.
-      const hasText = !!(r.last_message && r.last_message.trim().length > 0);
-      const previewText = hasText
-        ? r.last_message
-        : r.last_attachment_type === 'image'
-          ? '📷 Photo'
-          : r.last_attachment_type === 'audio'
-            ? '🎤 Voice message'
-            : null;
-      return {
-        conversationId: r.conversation_id,
-        otherUserId: r.other_user_id,
-        otherDisplayName: r.other_display_name,
-        otherAvatarUrl: r.other_avatar_url,
-        lastMessage: previewText,
-        lastMessageAt: r.last_message_at,
-        lastMessageFromMe: r.last_message_from === userId,
-        unreadCount: parseInt(r.unread_count, 10),
-      };
-    }),
+    conversations: result.rows.map(r => ({
+      conversationId: r.conversation_id,
+      otherUserId: r.other_user_id,
+      otherDisplayName: r.other_display_name,
+      otherAvatarUrl: r.other_avatar_url,
+      lastMessage: r.last_message,
+      lastMessageAt: r.last_message_at,
+      lastMessageFromMe: r.last_message_from === userId,
+      unreadCount: parseInt(r.unread_count, 10),
+    })),
     total,
   };
 }
@@ -487,14 +335,10 @@ export async function listMessages(
     id: string; conversation_id: string; from_user_id: string;
     content: string; read_at: Date | null; created_at: Date;
     reactions: Record<string, string[]> | null;
-    attachment_url: string | null;
-    attachment_type: string | null;
-    attachment_meta: Record<string, any> | null;
   }>(
     `SELECT
         m.id, m.conversation_id, m.from_user_id,
         m.content, m.read_at, m.created_at,
-        m.attachment_url, m.attachment_type, m.attachment_meta,
         COALESCE(r.reactions, '{}'::jsonb) AS reactions
      FROM direct_messages m
      LEFT JOIN LATERAL (
@@ -521,9 +365,6 @@ export async function listMessages(
       readAt: r.read_at,
       createdAt: r.created_at,
       reactions: r.reactions || {},
-      attachmentUrl: r.attachment_url,
-      attachmentType: r.attachment_type,
-      attachmentMeta: r.attachment_meta,
     })),
     total,
   };

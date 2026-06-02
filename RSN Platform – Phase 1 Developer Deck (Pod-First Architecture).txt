@@ -1,0 +1,261 @@
+RSN Platform – Phase 1 Developer
+Deck (Pod-First Architecture)
+Reference material (must review before estimating):
+● https://rsn.mister-raw.com
+● https://speedmixr.com
+These show direction, inspiration, and current positioning.
+We are not copying. We are building the engine properly.
+Additional technical reference:
+● RSN_DEVELOPMENT_PLAN.pdf (Andrew’s previous implementation plan)
+https://drive.google.com/file/d/1HR-PzxD-X-P-w-4MGvRaoZRGiKcQBfrU/view
+?usp=drive_link
+This document contains useful structural thinking and execution notes.
+The technical team should review it for practical insights.
+However, the architecture must follow the Pod Engine model defined in this deck.
+1) Strategic framing
+The Live RSN Event is not the platform.
+It is one type of Pod.
+Phase 1 focus:
+Build the underlying Pod Engine.
+Then implement RSN Live Event as the first Pod type running on that engine.
+Building only the event creates a feature.
+Building the Pod Engine creates the foundation.
+PART I — The Core Platform (Pod
+Engine)
+2) What is a Pod?
+A Pod is:
+● A set of people
+● With a defined reason to connect
+● With a defined communication structure
+● With a defined orchestration logic
+A Pod is NOT just an event.
+A Pod is a structured connection container.
+Examples:
+● Live Speed Networking (many 1:1 rounds)
+● 25-minute follow-up extension pod
+● Weekly founder reflection pod
+● 1:1 accountability duet
+● 1:1:1 trio
+● Many-to-many discussion
+● Async text-only pod
+● AI + Human pod
+The engine must support all of these structurally.
+3) Core Platform Entities (Data Model Level)
+This must be designed cleanly.
+Minimum core entities:
+1. User
+○ identity
+○ profile
+○ reasons/interests
+○ role (member / host / admin)
+2. Pod
+○ name
+○ description
+○ pod_type
+○ orchestration_type
+○ rules
+○ visibility (private / invite / public)
+3. PodMembership
+○ user_id
+○ pod_id
+○ role inside pod
+○ status
+4. Session
+○ belongs to pod
+○ scheduled_at
+○ duration
+○ configuration
+5. SessionParticipant
+○ session_id
+○ user_id
+○ join_time
+○ leave_time
+○ status
+6. Match
+○ session_id
+○ round_number
+○ participant_a_user_id
+○ participant_b_user_id
+○ metadata
+7. Rating
+○ match_id
+○ from_user_id
+○ quality_score (1–5)
+○ meet_again_boolean
+8. EncounterHistory (critical)
+This is the persistent user-level record of who met whom across ALL
+sessions/events.
+○ user_a_user_id
+○ user_b_user_id
+○ last_met_at
+○ times_met_total
+○ last_quality_score (optional)
+○ last_meet_again_flags (optional)
+9. ConnectionGraph
+This is the derived “relationship strength” layer used for follow-ups and
+recommendations.
+○ user_a_user_id
+○ user_b_user_id
+○ strength_score
+○ mutual_flag
+If this is not structured correctly, everything collapses later.
+Key requirement:
+● Every meeting must be stored on a per-user basis so users can attend
+multiple events and the system can:
+○ avoid repeat matches
+○ show prior connections
+○ recommend follow-ups
+PART II — Pod Engine Capabilities
+4) What the Pod Engine Must Do
+The engine must be able to:
+1. Create Pod Types
+○ Define orchestration logic
+○ Define communication mode
+○ Define matching rules
+2. Handle Membership
+○ Invite system
+○ Approval flow
+○ Join/leave
+3. Run Sessions
+○ Lobby
+○ Timer control
+○ Routing logic
+○ Round progression
+4. Store Interaction Data
+○ Ratings
+○ Mutual signals
+○ Avoid repeats
+5. Generate Follow-up Structures
+○ Suggest new pod
+○ Suggest duet extension
+This is the foundation.
+The Live Event becomes a configuration on top.
+PART III — RSN Live Event (Pod Type
+01)
+5) RSN Live Event as a Pod Configuration
+Pod Type: SPEED_NETWORKING
+Configuration:
+● many participants
+● 5 rounds
+● 8 minutes each
+● 1:1 routing
+● rating after each round
+Member Flow (Detailed Event Plan)
+1. Member receives an invite link from someone and clicks it.
+2. Landing page explains the event, rules, time, and intent.
+3. Member signs up or logs in.
+4. Member states reasons to meet others and selects which events to attend.
+5. Member receives confirmation and calendar invites.
+6. When event time arrives, member clicks link and logs in.
+7. Event starts in the Lobby. Participants arrive and are visible. Host greets
+everyone (Zoom-like waiting room experience).
+8. Host begins event. Matching engine activates.
+9. System routes everyone into 1:1 rooms for 8 minutes.
+10. When breakout ends, user returns automatically to lobby.
+11. User rates:
+● How was the conversation? (1–5)
+● Would you like to meet this person again? (Yes/No)
+12. Host resets and next round begins.
+13. Total of 5 rounds.
+14. Outtro: Host thanks everyone.
+15. After event ends:
+● Platform generates new connections list.
+● Mutual meet-again connections highlighted.
+● Email sent with recap and connection details.
+● Option presented to create or join a follow-up Pod (example: 25-minute
+extension session).
+RSN is the place humans connect for a reason.
+The event is one orchestration type built on the Pod Engine.
+Host Controls
+● Start session
+● Start/pause round
+● End session
+● Remove participant
+This is just a preset built on the engine.
+PART IV — Matching System (Engine
+Level)
+6) Matching Is an Engine Service
+Matching must be a separate service.
+Inputs:
+● Pod configuration
+● Session participants
+● Profile data
+● History
+● Constraints
+Outputs:
+● Pairings for round
+V1 logic:
+● Similarity score (shared reasons)
+● Diversity logic (avoid same company / repeats)
+● Hard constraints (language/timezone)
+● No duplicate match within same session
+Later: AI improvement layer.
+But architecture must support replacement of the matching algorithm.
+PART V — Infrastructure & Security
+Baseline
+7) Non-Negotiable
+● Role-based access control
+● Invite token validation
+● Rate limiting
+● Bot protection
+● Audit logs
+● Separation between Pod logic and matching logic
+Stack proposal (subject to technical team decision):
+● Next.js frontend
+● Postgres (Supabase or AWS RDS)
+● Realtime layer (WebSockets or Supabase realtime)
+● Video layer: LiveKit (LiveKit Cloud for Phase 1, self-host later if needed)
+● Cloudflare for WAF + rate limiting
+Why LiveKit
+● Built for real-time programmable video (not generic meetings)
+● Strong support for dynamic room creation and participant routing
+● Good control over 1:1 breakout logic
+● Scales horizontally
+● Cleaner for future pod types (AI rooms, trio rooms, etc.)
+Fallback options only if necessary:
+● Daily (fast integration)
+● Zoom SDK (familiar UX, less control)
+Do not over-engineer multi-cloud.
+Ship stable first.
+PART VI — Definition of Done (Phase 1)
+Phase 1 is complete when:
+1. We can create a Pod type: Raw Speed Networking Event.
+2. We can create a Session inside that Pod.
+3. Users can join.
+4. Matching routes correctly.
+5. Ratings are stored.
+6. Mutual meet-again connections are generated.
+7. Recap email is sent.
+8. System handles 300+ concurrent users.
+---
+PART VII — Commercial Terms (Phase
+1 Agreement)
+Payment Structure (USD)
+Milestone 1 — $500 upfront
+● Kickoff
+● Architecture confirmation
+● Initial repository setup
+● Core data model implemented
+Milestone 2 — $500 upon successful internal test
+● Pod Engine functional
+● Session creation working
+● Matching running for controlled test
+● End-to-end internal simulation completed
+Milestone 3 — $500 upon first successful live RSN event
+● 300+ users supported
+● 5 full rounds completed
+● Ratings stored
+● Recap email + connection list delivered
+Total Phase 1 build: $1,500
+After successful live event:
+● $1,200 per month maintenance + iterative development
+● Covers bug fixes, performance tuning, small feature iterations
+● Valid until external funding
+● Upon funding, terms renegotiated
+Expectations
+● Transparent hourly tracking internally
+● Clear weekly deliverables
+● No scope expansion without discussion
+● Stability over speed
+Technical team: Based on this structure and payment plan, provide the build plan,
+timeline, and stack decision.

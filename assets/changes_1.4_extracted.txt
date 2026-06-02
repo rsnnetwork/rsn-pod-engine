@@ -1,0 +1,229 @@
+RSN Platform Changes and Errors from Call with Shradha
+Source
+Impromptu Google Meet Meeting, March 15
+This document turns the call into a structured master list of bugs, corrections, missing features, and architectural clarifications.
+1. Critical Functional Errors and Bugs
+1.1 Login and Session Bugs
+ Users still have to log in twice.  Session is not persisting correctly after login.  Admin appears to get logged out unexpectedly after event completion.  Invite flow sometimes logs the user in, but then closes or behaves
+inconsistently.
+1.2 Invite Flow Bugs
+ Event invite link flow is unstable.  Invite page opens and closes unexpectedly.  Login from invite does not complete reliably.  Sending a second invite can produce: "fail to create invite".  It is unclear whether an invited user has actually joined or not after
+clicking invite links.
+1.3 Lobby and Live Event Bugs
+ Users can enter the waiting room before the host starts the event.  Participant can see "host is offline" while the host is in fact online.  Lobby does not properly show who is present.  Host cannot clearly see all participants present before starting.  Participants cannot reliably see each other before matching starts.
+1.4 Chat Bugs
+
+ Only host chat appears to work.  Participant chat does not work from both sides.  Chat visibility is incomplete.  Messages are not clearly shown in real time for all participants.
+1.5 Matching and Round Bugs
+ Same two people can be matched again even after they already met in the same event.
+ Encounter history is not stored properly.  System does not prevent repeated matching.  After round completion, rating step is missing.  Previously existing round rating seems to have disappeared.
+1.6 Event Recap Bug
+ Event recap fails to load after the event.  System displays "Could not load your recap".  Completed event state exists, but recap data does not render.
+1.7 Navigation and UI Bugs
+ Clicking the bottom profile section does not correctly take the user to the profile.
+ Admin quick actions and admin navigation elements are not fully clickable.
+ The pending requests area in the admin is not behaving correctly from the dashboard.
+1.8 Form and Field Bugs
+ LinkedIn field should not require a full URL entry.  System should auto-handle the LinkedIn base path rather than forcing
+users to paste the entire link.  Profile field behaviour is too rigid for intended matching use.
+1.9 Email Design Issue
+ Email template design does not appear branded or correctly styled.  Event and invite emails appear to fall back to an old or default email
+template.
+2. Pod System Corrections
+
+2.1 Pod Type Logic is Incorrect
+The current pod setup mixes up pod type with member count.
+What pod type should represent:
+ The kind of pod  The structural purpose of the pod  The reason people are gathered
+Examples of pod types:
+ Reason pod  Conversational pod  Speed networking pod  Webinar pod  Physical event pod  Chat pod  Two sided networking pod  One sided networking pod
+What pod type should not represent:
+ Maximum number of members
+2.2 Max Members Logic Must Change
+ Max members should be separate from pod type.  Standard should effectively allow unlimited members unless the pod
+type itself forces a limit.  If a pod type is structurally fixed, such as a two person conversational
+pod, the system should enforce that automatically.
+2.3 Pod Editing is Incomplete
+Currently pod editing only allows partial editing.
+Pod editing must allow editing of:
+ Pod name  Description  Pod type  Visibility  Capacity  Access rules
+
+ Invitation behaviour  Any core configuration attached to the pod
+2.4 Pod Copy Behaviour is Wrong
+ Copying a pod should open a proper editable duplicate workflow.  It should be obvious where the copied pod is.  Copying should not silently create a pod without clear edit access.
+2.5 Pod Member States Are Missing
+Pod member management should show clear status buckets:
+ Invited  Accepted  Declined  No response  Pending approval
+2.6 Pod List and Browse Flow Needs Correction
+Default state should show active pods.
+Recommended order:
+ Browse all  Active  Archived  All
+Also:
+ Browse all should be visually distinct from a user's own pods.  Users should clearly understand when they are browsing public pods
+versus viewing their own pods.
+3. User Profile and Matching Data Corrections
+3.1 Expertise and Interests Field is Too Small
+ Expertise and interests needs to be a larger text field.  This data will later feed AI based classification and matching.
+Here:
+
+3.2 Profile Needs Better Structured Matching Data
+The profile must capture more useful matching signals, including:
+ Who the user is  What they care about  What they can help with  Who they want to meet  Why they want to meet them  Their interests  Their expertise  Their intent
+3.3 Profile Should Become a Card
+ Each profile should become a scan-friendly card.  Card should make it easy to decide whether someone is relevant for
+matching.  This is especially important for premium match selection.
+Suggested card elements:
+ Photo  Name  Short identity summary  Interests  Expertise  Who they want to meet  Reason for connecting
+
+3.4 Premium Match Selection Feature
+Premium functionality should allow users to preselect up to 12 people they want to meet for an event.
+Logic should include:
+ User selects preferred people  Matching should take mutual interest into account  Premium priority may influence tie breaking where appropriate  System should still protect fairness and relevance
+4. User Search, Invite, and Access Control Corrections
+4.1 Platform User Search is Incomplete
+When inviting platform users, system must support:
+ Search existing users  Filter users  Select relevant users  Search beyond a tiny visible list
+4.2 Invite Limits Are Wrong
+ Limit of 10 invited users is not sufficient.  Invite limits should be configurable in admin.  Some pod creators may need to invite very large groups.
+4.3 Invite Permissions Must Be Role Based
+Suggested permission structure:
+ Super admins can invite everyone  Standard users can only invite platform users they have encountered,
+matched with, or otherwise have permission to invite
+4.4 User Settings Need Invitation Preferences
+Users should be able to control whether they want to receive invitations to platform wide recurring events.
+
+For example:
+ I do not want invites to weekly Reason events  I do want invite notifications from private pods I joined
+4.5 Public and Private Pod Access Model Needed
+Pods should support:
+ Public join  Public with approval  Private invite only  Request to join
+4.6 Request to Join Needs Access Logic
+Pod creators should be able to require:
+ Join request approval  Screening questions  Agreement checkboxes  Rules acknowledgement before acceptance
+5. Event System Corrections
+5.1 Pod and Event Must Be Separated Structurally
+This is a key correction from the call.
+Definitions:
+Pod A container of people gathered for a reason.
+Event A way those people engage with one another.
+This distinction must exist in the product model, the UI, and the database.
+5.2 Event Type Must Be Selectable When Scheduling
+When scheduling an event, user must choose the event type.
+Possible event types include:
+
+ Speed networking  Video meeting  Voice meeting  Ongoing chat  Webinar  Physical event
+The current system assumes speed networking only, which is too narrow.
+5.3 Event Scheduling Defaults Need Improvement
+ Date and time should default to current values.  UI should not show raw placeholder style fields as the main default.
+5.4 Event Participant Tracking Must Improve
+Event detail page should show:
+ Invited count  Going count  Declined count  Waiting for response count
+Filters should allow viewing each group separately.
+5.5 Invite Landing Page Needs Context
+Invite page should show:
+ Event name  Who invited the user  Why they were invited if relevant
+Current invite page is too generic.
+5.6 Waiting Room Logic Must Improve
+ Participants should not enter waiting room before host starts event.  Waiting room should accurately reflect host status.  Participant presence should be visible.
+5.7 Match Flow Needs Better State Control
+Host flow should be:
+
+ Match people  Review or amend matches if needed  Start round
+This should be explicit and controlled.
+5.8 Post Round Flow Needs Improvement
+After each round there should be:
+ Rating step  Option to indicate desire to meet again  Optional short extension request in future versions  Proper transition into next round or wrap up
+5.9 Event Recap Must Be Useful
+Recap should show:
+ Who you met  Ratings given  Whether there was mutual interest  Whether there was a rematch or follow up signal  Summary of event participation
+6. Admin System Corrections
+6.1 Admin Must Be a Real Control Center
+Admin currently feels partial and underpowered.
+Admin should include at minimum:
+ User management  Pod management  Event management  Invite management  Request approvals  Matching templates or engine settings  Violations and moderation  Email and automation controls  Platform stats  Limits and permissions settings
+
+6.2 Bulk Actions Needed
+Admin should support bulk operations such as:
+ Bulk approve users  Bulk decline users  Bulk invite users  Bulk manage event participants
+6.3 Request Management Needs Improvement
+Pending join requests should:
+ Be easy to access  Be clickable from admin dashboard  Support status views  Trigger correct emails on approval or decline
+7. Strategic Product Architecture Clarification
+This is one of the most important outputs from the call.
+7.1 Proposed Structural Hierarchy
+Circle A broader community or ecosystem layer. Examples:
+ Founders  Students  Investors  Tea producers  Companies
+Pod A subgroup inside a circle, gathered for a reason. Examples:
+ Founder sparring pod  Hiring pod  Investor founder pod  Students Pod  PhD support pod
+
+Event A way the pod interacts. Examples:
+ Speed networking event  Live chat event  Voice call event  Webinar  Physical meetup
+7.2 People and Entities
+The system should ultimately support both:
+ Individuals  Entities such as companies or institutions
+Entities should be able to create and manage their own structures inside the platform.
+8. Commercial and Future Facing Feature Signals from the Call
+These are not immediate bug fixes, but they are important directional points captured in the session.
+8.1 Platform Should Support Private Professional Use Cases
+Examples mentioned in the call:
+ Private investor meetings  Founder investor events  Hiring events  Academic groups  Topic based communities  Physical city based gatherings
+8.2 Platform Should Become More Than RSN Events
+The call reinforces that the current speed networking feature is only the first use case. The product direction is broader:
+
+ Group communication infrastructure  Purpose based interaction platform  Event and meeting infrastructure  Human matching layer
+8.3 Business Use Case Support
+Companies and institutions should later be able to:  Create circles  Run private pods  Schedule their own events  Use the platform for internal or external interaction
+9. Platform Branding Integration
+Based on the RSN visual strategy, the platform should consistently reflect the brand identity across all user-facing surfaces.
+9.1 Brand Colors Implementation
+The following colors should be integrated across the platform UI. Primary Emphasis Color
+ Red: #DE322E
+ Usage:
+ Calls to action
+ Important decisions
+ Key interaction elements
+ Notifications requiring attention
+Secondary Structure Colors  Black: #000000 (structure, text, hierarchy)
+ White: #FFFFFF (background and breathing space)
+
+ Light Gray: #F3F4F6 (UI surfaces, containers)
+Guideline  Red must be used sparingly.  Never use red as a large background fill.  It should signal action, urgency, or importance, not decoration.
+9.2 Platform Entry Branding
+The login experience should reinforce the brand. Changes required: Login Page
+ Display RSN logo prominently  Use brand red (#DE322E) for login buttons and primary actions  Clean white background with strong spacing
+Email and Invite Pages  Should reflect RSN colors and typography  Replace current fallback template with branded layout
+Navigation  Brand logo visible in top navigation  Logo should link back to the main dashboard/home
+10. Priority Implementation Order
+Priority 1
+Fix core reliability issues:  Login persistence
+
+ Invite flow  Waiting room access logic  Host status accuracy  Participant visibility  When logging out, a caution­like: are you sure you want to log out?
+Priority 2
+Fix live event functionality:
+ Chat for all users  Encounter tracking  Repeat match prevention  Rating flow restoration  Event recap loading
+Priority 3
+Fix pod management:
+ Pod type logic  Max member separation  Pod editing completeness  Pod copy behaviour  Member statuses
+Priority 4
+Fix search, invite, and permissions:
+ Search platform users  Filter inevitable users  Role based invitation permissions  User invitation preferences  Configurable invite limits
+Priority 5
+Expand event model:
+ Selectable event types  Better scheduling defaults  Participant status filters  Invite landing page context
+
+ Better post round flow  Brand color alignment
+Priority 6
+Strengthen admin:
+ Clickable admin dashboard  Bulk approvals  Matching templates  Violations  Emails and automations  Stats and permissions
+10. Simple One Line Summary
+The main issues from the call are that the current platform has unstable login and invite behaviour, incomplete event and lobby logic, weak pod editing and invite controls, missing rating and encounter tracking, and a structural product gap where pods and events are not yet cleanly separated in the system.
+11. Clean Developer Checklist Version
+Bugs to Fix
+ Fix double login issue  Fix unstable invite login flow  Fix second invite failure  Fix waiting room access before host starts  Fix false host offline state  Fix participant visibility in lobby  Fix participant chat  Fix missing round rating  Fix missing encounter tracking  Fix repeated matching of same people  Fix recap loading failure  Fix unexpected admin logout  Fix broken profile navigation  Fix non clickable admin request navigation  Fix LinkedIn field handling  Fix email template styling
+
+Functional Changes to Make
+ Make expertise and interests a large text field  Add better profile matching fields  Turn profile into a match card  Add premium pre selection of preferred people to meet  Add user database search and filtering when inviting  Add role based invite permissions  Add configurable invite limits  Add user settings for event invite preferences  Separate pod type from max members  Allow full pod editing  Improve pod copy flow  Add member state tracking in pods  Correct pod list default and order  Separate pod and event structurally  Add selectable event types  Improve event scheduling defaults  Add participant status tracking for events  Improve invite page context  Add request to join flow for pods  Add access questions and acceptance rules  Restore post round rating flow  Add meet again signal after rounds  Build useful recap page  Improve admin into full control layer  Add bulk admin actions
+Product Architecture Direction
+ Build Circle layer above pods  Keep pods as reason based containers  Keep events as interaction types inside pods  Support both individuals and entities in the long term  Support both digital and physical event structures
+
+

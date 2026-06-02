@@ -77,8 +77,11 @@ describe('Phase 8A — Stefan 8 May server fixes (architectural pins)', () => {
       expect(src).toMatch(/participantAId\s*===\s*participantBId|participantBId\s*===\s*participantAId|cannot be matched with themselves|self.?match/i);
     });
 
-    // 23 May (#12) — "host:force_match enables sessionWideActiveCheck" test
-    // removed: manual pairing (force-match) was removed per Stefan.
+    test('host:force_match enables sessionWideActiveCheck', () => {
+      // The force-match handler lives in matching-flow.ts (not host-actions).
+      const src = readFileSync(MATCHING_FLOW, 'utf8');
+      expect(src).toMatch(/handleHostForceMatch[\s\S]{0,2000}sessionWideActiveCheck\s*:\s*true/);
+    });
   });
 
   // ── 8A.4 ────────────────────────────────────────────────────────────────

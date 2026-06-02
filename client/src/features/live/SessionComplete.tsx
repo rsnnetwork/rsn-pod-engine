@@ -3,36 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
 import Avatar from '@/components/ui/Avatar';
 import { Spinner } from '@/components/ui/Spinner';
-import { CheckCircle, Users, Star, Handshake, ArrowRight, UserCheck, CircleDot, MessageSquare } from 'lucide-react';
+import { CheckCircle, Users, Star, Handshake, ArrowRight, UserCheck, CircleDot } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
-import { useAuthStore } from '@/stores/authStore';
-import { E } from '@/realtime/entities';
-
-// Feature 17 + 18 (13 May spec) — DM button on recap rows. One click lands
-// the user directly in the chat panel with the composer ready; no prompt,
-// no API round-trip from the recap. MessagesPage handles the routing for
-// both the "existing conversation" and "compose new" cases via the
-// /messages/new/:userId route. Same component used by SessionComplete and
-// RecapPage so behaviour is uniform across both recap views.
-function MessagePartnerButton({ userId, displayName }: { userId: string; displayName: string }) {
-  const navigate = useNavigate();
-  const openConversation = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    navigate(`/messages/new/${userId}`);
-  };
-  return (
-    <button
-      onClick={openConversation}
-      title={`Message ${displayName || 'this user'}`}
-      className="shrink-0 inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded-md border border-indigo-200 hover:bg-indigo-50 transition-colors"
-      data-testid={`recap-dm-button-${userId}`}
-    >
-      <MessageSquare className="h-3.5 w-3.5" /> Message
-    </button>
-  );
-}
 
 interface Connection {
   userId: string;
@@ -45,7 +18,6 @@ interface Connection {
   theirMeetAgain: boolean;
   mutualMeetAgain: boolean;
   roundNumber: number;
-  isManual: boolean;
 }
 
 // Phase 1 (5 May 2026 spec compliance) — these stats are now derived
@@ -63,17 +35,11 @@ interface Stats {
 interface Props { sessionId: string; }
 
 function InterestBadge({ connection }: { connection: Connection }) {
-  // "Mutual interest" on a per-round recap row must reflect THIS event: both
-  // people rated meet-again here. `connection.mutualMeetAgain` is the LIFETIME
-  // encounter_history.mutual_meet_again (true from a PRIOR event), so using it
-  // showed "Mutual interest" on rows even when this event had 0 mutual matches
-  // (Ali, 26 May). The DM/Message gate below intentionally stays on the lifetime
-  // flag; only this visual badge moves to the this-event signal.
-  if (connection.meetAgain && connection.theirMeetAgain) {
+  if (connection.mutualMeetAgain) {
     return (
       <div className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-600 font-medium">
         <Handshake className="h-3 w-3 text-indigo-500" />
-        <span>Mutual interest</span>
+        <span>Mutual Match!</span>
       </div>
     );
   }
@@ -81,7 +47,7 @@ function InterestBadge({ connection }: { connection: Connection }) {
     return (
       <div className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-600">
         <UserCheck className="h-3 w-3" />
-        <span>You wanted to meet again</span>
+        <span>You expressed interest</span>
       </div>
     );
   }
@@ -89,7 +55,7 @@ function InterestBadge({ connection }: { connection: Connection }) {
     return (
       <div className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-blue-600">
         <UserCheck className="h-3 w-3" />
-        <span>They wanted to meet again</span>
+        <span>They expressed interest</span>
       </div>
     );
   }
@@ -98,18 +64,11 @@ function InterestBadge({ connection }: { connection: Connection }) {
 
 export default function SessionComplete({ sessionId }: Props) {
   const navigate = useNavigate();
-  // Button visibility only — server gate is authoritative. Admins see Message
-  // on every person; members only see it on mutual matches.
-  const currentUserRole = useAuthStore((s) => s.user?.role);
-  const isAdmin = currentUserRole === 'admin' || currentUserRole === 'super_admin';
   const [connections, setConnections] = useState<Connection[]>([]);
   const [mutualConnections, setMutualConnections] = useState<Connection[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [totalRounds, setTotalRounds] = useState(0);
   const [roundsAttended, setRoundsAttended] = useState(0);
-  // #15 (23 May) — bonus rounds added live via "Another Round" (same recap-
-  // endpoint field the Full Recap uses, so both views agree).
-  const [bonusRoundsAdded, setBonusRoundsAdded] = useState(0);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(false);
 
@@ -117,15 +76,8 @@ export default function SessionComplete({ sessionId }: Props) {
     queryKey: ['session', sessionId],
     queryFn: () => api.get(`/sessions/${sessionId}`).then(r => r.data.data),
     enabled: !!sessionId,
-    meta: { entities: sessionId ? [E.session(sessionId)] : [] },
   });
   const podId = session?.podId;
-
-  // #15 (23 May, Ali) — a bonus round is one added live via "Another Round".
-  // The recap reports how many were added (bonusRoundsAdded); any round beyond
-  // (totalRounds − bonusRoundsAdded) is therefore a bonus round.
-  const isBonusRound = (r: number) =>
-    bonusRoundsAdded > 0 && totalRounds > 0 && r > totalRounds - bonusRoundsAdded;
 
   const fetchRecap = async () => {
     setLoading(true);
@@ -142,7 +94,6 @@ export default function SessionComplete({ sessionId }: Props) {
       setMutualConnections(d?.mutualConnections || []);
       setTotalRounds(d?.totalRounds || 0);
       setRoundsAttended(d?.roundsAttended || 0);
-      setBonusRoundsAdded(d?.bonusRoundsAdded || 0);
 
       // Per-user derived stats. avgQualityScore and meetAgainRate are
       // averaged across only THIS user's ratings (they gave), not the
@@ -151,21 +102,8 @@ export default function SessionComplete({ sessionId }: Props) {
       const avgQualityScore = ratedConns.length > 0
         ? ratedConns.reduce((sum, c) => sum + c.qualityScore, 0) / ratedConns.length
         : 0;
-      // #3 — Meet Again Rate = how many of the people you MET want to meet you
-      // again (their vote), over total unique people met. Was dividing by people
-      // YOU rated off your own field, so zero ratings could read 100%.
-      // #67% (26 May, live-test-2) — connections are PER-MATCH, so someone met
-      // twice this event has two rows. Deduping last-wins (new Map keeps the
-      // LAST row) meant a later un-re-rated re-match (theirMeetAgain=false)
-      // overwrote an earlier true → undercount (showed 67% when all were
-      // mutual). Aggregate per UNIQUE user with OR: a person counts if they
-      // said meet-again in ANY of their rows. Denominator = unique people met.
-      const metUserIds = new Set(conns.map(c => c.userId));
-      const userWantsMeetAgain = new Set(
-        conns.filter(c => c.theirMeetAgain).map(c => c.userId)
-      );
-      const meetAgainRate = metUserIds.size > 0
-        ? userWantsMeetAgain.size / metUserIds.size
+      const meetAgainRate = ratedConns.length > 0
+        ? ratedConns.filter(c => c.meetAgain).length / ratedConns.length
         : 0;
 
       setStats({
@@ -212,9 +150,6 @@ export default function SessionComplete({ sessionId }: Props) {
                 <CircleDot className="h-4 w-4 text-blue-500 shrink-0" />
                 <p className="text-sm text-gray-500">
                   You attended <span className="font-semibold text-gray-900">{roundsAttended}</span> round{roundsAttended !== 1 ? 's' : ''} out of <span className="font-semibold text-gray-900">{totalRounds}</span> total
-                  {bonusRoundsAdded > 0 && (
-                    <> <span className="text-xs text-gray-500">({totalRounds - bonusRoundsAdded} original + {bonusRoundsAdded} bonus)</span></>
-                  )}
                 </p>
               </div>
             )}
@@ -253,84 +188,57 @@ export default function SessionComplete({ sessionId }: Props) {
                 </h3>
                 <div className="space-y-3">
                   {mutualConnections.map(c => (
-                    <div key={c.userId} className="flex items-center gap-3 p-2 rounded-lg bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 transition-colors">
-                      <a href={`/profile/${c.userId}`} className="flex items-center gap-3 flex-1 min-w-0">
-                        <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-gray-900 font-medium truncate">{c.displayName}</p>
-                          {(c.jobTitle || c.company) && (
-                            <p className="text-xs text-gray-500 truncate">
-                              {[c.jobTitle, c.company].filter(Boolean).join(' · ')}
-                            </p>
-                          )}
-                        </div>
-                      </a>
+                    <a key={c.userId} href={`/profile/${c.userId}`} className="flex items-center gap-3 p-2 rounded-lg bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 transition-colors">
+                      <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-gray-900 font-medium truncate">{c.displayName}</p>
+                        {(c.jobTitle || c.company) && (
+                          <p className="text-xs text-gray-500 truncate">
+                            {[c.jobTitle, c.company].filter(Boolean).join(' · ')}
+                          </p>
+                        )}
+                      </div>
                       <Handshake className="h-4 w-4 text-indigo-500 shrink-0" />
-                      <MessagePartnerButton userId={c.userId} displayName={c.displayName} />
-                    </div>
+                    </a>
                   ))}
                 </div>
               </div>
             )}
 
-            {/* All people met — grouped by round, with manual rooms separate (#5) */}
+            {/* All people met — grouped by round */}
             {connections.length > 0 && (() => {
-              const roundConns = connections.filter(c => !c.isManual);
-              const manualConns = connections.filter(c => c.isManual);
-              const byRound = roundConns.reduce<Record<number, Connection[]>>((acc, c) => {
+              const byRound = connections.reduce<Record<number, Connection[]>>((acc, c) => {
                 (acc[c.roundNumber] ||= []).push(c);
                 return acc;
               }, {});
               const rounds = Object.keys(byRound).map(Number).sort((a, b) => a - b);
-              const row = (c: Connection) => (
-                <div key={`${c.userId}-${c.roundNumber}`} className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-100">
-                  <a href={`/profile/${c.userId}`} className="flex items-center gap-3 flex-1 min-w-0">
-                    <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="text-gray-900 font-medium truncate">{c.displayName}</p>
-                        <InterestBadge connection={c} />
-                      </div>
-                    </div>
-                  </a>
-                  {c.qualityScore > 0 && (
-                    <div className="flex items-center gap-1 text-xs text-amber-500">
-                      <Star className="h-3 w-3 fill-amber-400" />
-                      {c.qualityScore}
-                    </div>
-                  )}
-                  {/* Message button: mutual rows always qualify; non-mutual rows only for admins */}
-                  {(c.mutualMeetAgain || isAdmin) && (
-                    <MessagePartnerButton userId={c.userId} displayName={c.displayName} />
-                  )}
-                </div>
-              );
-              return (
-                <>
-                  {rounds.map(round => (
-                    <div key={round} className="bg-gray-50 rounded-2xl p-6 border border-gray-200">
-                      <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-2">
-                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-50 text-blue-600 text-[10px] font-bold">{round}</span>
-                        Round {round}
-                        {isBonusRound(round) && (
-                          <span className="ml-1 inline-flex items-center rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-[10px] font-semibold normal-case tracking-normal">Bonus round</span>
+              return rounds.map(round => (
+                <div key={round} className="bg-gray-50 rounded-2xl p-6 border border-gray-200">
+                  <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-2">
+                    <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-50 text-blue-600 text-[10px] font-bold">{round}</span>
+                    Round {round}
+                  </h3>
+                  <div className="space-y-2">
+                    {byRound[round].map(c => (
+                      <a key={`${c.userId}-${c.roundNumber}`} href={`/profile/${c.userId}`} className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-100">
+                        <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="text-gray-900 font-medium truncate">{c.displayName}</p>
+                            <InterestBadge connection={c} />
+                          </div>
+                        </div>
+                        {c.qualityScore > 0 && (
+                          <div className="flex items-center gap-1 text-xs text-amber-500">
+                            <Star className="h-3 w-3 fill-amber-400" />
+                            {c.qualityScore}
+                          </div>
                         )}
-                      </h3>
-                      <div className="space-y-2">{byRound[round].map(row)}</div>
-                    </div>
-                  ))}
-                  {/* #5 (24 May) — manual breakout rooms are NOT a numbered round */}
-                  {manualConns.length > 0 && (
-                    <div className="bg-gray-50 rounded-2xl p-6 border border-gray-200">
-                      <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-2">
-                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-emerald-50 text-emerald-600 text-[10px] font-bold">M</span>
-                        Manual rooms
-                      </h3>
-                      <div className="space-y-2">{manualConns.map(row)}</div>
-                    </div>
-                  )}
-                </>
-              );
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              ));
             })()}
           </>
         )}

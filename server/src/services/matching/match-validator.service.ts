@@ -33,13 +33,6 @@ export interface MatchValidationInput {
   participantCId?: string | null;
   /** Skip the participant in this match when checking conflicts (UPDATE case). */
   excludeMatchId?: string;
-  /**
-   * Skip MULTIPLE matches when checking conflicts. 23 May — a swap rewrites
-   * two rooms at once, so BOTH must be excluded; otherwise the swap-partner
-   * still sitting in the other room is mis-flagged as "already in another
-   * match" and the swap is rejected.
-   */
-  excludeMatchIds?: string[];
   /** Skip the cross-match DB query (use when caller has just reassigned conflicts). */
   skipConflictCheck?: boolean;
   /** Match statuses considered "occupied" for conflict purposes. Default: ['active']. */
@@ -78,7 +71,6 @@ export async function validateMatchAssignment(
     participantBId = null,
     participantCId = null,
     excludeMatchId,
-    excludeMatchIds,
     skipConflictCheck = false,
     conflictingStatuses = DEFAULT_CONFLICTING_STATUSES,
     minParticipants = 1,
@@ -131,13 +123,6 @@ export async function validateMatchAssignment(
     // an internal allow-list (TypeScript type), not user input.
     const statusInClause = conflictingStatuses.map(s => `'${s}'`).join(', ');
 
-    // 23 May — exclude ALL matches under edit. A swap rewrites two rooms at
-    // once, so both must be skipped or the swap-partner still in the other
-    // room is mis-flagged. `!= ALL('{}')` excludes nothing when the list is empty.
-    const excludeIds = [excludeMatchId, ...(excludeMatchIds || [])].filter(
-      (x): x is string => !!x,
-    );
-
     const conflictQuery = `
       SELECT id AS match_id, user_id
       FROM matches m,
@@ -145,14 +130,14 @@ export async function validateMatchAssignment(
       WHERE m.session_id = $1
         AND m.round_number = $2
         AND m.status IN (${statusInClause})
-        AND m.id != ALL($3::uuid[])
+        AND m.id != COALESCE($3, '00000000-0000-0000-0000-000000000000'::uuid)
         AND user_id = ANY($4)
         AND user_id IS NOT NULL
     `;
 
     const conflictResult = await query<{ match_id: string; user_id: string }>(
       conflictQuery,
-      [sessionId, roundNumber, excludeIds, uniqueIds]
+      [sessionId, roundNumber, excludeMatchId || null, uniqueIds]
     );
 
     if (conflictResult.rows.length > 0) {
@@ -171,22 +156,19 @@ export async function validateMatchAssignment(
   // per-round check above won't see it. The "one user = one room at any
   // moment" invariant requires us to look across all rounds for active rows.
   if (sessionWideActiveCheck && !skipConflictCheck && uniqueIds.length > 0 && participantAId) {
-    const excludeIdsSW = [excludeMatchId, ...(excludeMatchIds || [])].filter(
-      (x): x is string => !!x,
-    );
     const sessionWideQuery = `
       SELECT id AS match_id, user_id, round_number
       FROM matches m,
            LATERAL UNNEST(ARRAY[m.participant_a_id, m.participant_b_id, m.participant_c_id]) AS user_id
       WHERE m.session_id = $1
         AND m.status = 'active'
-        AND m.id != ALL($2::uuid[])
+        AND m.id != COALESCE($2, '00000000-0000-0000-0000-000000000000'::uuid)
         AND user_id = ANY($3)
         AND user_id IS NOT NULL
     `;
     const sessionWideResult = await query<{ match_id: string; user_id: string; round_number: number }>(
       sessionWideQuery,
-      [sessionId, excludeIdsSW, uniqueIds]
+      [sessionId, excludeMatchId || null, uniqueIds]
     );
     if (sessionWideResult.rows.length > 0) {
       const newConflicts = new Set(sessionWideResult.rows.map(r => r.user_id));

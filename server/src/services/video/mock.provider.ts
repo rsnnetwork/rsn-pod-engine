@@ -39,15 +39,4 @@ export class MockVideoProvider implements IVideoProvider {
   async roomExists(roomId: string): Promise<boolean> {
     return rooms.has(roomId);
   }
-
-  // Phase U — in-memory mock. Records the latest publish-permission
-  // state per (roomId, userId) so tests can assert the call happened
-  // without a real LiveKit instance. No actual track suppression
-  // (the mock has no media plane).
-  async setParticipantCanPublishAudio(roomId: string, userId: string, canPublishAudio: boolean): Promise<void> {
-    logger.debug({ roomId, userId, canPublishAudio }, 'MockVideo: setParticipantCanPublishAudio');
-  }
-
-  // Phase 4 (G1) — no-op mock; real eviction handled by LiveKitProvider.
-  async removeParticipant(_roomId: string, _userId: string): Promise<void> { /* no-op */ }
 }

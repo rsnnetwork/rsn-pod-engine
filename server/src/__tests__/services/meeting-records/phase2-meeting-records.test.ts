@@ -95,10 +95,7 @@ describe('Phase 2 — meeting_records stored counts', () => {
       const fnEnd = src.indexOf('\n}\n', fnStart);
       const fn = src.slice(fnStart, fnEnd);
       expect(fn).toMatch(/COUNT\(DISTINCT partner_id\)/);
-      // Bug 5 (13 May): the mutual column must dedupe by partner_id —
-      // same partner across N rounds is still 1 mutual match. Pre-fix
-      // this was COUNT(*) FILTER which counted per-round-pair.
-      expect(fn).toMatch(/COUNT\(DISTINCT partner_id\) FILTER \(WHERE is_mutual = TRUE\)/);
+      expect(fn).toMatch(/COUNT\(\*\) FILTER \(WHERE is_mutual = TRUE\)/);
     });
 
     it('exports recordRoundMeetings for bulk write at round end', () => {

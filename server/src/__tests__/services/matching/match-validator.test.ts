@@ -176,9 +176,7 @@ describe('T0-1 — match-validator.service', () => {
       const sqlText = call[0] as string;
       const sqlParams = call[1] as unknown[];
       expect(sqlText).toMatch(/m\.id\s*!=/i);
-      // 23 May — excludeMatchId is now folded into an excludeIds array param
-      // (so a swap can exclude both rooms); assert it reaches that array.
-      expect(sqlParams.some(p => Array.isArray(p) && (p as unknown[]).includes('match-X'))).toBe(true);
+      expect(sqlParams).toContain('match-X');
     });
 
     it('skipConflictCheck bypasses the DB query entirely', async () => {
@@ -231,9 +229,7 @@ describe('T0-1 — match-validator.service', () => {
         participantCId: 'user-c',
       });
       const params = mockQuery.mock.calls[0][1] as unknown[];
-      // 23 May — two array params now (excludeIds + the user list); pick the
-      // one holding the participant IDs.
-      const userListParam = params.find((p: unknown) => Array.isArray(p) && (p as unknown[]).includes('user-a'));
+      const userListParam = params.find((p: unknown) => Array.isArray(p));
       expect(userListParam).toEqual(['user-a', 'user-b', 'user-c']);
     });
 
@@ -246,7 +242,7 @@ describe('T0-1 — match-validator.service', () => {
         participantCId: null,
       });
       const params = mockQuery.mock.calls[0][1] as unknown[];
-      const userListParam = params.find((p: unknown) => Array.isArray(p) && (p as unknown[]).includes('user-a'));
+      const userListParam = params.find((p: unknown) => Array.isArray(p));
       expect(userListParam).toEqual(['user-a', 'user-b']);
     });
   });

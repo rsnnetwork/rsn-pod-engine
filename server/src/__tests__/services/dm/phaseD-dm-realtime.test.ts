@@ -28,59 +28,33 @@ describe('Phase D — DM real-time + notifications', () => {
       expect(src).toMatch(/export async function handleDmRead\(/);
     });
 
-    // 15 May refactor — the fan-out logic that used to live inline in
-    // handleDmSend now lives in the exported `broadcastDmMessage` helper
-    // so the REST POST /dm/messages route can call it too. The behavioural
-    // invariant ("send → both users get dm:message + conversation_updated +
-    // notification:new") is now pinned against the helper, AND a separate
-    // pin asserts handleDmSend delegates to it.
-
-    it('handleDmSend delegates fan-out to broadcastDmMessage', () => {
+    it('handleDmSend emits dm:message to BOTH users\' rooms', () => {
       const fnStart = src.indexOf('export async function handleDmSend(');
-      const fnEnd = src.indexOf('\n}\n', fnStart);
-      const fn = src.slice(fnStart, fnEnd);
-      expect(fn).toMatch(/broadcastDmMessage\(\s*io,\s*userId,\s*data\.toUserId,\s*conversationId,\s*message\s*\)/);
-    });
-
-    it('broadcastDmMessage is exported for cross-transport reuse', () => {
-      expect(src).toMatch(/export async function broadcastDmMessage\(/);
-    });
-
-    it('broadcastDmMessage emits dm:message to BOTH users\' rooms', () => {
-      const fnStart = src.indexOf('export async function broadcastDmMessage(');
       const fnEnd = src.indexOf('\n}\n', fnStart);
       const fn = src.slice(fnStart, fnEnd);
       const emits = (fn.match(/io\.to\(userRoom\([^)]+\)\)\.emit\(['"]dm:message['"]/g) || []).length;
       expect(emits).toBeGreaterThanOrEqual(2);
     });
 
-    it('broadcastDmMessage emits dm:conversation_updated for inbox sort', () => {
-      const fnStart = src.indexOf('export async function broadcastDmMessage(');
+    it('handleDmSend emits dm:conversation_updated for inbox sort', () => {
+      const fnStart = src.indexOf('export async function handleDmSend(');
       const fnEnd = src.indexOf('\n}\n', fnStart);
       const fn = src.slice(fnStart, fnEnd);
       expect(fn).toMatch(/dm:conversation_updated/);
     });
 
-    it('broadcastDmMessage writes a notifications row with type=direct_message', () => {
-      const fnStart = src.indexOf('export async function broadcastDmMessage(');
+    it('handleDmSend writes a notifications row with type=direct_message', () => {
+      const fnStart = src.indexOf('export async function handleDmSend(');
       const fnEnd = src.indexOf('\n}\n', fnStart);
       const fn = src.slice(fnStart, fnEnd);
       expect(fn).toMatch(/INSERT INTO notifications[\s\S]+?'direct_message'/);
     });
 
-    it('broadcastDmMessage emits notification:new (bell badge integration)', () => {
-      const fnStart = src.indexOf('export async function broadcastDmMessage(');
+    it('handleDmSend emits notification:new (bell badge integration)', () => {
+      const fnStart = src.indexOf('export async function handleDmSend(');
       const fnEnd = src.indexOf('\n}\n', fnStart);
       const fn = src.slice(fnStart, fnEnd);
       expect(fn).toMatch(/notification:new/);
-    });
-
-    it('REST POST /dm/messages also calls broadcastDmMessage so the realtime fan-out fires from either transport', () => {
-      const routeSrc = nodeFs.readFileSync(
-        nodePath.join(__dirname, '../../../routes/dm.ts'), 'utf8',
-      );
-      expect(routeSrc).toMatch(/import\s*\{[\s\S]{0,80}broadcastDmMessage[\s\S]{0,80}\}\s*from/);
-      expect(routeSrc).toMatch(/broadcastDmMessage\(\s*io,/);
     });
 
     it('handleDmSend checks recipient online status via fetchSockets', () => {
@@ -97,10 +71,8 @@ describe('Phase D — DM real-time + notifications', () => {
     });
 
     it('email send is fire-and-forget (void maybeSendDmEmail)', () => {
-      // We never want the socket response to block on email I/O. After the
-      // 15 May refactor the call lives inside broadcastDmMessage instead of
-      // handleDmSend directly.
-      const fnStart = src.indexOf('export async function broadcastDmMessage(');
+      // We never want the socket response to block on email I/O.
+      const fnStart = src.indexOf('export async function handleDmSend(');
       const fnEnd = src.indexOf('\n}\n', fnStart);
       const fn = src.slice(fnStart, fnEnd);
       expect(fn).toMatch(/void maybeSendDmEmail/);

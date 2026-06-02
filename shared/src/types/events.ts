@@ -13,7 +13,7 @@ export interface ServerToClientEvents {
   // Matching & routing
   'match:assigned': (data: { matchId: string; partnerId: string; partnerDisplayName?: string; partners?: { userId: string; displayName: string }[]; roomId: string; roundNumber: number }) => void;
   'match:bye_round': (data: { roundNumber: number; reason: string }) => void;
-  'match:reassigned': (data: { matchId: string; newPartnerId: string; partnerDisplayName?: string; roomId: string; roundNumber?: number; isManual?: boolean }) => void;
+  'match:reassigned': (data: { matchId: string; newPartnerId: string; partnerDisplayName?: string; roomId: string; roundNumber?: number }) => void;
   'match:partner_disconnected': (data: { matchId?: string }) => void;
   'match:partner_reconnected': (data: { matchId?: string }) => void;
 
@@ -64,18 +64,6 @@ export interface ServerToClientEvents {
     sessionId: string;
     reason: 'late_joiner' | 'left' | 'host_request';
     regeneratedRounds: number[];
-    // Bug 18 (18 May Stefan) — server now also reports the post-repair
-    // totals so the host's headline summary updates alongside the
-    // per-round badges. Optional for backward compat with older servers;
-    // when missing the client just doesn't touch the summary store.
-    roundCount?: number;
-    totalPairs?: number;
-    // Bug 28 (19 May Ali + Stefan) — cumulative count of "Another Round"
-    // presses for this event. Only sent on reason='host_request' (the
-    // bump path); late-joiner / left repairs leave it undefined. UI
-    // uses it to render a "Bonus" pill on rounds past the originally-
-    // configured count.
-    bonusRoundsAdded?: number;
   }) => void;
 
   // Host round dashboard (breakout room monitoring).
@@ -129,72 +117,6 @@ export interface ServerToClientEvents {
   'permissions:updated': (data: { sessionId: string; effectiveRole: 'pod_admin' | 'event_host' | 'cohost' | 'participant'; capabilities: string[] }) => void;
   // Phase G (10 May spec item 11) — host or co-host visibility mode changed.
   'host:visibility_changed': (data: { sessionId: string; userId: string; mode: 'big_speaker' | 'normal' | 'producer' | 'hidden' }) => void;
-  // Bug 1 (18 May Stefan) — global pin broadcast. An acting host has
-  // pinned (or unpinned, with pinnedUserId=null) a participant. Every
-  // viewer renders that user as the big tile.
-  'pin:changed': (data: { sessionId: string; pinnedUserId: string | null }) => void;
-  // 19 May Ali — generic realtime invalidator. Server emits the domain
-  // entities that just changed; every client's useEntityChangedHandler
-  // invalidates queries whose meta.entities intersects the payload.
-  // Replaces the bespoke per-event fan-out pattern over time (see
-  // docs/superpowers/plans/2026-05-19-realtime-architecture-migration.md).
-  'entity:changed': (data: { entities: string[] }) => void;
-  // Bug 26 (19 May Ali) — director's per-user visual tile override has
-  // changed. Visual-only: the listed users keep all cohost privileges,
-  // but their tile renders at participant size with no host-ring.
-  // Broadcast to every viewer; clients update local tileDemotedUserIds
-  // and the next Lobby render flattens the affected tiles.
-  'tile:size_changed': (data: { sessionId: string; tileDemotedUserIds: string[] }) => void;
-  // Bug 68 (18 May Stefan) — generic "session roster mutated" signal.
-  // Server emits to the session room on cohost assign/remove, acting-as-
-  // host toggle (self or director-initiated), kick, participant join/leave.
-  // Clients react by refetching the session snapshot — which holds every
-  // derived state (cohosts, overrides, counts, hccParticipants) in one
-  // call. Replaces the per-event-per-mutation socket fan-out pattern with
-  // a single coalescable refresh trigger.
-  'roster:changed': (data: { sessionId: string; cause: string }) => void;
-  // Phase 5 — versioned participant-state snapshot. Monotonically sequenced
-  // (seq); clients use a seq-guard to ignore stale/duplicate pushes. Emitted
-  // on every emitHostDashboard cycle when SNAPSHOT_EMIT_ENABLED=true.
-  // Purely additive — existing events (session:state, participant:joined/left)
-  // are unchanged and remain the primary channel.
-  'state:snapshot': (data: {
-    sessionId: string;
-    seq: number;
-    status: string;
-    currentRound: number;
-    participants: Array<{
-      userId: string;
-      displayName: string;
-      role: 'host' | 'cohost' | 'participant';
-      connState: string;
-      state: 'in_room' | 'in_main_room' | 'disconnected' | 'left';
-    }>;
-  }) => void;
-  // Bug 3 (18 May Stefan) — pod-level membership status changed for a
-  // specific user (approval, rejection, removal). Emitted to that user's
-  // personal room so their UI flips from "Pending approval" to "Active"
-  // without needing a refresh. Pending count on the host's side also
-  // refreshes because the host's same listener re-fetches the pods
-  // pending-list query.
-  'pod:membership_updated': (data: { podId: string; userId: string; cause: string }) => void;
-  // Bug 20 (18 May Stefan) — a session list or detail has changed (new
-  // session, started, ended, etc). Every pod member + registered
-  // participant receives this on their personal room; client invalidates
-  // my-sessions / pod-sessions / session-detail queries.
-  'session:list_changed': (data: { sessionId: string; podId: string | null; cause: string }) => void;
-
-  // Phase May-19 realtime sweep — admin-list / own-notifications / blocks /
-  // user / group events introduced when filling in the 12+ REST routes
-  // flagged by the code-reviewer for missing socket fanout. Clients
-  // listening for these invalidate the relevant React-Query keys so any
-  // open admin / notification / DM / group surface refreshes without a
-  // hard reload.
-  'admin:list_changed': (data: { scope: string; cause: string }) => void;
-  'notification:list_changed': (data: { userId: string; cause: string }) => void;
-  'user:blocks_changed': (data: { blockerId: string; blockedId: string; cause: string }) => void;
-  'user:changed': (data: { userId: string; cause: string }) => void;
-  'group:changed': (data: { groupId: string; userId: string; cause: string }) => void;
 
   // Reactions
   'reaction:received': (data: { userId: string; displayName: string; type: string; timestamp: string }) => void;
@@ -232,9 +154,6 @@ export interface ClientToServerEvents {
   // Session
   'session:join': (data: { sessionId: string }) => void;
   'session:leave': (data: { sessionId: string }) => void;
-  // Phase 5 — request a fresh state:snapshot. Server replies to the
-  // requesting socket only (no broadcast). No-op when flag is off.
-  'session:resync': (data: { sessionId: string }) => void;
 
   // Presence
   'presence:heartbeat': (data: { sessionId: string }) => void;
@@ -245,16 +164,13 @@ export interface ClientToServerEvents {
 
   // Rating
   'rating:submit': (data: { matchId: string; qualityScore: number; meetAgain: boolean; feedback?: string }) => void;
-  // #6 (25 May) — user dismissed the rating via "Skip". Recorded so the round-end
-  // emit + reconnect rating-replay don't re-prompt them (skip = "saw it, declined").
-  'rating:skip': (data: { sessionId: string; matchId: string }) => void;
 
   // Host controls
   'host:start_session': (data: { sessionId: string }) => void;
   'host:start_round': (data: { sessionId: string }) => void;
   'host:pause_session': (data: { sessionId: string }) => void;
   'host:resume_session': (data: { sessionId: string }) => void;
-  'host:end_session': (data: { sessionId: string; endEvent?: boolean }) => void;
+  'host:end_session': (data: { sessionId: string }) => void;
   'host:broadcast_message': (data: { sessionId: string; message: string }) => void;
   'host:remove_participant': (data: { sessionId: string; userId: string; reason: string }) => void;
   'host:reassign': (data: { sessionId: string; participantId: string }) => void;
@@ -264,6 +180,7 @@ export interface ClientToServerEvents {
   'host:exclude_participant': (data: { sessionId: string; userId: string }) => void;
   'host:regenerate_matches': (data: { sessionId: string }) => void;
   'host:cancel_preview': (data: { sessionId: string }) => void;
+  'host:force_match': (data: { sessionId: string; userIdA: string; userIdB: string }) => void;
   'host:move_to_room': (data: { sessionId: string; userId: string; targetMatchId: string }) => void;
   'host:mute_participant': (data: { sessionId: string; targetUserId: string; muted: boolean }) => void;
   'host:mute_all': (data: { sessionId: string; muted: boolean }) => void;
@@ -279,19 +196,6 @@ export interface ClientToServerEvents {
   'host:assign_cohost': (data: { sessionId: string; userId: string; role: 'co_host' | 'moderator' }) => void;
   'host:promote_cohost': (data: { sessionId: string; cohostUserId: string }) => void;
   'host:remove_cohost': (data: { sessionId: string; userId: string }) => void;
-
-  // Bug 1 (18 May Stefan) — global pin. Only acting hosts pass verifyHost;
-  // pinnedUserId=null clears the pin.
-  'host:set_pin': (data: { sessionId: string; pinnedUserId: string | null }) => void;
-
-  // Bug 26 (19 May Ali) — director-only visual demote for a cohost's tile.
-  // size='participant' shrinks; size='host' restores. Server verifies the
-  // caller is the event director (not just any acting host).
-  'host:set_tile_size': (data: {
-    sessionId: string;
-    targetUserId: string;
-    size: 'participant' | 'host';
-  }) => void;
 
   // Reactions
   'reaction:send': (data: { sessionId: string; type: string; matchId?: string }) => void;

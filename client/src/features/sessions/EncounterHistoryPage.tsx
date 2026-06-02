@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
-import { Handshake, Users, Calendar, ThumbsUp, MessageSquare } from 'lucide-react';
+import { Handshake, Users, Calendar, ThumbsUp } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Avatar from '@/components/ui/Avatar';
@@ -9,21 +8,13 @@ import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
 import EmptyState from '@/components/ui/EmptyState';
 import api from '@/lib/api';
-import { useAuthStore } from '@/stores/authStore';
-import { E } from '@/realtime/entities';
 
 export default function EncounterHistoryPage() {
   const [mutualOnly, setMutualOnly] = useState(false);
-  const navigate = useNavigate();
-  const currentUser = useAuthStore((s) => s.user);
-  const currentUserId = currentUser?.id;
-  // Button visibility only — server gate is the real authority.
-  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'super_admin';
 
   const { data: encounters, isLoading } = useQuery({
     queryKey: ['encounters', mutualOnly],
     queryFn: () => api.get(`/ratings/encounters?mutualOnly=${mutualOnly}`).then(r => r.data.data ?? []),
-    meta: { entities: currentUserId ? [E.user(currentUserId)] : [] },
   });
 
   if (isLoading) return <PageLoader />;
@@ -97,16 +88,6 @@ export default function EncounterHistoryPage() {
                   )}
                   {e.mutual && <Badge variant="brand">Mutual</Badge>}
                   {e.connectIntent && <Badge variant="success">Wants to connect</Badge>}
-                  {/* Message button: visible for mutual pairs or admins (server gate is authoritative) */}
-                  {(e.mutual || isAdmin) && (
-                    <button
-                      onClick={(evt) => { evt.preventDefault(); evt.stopPropagation(); navigate(`/messages/new/${e.otherUserId}`); }}
-                      title="Message this person"
-                      className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded-md border border-indigo-200 hover:bg-indigo-50 transition-colors"
-                    >
-                      <MessageSquare className="h-3.5 w-3.5" /> Message
-                    </button>
-                  )}
                 </div>
               </div>
             </Card>

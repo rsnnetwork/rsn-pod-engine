@@ -122,7 +122,7 @@ export async function submitRating(
 
     // Update encounter history
     await upsertEncounterHistory(
-      client, fromUserId, toUserId, match.sessionId, input.matchId, input.qualityScore, input.meetAgain
+      client, fromUserId, toUserId, match.sessionId, input.qualityScore, input.meetAgain
     );
 
     // Phase 2 (1 May spec) — also update meeting_records so recap counts
@@ -158,7 +158,6 @@ async function upsertEncounterHistory(
   fromUserId: string,
   toUserId: string,
   sessionId: string,
-  matchId: string,
   qualityScore: number,
   meetAgain: boolean
 ): Promise<void> {
@@ -168,21 +167,6 @@ async function upsertEncounterHistory(
     : [toUserId, fromUserId];
 
   const isFromA = fromUserId === userAId;
-
-  // Bug 6 (13 May live test) — pre-fix the increment guard used
-  //   last_session_id !== sessionId
-  // which meant a pair meeting in two rounds of the SAME event stayed
-  // at times_met = 1. The correct discriminator is the match, not the
-  // session: each match represents one meeting, and the second rater on
-  // that match must not double-count. Count any ratings on this match
-  // from anyone other than us. Zero means we are the first rater for
-  // this specific match → increment. One or more means the partner
-  // already rated → suppress.
-  const otherRatingsRes = (await client.query(
-    `SELECT COUNT(*)::text AS cnt FROM ratings WHERE match_id = $1 AND from_user_id <> $2`,
-    [matchId, fromUserId],
-  )) as { rows: { cnt: string }[] };
-  const isFirstRatingForThisMatch = otherRatingsRes.rows[0]?.cnt === '0';
 
   // Try to find existing encounter
   const existing = await client.query(
@@ -196,9 +180,16 @@ async function upsertEncounterHistory(
     const meetAgainB = isFromA ? row.last_meet_again_b : meetAgain;
     const mutual = meetAgainA === true && meetAgainB === true;
 
+    // Only increment times_met when this is the FIRST rating for this encounter
+    // (i.e. when the other side hasn't rated yet for this session).
+    // This prevents double-counting when both participants rate the same match.
+    const isFirstRating = isFromA
+      ? row.last_meet_again_b === null || row.last_session_id !== sessionId
+      : row.last_meet_again_a === null || row.last_session_id !== sessionId;
+
     await client.query(
       `UPDATE encounter_history
-       SET times_met = ${isFirstRatingForThisMatch ? 'times_met + 1' : 'times_met'},
+       SET times_met = ${isFirstRating ? 'times_met + 1' : 'times_met'},
            last_met_at = NOW(),
            last_session_id = $3,
            last_quality_score = $4,
@@ -318,11 +309,6 @@ export async function getPeopleMet(
     ? JSON.parse(session.config as unknown as string)
     : session.config;
   const totalRounds = config?.numberOfRounds || session.currentRound || 0;
-  // Bug 28 (19 May Ali + Stefan) — pass the bonus count through so the
-  // recap can show "3 rounds + 1 bonus" instead of just "4 rounds".
-  const bonusRoundsAdded = typeof config?.bonusRoundsAdded === 'number'
-    ? config.bonusRoundsAdded
-    : 0;
 
   // Get rounds attended count — include all states where user actually participated
   // (completed, active, no_show, reassigned all mean the user was in that round)
@@ -350,8 +336,7 @@ export async function getPeopleMet(
        COALESCE(r_given.meet_again, FALSE) AS "meetAgain",
        COALESCE(r_received.meet_again, FALSE) AS "theirMeetAgain",
        COALESCE(eh.mutual_meet_again, FALSE) AS "mutualMeetAgain",
-       m.round_number AS "roundNumber",
-       COALESCE(m.is_manual, FALSE) AS "isManual"
+       m.round_number AS "roundNumber"
      FROM matches m
      CROSS JOIN LATERAL (
        SELECT unnest(ARRAY[
@@ -411,43 +396,8 @@ export async function getPeopleMet(
     mutualPartnerIds = new Set(fallbackMutual.map(c => c.userId));
   }
 
-  // Bug 24 (18 May Ali) — recap pages used to render TWO rows for the
-  // same partner when the pair matched in multiple rounds (fallback
-  // ladder, "Another Round" path, or explicit re-pair). Now we dedupe
-  // by userId, keep the best-quality row, and surface a meetCount so
-  // the UI can render "Met 2 times" on a single row instead.
-  const dedupeByUser = (rows: ConnectionResult[]): (ConnectionResult & { meetCount: number })[] => {
-    const byUser = new Map<string, ConnectionResult & { meetCount: number }>();
-    for (const r of rows) {
-      const existing = byUser.get(r.userId);
-      if (!existing) {
-        byUser.set(r.userId, { ...r, meetCount: 1 });
-        continue;
-      }
-      existing.meetCount += 1;
-      // Keep the highest quality + the most generous mutual signals so
-      // the single row reflects the best of the multiple meetings.
-      if ((r.qualityScore || 0) > (existing.qualityScore || 0)) {
-        existing.qualityScore = r.qualityScore;
-      }
-      if (r.meetAgain) existing.meetAgain = true;
-      if (r.theirMeetAgain) existing.theirMeetAgain = true;
-      if (r.mutualMeetAgain) existing.mutualMeetAgain = true;
-      // Latest round wins for the "you met them in round X" hint when
-      // the meetCount is 1; for meetCount > 1 the client renders the
-      // count badge instead, so this fallback is fine.
-      if ((r.roundNumber || 0) > (existing.roundNumber || 0)) {
-        existing.roundNumber = r.roundNumber;
-      }
-    }
-    return Array.from(byUser.values());
-  };
-
-  // Filter mutual rows from the dedup'd set so the Mutual Matches card
-  // never repeats a person, and each row carries the meet count.
-  const dedupedMutual = dedupeByUser(
-    connections.filter(c => mutualPartnerIds.has(c.userId)),
-  );
+  // Filter the connections list using meeting_records as truth.
+  const mutualConnections = connections.filter(c => mutualPartnerIds.has(c.userId));
 
   return {
     sessionId,
@@ -455,10 +405,8 @@ export async function getPeopleMet(
     sessionDate: session.scheduledAt,
     totalRounds,
     roundsAttended,
-    bonusRoundsAdded,
-    // connections stays per-match so the per-round breakdown is intact.
     connections,
-    mutualConnections: dedupedMutual,
+    mutualConnections,
     // New Phase 2 fields. Existing clients that read connections.length and
     // mutualConnections.length keep working; new consumers use these.
     uniquePeopleMet: counts.uniquePeopleMet,
@@ -842,32 +790,21 @@ export async function finalizeSessionEncounters(sessionId: string): Promise<numb
     [sessionId]
   );
 
-  // F4 (21 May Ali) — pre-fix this loop awaited each INSERT serially, so
-  // for an N-match event the function took N × DB-roundtrip-ms before
-  // returning. completeSession used to await this before emitting
-  // session:completed, contributing the bulk of the observed 10 s
-  // "stale host UI after End Event". completeSession now fires-and-
-  // forgets this call, AND the inserts run in parallel here so the
-  // background work also clears in a few hundred ms rather than seconds.
-  // Promise.allSettled because each row is independent — one failure
-  // shouldn't poison the others.
-  const results = await Promise.allSettled(
-    matchesResult.rows.map(match => {
-      const [userAId, userBId] = match.participantAId < match.participantBId
-        ? [match.participantAId, match.participantBId]
-        : [match.participantBId, match.participantAId];
-      return query(
-        `INSERT INTO encounter_history (id, user_a_id, user_b_id, times_met, last_met_at, last_session_id)
-         VALUES ($1, $2, $3, 1, NOW(), $4)
-         ON CONFLICT (user_a_id, user_b_id) DO NOTHING`,
-        [uuid(), userAId, userBId, sessionId],
-      );
-    }),
-  );
-
   let created = 0;
-  for (const r of results) {
-    if (r.status === 'fulfilled' && r.value.rowCount && r.value.rowCount > 0) created++;
+
+  for (const match of matchesResult.rows) {
+    const [userAId, userBId] = match.participantAId < match.participantBId
+      ? [match.participantAId, match.participantBId]
+      : [match.participantBId, match.participantAId];
+
+    // Ensure an encounter_history row exists (INSERT ... ON CONFLICT DO NOTHING)
+    const result = await query(
+      `INSERT INTO encounter_history (id, user_a_id, user_b_id, times_met, last_met_at, last_session_id)
+       VALUES ($1, $2, $3, 1, NOW(), $4)
+       ON CONFLICT (user_a_id, user_b_id) DO NOTHING`,
+      [uuid(), userAId, userBId, sessionId]
+    );
+    if (result.rowCount && result.rowCount > 0) created++;
   }
 
   logger.info({ sessionId, totalMatches: matchesResult.rows.length, newEncounters: created },

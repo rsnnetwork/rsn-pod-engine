@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { getSocket } from '@/lib/socket';
-import { useSessionStore, useInRoomParticipants } from '@/stores/sessionStore';
+import { useSessionStore } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
 import { Hand, Heart, ThumbsUp } from 'lucide-react';
 
@@ -31,17 +31,9 @@ export default function ReactionBar({ sessionId }: { sessionId: string }) {
   const hostUserId = useSessionStore(s => s.hostUserId);
   const phase = useSessionStore(s => s.phase);
   const cohosts = useSessionStore(s => s.cohosts);
-  // F3 (21 May Ali) — reactions gate uses the same realtime in-room
-  // host-presence check as ChatPanel so both surfaces unlock/lock in
-  // lockstep for every viewer.
-  const participants = useInRoomParticipants();
   const { user } = useAuthStore();
   const isHostOrCohost = user?.id === hostUserId || (!!user?.id && cohosts.has(user.id));
-  // Bug A (15 May Shraddha) — same fix as ChatPanel: treat the host as
-  // present when they're either flagged in lobby or appear in participants.
-  const hostInParticipants = !!hostUserId && participants.some(p => p.userId === hostUserId);
-  const hostPresent = hostInLobby || hostInParticipants;
-  const reactionsDisabled = phase === 'lobby' && !hostPresent && !isHostOrCohost;
+  const reactionsDisabled = phase === 'lobby' && !hostInLobby && !isHostOrCohost;
 
   // Listen for incoming reactions
   useEffect(() => {

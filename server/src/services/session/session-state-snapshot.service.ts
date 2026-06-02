@@ -27,17 +27,16 @@ export interface SessionStateSnapshot {
   sessionStatus: SessionStatus;
   currentRound: number;
   totalRounds: number;
-  /**
-   * Bug 28 (19 May Ali + Stefan) — count of "Another Round" presses that
-   * extended the event past its originally-configured rounds. UI uses
-   * `currentRound > (totalRounds - bonusRoundsAdded)` to flag a round
-   * as a "Bonus" round in the header. 0 for events that never got an
-   * Another Round press.
-   */
-  bonusRoundsAdded: number;
   isPaused: boolean;
   /** Server-side wall-clock end of the current segment (ISO 8601). null when paused or no timer running. */
   timerEndsAt: string | null;
+  /**
+   * Server wall-clock at the moment this snapshot was built (ISO 8601).
+   * Clients diff it against their own Date.now() to derive a clock offset and
+   * resolve the absolute `timerEndsAt` correctly even when their system clock
+   * is skewed — the same anchor carried on socket timer:sync / round_started.
+   */
+  serverNow: string;
   /** Frozen remaining ms when paused. null otherwise. Used by clients to render the held value. */
   pausedTimeRemainingMs: number | null;
   /** Pre-generated round number awaiting host confirm (null when none). */
@@ -52,39 +51,18 @@ export interface SessionStateSnapshot {
   /** Whether the host's socket is currently in the lobby room. */
   hostInLobby: boolean;
 
-  /** T1-4 — canonical counts that disambiguate "X participants" UX.
-   *
-   * Phase P (12 May spec — Ali's 13 May clarification) adds `hostsRegistered`
-   * and `hostsConnected` so the UI can render "N hosts + M participants"
-   * accurately when admins/super_admins toggle "Join as host". The existing
-   * `connected` / `registered` / `active` fields preserve their pre-Phase-P
-   * semantics for backward compat: they exclude only the director (the
-   * `session.host_user_id`), not cohosts or opt-ins. Clients that want a
-   * pure "non-host participants" count should derive it by subtracting
-   * `hostsConnected` from `connected` (or use `hostsRegistered` for the
-   * registered split).
-   */
+  /** T1-4 — three canonical counts that disambiguate "X participants" UX. */
   participantCounts: {
-    /** Real-time socket presence — users with an active socket in the session room. Excludes director by default. */
+    /** Real-time socket presence — users with an active socket in the session room. Excludes host by default. */
     connected: number;
-    /** DB rows in session_participants with status NOT IN ('removed','left','no_show'). Excludes director by default. */
+    /** DB rows in session_participants with status NOT IN ('removed','left','no_show'). Excludes host by default. */
     registered: number;
-    /** Subset of registered who are also currently connected — what hosts mean by "active right now". Excludes director by default. */
+    /** Subset of registered who are also currently connected — what hosts mean by "active right now". Excludes host by default. */
     active: number;
-    /** Whether the director is currently connected (for explicit display, NOT included in the counts above). */
+    /** Whether the host is currently connected (for explicit display, NOT included in the counts above). */
     hostConnected: boolean;
     /** True if test/loadtest accounts (email LIKE 'loadtest_%@rsn-test.invalid') were filtered out. Always true post-T1-4. */
     ghostFiltered: boolean;
-    /**
-     * Phase P — count of users currently acting as host on this event:
-     * director + cohosts (minus opt-outs) + admin/super_admin opt-ins.
-     * The director is always counted regardless of any stale opt-out
-     * row. INCLUDES the director, unlike `registered`/`connected`/`active`
-     * which exclude them.
-     */
-    hostsRegistered: number;
-    /** Phase P — subset of hostsRegistered who are currently connected via socket. */
-    hostsConnected: number;
   };
 
   /** UI hint propagated from session config. */
@@ -98,72 +76,6 @@ export interface SessionStateSnapshot {
    * `host:visibility_changed` socket event.
    */
   hostVisibilityModes: Record<string, string>;
-
-  /**
-   * Phase M (12 May spec item 1) — explicit acting-as-host overrides.
-   * Map of userId → boolean for users who have toggled "Join as host" /
-   * "Join as participant". Absent users follow the role default (super_admin
-   * and event_host auto-host; everyone else auto-participant). The client
-   * uses this to derive isHost for its own user without round-tripping to
-   * the server on every render.
-   */
-  actingAsHostOverrides: Record<string, boolean>;
-
-  /**
-   * Phase O (12 May spec item 7) — authoritative host-muted state.
-   * Array of userIds whose `host_muted = TRUE` in session_participants.
-   * The client respects this on cold-start and reconnect: if our user is
-   * in the array, the client mirrors the muted state on its local audio
-   * track. The server is the single source of truth — self-unmute from
-   * the client UI does NOT clear this flag; only a host:mute_participant
-   * with muted=false can.
-   */
-  hostMutedUserIds: string[];
-
-  /**
-   * Bug 1 (18 May Stefan) — global pin set by an acting host. When non-null,
-   * every participant's lobby renders that user as the big tile (pinned-mode
-   * layout). null means no global pin; participants can use their own local
-   * pin if desired. Updated live via `pin:changed` socket events; the
-   * snapshot carries the latest value so a cold-start client sees the right
-   * layout immediately on page load / reconnect.
-   */
-  pinnedUserId: string | null;
-
-  /**
-   * Bug 26 (19 May Ali) — director's visual tile-demote list. User IDs
-   * whose tile renders at participant size instead of host size. Cohost
-   * privileges are unaffected. Empty array means no demotions in effect.
-   * Bundled on the snapshot so a refreshing client immediately renders
-   * the right tile sizes without waiting for the next tile:size_changed
-   * socket event.
-   */
-  tileDemotedUserIds: string[];
-
-  /**
-   * Bug 68 (18 May Stefan) — Host Control Center participants list, sourced
-   * from buildHostParticipantsView. Previously HCC was populated solely by
-   * the `host:round_dashboard` socket emit, which created a race when an
-   * admin was just promoted to co-host: their `isHost` flipped via
-   * `permissions:updated` → snapshot fetch, but their HCC drawer rendered
-   * empty until the next dashboard tick arrived. Including the same data
-   * on the snapshot makes the HCC drawer self-hydrating on every state
-   * transition — no socket dependency, no race window.
-   *
-   * Hidden when the snapshot is built before activeSessions is populated;
-   * the live emit then takes over once the host opens the drawer.
-   */
-  hccParticipants: Array<{
-    userId: string;
-    displayName: string;
-    email: string | null;
-    role: 'host' | 'cohost' | 'participant';
-    globalRole: 'user' | 'admin' | 'super_admin';
-    state: 'in_main_room' | 'in_room' | 'disconnected' | 'left';
-    currentMatchId: string | null;
-    currentRoomId: string | null;
-    joinedAt: string;
-  }>;
 
   /**
    * Phase 5B (5 May spec) — test-mode flag. Stefan's #2: when the host is
@@ -213,13 +125,20 @@ export async function buildSessionStateSnapshot(
   let hostInLobby = false;
   if (io) {
     const socketsInRoom = await io.in(sessionRoom(sessionId)).fetchSockets();
-    connectedParticipants = socketsInRoom
-      .map(s => ({
-        userId: (s.data as any)?.userId,
-        displayName: (s.data as any)?.displayName || 'User',
-      }))
-      .filter(p => p.userId);
-    hostInLobby = socketsInRoom.some(s => (s.data as any)?.userId === session.hostUserId);
+    // Deduplicate by userId: a user can briefly hold two sockets in the room
+    // (reconnect / duplicate-tab eviction window), and fetchSockets() returns
+    // one entry per socket. Without dedup this list (and any client that
+    // applies it as authoritative via setParticipants) would show the user
+    // twice and inflate the roster/count. Keep the first socket seen per user.
+    const seenUserIds = new Set<string>();
+    connectedParticipants = [];
+    for (const s of socketsInRoom) {
+      const uid = (s.data as any)?.userId;
+      if (!uid || seenUserIds.has(uid)) continue;
+      seenUserIds.add(uid);
+      connectedParticipants.push({ userId: uid, displayName: (s.data as any)?.displayName || 'User' });
+    }
+    hostInLobby = seenUserIds.has(session.hostUserId as string);
   }
 
   // ── Co-hosts ────────────────────────────────────────────────────────────
@@ -248,23 +167,8 @@ export async function buildSessionStateSnapshot(
   // Active: registered AND connected — what hosts intuitively mean by
   //   "X participants right now".
   // hostConnected: separate boolean so UI can show "+1 host" explicitly.
-  //
-  // Phase M (12 May spec item 1) piggybacks the acting_as_host column on
-  // this same SELECT so the snapshot remains a single round-trip for
-  // session_participants. Pull non-null overrides into the
-  // actingAsHostOverrides map; participants without an explicit toggle
-  // contribute nothing (they follow the role default).
-  // Phase O (12 May item 7) piggybacks host_muted on the same SELECT so
-  // the snapshot stays a single round-trip for session_participants. The
-  // hostMutedUserIds array is the server-authoritative mute roster:
-  // a user reconnecting must look in this list and mirror the mute on
-  // their own audio track.
-  const registeredRes = await query<{
-    user_id: string;
-    acting_as_host: boolean | null;
-    host_muted: boolean | null;
-  }>(
-    `SELECT sp.user_id, sp.acting_as_host, sp.host_muted
+  const registeredRes = await query<{ user_id: string }>(
+    `SELECT sp.user_id
      FROM session_participants sp
      JOIN users u ON u.id = sp.user_id
      WHERE sp.session_id = $1
@@ -272,22 +176,6 @@ export async function buildSessionStateSnapshot(
        AND u.email NOT LIKE 'loadtest_%@rsn-test.invalid'`,
     [sessionId],
   );
-  const actingAsHostOverrides: Record<string, boolean> = {};
-  const hostMutedUserIds: string[] = [];
-  for (const r of registeredRes.rows) {
-    // Phase P (Ali's 13 May clarification) — never expose the director's
-    // acting_as_host value. The director is permanently host of their
-    // own event; a stale FALSE row from pre-Phase-P or a malicious
-    // client must not leak into the snapshot. Filtering at the source
-    // means every consumer (client isHost, HCC role badge, banner
-    // visibility) sees a consistent "director is always host" view
-    // without each call site re-checking.
-    if (r.user_id === session.hostUserId) continue;
-    if (r.acting_as_host !== null && r.acting_as_host !== undefined) {
-      actingAsHostOverrides[r.user_id] = r.acting_as_host;
-    }
-    if (r.host_muted === true) hostMutedUserIds.push(r.user_id);
-  }
   const registeredIds = new Set(registeredRes.rows.map(r => r.user_id));
   // Exclude host from the headline count — surfaced separately as hostConnected
   if (session.hostUserId) registeredIds.delete(session.hostUserId);
@@ -303,28 +191,6 @@ export async function buildSessionStateSnapshot(
   const hostConnected = session.hostUserId
     ? connectedParticipants.some(p => p.userId === session.hostUserId)
     : false;
-
-  // ── Phase P (12 May spec — Ali's 13 May clarification) — host roster ───
-  //
-  // The system must read each user's role accurately so the UI can show
-  // "N hosts + M participants" honestly. The host roster is:
-  //   director + cohosts − opt-outs + opt-ins
-  // where the director is always counted regardless of any (stale or
-  // malicious) opt-out row. Phase P-A enforces this at multiple layers;
-  // here we just compute the snapshot view consistently.
-  const hostsRegisteredSet = new Set<string>();
-  if (session.hostUserId) hostsRegisteredSet.add(session.hostUserId);
-  for (const cohostId of cohosts) hostsRegisteredSet.add(cohostId);
-  for (const [uid, value] of Object.entries(actingAsHostOverrides)) {
-    if (value === true) hostsRegisteredSet.add(uid);
-    if (value === false) hostsRegisteredSet.delete(uid);
-  }
-  // Director defence in depth — always counted, never removable by override.
-  if (session.hostUserId) hostsRegisteredSet.add(session.hostUserId);
-  const hostsConnectedSet = new Set<string>();
-  for (const p of connectedParticipants) {
-    if (hostsRegisteredSet.has(p.userId)) hostsConnectedSet.add(p.userId);
-  }
 
   // ── Phase 7C.3 — test-mode detection v2 ─────────────────────────────────
   // 1. Explicit override via session.config.testMode wins. Set via the
@@ -397,39 +263,15 @@ export async function buildSessionStateSnapshot(
     }
   }
 
-  // Bug 68 (18 May Stefan) — bundle the HCC participants list onto the
-  // snapshot so a newly-promoted cohost has a populated drawer on the
-  // very next snapshot fetch (which permissions:updated already triggers).
-  // Pure read — buildHostParticipantsView runs the canonical SELECT every
-  // time. Cheap enough to call on every snapshot since the round
-  // dashboard does the same call every 5 seconds.
-  let hccParticipants: any[] = [];
-  if (activeSession && session.hostUserId) {
-    try {
-      const { buildHostParticipantsView } = await import('../orchestration/handlers/host-participants-view');
-      hccParticipants = await buildHostParticipantsView({
-        sessionId,
-        hostUserId: session.hostUserId,
-        presenceMap: activeSession.presenceMap,
-      });
-    } catch {
-      // Best-effort. If the helper throws, the snapshot still returns;
-      // the HCC will populate from the live host:round_dashboard tick.
-    }
-  }
-
   // ── Compose snapshot ───────────────────────────────────────────────────
   return {
     sessionId,
     sessionStatus: activeSession?.status ?? session.status,
     currentRound: activeSession?.currentRound ?? session.currentRound,
     totalRounds: config.numberOfRounds || 5,
-    // Bug 28 (19 May Ali + Stefan) — surface the bonus-round count so
-    // refresh / cold-fetch clients can render the "Bonus" badge on
-    // round headers without waiting for a host:event_plan_repaired emit.
-    bonusRoundsAdded: (config as any)?.bonusRoundsAdded ?? 0,
     isPaused: activeSession?.isPaused ?? false,
     timerEndsAt: activeSession?.timerEndsAt?.toISOString() ?? null,
+    serverNow: new Date().toISOString(),
     pausedTimeRemainingMs: activeSession?.pausedTimeRemaining ?? null,
     pendingRoundNumber: activeSession?.pendingRoundNumber ?? null,
 
@@ -445,25 +287,10 @@ export async function buildSessionStateSnapshot(
       active: activeCount,
       hostConnected,
       ghostFiltered: true,
-      hostsRegistered: hostsRegisteredSet.size,
-      hostsConnected: hostsConnectedSet.size,
     },
 
     timerVisibility: (config as any).timerVisibility || 'last_10s',
     testMode,
     hostVisibilityModes,
-    actingAsHostOverrides,
-    hostMutedUserIds,
-    // Bug 1 (18 May Stefan) — global pin from the in-memory activeSession.
-    // Missing on a fresh DB-only fetch (session not yet loaded into memory),
-    // which is correct: there is no live pin when nobody's running it.
-    pinnedUserId: activeSession?.pinnedUserId ?? null,
-    // Bug 26 (19 May Ali) — director's tile demote list. Same staleness
-    // rule as pinnedUserId: empty array when activeSession not loaded.
-    tileDemotedUserIds: activeSession?.tileDemotedUserIds ?? [],
-    // Bug 68 (18 May Stefan) — HCC drawer data bundled directly with the
-    // snapshot so a newly-promoted cohost can render their drawer in the
-    // same tick as their isHost flips.
-    hccParticipants,
   };
 }
