@@ -27,6 +27,14 @@ import * as matchingService from '../../matching/matching.service';
 // Phase 2B (5 May spec) — single chokepoint for presenceMap mutations.
 import { setPresence } from '../state/participant-state-machine';
 import { validateMatchAssignment } from '../../matching/match-validator.service';
+// Phase 2 (19 May 2026) — realtime migration dual-emit. Every legacy
+// in-handler broadcast (roster:changed, host:transferred, host:event_plan_*,
+// pin:changed, tile:size_changed, host:visibility_changed,
+// match:reassigned, match:partner_disconnected) gets a parallel
+// emitEntities() call with the matching domain-entity tags. See:
+//   docs/superpowers/plans/2026-05-19-realtime-architecture-migration.md
+import { emitEntities } from '../../../realtime/emit';
+import { E } from '../../../realtime/entities';
 
 // ─── Cross-module references (wired in Task 7) ────────────────────────────
 // Functions from round-lifecycle.ts that don't exist yet.
@@ -34,7 +42,19 @@ import { validateMatchAssignment } from '../../matching/match-validator.service'
 let _transitionToRound: ((io: SocketServer, sessionId: string, roundNumber: number) => Promise<void>) | null = null;
 let _completeSession: ((io: SocketServer, sessionId: string) => Promise<void>) | null = null;
 let _endRound: ((io: SocketServer, sessionId: string, roundNumber: number) => Promise<void>) | null = null;
+// #4 (26 May live test) — DIRECT (non-guard-wrapped) endRatingWindow for the
+// host force-advance path. Host handlers already run inside withSessionGuard,
+// so they MUST use the direct lifecycle fns (like _endRound / _transitionToRound
+// above) — the guard-wrapped timerCallbacks.endRatingWindow would re-acquire the
+// same session lock and deadlock.
+let _endRatingWindow: ((io: SocketServer, sessionId: string, roundNumber: number) => Promise<void>) | null = null;
 let _emitHostDashboard: ((sessionId: string) => Promise<void>) | null = null;
+// Bug 68 (18 May Stefan) — coalesce-bypass variant for cohost promote/
+// demote paths. The standard emitHostDashboard has a 1-second coalesce
+// window which delays a post-promote dashboard refresh; the force
+// variant skips it so the newly-promoted cohost sees their HCC populated
+// immediately, with no perceptible delay between click and render.
+let _emitHostDashboardForce: ((sessionId: string) => Promise<void>) | null = null;
 let _timerCallbacks: TimerCallbacks | null = null;
 let _maybeAutoEndEmptyRound: ((sessionId: string) => Promise<void>) | null = null;
 
@@ -46,14 +66,21 @@ export function injectHostActionDeps(deps: {
   transitionToRound: (io: SocketServer, sessionId: string, roundNumber: number) => Promise<void>;
   completeSession: (io: SocketServer, sessionId: string) => Promise<void>;
   endRound: (io: SocketServer, sessionId: string, roundNumber: number) => Promise<void>;
+  // #4 (26 May) — direct endRatingWindow for the host force-advance path.
+  endRatingWindow: (io: SocketServer, sessionId: string, roundNumber: number) => Promise<void>;
   emitHostDashboard: (sessionId: string) => Promise<void>;
+  // Bug 68 (18 May Stefan) — force variant for host-action-triggered
+  // emits that must not be coalesced.
+  emitHostDashboardForce?: (sessionId: string) => Promise<void>;
   timerCallbacks: TimerCallbacks;
   maybeAutoEndEmptyRound?: (sessionId: string) => Promise<void>;
 }) {
   _transitionToRound = deps.transitionToRound;
   _completeSession = deps.completeSession;
   _endRound = deps.endRound;
+  _endRatingWindow = deps.endRatingWindow;
   _emitHostDashboard = deps.emitHostDashboard;
+  _emitHostDashboardForce = deps.emitHostDashboardForce || null;
   _timerCallbacks = deps.timerCallbacks;
   _maybeAutoEndEmptyRound = deps.maybeAutoEndEmptyRound || null;
 }
@@ -90,20 +117,53 @@ async function maybeRepairFutureRounds(io: SocketServer, sessionId: string): Pro
       reason: 'host_request',
       regeneratedRounds: result.regeneratedRounds,
     });
+    // Phase 2 dual-emit — plan + session entity covers every plan-aware
+    // surface (event-plan, host-state, session). Audience is the active
+    // session participants (same as the room broadcast above).
+    emitSessionRoomEntities(io, sessionId, [E.session(sessionId), E.sessionPlan(sessionId)]).catch(() => {});
   }
+}
+
+// Phase 2 (19 May 2026) — helper used by every in-handler dual-emit below.
+// Resolves the active session participants (same audience as
+// `io.to(sessionRoom(sessionId)).emit(...)`) and fans the given entity
+// tags to each via emitEntities. Wrapped in .catch() at every call site
+// so fanout failure can never break the user-facing handler response.
+async function emitSessionRoomEntities(
+  io: SocketServer,
+  sessionId: string,
+  entities: string[],
+): Promise<void> {
+  if (entities.length === 0) return;
+  const rows = await query<{ user_id: string }>(
+    `SELECT user_id FROM session_participants
+       WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')`,
+    [sessionId],
+  );
+  await emitEntities(io, rows.rows.map(r => r.user_id), entities);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
 // HOST HELPERS
 // ═════════════════════════════════════════════════════════════════════════════
 
-/** Get all user IDs that should be excluded from matching: original host + co-hosts */
+/**
+ * Get all user IDs that should be excluded from matching: the event
+ * director + any formally-assigned co-hosts.
+ *
+ * 23 May (Stefan + Ali) — the acting-as-host opt-in/opt-out picker is
+ * removed. No participant can self-select host any more, so an admin or
+ * super-admin who merely opens someone else's event is now an ordinary,
+ * matchable participant. This is the root fix for "admin shows in the
+ * room but the engine never matches them" — they were landing in this
+ * host set via the old picker (acting_as_host = TRUE).
+ */
 export async function getAllHostIds(sessionId: string, hostUserId: string): Promise<string[]> {
   const cohostResult = await query<{ user_id: string }>(
     `SELECT user_id FROM session_cohosts WHERE session_id = $1`,
     [sessionId]
   );
-  return [hostUserId, ...cohostResult.rows.map(r => r.user_id)];
+  return Array.from(new Set<string>([hostUserId, ...cohostResult.rows.map(r => r.user_id)]));
 }
 
 // ─── Verify Host ────────────────────────────────────────────────────────────
@@ -131,6 +191,56 @@ export async function verifyHost(socket: Socket, sessionId: string): Promise<boo
     return false;
   }
 
+  return true;
+}
+
+/**
+ * Bug J (15 May Ali) — defence-in-depth gate that refuses Make / Remove
+ * co-host and Kick when the TARGET is a platform admin or super_admin.
+ * Admins choose their own per-event role through the Phase M banner.
+ *
+ * Bug 2 (18 May Stefan) — supreme-host carve-out: the EVENT DIRECTOR
+ * (sessions.host_user_id) IS the authority over their own event and
+ * can promote / demote / kick anyone on the roster, including platform
+ * admins. Non-director acting hosts (cohosts, super_admin opt-ins) are
+ * still blocked — only the director gets the override. Stefan's exact
+ * complaint: "Current admin logic blocks too much."
+ *
+ * Returns true if the action is permitted, false if it must be refused.
+ * Emits an error frame on refusal so the caller's UI can surface it.
+ */
+async function refuseIfAdminTarget(
+  socket: Socket,
+  sessionId: string,
+  targetUserId: string,
+): Promise<boolean> {
+  const callerUserId = getUserIdFromSocket(socket);
+  if (!callerUserId) return false;
+
+  // Bug 2 (18 May Stefan) — director shortcut. Reads the session row
+  // directly to avoid an in-memory cache hit when the session is still
+  // warming up.
+  const sessionRow = await query<{ host_user_id: string }>(
+    `SELECT host_user_id FROM sessions WHERE id = $1`,
+    [sessionId],
+  );
+  if (sessionRow.rows[0]?.host_user_id === callerUserId) {
+    return true;
+  }
+
+  const targetRow = await query<{ role: string }>(
+    `SELECT role::text AS role FROM users WHERE id = $1`,
+    [targetUserId],
+  );
+  const targetRole = targetRow.rows[0]?.role;
+  if (targetRole === 'admin' || targetRole === 'super_admin') {
+    socket.emit('error', {
+      code: 'ADMIN_TARGET',
+      message:
+        "Admins manage their own per-event role. Only the event director can override this.",
+    });
+    return false;
+  }
   return true;
 }
 
@@ -194,7 +304,14 @@ export async function handleHostStart(
       ? JSON.parse(session.config as unknown as string)
       : session.config;
 
-    // Create active session tracker
+    // M1 follow-up (21 May Ali) — preserve presenceMap if an ActiveSession
+    // already exists from the SCHEDULED phase. Participants who joined the
+    // pre-event lobby get tracked from their first join (see participant-
+    // flow.ts on-the-fly recovery), and replacing the Map on Start would
+    // wipe their presence — making them invisible until they re-emit a
+    // heartbeat. Same applies to participantStates if the state machine
+    // already started tracking anyone.
+    const existing = activeSessions.get(data.sessionId);
     const activeSession: ActiveSession = {
       sessionId: data.sessionId,
       hostUserId: session.hostUserId,
@@ -206,9 +323,10 @@ export async function handleHostStart(
       timerEndsAt: null,
       isPaused: false,
       pausedTimeRemaining: null,
-      presenceMap: new Map(),
+      presenceMap: existing?.presenceMap ?? new Map(),
       pendingRoundNumber: null,
-      manuallyLeftRound: new Set(),
+      manuallyLeftRound: existing?.manuallyLeftRound ?? new Set(),
+      participantStates: existing?.participantStates,
     };
 
     activeSessions.set(data.sessionId, activeSession);
@@ -259,6 +377,12 @@ export async function handleHostStart(
         roundCount: planOutput.rounds.length,
         totalPairs,
       });
+      // Phase 2 dual-emit — plan + session for event-plan / host-state
+      // re-queries on every participant's open lobby.
+      emitSessionRoomEntities(
+        io, data.sessionId,
+        [E.session(data.sessionId), E.sessionPlan(data.sessionId)],
+      ).catch(() => {});
     } catch (planErr: any) {
       logger.warn(
         { err: planErr, sessionId: data.sessionId },
@@ -292,6 +416,28 @@ export async function handleHostStartRound(
     if (!activeSession) {
       socket.emit('error', { code: 'INVALID_STATE', message: 'Session is not active' });
       return;
+    }
+
+    // #4 (26 May live test) — host force-advance from a stuck ROUND_RATING.
+    // If the all-rated early-close never fired (skips / leavers / re-match
+    // churn inflating the expected count), the host's "Start Round" / "Next
+    // Round" click must still advance. Close the rating window first — that
+    // transitions ROUND_RATING → ROUND_TRANSITION (the round was not the last,
+    // else the host would be in CLOSING_LOBBY) — then fall through to the
+    // normal start-round flow, which already accepts ROUND_TRANSITION. The
+    // normal ROUND_TRANSITION → start path is untouched.
+    if (activeSession.status === SessionStatus.ROUND_RATING) {
+      if (_endRatingWindow) {
+        logger.info({ sessionId: data.sessionId, roundNumber: activeSession.currentRound },
+          '#4 — host force-advance: closing rating window before starting next round');
+        // Direct (non-guard-wrapped) call — we already hold the session guard.
+        await _endRatingWindow(io, data.sessionId, activeSession.currentRound);
+      } else {
+        logger.error({ sessionId: data.sessionId },
+          'endRatingWindow not injected — cannot force-advance from rating');
+        socket.emit('error', { code: 'INTERNAL_ERROR', message: 'Cannot advance from rating right now' });
+        return;
+      }
     }
 
     // Allow starting round from lobby, transition, or closing_lobby (dynamic round extension)
@@ -507,7 +653,7 @@ export async function handleHostResume(
 export async function handleHostEnd(
   io: SocketServer,
   socket: Socket,
-  data: { sessionId: string }
+  data: { sessionId: string; endEvent?: boolean }
 ): Promise<void> {
   return withSessionGuard(data.sessionId, async () => {
   try {
@@ -523,6 +669,15 @@ export async function handleHostEnd(
       // Clear any existing timer
       if (activeSession.timer) clearTimeout(activeSession.timer);
 
+      // #11 (23 May) — distinguish "End Round" from "End Event". BOTH buttons
+      // emit host:end_session; only the End Event button carries endEvent:true.
+      // When the host explicitly ends the EVENT during a round, flag it so
+      // endRatingWindow completes the event after this round's rating (one
+      // press, instead of the old "press End Event 3×"). Plain "End Round" must
+      // NOT set this — otherwise ending a round early kills the whole event
+      // (regression 23 May: a 3-round event ended after round 1).
+      if (data.endEvent) activeSession.endRequested = true;
+
       if (!_endRound) {
         logger.error({ sessionId: data.sessionId }, 'endRound not injected — cannot end round');
         socket.emit('error', { code: 'INTERNAL_ERROR', message: 'Round end not available' });
@@ -533,6 +688,29 @@ export async function handleHostEnd(
       // which in turn calls endRatingWindow() → multi-round transition logic
       await _endRound(io, data.sessionId, activeSession.currentRound);
       logger.info({ sessionId: data.sessionId }, 'Host ended active round — rating window started, normal flow continues');
+      return;
+    }
+
+    // #4 (26 May live test) — host pressed End Round / End Event while the
+    // session is already in ROUND_RATING (round over, ratings in progress) and
+    // the all-rated early-close never fired. Don't drop straight into
+    // completeSession (that would skip finalizeRoundRatings + the proper
+    // transition); close the rating window through the normal path instead.
+    // With endEvent the endRequested flag makes endRatingWindow complete the
+    // event in one press (same one-press semantics as the #11 ROUND_ACTIVE
+    // path); a plain End Round just advances to ROUND_TRANSITION / closing.
+    if (activeSession && activeSession.status === SessionStatus.ROUND_RATING) {
+      if (data.endEvent) activeSession.endRequested = true;
+      if (!_endRatingWindow) {
+        logger.error({ sessionId: data.sessionId },
+          'endRatingWindow not injected — cannot end rating window');
+        socket.emit('error', { code: 'INTERNAL_ERROR', message: 'Rating window end not available' });
+        return;
+      }
+      logger.info({ sessionId: data.sessionId, endEvent: !!data.endEvent },
+        '#4 — host ended during rating: closing rating window');
+      // Direct (non-guard-wrapped) call — we already hold the session guard.
+      await _endRatingWindow(io, data.sessionId, activeSession.currentRound);
       return;
     }
 
@@ -599,6 +777,11 @@ export async function handleHostRemoveParticipant(
   return withSessionGuard(data.sessionId, async () => {
   try {
     if (!await verifyHost(socket, data.sessionId)) return;
+    // Bug J (15 May Ali) — admins cannot be kicked from an event by a
+    // cohost. Only the event director (Bug 2, 18 May Stefan) can — they
+    // hold supreme authority over their own event. Co-hosts and other
+    // acting hosts still can't kick admins.
+    if (!await refuseIfAdminTarget(socket, data.sessionId, data.userId)) return;
 
     await sessionService.updateParticipantStatus(
       data.sessionId, data.userId, ParticipantStatus.REMOVED
@@ -624,6 +807,24 @@ export async function handleHostRemoveParticipant(
     }
 
     io.to(sessionRoom(data.sessionId)).emit('participant:left', { userId: data.userId });
+    // Bug 68 (18 May Stefan) — broadcast roster mutation so every viewer
+    // refetches the snapshot and their lobby header count drops by one
+    // within the same tick as the kick.
+    io.to(sessionRoom(data.sessionId)).emit('roster:changed', {
+      sessionId: data.sessionId,
+      cause: 'participant_kicked',
+    });
+    // Phase 2 dual-emit — session + participants entities; the kicked
+    // user also gets the entity tag so their own client invalidates the
+    // session queries (which now show "removed" status).
+    emitSessionRoomEntities(
+      io, data.sessionId,
+      [E.session(data.sessionId), E.sessionParticipants(data.sessionId)],
+    ).catch(() => {});
+    emitEntities(
+      io, [data.userId],
+      [E.session(data.sessionId), E.sessionParticipants(data.sessionId)],
+    ).catch(() => {});
 
     // Phase 3 (5 May spec) — force-refresh canonical host dashboard after
     // any participant-state mutation. Closes Stefan #9 gap where the host
@@ -674,6 +875,19 @@ export async function handleHostReassign(
     // Try to pair the target participant with an isolated one
     const targetId = data.participantId;
     const partner = isolatedParticipants.find(id => id !== targetId);
+
+    // Phase R1 (20 May 2026) — belt-and-braces. Neither the host nor any
+    // cohort may end up in a reassign INSERT. The host UI shouldn't allow
+    // selecting them, but a malicious/buggy client could send the host's
+    // user_id as participantId.
+    if (targetId === activeSession.hostUserId ||
+        (partner && partner === activeSession.hostUserId)) {
+      logger.error({ sessionId: data.sessionId, targetId, partner,
+        hostUserId: activeSession.hostUserId },
+        'Phase R1 — refused host-driven reassign that would place the event host in a match');
+      socket.emit('error', { code: 'HOST_NOT_MATCHABLE', message: 'The event host cannot be reassigned into a match' });
+      return;
+    }
 
     if (partner) {
       // Create a new match for this round
@@ -740,6 +954,13 @@ export async function handleHostReassign(
         livekitUrl: appConfig.livekit.host,
       });
 
+      // Phase 2 dual-emit — session, participants list, and match entity
+      // for the two reassigned users so their live-event surfaces refetch.
+      emitEntities(
+        io, [targetId, partner],
+        [E.session(data.sessionId), E.sessionParticipants(data.sessionId), E.match(matchId)],
+      ).catch(() => {});
+
       logger.info({ sessionId: data.sessionId, targetId, partner }, 'Participant reassigned');
     } else {
       socket.emit('error', { code: 'NO_PARTNER', message: 'No available partner for reassignment' });
@@ -751,14 +972,24 @@ export async function handleHostReassign(
 }
 
 // ─── Host: Mute/Unmute Participant ──────────────────────────────────────────
+//
+// Phase O (12 May spec item 7) — persistent authoritative mute state.
+// Stefan reported admins couldn't mute (the pre-fix gate accepted only
+// the original event host, never co-hosts or super_admin), and that
+// muted participants got "stuck" muted after reconnect because the
+// mute was a fire-and-forget socket relay with no DB persistence.
+// Both fixed below:
+//   - Gate via verifyHost (which uses canActAsHost — cohort + super_admin
+//     accepted post-Phase-I; admin opt-in via Phase M also covered).
+//   - UPDATE session_participants.host_muted before emitting the relay,
+//     so the snapshot can replay it to the user on reconnect.
 
 export async function handleHostMuteParticipant(
   io: SocketServer,
   socket: Socket,
   data: any
 ): Promise<void> {
-  const userId = getUserIdFromSocket(socket);
-  if (!userId) return;
+  if (!await verifyHost(socket, data.sessionId)) return;
 
   const activeSession = activeSessions.get(data.sessionId);
   if (!activeSession) {
@@ -766,19 +997,97 @@ export async function handleHostMuteParticipant(
     return;
   }
 
-  if (activeSession.hostUserId !== userId) {
-    socket.emit('error', { code: 'NOT_HOST', message: 'Only the host can mute/unmute participants' });
-    return;
+  // Persist host_muted on session_participants so the state survives
+  // reconnects. host_muted_at is set when flipping to TRUE; left as-is
+  // (history preserved) when flipping to FALSE.
+  if (data.muted) {
+    await query(
+      `UPDATE session_participants
+       SET host_muted = TRUE, host_muted_at = NOW()
+       WHERE session_id = $1 AND user_id = $2`,
+      [data.sessionId, data.targetUserId],
+    );
+  } else {
+    await query(
+      `UPDATE session_participants
+       SET host_muted = FALSE
+       WHERE session_id = $1 AND user_id = $2`,
+      [data.sessionId, data.targetUserId],
+    );
   }
 
-  // Relay mute command to the target participant's client
+  // Relay mute command to the target participant's client (immediate UX
+  // feedback). Snapshot replay on reconnect uses the persisted state.
   io.to(userRoom(data.targetUserId)).emit('lobby:mute_command', {
     muted: data.muted,
     byHost: true,
   });
 
+  // R2-audit (20 May 2026 — live-test post-mortem). host_muted lives on
+  // session_participants and affects the participants list (muted icon).
+  // Fan out E.sessionParticipants so every viewer's list refreshes the
+  // mute state without F5. Pre-fix only the target user got the lobby
+  // mute relay; other viewers had to refresh to see the muted indicator.
+  try {
+    const rows = await query<{ user_id: string }>(
+      `SELECT user_id FROM session_participants
+         WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')`,
+      [data.sessionId],
+    );
+    emitEntities(
+      io, rows.rows.map(r => r.user_id),
+      [E.session(data.sessionId), E.sessionParticipants(data.sessionId)],
+    ).catch(() => {});
+  } catch { /* non-fatal */ }
+
+  // Phase U — LiveKit-level enforcement. Update publish permission on
+  // every room the user could currently be in (lobby + any active
+  // match). Provider swallows NotFound, so calling for both rooms is
+  // safe; the relevant one applies. canPublishAudio is the inverse of
+  // muted: false = revoke publish; true = restore.
+  await enforceLiveKitMute(data.sessionId, data.targetUserId, !data.muted);
+
   logger.info({ sessionId: data.sessionId, targetUserId: data.targetUserId, muted: data.muted },
-    'Host mute/unmute command sent');
+    'Phase O + U — Host mute/unmute persisted + relayed + LiveKit-enforced');
+}
+
+/**
+ * Phase U — apply LiveKit canPublishAudio to every room the user might
+ * be in: the session's lobby room + any active match they're in. The
+ * provider swallows NotFound for the room they're NOT in, so this is
+ * safe to call regardless of where they actually are.
+ */
+async function enforceLiveKitMute(
+  sessionId: string,
+  userId: string,
+  canPublishAudio: boolean,
+): Promise<void> {
+  try {
+    const sessRow = await query<{ lobby_room_id: string | null }>(
+      `SELECT lobby_room_id FROM sessions WHERE id = $1`,
+      [sessionId],
+    );
+    const lobbyRoom = sessRow.rows[0]?.lobby_room_id;
+    if (lobbyRoom) {
+      await videoService.setParticipantCanPublishAudio(lobbyRoom, userId, canPublishAudio);
+    }
+    const matchRow = await query<{ room_id: string | null }>(
+      `SELECT room_id FROM matches
+       WHERE session_id = $1
+         AND status = 'active'
+         AND (participant_a_id = $2 OR participant_b_id = $2 OR participant_c_id = $2)
+       LIMIT 1`,
+      [sessionId, userId],
+    );
+    const matchRoom = matchRow.rows[0]?.room_id;
+    if (matchRoom) {
+      await videoService.setParticipantCanPublishAudio(matchRoom, userId, canPublishAudio);
+    }
+  } catch (err) {
+    // Non-fatal: persistence + socket relay already happened; the
+    // LiveKit enforcement is defence in depth. Log and move on.
+    logger.warn({ err, sessionId, userId, canPublishAudio }, 'Phase U — LiveKit mute enforcement failed (non-fatal)');
+  }
 }
 
 // ─── Host: Mute/Unmute All ─────────────────────────────────────────────────
@@ -788,8 +1097,7 @@ export async function handleHostMuteAll(
   socket: Socket,
   data: any
 ): Promise<void> {
-  const userId = getUserIdFromSocket(socket);
-  if (!userId) return;
+  if (!await verifyHost(socket, data.sessionId)) return;
 
   const activeSession = activeSessions.get(data.sessionId);
   if (!activeSession) {
@@ -797,24 +1105,53 @@ export async function handleHostMuteAll(
     return;
   }
 
-  if (activeSession.hostUserId !== userId) {
-    socket.emit('error', { code: 'NOT_HOST', message: 'Only the host can mute/unmute all participants' });
-    return;
+  // Phase O — bulk persist BEFORE relay. Excludes the host themselves
+  // (existing behaviour) AND any co-hosts (who shouldn't be silenced by
+  // a bulk-mute action targeted at participants). One UPDATE replaces
+  // N updates from a loop — keeps the operation a single round-trip
+  // even at 100+ participants.
+  const allHostIds = await getAllHostIds(data.sessionId, activeSession.hostUserId);
+  if (data.muted) {
+    await query(
+      `UPDATE session_participants
+       SET host_muted = TRUE, host_muted_at = NOW()
+       WHERE session_id = $1
+         AND user_id != ALL($2::uuid[])
+         AND status NOT IN ('removed', 'left', 'no_show')`,
+      [data.sessionId, allHostIds],
+    );
+  } else {
+    await query(
+      `UPDATE session_participants
+       SET host_muted = FALSE
+       WHERE session_id = $1
+         AND user_id != ALL($2::uuid[])
+         AND status NOT IN ('removed', 'left', 'no_show')`,
+      [data.sessionId, allHostIds],
+    );
   }
 
   let count = 0;
   for (const [participantId] of activeSession.presenceMap) {
-    // Skip the host — they should not be muted
-    if (participantId === activeSession.hostUserId) continue;
+    // Skip the host AND all co-hosts — they should not be muted by
+    // bulk-mute. Excluded above for the DB persist; mirror here for
+    // the socket relay.
+    if (allHostIds.includes(participantId)) continue;
     io.to(userRoom(participantId)).emit('lobby:mute_command', {
       muted: data.muted,
       byHost: true,
     });
+    // Phase U — LiveKit-level enforcement, mirroring DB + relay.
+    // Sequenced (not parallel) to be gentle with the LiveKit API; mute
+    // bulk is rare enough that the latency is acceptable.
+    enforceLiveKitMute(data.sessionId, participantId, !data.muted).catch(err =>
+      logger.warn({ err, participantId }, 'Phase U bulk mute enforcement failed (non-fatal)'),
+    );
     count++;
   }
 
   logger.info({ sessionId: data.sessionId, muted: data.muted, count },
-    'Host mute/unmute all command sent');
+    'Phase O + U — Host mute/unmute all persisted + relayed + LiveKit-enforced');
 }
 
 // ─── Host: Remove participant from breakout room ────────────────────────────
@@ -851,7 +1188,14 @@ export async function handleHostRemoveFromRoom(
     );
     const durationS = parseFloat(matchInfoRes.rows[0]?.seconds || '0');
     const ratingCount = parseInt(matchInfoRes.rows[0]?.rating_count || '0', 10);
-    const terminalStatus = (durationS > 30 || ratingCount > 0) ? 'completed' : 'cancelled';
+    // 25 May (#2 + #3, Ali) — a participant the host pulls out of a live room is
+    // SENT TO RATE, so the match genuinely happened and must count as completed.
+    // The old heuristic marked it 'cancelled' when the room was <30s with no
+    // rating YET at removal time (ratings come AFTER the pull) — which made
+    // matched+rated pairs show as "N not matched" in the round count, and let
+    // them slip past the round-end re-prompt dedup (which only scans completed
+    // matches), re-opening the rating form for people who'd already rated.
+    const terminalStatus: 'completed' = 'completed';
 
     // Phase 3 (29 April 2026 spec) — trio-aware demotion. Pre-fix the entire
     // match was terminated when the host removed ONE participant from a
@@ -1007,6 +1351,13 @@ export async function handleHostRemoveFromRoom(
       for (const partnerId of partnerIds) {
         io.to(userRoom(partnerId)).emit('match:partner_disconnected', { matchId: data.matchId });
       }
+      // Phase 2 dual-emit — affected partner(s) + the removed user.
+      // Match entity covers the in-event match surface; session +
+      // participants cover the lobby / participants list refresh.
+      emitEntities(
+        io, [...partnerIds, data.userId],
+        [E.session(data.sessionId), E.sessionParticipants(data.sessionId), E.match(data.matchId)],
+      ).catch(() => {});
 
       // Server-side 5s timeout: return partner to rating → lobby
       // (Client's auto-leave won't work because match is already 'no_show').
@@ -1263,6 +1614,12 @@ export async function handleHostMoveToRoom(
         livekitUrl: moveConfig.livekit.host,
       });
     }
+    // Phase 2 dual-emit — session, participants, match-id for everyone
+    // in the new room. Same audience as the per-pid emits above.
+    emitEntities(
+      io, allParticipants,
+      [E.session(sessionId), E.sessionParticipants(sessionId), E.match(newMatchId)],
+    ).catch(() => {});
 
     // Give abandoned partner a bye notification
     io.to(userRoom(currentPartnerId)).emit('match:bye_round', {
@@ -1436,7 +1793,7 @@ export async function handleHostExtendBreakoutRoom(
     const secondsRemaining = Math.ceil(msRemaining / 1000);
     const newEndsAtIso = newEndsAt.toISOString();
     for (const pid of roomTimer.participantIds) {
-      io.to(userRoom(pid)).emit('timer:sync', { secondsRemaining, endsAt: newEndsAtIso });
+      io.to(userRoom(pid)).emit('timer:sync', { segmentType: 'breakout', secondsRemaining, endsAt: newEndsAtIso });
     }
 
     // Refresh host dashboard
@@ -1484,6 +1841,11 @@ export async function handleAssignCohost(
     // routes through canActAsHost which accepts cohost + super_admin
     // (Phase I narrowed regular admin out of the auto-host set).
     if (!await verifyHost(socket, sessionId)) return;
+    // Bug J (15 May Ali) — co-hosts cannot make a platform admin a co-host.
+    // Bug 2 (18 May Stefan) — but the event director CAN; they hold
+    // supreme authority over their own event. refuseIfAdminTarget now
+    // shortcircuits to allow when caller === session.host_user_id.
+    if (!await refuseIfAdminTarget(socket, sessionId, userId)) return;
 
     await query(
       `INSERT INTO session_cohosts (session_id, user_id, role, granted_by)
@@ -1507,6 +1869,27 @@ export async function handleAssignCohost(
         'start_round', 'pause', 'resume', 'broadcast', 'create_breakout',
       ],
     });
+    // Bug 68 (18 May Stefan) — every participant (not just the new cohost)
+    // must see the roster change immediately: header count flips from
+    // "N participants + M hosts" to "N-1 + M+1", tile badges update, etc.
+    // roster:changed triggers each client to refetch the snapshot, which
+    // carries every derived state in one round-trip.
+    io.to(sessionRoom(sessionId)).emit('roster:changed', {
+      sessionId,
+      cause: 'cohost_assigned',
+    });
+
+    // F3 (20 May 2026 — live-test post-mortem). Defensive entity-tag
+    // fanout so any client viewing session_participants / event-plan
+    // queries invalidates and refetches. roster:changed already triggers
+    // the full snapshot refetch, but tagging gives React-Query-based
+    // surfaces (SessionDetailPage participants, EventPlanStrip) a direct
+    // refresh signal too — covers admin / pod-page surfaces that don't
+    // subscribe to the live session room.
+    emitSessionRoomEntities(
+      io, sessionId,
+      [E.session(sessionId), E.sessionParticipants(sessionId), E.sessionPlan(sessionId)],
+    ).catch(() => {});
 
     // Phase 8A.5 (8 May spec) — cohost change must re-shape upcoming
     // rounds immediately. Pre-fix the schedule generated at Start
@@ -1517,6 +1900,15 @@ export async function handleAssignCohost(
     maybeRepairFutureRounds(io, sessionId).catch(err =>
       logger.warn({ err, sessionId }, 'Cohost-change plan repair failed (non-fatal)')
     );
+
+    // Bug F (15 May Ali) + Bug 68 (18 May Stefan) — re-emit the host
+    // dashboard so the newly-promoted co-host sees a populated HCC with
+    // ZERO perceptible delay. Force variant bypasses the 1-second
+    // coalesce window that would otherwise defer this emit; matching-
+    // flow's emit fans out via getAllHostIds to every acting host,
+    // including the freshly-inserted cohost row.
+    if (_emitHostDashboardForce) await _emitHostDashboardForce(sessionId).catch(() => {});
+    else if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
 
     logger.info({ sessionId, userId, role, grantedBy: hostId }, 'Co-host assigned');
   } catch (err) {
@@ -1542,6 +1934,12 @@ export async function handleRemoveCohost(
     // Same pattern as handleAssignCohost above. Only handlePromoteCohost
     // (ownership transfer) remains original-host-only.
     if (!await verifyHost(socket, sessionId)) return;
+    // Bug J (15 May Ali) — directors cannot demote a platform admin. The
+    // session_cohosts row only exists if the admin opted in themselves
+    // via the Phase M banner. Bug 2 (18 May Stefan) — the event director
+    // can still demote them via the supreme-host carve-out; other acting
+    // hosts cannot.
+    if (!await refuseIfAdminTarget(socket, sessionId, userId)) return;
 
     await query(
       `DELETE FROM session_cohosts WHERE session_id = $1 AND user_id = $2`,
@@ -1556,6 +1954,21 @@ export async function handleRemoveCohost(
       effectiveRole: 'participant' as const,
       capabilities: [],
     });
+    // Bug 68 (18 May Stefan) — broadcast the roster change so every
+    // viewer's count + badges update in the same tick.
+    io.to(sessionRoom(sessionId)).emit('roster:changed', {
+      sessionId,
+      cause: 'cohost_removed',
+    });
+
+    // F3 (20 May 2026 — live-test post-mortem). Same defensive fanout as
+    // handleAssignCohost — covers React-Query surfaces (admin / pod
+    // pages, SessionDetailPage participants) that don't listen on the
+    // live session room socket.
+    emitSessionRoomEntities(
+      io, sessionId,
+      [E.session(sessionId), E.sessionParticipants(sessionId), E.sessionPlan(sessionId)],
+    ).catch(() => {});
 
     // Phase 8A.5 (8 May spec) — demoted user re-enters the matching pool
     // for upcoming rounds. Trigger plan repair so the schedule includes
@@ -1563,6 +1976,12 @@ export async function handleRemoveCohost(
     maybeRepairFutureRounds(io, sessionId).catch(err =>
       logger.warn({ err, sessionId }, 'Cohost-change plan repair failed (non-fatal)')
     );
+
+    // Bug F (15 May Ali) + Bug 68 (18 May Stefan) — force-emit so the
+    // demoted user (and every other host) sees the role change with no
+    // coalesce-induced delay.
+    if (_emitHostDashboardForce) await _emitHostDashboardForce(sessionId).catch(() => {});
+    else if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
 
     logger.info({ sessionId, userId, removedBy: hostId }, 'Co-host removed');
   } catch (err) {
@@ -1634,6 +2053,22 @@ export async function handlePromoteCohost(
         newHostId: cohostUserId,
         newHostDisplayName: newHostName,
       });
+      // Phase 2 dual-emit — session row, participants list (cohost
+      // affiliation changed), and the pod (pod-level admin lists may
+      // surface the host). Audience: whole session room participants
+      // + both endpoints to make sure their user-scoped queries refresh.
+      try {
+        const podIdRes = await query<{ pod_id: string | null }>(
+          `SELECT pod_id FROM sessions WHERE id = $1`, [sessionId],
+        );
+        const podId = podIdRes.rows[0]?.pod_id ?? null;
+        const entities = [
+          E.session(sessionId), E.sessionParticipants(sessionId),
+        ];
+        if (podId) entities.push(E.pod(podId));
+        await emitSessionRoomEntities(io, sessionId, entities);
+        await emitEntities(io, [hostId, cohostUserId], entities);
+      } catch { /* dual-emit failure non-fatal */ }
 
       // Direct permission updates to both parties so UIs re-render.
       io.to(userRoom(cohostUserId)).emit('permissions:updated', {
@@ -1651,6 +2086,20 @@ export async function handlePromoteCohost(
         effectiveRole: 'participant' as const,
         capabilities: [],
       });
+
+      // Bug 33 (19 May Ali) — host transfer changes the matching pool:
+      // the previous director is now a participant (re-enters the pool)
+      // and the new director leaves the pool. Plan must recompute. Reuse
+      // the same maybeRepairFutureRounds wrapper used by assign/remove
+      // cohost above (which itself fires host:event_plan_repaired plus
+      // the session+plan entity emit). Bug 44 (19 May Ali) — and the
+      // host dashboard must refresh so the new director's HCC and the
+      // demoted host's view both show the post-transfer roster + plan.
+      maybeRepairFutureRounds(io, sessionId).catch(err =>
+        logger.warn({ err, sessionId }, 'Host-transfer plan repair failed (non-fatal)')
+      );
+      if (_emitHostDashboardForce) await _emitHostDashboardForce(sessionId).catch(() => {});
+      else if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
 
       logger.info({ sessionId, previousHostId: hostId, newHostId: cohostUserId }, 'Host transferred');
     } catch (err) {
@@ -1748,6 +2197,10 @@ export async function setHostVisibility(
       userId: targetUserId,
       mode,
     });
+    // Phase 2 dual-emit — session entity covers session-detail / host-state
+    // queries (which surface visibility modes) for every participant in
+    // the room.
+    emitSessionRoomEntities(_io, sessionId, [E.session(sessionId)]).catch(() => {});
   }
 
   logger.info({ sessionId, targetUserId, mode, requesterUserId: requester.userId },
@@ -2258,7 +2711,7 @@ export async function handleHostCreateBreakout(
           }
           const remaining = Math.max(0, Math.ceil((state.endsAt.getTime() - Date.now()) / 1000));
           for (const pid of state.participantIds) {
-            io.to(userRoom(pid)).emit('timer:sync', { secondsRemaining: remaining });
+            io.to(userRoom(pid)).emit('timer:sync', { segmentType: 'breakout', secondsRemaining: remaining });
           }
           if (remaining <= 0) {
             const iv = roomSyncIntervals.get(matchId);
@@ -2339,7 +2792,7 @@ export async function handleHostCreateBreakout(
 
         // Send timer:sync to participants in this room so they see countdown
         for (const pid of participantIds) {
-          io.to(userRoom(pid)).emit('timer:sync', { secondsRemaining: duration });
+          io.to(userRoom(pid)).emit('timer:sync', { segmentType: 'breakout', secondsRemaining: duration });
         }
       }
 
@@ -2356,6 +2809,142 @@ export async function handleHostCreateBreakout(
     } catch (err: any) {
       logger.error({ err }, 'Error in handleHostCreateBreakout');
       socket.emit('error', { code: 'CREATE_BREAKOUT_FAILED', message: err.message || 'Failed to create breakout room' });
+    }
+  });
+}
+
+// ─── Host Set Pin ───────────────────────────────────────────────────────────
+//
+// Bug 1 (18 May Stefan) — global pin. When an acting host clicks the pin
+// icon on a participant, that participant becomes the big tile for EVERY
+// viewer in the event (not just the host who clicked). Pre-fix the pin
+// was local-per-viewer, which Stefan called out as the wrong architecture:
+// "When host pins/highlights someone, that person should become large for
+// all participants, not only for the host."
+//
+// Wire:
+//   client (host clicks pin) → emit host:set_pin { sessionId, pinnedUserId }
+//   server → verifyHost → activeSession.pinnedUserId = ... → persistSessionState
+//   server → emit pin:changed { pinnedUserId } to sessionRoom (everyone)
+//   client → store.setServerPinnedUserId(...) → Lobby re-renders pinned-mode
+//
+// Sending pinnedUserId=null clears the global pin (everyone's view returns
+// to default grid, host auto-elevated). Participants can still set their
+// own local pin while no global pin is active.
+
+export async function handleHostSetPin(
+  io: SocketServer,
+  socket: Socket,
+  data: { sessionId: string; pinnedUserId: string | null },
+): Promise<void> {
+  return withSessionGuard(data.sessionId, async () => {
+    try {
+      if (!await verifyHost(socket, data.sessionId)) return;
+      const { sessionId } = data;
+      const activeSession = activeSessions.get(sessionId);
+      if (!activeSession) {
+        socket.emit('error', { code: 'SESSION_NOT_ACTIVE', message: 'No active session for pin' });
+        return;
+      }
+      // Normalise: empty string / undefined / non-string → null.
+      const pinnedUserId =
+        typeof data.pinnedUserId === 'string' && data.pinnedUserId.length > 0
+          ? data.pinnedUserId
+          : null;
+      // No-op if unchanged — saves a broadcast + DB write.
+      if ((activeSession.pinnedUserId ?? null) === pinnedUserId) return;
+
+      activeSession.pinnedUserId = pinnedUserId;
+      persistSessionState(sessionId, activeSession).catch(() => {});
+
+      // Broadcast to the whole session room — every participant rerenders
+      // their lobby with the new pin (or unpins if pinnedUserId=null).
+      io.to(sessionRoom(sessionId)).emit('pin:changed', {
+        sessionId,
+        pinnedUserId,
+      });
+      // Phase 2 dual-emit — session entity (host-state surfaces include
+      // the pinned user) for the whole audience.
+      emitSessionRoomEntities(io, sessionId, [E.session(sessionId)]).catch(() => {});
+
+      logger.info(
+        { sessionId, pinnedUserId, by: getUserIdFromSocket(socket) },
+        'Host set/cleared global pin',
+      );
+    } catch (err: any) {
+      logger.error({ err }, 'Error in handleHostSetPin');
+      socket.emit('error', { code: 'SET_PIN_FAILED', message: err.message || 'Failed to set pin' });
+    }
+  });
+}
+
+// Bug 26 (19 May Ali) — director can flatten a cohost's tile to participant
+// size without revoking any privilege. Visual-only override: cohost keeps
+// HCC, mute-other, etc. — only their tile-grid sizing changes. Director-only
+// authority (super_admin acting as host does NOT count as director here).
+export async function handleHostSetTileSize(
+  io: SocketServer,
+  socket: Socket,
+  data: { sessionId: string; targetUserId: string; size: 'participant' | 'host' },
+): Promise<void> {
+  return withSessionGuard(data.sessionId, async () => {
+    try {
+      const { sessionId, targetUserId, size } = data;
+      const callerId = getUserIdFromSocket(socket);
+      const activeSession = activeSessions.get(sessionId);
+      if (!activeSession) {
+        socket.emit('error', { code: 'SESSION_NOT_ACTIVE', message: 'No active session for tile resize' });
+        return;
+      }
+      // Director-only: hostUserId is THE event director (cohosts are
+      // separate). Even super_admin acting as host does NOT pass here —
+      // tile flattening is the director's prerogative.
+      if (!callerId || callerId !== activeSession.hostUserId) {
+        socket.emit('error', { code: 'NOT_DIRECTOR', message: 'Only the event director can resize tiles' });
+        return;
+      }
+      if (!targetUserId || typeof targetUserId !== 'string') {
+        socket.emit('error', { code: 'INVALID_TARGET', message: 'targetUserId required' });
+        return;
+      }
+      if (size !== 'participant' && size !== 'host') {
+        socket.emit('error', { code: 'INVALID_SIZE', message: "size must be 'participant' or 'host'" });
+        return;
+      }
+      // Issue 13 (20 May Stefan) — "Host should be able to unpin." Phase Q
+      // auto-elevates the director's tile (col-span-2 row-span-2). The
+      // original Bug 26 handler refused self-demote on the rationale that
+      // a director "can't be cohost of their own event." Stefan disagreed
+      // on the live test: the director wants the option to drop their
+      // own tile back to participant size when they're producing rather
+      // than presenting. Visual-only — director still owns every host
+      // privilege. Cohost demote semantics are unchanged.
+      const current = new Set(activeSession.tileDemotedUserIds ?? []);
+      const before = current.size;
+      if (size === 'participant') current.add(targetUserId);
+      else current.delete(targetUserId);
+      const after = current.size;
+      // No-op if unchanged — saves a broadcast.
+      if (before === after) return;
+
+      activeSession.tileDemotedUserIds = Array.from(current);
+      persistSessionState(sessionId, activeSession).catch(() => {});
+
+      io.to(sessionRoom(sessionId)).emit('tile:size_changed', {
+        sessionId,
+        tileDemotedUserIds: activeSession.tileDemotedUserIds,
+      });
+      // Phase 2 dual-emit — session entity (the demoted-ids list is part
+      // of the session-state snapshot consumed by every viewer).
+      emitSessionRoomEntities(io, sessionId, [E.session(sessionId)]).catch(() => {});
+
+      logger.info(
+        { sessionId, targetUserId, size, by: callerId, total: after },
+        'Director set cohost tile size override',
+      );
+    } catch (err: any) {
+      logger.error({ err }, 'Error in handleHostSetTileSize');
+      socket.emit('error', { code: 'SET_TILE_SIZE_FAILED', message: err.message || 'Failed to resize tile' });
     }
   });
 }

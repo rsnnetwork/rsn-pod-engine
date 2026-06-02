@@ -113,7 +113,12 @@ export async function cleanupTestData(): Promise<{ users: number; sessions: numb
 }
 
 export async function closePool() {
-  await pool.end();
+  // No-op. Each test file's afterAll() used to call pool.end(), which
+  // killed the shared singleton pool for every subsequent file (workers=1
+  // runs them sequentially in one process). The Playwright runner exits
+  // the process when the suite finishes; the pool gets torn down then.
+  // Keep this export as a stable shape so existing test files don't need
+  // edits, but make it a no-op so the pool survives across files.
 }
 
 export { pool };

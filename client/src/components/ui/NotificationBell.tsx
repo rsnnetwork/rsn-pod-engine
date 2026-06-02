@@ -78,7 +78,13 @@ export default function NotificationBell() {
     return () => clearInterval(interval);
   }, []);
 
-  // Listen for real-time notifications via socket
+  // Bug 32 (19 May Ali) — listen for real-time notifications via socket,
+  // BUT only for the bell's own local component state (the dropdown list
+  // + unread counter). All React-Query cache invalidation moved to
+  // `useLegacyInvalidationBridge`, mounted at the App root so it works on
+  // every page — not just pages wrapped by AppLayout. Pre-fix, users on
+  // live-event / invite-accept / onboarding pages received socket
+  // broadcasts that no listener reacted to.
   useEffect(() => {
     const socket = getSocket();
     if (!socket) return;
@@ -87,7 +93,17 @@ export default function NotificationBell() {
       setUnreadCount(prev => prev + 1);
     };
     socket.on('notification:new', handler);
-    return () => { socket.off('notification:new', handler); };
+    // Bug 3 (18 May Stefan) — when pod membership flips, the bell must
+    // also re-pull its own notification list so any approval/rejection
+    // notification appears in the dropdown without waiting for the 30s
+    // poll. This is local-state-only; cache invalidation belongs to the
+    // bridge.
+    const membershipRefetchHandler = () => { fetchNotifications(); };
+    socket.on('pod:membership_updated', membershipRefetchHandler);
+    return () => {
+      socket.off('notification:new', handler);
+      socket.off('pod:membership_updated', membershipRefetchHandler);
+    };
   }, []);
 
   const handleOpen = () => {

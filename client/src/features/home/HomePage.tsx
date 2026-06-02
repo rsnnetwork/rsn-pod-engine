@@ -6,29 +6,35 @@ import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
 import { useAuthStore } from '@/stores/authStore';
 import api from '@/lib/api';
+import { E } from '@/realtime/entities';
 
 export default function HomePage() {
   const { user } = useAuthStore();
+  const currentUserId = user?.id;
   const navigate = useNavigate();
 
   const { data: pods, isLoading: podsLoading } = useQuery({
     queryKey: ['my-pods'],
     queryFn: () => api.get('/pods').then(r => r.data.data ?? []),
+    meta: { entities: currentUserId ? [E.userPods(currentUserId)] : [] },
   });
 
   const { data: sessions, isLoading: sessionsLoading } = useQuery({
     queryKey: ['my-sessions'],
     queryFn: () => api.get('/sessions').then(r => r.data.data ?? []),
+    meta: { entities: currentUserId ? [E.userSessions(currentUserId)] : [] },
   });
 
   const { data: invites, isLoading: invitesLoading } = useQuery({
     queryKey: ['my-invites'],
     queryFn: () => api.get('/invites').then(r => r.data.data ?? []),
+    meta: { entities: currentUserId ? [E.userInvites(currentUserId)] : [] },
   });
 
   const { data: receivedInvites } = useQuery({
     queryKey: ['received-invites'],
     queryFn: () => api.get('/invites/received').then(r => r.data.data ?? []),
+    meta: { entities: currentUserId ? [E.userInvites(currentUserId)] : [] },
   });
 
   if (podsLoading || sessionsLoading || invitesLoading) return <PageLoader />;

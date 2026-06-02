@@ -134,25 +134,25 @@ describe('Phase C — DM data model + service + REST', () => {
       expect(fn).toMatch(/canMessage\(/);
     });
 
-    it('sendMessage uses ON CONFLICT to upsert the conversation row', () => {
-      const fnStart = src.indexOf('export async function sendMessage(');
+    it('insertDirectMessage uses ON CONFLICT to upsert the conversation row', () => {
+      const fnStart = src.indexOf('async function insertDirectMessage(');
       const fnEnd = src.indexOf('\n}\n', fnStart);
       const fn = src.slice(fnStart, fnEnd);
       expect(fn).toMatch(/ON CONFLICT \(user_a_id, user_b_id\) DO UPDATE/);
     });
 
-    it('sendMessage clears the SENDER side soft-delete on incoming send', () => {
+    it('insertDirectMessage clears the SENDER side soft-delete on incoming send', () => {
       // When the sender previously deleted the conversation, sending again
       // should re-show it in their inbox by clearing user_x_deleted_at.
-      const fnStart = src.indexOf('export async function sendMessage(');
+      const fnStart = src.indexOf('async function insertDirectMessage(');
       const fnEnd = src.indexOf('\n}\n', fnStart);
       const fn = src.slice(fnStart, fnEnd);
       expect(fn).toMatch(/clearDeletedColumn/);
       expect(fn).toMatch(/user_a_deleted_at|user_b_deleted_at/);
     });
 
-    it('sendMessage runs in a transaction (conversation upsert + message insert atomic)', () => {
-      const fnStart = src.indexOf('export async function sendMessage(');
+    it('insertDirectMessage runs in a transaction (conversation upsert + message insert atomic)', () => {
+      const fnStart = src.indexOf('async function insertDirectMessage(');
       const fnEnd = src.indexOf('\n}\n', fnStart);
       const fn = src.slice(fnStart, fnEnd);
       expect(fn).toMatch(/return transaction\(/);
@@ -223,7 +223,11 @@ describe('Phase C — DM data model + service + REST', () => {
     });
 
     it('content body validation caps length at 4000 chars', () => {
-      expect(src).toMatch(/content:\s*z\.string\(\)\.min\(1\)\.max\(4000\)/);
+      // Feature 19 (13 May) — content is optional now (an attachment-only
+      // message is valid). Length cap still pinned; the "at least one of
+      // content or attachment" rule is enforced via refine().
+      expect(src).toMatch(/content:\s*z\.string\(\)\.max\(4000\)/);
+      expect(src).toMatch(/\.refine\([\s\S]{0,200}content[\s\S]{0,200}attachment/);
     });
   });
 

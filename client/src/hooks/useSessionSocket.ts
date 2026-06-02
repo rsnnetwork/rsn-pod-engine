@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
-import { connectSocket, disconnectSocket, getSocket } from '@/lib/socket';
+import { connectSocket, getSocket } from '@/lib/socket';
 import { useSessionStore } from '@/stores/sessionStore';
+import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
 
@@ -27,6 +28,21 @@ const SOCKET_EVENTS = [
   'permissions:updated',
   // Phase G (10 May spec item 11) — host visibility mode change broadcast.
   'host:visibility_changed',
+  // Bug 1 (18 May Stefan) — global pin broadcast. Acting hosts pin a
+  // participant; everyone's lobby re-renders with that user as the big
+  // tile.
+  'pin:changed',
+  // Bug 26 (19 May Ali) — director's visual tile demote list changed.
+  // Every client recomputes which tiles render at participant size.
+  'tile:size_changed',
+  // Bug 68 (18 May Stefan) — server tells every client in the session
+  // room to refetch their snapshot because the roster mutated (cohost
+  // assigned/removed, acting-as-host toggled, kick, etc). One event
+  // covers all the cases where "everyone must see this change instantly".
+  'roster:changed',
+  // Phase 5 — versioned participant-state snapshot, seq-guarded. Additive;
+  // existing handlers (session:state, participant:joined/left) unchanged.
+  'state:snapshot',
 ] as const;
 
 // ── LiveKit token fetch with retry ──
@@ -57,6 +73,12 @@ export default function useSessionSocket(sessionId: string) {
   const ratingFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const byeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initializedRef = useRef<string | null>(null);
+  // 25 May (F/G) — timestamp of the last manual-breakout timer:sync. While these
+  // arrive (every 5s server-side), the breakout owns this client's timer and we
+  // drop session-wide round/rating ticks. Self-healing: keyed on the live stream,
+  // so it recovers after a refresh without any flag to restore. Window > 5s + margin.
+  const lastBreakoutSyncRef = useRef(0);
+  const BREAKOUT_OWNERSHIP_MS = 12_000;
 
   const clearTimer = () => {
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
@@ -150,6 +172,18 @@ export default function useSessionSocket(sessionId: string) {
       if (data.hostVisibilityModes && typeof data.hostVisibilityModes === 'object') {
         store.setHostVisibilityModes(data.hostVisibilityModes);
       }
+      // Phase O (12 May spec item 7) — apply server-authoritative host-mute
+      // roster. If the local user is in the array, fire the existing
+      // hostMuteCommand pathway so their LiveKit audio track is muted
+      // even after a reconnect (the pre-fix gap that left Shradha "stuck
+      // muted after refresh" was caused by the absence of this replay).
+      if (Array.isArray(data.hostMutedUserIds)) {
+        store.setHostMutedUserIds(data.hostMutedUserIds);
+        const myId = useAuthStore.getState().user?.id;
+        if (myId && data.hostMutedUserIds.includes(myId)) {
+          store.setHostMuteCommand(true);
+        }
+      }
     });
 
     // ── Co-host ──
@@ -159,6 +193,47 @@ export default function useSessionSocket(sessionId: string) {
     // ── Phase G (10 May spec item 11) — host visibility mode ──
     socket.on('host:visibility_changed', (data: any) => {
       if (data?.userId && data?.mode) store.setHostVisibility(data.userId, data.mode);
+    });
+
+    // ── Bug 1 (18 May Stefan) — global pin broadcast ──
+    // When ANY acting host pins/unpins someone, the server broadcasts
+    // pin:changed to the entire session room. Each viewer's Lobby reads
+    // serverPinnedUserId from the store and switches to pinned-mode
+    // rendering (big tile + thumb strip) with the named user as the
+    // spotlight. The per-viewer local pin (kept in Lobby.tsx useState)
+    // remains as a fallback when the global pin is null.
+    socket.on('pin:changed', (data: any) => {
+      const next = typeof data?.pinnedUserId === 'string' ? data.pinnedUserId : null;
+      store.setServerPinnedUserId(next);
+    });
+
+    // ── Bug 26 (19 May Ali) — director's visual tile demote list ──
+    // Whenever the director resizes a cohost's tile, the server broadcasts
+    // the FULL updated list to the session room. Every viewer's Lobby
+    // re-renders with the new sizes — demoted cohosts drop the host-tile
+    // ring + col-span and become regular participant tiles.
+    socket.on('tile:size_changed', (data: any) => {
+      const ids = Array.isArray(data?.tileDemotedUserIds) ? data.tileDemotedUserIds : [];
+      store.setTileDemotedUserIds(ids);
+    });
+
+    // ── Bug 68 (18 May Stefan) — universal "no refresh needed" path ──
+    // The server fires roster:changed whenever ANY session-roster mutation
+    // happens (cohost assigned/removed, acting-as-host toggled, kick,
+    // participant join/leave, etc). Refetching the snapshot pulls down
+    // every derived state in one round-trip — cohorts Set, acting-as-host
+    // overrides, participant counts, hccParticipants for the HCC drawer.
+    // Result: every client's UI converges to the new state within one
+    // network round-trip of the mutation, no refresh ever needed.
+    socket.on('roster:changed', () => {
+      fetchSessionStateSnapshot().catch(() => { /* best-effort */ });
+    });
+
+    // ── Phase 5 — versioned state:snapshot (seq-guarded, additive) ──
+    // Seq-guard lives in the store; stale/duplicate pushes are ignored.
+    // Existing handlers (session:state, participant:joined/left) unchanged.
+    socket.on('state:snapshot', (data: any) => {
+      store.applyStateSnapshot(data);
     });
 
     // Phase 8B.1 (8 May spec) — Stefan #4 + #9: a newly-promoted/demoted
@@ -198,7 +273,7 @@ export default function useSessionSocket(sessionId: string) {
           }
         }
       }
-      if (data.status === 'completed') { clearTimer(); clearByeTimeout(); store.setLiveKitToken(null, null); store.setMatch(null); store.setRoomId(null); store.setMatchingOverlay(null); store.setRoundDashboard(null); store.setByeRound(false); store.setPartnerDisconnected(false); store.setLeftCurrentRound(false); store.setTransitionStatus('session_ending'); setTimeout(() => { store.setTransitionStatus(null); store.setPhase('complete'); }, 1500); }
+      if (data.status === 'completed') { clearTimer(); clearByeTimeout(); store.setLiveKitToken(null, null); store.setMatch(null); store.setRoomId(null); store.setMatchingOverlay(null); store.setRoundDashboard(null); store.setByeRound(false); store.setPartnerDisconnected(false); store.setLeftCurrentRound(false); lastBreakoutSyncRef.current = 0; store.setTransitionStatus('session_ending'); setTimeout(() => { store.setTransitionStatus(null); store.setPhase('complete'); }, 1500); }
       if (data.status === 'lobby_open') { store.setTransitionStatus(null); store.setHostInLobby(true); }
       if (data.status === 'round_active') { store.setLeftCurrentRound(false); } // New round — clear flag so match:assigned is accepted
       if (data.status === 'closing_lobby') {
@@ -386,6 +461,9 @@ export default function useSessionSocket(sessionId: string) {
       store.setPartnerDisconnected(false);
       // Per-match timer visibility override (Task 14 — bulk manual breakouts)
       store.setBreakoutTimerHidden(data.timerVisibility === 'hidden');
+      // 25 May (F/G) — an algorithm-round match is NOT a manual breakout; hand the
+      // timer back to the session round timer (timer:sync) for this user now.
+      lastBreakoutSyncRef.current = 0;
       const partners = data.partners || [{ userId: data.partnerId, displayName: data.partnerDisplayName || data.partnerId }];
       store.setMatch({ userId: data.partnerId, displayName: data.partnerDisplayName || data.partnerId }, data.matchId, partners);
       store.setPhase('matched');
@@ -415,6 +493,10 @@ export default function useSessionSocket(sessionId: string) {
       store.setPartnerDisconnected(false);
       // Per-match timer visibility override (Task 14 — bulk manual breakouts)
       store.setBreakoutTimerHidden(data.timerVisibility === 'hidden');
+      // 25 May (F/G) — manual breakouts arrive as match:reassigned with isManual,
+      // immediately followed by the room's first 'breakout' timer:sync, which the
+      // recency gate picks up. Algorithm re-pairs omit isManual → no breakout ticks
+      // → the session timer keeps ownership. No explicit flag needed here.
       store.setMatch({ userId: data.newPartnerId, displayName: data.partnerDisplayName || data.newPartnerId }, data.matchId || null);
       // Phase C1 (10 May spec) — capture the LiveKit room id for the new
       // breakout. Pre-fix, only match:assigned called setRoomId, so a
@@ -457,6 +539,7 @@ export default function useSessionSocket(sessionId: string) {
       store.setTransitionStatus(null);
       store.setTimer(0); // Clear displayed timer
       store.setBreakoutTimerHidden(false); // Reset per-match visibility override
+      lastBreakoutSyncRef.current = 0; // 25 May (F/G) — left the breakout; session timer owns again
       store.setLeftCurrentRound(true); // Prevent re-entry via stale match:assigned
       store.setPhase('lobby');
     });
@@ -486,6 +569,30 @@ export default function useSessionSocket(sessionId: string) {
       // events can arrive out of order after reconnect, so don't gate on sessionStatus
       const currentState = useSessionStore.getState();
       if (currentState.sessionStatus === 'completed') return;
+      // #2 (26 May, live-test-2) — if the user already FULLY handled this exact
+      // match (rated or skipped every partner — recorded in ratedMatchIds when
+      // RatingPrompt hit allDone), a re-emitted rating:window_open during
+      // re-match churn must NOT re-show the form. The user already rated; the
+      // server 409s the duplicate POST, but the form re-appearing read as
+      // "rate again." Skip straight back to lobby (same cleanup as the fallback
+      // path) instead of setting phase='rating'. Suppress ONLY for the same
+      // matchId — a genuine re-match has a new matchId and still prompts.
+      if (data.matchId && currentState.ratedMatchIds.has(data.matchId)) {
+        clearTimer();
+        clearRatingFallback();
+        store.setTimerEndsAt(null);
+        store.setLiveKitToken(null, null);
+        store.setMatch(null);
+        store.setRoomId(null);
+        store.setTransitionStatus(null);
+        store.setPhase('lobby');
+        lastBreakoutSyncRef.current = 0;
+        return;
+      }
+      // 25 May (F/G) — rating opens AFTER a breakout ends (incl. host End-all-rooms,
+      // which routes participants straight to rating). Release breakout ownership so
+      // the session-level rating countdown (segmentType 'round_rating') shows at once.
+      lastBreakoutSyncRef.current = 0;
       if (data.partners && data.partners.length > 0) {
         // Server sent full partner info (reconnect or trio) — use it
         const primaryPartner = data.partners[0];
@@ -499,9 +606,11 @@ export default function useSessionSocket(sessionId: string) {
         store.setMatch(currentState.currentMatch, data.matchId, currentState.currentPartners);
       }
       store.setTransitionStatus(null); // Clear "Round ending — wrapping up" banner
-      store.setTimer(data.durationSeconds || 30);
+      // B (26 May) — rating window has no countdown. Stop the local tick so
+      // no stale timer from a prior segment stays running. Clear timerEndsAt so
+      // the 1s recompute path doesn't count from a leftover breakout endsAt.
       clearTimer();
-      intervalRef.current = setInterval(() => store.tickTimer(), 1000);
+      store.setTimerEndsAt(null);
 
       // Early leave: user left breakout mid-round — clear video, prevent re-entry
       if (data.earlyLeave) {
@@ -515,9 +624,11 @@ export default function useSessionSocket(sessionId: string) {
 
       // ── Fallback safety timer ──
       // If rating:window_closed is missed (network issue, socket drop), auto-return
-      // to lobby after rating duration + 30s buffer. Prevents users getting stuck.
+      // to lobby after 120s (server backstop 90s + 30s grace). Prevents users
+      // getting stuck if the socket event is lost. Kept in lockstep with the
+      // server-side RATING_BACKSTOP_MS so a dropped close event recovers promptly.
       clearRatingFallback();
-      const fallbackMs = ((data.durationSeconds || 30) + 30) * 1000;
+      const fallbackMs = 120_000;
       ratingFallbackRef.current = setTimeout(() => {
         const currentPhase = useSessionStore.getState().phase;
         if (currentPhase === 'rating') {
@@ -583,6 +694,37 @@ export default function useSessionSocket(sessionId: string) {
       const reason = reasonText[data?.reason] || 'plan updated';
       const rounds: number[] = data?.regeneratedRounds || [];
       if (rounds.length === 0) return; // nothing changed; skip toast
+      // Bug 18 (18 May Stefan) — sync the headline summary so the host
+      // sees the new round/pair totals in the EventPlan strip, not just
+      // the per-round badges. Pre-fix only host:event_plan_generated
+      // updated this store value, so post-repair the strip's "Plan: X
+      // rounds · Y pairs" kept showing the original Start-of-event
+      // numbers even when the badges underneath reflected the new plan.
+      const rc = typeof data?.roundCount === 'number' ? data.roundCount : null;
+      const tp = typeof data?.totalPairs === 'number' ? data.totalPairs : null;
+      if (rc !== null && tp !== null) {
+        store.setEventPlanSummary?.({ roundCount: rc, totalPairs: tp });
+      }
+      // Bug 27 (19 May Ali) — Bug 22 closed the DB persistence + plan-strip
+      // gap but left `totalRounds` in the client store stale between
+      // "Another Round" click and the next round_started event. Every
+      // surface that reads totalRounds ("Round N of M" in main room, host
+      // controls, breakout rooms, rating prompt last-round logic) stuck
+      // on the pre-bump number for the rating-window duration. Pushing
+      // the fresh count here closes that window — every UI updates the
+      // moment the bump broadcast lands.
+      if (rc !== null) {
+        store.setTotalRounds(rc);
+      }
+      // Bug 28 (19 May Ali + Stefan) — track bonus-round count so the
+      // header shows a "Bonus" pill on any round past the originally-
+      // configured count. Server sends the cumulative total in every
+      // event_plan_repaired emit with reason='host_request' (the
+      // Another Round path); late-joiner / left repairs leave it
+      // untouched (the field stays undefined for those, so we skip).
+      if (typeof data?.bonusRoundsAdded === 'number') {
+        store.setBonusRoundsAdded(data.bonusRoundsAdded);
+      }
       const range = rounds.length === 1
         ? `round ${rounds[0]}`
         : `rounds ${rounds[0]}–${rounds[rounds.length - 1]}`;
@@ -605,6 +747,16 @@ export default function useSessionSocket(sessionId: string) {
 
     socket.on('host:match_preview', (data: any) => {
       store.setMatchPreview(data);
+      // 26 May (#9-UI) — when the engine had to reuse already-met pairs, fire a
+      // transient toast so the host notices immediately, then the persistent
+      // banner (rendered in HostControls while matchPreview.usedRepeats is true)
+      // stays visible until the preview is regenerated or confirmed.
+      if (data?.usedRepeats) {
+        useToastStore.getState().addToast(
+          'No fresh pairings left — this round reuses some past partners',
+          'info',
+        );
+      }
     });
 
     // ── Host round dashboard (breakout room monitoring) ──
@@ -640,9 +792,15 @@ export default function useSessionSocket(sessionId: string) {
     // ── Chat ──
     socket.on('chat:message', (data: any) => store.addChatMessage(data));
     socket.on('chat:history', (data: any) => {
-      if (data.messages && Array.isArray(data.messages)) {
-        store.setChatMessages(data.messages);
-      }
+      if (!data.messages || !Array.isArray(data.messages)) return;
+      // Bug 15 (13 May live test) — an empty server reply must not wipe the
+      // local array. Pre-fix, a race during round transitions could ship
+      // an empty history back and erase the messages the user had just
+      // exchanged. Only replace when the server's authoritative reply is
+      // non-empty; an empty reply means "I have no extra history for you
+      // right now", not "discard what you have".
+      if (data.messages.length === 0) return;
+      store.setChatMessages(data.messages);
     });
     socket.on('chat:reaction_update', (data: any) => {
       if (data.messageId && data.reactions) {
@@ -668,6 +826,34 @@ export default function useSessionSocket(sessionId: string) {
       // currentRound > 0, so accepts timer:sync.
       const state = useSessionStore.getState();
       const isPauseSnapshot = data.paused === true || data.paused === false;
+
+      // 25 May (F/G) — timer SCOPE, self-healing. Manual breakout rooms emit a
+      // per-user timer:sync tagged segmentType 'breakout' every 5s (a server-side
+      // interval that keeps running across a participant's refresh). Round/rating
+      // timers are broadcast to the whole sessionRoom tagged with a session status.
+      // A user in a breakout is also in the sessionRoom, so the session broadcast
+      // would otherwise clobber the per-room countdown (the 158↔43 / 4:23↔8:23
+      // flicker). While breakout ticks are actively arriving, the breakout owns
+      // this client's timer — drop session-level ticks (incl. their pause snapshot).
+      // Keyed on the live stream, NOT a flag, so it recovers automatically after
+      // a refresh. Explicit resets (below) hand the timer back the instant a user
+      // leaves the breakout (rating opens / return to lobby / new round).
+      const nowMs = Date.now();
+      if (data.segmentType === 'breakout') {
+        lastBreakoutSyncRef.current = nowMs;
+      } else if (nowMs - lastBreakoutSyncRef.current < BREAKOUT_OWNERSHIP_MS) {
+        return;
+      }
+
+      // 25 May (#1) — while rating, the per-user rating:window_open countdown
+      // (pair 30s / trio 60s) is authoritative. endRound also broadcasts a session
+      // round_rating segment timer scaled to the round's MAX partner count, which
+      // for a pair user in a trio-containing round flips 30s<->60s. Ignore
+      // session-level (non-breakout) ticks while rating.
+      if (state.phase === 'rating' && data.segmentType && data.segmentType !== 'breakout') {
+        return;
+      }
+
       if (!isPauseSnapshot) {
         if (state.phase === 'complete') return;
         if (state.currentRound === 0 && state.phase === 'lobby') return;
@@ -740,10 +926,16 @@ export default function useSessionSocket(sessionId: string) {
         NO_ELIGIBLE_PAIRS: { msg: 'Everyone has already been matched. End the event or wait for new participants.', severity: 'info' },
         GENERATE_FAILED: { msg: 'Could not generate matches. Try again.', severity: 'error' },
         REGENERATE_FAILED: { msg: 'Re-match failed. Try again.', severity: 'error' },
+        // 23 May (Stefan live test) — Re-match couldn't produce a different
+        // no-repeat arrangement; show the server's reason as an info toast so
+        // the button never looks dead.
+        REMATCH_NO_ALTERNATIVE: { msg: rawMsg, severity: 'info' },
         ROOM_CREATION_FAILED: { msg: 'Could not create breakout room. Try again.', severity: 'error' },
         MATCH_CREATION_FAILED: { msg: 'Could not assign participants to the room. Try again.', severity: 'error' },
-        PARTICIPANT_ALREADY_MATCHED: { msg: 'One or more participants are already in another active match.', severity: 'info' },
-        FORCE_MATCH_FAILED: { msg: 'Force-match failed. Try again.', severity: 'error' },
+        // 23 May — surface the server's detailed "X and Y are already in another
+        // room — use Swap" guidance instead of a generic line (raised by manual
+        // breakout-room creation when a participant is already placed).
+        PARTICIPANT_ALREADY_MATCHED: { msg: rawMsg, severity: 'info' },
         REMOVE_FAILED: { msg: 'Could not remove that participant. Try again.', severity: 'error' },
         DM_SEND_FAILED: { msg: 'Message could not be sent. Try again.', severity: 'error' },
         DM_REACT_FAILED: { msg: 'Reaction could not be added. Try again.', severity: 'info' },
@@ -825,7 +1017,38 @@ export default function useSessionSocket(sessionId: string) {
     socket.io.on('reconnect_attempt', onReconnectAttempt);
     socket.io.on('reconnect_failed', onReconnectFailed);
 
+    // #16 (24 May, Ali — pre-event hardening) — when the user returns from the
+    // background (phone call, tab switch, screen lock, app switch) the OS may
+    // have throttled the heartbeat or dropped the socket, leaving the server
+    // thinking they're gone. The moment they're foregrounded, re-register
+    // presence so the server (and the matcher) counts them as present again —
+    // no button, no refresh. Debounced so a burst of focus/visibility flips
+    // fires once. Uses the same session:join the reconnect handler uses.
+    let resyncDebounce: ReturnType<typeof setTimeout> | null = null;
+    const resyncPresenceOnReturn = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (resyncDebounce) return;
+      resyncDebounce = setTimeout(() => { resyncDebounce = null; }, 2000);
+      // 25 May (A) — on return, RE-REGISTER via session:join so a backgrounded /
+      // dropped user is counted by the matcher again (exactly what a manual
+      // refresh does). The earlier heartbeat-only attempt did NOT re-register and
+      // left present people unmatched until they refreshed. This is safe now:
+      // skips are recorded server-side (#6 — no rating re-prompt), and the
+      // reconnect-reset only fires for users with no active match, so an
+      // in-breakout user is never flipped to the main room (#B).
+      if (!socket.connected) socket.connect();
+      socket.emit('session:join', { sessionId });
+      socket.emit('presence:heartbeat', { sessionId });
+    };
+    document.addEventListener('visibilitychange', resyncPresenceOnReturn);
+    window.addEventListener('focus', resyncPresenceOnReturn);
+    window.addEventListener('online', resyncPresenceOnReturn);
+
     return () => {
+      if (resyncDebounce) clearTimeout(resyncDebounce);
+      document.removeEventListener('visibilitychange', resyncPresenceOnReturn);
+      window.removeEventListener('focus', resyncPresenceOnReturn);
+      window.removeEventListener('online', resyncPresenceOnReturn);
       clearTimer();
       clearRatingFallback();
       clearByeTimeout();
@@ -840,9 +1063,13 @@ export default function useSessionSocket(sessionId: string) {
       socket.io.off('reconnect_attempt', onReconnectAttempt);
       socket.io.off('reconnect_failed', onReconnectFailed);
 
-      // Leave the session room and disconnect
+      // Leave the session room only — do NOT disconnect the global
+      // socket. Bug 32 (19 May Ali): the socket is now an app-lifetime
+      // connection owned by App.tsx so realtime works on every page,
+      // not just the live event. Disconnecting here would kill
+      // notifications + pod / session list updates on every page the
+      // user navigates to after leaving an event.
       socket.emit('session:leave', { sessionId });
-      disconnectSocket();
 
       // Allow re-initialization if this effect re-runs
       initializedRef.current = null;

@@ -8,6 +8,7 @@ import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { auditMiddleware } from '../middleware/audit';
 import * as orchestrationService from '../services/orchestration/orchestration.service';
+import { emitPermissionsUpdated } from '../realtime/fanout';
 import * as sessionService from '../services/session/session.service';
 import { ForbiddenError } from '../middleware/errors';
 import { UserRole } from '@rsn/shared';
@@ -23,6 +24,17 @@ const broadcastSchema = z.object({
 const visibilitySchema = z.object({
   userId: z.string().uuid(),
   mode: z.enum(['big_speaker', 'normal', 'producer', 'hidden']),
+});
+
+// Phase M (12 May spec item 1) — acting-as-host toggle. value=null clears
+// the explicit override back to role default; true/false set the override.
+const actingAsHostSchema = z.object({
+  value: z.union([z.boolean(), z.null()]),
+});
+
+// Phase S — host-initiated demote/promote of ANOTHER user.
+const actingAsHostForSchema = z.object({
+  value: z.union([z.boolean(), z.null()]),
 });
 
 // ─── Host Verification Helper ───────────────────────────────────────────────
@@ -151,6 +163,114 @@ router.post(
         req.body.mode,
       );
       res.json({ success: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /sessions/:id/host/acting-as-host — set acting-as-host override ──
+//
+// Phase M (12 May spec item 1) — per-event "Join as host" / "Join as
+// participant" toggle. Sets the caller's OWN acting_as_host column on
+// session_participants. The user must already be a registered participant
+// for the override to stick (the UPDATE is a no-op otherwise).
+//
+// Permission: caller can only set their own value. Other-user impersonation
+// is intentionally not supported here — the spec frames this as a per-user
+// self-toggle ("admins/super admins should have a toggle"). A future host-
+// initiated demote/promote would need a separate endpoint with a different
+// permission model.
+
+router.post(
+  '/:id/host/acting-as-host',
+  authenticate,
+  validate(actingAsHostSchema, 'body'),
+  auditMiddleware('session:acting_as_host', 'session'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const sessionId = req.params.id;
+      const userId = req.user!.userId;
+      // Phase P (12 May spec — Ali's 13 May clarification): the event
+      // director (session.host_user_id) cannot toggle. They are
+      // permanently the host of their own event. Refuse the POST so a
+      // malicious or curious client cannot demote the director by
+      // calling the API directly.
+      const session = await sessionService.getSessionById(sessionId);
+      if (session.hostUserId === userId) {
+        next(new ForbiddenError(
+          'The event director cannot toggle their own host status. Promote a co-host instead.',
+        ));
+        return;
+      }
+      await sessionService.setActingAsHost(sessionId, userId, req.body.value);
+      // Notify the user's own sockets so the snapshot resyncs the new
+      // override (and the UI re-derives isHost). Reuse permissions:updated
+      // — the existing client handler already calls fetchSessionStateSnapshot
+      // on this event.
+      await emitPermissionsUpdated(sessionId, userId);
+      res.json({
+        success: true,
+        data: { sessionId, userId, value: req.body.value },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /sessions/:id/host/acting-as-host-for/:userId ────────────────────
+//
+// Phase S — host-initiated promote/demote. Caller must be acting host on
+// this session (verifyHostOrSuperAdmin); target cannot be the director
+// (Phase P invariant: director is permanently host). Self-toggle goes
+// through the other endpoint; this one is explicitly for managing other
+// people's acting_as_host override.
+
+router.post(
+  '/:id/host/acting-as-host-for/:userId',
+  authenticate,
+  validate(actingAsHostForSchema, 'body'),
+  auditMiddleware('session:acting_as_host_admin', 'session'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!await verifyHostOrSuperAdmin(req, next)) return;
+      const sessionId = req.params.id;
+      const targetUserId = req.params.userId;
+      const callerUserId = req.user!.userId;
+
+      // Director is permanently host of their own event — Phase P
+      // invariant. Refuse any attempt to demote them via this endpoint
+      // regardless of caller's role.
+      const session = await sessionService.getSessionById(sessionId);
+      if (session.hostUserId === targetUserId) {
+        next(new ForbiddenError(
+          'The event director cannot be demoted. They are permanently the host of their own event.',
+        ));
+        return;
+      }
+
+      // A caller using this endpoint to set their OWN row is a misuse —
+      // the self-toggle endpoint is the right path. Redirect them.
+      if (targetUserId === callerUserId) {
+        next(new ForbiddenError(
+          'Use POST /sessions/:id/host/acting-as-host (the self-toggle) for your own override.',
+        ));
+        return;
+      }
+
+      await sessionService.setActingAsHost(sessionId, targetUserId, req.body.value);
+      // Phase 5 — notifyPermissionsUpdated was deleted; the replacement
+      // emitPermissionsUpdated lives in ../realtime/fanout and emits both
+      // the surviving permissions:updated socket event (load-bearing for
+      // Zustand snapshot rehydration in useSessionSocket) AND the
+      // entity-tag fanout for queries.
+      const { emitPermissionsUpdated } = await import('../realtime/fanout');
+      await emitPermissionsUpdated(sessionId, targetUserId);
+      res.json({
+        success: true,
+        data: { sessionId, userId: targetUserId, value: req.body.value },
+      });
     } catch (err) {
       next(err);
     }

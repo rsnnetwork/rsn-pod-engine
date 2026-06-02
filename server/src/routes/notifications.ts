@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { authenticate } from '../middleware/auth';
 import { query } from '../db';
+import { fanoutOwnNotifications } from '../realtime/fanout';
 import { ApiResponse } from '@rsn/shared';
 
 const router = Router();
@@ -29,6 +30,12 @@ router.get(
                   WHEN i.pod_id IS NOT NULL AND EXISTS (
                     SELECT 1 FROM pod_members pm
                     WHERE pm.pod_id = i.pod_id AND pm.user_id = $1
+                      -- Bug 30 (19 May Ali) — exclude history rows. A
+                      -- 'removed'/'left'/'declined' row means the user is
+                      -- NOT currently in the pod, so the new pending
+                      -- invite must NOT silently report as 'accepted'.
+                      -- Sessions branch above already mirrors this rule.
+                      AND pm.status NOT IN ('removed', 'left', 'declined')
                   ) THEN 'accepted'
                   ELSE i.status
                 END AS "inviteStatus",
@@ -73,6 +80,10 @@ router.post(
         `UPDATE notifications SET is_read = TRUE WHERE user_id = $1 AND is_read = FALSE`,
         [req.user!.userId]
       );
+      // Phase May-19 realtime — fan out to the user's own personal
+      // room so any other tabs / devices the same user has open reset
+      // the bell counter without a refresh.
+      fanoutOwnNotifications(req.user!.userId).catch(() => {});
       res.json({ success: true } as ApiResponse);
     } catch (err) {
       next(err);
@@ -90,6 +101,9 @@ router.post(
         `UPDATE notifications SET is_read = TRUE WHERE id = $1 AND user_id = $2`,
         [req.params.id, req.user!.userId]
       );
+      // Phase May-19 realtime — same own-room fanout so cross-tab bell
+      // counter stays in sync.
+      fanoutOwnNotifications(req.user!.userId).catch(() => {});
       res.json({ success: true } as ApiResponse);
     } catch (err) {
       next(err);
@@ -107,6 +121,9 @@ router.delete(
         `DELETE FROM notifications WHERE user_id = $1`,
         [req.user!.userId]
       );
+      // Phase May-19 realtime — clearing notifications also empties
+      // the bell on other tabs.
+      fanoutOwnNotifications(req.user!.userId).catch(() => {});
       res.json({ success: true } as ApiResponse);
     } catch (err) {
       next(err);

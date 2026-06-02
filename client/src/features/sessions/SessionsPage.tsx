@@ -10,6 +10,7 @@ import { PageLoader } from '@/components/ui/Spinner';
 import { useAuthStore } from '@/stores/authStore';
 import { formatDateTime, LOCAL_TIME_LABEL } from '@/lib/utils';
 import api from '@/lib/api';
+import { E } from '@/realtime/entities';
 import { sessionStatusLabel, sessionStatusColor } from './statusConfig';
 
 type EventFilter = 'upcoming' | 'cancelled' | 'all';
@@ -17,15 +18,18 @@ type EventFilter = 'upcoming' | 'cancelled' | 'all';
 export default function SessionsPage() {
   const navigate = useNavigate();
   const { user } = useAuthStore();
+  const currentUserId = user?.id;
   const [filter, setFilter] = useState<EventFilter>('upcoming');
   const { data, isLoading } = useQuery({
     queryKey: ['my-sessions'],
     queryFn: () => api.get('/sessions').then(r => r.data.data ?? []),
+    meta: { entities: currentUserId ? [E.userSessions(currentUserId)] : [] },
   });
 
   const { data: myPods } = useQuery({
     queryKey: ['my-pods'],
     queryFn: () => api.get('/pods?status=active').then(r => r.data.data ?? []),
+    meta: { entities: currentUserId ? [E.userPods(currentUserId)] : [] },
   });
   const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
   const canCreateEvent = isAdmin || (myPods || []).some((p: any) => p.memberRole === 'director' || p.memberRole === 'host');

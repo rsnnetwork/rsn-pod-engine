@@ -5,20 +5,35 @@
 // block-gate) live inside dmService — these routes are thin wrappers.
 
 import { Router, Request, Response, NextFunction } from 'express';
+import { Server as SocketServer } from 'socket.io';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
 import * as dmService from '../services/dm/dm.service';
+import { broadcastDmMessage } from '../services/orchestration/handlers/dm-handlers';
+import { fanoutDmConversation } from '../realtime/fanout';
+import { query } from '../db';
 import { ApiResponse } from '@rsn/shared';
 
 const router = Router();
 
 // ─── Validation schemas ────────────────────────────────────────────────────
 
+// Feature 19 (13 May spec) — Cloudinary image attachment. Content becomes
+// optional when an attachment is present; the service layer also enforces
+// the same rule and rejects payloads that have neither.
 const sendBodySchema = z.object({
   toUserId: z.string().uuid(),
-  content: z.string().min(1).max(4000),
-});
+  content: z.string().max(4000).optional().default(''),
+  attachment: z.object({
+    url: z.string().url(),
+    type: z.enum(['image', 'audio']),
+    meta: z.record(z.any()).optional().nullable(),
+  }).optional().nullable(),
+}).refine(
+  v => (v.content && v.content.trim().length > 0) || !!v.attachment?.url,
+  { message: 'Either content or attachment is required', path: ['content'] },
+);
 
 const listQuerySchema = z.object({
   page: z.string().regex(/^\d+$/).optional(),
@@ -102,8 +117,24 @@ router.post(
       const result = await dmService.sendMessage(
         req.user!.userId,
         req.body.toUserId,
-        req.body.content,
+        req.body.content || '',
+        req.body.attachment || null,
       );
+      // Real-time fan-out (15 May fix) — pre-refactor only the socket
+      // handler emitted dm:message, so REST-path sends (which is what
+      // the MessagesPage composer actually uses) sat silently in the DB
+      // until the recipient refreshed. broadcastDmMessage now ships the
+      // same events from both transports.
+      const io = req.app.get('io') as SocketServer | null;
+      if (io) {
+        await broadcastDmMessage(
+          io,
+          req.user!.userId,
+          req.body.toUserId,
+          result.conversationId,
+          result.message,
+        );
+      }
       const response: ApiResponse = { success: true, data: result };
       res.status(201).json(response);
     } catch (err) {
@@ -120,6 +151,25 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await dmService.markRead(req.params.id, req.user!.userId);
+      // Phase May-19 realtime — REST-path mark-read must mirror the
+      // socket-path handleDmRead fan-out so the original sender's open
+      // thread sees the read receipt without a refresh. Look up the
+      // other party from the conversation row.
+      if (result.markedCount > 0 && result.readAt) {
+        try {
+          const convResult = await query<{ user_a_id: string; user_b_id: string }>(
+            `SELECT user_a_id, user_b_id FROM dm_conversations WHERE id = $1`,
+            [req.params.id],
+          );
+          const conv = convResult.rows[0];
+          if (conv) {
+            const otherUserId = conv.user_a_id === req.user!.userId
+              ? conv.user_b_id
+              : conv.user_a_id;
+            fanoutDmConversation(req.params.id, [req.user!.userId, otherUserId]).catch(() => {});
+          }
+        } catch { /* non-fatal */ }
+      }
       const response: ApiResponse = { success: true, data: result };
       res.json(response);
     } catch (err) {
@@ -192,6 +242,11 @@ router.post(
         req.user!.userId,
         req.body.emoji,
       );
+      // Phase May-19 realtime — fan out the dm-conversation entity to
+      // both participants so the sender's other tab and the recipient's
+      // open thread refetch the message list (with new reaction) without
+      // a refresh. Mirrors handleDmReact in dm-handlers.ts.
+      fanoutDmConversation(result.conversationId, [req.user!.userId, result.otherUserId]).catch(() => {});
       const response: ApiResponse = { success: true, data: result };
       res.status(201).json(response);
     } catch (err) {
@@ -212,6 +267,9 @@ router.delete(
         req.user!.userId,
         req.params.emoji,
       );
+      // Phase May-19 realtime — fan out the dm-conversation entity to
+      // both participants. Mirrors handleDmUnreact in dm-handlers.ts.
+      fanoutDmConversation(result.conversationId, [req.user!.userId, result.otherUserId]).catch(() => {});
       const response: ApiResponse = { success: true, data: result };
       res.json(response);
     } catch (err) {

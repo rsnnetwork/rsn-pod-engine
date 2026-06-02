@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -19,7 +20,15 @@ export default function Modal({ open, onClose, title, children, className }: Mod
     return () => window.removeEventListener('keydown', handler);
   }, [open, onClose]);
 
-  return (
+  // Render through a portal to document.body. Without this, a Modal opened from
+  // inside an ancestor with a CSS transform (e.g. the `animate-fade-in-up`
+  // section wrappers, whose `both` fill-mode keeps a translateY transform after
+  // animating) is trapped in that transformed stacking context: `position:fixed`
+  // resolves against the ancestor instead of the viewport, and sibling page
+  // elements paint over the modal and intercept clicks on its buttons.
+  if (typeof document === 'undefined') return null;
+
+  return createPortal(
     <AnimatePresence>
       {open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -41,6 +50,7 @@ export default function Modal({ open, onClose, title, children, className }: Mod
           </motion.div>
         </div>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
   );
 }

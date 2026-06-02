@@ -10,6 +10,7 @@ import { useToastStore } from '@/stores/toastStore';
 import { useAuthStore } from '@/stores/authStore';
 import { isAdmin, formatDateTime } from '@/lib/utils';
 import api from '@/lib/api';
+import { E } from '@/realtime/entities';
 import { sessionStatusLabel, sessionStatusColor } from '@/features/sessions/statusConfig';
 
 export default function AdminSessionsPage() {
@@ -23,6 +24,7 @@ export default function AdminSessionsPage() {
     queryKey: ['admin-sessions', filter],
     queryFn: () => api.get(`/sessions?pageSize=100&admin=true${filter !== 'all' ? `&status=${filter}` : ''}`).then(r => r.data.data ?? []),
     enabled: isAdmin(user?.role),
+    meta: { entities: [E.adminSessions] },
   });
 
   const cancelMutation = useMutation({

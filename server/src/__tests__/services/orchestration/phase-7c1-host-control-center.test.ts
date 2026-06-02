@@ -71,8 +71,26 @@ describe('Phase 7C.1 — Host Control Center backing data (architectural pins)',
   test('matching-flow emit includes participants field', () => {
     const src = readFileSync(MATCHING_FLOW_PATH, 'utf8');
     expect(src).toMatch(/buildHostParticipantsView/);
-    // The emit payload includes participants: ...
-    expect(src).toMatch(/'host:round_dashboard'[\s\S]{0,2000}participants/);
+    // Bug F (15 May Ali) — the dashboard emit was refactored to build a
+    // shared payload then fan out to every acting host via getAllHostIds.
+    // The payload literal still carries `participants`; the emit literal
+    // is followed by the variable name.
+    expect(src).toMatch(
+      /dashboardPayload\s*=\s*\{[\s\S]{0,1500}participants[\s\S]{0,200}\};?[\s\S]{0,400}emit\(\s*'host:round_dashboard'\s*,\s*dashboardPayload/,
+    );
+  });
+
+  test('matching-flow fans out the dashboard to every acting host (Bug F)', () => {
+    const src = readFileSync(MATCHING_FLOW_PATH, 'utf8');
+    // Bug F (15 May Ali) — pre-fix the emit went only to userRoom of the
+    // session director, so co-hosts and Phase M opt-in admins never saw
+    // the live HCC dashboard and their drawer was empty until reload.
+    // Now getAllHostIds is invoked alongside the emit and we loop the
+    // hostIds list to deliver the payload to every acting host's room.
+    expect(src).toMatch(/getAllHostIds\(\s*sessionId\s*,\s*activeSession\.hostUserId/);
+    expect(src).toMatch(
+      /for\s*\(\s*const\s+hostId\s+of\s+hostIds\s*\)[\s\S]{0,200}userRoom\(\s*hostId\s*\)[\s\S]{0,80}emit\(\s*'host:round_dashboard'/,
+    );
   });
 
   test('participant-flow reconnect emit includes participants field', () => {

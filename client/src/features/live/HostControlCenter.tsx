@@ -26,11 +26,27 @@ import { useMemo, useState, useEffect, useRef, type ReactNode } from 'react';
 import { Rnd } from 'react-rnd';
 import { Button } from '@/components/ui/Button';
 import { useSessionStore } from '@/stores/sessionStore';
+import { useAuthStore } from '@/stores/authStore';
+import { createPortal } from 'react-dom';
+import { useToastStore } from '@/stores/toastStore';
 import { getSocket } from '@/lib/socket';
+import api from '@/lib/api';
+
+// Phase N (12 May spec item 2) — host visibility modes. The four-mode set
+// matches the server's host_visibility_mode enum and the client store's
+// hostVisibilityModes record. See migration 059 and session-state-snapshot.
+type HostVisibilityMode = 'big_speaker' | 'normal' | 'producer' | 'hidden';
+const HOST_VISIBILITY_LABELS: Record<HostVisibilityMode, string> = {
+  big_speaker: 'Big speaker',
+  normal: 'Normal',
+  producer: 'Producer (audio-only)',
+  hidden: 'Hidden',
+};
 import {
   X,
   Crown,
   Shield,
+  ShieldCheck,
   User as UserIcon,
   Wifi,
   WifiOff,
@@ -65,26 +81,15 @@ const HCC_MIN_W = 480;
 const HCC_MIN_H = 360;
 const HCC_DESKTOP_BREAKPOINT_PX = 768;
 
+// Bug 45 (19 May Ali) — persistence removed; modal re-centres every open.
+// Keeping HCC_WINDOW_KEY + the bounds shape around so the localStorage
+// cleanup below can find and erase any stale value left by previous builds,
+// and any other module that imports the bounds type still type-checks.
 interface PersistedBounds {
   x: number;
   y: number;
   width: number;
   height: number;
-}
-
-function readPersistedBounds(): PersistedBounds | null {
-  try {
-    const raw = localStorage.getItem(HCC_WINDOW_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (
-      typeof parsed?.x === 'number' &&
-      typeof parsed?.y === 'number' &&
-      typeof parsed?.width === 'number' &&
-      typeof parsed?.height === 'number'
-    ) return parsed;
-  } catch { /* ignore */ }
-  return null;
 }
 
 function writePersistedBounds(b: PersistedBounds): void {
@@ -138,6 +143,29 @@ export default function HostControlCenter({
 }: Props) {
   const roundDashboard = useSessionStore((s) => s.roundDashboard);
   const hostUserId = useSessionStore((s) => s.hostUserId);
+  // Phase N (12 May spec item 2) — visibility modes per host/cohost.
+  // Server-authoritative via session:state snapshot + host:visibility_changed
+  // broadcasts (Phase G, May 11). Read for the dropdown's current value;
+  // set optimistically below, then await server confirmation.
+  const hostVisibilityModes = useSessionStore((s) => s.hostVisibilityModes);
+  const storeSetHostVisibility = useSessionStore((s) => s.setHostVisibility);
+  // Phase M (12 May spec item 1) — acting-as-host overrides. Read so the
+  // toggle for the current user's own row reflects the live value; write
+  // optimistically through the local setter on toggle, then resync via
+  // the permissions:updated → fetchSessionStateSnapshot flow.
+  const actingAsHostOverrides = useSessionStore((s) => s.actingAsHostOverrides);
+  const setActingAsHostOverrides = useSessionStore((s) => s.setActingAsHostOverrides);
+  // Bug C1 (15 May Shraddha) — live cohost Set, updated immediately by the
+  // `cohost:assigned` socket event. The role on roundDashboard.participants
+  // only refreshes every ~5s; reading the store's Set as a fallback lets the
+  // HCC reflect the new role within milliseconds of the click.
+  const cohostsSet = useSessionStore((s) => s.cohosts);
+  // Phase M — current user's identity, used to gate the per-row toggle to
+  // the viewer's OWN row (server only accepts a self-toggle).
+  const authUser = useAuthStore((s) => s.user);
+  const currentUserId = authUser?.id;
+  // Phase R — toast for REST failures (replaces console.error stopgaps).
+  const addToast = useToastStore((s) => s.addToast);
   const socket = getSocket();
   const [filter, setFilter] = useState<StateFilter>('all');
   const [moveTargetUserId, setMoveTargetUserId] = useState<string | null>(null);
@@ -149,19 +177,27 @@ export default function HostControlCenter({
   // Default-large bounds: fill ~92vw × 88vh capped at 1280×900, centred.
   // Persisted bounds win after the user resizes/moves once.
   const [bounds, setBounds] = useState<PersistedBounds>(() => {
-    const persisted = readPersistedBounds();
-    if (persisted) return persisted;
     if (typeof window === 'undefined') {
       return { x: 100, y: 100, width: HCC_DEFAULT_W, height: HCC_DEFAULT_H };
     }
-    const w = Math.min(HCC_DEFAULT_W, Math.floor(window.innerWidth * 0.92));
-    const h = Math.min(HCC_DEFAULT_H, Math.floor(window.innerHeight * 0.88));
-    return {
-      x: Math.max(8, Math.floor((window.innerWidth - w) / 2)),
-      y: Math.max(8, Math.floor((window.innerHeight - h) / 2)),
-      width: w,
-      height: h,
-    };
+    // Bug 39 / 42 / 45 (19 May Ali) — three iterations of "modal opens
+    // in the wrong place" eventually pointed at a simpler answer: don't
+    // persist position at all. Every open starts CENTRED. The user can
+    // drag/resize during a session via the title bar (hcc-drag-handle),
+    // but the next open re-centres. This kills the entire class of
+    // "bad persisted bounds" bugs — every cross-monitor, cross-viewport,
+    // accidental-bottom-drag scenario just resets to a known-good spot.
+    // Trade-off: position doesn't "remember" across sessions. Net gain:
+    // the modal is always reachable.
+    const defaultW = Math.min(HCC_DEFAULT_W, Math.floor(window.innerWidth * 0.92));
+    const defaultH = Math.min(HCC_DEFAULT_H, Math.floor(window.innerHeight * 0.88));
+    const defaultX = Math.max(8, Math.floor((window.innerWidth - defaultW) / 2));
+    const defaultY = Math.max(8, Math.floor((window.innerHeight - defaultH) / 2));
+    // Clear any stale persisted bounds so a future re-introduction of
+    // persistence (or a build still running the older logic in another
+    // tab) doesn't pollute this tab. Safe no-op if the key doesn't exist.
+    try { localStorage.removeItem('hcc_window_bounds'); } catch { /* noop */ }
+    return { x: defaultX, y: defaultY, width: defaultW, height: defaultH };
   });
   const [isMaximized, setIsMaximized] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
@@ -188,14 +224,49 @@ export default function HostControlCenter({
   // emit carries participants=[]. Showing an empty list misleads the
   // host into thinking nobody's here. Keep the last non-empty list as
   // a fallback so the drawer survives a single-emit hiccup.
+  //
+  // Bug 68 (18 May Stefan) — when the host:round_dashboard event hasn't
+  // arrived yet (e.g. brand-new cohost opens HCC immediately after being
+  // promoted, before the next dashboard tick fans out to them), fall
+  // back to the snapshot's hccParticipants. The snapshot is fetched on
+  // every roster mutation (roster:changed) AND on permissions:updated,
+  // so a fresh cohost always has data on cold-render. The live dashboard
+  // still wins when it's present — it carries timer + room state the
+  // snapshot doesn't.
+  const snapshotHccParticipants = useSessionStore(s => s.hccParticipants);
+  // Bug 26 (19 May Ali) — director's visual demote list; drives the
+  // "Small tile" / "Restore tile" button label per cohost row.
+  const tileDemotedUserIds = useSessionStore(s => s.tileDemotedUserIds);
+  const tileDemotedSet = new Set(tileDemotedUserIds);
   const lastParticipantsRef = useRef<NonNullable<typeof roundDashboard>['participants']>(undefined);
   const incomingParticipants = roundDashboard?.participants;
   if (incomingParticipants && incomingParticipants.length > 0) {
     lastParticipantsRef.current = incomingParticipants;
   }
-  const participants = (incomingParticipants && incomingParticipants.length > 0)
-    ? incomingParticipants
-    : (lastParticipantsRef.current ?? []);
+  const rawParticipants =
+    (incomingParticipants && incomingParticipants.length > 0)
+      ? incomingParticipants
+      : (lastParticipantsRef.current && lastParticipantsRef.current.length > 0
+          ? lastParticipantsRef.current
+          : (snapshotHccParticipants ?? []));
+  // Bug C1 (15 May Shraddha) — overlay the live cohorts Set + acting-as-host
+  // overrides onto each participant's role so the HCC reflects a fresh
+  // assign/remove within milliseconds, not after the next 5s dashboard
+  // emit. Director keeps 'host' role unconditionally.
+  const participants = useMemo(() => {
+    return rawParticipants.map((p) => {
+      if (p.role === 'host') return p;
+      const override = actingAsHostOverrides[p.userId];
+      const isCohost = cohostsSet.has(p.userId);
+      // Opt-out wins; opt-in wins over no-cohost-row; otherwise the formal
+      // cohost membership decides.
+      const acting =
+        override === false ? false
+        : override === true ? true
+        : isCohost;
+      return { ...p, role: acting ? ('cohost' as const) : ('participant' as const) };
+    });
+  }, [rawParticipants, cohostsSet, actingAsHostOverrides]);
   const rooms = roundDashboard?.rooms ?? [];
 
   const counts = useMemo(() => {
@@ -238,6 +309,13 @@ export default function HostControlCenter({
     runLocked(`remove_cohost:${userId}`, () => {
       socket?.emit('host:remove_cohost', { sessionId, userId });
     });
+  // Bug 26 (19 May Ali) — director-only visual tile resize for a cohost.
+  // Visual only: cohost keeps every privilege; only their lobby tile size
+  // changes. Server verifies the caller is the actual event director.
+  const setCohostTileSize = (userId: string, size: 'participant' | 'host') =>
+    runLocked(`set_tile_size:${userId}:${size}`, () => {
+      socket?.emit('host:set_tile_size', { sessionId, targetUserId: userId, size });
+    });
   // Phase 7-audit fix — confirm() lives outside runLocked so a Cancel
   // doesn't burn the lock on a no-op. Lock acquisition only happens
   // when the user actually committed to the action.
@@ -261,6 +339,55 @@ export default function HostControlCenter({
   const extendRoom = (matchId: string) =>
     runLocked(`extend_room:${matchId}`, () => {
       socket?.emit('host:extend_breakout_room' as any, { sessionId, matchId, additionalSeconds: 120 });
+    });
+
+  // Phase N (12 May spec item 2) — set visibility mode for a host or co-host.
+  // Optimistic update on the local store so the dropdown reflects the choice
+  // immediately; if the REST call fails, revert. Server's
+  // host:visibility_changed broadcast (Phase G) confirms back to all clients
+  // including this one, so the eventual store value is server-authoritative.
+  const setVisibility = (userId: string, mode: HostVisibilityMode) =>
+    runLocked(`set_visibility:${userId}`, async () => {
+      const prev = hostVisibilityModes[userId] || 'normal';
+      if (prev === mode) return;
+      storeSetHostVisibility(userId, mode);
+      try {
+        await api.post(`/sessions/${sessionId}/host/visibility`, { userId, mode });
+      } catch {
+        // Revert local state on server rejection. Toast surfaces the
+        // failure to the host so they can retry; server's session:state
+        // re-emit (every 30 s) is the eventual-consistency safety net.
+        storeSetHostVisibility(userId, prev);
+        addToast("Couldn't change visibility. Try again.", 'error');
+      }
+    });
+
+  // Phase M (12 May spec item 1) — toggle the current user's acting-as-host
+  // override. value=null clears back to role default. The REST endpoint
+  // only accepts the caller's own userId, so this toggle is wired to
+  // hostUserId (the user themselves) — the per-row UI gates display to
+  // the user's own row.
+  const setMyActingAsHost = (value: boolean | null) =>
+    runLocked(`set_acting_as_host`, async () => {
+      if (!currentUserId) return;
+      const prev = actingAsHostOverrides[currentUserId];
+      // Optimistic local update via the bulk setter.
+      const next = { ...actingAsHostOverrides };
+      if (value === null) delete next[currentUserId];
+      else next[currentUserId] = value;
+      setActingAsHostOverrides(next);
+      try {
+        await api.post(`/sessions/${sessionId}/host/acting-as-host`, { value });
+      } catch {
+        // Revert on failure. Toast surfaces the failure so the host
+        // knows the toggle didn't take; permissions:updated re-sync
+        // is the eventual safety net.
+        const reverted = { ...actingAsHostOverrides };
+        if (prev === undefined) delete reverted[currentUserId];
+        else reverted[currentUserId] = prev;
+        setActingAsHostOverrides(reverted);
+        addToast("Couldn't switch role. Try again.", 'error');
+      }
     });
 
   // ── Window controls ───────────────────────────────────────────────────
@@ -357,6 +484,33 @@ export default function HostControlCenter({
                 End all rooms
               </button>
             )}
+            {/* Phase M (12 May item 1) — Join as participant / Join as host
+                toggle. Visible to any user already inside HCC (which is
+                gated on isHost upstream) EXCEPT the event director.
+                Phase P (Ali's 13 May clarification): the director cannot
+                toggle their own role — they are permanently the host of
+                their own event. The server REST endpoint refuses the
+                same combination as defence in depth. */}
+            {currentUserId && currentUserId !== hostUserId && (
+              <button
+                onClick={() => {
+                  const current = actingAsHostOverrides[currentUserId];
+                  // From "host" → opt out (false). From "false" → clear (null).
+                  // Untouched (undefined) → opt out (false). Symmetric for opt-in via
+                  // any non-host viewer is intentionally not exposed here;
+                  // the spec scopes opt-in to admins via base-role check.
+                  if (current === false) setMyActingAsHost(null);
+                  else setMyActingAsHost(false);
+                }}
+                className="text-xs px-2.5 py-1 rounded-md border border-gray-200 text-gray-700 hover:bg-gray-50"
+                title="Switch between hosting the event and attending as a participant"
+                data-testid="hcc-join-as-toggle"
+              >
+                {actingAsHostOverrides[currentUserId] === false
+                  ? 'Switch back to host'
+                  : 'Switch to participant'}
+              </button>
+            )}
           </div>
         </div>
         {/* Counts row */}
@@ -409,9 +563,16 @@ export default function HostControlCenter({
             on the participants <ul> so the last row isn't visually clipped
             by the bottom edge of the modal. Stefan #8: he couldn't see the
             last user in the control center on his standard window size. */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-0 lg:divide-x divide-gray-200 flex-1 min-h-0 overflow-y-auto">
+        {/* Bug 16 (18 May Stefan) — when there are NO active rooms, the
+            rooms pane sits empty in the right third and Stefan called the
+            drawer "Looks crap" with vast wasted space. Switch to a single-
+            column layout while rooms are empty so the participants list
+            uses the full drawer width; flip back to 2/3 + 1/3 the moment
+            a room opens. Keeps the host's attention on the only data
+            that's actually present. */}
+        <div className={`grid grid-cols-1 ${activeRoomsForMove.length > 0 ? 'lg:grid-cols-3 lg:divide-x divide-gray-200' : ''} gap-0 flex-1 min-h-0 overflow-y-auto`}>
           {/* Participants list */}
-          <div className="lg:col-span-2 min-h-[300px]">
+          <div className={`${activeRoomsForMove.length > 0 ? 'lg:col-span-2' : ''} min-h-[300px]`}>
             <div className="px-5 py-2 text-[11px] font-semibold uppercase tracking-wide text-gray-500 flex items-center gap-1.5">
               <Filter className="h-3 w-3" /> {STATE_LABEL[filter]}
               <span className="text-gray-400 normal-case font-normal">
@@ -423,18 +584,37 @@ export default function HostControlCenter({
                 No participants in this view.
               </div>
             ) : (
+              // Bug 16 (18 May Stefan) — tighter row padding (py-3 → py-2)
+              // and gap (gap-3 → gap-2.5) so more participants fit in the
+              // visible drawer height. Stefan's screenshot showed All=7 but
+              // only ~2 rows on-screen because each row was ~80px tall;
+              // trimming wasted vertical paddings gets ~5-6 rows visible
+              // in the same height without compromising readability.
               <ul className="divide-y divide-gray-100 pb-12">
                 {visibleParticipants.map((p) => (
-                  <li key={p.userId} className="px-5 py-3 hover:bg-gray-50">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-start gap-3 min-w-0">
+                  <li key={p.userId} className="px-4 py-2 hover:bg-gray-50">
+                    <div className="flex items-start justify-between gap-2.5">
+                      <div className="flex items-start gap-2.5 min-w-0">
                         <RoleBadge role={p.role} />
                         <div className="min-w-0">
-                          <div className="text-sm font-medium text-gray-900 truncate">
-                            {p.displayName}
+                          <div className="text-sm font-medium text-gray-900 truncate flex items-center gap-1.5 flex-wrap">
+                            <span>{p.displayName}</span>
                             {p.userId === hostUserId && (
-                              <span className="ml-1.5 text-[10px] uppercase tracking-wide text-amber-600">
+                              <span className="text-[10px] uppercase tracking-wide text-amber-600">
                                 you
+                              </span>
+                            )}
+                            {/* Bug C3 (15 May Shraddha) — visible role pill
+                                next to the name so the host role is
+                                obvious at a glance, not just an icon. */}
+                            {p.role === 'host' && (
+                              <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-amber-700 bg-amber-100 border border-amber-200 rounded-full px-1.5 py-px">
+                                <Crown className="h-2.5 w-2.5" /> Host
+                              </span>
+                            )}
+                            {p.role === 'cohost' && (
+                              <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-full px-1.5 py-px">
+                                <ShieldCheck className="h-2.5 w-2.5" /> Co-Host
                               </span>
                             )}
                           </div>
@@ -444,18 +624,77 @@ export default function HostControlCenter({
                           <StateBadge state={p.state} matchId={p.currentMatchId} />
                         </div>
                       </div>
-                      {p.userId !== hostUserId && (
-                        <RowActions
-                          isCohost={p.role === 'cohost'}
-                          state={p.state}
-                          onMakeCohost={() => makeCohost(p.userId)}
-                          onRemoveCohost={() => removeCohost(p.userId)}
-                          onReassign={() => reassign(p.userId)}
-                          onMoveToRoom={() => setMoveTargetUserId(p.userId)}
-                          onKick={() => kick(p.userId, p.displayName)}
-                          activeRoomsAvailable={activeRoomsForMove.length > 0}
-                        />
-                      )}
+                      <div className="flex flex-col items-end gap-1.5 shrink-0">
+                        {/* Phase N (12 May item 2) — visibility dropdown for
+                            hosts and co-hosts only. The host can set their
+                            own visibility (so the same control appears on
+                            the host's own row, which is why this is OUTSIDE
+                            the `p.userId !== hostUserId` gate). */}
+                        {(p.role === 'host' || p.role === 'cohost') && (
+                          <VisibilitySelect
+                            value={(hostVisibilityModes[p.userId] as HostVisibilityMode) || 'normal'}
+                            onChange={(mode) => setVisibility(p.userId, mode)}
+                          />
+                        )}
+                        {/* Bug 26 (19 May Ali) — director-only toggle to
+                            shrink a cohost's lobby tile to participant size.
+                            Visual-only: cohost keeps every privilege. Hidden
+                            for everyone except the actual event director
+                            (super_admin acting as host doesn't qualify) and
+                            for non-cohost rows. */}
+                        {p.role === 'cohost'
+                          && currentUserId === hostUserId
+                          && p.userId !== hostUserId && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCohostTileSize(
+                                p.userId,
+                                tileDemotedSet.has(p.userId) ? 'host' : 'participant',
+                              )
+                            }
+                            className={`text-[10px] font-medium px-2 py-0.5 rounded border transition-colors ${
+                              tileDemotedSet.has(p.userId)
+                                ? 'text-indigo-700 bg-indigo-50 border-indigo-200 hover:bg-indigo-100'
+                                : 'text-gray-600 bg-white border-gray-300 hover:bg-gray-50'
+                            }`}
+                            title={
+                              tileDemotedSet.has(p.userId)
+                                ? 'Restore this co-host to a host-sized tile'
+                                : 'Show this co-host with a participant-sized tile (cohost privileges unchanged)'
+                            }
+                          >
+                            {tileDemotedSet.has(p.userId) ? 'Restore tile' : 'Small tile'}
+                          </button>
+                        )}
+                        {p.userId !== hostUserId && (
+                          <RowActions
+                            isCohost={p.role === 'cohost'}
+                            state={p.state}
+                            // Bug J (15 May Ali) — disable Make/Remove
+                            // co-host and Kick when the target is a
+                            // platform admin or super_admin; admins
+                            // manage their per-event role via the Phase
+                            // M banner.
+                            // Bug 2 (18 May Stefan) — supreme-host
+                            // carve-out: the event director can act on
+                            // admins. Non-director acting hosts cannot.
+                            // The server enforces the same rule via
+                            // refuseIfAdminTarget's director shortcut;
+                            // this client gate just keeps the UI honest.
+                            targetIsAdmin={
+                              (p.globalRole === 'admin' || p.globalRole === 'super_admin')
+                              && currentUserId !== hostUserId
+                            }
+                            onMakeCohost={() => makeCohost(p.userId)}
+                            onRemoveCohost={() => removeCohost(p.userId)}
+                            onReassign={() => reassign(p.userId)}
+                            onMoveToRoom={() => setMoveTargetUserId(p.userId)}
+                            onKick={() => kick(p.userId, p.displayName)}
+                            activeRoomsAvailable={activeRoomsForMove.length > 0}
+                          />
+                        )}
+                      </div>
                     </div>
                   </li>
                 ))}
@@ -463,67 +702,67 @@ export default function HostControlCenter({
             )}
           </div>
 
-          {/* Rooms pane */}
+          {/* Rooms pane — Bug 16 (18 May Stefan): only render when there
+              ARE rooms. An empty "No active rooms" panel just chews up
+              valuable horizontal real-estate; the host doesn't need to be
+              reminded that the breakouts they haven't created yet are,
+              in fact, not yet created. */}
+          {activeRoomsForMove.length > 0 && (
           <div className="bg-gray-50 min-h-[300px]">
             <div className="px-5 py-2 text-[11px] font-semibold uppercase tracking-wide text-gray-500 flex items-center gap-1.5">
               <DoorOpen className="h-3 w-3" /> Rooms ({activeRoomsForMove.length})
             </div>
-            {activeRoomsForMove.length === 0 ? (
-              <div className="px-5 py-8 text-center text-sm text-gray-500">
-                No active rooms.
-              </div>
-            ) : (
-              <ul className="px-3 pb-4 space-y-2">
-                {activeRoomsForMove.map((r) => (
-                  <li
-                    key={r.matchId}
-                    className="bg-white rounded-lg border border-gray-200 p-3"
-                  >
-                    <div className="flex items-center justify-between mb-1.5">
-                      <div className="text-xs font-medium text-gray-700 flex items-center gap-1.5">
-                        {r.isManual ? (
-                          <span className="text-purple-600">Manual</span>
-                        ) : (
-                          <span className="text-emerald-600">Algorithm</span>
-                        )}
-                        <span className="text-gray-400">·</span>
-                        <span>{r.participants.length} people</span>
-                        {r.isTrio && (
-                          <span className="text-[10px] bg-blue-100 text-blue-700 rounded px-1.5 py-0.5">
-                            Trio
-                          </span>
-                        )}
-                      </div>
-                      {r.isManual && (
-                        <button
-                          onClick={() => extendRoom(r.matchId)}
-                          className="text-[11px] text-gray-500 hover:text-emerald-700 flex items-center gap-1"
-                          title="Add 2 minutes to this room"
-                        >
-                          <RefreshCw className="h-3 w-3" /> +2 min
-                        </button>
+            <ul className="px-3 pb-4 space-y-2">
+              {activeRoomsForMove.map((r) => (
+                <li
+                  key={r.matchId}
+                  className="bg-white rounded-lg border border-gray-200 p-3"
+                >
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="text-xs font-medium text-gray-700 flex items-center gap-1.5">
+                      {r.isManual ? (
+                        <span className="text-purple-600">Manual</span>
+                      ) : (
+                        <span className="text-emerald-600">Algorithm</span>
+                      )}
+                      <span className="text-gray-400">·</span>
+                      <span>{r.participants.length} people</span>
+                      {r.isTrio && (
+                        <span className="text-[10px] bg-blue-100 text-blue-700 rounded px-1.5 py-0.5">
+                          Trio
+                        </span>
                       )}
                     </div>
-                    <div className="space-y-1">
-                      {r.participants.map((rp) => (
-                        <div
-                          key={rp.userId}
-                          className="flex items-center gap-2 text-xs text-gray-700"
-                        >
-                          {rp.isConnected ? (
-                            <Wifi className="h-3 w-3 text-emerald-500 shrink-0" />
-                          ) : (
-                            <WifiOff className="h-3 w-3 text-red-500 shrink-0" />
-                          )}
-                          <span className="truncate">{rp.displayName}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
+                    {r.isManual && (
+                      <button
+                        onClick={() => extendRoom(r.matchId)}
+                        className="text-[11px] text-gray-500 hover:text-emerald-700 flex items-center gap-1"
+                        title="Add 2 minutes to this room"
+                      >
+                        <RefreshCw className="h-3 w-3" /> +2 min
+                      </button>
+                    )}
+                  </div>
+                  <div className="space-y-1">
+                    {r.participants.map((rp) => (
+                      <div
+                        key={rp.userId}
+                        className="flex items-center gap-2 text-xs text-gray-700"
+                      >
+                        {rp.isConnected ? (
+                          <Wifi className="h-3 w-3 text-emerald-500 shrink-0" />
+                        ) : (
+                          <WifiOff className="h-3 w-3 text-red-500 shrink-0" />
+                        )}
+                        <span className="truncate">{rp.displayName}</span>
+                      </div>
+                    ))}
+                  </div>
+                </li>
+              ))}
+            </ul>
           </div>
+          )}
         </div>
 
     </div>
@@ -613,7 +852,19 @@ export default function HostControlCenter({
   // Desktop — drag/resize window with backdrop. Default size large
   // (~92vw × 88vh, centred) so the host sees the whole view without
   // having to drag or resize. Drag handle = the title bar.
-  return (
+  //
+  // CRITICAL — portal to document.body. The caller (HostControls) renders
+  // this component inside a `position: relative` bottom bar. react-rnd
+  // uses position:absolute and is positioned relative to the nearest
+  // positioned ancestor, so without the portal the modal's (x,y)
+  // coordinates would be relative to that bottom bar instead of the
+  // viewport. That made the modal open at the bottom of the screen and
+  // refuse to drag above the bottom bar's top edge — every mode of
+  // "HCC opens off screen" + "can't drag above this point" traces back
+  // to this. Portalling to document.body restores the viewport-relative
+  // coordinate space that `bounds="window"` expects.
+  if (typeof document === 'undefined') return null;
+  return createPortal(
     <>
       <div className="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
       <Rnd
@@ -646,7 +897,8 @@ export default function HostControlCenter({
         {bodyContent}
       </Rnd>
       {subModal}
-    </>
+    </>,
+    document.body,
   );
 }
 
@@ -739,10 +991,17 @@ function StateBadge({
   state: 'in_main_room' | 'in_room' | 'disconnected' | 'left';
   matchId: string | null;
 }) {
+  // Bug C2 (15 May Shraddha) — palette swap:
+  //   in_main_room → RED (rsn brand). Was blue.
+  //   disconnected → BLUE. Was red — Shraddha said red should be reserved
+  //     for the brand-positive "in main room" state, not for the
+  //     warning "disconnected" state.
+  //   in_room (active breakout) stays emerald (positive but distinct).
+  //   left stays neutral grey.
   const map: Record<typeof state, { label: string; cls: string; Icon: any }> = {
     in_main_room: {
       label: 'In main room',
-      cls: 'bg-blue-50 text-blue-700 border-blue-200',
+      cls: 'bg-rsn-red/10 text-rsn-red border-rsn-red/30',
       Icon: Sofa,
     },
     in_room: {
@@ -752,7 +1011,7 @@ function StateBadge({
     },
     disconnected: {
       label: 'Disconnected',
-      cls: 'bg-red-50 text-red-700 border-red-200',
+      cls: 'bg-blue-50 text-blue-700 border-blue-200',
       Icon: WifiOff,
     },
     left: {
@@ -774,6 +1033,7 @@ function StateBadge({
 function RowActions({
   isCohost,
   state,
+  targetIsAdmin,
   onMakeCohost,
   onRemoveCohost,
   onReassign,
@@ -783,6 +1043,10 @@ function RowActions({
 }: {
   isCohost: boolean;
   state: 'in_main_room' | 'in_room' | 'disconnected' | 'left';
+  // Bug J (15 May Ali) — TRUE when target's global platform role is
+  // admin or super_admin. Disables Make/Remove co-host + Kick with an
+  // explanatory tooltip; admins manage their own role via Phase M.
+  targetIsAdmin: boolean;
   onMakeCohost: () => void;
   onRemoveCohost: () => void;
   onReassign: () => void;
@@ -790,19 +1054,42 @@ function RowActions({
   onKick: () => void;
   activeRoomsAvailable: boolean;
 }) {
+  // Bug J — single tooltip string surfaced on every disabled button so
+  // the host understands WHY the action is gated, not just that it's
+  // unclickable.
+  const adminBlockedTitle =
+    "Admins manage their own per-event role from the banner — directors can't promote, demote, or kick them.";
   return (
     <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-      {/* Phase 7-audit fix — allow promoting/demoting a recently disconnected
-          participant. The host might want to assign co-host preemptively
-          before the user reconnects (e.g. a known co-host whose Wi-Fi
-          dropped). Server-side state checks still gate the action. */}
+      {/* Bug K (15 May Ali) — consolidated. Pre-fix there were TWO
+          buttons for what looked like the same action: the formal
+          session_cohosts grant and the per-event Phase M opt-in. Both
+          ended up granting host UI for THIS event (session_cohosts is
+          per-session anyway), and the duplication confused users. We
+          keep the formal Make / Remove co-host path only; the per-event
+          opt-in pathway remains available to admins via the Phase M
+          banner on their own row.
+          Phase 7-audit fix — allow promoting/demoting a recently
+          disconnected participant. The host might want to assign co-host
+          preemptively before the user reconnects (e.g. a known co-host
+          whose Wi-Fi dropped). Server-side state checks still gate the
+          action. */}
       {state !== 'left' && (
         isCohost ? (
-          <ActionButton onClick={onRemoveCohost} title="Remove co-host role">
+          <ActionButton
+            onClick={onRemoveCohost}
+            disabled={targetIsAdmin}
+            title={targetIsAdmin ? adminBlockedTitle : 'Remove co-host role'}
+          >
             Remove co-host
           </ActionButton>
         ) : (
-          <ActionButton onClick={onMakeCohost} title="Make this person a co-host">
+          <ActionButton
+            onClick={onMakeCohost}
+            disabled={targetIsAdmin}
+            title={targetIsAdmin ? adminBlockedTitle : 'Make this person a co-host'}
+            tone="brand"
+          >
             Make co-host
           </ActionButton>
         )
@@ -818,7 +1105,12 @@ function RowActions({
         </ActionButton>
       )}
       {state !== 'left' && (
-        <ActionButton onClick={onKick} title="Remove from the event" tone="danger">
+        <ActionButton
+          onClick={onKick}
+          disabled={targetIsAdmin}
+          title={targetIsAdmin ? adminBlockedTitle : 'Remove from the event'}
+          tone="danger"
+        >
           Kick
         </ActionButton>
       )}
@@ -831,23 +1123,73 @@ function ActionButton({
   children,
   title,
   tone = 'normal',
+  disabled = false,
 }: {
   onClick: () => void;
   children: React.ReactNode;
   title?: string;
-  tone?: 'normal' | 'danger';
+  tone?: 'normal' | 'danger' | 'brand';
+  // Bug J (15 May Ali) — disabled buttons stay visible but inert so the
+  // host can hover for the tooltip explaining WHY the action is gated.
+  disabled?: boolean;
 }) {
-  const cls =
-    tone === 'danger'
-      ? 'border-red-200 text-red-700 hover:bg-red-50'
+  // Bug C2 (15 May Shraddha) — palette + tones:
+  //   brand  → red (rsn-red). Used for Make co-host so the primary
+  //            host-elevation action stands out. Was indistinguishable
+  //            grey on grey.
+  //   danger → slate. Was red; Shraddha asked Kick to look different from
+  //            the brand red so the destructive action doesn't blend with
+  //            the positive "main room" state pill.
+  //   normal → grey (unchanged).
+  const baseCls =
+    tone === 'brand'
+      ? 'border-rsn-red/30 text-rsn-red hover:bg-rsn-red/10 font-medium'
+      : tone === 'danger'
+      ? 'border-slate-300 text-slate-700 hover:bg-slate-100'
       : 'border-gray-200 text-gray-700 hover:bg-gray-50';
+  // Bug J — disabled state strips hover affordances and dims the text
+  // so the button reads as inert at a glance.
+  const disabledCls = 'border-gray-200 text-gray-300 cursor-not-allowed';
   return (
     <button
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
       title={title}
-      className={`text-[11px] px-2 py-1 rounded-md border transition-colors ${cls}`}
+      className={`text-[11px] px-2 py-1 rounded-md border transition-colors ${disabled ? disabledCls : baseCls}`}
     >
       {children}
     </button>
+  );
+}
+
+// Phase N (12 May spec item 2) — visibility mode selector for a single
+// host or co-host. Native <select> for accessibility and mobile-friendliness
+// (the browser's native picker is the most reliable cross-platform
+// pattern). Tailwind sizing matches the surrounding ActionButton density.
+function VisibilitySelect({
+  value,
+  onChange,
+}: {
+  value: HostVisibilityMode;
+  onChange: (mode: HostVisibilityMode) => void;
+}) {
+  return (
+    <label
+      className="text-[11px] flex items-center gap-1 text-gray-600"
+      title="How this host appears in the lobby and breakout rooms"
+    >
+      <span className="hidden sm:inline">View:</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as HostVisibilityMode)}
+        className="text-[11px] px-1.5 py-0.5 rounded-md border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-rsn-red/30"
+      >
+        {(Object.keys(HOST_VISIBILITY_LABELS) as HostVisibilityMode[]).map((mode) => (
+          <option key={mode} value={mode}>
+            {HOST_VISIBILITY_LABELS[mode]}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }

@@ -9,6 +9,7 @@ import { useToastStore } from '@/stores/toastStore';
 import { useAuthStore } from '@/stores/authStore';
 import { ArrowLeft, Clock, Users, Settings, Radio } from 'lucide-react';
 import api from '@/lib/api';
+import { E } from '@/realtime/entities';
 
 interface SessionForm {
   podId: string;
@@ -74,11 +75,13 @@ export default function CreateSessionPage() {
   const [params] = useSearchParams();
   const { addToast } = useToastStore();
   const { user } = useAuthStore();
+  const currentUserId = user?.id;
   const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
 
   const { data: allPods } = useQuery({
     queryKey: ['my-pods', isAdmin],
     queryFn: () => api.get(`/pods?status=active${isAdmin ? '&admin=true' : ''}`).then(r => r.data.data ?? []),
+    meta: { entities: currentUserId ? [E.userPods(currentUserId)] : [] },
   });
   const { data: templates } = useQuery({
     queryKey: ['matching-templates'],

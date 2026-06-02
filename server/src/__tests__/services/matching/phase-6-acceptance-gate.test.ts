@@ -200,9 +200,19 @@ describe('Phase 6 — Spec §14 acceptance gate', () => {
       expect(src).toMatch(/maybeRepairFutureRounds\(io,\s*data\.sessionId,\s*'left'\)/);
     });
 
-    it('15s mid-match disconnect transitions LEFT + repairs future (Phase 2.7)', () => {
+    it('15 s mid-match disconnect handler still ends the match cleanly (M1 21 May fix: no auto-LEFT)', () => {
+      // Phase 2.7 originally transitioned the user to LEFT inside the
+      // 15 s disconnect timeout. The M1 fix on 21 May removed that
+      // auto-LEFT because a network blip should not silently delete the
+      // user from every viewer's roster. The match-ending and partner-
+      // reassignment logic is still in place — pin those instead.
       const src = readServer('services/orchestration/handlers/participant-flow.ts');
-      expect(src).toMatch(/transitionParticipant\([\s\S]+?ParticipantState\.LEFT/);
+      expect(src).toMatch(/setTimeout\([\s\S]*?,\s*15000\)/);
+      expect(src).toMatch(/M1 fix \(21 May Ali\)/);
+      expect(src).toMatch(/findIsolatedParticipants/);
+      expect(src).toMatch(/Determine terminal status based on actual conversation state/);
+      // The auto-LEFT call inside this disconnect path is gone.
+      expect(src).not.toMatch(/transitionParticipant\([^)]*ParticipantState\.LEFT/);
     });
   });
 

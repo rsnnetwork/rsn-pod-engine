@@ -8,6 +8,8 @@ import { Button } from '@/components/ui/Button';
 import EmptyState from '@/components/ui/EmptyState';
 import { PageLoader } from '@/components/ui/Spinner';
 import api from '@/lib/api';
+import { useAuthStore } from '@/stores/authStore';
+import { E } from '@/realtime/entities';
 import CreatePodModal from './CreatePodModal';
 
 type PodFilter = 'browse' | 'active' | 'archived';
@@ -25,6 +27,7 @@ export default function PodsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [filter, setFilter] = useState<PodFilter>('active');
   const [search, setSearch] = useState('');
+  const currentUserId = useAuthStore((s) => s.user?.id);
 
   // Auto-open create modal when navigated with ?create=true (from Dashboard)
   useEffect(() => {
@@ -44,6 +47,7 @@ export default function PodsPage() {
       const params = `?status=${filter}`;
       return api.get(`/pods${params}`).then(r => r.data.data ?? []);
     },
+    meta: { entities: currentUserId ? [E.userPods(currentUserId)] : [] },
   });
 
   // Client-side search filter

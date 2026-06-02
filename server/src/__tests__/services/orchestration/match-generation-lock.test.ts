@@ -134,7 +134,9 @@ describe('match-write paths are wrapped in withMatchGenerationLock', () => {
 
   it('the late-joiner / leaver repair path uses the match-generation lock', () => {
     const src = read('services/orchestration/handlers/participant-flow.ts');
-    const idx = src.indexOf('async function maybeRepairFutureRounds');
+    // febf7a2 split repair into maybeRepairFutureRounds (throttle) -> runRepair
+    // (the worker). The lock wraps the real repairFutureRounds call in runRepair.
+    const idx = src.indexOf('async function runRepair');
     expect(idx).toBeGreaterThan(-1);
     expect(src.slice(idx, idx + 2000)).toMatch(/withMatchGenerationLock\(/);
   });
@@ -149,7 +151,9 @@ describe('match-write paths are wrapped in withMatchGenerationLock', () => {
     // that became active while queued. The currentRound read must sit after
     // the withMatchGenerationLock( call (i.e. inside its callback), not before.
     const src = read('services/orchestration/handlers/participant-flow.ts');
-    const idx = src.indexOf('async function maybeRepairFutureRounds');
+    // febf7a2 split repair into maybeRepairFutureRounds (throttle) -> runRepair
+    // (the worker). The lock wraps the real repairFutureRounds call in runRepair.
+    const idx = src.indexOf('async function runRepair');
     const block = src.slice(idx, idx + 2200);
     const lockIdx = block.indexOf('withMatchGenerationLock(');
     const repairCallIdx = block.indexOf('repairFutureRounds(sessionId, activeSession.currentRound + 1');

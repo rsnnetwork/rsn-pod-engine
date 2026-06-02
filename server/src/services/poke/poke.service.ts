@@ -112,6 +112,14 @@ export async function sendPoke(
           isRead: false,
           createdAt: notifResult.rows[0].created_at,
         });
+        // Phase 2 dual-emit — notifications + invites for the recipient
+        // so their bell counter / received-invites surfaces refresh.
+        const { emitEntities } = await import('../../realtime/emit');
+        const { E } = await import('../../realtime/entities');
+        emitEntities(
+          io, [recipientId],
+          [E.userNotifications(recipientId), E.userInvites(recipientId)],
+        ).catch(() => {});
       } catch { /* socket push is non-fatal */ }
     } catch (notifErr) {
       logger.warn({ notifErr }, 'Poke notification insert failed (non-fatal)');

@@ -6,6 +6,7 @@ import {
   RoomServiceClient,
   AccessToken,
   VideoGrant,
+  TrackSource,
 } from 'livekit-server-sdk';
 import { RoomType, VideoRoom, VideoToken, VideoParticipant } from '@rsn/shared';
 import { IVideoProvider } from './video.interface';
@@ -170,6 +171,65 @@ export class LiveKitProvider implements IVideoProvider {
       return rooms.length > 0;
     } catch {
       return false;
+    }
+  }
+
+  // ─── Phase 4 — Remove participant (eviction) ───────────────────────────
+
+  async removeParticipant(roomId: string, userId: string): Promise<void> {
+    await this.roomService.removeParticipant(roomId, userId);
+  }
+
+  // ─── Phase U — Set participant publish permission (mute enforcement) ────
+
+  async setParticipantCanPublishAudio(
+    roomId: string,
+    userId: string,
+    canPublishAudio: boolean,
+  ): Promise<void> {
+    try {
+      // Bug 1 (13 May live test) — Phase U's first cut set canPublish=false
+      // on mute, which revoked publish for ALL sources, so the host muting
+      // a participant also killed their camera. The mute UX is mic-only;
+      // we now use canPublishSources as a whitelist so the mic can be
+      // revoked while leaving camera + screen-share intact. Whitelist
+      // semantics: the participant may publish only the listed sources.
+      // To unmute we restore the full whitelist (all four sources).
+      //
+      // livekit-server-sdk v2 updateParticipant signature:
+      //   updateParticipant(room, identity, metadataOrOptions, maybePermission, maybeName)
+      // The options-object form (3rd arg) is the typed path; it accepts
+      // { permission, metadata, name, attributes } where permission is a
+      // Partial<ParticipantPermission> compatible shape.
+      const allowedSources = canPublishAudio
+        ? [TrackSource.CAMERA, TrackSource.MICROPHONE, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO]
+        : [TrackSource.CAMERA, TrackSource.SCREEN_SHARE, TrackSource.SCREEN_SHARE_AUDIO];
+      await this.roomService.updateParticipant(
+        roomId,
+        userId,
+        {
+          permission: {
+            canPublish: true,
+            canSubscribe: true,
+            canPublishData: true,
+            canPublishSources: allowedSources,
+          } as any,
+        },
+      );
+      logger.info({ roomId, userId, canPublishAudio }, 'Phase U — LiveKit participant publish permission updated');
+    } catch (err: any) {
+      const msg = String(err?.message || '').toLowerCase();
+      const code = err?.code;
+      // Twirp NotFound (code 5) OR legacy string patterns — participant
+      // is not in this room (left, disconnected, or never joined). The
+      // mute persists in DB and will apply when they re-issue a token
+      // (issueJoinToken consults host_muted on each new token).
+      if (code === 5 || msg.includes('not found') || msg.includes('does not exist')) {
+        logger.debug({ roomId, userId }, 'Phase U — participant not in room, skipping live permission update');
+        return;
+      }
+      logger.error({ err, roomId, userId, canPublishAudio }, 'Failed to update LiveKit participant permission');
+      throw err;
     }
   }
 }

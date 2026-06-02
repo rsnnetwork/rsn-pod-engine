@@ -2,8 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/Button';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useToastStore } from '@/stores/toastStore';
-import { Star, CheckCircle, Loader2, Clock, Handshake } from 'lucide-react';
+import { Star, CheckCircle, Loader2, Handshake } from 'lucide-react';
 import api from '@/lib/api';
+import { getSocket } from '@/lib/socket';
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 interface Props { sessionId: string; }
@@ -141,13 +142,13 @@ function RatingConfirmation({ meetAgain, isLastPartner, isLastRound, onContinue 
   );
 }
 
-export default function RatingPrompt(_props: Props) {
+export default function RatingPrompt(props: Props) {
   const currentMatch = useSessionStore(s => s.currentMatch);
   const currentMatchId = useSessionStore(s => s.currentMatchId);
   const currentPartners = useSessionStore(s => s.currentPartners);
-  const timerSeconds = useSessionStore(s => s.timerSeconds);
   const currentRound = useSessionStore(s => s.currentRound);
   const totalRounds = useSessionStore(s => s.totalRounds);
+  const ratedMatchIds = useSessionStore(s => s.ratedMatchIds);
   const { setPhase } = useSessionStore.getState();
   const { addToast } = useToastStore();
   const [currentPartnerIdx, setCurrentPartnerIdx] = useState(0);
@@ -159,6 +160,13 @@ export default function RatingPrompt(_props: Props) {
     : currentMatch ? [currentMatch] : [];
 
   const noMatchData = !currentMatchId || partners.length === 0;
+  // #C (26 May, live-test-3) — this match was already fully rated/skipped (it's
+  // in ratedMatchIds). The #2 guard covered the rating:window_open path, but
+  // session:round_ended sets phase='rating' DIRECTLY for everyone, re-showing
+  // the form for a pulled-out pair who already rated (Ali: "I press End Round
+  // and they have to rate again"). Match-keyed, so a GENUINE re-match (new
+  // matchId, not in the set) still prompts normally.
+  const alreadySettledMatch = !!currentMatchId && ratedMatchIds.has(currentMatchId);
   const isLastRound = currentRound >= totalRounds && totalRounds > 0;
   const isLastPartner = currentPartnerIdx >= partners.length - 1;
   const allDone = currentPartnerIdx >= partners.length && submissionState === null;
@@ -175,11 +183,39 @@ export default function RatingPrompt(_props: Props) {
   useEffect(() => {
     if (allDone && !hasRedirected.current) {
       hasRedirected.current = true;
+      // #6 (24 May, Ali) — mark this round's rating as done so a later
+      // round_rating phase transition does NOT re-open the form. An early-leaver
+      // who already rated (their form returns them to lobby, then the round
+      // ends) was re-prompted because lastRatedRound was only set on
+      // rating:window_closed. allDone fires after the LAST partner, so a trio
+      // still gets both forms first and a pair gets exactly one. Server-driven
+      // rating:window_open (genuine reassignment to a new partner) bypasses the
+      // round_rating guard, so legitimate re-prompts still work.
+      if (currentRound > 0) useSessionStore.getState().setLastRatedRound(currentRound);
+      // #2 (26 May, live-test-2) — this match is now FULLY handled (every
+      // partner rated or skipped). Record its matchId so a re-emitted
+      // rating:window_open for the SAME match during re-match churn is
+      // suppressed instead of re-showing the form (which the user then
+      // re-rated → server 409 → "rate again"). A genuine re-match has a new
+      // matchId and is not in this set, so it still prompts normally.
+      if (currentMatchId) useSessionStore.getState().addRatedMatchId(currentMatchId);
       setPhase('lobby');
     }
-  }, [allDone, setPhase]);
+  }, [allDone, setPhase, currentRound, currentMatchId]);
+
+  // #C (26 May) — if we were dropped into the rating phase for a match we've
+  // already settled (e.g. End Round broadcasting session:round_ended after a
+  // pulled-out pair already rated), leave straight back to the lobby instead of
+  // re-showing the form.
+  useEffect(() => {
+    if (alreadySettledMatch && !hasRedirected.current) {
+      hasRedirected.current = true;
+      setPhase('lobby');
+    }
+  }, [alreadySettledMatch, setPhase]);
 
   if (noMatchData) return null;
+  if (alreadySettledMatch) return null;
   if (allDone) return null;
 
   // Show the brief confirmation after submitting a rating
@@ -202,26 +238,33 @@ export default function RatingPrompt(_props: Props) {
   const partner = partners[currentPartnerIdx];
 
   const handleSubmitted = (meetAgain: boolean) => {
+    // #2 (25 May, Ali) — record the round as rated the MOMENT the last partner is
+    // submitted, not after the user clicks through the confirmation screen.
+    // Otherwise a round ending while the confirmation is up re-opens the form via
+    // the round_rating phase transition (the "already rated, prompted again" bug).
+    if (isLastPartner && currentRound > 0) useSessionStore.getState().setLastRatedRound(currentRound);
     setSubmissionState({ meetAgain });
   };
 
   const advance = () => setCurrentPartnerIdx(prev => prev + 1);
+  // #6 (25 May, Ali) — Skip = "saw it, don't want to rate". Tell the server so
+  // the round-end emit + reconnect rating-replay never re-prompt this match.
+  const skip = () => {
+    if (currentMatchId) {
+      try { getSocket().emit('rating:skip', { sessionId: props.sessionId, matchId: currentMatchId }); } catch { /* non-fatal */ }
+    }
+    advance();
+  };
 
   return (
     <div className="flex-1 flex items-center justify-center p-4 bg-[#202124]">
-      {timerSeconds > 0 && (
-        <div className="absolute top-4 right-4 flex items-center gap-1.5 text-sm text-gray-400 bg-[#292a2d]/80 backdrop-blur-sm rounded-full px-3 py-1">
-          <Clock className="h-3.5 w-3.5" />
-          <span>{timerSeconds}s</span>
-        </div>
-      )}
       <PartnerRatingForm
         key={partner.userId}
         partnerName={partner.displayName || 'your partner'}
         toUserId={partner.userId}
         matchId={currentMatchId}
         onSubmitted={handleSubmitted}
-        onSkip={advance}
+        onSkip={skip}
         partnerIndex={currentPartnerIdx}
         totalPartners={partners.length}
       />
