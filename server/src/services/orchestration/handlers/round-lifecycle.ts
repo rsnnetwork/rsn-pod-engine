@@ -406,6 +406,11 @@ export async function transitionToRound(
       totalRounds: activeSession.config.numberOfRounds,
       endsAt: endsAt.toISOString(),
       durationSeconds: activeSession.config.roundDurationSeconds,
+      // Clock-offset anchor (see timer-manager.ts timer:sync). Lets the client
+      // establish its server-clock offset at round start so the absolute
+      // endsAt here and in every subsequent sync resolve to the same wall
+      // time on every client regardless of local clock skew.
+      serverNow: new Date().toISOString(),
     });
 
     io.to(sessionRoom(sessionId)).emit('session:status_changed', {

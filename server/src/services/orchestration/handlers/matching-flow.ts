@@ -4,8 +4,12 @@
 // regenerate-matches, cancel-preview, plus internal helpers sendMatchPreview
 // and emitHostDashboard.
 //
-// Every state-mutating handler is wrapped with withSessionGuard to prevent
-// concurrent host actions on the same session.
+// Match generation (generate/regenerate previews) is wrapped with the
+// dedicated withMatchGenerationLock to serialise against the background
+// auto-repair paths (late-joiner/leaver/reconciler), preventing concurrent
+// regenerations from clobbering each other's pairing. That lock is separate
+// from the presence guard (withSessionGuard) so a long matching run never
+// blocks joins/leaves.
 //
 // Critical fixes included:
 // - FIX 3A: pendingRoundNumber cleared AFTER successful transition (not before)
@@ -16,7 +20,7 @@ import logger from '../../../config/logger';
 import { query } from '../../../db';
 import { SessionStatus, resolveDisplayName, placeholderName } from '@rsn/shared';
 import {
-  activeSessions,
+  activeSessions, withMatchGenerationLock,
   sessionRoom, userRoom, persistSessionState,
 } from '../state/session-state';
 import { verifyHost, getAllHostIds } from './host-actions';
@@ -51,7 +55,22 @@ export async function handleHostGenerateMatches(
   socket: Socket,
   data: { sessionId: string }
 ): Promise<void> {
+  // Authorize BEFORE taking the match-generation lock — otherwise any socket
+  // could queue unauthorized / no-op host:generate_matches calls ahead of
+  // legitimate match writes. verifyHost is cheap and lock-independent.
+  if (!await verifyHost(socket, data.sessionId)) return;
+  // Serialize match generation per session against the auto-repair paths
+  // (late-joiner/leaver/reconciler) so a host's preview generation and a
+  // background regeneration can't read the same eligible set and clobber
+  // each other's pairing. Dedicated match-generation lock — must NOT block
+  // joins/leaves, otherwise a participant arriving during this (up to 60s)
+  // run would be queued behind it and missing from the generated preview.
+  return withMatchGenerationLock(data.sessionId, async () => {
   try {
+    // Re-verify after acquiring the lock: this request may have waited behind
+    // another long match-generation job, during which the caller could have
+    // lost host/co-host privileges (TOCTOU). The pre-lock check above only
+    // gates queuing; this one gates the actual write.
     if (!await verifyHost(socket, data.sessionId)) return;
 
     const activeSession = activeSessions.get(data.sessionId);
@@ -201,6 +220,7 @@ export async function handleHostGenerateMatches(
     logger.error({ err }, 'Error generating match preview');
     socket.emit('error', { code: 'GENERATE_FAILED', message: err.message });
   }
+  });
 }
 
 // ─── Host Confirm Round (start after preview) ─────────────────────────────
@@ -426,7 +446,12 @@ export async function handleHostRegenerateMatches(
   socket: Socket,
   data: { sessionId: string }
 ): Promise<void> {
+  // Authorize before taking the lock (see handleHostGenerateMatches).
+  if (!await verifyHost(socket, data.sessionId)) return;
+  // Serialize with all other match-write paths (see handleHostGenerateMatches).
+  return withMatchGenerationLock(data.sessionId, async () => {
   try {
+    // Re-verify after the lock wait — privileges may have changed (TOCTOU).
     if (!await verifyHost(socket, data.sessionId)) return;
 
     const activeSession = activeSessions.get(data.sessionId);
@@ -462,6 +487,7 @@ export async function handleHostRegenerateMatches(
   } catch (err: any) {
     socket.emit('error', { code: 'REGENERATE_FAILED', message: err.message });
   }
+  });
 }
 
 // ─── Host Force Match (manually pair two specific participants) ──────────────

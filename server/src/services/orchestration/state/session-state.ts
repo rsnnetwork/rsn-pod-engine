@@ -71,6 +71,20 @@ export const disconnectTimeouts = new Map<string, NodeJS.Timeout>();
 /** Per-session operation lock — prevents concurrent host actions on same session */
 export const sessionLocks = new Map<string, Promise<void>>();
 
+/**
+ * Per-session MATCH-GENERATION lock — serialises only the match read→compute→
+ * write paths (host generate/regenerate previews, late-joiner/leaver/reconciler
+ * future-round repairs). Deliberately SEPARATE from `sessionLocks`: match
+ * generation can run for up to the 60s engine timeout, and the presence guard
+ * (`withSessionGuard`) also gates join/leave, so sharing one lock would stall
+ * joins/leaves behind a long matching run — and even queue a joining user
+ * behind a host's generate so they'd be missing from the preview. These two
+ * concerns must not block each other. The lost-update race we're fixing is
+ * purely generation-vs-generation, so a dedicated lock is sufficient and keeps
+ * presence updates flowing.
+ */
+export const matchGenerationLocks = new Map<string, Promise<void>>();
+
 export const MAX_CHAT_MESSAGES = 50;
 export const chatMessages = new Map<string, ChatMessage[]>(); // sessionId -> messages
 
@@ -89,6 +103,30 @@ export async function withSessionGuard<T>(sessionId: string, fn: () => Promise<T
     return await fn();
   } finally {
     sessionLocks.delete(sessionId);
+    resolve!();
+  }
+}
+
+/**
+ * Serialise MATCH-GENERATION operations on the same session (see
+ * `matchGenerationLocks`). Concurrent generate/regenerate/repair calls
+ * otherwise read the same eligible set, compute different pairings, and the
+ * last writer clobbers the others — stranding users in 1-person rooms or with
+ * no match row. Must NOT be acquired re-entrantly (it isn't reentrant): guard
+ * only at the top-level entry points, never inside repairFutureRounds /
+ * generateSingleRound, which call each other.
+ */
+export async function withMatchGenerationLock<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+  while (matchGenerationLocks.has(sessionId)) {
+    await matchGenerationLocks.get(sessionId);
+  }
+  let resolve: () => void;
+  const lock = new Promise<void>(r => { resolve = r; });
+  matchGenerationLocks.set(sessionId, lock);
+  try {
+    return await fn();
+  } finally {
+    matchGenerationLocks.delete(sessionId);
     resolve!();
   }
 }

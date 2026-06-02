@@ -36,7 +36,13 @@ export async function addPodMember(host: TestUser, podId: string, userId: string
   return apiRequest(host, 'POST', `/pods/${podId}/members`, { userId, role });
 }
 
-export async function createSession(host: TestUser, podId: string, title: string, scheduledAt: Date): Promise<{ id: string; title: string }> {
+export async function createSession(
+  host: TestUser,
+  podId: string,
+  title: string,
+  scheduledAt: Date,
+  configOverride?: Record<string, unknown>,
+): Promise<{ id: string; title: string }> {
   const res = await apiRequest(host, 'POST', '/sessions', {
     podId,
     title,
@@ -53,6 +59,7 @@ export async function createSession(host: TestUser, podId: string, title: string
       roundDurationSeconds: 60,
       transitionDurationSeconds: 30,
       closingLobbyDurationSeconds: 300,
+      ...configOverride,
     },
   });
   return res.data;

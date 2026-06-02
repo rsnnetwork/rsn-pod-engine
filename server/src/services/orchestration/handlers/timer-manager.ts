@@ -114,6 +114,13 @@ export function startSegmentTimer(
       // their own display from a single source of truth instead of
       // decrementing a fragile local counter (caused 60s+ drift).
       endsAt: session.timerEndsAt!.toISOString(),
+      // Clock-offset anchor: the server's wall-clock at emit time. Clients
+      // diff this against their own Date.now() to derive a per-client clock
+      // offset, then anchor the timer off the absolute `endsAt` corrected by
+      // that offset. Without it, a client whose system clock is skewed (or
+      // that misses syncs) ticks from a wrong base and shows a different
+      // countdown than its peers — the "everyone sees a different timer" bug.
+      serverNow: new Date().toISOString(),
     });
   }, 2000);
 

@@ -177,6 +177,43 @@ describe('T0-3 — buildSessionStateSnapshot', () => {
     expect(snapshot!.participantCounts.ghostFiltered).toBe(true);
   });
 
+  it('deduplicates connectedParticipants when a user holds multiple sockets', async () => {
+    // A user can briefly have two sockets in the room (reconnect / duplicate
+    // tab eviction window). fetchSockets() returns one entry per socket, so
+    // without dedup the authoritative room-wide broadcast would show the user
+    // twice and inflate the roster/count for everyone.
+    mockGetSessionById.mockResolvedValue(makeSession({ hostUserId: 'host-1' }));
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    mockQuery.mockResolvedValueOnce({ rows: [{ user_id: 'user-2' }], rowCount: 1 });
+
+    const io = makeIo([
+      { userId: 'user-2', displayName: 'User Two' },
+      { userId: 'user-2', displayName: 'User Two (dup tab)' },
+      { userId: 'host-1', displayName: 'Host' },
+    ]);
+
+    const snapshot = await buildSessionStateSnapshot(SESSION_ID, io);
+
+    const userTwo = snapshot!.connectedParticipants.filter(p => p.userId === 'user-2');
+    expect(userTwo).toHaveLength(1);              // deduped to one entry
+    expect(snapshot!.connectedParticipants).toHaveLength(2); // user-2 + host-1
+    expect(userTwo[0].displayName).toBe('User Two'); // first socket seen wins
+    expect(snapshot!.hostInLobby).toBe(true);
+  });
+
+  it('includes serverNow (clock-offset anchor) on every snapshot', async () => {
+    // Clients diff serverNow against their own clock to resolve the absolute
+    // timerEndsAt under skew — it must always be present.
+    mockGetSessionById.mockResolvedValue(makeSession());
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+    const snapshot = await buildSessionStateSnapshot(SESSION_ID, makeIo([]));
+
+    expect(typeof snapshot!.serverNow).toBe('string');
+    expect(Number.isNaN(Date.parse(snapshot!.serverNow))).toBe(false);
+  });
+
   it('returns hostInLobby=false when host socket is not in the room', async () => {
     mockGetSessionById.mockResolvedValue(makeSession({ hostUserId: 'host-1' }));
     mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });

@@ -278,11 +278,36 @@ export default function useSessionSocket(sessionId: string) {
       // prior round/manual room doesn't carry over and freeze the new
       // round's tick.
       store.setIsPaused(false);
-      const duration = typeof data.durationSeconds === 'number'
-        ? data.durationSeconds
-        : Math.max(0, Math.floor((new Date(data.endsAt).getTime() - Date.now()) / 1000));
-      store.setTimer(duration); // explicit reset so stale value (e.g. ended manual room's 8:20) doesn't leak
-      store.setTimerEndsAt(new Date(Date.now() + duration * 1000));
+      // Clock-offset mode: anchor the timer to the server's ABSOLUTE endsAt
+      // corrected by this client's server-clock offset, so every client shows
+      // the same countdown regardless of local clock skew (and a client that
+      // later misses syncs still computes correctly). Only UPDATE the offset
+      // when serverNow is present — never reset it on payloads that omit it,
+      // or a skewed client would diverge again the next time a legacy timer
+      // emitter fires. When no absolute endsAt is given, reconstruct one that
+      // is consistent with the current offset from durationSeconds.
+      if (data.serverNow) {
+        store.setClockOffset(Date.parse(data.serverNow) - Date.now());
+      }
+      const { clockOffset: offset, hasClockOffset } = useSessionStore.getState();
+      // Trust the absolute endsAt only when we have a trustworthy offset — a
+      // fresh serverNow, or one learned from an earlier new-format payload. In
+      // that case it is both skew-correct AND accounts for delivery latency
+      // (no full-duration reset if round_started arrives late). When no offset
+      // has ever been established (pure old-server window), the RELATIVE
+      // durationSeconds is the authoritative skew-immune value (Bug 16).
+      const trustAbsolute = (data.serverNow || hasClockOffset) && data.endsAt;
+      const endsAtMs = trustAbsolute
+        ? new Date(data.endsAt).getTime()
+        : typeof data.durationSeconds === 'number'
+        ? Date.now() + offset + data.durationSeconds * 1000
+        : data.endsAt
+        ? new Date(data.endsAt).getTime()
+        : Date.now() + offset;
+      // Explicit reset so a stale value (e.g. an ended manual room's 8:20)
+      // doesn't leak between setTimerEndsAt computations.
+      store.setTimer(Math.max(0, Math.ceil((endsAtMs - (Date.now() + offset)) / 1000)));
+      store.setTimerEndsAt(new Date(endsAtMs));
       clearTimer();
       intervalRef.current = setInterval(() => store.tickTimer(), 1000);
     });
@@ -666,13 +691,29 @@ export default function useSessionSocket(sessionId: string) {
       // *1000 so subsequent ticks recompute against the SAME clock that
       // ticks. Drops the 10s "host pause/resume drift" caused by clock
       // differences between host machine and server.
-      if (typeof data.secondsRemaining === 'number') {
-        store.setTimerEndsAt(new Date(Date.now() + data.secondsRemaining * 1000));
+      // Only UPDATE the offset when serverNow is present — NEVER reset it to 0
+      // on legacy payloads. Several timer paths (breakout extension / manual-
+      // room syncs) may still emit the older shape without serverNow; wiping a
+      // good offset there would send a skewed client back to local-clock timing
+      // and re-diverge. Always anchor to an offset-consistent absolute endsAt.
+      if (data.serverNow) {
+        store.setClockOffset(Date.parse(data.serverNow) - Date.now());
+      }
+      const { clockOffset: syncOffset, hasClockOffset } = useSessionStore.getState();
+      // Trust the absolute endsAt only when we hold a trustworthy offset (fresh
+      // serverNow or one learned earlier). Then it's skew-correct and resilient
+      // to missed syncs. With no established offset (pure old-server window),
+      // the RELATIVE secondsRemaining is the authoritative skew-immune value —
+      // reconstruct an endsAt consistent with the current offset so tickTimer
+      // stays correct without disturbing the established offset.
+      const trustAbsolute = (data.serverNow || hasClockOffset) && data.endsAt;
+      if (trustAbsolute) {
+        store.setTimerEndsAt(new Date(data.endsAt));
+      } else if (typeof data.secondsRemaining === 'number') {
+        store.setTimerEndsAt(new Date(Date.now() + syncOffset + data.secondsRemaining * 1000));
       } else if (data.endsAt) {
-        // Fallback if no secondsRemaining (older server payload during
-        // rolling deploys) — best-effort using absolute timestamp.
-        const remaining = Math.max(0, Math.floor((new Date(data.endsAt).getTime() - Date.now()) / 1000));
-        store.setTimerEndsAt(new Date(Date.now() + remaining * 1000));
+        // Last resort — absolute endsAt with whatever offset we have.
+        store.setTimerEndsAt(new Date(data.endsAt));
       }
 
       // Always clear existing interval then start fresh — prevents ghost timer overlap.

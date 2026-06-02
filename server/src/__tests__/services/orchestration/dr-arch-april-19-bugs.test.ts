@@ -178,7 +178,11 @@ describe('Dr Arch April 19 — Bug 8.5: Single source of truth for timer (server
     expect(implIdx).toBeGreaterThan(-1);
     const tickBlock = src.slice(implIdx, implIdx + 800);
     expect(tickBlock).toMatch(/s\.timerEndsAt/);
-    expect(tickBlock).toMatch(/getTime\(\)\s*-\s*Date\.now\(\)/);
+    // Recompute from the authoritative endsAt against "now". The clock-offset
+    // fix corrects "now" to server time (Date.now() + s.clockOffset), so allow
+    // an optional offset term — the key invariant is endsAt.getTime() minus a
+    // now-derived value, NOT a local decrement.
+    expect(tickBlock).toMatch(/getTime\(\)\s*-\s*\(?Date\.now\(\)/);
     // Hard-fail if anyone re-introduces the old decrement.
     expect(tickBlock).not.toMatch(/timerSeconds\s*-\s*1/);
   });

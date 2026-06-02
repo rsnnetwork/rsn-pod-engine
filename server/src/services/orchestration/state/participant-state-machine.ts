@@ -403,9 +403,17 @@ export async function reconcileSessionStates(sessionId: string): Promise<{
     // repair throttle.
     if (staleEscalated > 0 && activeSession.currentRound >= 1) {
       try {
-        const fromRound = activeSession.currentRound + 1;
         const matchingService = await import('../../matching/matching.service');
-        await matchingService.repairFutureRounds(sessionId, fromRound, 'left');
+        // Serialize with the join/leave/host repair paths — the reconciler
+        // ticks independently (30s) and must not race a regeneration that's
+        // mid-flight, or it would clobber freshly-written pairings. Dedicated
+        // match-generation lock so it doesn't block presence updates.
+        const { withMatchGenerationLock } = await import('./session-state');
+        await withMatchGenerationLock(sessionId, () =>
+          // currentRound read inside the lock callback so a round that advanced
+          // while we were queued isn't repaired as if it were still future.
+          matchingService.repairFutureRounds(sessionId, activeSession.currentRound + 1, 'left'),
+        );
       } catch (err) {
         logger.warn({ err, sessionId, staleEscalated },
           'Phase 7A.1 — future-rounds repair after stale escalation failed');

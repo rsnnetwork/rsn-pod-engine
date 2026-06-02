@@ -30,6 +30,13 @@ export interface SessionStateSnapshot {
   isPaused: boolean;
   /** Server-side wall-clock end of the current segment (ISO 8601). null when paused or no timer running. */
   timerEndsAt: string | null;
+  /**
+   * Server wall-clock at the moment this snapshot was built (ISO 8601).
+   * Clients diff it against their own Date.now() to derive a clock offset and
+   * resolve the absolute `timerEndsAt` correctly even when their system clock
+   * is skewed — the same anchor carried on socket timer:sync / round_started.
+   */
+  serverNow: string;
   /** Frozen remaining ms when paused. null otherwise. Used by clients to render the held value. */
   pausedTimeRemainingMs: number | null;
   /** Pre-generated round number awaiting host confirm (null when none). */
@@ -118,13 +125,20 @@ export async function buildSessionStateSnapshot(
   let hostInLobby = false;
   if (io) {
     const socketsInRoom = await io.in(sessionRoom(sessionId)).fetchSockets();
-    connectedParticipants = socketsInRoom
-      .map(s => ({
-        userId: (s.data as any)?.userId,
-        displayName: (s.data as any)?.displayName || 'User',
-      }))
-      .filter(p => p.userId);
-    hostInLobby = socketsInRoom.some(s => (s.data as any)?.userId === session.hostUserId);
+    // Deduplicate by userId: a user can briefly hold two sockets in the room
+    // (reconnect / duplicate-tab eviction window), and fetchSockets() returns
+    // one entry per socket. Without dedup this list (and any client that
+    // applies it as authoritative via setParticipants) would show the user
+    // twice and inflate the roster/count. Keep the first socket seen per user.
+    const seenUserIds = new Set<string>();
+    connectedParticipants = [];
+    for (const s of socketsInRoom) {
+      const uid = (s.data as any)?.userId;
+      if (!uid || seenUserIds.has(uid)) continue;
+      seenUserIds.add(uid);
+      connectedParticipants.push({ userId: uid, displayName: (s.data as any)?.displayName || 'User' });
+    }
+    hostInLobby = seenUserIds.has(session.hostUserId as string);
   }
 
   // ── Co-hosts ────────────────────────────────────────────────────────────
@@ -257,6 +271,7 @@ export async function buildSessionStateSnapshot(
     totalRounds: config.numberOfRounds || 5,
     isPaused: activeSession?.isPaused ?? false,
     timerEndsAt: activeSession?.timerEndsAt?.toISOString() ?? null,
+    serverNow: new Date().toISOString(),
     pausedTimeRemainingMs: activeSession?.pausedTimeRemaining ?? null,
     pendingRoundNumber: activeSession?.pendingRoundNumber ?? null,
 

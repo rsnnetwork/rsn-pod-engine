@@ -155,8 +155,22 @@ interface SessionLiveState {
   // — never decrements. Result: drift bounded by clock skew (few seconds)
   // regardless of how many ticks the client missed.
   timerEndsAt: Date | null;
+  // Per-client server-clock offset in ms: `serverNow - clientNow` at the last
+  // sync. Added to Date.now() when computing remaining time so that an
+  // absolute server `endsAt` resolves to the same wall time on every client
+  // regardless of local clock skew. 0 when the server payload predates the
+  // serverNow field (rolling deploy) — in that case the timer falls back to
+  // the older relative anchoring (endsAt = clientNow + secondsRemaining).
+  clockOffset: number;
+  // True once a server `serverNow` has been observed and clockOffset reflects
+  // a real measurement. While false (no new-format payload seen yet) the
+  // absolute server `endsAt` can't be trusted against the local clock, so the
+  // timer handlers prefer the skew-immune relative value (secondsRemaining /
+  // durationSeconds) instead.
+  hasClockOffset: boolean;
   setTimer: (s: number) => void;
   setTimerEndsAt: (endsAt: Date | null) => void;
+  setClockOffset: (offsetMs: number) => void;
   tickTimer: () => void;
   setRound: (r: number) => void;
   addBroadcast: (msg: string) => void;
@@ -213,6 +227,8 @@ export interface SessionStateSnapshot {
   totalRounds: number;
   isPaused: boolean;
   timerEndsAt: string | null;
+  /** Server wall-clock when the snapshot was built — used to derive clockOffset. */
+  serverNow?: string;
   pausedTimeRemainingMs: number | null;
   pendingRoundNumber: number | null;
   hostUserId: string | null;
@@ -245,6 +261,8 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   currentMatchId: null,
   timerSeconds: 0,
   timerEndsAt: null,
+  clockOffset: 0,
+  hasClockOffset: false,
   currentRound: 0,
   broadcasts: [],
   error: null,
@@ -303,7 +321,13 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
       if (s.timerEndsAt === null) return {};
       return { timerEndsAt: null };
     }
-    const remaining = Math.max(0, Math.ceil((timerEndsAt.getTime() - Date.now()) / 1000));
+    // Compute remaining against the server-corrected clock. When endsAt holds
+    // the server's absolute timestamp and clockOffset is set, this resolves to
+    // the same value on every client regardless of local clock skew. When the
+    // server payload predates serverNow, clockOffset is 0 and endsAt was
+    // client-rebased (clientNow + secondsRemaining), so this reduces to the
+    // previous relative behavior.
+    const remaining = Math.max(0, Math.ceil((timerEndsAt.getTime() - (Date.now() + s.clockOffset)) / 1000));
     // Bug 8.6 — same-millisecond endsAt arrivals (the 2s periodic sync
     // sends the SAME endsAt repeatedly) should not trigger re-renders.
     // Compare timestamps not references.
@@ -312,6 +336,9 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
     }
     return { timerEndsAt, timerSeconds: remaining };
   }),
+  // No display subscribes to clockOffset (only timerSeconds is rendered), so
+  // updating it every sync is free. Records that a real offset is now known.
+  setClockOffset: (clockOffset) => set({ clockOffset, hasClockOffset: true }),
   tickTimer: () => set((s) => {
     // Bug 8.5 (April 19) — recompute from authoritative server endsAt
     // instead of decrementing a local counter. Decrementing was fragile
@@ -320,7 +347,8 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
     // When timerEndsAt is null (paused or no active timer), keep the
     // existing displayed value so paused snapshots stay frozen.
     if (!s.timerEndsAt || s.isPaused) return {};
-    const remaining = Math.max(0, Math.ceil((s.timerEndsAt.getTime() - Date.now()) / 1000));
+    // Server-corrected now (see setTimerEndsAt / clockOffset).
+    const remaining = Math.max(0, Math.ceil((s.timerEndsAt.getTime() - (Date.now() + s.clockOffset)) / 1000));
     // Bug 8.6 (April 19) — only emit a state update when the seconds
     // value actually CHANGED. Returning {timerSeconds: same} still
     // makes Zustand re-render subscribers and was causing the breakout
@@ -390,10 +418,22 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   // Recomputes timer locally from the server's `endsAt` (clock-skew immune).
   // Does NOT touch fields the snapshot doesn't carry (currentMatch, broadcasts,
   // chat, etc.) — those have their own update paths.
-  applyFullState: (snapshot) => set(() => {
+  applyFullState: (snapshot) => set((s) => {
+    // Clock-offset correction for the late-join / reconnect path. The snapshot
+    // carries the server's absolute timerEndsAt; computing remaining against a
+    // skewed local Date.now() is exactly what made a joining client show a
+    // different countdown than its peers. serverNow lets us anchor to the
+    // server's clock instead. When serverNow is absent (older /state
+    // responder during a rolling deploy) we KEEP the previously learned offset
+    // rather than reverting to the raw local clock — discarding it would make
+    // a skewed client jump back to a divergent countdown on the next resync.
+    const clockOffset = snapshot.serverNow
+      ? Date.parse(snapshot.serverNow) - Date.now()
+      : s.clockOffset;
+    const hasClockOffset = snapshot.serverNow ? true : s.hasClockOffset;
     const endsAt = snapshot.timerEndsAt ? new Date(snapshot.timerEndsAt) : null;
     const timerSeconds = endsAt
-      ? Math.max(0, Math.ceil((endsAt.getTime() - Date.now()) / 1000))
+      ? Math.max(0, Math.ceil((endsAt.getTime() - (Date.now() + clockOffset)) / 1000))
       : snapshot.pausedTimeRemainingMs
       ? Math.max(0, Math.ceil(snapshot.pausedTimeRemainingMs / 1000))
       : 0;
@@ -404,6 +444,8 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
       totalRounds: snapshot.totalRounds,
       isPaused: snapshot.isPaused,
       timerEndsAt: endsAt,
+      clockOffset,
+      hasClockOffset,
       timerSeconds,
       hostUserId: snapshot.hostUserId,
       hostInLobby: snapshot.hostInLobby,
@@ -431,7 +473,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
     phase: 'lobby', connectionStatus: 'connecting', transitionStatus: null,
     sessionStatus: 'scheduled', hostInLobby: false, hostUserId: null, totalRounds: 5,
     participants: [], currentMatch: null, currentPartners: [], currentMatchId: null,
-    timerSeconds: 0, timerEndsAt: null, currentRound: 0, broadcasts: [], error: null, tileReactions: {},
+    timerSeconds: 0, timerEndsAt: null, clockOffset: 0, hasClockOffset: false, currentRound: 0, broadcasts: [], error: null, tileReactions: {},
     isReconnecting: false, isByeRound: false, liveKitToken: null, livekitUrl: null, currentRoomId: null,
     lobbyToken: null, lobbyUrl: null, lobbyRoomId: null,
     timerVisibility: 'always_visible', breakoutTimerHidden: false, matchPreview: null,

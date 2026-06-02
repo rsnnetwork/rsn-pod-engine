@@ -11,7 +11,7 @@ import logger from '../../../config/logger';
 import { query } from '../../../db';
 import { SessionStatus, ParticipantStatus, UserRole, resolveDisplayName, placeholderName } from '@rsn/shared';
 import {
-  ActiveSession, activeSessions, disconnectTimeouts, withSessionGuard,
+  ActiveSession, activeSessions, disconnectTimeouts, withSessionGuard, withMatchGenerationLock,
   sessionRoom, userRoom, getUserIdFromSocket,
   chatMessages, emitRatingWindowOnce,
 } from '../state/session-state';
@@ -51,8 +51,18 @@ async function maybeRepairFutureRounds(
   _futureRepairThrottle.set(sessionId, now);
 
   try {
-    const fromRound = activeSession.currentRound + 1;
-    const result = await matchingService.repairFutureRounds(sessionId, fromRound, reason);
+    // Serialize the read→compute→write of match regeneration per session.
+    // Concurrent late-joiner/leaver repairs (and host generate) otherwise
+    // race: each reads the same eligible set, computes a different pairing,
+    // and the last writer clobbers the others — stranding users in 1-person
+    // rooms or with no match row at all. Uses the dedicated match-generation
+    // lock (NOT the presence guard) so a repair never blocks joins/leaves —
+    // it only queues behind other match-write operations.
+    const result = await withMatchGenerationLock(sessionId, () =>
+      // currentRound read inside the lock callback so a round that advanced
+      // while we were queued is reflected.
+      matchingService.repairFutureRounds(sessionId, activeSession.currentRound + 1, reason),
+    );
     if (result.regeneratedRounds.length > 0) {
       io.to(sessionRoom(sessionId)).emit('host:event_plan_repaired', {
         sessionId,
@@ -63,6 +73,55 @@ async function maybeRepairFutureRounds(
   } catch (err) {
     logger.warn({ err, sessionId, reason }, 'maybeRepairFutureRounds: repair failed');
   }
+}
+
+// ─── Authoritative participant-list broadcast (debounced) ──────────────────
+//
+// Each client builds its participant list incrementally from
+// participant:joined / participant:left events, and derives the displayed
+// count from that local list. Under a burst of concurrent joins (10-12 users
+// at once) those per-socket events can be dropped, reordered, or duplicated,
+// so each client's list — and the count — drifts, with nothing pulling it
+// back to server truth (the full snapshot was only ever UNICAST to the
+// joining socket).
+//
+// After any membership change we now broadcast the authoritative connected-
+// participant list (the same snapshot the join unicast and the REST
+// /sessions/:id/state endpoint use) to the WHOLE room, so every client
+// converges. Debounced per session so a 12-user join burst collapses into
+// ~1 snapshot rather than 12 — each snapshot does an io.fetchSockets() plus
+// DB reads, so fanning one per join would be wasteful under exactly the load
+// that triggers the bug.
+const _participantBroadcastTimers = new Map<string, NodeJS.Timeout>();
+const PARTICIPANT_BROADCAST_DEBOUNCE_MS = 300;
+
+function scheduleParticipantListBroadcast(io: SocketServer, sessionId: string): void {
+  const existing = _participantBroadcastTimers.get(sessionId);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(() => {
+    _participantBroadcastTimers.delete(sessionId);
+    void (async () => {
+      try {
+        const { buildSessionStateSnapshot } = await import('../../session/session-state-snapshot.service');
+        const snapshot = await buildSessionStateSnapshot(sessionId, io);
+        if (!snapshot) return;
+        // Partial session:state — the client guards each field with
+        // `if (data.X)`, so sending only the membership-derived fields
+        // updates the participant list + host presence without clobbering
+        // round/timer/status state the client tracks elsewhere.
+        io.to(sessionRoom(sessionId)).emit('session:state', {
+          participants: snapshot.connectedParticipants,
+          hostInLobby: snapshot.hostInLobby,
+          participantCounts: snapshot.participantCounts,
+        });
+      } catch (err) {
+        logger.warn({ err, sessionId }, 'scheduleParticipantListBroadcast: failed (non-fatal)');
+      }
+    })();
+  }, PARTICIPANT_BROADCAST_DEBOUNCE_MS);
+  // Never keep the process alive solely for a pending presence broadcast.
+  if (typeof timer.unref === 'function') timer.unref();
+  _participantBroadcastTimers.set(sessionId, timer);
 }
 
 // ─── Cross-module references (wired in Task 7) ────────────────────────────
@@ -315,6 +374,11 @@ export async function handleJoinSession(
       const count = await sessionService.getParticipantCount(data.sessionId);
       io.to(sessionRoom(data.sessionId)).emit('participant:count', { count });
 
+      // Pull every client in the room back to the authoritative connected
+      // list (debounced) so a burst of concurrent joins can't leave clients
+      // with divergent incrementally-built lists / counts.
+      scheduleParticipantListBroadcast(io, data.sessionId);
+
       // T0-3: send the authoritative session-state snapshot. Same helper
       // backs the GET /api/sessions/:id/state REST endpoint, so the two
       // paths can never silently drift apart. Snapshot includes connected
@@ -337,6 +401,9 @@ export async function handleJoinSession(
             // T0-3: NEW fields the snapshot adds for resync precision
             isPaused: snapshot.isPaused,
             timerEndsAt: snapshot.timerEndsAt,
+            // Clock-offset anchor so a late joiner resolves timerEndsAt against
+            // server time, not its own (possibly skewed) wall clock.
+            serverNow: snapshot.serverNow,
             pausedTimeRemainingMs: snapshot.pausedTimeRemainingMs,
             pendingRoundNumber: snapshot.pendingRoundNumber,
             participantCounts: snapshot.participantCounts,
@@ -608,6 +675,7 @@ export async function handleLeaveSession(
 
     const count = await sessionService.getParticipantCount(data.sessionId);
     io.to(sessionRoom(data.sessionId)).emit('participant:count', { count });
+    scheduleParticipantListBroadcast(io, data.sessionId);
 
     logger.info({ sessionId: data.sessionId, userId }, 'User left session');
   });
@@ -1261,6 +1329,7 @@ export async function handleDisconnect(
       // Always notify remaining participants that this user left
       const isHost = activeSession.hostUserId === userId;
       io.to(sessionRoom(sessionId)).emit('participant:left', { userId, isHost });
+      scheduleParticipantListBroadcast(io, sessionId);
 
       // If mid-round, notify partner and attempt auto-reassignment
       if (activeSession.status === SessionStatus.ROUND_ACTIVE) {
@@ -1484,6 +1553,7 @@ export async function handleDisconnect(
       const isHost = session.hostUserId === userId;
 
       io.to(sessionRoom(sessionId)).emit('participant:left', { userId, isHost });
+      scheduleParticipantListBroadcast(io, sessionId);
       logger.info({ sessionId, userId }, 'Participant disconnected from pre-lobby waiting room');
     }
   } catch (err) {
@@ -1515,6 +1585,7 @@ export function startHeartbeatStaleDetection(io: SocketServer): void {
           }
           void maybeRepairFutureRounds(io, sessionId, 'left');
           io.to(sessionRoom(sessionId)).emit('participant:left', { userId });
+          scheduleParticipantListBroadcast(io, sessionId);
         }
       }
     }

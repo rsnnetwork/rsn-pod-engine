@@ -15,7 +15,7 @@ import {
   resolveDisplayName, placeholderName,
 } from '@rsn/shared';
 import {
-  ActiveSession, activeSessions, withSessionGuard,
+  ActiveSession, activeSessions, withSessionGuard, withMatchGenerationLock,
   sessionRoom, userRoom, getUserIdFromSocket, persistSessionState,
   emitRatingWindowOnce,
 } from '../state/session-state';
@@ -76,8 +76,14 @@ function maybeAutoEndEmptyRound(sessionId: string): void {
 async function maybeRepairFutureRounds(io: SocketServer, sessionId: string): Promise<void> {
   const activeSession = activeSessions.get(sessionId);
   if (!activeSession || activeSession.currentRound < 1) return;
-  const fromRound = activeSession.currentRound + 1;
-  const result = await matchingService.repairFutureRounds(sessionId, fromRound, 'host_request');
+  // Serialize with all other match-write paths (late-joiner/leaver repairs,
+  // host generate/regenerate) so concurrent regenerations can't clobber each
+  // other's pairing. Dedicated match-generation lock — does not block joins.
+  const result = await withMatchGenerationLock(sessionId, () =>
+    // currentRound read inside the lock callback so a round that advanced
+    // while we were queued isn't repaired as if it were still future.
+    matchingService.repairFutureRounds(sessionId, activeSession.currentRound + 1, 'host_request'),
+  );
   if (result.regeneratedRounds.length > 0) {
     io.to(sessionRoom(sessionId)).emit('host:event_plan_repaired', {
       sessionId,
