@@ -267,7 +267,7 @@ function MessageBubble({ msg, isOwn, sessionId }: { msg: ChatMessage; isOwn: boo
       >
         {!isOwn && (
           <div className="flex items-center gap-1.5 mb-0.5">
-            <a href={`/profile/${msg.userId}`} className={`text-xs font-semibold hover:underline ${msg.isHost ? 'text-amber-600' : 'text-gray-500'}`}>
+            <a href={`/profile/${msg.userId}`} target="_blank" rel="noopener noreferrer" className={`text-xs font-semibold hover:underline ${msg.isHost ? 'text-amber-600' : 'text-gray-500'}`}>
               {msg.displayName}
               {msg.isHost && <span className="ml-1 text-[10px] font-medium text-amber-600">HOST</span>}
             </a>

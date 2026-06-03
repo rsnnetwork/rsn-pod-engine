@@ -497,7 +497,11 @@ export default function useSessionSocket(sessionId: string) {
       // immediately followed by the room's first 'breakout' timer:sync, which the
       // recency gate picks up. Algorithm re-pairs omit isManual → no breakout ticks
       // → the session timer keeps ownership. No explicit flag needed here.
-      store.setMatch({ userId: data.newPartnerId, displayName: data.partnerDisplayName || data.newPartnerId }, data.matchId || null);
+      // H6 (27 May) — group/manual breakouts send the full partners[] (server:
+      // breakout-bulk.ts, host-actions.ts). Mirror match:assigned and pass it
+      // through so trio rooms rate every partner, not just the primary one.
+      const reassignPartners = data.partners || [{ userId: data.newPartnerId, displayName: data.partnerDisplayName || data.newPartnerId }];
+      store.setMatch({ userId: data.newPartnerId, displayName: data.partnerDisplayName || data.newPartnerId }, data.matchId || null, reassignPartners);
       // Phase C1 (10 May spec) — capture the LiveKit room id for the new
       // breakout. Pre-fix, only match:assigned called setRoomId, so a
       // reassigned user kept the old roomId in store and the chat filter
