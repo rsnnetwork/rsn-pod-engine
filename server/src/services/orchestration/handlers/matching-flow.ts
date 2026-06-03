@@ -172,7 +172,14 @@ async function replanRoundsAfterPreviewEdit(
   previewedRound: number,
 ): Promise<void> {
   try {
-    const result = await matchingService.repairFutureRounds(sessionId, previewedRound + 1, 'host_request');
+    // 27 May — replan against the LIVE present-in-main set so the regenerated
+    // future rounds (and the Event Plan strip that renders them) mirror what
+    // the presence-gated engine would actually produce — never a stale roster.
+    const replanSession = activeSessions.get(sessionId);
+    const presentUserIds = replanSession
+      ? await getPresentUserIds(io, sessionId, replanSession)
+      : undefined;
+    const result = await matchingService.repairFutureRounds(sessionId, previewedRound + 1, 'host_request', presentUserIds);
     if (result.regeneratedRounds.length === 0) return;
     io.to(sessionRoom(sessionId)).emit('host:event_plan_repaired', {
       sessionId,
@@ -284,7 +291,6 @@ export async function handleHostGenerateMatches(
         reason: 'host_request',
         regeneratedRounds: [activeSession.currentRound + 1],
         roundCount: activeSession.config.numberOfRounds,
-        totalPairs: 0,
         bonusRoundsAdded: activeSession.config.bonusRoundsAdded ?? 0,
       });
       // Phase 2 dual-emit — session + plan entities for every viewer so
@@ -424,6 +430,10 @@ export async function handleHostGenerateMatches(
         );
         activeSession.pendingRoundNumber = nextRound;
         await sendMatchPreview(io, socket, data.sessionId, nextRound, activeSession.hostUserId);
+        // 27 May — re-sync the rest of the plan to the LIVE present roster so
+        // the Event Plan strip mirrors the presence-gated engine, not the
+        // roster the pre-plan was built for (non-fatal, replans scheduled only).
+        await replanRoundsAfterPreviewEdit(io, data.sessionId, nextRound);
         return;
       }
 
@@ -516,7 +526,6 @@ export async function handleHostGenerateMatches(
         reason: 'host_request',
         regeneratedRounds: [nextRound],
         roundCount: activeSession.config.numberOfRounds,
-        totalPairs: 0,
         bonusRoundsAdded: activeSession.config.bonusRoundsAdded ?? 0,
       });
       try {
@@ -533,6 +542,9 @@ export async function handleHostGenerateMatches(
 
       // Send preview to host only (includes trio support + encounter history)
       await sendMatchPreview(io, socket, data.sessionId, nextRound, activeSession.hostUserId);
+      // 27 May — re-sync the remaining scheduled rounds to the LIVE present
+      // roster so the Event Plan strip mirrors the presence-gated engine.
+      await replanRoundsAfterPreviewEdit(io, data.sessionId, nextRound);
 
       logger.info({ sessionId: data.sessionId, roundNumber: nextRound },
         'Match preview generated for host (legacy on-the-fly path)');
@@ -870,7 +882,6 @@ export async function handleHostRegenerateMatches(
       reason: 'host_request',
       regeneratedRounds: [roundNumber],
       roundCount: activeSession.config.numberOfRounds,
-      totalPairs: 0,
       bonusRoundsAdded: activeSession.config.bonusRoundsAdded ?? 0,
     });
     try {

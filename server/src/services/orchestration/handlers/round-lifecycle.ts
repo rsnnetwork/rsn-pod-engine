@@ -490,7 +490,6 @@ export async function transitionToRound(
       reason: 'round_started',
       regeneratedRounds: [roundNumber],
       roundCount: activeSession.config.numberOfRounds,
-      totalPairs: 0,
       bonusRoundsAdded: activeSession.config.bonusRoundsAdded ?? 0,
     });
 
@@ -582,7 +581,6 @@ export async function endRound(
       reason: 'round_ended',
       regeneratedRounds: [roundNumber],
       roundCount: activeSession.config.numberOfRounds,
-      totalPairs: 0,
       bonusRoundsAdded: activeSession.config.bonusRoundsAdded ?? 0,
     });
 

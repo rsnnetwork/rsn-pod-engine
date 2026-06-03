@@ -72,23 +72,39 @@ export default function EventPlanStrip({ sessionId }: Props) {
   });
 
   // Refetch when the server reports a plan event (generated or repaired).
+  // 27 May — also refetch on every roster change (join/leave/cohost change):
+  // /plan is presence-gated server-side, so any presence movement can change
+  // the per-round "not matched" counts. Keeps the strip live, never stale.
   useEffect(() => {
     const socket = getSocket();
     if (!socket) return;
     const refresh = () => queryClient.invalidateQueries({ queryKey: ['event-plan', sessionId] });
     socket.on('host:event_plan_generated', refresh);
     socket.on('host:event_plan_repaired', refresh);
+    socket.on('participant:joined', refresh);
+    socket.on('participant:left', refresh);
+    socket.on('roster:changed', refresh);
     return () => {
       socket.off('host:event_plan_generated', refresh);
       socket.off('host:event_plan_repaired', refresh);
+      socket.off('participant:joined', refresh);
+      socket.off('participant:left', refresh);
+      socket.off('roster:changed', refresh);
     };
   }, [queryClient, sessionId]);
 
   if (isLoading || !data || data.rounds.length === 0) return null;
 
-  const headlineSummary = eventPlanSummary
-    ? `Plan: ${eventPlanSummary.roundCount} ${eventPlanSummary.roundCount === 1 ? 'round' : 'rounds'} · ${eventPlanSummary.totalPairs} pairs`
-    : `Plan: ${data.totalRounds} rounds`;
+  // 27 May — the headline derives from the same presence-gated /plan response
+  // as the round cards below it (single source of truth), instead of the
+  // socket-pushed eventPlanSummary which could be overwritten with stale or
+  // placeholder totals ("Plan: 5 rounds · 0 pairs"). roundCount still prefers
+  // the freshest socket value when present (Another Round bumps it instantly).
+  const livePairTotal = data.rounds.reduce(
+    (sum, r) => sum + (r.status === 'cancelled' ? 0 : r.pairCount), 0);
+  const headlineRounds = eventPlanSummary?.roundCount ?? data.totalRounds;
+  const headlineSummary =
+    `Plan: ${headlineRounds} ${headlineRounds === 1 ? 'round' : 'rounds'} · ${livePairTotal} ${livePairTotal === 1 ? 'pair' : 'pairs'}`;
 
   return (
     <div className="border-b border-gray-200 bg-white px-4 py-2.5">
