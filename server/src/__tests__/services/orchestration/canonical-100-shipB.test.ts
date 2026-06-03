@@ -335,6 +335,11 @@ describe('Ship B — flip-site + wiring invariants', () => {
     // Sweep enumerates lobby + ALL active match rooms (not only manual ones).
     expect(sweep).toMatch(/status = 'active'/);
     expect(sweep).not.toMatch(/is_manual/);
+    // Hotfix invariant: a stale in-memory session whose DB row is gone is
+    // skipped silently (getSessionById throws NotFound for those — pre-fix
+    // the sweep warn-spammed every 15s per stale session).
+    expect(sweep).toMatch(/getSessionById\(sessionId\)\.catch\(\(\) => null\)/);
+    expect(sweep).toMatch(/if \(!session\) continue/);
   });
 
   it('chat reactions also resolve recipients canonical-first', () => {

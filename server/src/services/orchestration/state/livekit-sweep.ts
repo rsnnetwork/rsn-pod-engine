@@ -86,8 +86,14 @@ export function startLiveKitSweep(): void {
     for (const sessionId of activeSessions.keys()) {
       try {
         const rooms = new Set<string>();
-        const session = await (await import('../../session/session.service')).getSessionById(sessionId);
-        if (session?.lobbyRoomId) rooms.add(session.lobbyRoomId);
+        // Smoke-caught hotfix: getSessionById THROWS for an in-memory session
+        // whose DB row is gone (ended events recovered from a stale Redis
+        // blob) — pre-fix this warn-spammed every 15s per stale session until
+        // the 4h TTL reaper. No DB row = event over = nothing to sweep.
+        const session = await (await import('../../session/session.service'))
+          .getSessionById(sessionId).catch(() => null);
+        if (!session) continue;
+        if (session.lobbyRoomId) rooms.add(session.lobbyRoomId);
         const active = await query<{ room_id: string }>(
           `SELECT DISTINCT room_id FROM matches
             WHERE session_id = $1 AND status = 'active' AND room_id IS NOT NULL`,
