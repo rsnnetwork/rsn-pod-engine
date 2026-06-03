@@ -107,11 +107,12 @@ describe('Phase 0 — server-canonical roomParticipants assignment', () => {
     it('host single-breakout (is_manual=TRUE) calls setRoomAssignment', () => {
       // Phase 4A (5 May spec) wrapped the INSERT in transaction() so
       // setRoomAssignment now lives in the post-transaction block. Widened
-      // the search window from 2000 to 4000 chars to span the transaction
-      // close + post-transaction notification loop.
+      // 2000 → 4000 for the transaction close + notification loop, then
+      // 4000 → 5000 when the Ship A regression fix added the canonical
+      // location clear for retired matches between them (4 Jun).
       const insertIdx = src.indexOf("INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, participant_c_id, room_id, status, started_at, is_manual)");
       expect(insertIdx).toBeGreaterThan(-1);
-      const after = src.slice(insertIdx, insertIdx + 4000);
+      const after = src.slice(insertIdx, insertIdx + 5000);
       expect(after).toMatch(/setRoomAssignment\(/);
     });
   });

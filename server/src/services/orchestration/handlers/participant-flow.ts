@@ -1359,6 +1359,21 @@ export async function handleLeaveConversation(
         userMatch.id, userId, 'completed'
       );
 
+      // Ship A regression fix (4 Jun live test) — the leaver's canonical
+      // location must clear NOW (their placement ended) or the snapshot/
+      // resync wire walks them back into the room. Dissolved pair → clear the
+      // whole match (the partner returns to main too); trio → leaver only
+      // (survivors keep their location and continue).
+      {
+        const { clearCanonicalLocationToMain, clearCanonicalBreakoutByMatch } =
+          await import('../state/canonical-state');
+        if (matchStillActive) {
+          await clearCanonicalLocationToMain(sessionId, userId);
+        } else {
+          await clearCanonicalBreakoutByMatch(sessionId, [userMatch.id]);
+        }
+      }
+
       if (matchStillActive) {
         // Trio room with 1 leaver. Don't broadcast partner_disconnected
         // (which implies the match ended). Don't trigger solo-reassign.

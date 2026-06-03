@@ -115,6 +115,49 @@ export async function updateCanonicalParticipant(
   }
 }
 
+/**
+ * Ship A regression fix (4 Jun live test) — room EXIT must reset canonical
+ * location. Room ENTRY writes canonical directly (setRoomAssignment); the
+ * state-machine "return to main" transitions early-return on their idempotent
+ * path (the in-memory map never goes IN_BREAKOUT), so they never reset
+ * location — and the snapshot/resync wire then walked participants BACK into
+ * the dead room ~10-30s after round end. These helpers are the symmetric
+ * direct write for room exit. The matchId guard makes the batch clear
+ * race-safe: a user already re-placed into a NEWER room (different matchId)
+ * is never stomped.
+ */
+export async function clearCanonicalBreakoutByMatch(
+  sessionId: string,
+  matchIds: string[] | Set<string>,
+): Promise<void> {
+  const redis = getRedisClient();
+  if (!redis) return;
+  const ids = matchIds instanceof Set ? matchIds : new Set(matchIds);
+  if (ids.size === 0) return;
+  try {
+    const doc = await readCanonical(sessionId);
+    if (!doc) return;
+    let changed = false;
+    for (const p of Object.values(doc.participants)) {
+      if (p.location.type === 'breakout' && ids.has(p.location.matchId)) {
+        p.location = { type: 'main' };
+        p.userSeq = doc.seq + 1;
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    doc.seq += 1;
+    await redis.setex(canonicalKey(sessionId), CANONICAL_TTL, JSON.stringify(doc));
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'clearCanonicalBreakoutByMatch failed');
+  }
+}
+
+/** Explicit single-user return-to-main (voluntary leave / host pull-back). */
+export async function clearCanonicalLocationToMain(sessionId: string, userId: string): Promise<void> {
+  await updateCanonicalParticipant(sessionId, userId, { location: { type: 'main' } });
+}
+
 /** Set the canonical session status and bump seq. Same guard/best-effort rules. */
 export async function updateCanonicalSessionStatus(
   sessionId: string,

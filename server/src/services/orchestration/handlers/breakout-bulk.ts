@@ -293,6 +293,14 @@ export async function handleHostCreateBreakoutBulk(
         continue;
       }
 
+      // Ship A regression fix — clear canonical locations of the retired
+      // matches (abandoned partners return to main; moved users are re-placed
+      // via setRoomAssignment below — the matchId guard keeps theirs safe).
+      {
+        const { clearCanonicalBreakoutByMatch } = await import('../state/canonical-state');
+        await clearCanonicalBreakoutByMatch(sessionId, reassignedForNotification.map(r => r.matchId));
+      }
+
       // Post-transaction: clear timers for reassigned matches + emit
       // partner-disconnected. Runs only for rooms that committed.
       for (const reassigned of reassignedForNotification) {
@@ -392,6 +400,12 @@ export async function handleHostCreateBreakoutBulk(
               `UPDATE matches SET status = 'completed', ended_at = NOW() WHERE id = $1 AND status = 'active'`,
               [matchId],
             );
+
+            // Ship A regression fix — manual-room expiry is a room end too.
+            {
+              const { clearCanonicalBreakoutByMatch } = await import('../state/canonical-state');
+              await clearCanonicalBreakoutByMatch(sessionId, [matchId]);
+            }
 
             const localNameRes = await query<{ id: string; display_name: string }>(
               `SELECT id, display_name FROM users WHERE id = ANY($1)`, [participantIds],
@@ -571,6 +585,12 @@ export async function handleHostEndBreakoutAll(
         `UPDATE matches SET status = 'completed', ended_at = NOW() WHERE id = $1 AND status = 'active'`,
         [m.id],
       ).catch((err) => logger.error({ err, matchId: m.id }, 'Failed to complete match in bulk end'));
+
+      // Ship A regression fix — explicit room end clears canonical location.
+      {
+        const { clearCanonicalBreakoutByMatch } = await import('../state/canonical-state');
+        await clearCanonicalBreakoutByMatch(sessionId, [m.id]);
+      }
 
       // Close LiveKit room (debug-on-404, preserved from Change 4.5 666dfb0)
       try {

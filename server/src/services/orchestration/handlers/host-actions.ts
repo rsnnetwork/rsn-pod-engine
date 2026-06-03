@@ -1226,6 +1226,19 @@ export async function handleHostRemoveFromRoom(
       data.matchId, data.userId, terminalStatus as 'completed' | 'cancelled',
     );
 
+    // Ship A regression fix (4 Jun live test) — same canonical-location clear
+    // as handleLeaveConversation: pulled user's placement ended; dissolved
+    // pair clears the whole match, trio clears the removed user only.
+    {
+      const { clearCanonicalLocationToMain, clearCanonicalBreakoutByMatch } =
+        await import('../state/canonical-state');
+      if (removalDemote.matchStillActive) {
+        await clearCanonicalLocationToMain(data.sessionId, data.userId);
+      } else {
+        await clearCanonicalBreakoutByMatch(data.sessionId, [data.matchId]);
+      }
+    }
+
     if (removalDemote.matchStillActive) {
       // Trio room with 1 removed — the room continues for the other 2.
       // Send the removed user their rating screen + return to lobby; notify
@@ -1580,6 +1593,14 @@ export async function handleHostMoveToRoom(
       }
       if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
       return;
+    }
+
+    // Ship A regression fix — retire both old matches' canonical locations
+    // (moved users get a new placement via setRoomAssignment below; the
+    // abandoned partner returns to main). matchId-guarded = race-safe.
+    {
+      const { clearCanonicalBreakoutByMatch } = await import('../state/canonical-state');
+      await clearCanonicalBreakoutByMatch(sessionId, [currentMatch.id, targetMatchId]);
     }
 
     // Post-transaction: give the abandoned partner a bye notification.
@@ -2624,6 +2645,14 @@ export async function handleHostCreateBreakout(
         return;
       }
 
+      // Ship A regression fix — clear canonical locations of the retired
+      // matches (abandoned partners return to main; moved users are re-placed
+      // via setRoomAssignment below — the matchId guard keeps theirs safe).
+      {
+        const { clearCanonicalBreakoutByMatch } = await import('../state/canonical-state');
+        await clearCanonicalBreakoutByMatch(sessionId, reassignedForNotification.map(r => r.matchId));
+      }
+
       // Post-transaction: notifications + solo-partner return-to-lobby.
       // Run only AFTER the transaction commits so we never emit "your
       // partner left" for a reassignment that was rolled back.
@@ -2749,6 +2778,12 @@ export async function handleHostCreateBreakout(
               `UPDATE matches SET status = 'completed', ended_at = NOW() WHERE id = $1 AND status = 'active'`,
               [matchId]
             );
+
+            // Ship A regression fix — manual-room expiry is a room end too.
+            {
+              const { clearCanonicalBreakoutByMatch } = await import('../state/canonical-state');
+              await clearCanonicalBreakoutByMatch(sessionId, [matchId]);
+            }
 
             const namesResult2 = await query<{ id: string; display_name: string }>(
               `SELECT id, display_name FROM users WHERE id = ANY($1)`, [participantIds]

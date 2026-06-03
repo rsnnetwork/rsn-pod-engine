@@ -704,6 +704,19 @@ export async function endRound(
       await transitionParticipant(sessionId, userId, ParticipantState.IN_MAIN_ROOM);
     }
 
+    // Ship A regression fix (4 Jun live test): the transitions above early-
+    // return on their idempotent path (in-memory state never goes IN_BREAKOUT
+    // — placement writes canonical directly in setRoomAssignment), so they
+    // never reset canonical location. Pre-fix it stayed 'breakout' after
+    // round end and the snapshot/resync wire pulled participants BACK into
+    // the dead room ~10-30s later. Clear explicitly — symmetric with the
+    // direct write on room entry; matchId-guarded so a user already re-placed
+    // into a newer room is never stomped.
+    {
+      const { clearCanonicalBreakoutByMatch } = await import('../state/canonical-state');
+      await clearCanonicalBreakoutByMatch(sessionId, matches.map(m => m.id));
+    }
+
     // Safety-net backstop — fires endRatingWindow if stragglers never finish.
     // No timer:sync is broadcast: the client shows no countdown during rating.
     // The primary advance path is the all-rated early-close
