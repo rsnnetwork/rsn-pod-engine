@@ -58,6 +58,24 @@ export async function readCanonical(sessionId: string): Promise<CanonicalSession
   }
 }
 
+/**
+ * Ship B — the fail-open flip helper for presence-membership reads.
+ * Returns the set of userIds whose canonical connState is 'connected', or
+ * NULL when the doc is missing/empty (Redis down, session pre-dates the
+ * canonical projection, or nothing projected yet). Callers treat null as
+ * "canonical unavailable" and fall back to the legacy presenceMap — never
+ * an empty set, which would wrongly read as "nobody is here".
+ */
+export async function getCanonicalConnectedSet(sessionId: string): Promise<Set<string> | null> {
+  const doc = await readCanonical(sessionId);
+  if (!doc || Object.keys(doc.participants).length === 0) return null;
+  const connected = new Set<string>();
+  for (const [uid, p] of Object.entries(doc.participants)) {
+    if (p.connState === 'connected') connected.add(uid);
+  }
+  return connected;
+}
+
 /** Write the canonical doc with TTL. No-op when Redis is unavailable. */
 export async function writeCanonical(state: CanonicalSessionState): Promise<void> {
   const redis = getRedisClient();

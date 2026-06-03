@@ -138,6 +138,12 @@ export async function recoverActiveSessions(io: SocketServer): Promise<void> {
 
         activeSessions.set(sessionId, activeSession);
 
+        // Ship B — warm participantStates from DB + canonical overlay so the
+        // host dashboard is correct immediately after a deploy (pre-fix the
+        // map stayed empty until the next transition). Best-effort.
+        const { warmParticipantStatesOnRestore } = await import('../state/participant-state-machine');
+        await warmParticipantStatesOnRestore(sessionId);
+
         if (activeSession.timerEndsAt && activeSession.timerEndsAt.getTime() > Date.now() && !activeSession.isPaused) {
           const remainingMs = activeSession.timerEndsAt.getTime() - Date.now();
           const remainingSec = Math.ceil(remainingMs / 1000);
@@ -193,6 +199,10 @@ export async function recoverActiveSessions(io: SocketServer): Promise<void> {
     };
 
     activeSessions.set(row.id, activeSession);
+
+    // Ship B — same participantStates warm-up as the Redis path above.
+    const { warmParticipantStatesOnRestore } = await import('../state/participant-state-machine');
+    await warmParticipantStatesOnRestore(row.id);
 
     if (activeSession.timerEndsAt && activeSession.timerEndsAt.getTime() > Date.now()) {
       const remainingMs = activeSession.timerEndsAt.getTime() - Date.now();
@@ -1293,7 +1303,13 @@ export async function detectNoShows(
         if (uid) liveSocketUserIds.add(uid);
       }
     } catch { /* fetchSockets failure non-fatal — fall back to presenceMap */ }
-    const isPresent = (uid: string) => activeSession.presenceMap.has(uid) || liveSocketUserIds.has(uid);
+    // Ship B — canonical-first presence, heartbeat map fallback (fail-open);
+    // the live-socket union stays as the strongest "actually here" net.
+    const { getCanonicalConnectedSet } = await import('../state/canonical-state');
+    const noShowPresent =
+      (await getCanonicalConnectedSet(sessionId))
+      ?? new Set(activeSession.presenceMap.keys());
+    const isPresent = (uid: string) => noShowPresent.has(uid) || liveSocketUserIds.has(uid);
 
     const matches = await matchingService.getMatchesByRound(sessionId, roundNumber);
     let anyTransition = false;

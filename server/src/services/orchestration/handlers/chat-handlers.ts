@@ -57,6 +57,8 @@ export async function handleChatSend(
     const isCohost = cohostResult.rows.length > 0;
 
     // In lobby phase, only allow chat when host is present (host/co-hosts always allowed)
+    // Ship B — this gate deliberately stays on the presenceMap: heartbeat
+    // freshness is the right "host is actively here" signal for unlocking chat.
     const activeSession = activeSessions.get(sessionId);
     if (!isHost && !isCohost && scope === 'lobby') {
       const hostPresent = activeSession?.presenceMap.has(session?.hostUserId || '');
@@ -115,28 +117,43 @@ export async function handleChatSend(
       // else in the room ever saw it. The user reported this as the very
       // first issue in the 30 April test event.
       //
-      // Resolution order:
-      //   1. activeSession.roomParticipants[userId] — set when the LiveKit
+      // Resolution order (Ship B):
+      //   1. Canonical location — carries the real roomId/matchId since
+      //      Ship A, survives restarts, no invalidation race. 'main' or
+      //      unavailable falls through unchanged.
+      //   2. activeSession.roomParticipants[userId] — set when the LiveKit
       //      `room.connect()` resolves and the client emits
-      //      `presence:room_joined`. This is the most accurate source.
-      //   2. Relaxed DB query: any match in this session containing the
+      //      `presence:room_joined`.
+      //   3. Relaxed DB query: any match in this session containing the
       //      user, where status is NOT 'cancelled' or 'no_show'. Picks up
       //      users in 'completed', 'reassigned', or 'scheduled' rooms that
       //      are still talking.
-      //   3. socket.emit-self only (the truly-orphan sender path — kept as
+      //   4. socket.emit-self only (the truly-orphan sender path — kept as
       //      a safety net so we never throw the message away).
       let resolvedRoomId: string | null = null;
       const recipientIds: Set<string> = new Set();
 
+      const { readCanonical } = await import('../state/canonical-state');
+      const canonDoc = await readCanonical(sessionId).catch(() => null);
+      const senderLoc = canonDoc?.participants[userId]?.location;
+      if (senderLoc?.type === 'breakout') {
+        resolvedRoomId = senderLoc.roomId;
+        for (const [uid, p] of Object.entries(canonDoc!.participants)) {
+          if (p.location.type === 'breakout' && p.location.roomId === senderLoc.roomId) {
+            recipientIds.add(uid);
+          }
+        }
+      }
+
       const senderRoomEntry = activeSession?.roomParticipants?.get(userId);
-      if (senderRoomEntry) {
-        // Primary source: the in-memory presence map. Find every userId
+      if (recipientIds.size === 0 && senderRoomEntry) {
+        // The in-memory presence map. Find every userId
         // currently in the same LiveKit room.
         resolvedRoomId = senderRoomEntry.roomId;
         for (const [uid, info] of activeSession!.roomParticipants!) {
           if (info.roomId === senderRoomEntry.roomId) recipientIds.add(uid);
         }
-      } else {
+      } else if (recipientIds.size === 0) {
         // Fallback: tightened to active/scheduled only.
         // Phase 8A.4 (8 May spec) — Stefan #8: pre-fix the filter
         // accepted 'completed'/'reassigned' rows too, so a chat sent
@@ -262,6 +279,7 @@ export async function handleReactionSend(
     // the room-scope resolution further down (Phase A fix).
     const activeSession = activeSessions.get(sessionId);
     if (!isHost && !isCohost) {
+      // Ship B — deliberate presenceMap stay (heartbeat freshness gate).
       const hostPresent = activeSession?.presenceMap.has(session?.hostUserId || '');
       if (!hostPresent && (!activeSession || activeSession.status === SessionStatus.LOBBY_OPEN || activeSession.status === SessionStatus.SCHEDULED)) {
         return; // Silently ignore reactions when host is absent in lobby
@@ -281,16 +299,27 @@ export async function handleReactionSend(
     // In lobby/transition phases, broadcast to everyone.
     //
     // Phase A (1 May 2026 spec) — same status-race bug as handleChatSend.
-    // Use roomParticipants as primary source, fall back to a relaxed match
-    // query that doesn't hard-filter on `status='active'` so reactions
-    // survive state transitions (round_active → round_rating after End Round).
-    const senderRoomEntryRx = activeSession?.roomParticipants?.get(userId);
+    // Ship B — canonical location first (same rationale as handleChatSend),
+    // then roomParticipants, then the relaxed match query that doesn't
+    // hard-filter on `status='active'` so reactions survive state
+    // transitions (round_active → round_rating after End Round).
     const recipientIdsRx: Set<string> = new Set();
-    if (senderRoomEntryRx) {
+    const { readCanonical } = await import('../state/canonical-state');
+    const canonDocRx = await readCanonical(sessionId).catch(() => null);
+    const senderLocRx = canonDocRx?.participants[userId]?.location;
+    if (senderLocRx?.type === 'breakout') {
+      for (const [uid, p] of Object.entries(canonDocRx!.participants)) {
+        if (p.location.type === 'breakout' && p.location.roomId === senderLocRx.roomId) {
+          recipientIdsRx.add(uid);
+        }
+      }
+    }
+    const senderRoomEntryRx = activeSession?.roomParticipants?.get(userId);
+    if (recipientIdsRx.size === 0 && senderRoomEntryRx) {
       for (const [uid, info] of activeSession!.roomParticipants!) {
         if (info.roomId === senderRoomEntryRx.roomId) recipientIdsRx.add(uid);
       }
-    } else {
+    } else if (recipientIdsRx.size === 0) {
       const reactionMatchRes = await query<{ participant_a_id: string; participant_b_id: string | null; participant_c_id: string | null }>(
         `SELECT participant_a_id, participant_b_id, participant_c_id
          FROM matches

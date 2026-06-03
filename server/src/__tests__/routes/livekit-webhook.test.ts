@@ -103,8 +103,10 @@ describe('LiveKit webhook handler', () => {
       .send('{}');
 
     expect(res.status).toBe(200);
+    // Ship B — the shared heal (livekit-sweep.ts) also stamps lastSeenAt on
+    // the connected direction so the sweep and webhook write identically.
     expect(mockUpdateCanonicalParticipant).toHaveBeenCalledWith(
-      'sess2', 'u2', { connState: 'connected' }
+      'sess2', 'u2', { connState: 'connected', lastSeenAt: expect.any(Number) }
     );
   });
 

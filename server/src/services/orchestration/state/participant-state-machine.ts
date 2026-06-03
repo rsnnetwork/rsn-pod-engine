@@ -302,8 +302,16 @@ export async function transitionParticipant(
     toState === ParticipantState.LEFT ? 'left' :
     toState === ParticipantState.REMOVED ? 'removed' :
     toState === ParticipantState.NO_SHOW ? 'no_show' : 'connected';
-  const canonPatch: { connState: string; location?: import('./canonical-state').ParticipantLocation } =
-    { connState: canonConn };
+  // Ship B — presence owns 'connected'; transitions own location (design §4.1:
+  // the two are orthogonal). A status transition may only UPGRADE connState to
+  // 'connected' when the user is actually heartbeating — otherwise a round-end
+  // IN_MAIN_ROOM reset of a silently-dead user resurrects a canonical ghost
+  // that the flipped read paths would count as present. Downgrades (terminal /
+  // disconnect states) are always authoritative.
+  const canonPatch: { connState?: string; location?: import('./canonical-state').ParticipantLocation } = {};
+  if (canonConn !== 'connected' || activeSession.presenceMap.has(userId)) {
+    canonPatch.connState = canonConn;
+  }
   if (toState === ParticipantState.IN_BREAKOUT && currentRoomId) {
     canonPatch.location = { type: 'breakout', roomId: currentRoomId, matchId: opts.matchId ?? '' };
   } else if (
@@ -333,8 +341,10 @@ export async function transitionParticipant(
       canonPatch.location = { type: 'main' }; // fail-open to legacy behaviour
     }
   }
-  void (await import('./canonical-state')).updateCanonicalParticipant(
-    sessionId, userId, canonPatch as any);
+  if (Object.keys(canonPatch).length > 0) {
+    void (await import('./canonical-state')).updateCanonicalParticipant(
+      sessionId, userId, canonPatch as any);
+  }
 
   return { ok: true, fromState, toState };
 }
@@ -358,7 +368,21 @@ export function setPresence(
   const activeSession = activeSessions.get(sessionId);
   if (!activeSession) return false;
   if (presence === null) {
-    return activeSession.presenceMap.delete(userId);
+    const removed = activeSession.presenceMap.delete(userId);
+    // Ship B — mirror the presence clear into canonical connState so
+    // canonical-gated reads never see heartbeat ghosts (the stale-heartbeat
+    // sweep and the kick path both clear via setPresence(null), and pre-fix
+    // canonical stayed 'connected' forever for them). Guarded: only a live
+    // 'connected' flips to 'disconnected' — terminal states (removed/left/
+    // no_show) are never stomped, and location is NEVER touched (0faf12b:
+    // a disconnect must not relocate; the user returns to the same room).
+    void import('./canonical-state').then(async m => {
+      const doc = await m.readCanonical(sessionId);
+      if (doc?.participants[userId]?.connState === 'connected') {
+        await m.updateCanonicalParticipant(sessionId, userId, { connState: 'disconnected' });
+      }
+    }).catch(() => {});
+    return removed;
   }
   const existed = activeSession.presenceMap.has(userId);
   activeSession.presenceMap.set(userId, presence);
@@ -615,5 +639,48 @@ export function bootstrapStatesFromDb(
       currentRoomId: liftedState === ParticipantState.IN_BREAKOUT ? row.current_room_id : null,
       updatedAt: now,
     });
+  }
+}
+
+/**
+ * Ship B — boot-restore warmer. Pre-fix, recoverActiveSessions restored the
+ * session shell + timers but left participantStates EMPTY, so after a deploy
+ * the host dashboard showed everyone as not-joined until the next transition.
+ * This lifts states from session_participants rows, then overlays the
+ * canonical doc where present — canonical is fresher than the DB projection
+ * (it carries the real breakout roomId and the live connState). Best-effort:
+ * canonical missing → DB lift stands; DB query failing → logged, no throw.
+ */
+export async function warmParticipantStatesOnRestore(sessionId: string): Promise<void> {
+  const activeSession = activeSessions.get(sessionId);
+  if (!activeSession) return;
+  try {
+    const rows = await query<{ user_id: string; status: string; current_room_id: string | null }>(
+      `SELECT user_id, status, current_room_id FROM session_participants WHERE session_id = $1`,
+      [sessionId],
+    );
+    bootstrapStatesFromDb(sessionId, rows.rows);
+
+    const { readCanonical } = await import('./canonical-state');
+    const doc = await readCanonical(sessionId);
+    if (!doc) return;
+    const states = activeSession.participantStates!;
+    const now = new Date();
+    for (const [uid, cp] of Object.entries(doc.participants)) {
+      const liftedFromCanonical: ParticipantState =
+        cp.connState === 'left' ? ParticipantState.LEFT :
+        cp.connState === 'removed' ? ParticipantState.REMOVED :
+        cp.connState === 'no_show' ? ParticipantState.NO_SHOW :
+        cp.connState === 'disconnected' ? ParticipantState.DISCONNECTED :
+        cp.location.type === 'breakout' ? ParticipantState.IN_BREAKOUT :
+        ParticipantState.IN_MAIN_ROOM;
+      states.set(uid, {
+        state: liftedFromCanonical,
+        currentRoomId: cp.location.type === 'breakout' ? cp.location.roomId : null,
+        updatedAt: now,
+      });
+    }
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'warmParticipantStatesOnRestore failed (non-fatal)');
   }
 }

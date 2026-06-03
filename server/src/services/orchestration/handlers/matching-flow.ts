@@ -84,6 +84,14 @@ export async function getPresentUserIds(
     logger.warn({ err, sessionId }, 'getPresentUserIds: fetchSockets failed (non-fatal)');
   }
   for (const uid of activeSession.presenceMap.keys()) present.add(uid);
+  // Ship B — canonical connState as a 4th union source. The function stays a
+  // defense-in-depth UNION (each signal alone has gaps); canonical brings the
+  // webhook/sweep-maintained server truth that survives restarts.
+  try {
+    const { getCanonicalConnectedSet } = await import('../state/canonical-state');
+    const canonConnected = await getCanonicalConnectedSet(sessionId);
+    if (canonConnected) for (const uid of canonConnected) present.add(uid);
+  } catch { /* non-fatal — remaining signals stand */ }
   try {
     const sessionForRoom = await (await import('../../session/session.service')).getSessionById(sessionId);
     if (sessionForRoom?.lobbyRoomId) {
@@ -1348,6 +1356,14 @@ async function emitHostDashboardImmediate(io: SocketServer, sessionId: string): 
   try {
     const matches = await matchingService.getMatchesByRound(sessionId, activeSession.currentRound);
 
+    // Ship B — presence source for every membership read in this function:
+    // canonical connected set when available, legacy heartbeat map otherwise
+    // (fail-open: getCanonicalConnectedSet returns null — never an empty set —
+    // when canonical is unavailable, so we can't wrongly render "nobody here").
+    const { getCanonicalConnectedSet } = await import('../state/canonical-state');
+    const presentSet: ReadonlySet<string> =
+      (await getCanonicalConnectedSet(sessionId)) ?? new Set(activeSession.presenceMap.keys());
+
     // Look up display names for all participant IDs — use per-session cache
     // (Tier-1 A1) to skip the DB round-trip for names we've already fetched
     // during this event. Names are stable for the session lifetime.
@@ -1358,7 +1374,7 @@ async function emitHostDashboardImmediate(io: SocketServer, sessionId: string): 
       if (m.participantCId) allUserIds.add(m.participantCId);
     }
     // Also include presence + host so bye-participant rendering has names
-    for (const uid of activeSession.presenceMap.keys()) allUserIds.add(uid);
+    for (const uid of presentSet) allUserIds.add(uid);
 
     if (!activeSession.displayNameCache) activeSession.displayNameCache = new Map();
     const cache = activeSession.displayNameCache;
@@ -1403,7 +1419,7 @@ async function emitHostDashboardImmediate(io: SocketServer, sessionId: string): 
       if (requireRoomJoined && activeSession.roomParticipants) {
         return activeSession.roomParticipants.has(uid);
       }
-      return activeSession.presenceMap.has(uid);
+      return presentSet.has(uid);
     };
 
     const rooms = matches
@@ -1468,7 +1484,7 @@ async function emitHostDashboardImmediate(io: SocketServer, sessionId: string): 
     }
 
     const byeParticipants: { userId: string; displayName: string }[] = [];
-    for (const [userId] of activeSession.presenceMap) {
+    for (const userId of presentSet) {
       if (userId !== activeSession.hostUserId && !matchedUserIds.has(userId)) {
         byeParticipants.push({
           userId,
@@ -1494,7 +1510,7 @@ async function emitHostDashboardImmediate(io: SocketServer, sessionId: string): 
     // roster (a registered-but-absent participant must not count). One query,
     // both counts derived. Fail-open: if presence is empty/unavailable, fall
     // back to the DB-eligible count so we never wrongly show zero.
-    const presenceSet = activeSession.presenceMap;
+    const presenceSet = presentSet;
     const eligibleRows = (await query<{ user_id: string }>(
       `SELECT sp.user_id FROM session_participants sp
        WHERE sp.session_id = $1

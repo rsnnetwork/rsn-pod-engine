@@ -70,6 +70,7 @@ import { handleChatSend, handleChatReact, handleReactionSend, handleChatRequestH
 import { handleDmSend, handleDmRead, handleDmReact, handleDmUnreact } from './handlers/dm-handlers';
 // Phase 2E (5 May spec) — global state reconciler.
 import { startGlobalReconciler } from './state/participant-state-machine';
+import { startLiveKitSweep } from './state/livekit-sweep';
 // Phase 5 — resync handler for session:resync socket event.
 import { handleResync } from './state/state-snapshot';
 
@@ -182,6 +183,11 @@ export function initOrchestration(socketServer: SocketServer): void {
   // Auto-heals participant-state drift every 30 s so users never need to
   // leave-and-rejoin to recover from a wedged state.
   startGlobalReconciler(io);
+
+  // ── Ship B (Phase 4) — 15s LiveKit reconciliation sweep ──
+  // Heals canonical connState for roster members whose join webhook was
+  // missed (positive heal only — see livekit-sweep.ts for the rationale).
+  startLiveKitSweep();
 
   // ── TTL cleanup (every 5 minutes, remove sessions older than 4 hours) ──
 

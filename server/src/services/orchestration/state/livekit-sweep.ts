@@ -1,0 +1,125 @@
+// ─── Phase-4 LiveKit Reconciliation Sweep (Ship B) ──────────────────────────
+// Design §9: "Periodic sweep (~15s): for each active room, listParticipants
+// vs canonical roster; heal diffs (catches missed webhooks)."
+//
+// Scope decision (deliberate): the sweep does POSITIVE heals only —
+// a LiveKit roster member whose canonical connState isn't 'connected' gets
+// healed to connected (a missed participant_joined webhook). Missed-JOIN is
+// the harmful direction for the canonical-gated read paths: a present-but-
+// excluded user is the recurring "present people weren't matched" bug class.
+// The reverse (missed participant_left) is already covered within 90s by the
+// stale-heartbeat sweep, whose setPresence(null) now mirrors 'disconnected'
+// into canonical. Absence-marking from LiveKit rosters here would FLAP for
+// camera-denied main-room users who are socket-present but never join the
+// lobby LiveKit room. Room-mismatch is logged for observability only —
+// eviction stays webhook/command-driven.
+
+import logger from '../../../config/logger';
+import { query } from '../../../db';
+import { activeSessions } from './session-state';
+import { readCanonical, updateCanonicalParticipant } from './canonical-state';
+
+/**
+ * Shared connState heal — the single write used by BOTH the LiveKit webhook
+ * receiver (push) and the periodic sweep (pull), so the two reconciliation
+ * paths can never diverge in behaviour.
+ */
+export async function healParticipantConnState(
+  sessionId: string,
+  userId: string,
+  connState: 'connected' | 'disconnected',
+): Promise<void> {
+  await updateCanonicalParticipant(
+    sessionId, userId,
+    connState === 'connected'
+      ? { connState, lastSeenAt: Date.now() }
+      : { connState },
+  );
+}
+
+/**
+ * Reconcile one room's live LiveKit roster against the canonical doc.
+ * Returns the number of participants healed.
+ */
+export async function reconcileRoomRoster(
+  sessionId: string,
+  roomId: string,
+  roster: { userId: string }[],
+): Promise<number> {
+  const doc = await readCanonical(sessionId);
+  if (!doc) return 0;
+  let healed = 0;
+  for (const p of roster) {
+    if (!p.userId) continue;
+    const cp = doc.participants[p.userId];
+    if (!cp) continue;                    // unknown identity — not ours to heal
+    if (cp.connState === 'removed') continue; // never resurrect a kicked user
+    if (cp.connState !== 'connected') {
+      await healParticipantConnState(sessionId, p.userId, 'connected');
+      healed++;
+      logger.info({ sessionId, roomId, userId: p.userId, was: cp.connState },
+        'LiveKit sweep: healed connState (missed join webhook)');
+    }
+    const expectedRoom = cp.location.type === 'breakout' ? cp.location.roomId : null;
+    if (expectedRoom && expectedRoom !== roomId) {
+      logger.warn({ sessionId, roomId, userId: p.userId, expectedRoom },
+        'LiveKit sweep: participant in unexpected room (observability only — no action)');
+    }
+  }
+  return healed;
+}
+
+const SWEEP_INTERVAL_MS = 15_000;
+const LIST_TIMEOUT_MS = 4_000;
+let _sweepHandle: NodeJS.Timeout | null = null;
+
+/**
+ * Single global 15s interval (mirrors startGlobalReconciler). Per active
+ * session: enumerate the lobby room + every active match's breakout room
+ * (ALL active matches — algorithm AND manual), list each room's LiveKit
+ * roster, reconcile. Every lookup is best-effort with its own catch; one
+ * bad room/session never stalls the sweep.
+ */
+export function startLiveKitSweep(): void {
+  if (_sweepHandle) return;
+  _sweepHandle = setInterval(async () => {
+    for (const sessionId of activeSessions.keys()) {
+      try {
+        const rooms = new Set<string>();
+        const session = await (await import('../../session/session.service')).getSessionById(sessionId);
+        if (session?.lobbyRoomId) rooms.add(session.lobbyRoomId);
+        const active = await query<{ room_id: string }>(
+          `SELECT DISTINCT room_id FROM matches
+            WHERE session_id = $1 AND status = 'active' AND room_id IS NOT NULL`,
+          [sessionId],
+        );
+        for (const r of active.rows) if (r.room_id) rooms.add(r.room_id);
+
+        const videoSvc = await import('../../video/video.service');
+        for (const roomId of rooms) {
+          try {
+            const roster = await Promise.race([
+              videoSvc.listParticipants(roomId),
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error('listParticipants timeout')), LIST_TIMEOUT_MS)),
+            ]);
+            await reconcileRoomRoster(sessionId, roomId, roster);
+          } catch (err) {
+            logger.warn({ err, sessionId, roomId }, 'LiveKit sweep: room reconcile failed (non-fatal)');
+          }
+        }
+      } catch (err) {
+        logger.warn({ err, sessionId }, 'LiveKit sweep: session tick failed (non-fatal)');
+      }
+    }
+  }, SWEEP_INTERVAL_MS);
+  logger.info({ intervalMs: SWEEP_INTERVAL_MS }, 'LiveKit reconciliation sweep started (Phase 4)');
+}
+
+export function stopLiveKitSweep(): void {
+  if (_sweepHandle) {
+    clearInterval(_sweepHandle);
+    _sweepHandle = null;
+    logger.info('LiveKit reconciliation sweep stopped');
+  }
+}

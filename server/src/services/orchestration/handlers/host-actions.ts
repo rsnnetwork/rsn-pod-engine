@@ -26,6 +26,7 @@ import { ForbiddenError, ValidationError } from '../../../middleware/errors';
 import * as matchingService from '../../matching/matching.service';
 // Phase 2B (5 May spec) — single chokepoint for presenceMap mutations.
 import { setPresence } from '../state/participant-state-machine';
+import { getCanonicalConnectedSet } from '../state/canonical-state';
 import { validateMatchAssignment } from '../../matching/match-validator.service';
 // Phase 2 (19 May 2026) — realtime migration dual-emit. Every legacy
 // in-handler broadcast (roster:changed, host:transferred, host:event_plan_*,
@@ -358,8 +359,11 @@ export async function handleHostStart(
       // 'registered'/'in_lobby' got in even if they never opened the
       // event page on a live socket.
       const activeSessionForPlan = activeSessions.get(data.sessionId);
-      const presentForPlan = activeSessionForPlan?.presenceMap
-        ? new Set(activeSessionForPlan.presenceMap.keys())
+      // Ship B — canonical-first presence for the pre-plan gate; legacy
+      // heartbeat map when canonical is unavailable (fail-open).
+      const presentForPlan = activeSessionForPlan
+        ? (await getCanonicalConnectedSet(data.sessionId))
+          ?? new Set(activeSessionForPlan.presenceMap.keys())
         : undefined;
       const planOutput = await matchingService.generateSessionSchedule(
         data.sessionId,
@@ -793,7 +797,9 @@ export async function handleHostRemoveParticipant(
       reason: data.reason,
     });
 
-    // Remove from presence
+    // Remove from presence. This site deliberately stays on the presenceMap:
+    // it needs the live socketId to force-leave the socket, which canonical
+    // does not store — it's a socket lookup, not a presence gate (Ship B).
     const activeSession = activeSessions.get(data.sessionId);
     if (activeSession) {
       const presence = activeSession.presenceMap.get(data.userId);
@@ -861,12 +867,16 @@ export async function handleHostReassign(
     );
 
     // Find isolated participants (no_show or reassigned match partners)
+    // Ship B — canonical-first presence, presenceMap fallback (fail-open).
+    const reassignPresent =
+      (await getCanonicalConnectedSet(data.sessionId))
+      ?? new Set(activeSession.presenceMap.keys());
     const isolatedParticipants: string[] = [];
     for (const match of matches) {
       if (match.status === MatchStatus.NO_SHOW || match.status === MatchStatus.REASSIGNED) {
         // Find the remaining participant
-        const aPresent = activeSession.presenceMap.has(match.participantAId);
-        const bPresent = activeSession.presenceMap.has(match.participantBId);
+        const aPresent = reassignPresent.has(match.participantAId);
+        const bPresent = reassignPresent.has(match.participantBId);
         if (aPresent && !bPresent) isolatedParticipants.push(match.participantAId);
         if (bPresent && !aPresent) isolatedParticipants.push(match.participantBId);
       }
@@ -1132,7 +1142,11 @@ export async function handleHostMuteAll(
   }
 
   let count = 0;
-  for (const [participantId] of activeSession.presenceMap) {
+  // Ship B — canonical-first presence for the relay loop, presenceMap fallback.
+  const mutePresent =
+    (await getCanonicalConnectedSet(data.sessionId))
+    ?? new Set(activeSession.presenceMap.keys());
+  for (const participantId of mutePresent) {
     // Skip the host AND all co-hosts — they should not be muted by
     // bulk-mute. Excluded above for the DB persist; mirror here for
     // the socket relay.

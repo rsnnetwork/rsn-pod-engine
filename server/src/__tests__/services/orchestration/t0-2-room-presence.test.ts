@@ -90,13 +90,16 @@ describe('T0-2 — server side: roomParticipants tracking', () => {
       expect(src).toMatch(/BREAKOUT_REQUIRE_ROOM_JOINED\s*!==\s*['"]false['"]/);
     });
 
-    it('uses roomParticipants when flag on AND map exists, else falls back to presenceMap', () => {
+    it('uses roomParticipants when flag on AND map exists, else falls back to the presence set', () => {
       expect(src).toMatch(/isConnectedFor/);
       const helperStart = src.indexOf('const isConnectedFor');
       const helperEnd = src.indexOf('\n    };', helperStart);
       const helper = src.slice(helperStart, helperEnd);
       expect(helper).toMatch(/activeSession\.roomParticipants/);
-      expect(helper).toMatch(/activeSession\.presenceMap\.has\(uid\)/);
+      // Ship B — the fallback flipped from the raw presenceMap to presentSet
+      // (canonical connected set, presenceMap when canonical is unavailable).
+      expect(helper).toMatch(/presentSet\.has\(uid\)/);
+      expect(src).toMatch(/getCanonicalConnectedSet\(sessionId\)\)\s*\?\?\s*new Set\(activeSession\.presenceMap\.keys\(\)\)/);
     });
 
     it('per-room participant entries call isConnectedFor (not presenceMap directly)', () => {

@@ -13,6 +13,7 @@ import { canViewSession } from '../services/session/session-access';
 import { buildSessionStateSnapshot } from '../services/session/session-state-snapshot.service';
 // 27 May — live main-room presence (heartbeat) to gate the event-plan "not matched" counts.
 import { activeSessions } from '../services/orchestration/state/session-state';
+import { getCanonicalConnectedSet } from '../services/orchestration/state/canonical-state';
 import { ApiResponse, SessionStatus, UserRole, hasRoleAtLeast } from '@rsn/shared';
 import { ForbiddenError, NotFoundError } from '../middleware/errors';
 import { query } from '../db';
@@ -780,11 +781,14 @@ router.get(
       // AND no match in round R contains them.
       // 27 May — gate "not matched" on LIVE main-room presence so a registered-
       // but-absent participant (accepted but never joined, or here-then-left) is
-      // never counted as a bye/warning. presenceMap is the in-memory heartbeat-
-      // fresh signal. Fail-open: no active session or empty presence → keep the
-      // DB-status behaviour (never wrongly inflate or zero the count). The same
-      // numbers are served to the host AND co-hosts (this endpoint is shared).
-      const presentIds = Array.from(activeSessions.get(sessionId)?.presenceMap.keys() ?? []);
+      // never counted as a bye/warning. Fail-open: no active session or empty
+      // presence → keep the DB-status behaviour (never wrongly inflate or zero
+      // the count). The same numbers are served to the host AND co-hosts.
+      // Ship B — canonical-first presence, heartbeat map fallback.
+      const presentIds = Array.from(
+        (await getCanonicalConnectedSet(sessionId))
+        ?? activeSessions.get(sessionId)?.presenceMap.keys()
+        ?? []);
       const presenceFilter = presentIds.length > 0 ? 'AND user_id = ANY($3::uuid[])' : '';
       const byeParams: unknown[] = presentIds.length > 0
         ? [sessionId, session.host_user_id, presentIds]

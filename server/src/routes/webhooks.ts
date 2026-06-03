@@ -14,7 +14,7 @@ import { Router, raw } from 'express';
 import { WebhookReceiver } from 'livekit-server-sdk';
 import { config } from '../config';
 import logger from '../config/logger';
-import { updateCanonicalParticipant } from '../services/orchestration/state/canonical-state';
+import { healParticipantConnState } from '../services/orchestration/state/livekit-sweep';
 
 const receiver = new WebhookReceiver(config.livekit.apiKey, config.livekit.apiSecret);
 
@@ -40,10 +40,12 @@ webhooksRouter.post('/livekit', raw({ type: 'application/webhook+json' }), async
     if (room && identity) {
       const sessionId = sessionIdFromRoom(room);
       if (sessionId) {
+        // Ship B — shared heal with the 15s sweep (livekit-sweep.ts) so the
+        // push (webhook) and pull (sweep) reconciliation paths never diverge.
         if (event.event === 'participant_left') {
-          await updateCanonicalParticipant(sessionId, identity, { connState: 'disconnected' });
+          await healParticipantConnState(sessionId, identity, 'disconnected');
         } else if (event.event === 'participant_joined') {
-          await updateCanonicalParticipant(sessionId, identity, { connState: 'connected' });
+          await healParticipantConnState(sessionId, identity, 'connected');
         }
       }
     }
