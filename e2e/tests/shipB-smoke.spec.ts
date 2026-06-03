@@ -101,6 +101,9 @@ async function newUserPage(user: TestUser, errors: string[]): Promise<Page> {
     localStorage.setItem('rsn_refresh', toks.r);
   }, { a: user.accessToken, r: user.refreshToken });
   const page = await context.newPage();
+  // The breakout header's Main Room / Leave buttons use native confirm()
+  // dialogs — Playwright auto-dismisses those unless explicitly accepted.
+  page.on('dialog', (d) => d.accept().catch(() => {}));
   page.on('websocket', (ws) => {
     ws.on('framesent', (f) => {
       const p = typeof f.payload === 'string' ? f.payload : f.payload.toString();
@@ -259,8 +262,12 @@ test('Ship B: round end + manual end + leave never ghost-pull; room chat stays r
   await waitForBreakout(bobPage, 'bob (room 3)');
 
   // Leave through the REAL UI — the breakout header's "Main Room" button.
+  // The early-leave rating form opens inside the breakout view; rate through
+  // it (as a real user would) before expecting the main room.
   await alicePage.locator('[title="Return to the main room"]').click({ timeout: 10_000 });
-  await waitForMain(alicePage, 'alice (after leave)');
+  await alicePage.waitForTimeout(2000);
+  await submitRatingIfPresent(alicePage, 'alice (early-leave)');
+  await waitForMain(alicePage, 'alice (after leave)', 60_000);
   await assertNoGhostRePull([{ page: alicePage, label: 'alice' }], 30_000, 'voluntary-leave');
   await alicePage.screenshot({ path: 'test-results/shipB-03-after-leave.png' }).catch(() => {});
 
