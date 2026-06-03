@@ -524,6 +524,17 @@ export async function endRound(
       [sessionId, roundNumber]
     );
 
+    // Ship C ordering — clear canonical breakout locations BEFORE any
+    // broadcast below. status_changed now triggers an instant resync pull on
+    // every client; if canonical still said 'breakout' at that moment the
+    // reply would mint a stale room token and walk clients back into the
+    // dead room (ghost re-pull, caught by the shipB smoke on the C build).
+    {
+      const { clearCanonicalBreakoutByMatch } = await import('../state/canonical-state');
+      const endedMatches = await matchingService.getMatchesByRound(sessionId, roundNumber);
+      await clearCanonicalBreakoutByMatch(sessionId, endedMatches.map(m => m.id));
+    }
+
     // Architectural rule: refresh host dashboard on every match transition.
     // Round-end completes a batch — emit immediately so the host sees the
     // ROUND_RATING state without waiting for the next polling tick.
@@ -668,18 +679,9 @@ export async function endRound(
       await transitionParticipant(sessionId, userId, ParticipantState.IN_MAIN_ROOM);
     }
 
-    // Ship A regression fix (4 Jun live test): the transitions above early-
-    // return on their idempotent path (in-memory state never goes IN_BREAKOUT
-    // — placement writes canonical directly in setRoomAssignment), so they
-    // never reset canonical location. Pre-fix it stayed 'breakout' after
-    // round end and the snapshot/resync wire pulled participants BACK into
-    // the dead room ~10-30s later. Clear explicitly — symmetric with the
-    // direct write on room entry; matchId-guarded so a user already re-placed
-    // into a newer room is never stomped.
-    {
-      const { clearCanonicalBreakoutByMatch } = await import('../state/canonical-state');
-      await clearCanonicalBreakoutByMatch(sessionId, matches.map(m => m.id));
-    }
+    // (Ship A regression fix note: canonical breakout locations were cleared
+    // at the TOP of endRound — before any broadcast — see the Ship C ordering
+    // comment there. The transitions above can't rewrite 'breakout'.)
 
     // Safety-net backstop — fires endRatingWindow if stragglers never finish.
     // No timer:sync is broadcast: the client shows no countdown during rating.
