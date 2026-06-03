@@ -312,7 +312,26 @@ export async function transitionParticipant(
     toState !== ParticipantState.REMOVED &&
     toState !== ParticipantState.NO_SHOW
   ) {
-    canonPatch.location = { type: 'main' };
+    // Location is a PLACEMENT. Status-hygiene transitions (join / reconnect
+    // resets / matchability repairs) must never RELOCATE a user whose match is
+    // still live — caught by the Ship A smoke: rejoining after an F5 fired a
+    // → IN_MAIN_ROOM hygiene transition that stomped canonical location back
+    // to 'main', so the resync could no longer route the user to their room.
+    // Guard: only write 'main' when the user has NO active match. When a room
+    // genuinely ends, matches flip non-active BEFORE participants transition,
+    // so the very next transition writes 'main' normally.
+    try {
+      const live = await query<{ id: string }>(
+        `SELECT id FROM matches
+          WHERE session_id = $1 AND status = 'active'
+            AND (participant_a_id = $2 OR participant_b_id = $2 OR participant_c_id = $2)
+          LIMIT 1`,
+        [sessionId, userId],
+      );
+      if (live.rows.length === 0) canonPatch.location = { type: 'main' };
+    } catch {
+      canonPatch.location = { type: 'main' }; // fail-open to legacy behaviour
+    }
   }
   void (await import('./canonical-state')).updateCanonicalParticipant(
     sessionId, userId, canonPatch as any);

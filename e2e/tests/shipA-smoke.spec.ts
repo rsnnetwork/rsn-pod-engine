@@ -138,8 +138,28 @@ test('Ship A: refresh mid-breakout returns to the same room; offline/online resy
 
   // ── TEST 1: alice refreshes mid-breakout → same room back ──
   console.log('  TEST 1: alice F5 mid-breakout…');
+  const aliceFrames: string[] = [];
+  alicePage.on('websocket', (ws) => {
+    ws.on('framesent', (f) => {
+      const p = typeof f.payload === 'string' ? f.payload : f.payload.toString();
+      if (p.includes('session:resync') || p.includes('session:join')) aliceFrames.push('SENT ' + p.slice(0, 120));
+    });
+    ws.on('framereceived', (f) => {
+      const p = typeof f.payload === 'string' ? f.payload : f.payload.toString();
+      if (p.includes('state:snapshot')) aliceFrames.push('RECV ' + p.slice(0, 500));
+      if (p.includes('match:assigned') || p.includes('match:reassigned')) aliceFrames.push('RECV ' + p.slice(0, 160));
+    });
+  });
   await alicePage.reload({ waitUntil: 'domcontentloaded' });
-  const aliceBack = await waitForBreakout(alicePage, 'alice (after refresh)', 40_000);
+  let aliceBack: number;
+  try {
+    aliceBack = await waitForBreakout(alicePage, 'alice (after refresh)', 40_000);
+  } catch (e) {
+    await alicePage.screenshot({ path: 'test-results/shipA-FAIL-alice-after-refresh.png' }).catch(() => {});
+    console.log('  ── alice frames around refresh ──');
+    for (const f of aliceFrames) console.log('   ', f);
+    throw e;
+  }
   expect(aliceBack, 'alice must land back in the breakout after refresh').toBeGreaterThan(0);
   // And actually CONNECTED: a remote participant tile (bob) renders video again.
   await alicePage.waitForTimeout(6000);
