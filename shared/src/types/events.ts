@@ -234,7 +234,7 @@ export interface ClientToServerEvents {
   'session:leave': (data: { sessionId: string }) => void;
   // Phase 5 — request a fresh state:snapshot. Server replies to the
   // requesting socket only (no broadcast). No-op when flag is off.
-  'session:resync': (data: { sessionId: string }) => void;
+  'session:resync': (data: { sessionId: string; haveSeq?: number }) => void;
 
   // Presence
   'presence:heartbeat': (data: { sessionId: string }) => void;

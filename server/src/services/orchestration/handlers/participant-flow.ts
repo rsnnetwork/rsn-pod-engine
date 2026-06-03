@@ -1020,6 +1020,21 @@ export function setRoomAssignment(
     if (!uid) continue;
     activeSession.roomParticipants.set(uid, { matchId, roomId, joinedAt: now });
   }
+  // Canonical-100% — mirror the server-canonical assignment into the canonical
+  // doc so location.breakout (with the REAL matchId) is authoritative for the
+  // snapshot you-block and room-scoped consumers. This is the only place that
+  // moves canonical location INTO a breakout (no IN_BREAKOUT transitions exist);
+  // transitions back to main / disconnects are handled in transitionParticipant
+  // (connState-only on disconnect — location survives for reconnect).
+  void (async () => {
+    const { updateCanonicalParticipant } = await import('../state/canonical-state');
+    for (const uid of userIds) {
+      if (!uid) continue;
+      await updateCanonicalParticipant(sessionId, uid, {
+        location: { type: 'breakout', roomId, matchId },
+      });
+    }
+  })().catch(() => { /* best-effort; canonical heals via webhooks/resync */ });
 }
 
 /**

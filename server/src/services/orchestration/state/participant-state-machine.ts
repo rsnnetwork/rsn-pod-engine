@@ -135,6 +135,10 @@ export interface TransitionResult {
 export interface TransitionOpts {
   /** When transitioning to IN_BREAKOUT, the room the participant joined. */
   currentRoomId?: string | null;
+  /** Canonical-100% — the match the breakout room belongs to, written into the
+   *  canonical location so room-scoped consumers (chat, snapshot you-block)
+   *  have the real matchId instead of ''. */
+  matchId?: string | null;
   /** If true, persist the projected DB status. Default: true. */
   persistToDb?: boolean;
   /** If true, allow self-transition without warning. Default: true. */
@@ -284,17 +288,34 @@ export async function transitionParticipant(
 
   // Phase 3 — canonical authoritative write. Mirror the state → location/
   // connState mapping. Best-effort; caller holds withSessionGuard.
+  //
+  // Canonical-100% — design §4.1: connState and location are ORTHOGONAL.
+  // A disconnect (or terminal state) flips connState ONLY; the participant's
+  // location survives so a reconnect returns them to the same room with one
+  // token. Location is written only when the transition MEANS a placement
+  // change (into a breakout, or back to main). Pre-fix every transition —
+  // including DISCONNECTED — stomped location back to 'main', and nothing
+  // ever wrote 'breakout' (no IN_BREAKOUT callers), so canonical location
+  // was permanently 'main' for everyone.
   const canonConn =
     toState === ParticipantState.DISCONNECTED ? 'disconnected' :
     toState === ParticipantState.LEFT ? 'left' :
     toState === ParticipantState.REMOVED ? 'removed' :
     toState === ParticipantState.NO_SHOW ? 'no_show' : 'connected';
-  const canonLoc: import('./canonical-state').ParticipantLocation =
-    toState === ParticipantState.IN_BREAKOUT && currentRoomId
-      ? { type: 'breakout', roomId: currentRoomId, matchId: '' }
-      : { type: 'main' };
+  const canonPatch: { connState: string; location?: import('./canonical-state').ParticipantLocation } =
+    { connState: canonConn };
+  if (toState === ParticipantState.IN_BREAKOUT && currentRoomId) {
+    canonPatch.location = { type: 'breakout', roomId: currentRoomId, matchId: opts.matchId ?? '' };
+  } else if (
+    toState !== ParticipantState.DISCONNECTED &&
+    toState !== ParticipantState.LEFT &&
+    toState !== ParticipantState.REMOVED &&
+    toState !== ParticipantState.NO_SHOW
+  ) {
+    canonPatch.location = { type: 'main' };
+  }
   void (await import('./canonical-state')).updateCanonicalParticipant(
-    sessionId, userId, { connState: canonConn as any, location: canonLoc });
+    sessionId, userId, canonPatch as any);
 
   return { ok: true, fromState, toState };
 }

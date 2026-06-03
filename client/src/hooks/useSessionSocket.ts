@@ -79,6 +79,10 @@ export default function useSessionSocket(sessionId: string) {
   // so it recovers after a refresh without any flag to restore. Window > 5s + margin.
   const lastBreakoutSyncRef = useRef(0);
   const BREAKOUT_OWNERSHIP_MS = 12_000;
+  // Canonical-100% (Ship A) — when the last room-assignment event landed.
+  // The snapshot's "canonical says main" healer must never fight a fresh
+  // match:assigned/reassigned that raced it on the wire.
+  const lastRoomEventAtRef = useRef(0);
 
   const clearTimer = () => {
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
@@ -229,11 +233,54 @@ export default function useSessionSocket(sessionId: string) {
       fetchSessionStateSnapshot().catch(() => { /* best-effort */ });
     });
 
-    // ── Phase 5 — versioned state:snapshot (seq-guarded, additive) ──
+    // ── Phase 5 — versioned state:snapshot (seq-guarded) ──
     // Seq-guard lives in the store; stale/duplicate pushes are ignored.
-    // Existing handlers (session:state, participant:joined/left) unchanged.
+    // Canonical-100% (Ship A) — the snapshot now carries a per-recipient `you`
+    // block { location, connState, role, token? }. When a seq-NEWER snapshot
+    // says our canonical location differs from where this client is actually
+    // connected, converge. Legacy match:assigned / match:return_to_lobby /
+    // lobby:token still drive the normal flow (dual-run); this path heals the
+    // cases they miss (refresh/reconnect races, missed events).
     socket.on('state:snapshot', (data: any) => {
+      const prevSeq = useSessionStore.getState().snapshotSeq;
       store.applyStateSnapshot(data);
+      if (typeof data?.seq !== 'number' || data.seq <= prevSeq) return;
+      const you = data?.you;
+      if (!you?.location) return;
+      const st = useSessionStore.getState();
+      if (you.location.type === 'breakout') {
+        // Wrong-room heal: we're in a breakout but the server says a DIFFERENT
+        // one (host swap that raced, missed reassign). Only act when the server
+        // minted a token for it (it does so exactly on location change/resync);
+        // joining-from-lobby stays with the legacy re-emit during dual-run.
+        const wrongRoom = st.phase === 'matched' && !!st.currentRoomId && st.currentRoomId !== you.location.roomId;
+        if (wrongRoom && you.token && you.livekitUrl) {
+          store.setRoomId(you.location.roomId);
+          store.setLiveKitToken(you.token, you.livekitUrl);
+          // Partner context refreshes via the in-flight match:reassigned.
+        }
+      } else {
+        // Canonical says MAIN but we're (still) connected to a breakout — a
+        // missed match:return_to_lobby. Never fight a just-landed assignment.
+        const inBreakout = st.phase === 'matched' && !!st.currentRoomId;
+        const recentRoomEvent = Date.now() - lastRoomEventAtRef.current < 10_000;
+        if (inBreakout && !recentRoomEvent) {
+          clearTimer();
+          store.setLiveKitToken(null, null);
+          store.setMatch(null);
+          store.setRoomId(null);
+          store.setByeRound(false);
+          store.setPartnerDisconnected(false);
+          store.setTransitionStatus(null);
+          store.setTimer(0);
+          store.setBreakoutTimerHidden(false);
+          lastBreakoutSyncRef.current = 0;
+          if (you.token && you.livekitUrl) {
+            store.setLobbyToken(you.token, you.livekitUrl, you.roomId ?? null);
+          }
+          store.setPhase('lobby');
+        }
+      }
     });
 
     // Phase 8B.1 (8 May spec) — Stefan #4 + #9: a newly-promoted/demoted
@@ -441,6 +488,7 @@ export default function useSessionSocket(sessionId: string) {
 
     // ── Matching ──
     socket.on('match:assigned', (data: any) => {
+      lastRoomEventAtRef.current = Date.now();
       // Only transition to 'matched' phase during an active round — ignore stale
       // match:assigned events that arrive during rating or lobby transitions.
       // NOTE: round_transition is allowed because the server emits match:assigned
@@ -485,6 +533,7 @@ export default function useSessionSocket(sessionId: string) {
     });
 
     socket.on('match:reassigned', (data: any) => {
+      lastRoomEventAtRef.current = Date.now();
       // Reassignment is an explicit action (host or auto) — only block during rating/completed
       const reassignState = useSessionStore.getState();
       if (reassignState.sessionStatus === 'round_rating' || reassignState.sessionStatus === 'completed') return;
@@ -1001,6 +1050,11 @@ export default function useSessionSocket(sessionId: string) {
       // causes a race condition with VideoRoom's backup fetch + 30s timeout.
       // Server will send fresh match:assigned on session:join if needed.
       socket.emit('session:join', { sessionId });
+      // Canonical-100% (Ship A) — ask for the authoritative versioned snapshot
+      // including a fresh token for OUR canonical location. Even if the legacy
+      // match:assigned re-emit races or is missed, the resync reply lands this
+      // client in the right room with exactly one token.
+      socket.emit('session:resync', { sessionId, haveSeq: useSessionStore.getState().snapshotSeq });
       // T0-3 — refetch authoritative state on every reconnect to recover
       // anything we might have missed during the disconnect window.
       fetchSessionStateSnapshot();
