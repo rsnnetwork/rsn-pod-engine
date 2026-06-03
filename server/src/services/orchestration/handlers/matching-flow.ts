@@ -991,7 +991,7 @@ export async function handleHostConfirmMatches(
 // ─── Helper: Send Match Preview to Host ───────────────────────────────────
 
 export async function sendMatchPreview(
-  _io: SocketServer,
+  io: SocketServer,
   socket: Socket,
   sessionId: string,
   roundNumber: number,
@@ -1125,7 +1125,17 @@ export async function sendMatchPreview(
   // display names. We re-fetch names for any bye-only users not already in
   // nameMap so they always render with a real label.
   const matchedIds = new Set(matches.flatMap(m => [m.participantAId, m.participantBId, ...(m.participantCId ? [m.participantCId] : [])]));
-  const byeUserIds = allParticipants.rows.map(p => p.user_id).filter(uid => !matchedIds.has(uid));
+  let byeUserIds = allParticipants.rows.map(p => p.user_id).filter(uid => !matchedIds.has(uid));
+  // 27 May — "Not matched: X" must only list people actually in the main room.
+  // A registered-but-absent participant (accepted, never joined / here-then-left)
+  // is gated out of matching; gate them out of the host's bye list too so the
+  // host (and co-hosts, who receive the same preview) see live truth, not stale
+  // roster. Fail-open: no activeSession or empty present set → leave the DB list.
+  const previewActiveSession = activeSessions.get(sessionId);
+  if (previewActiveSession) {
+    const present = await getPresentUserIds(io, sessionId, previewActiveSession);
+    if (present.size > 0) byeUserIds = byeUserIds.filter(uid => present.has(uid));
+  }
   const byeNamesNeeded = byeUserIds.filter(uid => !nameMap.has(uid));
   if (byeNamesNeeded.length > 0) {
     const byeNamesResult = await query<{ id: string; displayName: string | null; email: string | null }>(
@@ -1468,25 +1478,13 @@ async function emitHostDashboardImmediate(io: SocketServer, sessionId: string): 
     // Count of main-room participants eligible for the next algorithm round.
     // Excludes host AND anyone already in an active match (manual or algorithm).
     // Used by the client to enable/disable the "Match People" button.
-    const eligibleMainRoomRes = await query<{ c: string }>(
-      `SELECT COUNT(*)::text AS c FROM session_participants sp
-       WHERE sp.session_id = $1
-         AND sp.status NOT IN ('removed', 'left', 'no_show')
-         AND sp.user_id != $2
-         AND NOT EXISTS (
-           SELECT 1 FROM matches m
-           WHERE m.session_id = $1 AND m.status = 'active'
-             AND (m.participant_a_id = sp.user_id OR m.participant_b_id = sp.user_id OR m.participant_c_id = sp.user_id)
-         )`,
-      [sessionId, activeSession.hostUserId],
-    );
-    const eligibleMainRoomCount = parseInt(eligibleMainRoomRes.rows[0]?.c || '0', 10);
-
-    // Phase 8A.2 (8 May spec) — Stefan #2: also surface how many of
-    // those eligible-by-DB are actually CONNECTED right now. Lets the
-    // host see the gap (e.g. "5 in main room out of 7 registered").
+    // 27 May — gate the eligible count on LIVE main-room presence so the
+    // "Match People" button + counts reflect who's actually here, not stale
+    // roster (a registered-but-absent participant must not count). One query,
+    // both counts derived. Fail-open: if presence is empty/unavailable, fall
+    // back to the DB-eligible count so we never wrongly show zero.
     const presenceSet = activeSession.presenceMap;
-    const presentMainRoomCount = (await query<{ user_id: string }>(
+    const eligibleRows = (await query<{ user_id: string }>(
       `SELECT sp.user_id FROM session_participants sp
        WHERE sp.session_id = $1
          AND sp.status NOT IN ('removed', 'left', 'no_show')
@@ -1497,7 +1495,9 @@ async function emitHostDashboardImmediate(io: SocketServer, sessionId: string): 
              AND (m.participant_a_id = sp.user_id OR m.participant_b_id = sp.user_id OR m.participant_c_id = sp.user_id)
          )`,
       [sessionId, activeSession.hostUserId],
-    )).rows.filter(r => presenceSet.has(r.user_id)).length;
+    )).rows;
+    const presentMainRoomCount = eligibleRows.filter(r => presenceSet.has(r.user_id)).length;
+    const eligibleMainRoomCount = presenceSet.size > 0 ? presentMainRoomCount : eligibleRows.length;
 
     // Phase 7C.1 — backing data for the Host Control Center drawer.
     // Same query cadence as the dashboard, so opening the drawer never

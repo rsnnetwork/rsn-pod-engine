@@ -69,9 +69,13 @@ describe('23 May live-test host-control fixes', () => {
     it('/plan bye-count active_participants excludes session_cohosts (not just the director)', () => {
       const i = sessionsSrc.indexOf("'/:id/plan'");
       expect(i).toBeGreaterThan(-1);
-      const block = sessionsSrc.slice(i, i + 5000);
+      // 27 May — widened: a live-presence gate (presentIds) was added ahead of
+      // the bye-count CTE, pushing active_participants further into the handler.
+      const block = sessionsSrc.slice(i, i + 6500);
       expect(block).toMatch(/active_participants AS/);
       expect(block).toMatch(/NOT IN \(SELECT user_id FROM session_cohosts/);
+      // and the new live-presence gate is present on the same CTE.
+      expect(block).toMatch(/AND user_id = ANY\(\$3::uuid\[\]\)/);
     });
   });
 });

@@ -11,6 +11,8 @@ import { fanoutSessionEntities, fanoutUserEntity } from '../realtime/fanout';
 import { E } from '../realtime/entities';
 import { canViewSession } from '../services/session/session-access';
 import { buildSessionStateSnapshot } from '../services/session/session-state-snapshot.service';
+// 27 May — live main-room presence (heartbeat) to gate the event-plan "not matched" counts.
+import { activeSessions } from '../services/orchestration/state/session-state';
 import { ApiResponse, SessionStatus, UserRole, hasRoleAtLeast } from '@rsn/shared';
 import { ForbiddenError, NotFoundError } from '../middleware/errors';
 import { query } from '../db';
@@ -776,6 +778,17 @@ router.get(
       // Get bye participants per round (those NOT in any match for that round).
       // A participant is "byed" in round R if they have status NOT IN ('removed','left','no_show')
       // AND no match in round R contains them.
+      // 27 May — gate "not matched" on LIVE main-room presence so a registered-
+      // but-absent participant (accepted but never joined, or here-then-left) is
+      // never counted as a bye/warning. presenceMap is the in-memory heartbeat-
+      // fresh signal. Fail-open: no active session or empty presence → keep the
+      // DB-status behaviour (never wrongly inflate or zero the count). The same
+      // numbers are served to the host AND co-hosts (this endpoint is shared).
+      const presentIds = Array.from(activeSessions.get(sessionId)?.presenceMap.keys() ?? []);
+      const presenceFilter = presentIds.length > 0 ? 'AND user_id = ANY($3::uuid[])' : '';
+      const byeParams: unknown[] = presentIds.length > 0
+        ? [sessionId, session.host_user_id, presentIds]
+        : [sessionId, session.host_user_id];
       const byeResult = await query<{ round_number: number; bye_count: string }>(
         `WITH active_participants AS (
            SELECT user_id FROM session_participants
@@ -786,6 +799,7 @@ router.get(
              -- Pre-fix, promoting someone to co-host made them show up in the
              -- "N not matched" tally, confusing the host.
              AND user_id NOT IN (SELECT user_id FROM session_cohosts WHERE session_id = $1)
+             ${presenceFilter}
          ),
          round_participants AS (
            SELECT m.round_number,
@@ -802,7 +816,7 @@ router.get(
                  )) AS bye_count
          FROM (SELECT DISTINCT round_number FROM matches
                WHERE session_id = $1 AND COALESCE(is_manual, FALSE) = FALSE) r`,
-        [sessionId, session.host_user_id],
+        byeParams,
       );
       const byeByRound = new Map<number, number>();
       for (const row of byeResult.rows) {

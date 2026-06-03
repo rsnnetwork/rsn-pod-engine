@@ -99,7 +99,7 @@ describe('Phase 1 — SPA navigation + name-fallback architecture', () => {
       // The byeParticipants block builds displayName via the same safe fallback.
       // The placeholder text "Not matched: User, User" came from the previous
       // `|| 'User'` literal; we explicitly assert it is gone.
-      const byeBlockStart = src.indexOf('const byeUserIds');
+      const byeBlockStart = src.indexOf('let byeUserIds');
       expect(byeBlockStart).toBeGreaterThan(-1);
       const byeBlockEnd = src.indexOf('socket.emit(', byeBlockStart);
       expect(byeBlockEnd).toBeGreaterThan(byeBlockStart);
