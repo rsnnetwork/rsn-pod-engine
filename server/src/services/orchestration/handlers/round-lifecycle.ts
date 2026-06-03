@@ -362,44 +362,11 @@ export async function transitionToRound(
       : { rows: [] };
     const globalNameMap = new Map<string, string>(namesResult.rows.map(r => [r.id, r.displayName] as [string, string]));
 
-    // Step 5: Pre-generate LiveKit tokens for all participants (inline, no API round-trip)
-    // Uses same TTL formula as session.service.ts generateLiveKitToken
-    const { config: appConfig } = await import('../../../config');
-    const sessionConfig = activeSession.config;
-    const roundsRemaining = Math.max(1, (sessionConfig.numberOfRounds || 5) - roundNumber);
-    const roundDuration = sessionConfig.roundDurationSeconds || 480;
-    // F5 (21 May Ali) — fallback aligned with DEFAULT_SESSION_CONFIG (30 s).
-    const ratingWindow = sessionConfig.ratingWindowSeconds || 30;
-    const estimatedRemainingSeconds = roundsRemaining * (roundDuration + ratingWindow + 30) + 600;
-    const tokenTtl = Math.max(1800, Math.min(14400, estimatedRemainingSeconds));
-
-    // Generate tokens in parallel for all matched participants
-    const tokenMap = new Map<string, string>(); // pid -> JWT token
-    const tokenPromises = allPidArray
-      .filter(pid => matchedUserIds.has(pid))
-      .map(async (pid) => {
-        try {
-          const displayName = globalNameMap.get(pid) || 'User';
-          // Find which room this participant is in
-          let pidRoomId: string | undefined;
-          for (const match of matches) {
-            const mPids = [match.participantAId, match.participantBId];
-            if (match.participantCId) mPids.push(match.participantCId);
-            if (mPids.includes(pid)) {
-              pidRoomId = matchRoomMap.get(match.id);
-              break;
-            }
-          }
-          if (pidRoomId) {
-            const vt = await videoService.issueJoinToken(pid, pidRoomId, displayName, tokenTtl);
-            tokenMap.set(pid, vt.token);
-          }
-        } catch (err) {
-          // Non-fatal: client will fall back to API token fetch
-          logger.warn({ err, pid, sessionId }, 'Inline token generation failed — client will retry via API');
-        }
-      });
-    await Promise.all(tokenPromises);
+    // Ship C — match:assigned is a pure lifecycle notification now. The token
+    // arrives via the snapshot rail (setRoomAssignment above changes canonical
+    // location → the next co-emit mints you.token) and the client's REST
+    // fallback (POST /sessions/:id/token) — exactly one token source family,
+    // no dual-token reconnect races. The inline pre-mint block retired here.
 
     // Step 6: Emit match:assigned to all participants + batch status update
     const statusUpdatePromises: Promise<void>[] = [];
@@ -428,9 +395,6 @@ export async function transitionToRound(
           partners,
           roomId,
           roundNumber,
-          // Inline token eliminates client-side API round-trip (~100-500ms saved)
-          token: tokenMap.get(pid) || null,
-          livekitUrl: appConfig.livekit.host,
         });
         // Phase 2 dual-emit — session + participants + match for each
         // assigned participant so their live-event queries refresh.
@@ -809,32 +773,20 @@ export async function endRatingWindow(
         currentRound: roundNumber,
       });
 
-      // Re-issue lobby tokens to all connected participants for video mosaic (FIX 15F: dynamic TTL)
+      // Ship C — lobby:token retired. The client pulls a session:resync on
+      // every session:status_changed (and on connect), and handleResync
+      // always mints a token for the canonical location — so everyone gets
+      // their lobby token within one round-trip of the status broadcast.
+      // The Phase-4 eviction side effect from the old token loop survives.
       const session = await sessionService.getSessionById(sessionId);
-      if (session.lobbyRoomId) {
-        const lobbyRoundsRemaining = Math.max(1, (activeSession.config.numberOfRounds || 5) - roundNumber);
-        const lobbyRoundDuration = activeSession.config.roundDurationSeconds || 480;
-        // F5 (21 May Ali) — fallback aligned with DEFAULT_SESSION_CONFIG (30 s).
-        const lobbyRatingWindow = activeSession.config.ratingWindowSeconds || 30;
-        const lobbyTtl = Math.max(1800, Math.min(14400, lobbyRoundsRemaining * (lobbyRoundDuration + lobbyRatingWindow + 30) + 600));
-
+      if (session.lobbyRoomId && config.roomEvictionEnabled) {
         const socketsInRoom = await io.in(sessionRoom(sessionId)).fetchSockets();
-        const { config: appConfig } = await import('../../../config');
         for (const s of socketsInRoom) {
           try {
             const uid = (s.data as any)?.userId;
-            const dName = (s.data as any)?.displayName || 'User';
             if (!uid) continue;
-            const lobbyToken = await videoService.issueJoinToken(uid, session.lobbyRoomId, dName, lobbyTtl);
-            s.emit('lobby:token', {
-              token: lobbyToken.token,
-              livekitUrl: appConfig.livekit.host,
-              roomId: session.lobbyRoomId,
-            });
-            if (config.roomEvictionEnabled) {
-              const rp = activeSession.roomParticipants?.get(uid);
-              if (rp?.roomId) await videoService.evictFromRoom(uid, rp.roomId);
-            }
+            const rp = activeSession.roomParticipants?.get(uid);
+            if (rp?.roomId) await videoService.evictFromRoom(uid, rp.roomId);
           } catch { /* skip */ }
         }
       }
@@ -854,26 +806,9 @@ export async function endRatingWindow(
         currentRound: roundNumber,
       });
 
-      // Re-issue lobby tokens so participants see each other for goodbyes (FIX 15F: dynamic TTL)
-      const session = await sessionService.getSessionById(sessionId);
-      if (session.lobbyRoomId) {
-        const closingTtl = 1800; // 30 min — closing lobby is just goodbyes + recap transition
-        const socketsInRoom = await io.in(sessionRoom(sessionId)).fetchSockets();
-        const { config: appConfig } = await import('../../../config');
-        for (const s of socketsInRoom) {
-          try {
-            const uid = (s.data as any)?.userId;
-            const dName = (s.data as any)?.displayName || 'User';
-            if (!uid) continue;
-            const lobbyToken = await videoService.issueJoinToken(uid, session.lobbyRoomId, dName, closingTtl);
-            s.emit('lobby:token', {
-              token: lobbyToken.token,
-              livekitUrl: appConfig.livekit.host,
-              roomId: session.lobbyRoomId,
-            });
-          } catch { /* skip */ }
-        }
-      }
+      // Ship C — lobby:token retired; the status_changed broadcast above
+      // triggers each client's resync pull, whose reply carries the goodbye-
+      // lobby token (handleResync always mints for the canonical location).
 
       // Host-controlled: no auto-end. Host must click "End Event".
       // 10-minute safety fallback prevents orphaned sessions if host disconnects.

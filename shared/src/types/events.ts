@@ -200,7 +200,8 @@ export interface ServerToClientEvents {
   'reaction:received': (data: { userId: string; displayName: string; type: string; timestamp: string }) => void;
 
   // Lobby video
-  'lobby:token': (data: { token: string; livekitUrl: string; roomId: string }) => void;
+  // Ship C — the lobby token event retired. Tokens travel exclusively on the
+  // snapshot rail (state:snapshot you.token / session:resync reply) + REST.
   'lobby:mute_command': (data: { muted: boolean; byHost: boolean }) => void;
 
   // Chat

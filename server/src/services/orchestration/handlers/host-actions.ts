@@ -279,24 +279,9 @@ export async function handleHostStart(
       });
       logger.info({ sessionId: data.sessionId, lobbyRoom: lobbyRoom.roomId }, 'Lobby LiveKit room created');
 
-      // Distribute lobby tokens to all sockets already in the session room
-      try {
-        const { config: appConfig } = await import('../../../config');
-        const sockets = await io.in(sessionRoom(data.sessionId)).fetchSockets();
-        for (const s of sockets) {
-          const uid = (s.data as any)?.userId;
-          if (!uid) continue;
-          const name = (s.data as any)?.displayName || 'User';
-          const tok = await videoService.issueJoinToken(uid, lobbyRoom.roomId, name);
-          s.emit('lobby:token', {
-            token: tok.token,
-            livekitUrl: appConfig.livekit.host,
-            roomId: lobbyRoom.roomId,
-          });
-        }
-      } catch (broadcastErr) {
-        logger.warn({ err: broadcastErr, sessionId: data.sessionId }, 'Failed to broadcast lobby tokens to existing sockets');
-      }
+      // Ship C — lobby:token retired. The session:status_changed broadcast
+      // below triggers every connected client's session:resync pull, and
+      // handleResync mints their lobby token for the just-created room.
     } catch (lobbyErr) {
       logger.warn({ err: lobbyErr, sessionId: data.sessionId }, 'Failed to create lobby LiveKit room — continuing without video mosaic');
     }
@@ -930,38 +915,18 @@ export async function handleHostReassign(
       const { setRoomAssignment } = await import('./participant-flow');
       setRoomAssignment(data.sessionId, matchId, roomId, [targetId, partner]);
 
-      // Generate tokens for both participants inline
-      const { config: appConfig } = await import('../../../config');
-      let targetToken: string | null = null;
-      let partnerToken: string | null = null;
-      try {
-        const targetName = (await query<{ display_name: string }>(`SELECT display_name FROM users WHERE id = $1`, [targetId])).rows[0]?.display_name || 'User';
-        const partnerName = (await query<{ display_name: string }>(`SELECT display_name FROM users WHERE id = $1`, [partner])).rows[0]?.display_name || 'User';
-        const [tVt, pVt] = await Promise.all([
-          videoService.issueJoinToken(targetId, roomId, targetName),
-          videoService.issueJoinToken(partner, roomId, partnerName),
-        ]);
-        targetToken = tVt.token;
-        partnerToken = pVt.token;
-      } catch (err) {
-        logger.warn({ err }, 'Inline token gen failed for reassignment — clients will retry via API');
-      }
-
-      // Notify both participants
+      // Ship C — lifecycle notification only; tokens ride the snapshot rail
+      // (setRoomAssignment above changed canonical location) + REST fallback.
       io.to(userRoom(targetId)).emit('match:reassigned', {
         matchId,
         newPartnerId: partner,
         roomId,
-        token: targetToken,
-        livekitUrl: appConfig.livekit.host,
       });
 
       io.to(userRoom(partner)).emit('match:reassigned', {
         matchId,
         newPartnerId: targetId,
         roomId,
-        token: partnerToken,
-        livekitUrl: appConfig.livekit.host,
       });
 
       // Phase 2 dual-emit — session, participants list, and match entity
@@ -1289,21 +1254,8 @@ export async function handleHostRemoveFromRoom(
         earlyLeave: true,
       });
 
-      // Re-issue lobby token for removed user
-      const trioRemSession = await sessionService.getSessionById(data.sessionId);
-      if (trioRemSession.lobbyRoomId) {
-        try {
-          const { config: appConfig } = await import('../../../config');
-          const socketsInRoom = await io.in(userRoom(data.userId)).fetchSockets();
-          for (const sk of socketsInRoom) {
-            const uid = (sk.data as any)?.userId;
-            if (uid !== data.userId) continue;
-            const dName = (sk.data as any)?.displayName || 'User';
-            const lobbyToken = await videoService.issueJoinToken(uid, trioRemSession.lobbyRoomId, dName);
-            sk.emit('lobby:token', { token: lobbyToken.token, livekitUrl: appConfig.livekit.host, roomId: trioRemSession.lobbyRoomId });
-          }
-        } catch { /* skip */ }
-      }
+      // Ship C — lobby:token retired; the pulled user's canonical location
+      // flipped to main (clearCanonicalLocationToMain above) → snapshot rail.
 
       // Refresh host dashboard so the room card reflects the smaller pair
       if (_emitHostDashboard) await _emitHostDashboard(data.sessionId).catch(() => {});
@@ -1353,21 +1305,8 @@ export async function handleHostRemoveFromRoom(
       }
     }
 
-    // Re-issue lobby token for the removed user
-    const session = await sessionService.getSessionById(data.sessionId);
-    if (session.lobbyRoomId) {
-      try {
-        const { config: appConfig } = await import('../../../config');
-        const socketsInRoom = await io.in(userRoom(data.userId)).fetchSockets();
-        for (const sk of socketsInRoom) {
-          const uid = (sk.data as any)?.userId;
-          if (uid !== data.userId) continue;
-          const dName = (sk.data as any)?.displayName || 'User';
-          const lobbyToken = await videoService.issueJoinToken(uid, session.lobbyRoomId, dName);
-          sk.emit('lobby:token', { token: lobbyToken.token, livekitUrl: appConfig.livekit.host, roomId: session.lobbyRoomId });
-        }
-      } catch { /* skip */ }
-    }
+    // Ship C — lobby:token retired; canonical-location clear above puts the
+    // removed user on the snapshot rail for their lobby token.
 
     // Notify partner — show "partner left" with 5s countdown, then rating + lobby
     if (matchResult.rows.length > 0) {
@@ -1418,20 +1357,7 @@ export async function handleHostRemoveFromRoom(
               earlyLeave: true,
             });
 
-            // Re-issue lobby token
-            if (session.lobbyRoomId) {
-              try {
-                const { config: appConfig2 } = await import('../../../config');
-                const socketsInRoom = await io.in(userRoom(partnerId)).fetchSockets();
-                for (const sk of socketsInRoom) {
-                  const uid = (sk.data as any)?.userId;
-                  if (uid !== partnerId) continue;
-                  const dName = (sk.data as any)?.displayName || 'User';
-                  const lobbyToken = await videoService.issueJoinToken(uid, session.lobbyRoomId, dName);
-                  sk.emit('lobby:token', { token: lobbyToken.token, livekitUrl: appConfig2.livekit.host, roomId: session.lobbyRoomId });
-                }
-              } catch { /* skip */ }
-            }
+            // Ship C — lobby:token retired; snapshot rail covers the partner.
           }
 
           if (_emitHostDashboard) await _emitHostDashboard(data.sessionId).catch(() => {});
@@ -1620,20 +1546,8 @@ export async function handleHostMoveToRoom(
     const nameMap = new Map(namesResult.rows.map(r => [r.id, r.display_name || 'User']));
 
     // Generate tokens and notify all participants in the new room
-    const { config: moveConfig } = await import('../../../config');
-    const tokenMapMove = new Map<string, string>();
-    try {
-      const tokenResults = await Promise.all(
-        allParticipants.map(async (pid) => {
-          const vt = await videoService.issueJoinToken(pid, newRoomId, nameMap.get(pid) || 'User');
-          return { pid, token: vt.token };
-        })
-      );
-      for (const { pid, token } of tokenResults) tokenMapMove.set(pid, token);
-    } catch (err) {
-      logger.warn({ err }, 'Inline token gen failed for move-reassign — clients will retry via API');
-    }
-
+    // Ship C — lifecycle notification only; tokens ride the snapshot rail
+    // (setRoomAssignment above changed canonical locations) + REST fallback.
     for (const pid of allParticipants) {
       const partners = allParticipants.filter(p => p !== pid).map(p => ({
         userId: p,
@@ -1645,8 +1559,6 @@ export async function handleHostMoveToRoom(
         partnerDisplayName: partners[0]?.displayName,
         roomId: newRoomId,
         roundNumber: activeSession.currentRound,
-        token: tokenMapMove.get(pid) || null,
-        livekitUrl: moveConfig.livekit.host,
       });
     }
     // Phase 2 dual-emit — session, participants, match-id for everyone
@@ -2674,18 +2586,7 @@ export async function handleHostCreateBreakout(
               await sessionService.updateParticipantStatus(sessionId, soloPartnerId, ParticipantStatus.IN_LOBBY);
               io.to(userRoom(soloPartnerId)).emit('match:return_to_lobby', { reason: 'partner_left' });
 
-              const session = await sessionService.getSessionById(sessionId);
-              if (session.lobbyRoomId) {
-                const { config: appConfig } = await import('../../../config');
-                const socketsInRoom = await io.in(userRoom(soloPartnerId)).fetchSockets();
-                for (const sk of socketsInRoom) {
-                  const uid = (sk.data as any)?.userId;
-                  if (uid !== soloPartnerId) continue;
-                  const dName = (sk.data as any)?.displayName || 'User';
-                  const lobbyToken = await videoService.issueJoinToken(uid, session.lobbyRoomId, dName);
-                  sk.emit('lobby:token', { token: lobbyToken.token, livekitUrl: appConfig.livekit.host, roomId: session.lobbyRoomId });
-                }
-              }
+              // Ship C — lobby:token retired; snapshot rail covers the survivor.
             } catch (err) {
               logger.error({ err }, 'Error returning solo partner to lobby after create_breakout');
             }
@@ -2711,17 +2612,11 @@ export async function handleHostCreateBreakout(
         );
         const nameMap = new Map(namesResult.rows.map(r => [r.id, r.display_name || 'User']));
 
-        const { config: appConfig } = await import('../../../config');
+        // Ship C — lifecycle notification only; snapshot rail + REST fallback.
         for (const pid of participantIds) {
           const partners = participantIds
             .filter(id => id !== pid)
             .map(id => ({ userId: id, displayName: nameMap.get(id) || 'User' }));
-
-          let token: string | null = null;
-          try {
-            const vt = await videoService.issueJoinToken(pid, newRoomId, nameMap.get(pid) || 'User');
-            token = vt.token;
-          } catch { /* client retries via API */ }
 
         io.to(userRoom(pid)).emit('match:reassigned', {
           matchId,
@@ -2730,8 +2625,6 @@ export async function handleHostCreateBreakout(
           partners,
           roomId: newRoomId,
           roundNumber: activeSession.currentRound,
-          token,
-          livekitUrl: appConfig.livekit.host,
         });
         }
       } // end if participantIds.length > 0
@@ -2806,20 +2699,8 @@ export async function handleHostCreateBreakout(
                 earlyLeave: true,
               });
 
-              const session2 = await sessionService.getSessionById(sessionId);
-              if (session2.lobbyRoomId) {
-                try {
-                  const { config: appConfig2 } = await import('../../../config');
-                  const socketsInRoom = await io.in(userRoom(pid)).fetchSockets();
-                  for (const sk of socketsInRoom) {
-                    const uid = (sk.data as any)?.userId;
-                    if (uid !== pid) continue;
-                    const dName = (sk.data as any)?.displayName || 'User';
-                    const lobbyToken = await videoService.issueJoinToken(uid, session2.lobbyRoomId, dName);
-                    sk.emit('lobby:token', { token: lobbyToken.token, livekitUrl: appConfig2.livekit.host, roomId: session2.lobbyRoomId });
-                  }
-                } catch { /* skip */ }
-              }
+              // Ship C — lobby:token retired; the manual-room expiry clears
+              // canonical locations (Ship A regression fix) → snapshot rail.
             }
 
             if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});

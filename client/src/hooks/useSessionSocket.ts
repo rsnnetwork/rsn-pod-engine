@@ -14,7 +14,7 @@ const SOCKET_EVENTS = [
   'match:partner_disconnected', 'match:partner_reconnected', 'match:return_to_lobby',
   'rating:window_open', 'rating:window_closed',
   'session:matching_preparing', 'session:matching_in_progress', 'session:matching_cancelled', 'session:matches_confirmed',
-  'host:broadcast', 'lobby:token', 'host:participant_removed',
+  'host:broadcast', 'host:participant_removed',
   'host:match_preview', 'lobby:mute_command',
   'host:round_dashboard', 'host:room_status_update',
   // Phase 3 (5 May spec compliance) — pre-event plan + future-only repair events.
@@ -241,12 +241,12 @@ export default function useSessionSocket(sessionId: string) {
 
     // ── Phase 5 — versioned state:snapshot (seq-guarded) ──
     // Seq-guard lives in the store; stale/duplicate pushes are ignored.
-    // Canonical-100% (Ship A) — the snapshot now carries a per-recipient `you`
+    // Canonical-100% (Ship A) — the snapshot carries a per-recipient `you`
     // block { location, connState, role, token? }. When a seq-NEWER snapshot
     // says our canonical location differs from where this client is actually
-    // connected, converge. Legacy match:assigned / match:return_to_lobby /
-    // lobby:token still drive the normal flow (dual-run); this path heals the
-    // cases they miss (refresh/reconnect races, missed events).
+    // connected, converge. Ship C — this rail (+ REST fallback) is now the
+    // ONLY token source: legacy events are lifecycle notifications only and
+    // lobby:token is retired.
     socket.on('state:snapshot', (data: any) => {
       const prevSeq = useSessionStore.getState().snapshotSeq;
       store.applyStateSnapshot(data);
@@ -295,6 +295,13 @@ export default function useSessionSocket(sessionId: string) {
             store.setLobbyToken(you.token, you.livekitUrl, you.roomId ?? null);
           }
           store.setPhase('lobby');
+        } else if (st.phase === 'lobby' && you.token && you.livekitUrl &&
+                   (!st.lobbyToken || (you.roomId && st.lobbyRoomId !== you.roomId))) {
+          // Ship C — lobby:token retired; resync replies / location-change
+          // snapshots are now the lobby token rail. Arm the lobby connection
+          // whenever we're token-less (event start, post-round return) or the
+          // lobby room changed.
+          store.setLobbyToken(you.token, you.livekitUrl, you.roomId ?? null);
         }
       }
     });
@@ -324,6 +331,10 @@ export default function useSessionSocket(sessionId: string) {
     // ── Session lifecycle ──
     socket.on('session:status_changed', (data: any) => {
       store.setSessionStatus(data.status);
+      // Ship C — every status change pulls a resync; handleResync always
+      // mints a token for OUR canonical location, so lobby returns / event
+      // start get their token within one round-trip (replaces lobby:token).
+      socket.emit('session:resync', { sessionId, haveSeq: useSessionStore.getState().snapshotSeq });
       if (data.isPaused !== undefined) {
         store.setIsPaused(data.isPaused);
         if (data.isPaused) {
@@ -533,19 +544,16 @@ export default function useSessionSocket(sessionId: string) {
       store.setPhase('matched');
       // Store roomId for VideoRoom backup fetch
       if (data.roomId) store.setRoomId(data.roomId);
-      // Use inline token if server provided it (instant), otherwise fall back to API fetch
-      if (data.token && data.livekitUrl) {
-        store.setLiveKitToken(data.token, data.livekitUrl);
+      // Ship C — events no longer carry tokens. REST-fetch the room token;
+      // the snapshot rail (you.token minted on the location change) races it
+      // and whichever lands first wins — both set the same store keys.
+      store.setTransitionStatus('preparing_match');
+      fetchTokenWithRetry(sessionId, data.roomId).then(result => {
+        if (result) {
+          store.setLiveKitToken(result.token, result.livekitUrl);
+        }
         store.setTransitionStatus(null);
-      } else {
-        store.setTransitionStatus('preparing_match');
-        fetchTokenWithRetry(sessionId, data.roomId).then(result => {
-          if (result) {
-            store.setLiveKitToken(result.token, result.livekitUrl);
-          }
-          store.setTransitionStatus(null);
-        });
-      }
+      });
     });
 
     socket.on('match:reassigned', (data: any) => {
@@ -574,19 +582,14 @@ export default function useSessionSocket(sessionId: string) {
       // the actual new room.
       if (data.roomId) store.setRoomId(data.roomId);
       store.setPhase('matched');
-      // Use inline token if server provided it, otherwise fall back to API fetch
-      if (data.token && data.livekitUrl) {
-        store.setLiveKitToken(data.token, data.livekitUrl);
+      // Ship C — events no longer carry tokens; REST + snapshot rail converge.
+      store.setTransitionStatus('preparing_match');
+      fetchTokenWithRetry(sessionId, data.roomId).then(result => {
+        if (result) {
+          store.setLiveKitToken(result.token, result.livekitUrl);
+        }
         store.setTransitionStatus(null);
-      } else {
-        store.setTransitionStatus('preparing_match');
-        fetchTokenWithRetry(sessionId, data.roomId).then(result => {
-          if (result) {
-            store.setLiveKitToken(result.token, result.livekitUrl);
-          }
-          store.setTransitionStatus(null);
-        });
-      }
+      });
     });
 
     socket.on('match:partner_disconnected', () => {
@@ -801,9 +804,9 @@ export default function useSessionSocket(sessionId: string) {
     });
 
     // ── Lobby video ──
-    socket.on('lobby:token', (data: any) => {
-      store.setLobbyToken(data.token, data.livekitUrl, data.roomId);
-    });
+    // Ship C — 'lobby:token' retired. The lobby token arrives exclusively via
+    // the snapshot rail: session:resync replies (pulled on connect AND on
+    // every status change) and state:snapshot you.token.
 
     socket.on('lobby:mute_command', (data: any) => {
       store.setHostMuteCommand(data.muted);

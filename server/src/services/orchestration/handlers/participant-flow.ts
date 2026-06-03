@@ -677,23 +677,10 @@ export async function handleJoinSession(
         }
       }
 
-      // If in lobby/transition phase and session has a lobby room, send lobby token for video mosaic
-      const lobbyPhases = [SessionStatus.LOBBY_OPEN, SessionStatus.ROUND_ACTIVE, SessionStatus.ROUND_TRANSITION, SessionStatus.ROUND_RATING, SessionStatus.CLOSING_LOBBY];
-      const currentStatus = activeSession?.status || session.status;
-      if (session.lobbyRoomId && lobbyPhases.includes(currentStatus as SessionStatus)) {
-        try {
-          const displayName = (socket.data as any)?.displayName || 'User';
-          const lobbyToken = await videoService.issueJoinToken(userId, session.lobbyRoomId, displayName);
-          const { config: appConfig } = await import('../../../config');
-          socket.emit('lobby:token', {
-            token: lobbyToken.token,
-            livekitUrl: appConfig.livekit.host,
-            roomId: session.lobbyRoomId,
-          });
-        } catch (tokenErr) {
-          logger.warn({ err: tokenErr }, 'Failed to issue lobby token');
-        }
-      }
+      // Ship C — lobby:token retired. The client emits session:resync on
+      // every connect (2792557) and on every status change; handleResync
+      // always mints a token for the canonical location, so the joiner's
+      // lobby token arrives via the snapshot rail within one round-trip.
 
       // If host reconnects mid-round, send them the dashboard
       if (activeSession && activeSession.status === SessionStatus.ROUND_ACTIVE && isHost) {
@@ -754,15 +741,9 @@ export async function handleJoinSession(
             data.sessionId, userId, ParticipantStatus.IN_ROUND
           ).catch(() => {});
 
-          // Generate inline token for instant reconnection (FIX 15B)
-          const { config: reconnectConfig } = await import('../../../config');
-          let reconnectToken: string | null = null;
-          try {
-            const userDisplayName = (socket.data as any)?.displayName || 'User';
-            const vt = await videoService.issueJoinToken(userId, userMatch.roomId || '', userDisplayName);
-            reconnectToken = vt.token;
-          } catch { /* non-fatal — client falls back to API fetch */ }
-
+          // Ship C — lifecycle notification only; the reconnect token rides
+          // the resync reply (client resyncs on every connect) or the REST
+          // fallback the match:assigned handler always triggers now.
           socket.emit('match:assigned', {
             matchId: userMatch.id,
             partnerId: partners[0].userId,
@@ -770,8 +751,6 @@ export async function handleJoinSession(
             partners,
             roomId: userMatch.roomId || '',
             roundNumber: activeSession.currentRound,
-            token: reconnectToken,
-            livekitUrl: reconnectConfig.livekit.host,
           });
           // Phase 2 dual-emit — session + participants + match entity
           // for the reconnecting user so their live-event surfaces resync.
@@ -1427,19 +1406,9 @@ export async function handleLeaveConversation(
           earlyLeave: true,
         });
 
-        const trioSession = await sessionService.getSessionById(sessionId);
-        if (trioSession.lobbyRoomId) {
-          try {
-            const { config: appConfig } = await import('../../../config');
-            const dName = (socket.data as any)?.displayName || 'User';
-            const lobbyToken = await videoService.issueJoinToken(userId, trioSession.lobbyRoomId, dName);
-            socket.emit('lobby:token', {
-              token: lobbyToken.token,
-              livekitUrl: appConfig.livekit.host,
-              roomId: trioSession.lobbyRoomId,
-            });
-          } catch { /* skip */ }
-        }
+        // Ship C — lobby:token retired; the leaver's canonical location just
+        // flipped to main (clearCanonicalLocationToMain above), so the next
+        // snapshot co-emit mints their lobby token (location change).
 
         logger.info(
           { sessionId, userId, matchId: userMatch.id, remaining: remainingUserIds.length },
@@ -1507,20 +1476,8 @@ export async function handleLeaveConversation(
         socket.emit('match:return_to_lobby', { reason: 'you_left' });
       }
 
-      // Re-issue lobby token so user can rejoin lobby video
-      const session = await sessionService.getSessionById(sessionId);
-      if (session.lobbyRoomId) {
-        try {
-          const { config: appConfig } = await import('../../../config');
-          const dName = (socket.data as any)?.displayName || 'User';
-          const lobbyToken = await videoService.issueJoinToken(userId, session.lobbyRoomId, dName);
-          socket.emit('lobby:token', {
-            token: lobbyToken.token,
-            livekitUrl: appConfig.livekit.host,
-            roomId: session.lobbyRoomId,
-          });
-        } catch { /* skip */ }
-      }
+      // Ship C — lobby:token retired; canonical location flipped to main via
+      // the clears above, so the snapshot rail delivers the lobby token.
 
       logger.info({ sessionId, userId, matchId: userMatch.id }, 'Participant left conversation → returned to lobby');
 
@@ -1597,40 +1554,27 @@ export async function handleLeaveConversation(
                 throw insertErr;
               }
 
-              // Fetch display names + generate tokens
+              // Fetch display names
               const nameRes = await query<{ id: string; display_name: string }>(
                 `SELECT id, display_name FROM users WHERE id = ANY($1)`,
                 [[soloPartnerId, candidateUserId]]
               );
               const names = new Map(nameRes.rows.map(r => [r.id, r.display_name || 'User']));
 
-              const { config: reassignConfig } = await import('../../../config');
-              let soloTk: string | null = null;
-              let candidateTk: string | null = null;
-              try {
-                const [sVt, cVt] = await Promise.all([
-                  videoService.issueJoinToken(soloPartnerId, newRoomId, names.get(soloPartnerId) || 'User'),
-                  videoService.issueJoinToken(candidateUserId, newRoomId, names.get(candidateUserId) || 'User'),
-                ]);
-                soloTk = sVt.token;
-                candidateTk = cVt.token;
-              } catch { /* non-fatal */ }
-
               // Phase 0 (1 May spec) — server-canonical room assignment
               // for solo-recovery match. Same architectural rule.
               setRoomAssignment(sessionId, matchId, newRoomId, [soloPartnerId, candidateUserId]);
 
+              // Ship C — lifecycle notifications only; snapshot rail + REST.
               io.to(userRoom(soloPartnerId)).emit('match:reassigned', {
                 matchId, newPartnerId: candidateUserId,
                 partnerDisplayName: names.get(candidateUserId),
                 roomId: newRoomId, roundNumber: currentSession.currentRound,
-                token: soloTk, livekitUrl: reassignConfig.livekit.host,
               });
               io.to(userRoom(candidateUserId)).emit('match:reassigned', {
                 matchId, newPartnerId: soloPartnerId,
                 partnerDisplayName: names.get(soloPartnerId),
                 roomId: newRoomId, roundNumber: currentSession.currentRound,
-                token: candidateTk, livekitUrl: reassignConfig.livekit.host,
               });
               // Phase 2 dual-emit — affected pair gets session + participants
               // + match entity tags.
@@ -1664,24 +1608,9 @@ export async function handleLeaveConversation(
                 earlyLeave: true,
               });
 
-              // Re-issue lobby token
-              if (session.lobbyRoomId) {
-                const socketsInRoom = await io.in(userRoom(soloPartnerId)).fetchSockets();
-                const { config: appConfig } = await import('../../../config');
-                for (const s of socketsInRoom) {
-                  try {
-                    const uid = (s.data as any)?.userId;
-                    const dName = (s.data as any)?.displayName || 'User';
-                    if (uid !== soloPartnerId) continue;
-                    const lobbyToken = await videoService.issueJoinToken(uid, session.lobbyRoomId, dName);
-                    s.emit('lobby:token', {
-                      token: lobbyToken.token,
-                      livekitUrl: appConfig.livekit.host,
-                      roomId: session.lobbyRoomId,
-                    });
-                  } catch { /* skip */ }
-                }
-              }
+              // Ship C — lobby:token retired; the survivor's canonical
+              // location flipped to main (leave-conversation clears), so the
+              // snapshot rail delivers their lobby token.
 
               logger.info({ sessionId, soloPartnerId, matchId: userMatch.id }, 'No reassign available — showing rating then lobby');
             }
@@ -1915,34 +1844,20 @@ export async function handleDisconnect(
                   );
                   const names = new Map(nameRes.rows.map(r => [r.id, r.display_name || 'User']));
 
-                  // Generate inline tokens for instant breakout transition
-                  const { config: reassignConfig } = await import('../../../config');
-                  let partnerTk: string | null = null;
-                  let candidateTk: string | null = null;
-                  try {
-                    const [pVt, cVt] = await Promise.all([
-                      videoService.issueJoinToken(partnerId, roomId, names.get(partnerId) || 'User'),
-                      videoService.issueJoinToken(candidateUserId, roomId, names.get(candidateUserId) || 'User'),
-                    ]);
-                    partnerTk = pVt.token;
-                    candidateTk = cVt.token;
-                  } catch { /* non-fatal — client retries via API */ }
-
                   // Phase 0 (1 May spec) — server-canonical room
                   // assignment for disconnect-recovery match. Same rule.
                   setRoomAssignment(sessionId, matchId, roomId, [partnerId, candidateUserId]);
 
+                  // Ship C — lifecycle notifications only; snapshot rail + REST.
                   io.to(userRoom(partnerId)).emit('match:reassigned', {
                     matchId, newPartnerId: candidateUserId,
                     partnerDisplayName: names.get(candidateUserId),
                     roomId, roundNumber: disconnectRound,
-                    token: partnerTk, livekitUrl: reassignConfig.livekit.host,
                   });
                   io.to(userRoom(candidateUserId)).emit('match:reassigned', {
                     matchId, newPartnerId: partnerId,
                     partnerDisplayName: names.get(partnerId),
                     roomId, roundNumber: disconnectRound,
-                    token: candidateTk, livekitUrl: reassignConfig.livekit.host,
                   });
                   // Phase 2 dual-emit — affected pair refreshes session +
                   // participants + match entities.

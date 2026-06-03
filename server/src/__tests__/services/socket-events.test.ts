@@ -64,12 +64,12 @@ describe('Socket Event Types', () => {
         'host:broadcast',
         'host:participant_removed',
         'host:match_preview',
-        'lobby:token',
+        // Ship C — the lobby token event retired (snapshot rail + REST only).
         'lobby:mute_command',
         'timer:sync',
         'error',
       ];
-      expect(events).toHaveLength(23);
+      expect(events).toHaveLength(22);
     });
 
     it('should have lobby:mute_command with byHost field', () => {

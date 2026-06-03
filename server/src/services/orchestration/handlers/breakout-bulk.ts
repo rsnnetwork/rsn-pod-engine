@@ -136,7 +136,6 @@ export async function handleHostCreateBreakoutBulk(
       return;
     }
 
-    const { config: appConfig } = await import('../../../config');
     const { v4: uuid } = await import('uuid');
 
     const nameRes = await query<{ id: string; display_name: string }>(
@@ -324,17 +323,13 @@ export async function handleHostCreateBreakoutBulk(
         await sessionService.updateParticipantStatus(sessionId, pid, ParticipantStatus.IN_ROUND).catch(() => {});
       }
 
-      // Emit match:reassigned to each participant
+      // Emit match:reassigned to each participant. Ship C — lifecycle
+      // notification only; tokens ride the snapshot rail (setRoomAssignment
+      // below changes canonical locations) + the client's REST fallback.
       for (const pid of participantIds) {
         const partners = participantIds
           .filter((id) => id !== pid)
           .map((id) => ({ userId: id, displayName: nameMap.get(id) || 'User' }));
-
-        let token: string | null = null;
-        try {
-          const vt = await videoService.issueJoinToken(pid, newRoomId, nameMap.get(pid) || 'User');
-          token = vt.token;
-        } catch { /* client retries */ }
 
         io.to(userRoom(pid)).emit('match:reassigned', {
           matchId,
@@ -343,8 +338,6 @@ export async function handleHostCreateBreakoutBulk(
           partners,
           roomId: newRoomId,
           roundNumber: activeSession.currentRound,
-          token,
-          livekitUrl: appConfig.livekit.host,
           timerVisibility,
           // 25 May (F/G) — flags this as a MANUAL breakout so the client scopes
           // its timer to the per-room countdown and ignores session-wide
@@ -428,19 +421,8 @@ export async function handleHostCreateBreakoutBulk(
                 earlyLeave: true,
               });
 
-              const session = await sessionService.getSessionById(sessionId);
-              if (session.lobbyRoomId) {
-                try {
-                  const socketsInRoom = await io.in(userRoom(pid)).fetchSockets();
-                  for (const sk of socketsInRoom) {
-                    const uid = (sk.data as any)?.userId;
-                    if (uid !== pid) continue;
-                    const dName = (sk.data as any)?.displayName || 'User';
-                    const lobbyToken = await videoService.issueJoinToken(uid, session.lobbyRoomId, dName);
-                    sk.emit('lobby:token', { token: lobbyToken.token, livekitUrl: appConfig.livekit.host, roomId: session.lobbyRoomId });
-                  }
-                } catch { /* skip */ }
-              }
+              // Ship C — lobby:token retired; the expiry's canonical clear
+              // above puts everyone on the snapshot rail for lobby tokens.
             }
 
             if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
@@ -573,8 +555,6 @@ export async function handleHostEndBreakoutAll(
       return;
     }
 
-    const { config: appConfig } = await import('../../../config');
-
     for (const m of manuals) {
       const pids = participantsOf(m);
       // Clear per-room timer
@@ -618,20 +598,8 @@ export async function handleHostEndBreakoutAll(
           earlyLeave: true,
         });
 
-        // Return to lobby — issue new LiveKit token for lobby room
-        const session = await sessionService.getSessionById(sessionId);
-        if (session.lobbyRoomId) {
-          try {
-            const socketsInRoom = await io.in(userRoom(pid)).fetchSockets();
-            for (const sk of socketsInRoom) {
-              const uid = (sk.data as any)?.userId;
-              if (uid !== pid) continue;
-              const dName = (sk.data as any)?.displayName || 'User';
-              const lobbyToken = await videoService.issueJoinToken(uid, session.lobbyRoomId, dName);
-              sk.emit('lobby:token', { token: lobbyToken.token, livekitUrl: appConfig.livekit.host, roomId: session.lobbyRoomId });
-            }
-          } catch { /* skip */ }
-        }
+        // Ship C — lobby:token retired; end-all's canonical clear above puts
+        // everyone on the snapshot rail for lobby tokens.
 
         // Bug 14 (April 19) — DO NOT emit match:return_to_lobby here. The
         // client's handler sets phase='lobby' which dismisses the rating

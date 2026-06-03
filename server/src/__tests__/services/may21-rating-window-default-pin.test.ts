@@ -42,8 +42,10 @@ describe('F5 (21 May Ali) — ratingWindowSeconds default 30, min 20', () => {
     const src = readServer('services/orchestration/handlers/round-lifecycle.ts');
     // Pre-fix some fallbacks used `|| 10` and others `|| 30`. They MUST
     // all be 30 now (or some other consistent value ≥ 30). 10 is banned.
+    // Ship C removed the inline token-mint TTL fallback, so only the rating
+    // window's own fallback remains (was ≥2 occurrences pre-cutover).
     const fallbacks = src.match(/ratingWindowSeconds\s*\|\|\s*(\d+)/g) || [];
-    expect(fallbacks.length).toBeGreaterThanOrEqual(2);
+    expect(fallbacks.length).toBeGreaterThanOrEqual(1);
     for (const f of fallbacks) {
       expect(f).not.toMatch(/\|\|\s*10\b/);
     }

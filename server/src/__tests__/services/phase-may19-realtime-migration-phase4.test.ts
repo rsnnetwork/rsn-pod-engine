@@ -204,9 +204,11 @@ describe('Realtime migration Phase 4 — page-level listener prune', () => {
       expect(sessionSrc).toMatch(/socket\.on\(\s*['"]host:event_plan_repaired['"]/);
     });
 
-    // Zustand lobby-token + host-mute-command writes.
-    it('subscribes to lobby:token and lobby:mute_command', () => {
-      expect(sessionSrc).toMatch(/socket\.on\(\s*['"]lobby:token['"]/);
+    // Zustand host-mute-command writes. Ship C (canonical-100%) retired the
+    // lobby:token event — the lobby token now arrives exclusively via the
+    // snapshot rail (session:resync replies + state:snapshot you.token).
+    it('subscribes to lobby:mute_command; lobby:token retired by Ship C', () => {
+      expect(sessionSrc).not.toMatch(/socket\.on\(\s*['"]lobby:token['"]/);
       expect(sessionSrc).toMatch(/socket\.on\(\s*['"]lobby:mute_command['"]/);
     });
 
