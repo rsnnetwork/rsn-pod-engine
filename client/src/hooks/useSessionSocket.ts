@@ -143,6 +143,12 @@ export default function useSessionSocket(sessionId: string) {
     const joinSession = () => {
       store.setConnectionStatus('connected');
       socket.emit('session:join', { sessionId });
+      // Canonical-100% (Ship A) — resync on EVERY connect, not just socket.io
+      // reconnects: a page refresh creates a FRESH socket, so the 'reconnect'
+      // event never fires, yet the user may canonically belong in a breakout
+      // (e.g. F5 mid-room). The resync reply carries you{location, token} and
+      // the snapshot handler routes us into the right room.
+      socket.emit('session:resync', { sessionId, haveSeq: useSessionStore.getState().snapshotSeq });
     };
 
     if (socket.connected) {
@@ -249,15 +255,25 @@ export default function useSessionSocket(sessionId: string) {
       if (!you?.location) return;
       const st = useSessionStore.getState();
       if (you.location.type === 'breakout') {
-        // Wrong-room heal: we're in a breakout but the server says a DIFFERENT
-        // one (host swap that raced, missed reassign). Only act when the server
-        // minted a token for it (it does so exactly on location change/resync);
-        // joining-from-lobby stays with the legacy re-emit during dual-run.
+        // Heal into the canonical breakout. Two cases, both requiring the
+        // server-minted token (sent exactly on location change / resync):
+        //  - wrong room: connected to a different breakout (raced host swap);
+        //  - from lobby: fresh page load (F5 mid-room) or stranded client —
+        //    a refresh creates a NEW socket, so only the resync reply knows
+        //    we belong in a room. Canonical location survives disconnects
+        //    (Ship A server fix), so this is authoritative.
         const wrongRoom = st.phase === 'matched' && !!st.currentRoomId && st.currentRoomId !== you.location.roomId;
-        if (wrongRoom && you.token && you.livekitUrl) {
+        const strandedInLobby = st.phase === 'lobby';
+        if ((wrongRoom || strandedInLobby) && you.token && you.livekitUrl) {
+          store.setMatchingOverlay(null);
+          store.setByeRound(false);
+          store.setPartnerDisconnected(false);
+          store.setLeftCurrentRound(false);
           store.setRoomId(you.location.roomId);
           store.setLiveKitToken(you.token, you.livekitUrl);
-          // Partner context refreshes via the in-flight match:reassigned.
+          store.setPhase('matched');
+          // Partner context (names/matchId) refreshes via the legacy events
+          // still flowing in dual-run; LiveKit tracks render regardless.
         }
       } else {
         // Canonical says MAIN but we're (still) connected to a breakout — a
@@ -1097,6 +1113,9 @@ export default function useSessionSocket(sessionId: string) {
       if (!socket.connected) socket.connect();
       socket.emit('session:join', { sessionId });
       socket.emit('presence:heartbeat', { sessionId });
+      // Canonical-100% (Ship A) — a backgrounded device (phone lock, app switch)
+      // may have missed room moves entirely; the resync reply re-lands us.
+      socket.emit('session:resync', { sessionId, haveSeq: useSessionStore.getState().snapshotSeq });
     };
     document.addEventListener('visibilitychange', resyncPresenceOnReturn);
     window.addEventListener('focus', resyncPresenceOnReturn);
