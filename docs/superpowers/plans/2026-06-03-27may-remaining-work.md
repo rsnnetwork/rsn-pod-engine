@@ -1,6 +1,6 @@
 # 27th May — Remaining Work (continuation doc)
 
-**Last updated:** 2026-06-03 (main = `d6b964a`)
+**Last updated:** 2026-06-03 (main = `66f4892`)
 **Purpose:** a fresh Claude session told "start 27th may remaining work" reads THIS file and continues without re-discovery. It is the single up-to-date status; older triage/plan docs are historical.
 
 ---
@@ -23,14 +23,15 @@
 | Phase 1a | `b2c99a3` | Presence-gated matching eligibility + manual breakout (`PARTICIPANT_NOT_IN_MAIN_ROOM`); `presentUserIds` threaded through `getEligibleParticipants`/`generateSingleRound`/`repairFutureRounds`. |
 | Phase 1a.2 | `58a9860` | Host/co-host surfaces gated: preview "Not matched" list, `/plan` bye-count, `eligibleMainRoomCount`. |
 | Phase 1a.3 | `d6b964a` | Event Plan strip live: replan-after-generate against present set (replan was fail-open + only on preview edits); removed 5 hardcoded `totalPairs: 0`; strip headline derives from gated `/plan`; `/plan` refetches on roster events. |
+| Canonical Ship A | `66f4892` | Snapshot v2: per-recipient `you{location,connState,role,token?}` + timer.endsAt; token minted only on location change/resync; client emits `session:resync` on reconnect + conservative snapshot healing (wrong-room swap, missed return-to-lobby w/ 10s guard); location semantics fixed (disconnect preserves location; setRoomAssignment writes canonical breakout w/ real matchId — previously location was never breakout). Dual-run: legacy token events untouched. |
 
 Also verified live in prod: canonical room-state phases 1–4 + snapshot wire (`SNAPSHOT_EMIT_ENABLED=true`, `ROOM_EVICTION_ENABLED=true`); timer drift fixed; ghosts/count-flip/bounce clusters addressed.
 
 ## Remaining work, in priority order
 
-### Workstream 1 — Canonical migration to 100% (NEXT; Ali explicitly requested)
+### Workstream 1 — Canonical migration to 100% (Ship A DONE `66f4892`; next = Ship B, then Ship C after Ali live-tests)
 The migration is ~85% done. Finish:
-1. **Phase 5 completion — fold tokens into the versioned snapshot; retire `match:assigned`/`lobby:token` as token carriers.** Biggest client-contract change; design at `docs/superpowers/specs/2026-05-25-canonical-room-state-design.md` §8 + `docs/superpowers/plans/2026-05-25-canonical-room-state-phase5.md`. Snapshot's `you.token` carries the single token for the client's canonical location; client reacts to location change by disconnect+reconnect with the new token; kills the dual-token/dual-room class. Client + server deploy together (same-deploy cutover) — plan a dual-run window where old events still fire, then remove. Touches `state-snapshot.ts`, `round-lifecycle.ts`, `participant-flow.ts`, `useSessionSocket.ts`, `sessionStore.ts`, `VideoRoom.tsx`, `Lobby.tsx`.
+1. **Ship B (next):** flip easy presenceMap reads to canonical connState (fail-open) in matching-flow/host-actions/round-lifecycle; chat room-routing via canonical location (real matchId now available); boot-restore participantStates from DB + consult canonical on restore; Phase-4 15s LiveKit sweep (extract webhook heal into reconcileParticipantWithRoom). **Ship C (after Ali live-tests A+B):** strip tokens from match:assigned/reassigned + retire lobby:token (events stay as lifecycle notifications); client connects purely via snapshot you.token + REST fallback; update token-asserting tests. Full design in the approved plan (plans/ok-i-want-you-humble-locket.md mirror) + specs/2026-05-25-canonical-room-state-design.md §8.
 2. **Phase 3 completion — flip remaining legacy in-memory read paths to canonical** (today only host-participants-view reads canonical; lobby/breakout rosters + misc reads still hit in-memory maps/DB). In-memory maps become cache only, rebuilt from Redis on boot.
 3. **Phase 4 hardening — periodic LiveKit sweep (~15s `listParticipants` vs canonical)** to heal missed webhooks (currently webhook-only).
 4. Known small gap: `transitionParticipant` writes canonical location with `matchId: ''` (hardcoded) — fix while in there.
