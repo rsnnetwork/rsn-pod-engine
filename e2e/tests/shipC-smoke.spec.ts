@@ -145,7 +145,9 @@ test('Ship C: snapshot rail carries every token — lobby + round video work wit
 
   // ── 3. F5 mid-breakout — resync rail brings alice back with video ──
   console.log('  alice F5 mid-breakout…');
-  await alicePage.reload({ waitUntil: 'domcontentloaded' });
+  // 'commit' + long timeout: tearing down a live LiveKit connection can stall
+  // the unload long enough to blow the default domcontentloaded budget.
+  await alicePage.reload({ waitUntil: 'commit', timeout: 60_000 });
   await waitForBreakout(alicePage, 'alice (after refresh)', 45_000);
   await waitForVideo(alicePage, 'alice (after refresh)', 35_000);
 
