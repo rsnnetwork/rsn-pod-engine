@@ -67,6 +67,53 @@ describe('clearCanonicalBreakoutByMatch', () => {
   });
 });
 
+describe('canonical RMW serialization (lost-update race)', () => {
+  it('concurrent participant patches never clobber each other', async () => {
+    // Pre-fix: updateCanonicalParticipant read the whole doc, patched one
+    // user, and wrote the whole doc back — two concurrent calls both read
+    // the same base doc and the second write erased the first (observed in
+    // prod: a heartbeat mirror clobbering a just-written breakout location,
+    // which mis-routed room chat to the sender only).
+    const { updateCanonicalParticipant } = await import('../../../services/orchestration/state/canonical-state');
+    await writeCanonical(doc({
+      u1: cp_main(), u2: cp_main(), u3: cp_main(), u4: cp_main(), u5: cp_main(),
+    }) as any);
+    await Promise.all([
+      updateCanonicalParticipant('s1', 'u1', { location: { type: 'breakout', roomId: 'r1', matchId: 'm1' } } as any),
+      updateCanonicalParticipant('s1', 'u2', { location: { type: 'breakout', roomId: 'r1', matchId: 'm1' } } as any),
+      updateCanonicalParticipant('s1', 'u3', { connState: 'connected', lastSeenAt: 999 } as any),
+      updateCanonicalParticipant('s1', 'u4', { connState: 'disconnected' } as any),
+      updateCanonicalParticipant('s1', 'u5', { location: { type: 'breakout', roomId: 'r2', matchId: 'm2' } } as any),
+    ]);
+    const d = await readCanonical('s1');
+    expect(d!.participants.u1.location).toEqual({ type: 'breakout', roomId: 'r1', matchId: 'm1' });
+    expect(d!.participants.u2.location).toEqual({ type: 'breakout', roomId: 'r1', matchId: 'm1' });
+    expect(d!.participants.u3.lastSeenAt).toBe(999);
+    expect(d!.participants.u4.connState).toBe('disconnected');
+    expect(d!.participants.u5.location).toEqual({ type: 'breakout', roomId: 'r2', matchId: 'm2' });
+    expect(d!.seq).toBe(15); // 10 + exactly one bump per write
+  });
+
+  it('mixed helpers serialize too (participant patch vs batch clear)', async () => {
+    const { updateCanonicalParticipant } = await import('../../../services/orchestration/state/canonical-state');
+    await writeCanonical(doc({ u1: inRoom('r1', 'm-old'), u2: inRoom('r1', 'm-old') }) as any);
+    await Promise.all([
+      clearCanonicalBreakoutByMatch('s1', ['m-old']),
+      updateCanonicalParticipant('s1', 'u2', { location: { type: 'breakout', roomId: 'r9', matchId: 'm-new' } } as any),
+    ]);
+    const d = await readCanonical('s1');
+    // u1 cleared by the batch; u2's NEW placement survives regardless of order
+    // (either the clear ran first — m-old matched, then the new write landed —
+    // or the new write ran first and the m-old guard skipped u2).
+    expect(d!.participants.u1.location).toEqual({ type: 'main' });
+    expect(d!.participants.u2.location).toEqual({ type: 'breakout', roomId: 'r9', matchId: 'm-new' });
+  });
+});
+
+const cp_main = () => ({
+  role: 'participant', connState: 'connected', location: { type: 'main' }, lastSeenAt: 1, userSeq: 1,
+});
+
 describe('clearCanonicalLocationToMain', () => {
   it('returns one user to main (explicit leave / host pull-back)', async () => {
     await writeCanonical(doc({ u1: inRoom('r1', 'm1'), u2: inRoom('r1', 'm1') }) as any);

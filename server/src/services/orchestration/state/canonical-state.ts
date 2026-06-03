@@ -88,31 +88,56 @@ export async function writeCanonical(state: CanonicalSessionState): Promise<void
 }
 
 /**
- * Patch a single participant in the canonical doc and bump seq. Read-modify-
- * write of the one key; callers MUST hold withSessionGuard for the session
- * (the transition chokepoint does). Best-effort: no-op if Redis down or the
- * doc doesn't exist yet (the periodic shadow projection backfills it).
+ * Lost-update guard (4 Jun, found by the Ship B headed smoke) — every mutator
+ * below is a read-modify-write of the WHOLE doc. Two concurrent RMWs both
+ * read the same base doc and the later write erased the earlier one. In prod
+ * the writers are genuinely concurrent (fire-and-forget heartbeat mirrors,
+ * setRoomAssignment placements, webhook/sweep heals, resync paths) — observed
+ * as a heartbeat mirror clobbering a just-written breakout location, which
+ * mis-routed room chat to the sender only. Serialize all canonical RMWs per
+ * session through a promise chain. Correct for the current single-instance
+ * deployment; the multi-instance scale-out needs WATCH/Lua here instead.
  */
-export async function updateCanonicalParticipant(
+const _rmwChains = new Map<string, Promise<void>>();
+function serializeRmw(sessionId: string, fn: () => Promise<void>): Promise<void> {
+  const prev = _rmwChains.get(sessionId) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  const tracked = next.catch(() => {});
+  _rmwChains.set(sessionId, tracked);
+  void tracked.then(() => {
+    if (_rmwChains.get(sessionId) === tracked) _rmwChains.delete(sessionId);
+  });
+  return next;
+}
+
+/**
+ * Patch a single participant in the canonical doc and bump seq. Read-modify-
+ * write of the one key, serialized per session (see serializeRmw above).
+ * Best-effort: no-op if Redis down or the doc doesn't exist yet (the periodic
+ * shadow projection backfills it).
+ */
+export function updateCanonicalParticipant(
   sessionId: string,
   userId: string,
   patch: Partial<CanonicalParticipant>,
 ): Promise<void> {
-  const redis = getRedisClient();
-  if (!redis) return;
-  try {
-    const doc = await readCanonical(sessionId);
-    if (!doc) return;
-    const prev = doc.participants[userId] ?? {
-      role: 'participant', connState: 'disconnected',
-      location: { type: 'main' }, lastSeenAt: 0, userSeq: doc.seq,
-    } as CanonicalParticipant;
-    doc.participants[userId] = { ...prev, ...patch, userSeq: doc.seq + 1 };
-    doc.seq += 1;
-    await redis.setex(canonicalKey(sessionId), CANONICAL_TTL, JSON.stringify(doc));
-  } catch (err) {
-    logger.warn({ err, sessionId, userId }, 'updateCanonicalParticipant failed');
-  }
+  return serializeRmw(sessionId, async () => {
+    const redis = getRedisClient();
+    if (!redis) return;
+    try {
+      const doc = await readCanonical(sessionId);
+      if (!doc) return;
+      const prev = doc.participants[userId] ?? {
+        role: 'participant', connState: 'disconnected',
+        location: { type: 'main' }, lastSeenAt: 0, userSeq: doc.seq,
+      } as CanonicalParticipant;
+      doc.participants[userId] = { ...prev, ...patch, userSeq: doc.seq + 1 };
+      doc.seq += 1;
+      await redis.setex(canonicalKey(sessionId), CANONICAL_TTL, JSON.stringify(doc));
+    } catch (err) {
+      logger.warn({ err, sessionId, userId }, 'updateCanonicalParticipant failed');
+    }
+  });
 }
 
 /**
@@ -126,31 +151,33 @@ export async function updateCanonicalParticipant(
  * race-safe: a user already re-placed into a NEWER room (different matchId)
  * is never stomped.
  */
-export async function clearCanonicalBreakoutByMatch(
+export function clearCanonicalBreakoutByMatch(
   sessionId: string,
   matchIds: string[] | Set<string>,
 ): Promise<void> {
-  const redis = getRedisClient();
-  if (!redis) return;
   const ids = matchIds instanceof Set ? matchIds : new Set(matchIds);
-  if (ids.size === 0) return;
-  try {
-    const doc = await readCanonical(sessionId);
-    if (!doc) return;
-    let changed = false;
-    for (const p of Object.values(doc.participants)) {
-      if (p.location.type === 'breakout' && ids.has(p.location.matchId)) {
-        p.location = { type: 'main' };
-        p.userSeq = doc.seq + 1;
-        changed = true;
+  if (ids.size === 0) return Promise.resolve();
+  return serializeRmw(sessionId, async () => {
+    const redis = getRedisClient();
+    if (!redis) return;
+    try {
+      const doc = await readCanonical(sessionId);
+      if (!doc) return;
+      let changed = false;
+      for (const p of Object.values(doc.participants)) {
+        if (p.location.type === 'breakout' && ids.has(p.location.matchId)) {
+          p.location = { type: 'main' };
+          p.userSeq = doc.seq + 1;
+          changed = true;
+        }
       }
+      if (!changed) return;
+      doc.seq += 1;
+      await redis.setex(canonicalKey(sessionId), CANONICAL_TTL, JSON.stringify(doc));
+    } catch (err) {
+      logger.warn({ err, sessionId }, 'clearCanonicalBreakoutByMatch failed');
     }
-    if (!changed) return;
-    doc.seq += 1;
-    await redis.setex(canonicalKey(sessionId), CANONICAL_TTL, JSON.stringify(doc));
-  } catch (err) {
-    logger.warn({ err, sessionId }, 'clearCanonicalBreakoutByMatch failed');
-  }
+  });
 }
 
 /** Explicit single-user return-to-main (voluntary leave / host pull-back). */
@@ -159,19 +186,21 @@ export async function clearCanonicalLocationToMain(sessionId: string, userId: st
 }
 
 /** Set the canonical session status and bump seq. Same guard/best-effort rules. */
-export async function updateCanonicalSessionStatus(
+export function updateCanonicalSessionStatus(
   sessionId: string,
   status: SessionStatus,
 ): Promise<void> {
-  const redis = getRedisClient();
-  if (!redis) return;
-  try {
-    const doc = await readCanonical(sessionId);
-    if (!doc) return;
-    doc.status = status;
-    doc.seq += 1;
-    await redis.setex(canonicalKey(sessionId), CANONICAL_TTL, JSON.stringify(doc));
-  } catch (err) {
-    logger.warn({ err, sessionId, status }, 'updateCanonicalSessionStatus failed');
-  }
+  return serializeRmw(sessionId, async () => {
+    const redis = getRedisClient();
+    if (!redis) return;
+    try {
+      const doc = await readCanonical(sessionId);
+      if (!doc) return;
+      doc.status = status;
+      doc.seq += 1;
+      await redis.setex(canonicalKey(sessionId), CANONICAL_TTL, JSON.stringify(doc));
+    } catch (err) {
+      logger.warn({ err, sessionId, status }, 'updateCanonicalSessionStatus failed');
+    }
+  });
 }
