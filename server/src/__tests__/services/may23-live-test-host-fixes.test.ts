@@ -23,16 +23,20 @@ describe('23 May live-test host-control fixes', () => {
     const fnStart = flowSrc.indexOf('export async function handleHostGenerateMatches');
     const fn = flowSrc.slice(fnStart, flowSrc.indexOf('\nexport ', fnStart + 1));
 
-    it('clears stale "disconnected" for present sockets BEFORE computing eligibility', () => {
-      const fetchIdx = fn.indexOf('fetchSockets()');
-      // Match the actual CALL (prefixed), not the comment mention of the name.
+    it('computes main-room presence and clears stale "disconnected" BEFORE eligibility', () => {
+      // 27 May — the socket/heartbeat/LiveKit-roster union moved into the
+      // getPresentUserIds() helper. handleHostGenerateMatches calls it, reconciles
+      // stale 'disconnected' rows, then gates eligibility on the same present set.
+      const presentIdx = fn.indexOf('getPresentUserIds(');
       const eligIdx = fn.indexOf('matchingService.getEligibleParticipants');
-      expect(fetchIdx).toBeGreaterThan(-1);
+      expect(presentIdx).toBeGreaterThan(-1);
       expect(eligIdx).toBeGreaterThan(-1);
-      // Reconcile must run before eligibility, or it has no effect.
-      expect(fetchIdx).toBeLessThan(eligIdx);
+      // Presence (and the reconcile that depends on it) must run before eligibility.
+      expect(presentIdx).toBeLessThan(eligIdx);
       expect(fn).toMatch(/status = 'disconnected'/);
       expect(fn).toMatch(/transitionParticipant\([\s\S]{0,140}ParticipantState\.IN_MAIN_ROOM/);
+      // Eligibility is gated on the live present set, not DB status alone.
+      expect(fn).toMatch(/getEligibleParticipants\([\s\S]{0,80}presentUserIds/);
     });
   });
 

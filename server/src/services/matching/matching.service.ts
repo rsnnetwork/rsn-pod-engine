@@ -180,11 +180,40 @@ export async function generateSessionSchedule(
 
 // ─── Generate Single Round ──────────────────────────────────────────────────
 
+/**
+ * 27 May — presence gate. Intersect a DB-eligible candidate list with the live
+ * "present in the main room" set so absent participants (registered-but-never-
+ * joined, or who left) are never matched. FAIL-OPEN: when the present set is
+ * absent or empty, or when intersecting would leave nobody, fall back to the DB
+ * list and warn — we never silently match zero people.
+ */
+function gatePresentRows<T>(
+  rows: T[],
+  getId: (row: T) => string,
+  presentUserIds: Set<string> | undefined,
+  sessionId: string,
+  where: string,
+): T[] {
+  if (!presentUserIds) return rows;
+  if (presentUserIds.size === 0) {
+    logger.warn({ sessionId, where }, 'presence gate: empty present-set — falling open to DB-eligible');
+    return rows;
+  }
+  const gated = rows.filter((r) => presentUserIds.has(getId(r)));
+  if (gated.length === 0) {
+    logger.warn({ sessionId, where, dbEligible: rows.length },
+      'presence gate: zero overlap with present-set — falling open to DB-eligible');
+    return rows;
+  }
+  return gated;
+}
+
 export async function generateSingleRound(
   sessionId: string,
   roundNumber: number,
   excludeUserIds?: string[],
   options?: { regenerate?: boolean; excludePairKeys?: string[] },
+  presentUserIds?: Set<string>,
 ): Promise<RoundAssignment> {
   const session = await sessionService.getSessionById(sessionId);
   const sessionConfig = typeof session.config === 'string'
@@ -237,11 +266,14 @@ export async function generateSingleRound(
         [sessionId]
       );
 
-  // Phase H (10 May simplify pass) — the old in-memory `presentUserIds`
-  // filter is gone. Phase A1 made the DB query (with `disconnected`
-  // excluded) the single source of truth for eligibility, so an extra
-  // intersection here was dead code that just forced callers to pass
-  // `undefined` as a positional placeholder.
+  // 27 May (presence gate) — re-introduce the live-presence intersection that
+  // Phase H removed, but as an OPTIONAL fail-open filter: live-path callers
+  // (host press Match / re-match / auto-repair) pass the set of users actually
+  // in the main room, so a registered-but-absent participant is never matched;
+  // callers without a presence signal pass undefined and keep DB-status behaviour.
+  participantsResult.rows = gatePresentRows(
+    participantsResult.rows, (p) => p.userId, presentUserIds, sessionId, 'generateSingleRound',
+  );
 
   // Phase 4 — same matching-policy resolution as generateSessionSchedule.
   const userIds = participantsResult.rows.map((p) => p.userId);
@@ -536,7 +568,8 @@ export async function generateSingleRound(
 
 export async function getEligibleParticipants(
   sessionId: string,
-  excludeUserIds: string[] = []
+  excludeUserIds: string[] = [],
+  presentUserIds?: Set<string>,
 ): Promise<string[]> {
   // Phase A1 (10 May spec) — DB is the single source of truth for matching
   // eligibility. `disconnected` was previously eligible (filter only excluded
@@ -568,7 +601,8 @@ export async function getEligibleParticipants(
            )`,
         [sessionId]
       );
-  return result.rows.map(r => r.user_id);
+  return gatePresentRows(result.rows, (r) => r.user_id, presentUserIds, sessionId, 'getEligibleParticipants')
+    .map(r => r.user_id);
 }
 
 // ─── Get Matches for Session/Round ──────────────────────────────────────────
@@ -857,6 +891,7 @@ export async function repairFutureRounds(
   sessionId: string,
   fromRoundNumber: number,
   reason: 'late_joiner' | 'left' | 'host_request',
+  presentUserIds?: Set<string>,
 ): Promise<{ regeneratedRounds: number[]; errors: Array<{ roundNumber: number; error: string }> }> {
   const session = await sessionService.getSessionById(sessionId);
   const sessionConfig = typeof session.config === 'string'
@@ -917,7 +952,7 @@ export async function repairFutureRounds(
 
   for (let r = fromRoundNumber; r <= totalRounds; r++) {
     try {
-      await generateSingleRound(sessionId, r, allHostIds);
+      await generateSingleRound(sessionId, r, allHostIds, undefined, presentUserIds);
       regeneratedRounds.push(r);
     } catch (err: any) {
       logger.warn({ err, sessionId, roundNumber: r, reason },

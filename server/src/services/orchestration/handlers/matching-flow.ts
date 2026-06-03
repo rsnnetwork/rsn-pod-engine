@@ -20,7 +20,7 @@ import logger from '../../../config/logger';
 import { query } from '../../../db';
 import { SessionStatus, resolveDisplayName, placeholderName } from '@rsn/shared';
 import {
-  activeSessions, withMatchGenerationLock,
+  ActiveSession, activeSessions, withMatchGenerationLock,
   sessionRoom, userRoom, persistSessionState,
 } from '../state/session-state';
 import { verifyHost, getAllHostIds } from './host-actions';
@@ -57,6 +57,49 @@ export function injectMatchingFlowDeps(deps: {
 // ─── Constants ─────────────────────────────────────────────────────────────
 
 const MATCHING_TIMEOUT_MS = 60_000;
+
+/**
+ * 27 May — the authoritative "who is in the main room right now" set, used to
+ * gate matching + manual room assignment so a registered-but-absent participant
+ * (accepted the invite but never joined, or was here and left) is never matched.
+ * Union of three signals: live session-room sockets, heartbeat-fresh presenceMap,
+ * and the LiveKit lobby roster (the video presence that renders the host's tiles —
+ * survives a backgrounded tab / blip the 15s heartbeat doesn't). Host/co-hosts are
+ * NOT removed here — downstream excludeUserIds handles that. The LiveKit lookup
+ * fails open in its own try/catch + 4s timeout.
+ */
+export async function getPresentUserIds(
+  io: SocketServer,
+  sessionId: string,
+  activeSession: ActiveSession,
+): Promise<Set<string>> {
+  const present = new Set<string>();
+  try {
+    const socketsInRoom = await io.in(sessionRoom(sessionId)).fetchSockets();
+    for (const s of socketsInRoom) {
+      const uid = (s.data as any)?.userId;
+      if (uid) present.add(uid);
+    }
+  } catch (err) {
+    logger.warn({ err, sessionId }, 'getPresentUserIds: fetchSockets failed (non-fatal)');
+  }
+  for (const uid of activeSession.presenceMap.keys()) present.add(uid);
+  try {
+    const sessionForRoom = await (await import('../../session/session.service')).getSessionById(sessionId);
+    if (sessionForRoom?.lobbyRoomId) {
+      const videoSvc = await import('../../video/video.service');
+      const roster = await Promise.race([
+        videoSvc.listParticipants(sessionForRoom.lobbyRoomId),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('listParticipants timeout')), 4000)),
+      ]);
+      for (const p of roster) if (p.userId) present.add(p.userId);
+    }
+  } catch (lkErr) {
+    logger.warn({ err: lkErr, sessionId },
+      'getPresentUserIds: LiveKit roster lookup failed (non-fatal, using socket/heartbeat presence)');
+  }
+  return present;
+}
 
 // 23 May (Stefan + Ali) — recover the previewed round from the DB when the
 // in-memory pendingRoundNumber was lost (e.g. a deploy/restart between the
@@ -275,41 +318,13 @@ export async function handleHostGenerateMatches(
     // stale 'disconnected' cleared, so eligibility equals what the host sees.
     const allHostIds = await getAllHostIds(data.sessionId, activeSession.hostUserId);
 
+    // 27 May — compute the live "present in main room" set ONCE (sockets +
+    // heartbeat + LiveKit lobby roster). Used to (a) reconcile any present-but-
+    // 'disconnected' rows so DB status matches what the host sees, and (b) gate
+    // eligibility + the engine run below so a registered-but-absent participant
+    // (e.g. accepted the invite, never joined) is never matched.
+    const presentUserIds = await getPresentUserIds(io, data.sessionId, activeSession);
     try {
-      const presentUserIds = new Set<string>();
-      const socketsInRoom = await io.in(sessionRoom(data.sessionId)).fetchSockets();
-      for (const s of socketsInRoom) {
-        const uid = (s.data as any)?.userId;
-        if (uid) presentUserIds.add(uid);
-      }
-      for (const uid of activeSession.presenceMap.keys()) presentUserIds.add(uid);
-
-      // #16 (24 May, Ali — pre-event hardening) — the authoritative "who is
-      // visibly in the main room" signal is LiveKit's OWN room roster: the video
-      // connection that renders the host's tiles, which survives a backgrounded
-      // tab / phone call / screen lock / laggy control socket (the 15s heartbeat
-      // does NOT). Add it to the present set so a participant who is genuinely in
-      // the room is never excluded from matching for a socket blip — the exact
-      // "7 in room, only 5 matched" gap. Fail-open in its OWN try/catch + 4s
-      // timeout: a LiveKit error must never abort the socket/heartbeat reconcile
-      // below or delay the host's match action.
-      try {
-        const sessionForRoom = await (await import('../../session/session.service')).getSessionById(data.sessionId);
-        if (sessionForRoom?.lobbyRoomId) {
-          const videoSvc = await import('../../video/video.service');
-          const roster = await Promise.race([
-            videoSvc.listParticipants(sessionForRoom.lobbyRoomId),
-            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('listParticipants timeout')), 4000)),
-          ]);
-          for (const p of roster) if (p.userId) presentUserIds.add(p.userId);
-          logger.info({ sessionId: data.sessionId, livekitPresent: roster.length },
-            '#16 — reconciled main-room presence against LiveKit roster');
-        }
-      } catch (lkErr) {
-        logger.warn({ err: lkErr, sessionId: data.sessionId },
-          '#16 — LiveKit roster reconcile failed (non-fatal, using socket/heartbeat presence)');
-      }
-
       if (presentUserIds.size > 0) {
         const stale = await query<{ user_id: string }>(
           `SELECT user_id FROM session_participants
@@ -328,7 +343,7 @@ export async function handleHostGenerateMatches(
       logger.warn({ err, sessionId: data.sessionId }, 'Presence reconcile before matching failed (non-fatal)');
     }
 
-    const eligible = await matchingService.getEligibleParticipants(data.sessionId, allHostIds);
+    const eligible = await matchingService.getEligibleParticipants(data.sessionId, allHostIds, presentUserIds);
     if (eligible.length < 2) {
       socket.emit('error', {
         code: 'INSUFFICIENT_PARTICIPANTS',
@@ -461,7 +476,7 @@ export async function handleHostGenerateMatches(
     // Phase A1 (10 May) — no presentUserIds intersection; DB status is the
     // single source of truth via getEligibleParticipants.
     try {
-      const matchPromise = matchingService.generateSingleRound(data.sessionId, nextRound, allHostIds);
+      const matchPromise = matchingService.generateSingleRound(data.sessionId, nextRound, allHostIds, undefined, presentUserIds);
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('Matching engine timeout after 60s')), MATCHING_TIMEOUT_MS)
       );
@@ -809,10 +824,10 @@ export async function handleHostRegenerateMatches(
       [data.sessionId, roundNumber]
     );
 
-    // Re-generate (exclude host + co-hosts from matching). Phase A1 (10 May)
-    // — DB status is the single source of truth via getEligibleParticipants
-    // inside the matching service; no in-memory presence intersection.
+    // Re-generate (exclude host + co-hosts from matching). 27 May — also gate on
+    // the live present-in-main set so re-match never pulls in an absent participant.
     const allHostIds = await getAllHostIds(data.sessionId, activeSession.hostUserId);
+    const presentUserIds = await getPresentUserIds(io, data.sessionId, activeSession);
 
     // 23 May (#5b, refined per Ali) — Re-match must ALWAYS rotate to a DIFFERENT
     // arrangement, every press. Hard-exclude the CURRENT preview pairs so the
@@ -827,7 +842,7 @@ export async function handleHostRegenerateMatches(
     await query(`DELETE FROM matches WHERE session_id = $1 AND round_number = $2`, [data.sessionId, roundNumber]);
     await matchingService.generateSingleRound(
       data.sessionId, roundNumber, allHostIds,
-      { regenerate: true, excludePairKeys: beforePairKeys },
+      { regenerate: true, excludePairKeys: beforePairKeys }, presentUserIds,
     );
     const afterMatches = await matchingService.getMatchesByRound(data.sessionId, roundNumber);
     const afterArrangement = arrangementKey(afterMatches);
@@ -839,7 +854,7 @@ export async function handleHostRegenerateMatches(
       (afterArrangement === beforeArrangement || afterMatches.length < beforeMatches.length);
     if (noOtherArrangement) {
       await query(`DELETE FROM matches WHERE session_id = $1 AND round_number = $2`, [data.sessionId, roundNumber]);
-      await matchingService.generateSingleRound(data.sessionId, roundNumber, allHostIds, { regenerate: false });
+      await matchingService.generateSingleRound(data.sessionId, roundNumber, allHostIds, { regenerate: false }, presentUserIds);
     }
 
     // R7 (20 May 2026 — live-test post-mortem). After regenerating a round

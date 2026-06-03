@@ -77,4 +77,46 @@ describe('matching.service.getEligibleParticipants', () => {
     expect(sql).toMatch(/participant_b_id\s*=\s*sp\.user_id/);
     expect(sql).toMatch(/participant_c_id\s*=\s*sp\.user_id/);
   });
+
+  // ─── 27 May — presence gate (only people in the main room are eligible) ─────
+  describe('presence gate (presentUserIds)', () => {
+    it('intersects DB-eligible with the present set — absent users excluded', async () => {
+      // DB says A,B,C are status-eligible; but only A and B are in the main room.
+      mockQuery.mockResolvedValueOnce({ rows: [{ user_id: 'A' }, { user_id: 'B' }, { user_id: 'C' }] });
+
+      const { getEligibleParticipants } = await import('../../../services/matching/matching.service');
+      const result = await getEligibleParticipants('sess-1', ['HOST'], new Set(['A', 'B']));
+
+      expect(result.sort()).toEqual(['A', 'B']); // C (registered-but-absent) gated out
+    });
+
+    it('fail-open: undefined present set → DB-eligible unchanged', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ user_id: 'A' }, { user_id: 'B' }, { user_id: 'C' }] });
+
+      const { getEligibleParticipants } = await import('../../../services/matching/matching.service');
+      const result = await getEligibleParticipants('sess-1', ['HOST']); // no present set
+
+      expect(result.sort()).toEqual(['A', 'B', 'C']);
+    });
+
+    it('fail-open: empty present set → DB-eligible unchanged (never match nobody)', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ user_id: 'A' }, { user_id: 'B' }] });
+
+      const { getEligibleParticipants } = await import('../../../services/matching/matching.service');
+      const result = await getEligibleParticipants('sess-1', ['HOST'], new Set<string>());
+
+      expect(result.sort()).toEqual(['A', 'B']);
+    });
+
+    it('fail-open: non-empty present set with ZERO overlap → DB-eligible unchanged', async () => {
+      // Present set is stale/wrong (none of the DB-eligible users appear) — rather
+      // than match nobody, fall back to the DB-eligible list.
+      mockQuery.mockResolvedValueOnce({ rows: [{ user_id: 'A' }, { user_id: 'B' }] });
+
+      const { getEligibleParticipants } = await import('../../../services/matching/matching.service');
+      const result = await getEligibleParticipants('sess-1', ['HOST'], new Set(['X', 'Y', 'Z']));
+
+      expect(result.sort()).toEqual(['A', 'B']);
+    });
+  });
 });

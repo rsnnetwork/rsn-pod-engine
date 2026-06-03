@@ -31,18 +31,23 @@ function fnSlice(src: string, signature: string): string {
 describe('#16 — matcher includes everyone visibly in the main room (LiveKit roster reconcile)', () => {
   const flowSrc = readServer('services/orchestration/handlers/matching-flow.ts');
   const genFn = fnSlice(flowSrc, 'export async function handleHostGenerateMatches');
+  // 27 May — the socket/heartbeat/LiveKit-roster union now lives in this helper,
+  // reused by host-generate, re-match, auto-repair, and manual breakout.
+  const presentFn = fnSlice(flowSrc, 'export async function getPresentUserIds');
 
-  it('reconciles the LiveKit main-room roster into the present set before matching', () => {
-    expect(genFn).toMatch(/listParticipants/);
-    expect(genFn).toMatch(/lobbyRoomId/);
-    // roster userIds feed the same present set that clears stale 'disconnected'
-    expect(genFn).toMatch(/presentUserIds\.add\(p\.userId\)/);
+  it('reconciles the LiveKit main-room roster into the present set', () => {
+    expect(presentFn).toMatch(/listParticipants/);
+    expect(presentFn).toMatch(/lobbyRoomId/);
+    // roster userIds feed the present set
+    expect(presentFn).toMatch(/present\.add\(p\.userId\)/);
+    // and handleHostGenerateMatches builds eligibility from that present set
+    expect(genFn).toMatch(/getPresentUserIds\(/);
   });
 
   it('the LiveKit roster query is fail-open — own try/catch + timeout, never blocks matching', () => {
-    // A LiveKit failure must not abort the existing socket/heartbeat reconcile.
-    expect(genFn).toMatch(/listParticipants[\s\S]{0,500}catch/);
-    expect(genFn).toMatch(/Promise\.race|timeout/i);
+    // A LiveKit failure must not abort presence computation.
+    expect(presentFn).toMatch(/listParticipants[\s\S]{0,500}catch/);
+    expect(presentFn).toMatch(/Promise\.race|timeout/i);
   });
 
   it('#5 — recap returns is_manual and renders a separate Manual rooms section', () => {

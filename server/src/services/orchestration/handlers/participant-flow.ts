@@ -129,11 +129,14 @@ async function runRepair(
     // rooms or with no match row at all. Uses the dedicated match-generation
     // lock (NOT the presence guard) so a repair never blocks joins/leaves —
     // it only queues behind other match-write operations.
-    const result = await withMatchGenerationLock(sessionId, () =>
+    const result = await withMatchGenerationLock(sessionId, async () => {
       // currentRound read inside the lock callback so a round that advanced
-      // while we were queued is reflected.
-      matchingService.repairFutureRounds(sessionId, activeSession.currentRound + 1, reason),
-    );
+      // while we were queued is reflected. 27 May — gate the regen on the live
+      // present-in-main set (dynamic import avoids a require cycle) so an absent
+      // participant is never re-matched into a future round.
+      const presentUserIds = await (await import('./matching-flow')).getPresentUserIds(io, sessionId, activeSession);
+      return matchingService.repairFutureRounds(sessionId, activeSession.currentRound + 1, reason, presentUserIds);
+    });
     if (result.regeneratedRounds.length > 0) {
       // Pull post-repair totals so the host strip shows the correct
       // roundCount + totalPairs. COUNT(*) over scheduled+active+completed

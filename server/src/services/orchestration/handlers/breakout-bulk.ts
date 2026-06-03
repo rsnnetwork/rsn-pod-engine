@@ -181,6 +181,29 @@ export async function handleHostCreateBreakoutBulk(
       return;
     }
 
+    // 27 May — only participants currently IN THE MAIN ROOM can be placed into a
+    // manual breakout. Reject any selected user who isn't present (registered-but-
+    // absent, or was here and left). Fail-open: if the present signal is empty/
+    // unavailable, skip the check rather than block the host (mirrors the matching
+    // fail-open rule). Dynamic import of the sibling helper avoids a require cycle.
+    const presentForBulk = await (await import('./matching-flow')).getPresentUserIds(io, sessionId, activeSession);
+    if (presentForBulk.size > 0) {
+      const absent = allIds.filter((id) => !presentForBulk.has(id));
+      if (absent.length > 0) {
+        const absentNames = absent.map((id) => nameMap.get(id) || 'A participant').sort();
+        socket.emit('error', {
+          code: 'PARTICIPANT_NOT_IN_MAIN_ROOM',
+          message:
+            absentNames.length === 1
+              ? `${absentNames[0]} is not in the main room right now and can't be added to a room.`
+              : `${absentNames.join(', ')} are not in the main room right now and can't be added to a room.`,
+          userIds: absent,
+        });
+        if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
+        return;
+      }
+    }
+
     const createdMatchIds: string[] = [];
 
     // Phase 6 (5 May spec) — atomic per-room bulk-create.

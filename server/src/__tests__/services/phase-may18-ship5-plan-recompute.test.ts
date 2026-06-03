@@ -67,7 +67,10 @@ describe('Bug 18 — Event plan recomputes when participants join mid-event', ()
   it('runRepair emits host:event_plan_repaired with roundCount + totalPairs', () => {
     const fnStart = flowSrc.indexOf('async function runRepair');
     expect(fnStart).toBeGreaterThan(-1);
-    const fn = flowSrc.slice(fnStart, fnStart + 2500);
+    // 27 May — runRepair now computes the present-in-main set inside the lock
+    // callback before regenerating; widen the window so the plan-repaired emit
+    // (further down the function) is still captured.
+    const fn = flowSrc.slice(fnStart, fnStart + 3200);
     // Reads the latest counts from the matches table.
     expect(fn).toMatch(/COUNT\(DISTINCT\s+round_number\)/);
     expect(fn).toMatch(/COUNT\(\*\)::text AS total_pairs/);
