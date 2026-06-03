@@ -164,7 +164,19 @@ export async function handleResync(_io: SocketServer, socket: Socket, data: { se
     if (!doc) return;
     const base = baseFromDoc(doc);
     const userId: string | undefined = (socket.data as { userId?: string })?.userId;
-    const p = userId ? doc.participants[userId] : undefined;
+    let p = userId ? doc.participants[userId] : undefined;
+    if (userId && !p) {
+      // Ship C first-join race — the joiner's presence mirror may not have
+      // landed in canonical yet when their connect-time resync arrives. The
+      // resync is now the ONLY lobby-token rail (lobby:token retired), so
+      // going silent here left fresh joiners without lobby video. Answer
+      // with a synthetic main-room `you`; generateLiveKitToken still
+      // validates session membership before minting.
+      p = {
+        role: 'participant', connState: 'connected',
+        location: { type: 'main' }, lastSeenAt: Date.now(), userSeq: doc.seq,
+      } as CanonicalSessionState['participants'][string];
+    }
     if (userId && p) {
       const you = await buildYou(data.sessionId, userId, p, true);
       // Record the location we answered with so the next co-emit doesn't

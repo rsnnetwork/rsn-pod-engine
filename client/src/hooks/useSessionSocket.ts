@@ -1058,6 +1058,12 @@ export default function useSessionSocket(sessionId: string) {
     const PERIODIC_RESYNC_MS = 30_000;
     const periodicResyncInterval = setInterval(() => {
       fetchSessionStateSnapshot();
+      // Ship C belt — sitting in the lobby without a token means the
+      // first-join resync raced or was missed; pull another, the reply mints.
+      const stNow = useSessionStore.getState();
+      if (stNow.phase === 'lobby' && !stNow.lobbyToken) {
+        socket.emit('session:resync', { sessionId, haveSeq: stNow.snapshotSeq });
+      }
     }, PERIODIC_RESYNC_MS);
 
     // ── Reconnection ──
