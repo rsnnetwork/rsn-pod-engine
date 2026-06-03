@@ -1,6 +1,6 @@
 # 27th May — Remaining Work (continuation doc)
 
-**Last updated:** 2026-06-03 (main = `66f4892`)
+**Last updated:** 2026-06-03 (main = `0faf12b`)
 **Purpose:** a fresh Claude session told "start 27th may remaining work" reads THIS file and continues without re-discovery. It is the single up-to-date status; older triage/plan docs are historical.
 
 ---
@@ -23,7 +23,7 @@
 | Phase 1a | `b2c99a3` | Presence-gated matching eligibility + manual breakout (`PARTICIPANT_NOT_IN_MAIN_ROOM`); `presentUserIds` threaded through `getEligibleParticipants`/`generateSingleRound`/`repairFutureRounds`. |
 | Phase 1a.2 | `58a9860` | Host/co-host surfaces gated: preview "Not matched" list, `/plan` bye-count, `eligibleMainRoomCount`. |
 | Phase 1a.3 | `d6b964a` | Event Plan strip live: replan-after-generate against present set (replan was fail-open + only on preview edits); removed 5 hardcoded `totalPairs: 0`; strip headline derives from gated `/plan`; `/plan` refetches on roster events. |
-| Canonical Ship A | `66f4892` | Snapshot v2: per-recipient `you{location,connState,role,token?}` + timer.endsAt; token minted only on location change/resync; client emits `session:resync` on reconnect + conservative snapshot healing (wrong-room swap, missed return-to-lobby w/ 10s guard); location semantics fixed (disconnect preserves location; setRoomAssignment writes canonical breakout w/ real matchId — previously location was never breakout). Dual-run: legacy token events untouched. |
+| Canonical Ship A | `66f4892` | Snapshot v2: per-recipient `you{location,connState,role,token?}` + timer.endsAt; token minted only on location change/resync; client emits `session:resync` on reconnect + conservative snapshot healing (wrong-room swap, missed return-to-lobby w/ 10s guard); location semantics fixed (disconnect preserves location; setRoomAssignment writes canonical breakout w/ real matchId — previously location was never breakout). Dual-run: legacy token events untouched. Smoke-caught hotfixes: `2792557` (resync on EVERY connect — refresh creates a fresh socket so 'reconnect' never fires; + lobby→breakout heal) and `0faf12b` (status-hygiene transitions must not relocate a live-match user — the rejoin path stomped canonical location). VERIFIED by headed prod smoke e2e/tests/shipA-smoke.spec.ts (run with JWT_SECRET=$(cat e2e/.jwt_secret)): F5-mid-breakout returns to same room w/ video; 12s offline→online resyncs (session:resync asserted on the wire). |
 
 Also verified live in prod: canonical room-state phases 1–4 + snapshot wire (`SNAPSHOT_EMIT_ENABLED=true`, `ROOM_EVICTION_ENABLED=true`); timer drift fixed; ghosts/count-flip/bounce clusters addressed.
 
