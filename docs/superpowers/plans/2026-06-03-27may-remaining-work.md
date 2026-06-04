@@ -1,6 +1,6 @@
 # 27th May — Remaining Work (continuation doc)
 
-**Last updated:** 2026-06-04 (Workstream 1 COMPLETE — Ships A+B+C all live; canonical migration 100%)
+**Last updated:** 2026-06-04 ~07:30 UTC (Workstream 1 COMPLETE incl. Ali's manual test ✅; NEXT SESSION STARTS AT WORKSTREAM 2)
 **Purpose:** a fresh Claude session told "start 27th may remaining work" reads THIS file and continues without re-discovery. It is the single up-to-date status; older triage/plan docs are historical.
 
 ---
@@ -31,9 +31,14 @@ Also verified live in prod: canonical room-state phases 1–4 + snapshot wire (`
 
 ## Remaining work, in priority order
 
-### Workstream 1 — Canonical migration: ✅ COMPLETE (A `66f4892` + B `087ba44` + C `2bdaef6`, all live + headed-smoke-verified on `4077f23`)
-Ali's reported Ship A issue (participants pulled back into a dead breakout after End Round) was triaged and fixed at the root during the C slice — see the ghost-engine fixes in the shipped table. Remaining nice-to-have (NOT blocking): flip the last misc in-memory reads (lobby/breakout roster surfaces) to canonical; in-memory maps as cache only, rebuilt on boot.
-**NEXT after Ali's morning test: Workstream 2 (Part B "nobody waits alone") + Workstream 3 UX items.**
+### Workstream 1 — Canonical migration: ✅ COMPLETE AND HUMAN-VERIFIED
+A `66f4892` + B `087ba44` + C `2bdaef6` all live (main = `69e5a77`); headed shipA/B/C smokes + 20-browser load run green on `4077f23`; **Ali manually tested the full flow 2026-06-04 morning (session 'bb' — rounds, round-end return, no ghost re-pull) and confirmed "it was good"**. His reported Ship A issue (pulled back into dead breakout after End Round) was root-caused to the shadow-projection overwrite and fixed (`4077f23`). Remaining nice-to-have (NOT blocking): flip the last misc in-memory reads (lobby/breakout roster surfaces) to canonical; maps as cache only, rebuilt on boot.
+
+**Sentry context for next session:** client project has a pre-existing LiveKit video-UX cluster — `NegotiationError: negotiation timed out` (the 93-event spike on 2026-06-04 00:50-00:52 was the 20-browser load harness, NOT real users — safe to resolve) and `PublishTrackError: insufficient permissions` ×11 — both belong to the Workstream 3 E4/E5 audio/video items below.
+
+**E2E harness (reuse, don't rebuild):** `Desktop\RSN-fixloc` worktree has e2e node_modules + `.jwt_secret` + `server/.env` ready; specs `e2e/tests/ship{A,B,C}-smoke.spec.ts` + `loadABC-20users.spec.ts` run headed vs prod (command in e2e/README.md). New slices still get their own fresh worktree off origin/main per cadence.
+
+### >>> NEXT SESSION ENTRY POINT: Workstream 2, then Workstream 3 <<<
 
 ### Workstream 2 — Part B "nobody waits alone" (full spec agreed with Ali — implement exactly this)
 - A matching breakout needs ≥2 people; a room dropping below 2 ENDS for whoever remains. **No re-pairing** — remove the `findIsolatedParticipants` re-pair path (participant-flow.ts ~1520 leave-conversation, ~1829 disconnect-timeout); survivor goes rating → main.
