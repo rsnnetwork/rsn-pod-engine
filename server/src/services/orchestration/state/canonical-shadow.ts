@@ -5,7 +5,7 @@
 // throws — it is purely additive and must not affect existing behavior.
 
 import type { ActiveSession } from './session-state';
-import { readCanonical, writeCanonical } from './canonical-state';
+import { readCanonical, mergeProjectedCanonical } from './canonical-state';
 import { projectActiveSessionToCanonical } from './canonical-projection';
 import logger from '../../../config/logger';
 
@@ -13,7 +13,11 @@ export async function shadowWriteCanonical(activeSession: ActiveSession): Promis
   try {
     const prev = await readCanonical(activeSession.sessionId);
     const doc = projectActiveSessionToCanonical(activeSession, prev?.seq ?? 0);
-    await writeCanonical(doc);
+    // 4 Jun ghost root cause — this used to writeCanonical (whole-doc
+    // overwrite), resurrecting dead breakout locations from the stale
+    // roomParticipants map after every room-end clear. Now a serialized
+    // merge: existing canonical participants win, projection only adds.
+    await mergeProjectedCanonical(doc);
   } catch (err) {
     logger.warn({ err, sessionId: activeSession.sessionId }, 'shadowWriteCanonical failed (non-fatal)');
   }

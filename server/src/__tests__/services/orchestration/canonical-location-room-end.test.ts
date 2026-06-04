@@ -114,6 +114,41 @@ const cp_main = () => ({
   role: 'participant', connState: 'connected', location: { type: 'main' }, lastSeenAt: 1, userSeq: 1,
 });
 
+describe('shadow projection must never resurrect locations (the ghost engine)', () => {
+  it('preserves existing participants verbatim; only adds new ones and doc-level fields', async () => {
+    // The Phase-1 shadow projection derived location from the in-memory
+    // roomParticipants map, which nothing clears at round end — so every
+    // persistSessionState overwrote the whole doc and resurrected the dead
+    // breakout location AFTER the room-end clears (the 4-Jun ghost's real
+    // engine). Post-fix it merges: existing participants are preserved
+    // verbatim (canonical is authoritative), new ones are added, and only
+    // doc-level fields (status/round/timer) come from the projection.
+    const { shadowWriteCanonical } = await import('../../../services/orchestration/state/canonical-shadow');
+    await writeCanonical(doc({
+      u1: { role: 'participant', connState: 'connected', location: { type: 'main' }, lastSeenAt: 5, userSeq: 1 },
+    }) as any);
+
+    const activeSession: any = {
+      sessionId: 's1', hostUserId: 'h', status: 'round_transition', currentRound: 1,
+      timerEndsAt: null,
+      presenceMap: new Map([
+        ['u1', { lastHeartbeat: new Date(), socketId: 'x' }],
+        ['u2', { lastHeartbeat: new Date(), socketId: 'y' }], // new joiner, not in doc yet
+      ]),
+      // STALE: u1's round-1 room entry that nothing cleaned up
+      roomParticipants: new Map([['u1', { matchId: 'm-dead', roomId: 'r-dead', joinedAt: new Date() }]]),
+      participantStates: new Map(),
+    };
+    await shadowWriteCanonical(activeSession);
+
+    const d = await readCanonical('s1');
+    expect(d!.participants.u1.location).toEqual({ type: 'main' });     // NOT resurrected
+    expect(d!.participants.u2).toBeDefined();                          // new joiner added
+    expect(d!.participants.u2.location).toEqual({ type: 'main' });
+    expect(d!.status).toBe('round_transition');                        // doc-level updated
+  });
+});
+
 describe('clearCanonicalLocationToMain', () => {
   it('returns one user to main (explicit leave / host pull-back)', async () => {
     await writeCanonical(doc({ u1: inRoom('r1', 'm1'), u2: inRoom('r1', 'm1') }) as any);

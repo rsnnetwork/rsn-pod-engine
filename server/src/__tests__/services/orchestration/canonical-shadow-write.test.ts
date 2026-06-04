@@ -5,7 +5,10 @@ const reads: string[] = [];
 const writes: any[] = [];
 jest.mock('../../../services/orchestration/state/canonical-state', () => ({
   readCanonical: jest.fn(async (id: string) => { reads.push(id); return { seq: 7 }; }),
-  writeCanonical: jest.fn(async (state: any) => { writes.push(state); }),
+  // 4 Jun ghost fix — the shadow now MERGES through the serialized helper
+  // instead of overwriting via writeCanonical (which resurrected dead
+  // breakout locations from the stale roomParticipants map).
+  mergeProjectedCanonical: jest.fn(async (state: any) => { writes.push(state); }),
 }));
 
 import { shadowWriteCanonical } from '../../../services/orchestration/state/canonical-shadow';

@@ -185,6 +185,37 @@ export async function clearCanonicalLocationToMain(sessionId: string, userId: st
   await updateCanonicalParticipant(sessionId, userId, { location: { type: 'main' } });
 }
 
+/**
+ * Serialized MERGE for the shadow projection (4 Jun ghost root cause).
+ * Pre-fix the shadow OVERWROTE the whole doc from in-memory state on every
+ * persistSessionState — and its location source (roomParticipants) is never
+ * cleaned at round end, so it kept resurrecting dead breakout locations
+ * after the room-end clears. Canonical participants are AUTHORITATIVE now:
+ * existing entries are preserved verbatim; the projection only contributes
+ * brand-new participants and the doc-level fields (status/round/timer).
+ */
+export function mergeProjectedCanonical(projected: CanonicalSessionState): Promise<void> {
+  return serializeRmw(projected.sessionId, async () => {
+    const redis = getRedisClient();
+    if (!redis) return;
+    try {
+      const prev = await readCanonical(projected.sessionId);
+      if (!prev) {
+        await redis.setex(canonicalKey(projected.sessionId), CANONICAL_TTL, JSON.stringify(projected));
+        return;
+      }
+      const merged: CanonicalSessionState = {
+        ...projected,
+        seq: prev.seq + 1,
+        participants: { ...projected.participants, ...prev.participants },
+      };
+      await redis.setex(canonicalKey(projected.sessionId), CANONICAL_TTL, JSON.stringify(merged));
+    } catch (err) {
+      logger.warn({ err, sessionId: projected.sessionId }, 'mergeProjectedCanonical failed');
+    }
+  });
+}
+
 /** Set the canonical session status and bump seq. Same guard/best-effort rules. */
 export function updateCanonicalSessionStatus(
   sessionId: string,
