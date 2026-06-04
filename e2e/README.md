@@ -32,6 +32,28 @@ Users created via `helpers/auth.ts:createTestUser()` — directly in DB with ema
 ## What's tested
 
 - **manual-rooms.spec.ts** — ghost room disappears after match completes, bulk create works
+- **shipA-smoke.spec.ts** — canonical Ship A (HEADED, vs prod): F5 mid-breakout returns to the
+  same room with video; 12s offline→online re-syncs (`session:resync` asserted on the wire when
+  the socket.io connection actually dropped — LiveKit sockets are excluded from that check)
+- **shipB-smoke.spec.ts** — canonical Ship B + room-end fixes (HEADED, vs prod): full algorithm
+  round cycle with REAL rating-form clicks, 75s ghost-re-pull watch after End Round, manual
+  breakout with UI-driven room-scope chat assertion (roommate sees it, host doesn't), end-all +
+  voluntary-leave ghost watches. Native confirm() dialogs are auto-accepted.
+- **shipC-smoke.spec.ts** — canonical Ship C token cutover (HEADED, vs prod): lobby + breakout
+  video work with ZERO legacy token frames (no lobby:token ever; match:assigned carries no
+  token) — everything rides the snapshot rail (resync replies + you.token) + REST fallback.
+- **loadABC-20users.spec.ts** — 20 REAL browser contexts vs prod: sequential joins, lobby video,
+  full 10-pair round, all 20 return to main, 60s ghost watch across every page. Video counts are
+  local-CPU-tolerant (20 publishers × 19 subscriptions saturate one machine); state placement
+  and final convergence are strict.
+
+Run any of them headed against prod:
+```bash
+cd e2e
+$env:JWT_SECRET = (Get-Content .jwt_secret -Raw).Trim()
+$env:DATABASE_URL = ((Get-Content "..\server\.env" | Select-String "^DATABASE_URL=") -replace "^DATABASE_URL=","")
+npx playwright test tests/shipA-smoke.spec.ts tests/shipB-smoke.spec.ts tests/shipC-smoke.spec.ts --reporter=line
+```
 
 ## Adding tests
 
