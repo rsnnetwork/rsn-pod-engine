@@ -107,9 +107,12 @@ test('Ship A: refresh mid-breakout returns to the same room; offline/online resy
   const bobPage = await newUserPage(bob, errors);
 
   // Capture bob's socket frames to assert session:resync goes out on reconnect.
+  // Count ONLY socket.io websockets — LiveKit always reconnects after a blip
+  // (new wss to the media server) even when the socket.io connection survives.
   const bobSentFrames: string[] = [];
   let bobSocketsCreated = 0;
   bobPage.on('websocket', (ws) => {
+    if (!ws.url().includes('/socket.io/')) return;
     bobSocketsCreated++;
     ws.on('framesent', (f) => {
       const p = typeof f.payload === 'string' ? f.payload : f.payload.toString();
