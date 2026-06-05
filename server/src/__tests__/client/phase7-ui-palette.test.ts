@@ -39,7 +39,12 @@ describe('Phase 7 — UI palette + recap nav', () => {
     });
 
     it('headline uses dark text on white (text-[#1a1a2e])', () => {
-      expect(src).toMatch(/text-\[#1a1a2e\][\s\S]+?Rate your conversation/);
+      // WS2 (27 May remaining work) — the headline text became dynamic
+      // (ratingCopy(reason).heading drives "Your partner didn't return" /
+      // "Rate your last conversation" / the default). Pin the palette on
+      // the h2 itself plus the default copy still existing in ratingCopy.
+      expect(src).toMatch(/<h2 className="text-xl font-bold text-\[#1a1a2e\][^"]*">\{ratingCopy\(reason\)\.heading\}<\/h2>/);
+      expect(src).toMatch(/Rate your conversation/);
     });
 
     it('star colour for unrated changed from white-tint to gray (visible on white)', () => {

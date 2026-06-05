@@ -23,17 +23,22 @@ function readSource(relPath: string): string {
 }
 
 describe('Tier-1 A3 — deferred-callback session-end guards', () => {
-  describe('host-actions.ts host-remove 5s partner-return', () => {
+  describe('host-actions.ts host-remove partner-return', () => {
     const src = readSource('host-actions.ts');
 
-    it('the 5-second setTimeout checks activeSessions before doing work', () => {
-      // Locate the specific setTimeout by its trailing 5 000 ms argument
-      // and verify the first statement inside the callback is a guard.
-      const timeoutIdx = src.indexOf('Server-side 5s timeout');
-      expect(timeoutIdx).toBeGreaterThan(-1);
-      const block = src.slice(timeoutIdx, timeoutIdx + 1200);
-      expect(block).toMatch(/setTimeout\(async \(\) => \{[\s\S]*?const currentSession = activeSessions\.get\(data\.sessionId\)/);
-      expect(block).toMatch(/if \(!currentSession\)/);
+    it('WS2 — the partner-return is now inline (the deferred 5s flow this guard protected is gone)', () => {
+      // Pre-WS2 a "Server-side 5s timeout" deferred the partner's rating and
+      // needed an activeSessions guard against the session ending mid-delay.
+      // WS2 made host pull-back an IMMEDIATE room end (survivor → rating →
+      // main inside the handler itself), so there is no deferred callback
+      // left to guard. Pin the removal so the unguarded-timeout pattern
+      // can't silently come back.
+      expect(src).not.toMatch(/Server-side 5s timeout/);
+      const fnStart = src.indexOf('export async function handleHostRemoveFromRoom');
+      expect(fnStart).toBeGreaterThan(-1);
+      const fn = src.slice(fnStart, src.indexOf('\nexport ', fnStart + 1));
+      expect(fn).not.toMatch(/setTimeout\([\s\S]*?,\s*5000\)/);
+      expect(fn).toMatch(/endRoomEarlyForSurvivors\(/);
     });
   });
 
@@ -45,7 +50,10 @@ describe('Tier-1 A3 — deferred-callback session-end guards', () => {
       expect(src).toMatch(/if \(!s \|\| s\.status !== SessionStatus\.ROUND_ACTIVE\)/);
     });
 
-    it('participant-flow auto-reassign 5s setTimeout guards on currentSession', () => {
+    it('participant-flow match-end grace setTimeout guards on currentSession (was: auto-reassign 5s)', () => {
+      // WS2 — the 5s auto-reassign timer is gone; the surviving deferred
+      // callback is the shared 15s match-end grace, which must keep the
+      // same session-ended guard pattern.
       const src = readSource('participant-flow.ts');
       expect(src).toMatch(/setTimeout\(async \(\) => \{[\s\S]{0,200}?const currentSession = activeSessions\.get\(sessionId\)/);
       // One of these guard blocks must early-return on null

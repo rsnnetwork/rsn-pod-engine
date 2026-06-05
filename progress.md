@@ -7981,3 +7981,27 @@ Cardinal invariant: `document.scrollWidth <= clientWidth`, asserted on both `doc
 | W — Sentry post-deploy check | follow-up | ⏭ SDK wired; awaits SENTRY_AUTH_TOKEN |
 
 All 12 May items + all deferred follow-ups closed. End-to-end verification: server unit suite (1372 tests) + Playwright suite (16 earlier + 5 mobile = 21 tests) against live production, all passing.
+
+
+---
+
+## 2026-06-05 — WS2 Slice 1: "Nobody waits alone" core (27 May remaining work)
+
+**Status:** Completed (local verification; deploy + headed smoke follow in same session)
+
+**What changed:**
+- NO RE-PAIRING anywhere: removed both auto-reassign paths (leave-conversation 5s timer, disconnect-timeout ladder) and deleted the now-dead `isolated-participants` module + its unit tests. A room dropping below 2 ENDS for the survivor: rating → main.
+- Deliberate exits end the room IMMEDIATELY: "Back to Main" (handleLeaveConversation pair path) and host pull-back (handleHostRemoveFromRoom — its deferred 5s partner flow is gone) send the survivor straight to the rating form.
+- Involuntary exits get a 15s grace via new shared `scheduleMatchEndGrace` (participant-flow.ts): connection drop AND "Leave event" (which previously orphaned the partner's match entirely). Return within grace → room resumes (partner gets match:partner_reconnected immediately on rejoin, banner clears); else trio-aware demote → survivor rates ('partner_no_return').
+- Trio slot-C disconnect bug fixed (match lookup now checks all 3 slots; all surviving partners notified); trio disconnect expiry no longer kills the whole match (demote keeps 2 survivors talking).
+- `rating:window_open` gained `reason` ('partner_no_return' | 'late_return' | 'round_end' | 'early_leave'); RatingPrompt renders copy per reason. Late returners (back after the grace) get "Rate your last conversation" replayed on rejoin (new branch in handleJoinSession ROUND_ACTIVE restore).
+- `emitRatingWindowOnce` now returns whether it emitted; new `room-end-early.ts` helper falls back to match:return_to_lobby for already-rated survivors (never strands anyone in a dead room).
+- CLIENT TRAP REMOVED: VideoRoom's PartnerLeftAutoReturn auto-emitted leave_conversation after 5s, defeating any server grace. Now a passive "Waiting for your partner to reconnect…" banner; the server decides resume-or-end. New match:participant_left listener (trio survivors) clears the banner + toasts.
+
+**Files touched:** shared/src/types/events.ts; server: participant-flow.ts, host-actions.ts, round-lifecycle.ts, session-state.ts, room-end-early.ts (new), match-status.ts, isolated-participants.ts (deleted); client: VideoRoom.tsx, RatingPrompt.tsx, useSessionSocket.ts, sessionStore.ts; tests: 2 new WS2 pin suites + ws2-smoke.spec.ts (headed E2E), 7 anchor suites re-pointed to the new contract (assertions kept).
+
+**Verification:** typecheck shared/server/client clean; FULL server suite 164/164 suites, 2014 passed.
+
+**Decisions:** isolated-participants deleted (zero production callers post-WS2; deletion pinned by match-status-semantics test so re-pairing can't silently return). Manual-room (LOBBY_OPEN) disconnects keep pre-existing behavior — grace applies to ROUND_ACTIVE, matching the old gating.
+
+**Next:** push staging → CI → main → verify Render+Vercel → headed ws2-smoke vs prod → checkhole → Slice 2 (kick ends match + REMOVED rejoin ban + trio departed round-end ratings).

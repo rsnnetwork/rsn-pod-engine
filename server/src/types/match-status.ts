@@ -24,7 +24,9 @@
  *               by round-lifecycle.ts:detectNoShows (60s after round start)
  *               when presenceMap.has(userId) === false for one or both
  *               participants. RESERVED for this one meaning — do not reuse
- *               as a scratch flag for reassign logic (use findIsolatedParticipants).
+ *               as a scratch flag. (WS2, 27 May remaining work: the old
+ *               reassign flows were removed — a room dropping below 2 now
+ *               ends for the survivor instead of re-pairing.)
  *
  *   cancelled:  Match was aborted before or during. Reasons:
  *                 - Host manually removed a participant mid-round

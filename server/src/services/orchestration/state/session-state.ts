@@ -333,12 +333,16 @@ async function persistChatToRedis(sessionId: string, messages: ChatMessage[]): P
 // Fail-open: if the DB query errors, we still emit (better a duplicate prompt
 // than a missed one — and the rating service itself will reject the dup).
 
+// WS2 (27 May remaining work) — returns whether the window was actually
+// emitted. Early-end callers (room-end-early.ts) need this to fall back to
+// match:return_to_lobby for a survivor who already rated, so a dedup-skip
+// never strands them inside a dead breakout.
 export async function emitRatingWindowOnce(
   io: { to: (room: string) => { emit: (event: string, payload: unknown) => void } },
   userId: string,
   matchId: string,
   payload: unknown,
-): Promise<void> {
+): Promise<boolean> {
   // Phase R4 (20 May 2026) — defense-in-depth. The event host's userId must
   // never receive a rating prompt: the host is not matchable (Phase R1) and
   // any rating prompt to them is the signature of a phantom match having
@@ -356,7 +360,7 @@ export async function emitRatingWindowOnce(
     if (hostUserId && hostUserId === userId) {
       logger.warn({ matchId, userId, hostUserId },
         'Phase R4 — refused to open rating window for the event host. Upstream guard bypassed?');
-      return;
+      return false;
     }
   } catch (err) {
     logger.warn({ err, matchId, userId },
@@ -370,12 +374,13 @@ export async function emitRatingWindowOnce(
     );
     if (existing.rows.length > 0) {
       logger.info({ matchId, userId }, 'Skipping rating:window_open — user already rated this match');
-      return;
+      return false;
     }
   } catch (err) {
     logger.warn({ err, matchId, userId }, 'rating dedup check failed — emitting anyway (fail-open)');
   }
   io.to(userRoom(userId)).emit('rating:window_open', payload);
+  return true;
 }
 
 // ─── Health / Diagnostics ───────────────────────────────────────────────────

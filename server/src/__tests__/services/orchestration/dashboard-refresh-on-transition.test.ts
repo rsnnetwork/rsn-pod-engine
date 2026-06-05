@@ -43,13 +43,16 @@ describe('Architectural: dashboard refresh on every match status transition', ()
       expect(fn).toMatch(/emitHostDashboard\(/);
     });
 
-    it('disconnect timeout (cancelled/completed) emits emitHostDashboard after UPDATE matches', () => {
+    it('match-end grace expiry (cancelled/completed) emits emitHostDashboard after the demote', () => {
+      // WS2 (27 May remaining work) — the disconnect timeout body moved into
+      // the shared scheduleMatchEndGrace (also used by Leave Event) and the
+      // inline UPDATE became a trio-aware demote. The architectural rule is
+      // unchanged: the transition still refreshes the host dashboard.
       const src = readSource('../../../services/orchestration/handlers/participant-flow.ts');
-      // The disconnect handler's terminalStatus block
-      const blockStart = src.indexOf("'Match ended by disconnect'");
+      const blockStart = src.indexOf("'Match-end grace expired'");
       expect(blockStart).toBeGreaterThan(-1);
-      // emit must exist within the same callback
-      const block = src.slice(blockStart, blockStart + 1500);
+      // emit must exist within the same callback (both trio + pair branches)
+      const block = src.slice(blockStart, blockStart + 2500);
       expect(block).toMatch(/emitHostDashboard\(/);
     });
   });

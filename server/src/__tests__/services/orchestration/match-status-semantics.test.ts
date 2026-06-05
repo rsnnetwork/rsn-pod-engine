@@ -42,10 +42,18 @@ describe('match-status semantics refactor — regression for Change 4.5', () => 
     });
   });
 
-  describe('Change 4.5 commit 7d3efb8 — findIsolatedParticipants helper exists', () => {
-    it('exports findIsolatedParticipants for reassign flows', async () => {
-      const mod: any = await import('../../../services/matching/isolated-participants');
-      expect(typeof mod.findIsolatedParticipants).toBe('function');
+  describe('WS2 (27 May remaining work) — reassign flows removed for good', () => {
+    // Change 4.5 (commit 7d3efb8) introduced the isolated-participants helper
+    // for the auto-reassign ladder. WS2 inverted the product rule — a room
+    // dropping below 2 ENDS for the survivor (rating → main), never re-pairs —
+    // so the helper and its call sites were deleted. Pin the deletion: the
+    // module must stay gone (a re-introduction means someone resurrected
+    // re-pairing without revisiting the agreed spec).
+    it('the isolated-participants module no longer exists', () => {
+      const fs = require('fs');
+      const path = require('path');
+      const modulePath = path.join(__dirname, '../../../services/matching/isolated-participants.ts');
+      expect(fs.existsSync(modulePath)).toBe(false);
     });
   });
 

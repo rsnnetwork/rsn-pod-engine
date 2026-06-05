@@ -643,6 +643,7 @@ export async function endRound(
             roundNumber,
             durationSeconds: scaledDuration,
             partnerCount,
+            reason: 'round_end',
           });
           // Phase 2 dual-emit — session + participants for the rater so
           // unrated-partners / session-participants queries pick up the

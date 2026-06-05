@@ -12,6 +12,8 @@ const SOCKET_EVENTS = [
   'session:round_ended', 'session:completed', 'session:evicted',
   'match:assigned', 'match:reassigned', 'match:bye_round',
   'match:partner_disconnected', 'match:partner_reconnected', 'match:return_to_lobby',
+  // WS2 (27 May remaining work) — trio "someone left, you keep talking".
+  'match:participant_left',
   'rating:window_open', 'rating:window_closed',
   'session:matching_preparing', 'session:matching_in_progress', 'session:matching_cancelled', 'session:matches_confirmed',
   'host:broadcast', 'host:participant_removed',
@@ -382,6 +384,7 @@ export default function useSessionSocket(sessionId: string) {
         } else if (state.phase !== 'rating') {
           // Matched users who didn't get rating:window_open (edge case) — transition them
           store.setTransitionStatus('round_ending');
+          store.setRatingReason(null); // WS2 — direct phase flip = default round-end copy
           store.setPhase('rating');
         }
       }
@@ -471,6 +474,7 @@ export default function useSessionSocket(sessionId: string) {
       } else {
         store.setTransitionStatus('round_ending');
         // Preserve currentMatch/currentMatchId so RatingPrompt can use them
+        store.setRatingReason(null); // WS2 — direct phase flip = default round-end copy
         store.setPhase('rating');
       }
     });
@@ -600,6 +604,15 @@ export default function useSessionSocket(sessionId: string) {
       store.setPartnerDisconnected(false);
     });
 
+    // WS2 (27 May remaining work) — a trio member left / dropped past the
+    // grace, but THIS room continues (2+ remain). Clear any waiting banner
+    // (the grace path raised partnerDisconnected) and tell the survivors.
+    socket.on('match:participant_left', (data: any) => {
+      store.setPartnerDisconnected(false);
+      const name = data?.leftDisplayName || 'A participant';
+      useToastStore.getState().addToast(`${name} left the conversation — you can keep talking`, 'info');
+    });
+
     socket.on('match:return_to_lobby', () => {
       // Returned to lobby from breakout room (left conversation or partner left)
       clearTimer(); // Stop round timer — this user's room participation is over
@@ -678,6 +691,10 @@ export default function useSessionSocket(sessionId: string) {
         store.setMatch(currentState.currentMatch, data.matchId, currentState.currentPartners);
       }
       store.setTransitionStatus(null); // Clear "Round ending — wrapping up" banner
+      // WS2 (27 May remaining work) — why the form opened drives the copy
+      // (RatingPrompt): partner_no_return / late_return / round_end /
+      // early_leave. Older servers omit it → null → default copy.
+      store.setRatingReason(data.reason ?? null);
       // B (26 May) — rating window has no countdown. Stop the local tick so
       // no stale timer from a prior segment stays running. Clear timerEndsAt so
       // the 1s recompute path doesn't count from a leftover breakout endsAt.

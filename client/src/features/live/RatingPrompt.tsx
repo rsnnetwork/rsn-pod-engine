@@ -11,7 +11,28 @@ interface Props { sessionId: string; }
 
 type SubmissionState = null | { meetAgain: boolean };
 
-function PartnerRatingForm({ partnerName, toUserId, matchId, onSubmitted, onSkip, partnerIndex, totalPartners }: {
+// WS2 (27 May remaining work) — header + subline copy keyed by why the
+// rating window opened. Default (null / 'round_end' / 'early_leave') keeps
+// the existing copy; the two "your room ended early" reasons explain what
+// happened so the form doesn't feel like a glitch.
+function ratingCopy(reason: 'partner_no_return' | 'late_return' | 'round_end' | 'early_leave' | null): {
+  heading: string;
+  subline: string | null;
+} {
+  switch (reason) {
+    case 'partner_no_return':
+      return {
+        heading: 'Your partner didn’t return',
+        subline: 'Rate your conversation — returning you to the main room.',
+      };
+    case 'late_return':
+      return { heading: 'Rate your last conversation', subline: null };
+    default:
+      return { heading: 'Rate your conversation', subline: null };
+  }
+}
+
+function PartnerRatingForm({ partnerName, toUserId, matchId, onSubmitted, onSkip, partnerIndex, totalPartners, reason }: {
   partnerName: string;
   toUserId: string;
   matchId: string;
@@ -19,6 +40,7 @@ function PartnerRatingForm({ partnerName, toUserId, matchId, onSubmitted, onSkip
   onSkip: () => void;
   partnerIndex: number;
   totalPartners: number;
+  reason: 'partner_no_return' | 'late_return' | 'round_end' | 'early_leave' | null;
 }) {
   const { addToast } = useToastStore();
   const [rating, setRating] = useState(0);
@@ -64,7 +86,10 @@ function PartnerRatingForm({ partnerName, toUserId, matchId, onSubmitted, onSkip
           ))}
         </div>
       )}
-      <h2 className="text-xl font-bold text-[#1a1a2e] mb-2">Rate your conversation</h2>
+      <h2 className="text-xl font-bold text-[#1a1a2e] mb-2">{ratingCopy(reason).heading}</h2>
+      {ratingCopy(reason).subline && (
+        <p className="text-sm text-gray-400 mb-2">{ratingCopy(reason).subline}</p>
+      )}
       <p className="text-gray-500 mb-2">
         How was your chat with <span className="text-[#1a1a2e] font-medium">{partnerName}</span>?
       </p>
@@ -146,6 +171,7 @@ export default function RatingPrompt(props: Props) {
   const currentMatch = useSessionStore(s => s.currentMatch);
   const currentMatchId = useSessionStore(s => s.currentMatchId);
   const currentPartners = useSessionStore(s => s.currentPartners);
+  const ratingReason = useSessionStore(s => s.ratingReason);
   const currentRound = useSessionStore(s => s.currentRound);
   const totalRounds = useSessionStore(s => s.totalRounds);
   const ratedMatchIds = useSessionStore(s => s.ratedMatchIds);
@@ -267,6 +293,7 @@ export default function RatingPrompt(props: Props) {
         onSkip={skip}
         partnerIndex={currentPartnerIdx}
         totalPartners={partners.length}
+        reason={ratingReason}
       />
     </div>
   );

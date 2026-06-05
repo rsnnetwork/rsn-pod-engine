@@ -54,13 +54,17 @@ describe('May 21 test post-mortem — M1 + M3 architectural fixes', () => {
       expect(src).toMatch(/Phase A1[\s\S]{0,2000}ParticipantStatus\.LEFT/);
     });
 
-    it('match-ending logic (terminal status, auto-reassign) still runs after the dropped LEFT', () => {
+    it('match-ending logic (terminal status via trio-aware demote) still runs after the dropped LEFT', () => {
+      // WS2 (27 May remaining work) — the auto-reassign ladder was removed:
+      // a room dropping below 2 now ENDS for the survivor (rating → main)
+      // instead of re-pairing. The match-ending contract survives via
+      // demoteParticipantFromMatch inside the shared match-end grace.
       const m1Idx = src.indexOf('M1 fix (21 May Ali)');
       const after = src.slice(m1Idx, m1Idx + 5000);
       // The terminal-status block must come AFTER the M1 comment block.
       expect(after).toMatch(/Determine terminal status based on actual conversation state/);
-      // And the auto-reassign block.
-      expect(after).toMatch(/Try auto-reassignment/);
+      // And the trio-aware match-ending demote.
+      expect(after).toMatch(/demoteParticipantFromMatch/);
     });
   });
 

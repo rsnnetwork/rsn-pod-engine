@@ -35,7 +35,15 @@ export interface ServerToClientEvents {
   }) => void;
 
   // Rating window
-  'rating:window_open': (data: { matchId: string; partnerId: string; partnerDisplayName?: string; partners?: { userId: string; displayName: string }[]; roundNumber: number; durationSeconds: number }) => void;
+  // WS2 (27 May remaining work) — `reason` drives the client copy:
+  //   round_end          → normal end-of-round form (default when absent)
+  //   early_leave        → the leaver's / pulled-out user's own immediate form
+  //   partner_no_return  → survivor whose room ended (partner left / dropped / kicked)
+  //   late_return        → returner after the 15s grace, prompted on rejoin
+  // Optional for backward compat — older servers omit it, client falls back
+  // to the round_end copy. `earlyLeave` predates `reason` and still tells the
+  // client to tear down breakout video/room state when the form opens.
+  'rating:window_open': (data: { matchId: string; partnerId: string; partnerDisplayName?: string; partners?: { userId: string; displayName: string }[]; roundNumber?: number; durationSeconds: number; earlyLeave?: boolean; reason?: 'partner_no_return' | 'late_return' | 'round_end' | 'early_leave' }) => void;
   'rating:window_closed': (data: { roundNumber: number }) => void;
 
   // Host actions
@@ -109,7 +117,11 @@ export interface ServerToClientEvents {
   }) => void;
 
   // Breakout room
-  'match:return_to_lobby': (data: { reason: 'partner_left' | 'you_left' | 'auto_return' }) => void;
+  'match:return_to_lobby': (data: { reason: 'partner_left' | 'you_left' | 'auto_return' | 'host_removed' }) => void;
+  // WS2 — emitted since Phase 3 (trio leave keeps the room alive) but never
+  // declared: the lighter "someone left, you keep talking" notification sent
+  // to the SURVIVORS of a trio when one member leaves / is pulled / times out.
+  'match:participant_left': (data: { matchId: string; leftUserId: string; leftDisplayName?: string; remainingCount: number; reason?: string }) => void;
 
   // Matching anticipation
   'session:matching_preparing': (data: { sessionId: string; roundNumber: number }) => void;

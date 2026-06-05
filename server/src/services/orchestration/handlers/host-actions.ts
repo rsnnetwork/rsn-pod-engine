@@ -20,6 +20,8 @@ import {
   emitRatingWindowOnce,
 } from '../state/session-state';
 import { startSegmentTimer, getTimerCallbackForState, TimerCallbacks } from './timer-manager';
+// WS2 (27 May remaining work) — shared survivor flow for early room ends.
+import { endRoomEarlyForSurvivors } from './room-end-early';
 import * as sessionService from '../../session/session.service';
 import * as videoService from '../../video/video.service';
 import { ForbiddenError, ValidationError } from '../../../middleware/errors';
@@ -1252,6 +1254,7 @@ export async function handleHostRemoveFromRoom(
         partners: remPartnersWithNames,
         durationSeconds: 20,
         earlyLeave: true,
+        reason: 'early_leave',
       });
 
       // Ship C — lobby:token retired; the pulled user's canonical location
@@ -1298,6 +1301,7 @@ export async function handleHostRemoveFromRoom(
           partners: partnersWithNames,
           durationSeconds: 20,
           earlyLeave: true,
+          reason: 'early_leave',
         });
       } else {
         // Solo — no one to rate, just return to lobby
@@ -1308,15 +1312,17 @@ export async function handleHostRemoveFromRoom(
     // Ship C — lobby:token retired; canonical-location clear above puts the
     // removed user on the snapshot rail for their lobby token.
 
-    // Notify partner — show "partner left" with 5s countdown, then rating + lobby
+    // WS2 (27 May remaining work) — host pull-back is a DELIBERATE room end:
+    // the survivor goes straight to rating ('partner_no_return') → main room,
+    // IMMEDIATELY. The old flow put the partner into the waiting state and
+    // deferred their rating by a server-side 5s timeout; both are gone —
+    // waiting states are reserved for the involuntary grace paths
+    // (connection drop / Leave Event).
     if (matchResult.rows.length > 0) {
       const match = matchResult.rows[0];
       const partnerIds = [match.participant_a_id, match.participant_b_id, match.participant_c_id]
         .filter((id): id is string => !!id && id !== data.userId);
 
-      for (const partnerId of partnerIds) {
-        io.to(userRoom(partnerId)).emit('match:partner_disconnected', { matchId: data.matchId });
-      }
       // Phase 2 dual-emit — affected partner(s) + the removed user.
       // Match entity covers the in-event match surface; session +
       // participants cover the lobby / participants list refresh.
@@ -1325,46 +1331,9 @@ export async function handleHostRemoveFromRoom(
         [E.session(data.sessionId), E.sessionParticipants(data.sessionId), E.match(data.matchId)],
       ).catch(() => {});
 
-      // Server-side 5s timeout: return partner to rating → lobby
-      // (Client's auto-leave won't work because match is already 'no_show').
-      //
-      // Tier-1 A3: guard the deferred callback against session-ended race.
-      // If the host ended the event during this 5 s window, firing rating
-      // prompts + reissuing lobby tokens against a dead session would emit
-      // stale events to disconnected sockets and touch a DB row whose
-      // parent session is in the completed/deleted state. Bail out early.
-      setTimeout(async () => {
-        const currentSession = activeSessions.get(data.sessionId);
-        if (!currentSession) {
-          logger.info({ sessionId: data.sessionId, userId: data.userId }, 'Session ended during host-remove 5s grace — skipping partner-return flow');
-          return;
-        }
-        try {
-          const removedNameRes = await query<{ display_name: string }>(
-            `SELECT display_name FROM users WHERE id = $1`, [data.userId]
-          );
-          const removedName = removedNameRes.rows[0]?.display_name || 'Partner';
+      await endRoomEarlyForSurvivors(io, data.sessionId, data.matchId, [data.userId], partnerIds);
 
-          for (const partnerId of partnerIds) {
-            await sessionService.updateParticipantStatus(data.sessionId, partnerId, ParticipantStatus.IN_LOBBY).catch(() => {});
-
-            await emitRatingWindowOnce(io, partnerId, data.matchId, {
-              matchId: data.matchId,
-              partnerId: data.userId,
-              partnerDisplayName: removedName,
-              partners: [{ userId: data.userId, displayName: removedName }],
-              durationSeconds: 20,
-              earlyLeave: true,
-            });
-
-            // Ship C — lobby:token retired; snapshot rail covers the partner.
-          }
-
-          if (_emitHostDashboard) await _emitHostDashboard(data.sessionId).catch(() => {});
-        } catch (err) {
-          logger.error({ err }, 'Error in host remove-from-room partner timeout');
-        }
-      }, 5000);
+      if (_emitHostDashboard) await _emitHostDashboard(data.sessionId).catch(() => {});
     }
 
     // Refresh host dashboard

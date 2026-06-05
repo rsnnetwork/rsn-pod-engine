@@ -18,9 +18,11 @@ import {
 import * as sessionService from '../../session/session.service';
 import * as matchingService from '../../matching/matching.service';
 import * as ratingService from '../../rating/rating.service';
-import * as videoService from '../../video/video.service';
 import { clearRoomTimers } from './host-actions';
-import { findIsolatedParticipants } from '../../matching/isolated-participants';
+// WS2 (27 May remaining work) — "nobody waits alone": a room dropping below 2
+// ENDS for whoever remains (rating → main). The isolated-participants
+// auto-reassign paths that used to re-pair survivors are gone.
+import { endRoomEarlyForSurvivors } from './room-end-early';
 // Phase 2B (5 May spec) — chokepoint helpers for presence + state writes.
 import { transitionParticipant, setPresence, ParticipantState } from '../state/participant-state-machine';
 // Phase 2 (19 May 2026) — realtime migration dual-emit. Each legacy
@@ -275,6 +277,147 @@ function maybeAutoEndEmptyRound(sessionId: string): void {
       logger.warn({ err, sessionId }, 'Failed maybeAutoEndEmptyRound from participant-flow')
     );
   }
+}
+
+// ─── WS2: shared 15s match-end grace (disconnect + Leave Event) ─────────────
+//
+// A mid-round involuntary departure (connection drop, browser close, Leave
+// Event) gives the leaver 15 seconds before their room ends. The partner saw
+// match:partner_disconnected from the caller ("waiting for partner…"); a
+// return within the grace cancels the timeout (rejoin clears
+// disconnectTimeouts) or no-ops it (FIX 3C reconnectedAt guard) and the room
+// resumes. Otherwise the match demotes and the room ENDS for the survivor —
+// rating ('partner_no_return') → main room. NO re-pairing: WS2 removed the
+// old auto-reassign-or-bye ladder that used to run here.
+//
+// M1 fix (21 May Ali) — the grace expiry still NEVER auto-transitions the
+// disconnected user to LEFT and never fires the 'left' plan repair. A
+// network blip must not delete the user from every viewer's roster. LEFT
+// stays reserved for the explicit Leave Event handler, host kick (REMOVED),
+// and the event-end sweep in completeSession.
+function scheduleMatchEndGrace(
+  io: SocketServer,
+  sessionId: string,
+  userId: string,
+  matchId: string,
+  roundNumber: number,
+  survivorIds: string[],
+): void {
+  // Cancel any existing disconnect timeout for this user
+  const timeoutKey = `${sessionId}:${userId}`;
+  if (disconnectTimeouts.has(timeoutKey)) {
+    clearTimeout(disconnectTimeouts.get(timeoutKey)!);
+    disconnectTimeouts.delete(timeoutKey);
+  }
+
+  // FIX 3C: record disconnectedAt so the timeout can detect a reconnect
+  const disconnectedAt = new Date();
+
+  const timeoutId = setTimeout(async () => {
+    disconnectTimeouts.delete(timeoutKey);
+    await withSessionGuard(sessionId, async () => {
+      try {
+        // Tier-1 A3 — session-ended race guard.
+        const currentSession = activeSessions.get(sessionId);
+        if (!currentSession) return;
+        if (currentSession.currentRound !== roundNumber) return;
+
+        // FIX 3C: user came back during the grace window — room resumes.
+        // Either signal (fresh reconnectedAt stamp or restored presence)
+        // means the same thing; notify partner(s) so any "waiting for
+        // partner…" banner clears (backstop — the rejoin path also emits
+        // match:partner_reconnected immediately).
+        const presence = currentSession.presenceMap.get(userId);
+        const cameBack =
+          (presence && presence.reconnectedAt && presence.reconnectedAt > disconnectedAt) ||
+          currentSession.presenceMap.has(userId);
+        if (cameBack) {
+          logger.info({ userId, sessionId }, 'User reconnected during grace window — room resumes');
+          for (const survivorId of survivorIds) {
+            io.to(userRoom(survivorId)).emit('match:partner_reconnected', { matchId });
+          }
+          emitEntities(
+            io, survivorIds,
+            [E.session(sessionId), E.sessionParticipants(sessionId), E.match(matchId)],
+          ).catch(() => {});
+          return;
+        }
+
+        // M1 fix (21 May Ali) — no auto-LEFT from this expiry, ever. A 16s
+        // network blip must not delete the user from every viewer's roster;
+        // LEFT is reserved for the explicit Leave Event handler, host kick
+        // (REMOVED), and the event-end sweep. Only the MATCH ends here.
+
+        // Determine terminal status based on actual conversation state:
+        //   >30s OR ratings submitted → completed (real conversation)
+        //   otherwise → cancelled (no_show reserved for never-connected)
+        const matchInfoRes = await query<{ seconds: string; rating_count: string }>(
+          `SELECT
+             EXTRACT(EPOCH FROM (NOW() - started_at))::text AS seconds,
+             (SELECT COUNT(*)::text FROM ratings WHERE match_id = $1) AS rating_count
+           FROM matches WHERE id = $1`,
+          [matchId],
+        );
+        const durationS = parseFloat(matchInfoRes.rows[0]?.seconds || '0');
+        const ratingCount = parseInt(matchInfoRes.rows[0]?.rating_count || '0', 10);
+        const terminalStatus = (durationS > 30 || ratingCount > 0) ? 'completed' : 'cancelled';
+
+        // Trio-aware demotion — the old inline terminal UPDATE here killed a
+        // whole trio when ONE member dropped; demote keeps 2+ survivors
+        // talking and only marks terminal when the room actually empties.
+        const { remainingUserIds, matchStillActive } = await matchingService.demoteParticipantFromMatch(
+          matchId, userId, terminalStatus as 'completed' | 'cancelled',
+        );
+
+        logger.info(
+          { sessionId, matchId, userId, durationS, ratingCount, terminalStatus, matchStillActive },
+          'Match-end grace expired',
+        );
+
+        const { clearCanonicalLocationToMain, clearCanonicalBreakoutByMatch } =
+          await import('../state/canonical-state');
+
+        if (matchStillActive) {
+          // Trio: survivors continue to normal round end. Only the departed
+          // user's canonical location clears (they are out of the room).
+          await clearCanonicalLocationToMain(sessionId, userId);
+
+          let leftName: string | undefined;
+          try {
+            const nameRes = await query<{ display_name: string | null; email: string | null }>(
+              `SELECT display_name, email FROM users WHERE id = $1`, [userId],
+            );
+            leftName = resolveDisplayName(userId, nameRes.rows[0]?.display_name ?? null, nameRes.rows[0]?.email ?? null);
+          } catch { /* placeholder below */ }
+          for (const remainingId of remainingUserIds) {
+            io.to(userRoom(remainingId)).emit('match:participant_left', {
+              matchId,
+              leftUserId: userId,
+              leftDisplayName: leftName || placeholderName(userId),
+              remainingCount: remainingUserIds.length,
+              reason: 'disconnect_timeout',
+            });
+          }
+          emitHostDashboard(sessionId);
+          return;
+        }
+
+        // Pair: the room ends for the survivor — rating → main, no re-pairing.
+        // Ship C ordering — canonical clears BEFORE survivor-facing emits so an
+        // instant resync can't mint a stale room token.
+        await clearCanonicalBreakoutByMatch(sessionId, [matchId]);
+        clearRoomTimers(matchId);
+        emitHostDashboard(sessionId);
+        // Bug 4 (April 18 Dr Arch): the terminal status may have left zero
+        // active matches in the round.
+        maybeAutoEndEmptyRound(sessionId);
+        await endRoomEarlyForSurvivors(io, sessionId, matchId, [userId], remainingUserIds);
+      } catch (err) {
+        logger.warn({ err, sessionId, userId }, 'Error in match-end grace handler');
+      }
+    });
+  }, 15000);
+  disconnectTimeouts.set(timeoutKey, timeoutId);
 }
 
 // ─── Join Session ──────────────────────────────────────────────────────────
@@ -758,6 +901,61 @@ export async function handleJoinSession(
             io, [userId],
             [E.session(data.sessionId), E.sessionParticipants(data.sessionId), E.match(userMatch.id)],
           ).catch(() => {});
+
+          // WS2 — the partner's "waiting for partner…" banner must clear the
+          // moment the user is back, not 15s later at the grace expiry
+          // backstop. Tell the surviving partner(s) the room resumed.
+          for (const pid of partnerIds) {
+            io.to(userRoom(pid)).emit('match:partner_reconnected', { matchId: userMatch.id });
+          }
+        } else {
+          // WS2 (27 May remaining work) — LATE RETURNER. Their room ended
+          // while they were away (15s grace expired, partner left, or kick of
+          // a partner) and there's no active match to restore. Replay the
+          // rating form for the most recent completed match they haven't
+          // rated or skipped — "Rate your last conversation" — then the
+          // normal lobby flow takes over (canonical already points at main).
+          try {
+            const lateMatchRes = await query<{ id: string; participant_a_id: string; participant_b_id: string | null; participant_c_id: string | null; round_number: number }>(
+              `SELECT id, participant_a_id, participant_b_id, participant_c_id, round_number
+               FROM matches
+               WHERE session_id = $1 AND status = 'completed'
+                 AND (participant_a_id = $2 OR participant_b_id = $2 OR participant_c_id = $2)
+                 AND NOT EXISTS (SELECT 1 FROM ratings r WHERE r.match_id = matches.id AND r.from_user_id = $2)
+               ORDER BY ended_at DESC NULLS LAST
+               LIMIT 1`,
+              [data.sessionId, userId],
+            );
+            const lateMatch = lateMatchRes.rows[0];
+            const lateSkipped = lateMatch
+              ? (activeSession.ratingSkips?.has(`${userId}:${lateMatch.id}`) ?? false)
+              : true;
+            if (lateMatch && !lateSkipped) {
+              const latePartnerIds = [lateMatch.participant_a_id, lateMatch.participant_b_id, lateMatch.participant_c_id]
+                .filter((id): id is string => !!id && id !== userId);
+              if (latePartnerIds.length > 0) {
+                const lateNameRes = await query<{ id: string; display_name: string | null; email: string | null }>(
+                  `SELECT id, display_name, email FROM users WHERE id = ANY($1)`, [latePartnerIds],
+                );
+                const lateNameMap = new Map(lateNameRes.rows.map(r => [r.id, resolveDisplayName(r.id, r.display_name, r.email)]));
+                const latePartners = latePartnerIds.map(id => ({
+                  userId: id, displayName: lateNameMap.get(id) || placeholderName(id),
+                }));
+                await emitRatingWindowOnce(io, userId, lateMatch.id, {
+                  matchId: lateMatch.id,
+                  partnerId: latePartnerIds[0],
+                  partnerDisplayName: latePartners[0].displayName,
+                  partners: latePartners,
+                  roundNumber: lateMatch.round_number,
+                  durationSeconds: 20,
+                  earlyLeave: true,
+                  reason: 'late_return',
+                });
+              }
+            }
+          } catch (err) {
+            logger.warn({ err, sessionId: data.sessionId, userId }, 'Late-return rating replay failed');
+          }
         }
       }
 
@@ -806,6 +1004,7 @@ export async function handleJoinSession(
               partners: partnersWithNames,
               roundNumber: activeSession.currentRound,
               durationSeconds: remainingSeconds,
+              reason: 'round_end',
             });
             // Phase 2 dual-emit — session + participants for the reconnecting
             // user picking up the rating screen replay.
@@ -850,6 +1049,43 @@ export async function handleLeaveSession(
     // Check if leaving user is host
     const session = await sessionService.getSessionById(data.sessionId).catch(() => null);
     const isHost = session?.hostUserId === userId;
+
+    // WS2 (27 May remaining work) — Leave Event mid-round used to orphan the
+    // partner's match entirely (no notify, no end). Now the partner gets the
+    // same 15s grace as a connection drop: "waiting for partner…", room
+    // resumes if the leaver rejoins within the grace (rejoin cancels the
+    // timeout + reconnectedAt guard), else the room ends for the survivor.
+    // Canonical location is deliberately NOT cleared here — only the grace
+    // expiry decides, so a resume walks the leaver straight back into the room.
+    if (!isHost) {
+      const leaveSession = activeSessions.get(data.sessionId);
+      if (leaveSession && leaveSession.status === SessionStatus.ROUND_ACTIVE) {
+        try {
+          const leaveMatchRes = await query<{ id: string; participant_a_id: string; participant_b_id: string | null; participant_c_id: string | null }>(
+            `SELECT id, participant_a_id, participant_b_id, participant_c_id
+             FROM matches WHERE session_id = $1 AND status = 'active' AND round_number = $3
+               AND (participant_a_id = $2 OR participant_b_id = $2 OR participant_c_id = $2)
+             LIMIT 1`,
+            [data.sessionId, userId, leaveSession.currentRound],
+          );
+          if (leaveMatchRes.rows.length > 0) {
+            const m = leaveMatchRes.rows[0];
+            const survivorIds = [m.participant_a_id, m.participant_b_id, m.participant_c_id]
+              .filter((id): id is string => !!id && id !== userId);
+            for (const survivorId of survivorIds) {
+              io.to(userRoom(survivorId)).emit('match:partner_disconnected', { matchId: m.id });
+            }
+            emitEntities(
+              io, survivorIds,
+              [E.session(data.sessionId), E.sessionParticipants(data.sessionId), E.match(m.id)],
+            ).catch(() => {});
+            scheduleMatchEndGrace(io, data.sessionId, userId, m.id, leaveSession.currentRound, survivorIds);
+          }
+        } catch (err) {
+          logger.warn({ err, sessionId: data.sessionId, userId }, 'Leave-event match grace scheduling failed');
+        }
+      }
+    }
 
     // Phase A1 (10 May spec) — always mark LEFT, regardless of session phase.
     // Pre-fix, leaving during SCHEDULED/LOBBY_OPEN reset status to REGISTERED;
@@ -1460,11 +1696,17 @@ export async function handleLeaveConversation(
           partners: partnersWithNames,
           durationSeconds: 20,
           earlyLeave: true,
+          reason: 'early_leave',
         });
 
-        for (const partnerId of partnerIds) {
-          io.to(userRoom(partnerId)).emit('match:partner_disconnected', { matchId: userMatch.id });
-        }
+        // WS2 (27 May remaining work) — "Back to Main Room" is a DELIBERATE
+        // exit: the room ends for the survivor IMMEDIATELY. No
+        // partner_disconnected (that's the waiting state for grace paths),
+        // no 5s wait, and no re-pairing — the old isolated-participants
+        // auto-reassign block lived here and is gone. Survivor goes
+        // rating ('partner_no_return') → main room.
+        await endRoomEarlyForSurvivors(io, sessionId, userMatch.id, [userId], partnerIds);
+
         // Phase 2 dual-emit — session + participants + match for the
         // leaver and remaining partners.
         emitEntities(
@@ -1481,144 +1723,6 @@ export async function handleLeaveConversation(
 
       logger.info({ sessionId, userId, matchId: userMatch.id }, 'Participant left conversation → returned to lobby');
 
-      // ─── 2.3: Auto-reassign solo partner after 5s, or return to lobby ──
-      if (partnerIds.length === 1) {
-        const soloPartnerId = partnerIds[0];
-
-        // Schedule auto-reassign — match stays 'completed' (no status overload);
-        // isolated partners found via presence helper in setTimeout body below.
-        setTimeout(async () => {
-          try {
-            const currentSession = activeSessions.get(sessionId);
-            if (!currentSession) return;
-            // Allow ROUND_ACTIVE (normal rounds) and LOBBY_OPEN (host-created rooms)
-            if (currentSession.status !== SessionStatus.ROUND_ACTIVE && currentSession.status !== SessionStatus.LOBBY_OPEN) return;
-            if (currentSession.currentRound !== activeSession.currentRound) return;
-
-            // Verify solo partner is still waiting (not matched by another flow, still connected)
-            if (!currentSession.presenceMap.has(soloPartnerId)) return;
-            const alreadyMatched = await query<{ id: string }>(
-              `SELECT id FROM matches
-               WHERE session_id = $1 AND round_number = $2 AND status = 'active'
-                 AND (participant_a_id = $3 OR participant_b_id = $3 OR participant_c_id = $3)
-               LIMIT 1`,
-              [sessionId, currentSession.currentRound, soloPartnerId]
-            );
-            if (alreadyMatched.rows.length > 0) return;
-
-            // Find an isolated participant (not in any active match) via presence helper
-            const isolatedUserIds = await findIsolatedParticipants(
-              sessionId,
-              currentSession.currentRound,
-              currentSession.presenceMap,
-              soloPartnerId,
-            );
-
-            let reassigned = false;
-            for (const candidateUserId of isolatedUserIds) {
-              // Already filtered by presenceMap.has in findIsolatedParticipants
-              if (candidateUserId === soloPartnerId) continue;
-
-              // Found another isolated participant — pair them
-              const reassignSlug = `leave-reassign-${Date.now()}`;
-              const newRoomId = `session-${sessionId}-round-${currentSession.currentRound}-${reassignSlug}`;
-              try {
-                await videoService.createMatchRoom(sessionId, currentSession.currentRound, reassignSlug);
-              } catch { /* room may already exist */ }
-
-              const { v4: uuid } = await import('uuid');
-              const matchId = uuid();
-              const normA = soloPartnerId < candidateUserId ? soloPartnerId : candidateUserId;
-              const normB = soloPartnerId < candidateUserId ? candidateUserId : soloPartnerId;
-              // Phase R1 (20 May 2026) — belt-and-braces. findIsolatedParticipants
-              // already filters host/cohosts via SQL, but the INSERT site asserts
-              // again. If we ever reach this with a host_user_id in normA/normB,
-              // the upstream filter regressed and we must not create the phantom
-              // match. Skip and try the next candidate.
-              if (normA === currentSession.hostUserId || normB === currentSession.hostUserId) {
-                logger.error({ sessionId, normA, normB, hostUserId: currentSession.hostUserId },
-                  'Phase R1 — refused to INSERT host into leave-reassign match. Upstream filter regressed?');
-                continue;
-              }
-              try {
-                await query(
-                  `INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, room_id, status, started_at)
-                   VALUES ($1, $2, $3, $4, $5, $6, 'active', NOW())`,
-                  [matchId, sessionId, currentSession.currentRound, normA, normB, newRoomId]
-                );
-              } catch (insertErr: any) {
-                if (insertErr.message?.includes('PARTICIPANT_ALREADY_MATCHED') || insertErr.code === '23505') {
-                  logger.warn({ soloPartnerId, candidateUserId }, 'Auto-reassign after leave skipped: already matched');
-                  continue;
-                }
-                throw insertErr;
-              }
-
-              // Fetch display names
-              const nameRes = await query<{ id: string; display_name: string }>(
-                `SELECT id, display_name FROM users WHERE id = ANY($1)`,
-                [[soloPartnerId, candidateUserId]]
-              );
-              const names = new Map(nameRes.rows.map(r => [r.id, r.display_name || 'User']));
-
-              // Phase 0 (1 May spec) — server-canonical room assignment
-              // for solo-recovery match. Same architectural rule.
-              setRoomAssignment(sessionId, matchId, newRoomId, [soloPartnerId, candidateUserId]);
-
-              // Ship C — lifecycle notifications only; snapshot rail + REST.
-              io.to(userRoom(soloPartnerId)).emit('match:reassigned', {
-                matchId, newPartnerId: candidateUserId,
-                partnerDisplayName: names.get(candidateUserId),
-                roomId: newRoomId, roundNumber: currentSession.currentRound,
-              });
-              io.to(userRoom(candidateUserId)).emit('match:reassigned', {
-                matchId, newPartnerId: soloPartnerId,
-                partnerDisplayName: names.get(soloPartnerId),
-                roomId: newRoomId, roundNumber: currentSession.currentRound,
-              });
-              // Phase 2 dual-emit — affected pair gets session + participants
-              // + match entity tags.
-              emitEntities(
-                io, [soloPartnerId, candidateUserId],
-                [E.session(sessionId), E.sessionParticipants(sessionId), E.match(matchId)],
-              ).catch(() => {});
-
-              logger.info({ sessionId, soloPartnerId, candidateUserId, matchId },
-                'Auto-reassigned after early leave');
-              reassigned = true;
-              break;
-            }
-
-            if (!reassigned) {
-              // No partner available — show rating for departed partner, then return to lobby
-              await sessionService.updateParticipantStatus(sessionId, soloPartnerId, ParticipantStatus.IN_LOBBY);
-
-              // Get the departed user's display name for the rating form
-              const departedNameRes = await query<{ display_name: string }>(
-                `SELECT display_name FROM users WHERE id = $1`, [userId]
-              );
-              const departedName = departedNameRes.rows[0]?.display_name || 'Partner';
-
-              await emitRatingWindowOnce(io, soloPartnerId, userMatch.id, {
-                matchId: userMatch.id,
-                partnerId: userId,
-                partnerDisplayName: departedName,
-                partners: [{ userId, displayName: departedName }],
-                durationSeconds: 20,
-                earlyLeave: true,
-              });
-
-              // Ship C — lobby:token retired; the survivor's canonical
-              // location flipped to main (leave-conversation clears), so the
-              // snapshot rail delivers their lobby token.
-
-              logger.info({ sessionId, soloPartnerId, matchId: userMatch.id }, 'No reassign available — showing rating then lobby');
-            }
-          } catch (err) {
-            logger.error({ err }, 'Error in auto-reassign after early leave');
-          }
-        }, 5000);
-      }
     } catch (err) {
       logger.error({ err }, 'Error in handleLeaveConversation');
     }
@@ -1663,230 +1767,36 @@ export async function handleDisconnect(
       // + statemgmt: debounced authoritative participant-list push.
       scheduleParticipantListBroadcast(io, sessionId);
 
-      // If mid-round, notify partner and attempt auto-reassignment
+      // If mid-round, notify partner(s) and start the 15s match-end grace
       if (activeSession.status === SessionStatus.ROUND_ACTIVE) {
         try {
           const matches = await matchingService.getMatchesByRound(sessionId, activeSession.currentRound);
           const userMatch = matches.find(
-            m => (m.participantAId === userId || m.participantBId === userId) && m.status === 'active'
+            m => (m.participantAId === userId || m.participantBId === userId || m.participantCId === userId) && m.status === 'active'
           );
           if (userMatch) {
-            const partnerId = userMatch.participantAId === userId
-              ? userMatch.participantBId : userMatch.participantAId;
+            // WS2 (27 May remaining work) — trio slot-C disconnects used to be
+            // invisible (the find above only checked A/B). All surviving
+            // partners now get the waiting state, not just a binary "other".
+            const survivorIds = [userMatch.participantAId, userMatch.participantBId, userMatch.participantCId]
+              .filter((id): id is string => !!id && id !== userId);
 
-            // Step 1: Notify partner with "waiting for reassignment" (NOT bye_round)
-            io.to(userRoom(partnerId)).emit('match:partner_disconnected', {
-              matchId: userMatch.id,
-            });
-            // Phase 2 dual-emit — partner's in-event match surface refetches.
+            // Step 1: notify partner(s) with "waiting for partner…" (NOT bye_round)
+            for (const survivorId of survivorIds) {
+              io.to(userRoom(survivorId)).emit('match:partner_disconnected', {
+                matchId: userMatch.id,
+              });
+            }
+            // Phase 2 dual-emit — partners' in-event match surfaces refetch.
             emitEntities(
-              io, [partnerId],
+              io, survivorIds,
               [E.session(sessionId), E.sessionParticipants(sessionId), E.match(userMatch.id)],
             ).catch(() => {});
 
-            const disconnectRound = activeSession.currentRound;
-            const disconnectMatchId = userMatch.id;
-
-            // Cancel any existing disconnect timeout for this user
-            const timeoutKey = `${sessionId}:${userId}`;
-            if (disconnectTimeouts.has(timeoutKey)) {
-              clearTimeout(disconnectTimeouts.get(timeoutKey)!);
-              disconnectTimeouts.delete(timeoutKey);
-            }
-
-            // FIX 3C: Record disconnectedAt so the timeout callback can detect if user reconnected
-            const disconnectedAt = new Date();
-
-            // Step 2: After 15 seconds, try auto-reassignment or fall back to bye
-            const timeoutId = setTimeout(async () => {
-              disconnectTimeouts.delete(timeoutKey);
-              await withSessionGuard(sessionId, async () => {
-              try {
-                const currentSession = activeSessions.get(sessionId);
-                if (!currentSession || currentSession.currentRound !== disconnectRound) return;
-
-                // FIX 3C: Check if user reconnected during the timeout window
-                const presence = currentSession.presenceMap.get(userId);
-                if (presence && presence.reconnectedAt && presence.reconnectedAt > disconnectedAt) {
-                  logger.info({ userId, sessionId }, 'User reconnected during timeout window — skipping no-show');
-                  return; // Skip all no-show logic
-                }
-
-                if (currentSession.presenceMap.has(userId)) {
-                  // User reconnected — notify partner
-                  io.to(userRoom(partnerId)).emit('match:partner_reconnected', {
-                    matchId: disconnectMatchId,
-                  });
-                  // Phase 2 dual-emit — partner's match surface refreshes.
-                  emitEntities(
-                    io, [partnerId],
-                    [E.session(sessionId), E.sessionParticipants(sessionId), E.match(disconnectMatchId)],
-                  ).catch(() => {});
-                  return;
-                }
-
-                // M1 fix (21 May Ali) — DO NOT auto-transition disconnected
-                // participants to LEFT. The original Phase 2.7 design fired a
-                // LEFT transition after 15 s of no reconnect, which permanently
-                // removed the user from the participant snapshot
-                // (`session-state-snapshot.service.ts` filters
-                // `status NOT IN ('left','removed','no_show')`). A typical phone
-                // hand-off or laptop screen-lock easily crosses 15 s, so during
-                // the 21 May live event 3 of 8 participants got silently kicked
-                // out of every other client's roster — UI showed 5 while
-                // matching engine still saw 8 → trust-killer mismatch.
-                //
-                // New semantics: LEFT is reserved for explicit user action
-                // (Leave Event button), host kick (REMOVED), or event-end sweep
-                // (`completeSession` in round-lifecycle.ts). A network blip
-                // leaves the user as `disconnected` status — still visible in
-                // every roster, with a "disconnected" visual treatment. When
-                // they reconnect, the reset path (participant-flow.ts:436)
-                // heals their status. When the event truly ends, the sweep
-                // closes them out.
-                //
-                // The match-ending logic below (terminal status, auto-reassign)
-                // still runs — those are correct independent of whether the
-                // user gets marked LEFT. The partner needs to be reassigned or
-                // given a bye regardless.
-                //
-                // The Bug 36 host/cohost LEFT carve-out is now a no-op (no
-                // LEFT transition for ANYONE on disconnect timeout), so the
-                // hcRow query + guard are removed.
-
-                // Determine terminal status based on actual conversation state:
-                //   >30s OR ratings submitted → completed (real conversation)
-                //   otherwise → cancelled (no_show reserved for never-connected)
-                const matchInfoRes = await query<{ seconds: string; rating_count: string }>(
-                  `SELECT
-                     EXTRACT(EPOCH FROM (NOW() - started_at))::text AS seconds,
-                     (SELECT COUNT(*)::text FROM ratings WHERE match_id = $1) AS rating_count
-                   FROM matches WHERE id = $1`,
-                  [disconnectMatchId],
-                );
-                const durationS = parseFloat(matchInfoRes.rows[0]?.seconds || '0');
-                const ratingCount = parseInt(matchInfoRes.rows[0]?.rating_count || '0', 10);
-                const terminalStatus = (durationS > 30 || ratingCount > 0) ? 'completed' : 'cancelled';
-
-                await query(
-                  `UPDATE matches SET status = $2, ended_at = NOW() WHERE id = $1 AND status = 'active'`,
-                  [disconnectMatchId, terminalStatus],
-                );
-
-                logger.info(
-                  { sessionId, matchId: disconnectMatchId, userId, durationS, ratingCount, terminalStatus },
-                  'Match ended by disconnect',
-                );
-
-                // Architectural rule: refresh host dashboard on every match
-                // transition. Manual rooms during LOBBY_OPEN need this since
-                // the round-lifecycle polling only runs in ROUND_ACTIVE.
-                emitHostDashboard(sessionId);
-
-                // Bug 4 (April 18 Dr Arch): a disconnect-triggered terminal
-                // status may have left zero active matches in the round.
-                maybeAutoEndEmptyRound(sessionId);
-
-                // Step 3: Try auto-reassignment — find another isolated participant via presence
-                const isolatedUserIds = await findIsolatedParticipants(
-                  sessionId,
-                  disconnectRound,
-                  currentSession.presenceMap,
-                  userId,
-                );
-
-                let reassigned = false;
-                for (const candidateUserId of isolatedUserIds) {
-                  if (candidateUserId === userId) continue; // double-safety, already excluded
-                  if (candidateUserId === partnerId) continue; // don't pair partner with themselves
-
-                  // Found another isolated participant — pair them!
-                  const reassignSlug = `auto-reassign-${Date.now()}`;
-                  const roomId = `session-${sessionId}-round-${disconnectRound}-${reassignSlug}`;
-                  try {
-                    await videoService.createMatchRoom(sessionId, disconnectRound, reassignSlug);
-                  } catch { /* room may already exist */ }
-
-                  const matchId = require('uuid').v4();
-                  // Normalize participant order (lexicographic) for constraint consistency
-                  const normA = partnerId < candidateUserId ? partnerId : candidateUserId;
-                  const normB = partnerId < candidateUserId ? candidateUserId : partnerId;
-                  // Phase R1 (20 May 2026) — belt-and-braces. findIsolatedParticipants
-                  // filters host/cohost via SQL; this asserts at the INSERT.
-                  // If we reach here with a host_user_id, the SQL filter regressed
-                  // and we must not create the phantom match that caused the
-                  // 20 May Round-2 host-in-breakout incident.
-                  if (normA === currentSession.hostUserId || normB === currentSession.hostUserId) {
-                    logger.error({ sessionId, normA, normB, hostUserId: currentSession.hostUserId },
-                      'Phase R1 — refused to INSERT host into disconnect-reassign match. Upstream filter regressed?');
-                    continue;
-                  }
-                  try {
-                    await query(
-                      `INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, room_id, status, started_at)
-                       VALUES ($1, $2, $3, $4, $5, $6, 'active', NOW())`,
-                      [matchId, sessionId, disconnectRound, normA, normB, roomId]
-                    );
-                  } catch (insertErr: any) {
-                    // DB constraint caught a conflict — participant already matched
-                    if (insertErr.message?.includes('PARTICIPANT_ALREADY_MATCHED') || insertErr.code === '23505') {
-                      logger.warn({ partnerId, candidateUserId, disconnectRound },
-                        'Auto-reassign skipped: participant already in active match');
-                      continue; // Try next candidate
-                    }
-                    throw insertErr;
-                  }
-
-                  // Fetch display names
-                  const nameRes = await query<{ id: string; display_name: string }>(
-                    `SELECT id, display_name FROM users WHERE id = ANY($1)`,
-                    [[partnerId, candidateUserId]]
-                  );
-                  const names = new Map(nameRes.rows.map(r => [r.id, r.display_name || 'User']));
-
-                  // Phase 0 (1 May spec) — server-canonical room
-                  // assignment for disconnect-recovery match. Same rule.
-                  setRoomAssignment(sessionId, matchId, roomId, [partnerId, candidateUserId]);
-
-                  // Ship C — lifecycle notifications only; snapshot rail + REST.
-                  io.to(userRoom(partnerId)).emit('match:reassigned', {
-                    matchId, newPartnerId: candidateUserId,
-                    partnerDisplayName: names.get(candidateUserId),
-                    roomId, roundNumber: disconnectRound,
-                  });
-                  io.to(userRoom(candidateUserId)).emit('match:reassigned', {
-                    matchId, newPartnerId: partnerId,
-                    partnerDisplayName: names.get(partnerId),
-                    roomId, roundNumber: disconnectRound,
-                  });
-                  // Phase 2 dual-emit — affected pair refreshes session +
-                  // participants + match entities.
-                  emitEntities(
-                    io, [partnerId, candidateUserId],
-                    [E.session(sessionId), E.sessionParticipants(sessionId), E.match(matchId)],
-                  ).catch(() => {});
-
-                  logger.info({ sessionId, partnerId, candidateUserId, matchId },
-                    'Auto-reassigned isolated participants after disconnect');
-                  reassigned = true;
-                  break;
-                }
-
-                if (!reassigned) {
-                  // No available partner — fall back to bye round
-                  io.to(userRoom(partnerId)).emit('match:bye_round', {
-                    roundNumber: disconnectRound,
-                    reason: 'Your partner could not reconnect and no reassignment was available. You have a bye this round.',
-                  });
-                  logger.info({ sessionId, userId, partnerId, matchId: disconnectMatchId },
-                    'Partner disconnect timeout — no reassignment available, converted to bye');
-                }
-              } catch (err) {
-                logger.warn({ err, sessionId, userId }, 'Error in disconnect timeout handler');
-              }
-              });
-            }, 15000);
-            disconnectTimeouts.set(timeoutKey, timeoutId);
+            // Step 2: 15s grace, then the room ends for the survivor — no
+            // re-pairing. M1 fix (21 May Ali) semantics live inside the shared
+            // grace handler: the timeout still never auto-LEFTs the user.
+            scheduleMatchEndGrace(io, sessionId, userId, userMatch.id, activeSession.currentRound, survivorIds);
           }
         } catch (err) {
           logger.warn({ err, sessionId, userId }, 'Failed to notify partner of disconnect');

@@ -10,10 +10,15 @@
 // now pins the REVISED contract:
 //
 //   1. The 15 s disconnect timeout still fires — it still cleans up the
-//      match (terminal status, auto-reassign partner) — but it does NOT
-//      transition the disconnected user to LEFT, and it does NOT call
+//      match (terminal status) — but it does NOT transition the
+//      disconnected user to LEFT, and it does NOT call
 //      maybeRepairFutureRounds('left'). The user stays in a non-terminal
 //      session_participants status so every roster keeps showing them.
+//      WS2 (27 May remaining work, 4 Jun) — the timeout body moved into the
+//      shared scheduleMatchEndGrace helper (also used by Leave Event), and
+//      the auto-reassign-or-bye ladder was REMOVED: a room dropping below 2
+//      now ENDS for the survivor (rating → main). Anchors re-pointed; the
+//      no-auto-LEFT assertions are unchanged in meaning.
 //   2. The 90 s stale-heartbeat path clears presence but does NOT
 //      transition the user to LEFT either. Same reasoning.
 //   3. LEFT is set ONLY by: explicit session:leave handler (Phase A1),
@@ -40,35 +45,46 @@ describe('Phase 2.7 — Disconnect handling (M1 21 May fix: no auto-LEFT)', () =
       expect(src).toMatch(/setTimeout\([\s\S]*?,\s*15000\)/);
     });
 
-    it('the M1-fix comment block is present in the disconnect-timeout body', () => {
+    it('the M1-fix comment block is present in the disconnect flow (handler + shared grace)', () => {
+      // WS2 — the timeout body lives in scheduleMatchEndGrace; both the
+      // handler (scheduling site) and the grace body carry the M1 marker.
       const fnStart = src.indexOf('export async function handleDisconnect(');
       const fnEnd = src.indexOf('\nexport ', fnStart + 1);
       const fn = src.slice(fnStart, fnEnd);
       expect(fn).toMatch(/M1 fix \(21 May Ali\)/);
+      const graceStart = src.indexOf('function scheduleMatchEndGrace(');
+      expect(graceStart).toBeGreaterThan(-1);
+      const grace = src.slice(graceStart, src.indexOf('\nexport ', graceStart + 1));
+      expect(grace).toMatch(/M1 fix \(21 May Ali\)/);
     });
 
-    it('the disconnect-timeout body does NOT transition the user to LEFT', () => {
+    it('the grace-expiry body does NOT transition the user to LEFT', () => {
+      const graceStart = src.indexOf('function scheduleMatchEndGrace(');
+      const grace = src.slice(graceStart, src.indexOf('\nexport ', graceStart + 1));
+      expect(grace).not.toMatch(/transitionParticipant\([^)]*ParticipantState\.LEFT/);
+      // The disconnect handler itself stays LEFT-free too.
       const fnStart = src.indexOf('export async function handleDisconnect(');
-      const fnEnd = src.indexOf('\nexport ', fnStart + 1);
-      const fn = src.slice(fnStart, fnEnd);
+      const fn = src.slice(fnStart, src.indexOf('\nexport ', fnStart + 1));
       expect(fn).not.toMatch(/transitionParticipant\([^)]*ParticipantState\.LEFT/);
     });
 
-    it('the disconnect-timeout body does NOT trigger maybeRepairFutureRounds(left)', () => {
-      const fnStart = src.indexOf('export async function handleDisconnect(');
-      const fnEnd = src.indexOf('\nexport ', fnStart + 1);
-      const fn = src.slice(fnStart, fnEnd);
-      expect(fn).not.toMatch(/maybeRepairFutureRounds\(io,\s*sessionId,\s*'left'\)/);
+    it('the grace-expiry body does NOT trigger maybeRepairFutureRounds(left)', () => {
+      const graceStart = src.indexOf('function scheduleMatchEndGrace(');
+      const grace = src.slice(graceStart, src.indexOf('\nexport ', graceStart + 1));
+      expect(grace).not.toMatch(/maybeRepairFutureRounds\(io,\s*sessionId,\s*'left'\)/);
     });
 
-    it('the match-ending logic (terminal status + auto-reassign) still runs', () => {
-      const fnStart = src.indexOf('export async function handleDisconnect(');
-      const fnEnd = src.indexOf('\nexport ', fnStart + 1);
-      const fn = src.slice(fnStart, fnEnd);
-      // Partner-side reassignment is preserved.
-      expect(fn).toMatch(/findIsolatedParticipants/);
-      // Terminal-status decision is preserved.
-      expect(fn).toMatch(/Determine terminal status based on actual conversation state/);
+    it('the match-ending logic still runs at expiry (terminal status via trio-aware demote, NO re-pairing)', () => {
+      // WS2 — the reassign ladder is gone: the room ends for the survivor.
+      const graceStart = src.indexOf('function scheduleMatchEndGrace(');
+      const grace = src.slice(graceStart, src.indexOf('\nexport ', graceStart + 1));
+      // Terminal-status decision is preserved (now feeds the demote arg).
+      expect(grace).toMatch(/Determine terminal status based on actual conversation state/);
+      expect(grace).toMatch(/demoteParticipantFromMatch/);
+      // No re-pair, no bye: the survivor's room ends instead.
+      expect(grace).not.toMatch(/INSERT INTO matches/);
+      expect(grace).not.toMatch(/match:bye_round/);
+      expect(grace).toMatch(/endRoomEarlyForSurvivors/);
     });
   });
 

@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef, memo } from 'react';
 import { useParams } from 'react-router-dom';
 import { useSessionStore } from '@/stores/sessionStore';
 import { formatTime } from '@/lib/utils';
-import { Video, Clock, Mic, MicOff, VideoOff, Wifi, UserX, ArrowLeft, Sparkles } from 'lucide-react';
+import { Video, Clock, Mic, MicOff, VideoOff, Wifi, Loader2, ArrowLeft, Sparkles } from 'lucide-react';
 import { useBackgroundEffects } from '@/hooks/useBackgroundEffects';
 import { BackgroundPanel } from './BackgroundPanel';
 import { BG_CAPTURE_RESOLUTION } from '@/lib/backgroundEffects';
@@ -432,22 +432,26 @@ const MediaControls = memo(function MediaControls() {
   );
 });
 
-function PartnerLeftAutoReturn({ sessionId }: { sessionId: string }) {
-  const [countdown, setCountdown] = useState(5);
-  useEffect(() => {
-    const interval = setInterval(() => setCountdown(c => c - 1), 1000);
-    const timer = setTimeout(() => {
-      getSocket()?.emit('participant:leave_conversation', { sessionId });
-    }, 5000);
-    return () => { clearInterval(interval); clearTimeout(timer); };
-  }, [sessionId]);
+// WS2 (27 May remaining work) — "waiting for partner…" banner. Pre-WS2 this
+// auto-emitted leave_conversation after 5s, which fought the SERVER's 15s
+// grace: the survivor self-ejected before a partner mid-refresh could come
+// back, and a reconnecting pair got torn down by their own client. Now the
+// server alone decides the outcome:
+//   - partner returns within 15s → match:partner_reconnected clears the
+//     flag and the room resumes;
+//   - grace expires → rating:window_open (reason 'partner_no_return') /
+//     match:return_to_lobby tear the room down.
+// The manual button stays — leaving NOW is a deliberate immediate room end.
+// Deliberately does NOT set leftCurrentRound: the survivor never left, and
+// a resumed room would otherwise be blocked by the stale-assign guard.
+function PartnerWaitingBanner({ sessionId }: { sessionId: string }) {
   return (
-    <div className="bg-amber-500/10 px-4 py-3 flex items-center justify-center gap-2">
-      <UserX className="h-4 w-4 text-amber-400" />
-      <p className="text-sm text-amber-400 font-medium">Your partner left the room. Returning to main room in {Math.max(0, countdown)}s</p>
+    <div className="bg-amber-500/10 px-4 py-3 flex flex-wrap items-center justify-center gap-2">
+      <Loader2 className="h-4 w-4 text-amber-400 animate-spin" />
+      <p className="text-sm text-amber-400 font-medium">Waiting for your partner to reconnect…</p>
       <button
         onClick={() => getSocket()?.emit('participant:leave_conversation', { sessionId })}
-        className="ml-2 px-3 py-1 text-xs font-medium bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 rounded-full transition-colors"
+        className="ml-2 min-h-[44px] px-4 py-1.5 text-xs font-medium bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 rounded-full transition-colors"
       >
         Return to Main Room
       </button>
@@ -648,9 +652,10 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
       {/* D (25 May Ali) — recover the connection (and the user's matchability +
           video) when they return to the foreground after a suspended tab. */}
       <ReconnectOnReturn onReconnect={reconnectRoom} />
-      {/* Partner disconnected — auto-return to main room */}
+      {/* WS2 — partner disconnected: passive waiting banner; the SERVER's 15s
+          grace decides resume-or-end (no client-side self-eject). */}
       {partnerDisconnected && sessionId && (
-        <PartnerLeftAutoReturn sessionId={sessionId} />
+        <PartnerWaitingBanner sessionId={sessionId} />
       )}
 
       <div className="flex-1 flex flex-col p-4 gap-4 bg-[#202124] overflow-auto min-h-0 relative">

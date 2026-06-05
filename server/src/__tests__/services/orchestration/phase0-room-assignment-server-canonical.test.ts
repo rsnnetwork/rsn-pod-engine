@@ -120,17 +120,17 @@ describe('Phase 0 — server-canonical roomParticipants assignment', () => {
   describe('participant-flow.ts recovery flows activate with assignment', () => {
     const src = readServer('services/orchestration/handlers/participant-flow.ts');
 
-    it('solo-recovery match insert is followed by setRoomAssignment', () => {
-      // The solo-recovery handler lives in handleLeaveConversation. It
-      // INSERTs status='active' for the new pair then emits
-      // match:reassigned to both. Pin that setRoomAssignment runs between.
-      const allInserts = [...src.matchAll(/INSERT INTO matches \(id, session_id, round_number, participant_a_id, participant_b_id, room_id, status, started_at\)/g)];
-      expect(allInserts.length).toBeGreaterThanOrEqual(2);
-      // For each such insert, look ahead 3000 chars for setRoomAssignment.
-      for (const m of allInserts) {
-        const after = src.slice(m.index!, m.index! + 3000);
-        expect(after).toMatch(/setRoomAssignment\(/);
-      }
+    it('WS2 — participant-flow no longer creates matches at all (recovery INSERTs removed)', () => {
+      // Pre-WS2 the solo-recovery (leave) and disconnect-recovery flows
+      // INSERTed new active matches here, and this test pinned that every
+      // such INSERT was followed by setRoomAssignment. WS2 (27 May
+      // remaining work) removed re-pairing entirely — a room dropping
+      // below 2 ends for the survivor — so the architectural rule is now
+      // simpler and stronger: participant-flow NEVER creates matches.
+      // Match creation (and its setRoomAssignment pairing, pinned by the
+      // matching-flow/host-actions cases above) happens only in the
+      // matching engine and host actions.
+      expect(src).not.toMatch(/INSERT INTO matches/);
     });
   });
 
