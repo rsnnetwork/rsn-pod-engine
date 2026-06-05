@@ -91,6 +91,15 @@ export function startSegmentTimer(
   // events (~25 events/sec at 50 participants per session — trivial).
   // Forward-compat: when phase 2 (Redis) lands, this becomes a pub/sub
   // subscription so all hosts in a session get a single backend tick.
+  // WS3/B2 (27 May remaining work) — "abrupt round end": warn the rooms at
+  // T-30s and T-10s so conversations can wrap up. The warning rides this
+  // same interval (threshold-crossing detection in closure state — no extra
+  // timeouts to track, pause/resume restarts the closure naturally and
+  // re-warns only thresholds still ahead of the resumed remaining time).
+  // Round segments only: rating/transition segments ending abruptly is fine.
+  const warnThresholds = [30, 10];
+  let prevRemainingSeconds = durationSeconds;
+
   const syncInterval = setInterval(() => {
     const session = activeSessions.get(sessionId);
 
@@ -112,6 +121,21 @@ export function startSegmentTimer(
       session.timerSyncInterval = null;
       return;
     }
+
+    const secondsRemaining = Math.ceil(remainingMs / 1000);
+    if (session.status === SessionStatus.ROUND_ACTIVE) {
+      for (const threshold of warnThresholds) {
+        if (secondsRemaining <= threshold && prevRemainingSeconds > threshold) {
+          io.to(sessionRoom(sessionId)).emit('timer:warning', {
+            segmentType: session.status,
+            threshold,
+            secondsRemaining,
+            endsAt: session.timerEndsAt.toISOString(),
+          });
+        }
+      }
+    }
+    prevRemainingSeconds = secondsRemaining;
 
     io.to(sessionRoom(sessionId)).emit('timer:sync', {
       segmentType: session.status,

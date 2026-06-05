@@ -511,10 +511,29 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
   const timerVisibility = useSessionStore(s => s.timerVisibility);
   const breakoutTimerHidden = useSessionStore(s => s.breakoutTimerHidden);
   const partnerDisconnected = useSessionStore(s => s.partnerDisconnected);
+  const timerEndsAt = useSessionStore(s => s.timerEndsAt);
+  const clockOffset = useSessionStore(s => s.clockOffset);
+  const timerWarning = useSessionStore(s => s.timerWarning);
   const { setLiveKitToken } = useSessionStore.getState();
   const [retrying, setRetrying] = useState(false);
   const retryCountRef = useRef(0);
   const { sessionId } = useParams();
+
+  // WS3/B3 (27 May remaining work) — "final stretch sticks". The displayed
+  // countdown and (critically) the timer-VISIBILITY thresholds used to read
+  // `timerSeconds`, which freezes when the global 1s tick stalls (tab
+  // throttling, missed syncs) — so "Timer hidden until final stretch" never
+  // revealed. Derive remaining time from the authoritative `timerEndsAt`
+  // (clock-offset corrected) on this component's OWN 1s heartbeat, so the
+  // reveal self-heals no matter what happened to the tick chain.
+  const [, forceTimerTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => forceTimerTick(t => (t + 1) % 3600), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const derivedTimerSeconds = timerEndsAt
+    ? Math.max(0, Math.ceil((timerEndsAt.getTime() - (Date.now() + clockOffset)) / 1000))
+    : timerSeconds;
 
   // T2-5 (Issue 14.2) — fetch session title so the badge above the video
   // can show event context. Pre-fix: badge said "Breakout Room · Round X/Y"
@@ -657,6 +676,18 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
       {partnerDisconnected && sessionId && (
         <PartnerWaitingBanner sessionId={sessionId} />
       )}
+      {/* WS3/B2 — round wrap-up warning (T-30/T-10), self-dismisses after 8s.
+          The 1s heartbeat above re-renders this window closed. */}
+      {timerWarning && Date.now() - timerWarning.firedAt < 8000 && (
+        <div className={`px-4 py-2 flex items-center justify-center gap-2 ${timerWarning.threshold <= 10 ? 'bg-red-500/10' : 'bg-amber-500/10'}`}>
+          <Clock className={`h-4 w-4 ${timerWarning.threshold <= 10 ? 'text-red-400' : 'text-amber-400'}`} />
+          <p className={`text-sm font-medium ${timerWarning.threshold <= 10 ? 'text-red-400' : 'text-amber-400'}`}>
+            {timerWarning.threshold <= 10
+              ? '10 seconds left — the round is ending'
+              : '30 seconds left — time to wrap up'}
+          </p>
+        </div>
+      )}
 
       <div className="flex-1 flex flex-col p-4 gap-4 bg-[#202124] overflow-auto min-h-0 relative">
         {/* Timer bar — responsive: stacks on mobile */}
@@ -705,17 +736,20 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
             </div>
           )}
           {(() => {
+            // WS3/B3 — everything below reads derivedTimerSeconds (anchored
+            // on timerEndsAt + this component's own 1s heartbeat) so the
+            // final-stretch reveal can't stick on a frozen timerSeconds.
             // No timer if value is NaN/0 (e.g. host-created room without duration)
-            if (!timerSeconds || isNaN(timerSeconds)) return null;
+            if (!derivedTimerSeconds || isNaN(derivedTimerSeconds)) return null;
             // Task 14: per-room bulk breakout visibility override. Host always sees.
             if (breakoutTimerHidden && !isHost) return null;
             // Host always sees the timer regardless of visibility setting
             const showTimer = isHost ||
               timerVisibility === 'always_visible' ||
-              (timerVisibility === 'last_10s' && timerSeconds <= 10) ||
-              (timerVisibility === 'last_30s' && timerSeconds <= 30) ||
-              (timerVisibility === 'last_60s' && timerSeconds <= 60) ||
-              (timerVisibility === 'last_120s' && timerSeconds <= 120);
+              (timerVisibility === 'last_10s' && derivedTimerSeconds <= 10) ||
+              (timerVisibility === 'last_30s' && derivedTimerSeconds <= 30) ||
+              (timerVisibility === 'last_60s' && derivedTimerSeconds <= 60) ||
+              (timerVisibility === 'last_120s' && derivedTimerSeconds <= 120);
             if (timerVisibility === 'hidden' && !isHost) return null;
             if (!showTimer) return (
               <div className="flex items-center gap-2 text-gray-500">
@@ -726,10 +760,10 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
             return (
               <div className="flex items-center gap-2 text-gray-300">
                 <Clock className="h-4 w-4" />
-                <span className={`font-mono text-lg ${timerSeconds <= 30 ? 'text-amber-400' : ''} ${timerSeconds <= 10 ? 'text-red-400 animate-pulse' : ''}`}>
-                  {formatTime(timerSeconds)}
+                <span className={`font-mono text-lg ${derivedTimerSeconds <= 30 ? 'text-amber-400' : ''} ${derivedTimerSeconds <= 10 ? 'text-red-400 animate-pulse' : ''}`}>
+                  {formatTime(derivedTimerSeconds)}
                 </span>
-                {timerSeconds <= 10 && timerSeconds > 0 && (
+                {derivedTimerSeconds <= 10 && derivedTimerSeconds > 0 && (
                   <span className="text-xs text-red-400 ml-1">Ending soon</span>
                 )}
               </div>

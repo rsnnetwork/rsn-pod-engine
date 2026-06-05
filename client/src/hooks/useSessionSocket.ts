@@ -3,6 +3,7 @@ import { connectSocket, getSocket } from '@/lib/socket';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
+import { playTimerChime } from '@/lib/chime';
 import api from '@/lib/api';
 
 // All socket event names we listen to — used for deterministic cleanup
@@ -22,7 +23,7 @@ const SOCKET_EVENTS = [
   // Phase 3 (5 May spec compliance) — pre-event plan + future-only repair events.
   'host:event_plan_generated', 'host:event_plan_repaired',
   'chat:message', 'chat:history', 'chat:reaction_update',
-  'timer:sync', 'error',
+  'timer:sync', 'timer:warning', 'error',
   'cohost:assigned', 'cohost:removed',
   // Phase 8B.1 (8 May spec) — direct permission update so a newly-promoted
   // co-host's UI gains host buttons immediately, without waiting for the
@@ -898,6 +899,16 @@ export default function useSessionSocket(sessionId: string) {
     });
 
     // ── Sync & errors ──
+    // WS3/B2 — round wrap-up warning (T-30/T-10 from the server's segment
+    // timer). Banner renders in VideoRoom; the chime is a soft WebAudio
+    // two-tone (fail-open silent). Only meaningful while in a breakout.
+    socket.on('timer:warning', (data: any) => {
+      const threshold = typeof data?.threshold === 'number' ? data.threshold : null;
+      if (threshold === null) return;
+      store.setTimerWarning({ threshold, firedAt: Date.now() });
+      if (useSessionStore.getState().phase === 'matched') playTimerChime();
+    });
+
     socket.on('timer:sync', (data: any) => {
       // Bug 17 (April 19) — REAL root cause of the persistent "host pause
       // doesn't actually pause" bug. The previous guard `if (phase === 'lobby'

@@ -103,6 +103,9 @@ interface SessionLiveState {
   // conversation" vs the default round-end copy). Null when the server
   // didn't send a reason (older server / round_ended phase transition).
   ratingReason: 'partner_no_return' | 'late_return' | 'round_end' | 'early_leave' | null;
+  // WS3/B2 — last timer:warning received (T-30/T-10 of an active round).
+  // `firedAt` keys the banner's self-dismiss; cleared with the round state.
+  timerWarning: { threshold: number; firedAt: number } | null;
   timerSeconds: number;
   currentRound: number;
   broadcasts: string[];
@@ -248,6 +251,7 @@ interface SessionLiveState {
   setLiveRoomParticipants: (list: Array<{ userId: string; displayName: string }>) => void;
   setMatch: (m: MatchPartner | null, matchId?: string | null, partners?: MatchPartner[]) => void;
   setRatingReason: (reason: SessionLiveState['ratingReason']) => void;
+  setTimerWarning: (w: SessionLiveState['timerWarning']) => void;
   // Bug 8.5 (April 19) — Timer is now derived from server's authoritative
   // `endsAt` timestamp, NOT from a local 1s decrement. Local decrement was
   // fragile to tab throttling, browser sleep, clock skew, and missed syncs
@@ -386,6 +390,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   currentPartners: [],
   currentMatchId: null,
   ratingReason: null,
+  timerWarning: null,
   timerSeconds: 0,
   timerEndsAt: null,
   clockOffset: 0,
@@ -444,6 +449,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   setLiveRoomParticipants: (list) => set({ liveRoomParticipants: list }),
   setMatch: (currentMatch, matchId = null, partners = []) => set({ currentMatch, currentMatchId: matchId, currentPartners: partners }),
   setRatingReason: (ratingReason) => set({ ratingReason }),
+  setTimerWarning: (timerWarning) => set({ timerWarning }),
   setTimer: (timerSeconds) => set({ timerSeconds }),
   setTimerEndsAt: (timerEndsAt) => set((s) => {
     // Whenever endsAt is updated, immediately recompute the displayed
@@ -657,7 +663,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   reset: () => set({
     phase: 'lobby', connectionStatus: 'connecting', transitionStatus: null,
     sessionStatus: 'scheduled', hostInLobby: false, hostUserId: null, sessionStateLoaded: false, serverPinnedUserId: null, tileDemotedUserIds: [], hccParticipants: [], totalRounds: 5, bonusRoundsAdded: 0,
-    participants: [], liveRoomParticipants: [], currentMatch: null, currentPartners: [], currentMatchId: null, ratingReason: null,
+    participants: [], liveRoomParticipants: [], currentMatch: null, currentPartners: [], currentMatchId: null, ratingReason: null, timerWarning: null,
     timerSeconds: 0, timerEndsAt: null, clockOffset: 0, hasClockOffset: false, currentRound: 0, broadcasts: [], error: null, tileReactions: {},
     isReconnecting: false, isByeRound: false, liveKitToken: null, livekitUrl: null, currentRoomId: null,
     lobbyToken: null, lobbyUrl: null, lobbyRoomId: null,

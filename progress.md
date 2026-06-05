@@ -8040,3 +8040,19 @@ All 12 May items + all deferred follow-ups closed. End-to-end verification: serv
 **Out of scope (deliberate):** profile links on non-event pages (pods, admin, session detail, messages, standalone recap) keep same-tab navigation — no socket to kill there.
 
 **Next:** ship → headed profile-link smoke vs prod → checkhole → S4 (timer warnings + final-stretch fix).
+
+
+---
+
+## 2026-06-05 — S4: B2 timer warnings + B3 final-stretch self-heal
+
+**Status:** Completed (local verification; ship + headed smoke follow in same session)
+
+**What changed:**
+- B2 "abrupt round end": startSegmentTimer's existing 2s sync interval now detects T-30s/T-10s threshold CROSSINGS (closure state, ROUND_ACTIVE only) and emits the new `timer:warning` event — no extra timeouts to track; pause/resume restarts the closure and only re-warns thresholds still ahead. Client: new timer:warning listener stores {threshold, firedAt} + plays a soft WebAudio two-tone chime (lib/chime.ts — no asset, fail-open silent); VideoRoom shows a self-dismissing wrap-up banner (amber 30s / red 10s).
+- B3 "final stretch sticks": VideoRoom's countdown display AND the timer-visibility thresholds ("Timer hidden until final stretch") used to read the store's ticked timerSeconds, which freezes when the 1s tick stalls (tab throttling/missed syncs) so the reveal never happened. They now derive remaining time from the authoritative timerEndsAt (clock-offset corrected) on VideoRoom's OWN 1s heartbeat — self-healing regardless of the global tick chain.
+- shared events: timer:warning declared; timer:sync's long-emitted endsAt/serverNow finally typed.
+
+**Files touched:** server: timer-manager.ts; shared: events.ts; client: lib/chime.ts (new), stores/sessionStore.ts (timerWarning), hooks/useSessionSocket.ts, features/live/VideoRoom.tsx; tests: ws3-timer-warning.test.ts (new pins).
+
+**Next:** ship → headed timer smoke vs prod → checkhole → S5 (distinct Leave Event vs Back to Main buttons).

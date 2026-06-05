@@ -221,8 +221,14 @@ export interface ServerToClientEvents {
   'chat:history': (data: { messages: { id: string; userId: string; displayName: string; message: string; timestamp: string; scope: 'lobby' | 'room'; isHost: boolean; reactions?: Record<string, string[]> }[] }) => void;
   'chat:reaction_update': (data: { messageId: string; reactions: Record<string, string[]> }) => void;
 
-  // Timer sync
-  'timer:sync': (data: { segmentType: string; secondsRemaining: number; totalSeconds: number }) => void;
+  // Timer sync. endsAt + serverNow have been emitted since Bug 8.5 (clients
+  // anchor the countdown on the absolute endsAt corrected by clock offset) —
+  // now declared in the type too.
+  'timer:sync': (data: { segmentType: string; secondsRemaining: number; totalSeconds: number; endsAt?: string; serverNow?: string }) => void;
+  // WS3/B2 (27 May remaining work) — fired at T-30s and T-10s of an active
+  // ROUND so conversations can wrap up instead of ending abruptly. Client
+  // shows a banner + soft chime in the breakout room.
+  'timer:warning': (data: { segmentType: string; threshold: number; secondsRemaining: number; endsAt?: string }) => void;
 
   // Notifications (real-time push)
   'notification:new': (data: { id: string; type: string; title: string; body?: string; link?: string; isRead: boolean; createdAt: string; inviteStatus?: string; podId?: string | null; sessionId?: string | null }) => void;
