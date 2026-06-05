@@ -932,13 +932,24 @@ export async function handleJoinSession(
           // rated or skipped — "Rate your last conversation" — then the
           // normal lobby flow takes over (canonical already points at main).
           try {
-            const lateMatchRes = await query<{ id: string; participant_a_id: string; participant_b_id: string | null; participant_c_id: string | null; round_number: number }>(
-              `SELECT id, participant_a_id, participant_b_id, participant_c_id, round_number
+            // S14 (live-test 2026-06-05) — TWO late-return shapes:
+            //   (a) their room ENDED while away → completed match with them
+            //       still in the slots;
+            //   (b) they were DEPARTED from a still-running TRIO (grace
+            //       expired, room continued without them) → match active,
+            //       their id only in departed_user_ids. Pre-fix this case
+            //       got NOTHING on return and they could never rate the
+            //       partners they actually talked to.
+            const lateMatchRes = await query<{ id: string; participant_a_id: string; participant_b_id: string | null; participant_c_id: string | null; departed_user_ids: string[] | null; round_number: number }>(
+              `SELECT id, participant_a_id, participant_b_id, participant_c_id, departed_user_ids, round_number
                FROM matches
-               WHERE session_id = $1 AND status = 'completed'
-                 AND (participant_a_id = $2 OR participant_b_id = $2 OR participant_c_id = $2)
+               WHERE session_id = $1
+                 AND (
+                   (status = 'completed' AND (participant_a_id = $2 OR participant_b_id = $2 OR participant_c_id = $2))
+                   OR (status IN ('active', 'completed') AND $2 = ANY(departed_user_ids))
+                 )
                  AND NOT EXISTS (SELECT 1 FROM ratings r WHERE r.match_id = matches.id AND r.from_user_id = $2)
-               ORDER BY ended_at DESC NULLS LAST
+               ORDER BY COALESCE(ended_at, started_at) DESC NULLS LAST
                LIMIT 1`,
               [data.sessionId, userId],
             );
@@ -947,8 +958,13 @@ export async function handleJoinSession(
               ? (activeSession.ratingSkips?.has(`${userId}:${lateMatch.id}`) ?? false)
               : true;
             if (lateMatch && !lateSkipped) {
-              const latePartnerIds = [lateMatch.participant_a_id, lateMatch.participant_b_id, lateMatch.participant_c_id]
-                .filter((id): id is string => !!id && id !== userId);
+              // Partners = current slots ∪ other departed members, minus
+              // self — a departed-from-trio returner rates the people they
+              // actually talked to (the slots no longer contain them).
+              const latePartnerIds = [
+                lateMatch.participant_a_id, lateMatch.participant_b_id, lateMatch.participant_c_id,
+                ...(lateMatch.departed_user_ids ?? []),
+              ].filter((id, idx, arr): id is string => !!id && id !== userId && arr.indexOf(id) === idx);
               if (latePartnerIds.length > 0) {
                 const lateNameRes = await query<{ id: string; display_name: string | null; email: string | null }>(
                   `SELECT id, display_name, email FROM users WHERE id = ANY($1)`, [latePartnerIds],

@@ -42,6 +42,7 @@ export async function submitRating(
     `SELECT id, session_id AS "sessionId", round_number AS "roundNumber",
             participant_a_id AS "participantAId", participant_b_id AS "participantBId",
             participant_c_id AS "participantCId",
+            departed_user_ids AS "departedUserIds",
             status, created_at AS "createdAt", ended_at
      FROM matches WHERE id = $1`,
     [input.matchId]
@@ -53,9 +54,18 @@ export async function submitRating(
 
   const match = matchResult.rows[0];
 
-  // Check user was in this match (A, B, or C)
+  // Check user was in this match — current slots ∪ DEPARTED members.
+  // S14 (live-test 2026-06-05, Ali's trio repro): demoting a trio leaver
+  // re-canonicalises the slots, so the leaver was no longer "a participant"
+  // here and their early-leave rating 403'd (latent since Phase 3); the
+  // SAME check on toUserId below silently blocked the survivors' round-end
+  // rating OF the departed. departed_user_ids (migration 066) restores
+  // rating reachability in both directions.
   const matchParticipants = [match.participantAId, match.participantBId];
   if (match.participantCId) matchParticipants.push(match.participantCId);
+  for (const departedId of match.departedUserIds ?? []) {
+    if (!matchParticipants.includes(departedId)) matchParticipants.push(departedId);
+  }
   if (!matchParticipants.includes(fromUserId)) {
     throw new ForbiddenError('You are not a participant in this match');
   }

@@ -1280,26 +1280,40 @@ export async function detectNoShows(
     for (const match of matches) {
       if (match.status !== 'active') continue;
 
-      const aPresent = isPresent(match.participantAId);
-      const bPresent = isPresent(match.participantBId);
+      // S14 (live-test 2026-06-05, 3-participant event) — this scan was
+      // pair-only: a trio with ONE absent member had the WHOLE match marked
+      // no_show (the two present people kept talking in a zombie room with
+      // ended_at never set, their round-end ratings were then auto-excluded
+      // as no_show stats, and a stray bye_round told one of them a new
+      // partner was coming). Handle every slot layout: demote absentees
+      // while 2+ are present; terminal no_show only below that.
+      const slotIds = [match.participantAId, match.participantBId, match.participantCId]
+        .filter((id): id is string => !!id);
+      const absentIds = slotIds.filter((id) => !isPresent(id));
+      if (absentIds.length === 0) continue;
+      const presentIds = slotIds.filter((id) => isPresent(id));
 
-      if (!aPresent && !bPresent) {
-        // Both absent — mark both no-show, cancel match
-        await query(
-          `UPDATE matches SET status = 'no_show' WHERE id = $1`,
-          [match.id]
-        );
+      if (presentIds.length >= 2) {
+        // Trio with one absentee — the room CONTINUES for the present two.
+        // recordDeparted=false: the no-show never met the room, so they stay
+        // out of everyone's rating lists (and the late-return replay).
+        for (const missingUserId of absentIds) {
+          await matchingService.demoteParticipantFromMatch(match.id, missingUserId, 'completed', { recordDeparted: false });
+          // Phase 2C — chokepoint NO_SHOW transition already sets is_no_show=TRUE.
+          await sessionService.updateParticipantStatus(sessionId, missingUserId, ParticipantStatus.NO_SHOW);
+          for (const remainingId of presentIds) {
+            io.to(userRoom(remainingId)).emit('match:participant_left', {
+              matchId: match.id,
+              leftUserId: missingUserId,
+              remainingCount: presentIds.length,
+              reason: 'no_show',
+            });
+          }
+          logger.warn({ sessionId, roundNumber, matchId: match.id, missingUserId }, 'Trio no-show demoted; room continues for the present two');
+        }
         anyTransition = true;
-        // Phase 2C (5 May spec) — updateParticipantStatus delegates to the
-        // chokepoint which already writes is_no_show=TRUE on the NO_SHOW
-        // transition. The follow-up bulk UPDATE was redundant and removed.
-        await sessionService.updateParticipantStatus(sessionId, match.participantAId, ParticipantStatus.NO_SHOW);
-        await sessionService.updateParticipantStatus(sessionId, match.participantBId, ParticipantStatus.NO_SHOW);
-
-        logger.warn({ sessionId, roundNumber, matchId: match.id }, 'Both participants no-show');
-      } else if (!aPresent || !bPresent) {
-        const missingUserId = !aPresent ? match.participantAId : match.participantBId;
-        const waitingUserId = !aPresent ? match.participantBId : match.participantAId;
+      } else if (presentIds.length === 1) {
+        const waitingUserId = presentIds[0];
 
         // Mark match as no-show
         await query(
@@ -1308,15 +1322,33 @@ export async function detectNoShows(
         );
         anyTransition = true;
         // Phase 2C — chokepoint NO_SHOW transition already sets is_no_show=TRUE.
-        await sessionService.updateParticipantStatus(sessionId, missingUserId, ParticipantStatus.NO_SHOW);
+        for (const missingUserId of absentIds) {
+          await sessionService.updateParticipantStatus(sessionId, missingUserId, ParticipantStatus.NO_SHOW);
+        }
 
-        // Notify waiting participant
+        // Notify waiting participant. (WS2: no re-pair mid-round — don't
+        // promise a new partner.)
         io.to(userRoom(waitingUserId)).emit('match:bye_round', {
           roundNumber,
-          reason: 'Your partner did not connect. We are looking for a new partner.',
+          reason: 'Your partner did not connect.',
         });
 
-        logger.warn({ sessionId, roundNumber, missingUserId, waitingUserId }, 'No-show detected');
+        logger.warn({ sessionId, roundNumber, absentIds, waitingUserId }, 'No-show detected');
+      } else {
+        // Everyone absent — mark all no-show, cancel match
+        await query(
+          `UPDATE matches SET status = 'no_show' WHERE id = $1`,
+          [match.id]
+        );
+        anyTransition = true;
+        // Phase 2C (5 May spec) — updateParticipantStatus delegates to the
+        // chokepoint which already writes is_no_show=TRUE on the NO_SHOW
+        // transition. The follow-up bulk UPDATE was redundant and removed.
+        for (const missingUserId of absentIds) {
+          await sessionService.updateParticipantStatus(sessionId, missingUserId, ParticipantStatus.NO_SHOW);
+        }
+
+        logger.warn({ sessionId, roundNumber, matchId: match.id }, 'All participants no-show');
       }
     }
 

@@ -691,7 +691,12 @@ export async function demoteParticipantFromMatch(
   matchId: string,
   userId: string,
   terminalStatusIfRoomEmpties: 'completed' | 'cancelled' | 'reassigned' = 'completed',
+  // S14 — recordDeparted=false for NO-SHOW demotions: the absentee never met
+  // the room, so they must stay OUT of departed_user_ids (which drives both
+  // the survivors' rating lists and the late-return rating replay).
+  options: { recordDeparted?: boolean } = {},
 ): Promise<{ remainingUserIds: string[]; matchStillActive: boolean }> {
+  const recordDeparted = options.recordDeparted !== false;
   return transaction(async (client) => {
     const result = await client.query<{
       participant_a_id: string;
@@ -721,9 +726,11 @@ export async function demoteParticipantFromMatch(
       const newC = sorted[2] || null; // 4-person rooms not supported, but safe
       await client.query(
         `UPDATE matches SET participant_a_id = $1, participant_b_id = $2, participant_c_id = $3,
-                departed_user_ids = array_append(departed_user_ids, $5::uuid)
+                departed_user_ids = CASE WHEN $6::boolean
+                  THEN array_append(departed_user_ids, $5::uuid)
+                  ELSE departed_user_ids END
          WHERE id = $4`,
-        [newA, newB, newC, matchId, userId],
+        [newA, newB, newC, matchId, userId, recordDeparted],
       );
       return { remainingUserIds: remaining, matchStillActive: true };
     }
@@ -733,9 +740,11 @@ export async function demoteParticipantFromMatch(
     // the lone survivor's early-end rating form covers both of them.
     await client.query(
       `UPDATE matches SET status = $2, ended_at = NOW(),
-              departed_user_ids = array_append(departed_user_ids, $3::uuid)
+              departed_user_ids = CASE WHEN $4::boolean
+                THEN array_append(departed_user_ids, $3::uuid)
+                ELSE departed_user_ids END
        WHERE id = $1 AND status = 'active'`,
-      [matchId, terminalStatusIfRoomEmpties, userId],
+      [matchId, terminalStatusIfRoomEmpties, userId, recordDeparted],
     );
     return { remainingUserIds: remaining, matchStillActive: false };
   });
