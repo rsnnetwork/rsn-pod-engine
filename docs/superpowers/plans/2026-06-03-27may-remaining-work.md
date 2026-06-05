@@ -1,6 +1,6 @@
 # 27th May — Remaining Work (continuation doc)
 
-**Last updated:** 2026-06-04 ~07:30 UTC (Workstream 1 COMPLETE incl. Ali's manual test ✅; NEXT SESSION STARTS AT WORKSTREAM 2)
+**Last updated:** 2026-06-05 ~16:00 UTC (WS2 CORE "nobody waits alone" SHIPPED + prod-smoke-verified ✅; autonomous run in progress — next: WS2 kick/ban/trio-departed slice, then name-click audit, then Workstream 3)
 **Purpose:** a fresh Claude session told "start 27th may remaining work" reads THIS file and continues without re-discovery. It is the single up-to-date status; older triage/plan docs are historical.
 
 ---
@@ -40,7 +40,17 @@ A `66f4892` + B `087ba44` + C `2bdaef6` all live (main = `69e5a77`); headed ship
 
 ### >>> NEXT SESSION ENTRY POINT: Workstream 2, then Workstream 3 <<<
 
-### Workstream 2 — Part B "nobody waits alone" (full spec agreed with Ali — implement exactly this)
+### Workstream 2 — Part B "nobody waits alone": CORE SHIPPED ✅ (2026-06-05, autonomous run)
+
+**Shipped:** `fcfa3e5` (core) + `56e14b4` (cancelled rooms not ratable) + `eb2e252` (hardened prod smoke). All on main, CI green, Render+Vercel live, full server suite 164/164 (2014 tests), headed `e2e/tests/ws2-smoke.spec.ts` FULL PASS vs prod (waiting banner + no client self-eject; resume-within-grace → same room; expiry → survivor 'partner_no_return' form → main, NO re-pair; late-returner 'Rate your last conversation' on rejoin; deliberate leave → survivor form in 1s). checkhole green 15:55 UTC.
+
+**Delivered:** no re-pairing anywhere (isolated-participants module deleted, deletion pinned); Back-to-Main + host pull-back = immediate room end (5s deferred flows removed); disconnect AND Leave-event share the 15s `scheduleMatchEndGrace` (leave-event used to orphan the partner); trio slot-C disconnect fix + trio-aware expiry demote; `rating:window_open.reason` + per-reason RatingPrompt copy; late-return replay on rejoin; `emitRatingWindowOnce` returns emission so survivors are never stranded; cancelled (<30s) rooms skip the rating form both sides; client PartnerLeftAutoReturn 5s self-eject → passive waiting banner; `match:participant_left` typed + listened (trio banner clear + toast).
+
+**Smoke harness learnings (baked into the spec):** single 10-min round (helper default 60s round fired round-end machinery mid-phase), presence-settled preview regen, 6-headed-browser ceiling on the 8GB run machine, commit-level goto + retries for the fluctuating uplink.
+
+**REMAINING from the WS2 spec (next slice, S2):** kick ends the active match (survivor rates, kicked user gets NO form) — kick currently orphans the match; `registerParticipant` must reject status='removed' (kicked users can currently re-register back in — confirmed hole); trio departed round-end ratings (migration `departed_user_ids UUID[]` on matches + demote append + endRound partner list includes departed).
+
+#### Original agreed spec (for reference — implement exactly this)
 - A matching breakout needs ≥2 people; a room dropping below 2 ENDS for whoever remains. **No re-pairing** — remove the `findIsolatedParticipants` re-pair path (participant-flow.ts ~1520 leave-conversation, ~1829 disconnect-timeout); survivor goes rating → main.
 - **Trigger timing:** "Back to Main Room" button + host pull-back = **immediate** room end. Browser close / connection drop / **"Leave event"** = **15s grace** (partner sees "waiting for partner…"); return within 15s → room resumes; else room ends. ("Leave event" today sets LEFT immediately and orphans the partner's match — fix that.)
 - **Symmetric rating + UI messages:** survivor's rating form shows *"Your partner didn't return — rate your conversation, returning you to the main room"*; a **late-returner** (back after 15s) gets the rating form on rejoin with *"Rate your last conversation"*, then → main. Add a `reason` field to `rating:window_open` (`partner_no_return | late_return | round_end | early_leave`) and render copy in `RatingPrompt.tsx`. Reuse `emitRatingWindowOnce` (ratings-table dedup makes it safe). Both sides always rate; one rating per match ever (3-layer dedup already exists and works — client `ratedMatchIds`, server `emitRatingWindowOnce`, round-end partner-edge dedup at round-lifecycle.ts ~629).
