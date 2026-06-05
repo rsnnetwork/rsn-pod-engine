@@ -8162,3 +8162,21 @@ All 12 May items + all deferred follow-ups closed. End-to-end verification: serv
 **After:** `npm audit --omit=dev` = 0 vulnerabilities. Remaining 2 moderate are DEV-ONLY (esbuild/vite dev-server request-forgery — fix requires breaking vite@8; exposure is the local dev machine only, not prod builds) — deferred deliberately, revisit on the next Vite major.
 
 **Verification:** typechecks all green; FULL suite 170/170 (2057 tests) on the bumped tree; ws2-smoke regression vs the deploy (socket.io stack changed) after ship.
+
+---
+
+## 2026-06-06 - S14: departed trio members stay ratable (Ali live-test, event "vv")
+
+**Reported (3 participants + host, trio rounds):** (1) trio leaver's rating Submit failed - had to Skip; (2) survivors got no round-end form for the departed member; (3) browser-close + reopen landed in main with nothing.
+
+**Root causes + fixes (commit fc8a8b8):**
+- submitRating validated rater AND toUserId against the CURRENT slots only; demoting a trio leaver re-canonicalises the slots, so both directions involving a departed member 403'd. Now validates against slots UNION departed_user_ids (rating.service.ts).
+- Late-return rating replay only matched COMPLETED matches with the user in the slots; a member departed from a still-ACTIVE trio (grace expired, room continued) got nothing on reopen. Query now also matches `$2 = ANY(departed_user_ids)` on active|completed; partner list unions departed ids minus self (participant-flow.ts handleJoinSession).
+- BONUS root-caused from the round-3 data (match a911c69b: no_show + ended_at NULL): detectNoShows was PAIR-ONLY. A trio with one absentee had the WHOLE match marked no_show (zombie room for the present two; their ratings then auto-excluded as no_show stats; stray bye_round). Now: 2+ present -> demote the absentee and the room continues; <2 present -> terminal no_show. No-show demotions pass recordDeparted=false (never met the room -> in nobody's rating list). bye_round copy no longer promises a new partner (WS2: no re-pair).
+- demoteParticipantFromMatch gained `options.recordDeparted` (default true - all existing leave/kick/grace callers unchanged).
+
+**Tests:** new pin file s14-departed-rating-reachability.test.ts (10 pins); FULL suite 171/171 (2067). Edge smoke HARDENED: rateOne now asserts every submit ADVANCES the form (visibility-only asserts had passed even while the POST 403'd - exactly how this slipped); trio test now SUBMITS the survivor's departed-partner rating; NEW test 3 replays Ali's repro (trio -> page.close -> 25s -> room continues for survivors -> reopen -> late-return form for BOTH partners -> submit both -> main room).
+
+**Browser-verified vs prod (fc8a8b8 live on Render):** edge smoke 3/3 passed headed (reopen path 1.1m, trio mechanics 3.6m, pair edge regression 1.5m). Checkhole: Sentry server 0; client cluster = tonight's fake-media smoke browsers (NegotiationError/PublishTrack noise); CI main+staging green; main=staging=fc8a8b8; health db 3ms; app 200; DB 0 e2e orphans; Redis PONG.
+
+**Behavior note (bug 3):** landing in the MAIN room after a >15s absence is by design - a demoted member cannot re-enter a continuing breakout; the fix is that they now get the rating form for the partners they talked to. A return WITHIN 15s still resumes the room (ws2-smoke-proven).
