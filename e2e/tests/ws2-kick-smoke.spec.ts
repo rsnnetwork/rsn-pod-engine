@@ -188,5 +188,13 @@ test('WS2 kick: survivor rates immediately, kicked user gets no form and cannot 
   expect(reg.status, 'kicked user re-register must be rejected').toBe(403);
   expect(reg.data?.error?.code, 'distinct REMOVED_FROM_EVENT code').toBe('REMOVED_FROM_EVENT');
 
-  console.log('✓ WS2 kick smoke complete: survivor rated immediately, kicked user formless + banned from re-entry');
+  // S12 — a kicked user RELOADING the live page (socket rejoin path) must be
+  // explicitly evicted, never silently half-joined into the lobby.
+  await p1aPage.reload({ waitUntil: 'commit' }).catch(() => {});
+  await p1aPage.waitForTimeout(8000);
+  const backInLobby = await p1aPage.locator('video').count().catch(() => 0);
+  console.log(`  kicked user after reload: videos=${backInLobby}`);
+  expect(backInLobby, 'kicked user must NOT re-enter the lobby on reload').toBe(0);
+
+  console.log('✓ WS2 kick smoke complete: survivor rated immediately, kicked user formless + banned (REST + socket rejoin)');
 });
