@@ -216,7 +216,17 @@ test('mobile event: main room, buttons, chat, host-on-phone, breakout, rating �
   // ── 5. BREAKOUT on the phone ──
   await assertNoHorizontalOverflow(alicePage, 'alice breakout @360');
   await assertTapTarget(alicePage, alicePage.getByText('Back to Main Room', { exact: true }).first(), 'Back to Main Room', 360, 32);
-  const roomVideos = await alicePage.locator('video').count();
+  // LiveKit takes a few seconds after the room UI mounts to render tracks —
+  // poll rather than snapshot.
+  let roomVideos = 0;
+  {
+    const deadline = Date.now() + 45_000;
+    while (Date.now() < deadline) {
+      roomVideos = await alicePage.locator('video').count();
+      if (roomVideos > 0) break;
+      await alicePage.waitForTimeout(2000);
+    }
+  }
   console.log(`  alice videos in breakout: ${roomVideos}`);
   expect(roomVideos, 'breakout video renders on the phone').toBeGreaterThan(0);
   await alicePage.screenshot({ path: 'test-results/wsm-04-alice-breakout-360.png' }).catch(() => {});
