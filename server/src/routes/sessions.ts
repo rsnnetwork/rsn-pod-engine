@@ -660,7 +660,7 @@ router.get(
       // Get rating stats
       const statsResult = await query<any>(
         `SELECT COUNT(*)::int AS "totalRatings",
-                COALESCE(AVG(quality_score), 0) AS "avgQuality",
+                COALESCE(AVG(quality_score) FILTER (WHERE NOT excluded_from_quality_stats), 0) AS "avgQuality",
                 COUNT(*) FILTER (WHERE meet_again = true)::int AS "meetAgainCount"
          FROM ratings r JOIN matches m ON r.match_id = m.id
          WHERE m.session_id = $1`,

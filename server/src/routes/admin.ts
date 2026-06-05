@@ -38,7 +38,7 @@ router.get(
         query<{ count: string }>(`SELECT COUNT(*) as count FROM sessions`),
         query<{ count: string }>(`SELECT COUNT(*) as count FROM sessions WHERE status = 'completed'`),
         query<{ count: string }>(`SELECT COUNT(*) as count FROM matches`),
-        query<{ avg: string | null }>(`SELECT ROUND(AVG(quality_score), 1) as avg FROM ratings WHERE quality_score IS NOT NULL`),
+        query<{ avg: string | null }>(`SELECT ROUND(AVG(quality_score), 1) as avg FROM ratings WHERE quality_score IS NOT NULL AND NOT excluded_from_quality_stats`),
         query<{ date: string; count: string }>(
           `SELECT TO_CHAR(created_at::date, 'YYYY-MM-DD') as date, COUNT(*) as count
            FROM users
@@ -799,7 +799,8 @@ async function computeOverview() {
     query<{ avg: string | null; n: string }>(
       `SELECT ROUND(AVG(quality_score)::numeric, 2)::text AS avg, COUNT(*)::text AS n
          FROM ratings
-        WHERE quality_score IS NOT NULL AND created_at > NOW() - INTERVAL '30 days'`,
+        WHERE quality_score IS NOT NULL AND NOT excluded_from_quality_stats
+          AND created_at > NOW() - INTERVAL '30 days'`,
     ),
     query<{ mutual: string; total: string }>(
       `SELECT
@@ -883,7 +884,7 @@ async function computeEvents() {
        s.status,
        (SELECT COUNT(*)::text FROM session_participants sp WHERE sp.session_id = s.id) AS participants,
        (SELECT COUNT(*)::text FROM session_participants sp WHERE sp.session_id = s.id AND sp.status NOT IN ('left','no_show','disconnected','removed')) AS completed,
-       (SELECT ROUND(AVG(r.quality_score)::numeric, 2)::text FROM ratings r JOIN matches m ON m.id = r.match_id WHERE m.session_id = s.id) AS avg_quality,
+       (SELECT ROUND(AVG(r.quality_score)::numeric, 2)::text FROM ratings r JOIN matches m ON m.id = r.match_id WHERE m.session_id = s.id AND NOT r.excluded_from_quality_stats) AS avg_quality,
        (SELECT COUNT(*) FILTER (WHERE is_mutual = TRUE)::text FROM meeting_records WHERE session_id = s.id) AS mutual_count,
        (SELECT COUNT(*)::text FROM meeting_records WHERE session_id = s.id) AS meeting_total,
        (SELECT COUNT(*)::text FROM session_participants sp WHERE sp.session_id = s.id AND sp.status IN ('left','no_show','disconnected')) AS dropped

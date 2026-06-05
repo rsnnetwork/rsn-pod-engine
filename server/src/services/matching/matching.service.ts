@@ -870,6 +870,7 @@ async function getEncounterHistoryForUsers(
            OR
            (m.participant_a_id = eh.user_b_id AND m.participant_b_id = eh.user_a_id)
          )
+         AND NOT r.excluded_from_quality_stats
        ) AS "averageRating"
      FROM encounter_history eh
      WHERE eh.user_a_id = ANY($1) AND eh.user_b_id = ANY($1)${extraWhere}`,

@@ -8087,3 +8087,18 @@ All 12 May items + all deferred follow-ups closed. End-to-end verification: serv
 **Files touched:** client: Lobby.tsx, VideoRoom.tsx; tests: ws3-audio-cluster.test.ts (pins).
 
 **Next:** ship → smoke (mic unmute persists across a pin toggle is hard to drive headlessly — verify via the pins + existing smokes + Ali manual check note) → checkhole → S9 (rating "didn't work" option).
+
+
+---
+
+## 2026-06-05 — S9: H5 rating "didn't work" option + quality-stats exclusion
+
+**Status:** Completed (local verification; ship follows)
+
+**What changed:**
+- Migration 067: ratings.excluded_from_quality_stats BOOLEAN NOT NULL DEFAULT FALSE (additive).
+- POST /ratings accepts optional didntWork; the insert/upsert writes the flag. The rating row still exists so the one-per-match dedup + rejoin replay treat the match as handled.
+- EVERY AVG(quality_score) consumer now filters excluded ratings — full inventory pinned by count in ws3-didnt-work-rating.test.ts: admin.ts x3 (platform avg, 30-day avg, per-session avg), sessions.ts stats, rating.service session stats, matching.service encounter averageRating (matching weight!), round-lifecycle x2 (recap per-user + host recap email).
+- RatingPrompt: "This conversation didn't work" action beside Skip (44px target, explanatory title) — submits qualityScore 1 + didntWork:true → advances like a normal submit. Label/feedback stays optional.
+
+**Next:** ship → checkhole → S10 (lobby layout grid/scroll) → FINAL regression.

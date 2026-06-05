@@ -72,6 +72,35 @@ function PartnerRatingForm({ partnerName, toUserId, matchId, onSubmitted, onSkip
     }
   };
 
+  // WS3/H5 — "this conversation didn't work" (partner never showed, tech
+  // failure). Records a rating row so the one-per-match dedup and the
+  // rejoin replay treat the match as handled, but flags it
+  // excluded_from_quality_stats so it never drags down anyone's averages.
+  const submitDidntWork = async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      await api.post('/ratings', {
+        matchId,
+        qualityScore: 1,
+        meetAgain: false,
+        toUserId,
+        didntWork: true,
+      });
+      onSubmitted(false);
+    } catch (err: any) {
+      const errCode = err?.response?.data?.error?.code;
+      if (errCode === 'MATCH_ALREADY_RATED') {
+        onSubmitted(false);
+      } else {
+        const msg = err?.response?.data?.error?.message || 'Failed to submit';
+        addToast(msg, 'error');
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
     // Phase 7 (1 May 2026 spec, item 8) — rating screen on white background.
     // Stefan: 'Rating screen wrong color (should be white)'. Pre-Phase-7 used
@@ -123,9 +152,20 @@ function PartnerRatingForm({ partnerName, toUserId, matchId, onSubmitted, onSkip
         Submit Rating
       </Button>
 
-      <button onClick={onSkip} className="text-sm text-gray-400 hover:text-gray-600 mt-4 transition-colors">
-        Skip
-      </button>
+      <div className="flex items-center justify-center gap-4 mt-4">
+        <button onClick={onSkip} className="text-sm text-gray-400 hover:text-gray-600 transition-colors min-h-[44px]">
+          Skip
+        </button>
+        <span className="text-gray-300">·</span>
+        <button
+          onClick={submitDidntWork}
+          disabled={submitting}
+          className="text-sm text-gray-400 hover:text-gray-600 transition-colors min-h-[44px]"
+          title="Partner never showed or technical problems — won't affect quality stats"
+        >
+          This conversation didn&apos;t work
+        </button>
+      </div>
     </div>
   );
 }

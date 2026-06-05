@@ -17,7 +17,9 @@ import { NotFoundError, ConflictError, ValidationError, ForbiddenError } from '.
 const RATING_COLUMNS = `
   id, match_id AS "matchId", from_user_id AS "fromUserId",
   to_user_id AS "toUserId", quality_score AS "qualityScore",
-  meet_again AS "meetAgain", feedback, created_at AS "createdAt"
+  meet_again AS "meetAgain", feedback,
+  excluded_from_quality_stats AS "excludedFromQualityStats",
+  created_at AS "createdAt"
 `;
 
 const ENCOUNTER_COLUMNS = `
@@ -108,14 +110,15 @@ export async function submitRating(
   return transaction(async (client) => {
     // Insert the rating
     const result = await client.query<Rating>(
-      `INSERT INTO ratings (id, match_id, from_user_id, to_user_id, quality_score, meet_again, feedback)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO ratings (id, match_id, from_user_id, to_user_id, quality_score, meet_again, feedback, excluded_from_quality_stats)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (match_id, from_user_id, to_user_id) DO UPDATE SET
          quality_score = EXCLUDED.quality_score,
          meet_again = EXCLUDED.meet_again,
-         feedback = EXCLUDED.feedback
+         feedback = EXCLUDED.feedback,
+         excluded_from_quality_stats = EXCLUDED.excluded_from_quality_stats
        RETURNING ${RATING_COLUMNS}`,
-      [ratingId, input.matchId, fromUserId, toUserId, input.qualityScore, input.meetAgain, input.feedback || null]
+      [ratingId, input.matchId, fromUserId, toUserId, input.qualityScore, input.meetAgain, input.feedback || null, input.didntWork === true]
     );
 
     const rating = result.rows[0];
@@ -593,7 +596,7 @@ export async function getSessionRatingStats(sessionId: string): Promise<{
   }>(
     `SELECT
        COUNT(*)::text AS "totalRatings",
-       COALESCE(AVG(quality_score), 0)::text AS "avgQualityScore",
+       COALESCE(AVG(quality_score) FILTER (WHERE NOT excluded_from_quality_stats), 0)::text AS "avgQualityScore",
        COUNT(*) FILTER (WHERE meet_again = TRUE)::text AS "meetAgainCount"
      FROM ratings r
      JOIN matches m ON m.id = r.match_id

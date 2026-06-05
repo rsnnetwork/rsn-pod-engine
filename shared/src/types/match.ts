@@ -39,6 +39,10 @@ export interface Rating {
   qualityScore: number;  // 1-5
   meetAgain: boolean;
   feedback: string | null;
+  // WS3/H5 (27 May remaining work) — "this conversation didn't work"
+  // (no-show partner, tech failure). Recorded so dedup/replay treat the
+  // match as handled, but EXCLUDED from every quality average.
+  excludedFromQualityStats?: boolean;
   createdAt: Date;
 }
 
@@ -47,6 +51,8 @@ export interface CreateRatingInput {
   qualityScore: number;
   meetAgain: boolean;
   feedback?: string;
+  // WS3/H5 — marks the rating excluded from quality stats.
+  didntWork?: boolean;
 }
 
 export interface EncounterHistory {

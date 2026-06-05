@@ -20,6 +20,9 @@ const submitRatingSchema = z.object({
   meetAgain: z.boolean(),
   feedback: z.string().max(1000).optional(),
   toUserId: z.string().uuid().optional(),
+  // WS3/H5 — "this conversation didn't work": rating recorded (dedup/replay
+  // see the match as handled) but excluded from every quality average.
+  didntWork: z.boolean().optional(),
 });
 
 // ─── POST /ratings — Submit a rating for a match ────────────────────────────

@@ -1091,7 +1091,7 @@ export async function sendRecapEmails(sessionId: string): Promise<void> {
     `SELECT r.from_user_id AS "userId", COALESCE(AVG(r.quality_score), 0)::text AS avg
      FROM ratings r
      JOIN matches m ON m.id = r.match_id
-     WHERE m.session_id = $1
+     WHERE m.session_id = $1 AND NOT r.excluded_from_quality_stats
      GROUP BY r.from_user_id`,
     [sessionId]
   );
@@ -1162,7 +1162,7 @@ export async function sendRecapEmails(sessionId: string): Promise<void> {
         `SELECT COUNT(*)::text AS count FROM matches WHERE session_id = $1 AND status NOT IN ('cancelled', 'scheduled')`, [sessionId]
       );
       const avgEventRatingResult = await query<{ avg: string }>(
-        `SELECT COALESCE(AVG(r.quality_score), 0)::text AS avg FROM ratings r JOIN matches m ON m.id = r.match_id WHERE m.session_id = $1`, [sessionId]
+        `SELECT COALESCE(AVG(r.quality_score), 0)::text AS avg FROM ratings r JOIN matches m ON m.id = r.match_id WHERE m.session_id = $1 AND NOT r.excluded_from_quality_stats`, [sessionId]
       );
       const totalMutualResult = await query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM encounter_history WHERE mutual_meet_again = TRUE AND last_session_id = $1`, [sessionId]
