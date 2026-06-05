@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
 import Avatar from '@/components/ui/Avatar';
+import ProfileLink from '@/components/ui/ProfileLink';
 import { Spinner } from '@/components/ui/Spinner';
 import { CheckCircle, Users, Star, Handshake, ArrowRight, UserCheck, CircleDot, MessageSquare } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
@@ -254,7 +255,7 @@ export default function SessionComplete({ sessionId }: Props) {
                 <div className="space-y-3">
                   {mutualConnections.map(c => (
                     <div key={c.userId} className="flex items-center gap-3 p-2 rounded-lg bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 transition-colors">
-                      <a href={`/profile/${c.userId}`} className="flex items-center gap-3 flex-1 min-w-0">
+                      <ProfileLink userId={c.userId} className="flex items-center gap-3 flex-1 min-w-0">
                         <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
                         <div className="flex-1 min-w-0">
                           <p className="text-gray-900 font-medium truncate">{c.displayName}</p>
@@ -264,7 +265,7 @@ export default function SessionComplete({ sessionId }: Props) {
                             </p>
                           )}
                         </div>
-                      </a>
+                      </ProfileLink>
                       <Handshake className="h-4 w-4 text-indigo-500 shrink-0" />
                       <MessagePartnerButton userId={c.userId} displayName={c.displayName} />
                     </div>
@@ -284,7 +285,7 @@ export default function SessionComplete({ sessionId }: Props) {
               const rounds = Object.keys(byRound).map(Number).sort((a, b) => a - b);
               const row = (c: Connection) => (
                 <div key={`${c.userId}-${c.roundNumber}`} className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-100">
-                  <a href={`/profile/${c.userId}`} className="flex items-center gap-3 flex-1 min-w-0">
+                  <ProfileLink userId={c.userId} className="flex items-center gap-3 flex-1 min-w-0">
                     <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
@@ -292,7 +293,7 @@ export default function SessionComplete({ sessionId }: Props) {
                         <InterestBadge connection={c} />
                       </div>
                     </div>
-                  </a>
+                  </ProfileLink>
                   {c.qualityScore > 0 && (
                     <div className="flex items-center gap-1 text-xs text-amber-500">
                       <Star className="h-3 w-3 fill-amber-400" />

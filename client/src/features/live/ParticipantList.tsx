@@ -3,6 +3,7 @@ import { useSessionStore, useInRoomParticipants } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import Avatar from '@/components/ui/Avatar';
+import ProfileLink from '@/components/ui/ProfileLink';
 import { getSocket } from '@/lib/socket';
 import api from '@/lib/api';
 
@@ -109,10 +110,13 @@ export default function ParticipantList({ onClose, sessionId }: Props) {
 
           return (
             <div key={p.userId} className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-white/5 group">
-              <a href={`/profile/${p.userId}`} className="flex items-center gap-2.5 flex-1 min-w-0">
+              {/* WS2/S3 — ProfileLink opens a NEW TAB: a same-tab navigation
+                  here tore down the socket + LiveKit and ejected the clicker
+                  from the live event. */}
+              <ProfileLink userId={p.userId} className="flex items-center gap-2.5 flex-1 min-w-0">
                 <Avatar name={p.displayName || 'User'} size="sm" />
                 <span className="text-sm text-gray-300 truncate">{p.displayName || 'User'}</span>
-              </a>
+              </ProfileLink>
               {isPHost && (
                 <span className="flex items-center gap-0.5 text-[10px] font-medium text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded-full shrink-0">
                   <Crown className="h-2.5 w-2.5" /> Host

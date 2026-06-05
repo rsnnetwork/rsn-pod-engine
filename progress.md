@@ -8023,3 +8023,20 @@ All 12 May items + all deferred follow-ups closed. End-to-end verification: serv
 **Verification:** typecheck shared/server/client clean; WS2 suites 42/42; FULL suite green (after anchor re-point; routes.test was parallel-load flake, green in isolation).
 
 **Next:** ship → headed kick smoke vs prod → checkhole → S3 (name-click eject audit, SafeProfileLink).
+
+
+---
+
+## 2026-06-05 — S3: Name-click eject audit — ProfileLink everywhere inside the event
+
+**Status:** Completed (local verification; ship + headed smoke follow in same session)
+
+**What changed:**
+- AUDIT: swept every surface inside the live event that renders another user's display name. Found ONE remaining ejector: the participant-list drawer (ParticipantList.tsx) used a plain same-tab <a href="/profile/...">, tearing down the clicker's socket + LiveKit. Chat was fixed ad-hoc in Phase 0 (a0070bd); all other surfaces (lobby tiles, breakout tiles, rating form, HCC, round dashboard) are display-only.
+- SYSTEMATIC FIX: new shared components/ui/ProfileLink.tsx — the ONE way to link a name to a profile; always opens a NEW TAB (target=_blank + noopener noreferrer). Applied to ParticipantList, ChatPanel (migrated), SessionComplete (mutual matches + people-met rows).
+- ENFORCEMENT: ws2-profile-link-safety.test.ts greps ALL of features/live for raw <a href="/profile/...">, navigate('/profile/...'), or <Link to="/profile/..."> and fails the build on any hit — the bug class cannot regress one surface at a time.
+- Headed e2e ws2-profile-link-smoke.spec.ts: alice clicks bob's name in the participant list mid-event → profile opens in a NEW tab, alice's event tab never navigates, her presence stays visible to bob.
+
+**Out of scope (deliberate):** profile links on non-event pages (pods, admin, session detail, messages, standalone recap) keep same-tab navigation — no socket to kill there.
+
+**Next:** ship → headed profile-link smoke vs prod → checkhole → S4 (timer warnings + final-stretch fix).
