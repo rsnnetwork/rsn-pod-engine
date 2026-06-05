@@ -1,6 +1,20 @@
 # 27th May — Remaining Work (continuation doc)
 
-**Last updated:** 2026-06-05 ~17:15 UTC (autonomous run: S1 WS2-core ✅, S2 kick/ban/departed ✅ `2c64e40`, S3 ProfileLink name-click safety ✅ `cdbc861`, S4 timer warnings + final-stretch ✅ `39a502b` — each prod-smoke-verified + checkholed. NEXT: S5 leave buttons → S6 mobile chat → S7 audio → S8 pin → S9 rating option → S10 lobby layout → full regression. Slice queue + process in plan file zany-puzzling-wreath.md + progress.md)
+**Last updated:** 2026-06-05 ~18:10 UTC — **27-MAY REMAINING WORK: ALL ITEMS CLOSED** (autonomous run, 2026-06-05). Per-slice detail in progress.md.
+
+| Slice | Item | Commit | Status |
+|---|---|---|---|
+| S1 | WS2 core "nobody waits alone" (no re-pair, 15s grace incl. Leave-event, rating reasons, slot-C, late-return, client self-eject killed) | `fcfa3e5`+`56e14b4` | ✅ prod-smoke full pass |
+| S2 | Kick ends match, REMOVED re-entry ban, trio departed round-end ratings (migration 066) | `2c64e40` | ✅ prod-smoke full pass |
+| S3 | Name-click eject → shared ProfileLink + build-failing pin | `cdbc861` | ✅ prod-smoke full pass |
+| S4 | B2 timer:warning T-30/T-10 + chime; B3 final-stretch reveal from timerEndsAt | `39a502b` | ✅ prod-smoke full pass |
+| S5 | G3/G4 one in-room exit + destructive top-bar Leave Event | `3eb34e8` | ✅ prod-smoke (real click) |
+| S6 | F1 mobile chat | — | ✅ already fixed (Bug 9+50, May 21) — stale audit item |
+| S7+S8 | E4 echo-cancel + publish policy; E5/E6 SID-keyed join prefs (remount re-mute killed) | `65bfa00` | ✅ shipped + pinned; audio-by-ear → Ali |
+| S9 | H5 "didn't work" rating, excluded from every quality average (migration 067) | `1f95535` | ✅ shipped + AVG inventory pinned |
+| S10 | D1–D3 lobby layout | — | ✅ already implemented (Bug 8/49 + Phase 8) — stale audit item |
+
+New headed smokes in e2e/tests: ws2-smoke, ws2-kick-smoke, ws2-profile-link-smoke, ws3-timer-smoke (run vs prod from the RSN-fixloc harness). Full final regression (shipA/B/C + all new smokes) run at close of the 2026-06-05 session — see progress.md for results.
 **Purpose:** a fresh Claude session told "start 27th may remaining work" reads THIS file and continues without re-discovery. It is the single up-to-date status; older triage/plan docs are historical.
 
 ---

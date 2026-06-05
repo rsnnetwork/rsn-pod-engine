@@ -8102,3 +8102,16 @@ All 12 May items + all deferred follow-ups closed. End-to-end verification: serv
 - RatingPrompt: "This conversation didn't work" action beside Skip (44px target, explanatory title) — submits qualityScore 1 + didntWork:true → advances like a normal submit. Label/feedback stays optional.
 
 **Next:** ship → checkhole → S10 (lobby layout grid/scroll) → FINAL regression.
+
+
+---
+
+## 2026-06-05 — FINAL: full regression + checkhole — 27-MAY REMAINING WORK COMPLETE
+
+**Regression (headed, vs prod @ 1f95535): 8/8 specs green** — shipA (refresh/reconnect), shipB (full round cycle + real rating clicks + ghost watch; its leave-button locator updated to S5's "Back to Main Room"), shipC (snapshot token rail), ws2-smoke (grace/expiry/late-return/no-re-pair/deliberate-leave), ws2-kick-smoke (survivor 0s + 403 ban), ws2-profile-link-smoke (new tab + event survives), ws3-timer-smoke (hidden → T-30 reveal → T-10).
+
+**Checkhole 18:10 UTC: GREEN** — health ok (db 3ms), Sentry api 24h: 0 unresolved, Sentry client new-6h: 0, main=staging=1f95535, Render live @ 1f95535, app 200/0.75s, 0 e2e orphans.
+
+**Slices shipped this run:** S1 fcfa3e5+56e14b4, S2 2c64e40, S3 cdbc861, S4 39a502b, S5 3eb34e8, S7+S8 65bfa00, S9 1f95535 (+ docs/test commits). S6 + S10 verified already-fixed (stale audit items).
+
+**For Ali to verify by ear/hand (cannot be driven headless):** (1) main-room audio: unmute, then toggle pin/density — you must STAY unmuted and be heard; (2) the T-30 chime is audible and pleasant; (3) echo gone on the devices that had it.

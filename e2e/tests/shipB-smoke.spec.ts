@@ -261,10 +261,11 @@ test('Ship B: round end + manual end + leave never ghost-pull; room chat stays r
   await waitForBreakout(alicePage, 'alice (room 3)');
   await waitForBreakout(bobPage, 'bob (room 3)');
 
-  // Leave through the REAL UI — the breakout header's "Main Room" button.
+  // Leave through the REAL UI — the breakout header's exit button
+  // (WS3/G3 renamed it "Back to Main Room" with a clearer title).
   // The early-leave rating form opens inside the breakout view; rate through
   // it (as a real user would) before expecting the main room.
-  await alicePage.locator('[title="Return to the main room"]').click({ timeout: 10_000 });
+  await alicePage.getByText('Back to Main Room', { exact: true }).first().click({ timeout: 10_000 });
   await alicePage.waitForTimeout(2000);
   await submitRatingIfPresent(alicePage, 'alice (early-leave)');
   await waitForMain(alicePage, 'alice (after leave)', 60_000);
