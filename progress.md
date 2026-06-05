@@ -8115,3 +8115,14 @@ All 12 May items + all deferred follow-ups closed. End-to-end verification: serv
 **Slices shipped this run:** S1 fcfa3e5+56e14b4, S2 2c64e40, S3 cdbc861, S4 39a502b, S5 3eb34e8, S7+S8 65bfa00, S9 1f95535 (+ docs/test commits). S6 + S10 verified already-fixed (stale audit items).
 
 **For Ali to verify by ear/hand (cannot be driven headless):** (1) main-room audio: unmute, then toggle pin/density — you must STAY unmuted and be heard; (2) the T-30 chime is audible and pleasant; (3) echo gone on the devices that had it.
+
+
+---
+
+## 2026-06-06 — S11 + edge proofs: every honest gap browser-verified + mobile pass
+
+**Edge smoke (ws2-edge-smoke.spec.ts, 2/2 vs prod):** cancelled <30s room → NO rating form, straight to main; the real "Leave Event" button mid-round → partner waiting banner → grace-expiry form; simultaneous double-leave → both coherent exits (FOR UPDATE serialization proven); "didn't work" click → DB row excluded_from_quality_stats=true (verified by direct query); TRIO via the engine itself (3 users → algorithm trio): leaver rated BOTH partners, survivors kept talking, and the DEPARTED member appeared in the survivor's round-end form — departed_user_ids round-trip browser-proven.
+
+**S11 mobile:** comprehensive phone smoke (ws3-mobile-event-smoke.spec.ts): alice 360px + HOST on 390px + desktop counterpart — main-room overflow/tiles, tap-target boundingBox audits (Participants/Leave Event/chat FAB/Back-to-Main/stars/submit), chat bottom-sheet send phone→desktop, host overflow pre/mid-round, breakout + rating driven end-to-end on 360px. Fix shipped with it: participants toggle was a 32px tap target → 44px + aria-label.
+
+**Verification:** first mobile-smoke run vs old deploy caught the missing aria-label/size as designed; re-run green after deploy (see below).

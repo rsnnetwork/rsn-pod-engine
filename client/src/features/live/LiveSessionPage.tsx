@@ -187,9 +187,12 @@ export default function LiveSessionPage() {
             running. */}
         {phase !== 'complete' && (
           <div className="flex items-center gap-1">
+            {/* WS3/S11 — 44px tap target (was p-2 ≈ 32px, below the mobile
+                minimum); thumb-sized like the chat FAB. */}
             <button
               onClick={() => setParticipantListOpen(!participantListOpen)}
-              className={`p-2 rounded-full transition-colors ${participantListOpen ? 'bg-gray-200 text-[#1a1a2e]' : 'text-gray-500 hover:text-[#1a1a2e] hover:bg-gray-100'}`}
+              aria-label="Participants"
+              className={`min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full transition-colors ${participantListOpen ? 'bg-gray-200 text-[#1a1a2e]' : 'text-gray-500 hover:text-[#1a1a2e] hover:bg-gray-100'}`}
             >
               <Users className="h-4 w-4" />
             </button>
