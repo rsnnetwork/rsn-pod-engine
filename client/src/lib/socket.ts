@@ -11,7 +11,13 @@ export function getSocket(): TypedSocket {
   if (!socket) {
     socket = io(SOCKET_BASE_URL, {
       autoConnect: false,
-      transports: ['websocket', 'polling'],
+      // A4 (27 May audit) — the server deliberately pins websocket-only
+      // (Tier-1 A6); offering an HTTP long-poll fallback here made a
+      // WS-blocked client fall back to a transport the server refuses:
+      // registered in the DB but never socket-connected = a ghost that
+      // fails SILENTLY. One aligned transport → connection failures are
+      // immediate and visible (reconnection banner), not half-joined limbo.
+      transports: ['websocket'],
       auth: () => ({
         token: useAuthStore.getState().accessToken,
       }),

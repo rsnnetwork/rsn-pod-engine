@@ -471,7 +471,7 @@ export default function LiveSessionPage() {
             {/* Participant list panel — Bug 10: hidden once event is complete. */}
             {participantListOpen && !chatOpen && phase !== 'complete' && (
               <div className="w-full sm:w-72 sm:min-w-[288px] flex-shrink-0 h-full border-l border-white/10">
-                <ParticipantList onClose={() => setParticipantListOpen(false)} sessionId={sessionId} />
+                <ParticipantList onClose={() => setParticipantListOpen(false)} sessionId={sessionId} isHost={isHost} />
               </div>
             )}
 

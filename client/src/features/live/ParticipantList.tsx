@@ -10,9 +10,15 @@ import api from '@/lib/api';
 interface Props {
   onClose: () => void;
   sessionId: string;
+  // C1 (27 May audit) — co-host management must work for ANY acting host
+  // (director, formal co-host, opted-in admin), and PRE-EVENT. The server
+  // (handleAssignCohost) already authorizes via canActAsHost with no
+  // status gate; this prop carries the page-level host determination so
+  // the toggle isn't restricted to the original director.
+  isHost?: boolean;
 }
 
-export default function ParticipantList({ onClose, sessionId }: Props) {
+export default function ParticipantList({ onClose, sessionId, isHost = false }: Props) {
   // F3 (21 May Ali) — drawer roster shows REALTIME in-room presence from
   // LiveKit's room state (every viewer subscribes to the same source so
   // counts converge), not the socket-fed list which drifts when
@@ -138,7 +144,11 @@ export default function ParticipantList({ onClose, sessionId }: Props) {
                   show, and clicking it does the right thing for any
                   cohost the director sees. */}
               {(() => {
-                if (!isOriginalHost || isPHost || isSelf) return null;
+                // C1 (27 May audit) — was isOriginalHost-only, which left an
+                // acting host (admin/co-host) with no co-host button at all,
+                // pre-event or during. Server-side authz still gates the
+                // actual assignment (canActAsHost).
+                if (!(isOriginalHost || isHost) || isPHost || isSelf) return null;
                 // Bug 38 (19 May Ali) — was opacity-0 group-hover:opacity-100,
                 // which hid the toggle entirely on mobile (no hover) and made
                 // it easy to miss on desktop. Now always visible so the

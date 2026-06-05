@@ -8126,3 +8126,23 @@ All 12 May items + all deferred follow-ups closed. End-to-end verification: serv
 **S11 mobile:** comprehensive phone smoke (ws3-mobile-event-smoke.spec.ts): alice 360px + HOST on 390px + desktop counterpart — main-room overflow/tiles, tap-target boundingBox audits (Participants/Leave Event/chat FAB/Back-to-Main/stars/submit), chat bottom-sheet send phone→desktop, host overflow pre/mid-round, breakout + rating driven end-to-end on 360px. Fix shipped with it: participants toggle was a 32px tap target → 44px + aria-label.
 
 **Verification:** first mobile-smoke run vs old deploy caught the missing aria-label/size as designed; re-run green after deploy (see below).
+
+
+---
+
+## 2026-06-06 — S12: deep re-audit gaps + code-review findings closed
+
+**Trigger:** Ali asked for a full re-audit vs the ORIGINAL 27-May audit doc + an independent code review of the whole run diff (e5c842e..8882aa9, 56 files).
+
+**Review verdict (2 independent reviewers, correctness/races + security/regression): ZERO blockers, ZERO majors.** SQL fully parameterized, rating authz sound, grace-timer sharing + demote idempotency + warning closure all confirmed correct, migrations additive, no regressions from the removals.
+
+**Re-audit found 3 items the distilled doc had DROPPED from the original audit + 2 review minors — all fixed here:**
+- A4: client offered an HTTP-poll fallback the websocket-pinned server refuses (silent ghost path) → client now websocket-only, failures surface immediately.
+- C1: pre-event co-host management — the HCC opener was sessionStarted-gated and the participant-drawer co-host toggle was director-only → opener un-gated, toggle now works for any acting host (server canActAsHost still authorizes).
+- H5 residual: ratings filed against no_show/cancelled matches were still counted in quality averages → AUTO-excluded at insert (in addition to the user didnt-work flag).
+- Review minor 1: a kicked user socket rejoin silently swallowed the 403 → now explicit session:evicted + room leave.
+- Review minor 2: excluded ratings leaked their 1-star into encounter_history.last_quality_score + meeting_records.rating_given (connection cards/recap) → score withheld (null) for excluded ratings; the meeting itself still counts.
+
+**Verified equivalent-by-design (not gaps):** M2/M4 two-phase activation superseded by presence-gated matching + 60s no-show detection + WS2 self-heal; M3b cohost source unified in Phase R6; D1-D3/BG1 restored by the snapshot recovery. Product note: kick = permanent ban (re-invite also blocked) — deliberate per the WS2 spec.
+
+**Dependency audit:** 18 vulns (4 high: axios SSRF, nodemailer, path-to-regexp ReDoS, socket.io-parser) → S13 dep-bump slice next.

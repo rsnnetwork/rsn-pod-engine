@@ -251,7 +251,10 @@ describe('Phase X — 13 May live-test bug fixes', () => {
       // toggleCohost already handles both code paths (formal removeCohost
       // socket emit + acting-as-host REST clear), so removing the
       // visibility gate is safe.
-      expect(src).toMatch(/if\s*\(!isOriginalHost\s*\|\|\s*isPHost\s*\|\|\s*isSelf\)\s*return\s+null/);
+      // S12 (C1, 27 May audit) — the gate widened from director-only to
+      // any acting host (isOriginalHost || isHost); the Bug 43 contract
+      // (director sees it for every cohost, no isViaPhaseM gate) holds.
+      expect(src).toMatch(/if\s*\(!\(isOriginalHost\s*\|\|\s*isHost\)\s*\|\|\s*isPHost\s*\|\|\s*isSelf\)\s*return\s+null/);
       // Anti-regression: the old isViaPhaseM check must NOT come back
       // as a gating condition on the visibility check.
       expect(src).not.toMatch(/\|\|\s*isViaPhaseM\)\s*return\s+null/);

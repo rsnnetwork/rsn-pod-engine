@@ -100,7 +100,9 @@ export async function upsertRatingForMeeting(input: {
   matchId: string;
   raterUserId: string;
   ratedUserId: string;
-  qualityScore: number;
+  // null = excluded rating (didn't work / no_show / cancelled): the
+  // meeting record still counts, the score is withheld from the recap.
+  qualityScore: number | null;
   meetAgain: boolean;
 }): Promise<void> {
   const { sessionId, roundNumber, matchId, raterUserId, ratedUserId, qualityScore, meetAgain } = input;

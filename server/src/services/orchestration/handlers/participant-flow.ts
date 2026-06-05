@@ -562,8 +562,19 @@ export async function handleJoinSession(
       try {
         await sessionService.registerParticipant(data.sessionId, userId, userRole);
         didRegister = true;
-      } catch {
-        // Already registered or session not open — that's fine
+      } catch (regErr: any) {
+        // Already registered or session not open — that's fine.
+        // WS2/S12 — EXCEPT a kicked user: registerParticipant now throws
+        // REMOVED_FROM_EVENT and every filter already excludes them, but
+        // this catch used to swallow it silently AFTER socket.join() —
+        // the kicked user sat on a joined socket seeing nothing. Tell
+        // them explicitly and don't proceed with the join flow.
+        if (regErr?.code === 'REMOVED_FROM_EVENT') {
+          socket.leave(sessionRoom(data.sessionId));
+          socket.emit('session:evicted', {});
+          logger.info({ sessionId: data.sessionId, userId }, 'Removed user attempted to rejoin — evicted');
+          return;
+        }
       }
 
       // Phase 2.5D (5 May spec) — late-joiner future-only repair.

@@ -54,4 +54,46 @@ describe('WS3/H5 — didnt-work rating is recorded but excluded from quality sta
     expect(src).toMatch(/didntWork: true/);
     expect(src).toMatch(/didn&apos;t work/);
   });
+
+  it('S12 — no_show/cancelled match ratings are AUTO-excluded (not just user-flagged)', () => {
+    const svc = readServer('services/rating/rating.service.ts');
+    expect(svc).toMatch(/input\.didntWork === true \|\| match\.status === 'no_show' \|\| match\.status === 'cancelled'/);
+  });
+
+  it('S12 — excluded scores are withheld from encounter_history and meeting_records surfaces', () => {
+    const svc = readServer('services/rating/rating.service.ts');
+    expect(svc).toMatch(/scoreForAggregates = rating\.excludedFromQualityStats \? null : input\.qualityScore/);
+    // Both aggregate writers accept the withheld (null) score.
+    expect(svc).toMatch(/qualityScore: number \| null/);
+    expect(readServer('services/meeting-records/meeting-records.service.ts')).toMatch(/qualityScore: number \| null/);
+  });
+});
+
+describe('S12 — remaining 27-May audit gaps closed', () => {
+  it('A4 — client offers only the websocket transport (aligned with the pinned server)', () => {
+    const src = readClient('lib/socket.ts');
+    expect(src).toMatch(/transports: \['websocket'\]/);
+    expect(src).not.toMatch(/'polling'/);
+  });
+
+  it('C1 — co-host toggle works for any acting host, not just the director', () => {
+    const src = readClient('features/live/ParticipantList.tsx');
+    expect(src).toMatch(/isOriginalHost \|\| isHost/);
+  });
+
+  it('C1 — the Host Control Center opener is no longer gated on sessionStarted', () => {
+    const src = readClient('features/live/HostControls.tsx');
+    const idx = src.indexOf('Open Host Control Center');
+    expect(idx).toBeGreaterThan(-1);
+    const before = src.slice(Math.max(0, idx - 500), idx);
+    expect(before).not.toMatch(/sessionStarted && \(/);
+  });
+
+  it('kicked users attempting a socket rejoin get an explicit eviction, not silence', () => {
+    const src = readServer('services/orchestration/handlers/participant-flow.ts');
+    expect(src).toMatch(/REMOVED_FROM_EVENT/);
+    const idx = src.indexOf("'REMOVED_FROM_EVENT'");
+    const block = src.slice(idx, idx + 400);
+    expect(block).toMatch(/session:evicted/);
+  });
 });

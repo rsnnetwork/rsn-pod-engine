@@ -947,17 +947,19 @@ export default function HostControls({ sessionId }: Props) {
                 bar (red, last action before End Event). Click → opens
                 the windowed Control Center centred + large enough that
                 no dragging is needed for the everyday view. Drag,
-                minimize, maximize all still available from the title bar. */}
-            {sessionStarted && (
-              <Button
-                size="sm"
-                variant="danger"
-                onClick={() => setShowControlCenter(true)}
-                title="Open Host Control Center"
-              >
-                <LayoutDashboard className="h-4 w-4 mr-1" /> Control Center
-              </Button>
-            )}
+                minimize, maximize all still available from the title bar.
+                C1 (27 May audit) — no longer gated on sessionStarted:
+                hosts need the Control Center BEFORE the event starts
+                (assign co-hosts, review the roster). Round-specific tabs
+                render their own empty states pre-round. */}
+            <Button
+              size="sm"
+              variant="danger"
+              onClick={() => setShowControlCenter(true)}
+              title="Open Host Control Center"
+            >
+              <LayoutDashboard className="h-4 w-4 mr-1" /> Control Center
+            </Button>
 
             <Button size="sm" variant="danger" onClick={endEvent}>
               <Square className="h-4 w-4 mr-1" /> End Event

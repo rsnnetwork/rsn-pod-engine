@@ -118,14 +118,29 @@ export async function submitRating(
          feedback = EXCLUDED.feedback,
          excluded_from_quality_stats = EXCLUDED.excluded_from_quality_stats
        RETURNING ${RATING_COLUMNS}`,
-      [ratingId, input.matchId, fromUserId, toUserId, input.qualityScore, input.meetAgain, input.feedback || null, input.didntWork === true]
+      [
+        ratingId, input.matchId, fromUserId, toUserId, input.qualityScore, input.meetAgain, input.feedback || null,
+        // WS3/H5 — exclusion is user-initiated (didntWork) OR automatic:
+        // a no_show / cancelled match was never a real conversation, so a
+        // rating filed against it (the present partner rating the absent
+        // one, a host-remove grace rating) must not skew quality averages.
+        input.didntWork === true || match.status === 'no_show' || match.status === 'cancelled',
+      ]
     );
 
     const rating = result.rows[0];
 
+    // WS3/S12 — an excluded rating (user clicked "didn't work", or the
+    // match was no_show/cancelled) must not surface as a real quality
+    // score anywhere: the connections card reads
+    // encounter_history.last_quality_score and the recap reads
+    // meeting_records.rating_given. The encounter/meeting still counts
+    // (they DID meet) — only the score is withheld.
+    const scoreForAggregates = rating.excludedFromQualityStats ? null : input.qualityScore;
+
     // Update encounter history
     await upsertEncounterHistory(
-      client, fromUserId, toUserId, match.sessionId, input.matchId, input.qualityScore, input.meetAgain
+      client, fromUserId, toUserId, match.sessionId, input.matchId, scoreForAggregates, input.meetAgain
     );
 
     // Phase 2 (1 May spec) — also update meeting_records so recap counts
@@ -139,7 +154,7 @@ export async function submitRating(
         matchId: input.matchId,
         raterUserId: fromUserId,
         ratedUserId: toUserId,
-        qualityScore: input.qualityScore,
+        qualityScore: scoreForAggregates,
         meetAgain: input.meetAgain,
       });
     } catch (mrErr) {
@@ -162,7 +177,9 @@ async function upsertEncounterHistory(
   toUserId: string,
   sessionId: string,
   matchId: string,
-  qualityScore: number,
+  // null = excluded rating (didn't work / no_show / cancelled): the
+  // encounter still counts, the score is withheld from the surfaces.
+  qualityScore: number | null,
   meetAgain: boolean
 ): Promise<void> {
   // Determine ordered IDs
