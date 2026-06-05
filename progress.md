@@ -8071,3 +8071,19 @@ All 12 May items + all deferred follow-ups closed. End-to-end verification: serv
 - Pin ws3-leave-buttons.test.ts: VideoRoom has no session:leave / location redirect; top bar has the LogOut + red Leave Event; old copy gone. ws2-smoke phase A locator updated to the new label.
 
 **Next:** ship → reuse ws2-smoke phase A vs prod (clicks the real button) → checkhole → S6 (mobile chat bottom-sheet).
+
+
+---
+
+## 2026-06-05 — S7+S8: main-room audio cluster (E4 echo/policy + E5/E6 pin force-mute)
+
+**Status:** Completed (local verification; ship + smoke follow)
+
+**What changed:**
+- E5/E6 ROOT CAUSE (the real "cannot be heard in main room"): LobbyMediaControls applied join preferences (non-host auto-mute + 500ms re-apply + camera pref) behind a per-INSTANCE useRef. Pin/tile-demote/density swaps remount the component (flex<->grid tree swap) -> fresh ref -> re-mute fired on EVERY layout change, force-muting anyone who had unmuted. Guard is now SID-keyed at module scope (appliedPrefsForSid Set): once per actual room connection; remounts are no-ops; a genuine rejoin gets a new SID and re-applies join-muted as designed.
+- E4: audioCaptureDefaults (echoCancellation + noiseSuppression + autoGainControl) pinned on BOTH rooms' mic capture (Lobby + VideoRoom). Lobby publish POLICY documented as deliberate: non-hosts JOIN muted (audio={isHost}) - a 50-person room joining hot-mic would be chaos - but tokens grant canPublish, so the mic button genuinely unmutes them (and now STAYS unmuted thanks to the SID fix).
+- Sentry note: PublishTrackError "insufficient permissions" x11 = Phase U host-mute enforcement working as designed (canPublishSources revoked), NOT this bug.
+
+**Files touched:** client: Lobby.tsx, VideoRoom.tsx; tests: ws3-audio-cluster.test.ts (pins).
+
+**Next:** ship → smoke (mic unmute persists across a pin toggle is hard to drive headlessly — verify via the pins + existing smokes + Ali manual check note) → checkhole → S9 (rating "didn't work" option).

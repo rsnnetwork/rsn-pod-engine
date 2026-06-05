@@ -570,6 +570,13 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
   );
 }
 
+// WS3/E5+E6 — module-scope marker: which LiveKit participant SIDs already
+// had their join preferences (auto-mute + camera pref) applied. Survives
+// the flex↔grid remounts that a pin/density change causes; a NEW room
+// connection gets a new SID and re-applies. Bounded: a tab accumulates a
+// handful of SIDs per event at most.
+const appliedPrefsForSid = new Set<string>();
+
 function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?: string }) {
   // Bug 11 (13 May live test) — destructure the reactive isMicrophoneEnabled /
   // isCameraEnabled values from useLocalParticipant directly. Pre-fix the
@@ -609,11 +616,23 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
     return remotes.every(p => !p.isMicrophoneEnabled);
   })();
 
-  // Apply saved camera/mic preferences to LiveKit on mount
-  const appliedRef = useRef(false);
+  // Apply saved camera/mic preferences to LiveKit ONCE PER ROOM CONNECTION.
+  //
+  // WS3/E5+E6 — this used to be guarded by a per-INSTANCE useRef. The pin /
+  // tile-demote / density features swap the lobby between flex and grid
+  // trees, which REMOUNTS LobbyMediaControls — fresh ref → the non-host
+  // auto-mute block (plus its 500ms re-apply) re-fired on every layout
+  // change, force-muting anyone who had unmuted. That was the real "I
+  // unmute and it flips back / nobody can hear me in the main room" bug.
+  // The guard is now keyed on the LiveKit participant SID (module scope):
+  // one application per actual room connection — remounts are no-ops, while
+  // a genuine rejoin / room change gets a fresh SID and re-applies the
+  // join-muted policy as designed.
   useEffect(() => {
-    if (!localParticipant || appliedRef.current) return;
-    appliedRef.current = true;
+    if (!localParticipant) return;
+    const sid = localParticipant.sid;
+    if (!sid || appliedPrefsForSid.has(sid)) return;
+    appliedPrefsForSid.add(sid);
 
     // Camera: apply sessionStorage preference (overrides LiveKit auto-enable)
     const savedCam = sessionStorage.getItem('rsn_cam');
@@ -1438,10 +1457,18 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
           serverUrl={lobbyUrl}
           connect={true}
           video={true}
+          // WS3/E4 — deliberate lobby publish POLICY: non-hosts JOIN muted
+          // (audio={isHost} = initial capture off — a 50-person main room
+          // joining hot-mic'd is chaos) but their token allows publishing,
+          // so the mic button unmutes them and they ARE heard. The old
+          // "can't be heard in main room" was the per-tile remount re-mute
+          // (fixed below in LobbyMediaControls — SID-keyed once-only).
           audio={isHost}
           className="flex-1 w-full max-w-4xl"
           options={{
             videoCaptureDefaults: { resolution: { ...BG_CAPTURE_RESOLUTION } },
+            // WS3/E4 — pin echo/noise processing on for the main-room mic.
+            audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
           }}
         >
           {/* F3 (21 May Ali) — sync LiveKit room presence into the store

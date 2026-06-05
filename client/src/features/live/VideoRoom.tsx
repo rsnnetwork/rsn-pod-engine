@@ -620,6 +620,11 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
       audio={true}
       options={{
         videoCaptureDefaults: { resolution: { ...BG_CAPTURE_RESOLUTION } },
+        // WS3/E4 — explicit echo/noise processing on the mic capture. The
+        // browser defaults usually include these, but several "echo / hears
+        // themselves" reports came from devices where they were off; pin
+        // them on for every breakout capture.
+        audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       }}
       onConnected={() => {
         // T0-2 (Issue 7) — confirm LiveKit room membership to the server so
