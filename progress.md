@@ -8146,3 +8146,19 @@ All 12 May items + all deferred follow-ups closed. End-to-end verification: serv
 **Verified equivalent-by-design (not gaps):** M2/M4 two-phase activation superseded by presence-gated matching + 60s no-show detection + WS2 self-heal; M3b cohost source unified in Phase R6; D1-D3/BG1 restored by the snapshot recovery. Product note: kick = permanent ban (re-invite also blocked) — deliberate per the WS2 spec.
 
 **Dependency audit:** 18 vulns (4 high: axios SSRF, nodemailer, path-to-regexp ReDoS, socket.io-parser) → S13 dep-bump slice next.
+
+
+---
+
+## 2026-06-06 — S13: dependency security — prod tree at ZERO vulnerabilities
+
+**Before:** 18 vulns (4 high: axios SSRF, nodemailer SMTP-injection cluster, path-to-regexp ReDoS, socket.io-parser unbounded attachments) + dev-chain handlebars CRITICAL.
+
+**Done:**
+- npm audit fix (in-range): axios, path-to-regexp/express chain, socket.io stack (ws/engine.io/parser/adapter), follow-redirects, qs/body-parser, react-router, handlebars (critical, dev chain), brace-expansion.
+- nodemailer (HIGH) — REMOVED entirely: zero imports anywhere, email runs on Resend. Dead dependency was the whole exposure.
+- uuid bumped 9 → 11.1.1 (our usage is v4-only; the advisory hits v3/v5/v6 with a buf param we never pass).
+
+**After:** `npm audit --omit=dev` = 0 vulnerabilities. Remaining 2 moderate are DEV-ONLY (esbuild/vite dev-server request-forgery — fix requires breaking vite@8; exposure is the local dev machine only, not prod builds) — deferred deliberately, revisit on the next Vite major.
+
+**Verification:** typechecks all green; FULL suite 170/170 (2057 tests) on the bumped tree; ws2-smoke regression vs the deploy (socket.io stack changed) after ship.
