@@ -31,6 +31,12 @@ import { E } from '../../../realtime/entities';
  * and a match:return_to_lobby fallback when the window is dedup-skipped so
  * an already-rated survivor is never stranded in a dead room.
  *
+ * `ratable: false` (match ended 'cancelled' — under 30s, no ratings: not a
+ * real conversation) skips the rating window entirely: prompting someone to
+ * rate a 15-second aborted room is noise, and the ratings service only
+ * accepts cancelled-match ratings for a 30s grace anyway. Survivors go
+ * straight back to the main room.
+ *
  * Every step fails open — a DB hiccup on one survivor must not block the
  * others or leave the room half-ended.
  */
@@ -40,8 +46,29 @@ export async function endRoomEarlyForSurvivors(
   matchId: string,
   departedUserIds: string[],
   survivorIds: string[],
+  ratable: boolean = true,
 ): Promise<void> {
   if (survivorIds.length === 0) return;
+
+  if (!ratable) {
+    for (const survivorId of survivorIds) {
+      try {
+        await sessionService.updateParticipantStatus(sessionId, survivorId, ParticipantStatus.IN_LOBBY).catch(() => {});
+        io.to(userRoom(survivorId)).emit('match:return_to_lobby', { reason: 'partner_left' });
+        emitEntities(
+          io, [survivorId],
+          [E.session(sessionId), E.sessionParticipants(sessionId), E.match(matchId)],
+        ).catch(() => {});
+      } catch (err) {
+        logger.error({ err, sessionId, matchId, survivorId }, 'endRoomEarlyForSurvivors: non-ratable survivor flow failed');
+      }
+    }
+    logger.info(
+      { sessionId, matchId, survivors: survivorIds.length },
+      'Room ended early (cancelled, not ratable) — survivor(s) returned to main room',
+    );
+    return;
+  }
 
   // One name lookup for all departed partners (the rating form labels).
   let departedWithNames = departedUserIds.map(id => ({ userId: id, displayName: placeholderName(id) }));

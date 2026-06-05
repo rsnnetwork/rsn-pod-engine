@@ -411,7 +411,12 @@ function scheduleMatchEndGrace(
         // Bug 4 (April 18 Dr Arch): the terminal status may have left zero
         // active matches in the round.
         maybeAutoEndEmptyRound(sessionId);
-        await endRoomEarlyForSurvivors(io, sessionId, matchId, [userId], remainingUserIds);
+        // 'cancelled' (<30s, no ratings) = not a real conversation → no
+        // rating form; the survivor goes straight back to the main room.
+        await endRoomEarlyForSurvivors(
+          io, sessionId, matchId, [userId], remainingUserIds,
+          terminalStatus === 'completed',
+        );
       } catch (err) {
         logger.warn({ err, sessionId, userId }, 'Error in match-end grace handler');
       }

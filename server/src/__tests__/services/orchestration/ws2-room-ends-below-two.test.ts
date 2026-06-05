@@ -154,6 +154,23 @@ describe('WS2 — survivor early-end helper (room-end-early.ts)', () => {
     expect(reSrc()).toMatch(/export async function endRoomEarlyForSurvivors/);
   });
 
+  it("cancelled (<30s) rooms are not ratable — survivors return to main with NO rating form", () => {
+    // A 15-second aborted room is not a real conversation: prompting a
+    // rating is noise and the ratings service only accepts cancelled-match
+    // ratings within a 30s grace anyway. The grace expiry passes
+    // ratable=false and the helper short-circuits to match:return_to_lobby.
+    const src = reSrc();
+    expect(src).toMatch(/ratable: boolean/);
+    const nrIdx = src.indexOf('if (!ratable)');
+    expect(nrIdx).toBeGreaterThan(-1);
+    const nrBlock = src.slice(nrIdx, src.indexOf('return;', nrIdx));
+    expect(nrBlock).toMatch(/match:return_to_lobby/);
+    expect(nrBlock).not.toMatch(/emitRatingWindowOnce/);
+    // The grace expiry derives ratability from the terminal status.
+    const pf = pfSrc();
+    expect(pf).toMatch(/terminalStatus === 'completed',?\s*\n?\s*\)/);
+  });
+
   it("opens the survivor's rating window with reason 'partner_no_return' via the dedup helper", () => {
     expect(reSrc()).toMatch(/emitRatingWindowOnce/);
     expect(reSrc()).toMatch(/'partner_no_return'/);
