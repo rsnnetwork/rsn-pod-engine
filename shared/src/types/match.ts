@@ -16,6 +16,11 @@ export interface Match {
   participantAId: string;
   participantBId: string;
   participantCId: string | null;  // 3-person room (trio)
+  // WS2 (27 May remaining work) — members who departed early (leave /
+  // pull-back / grace expiry / kick). RATING-ONLY: lets round-end emission
+  // have the survivors rate the departed; matching/presence never read it.
+  // Optional for rows fetched by queries that don't select the column.
+  departedUserIds?: string[];
   roomId: string | null;
   status: MatchStatus;
   score: number | null;

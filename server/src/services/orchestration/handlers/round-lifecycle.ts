@@ -572,12 +572,16 @@ export async function endRound(
     // Get matches for rating window notifications
     const matches = await matchingService.getMatchesByRound(sessionId, roundNumber);
 
-    // Batch-lookup display names for all participants across all matches
+    // Batch-lookup display names for all participants across all matches.
+    // WS2 (27 May remaining work) — departed members (left / pulled / kicked
+    // mid-round) are rated by the survivors at round end, so their names
+    // join the batch too.
     const allMatchParticipantIds = new Set<string>();
     for (const match of matches) {
       allMatchParticipantIds.add(match.participantAId);
       allMatchParticipantIds.add(match.participantBId);
       if (match.participantCId) allMatchParticipantIds.add(match.participantCId);
+      for (const departedId of match.departedUserIds ?? []) allMatchParticipantIds.add(departedId);
     }
     const ratingNameMap = new Map<string, string>();
     if (allMatchParticipantIds.size > 0) {
@@ -593,6 +597,14 @@ export async function endRound(
         // Collect all participant IDs for this match (pair or trio)
         const participantIds = [match.participantAId, match.participantBId];
         if (match.participantCId) participantIds.push(match.participantCId);
+        // WS2 — RATERS are the current slot members only (the departed
+        // already rated at their early exit, or get the late-return replay),
+        // but each rater's PARTNER LIST includes the departed so a trio's
+        // survivors rate each other + the member who left mid-round.
+        const ratingParticipantIds = [
+          ...participantIds,
+          ...(match.departedUserIds ?? []).filter(id => !participantIds.includes(id)),
+        ];
 
         // Dedup: only emit rating:window_open to users who haven't already rated
         // this match. Primary emit sites (voluntary leave, host remove, auto-
@@ -619,7 +631,7 @@ export async function endRound(
 
         // Notify each participant to rate their partner(s) — include display names
         for (const pid of participantIds) {
-          const partnerIds = participantIds.filter(id => id !== pid);
+          const partnerIds = ratingParticipantIds.filter(id => id !== pid);
           // #6 (25 May) — an explicit Skip closes the rating for this match.
           if (activeSession.ratingSkips?.has(`${pid}:${match.id}`)) continue;
           // Skip the form only when this user has already rated EVERY partner in

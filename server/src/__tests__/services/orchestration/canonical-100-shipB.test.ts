@@ -297,7 +297,9 @@ describe('Ship B — flip-site + wiring invariants', () => {
   it('host kick deliberately stays on presenceMap (socketId lookup, not a presence gate)', () => {
     const src = readSrc('services/orchestration/handlers/host-actions.ts');
     const i = src.indexOf('export async function handleHostRemoveParticipant');
-    const block = src.slice(i, i + 2400);
+    // WS2 widened this window: the kick handler gained the match-end flow
+    // (demote + survivor rating) ahead of the presence cleanup.
+    const block = src.slice(i, i + 7000);
     expect(block).toMatch(/presenceMap\.get\(data\.userId\)/);
     expect(block).toMatch(/deliberately|socketId/i); // documented decision
   });

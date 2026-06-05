@@ -70,15 +70,33 @@ export async function endRoomEarlyForSurvivors(
     return;
   }
 
+  // WS2 — merge the caller's departed id(s) with the match row's
+  // departed_user_ids (appended by demoteParticipantFromMatch): a 3→2→1
+  // double-leave means the lone survivor must rate BOTH departed members,
+  // not just the last one to go. Fail-open: on a lookup error the caller's
+  // list still drives the form.
+  let allDepartedIds = [...departedUserIds];
+  try {
+    const depRes = await query<{ departed_user_ids: string[] | null }>(
+      `SELECT departed_user_ids FROM matches WHERE id = $1`,
+      [matchId],
+    );
+    for (const id of depRes.rows[0]?.departed_user_ids ?? []) {
+      if (!allDepartedIds.includes(id) && !survivorIds.includes(id)) allDepartedIds.push(id);
+    }
+  } catch (err) {
+    logger.warn({ err, sessionId, matchId }, 'endRoomEarlyForSurvivors: departed lookup failed — using caller list');
+  }
+
   // One name lookup for all departed partners (the rating form labels).
-  let departedWithNames = departedUserIds.map(id => ({ userId: id, displayName: placeholderName(id) }));
+  let departedWithNames = allDepartedIds.map(id => ({ userId: id, displayName: placeholderName(id) }));
   try {
     const nameRes = await query<{ id: string; display_name: string | null; email: string | null }>(
       `SELECT id, display_name, email FROM users WHERE id = ANY($1)`,
-      [departedUserIds],
+      [allDepartedIds],
     );
     const nameMap = new Map(nameRes.rows.map(r => [r.id, resolveDisplayName(r.id, r.display_name, r.email)]));
-    departedWithNames = departedUserIds.map(id => ({
+    departedWithNames = allDepartedIds.map(id => ({
       userId: id,
       displayName: nameMap.get(id) || placeholderName(id),
     }));

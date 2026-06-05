@@ -774,6 +774,58 @@ export async function handleHostRemoveParticipant(
     // acting hosts still can't kick admins.
     if (!await refuseIfAdminTarget(socket, data.sessionId, data.userId)) return;
 
+    // WS2 (27 May remaining work) — a kick must END the kicked user's active
+    // match, not orphan it. Immediate (kick is decisive — no grace): the
+    // SURVIVOR auto-rates ('partner_no_return') → main room; a trio's
+    // remaining 2 continue to round end (they rate the departed there via
+    // departed_user_ids). The kicked user gets NO rating form. Terminal
+    // status is 'completed' per the host-remove precedent: removed users'
+    // partners are sent to rate, so the match is real regardless of duration.
+    try {
+      const kickMatchRes = await query<{ id: string; participant_a_id: string; participant_b_id: string | null; participant_c_id: string | null }>(
+        `SELECT id, participant_a_id, participant_b_id, participant_c_id
+         FROM matches WHERE session_id = $1 AND status = 'active'
+           AND (participant_a_id = $2 OR participant_b_id = $2 OR participant_c_id = $2)
+         LIMIT 1`,
+        [data.sessionId, data.userId],
+      );
+      if (kickMatchRes.rows.length > 0) {
+        const kickMatch = kickMatchRes.rows[0];
+        const kickDemote = await matchingService.demoteParticipantFromMatch(
+          kickMatch.id, data.userId, 'completed',
+        );
+        const { clearCanonicalLocationToMain, clearCanonicalBreakoutByMatch } =
+          await import('../state/canonical-state');
+        if (kickDemote.matchStillActive) {
+          // Trio — survivors keep talking; only the kicked user's canonical
+          // location clears. Lighter notification, no rating yet.
+          await clearCanonicalLocationToMain(data.sessionId, data.userId);
+          for (const remainingId of kickDemote.remainingUserIds) {
+            io.to(userRoom(remainingId)).emit('match:participant_left', {
+              matchId: kickMatch.id,
+              leftUserId: data.userId,
+              remainingCount: kickDemote.remainingUserIds.length,
+              reason: 'host_removed',
+            });
+          }
+        } else {
+          // Pair — the room ends NOW for the survivor (Ship C ordering:
+          // canonical clears before survivor-facing emits).
+          await clearCanonicalBreakoutByMatch(data.sessionId, [kickMatch.id]);
+          clearRoomTimers(kickMatch.id);
+          await endRoomEarlyForSurvivors(
+            io, data.sessionId, kickMatch.id, [data.userId], kickDemote.remainingUserIds,
+          );
+          // Bug 4 (April 18 Dr Arch): the kick may have ended the last
+          // active match of an algorithm round.
+          maybeAutoEndEmptyRound(data.sessionId);
+        }
+      }
+    } catch (err) {
+      logger.warn({ err, sessionId: data.sessionId, userId: data.userId },
+        'Kick match-end flow failed — continuing with event removal (fail-open)');
+    }
+
     await sessionService.updateParticipantStatus(
       data.sessionId, data.userId, ParticipantStatus.REMOVED
     );

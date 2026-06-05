@@ -627,6 +627,7 @@ export async function getMatchesByRound(sessionId: string, roundNumber: number):
     `SELECT id, session_id AS "sessionId", round_number AS "roundNumber",
             participant_a_id AS "participantAId", participant_b_id AS "participantBId",
             participant_c_id AS "participantCId",
+            departed_user_ids AS "departedUserIds",
             room_id AS "roomId", status, score, reason_tags AS "reasonTags",
             is_manual AS "isManual",
             started_at AS "startedAt", ended_at AS "endedAt", created_at AS "createdAt"
@@ -642,6 +643,7 @@ export async function getMatchById(matchId: string): Promise<Match> {
     `SELECT id, session_id AS "sessionId", round_number AS "roundNumber",
             participant_a_id AS "participantAId", participant_b_id AS "participantBId",
             participant_c_id AS "participantCId",
+            departed_user_ids AS "departedUserIds",
             room_id AS "roomId", status, score, reason_tags AS "reasonTags",
             is_manual AS "isManual",
             started_at AS "startedAt", ended_at AS "endedAt", created_at AS "createdAt"
@@ -709,21 +711,31 @@ export async function demoteParticipantFromMatch(
 
     if (remaining.length >= 2) {
       // Trio with 1 leaver — keep match active, re-canonicalise slots.
+      // WS2 (27 May remaining work) — record the departed id so round-end
+      // rating emission can still have the survivors rate them (the slot
+      // re-canonicalisation below erases them from the row otherwise).
+      // departed_user_ids is RATING-ONLY: matching/presence never read it.
       const sorted = [...remaining].sort();
       const newA = sorted[0];
       const newB = sorted[1];
       const newC = sorted[2] || null; // 4-person rooms not supported, but safe
       await client.query(
-        `UPDATE matches SET participant_a_id = $1, participant_b_id = $2, participant_c_id = $3 WHERE id = $4`,
-        [newA, newB, newC, matchId],
+        `UPDATE matches SET participant_a_id = $1, participant_b_id = $2, participant_c_id = $3,
+                departed_user_ids = array_append(departed_user_ids, $5::uuid)
+         WHERE id = $4`,
+        [newA, newB, newC, matchId, userId],
       );
       return { remainingUserIds: remaining, matchStillActive: true };
     }
 
-    // 1 or 0 remain — terminal.
+    // 1 or 0 remain — terminal. The departed append still happens so a
+    // 3→2→1 double-leave preserves BOTH departed ids on the terminal row —
+    // the lone survivor's early-end rating form covers both of them.
     await client.query(
-      `UPDATE matches SET status = $2, ended_at = NOW() WHERE id = $1 AND status = 'active'`,
-      [matchId, terminalStatusIfRoomEmpties],
+      `UPDATE matches SET status = $2, ended_at = NOW(),
+              departed_user_ids = array_append(departed_user_ids, $3::uuid)
+       WHERE id = $1 AND status = 'active'`,
+      [matchId, terminalStatusIfRoomEmpties, userId],
     );
     return { remainingUserIds: remaining, matchStillActive: false };
   });

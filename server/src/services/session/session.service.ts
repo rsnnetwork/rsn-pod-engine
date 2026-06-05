@@ -7,7 +7,7 @@ import logger from '../../config/logger';
 import {
   Session, SessionParticipant, SessionConfig, SessionStatus,
   ParticipantStatus, CreateSessionInput, UpdateSessionInput,
-  DEFAULT_SESSION_CONFIG, UserRole, hasRoleAtLeast,
+  DEFAULT_SESSION_CONFIG, UserRole, hasRoleAtLeast, ErrorCode,
 } from '@rsn/shared';
 import { NotFoundError, ConflictError, ForbiddenError, AppError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
@@ -289,6 +289,14 @@ export async function registerParticipant(sessionId: string, userId: string, use
       const existingStatus = existing.rows[0].status as string;
       if (['registered', 'checked_in', 'in_lobby', 'in_round'].includes(existingStatus)) {
         throw new ConflictError('SESSION_ALREADY_REGISTERED', 'You are already registered for this event');
+      }
+      // WS2 (27 May remaining work) — kick = banned from re-entry. Pre-fix
+      // the re-register UPDATE below resurrected 'removed' rows straight
+      // back to 'registered', so a kicked user could walk back into the
+      // event (the socket join path auto-registers on page load). REMOVED
+      // is terminal in the participant state machine; honor it here too.
+      if (existingStatus === 'removed') {
+        throw new AppError(403, 'REMOVED_FROM_EVENT' as ErrorCode, 'You have been removed from this event by the host');
       }
       // Re-register
       const result = await client.query<SessionParticipant>(

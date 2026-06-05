@@ -8005,3 +8005,21 @@ All 12 May items + all deferred follow-ups closed. End-to-end verification: serv
 **Decisions:** isolated-participants deleted (zero production callers post-WS2; deletion pinned by match-status-semantics test so re-pairing can't silently return). Manual-room (LOBBY_OPEN) disconnects keep pre-existing behavior — grace applies to ROUND_ACTIVE, matching the old gating.
 
 **Next:** push staging → CI → main → verify Render+Vercel → headed ws2-smoke vs prod → checkhole → Slice 2 (kick ends match + REMOVED rejoin ban + trio departed round-end ratings).
+
+
+---
+
+## 2026-06-05 — WS2 Slice 2: kick semantics + REMOVED ban + trio departed ratings
+
+**Status:** Completed (local verification; ship + headed kick smoke follow in same session)
+
+**What changed:**
+- KICK ENDS THE MATCH: handleHostRemoveParticipant now finds the kicked user's active match (all 3 slots), demotes trio-aware ('completed' — host-remove precedent), clears canonical, and runs the survivor through endRoomEarlyForSurvivors (immediate 'partner_no_return' form → main, no grace, no re-pair). Trio survivors continue (match:participant_left). The kicked user gets NO rating form. Pre-fix the kick orphaned the match entirely.
+- REMOVED BAN: registerParticipant rejects status='removed' with 403 REMOVED_FROM_EVENT before the re-register UPDATE that used to silently resurrect kicked users to 'registered' (the socket join path auto-registers on page load, so kicked users could walk straight back in).
+- TRIO DEPARTED RATINGS: migration 066 adds matches.departed_user_ids UUID[] (additive, rating-only). demoteParticipantFromMatch appends the leaver in BOTH branches (3→2→1 double-leave preserves both ids). getMatchesByRound/getMatchById expose departedUserIds. endRound partner lists = current slots + departed (raters stay slot-members; departed already rated at exit or get the late-return replay). endRoomEarlyForSurvivors merges the match row's departed ids so a lone survivor's form covers every departed member.
+
+**Files touched:** server: migrations/066, matching.service.ts, host-actions.ts, session.service.ts, round-lifecycle.ts, room-end-early.ts; shared: match.ts (departedUserIds); tests: ws2-kick-ban-departed.test.ts (new), canonical-100-shipB anchor window widened; e2e: ws2-kick-smoke.spec.ts (new headed kick smoke).
+
+**Verification:** typecheck shared/server/client clean; WS2 suites 42/42; FULL suite green (after anchor re-point; routes.test was parallel-load flake, green in isolation).
+
+**Next:** ship → headed kick smoke vs prod → checkhole → S3 (name-click eject audit, SafeProfileLink).
