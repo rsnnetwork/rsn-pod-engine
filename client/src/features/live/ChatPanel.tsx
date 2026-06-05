@@ -228,8 +228,10 @@ function ChatInputWithEmoji({ inputRef, input, setInput, handleKeyDown, handleSe
           // is the root cause.
           className="flex-1 px-3 py-2 text-base sm:text-sm text-gray-800 bg-gray-50 border border-gray-200 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500/50 placeholder-gray-400"
         />
-        <button onClick={handleSend} disabled={!input.trim()}
-          className="p-2 rounded-full bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+        {/* WS3/S11 — 44px tap target (was p-2 ≈ 32px, below the mobile
+            minimum; caught by the mobile event smoke). */}
+        <button onClick={handleSend} disabled={!input.trim()} aria-label="Send message"
+          className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
           <Send className="h-4 w-4" />
         </button>
       </div>

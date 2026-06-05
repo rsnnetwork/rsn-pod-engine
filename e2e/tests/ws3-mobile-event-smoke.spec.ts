@@ -157,13 +157,22 @@ test('mobile event: main room, buttons, chat, host-on-phone, breakout, rating �
   await alicePage.locator('button[aria-label="Participants"]').first().click(); // close
 
   // ── 3. MESSAGING from the phone ──
+  // Bob's chat must be OPEN to render incoming messages — open both panels.
+  await bobPage.locator('button[aria-label="Open chat"]').first().click();
   await alicePage.locator('button[aria-label="Open chat"]').first().click();
   const chatInput = alicePage.locator('input[placeholder*="essage"], textarea[placeholder*="essage"], input[type="text"]').last();
   await expect(chatInput, 'chat input visible in the bottom sheet').toBeVisible({ timeout: 15_000 });
   const inputBox = await chatInput.boundingBox();
   expect(inputBox!.y + inputBox!.height, 'chat input inside the 740px viewport').toBeLessThanOrEqual(741);
   await chatInput.fill('hello from the phone');
-  await chatInput.press('Enter');
+  // Send via the real button (Enter handling varies); fall back to Enter.
+  const sendBtn = alicePage.locator('button:has(svg.lucide-send)').first();
+  if (await sendBtn.isVisible().catch(() => false)) {
+    await assertTapTarget(alicePage, sendBtn, 'Chat send', 360, 36);
+    await sendBtn.click();
+  } else {
+    await chatInput.press('Enter');
+  }
   await expect(bobPage.getByText('hello from the phone').first(), 'desktop receives the phone message')
     .toBeVisible({ timeout: 20_000 });
   console.log('  ✓ chat: phone → desktop delivered');
