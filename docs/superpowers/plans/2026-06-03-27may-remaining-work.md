@@ -1,6 +1,6 @@
 # 27th May — Remaining Work (continuation doc)
 
-**Last updated:** 2026-06-05 ~16:00 UTC (WS2 CORE "nobody waits alone" SHIPPED + prod-smoke-verified ✅; autonomous run in progress — next: WS2 kick/ban/trio-departed slice, then name-click audit, then Workstream 3)
+**Last updated:** 2026-06-05 ~17:15 UTC (autonomous run: S1 WS2-core ✅, S2 kick/ban/departed ✅ `2c64e40`, S3 ProfileLink name-click safety ✅ `cdbc861`, S4 timer warnings + final-stretch ✅ `39a502b` — each prod-smoke-verified + checkholed. NEXT: S5 leave buttons → S6 mobile chat → S7 audio → S8 pin → S9 rating option → S10 lobby layout → full regression. Slice queue + process in plan file zany-puzzling-wreath.md + progress.md)
 **Purpose:** a fresh Claude session told "start 27th may remaining work" reads THIS file and continues without re-discovery. It is the single up-to-date status; older triage/plan docs are historical.
 
 ---

@@ -6,7 +6,7 @@ import { Video, Clock, Mic, MicOff, VideoOff, Wifi, Loader2, ArrowLeft, Sparkles
 import { useBackgroundEffects } from '@/hooks/useBackgroundEffects';
 import { BackgroundPanel } from './BackgroundPanel';
 import { BG_CAPTURE_RESOLUTION } from '@/lib/backgroundEffects';
-import { getSocket, disconnectSocket } from '@/lib/socket';
+import { getSocket } from '@/lib/socket';
 import {
   LiveKitRoom,
   VideoTrack,
@@ -709,29 +709,24 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
           </div>
           {!isHost && (
             <div className="flex items-center gap-1 sm:gap-2">
+              {/* WS3/G3+G4 — ONE in-room exit: "Back to Main Room" (room-only,
+                  amber). Its visually-identical "Leave" twin (same ArrowLeft
+                  icon, same styling — users couldn't tell them apart and some
+                  left the whole EVENT meaning to leave the room) is removed;
+                  the event exit lives in the top bar as the destructive
+                  red "Leave Event" (LogOut icon). Its old confirm copy was
+                  also wrong post-WS2 (it claimed rejoining was impossible —
+                  leavers CAN rejoin; only kicks ban re-entry). */}
               <button
                 onClick={() => {
                   if (confirm('Return to the main room? Your conversation will end.')) {
                     if (sessionId) getSocket()?.emit('participant:leave_conversation', { sessionId });
                   }
                 }}
-                className="flex items-center gap-1 px-2 py-1 text-[10px] sm:text-xs text-gray-400 hover:text-amber-400 hover:bg-white/5 rounded-lg transition-colors"
-                title="Return to the main room"
+                className="flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] text-[11px] sm:text-xs font-medium text-amber-400 hover:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 rounded-lg transition-colors"
+                title="End this conversation and return to the main room"
               >
-                <ArrowLeft className="h-3 w-3" /> Main Room
-              </button>
-              <button
-                onClick={() => {
-                  if (confirm('Leave this event entirely? You will not be able to rejoin.')) {
-                    if (sessionId) getSocket()?.emit('session:leave', { sessionId });
-                    disconnectSocket();
-                    useSessionStore.getState().reset();
-                    window.location.href = '/sessions';
-                  }
-                }}
-                className="flex items-center gap-1 px-2 py-1 text-[10px] sm:text-xs text-gray-400 hover:text-red-400 hover:bg-white/5 rounded-lg transition-colors"
-              >
-                <ArrowLeft className="h-3 w-3" /> Leave
+                <ArrowLeft className="h-3.5 w-3.5" /> Back to Main Room
               </button>
             </div>
           )}

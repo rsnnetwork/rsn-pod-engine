@@ -8056,3 +8056,18 @@ All 12 May items + all deferred follow-ups closed. End-to-end verification: serv
 **Files touched:** server: timer-manager.ts; shared: events.ts; client: lib/chime.ts (new), stores/sessionStore.ts (timerWarning), hooks/useSessionSocket.ts, features/live/VideoRoom.tsx; tests: ws3-timer-warning.test.ts (new pins).
 
 **Next:** ship → headed timer smoke vs prod → checkhole → S5 (distinct Leave Event vs Back to Main buttons).
+
+
+---
+
+## 2026-06-05 — S5: G3/G4 distinct Leave Event vs Back to Main Room
+
+**Status:** Completed (local verification; ship + smoke follow)
+
+**What changed:**
+- VideoRoom rendered two visually identical exits (same ArrowLeft icon, same gray styling): "Main Room" and "Leave" — users left the whole EVENT meaning to leave the room. The in-room "Leave" duplicate is REMOVED (its confirm copy was also wrong post-WS2: "you will not be able to rejoin" — only kicks ban re-entry now).
+- The room keeps ONE exit: "Back to Main Room" (amber pill, ArrowLeft, 36px+ tap target, explicit title).
+- The EVENT exit is the top bar's "Leave Event": now destructive red with the LogOut icon and explicit label (was gray "Leave"), 44px tap target.
+- Pin ws3-leave-buttons.test.ts: VideoRoom has no session:leave / location redirect; top bar has the LogOut + red Leave Event; old copy gone. ws2-smoke phase A locator updated to the new label.
+
+**Next:** ship → reuse ws2-smoke phase A vs prod (clicks the real button) → checkhole → S6 (mobile chat bottom-sheet).

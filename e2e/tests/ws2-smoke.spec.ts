@@ -337,11 +337,11 @@ test('WS2: waiting banner + grace; expiry → survivor rates, late returner rate
   await p2bPage.close().catch(() => {});
 
   // ── PHASE A (strict): deliberate "Main Room" click → survivor rates IMMEDIATELY ──
-  console.log('  PHASE A: P3a clicks Main Room…');
+  console.log('  PHASE A: P3a clicks Back to Main Room…');
   const p3aPage = sessions.get(P3a.id)!.page;
   const p3bPage = sessions.get(P3b.id)!.page;
   const t0 = Date.now();
-  await p3aPage.getByText('Main Room', { exact: true }).first().click();
+  await p3aPage.getByText('Back to Main Room', { exact: true }).first().click();
   // The leaver gets their own early-leave form.
   await waitForText(p3aPage, /Rate your conversation/i, 'P3a (leaver) gets the early-leave rating form', 15_000);
   // The survivor's room ends NOW — no waiting banner, no 15s wait. With a

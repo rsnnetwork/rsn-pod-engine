@@ -193,11 +193,14 @@ export default function LiveSessionPage() {
             >
               <Users className="h-4 w-4" />
             </button>
+            {/* WS3/G3 — THE event exit. Destructive styling + explicit label
+                so it can't be confused with "Back to Main Room" (which only
+                ends the breakout). The in-room duplicate was removed (G4). */}
             <button
               onClick={handleLeave}
-              className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-red-500 transition-colors px-3 py-1.5 rounded-full hover:bg-gray-100"
+              className="flex items-center gap-1.5 text-sm font-medium text-red-500 hover:text-red-600 transition-colors px-3 py-1.5 rounded-full hover:bg-red-50 min-h-[44px]"
             >
-              <LogOut className="h-4 w-4" /> Leave
+              <LogOut className="h-4 w-4" /> Leave Event
             </button>
           </div>
         )}
