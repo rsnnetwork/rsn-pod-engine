@@ -674,12 +674,25 @@ export async function endRound(
     // awaits that took 1.5–4.5 s wall time on 100 matches (during which the
     // rating:window_open timer was already ticking on the client).
     const roundUserCounts = new Map<string, number>();
+    // S20 (live-test z1) — attendance counts slots ∪ departed: a member
+    // demoted mid-round still attended it. The room-return transitions
+    // below stay SLOT-ONLY (a departed user may have left the event; we
+    // must not walk their state back to IN_MAIN_ROOM).
+    const attendanceCounts = new Map<string, number>();
     for (const match of matches) {
       for (const pid of [match.participantAId, match.participantBId, match.participantCId]) {
         if (pid) roundUserCounts.set(pid, (roundUserCounts.get(pid) || 0) + 1);
       }
+      const attended = new Set<string>([
+        match.participantAId, match.participantBId,
+        ...(match.participantCId ? [match.participantCId] : []),
+        ...(match.departedUserIds ?? []),
+      ].filter((id): id is string => !!id));
+      for (const pid of attended) {
+        attendanceCounts.set(pid, (attendanceCounts.get(pid) || 0) + 1);
+      }
     }
-    await sessionService.incrementRoundsCompletedBatch(sessionId, roundUserCounts);
+    await sessionService.incrementRoundsCompletedBatch(sessionId, attendanceCounts);
 
     // Phase 2C (5 May spec) — return each round-participant to the main room
     // through the chokepoint instead of a bulk UPDATE. The chokepoint

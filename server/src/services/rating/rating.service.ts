@@ -355,12 +355,17 @@ export async function getPeopleMet(
     : 0;
 
   // Get rounds attended count — include all states where user actually participated
-  // (completed, active, no_show, reassigned all mean the user was in that round)
+  // (completed, active, no_show, reassigned all mean the user was in that round).
+  // S20 (live-test z1, 2026-06-06) — a member demoted mid-round (throttled
+  // browser → 15s grace expiry) is re-canonicalised OUT of the slots but DID
+  // attend that round: they talked, rated, and were rated. Count slots ∪
+  // departed, or saif/waseem read "attended 3 of 5" after one flaky round.
   const roundsResult = await query<{ count: string }>(
     `SELECT COUNT(DISTINCT round_number)::text AS count
      FROM matches
      WHERE session_id = $1
-       AND (participant_a_id = $2 OR participant_b_id = $2 OR participant_c_id = $2)
+       AND (participant_a_id = $2 OR participant_b_id = $2 OR participant_c_id = $2
+            OR $2 = ANY(departed_user_ids))
        AND status NOT IN ('cancelled', 'scheduled')`,
     [sessionId, userId]
   );
@@ -369,6 +374,12 @@ export async function getPeopleMet(
   // Get all matches the user participated in for this session
   // Uses LATERAL to handle 2-person and 3-person rooms uniformly
   // Now also returns theirMeetAgain (whether the partner rated meet_again for us)
+  // S20 — the partner expansion and the membership filter both union
+  // departed_user_ids: a demoted member's recap must list the partners from
+  // that round (mutual count came from meeting_records and already included
+  // them — count 3 vs visible list 1 was exactly this drift), and the
+  // survivors' recaps must list the demoted member. DISTINCT guards the
+  // pair case where the departed id is still in the slots.
   const connectionsResult = await query<ConnectionResult>(
     `SELECT
        u.id AS "userId",
@@ -384,11 +395,12 @@ export async function getPeopleMet(
        COALESCE(m.is_manual, FALSE) AS "isManual"
      FROM matches m
      CROSS JOIN LATERAL (
-       SELECT unnest(ARRAY[
-         CASE WHEN m.participant_a_id != $1 THEN m.participant_a_id END,
-         CASE WHEN m.participant_b_id != $1 THEN m.participant_b_id END,
-         CASE WHEN m.participant_c_id IS NOT NULL AND m.participant_c_id != $1 THEN m.participant_c_id END
-       ]) AS partner_id
+       SELECT DISTINCT pid AS partner_id
+       FROM unnest(
+         ARRAY[m.participant_a_id, m.participant_b_id, m.participant_c_id]
+         || COALESCE(m.departed_user_ids, '{}'::uuid[])
+       ) AS pid
+       WHERE pid IS NOT NULL AND pid != $1
      ) AS partners
      JOIN users u ON u.id = partners.partner_id
      LEFT JOIN ratings r_given ON r_given.match_id = m.id AND r_given.from_user_id = $1 AND r_given.to_user_id = u.id
@@ -397,7 +409,8 @@ export async function getPeopleMet(
        (eh.user_a_id = LEAST($1, u.id) AND eh.user_b_id = GREATEST($1, u.id))
      )
      WHERE m.session_id = $2
-       AND (m.participant_a_id = $1 OR m.participant_b_id = $1 OR m.participant_c_id = $1)
+       AND (m.participant_a_id = $1 OR m.participant_b_id = $1 OR m.participant_c_id = $1
+            OR $1 = ANY(m.departed_user_ids))
        AND m.status NOT IN ('cancelled', 'scheduled')
        AND partners.partner_id IS NOT NULL
      ORDER BY m.round_number ASC`,

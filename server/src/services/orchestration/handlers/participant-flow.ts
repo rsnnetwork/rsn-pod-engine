@@ -603,10 +603,17 @@ export async function handleJoinSession(
           await sessionService.updateParticipantStatus(
             data.sessionId, userId, ParticipantStatus.IN_LOBBY
           );
-        } else if (effectiveStatus === SessionStatus.SCHEDULED) {
+        } else if (effectiveStatus === SessionStatus.SCHEDULED
+                || effectiveStatus === SessionStatus.COMPLETED
+                || effectiveStatus === SessionStatus.CANCELLED) {
           // Pre-start: do NOT auto-checkin. registerParticipant above
           // already inserted a 'registered' row if the user was new;
           // existing rows keep whatever status they had.
+          // S20 (live-test z1) — same rule POST-END: reopening a finished
+          // event (recap view from a throttled tab that woke up) used to
+          // fall through to the CHECKED_IN write below and resurrect a
+          // swept 'left' row — Ali found two "Checked In" zombies on a
+          // completed event's participant list.
         } else {
           await sessionService.updateParticipantStatus(
             data.sessionId, userId,
