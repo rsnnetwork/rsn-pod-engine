@@ -328,6 +328,29 @@ export async function handleHostStart(
       status: SessionStatus.LOBBY_OPEN,
       currentRound: 0,
     });
+    // S26 (live-test 2026-06-07, alihammza stuck on the waiting screen) —
+    // #11 belt-and-braces, applied to START: a participant whose socket
+    // silently dropped out of sessionRoom never hears the broadcast above
+    // and stays on "waiting for host" until a manual refresh. userRoom is
+    // far more stable (per-socket, re-joined on every connect), so also
+    // fan the start signal out per participant — the exact pattern the
+    // 23 May fix used for session:completed.
+    try {
+      const startParts = await query<{ user_id: string }>(
+        `SELECT user_id FROM session_participants
+           WHERE session_id = $1 AND status NOT IN ('removed', 'no_show')`,
+        [data.sessionId],
+      );
+      for (const r of startParts.rows) {
+        io.to(userRoom(r.user_id)).emit('session:status_changed', {
+          sessionId: data.sessionId,
+          status: SessionStatus.LOBBY_OPEN,
+          currentRound: 0,
+        });
+      }
+    } catch (err) {
+      logger.warn({ err, sessionId: data.sessionId }, 'S26 per-user start fan-out failed (non-fatal)');
+    }
 
     // Phase 2.5A (5 May spec) — pre-event session planning.
     // Stefan's matching spec §5: "Generate the full session plan upfront. Do
@@ -2302,6 +2325,23 @@ export async function startSession(sessionId: string, hostUserId: string): Promi
       status: SessionStatus.LOBBY_OPEN,
       currentRound: 0,
     });
+    // S26 — same per-user belt-and-braces as the socket start path.
+    try {
+      const startParts = await query<{ user_id: string }>(
+        `SELECT user_id FROM session_participants
+           WHERE session_id = $1 AND status NOT IN ('removed', 'no_show')`,
+        [sessionId],
+      );
+      for (const r of startParts.rows) {
+        _io.to(userRoom(r.user_id)).emit('session:status_changed', {
+          sessionId,
+          status: SessionStatus.LOBBY_OPEN,
+          currentRound: 0,
+        });
+      }
+    } catch (err) {
+      logger.warn({ err, sessionId }, 'S26 per-user start fan-out failed (non-fatal)');
+    }
   }
 
   // Host-controlled lobby: no auto-timer. Host must click "Start Round" manually.

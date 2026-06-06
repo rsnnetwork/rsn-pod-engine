@@ -11,6 +11,7 @@ import {
 import { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
 import { useSessionStore, useInRoomParticipants } from '@/stores/sessionStore';
 import { getSocket } from '@/lib/socket';
+import api from '@/lib/api';
 import { useVisibilityPartition } from './useVisibilityPartition';
 import {
   LiveKitRoom,
@@ -1440,11 +1441,31 @@ function DeviceTest() {
  * Camera-first layout: video preview is the primary content,
  * status overlay is secondary — matches how Google Meet / FaceTime handle pre-call.
  */
-function PreLobbyWaitingRoom({ isHost = false }: { isHost?: boolean }) {
+function PreLobbyWaitingRoom({ isHost = false, sessionId }: { isHost?: boolean; sessionId?: string }) {
   const { participants, hostUserId, cohosts } = useSessionStore();
   // Bug E (15 May Ali) — count acting hosts (Phase M opt-ins) too.
   const actingAsHostOverrides = useSessionStore(s => s.actingAsHostOverrides);
   const hostOnline = useHostPresence();
+
+  // S26 (live-test 2026-06-07) — a participant whose socket silently fell
+  // out of the broadcast room never hears session:status_changed when the
+  // host presses Start, and sat on this screen until a manual refresh.
+  // The server now also fans the start out per-user; this poll is the
+  // second, socket-independent layer: every 10s ask the REST snapshot
+  // (server truth) and unblock the gate the moment the event is live.
+  useEffect(() => {
+    if (!sessionId) return;
+    const iv = setInterval(async () => {
+      try {
+        const r = await api.get(`/sessions/${sessionId}/state`);
+        const st = r.data?.data?.sessionStatus;
+        if (st && st !== 'scheduled') {
+          useSessionStore.getState().setSessionStatus(st);
+        }
+      } catch { /* transient — next tick retries */ }
+    }, 10_000);
+    return () => clearInterval(iv);
+  }, [sessionId]);
 
   return (
     <div className="flex-1 flex flex-col bg-white">
@@ -1521,7 +1542,7 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
   // LOBBY GATE: Participants cannot enter the lobby before the host starts the event.
   // Show a dedicated waiting room instead. Host still sees the normal lobby with controls.
   if (!isHost && sessionStatus === 'scheduled') {
-    return <PreLobbyWaitingRoom isHost={isHost} />;
+    return <PreLobbyWaitingRoom isHost={isHost} sessionId={sessionId} />;
   }
 
   // If we have a lobby token, render the video mosaic
