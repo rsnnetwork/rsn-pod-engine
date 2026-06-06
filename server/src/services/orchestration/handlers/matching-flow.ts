@@ -1020,8 +1020,10 @@ export async function sendMatchPreview(
 
   const allUserIds = new Set<string>();
   for (const m of matches) {
-    allUserIds.add(m.participantAId);
-    allUserIds.add(m.participantBId);
+    // S25 — same NULL-slot guard as the dashboard builder below: a
+    // 1-person manual room has no B participant.
+    if (m.participantAId) allUserIds.add(m.participantAId);
+    if (m.participantBId) allUserIds.add(m.participantBId);
     if (m.participantCId) allUserIds.add(m.participantCId);
   }
 
@@ -1369,8 +1371,17 @@ async function emitHostDashboardImmediate(io: SocketServer, sessionId: string): 
     // during this event. Names are stable for the session lifetime.
     const allUserIds = new Set<string>();
     for (const m of matches) {
-      allUserIds.add(m.participantAId);
-      allUserIds.add(m.participantBId);
+      // S25 (live-test bb root #2) — participant_b_id is NULL for a
+      // 1-person manual room. The unguarded add fed that NULL into
+      // placeholderName (null.slice → TypeError), which crashed THIS
+      // WHOLE FUNCTION for as long as any such match existed in the
+      // round (completed ones included — this loop isn't status-
+      // filtered). Net effect in bb: zero dashboard emits from the
+      // moment the 1-person room was created until event end — the
+      // host's panel froze on the algorithm-round era and offered the
+      // stale End Round that killed the event.
+      if (m.participantAId) allUserIds.add(m.participantAId);
+      if (m.participantBId) allUserIds.add(m.participantBId);
       if (m.participantCId) allUserIds.add(m.participantCId);
     }
     // Also include presence + host so bye-participant rendering has names

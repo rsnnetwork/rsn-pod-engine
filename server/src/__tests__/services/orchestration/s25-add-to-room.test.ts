@@ -64,6 +64,26 @@ describe('S25 — server handleHostAddToRoom', () => {
   });
 });
 
+describe('S25 — the dashboard builder survives 1-person rooms (bb root #2)', () => {
+  it('the name-collection loop guards every slot (no NULL into placeholderName)', () => {
+    const src = readServer('services/orchestration/handlers/matching-flow.ts');
+    const i = src.indexOf('const allUserIds = new Set<string>()');
+    expect(i).toBeGreaterThan(-1);
+    const block = src.slice(i, i + 1400);
+    expect(block).toMatch(/if \(m\.participantAId\) allUserIds\.add\(m\.participantAId\)/);
+    expect(block).toMatch(/if \(m\.participantBId\) allUserIds\.add\(m\.participantBId\)/);
+    expect(block).toMatch(/if \(m\.participantCId\) allUserIds\.add\(m\.participantCId\)/);
+  });
+
+  it('placeholderName degrades on null/undefined instead of throwing', () => {
+    const src = nodeFs.readFileSync(
+      nodePath.join(__dirname, '../../../../../shared/src/identity/displayName.ts'), 'utf8',
+    );
+    expect(src).toMatch(/placeholderName\(userId: string \| null \| undefined\)/);
+    expect(src).toMatch(/userId \? `Participant \$\{userId\.slice\(0, 6\)\}` : 'Participant'/);
+  });
+});
+
 describe('S25 — client', () => {
   it('participant_joined handler adds the partner and raises the banner', () => {
     const src = readClient('hooks/useSessionSocket.ts');

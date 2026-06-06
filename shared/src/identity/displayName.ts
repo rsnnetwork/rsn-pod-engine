@@ -39,6 +39,10 @@ export function resolveDisplayName(
  * inside a hot loop where no DB row was fetched). Same fallback shape as
  * resolveDisplayName so labels stay consistent.
  */
-export function placeholderName(userId: string): string {
-  return `Participant ${userId.slice(0, 6)}`;
+export function placeholderName(userId: string | null | undefined): string {
+  // S25 (live-test bb) — a NULL fed from a 1-person room's empty B-slot
+  // used to throw here (null.slice) and took the host-dashboard builder
+  // down with it. A label helper must never be the thing that crashes a
+  // pipeline — degrade to a generic label instead.
+  return userId ? `Participant ${userId.slice(0, 6)}` : 'Participant';
 }

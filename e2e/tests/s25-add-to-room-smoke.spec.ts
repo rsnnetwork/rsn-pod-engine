@@ -101,9 +101,12 @@ test('S25: grow a 1-person manual room to a trio via the UI; 4th refused', async
   await hostPg.page.waitForTimeout(9000);
 
   // 1-person manual room with u1.
+  // NOTE: the raw host socket must NOT session:join — joining as the same
+  // user DISPLACES the host PAGE's seat ("connected from another device"),
+  // and the page then stops receiving dashboards. Host actions only need
+  // the authenticated socket, not session membership.
   const hostSock = await connectSocket(host);
   sockets.push(hostSock);
-  hostSock.emit('session:join', { sessionId });
   await hostPg.page.waitForTimeout(1500);
   hostSock.emit('host:create_breakout_bulk', {
     sessionId, rooms: [{ participantIds: [u1.id] }], sharedDurationSeconds: 300, timerVisibility: 'visible',
@@ -120,6 +123,24 @@ test('S25: grow a 1-person manual room to a trio via the UI; 4th refused', async
   console.log('  ✓ 1-person manual room created');
 
   // Host UI: + Add person → pick u2.
+  await hostPg.page.waitForTimeout(5000);
+  {
+    const { Pool } = await import('pg');
+    const dpool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const srow = (await dpool.query(`SELECT status, current_round FROM sessions WHERE id = $1`, [sessionId])).rows[0];
+    const mrows = (await dpool.query(`SELECT round_number, status, is_manual FROM matches WHERE session_id = $1`, [sessionId])).rows;
+    await dpool.end();
+    console.log(`  DB: session status=${srow?.status} current_round=${srow?.current_round} matches=${JSON.stringify(mrows)}`);
+  }
+  const diag = {
+    manualHeader: await hostPg.page.getByText('Manual Breakouts', { exact: false }).count(),
+    roomCard: await hostPg.page.getByText('Room 1', { exact: false }).count(),
+    plus2min: await hostPg.page.getByText('+2 min', { exact: false }).count(),
+    addPerson: await hostPg.page.getByText('Add person', { exact: false }).count(),
+    endAll: await hostPg.page.getByText('End All', { exact: false }).count(),
+  };
+  console.log('  host panel diag:', JSON.stringify(diag));
+  await hostPg.page.screenshot({ path: 'test-results/s25-host-panel.png' }).catch(() => {});
   const addBtn = hostPg.page.getByText('Add person', { exact: true }).first();
   await expect(addBtn, 'Add person button on the room card').toBeVisible({ timeout: 30_000 });
   await addBtn.click();

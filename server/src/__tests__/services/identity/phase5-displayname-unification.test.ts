@@ -30,7 +30,10 @@ describe('Phase 5 — displayName unification', () => {
     });
 
     it('exports placeholderName(userId) for hot-loop misses', () => {
-      expect(src).toMatch(/export function placeholderName\(userId: string\)/);
+      // S25 re-point — signature widened to accept null/undefined so a
+      // 1-person room's empty B-slot degrades to a generic label instead
+      // of crashing the host-dashboard builder (null.slice TypeError).
+      expect(src).toMatch(/export function placeholderName\(userId: string \| null \| undefined\)/);
     });
 
     it('fallback chain: displayName → email-prefix → "Participant {short}"', () => {
