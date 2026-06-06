@@ -97,6 +97,10 @@ interface SessionLiveState {
   liveRoomParticipants: Array<{ userId: string; displayName: string }>;
   currentMatch: MatchPartner | null;
   currentPartners: MatchPartner[];  // All partners (1 for pair, 2 for trio)
+  /** S23 — transient in-room notice ("X returned to the main room…"). */
+  roomNotice: string | null;
+  removePartner: (userId: string) => void;
+  setRoomNotice: (roomNotice: string | null) => void;
   currentMatchId: string | null;
   // WS2 (27 May remaining work) — why the rating window opened; drives the
   // RatingPrompt copy ("Your partner didn't return…" vs "Rate your last
@@ -388,6 +392,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   liveRoomParticipants: [],
   currentMatch: null,
   currentPartners: [],
+  roomNotice: null,
   currentMatchId: null,
   ratingReason: null,
   timerWarning: null,
@@ -448,6 +453,14 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   })),
   setLiveRoomParticipants: (list) => set({ liveRoomParticipants: list }),
   setMatch: (currentMatch, matchId = null, partners = []) => set({ currentMatch, currentMatchId: matchId, currentPartners: partners }),
+  // S23 (live-test bb) — a trio member leaving must shrink currentPartners
+  // so the room layout reflows to the pair arrangement (isTrio derives from
+  // currentPartners.length; pre-fix the grid kept a hole where the leaver
+  // sat) and the survivors see an in-room notice.
+  removePartner: (userId) => set((s) => ({
+    currentPartners: s.currentPartners.filter(p => p.userId !== userId),
+  })),
+  setRoomNotice: (roomNotice) => set({ roomNotice }),
   setRatingReason: (ratingReason) => set({ ratingReason }),
   setTimerWarning: (timerWarning) => set({ timerWarning }),
   setTimer: (timerSeconds) => set({ timerSeconds }),
@@ -663,7 +676,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   reset: () => set({
     phase: 'lobby', connectionStatus: 'connecting', transitionStatus: null,
     sessionStatus: 'scheduled', hostInLobby: false, hostUserId: null, sessionStateLoaded: false, serverPinnedUserId: null, tileDemotedUserIds: [], hccParticipants: [], totalRounds: 5, bonusRoundsAdded: 0,
-    participants: [], liveRoomParticipants: [], currentMatch: null, currentPartners: [], currentMatchId: null, ratingReason: null, timerWarning: null,
+    participants: [], liveRoomParticipants: [], currentMatch: null, currentPartners: [], currentMatchId: null, ratingReason: null, timerWarning: null, roomNotice: null,
     timerSeconds: 0, timerEndsAt: null, clockOffset: 0, hasClockOffset: false, currentRound: 0, broadcasts: [], error: null, tileReactions: {},
     isReconnecting: false, isByeRound: false, liveKitToken: null, livekitUrl: null, currentRoomId: null,
     lobbyToken: null, lobbyUrl: null, lobbyRoomId: null,

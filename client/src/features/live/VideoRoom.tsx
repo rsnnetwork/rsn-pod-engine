@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef, memo } from 'react';
 import { useParams } from 'react-router-dom';
 import { useSessionStore } from '@/stores/sessionStore';
 import { formatTime } from '@/lib/utils';
-import { Video, Clock, Mic, MicOff, VideoOff, Wifi, Loader2, ArrowLeft, Sparkles } from 'lucide-react';
+import { Video, Clock, Mic, MicOff, VideoOff, Wifi, Loader2, ArrowLeft, Sparkles, Users } from 'lucide-react';
 import { useBackgroundEffects } from '@/hooks/useBackgroundEffects';
 import { BackgroundPanel } from './BackgroundPanel';
 import { BG_CAPTURE_RESOLUTION } from '@/lib/backgroundEffects';
@@ -511,6 +511,7 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
   const timerVisibility = useSessionStore(s => s.timerVisibility);
   const breakoutTimerHidden = useSessionStore(s => s.breakoutTimerHidden);
   const partnerDisconnected = useSessionStore(s => s.partnerDisconnected);
+  const roomNotice = useSessionStore(s => s.roomNotice);
   const timerEndsAt = useSessionStore(s => s.timerEndsAt);
   const clockOffset = useSessionStore(s => s.clockOffset);
   const timerWarning = useSessionStore(s => s.timerWarning);
@@ -680,6 +681,15 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
           grace decides resume-or-end (no client-side self-eject). */}
       {partnerDisconnected && sessionId && (
         <PartnerWaitingBanner sessionId={sessionId} />
+      )}
+      {/* S23 — in-room notice when a trio member returns to the main room.
+          The old toast was missable mid-conversation; this stays ~8s
+          (auto-cleared by the socket handler). */}
+      {roomNotice && (
+        <div className="bg-blue-500/10 px-4 py-3 flex items-center justify-center gap-2" data-testid="room-notice">
+          <Users className="h-4 w-4 text-blue-400" />
+          <p className="text-sm text-blue-400 font-medium">{roomNotice}</p>
+        </div>
       )}
       {/* WS3/B2 — round wrap-up warning (T-30/T-10), self-dismisses after 8s.
           The 1s heartbeat above re-renders this window closed. */}

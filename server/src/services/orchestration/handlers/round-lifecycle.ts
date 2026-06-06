@@ -929,6 +929,15 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
     await sessionService.updateSessionStatus(sessionId, SessionStatus.COMPLETED);
     void updateCanonicalSessionStatus(sessionId, SessionStatus.COMPLETED);
     await query('UPDATE sessions SET ended_at = NOW() WHERE id = $1', [sessionId]);
+    // S24 (live-test bb) — close out any match still ACTIVE at event end
+    // (a manual breakout running when the host ends the event). Pre-fix the
+    // row dangled active-in-a-completed-session forever, confusing every
+    // "active match" lookup that doesn't also check session status.
+    await query(
+      `UPDATE matches SET status = 'completed', ended_at = NOW()
+       WHERE session_id = $1 AND status = 'active'`,
+      [sessionId],
+    ).catch((err) => logger.warn({ err, sessionId }, 'S24 — closing dangling active matches failed (non-fatal)'));
 
     // EMIT FIRST. Host's UI transitions on this; everything below is
     // background housekeeping.

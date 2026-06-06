@@ -732,6 +732,19 @@ export async function handleHostEnd(
       return;
     }
 
+    // S24 (live-test bb) — a plain END ROUND must NEVER complete the event.
+    // Pre-fix, pressing End Round while no algorithm round was running
+    // (manual rooms up, status past ROUND_RATING) fell through to
+    // completeSession below and ended the whole event — recap pages and
+    // emails included. Only the explicit End Event press (endEvent:true)
+    // may reach the completion path from here.
+    if (!data.endEvent) {
+      socket.emit('error', { code: 'NO_ACTIVE_ROUND', message: 'No active round to end' });
+      logger.info({ sessionId: data.sessionId, status: activeSession?.status },
+        'S24 — End Round with no active round refused (event untouched)');
+      return;
+    }
+
     // If in closing lobby, host can skip the 30s countdown
     if (activeSession && activeSession.status === SessionStatus.CLOSING_LOBBY) {
       if (activeSession.timer) { clearTimeout(activeSession.timer); activeSession.timer = null; }

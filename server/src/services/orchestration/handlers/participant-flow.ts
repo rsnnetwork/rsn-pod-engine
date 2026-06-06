@@ -797,7 +797,14 @@ export async function handleJoinSession(
             if (m.participantCId) {
               participants.push({ userId: m.participantCId, displayName: await getName(m.participantCId), isConnected: activeSession!.presenceMap.has(m.participantCId) });
             }
-            return { matchId: m.id, roomId: m.roomId || '', status: m.status, participants, isTrio: !!m.participantCId };
+            // S24 (live-test bb) — THE root of "manual room showed as an
+            // algorithm room with an End Round button": this reconnect
+            // replay omitted isManual, so a host socket blip overwrote the
+            // dashboard with unlabelled rooms → hasActiveAlgorithmRound
+            // flipped true → End Round rendered → its no-endEvent press fell
+            // through and completed the event. Label the rooms like the
+            // canonical builder (matching-flow) does.
+            return { matchId: m.id, roomId: m.roomId || '', status: m.status, participants, isTrio: !!m.participantCId, isManual: m.isManual === true };
           }));
           // Bye participants are those in_lobby during an active round (not in any active match)
           const matchedUserIds = new Set<string>();

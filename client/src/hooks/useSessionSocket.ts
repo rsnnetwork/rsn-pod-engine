@@ -611,7 +611,17 @@ export default function useSessionSocket(sessionId: string) {
     socket.on('match:participant_left', (data: any) => {
       store.setPartnerDisconnected(false);
       const name = data?.leftDisplayName || 'A participant';
-      useToastStore.getState().addToast(`${name} left the conversation — you can keep talking`, 'info');
+      // S23 (live-test bb) — the 3s toast was too easy to miss mid-
+      // conversation: survivors reported "no message". An IN-ROOM banner
+      // (rendered by VideoRoom) stays up ~8s instead. Removing the leaver
+      // from currentPartners reflows the grid to the pair layout (pre-fix
+      // the trio grid kept an empty hole where the leaver sat).
+      if (data?.leftUserId) store.removePartner(data.leftUserId);
+      store.setRoomNotice(`${name} returned to the main room — you can keep talking`);
+      setTimeout(() => {
+        const s = useSessionStore.getState();
+        if (s.roomNotice && s.roomNotice.startsWith(name)) s.setRoomNotice(null);
+      }, 8000);
     });
 
     socket.on('match:return_to_lobby', () => {
@@ -1022,6 +1032,11 @@ export default function useSessionSocket(sessionId: string) {
         VALIDATION_ERROR: { msg: rawMsg, severity: 'info' },
         INVALID_STATE: { msg: rawMsg, severity: 'info' },
         NOT_ENOUGH_PARTICIPANTS: { msg: 'Not enough participants to start matching yet.', severity: 'info' },
+        // S24 — End Round with no algorithm round running is a no-op now
+        // (pre-fix it fell through and ENDED THE EVENT).
+        NO_ACTIVE_ROUND: { msg: 'No active round to end.', severity: 'info' },
+        // S19 — co-hosts cannot end the event.
+        DIRECTOR_ONLY: { msg: 'Only the host can end the event.', severity: 'info' },
         INSUFFICIENT_PARTICIPANTS: { msg: rawMsg, severity: 'info' },
         NO_ELIGIBLE_PAIRS: { msg: 'Everyone has already been matched. End the event or wait for new participants.', severity: 'info' },
         GENERATE_FAILED: { msg: 'Could not generate matches. Try again.', severity: 'error' },
