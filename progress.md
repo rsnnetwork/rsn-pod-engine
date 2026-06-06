@@ -8180,3 +8180,17 @@ All 12 May items + all deferred follow-ups closed. End-to-end verification: serv
 **Browser-verified vs prod (fc8a8b8 live on Render):** edge smoke 3/3 passed headed (reopen path 1.1m, trio mechanics 3.6m, pair edge regression 1.5m). Checkhole: Sentry server 0; client cluster = tonight's fake-media smoke browsers (NegotiationError/PublishTrack noise); CI main+staging green; main=staging=fc8a8b8; health db 3ms; app 200; DB 0 e2e orphans; Redis PONG.
 
 **Behavior note (bug 3):** landing in the MAIN room after a >15s absence is by design - a demoted member cannot re-enter a continuing breakout; the fix is that they now get the rating form for the partners they talked to. A return WITHIN 15s still resumes the room (ws2-smoke-proven).
+
+---
+
+## 2026-06-06 - S15: registration confirmation email re-sent on every rejoin (Ali live-test report)
+
+**Reported:** invited/registered users get the confirmation email correctly, but pressing "Join Live Event" / joining late re-sends it every time.
+
+**Root cause:** the live page auto-registers on every mount (useSessionSocket warmup POST), and a participant who left or was no-showed flips back to 'registered' via the re-register UPDATE in registerParticipant. POST /sessions/:id/register emailed on EVERY successful call, so each rejoin after leaving re-fired the "you're registered" email + .ics. (Already-registered statuses 409'd and never emailed - the leak was exclusively the 'left'/'no_show' re-activation path.)
+
+**Fix (commit 8ade0a1):** registerParticipant returns isNewRegistration - true only for a fresh INSERT; false for re-activations AND for losing the concurrent ON CONFLICT race (the winning call emails). The route gates the confirmation email on it. Deliberate cancel (DELETE /register removes the row) + re-register is a genuinely fresh registration and still emails - correct, the user expects a new calendar invite.
+
+**Tests:** 3 behavioral asserts in session.service.test.ts (fresh:true, re-activation:false, race-loss:false) + 2 wiring pins in session-registration-confirmation.test.ts. FULL suite 171/171 (2069).
+
+**Verified vs prod (8ade0a1 live):** s15-email-smoke.spec.ts - fresh register isNew=true -> DB-flip to 'left' (in-event leave shape) -> rejoin 201 isNew=false (silent) -> cancel+re-register isNew=true. First smoke run used DELETE /register as the "leave" and FAILED - which exposed that cancel deletes the row (fresh again, correct) vs in-event leave keeps it; smoke corrected to the real repro shape and passed. Resend list API not queryable with our key - email-count asserted via the gate + pins, stated honestly.
