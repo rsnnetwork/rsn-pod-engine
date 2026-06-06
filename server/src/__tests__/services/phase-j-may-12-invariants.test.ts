@@ -172,8 +172,12 @@ describe('Phase J — 12 May invariants (items 9, 12; cross-ref 10, 14)', () => 
       //   (a) an inline SELECT id FROM ratings WHERE match_id = ... check, OR
       //   (b) the emitRatingWindowOnce helper call (which itself does the check).
       const between = src.slice(ratingReplayIdx, sectionEnd);
+      // S18 re-point — the replay's dedup upgraded from "any rating exists"
+      // (SELECT id) to per-edge "which partners are already rated"
+      // (SELECT to_user_id … AND from_user_id), so a trio survivor who rated
+      // ONE partner still gets the remaining unrated partner on reconnect.
       const inlineDedup =
-        /SELECT\s+id\s+FROM\s+ratings\s+WHERE\s+match_id/i.test(between);
+        /SELECT\s+(id|to_user_id)\s+FROM\s+ratings\s+WHERE\s+match_id/i.test(between);
       const helperDedup = nextHelperIdx > -1 && nextHelperIdx <= sectionEnd;
       expect(inlineDedup || helperDedup).toBe(true);
     });

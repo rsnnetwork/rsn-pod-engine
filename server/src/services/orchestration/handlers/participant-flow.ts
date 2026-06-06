@@ -1003,19 +1003,29 @@ export async function handleJoinSession(
           m => (m.participantAId === userId || m.participantBId === userId || m.participantCId === userId) && m.status === 'completed'
         );
         if (userMatch) {
-          // Check if user already rated this match — don't re-send if they did
-          const existingRating = await query<{ id: string }>(
-            `SELECT id FROM ratings WHERE match_id = $1 AND from_user_id = $2 LIMIT 1`,
+          // S18 (live-test 2026-06-06, saif's single form) — this replay used
+          // to rebuild the partner list from the SLOTS only, so a socket
+          // reconnect during the rating window overwrote a trio survivor's
+          // 2-partner form (other survivor + the DEPARTED member) with a
+          // 1-partner one; and its "any rating exists" guard dropped the
+          // whole replay after the FIRST submit, losing the remaining
+          // unrated partner on refresh. Partners now union departed_user_ids
+          // (S14 family) and filter to the still-UNRATED edges.
+          const ratedRes = await query<{ to_user_id: string }>(
+            `SELECT to_user_id FROM ratings WHERE match_id = $1 AND from_user_id = $2`,
             [userMatch.id, userId]
           );
+          const ratedTo = new Set(ratedRes.rows.map(r => r.to_user_id));
           // #6 (25 May) — a skip closes this match's rating: don't re-send the
           // form to someone who explicitly skipped it (reconnect/refresh).
           const skipped = activeSession.ratingSkips?.has(`${userId}:${userMatch.id}`) ?? false;
-          if (existingRating.rows.length === 0 && !skipped) {
-            const participantIds = [userMatch.participantAId, userMatch.participantBId];
-            if (userMatch.participantCId) participantIds.push(userMatch.participantCId);
-            const partnerIds = participantIds.filter(id => id !== userId);
-
+          const participantIds = [userMatch.participantAId, userMatch.participantBId];
+          if (userMatch.participantCId) participantIds.push(userMatch.participantCId);
+          const partnerIds = [
+            ...participantIds,
+            ...(userMatch.departedUserIds ?? []).filter(id => !participantIds.includes(id)),
+          ].filter(id => id !== userId && !ratedTo.has(id));
+          if (partnerIds.length > 0 && !skipped) {
             // Same fallback chain as the assigned-partner block above to keep
             // the rating prompt names readable when display_name is missing.
             const partnerNameResult = await query<{ id: string; displayName: string | null; email: string | null }>(

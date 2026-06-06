@@ -468,6 +468,18 @@ export async function updateSessionStatus(
   const currentResult = await query<{ status: string }>(`SELECT status FROM sessions WHERE id = $1`, [sessionId]);
   if (currentResult.rows.length > 0) {
     const currentStatus = currentResult.rows[0].status;
+    // S18 (live-test 2026-06-06, event b1) — TERMINAL states are terminal.
+    // The "allow as safety fallback" below let an in-flight round-end write
+    // completed → round_rating three seconds AFTER End Event ran: recap
+    // emails were already out and one client was on the recap page while
+    // another stayed stranded in the main room of a half-alive event.
+    // A completed/cancelled session never transitions again — refuse and
+    // return the row untouched.
+    const TERMINAL = [SessionStatus.COMPLETED, SessionStatus.CANCELLED] as string[];
+    if (TERMINAL.includes(currentStatus) && currentStatus !== status) {
+      logger.warn({ sessionId, from: currentStatus, to: status }, 'Refused status transition out of a terminal session state');
+      return getSessionById(sessionId);
+    }
     const validNextStates = VALID_SESSION_TRANSITIONS[currentStatus];
     if (validNextStates && !validNextStates.includes(status)) {
       logger.warn({ sessionId, from: currentStatus, to: status }, 'Invalid session status transition — allowing as safety fallback');

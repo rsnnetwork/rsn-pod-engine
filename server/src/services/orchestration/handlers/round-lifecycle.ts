@@ -854,6 +854,19 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
     return;
   }
 
+  // S18 (live-test 2026-06-06, event b1) — flip the IN-MEMORY status to
+  // COMPLETED synchronously, BEFORE the first await. The activeSessions
+  // entry survives until the finally-delete (which waits on a 2–5 s
+  // LiveKit cleanup), and during that window an in-flight round-end
+  // (participant leave → empty round → endRound) read the stale status,
+  // passed its C2 guard, and re-broadcast round_rating over a COMPLETED
+  // event: one participant was on the recap page (with the recap email
+  // sent) while another sat stranded in the main room. With this flip,
+  // endRound's canTransitionSession(COMPLETED → ROUND_RATING) refuses.
+  // updateSessionStatus independently refuses terminal-state exits at the
+  // DB layer (same incident, second lock).
+  if (activeSession) activeSession.status = SessionStatus.COMPLETED;
+
   try {
     // FIX 5D: Clear ALL timers (main + sync interval)
     clearSessionTimers(sessionId);
