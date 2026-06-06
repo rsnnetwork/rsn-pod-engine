@@ -8238,3 +8238,11 @@ OPEN per Ali: minimum-2 rule for manual rooms? DM gate exceptions (grandfathered
 **bb root No. 2 (c063305), found because the S25 smoke deterministically reproduced it:** the dashboard builders name-collection loop added participant_b_id UNGUARDED; a 1-person rooms NULL b-slot hit placeholderName (null.slice TypeError) and crashed emitHostDashboardImmediate - and since the loop is not status-filtered, ZERO dashboards emitted from the moment such a room existed (even completed) until event end. THAT is what froze Alis bb panel on the algorithm-round era and kept the stale End Round on screen; the unlabelled reconnect replay (S24) composed on top. All three slot loops guarded; placeholderName degrades on null instead of throwing. DM decisions per Ali: keep grandfathered threads + admin bypass (S22 closed, no code change).
 
 **Smoke (50.6s, prod):** panel renders at round 0 WITH a 1-person room (crash fix proven) -> picker grows 1->2 (in-room banner) -> 2->3 -> Room full (3) + no Add button. Harness lesson: a raw host socket must NOT session:join alongside the host page - same-user join DISPLACES the pages seat ("connected from another device").
+
+---
+
+## 2026-06-07 - S26: the start signal cannot be missed (2a65a0d)
+
+Live test: host pressed Start with 3 waiting; one participants socket had silently dropped out of sessionRoom, never heard the room-only session:status_changed, and sat on "waiting for host" until manual refresh. Same class as No. 11 (23 May, host missed session:completed). NOT caused by todays slices - the start broadcast was room-only since the original flow.
+
+Two layers: both start paths (socket + REST) also fan LOBBY_OPEN per participant via userRoom (No. 11 pattern); PreLobbyWaitingRoom polls GET /sessions/:id/state every 10s (server truth, socket-independent) and opens the gate itself. Smoke (28.8s, prod): page deafened via same-user displacement (the in-the-wild shape) -> healthy peer entered 1s after Start, DEAF page entered 5s after Start, no refresh.
