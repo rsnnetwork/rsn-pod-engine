@@ -1453,14 +1453,35 @@ function PreLobbyWaitingRoom({ isHost = false, sessionId }: { isHost?: boolean; 
   // The server now also fans the start out per-user; this poll is the
   // second, socket-independent layer: every 10s ask the REST snapshot
   // (server truth) and unblock the gate the moment the event is live.
+  //
+  // S27 — opening the gate with ONLY the status flag left a half-
+  // initialized lobby: no lobbyToken → "Main Room" shell with no video
+  // (alihammza on mobile, event v1). Converge FULLY instead: apply the
+  // whole snapshot atomically AND pull the session:resync rail — the
+  // resync reply mints the lobby token for our canonical location and is
+  // direct request/response, so it works even on an unseated socket.
   useEffect(() => {
     if (!sessionId) return;
     const iv = setInterval(async () => {
       try {
         const r = await api.get(`/sessions/${sessionId}/state`);
-        const st = r.data?.data?.sessionStatus;
-        if (st && st !== 'scheduled') {
-          useSessionStore.getState().setSessionStatus(st);
+        const d = r.data?.data;
+        if (d?.sessionStatus && d.sessionStatus !== 'scheduled') {
+          const s = useSessionStore.getState();
+          s.applyFullState(d);
+          // Token rail #1 — socket resync (request/response: works even on
+          // an UNSEATED socket).
+          getSocket()?.emit('session:resync' as any, { sessionId, haveSeq: useSessionStore.getState().snapshotSeq });
+          // Token rail #2 — ZERO-socket heal (zombie websocket on mobile):
+          // REST-mint the lobby token directly. Both rails are idempotent.
+          if (!useSessionStore.getState().lobbyToken) {
+            try {
+              const t = await api.post(`/sessions/${sessionId}/token`, {});
+              const td = t.data?.data;
+              const cur = useSessionStore.getState();
+              if (td?.token && !cur.lobbyToken) cur.setLobbyToken(td.token, td.livekitUrl, td.roomId ?? null);
+            } catch { /* resync rail covers */ }
+          }
         }
       } catch { /* transient — next tick retries */ }
     }, 10_000);

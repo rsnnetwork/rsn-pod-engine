@@ -45,15 +45,34 @@ describe('S26 — per-user start fan-out (both start paths)', () => {
   });
 });
 
-describe('S26 — waiting screen polls server truth', () => {
-  it('PreLobbyWaitingRoom polls /sessions/:id/state and opens the gate', () => {
+describe('S26/S27 — waiting screen polls server truth and converges FULLY', () => {
+  it('PreLobbyWaitingRoom applies the whole snapshot + pulls BOTH token rails', () => {
+    // S27 (alihammza's blank Main Room, mobile, event v1) — flipping only
+    // the status flag opened the gate into a tokenless, video-less lobby.
+    // The poll now applies the full snapshot atomically, emits the socket
+    // resync (works on unseated sockets) AND REST-mints the lobby token
+    // (works with ZERO functional sockets — the mobile zombie case).
     const src = readClient('features/live/Lobby.tsx');
     const i = src.indexOf('function PreLobbyWaitingRoom');
     expect(i).toBeGreaterThan(-1);
-    const fn = src.slice(i, i + 2600);
+    const fn = src.slice(i, i + 3600);
     expect(fn).toMatch(/api\.get\(`\/sessions\/\$\{sessionId\}\/state`\)/);
-    expect(fn).toMatch(/st !== 'scheduled'/);
-    expect(fn).toMatch(/setSessionStatus\(st\)/);
+    expect(fn).toMatch(/d\.sessionStatus !== 'scheduled'/);
+    expect(fn).toMatch(/s\.applyFullState\(d\)/);
+    expect(fn).toMatch(/emit\('session:resync' as any/);
+    expect(fn).toMatch(/api\.post\(`\/sessions\/\$\{sessionId\}\/token`, \{\}\)/);
+    expect(fn).toMatch(/setLobbyToken\(td\.token, td\.livekitUrl, td\.roomId \?\? null\)/);
     expect(fn).toMatch(/10_000/);
+  });
+
+  it('the 30s tokenless-lobby belt also REST-mints (zombie-socket heal)', () => {
+    const src = readClient('hooks/useSessionSocket.ts');
+    const i = src.indexOf('Ship C belt — sitting in the lobby without a token');
+    expect(i).toBeGreaterThan(-1);
+    const block = src.slice(i, i + 1500);
+    expect(block).toMatch(/sessionStatus !== 'scheduled'/);
+    expect(block).toMatch(/emit\('session:resync'/);
+    expect(block).toMatch(/api\.post\(`\/sessions\/\$\{sessionId\}\/token`, \{\}\)/);
+    expect(block).toMatch(/cur\.setLobbyToken\(td\.token, td\.livekitUrl, td\.roomId \?\? null\)/);
   });
 });

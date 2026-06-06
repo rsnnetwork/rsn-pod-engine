@@ -1121,8 +1121,20 @@ export default function useSessionSocket(sessionId: string) {
       // Ship C belt — sitting in the lobby without a token means the
       // first-join resync raced or was missed; pull another, the reply mints.
       const stNow = useSessionStore.getState();
-      if (stNow.phase === 'lobby' && !stNow.lobbyToken) {
+      if (stNow.phase === 'lobby' && !stNow.lobbyToken && stNow.sessionStatus !== 'scheduled') {
         socket.emit('session:resync', { sessionId, haveSeq: stNow.snapshotSeq });
+        // S27 (live-test v1, alihammza's blank Main Room on mobile) — the
+        // resync rides the websocket, and a ZOMBIE socket (mobile background
+        // kill, undetected for the ping-timeout window) swallows it
+        // silently. REST-mint the lobby token directly so a tokenless
+        // lobby heals over pure HTTPS with zero working sockets.
+        api.post(`/sessions/${sessionId}/token`, {}).then(res => {
+          const td = res.data?.data;
+          const cur = useSessionStore.getState();
+          if (td?.token && !cur.lobbyToken && cur.phase === 'lobby') {
+            cur.setLobbyToken(td.token, td.livekitUrl, td.roomId ?? null);
+          }
+        }).catch(() => { /* next 30s tick retries */ });
       }
     }, PERIODIC_RESYNC_MS);
 
