@@ -370,6 +370,24 @@ test('edges: trio — leaver rates BOTH partners, survivors keep talking, depart
       .toBeVisible({ timeout: 10_000 });
     await rateOne(s0Page, 'survivor form 2 (the DEPARTED — submit must succeed)');
     console.log('  ✓ departed member rated AND submitted at round end (browser-proven)');
+
+    // S20 (live-test z1) — the recap API must count the departed round.
+    // Pre-fix the LEAVER's people-met read "attended 0" rounds + an empty
+    // connections list for this round (slots-only), so the Mutual Matches
+    // count and list drifted apart and the Meet Again Rate denominator
+    // shrank (Ali's 25%-instead-of-50% recap).
+    const axios = (await import('axios')).default;
+    const pm = await axios.get(`${SERVER}/api/ratings/sessions/${sessionId}/people-met`, {
+      headers: { Authorization: `Bearer ${leaver.accessToken}` },
+    });
+    const d = pm.data?.data;
+    const connUserIds = new Set((d?.connections || []).map((c: any) => c.userId));
+    console.log(`  leaver recap: roundsAttended=${d?.roundsAttended} connections=${connUserIds.size}`);
+    expect(d?.roundsAttended, 'LEAVER attended the round they departed from').toBe(1);
+    for (const s of survivors) {
+      expect(connUserIds.has(s.id), `leaver's connections include ${s.displayName}`).toBe(true);
+    }
+    console.log('  ✓ S20: departed member counted in recap (rounds + connections)');
   } else {
     console.log('  (manual-room trio: departed-at-round-end not applicable — stays unit-pinned)');
   }
