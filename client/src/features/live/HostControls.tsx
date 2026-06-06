@@ -1,4 +1,5 @@
 import { useSessionStore, useInRoomParticipants } from '@/stores/sessionStore';
+import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { Button } from '@/components/ui/Button';
 import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, UserMinus, RefreshCw, UserPlus, AlertTriangle, CheckCircle2, Clock, LayoutDashboard } from 'lucide-react';
@@ -60,6 +61,15 @@ export default function HostControls({ sessionId }: Props) {
   const sessionStarted = sessionStatus !== 'scheduled' || transitionStatus === 'starting_session' || currentRound > 0;
   const allRoundsDone = currentRound >= totalRounds && totalRounds > 0;
   const isInRound = sessionStatus === 'round_active' || sessionStatus === 'round_rating' || phase === 'matched' || phase === 'rating';
+
+  // S19 (Ali, 6 Jun — live-test b1) — ending the EVENT is the director's
+  // call alone. A co-host ended b1 and recap emails went out mid-test.
+  // Co-hosts keep every other control (start/end round, rooms, mute…);
+  // the End Event button renders DISABLED for them with the why.
+  // (hostUserId is read from the store further down, near hostsSet.)
+  const { user } = useAuthStore();
+  const directorUserId = useSessionStore(s => s.hostUserId);
+  const isDirector = !!user?.id && user.id === directorUserId;
 
   // Phase 7B.3 — click-lock against double-fires (Stefan #10).
   const { runLocked } = useActionLock();
@@ -961,7 +971,13 @@ export default function HostControls({ sessionId }: Props) {
               <LayoutDashboard className="h-4 w-4 mr-1" /> Control Center
             </Button>
 
-            <Button size="sm" variant="danger" onClick={endEvent}>
+            <Button
+              size="sm"
+              variant="danger"
+              onClick={endEvent}
+              disabled={!isDirector}
+              title={isDirector ? 'End this event for everyone' : 'Only the host can end the event'}
+            >
               <Square className="h-4 w-4 mr-1" /> End Event
             </Button>
           </div>

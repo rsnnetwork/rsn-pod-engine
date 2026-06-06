@@ -654,6 +654,31 @@ export async function handleHostEnd(
 
     const activeSession = activeSessions.get(data.sessionId);
 
+    // S19 (Ali, 6 Jun — live-test b1) — COMPLETING the event is the
+    // DIRECTOR's call alone (platform super_admin keeps an emergency
+    // override). verifyHost above accepts co-hosts, and a co-host ending
+    // b1 sent the recap emails mid-test. Co-hosts may still END A ROUND
+    // (the endEvent:false ROUND_ACTIVE / ROUND_RATING paths, which never
+    // complete the session); anything that ends the EVENT — endEvent:true
+    // from any state, or the fall-through completeSession path — refuses.
+    {
+      const callerId = getUserIdFromSocket(socket);
+      const directorId = activeSession?.hostUserId
+        ?? (await query<{ host_user_id: string }>(
+              `SELECT host_user_id FROM sessions WHERE id = $1`, [data.sessionId],
+            )).rows[0]?.host_user_id;
+      const isDirector = !!callerId && callerId === directorId;
+      const isSuperAdmin = ((socket.data as any)?.role as string | undefined) === 'super_admin';
+      const wouldCompleteEvent = !!data.endEvent
+        || !(activeSession && (activeSession.status === SessionStatus.ROUND_ACTIVE
+                            || activeSession.status === SessionStatus.ROUND_RATING));
+      if (wouldCompleteEvent && !isDirector && !isSuperAdmin) {
+        socket.emit('error', { code: 'DIRECTOR_ONLY', message: 'Only the host can end the event' });
+        logger.info({ sessionId: data.sessionId, callerId }, 'S19 — non-director end-event refused');
+        return;
+      }
+    }
+
     // If currently in an active round, end the round first so users get
     // a rating window before the session completes.
     // endRound() triggers the normal flow: rating window → endRatingWindow() →
