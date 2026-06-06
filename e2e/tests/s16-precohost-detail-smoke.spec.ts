@@ -1,6 +1,7 @@
 import { test, expect, chromium, Browser, Page, BrowserContext } from '@playwright/test';
 import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers/auth';
-import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
+import { createPod, addPodMember, createSession, registerForSession } from '../helpers/api';
+import { Pool } from 'pg';
 
 // HEADED smoke for S16 against PRODUCTION — co-host management on the EVENT
 // DETAIL page (Ali, 6 Jun: "we need co-host pre event here on this page too").
@@ -121,7 +122,13 @@ test('event-page co-host: phone-width pre-event assign → live host powers → 
 
   // S16.1 (Ali) — once the event is COMPLETED the toggle must disappear
   // ("event is completed! why still promote to co-host button is here").
-  await endSession(host, sess.id);
+  // This session was never started, so flip it terminal directly — the
+  // assertion is purely about what the detail page renders for status.
+  {
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    await pool.query(`UPDATE sessions SET status = 'completed', ended_at = NOW() WHERE id = $1`, [sess.id]);
+    await pool.end();
+  }
   await hostPg.page.reload({ waitUntil: 'commit' }).catch(() => {});
   await expect(hostPg.page.getByText('Completed', { exact: true }).first(),
     'event shows Completed').toBeVisible({ timeout: 20_000 });
