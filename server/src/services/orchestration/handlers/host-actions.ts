@@ -1047,6 +1047,22 @@ export async function handleHostMuteParticipant(
     );
   }
 
+  // S17 (live-test 2026-06-06, Ali: "mute must be instant") — direction-
+  // aware ordering. The client reacts to lobby:mute_command by calling
+  // setMicrophoneEnabled immediately, so:
+  //   UNMUTE → the LiveKit publish permission MUST be restored BEFORE the
+  //     relay. Pre-fix the relay won the race against the Phase U restore
+  //     (which sat behind a participants SELECT + entity fanout), the
+  //     client re-published against a still-revoked permission, threw
+  //     PublishTrackError "insufficient permissions" (the Sentry cluster,
+  //     11×) and never retried — the user stayed muted "for a while".
+  //   MUTE → relay FIRST (the target's client kills its mic in one hop);
+  //     the SFU-level revoke is defence in depth and runs right after
+  //     without blocking perceived latency.
+  if (!data.muted) {
+    await enforceLiveKitMute(data.sessionId, data.targetUserId, true);
+  }
+
   // Relay mute command to the target participant's client (immediate UX
   // feedback). Snapshot replay on reconnect uses the persisted state.
   io.to(userRoom(data.targetUserId)).emit('lobby:mute_command', {
@@ -1054,29 +1070,35 @@ export async function handleHostMuteParticipant(
     byHost: true,
   });
 
+  if (data.muted) {
+    // Phase U — LiveKit-level enforcement. Update publish permission on
+    // every room the user could currently be in (lobby + any active
+    // match). Provider swallows NotFound, so calling for both rooms is
+    // safe; the relevant one applies. Fire-and-forget: the local mute
+    // already happened via the relay above.
+    enforceLiveKitMute(data.sessionId, data.targetUserId, false).catch(() => {});
+  }
+
   // R2-audit (20 May 2026 — live-test post-mortem). host_muted lives on
   // session_participants and affects the participants list (muted icon).
   // Fan out E.sessionParticipants so every viewer's list refreshes the
   // mute state without F5. Pre-fix only the target user got the lobby
   // mute relay; other viewers had to refresh to see the muted indicator.
-  try {
-    const rows = await query<{ user_id: string }>(
-      `SELECT user_id FROM session_participants
-         WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')`,
-      [data.sessionId],
-    );
-    emitEntities(
-      io, rows.rows.map(r => r.user_id),
-      [E.session(data.sessionId), E.sessionParticipants(data.sessionId)],
-    ).catch(() => {});
-  } catch { /* non-fatal */ }
-
-  // Phase U — LiveKit-level enforcement. Update publish permission on
-  // every room the user could currently be in (lobby + any active
-  // match). Provider swallows NotFound, so calling for both rooms is
-  // safe; the relevant one applies. canPublishAudio is the inverse of
-  // muted: false = revoke publish; true = restore.
-  await enforceLiveKitMute(data.sessionId, data.targetUserId, !data.muted);
+  // S17 — moved fully off the latency path (was an awaited SELECT sitting
+  // between the relay and the LiveKit enforcement).
+  void (async () => {
+    try {
+      const rows = await query<{ user_id: string }>(
+        `SELECT user_id FROM session_participants
+           WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')`,
+        [data.sessionId],
+      );
+      emitEntities(
+        io, rows.rows.map(r => r.user_id),
+        [E.session(data.sessionId), E.sessionParticipants(data.sessionId)],
+      ).catch(() => {});
+    } catch { /* non-fatal */ }
+  })();
 
   logger.info({ sessionId: data.sessionId, targetUserId: data.targetUserId, muted: data.muted },
     'Phase O + U — Host mute/unmute persisted + relayed + LiveKit-enforced');
@@ -1094,26 +1116,33 @@ async function enforceLiveKitMute(
   canPublishAudio: boolean,
 ): Promise<void> {
   try {
-    const sessRow = await query<{ lobby_room_id: string | null }>(
-      `SELECT lobby_room_id FROM sessions WHERE id = $1`,
-      [sessionId],
-    );
+    // S17 — parallelized: the two lookups and the two LiveKit Cloud calls
+    // ran serially (up to 4 round-trips on the mute latency path); now the
+    // lookups batch and the permission updates fire together.
+    const [sessRow, matchRow] = await Promise.all([
+      query<{ lobby_room_id: string | null }>(
+        `SELECT lobby_room_id FROM sessions WHERE id = $1`,
+        [sessionId],
+      ),
+      query<{ room_id: string | null }>(
+        `SELECT room_id FROM matches
+         WHERE session_id = $1
+           AND status = 'active'
+           AND (participant_a_id = $2 OR participant_b_id = $2 OR participant_c_id = $2)
+         LIMIT 1`,
+        [sessionId, userId],
+      ),
+    ]);
     const lobbyRoom = sessRow.rows[0]?.lobby_room_id;
-    if (lobbyRoom) {
-      await videoService.setParticipantCanPublishAudio(lobbyRoom, userId, canPublishAudio);
-    }
-    const matchRow = await query<{ room_id: string | null }>(
-      `SELECT room_id FROM matches
-       WHERE session_id = $1
-         AND status = 'active'
-         AND (participant_a_id = $2 OR participant_b_id = $2 OR participant_c_id = $2)
-       LIMIT 1`,
-      [sessionId, userId],
-    );
     const matchRoom = matchRow.rows[0]?.room_id;
-    if (matchRoom) {
-      await videoService.setParticipantCanPublishAudio(matchRoom, userId, canPublishAudio);
+    const applies: Promise<void>[] = [];
+    if (lobbyRoom) {
+      applies.push(videoService.setParticipantCanPublishAudio(lobbyRoom, userId, canPublishAudio));
     }
+    if (matchRoom) {
+      applies.push(videoService.setParticipantCanPublishAudio(matchRoom, userId, canPublishAudio));
+    }
+    await Promise.all(applies);
   } catch (err) {
     // Non-fatal: persistence + socket relay already happened; the
     // LiveKit enforcement is defence in depth. Log and move on.
@@ -1172,16 +1201,33 @@ export async function handleHostMuteAll(
     // bulk-mute. Excluded above for the DB persist; mirror here for
     // the socket relay.
     if (allHostIds.includes(participantId)) continue;
-    io.to(userRoom(participantId)).emit('lobby:mute_command', {
-      muted: data.muted,
-      byHost: true,
-    });
-    // Phase U — LiveKit-level enforcement, mirroring DB + relay.
-    // Sequenced (not parallel) to be gentle with the LiveKit API; mute
-    // bulk is rare enough that the latency is acceptable.
-    enforceLiveKitMute(data.sessionId, participantId, !data.muted).catch(err =>
-      logger.warn({ err, participantId }, 'Phase U bulk mute enforcement failed (non-fatal)'),
-    );
+    if (data.muted) {
+      // S17 — MUTE: relay first (instant local mute), SFU revoke follows.
+      io.to(userRoom(participantId)).emit('lobby:mute_command', {
+        muted: true,
+        byHost: true,
+      });
+      // Phase U — LiveKit-level enforcement, mirroring DB + relay.
+      enforceLiveKitMute(data.sessionId, participantId, false).catch(err =>
+        logger.warn({ err, participantId }, 'Phase U bulk mute enforcement failed (non-fatal)'),
+      );
+    } else {
+      // S17 — UNMUTE: restore the publish permission BEFORE the relay.
+      // Same race as the single-target handler: the client re-publishes
+      // the mic the moment the relay lands, and a still-revoked
+      // permission throws PublishTrackError, leaving them stuck muted.
+      // Per-user chains run concurrently; each user's relay waits only
+      // for their OWN permission restore.
+      void enforceLiveKitMute(data.sessionId, participantId, true)
+        .catch(err =>
+          logger.warn({ err, participantId }, 'Phase U bulk mute enforcement failed (non-fatal)'))
+        .then(() => {
+          io.to(userRoom(participantId)).emit('lobby:mute_command', {
+            muted: false,
+            byHost: true,
+          });
+        });
+    }
     count++;
   }
 

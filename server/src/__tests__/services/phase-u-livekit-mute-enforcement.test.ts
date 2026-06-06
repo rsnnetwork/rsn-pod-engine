@@ -91,12 +91,16 @@ describe('Phase U — LiveKit canPublishAudio revocation', () => {
       expect(enforceIdx).toBeGreaterThan(persistIdx);
     });
 
-    it('handleHostMuteAll bulk-fires enforceLiveKitMute per non-host participant', () => {
+    it('handleHostMuteAll bulk-fires enforceLiveKitMute per non-host participant (both directions)', () => {
       const fnStart = src.indexOf('export async function handleHostMuteAll');
       const fnEnd = src.indexOf('\nexport ', fnStart + 1);
       const fn = src.slice(fnStart, fnEnd > -1 ? fnEnd : src.length);
 
-      expect(fn).toMatch(/enforceLiveKitMute\(\s*data\.sessionId,\s*participantId,\s*!data\.muted\s*\)/);
+      // S17 re-point — the single !data.muted call split into direction-
+      // aware branches (mute revokes, unmute restores); both still enforce
+      // per participant.
+      expect(fn).toMatch(/enforceLiveKitMute\(\s*data\.sessionId,\s*participantId,\s*false\s*\)/);
+      expect(fn).toMatch(/enforceLiveKitMute\(\s*data\.sessionId,\s*participantId,\s*true\s*\)/);
       // Bulk path skips the host roster (same allHostIds set used for
       // the DB UPDATE WHERE clause).
       expect(fn).toMatch(/allHostIds\.includes\(participantId\)/);

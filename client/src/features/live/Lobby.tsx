@@ -691,7 +691,21 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
     if (hostMuteCommand !== null && !isHost) {
       setHostMuteProcessing(true);
       const target = !hostMuteCommand; // hostMuteCommand=true means "mute", so !true = false = mute
-      localParticipant.setMicrophoneEnabled(target);
+      // S17 (live-test 2026-06-06) — the publish used to be fire-and-forget
+      // with no catch: when the host's UNMUTE relay raced ahead of the
+      // LiveKit permission restore, setMicrophoneEnabled(true) threw
+      // PublishTrackError "insufficient permissions" and the user stayed
+      // visibly muted (Ali: "host unmutes all but the tile shows mute").
+      // The server now restores the permission BEFORE relaying; this retry
+      // covers any residual SFU propagation delay.
+      void (async () => {
+        try {
+          await localParticipant.setMicrophoneEnabled(target);
+        } catch {
+          await new Promise((r) => setTimeout(r, 1200));
+          await localParticipant.setMicrophoneEnabled(target).catch(() => {});
+        }
+      })();
       setMicEnabled(target);
       sessionStorage.setItem('rsn_mic', String(target));
       setHostMuteCommand(null);
