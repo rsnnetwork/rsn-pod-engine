@@ -19,10 +19,11 @@ import {
   useParticipants,
   useLocalParticipant,
   RoomAudioRenderer,
+  useConnectionState,
 } from '@livekit/components-react';
 import { isTrackReference } from '@livekit/components-core';
 import '@livekit/components-styles';
-import { Track } from 'livekit-client';
+import { Track, ConnectionState } from 'livekit-client';
 
 // Bug 10 (April 19) — Meet/Zoom-style reaction badge anchored above
 // the lobby tile name plate. Subscribes only to this user's entry so
@@ -102,6 +103,37 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
     normalTracks: cameraTracks,
     visibilityFor,
   } = useVisibilityPartition(cameraTracksSorted, hostVisibilityModes);
+
+  // S21 (live-test z1, 12 browsers) — when OUR OWN connection renegotiates,
+  // every remote track vanishes for 2–4s and the grid flashed to a single
+  // tile ("0 participants + 1 host"). During reconnect we freeze the LAST
+  // GOOD roster as placeholder tiles with an explicit "Reconnecting…" badge
+  // — never a stale list presented as live. Hard cap 15s, then we fall back
+  // to whatever the room reports (plus the badge) rather than hold forever.
+  // Normal operation is untouched: joins/leaves apply instantly.
+  const connectionState = useConnectionState();
+  const reconnecting = connectionState !== ConnectionState.Connected;
+  const heldRosterRef = useRef<Array<{ identity: string; name: string }>>([]);
+  const holdDeadlineRef = useRef(0);
+  const [, setHoldTick] = useState(0);
+  if (!reconnecting) {
+    holdDeadlineRef.current = 0;
+    if (cameraTracksSorted.length > 1) {
+      heldRosterRef.current = cameraTracksSorted.map(t => ({
+        identity: t.participant.identity,
+        name: t.participant.name || 'Participant',
+      }));
+    }
+  } else if (holdDeadlineRef.current === 0 && heldRosterRef.current.length > 1) {
+    holdDeadlineRef.current = Date.now() + 15_000;
+  }
+  const holdActive = reconnecting && holdDeadlineRef.current > 0 && Date.now() < holdDeadlineRef.current;
+  useEffect(() => {
+    if (!holdActive) return;
+    // Re-render at the cap so an unrecovered connection stops holding.
+    const t = setTimeout(() => setHoldTick(x => x + 1), Math.max(0, holdDeadlineRef.current - Date.now()) + 100);
+    return () => clearTimeout(t);
+  }, [holdActive]);
 
   // Responsive grid based on density preference
   const n = participants.length;
@@ -476,6 +508,34 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
       </div>
     );
   };
+
+  // S21 — held grid while reconnecting: same layout, placeholder tiles
+  // (avatar initial + name) from the last good roster, with the badge.
+  // Rendered INSTEAD of live tiles (no stale interactive controls, no
+  // dead video elements).
+  if (holdActive) {
+    return (
+      <div className={`relative flex flex-col gap-3 w-full ${maxWClass} mx-auto`} data-testid="lobby-reconnect-hold">
+        <div className="flex justify-center">
+          <span className="inline-flex items-center gap-2 rounded-full bg-amber-500 text-white text-xs font-semibold px-3 py-1.5 shadow">
+            <Loader2 className="h-3 w-3 animate-spin" /> Reconnecting…
+          </span>
+        </div>
+        <div className={`grid ${gridCols} ${gapClass} opacity-80`}>
+          {heldRosterRef.current.map(p => (
+            <div key={p.identity} className="relative aspect-video rounded-xl bg-gray-900 flex items-center justify-center">
+              <div className="flex flex-col items-center gap-1.5">
+                <div className="h-10 w-10 rounded-full bg-gray-700 text-white flex items-center justify-center text-sm font-semibold">
+                  {(p.name || '?').charAt(0).toUpperCase()}
+                </div>
+                <span className="text-xs text-gray-300 max-w-[90%] truncate">{p.name}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   // Pinned layout: large tile + small row at bottom.
   // Bug 1 (18 May Stefan) — render against EFFECTIVE pin (server > local)
@@ -919,9 +979,23 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
  */
 function LiveKitPresenceSync() {
   const livekitParticipants = useParticipants();
+  const connectionState = useConnectionState();
   const setLiveRoomParticipants = useSessionStore(s => s.setLiveRoomParticipants);
   const lastKeyRef = useRef<string>('');
+  // S21 (live-test z1) — while OUR OWN connection renegotiates, LiveKit's
+  // participant set collapses to just the local participant for a few
+  // seconds. Publishing that flashed "0 participants + 1 host" and blanked
+  // every roster consumer. During reconnect we HOLD the last good roster —
+  // truth isn't reachable in that window anyway — capped at 15s, after
+  // which we publish whatever LiveKit reports rather than lie forever.
+  const holdDeadlineRef = useRef(0);
   useEffect(() => {
+    if (connectionState !== ConnectionState.Connected) {
+      if (holdDeadlineRef.current === 0) holdDeadlineRef.current = Date.now() + 15_000;
+      if (Date.now() < holdDeadlineRef.current) return; // hold last roster
+    } else {
+      holdDeadlineRef.current = 0;
+    }
     // Local + remote both come back from useParticipants(); identity is
     // the LiveKit token's identity field, which the server sets to the
     // userId (same invariant the tile-sort relies on at line ~122).
