@@ -677,3 +677,127 @@ export async function handleHostSetBreakoutDurationAll(
     );
   });
 }
+
+// ─── host:add_to_room (S25 — Ali, 6 Jun) ───────────────────────────────────
+//
+// Grow an ACTIVE MANUAL room after creation: the host/co-host picks a
+// main-room participant and drops them into an existing room (1→2, 2→3).
+// Hard cap 3 — the whole system is wired for pairs/trios (matches has
+// exactly A/B/C slots; layouts, rating fan-out and recap all assume ≤3).
+// The added member rides the SAME rails as room creation: slot UPDATE,
+// setRoomAssignment (canonical → token via resync), IN_ROUND status,
+// match:reassigned to the joiner. Existing occupants get the lightweight
+// match:participant_joined (S23-symmetric in-room banner + partner add) —
+// NOT a re-assign, so their video doesn't remount.
+
+export async function handleHostAddToRoom(
+  io: SocketServer,
+  socket: Socket,
+  data: { sessionId: string; userId: string; matchId: string },
+): Promise<void> {
+  return withSessionGuard(data.sessionId, async () => {
+    if (!await verifyHost(socket, data.sessionId)) return;
+
+    const { sessionId, userId, matchId } = data;
+    const activeSession = activeSessions.get(sessionId);
+    if (!activeSession) {
+      socket.emit('error', { code: 'SESSION_NOT_FOUND', message: 'Session not found' });
+      return;
+    }
+
+    // Target must be an ACTIVE MANUAL room in THIS session.
+    const t = await query<{
+      id: string; room_id: string;
+      participant_a_id: string; participant_b_id: string | null; participant_c_id: string | null;
+    }>(
+      `SELECT id, room_id, participant_a_id, participant_b_id, participant_c_id
+       FROM matches
+       WHERE id = $1 AND session_id = $2 AND status = 'active' AND is_manual = TRUE`,
+      [matchId, sessionId],
+    );
+    if (t.rows.length === 0) {
+      socket.emit('error', { code: 'TARGET_NOT_FOUND', message: 'Room not found or no longer active' });
+      return;
+    }
+    const m = t.rows[0];
+    const members = [m.participant_a_id, m.participant_b_id, m.participant_c_id]
+      .filter((x): x is string => !!x);
+    if (members.includes(userId)) {
+      socket.emit('error', { code: 'ALREADY_IN_ROOM', message: 'They are already in this room' });
+      return;
+    }
+    if (members.length >= 3) {
+      socket.emit('error', { code: 'ROOM_FULL', message: 'Rooms support up to 3 people' });
+      return;
+    }
+
+    // The person must be FREE — not seated in any active match.
+    const busy = await query(
+      `SELECT 1 FROM matches
+       WHERE session_id = $1 AND status = 'active'
+         AND (participant_a_id = $2 OR participant_b_id = $2 OR participant_c_id = $2)`,
+      [sessionId, userId],
+    );
+    if (busy.rows.length > 0) {
+      socket.emit('error', { code: 'USER_BUSY', message: 'They are already in another room' });
+      return;
+    }
+
+    // Fill the first free slot — guarded so a concurrent add can't stack.
+    const slot = !m.participant_b_id ? 'participant_b_id' : 'participant_c_id';
+    const upd = await query(
+      `UPDATE matches SET ${slot} = $1
+       WHERE id = $2 AND status = 'active' AND ${slot} IS NULL
+       RETURNING id`,
+      [userId, matchId],
+    );
+    if (upd.rows.length === 0) {
+      socket.emit('error', { code: 'ROOM_CHANGED', message: 'The room just changed — try again' });
+      return;
+    }
+
+    const nameRes = await query<{ id: string; display_name: string }>(
+      `SELECT id, display_name FROM users WHERE id = ANY($1)`,
+      [[...members, userId]],
+    );
+    const nameMap = new Map(nameRes.rows.map((r) => [r.id, r.display_name || 'User']));
+    const joinerName = nameMap.get(userId) || 'A participant';
+
+    // Same assignment rail as creation: canonical → token via resync.
+    const { setRoomAssignment } = await import('./participant-flow');
+    setRoomAssignment(sessionId, matchId, m.room_id, [userId]);
+    await sessionService.updateParticipantStatus(sessionId, userId, ParticipantStatus.IN_ROUND).catch(() => {});
+
+    // Room timer membership — the joiner receives the room's timer:sync ticks.
+    const timerState = roomTimers.get(matchId);
+    if (timerState && !timerState.participantIds.includes(userId)) {
+      timerState.participantIds.push(userId);
+    }
+
+    // Joiner: full assignment notification (same shape as creation).
+    io.to(userRoom(userId)).emit('match:reassigned', {
+      matchId,
+      newPartnerId: members[0],
+      partnerDisplayName: nameMap.get(members[0]) || 'User',
+      partners: members.map((id) => ({ userId: id, displayName: nameMap.get(id) || 'User' })),
+      roomId: m.room_id,
+      roundNumber: activeSession.currentRound,
+      timerVisibility: 'visible',
+      isManual: true,
+    });
+
+    // Existing occupants: lightweight join notice (no video remount).
+    for (const pid of members) {
+      io.to(userRoom(pid)).emit('match:participant_joined', {
+        matchId,
+        joinedUserId: userId,
+        joinedDisplayName: joinerName,
+        memberCount: members.length + 1,
+      });
+    }
+
+    if (_emitHostDashboard) await _emitHostDashboard(sessionId).catch(() => {});
+
+    logger.info({ sessionId, matchId, userId, members: members.length + 1 }, 'S25 — participant added to manual room');
+  });
+}

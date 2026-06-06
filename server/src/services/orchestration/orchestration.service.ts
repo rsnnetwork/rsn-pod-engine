@@ -78,6 +78,7 @@ import { handleResync } from './state/state-snapshot';
 import {
   handleHostCreateBreakoutBulk, handleHostExtendBreakoutAll,
   handleHostEndBreakoutAll, handleHostSetBreakoutDurationAll,
+  handleHostAddToRoom,
   injectBreakoutBulkDeps,
 } from './handlers/breakout-bulk';
 
@@ -321,6 +322,8 @@ export function initOrchestration(socketServer: SocketServer): void {
     wrapHandler('host:extend_breakout_all', socket, handleHostExtendBreakoutAll);
     wrapHandler('host:end_breakout_all', socket, handleHostEndBreakoutAll);
     wrapHandler('host:set_breakout_duration_all', socket, handleHostSetBreakoutDurationAll);
+    // S25 — grow an active manual room (1→2, 2→3; hard cap 3).
+    wrapHandler('host:add_to_room', socket, handleHostAddToRoom);
 
     // ── Host Events (unguarded — no session state mutation) ──
     socket.on('host:broadcast_message', async (data) => {

@@ -15,6 +15,8 @@ const SOCKET_EVENTS = [
   'match:partner_disconnected', 'match:partner_reconnected', 'match:return_to_lobby',
   // WS2 (27 May remaining work) — trio "someone left, you keep talking".
   'match:participant_left',
+  // S25 — host grew this manual room; a new member joined.
+  'match:participant_joined',
   'rating:window_open', 'rating:window_closed',
   'session:matching_preparing', 'session:matching_in_progress', 'session:matching_cancelled', 'session:matches_confirmed',
   'host:broadcast', 'host:participant_removed',
@@ -618,6 +620,21 @@ export default function useSessionSocket(sessionId: string) {
       // the trio grid kept an empty hole where the leaver sat).
       if (data?.leftUserId) store.removePartner(data.leftUserId);
       store.setRoomNotice(`${name} returned to the main room — you can keep talking`);
+      setTimeout(() => {
+        const s = useSessionStore.getState();
+        if (s.roomNotice && s.roomNotice.startsWith(name)) s.setRoomNotice(null);
+      }, 8000);
+    });
+
+    // S25 — the host added someone to THIS room. Add them to the partner
+    // list (grid grows to the trio layout) and show the in-room banner.
+    // The joiner themself arrives via the match:reassigned rail instead.
+    socket.on('match:participant_joined', (data: any) => {
+      const name = data?.joinedDisplayName || 'A participant';
+      if (data?.joinedUserId) {
+        store.addPartner({ userId: data.joinedUserId, displayName: data.joinedDisplayName });
+      }
+      store.setRoomNotice(`${name} joined the room`);
       setTimeout(() => {
         const s = useSessionStore.getState();
         if (s.roomNotice && s.roomNotice.startsWith(name)) s.setRoomNotice(null);

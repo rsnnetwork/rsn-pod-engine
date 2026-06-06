@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { useSessionStore } from '@/stores/sessionStore';
-import { Clock, Wifi, WifiOff, UserMinus, Radio, AlertTriangle, ArrowRightLeft } from 'lucide-react';
+import { useSessionStore, useInRoomParticipants } from '@/stores/sessionStore';
+import { Clock, Wifi, WifiOff, UserMinus, Radio, AlertTriangle, ArrowRightLeft, UserPlus } from 'lucide-react';
 import { getSocket } from '@/lib/socket';
 
 interface Props { sessionId: string; }
@@ -33,6 +33,10 @@ export default function HostRoundDashboard({ sessionId }: Props) {
   const totalRounds = useSessionStore(s => s.totalRounds);
   const socket = getSocket();
   const [moveMode, setMoveMode] = useState<{ userId: string; fromMatchId: string; displayName: string } | null>(null);
+  // S25 — "+ Add person" picker open for this manual room's matchId.
+  const [addMode, setAddMode] = useState<string | null>(null);
+  const mainRoomParticipants = useInRoomParticipants();
+  const hostUserId = useSessionStore(s => s.hostUserId);
   // Bug 18 — local 1s tick so per-manual-room timers re-render. This
   // is independent of the session-level timerSeconds; manual rooms each
   // have their own endsAt and we recompute on tick.
@@ -313,16 +317,65 @@ export default function HostRoundDashboard({ sessionId }: Props) {
                   <p className="text-xs text-blue-500 text-center mt-2 font-medium">Click to move here</p>
                 )}
                 {room.status === 'active' && !moveMode && room.isManual && (
-                  <div className="flex justify-end mt-2">
+                  <div className="flex justify-end items-center gap-1.5 mt-2">
+                    {/* S25 — grow this room (1→2, 2→3; hard cap 3). The
+                        picker lists main-room participants not seated in
+                        any active room. Mobile-first: taps, no drag. */}
+                    {room.participants.length >= 3 ? (
+                      <span className="text-xs text-gray-400 px-2 py-1" title="Rooms support up to 3 people">Room full (3)</span>
+                    ) : (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setAddMode(addMode === room.matchId ? null : room.matchId); }}
+                        className="text-xs text-gray-600 hover:text-gray-900 px-2 py-1 min-h-[32px] border border-gray-200 rounded inline-flex items-center gap-1"
+                        title="Add a main-room participant to this room"
+                      >
+                        <UserPlus className="h-3 w-3" /> Add person
+                      </button>
+                    )}
                     <button
                       onClick={(e) => { e.stopPropagation(); extendBreakoutRoom(room.matchId); }}
-                      className="text-xs text-gray-600 hover:text-gray-900 px-2 py-1 border border-gray-200 rounded inline-flex items-center gap-1"
+                      className="text-xs text-gray-600 hover:text-gray-900 px-2 py-1 min-h-[32px] border border-gray-200 rounded inline-flex items-center gap-1"
                       title="Add 2 minutes to this room's timer"
                     >
                       <Clock className="h-3 w-3" /> +2 min
                     </button>
                   </div>
                 )}
+                {addMode === room.matchId && room.status === 'active' && (() => {
+                  // Available = in the main room, not the director, not
+                  // already seated in ANY active room.
+                  const seated = new Set(
+                    (roundDashboard?.rooms || [])
+                      .filter((r: any) => r.status === 'active')
+                      .flatMap((r: any) => r.participants.map((p: any) => p.userId)),
+                  );
+                  const available = mainRoomParticipants.filter(
+                    p => p.userId !== hostUserId && !seated.has(p.userId),
+                  );
+                  return (
+                    <div className="mt-2 border-t border-gray-200 pt-2" data-testid="add-person-picker">
+                      {available.length === 0 ? (
+                        <p className="text-xs text-gray-400 italic">Nobody available in the main room</p>
+                      ) : (
+                        <div className="flex flex-wrap gap-1.5">
+                          {available.map(p => (
+                            <button
+                              key={p.userId}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                socket?.emit('host:add_to_room' as any, { sessionId, userId: p.userId, matchId: room.matchId });
+                                setAddMode(null);
+                              }}
+                              className="text-xs px-2.5 py-1.5 min-h-[32px] rounded-full bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"
+                            >
+                              + {p.displayName || 'Participant'}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             );
           };

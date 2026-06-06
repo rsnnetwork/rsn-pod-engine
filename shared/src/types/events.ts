@@ -122,6 +122,9 @@ export interface ServerToClientEvents {
   // declared: the lighter "someone left, you keep talking" notification sent
   // to the SURVIVORS of a trio when one member leaves / is pulled / times out.
   'match:participant_left': (data: { matchId: string; leftUserId: string; leftDisplayName?: string; remainingCount: number; reason?: string }) => void;
+  // S25 — a host grew a manual room: existing occupants learn about the
+  // joiner WITHOUT a re-assign (no video remount on their side).
+  'match:participant_joined': (data: { matchId: string; joinedUserId: string; joinedDisplayName?: string; memberCount: number }) => void;
 
   // Matching anticipation
   'session:matching_preparing': (data: { sessionId: string; roundNumber: number }) => void;
@@ -320,6 +323,10 @@ export interface ClientToServerEvents {
   'chat:react': (data: { sessionId: string; messageId: string; emoji: string }) => void;
   // Phase 4B (5 May spec) — force-fetch chat history on demand.
   'chat:request_history': (data: { sessionId: string; matchId?: string }) => void;
+
+  // S25 — grow an active manual room (host/co-host adds a main-room
+  // participant; hard cap 3 members).
+  'host:add_to_room': (data: { sessionId: string; userId: string; matchId: string }) => void;
 
   // DM (Phase D of chat-fix-and-dm-system, 1 May 2026)
   'dm:send': (data: { toUserId: string; content: string }) => void;

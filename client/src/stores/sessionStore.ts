@@ -100,6 +100,7 @@ interface SessionLiveState {
   /** S23 — transient in-room notice ("X returned to the main room…"). */
   roomNotice: string | null;
   removePartner: (userId: string) => void;
+  addPartner: (partner: MatchPartner) => void;
   setRoomNotice: (roomNotice: string | null) => void;
   currentMatchId: string | null;
   // WS2 (27 May remaining work) — why the rating window opened; drives the
@@ -460,6 +461,12 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   removePartner: (userId) => set((s) => ({
     currentPartners: s.currentPartners.filter(p => p.userId !== userId),
   })),
+  // S25 — the symmetric grow: a host added someone to this room.
+  addPartner: (partner) => set((s) => (
+    s.currentPartners.some(p => p.userId === partner.userId)
+      ? {}
+      : { currentPartners: [...s.currentPartners, partner] }
+  )),
   setRoomNotice: (roomNotice) => set({ roomNotice }),
   setRatingReason: (ratingReason) => set({ ratingReason }),
   setTimerWarning: (timerWarning) => set({ timerWarning }),
