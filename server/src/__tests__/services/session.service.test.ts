@@ -111,6 +111,8 @@ describe('Session Service', () => {
 
       const participant = await sessionService.registerParticipant('session-123', 'user-new');
       expect(participant).toBeDefined();
+      // S15 — a fresh INSERT is the only path that earns the confirmation email.
+      expect(participant.isNewRegistration).toBe(true);
     });
   });
 
@@ -217,6 +219,8 @@ describe('Session Service', () => {
 
       const participant = await sessionService.registerParticipant('session-123', 'user-new');
       expect(participant.id).toBe('sp-from-concurrent-insert');
+      // S15 — losing the race is NOT a fresh registration (the winner emails).
+      expect(participant.isNewRegistration).toBe(false);
       // Verify the INSERT actually used ON CONFLICT DO NOTHING
       const insertCall = mockQuery.mock.calls.find(
         (c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).includes('INSERT INTO session_participants')
@@ -242,6 +246,10 @@ describe('Session Service', () => {
 
       const result = await sessionService.registerParticipant('session-123', 'user-left');
       expect(result.status).toBe('registered');
+      // S15 (live-test 2026-06-06) — re-activating a 'left' row must NOT count
+      // as a new registration; the live page auto-registers on every mount, so
+      // this path used to re-send the confirmation email on every rejoin.
+      expect(result.isNewRegistration).toBe(false);
     });
   });
 

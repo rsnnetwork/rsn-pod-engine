@@ -215,7 +215,17 @@ export async function listSessions(params: {
 
 // ─── Participant Registration ───────────────────────────────────────────────
 
-export async function registerParticipant(sessionId: string, userId: string, userRole?: UserRole): Promise<SessionParticipant> {
+// S15 (live-test 2026-06-06) — isNewRegistration distinguishes a FRESH
+// registration from a re-activation (a 'left'/'no_show' row flipping back to
+// 'registered'). The live page auto-registers on every mount, so "Join Live
+// Event" / "Join Late" after leaving hit the re-register UPDATE — and the
+// route re-sent the "you're registered" confirmation email each time. Only
+// fresh INSERTs deserve the email.
+export async function registerParticipant(
+  sessionId: string,
+  userId: string,
+  userRole?: UserRole,
+): Promise<SessionParticipant & { isNewRegistration: boolean }> {
   const participant = await transaction(async (client) => {
     // Read session without lock — ON CONFLICT handles concurrent inserts safely.
     // FOR UPDATE was causing cascading timeouts when multiple users register simultaneously.
@@ -305,7 +315,7 @@ export async function registerParticipant(sessionId: string, userId: string, use
          RETURNING ${PARTICIPANT_COLUMNS}`,
         [sessionId, userId]
       );
-      return result.rows[0];
+      return { ...result.rows[0], isNewRegistration: false };
     }
 
     // Phase R8 (20 May 2026 — live-test post-mortem). For admin / super_admin
@@ -334,15 +344,17 @@ export async function registerParticipant(sessionId: string, userId: string, use
       [sessionId, userId, defaultActingAsHost]
     );
 
-    let participant: SessionParticipant;
+    let participant: SessionParticipant & { isNewRegistration: boolean };
     if (insertResult.rowCount === 0) {
+      // Lost the ON CONFLICT race — the concurrent caller's insert is the
+      // fresh one (and sends any confirmation); this call is a no-op read.
       const existingRow = await client.query<SessionParticipant>(
         `SELECT ${PARTICIPANT_COLUMNS} FROM session_participants WHERE session_id = $1 AND user_id = $2`,
         [sessionId, userId]
       );
-      participant = existingRow.rows[0];
+      participant = { ...existingRow.rows[0], isNewRegistration: false };
     } else {
-      participant = insertResult.rows[0];
+      participant = { ...insertResult.rows[0], isNewRegistration: true };
     }
 
     // Sync invite status: if user had a pending invite for this session, mark it accepted

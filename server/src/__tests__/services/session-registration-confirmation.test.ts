@@ -74,9 +74,31 @@ describe('Self-registration confirmation + calendar (26 May, Stefan)', () => {
       // first occurrence of the route string is the POST handler (DELETE is later)
       const i = src.indexOf("'/:id/register'");
       expect(i).toBeGreaterThan(-1);
-      const block = src.slice(i, i + 2200);
+      const block = src.slice(i, i + 2800);
       expect(block).toMatch(/sendSessionRegistrationConfirmationEmail/);
       expect(block).toMatch(/buildSessionCalendarEvent/);
+    });
+
+    // S15 (live-test 2026-06-06) — the live page auto-registers on every
+    // mount, and a 'left'/'no_show' participant re-joining flips back to
+    // 'registered' via the re-register UPDATE. That used to re-fire the
+    // confirmation email on every "Join Live Event" / late-rejoin press.
+    it('the confirmation email is gated on isNewRegistration (fresh INSERTs only)', () => {
+      const src = readServer('routes/sessions.ts');
+      const i = src.indexOf("'/:id/register'");
+      const block = src.slice(i, i + 2800);
+      expect(block).toMatch(/if \(participant\.isNewRegistration\) void \(async \(\) =>/);
+    });
+
+    it('registerParticipant marks re-activations and race-losses as NOT new', () => {
+      const src = readServer('services/session/session.service.ts');
+      const i = src.indexOf('export async function registerParticipant');
+      expect(i).toBeGreaterThan(-1);
+      const fn = src.slice(i, src.indexOf('\nexport async function unregisterParticipant', i));
+      // Re-register UPDATE path → false
+      expect(fn).toMatch(/UPDATE session_participants SET status = 'registered'[\s\S]{0,400}?isNewRegistration: false/);
+      // Fresh INSERT path → true
+      expect(fn).toMatch(/isNewRegistration: true/);
     });
   });
 });

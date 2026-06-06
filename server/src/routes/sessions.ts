@@ -311,7 +311,11 @@ router.post(
       // emailed host-invites already do. Best-effort + fire-and-forget so email
       // latency never delays the 201. Invite-accepts register via a different
       // path (and already got the invite email + calendar), so no double-send.
-      void (async () => {
+      //
+      // S15 (live-test 2026-06-06) — FRESH registrations only. The live page
+      // auto-registers on every mount, so "Join Live Event" / rejoin-after-
+      // leaving hit the re-register path and re-sent this email every time.
+      if (participant.isNewRegistration) void (async () => {
         try {
           const u = (await query<{ email: string; display_name: string | null }>(
             `SELECT email, display_name FROM users WHERE id = $1`,
