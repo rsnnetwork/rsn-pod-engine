@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Calendar, Users, Play, Clock, UserPlus, UserMinus, Settings, CheckCircle, Pencil, Trash2, Mail, Copy, Check, AlertTriangle, CopyPlus, Search, Send } from 'lucide-react';
+import { ArrowLeft, Calendar, Users, Play, Clock, UserPlus, UserMinus, Settings, CheckCircle, Pencil, Trash2, Mail, Copy, Check, AlertTriangle, CopyPlus, Search, Send, Shield, ShieldCheck } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Avatar from '@/components/ui/Avatar';
@@ -110,6 +110,29 @@ export default function SessionDetailPage() {
 
   const isHost = session?.hostUserId === user?.id;
   const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
+
+  // S16 (Ali, 6 Jun) — co-host management lives HERE too, not only in the
+  // live page's participant drawer: the host plans co-hosts before the
+  // event. Mirrors the drawer's rule (any acting host may manage; the
+  // server authorizes via canActAsHost and keeps the director-only guard
+  // for platform-admin targets). viewerIsCohost comes from the participants
+  // payload so a formal co-host visiting this page gets the toggles too.
+  const viewerIsCohost = (participants || []).some((p: any) => p.userId === user?.id && p.isCohost);
+  const canManageCohosts = isHost || user?.role === 'super_admin' || viewerIsCohost;
+  const [cohostBusy, setCohostBusy] = useState<string | null>(null);
+  const toggleCohost = async (targetUserId: string, currentlyCohost: boolean) => {
+    setCohostBusy(targetUserId);
+    try {
+      if (currentlyCohost) await api.delete(`/sessions/${sessionId}/cohosts/${targetUserId}`);
+      else await api.post(`/sessions/${sessionId}/cohosts/${targetUserId}`);
+      qc.invalidateQueries({ queryKey: ['session-participants', sessionId] });
+      addToast(currentlyCohost ? 'Co-host removed' : 'Co-host added — they will have host controls when they join', 'success');
+    } catch (err: any) {
+      addToast(err?.response?.data?.error?.message || 'Failed to update co-host', 'error');
+    } finally {
+      setCohostBusy(null);
+    }
+  };
 
   const { data: participantCounts } = useQuery({
     queryKey: ['session-participant-counts', sessionId],
@@ -716,13 +739,35 @@ export default function SessionDetailPage() {
               return (
                 <Card key={p.userId || p.id} className="!p-4">
                   <div className="flex items-center justify-between">
-                    <a href={`/profile/${p.userId || p.id}`} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+                    <a href={`/profile/${p.userId || p.id}`} className="flex items-center gap-3 hover:opacity-80 transition-opacity min-w-0">
                       <Avatar src={p.avatarUrl} name={p.displayName || p.email || 'User'} size="sm" />
-                      <div>
-                        <p className="text-sm font-medium text-gray-800">{p.displayName || p.email || 'Participant'}</p>
-                        <p className="text-xs text-gray-400">{statusLabel}</p>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-800 truncate">{p.displayName || p.email || 'Participant'}</p>
+                        <p className="text-xs text-gray-400">{p.isCohost ? 'Co-Host' : statusLabel}</p>
                       </div>
                     </a>
+                    {/* S16 — pre-event co-host management on the event page.
+                        Same semantics as the live drawer's shield toggle. */}
+                    <div className="flex items-center gap-2 shrink-0">
+                      {p.isCohost && (
+                        <Badge variant="info" className="text-xs flex items-center gap-1">
+                          <ShieldCheck className="h-3 w-3" /> Co-Host
+                        </Badge>
+                      )}
+                      {canManageCohosts && p.userId !== user?.id && (
+                        <button
+                          onClick={() => toggleCohost(p.userId, !!p.isCohost)}
+                          disabled={cohostBusy === p.userId}
+                          title={p.isCohost ? 'Remove co-host' : 'Make co-host'}
+                          aria-label={p.isCohost ? `Remove ${p.displayName || 'user'} as co-host` : `Make ${p.displayName || 'user'} a co-host`}
+                          className={`min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg transition-colors disabled:opacity-50 ${
+                            p.isCohost ? 'text-blue-600 hover:bg-blue-50' : 'text-gray-400 hover:bg-gray-100'
+                          }`}
+                        >
+                          <Shield className="h-5 w-5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </Card>
               );

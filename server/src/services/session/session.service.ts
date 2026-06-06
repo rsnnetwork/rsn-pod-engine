@@ -413,8 +413,14 @@ export async function getSessionParticipants(
   sessionId: string,
   status?: ParticipantStatus
 ): Promise<(SessionParticipant & { displayName?: string; email?: string; avatarUrl?: string; jobTitle?: string; company?: string })[]> {
+  // S16 — isCohost lets pre-event surfaces (SessionDetailPage) render the
+  // Co-Host badge + toggle without a second round-trip. session_cohosts is
+  // the canonical cohost source (Phase R6).
   let sql = `SELECT ${PARTICIPANT_COLUMNS}, u.display_name AS "displayName", u.email,
-                    u.avatar_url AS "avatarUrl", u.job_title AS "jobTitle", u.company
+                    u.avatar_url AS "avatarUrl", u.job_title AS "jobTitle", u.company,
+                    EXISTS(SELECT 1 FROM session_cohosts sc
+                           WHERE sc.session_id = session_participants.session_id
+                             AND sc.user_id = session_participants.user_id) AS "isCohost"
              FROM session_participants
              JOIN users u ON u.id = session_participants.user_id
              WHERE session_id = $1`;

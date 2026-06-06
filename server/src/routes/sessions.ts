@@ -593,6 +593,133 @@ router.get(
   }
 );
 
+// ─── POST/DELETE /sessions/:id/cohosts/:userId (S16 — pre-event co-host) ────
+//
+// Ali (2026-06-06): co-host management must also live on the EVENT DETAIL
+// page, not only inside the live page's participant drawer. The socket
+// handlers (handleAssignCohost / handleRemoveCohost) stay the in-event path;
+// these REST twins serve page surfaces with no session socket. Same rules:
+//   - any acting host may manage co-hosts (canActAsHost: director, formal
+//     co-host, pod admin / super_admin),
+//   - only the DIRECTOR may change a platform admin's co-host status
+//     (Bug J / Bug 2 supreme-host carve-out),
+//   - assignment requires an actual (non-removed) participant row.
+// Side effects mirror the socket path so a live page open pre-start updates
+// instantly: cohost:assigned/removed + permissions:updated + roster:changed
+// + entity fanout, and a future-rounds repair when the event is running.
+
+async function mutateSessionCohost(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+  action: 'assign' | 'remove',
+): Promise<void> {
+  try {
+    const sessionId = req.params.id;
+    const targetUserId = req.params.userId;
+    const session = await sessionService.getSessionById(sessionId); // 404s
+
+    const { canActAsHost } = await import('../services/roles/effective-role.service');
+    const { allowed } = await canActAsHost(req.user!.userId, req.user!.role, sessionId);
+    if (!allowed) {
+      throw new ForbiddenError('Only the event host or a co-host can manage co-hosts');
+    }
+
+    if (targetUserId === session.hostUserId) {
+      res.status(400).json({ success: false, error: { code: 'TARGET_IS_DIRECTOR', message: 'The event director is already the host' } });
+      return;
+    }
+
+    const targetRes = await query<{ role: string }>(`SELECT role FROM users WHERE id = $1`, [targetUserId]);
+    if (targetRes.rows.length === 0) throw new NotFoundError('User', targetUserId);
+    const isDirectorCaller = req.user!.userId === session.hostUserId;
+    if (hasRoleAtLeast(targetRes.rows[0].role as UserRole, UserRole.ADMIN) && !isDirectorCaller) {
+      throw new ForbiddenError("Only the event director can change a platform admin's co-host status");
+    }
+
+    if (action === 'assign') {
+      const partRes = await query(
+        `SELECT 1 FROM session_participants WHERE session_id = $1 AND user_id = $2 AND status != 'removed'`,
+        [sessionId, targetUserId],
+      );
+      if (partRes.rows.length === 0) {
+        res.status(400).json({ success: false, error: { code: 'NOT_A_PARTICIPANT', message: 'Co-hosts must be registered participants of this event' } });
+        return;
+      }
+      await query(
+        `INSERT INTO session_cohosts (session_id, user_id, role, granted_by)
+         VALUES ($1, $2, 'co_host', $3)
+         ON CONFLICT (session_id, user_id) DO UPDATE SET role = 'co_host'`,
+        [sessionId, targetUserId, req.user!.userId],
+      );
+    } else {
+      await query(`DELETE FROM session_cohosts WHERE session_id = $1 AND user_id = $2`, [sessionId, targetUserId]);
+    }
+
+    // Socket side effects — same shape the socket handlers emit, so any
+    // open live page (even pre-start) flips without a refresh.
+    try {
+      const { getRealtimeIo } = await import('../realtime/emit');
+      const { sessionRoom, userRoom } = await import('../services/orchestration/state/session-state');
+      const io = getRealtimeIo();
+      if (io) {
+        if (action === 'assign') {
+          const displayName = (await query<{ display_name: string }>(
+            `SELECT display_name FROM users WHERE id = $1`, [targetUserId],
+          )).rows[0]?.display_name || 'User';
+          io.to(sessionRoom(sessionId)).emit('cohost:assigned', { userId: targetUserId, displayName, role: 'co_host' });
+          io.to(userRoom(targetUserId)).emit('permissions:updated', {
+            sessionId,
+            effectiveRole: 'cohost' as const,
+            capabilities: [
+              'mute_participants', 'remove_participants', 'reassign',
+              'start_round', 'pause', 'resume', 'broadcast', 'create_breakout',
+            ],
+          });
+        } else {
+          io.to(sessionRoom(sessionId)).emit('cohost:removed', { userId: targetUserId });
+          io.to(userRoom(targetUserId)).emit('permissions:updated', {
+            sessionId, effectiveRole: 'participant' as const, capabilities: [],
+          });
+        }
+        io.to(sessionRoom(sessionId)).emit('roster:changed', {
+          sessionId, cause: action === 'assign' ? 'cohost_assigned' : 'cohost_removed',
+        });
+        // Running event: re-shape upcoming rounds (Phase 8A.5 parity) —
+        // a promoted co-host must drop out of future matching, a demoted
+        // one must re-enter it.
+        if (activeSessions.has(sessionId)) {
+          const { maybeRepairFutureRounds } = await import('../services/orchestration/handlers/host-actions');
+          maybeRepairFutureRounds(io, sessionId).catch((err: unknown) =>
+            logger.warn({ err, sessionId }, 'REST cohost change: plan repair failed (non-fatal)'));
+        }
+      }
+    } catch (err) {
+      logger.warn({ err, sessionId }, 'REST cohost change: socket fanout failed (non-fatal)');
+    }
+    fanoutSessionEntities(session.podId ?? null, sessionId, [
+      E.session(sessionId), E.sessionParticipants(sessionId), E.sessionPlan(sessionId),
+    ]).catch(() => {});
+
+    logger.info({ sessionId, targetUserId, action, by: req.user!.userId }, 'Co-host change via REST');
+    res.json({ success: true, data: { userId: targetUserId, isCohost: action === 'assign' } });
+  } catch (err) {
+    next(err);
+  }
+}
+
+router.post(
+  '/:id/cohosts/:userId',
+  authenticate,
+  (req: Request, res: Response, next: NextFunction) => mutateSessionCohost(req, res, next, 'assign'),
+);
+
+router.delete(
+  '/:id/cohosts/:userId',
+  authenticate,
+  (req: Request, res: Response, next: NextFunction) => mutateSessionCohost(req, res, next, 'remove'),
+);
+
 // ─── GET /sessions/:id/cohosts/check (am I a co-host?) ──────────────────────
 
 router.get(

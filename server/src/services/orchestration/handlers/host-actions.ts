@@ -103,7 +103,9 @@ function maybeAutoEndEmptyRound(sessionId: string): void {
 // late-joiner / leaver path uses, with reason='host_request' since
 // the trigger is a host action. No throttling — cohost change is
 // a manual, low-frequency event.
-async function maybeRepairFutureRounds(io: SocketServer, sessionId: string): Promise<void> {
+// S16 — exported so the REST cohost routes (event-detail page surface)
+// trigger the same repair as the socket handlers.
+export async function maybeRepairFutureRounds(io: SocketServer, sessionId: string): Promise<void> {
   const activeSession = activeSessions.get(sessionId);
   if (!activeSession || activeSession.currentRound < 1) return;
   // Serialize with all other match-write paths (late-joiner/leaver repairs,
