@@ -619,6 +619,12 @@ async function mutateSessionCohost(
     const targetUserId = req.params.userId;
     const session = await sessionService.getSessionById(sessionId); // 404s
 
+    // S16.1 (Ali) — no co-host changes on a finished event.
+    if (session.status === SessionStatus.COMPLETED || session.status === SessionStatus.CANCELLED) {
+      res.status(400).json({ success: false, error: { code: 'SESSION_OVER', message: 'This event has ended — co-hosts can no longer be changed' } });
+      return;
+    }
+
     const { canActAsHost } = await import('../services/roles/effective-role.service');
     const { allowed } = await canActAsHost(req.user!.userId, req.user!.role, sessionId);
     if (!allowed) {

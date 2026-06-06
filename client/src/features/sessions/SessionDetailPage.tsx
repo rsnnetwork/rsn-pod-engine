@@ -118,7 +118,10 @@ export default function SessionDetailPage() {
   // for platform-admin targets). viewerIsCohost comes from the participants
   // payload so a formal co-host visiting this page gets the toggles too.
   const viewerIsCohost = (participants || []).some((p: any) => p.userId === user?.id && p.isCohost);
-  const canManageCohosts = isHost || user?.role === 'super_admin' || viewerIsCohost;
+  // S16.1 (Ali) — a finished event has no co-hosts to manage: the toggle
+  // renders only while the event can still happen / is happening.
+  const sessionOver = session?.status === 'completed' || session?.status === 'cancelled';
+  const canManageCohosts = !sessionOver && (isHost || user?.role === 'super_admin' || viewerIsCohost);
   const [cohostBusy, setCohostBusy] = useState<string | null>(null);
   const toggleCohost = async (targetUserId: string, currentlyCohost: boolean) => {
     setCohostBusy(targetUserId);

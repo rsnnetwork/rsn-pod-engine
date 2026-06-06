@@ -1,6 +1,6 @@
 import { test, expect, chromium, Browser, Page, BrowserContext } from '@playwright/test';
 import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers/auth';
-import { createPod, addPodMember, createSession, registerForSession } from '../helpers/api';
+import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
 
 // HEADED smoke for S16 against PRODUCTION — co-host management on the EVENT
 // DETAIL page (Ali, 6 Jun: "we need co-host pre event here on this page too").
@@ -118,6 +118,19 @@ test('event-page co-host: phone-width pre-event assign → live host powers → 
     expect(gone, 'P1 loses the Control Center live after the event-page demote').toBe(true);
   }
   console.log('  ✓ event-page demote stripped P1’s host surface live (REST → socket fanout)');
+
+  // S16.1 (Ali) — once the event is COMPLETED the toggle must disappear
+  // ("event is completed! why still promote to co-host button is here").
+  await endSession(host, sess.id);
+  await hostPg.page.reload({ waitUntil: 'commit' }).catch(() => {});
+  await expect(hostPg.page.getByText('Completed', { exact: true }).first(),
+    'event shows Completed').toBeVisible({ timeout: 20_000 });
+  // Rows render, toggle does not.
+  await expect(hostPg.page.getByText(p1.displayName, { exact: false }).first(),
+    'participant rows still render post-event').toBeVisible({ timeout: 15_000 });
+  const staleToggles = await hostPg.page.locator('button[aria-label*="co-host"]').count();
+  expect(staleToggles, 'NO co-host toggles on a completed event').toBe(0);
+  console.log('  ✓ S16.1: completed event shows no co-host toggles');
 
   for (const s of [hostPg, p1Pg]) { await s.context.close().catch(() => {}); }
   console.log('✓ S16 smoke complete: event-page co-host management browser-proven (phone width)');

@@ -59,6 +59,12 @@ describe('S16 — REST cohost mutation routes', () => {
     expect(fn).toMatch(/TARGET_IS_DIRECTOR/);
   });
 
+  it('S16.1 — refuses co-host changes on a finished event (SESSION_OVER)', () => {
+    const fn = sliceFn(routesSrc(), 'async function mutateSessionCohost');
+    expect(fn).toMatch(/session\.status === SessionStatus\.COMPLETED \|\| session\.status === SessionStatus\.CANCELLED/);
+    expect(fn).toMatch(/SESSION_OVER/);
+  });
+
   it('mirrors the socket side effects: cohost event + permissions + roster + plan repair', () => {
     const fn = sliceFn(routesSrc(), 'async function mutateSessionCohost');
     expect(fn).toMatch(/'cohost:assigned'/);
@@ -108,9 +114,10 @@ describe('S16 — SessionDetailPage UI', () => {
     expect(src).toMatch(/invalidateQueries\(\{ queryKey: \['session-participants', sessionId\] \}\)/);
   });
 
-  it('toggle is gated on acting hosts and hidden on self', () => {
+  it('toggle is gated on acting hosts, hidden on self, and hidden once the event is over (S16.1)', () => {
     const src = detailSrc();
-    expect(src).toMatch(/canManageCohosts = isHost \|\| user\?\.role === 'super_admin' \|\| viewerIsCohost/);
+    expect(src).toMatch(/canManageCohosts = !sessionOver && \(isHost \|\| user\?\.role === 'super_admin' \|\| viewerIsCohost\)/);
+    expect(src).toMatch(/sessionOver = session\?\.status === 'completed' \|\| session\?\.status === 'cancelled'/);
     expect(src).toMatch(/canManageCohosts && p\.userId !== user\?\.id/);
   });
 
