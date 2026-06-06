@@ -8218,3 +8218,13 @@ Round-3 b1 note: no rating forms after round 3 was BY DESIGN - the room lived 29
 **S21 (222279c) - roster hold during the viewers own reconnect.** Hosts LiveKit connection renegotiated under the 12-browser load; grid flashed "0 participants + 1 host" for 2-4s. LobbyMosaic now freezes the last good roster as passive placeholder tiles under an amber Reconnecting badge while connectionState != Connected (hard cap 15s, atomic swap to fresh truth on recovery; normal joins/leaves untouched). LiveKitPresenceSync holds the published roster the same way so counters/drawer dont flash 0. Prod smoke: 3 tiles -> network cut -> held grid (3 placeholders + badge) -> recovery. Meet Again Rate formula CONFIRMED by Ali: their-yes / people-met.
 
 **S22 - DM lock reasons visible.** Server was already the gate (sendMessage re-runs canMessage; 403 per reason). The disabled Message buttons relied on native title tooltips - invisible on touch. The reason now renders as text under the button ("DMs unlock when you both say meet again" / "DMs unlock after you meet at an event"). Gate exceptions pending Alis call: grandfathered threads + admin bypass.
+
+---
+
+## 2026-06-06 - S23-S24: trio-leave UX + the End-Round-ended-my-event chain (live-test bb)
+
+**S23 (06adda7):** trio member pressing Back to Main Room now shows survivors an ~8s in-room banner (data-testid room-notice) instead of a missable 3s toast, and removes the leaver from currentPartners so the grid reflows to the pair layout (isTrio derives from currentPartners.length - pre-fix the grid kept a hole).
+
+**S24 (06adda7) - root-cause chain proven from bbs DB rows + code lines:** the host-reconnect dashboard replay (participant-flow ~line 800) omitted isManual AND fires on EVERY host page load/refresh/reconnect in any live state. After creating a manual room, any reconnect overwrote the dashboard with unlabelled rooms -> active manual room classified as an algorithm round -> End Round button rendered -> its no-endEvent press fell through handleHostEnds completion path -> EVENT COMPLETED mid-test; the manual match dangled active in the corpse. Three locks: replay now labels rooms like the canonical builder; plain End Round REFUSES with NO_ACTIVE_ROUND when no algorithm round runs (only endEvent:true reaches completion - stale UI is now harmless); completeSession closes any still-active matches. Smoke (52.9s, prod): banner + reflow + host-reload keeps manual label + refusal frame + event survives + completion closes the room. Note: Alis S21 hold was NOT the cause (different data stream; the replay bug predates it by weeks) - his wifi-toggle test exposed it.
+
+OPEN per Ali: minimum-2 rule for manual rooms? DM gate exceptions (grandfathered threads / admin bypass) keep-or-remove?
