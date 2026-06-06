@@ -169,13 +169,23 @@ export default function PublicProfilePage() {
                   <MessageSquare className="h-3.5 w-3.5 mr-1.5" /> Message
                 </Button>
               ) : cantMessageReason === 'not_mutual' ? (
-                <Button size="sm" variant="ghost" disabled className="text-xs cursor-not-allowed" title="DMs unlock when you both say 'meet again'">
-                  <MessageSquare className="h-3.5 w-3.5 mr-1.5" /> Message — meet again first
-                </Button>
+                // S22 (Ali, 6 Jun) — the WHY must be VISIBLE, not only a
+                // native title tooltip (which needs a long hover and never
+                // fires on touch devices). Server enforcement lives in
+                // dm.service sendMessage → canMessage(); this is display.
+                <div className="flex flex-col items-center gap-1">
+                  <Button size="sm" variant="ghost" disabled className="text-xs cursor-not-allowed" title="DMs unlock when you both say 'meet again'">
+                    <MessageSquare className="h-3.5 w-3.5 mr-1.5" /> Message — meet again first
+                  </Button>
+                  <span className="text-[11px] text-gray-400">DMs unlock when you both say “meet again”</span>
+                </div>
               ) : cantMessageReason === 'no_encounter' ? (
-                <Button size="sm" variant="ghost" disabled className="text-xs cursor-not-allowed" title="DMs unlock after you share a room in an event">
-                  <MessageSquare className="h-3.5 w-3.5 mr-1.5" /> Message — meet first
-                </Button>
+                <div className="flex flex-col items-center gap-1">
+                  <Button size="sm" variant="ghost" disabled className="text-xs cursor-not-allowed" title="DMs unlock after you meet at an event">
+                    <MessageSquare className="h-3.5 w-3.5 mr-1.5" /> Message — meet first
+                  </Button>
+                  <span className="text-[11px] text-gray-400">DMs unlock after you meet at an event</span>
+                </div>
               ) : null}
             </div>
           )}
