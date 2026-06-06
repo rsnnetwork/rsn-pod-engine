@@ -8246,3 +8246,13 @@ OPEN per Ali: minimum-2 rule for manual rooms? DM gate exceptions (grandfathered
 Live test: host pressed Start with 3 waiting; one participants socket had silently dropped out of sessionRoom, never heard the room-only session:status_changed, and sat on "waiting for host" until manual refresh. Same class as No. 11 (23 May, host missed session:completed). NOT caused by todays slices - the start broadcast was room-only since the original flow.
 
 Two layers: both start paths (socket + REST) also fan LOBBY_OPEN per participant via userRoom (No. 11 pattern); PreLobbyWaitingRoom polls GET /sessions/:id/state every 10s (server truth, socket-independent) and opens the gate itself. Smoke (28.8s, prod): page deafened via same-user displacement (the in-the-wild shape) -> healthy peer entered 1s after Start, DEAF page entered 5s after Start, no refresh.
+
+---
+
+## 2026-06-07 - S27: stuck-at-start eliminated, all edge cases (1859d2f)
+
+alihammza (mobile, event v1) hit the half-state S26 left possible: the waiting-room poll flipped only the status flag, so a phone with a ZOMBIE websocket (background kill, undetected until ping timeout - all socket emits silently swallowed, including the resync token rail and the 30s belt) landed in a tokenless lobby: Main Room shell, no video, until refresh.
+
+S27 = full convergence on socket-independent rails: the poll applies the whole REST snapshot atomically + emits session:resync (works on unseated sockets) + REST-mints the lobby token via POST /sessions/:id/token (works with ZERO functional sockets); the 30s tokenless-lobby belt gets the same REST mint (was riding the dead websocket only) and is gated off pre-start sessions.
+
+Matrix smoke (44.3s, prod), "entered" = video grid LIVE: A healthy 6s; B broadcast-deaf socket (same-user displacement, alihammzas shape) 6s, no refresh; C network dead across Start then restored - 6s after restoration. Stuck-at-start is structurally impossible: 4 independent delivery rails (room broadcast, per-user fan-out, 10s REST poll w/ full convergence, 30s belt w/ REST token), any one suffices.
