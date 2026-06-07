@@ -75,6 +75,24 @@ describe('P2-4 — host dashboard pushes only on change', () => {
   });
 });
 
+describe('Bug② — a departed-but-was-matched person is not counted "not matched"', () => {
+  const serverSrc3 = (rel: string) =>
+    nodeFs.readFileSync(nodePath.join(__dirname, '../../', rel), 'utf8');
+
+  it('host dashboard byeParticipants unions departed_user_ids', () => {
+    const src = serverSrc3('services/orchestration/handlers/matching-flow.ts');
+    expect(src).toMatch(/for \(const uid of \(m\.departedUserIds \?\? \[\]\)\) matchedUserIds\.add\(uid\)/);
+  });
+  it('match-preview bye list unions departed_user_ids', () => {
+    const src = serverSrc3('services/orchestration/handlers/matching-flow.ts');
+    expect(src).toMatch(/\.\.\.\(m\.departedUserIds \?\? \[\]\),/);
+  });
+  it('the /plan event-strip bye_count CTE unions departed_user_ids', () => {
+    const src = serverSrc3('routes/sessions.ts');
+    expect(src).toMatch(/UNION\s*SELECT m\.round_number, unnest\(m\.departed_user_ids\) AS user_id/);
+  });
+});
+
 describe('P2-2 — notification poll pauses inside live events', () => {
   // ~240 useless /notifications requests per user per 2h event; the socket
   // listener keeps the badge live, and leaving the event resumes the poll.

@@ -1145,7 +1145,14 @@ export async function sendMatchPreview(
   // the placeholder bug ("Not matched: User, User") was caused by missing
   // display names. We re-fetch names for any bye-only users not already in
   // nameMap so they always render with a real label.
-  const matchedIds = new Set(matches.flatMap(m => [m.participantAId, m.participantBId, ...(m.participantCId ? [m.participantCId] : [])]));
+  // Bug② — count departed-but-was-matched people as matched (union
+  // departed_user_ids), same as the live dashboard; a preview is usually
+  // pre-departure so this is normally a no-op, but stays correct if a
+  // re-match preview is shown for a round that already had a departure.
+  const matchedIds = new Set(matches.flatMap(m => [
+    m.participantAId, m.participantBId, ...(m.participantCId ? [m.participantCId] : []),
+    ...(m.departedUserIds ?? []),
+  ]));
   let byeUserIds = allParticipants.rows.map(p => p.user_id).filter(uid => !matchedIds.has(uid));
   // 27 May — "Not matched: X" must only list people actually in the main room.
   // A registered-but-absent participant (accepted, never joined / here-then-left)
@@ -1493,12 +1500,17 @@ async function emitHostDashboardImmediate(io: SocketServer, sessionId: string): 
         };
       });
 
-    // Find bye participants (matched to nobody)
+    // Find bye participants (matched to nobody). Bug② (2026-06-08) — a person
+    // who was in a match and clicked "Back to Main Room" is removed from the
+    // slots but recorded in departed_user_ids; they WERE matched this round.
+    // Union departed_user_ids so they are NOT shown in the host's "Not matched
+    // this round" banner — only a genuine bye (never placed) belongs there.
     const matchedUserIds = new Set<string>();
     for (const m of matches) {
       if (m.participantAId) matchedUserIds.add(m.participantAId);
       if (m.participantBId) matchedUserIds.add(m.participantBId);
       if (m.participantCId) matchedUserIds.add(m.participantCId);
+      for (const uid of (m.departedUserIds ?? [])) matchedUserIds.add(uid);
     }
 
     const byeParticipants: { userId: string; displayName: string }[] = [];

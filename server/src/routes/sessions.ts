@@ -948,6 +948,15 @@ router.get(
            FROM matches m
            WHERE m.session_id = $1 AND m.status NOT IN ('cancelled')
              AND COALESCE(m.is_manual, FALSE) = FALSE
+           -- Bug② (2026-06-08): someone who left a room (Back to Main Room) is
+           -- removed from the slots but kept in departed_user_ids — they WERE
+           -- matched this round. Union them in so the Event Plan strip's
+           -- "N not matched" only counts genuine byes, not voluntary leavers.
+           UNION
+           SELECT m.round_number, unnest(m.departed_user_ids) AS user_id
+           FROM matches m
+           WHERE m.session_id = $1 AND m.status NOT IN ('cancelled')
+             AND COALESCE(m.is_manual, FALSE) = FALSE
          )
          SELECT r.round_number,
                 (SELECT COUNT(*)::text FROM active_participants ap
