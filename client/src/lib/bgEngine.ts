@@ -146,8 +146,11 @@ class BgEngine {
 
   /** Create (once) and return the event camera track. The saved background is
    *  applied CONCURRENTLY — publish immediately; the processed output replaces
-   *  the sender's track the moment it attaches. */
-  ensureTrack(): Promise<LocalVideoTrack | null> {
+   *  the sender's track the moment it attaches.
+   *  @param applySaved re-apply the persisted pref after creation (the
+   *  publisher path wants this; the queue's own build path must NOT — it is
+   *  already executing an apply). */
+  ensureTrack(applySaved = true): Promise<LocalVideoTrack | null> {
     if (this.destroyed) return Promise.resolve(null);
     // Self-heal: if a teardown race ever stopped the track (readyState 'ended'),
     // re-acquire instead of handing rooms a dead camera for the rest of the event.
@@ -169,9 +172,11 @@ class BgEngine {
             },
           });
           this.track = track;
-          const pref = loadBgPreference();
-          if (pref && pref.mode !== 'disabled' && (await isBackgroundSupported())) {
-            void this.apply(pref); // fire-and-forget — never blocks publish
+          if (applySaved) {
+            const pref = loadBgPreference();
+            if (pref && pref.mode !== 'disabled' && (await isBackgroundSupported())) {
+              void this.apply(pref); // fire-and-forget — never blocks publish
+            }
           }
           return track;
         } catch (err) {
@@ -237,7 +242,12 @@ class BgEngine {
   // ── executor (queue-serialized; never call directly) ─────────────────────
 
   private async execBuild(pref: BgPreference): Promise<void> {
-    const track = this.track;
+    // A click can land before the camera exists (page still booting, publisher
+    // not yet connected). The OLD hook remembered the choice for later; the
+    // engine goes further — acquire the camera now (deduped with the
+    // publisher's ensureTrack via the same promise) and proceed. Without this
+    // the user's first click silently failed with bg_no_track.
+    const track = this.track ?? await this.ensureTrack(false);
     if (!track) throw new Error('bg_no_track');
     const mod = await loadBgProcessors();
     if (!mod) throw new Error('bg_module_unavailable');

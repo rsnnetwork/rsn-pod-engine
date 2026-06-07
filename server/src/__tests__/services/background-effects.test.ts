@@ -49,6 +49,13 @@ describe('Background effects — event-scoped engine wiring', () => {
     expect(vr).not.toMatch(/unpublishTrack\(pub\.track\)/);
   });
 
+  it('a click before the camera exists acquires it instead of failing', () => {
+    // bg-smoke on prod caught the gap: apply → execBuild with no track threw
+    // bg_no_track and the user's first click was silently lost. The build now
+    // self-acquires (deduped with the publisher via the same trackPromise).
+    expect(engine).toMatch(/this\.track \?\? await this\.ensureTrack\(false\)/);
+  });
+
   it('applies are serialized through the core queue with switchTo reuse', () => {
     expect(engine).toMatch(/createApplyQueue/);
     expect(engine).toMatch(/switchTo/);
