@@ -115,10 +115,16 @@ describe('Background effects — event-scoped engine wiring', () => {
     expect(bg).toMatch(/resolveAssetPaths/);
   });
 
-  it('UI is capability-gated at runtime, not hard-wired to the flag', () => {
-    expect(bg).toMatch(/supportsModernBackgroundProcessors/);
+  it('UI is capability-gated at runtime on the FALLBACK-inclusive check (mobile)', () => {
+    // Bug① (2026-06-08) — gating on supportsModernBackgroundProcessors hid the
+    // button on iOS Safari / some Android. The gate now accepts the canvas
+    // fallback; the engine runs non-modern devices at the lightest profile.
+    expect(bg).toMatch(/isBackgroundSupported[\s\S]{0,400}supportsBackgroundProcessors\(\)/);
+    expect(bg).not.toMatch(/_supported = typeof mod\.supportsModernBackgroundProcessors/);
     expect(lobby).toMatch(/bg\.supported/);
     expect(vr).toMatch(/bg\.supported/);
+    // engine still detects the modern API for the adaptive profile (not the gate)
+    expect(engine).toMatch(/modernApi/);
   });
 
   it('a transient module-load failure never hides the feature for the session', () => {

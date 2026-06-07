@@ -81,9 +81,14 @@ export function loadBgProcessors(): Promise<BgModule | null> {
 }
 
 let _supported: boolean | undefined;
-/** True only when the flag is on AND the browser supports the modern processor.
- *  A GENUINE capability answer is cached (it can't change within a session);
- *  a module-load failure is not an answer — it stays uncached so a later
+/** True when the flag is on AND the browser can run the processor AT ALL —
+ *  modern (MediaStreamTrackProcessor, Chrome/Edge) OR the canvas.captureStream
+ *  FALLBACK (iOS Safari, older Android). Gating on the modern check alone hid
+ *  the BG button entirely on mobile (Ali, 2026-06-08). The fallback path is
+ *  heavier (main-thread RAF), so the engine runs it at the lightest adaptive
+ *  profile and the never-freeze ladder still guards it.
+ *  A GENUINE capability answer is cached (can't change within a session);
+ *  a module-load failure is NOT an answer — it stays uncached so a later
  *  probe can retry once the network recovers. */
 export async function isBackgroundSupported(): Promise<boolean> {
   if (!BACKGROUND_EFFECTS_ENABLED) return false;
@@ -91,8 +96,8 @@ export async function isBackgroundSupported(): Promise<boolean> {
   const mod = await loadBgProcessors();
   if (!mod) return false; // do NOT cache — transient load failure
   try {
-    _supported = typeof mod.supportsModernBackgroundProcessors === 'function'
-      ? mod.supportsModernBackgroundProcessors()
+    _supported = typeof mod.supportsBackgroundProcessors === 'function'
+      ? mod.supportsBackgroundProcessors()
       : false;
   } catch {
     _supported = false;
