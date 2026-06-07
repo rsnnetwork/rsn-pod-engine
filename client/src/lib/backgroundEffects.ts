@@ -67,24 +67,32 @@ export function isCustomActive(current: BgPreference): boolean {
 type BgModule = typeof import('@livekit/track-processors');
 
 let _modPromise: Promise<BgModule | null> | null = null;
-/** Lazy-load the heavy processor module once. */
+/** Lazy-load the heavy processor module once. A FAILED load is NOT cached —
+ *  one flaky chunk fetch must not erase the feature for the whole session
+ *  (observed 2026-06-07: fully-working lobby, BG button permanently missing). */
 export function loadBgProcessors(): Promise<BgModule | null> {
   if (!_modPromise) {
-    _modPromise = import(/* @vite-ignore */ '@livekit/track-processors').catch(() => null);
+    _modPromise = import(/* @vite-ignore */ '@livekit/track-processors').catch(() => {
+      _modPromise = null; // transient — let the next caller retry the import
+      return null;
+    });
   }
   return _modPromise;
 }
 
 let _supported: boolean | undefined;
 /** True only when the flag is on AND the browser supports the modern processor.
- *  Cached — the answer can't change within a session. */
+ *  A GENUINE capability answer is cached (it can't change within a session);
+ *  a module-load failure is not an answer — it stays uncached so a later
+ *  probe can retry once the network recovers. */
 export async function isBackgroundSupported(): Promise<boolean> {
   if (!BACKGROUND_EFFECTS_ENABLED) return false;
   if (_supported !== undefined) return _supported;
   const mod = await loadBgProcessors();
+  if (!mod) return false; // do NOT cache — transient load failure
   try {
-    _supported = !!mod && typeof mod.supportsModernBackgroundProcessors === 'function'
-      ? mod!.supportsModernBackgroundProcessors()
+    _supported = typeof mod.supportsModernBackgroundProcessors === 'function'
+      ? mod.supportsModernBackgroundProcessors()
       : false;
   } catch {
     _supported = false;

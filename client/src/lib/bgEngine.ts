@@ -105,10 +105,24 @@ class BgEngine {
         },
       },
     );
-    void isBackgroundSupported().then((s) => {
-      this.patch({ supported: s });
-      if (s) void prewarmBackground(); // HTTP-cache wasm+model early
-    });
+    void this.probeSupport();
+  }
+
+  /** Capability probe with backoff. A transient module-load failure (flaky
+   *  network at page load) must not hide the BG button for the whole event —
+   *  isBackgroundSupported only caches GENUINE answers, so retrying converges
+   *  the moment the chunk fetch succeeds. */
+  private async probeSupport(attempt = 0): Promise<void> {
+    if (this.destroyed) return;
+    const s = await isBackgroundSupported();
+    if (s) {
+      this.patch({ supported: true });
+      void prewarmBackground(); // HTTP-cache wasm+model early
+      return;
+    }
+    if (attempt < 6) {
+      setTimeout(() => { void this.probeSupport(attempt + 1); }, 2000 * (attempt + 1));
+    }
   }
 
   // ── public state for React ────────────────────────────────────────────────

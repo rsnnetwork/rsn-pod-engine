@@ -114,6 +114,15 @@ describe('Background effects — event-scoped engine wiring', () => {
     expect(vr).toMatch(/bg\.supported/);
   });
 
+  it('a transient module-load failure never hides the feature for the session', () => {
+    // loadBgProcessors must NOT cache a rejected import (one flaky chunk fetch
+    // erased the BG button until hard refresh — found by the 6-browser smoke,
+    // 2026-06-07), and the engine probe must retry with backoff.
+    expect(bg).toMatch(/_modPromise = null; \/\/ transient/);
+    expect(bg).toMatch(/if \(!mod\) return false; \/\/ do NOT cache/);
+    expect(engine).toMatch(/probeSupport\(attempt \+ 1\)/);
+  });
+
   it('build self-hosts the wasm via a copy script hooked into the build', () => {
     const pkg = clientRoot('package.json');
     expect(pkg).toMatch(/copy-mediapipe\.mjs/);
