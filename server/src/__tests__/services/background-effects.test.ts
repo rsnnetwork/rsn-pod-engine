@@ -88,21 +88,23 @@ describe('Background effects — event-scoped engine wiring', () => {
     expect(engine).toMatch(/lastDegradeToastAt/); // debounced so a flapping device can't spam
   });
 
-  it('Bug④ — confidence-mask path is flag-gated, modern-API-only, code-split, and reuses the library wrapper', () => {
+  it('Bug④ — no-flash transformer is flag-gated, modern-API-only, code-split, library-wrapped, same proven mask', () => {
     const flags = clientSrc('lib/featureFlags.ts');
-    const conf = clientSrc('lib/bgConfidenceTransformer.ts');
-    expect(flags).toMatch(/BG_CONFIDENCE_MASK = true/);
+    const nf = clientSrc('lib/bgNoFlashTransformer.ts');
+    expect(flags).toMatch(/BG_NOFLASH_TRANSFORMER = true/);
     // gated on flag AND modern API (mobile/fallback stay on stock)
-    expect(engine).toMatch(/BG_CONFIDENCE_MASK && this\.modernApi/);
+    expect(engine).toMatch(/BG_NOFLASH_TRANSFORMER && this\.modernApi/);
     // dynamically imported so the heavy transformer/mediapipe stays code-split
-    expect(engine).toMatch(/await import\('\.\/bgConfidenceTransformer'\)/);
+    expect(engine).toMatch(/await import\('\.\/bgNoFlashTransformer'\)/);
     // built on the library's exported wrapper — only the transformer is vendored
     expect(engine).toMatch(/new mod\.BackgroundProcessorWrapper\(/);
-    // the two deltas: confidence mask + no first-frame raw flash
-    expect(conf).toMatch(/outputConfidenceMasks: true/);
-    expect(conf).toMatch(/outputCategoryMask: false/);
-    expect(conf).toMatch(/result\.confidenceMasks\?\.\[0\]/);
-    expect(conf).not.toMatch(/controller\.enqueue\(frame\.clone\(\)\)/); // no raw-flash enqueue
+    // SAME proven category mask as stock (compositing unchanged) ...
+    expect(nf).toMatch(/outputCategoryMask: true/);
+    expect(nf).toMatch(/result\.categoryMask\.getAsWebGLTexture\(\)/);
+    // ... the ONLY change is dropping the first-frame raw-clone flash
+    expect(nf).not.toMatch(/controller\.enqueue\(frame\.clone\(\)\)/);
+    // confidence-mask path stays parked (would composite inverted)
+    expect(nf).not.toMatch(/outputConfidenceMasks: true/);
   });
 
   it('custom uploads persist via IndexedDB sentinel (refresh-survivable)', () => {

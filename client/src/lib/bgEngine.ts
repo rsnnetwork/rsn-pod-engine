@@ -1,4 +1,4 @@
-﻿// Event-scoped background engine â€” the Zoom model. ONE camera LocalVideoTrack +
+// Event-scoped background engine â€” the Zoom model. ONE camera LocalVideoTrack +
 // ONE MediaPipe pipeline for the WHOLE event; each room (main / breakout /
 // manual) publishes the same already-processed track, so:
 //   â€¢ room transitions never rebuild segmentation (the 3.5â€“8.8s cold cost and
@@ -28,7 +28,7 @@ import {
 } from './bgEngineCore';
 import { createFrameHealthMonitor, type FrameStats } from './bgFrameHealth';
 import { loadBgPreference, saveBgPreference, type BgPreference } from './bgPreference';
-import { BG_CONFIDENCE_MASK } from './featureFlags';
+import { BG_NOFLASH_TRANSFORMER } from './featureFlags';
 import { useToastStore } from '@/stores/toastStore';
 import { CUSTOM_BG_URL, loadCustomBg, saveCustomBg } from './bgUploadStore';
 
@@ -268,13 +268,13 @@ class BgEngine {
       this.lastFrameAt = Date.now();
       monitor(stats);
     };
-    // Bugâ‘£ â€” desktop (modern API) + flag â†’ vendored confidence-mask transformer
+    // Bugâ‘£ â€” desktop (modern API) + flag â†’ vendored no-flash transformer
     // for accurate, feathered edges and no first-frame flash. Mobile / canvas
     // fallback / flag-off stay on the proven stock BackgroundProcessor. The
     // module is dynamically imported so the heavy transformer/mediapipe code
     // stays code-split (never in the initial bundle).
-    const proc = (BG_CONFIDENCE_MASK && this.modernApi)
-      ? await this.buildConfidenceProcessor(mod, pref, assetPaths, onFrameProcessed)
+    const proc = (BG_NOFLASH_TRANSFORMER && this.modernApi)
+      ? await this.buildNoFlashProcessor(mod, pref, assetPaths, onFrameProcessed)
       : pref.mode === 'disabled'
         ? mod.BackgroundProcessor({ mode: 'disabled', maxFps: this.profile.maxFps, assetPaths, onFrameProcessed })
         : createBackgroundProcessor(mod, { pref, maxFps: this.profile.maxFps, assetPaths, onFrameProcessed });
@@ -282,22 +282,22 @@ class BgEngine {
     this.processor = proc;
     this.startStallWatchdog();
     bgDebug('pipeline built', pref.mode, 'maxFps', this.profile.maxFps,
-      (BG_CONFIDENCE_MASK && this.modernApi) ? 'confidence' : 'stock');
+      (BG_NOFLASH_TRANSFORMER && this.modernApi) ? 'noflash' : 'stock');
   }
 
   /** Build a BackgroundProcessorWrapper around the vendored confidence-mask
    *  transformer. switchTo/restart/destroy/mode all come from the library's
    *  exported wrapper unchanged â€” only the transformer differs. */
-  private async buildConfidenceProcessor(
+  private async buildNoFlashProcessor(
     mod: any, pref: BgPreference, assetPaths: any, onFrameProcessed: (s: FrameStats) => void,
   ): Promise<any> {
-    const { ConfidenceBackgroundTransformer } = await import('./bgConfidenceTransformer');
+    const { NoFlashBackgroundTransformer } = await import('./bgNoFlashTransformer');
     const tOpts: any = { assetPaths, onFrameProcessed };
     if (pref.mode === 'blur') tOpts.blurRadius = BG_BLUR_RADIUS;
     else if (pref.mode === 'image') tOpts.imagePath = pref.imageUrl;
     else tOpts.backgroundDisabled = true; // passthrough (prewarm)
     return new mod.BackgroundProcessorWrapper(
-      new ConfidenceBackgroundTransformer(tOpts),
+      new NoFlashBackgroundTransformer(tOpts),
       'background-processor',
       { maxFps: this.profile.maxFps },
     );

@@ -1,27 +1,27 @@
 // Vendored, MINIMAL fork of @livekit/track-processors' BackgroundTransformer
-// (Bug④, 2026-06-08). Two deliberate deltas vs the stock transformer; EVERY
+// (Bug④, 2026-06-08). ONE deliberate delta vs the stock transformer; every
 // other line mirrors it so the maintained gl/stream pipeline (VideoTransformer
-// base + ProcessorWrapper, both still imported from the library) is untouched:
+// base + BackgroundProcessorWrapper, both still imported from the library) is
+// untouched, and the mask source is the SAME proven CATEGORY mask the stock
+// path uses — identical compositing, zero edge-quality risk:
 //
-//   1. CONFIDENCE MASK instead of CATEGORY MASK. The stock transformer requests
-//      outputCategoryMask (hard 0/1) and the WebGL composite shader fakes a soft
-//      edge with an 8px box-blur + smoothstep — which spreads the silhouette and
-//      bleeds the real room in around the body. A confidence mask is a true
-//      0..1 per-pixel probability; the SAME shader then feathers a genuinely
-//      accurate edge with no logic change. This is the desktop "sharper edges"
-//      win (Ali's manual test, image 1).
+//   NO FIRST-FRAME RAW FLASH. The stock transformer enqueues an UNPROCESSED
+//   clone of the very first frame (to mask cold model-load) — which briefly
+//   reveals the user's real background on apply (Ali's manual test, image 1).
+//   We prewarm the model, so the first frame is processed normally; the raw
+//   enqueue is dropped.
 //
-//   2. NO FIRST-FRAME RAW FLASH. The stock transformer enqueues an UNPROCESSED
-//      clone of the very first frame (to avoid a solid-colour flash during cold
-//      model load) — which briefly reveals the user's real background on apply.
-//      We prewarm the model, so the first frame can be processed normally; the
-//      raw enqueue is dropped.
+// NOTE (confidence mask, parked): switching to outputConfidenceMasks for
+// genuinely accurate feathered edges was prototyped and REJECTED in pre-prod
+// testing — the selfie confidence mask is person-probability (high on the
+// person) but the library's composite shader treats HIGH mask = background, so
+// it composites inverted (replaces the person, keeps the room). Correcting it
+// needs a per-frame CPU mask inversion (perf cost) or forking the WebGL shader
+// (setupWebGL) — a larger, riskier vendor deferred to its own effort. Until
+// then the edge quality stays at the stock model's level (= Google Meet basic).
 //
-// Flag-gated (featureFlags.BG_CONFIDENCE_MASK) and used ONLY on the modern API
-// path; mobile / fallback / flag-off keep the stock BackgroundProcessor. If the
-// confidence mask ever proves inverted on some model build, flip
-// CONFIDENCE_MASK_INVERT — the shader convention (high mask = background) is the
-// same one the category mask satisfied.
+// Flag-gated (featureFlags.BG_NOFLASH_TRANSFORMER) and used ONLY on the modern
+// API path; mobile / canvas fallback / flag-off keep the stock BackgroundProcessor.
 import { VideoTransformer } from '@livekit/track-processors';
 import { FilesetResolver, ImageSegmenter } from '@mediapipe/tasks-vision';
 import type * as vision from '@mediapipe/tasks-vision';
@@ -34,7 +34,7 @@ export interface FrameProcessingStats {
   filterTimeMs: number;
 }
 
-export type ConfidenceBackgroundOptions = {
+export type NoFlashBackgroundOptions = {
   blurRadius?: number;
   imagePath?: string;
   backgroundDisabled?: boolean;
@@ -43,21 +43,15 @@ export type ConfidenceBackgroundOptions = {
   onFrameProcessed?: (stats: FrameProcessingStats) => void;
 };
 
-/** The selfie confidence mask is foreground-probability; the stock shader's
- *  convention (validated by the category-mask path) treats the sampled value
- *  such that this orientation composites correctly. If a future model build
- *  inverts it (person replaced instead of background), set this true. */
-const CONFIDENCE_MASK_INVERT = false;
-
-export class ConfidenceBackgroundTransformer extends VideoTransformer<ConfidenceBackgroundOptions> {
+export class NoFlashBackgroundTransformer extends VideoTransformer<NoFlashBackgroundOptions> {
   imageSegmenter?: vision.ImageSegmenter;
   segmentationResults: vision.ImageSegmenterResult | undefined;
   backgroundImageAndPath: { imageData: ImageBitmap; path: string } | null = null;
-  options: ConfidenceBackgroundOptions;
+  options: NoFlashBackgroundOptions;
   segmentationTimeMs = 0;
   isFirstFrame = true;
 
-  constructor(opts: ConfidenceBackgroundOptions) {
+  constructor(opts: NoFlashBackgroundOptions) {
     super();
     this.options = opts;
     this.update(opts);
@@ -81,9 +75,10 @@ export class ConfidenceBackgroundTransformer extends VideoTransformer<Confidence
       },
       canvas: this.canvas as any,
       runningMode: 'VIDEO',
-      // DELTA 1 — soft per-pixel probability instead of the hard category mask.
-      outputCategoryMask: false,
-      outputConfidenceMasks: true,
+      // SAME proven mask source as the stock transformer (correct shader
+      // orientation). Confidence mask is parked — see file header.
+      outputCategoryMask: true,
+      outputConfidenceMasks: false,
     });
 
     if (this.options?.imagePath) {
@@ -139,10 +134,10 @@ export class ConfidenceBackgroundTransformer extends VideoTransformer<Confidence
       this.canvas.width = frame.displayWidth;
       this.canvas.height = frame.displayHeight;
 
-      // DELTA 2 — the stock transformer enqueues an UNPROCESSED clone here on
-      // the first frame (flash of the real room). We prewarm the model, so we
-      // process the first frame normally instead. isFirstFrame is kept only to
-      // mirror the field; no raw enqueue.
+      // DELTA — the stock transformer enqueues an UNPROCESSED clone here on the
+      // first frame (flash of the real room). We prewarm the model, so process
+      // the first frame normally instead. isFirstFrame kept only to mirror the
+      // field; no raw enqueue.
       this.isFirstFrame = false;
 
       const filterStartTimeMs = performance.now();
@@ -152,9 +147,7 @@ export class ConfidenceBackgroundTransformer extends VideoTransformer<Confidence
           this.imageSegmenter?.segmentForVideo(frame, segStart, (result) => {
             this.segmentationTimeMs = performance.now() - segStart;
             this.segmentationResults = result;
-            // DELTA 1 — feed the confidence mask (soft 0..1) to the same gl path.
-            const mask = result.confidenceMasks?.[0];
-            if (mask) this.gl?.updateMask(mask.getAsWebGLTexture());
+            if (result.categoryMask) this.gl?.updateMask(result.categoryMask.getAsWebGLTexture());
             result.close();
             resolve();
           });
@@ -186,7 +179,7 @@ export class ConfidenceBackgroundTransformer extends VideoTransformer<Confidence
     }
   }
 
-  async update(opts: ConfidenceBackgroundOptions) {
+  async update(opts: NoFlashBackgroundOptions) {
     this.options = { ...this.options, ...opts };
     this.gl?.setBlurRadius(opts.blurRadius ?? null);
     if (opts.imagePath) {
@@ -197,7 +190,3 @@ export class ConfidenceBackgroundTransformer extends VideoTransformer<Confidence
     this.gl?.setBackgroundDisabled(opts.backgroundDisabled ?? false);
   }
 }
-
-// Referenced so the invert constant isn't tree-shaken before it's wired into a
-// future mask-orientation toggle; documents the known escape hatch.
-export const CONFIDENCE_MASK_INVERT_ACTIVE = CONFIDENCE_MASK_INVERT;
