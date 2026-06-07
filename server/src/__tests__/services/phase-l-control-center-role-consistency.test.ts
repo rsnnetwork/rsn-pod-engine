@@ -82,11 +82,12 @@ describe('Phase L — control center role consistency (item 6)', () => {
     const hostControlsSrc = readClient('features/live/HostControls.tsx');
 
     it('LiveSessionPage mounts HostControls only when isHost', () => {
-      // The exact form: `{isHost && phase !== 'complete' && <HostControls`
+      // Form: `{isHost && phase !== 'complete' && (<SectionErrorBoundary…><HostControls`
       // The "phase !== 'complete'" extra guard is intentional — we hide host
       // UI after the event ends. The isHost gate is what guarantees
-      // non-host roles never see the host UI on the live page.
-      expect(liveSrc).toMatch(/\{\s*isHost\s+&&[\s\S]{0,80}<HostControls/);
+      // non-host roles never see the host UI on the live page. (Window widened
+      // 2026-06-08: HostControls is now wrapped in an error boundary.)
+      expect(liveSrc).toMatch(/\{\s*isHost\s+&&[\s\S]{0,800}<HostControls/);
     });
 
     it('HostControlCenter is only imported by HostControls (cannot bypass the isHost gate)', () => {

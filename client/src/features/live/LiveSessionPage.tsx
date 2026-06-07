@@ -559,7 +559,17 @@ export default function LiveSessionPage() {
       </div>
 
       {/* Host controls visible in all active phases */}
-      {isHost && phase !== 'complete' && <HostControls sessionId={sessionId} />}
+      {isHost && phase !== 'complete' && (
+        // Wrapped in an error boundary (2026-06-08 audit): every other live
+        // subtree (Lobby/Video/Rating/Chat) is boundaried, but HostControls —
+        // which renders the EventPlanStrip + host dashboard off live socket
+        // payloads — was not, so a single throw there white-screened the host
+        // mid-event and they lost all event control. The boundary degrades to
+        // a localized fallback instead.
+        <SectionErrorBoundary name="Host controls">
+          <HostControls sessionId={sessionId} />
+        </SectionErrorBoundary>
+      )}
     </div>
   );
 }

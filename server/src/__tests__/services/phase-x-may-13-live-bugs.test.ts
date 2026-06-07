@@ -483,7 +483,10 @@ describe('Phase X — 13 May live-test bug fixes', () => {
     });
 
     it('host controls already gated by phase !== complete (pre-existing)', () => {
-      expect(src).toMatch(/isHost && phase !== 'complete' && <HostControls/);
+      // 2026-06-08: HostControls is now wrapped in a SectionErrorBoundary, so
+      // <HostControls no longer sits immediately after the gate — assert the
+      // gate condition + that HostControls renders within it.
+      expect(src).toMatch(/isHost && phase !== 'complete' &&[\s\S]{0,800}<HostControls/);
     });
   });
 });
