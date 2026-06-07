@@ -352,15 +352,25 @@ export async function transitionToRound(
       );
     }
 
-    // Step 4: Batch-fetch ALL display names in one query (not per-match)
+    // Step 4: Batch-fetch ALL display names in one query (not per-match).
+    // Isolated in its own try/catch (2026-06-08 audit): names are COSMETIC —
+    // match:assigned falls back to a 'Partner' label without them. Previously a
+    // transient failure of THIS query threw inside transitionToRound and
+    // aborted the entire round start (matches activated but nobody assigned →
+    // everyone stuck). A failure here must never block the round from starting.
     const allPidArray = Array.from(allParticipantIds);
-    const namesResult = allPidArray.length > 0
-      ? await query<{ id: string; displayName: string }>(
-          `SELECT id, display_name AS "displayName" FROM users WHERE id = ANY($1)`,
-          [allPidArray]
-        )
-      : { rows: [] };
-    const globalNameMap = new Map<string, string>(namesResult.rows.map(r => [r.id, r.displayName] as [string, string]));
+    let globalNameMap = new Map<string, string>();
+    try {
+      const namesResult = allPidArray.length > 0
+        ? await query<{ id: string; displayName: string }>(
+            `SELECT id, display_name AS "displayName" FROM users WHERE id = ANY($1)`,
+            [allPidArray]
+          )
+        : { rows: [] };
+      globalNameMap = new Map<string, string>(namesResult.rows.map(r => [r.id, r.displayName] as [string, string]));
+    } catch (err) {
+      logger.warn({ err, sessionId }, 'Round-start name lookup failed — proceeding with fallback labels');
+    }
 
     // Ship C — match:assigned is a pure lifecycle notification now. The token
     // arrives via the snapshot rail (setRoomAssignment above changes canonical
