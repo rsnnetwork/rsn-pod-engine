@@ -1,11 +1,11 @@
-// Event-scoped background engine — the Zoom model. ONE camera LocalVideoTrack +
+﻿// Event-scoped background engine â€” the Zoom model. ONE camera LocalVideoTrack +
 // ONE MediaPipe pipeline for the WHOLE event; each room (main / breakout /
 // manual) publishes the same already-processed track, so:
-//   • room transitions never rebuild segmentation (the 3.5–8.8s cold cost and
+//   â€¢ room transitions never rebuild segmentation (the 3.5â€“8.8s cold cost and
 //     ~300ms/frame warmup jank measured on prod 2026-06-07 happen ONCE)
-//   • persistence is structural — the background IS the track, everywhere,
+//   â€¢ persistence is structural â€” the background IS the track, everywhere,
 //     until the user changes it or closes the browser
-//   • every apply after the first is a switchTo() (measured 244–409ms)
+//   â€¢ every apply after the first is a switchTo() (measured 244â€“409ms)
 // Serialization / latest-wins / watchdog semantics live in bgEngineCore (pure,
 // unit-tested); this shell binds them to livekit-client + track-processors.
 import { createLocalVideoTrack, LocalVideoTrack } from 'livekit-client';
@@ -28,6 +28,7 @@ import {
 } from './bgEngineCore';
 import { createFrameHealthMonitor, type FrameStats } from './bgFrameHealth';
 import { loadBgPreference, saveBgPreference, type BgPreference } from './bgPreference';
+import { BG_CONFIDENCE_MASK } from './featureFlags';
 import { useToastStore } from '@/stores/toastStore';
 import { CUSTOM_BG_URL, loadCustomBg, saveCustomBg } from './bgUploadStore';
 
@@ -49,17 +50,20 @@ function bgDebug(...args: unknown[]): void {
   } catch { /* ignore */ }
 }
 
+function detectModernApi(): boolean {
+  return typeof (window as any).MediaStreamTrackGenerator !== 'undefined'
+    && typeof (window as any).MediaStreamTrackProcessor !== 'undefined';
+}
+
 function detectProfile(): BgProfile {
   const nav = navigator as Navigator & { deviceMemory?: number };
   const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(nav.userAgent)
     || (nav.maxTouchPoints > 1 && /Mac/.test(nav.userAgent)); // iPadOS masquerades as Mac
-  const modernApi = typeof (window as any).MediaStreamTrackGenerator !== 'undefined'
-    && typeof (window as any).MediaStreamTrackProcessor !== 'undefined';
   return pickBgProfile({
     isMobile,
     cores: nav.hardwareConcurrency ?? 4,
     deviceMemoryGB: nav.deviceMemory ?? 8,
-    modernApi,
+    modernApi: detectModernApi(),
   });
 }
 
@@ -69,6 +73,7 @@ class BgEngine {
   private processor: any = null;
   private queue: ApplyQueue;
   private profile: BgProfile = detectProfile();
+  private modernApi: boolean = detectModernApi();
   private reduced = false;
   private listeners = new Set<() => void>();
   private stateCache: BgEngineState;
@@ -76,7 +81,7 @@ class BgEngine {
   private stallTimer: ReturnType<typeof setInterval> | null = null;
   private customUrl: string | null = null; // live object URL for the IDB upload
   private destroyed = false;
-  private lastDegradeToastAt = 0; // Bug③ — debounce the auto-disable toast
+  private lastDegradeToastAt = 0; // Bugâ‘¢ â€” debounce the auto-disable toast
 
   constructor() {
     this.stateCache = {
@@ -100,7 +105,7 @@ class BgEngine {
           bgDebug('apply failed', err);
         },
         onHardFail: (err, pref) => {
-          // A wedged WASM worker — raw camera is the safe state.
+          // A wedged WASM worker â€” raw camera is the safe state.
           bgDebug('apply hard-fail (watchdog)', pref, err);
           this.patch({ current: { mode: 'disabled' }, degraded: true });
           saveBgPreference({ mode: 'disabled' });
@@ -112,8 +117,8 @@ class BgEngine {
 
   /** Capability probe that can never be defeated by the network. Two failure
    *  shapes both used to hide the BG button for the whole event:
-   *    • a REJECTED module import was cached as "unsupported" forever
-   *    • a STALLED import (no timeout on dynamic import) hung the first and
+   *    â€¢ a REJECTED module import was cached as "unsupported" forever
+   *    â€¢ a STALLED import (no timeout on dynamic import) hung the first and
    *      only probe, so no retry ever ran
    *  Now every attempt is timeout-raced and the loop keeps going for the
    *  event's lifetime (genuine-unsupported devices hit the cached answer, so
@@ -122,9 +127,9 @@ class BgEngine {
     if (this.destroyed) return;
     const s = await Promise.race([
       isBackgroundSupported(),
-      new Promise<null>((r) => setTimeout(() => r(null), 8000)), // stalled fetch ⇒ check again later
+      new Promise<null>((r) => setTimeout(() => r(null), 8000)), // stalled fetch â‡’ check again later
     ]);
-    bgDebug('probe attempt', attempt, '→', s === null ? 'stalled' : s);
+    bgDebug('probe attempt', attempt, 'â†’', s === null ? 'stalled' : s);
     if (s) {
       this.patch({ supported: true });
       void prewarmBackground(); // HTTP-cache wasm+model early
@@ -133,7 +138,7 @@ class BgEngine {
     setTimeout(() => { void this.probeSupport(attempt + 1); }, Math.min(15_000, 2000 * (attempt + 1)));
   }
 
-  // ── public state for React ────────────────────────────────────────────────
+  // â”€â”€ public state for React â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   getState(): BgEngineState { return this.stateCache; }
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
@@ -144,20 +149,20 @@ class BgEngine {
     this.listeners.forEach((fn) => fn());
   }
 
-  // ── camera track (one per event) ──────────────────────────────────────────
+  // â”€â”€ camera track (one per event) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   /** Create (once) and return the event camera track. The saved background is
-   *  applied CONCURRENTLY — publish immediately; the processed output replaces
+   *  applied CONCURRENTLY â€” publish immediately; the processed output replaces
    *  the sender's track the moment it attaches.
    *  @param applySaved re-apply the persisted pref after creation (the
-   *  publisher path wants this; the queue's own build path must NOT — it is
+   *  publisher path wants this; the queue's own build path must NOT â€” it is
    *  already executing an apply). */
   ensureTrack(applySaved = true): Promise<LocalVideoTrack | null> {
     if (this.destroyed) return Promise.resolve(null);
     // Self-heal: if a teardown race ever stopped the track (readyState 'ended'),
     // re-acquire instead of handing rooms a dead camera for the rest of the event.
     if (this.track && this.track.mediaStreamTrack?.readyState === 'ended' && !this.track.isMuted) {
-      bgDebug('engine track ended unexpectedly — reacquiring');
+      bgDebug('engine track ended unexpectedly â€” reacquiring');
       this.disposeProcessor();
       this.queue.notePipelineLost(); // reality = raw camera; saved pref re-applies on recreate
       try { this.track.stop(); } catch { /* already dead */ }
@@ -177,7 +182,7 @@ class BgEngine {
           if (applySaved) {
             const pref = loadBgPreference();
             if (pref && pref.mode !== 'disabled' && (await isBackgroundSupported())) {
-              void this.apply(pref); // fire-and-forget — never blocks publish
+              void this.apply(pref); // fire-and-forget â€” never blocks publish
             }
           }
           return track;
@@ -193,7 +198,7 @@ class BgEngine {
 
   getTrack(): LocalVideoTrack | null { return this.track; }
 
-  // ── applies ───────────────────────────────────────────────────────────────
+  // â”€â”€ applies â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   /** User picked a preset / blur / off. Persists on success. */
   async apply(pref: BgPreference): Promise<ApplyResult> {
@@ -216,21 +221,21 @@ class BgEngine {
     return res;
   }
 
-  /** Panel opened — build the pipeline while the user is still choosing, so the
+  /** Panel opened â€” build the pipeline while the user is still choosing, so the
    *  first apply is an instant switchTo instead of a multi-second cold build. */
   prewarmPipeline(): void {
     if (!this.stateCache.supported || !this.track) return;
     void this.queue.prewarm();
   }
 
-  /** Map the persisted/UI pref to what the pipeline runs (IDB sentinel → URL). */
+  /** Map the persisted/UI pref to what the pipeline runs (IDB sentinel â†’ URL). */
   private async resolvePref(
     pref: BgPreference,
   ): Promise<{ runtime: BgPreference; persisted: BgPreference } | null> {
     if (pref.mode === 'image' && pref.imageUrl === CUSTOM_BG_URL) {
       if (!this.customUrl) {
         const blob = await loadCustomBg();
-        if (!blob) return null; // upload gone (cleared storage) — caller treats as failed
+        if (!blob) return null; // upload gone (cleared storage) â€” caller treats as failed
         this.customUrl = URL.createObjectURL(blob);
       }
       return { runtime: { mode: 'image', imageUrl: this.customUrl }, persisted: pref };
@@ -241,12 +246,12 @@ class BgEngine {
     return { runtime: pref, persisted: pref };
   }
 
-  // ── executor (queue-serialized; never call directly) ─────────────────────
+  // â”€â”€ executor (queue-serialized; never call directly) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   private async execBuild(pref: BgPreference): Promise<void> {
     // A click can land before the camera exists (page still booting, publisher
     // not yet connected). The OLD hook remembered the choice for later; the
-    // engine goes further — acquire the camera now (deduped with the
+    // engine goes further â€” acquire the camera now (deduped with the
     // publisher's ensureTrack via the same promise) and proceed. Without this
     // the user's first click silently failed with bg_no_track.
     const track = this.track ?? await this.ensureTrack(false);
@@ -263,23 +268,49 @@ class BgEngine {
       this.lastFrameAt = Date.now();
       monitor(stats);
     };
-    const proc = pref.mode === 'disabled'
-      ? mod.BackgroundProcessor({ mode: 'disabled', maxFps: this.profile.maxFps, assetPaths, onFrameProcessed })
-      : createBackgroundProcessor(mod, { pref, maxFps: this.profile.maxFps, assetPaths, onFrameProcessed });
+    // Bugâ‘£ â€” desktop (modern API) + flag â†’ vendored confidence-mask transformer
+    // for accurate, feathered edges and no first-frame flash. Mobile / canvas
+    // fallback / flag-off stay on the proven stock BackgroundProcessor. The
+    // module is dynamically imported so the heavy transformer/mediapipe code
+    // stays code-split (never in the initial bundle).
+    const proc = (BG_CONFIDENCE_MASK && this.modernApi)
+      ? await this.buildConfidenceProcessor(mod, pref, assetPaths, onFrameProcessed)
+      : pref.mode === 'disabled'
+        ? mod.BackgroundProcessor({ mode: 'disabled', maxFps: this.profile.maxFps, assetPaths, onFrameProcessed })
+        : createBackgroundProcessor(mod, { pref, maxFps: this.profile.maxFps, assetPaths, onFrameProcessed });
     await track.setProcessor(proc);
     this.processor = proc;
     this.startStallWatchdog();
-    bgDebug('pipeline built', pref.mode, 'maxFps', this.profile.maxFps);
+    bgDebug('pipeline built', pref.mode, 'maxFps', this.profile.maxFps,
+      (BG_CONFIDENCE_MASK && this.modernApi) ? 'confidence' : 'stock');
+  }
+
+  /** Build a BackgroundProcessorWrapper around the vendored confidence-mask
+   *  transformer. switchTo/restart/destroy/mode all come from the library's
+   *  exported wrapper unchanged â€” only the transformer differs. */
+  private async buildConfidenceProcessor(
+    mod: any, pref: BgPreference, assetPaths: any, onFrameProcessed: (s: FrameStats) => void,
+  ): Promise<any> {
+    const { ConfidenceBackgroundTransformer } = await import('./bgConfidenceTransformer');
+    const tOpts: any = { assetPaths, onFrameProcessed };
+    if (pref.mode === 'blur') tOpts.blurRadius = BG_BLUR_RADIUS;
+    else if (pref.mode === 'image') tOpts.imagePath = pref.imageUrl;
+    else tOpts.backgroundDisabled = true; // passthrough (prewarm)
+    return new mod.BackgroundProcessorWrapper(
+      new ConfidenceBackgroundTransformer(tOpts),
+      'background-processor',
+      { maxFps: this.profile.maxFps },
+    );
   }
 
   private async execSwitch(pref: BgPreference): Promise<void> {
     const proc = this.processor;
     if (!proc?.switchTo) throw new Error('bg_no_pipeline');
-    // blurRadius must ride along — the library's switchTo default (10) is
+    // blurRadius must ride along â€” the library's switchTo default (10) is
     // visibly weaker than the tuned RSN radius (bg-visual smoke caught this).
     if (pref.mode === 'blur') await proc.switchTo({ mode: 'background-blur', blurRadius: BG_BLUR_RADIUS });
     else if (pref.mode === 'image') await proc.switchTo({ mode: 'virtual-background', imagePath: pref.imageUrl });
-    else await proc.switchTo({ mode: 'disabled' }); // warm passthrough — re-enable stays instant
+    else await proc.switchTo({ mode: 'disabled' }); // warm passthrough â€” re-enable stays instant
   }
 
   private disposeProcessor(): void {
@@ -293,41 +324,41 @@ class BgEngine {
     })();
   }
 
-  // ── safety nets (one pipeline → one set of nets) ─────────────────────────
+  // â”€â”€ safety nets (one pipeline â†’ one set of nets) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   /** Sustained slow frames: lower the SEGMENTATION rate in place via capture
-   *  constraints — works on both the modern and fallback paths, no rebuild. */
+   *  constraints â€” works on both the modern and fallback paths, no rebuild. */
   private stepDownFps(): void {
     if (this.reduced) return;
     this.reduced = true;
-    bgDebug('reduce →', this.profile.reducedFps, 'fps');
+    bgDebug('reduce â†’', this.profile.reducedFps, 'fps');
     void this.track?.mediaStreamTrack
       ?.applyConstraints({ frameRate: this.profile.reducedFps })
-      .catch(() => { /* constraint unsupported — the disable ladder still guards */ });
+      .catch(() => { /* constraint unsupported â€” the disable ladder still guards */ });
   }
 
   private async autoDisable(reason: string): Promise<void> {
     bgDebug('auto-disable:', reason);
     this.stopStallWatchdog();
     await this.queue.request({ mode: 'disabled' });
-    this.disposeProcessor(); // device can't cope — free the WASM/GL memory too
+    this.disposeProcessor(); // device can't cope â€” free the WASM/GL memory too
     this.patch({ degraded: true, current: { mode: 'disabled' } });
     // Persist Off so room hops / refreshes don't re-spin a pipeline the device
     // already proved it can't sustain. The user can re-enable explicitly.
     saveBgPreference({ mode: 'disabled' });
-    // Bug③ (2026-06-08) — the degraded notice only showed INSIDE the BG panel,
+    // Bugâ‘¢ (2026-06-08) â€” the degraded notice only showed INSIDE the BG panel,
     // so a user who never reopened it didn't know their background vanished.
     // Surface a transient toast (zustand store, read outside React) the moment
-    // it self-disables — debounced so a flapping device doesn't spam toasts.
+    // it self-disables â€” debounced so a flapping device doesn't spam toasts.
     const now = Date.now();
     if (now - this.lastDegradeToastAt > 30_000) {
       this.lastDegradeToastAt = now;
       try {
         useToastStore.getState().addToast(
-          "Background turned off — your device couldn't keep up. Tap BG to try again.",
+          "Background turned off â€” your device couldn't keep up. Tap BG to try again.",
           'info',
         );
-      } catch { /* store unavailable — panel notice still covers it */ }
+      } catch { /* store unavailable â€” panel notice still covers it */ }
     }
   }
 
@@ -346,7 +377,7 @@ class BgEngine {
     if (this.stallTimer) { clearInterval(this.stallTimer); this.stallTimer = null; }
   }
 
-  // ── teardown (event exit) ────────────────────────────────────────────────
+  // â”€â”€ teardown (event exit) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   async destroy(): Promise<void> {
     this.destroyed = true;
@@ -371,7 +402,7 @@ export function getBgEngine(): BgEngine {
   return _engine;
 }
 
-/** Tear down on event exit — the next event gets a fresh engine. */
+/** Tear down on event exit â€” the next event gets a fresh engine. */
 export async function destroyBgEngine(): Promise<void> {
   const e = _engine;
   _engine = null;
