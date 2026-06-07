@@ -54,6 +54,13 @@ describe('P2-5 — host-reconnect dashboard replay batches name lookups', () => 
   });
 });
 
+describe('P2-3 — per-event SID markers are pruned on event exit', () => {
+  it('LiveSessionPage clears the module-scope applied-prefs set on unmount', () => {
+    expect(clientSrc('features/live/Lobby.tsx')).toMatch(/export function clearAppliedPrefMarkers/);
+    expect(clientSrc('features/live/LiveSessionPage.tsx')).toMatch(/clearAppliedPrefMarkers\(\); \/\/ P2-3/);
+  });
+});
+
 describe('P2-4 — host dashboard pushes only on change', () => {
   const serverSrc2 = (rel: string) =>
     nodeFs.readFileSync(nodePath.join(__dirname, '../../', rel), 'utf8');

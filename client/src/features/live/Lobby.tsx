@@ -634,6 +634,13 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
 // handful of SIDs per event at most.
 const appliedPrefsForSid = new Set<string>();
 
+/** P2-3 — prune on event exit (LiveSessionPage unmount). SIDs are never
+ *  reused, so entries from a finished event are dead weight; without this a
+ *  long-lived tab hopping between events grows the set forever. */
+export function clearAppliedPrefMarkers(): void {
+  appliedPrefsForSid.clear();
+}
+
 function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?: string }) {
   // Bug 11 (13 May live test) — destructure the reactive isMicrophoneEnabled /
   // isCameraEnabled values from useLocalParticipant directly. Pre-fix the

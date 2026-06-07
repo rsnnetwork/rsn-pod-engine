@@ -5,7 +5,7 @@ import { useSessionStore } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import useSessionSocket from '@/hooks/useSessionSocket';
-import Lobby from './Lobby';
+import Lobby, { clearAppliedPrefMarkers } from './Lobby';
 import VideoRoom from './VideoRoom';
 import RatingPrompt from './RatingPrompt';
 import SessionComplete from './SessionComplete';
@@ -68,7 +68,10 @@ export default function LiveSessionPage() {
   // torn down here on event exit so no camera capture or MediaPipe worker can
   // outlive the event (next event gets a fresh engine).
   useEffect(() => {
-    return () => { void destroyBgEngine(); };
+    return () => {
+      void destroyBgEngine();
+      clearAppliedPrefMarkers(); // P2-3 — SID markers from this event are dead weight
+    };
   }, []);
 
   const { data: session, refetch } = useQuery({
