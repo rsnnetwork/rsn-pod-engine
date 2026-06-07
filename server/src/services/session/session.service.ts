@@ -765,8 +765,42 @@ export async function generateLiveKitToken(sessionId: string, userId: string, ro
       ttl,
     });
 
-    // Use the match-specific room if provided, otherwise fall back to session room
-    const roomName = roomId || session.lobbyRoomId || `session-${sessionId}`;
+    // Authorize the requested room (2026-06-08 security audit). The roomId comes
+    // from the client and was previously used verbatim — a participant could
+    // request a token for ANY room name (a breakout they're not in, or another
+    // session's room) and join the video. Grant only: this session's lobby, OR
+    // a breakout in THIS session the caller is a member of, OR (host/cohost) any
+    // room in their own session (monitoring/producer). Anything else falls back
+    // to the caller's own lobby — legit clients always pass an allowed room, so
+    // their behaviour is unchanged.
+    const lobbyRoomName = session.lobbyRoomId || `session-${sessionId}`;
+    let roomName = lobbyRoomName;
+    if (roomId && roomId !== lobbyRoomName) {
+      const isHostOrCohost =
+        session.hostUserId === userId ||
+        (await query(
+          `SELECT 1 FROM session_cohosts WHERE session_id = $1 AND user_id = $2 LIMIT 1`,
+          [sessionId, userId],
+        )).rows.length > 0;
+      if (isHostOrCohost) {
+        roomName = roomId;
+      } else {
+        const memberOfRoom = await query(
+          `SELECT 1 FROM matches
+             WHERE session_id = $1 AND room_id = $2
+               AND ($3 = participant_a_id OR $3 = participant_b_id OR $3 = participant_c_id
+                    OR $3 = ANY(departed_user_ids))
+             LIMIT 1`,
+          [sessionId, roomId, userId],
+        );
+        if (memberOfRoom.rows.length > 0) {
+          roomName = roomId;
+        } else {
+          logger.warn({ sessionId, userId, requestedRoomId: roomId },
+            'LiveKit token: unauthorized roomId — granting lobby instead');
+        }
+      }
+    }
     at.addGrant({ room: roomName, roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: true });
 
     const token = await at.toJwt();
