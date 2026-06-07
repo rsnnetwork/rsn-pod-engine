@@ -6,7 +6,7 @@ import { Bell, Check, CheckCircle, X, Loader2 } from 'lucide-react';
 // inside the AppLayout which lives inside <Routes>). So useNavigate works.
 // The old comment claiming otherwise was wrong; window.location.href was the
 // lazy workaround that caused the page-reload UX everyone complained about.
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useToastStore } from '@/stores/toastStore';
 import { getSocket } from '@/lib/socket';
@@ -71,12 +71,19 @@ export default function NotificationBell() {
     setLoading(false);
   };
 
-  // Fetch on mount + poll every 30s for pages without socket
+  // Fetch on mount + poll every 30s for pages without socket.
+  // P2-2 — PAUSED inside a live event: nobody reads notifications mid-round,
+  // and the poll was ~240 useless requests per user over a 2h event, each one
+  // waking the tab. The socket listener below still updates the badge live;
+  // leaving the event re-runs this effect → immediate fetch + poll resumes.
+  const { pathname } = useLocation();
+  const inLiveEvent = pathname.startsWith('/session/') && pathname.includes('/live');
   useEffect(() => {
+    if (inLiveEvent) return;
     fetchNotifications();
     const interval = setInterval(fetchNotifications, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [inLiveEvent]);
 
   // Bug 32 (19 May Ali) — listen for real-time notifications via socket,
   // BUT only for the bell's own local component state (the dropdown list

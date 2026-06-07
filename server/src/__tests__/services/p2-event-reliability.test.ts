@@ -33,3 +33,34 @@ describe('P2-1 — live components subscribe to FIELDS, never the whole store', 
     expect(src).toMatch(/useRef\(useSessionStore\.getState\(\)\)\.current/);
   });
 });
+
+describe('P2-5 — host-reconnect dashboard replay batches name lookups', () => {
+  const serverSrc = (rel: string) =>
+    nodeFs.readFileSync(nodePath.join(__dirname, '../../', rel), 'utf8');
+
+  it('replay uses ONE ANY($1) lookup and guards every slot (no per-uid queries, no phantom NULL-B "User")', () => {
+    const src = serverSrc('services/orchestration/handlers/participant-flow.ts');
+    // scope to the host-reconnect replay block (a legitimate single-user
+    // display-name lookup exists earlier in the file for the join path)
+    const idx = src.indexOf('if (isHost && activeSession && hostDashboardStates)');
+    expect(idx).toBeGreaterThan(-1);
+    const block = src.slice(idx, idx + 3000);
+    // the per-match getName round-trips are gone
+    expect(block).not.toMatch(/WHERE id = \$1/);
+    // replaced by the canonical builder's batched shape
+    expect(block).toMatch(/SELECT id, display_name FROM users WHERE id = ANY\(\$1\)/);
+    // every slot guarded — B is NULL for 1-person manual rooms (S25 lesson)
+    expect(block).toMatch(/for \(const uid of \[m\.participantAId, m\.participantBId, m\.participantCId\]\) \{\s*if \(uid\) slotIds\.add\(uid\);/);
+  });
+});
+
+describe('P2-2 — notification poll pauses inside live events', () => {
+  // ~240 useless /notifications requests per user per 2h event; the socket
+  // listener keeps the badge live, and leaving the event resumes the poll.
+  it('the 30s poll is gated off /session/*/live routes', () => {
+    const src = clientSrc('components/ui/NotificationBell.tsx');
+    expect(src).toMatch(/inLiveEvent = pathname\.startsWith\('\/session\/'\) && pathname\.includes\('\/live'\)/);
+    expect(src).toMatch(/if \(inLiveEvent\) return;/);
+    expect(src).toMatch(/\}, \[inLiveEvent\]\);/);
+  });
+});
