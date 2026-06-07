@@ -54,6 +54,24 @@ describe('P2-5 — host-reconnect dashboard replay batches name lookups', () => 
   });
 });
 
+describe('Bug — departed-in-room still counts as "people met"', () => {
+  const serverSrc4 = (rel: string) =>
+    nodeFs.readFileSync(nodePath.join(__dirname, '../../', rel), 'utf8');
+
+  it('recordRoundMeetings unions departed_user_ids into the meeting set', () => {
+    const mr = serverSrc4('services/meeting-records/meeting-records.service.ts');
+    // ids = slots ∪ departed (someone who left within seconds still met the others)
+    expect(mr).toMatch(/\.\.\.\(m\.departedUserIds \?\? \[\]\)/);
+    expect(mr).toMatch(/departedUserIds\?: string\[\] \| null/);
+  });
+
+  it('finalizeRoundRatings selects + forwards departed_user_ids to the recorder', () => {
+    const rs = serverSrc4('services/rating/rating.service.ts');
+    expect(rs).toMatch(/departed_user_ids AS "departedUserIds"[\s\S]{0,200}WHERE session_id = \$1 AND round_number/);
+    expect(rs).toMatch(/departedUserIds: m\.departedUserIds \?\? \[\]/);
+  });
+});
+
 describe('Bug B — waiting room converges on foreground (mobile stuck-at-start)', () => {
   // mobile browsers pause setInterval while backgrounded; the websocket is a
   // zombie — so a per-user must converge on visibilitychange/focus/online, not

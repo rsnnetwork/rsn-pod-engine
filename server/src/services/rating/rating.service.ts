@@ -576,9 +576,10 @@ export async function finalizeRoundRatings(
   sessionId: string,
   roundNumber: number
 ): Promise<{ totalMatches: number; ratedMatches: number; mutualConnections: number }> {
-  const matchesResult = await query<Match & { participantCId?: string | null }>(
+  const matchesResult = await query<Match & { participantCId?: string | null; departedUserIds?: string[] | null }>(
     `SELECT id, participant_a_id AS "participantAId", participant_b_id AS "participantBId",
-            participant_c_id AS "participantCId"
+            participant_c_id AS "participantCId",
+            departed_user_ids AS "departedUserIds"
      FROM matches
      WHERE session_id = $1 AND round_number = $2 AND status IN ('completed', 'reassigned')`,
     [sessionId, roundNumber]
@@ -603,6 +604,7 @@ export async function finalizeRoundRatings(
     await recordRoundMeetings(sessionId, roundNumber, matchesResult.rows.map(m => ({
       id: m.id, participantAId: m.participantAId, participantBId: m.participantBId,
       participantCId: m.participantCId ?? null,
+      departedUserIds: m.departedUserIds ?? [], // people who left the room still "met" the others
     })));
   } catch (err) {
     logger.error({ err, sessionId, roundNumber }, 'Failed to write meeting_records — recap will rebuild from matches × ratings');

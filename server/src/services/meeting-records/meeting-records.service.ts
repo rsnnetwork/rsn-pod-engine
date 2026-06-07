@@ -194,11 +194,20 @@ export async function getMeetingCounts(userId: string, sessionId: string): Promi
 export async function recordRoundMeetings(
   sessionId: string,
   roundNumber: number,
-  matches: { id: string; participantAId: string; participantBId: string | null; participantCId?: string | null }[],
+  matches: { id: string; participantAId: string; participantBId: string | null; participantCId?: string | null; departedUserIds?: string[] | null }[],
 ): Promise<{ recorded: number }> {
   let recorded = 0;
   for (const m of matches) {
-    const ids = [m.participantAId, m.participantBId, m.participantCId].filter((x): x is string => !!x);
+    // "People met" must count anyone who was in the room — INCLUDING someone
+    // who left within seconds (2026-06-08: waseem departed a trio immediately;
+    // his recap showed People Met 0 while the round list correctly showed the 2
+    // he was with). departed_user_ids holds exactly the people who WERE in the
+    // room (no-show absentees use recordDeparted=false and never land here), so
+    // union them in: every pair among slots ∪ departed gets a meeting_record.
+    const ids = Array.from(new Set(
+      [m.participantAId, m.participantBId, m.participantCId, ...(m.departedUserIds ?? [])]
+        .filter((x): x is string => !!x),
+    ));
     // Existing ratings for this match (if any) so we populate fields on first insert.
     const ratingsRes = await query<{ from_user_id: string; to_user_id: string; quality_score: number; meet_again: boolean }>(
       `SELECT from_user_id, to_user_id, quality_score, meet_again FROM ratings WHERE match_id = $1`,
