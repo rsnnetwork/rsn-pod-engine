@@ -54,6 +54,20 @@ describe('P2-5 — host-reconnect dashboard replay batches name lookups', () => 
   });
 });
 
+describe('P2-4 — host dashboard pushes only on change', () => {
+  const serverSrc2 = (rel: string) =>
+    nodeFs.readFileSync(nodePath.join(__dirname, '../../', rel), 'utf8');
+
+  it('the immediate emit skips identical payloads, with a 30s heartbeat and audience-aware fingerprint', () => {
+    const src = serverSrc2('services/orchestration/handlers/matching-flow.ts');
+    // ticking field excluded (hosts render time from timerEndsAt — Bug 8.5)
+    expect(src).toMatch(/timerSecondsRemaining: 0, _audience: hostIds/);
+    // skip path + heartbeat belt
+    expect(src).toMatch(/DASHBOARD_UNCHANGED_HEARTBEAT_MS = 30_000/);
+    expect(src).toMatch(/fp === emitState\.lastPayloadFp && Date\.now\(\) - \(emitState\.lastSentAt \?\? 0\) < DASHBOARD_UNCHANGED_HEARTBEAT_MS/);
+  });
+});
+
 describe('P2-2 — notification poll pauses inside live events', () => {
   // ~240 useless /notifications requests per user per 2h event; the socket
   // listener keeps the badge live, and leaving the event resumes the poll.

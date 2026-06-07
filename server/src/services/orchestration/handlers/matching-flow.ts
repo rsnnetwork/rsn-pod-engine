@@ -1253,10 +1253,17 @@ export async function sendMatchPreview(
 //    ActiveSession lifecycle — cleared automatically on completeSession.
 
 const DASHBOARD_COALESCE_MS = 1000;
+// P2-4 — emit-on-change: when nothing in the payload changed, the periodic
+// 5s rebuild (round-lifecycle) skips the socket push. Hosts still get an
+// unchanged heartbeat at this cadence so the legacy timerSecondsRemaining
+// field can't go arbitrarily stale on clients that read it.
+const DASHBOARD_UNCHANGED_HEARTBEAT_MS = 30_000;
 
 interface DashboardEmitState {
   lastEmit: number;      // epoch ms of the last immediate emit
   pendingTimer: NodeJS.Timeout | null; // trailing-edge timer
+  lastPayloadFp?: string; // fingerprint of the last SENT payload (P2-4)
+  lastSentAt?: number;    // epoch ms of the last actual socket push (P2-4)
 }
 
 const dashboardEmitState = new Map<string, DashboardEmitState>();
@@ -1574,9 +1581,28 @@ async function emitHostDashboardImmediate(io: SocketServer, sessionId: string): 
       reassignmentInProgress: false,
       participants,
     };
+    // P2-4 — emit-on-change. During ROUND_ACTIVE this function runs every 5s
+    // per session and used to push the full payload (~15-25KB at 100
+    // participants) to every host whether anything changed or not — thousands
+    // of redundant pushes per event, each re-rendering the host panel. The
+    // fingerprint EXCLUDES timerSecondsRemaining (it ticks every second by
+    // construction; hosts render time from timerEndsAt — Bug 8.5); presence /
+    // room / participant changes all alter the fingerprint, so real changes
+    // always flow. An unchanged payload is still pushed every 30s as a
+    // heartbeat belt.
     const hostIds = await getAllHostIds(sessionId, activeSession.hostUserId).catch(() => [
       activeSession.hostUserId,
     ]);
+    // The AUDIENCE is part of the fingerprint: a newly-added co-host changes
+    // hostIds, so their first dashboard is never withheld by the skip.
+    const fp = JSON.stringify({ ...dashboardPayload, timerSecondsRemaining: 0, _audience: hostIds });
+    const emitState = dashboardEmitState.get(sessionId) || { lastEmit: 0, pendingTimer: null };
+    if (fp === emitState.lastPayloadFp && Date.now() - (emitState.lastSentAt ?? 0) < DASHBOARD_UNCHANGED_HEARTBEAT_MS) {
+      return; // nothing changed — spare every host the redundant push
+    }
+    emitState.lastPayloadFp = fp;
+    emitState.lastSentAt = Date.now();
+    dashboardEmitState.set(sessionId, emitState);
     for (const hostId of hostIds) {
       io.to(userRoom(hostId)).emit('host:round_dashboard', dashboardPayload);
     }

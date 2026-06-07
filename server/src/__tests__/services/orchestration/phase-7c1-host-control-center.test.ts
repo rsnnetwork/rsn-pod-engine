@@ -74,9 +74,10 @@ describe('Phase 7C.1 — Host Control Center backing data (architectural pins)',
     // Bug F (15 May Ali) — the dashboard emit was refactored to build a
     // shared payload then fan out to every acting host via getAllHostIds.
     // The payload literal still carries `participants`; the emit literal
-    // is followed by the variable name.
+    // is followed by the variable name. (Gap widened 400→1800: P2-4 inserted
+    // the emit-on-change fingerprint skip between payload and fan-out.)
     expect(src).toMatch(
-      /dashboardPayload\s*=\s*\{[\s\S]{0,1500}participants[\s\S]{0,200}\};?[\s\S]{0,400}emit\(\s*'host:round_dashboard'\s*,\s*dashboardPayload/,
+      /dashboardPayload\s*=\s*\{[\s\S]{0,1500}participants[\s\S]{0,200}\};?[\s\S]{0,1800}emit\(\s*'host:round_dashboard'\s*,\s*dashboardPayload/,
     );
   });
 
