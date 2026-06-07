@@ -28,6 +28,7 @@ import {
 } from './bgEngineCore';
 import { createFrameHealthMonitor, type FrameStats } from './bgFrameHealth';
 import { loadBgPreference, saveBgPreference, type BgPreference } from './bgPreference';
+import { useToastStore } from '@/stores/toastStore';
 import { CUSTOM_BG_URL, loadCustomBg, saveCustomBg } from './bgUploadStore';
 
 const BG_STALL_MS = 4000;
@@ -75,6 +76,7 @@ class BgEngine {
   private stallTimer: ReturnType<typeof setInterval> | null = null;
   private customUrl: string | null = null; // live object URL for the IDB upload
   private destroyed = false;
+  private lastDegradeToastAt = 0; // Bug③ — debounce the auto-disable toast
 
   constructor() {
     this.stateCache = {
@@ -313,6 +315,20 @@ class BgEngine {
     // Persist Off so room hops / refreshes don't re-spin a pipeline the device
     // already proved it can't sustain. The user can re-enable explicitly.
     saveBgPreference({ mode: 'disabled' });
+    // Bug③ (2026-06-08) — the degraded notice only showed INSIDE the BG panel,
+    // so a user who never reopened it didn't know their background vanished.
+    // Surface a transient toast (zustand store, read outside React) the moment
+    // it self-disables — debounced so a flapping device doesn't spam toasts.
+    const now = Date.now();
+    if (now - this.lastDegradeToastAt > 30_000) {
+      this.lastDegradeToastAt = now;
+      try {
+        useToastStore.getState().addToast(
+          "Background turned off — your device couldn't keep up. Tap BG to try again.",
+          'info',
+        );
+      } catch { /* store unavailable — panel notice still covers it */ }
+    }
   }
 
   private startStallWatchdog(): void {

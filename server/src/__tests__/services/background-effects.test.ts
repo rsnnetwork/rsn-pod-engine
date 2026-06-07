@@ -83,6 +83,11 @@ describe('Background effects — event-scoped engine wiring', () => {
     expect(page).toMatch(/destroyBgEngine/);
   });
 
+  it('auto-disable surfaces a transient toast, not just the in-panel notice (Bug③)', () => {
+    expect(engine).toMatch(/useToastStore\.getState\(\)\.addToast/);
+    expect(engine).toMatch(/lastDegradeToastAt/); // debounced so a flapping device can't spam
+  });
+
   it('custom uploads persist via IndexedDB sentinel (refresh-survivable)', () => {
     expect(engine).toMatch(/CUSTOM_BG_URL/);
     expect(clientSrc('lib/bgUploadStore.ts')).toMatch(/indexedDB\.open/);
