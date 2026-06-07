@@ -24,6 +24,15 @@ import { useConnectionState, useRoomContext } from '@livekit/components-react';
 import { ConnectionState, Track } from 'livekit-client';
 import { getBgEngine } from '@/lib/bgEngine';
 
+function pubDebug(...args: unknown[]): void {
+  try {
+    if (localStorage.getItem('rsn_bg_debug')) {
+      // eslint-disable-next-line no-console
+      console.log('[bg:pub]', ...args);
+    }
+  } catch { /* ignore */ }
+}
+
 export function BgCameraPublisher() {
   const room = useRoomContext();
   const connectionState = useConnectionState(room);
@@ -50,8 +59,19 @@ export function BgCameraPublisher() {
       const wantCam = sessionStorage.getItem('rsn_cam') !== 'false';
       if (!wantCam && !track.isMuted) await track.mute().catch(() => {});
       if (wantCam && track.isMuted) await track.unmute().catch(() => {});
-      if (cancelled) return;
-      await lp.publishTrack(track, { source: Track.Source.Camera }).catch(() => {});
+      // Publishing the camera is THE critical path of the whole video UX — a
+      // single swallowed failure here means no video for the entire room stay.
+      // Bounded retries cover transient negotiation/connection races.
+      for (let attempt = 1; attempt <= 3 && !cancelled; attempt++) {
+        try {
+          await lp.publishTrack(track, { source: Track.Source.Camera });
+          pubDebug('camera published', { attempt, room: room.name });
+          return;
+        } catch (err) {
+          pubDebug('camera publish failed', { attempt, err: String(err) });
+          if (attempt < 3) await new Promise((r) => setTimeout(r, 1500));
+        }
+      }
     })();
     return () => {
       cancelled = true;
