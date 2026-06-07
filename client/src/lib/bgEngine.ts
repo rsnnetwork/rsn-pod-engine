@@ -108,21 +108,26 @@ class BgEngine {
     void this.probeSupport();
   }
 
-  /** Capability probe with backoff. A transient module-load failure (flaky
-   *  network at page load) must not hide the BG button for the whole event —
-   *  isBackgroundSupported only caches GENUINE answers, so retrying converges
-   *  the moment the chunk fetch succeeds. */
+  /** Capability probe that can never be defeated by the network. Two failure
+   *  shapes both used to hide the BG button for the whole event:
+   *    • a REJECTED module import was cached as "unsupported" forever
+   *    • a STALLED import (no timeout on dynamic import) hung the first and
+   *      only probe, so no retry ever ran
+   *  Now every attempt is timeout-raced and the loop keeps going for the
+   *  event's lifetime (genuine-unsupported devices hit the cached answer, so
+   *  later laps cost a microtask). Converges the moment the chunk lands. */
   private async probeSupport(attempt = 0): Promise<void> {
     if (this.destroyed) return;
-    const s = await isBackgroundSupported();
+    const s = await Promise.race([
+      isBackgroundSupported(),
+      new Promise<null>((r) => setTimeout(() => r(null), 8000)), // stalled fetch ⇒ check again later
+    ]);
     if (s) {
       this.patch({ supported: true });
       void prewarmBackground(); // HTTP-cache wasm+model early
       return;
     }
-    if (attempt < 6) {
-      setTimeout(() => { void this.probeSupport(attempt + 1); }, 2000 * (attempt + 1));
-    }
+    setTimeout(() => { void this.probeSupport(attempt + 1); }, Math.min(15_000, 2000 * (attempt + 1)));
   }
 
   // ── public state for React ────────────────────────────────────────────────

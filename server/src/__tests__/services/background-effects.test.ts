@@ -117,10 +117,13 @@ describe('Background effects — event-scoped engine wiring', () => {
   it('a transient module-load failure never hides the feature for the session', () => {
     // loadBgProcessors must NOT cache a rejected import (one flaky chunk fetch
     // erased the BG button until hard refresh — found by the 6-browser smoke,
-    // 2026-06-07), and the engine probe must retry with backoff.
+    // 2026-06-07), the probe must timeout-race a STALLED import (no native
+    // timeout on dynamic import), and the retry loop must outlive any blip.
     expect(bg).toMatch(/_modPromise = null; \/\/ transient/);
     expect(bg).toMatch(/if \(!mod\) return false; \/\/ do NOT cache/);
+    expect(engine).toMatch(/Promise\.race\(\[\s*isBackgroundSupported\(\)/);
     expect(engine).toMatch(/probeSupport\(attempt \+ 1\)/);
+    expect(engine).toMatch(/Math\.min\(15_000/); // gentle forever-loop, not a capped one
   });
 
   it('build self-hosts the wasm via a copy script hooked into the build', () => {
