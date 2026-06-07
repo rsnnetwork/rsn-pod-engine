@@ -3,8 +3,9 @@ import { useParams } from 'react-router-dom';
 import { useSessionStore } from '@/stores/sessionStore';
 import { formatTime } from '@/lib/utils';
 import { Video, Clock, Mic, MicOff, VideoOff, Wifi, Loader2, ArrowLeft, Sparkles, Users } from 'lucide-react';
-import { useBackgroundEffects } from '@/hooks/useBackgroundEffects';
+import { useBgEngine } from '@/hooks/useBgEngine';
 import { BackgroundPanel } from './BackgroundPanel';
+import { BgCameraPublisher } from './BgCameraPublisher';
 import { BG_CAPTURE_RESOLUTION } from '@/lib/backgroundEffects';
 import { getSocket } from '@/lib/socket';
 import {
@@ -360,13 +361,13 @@ const VideoStage = memo(function VideoStage() {
 // (mic/cam/bg toggles) and doesn't depend on parent props. Memoization
 // stops the toolbar from re-rendering on every timer tick.
 const MediaControls = memo(function MediaControls() {
-  const { localParticipant, isCameraEnabled: hookCamEnabled } = useLocalParticipant();
+  const { localParticipant } = useLocalParticipant();
   const [micEnabled, setMicEnabled] = useState(true);
   const [camEnabled, setCamEnabled] = useState(true);
   const [showBgPanel, setShowBgPanel] = useState(false);
-  // All background-effect lifecycle (capability, persist-across-rooms,
-  // degrade-then-disable, destroy-on-unmount) lives in this shared hook.
-  const bg = useBackgroundEffects(localParticipant, hookCamEnabled);
+  // Event-scoped BG engine — same instance as the lobby, so the background a
+  // user chose in the main room is structurally already on this room's track.
+  const bg = useBgEngine();
 
   useEffect(() => {
     if (localParticipant) {
@@ -386,12 +387,10 @@ const MediaControls = memo(function MediaControls() {
         await localParticipant.setCameraEnabled(false);
         setCamEnabled(false);
       } else {
-        // Unpublish stale tracks first, then re-enable fresh
-        for (const pub of localParticipant.videoTrackPublications.values()) {
-          if (pub.track) {
-            try { await localParticipant.unpublishTrack(pub.track); } catch { /* ignore */ }
-          }
-        }
+        // setCameraEnabled(true) unmutes the EVENT-SCOPED engine publication
+        // (lib/bgEngine) — never unpublish/stop it: that would kill the shared
+        // camera + background pipeline for the rest of the event. The SDK
+        // reacquires capture and restarts the processor on unmute by itself.
         await localParticipant.setCameraEnabled(true);
         setCamEnabled(true);
         setTimeout(() => setCamEnabled(localParticipant.isCameraEnabled), 500);
@@ -413,7 +412,13 @@ const MediaControls = memo(function MediaControls() {
         {camEnabled ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
       </button>
       {bg.supported && (
-        <button onClick={() => setShowBgPanel(!showBgPanel)} title="Background effects"
+        <button
+          onClick={() => {
+            if (!showBgPanel) bg.prewarm(); // build the pipeline while the user chooses
+            setShowBgPanel(!showBgPanel);
+          }}
+          title="Background effects"
+          aria-label="Background effects"
           className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium transition-colors ${bg.current.mode !== 'disabled' ? 'bg-indigo-500/80 text-white' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}>
           <Sparkles className="h-4 w-4" />
           BG
@@ -424,7 +429,9 @@ const MediaControls = memo(function MediaControls() {
         <BackgroundPanel
           current={bg.current}
           degraded={bg.degraded}
+          applying={bg.applying}
           onApply={bg.apply}
+          onUpload={bg.applyUpload}
           onClose={() => setShowBgPanel(false)}
         />
       )}
@@ -617,7 +624,11 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
       token={liveKitToken}
       serverUrl={livekitUrl}
       connect={true}
-      video={true}
+      // video is published by BgCameraPublisher: the EVENT-SCOPED camera track
+      // (lib/bgEngine) arrives here with its background pipeline already live —
+      // the same object the lobby published, so the user's background is
+      // structurally present from the first frame, with zero re-segmentation.
+      video={false}
       audio={true}
       options={{
         videoCaptureDefaults: { resolution: { ...BG_CAPTURE_RESOLUTION } },
@@ -677,6 +688,7 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
       {/* D (25 May Ali) — recover the connection (and the user's matchability +
           video) when they return to the foreground after a suspended tab. */}
       <ReconnectOnReturn onReconnect={reconnectRoom} />
+      <BgCameraPublisher />
       {/* WS2 — partner disconnected: passive waiting banner; the SERVER's 15s
           grace decides resume-or-end (no client-side self-eject). */}
       {partnerDisconnected && sessionId && (

@@ -56,9 +56,12 @@ describe('May 20 doc — final batch (Issues 9, 10, 12, 13)', () => {
   // ─── Issue 10 — "Background does not persist between main and breakout" ──
   describe('Issue 10 — Background preference persists across main↔breakout', () => {
     // The persistence REQUIREMENT is unchanged; the implementation was rebuilt
-    // (27 May) into a shared hook + localStorage. These pins follow it there.
+    // twice — 27 May (shared hook + localStorage re-apply) and 7 June (event-
+    // scoped engine: ONE camera track + ONE pipeline republished into every
+    // room, persistence by construction). These pins follow it to the engine;
+    // the full architecture pins live in background-effects.test.ts.
     const pref = readClient('lib/bgPreference.ts');
-    const hook = readClient('hooks/useBackgroundEffects.ts');
+    const engine = readClient('lib/bgEngine.ts');
     const lobby = readClient('features/live/Lobby.tsx');
     const videoRoom = readClient('features/live/VideoRoom.tsx');
 
@@ -72,21 +75,16 @@ describe('May 20 doc — final batch (Issues 9, 10, 12, 13)', () => {
       expect(pref).toMatch(/rsn_bg_preference/);
     });
 
-    it('the shared hook re-applies the saved preference whenever the camera publishes', () => {
-      // This is what makes the effect survive main→breakout→main: load the
-      // persisted pref and re-apply it on the cameraReady signal; persist every
-      // change; and destroy the processor on unmount so no worker leaks per hop.
-      expect(hook).toMatch(/loadBgPreference\(\)/);
-      expect(hook).toMatch(/saveBgPreference\(/);
-      expect(hook).toMatch(/\}, \[localParticipant, cameraReady\]\);/);
-      expect(hook).toMatch(/p\.destroy/);
+    it('the engine seeds from the saved preference and persists every change', () => {
+      expect(engine).toMatch(/loadBgPreference\(\)/);
+      expect(engine).toMatch(/saveBgPreference\(/);
     });
 
-    it('both rooms drive background through the shared hook (no divergent copies)', () => {
-      expect(lobby).toMatch(/useBackgroundEffects\(localParticipant, hookCamEnabled\)/);
-      expect(videoRoom).toMatch(/useBackgroundEffects\(localParticipant, hookCamEnabled\)/);
-      // picker persists by applying a preset → the hook saves it
-      expect(lobby).toMatch(/bg\.apply\(presetToPreference\(preset\)\)/);
+    it('both rooms drive background through the shared engine (no divergent copies)', () => {
+      expect(lobby).toMatch(/useBgEngine\(\)/);
+      expect(videoRoom).toMatch(/useBgEngine\(\)/);
+      expect(lobby).toMatch(/<BgCameraPublisher \/>/);
+      expect(videoRoom).toMatch(/<BgCameraPublisher \/>/);
       // the old per-room inline apply + one-shot guard are gone
       expect(lobby).not.toMatch(/bgAutoAppliedRef/);
       expect(videoRoom).not.toMatch(/videoRoomToPreference/);

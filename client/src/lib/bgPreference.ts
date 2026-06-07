@@ -1,13 +1,12 @@
-// Persists the user's background-effect choice so it follows them across room
-// transitions (main → breakout → main) and survives a page refresh, until they
-// explicitly pick "Off". The hook (useBackgroundEffects) re-applies it whenever
-// the camera publishes.
+// Persists the user's background-effect choice so it survives a page refresh
+// (which RSN clients do constantly mid-event). Within an event, persistence is
+// structural — the event-scoped engine (lib/bgEngine) keeps one processed
+// camera track alive across every room; this localStorage pref only seeds the
+// engine on boot/refresh.
 //
-// Storage: localStorage (survives refresh, which RSN clients do constantly
-// mid-event). Custom uploads are blob: URLs created with URL.createObjectURL —
-// those die on a full reload, so a persisted custom image falls back to Off
-// after a hard refresh (the blob no longer exists). Blur and preset images
-// (same-origin static URLs) survive refresh fine.
+// Custom uploads persist as the CUSTOM_BG_URL sentinel ('idb://custom-bg');
+// the engine rehydrates the image bytes from IndexedDB (lib/bgUploadStore).
+// Raw blob: URLs from a previous tab session are dead after reload — ignored.
 
 const KEY = 'rsn_bg_preference';
 

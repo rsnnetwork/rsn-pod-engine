@@ -1,13 +1,9 @@
-import { Users, Loader2, Video, VideoOff, Sparkles, ChevronDown, ChevronUp, Mic, MicOff, Volume2, VolumeX, UserX, Camera, X, Pin, PinOff, Minimize2, Maximize2 } from 'lucide-react';
+import { Users, Loader2, Video, VideoOff, Sparkles, ChevronDown, ChevronUp, Mic, MicOff, Volume2, VolumeX, UserX, Camera, Pin, PinOff, Minimize2, Maximize2 } from 'lucide-react';
 import HostRoundDashboard from './HostRoundDashboard';
-import { useBackgroundEffects } from '@/hooks/useBackgroundEffects';
-import {
-  BG_PRESETS,
-  presetToPreference,
-  isActivePreset,
-  isCustomActive,
-  BG_CAPTURE_RESOLUTION,
-} from '@/lib/backgroundEffects';
+import { useBgEngine } from '@/hooks/useBgEngine';
+import { BackgroundPanel } from './BackgroundPanel';
+import { BgCameraPublisher } from './BgCameraPublisher';
+import { BG_CAPTURE_RESOLUTION } from '@/lib/backgroundEffects';
 import { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
 import { useSessionStore, useInRoomParticipants } from '@/stores/sessionStore';
 import { getSocket } from '@/lib/socket';
@@ -665,9 +661,10 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
   // processor is (re-)applied by a separate effect once the local camera
   // track is ready.
   const [showBgPanel, setShowBgPanel] = useState(false);
-  // Shared BG lifecycle: capability gate, persist-across-rooms, degrade→disable,
-  // destroy-on-unmount. hookCamEnabled flips true the instant the camera publishes.
-  const bg = useBackgroundEffects(localParticipant, hookCamEnabled);
+  // Event-scoped BG engine (lib/bgEngine): ONE camera track + ONE pipeline for
+  // the whole event, published into every room — applies are instant switchTo()s
+  // and the background persists structurally across main↔breakout↔manual.
+  const bg = useBgEngine();
 
   // Derive allMuted from actual remote participant mic state (host button label
   // must reflect reality, not a stale local flag that resets on remount).
@@ -695,15 +692,9 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
     if (!sid || appliedPrefsForSid.has(sid)) return;
     appliedPrefsForSid.add(sid);
 
-    // Camera: apply sessionStorage preference (overrides LiveKit auto-enable)
-    const savedCam = sessionStorage.getItem('rsn_cam');
-    if (savedCam !== null) {
-      const wantCam = savedCam === 'true';
-      localParticipant.setCameraEnabled(wantCam).catch(() => {});
-      setCamEnabled(wantCam);
-    } else {
-      setCamEnabled(localParticipant.isCameraEnabled);
-    }
+    // Camera preference is applied by BgCameraPublisher BEFORE the engine track
+    // publishes (no flash of video for camera-off users); here we only mirror.
+    setCamEnabled(localParticipant.isCameraEnabled);
 
     // Mic: auto-mute participants on first join / return from breakout.
     // Double-apply after 500ms to beat any LiveKit race where audio is auto-published
@@ -726,9 +717,9 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
     }
   }, [localParticipant, isHost]);
 
-  // (Background persistence across main↔breakout is now handled inside
-  // useBackgroundEffects — it re-applies the saved preference whenever the
-  // camera publishes, and destroys the processor on unmount.)
+  // (Background persistence across main↔breakout is structural: the event-
+  // scoped engine track — pipeline attached — is republished into every room
+  // by BgCameraPublisher. Nothing to re-apply here.)
 
   // Bug 11 (13 May live test) — sync local optimistic state with the hook's
   // reactive values. The hook re-renders the parent whenever the underlying
@@ -789,17 +780,13 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
       await localParticipant.setCameraEnabled(target);
     } catch (err) {
       console.error('Camera toggle failed:', err);
-      // If direct toggle fails, try the nuclear option: stop all video, then re-enable
+      // Recovery WITHOUT stopping tracks — the camera publication is the
+      // event-scoped engine track (lib/bgEngine); stopping it would kill the
+      // camera + background pipeline for the REST OF THE EVENT. A plain retry
+      // covers the transient failures the old "stop everything" path targeted.
       if (target) {
         try {
-          // Stop existing tracks
-          const tracks = Array.from(localParticipant.videoTrackPublications.values());
-          for (const pub of tracks) {
-            if (pub.track) pub.track.stop();
-          }
-          // Wait for cleanup
           await new Promise(r => setTimeout(r, 300));
-          // Request fresh camera
           await localParticipant.setCameraEnabled(true);
         } catch (retryErr) {
           console.error('Camera retry also failed:', retryErr);
@@ -865,7 +852,10 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
       <div className="relative">
         {bg.supported && (
         <button
-          onClick={() => setShowBgPanel(!showBgPanel)}
+          onClick={() => {
+            if (!showBgPanel) bg.prewarm(); // build the pipeline while the user chooses
+            setShowBgPanel(!showBgPanel);
+          }}
           aria-label="Background effects"
           className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors backdrop-blur-sm ${
             bg.current.mode !== 'disabled' ? 'bg-indigo-500/80 text-white' : 'bg-black/40 text-white hover:bg-black/60'
@@ -877,71 +867,16 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
         </button>
         )}
         {showBgPanel && bg.supported && (
-          // Phase 7-audit fix — viewport-fixed centered card on desktop,
-          // full-width bottom sheet on mobile. Click-out + Esc both close.
-          // Same UX pattern as the Invite / Room modals.
-          <>
-            <div
-              className="fixed inset-0 z-50 bg-black/30 backdrop-blur-sm"
-              onClick={() => setShowBgPanel(false)}
-              aria-hidden="true"
-            />
-            <div
-              role="dialog"
-              aria-label="Choose background"
-              className="fixed z-50 left-1/2 -translate-x-1/2 bottom-0 sm:bottom-auto sm:top-1/2 sm:-translate-y-1/2 w-full sm:w-[28rem] max-w-[95vw] bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl border-t sm:border border-gray-200 p-4"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-sm font-semibold text-gray-900">Background</p>
-                <button
-                  onClick={() => setShowBgPanel(false)}
-                  className="text-gray-400 hover:text-gray-700 p-1 -m-1 rounded"
-                  aria-label="Close"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-              {bg.degraded && (
-                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5 mb-3 leading-snug">
-                  Background turned off — your device couldn't keep up. You can try again, but video may be smoother without it.
-                </p>
-              )}
-              <div className="grid grid-cols-3 gap-2">
-                {BG_PRESETS.map(preset => (
-                  <button key={preset.label}
-                    onClick={() => { bg.apply(presetToPreference(preset)); setShowBgPanel(false); }}
-                    className={`rounded-lg border-2 overflow-hidden transition-colors ${isActivePreset(preset, bg.current) ? 'border-rsn-red ring-2 ring-rsn-red/20' : 'border-gray-200 hover:border-gray-400'}`}>
-                    {preset.image ? (
-                      <div className="relative">
-                        <img src={preset.image} alt={preset.label} className="w-full h-20 object-cover" loading="lazy" />
-                        <span className="absolute bottom-0 inset-x-0 bg-black/50 text-white text-[10px] font-medium py-0.5 text-center">{preset.label}</span>
-                      </div>
-                    ) : (
-                      <div className={`w-full h-20 flex items-center justify-center text-xs font-medium ${preset.mode === 'disabled' ? 'bg-gray-100 text-gray-600' : 'bg-indigo-50 text-indigo-600'}`}>{preset.label}</div>
-                    )}
-                  </button>
-                ))}
-                {/* Custom upload */}
-                <button
-                  onClick={() => {
-                    const input = document.createElement('input');
-                    input.type = 'file';
-                    input.accept = 'image/*';
-                    input.onchange = (e) => {
-                      const file = (e.target as HTMLInputElement).files?.[0];
-                      if (!file) return;
-                      bg.apply({ mode: 'image', imageUrl: URL.createObjectURL(file) });
-                      setShowBgPanel(false);
-                    };
-                    input.click();
-                  }}
-                  className={`rounded-lg border-2 border-dashed overflow-hidden transition-colors ${isCustomActive(bg.current) ? 'border-rsn-red ring-2 ring-rsn-red/20' : 'border-gray-300 hover:border-gray-400'}`}>
-                  <div className="w-full h-20 flex items-center justify-center text-xs font-medium text-gray-400">+ Upload</div>
-                </button>
-              </div>
-            </div>
-          </>
+          // Shared picker (BackgroundPanel) — identical UI in lobby, breakout
+          // and manual rooms; bottom sheet on mobile, centered card on desktop.
+          <BackgroundPanel
+            current={bg.current}
+            degraded={bg.degraded}
+            applying={bg.applying}
+            onApply={bg.apply}
+            onUpload={bg.applyUpload}
+            onClose={() => setShowBgPanel(false)}
+          />
         )}
       </div>
       {isHost && sessionId && (
@@ -1586,7 +1521,12 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
           token={lobbyToken}
           serverUrl={lobbyUrl}
           connect={true}
-          video={true}
+          // video is published by BgCameraPublisher: the EVENT-SCOPED camera
+          // track (lib/bgEngine) with the background pipeline already attached
+          // is reused across every room — never re-acquired, never re-segmented.
+          // The publisher unpublishes it (without stopping) BEFORE this room
+          // disconnects, so the SDK's disconnect cleanup never touches it.
+          video={false}
           // WS3/E4 — deliberate lobby publish POLICY: non-hosts JOIN muted
           // (audio={isHost} = initial capture off — a 50-person main room
           // joining hot-mic'd is chaos) but their token allows publishing,
@@ -1607,6 +1547,7 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
               without depending on socket fan-out for participant
               join/leave events. */}
           <LiveKitPresenceSync />
+          <BgCameraPublisher />
           <RoomAudioRenderer />
           <LobbyMosaic isHost={isHost} sessionId={sessionId} />
         </LiveKitRoom>

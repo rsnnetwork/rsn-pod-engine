@@ -20,6 +20,7 @@ import { AlertCircle, X, LogOut, WifiOff, Loader2, RefreshCw, MessageCircle, Rad
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { disconnectSocket, connectSocket, getSocket } from '@/lib/socket';
+import { destroyBgEngine } from '@/lib/bgEngine';
 
 export default function LiveSessionPage() {
   const { sessionId } = useParams();
@@ -60,6 +61,14 @@ export default function LiveSessionPage() {
       .catch(() => {
         setMediaError(true);
       });
+  }, []);
+
+  // The EVENT-SCOPED camera + background pipeline (lib/bgEngine) lives exactly
+  // as long as this page: created lazily by the first room's BgCameraPublisher,
+  // torn down here on event exit so no camera capture or MediaPipe worker can
+  // outlive the event (next event gets a fresh engine).
+  useEffect(() => {
+    return () => { void destroyBgEngine(); };
   }, []);
 
   const { data: session, refetch } = useQuery({
