@@ -139,12 +139,17 @@ describe('Background effects — event-scoped engine wiring', () => {
     expect(bg).toMatch(/resolveAssetPaths/);
   });
 
-  it('UI is capability-gated at runtime on the FALLBACK-inclusive check (mobile)', () => {
-    // Bug① (2026-06-08) — gating on supportsModernBackgroundProcessors hid the
-    // button on iOS Safari / some Android. The gate now accepts the canvas
-    // fallback; the engine runs non-modern devices at the lightest profile.
-    expect(bg).toMatch(/isBackgroundSupported[\s\S]{0,400}supportsBackgroundProcessors\(\)/);
+  it('UI gate is an INSTANT local feature-detect (no module load) and fallback-inclusive', () => {
+    // Bug① — accept the canvas fallback (iOS/Android), not modern-API-only.
+    // Bug A (2026-06-08) — the gate must NOT wait on the heavy module import
+    // (that hid the button until a refresh); it is a sync local detect now.
+    expect(bg).toMatch(/function browserSupportsBgEffects\(\)/);
+    expect(bg).toMatch(/_supported = browserSupportsBgEffects\(\)/);
+    // gate no longer calls the async module to answer "supported?"
+    expect(bg).not.toMatch(/mod\.supportsBackgroundProcessors\(\)/);
     expect(bg).not.toMatch(/_supported = typeof mod\.supportsModernBackgroundProcessors/);
+    // local detect is fallback-inclusive (modern OR captureStream)
+    expect(bg).toMatch(/hasModern \|\| hasFallback/);
     expect(lobby).toMatch(/bg\.supported/);
     expect(vr).toMatch(/bg\.supported/);
     // engine still detects the modern API for the adaptive profile (not the gate)
@@ -152,12 +157,11 @@ describe('Background effects — event-scoped engine wiring', () => {
   });
 
   it('a transient module-load failure never hides the feature for the session', () => {
-    // loadBgProcessors must NOT cache a rejected import (one flaky chunk fetch
-    // erased the BG button until hard refresh — found by the 6-browser smoke,
-    // 2026-06-07), the probe must timeout-race a STALLED import (no native
-    // timeout on dynamic import), and the retry loop must outlive any blip.
+    // The GATE no longer touches the module at all (Bug A — sync local detect),
+    // so a flaky/stalled chunk fetch can't hide the button. loadBgProcessors
+    // (used only on prewarm/apply) still must NOT cache a rejected import.
     expect(bg).toMatch(/_modPromise = null; \/\/ transient/);
-    expect(bg).toMatch(/if \(!mod\) return false; \/\/ do NOT cache/);
+    // probe still resilient (now resolves instantly off the local detect)
     expect(engine).toMatch(/Promise\.race\(\[\s*isBackgroundSupported\(\)/);
     expect(engine).toMatch(/probeSupport\(attempt \+ 1\)/);
     expect(engine).toMatch(/Math\.min\(15_000/); // gentle forever-loop, not a capped one

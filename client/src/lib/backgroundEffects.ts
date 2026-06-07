@@ -80,28 +80,48 @@ export function loadBgProcessors(): Promise<BgModule | null> {
   return _modPromise;
 }
 
+/** LOCAL capability detection — mirrors @livekit/track-processors'
+ *  supportsBackgroundProcessors() (BackgroundTransformer.isSupported &&
+ *  ProcessorWrapper.isSupported) using pure feature flags, so the BG button
+ *  gate needs ZERO module load. Bug A (Ali, 2026-06-08): gating on the async
+ *  module import hid the button until the heavy chunk finished loading — on a
+ *  fresh load that lagged seconds behind the room and the button only appeared
+ *  after a manual refresh (chunk then HTTP-cached). The actual module still
+ *  lazy-loads on prewarm/apply; only the GATE is now instant. */
+function browserSupportsBgEffects(): boolean {
+  try {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return false;
+    // BackgroundTransformer.isSupported
+    const transformerOk =
+      typeof OffscreenCanvas !== 'undefined' &&
+      typeof VideoFrame !== 'undefined' &&
+      typeof createImageBitmap !== 'undefined' &&
+      !!document.createElement('canvas').getContext('webgl2');
+    if (!transformerOk) return false;
+    // ProcessorWrapper.isSupported — modern OR canvas.captureStream fallback
+    const hasModern =
+      typeof (window as any).MediaStreamTrackGenerator !== 'undefined' &&
+      typeof (window as any).MediaStreamTrackProcessor !== 'undefined';
+    const hasFallback =
+      typeof HTMLCanvasElement !== 'undefined' &&
+      typeof VideoFrame !== 'undefined' &&
+      'captureStream' in HTMLCanvasElement.prototype;
+    return hasModern || hasFallback;
+  } catch {
+    return false;
+  }
+}
+
 let _supported: boolean | undefined;
 /** True when the flag is on AND the browser can run the processor AT ALL —
  *  modern (MediaStreamTrackProcessor, Chrome/Edge) OR the canvas.captureStream
  *  FALLBACK (iOS Safari, older Android). Gating on the modern check alone hid
- *  the BG button entirely on mobile (Ali, 2026-06-08). The fallback path is
- *  heavier (main-thread RAF), so the engine runs it at the lightest adaptive
- *  profile and the never-freeze ladder still guards it.
- *  A GENUINE capability answer is cached (can't change within a session);
- *  a module-load failure is NOT an answer — it stays uncached so a later
- *  probe can retry once the network recovers. */
+ *  the BG button on mobile; gating on the async MODULE load hid it until a
+ *  refresh (Bug A). Now a SYNC local feature-detect — instant, no import. */
 export async function isBackgroundSupported(): Promise<boolean> {
   if (!BACKGROUND_EFFECTS_ENABLED) return false;
   if (_supported !== undefined) return _supported;
-  const mod = await loadBgProcessors();
-  if (!mod) return false; // do NOT cache — transient load failure
-  try {
-    _supported = typeof mod.supportsBackgroundProcessors === 'function'
-      ? mod.supportsBackgroundProcessors()
-      : false;
-  } catch {
-    _supported = false;
-  }
+  _supported = browserSupportsBgEffects();
   return _supported;
 }
 
