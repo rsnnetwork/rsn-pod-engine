@@ -1416,7 +1416,13 @@ function PreLobbyWaitingRoom({ isHost = false, sessionId }: { isHost?: boolean; 
   // direct request/response, so it works even on an unseated socket.
   useEffect(() => {
     if (!sessionId) return;
-    const iv = setInterval(async () => {
+    let cancelled = false;
+
+    // One convergence pass: ask the REST snapshot (server truth) and, if the
+    // event is live, apply it + pull both token rails. Shared by the interval
+    // AND the foreground listeners below.
+    const converge = async () => {
+      if (cancelled) return;
       try {
         const r = await api.get(`/sessions/${sessionId}/state`);
         const d = r.data?.data;
@@ -1437,9 +1443,32 @@ function PreLobbyWaitingRoom({ isHost = false, sessionId }: { isHost?: boolean; 
             } catch { /* resync rail covers */ }
           }
         }
-      } catch { /* transient — next tick retries */ }
-    }, 10_000);
-    return () => clearInterval(iv);
+      } catch { /* transient — next tick / next foreground retries */ }
+    };
+
+    const iv = setInterval(converge, 10_000);
+
+    // MOBILE STUCK-AT-WAITING-ROOM (2026-06-08, alihammza) — the 10s interval
+    // is THROTTLED/PAUSED by mobile browsers while the tab is backgrounded or
+    // the screen is locked, and the websocket is a silent zombie, so when the
+    // host presses Start during that window NOTHING converges until a full
+    // refresh. Converge the instant the tab returns to the foreground (and on
+    // network regain) so coming back — without refreshing — pulls the user in.
+    // Same return-to-foreground pattern the in-room ReconnectOnReturn uses.
+    const onForeground = () => { if (document.visibilityState === 'visible') void converge(); };
+    document.addEventListener('visibilitychange', onForeground);
+    window.addEventListener('focus', onForeground);
+    window.addEventListener('online', onForeground);
+    // Fire once on mount too (covers a tab that loaded already-backgrounded).
+    void converge();
+
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+      document.removeEventListener('visibilitychange', onForeground);
+      window.removeEventListener('focus', onForeground);
+      window.removeEventListener('online', onForeground);
+    };
   }, [sessionId]);
 
   return (

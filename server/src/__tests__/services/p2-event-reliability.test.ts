@@ -54,6 +54,19 @@ describe('P2-5 — host-reconnect dashboard replay batches name lookups', () => 
   });
 });
 
+describe('Bug B — waiting room converges on foreground (mobile stuck-at-start)', () => {
+  // mobile browsers pause setInterval while backgrounded; the websocket is a
+  // zombie — so a per-user must converge on visibilitychange/focus/online, not
+  // only on the throttled 10s timer (else only a full refresh unblocks them).
+  it('PreLobbyWaitingRoom re-runs convergence on return to foreground', () => {
+    const src = clientSrc('features/live/Lobby.tsx');
+    expect(src).toMatch(/const converge = async \(\)/);
+    expect(src).toMatch(/document\.addEventListener\('visibilitychange', onForeground\)/);
+    expect(src).toMatch(/window\.addEventListener\('focus', onForeground\)/);
+    expect(src).toMatch(/window\.addEventListener\('online', onForeground\)/);
+  });
+});
+
 describe('P2-3 — per-event SID markers are pruned on event exit', () => {
   it('LiveSessionPage clears the module-scope applied-prefs set on unmount', () => {
     expect(clientSrc('features/live/Lobby.tsx')).toMatch(/export function clearAppliedPrefMarkers/);
