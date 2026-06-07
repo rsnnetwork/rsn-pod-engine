@@ -784,18 +784,31 @@ export async function handleJoinSession(
       ].includes(activeSession.status) : false;
       if (isHost && activeSession && hostDashboardStates) {
         try {
-          const getName = async (uid: string) => {
-            const r = await query<{ display_name: string }>('SELECT display_name FROM users WHERE id = $1', [uid]);
-            return r.rows[0]?.display_name || 'User';
-          };
           const matches = await matchingService.getMatchesByRound(data.sessionId, activeSession.currentRound);
-          const rooms = await Promise.all(matches.map(async (m: any) => {
-            const participants = [
-              { userId: m.participantAId, displayName: await getName(m.participantAId), isConnected: activeSession!.presenceMap.has(m.participantAId) },
-              { userId: m.participantBId, displayName: await getName(m.participantBId), isConnected: activeSession!.presenceMap.has(m.participantBId) },
-            ];
-            if (m.participantCId) {
-              participants.push({ userId: m.participantCId, displayName: await getName(m.participantCId), isConnected: activeSession!.presenceMap.has(m.participantCId) });
+          // P2-5 — ONE batched name lookup instead of 2-3 queries PER MATCH.
+          // This replay fires on EVERY host page load / refresh / reconnect;
+          // at 50 rooms the old per-uid getName cost ~150 sequential round
+          // trips before the dashboard could render. (The canonical builder in
+          // matching-flow already batches with ANY($1) — this path drifted.)
+          // Slots are guarded like the canonical builder post-S25: B is NULL
+          // for 1-person manual rooms and must not become a phantom "User".
+          const slotIds = new Set<string>();
+          for (const m of matches) {
+            for (const uid of [m.participantAId, m.participantBId, m.participantCId]) {
+              if (uid) slotIds.add(uid);
+            }
+          }
+          const nameRows = slotIds.size
+            ? await query<{ id: string; display_name: string }>(
+                'SELECT id, display_name FROM users WHERE id = ANY($1)', [[...slotIds]],
+              )
+            : { rows: [] as Array<{ id: string; display_name: string }> };
+          const names = new Map(nameRows.rows.map((r) => [r.id, r.display_name]));
+          const getName = (uid: string) => names.get(uid) || 'User';
+          const rooms = matches.map((m: any) => {
+            const participants: Array<{ userId: string; displayName: string; isConnected: boolean }> = [];
+            for (const uid of [m.participantAId, m.participantBId, m.participantCId]) {
+              if (uid) participants.push({ userId: uid, displayName: getName(uid), isConnected: activeSession!.presenceMap.has(uid) });
             }
             // S24 (live-test bb) — THE root of "manual room showed as an
             // algorithm room with an End Round button": this reconnect
@@ -805,13 +818,13 @@ export async function handleJoinSession(
             // through and completed the event. Label the rooms like the
             // canonical builder (matching-flow) does.
             return { matchId: m.id, roomId: m.roomId || '', status: m.status, participants, isTrio: !!m.participantCId, isManual: m.isManual === true };
-          }));
+          });
           // Bye participants are those in_lobby during an active round (not in any active match)
           const matchedUserIds = new Set<string>();
           for (const m of matches) {
-            matchedUserIds.add(m.participantAId);
-            matchedUserIds.add(m.participantBId);
-            if (m.participantCId) matchedUserIds.add(m.participantCId);
+            for (const uid of [m.participantAId, m.participantBId, m.participantCId]) {
+              if (uid) matchedUserIds.add(uid);
+            }
           }
           const byeResult = await query<{ user_id: string; display_name: string }>(
             `SELECT sp.user_id, u.display_name FROM session_participants sp JOIN users u ON u.id = sp.user_id
