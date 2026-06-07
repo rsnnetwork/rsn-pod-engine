@@ -10,6 +10,7 @@
 // unit-tested); this shell binds them to livekit-client + track-processors.
 import { createLocalVideoTrack, LocalVideoTrack } from 'livekit-client';
 import {
+  BG_BLUR_RADIUS,
   BG_CAPTURE_RESOLUTION,
   createBackgroundProcessor,
   isBackgroundSupported,
@@ -242,7 +243,9 @@ class BgEngine {
   private async execSwitch(pref: BgPreference): Promise<void> {
     const proc = this.processor;
     if (!proc?.switchTo) throw new Error('bg_no_pipeline');
-    if (pref.mode === 'blur') await proc.switchTo({ mode: 'background-blur' });
+    // blurRadius must ride along — the library's switchTo default (10) is
+    // visibly weaker than the tuned RSN radius (bg-visual smoke caught this).
+    if (pref.mode === 'blur') await proc.switchTo({ mode: 'background-blur', blurRadius: BG_BLUR_RADIUS });
     else if (pref.mode === 'image') await proc.switchTo({ mode: 'virtual-background', imagePath: pref.imageUrl });
     else await proc.switchTo({ mode: 'disabled' }); // warm passthrough — re-enable stays instant
   }

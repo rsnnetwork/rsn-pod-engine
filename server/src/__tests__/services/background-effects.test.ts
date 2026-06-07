@@ -52,6 +52,9 @@ describe('Background effects — event-scoped engine wiring', () => {
   it('applies are serialized through the core queue with switchTo reuse', () => {
     expect(engine).toMatch(/createApplyQueue/);
     expect(engine).toMatch(/switchTo/);
+    // the tuned blur radius must ride every switch — the library default (10)
+    // is visibly weaker (caught by bg-visual on the preview, 2026-06-07)
+    expect(engine).toMatch(/mode: 'background-blur', blurRadius: BG_BLUR_RADIUS/);
     // "None" keeps the pipeline warm (passthrough), not a destroy
     expect(engine).toMatch(/mode: 'disabled' \}\); \/\/ warm passthrough/);
   });
