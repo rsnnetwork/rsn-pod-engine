@@ -122,6 +122,7 @@ class BgEngine {
       isBackgroundSupported(),
       new Promise<null>((r) => setTimeout(() => r(null), 8000)), // stalled fetch ⇒ check again later
     ]);
+    bgDebug('probe attempt', attempt, '→', s === null ? 'stalled' : s);
     if (s) {
       this.patch({ supported: true });
       void prewarmBackground(); // HTTP-cache wasm+model early
