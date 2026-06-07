@@ -73,7 +73,13 @@ async function fetchTokenWithRetry(
 }
 
 export default function useSessionSocket(sessionId: string) {
-  const store = useSessionStore();
+  // P2-1 — actions only, NO subscription. Zustand actions are stable
+  // singletons, and every state READ in this hook already goes through
+  // useSessionStore.getState() inside the handlers. The old whole-store
+  // subscription re-rendered the entire LiveSessionPage tree on EVERY store
+  // write (each 1s timer tick, every chat message, every presence change)
+  // for zero functional benefit.
+  const store = useRef(useSessionStore.getState()).current;
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const ratingFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const byeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);

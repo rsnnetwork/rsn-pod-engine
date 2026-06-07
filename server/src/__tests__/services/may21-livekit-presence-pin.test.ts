@@ -83,7 +83,9 @@ describe('F3 (21 May Ali) — LiveKit presence is the source of truth for in-roo
     it('LobbyStatusOverlay reads the realtime in-room list', () => {
       const idx = src.indexOf('function LobbyStatusOverlay');
       expect(idx).toBeGreaterThan(-1);
-      const body = src.slice(idx, idx + 600);
+      // window widened 600→1000: P2-1 expanded the whole-store destructure
+      // into per-field selectors above the call
+      const body = src.slice(idx, idx + 1000);
       expect(body).toMatch(/useInRoomParticipants\(\)/);
     });
 

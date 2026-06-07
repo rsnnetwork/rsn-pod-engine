@@ -647,7 +647,10 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
   // mirror them into local state for the optimistic-toggle UX.
   const { localParticipant, isMicrophoneEnabled: hookMicEnabled, isCameraEnabled: hookCamEnabled } = useLocalParticipant();
   const allParticipants = useParticipants();
-  const { hostMuteCommand, setHostMuteCommand } = useSessionStore();
+  // P2-1 — field selectors, not whole-store: this strip must not re-render on
+  // every timer tick / chat message (it sits inside the per-tile layout).
+  const hostMuteCommand = useSessionStore(s => s.hostMuteCommand);
+  const setHostMuteCommand = useSessionStore(s => s.setHostMuteCommand);
   // Restore camera/mic preference from sessionStorage (FIX 15D — survives refresh)
   const [micEnabled, setMicEnabled] = useState(() => {
     const saved = sessionStorage.getItem('rsn_mic');
@@ -1011,7 +1014,13 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
   // participant:joined/left fan-out misses a client. useInRoomParticipants
   // returns the LiveKit identity set when the room is mounted, falling
   // back to the durable roster pre-LiveKit.
-  const { isByeRound, transitionStatus, sessionStatus, hostUserId, leftCurrentRound, cohosts } = useSessionStore();
+  // P2-1 — field selectors (header rebuilt itself on every store write before)
+  const isByeRound = useSessionStore(s => s.isByeRound);
+  const transitionStatus = useSessionStore(s => s.transitionStatus);
+  const sessionStatus = useSessionStore(s => s.sessionStatus);
+  const hostUserId = useSessionStore(s => s.hostUserId);
+  const leftCurrentRound = useSessionStore(s => s.leftCurrentRound);
+  const cohosts = useSessionStore(s => s.cohosts);
   const participants = useInRoomParticipants();
   // Bug E (15 May Ali) — header count needs acting-as-host opt-ins.
   const actingAsHostOverrides = useSessionStore(s => s.actingAsHostOverrides);
@@ -1169,7 +1178,8 @@ function formatParticipantHeader(
 
 function HostParticipantPanel({ sessionId }: { sessionId?: string }) {
   // F3 (21 May Ali) — same realtime-presence story as LobbyStatusOverlay.
-  const { hostUserId, cohosts } = useSessionStore();
+  const hostUserId = useSessionStore(s => s.hostUserId);
+  const cohosts = useSessionStore(s => s.cohosts);
   const participants = useInRoomParticipants();
   // Phase P (Ali's 13 May clarification) — host roster must factor in
   // acting_as_host opt-ins (admins/super_admins joining as host) and
@@ -1377,7 +1387,9 @@ function DeviceTest() {
  * status overlay is secondary — matches how Google Meet / FaceTime handle pre-call.
  */
 function PreLobbyWaitingRoom({ isHost = false, sessionId }: { isHost?: boolean; sessionId?: string }) {
-  const { participants, hostUserId, cohosts } = useSessionStore();
+  const participants = useSessionStore(s => s.participants);
+  const hostUserId = useSessionStore(s => s.hostUserId);
+  const cohosts = useSessionStore(s => s.cohosts);
   // Bug E (15 May Ali) — count acting hosts (Phase M opt-ins) too.
   const actingAsHostOverrides = useSessionStore(s => s.actingAsHostOverrides);
   const hostOnline = useHostPresence();
@@ -1489,7 +1501,16 @@ function PreLobbyWaitingRoom({ isHost = false, sessionId }: { isHost?: boolean; 
 }
 
 export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean; sessionId?: string }) {
-  const { participants, lobbyToken, lobbyUrl, sessionStatus, hostUserId, roundDashboard } = useSessionStore();
+  // P2-1 — the TOP-LEVEL lobby component: a whole-store subscription here
+  // rippled re-renders through LobbyMosaic (the entire video grid) on every
+  // timer tick. Field selectors make the grid re-render only when these
+  // actually change.
+  const participants = useSessionStore(s => s.participants);
+  const lobbyToken = useSessionStore(s => s.lobbyToken);
+  const lobbyUrl = useSessionStore(s => s.lobbyUrl);
+  const sessionStatus = useSessionStore(s => s.sessionStatus);
+  const hostUserId = useSessionStore(s => s.hostUserId);
+  const roundDashboard = useSessionStore(s => s.roundDashboard);
 
   // Host sees breakout room dashboard only when there are ACTIVE rooms (not stale disconnected/completed)
   const hasActiveRooms = roundDashboard?.rooms.some((r: any) => r.status === 'active');
