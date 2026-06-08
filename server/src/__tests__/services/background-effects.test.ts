@@ -88,6 +88,14 @@ describe('Background effects — event-scoped engine wiring', () => {
     expect(engine).toMatch(/lastDegradeToastAt/); // debounced so a flapping device can't spam
   });
 
+  it('the live event page mounts a ToastContainer (it is outside AppLayout)', () => {
+    // Without this the auto-disable toast fired into the void during an event
+    // (Ali, 2026-06-08). The /session/:id/live route bypasses AppLayout.
+    const page = clientSrc('features/live/LiveSessionPage.tsx');
+    expect(page).toMatch(/import ToastContainer from '@\/components\/ui\/Toast'/);
+    expect(page).toMatch(/<ToastContainer \/>/);
+  });
+
   it('Bug④ — no-flash transformer is flag-gated, modern-API-only, code-split, library-wrapped, same proven mask', () => {
     const flags = clientSrc('lib/featureFlags.ts');
     const nf = clientSrc('lib/bgNoFlashTransformer.ts');

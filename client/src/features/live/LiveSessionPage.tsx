@@ -15,6 +15,7 @@ import MatchingOverlay from './MatchingOverlay';
 import ReactionBar from './ReactionBar';
 import ParticipantList from './ParticipantList';
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
+import ToastContainer from '@/components/ui/Toast';
 import { PageLoader } from '@/components/ui/Spinner';
 import { AlertCircle, X, LogOut, WifiOff, Loader2, RefreshCw, MessageCircle, Radio, Users, Shuffle, Mic, ArrowLeftRight, CheckCircle2, Lock } from 'lucide-react';
 import api from '@/lib/api';
@@ -174,6 +175,13 @@ export default function LiveSessionPage() {
     // viewport wider on mobile. min-w-0 lets flex children shrink
     // below their content width instead of pushing the parent.
     <div className="h-[100dvh] bg-white flex flex-col overflow-x-hidden min-w-0">
+      {/* Toasts: the live event route is NOT inside AppLayout (App.tsx), so the
+          app-wide ToastContainer there never mounts during an event — toasts
+          (e.g. the BG auto-disable notice) fired into the void (Ali, 2026-06-08:
+          "removes BG and doesn't inform user"). Mount one here so event-time
+          toasts are visible. Self-contained, fixed-position; no duplicate
+          because this page bypasses AppLayout. */}
+      <ToastContainer />
       {/* Phase 5B (5 May spec) — test-mode banner.
           Shown to ALL participants when the server detects multiple
           accounts sharing the host's email-username root, OR when the
