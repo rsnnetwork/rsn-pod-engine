@@ -20,8 +20,12 @@
 // (setupWebGL) — a larger, riskier vendor deferred to its own effort. Until
 // then the edge quality stays at the stock model's level (= Google Meet basic).
 //
-// Flag-gated (featureFlags.BG_NOFLASH_TRANSFORMER) and used ONLY on the modern
-// API path; mobile / canvas fallback / flag-off keep the stock BackgroundProcessor.
+// Flag-gated (featureFlags.BG_NOFLASH_TRANSFORMER). As of 2026-06-09 it runs on
+// EVERY supported path â€” modern (Chrome/Edge) AND the canvas.captureStream
+// fallback (iOS Safari / older Android) â€” because the first-frame raw flash is
+// exactly what phone users saw on apply. It subclasses the library's
+// VideoTransformer, so ProcessorWrapper drives it identically on both paths;
+// flag-off reverts to the stock BackgroundProcessor everywhere.
 import { VideoTransformer } from '@livekit/track-processors';
 import { FilesetResolver, ImageSegmenter } from '@mediapipe/tasks-vision';
 import type * as vision from '@mediapipe/tasks-vision';
@@ -50,6 +54,13 @@ export class NoFlashBackgroundTransformer extends VideoTransformer<NoFlashBackgr
   options: NoFlashBackgroundOptions;
   segmentationTimeMs = 0;
   isFirstFrame = true;
+  // The `WIDTHxHEIGHT` the image background was last cover-cropped for. The
+  // library covers the bitmap to canvas.width/height ONCE (at set time); if the
+  // frame dimensions later change (mobile rotation, or a device that ignored the
+  // 960x540 capture constraint) the crop goes stale and the image letterboxes or
+  // stretches. We re-cover whenever this key changes so an image background stays
+  // fully fitted on every device/orientation. '' = not yet covered.
+  private bgFitKey = '';
 
   constructor(opts: NoFlashBackgroundOptions) {
     super();
@@ -95,6 +106,7 @@ export class NoFlashBackgroundTransformer extends VideoTransformer<NoFlashBackgr
     await this.imageSegmenter?.close();
     this.backgroundImageAndPath = null;
     this.isFirstFrame = true;
+    this.bgFitKey = '';
   }
 
   async loadAndSetBackground(path: string) {
@@ -110,6 +122,9 @@ export class NoFlashBackgroundTransformer extends VideoTransformer<NoFlashBackgr
       this.backgroundImageAndPath = { imageData, path };
     }
     this.gl?.setBackgroundImage(this.backgroundImageAndPath.imageData);
+    // Record the dimensions we just covered for, so transform() only re-covers
+    // when the frame size actually changes.
+    this.bgFitKey = this.canvas ? `${this.canvas.width}x${this.canvas.height}` : '';
   }
 
   async transform(frame: VideoFrame, controller: TransformStreamDefaultController<VideoFrame>) {
@@ -133,6 +148,20 @@ export class NoFlashBackgroundTransformer extends VideoTransformer<NoFlashBackgr
       if (!this.canvas) throw TypeError('Canvas needs to be initialized first');
       this.canvas.width = frame.displayWidth;
       this.canvas.height = frame.displayHeight;
+
+      // Keep an IMAGE background fully covering the ACTUAL frame. The library
+      // crops the bitmap to canvas dims only when setBackgroundImage is called;
+      // if the frame size changes afterwards (rotation, constraint ignored) the
+      // crop is stale and the room shows at the edges. switchTo reliably clears
+      // imagePath on blur/disabled, so this never fires outside image mode. The
+      // re-cover (createImageBitmap) runs only on a genuine dimension change.
+      if (typeof this.options.imagePath === 'string' && this.backgroundImageAndPath) {
+        const fitKey = `${this.canvas.width}x${this.canvas.height}`;
+        if (fitKey !== this.bgFitKey) {
+          this.bgFitKey = fitKey;
+          void this.gl?.setBackgroundImage(this.backgroundImageAndPath.imageData);
+        }
+      }
 
       // DELTA — the stock transformer enqueues an UNPROCESSED clone here on the
       // first frame (flash of the real room). We prewarm the model, so process
@@ -186,6 +215,7 @@ export class NoFlashBackgroundTransformer extends VideoTransformer<NoFlashBackgr
       await this.loadAndSetBackground(opts.imagePath);
     } else {
       this.gl?.setBackgroundImage(null);
+      this.bgFitKey = ''; // no image active; re-cover on the next image apply
     }
     this.gl?.setBackgroundDisabled(opts.backgroundDisabled ?? false);
   }

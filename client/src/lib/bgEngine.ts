@@ -268,12 +268,20 @@ class BgEngine {
       this.lastFrameAt = Date.now();
       monitor(stats);
     };
-    // Bugâ‘£ â€” desktop (modern API) + flag â†’ vendored no-flash transformer
-    // for accurate, feathered edges and no first-frame flash. Mobile / canvas
-    // fallback / flag-off stay on the proven stock BackgroundProcessor. The
-    // module is dynamically imported so the heavy transformer/mediapipe code
-    // stays code-split (never in the initial bundle).
-    const proc = (BG_NOFLASH_TRANSFORMER && this.modernApi)
+    // Flag on â†’ vendored no-flash transformer on EVERY supported path
+    // (2026-06-09). It subclasses the library's VideoTransformer, so the
+    // ProcessorWrapper drives it identically on the modern (Chrome/Edge) AND
+    // the canvas.captureStream fallback (iOS Safari / older Android) paths.
+    // The one delta vs stock is dropping the first-frame RAW clone the stock
+    // transformer enqueues to mask cold model-load â€” which briefly reveals the
+    // user's real room on apply. We prewarm the model, so we process the first
+    // frame normally instead. Originally desktop-only out of caution; extended
+    // to mobile because that flash is exactly what phone users see, and the
+    // mask source is the SAME proven category mask (zero edge-quality change).
+    // Module is dynamically imported so the heavy code stays code-split. Flag
+    // off reverts to the stock BackgroundProcessor everywhere.
+    const useNoFlash = BG_NOFLASH_TRANSFORMER;
+    const proc = useNoFlash
       ? await this.buildNoFlashProcessor(mod, pref, assetPaths, onFrameProcessed)
       : pref.mode === 'disabled'
         ? mod.BackgroundProcessor({ mode: 'disabled', maxFps: this.profile.maxFps, assetPaths, onFrameProcessed })
@@ -282,7 +290,7 @@ class BgEngine {
     this.processor = proc;
     this.startStallWatchdog();
     bgDebug('pipeline built', pref.mode, 'maxFps', this.profile.maxFps,
-      (BG_NOFLASH_TRANSFORMER && this.modernApi) ? 'noflash' : 'stock');
+      useNoFlash ? 'noflash' : 'stock', this.modernApi ? 'modern' : 'fallback');
   }
 
   /** Build a BackgroundProcessorWrapper around the vendored confidence-mask

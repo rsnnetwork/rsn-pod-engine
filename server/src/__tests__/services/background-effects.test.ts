@@ -96,12 +96,14 @@ describe('Background effects — event-scoped engine wiring', () => {
     expect(page).toMatch(/<ToastContainer \/>/);
   });
 
-  it('Bug④ — no-flash transformer is flag-gated, modern-API-only, code-split, library-wrapped, same proven mask', () => {
+  it('Bug④ — no-flash transformer is flag-gated, ALL-PATHS (mobile too), code-split, library-wrapped, same proven mask', () => {
     const flags = clientSrc('lib/featureFlags.ts');
     const nf = clientSrc('lib/bgNoFlashTransformer.ts');
     expect(flags).toMatch(/BG_NOFLASH_TRANSFORMER = true/);
-    // gated on flag AND modern API (mobile/fallback stay on stock)
-    expect(engine).toMatch(/BG_NOFLASH_TRANSFORMER && this\.modernApi/);
+    // 2026-06-09: gated on the flag ALONE — no longer modern-API-only, so the
+    // canvas fallback (iOS Safari / older Android) also gets no apply-flash.
+    expect(engine).toMatch(/const useNoFlash = BG_NOFLASH_TRANSFORMER;/);
+    expect(engine).not.toMatch(/BG_NOFLASH_TRANSFORMER && this\.modernApi/);
     // dynamically imported so the heavy transformer/mediapipe stays code-split
     expect(engine).toMatch(/await import\('\.\/bgNoFlashTransformer'\)/);
     // built on the library's exported wrapper — only the transformer is vendored
@@ -113,6 +115,17 @@ describe('Background effects — event-scoped engine wiring', () => {
     expect(nf).not.toMatch(/controller\.enqueue\(frame\.clone\(\)\)/);
     // confidence-mask path stays parked (would composite inverted)
     expect(nf).not.toMatch(/outputConfidenceMasks: true/);
+  });
+
+  it('image background re-covers when frame dimensions change (mobile rotation / fully-fitted)', () => {
+    // The library covers the bitmap to canvas dims only at set-time; if the
+    // frame size later changes the crop goes stale and the real room shows at
+    // the edges. The vendored transformer re-covers on a dimension change.
+    const nf = clientSrc('lib/bgNoFlashTransformer.ts');
+    expect(nf).toMatch(/private bgFitKey = '';/);
+    // re-cover guarded to image mode only (switchTo clears imagePath otherwise)
+    expect(nf).toMatch(/typeof this\.options\.imagePath === 'string' && this\.backgroundImageAndPath/);
+    expect(nf).toMatch(/this\.gl\?\.setBackgroundImage\(this\.backgroundImageAndPath\.imageData\)/);
   });
 
   it('custom uploads persist via IndexedDB sentinel (refresh-survivable)', () => {
