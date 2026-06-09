@@ -142,8 +142,12 @@ test('#3: a super_admin (not the director) always sees host controls', async () 
     await page.goto(`${APP}/session/${sessionId}/live`, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(9000);
     // sadmin is a super_admin and NOT the event director, yet must see host UI.
-    const ctrl = page.getByRole('button', { name: /Control Center|End Event/ });
+    // Both "Control Center" AND "End Event" render for a host, so scope to first.
+    const ctrl = page.getByRole('button', { name: /Control Center|End Event/ }).first();
     await expect(ctrl, 'a non-director super_admin must see host controls').toBeVisible({ timeout: 20_000 });
+    // Confirm the full host control bar is present (≥2 host buttons), not a fluke.
+    expect(await page.getByRole('button', { name: /Control Center|End Event/ }).count(),
+      'super_admin should see the host control bar').toBeGreaterThanOrEqual(2);
     await page.screenshot({ path: 'test-results/j9-superadmin-host.png' }).catch(() => {});
     console.log('  ✓ non-director super_admin sees host controls');
   } finally { await ctx.close(); }
