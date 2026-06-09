@@ -318,7 +318,16 @@ export async function sendMagicLink(email: string, requestedClientUrl?: string, 
 
   // Build the magic link URL using request origin when available.
   const clientBaseUrl = resolveClientBaseUrl(requestedClientUrl);
-  const magicLinkUrl = `${clientBaseUrl}/auth/verify?token=${token}`;
+  // Carry the invite code IN THE LINK (Stefan, 9 Jun): a new user invited to an
+  // event clicks the magic link from their email — usually a different tab /
+  // browser / phone where the login tab's sessionStorage `rsn_redirect` does NOT
+  // exist. Without the code in the URL, VerifyPage falls back to '/' (dashboard)
+  // and the invitee never reaches the invite-accept step, so they're never
+  // registered for the event. The Google-OAuth path already embeds inviteCode in
+  // the verify URL; magic link must too so VerifyPage routes them to /invite/:code.
+  const magicLinkUrl = inviteCode
+    ? `${clientBaseUrl}/auth/verify?token=${token}&inviteCode=${encodeURIComponent(inviteCode)}`
+    : `${clientBaseUrl}/auth/verify?token=${token}`;
 
   // In development, return the link directly (also send email if configured)
   if (config.isDev) {
