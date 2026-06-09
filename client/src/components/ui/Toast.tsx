@@ -23,9 +23,13 @@ interface Props {
 
 export default function ToastContainer({ hostQuiet = false }: Props) {
   const { toasts, removeToast } = useToastStore();
+  // Internal/admin/system messages ("plan updated", "event plan ready") never
+  // banner anyone — they're already reflected in the UI and aren't user-facing
+  // event messages (Ali, 9 Jun: participants must not see system messages).
+  const userFacing = toasts.filter(t => !t.internal);
   const visible = hostQuiet
-    ? toasts.filter(t => t.type === 'error' && !t.hostSilent)
-    : toasts;
+    ? userFacing.filter(t => t.type === 'error' && !t.hostSilent)
+    : userFacing;
   return (
     <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2 max-w-sm">
       <AnimatePresence>

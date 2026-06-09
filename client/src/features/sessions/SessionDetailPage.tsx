@@ -277,7 +277,16 @@ export default function SessionDetailPage() {
 
   const createSessionInviteMutation = useMutation({
     mutationFn: (body: { inviteeEmail?: string }) =>
-      api.post('/invites', { type: 'session', sessionId, maxUses: body.inviteeEmail ? 1 : 10, expiresInHours: 168, ...body }),
+      // A direct email invite is single-use; a SHAREABLE link must cover the
+      // whole event, not an arbitrary 10 (Ali, 9 Jun — couldn't invite a large
+      // group). Cap it at the event's capacity (maxParticipants, default 500).
+      api.post('/invites', {
+        type: 'session',
+        sessionId,
+        maxUses: body.inviteeEmail ? 1 : (session?.config?.maxParticipants ?? 500),
+        expiresInHours: 168,
+        ...body,
+      }),
     onSuccess: (res: any, variables) => {
       const code = res.data?.data?.code;
       if (code) setInviteLink(`${window.location.origin}/invite/${code}`);
@@ -894,7 +903,7 @@ export default function SessionDetailPage() {
                   value={userSearch}
                   onChange={e => setUserSearch(e.target.value)}
                   placeholder="Search by name or email..."
-                  className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#1a1a2e]"
+                  className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-200 bg-gray-50 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a1a2e]"
                 />
               </div>
               {debouncedUserSearch.length >= 1 && searchResults && searchResults.length === 0 && (

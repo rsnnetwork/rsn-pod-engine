@@ -260,9 +260,17 @@ class BgEngine {
     if (!mod) throw new Error('bg_module_unavailable');
     const assetPaths = await resolveAssetPaths();
     this.reduced = false;
+    // Judge frame health against the DEVICE'S OWN target fps, not a fixed 15fps.
+    // A mobile profile (maxFps 8–10 ⇒ 100–125ms/frame) was being measured
+    // against the 66ms 15fps budget, so ordinary mobile frames read as breaches
+    // and the effect self-disabled after a few seconds (Ali, 9 Jun). Budget =
+    // 1000/maxFps; watchdog scales with it so one jank spike doesn't kill it.
+    const frameBudgetMs = Math.round(1000 / Math.max(1, this.profile.maxFps));
     const monitor = createFrameHealthMonitor({
       onReduce: () => this.stepDownFps(),
       onDisable: () => { void this.autoDisable('degrade'); },
+      budgetMs: frameBudgetMs,
+      watchdogMs: Math.max(250, frameBudgetMs * 3),
     });
     const onFrameProcessed = (stats: FrameStats) => {
       this.lastFrameAt = Date.now();

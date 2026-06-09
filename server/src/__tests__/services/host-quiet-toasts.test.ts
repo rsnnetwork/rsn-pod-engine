@@ -16,21 +16,31 @@ describe('Host-quiet toasts', () => {
   const toast = clientSrc('components/ui/Toast.tsx');
   const live = clientSrc('features/live/LiveSessionPage.tsx');
   const rating = clientSrc('features/live/RatingPrompt.tsx');
+  const sock = clientSrc('hooks/useSessionSocket.ts');
 
-  it('the toast store carries an optional hostSilent flag through addToast', () => {
+  it('the toast store carries optional hostSilent + internal flags through addToast', () => {
     expect(store).toMatch(/hostSilent\?: boolean/);
+    expect(store).toMatch(/internal\?: boolean/);
     expect(store).toMatch(/addToast: \(message: string, type: Toast\['type'\], opts\?: ToastOptions\)/);
-    // the flag is persisted onto the toast it creates
+    // the flags are persisted onto the toast it creates
     expect(store).toMatch(/hostSilent: opts\?\.hostSilent/);
+    expect(store).toMatch(/internal: opts\?\.internal/);
   });
 
-  it('ToastContainer hostQuiet mode shows the host ONLY non-silent errors', () => {
+  it('ToastContainer drops internal toasts for everyone, then host sees only non-silent errors', () => {
     expect(toast).toMatch(/hostQuiet\?: boolean/);
     expect(toast).toMatch(/export default function ToastContainer\(\{ hostQuiet = false \}: Props\)/);
-    // info / success are dropped for the host; errors survive unless hostSilent
-    expect(toast).toMatch(/hostQuiet[\s\S]*toasts\.filter\(t => t\.type === 'error' && !t\.hostSilent\)/);
+    // #2 (9 Jun) — internal/admin/system messages never banner ANYONE
+    expect(toast).toMatch(/const userFacing = toasts\.filter\(t => !t\.internal\)/);
+    // host: info/success dropped; errors survive unless hostSilent
+    expect(toast).toMatch(/hostQuiet[\s\S]*userFacing\.filter\(t => t\.type === 'error' && !t\.hostSilent\)/);
     // the render loop iterates the filtered list, not the raw store
     expect(toast).toMatch(/\{visible\.map\(t =>/);
+  });
+
+  it('#2 — the "plan updated" + "event plan ready" notices are internal (no participant banner)', () => {
+    expect(sock).toMatch(/Plan updated for \$\{range\} \(\$\{reason\}\)`, 'info', \{ internal: true \}\)/);
+    expect(sock).toMatch(/'success', \{ internal: true \}\)/);
   });
 
   it('the live event page runs the host in hostQuiet mode', () => {

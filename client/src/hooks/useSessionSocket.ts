@@ -802,7 +802,9 @@ export default function useSessionSocket(sessionId: string) {
       const toast = useToastStore.getState().addToast;
       const rc = data?.roundCount ?? 0;
       const tp = data?.totalPairs ?? 0;
-      toast(`Event plan ready — ${rc} ${rc === 1 ? 'round' : 'rounds'}, ${tp} ${tp === 1 ? 'pair' : 'pairs'}`, 'success');
+      // Internal/admin notification — the host UI shows the plan summary
+      // persistently (below), and participants must not see system messages.
+      toast(`Event plan ready — ${rc} ${rc === 1 ? 'round' : 'rounds'}, ${tp} ${tp === 1 ? 'pair' : 'pairs'}`, 'success', { internal: true });
       // Also store the headline numbers so the host UI can show them persistently.
       store.setEventPlanSummary?.({ roundCount: rc, totalPairs: tp });
     });
@@ -851,7 +853,9 @@ export default function useSessionSocket(sessionId: string) {
       const range = rounds.length === 1
         ? `round ${rounds[0]}`
         : `rounds ${rounds[0]}–${rounds[rounds.length - 1]}`;
-      toast(`Plan updated for ${range} (${reason})`, 'info');
+      // Internal/admin notification — reflected in the event-plan strip; not a
+      // user-facing message, so it never banners participants OR the host.
+      toast(`Plan updated for ${range} (${reason})`, 'info', { internal: true });
     });
 
     // ── Lobby video ──

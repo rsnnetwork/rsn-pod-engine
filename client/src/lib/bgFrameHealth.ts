@@ -57,16 +57,23 @@ export function createFrameHealthMonitor(handlers: {
   /** Start already stepped-down — the processor was rebuilt at reduced fps, so
    *  the next sustained breach should disable rather than reduce again. */
   startReduced?: boolean;
-  /** Per-frame budget in ms. Defaults to the 15fps budget; when the processor
-   *  has been rebuilt at the reduced fps, pass the larger (10fps) budget so a
-   *  frame that fits the reduced rate is not still counted as a breach. */
+  /** Per-frame budget in ms. Defaults to the 15fps budget; PASS THE DEVICE'S
+   *  ACTUAL target (1000 / profile.maxFps) so a mobile profile (8–10fps =
+   *  100–125ms/frame) isn't judged against the 66ms 15fps budget — that
+   *  mismatch false-disabled mobile backgrounds after a few seconds (Ali, 9 Jun). */
   budgetMs?: number;
+  /** Single-frame catastrophic kill threshold. Defaults to BG_WATCHDOG_MS
+   *  (250ms — tuned for the 15fps desktop budget). On a slower profile pass a
+   *  larger value so one mobile jank spike doesn't nuke the effect. */
+  watchdogMs?: number;
 }): (stats: FrameStats) => void {
   const budget = handlers.budgetMs ?? BG_FRAME_BUDGET_MS;
+  const watchdogMs = handlers.watchdogMs ?? BG_WATCHDOG_MS;
   const breaches: number[] = [];
   let reduced = handlers.startReduced ?? false;
   let finished = false;
   let total = 0;
+  let catastrophic = 0; // consecutive watchdog-class frames
 
   return (stats: FrameStats) => {
     if (finished) return;
@@ -76,12 +83,20 @@ export function createFrameHealthMonitor(handlers: {
     total++;
     if (total <= BG_WARMUP_FRAMES) return;
 
-    // Hard watchdog — one catastrophic frame ends it now.
-    if (stats.processingTimeMs >= BG_WATCHDOG_MS) {
-      finished = true;
-      handlers.onDisable();
+    // Hard watchdog — kill on TWO consecutive catastrophic frames, not one.
+    // A single >watchdog spike (a GC pause / a backgrounded mobile tab waking)
+    // is normal jank; requiring two-in-a-row keeps the never-freeze guarantee
+    // (the render loop already drops frames) while not flapping the effect off
+    // on a momentary spike — the other half of the mobile-disappear fix.
+    if (stats.processingTimeMs >= watchdogMs) {
+      catastrophic++;
+      if (catastrophic >= 2) {
+        finished = true;
+        handlers.onDisable();
+      }
       return;
     }
+    catastrophic = 0;
 
     breaches.push(stats.processingTimeMs > budget ? 1 : 0);
     if (breaches.length < BG_HEALTH_WINDOW) return;
