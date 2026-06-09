@@ -91,23 +91,17 @@ export default function LiveSessionPage() {
   const cohosts = useSessionStore(s => s.cohosts);
   const isOriginalHost = session?.hostUserId === user?.id;
   const isCohost = !!user?.id && cohosts.has(user.id);
-  // Bug D (15 May Ali) — super_admins no longer auto-default to host.
-  // Pre-fix they saw Start/End Event buttons and host controls the moment
-  // they opened the page, but the server-side hostsSet only counted them
-  // as host once they explicitly opted in via the "Join as host" banner.
-  // The mismatch produced screens where the count said "1 host" while a
-  // super_admin had host controls — confusing for everyone in the lobby.
-  // Now baseIsHost only reflects FORMAL roles (director + session_cohosts);
-  // super_admin and admin both pass through Phase M (explicit pick + per-
-  // event override) just like everyone else with the toggle.
-  const baseIsHost = isOriginalHost || isCohost;
-  // 23 May (Stefan + Ali) — the "Join as host / participant" picker is
-  // removed. Only the event director and formally-assigned cohosts are
-  // hosts; everyone else (including admins / super-admins who merely open
-  // someone else's event) joins straight as a participant. These four
-  // values are pinned so the role banners + the must-pick blocker below
-  // never render and the content always shows. Kept as no-ops rather than
-  // ripping out the JSX mid-fix; the dead banner markup is pruned later.
+  // Stefan's rule (9 Jun): a SUPER-ADMIN (only Stefan now) ALWAYS has host
+  // authority on EVERY event — whether or not he's the director — and sees all
+  // host controls. Admins (the default for everyone else, incl. Ali/Shradha)
+  // join as ordinary participants and get host controls only when promoted to
+  // co-host. This restores the super-admin auto-host the 23-May change had
+  // pinned off; the server already authorises super-admins via canActAsHost.
+  const isSuperAdmin = (user as any)?.role === 'super_admin';
+  const baseIsHost = isOriginalHost || isCohost || isSuperAdmin;
+  // The "Join as host / participant" picker is removed; these stay pinned so the
+  // old role banners + must-pick blocker never render and the content always
+  // shows. (Dead Phase-M banner markup below is a no-op.)
   const isHost = baseIsHost;
   const myActingAsHost: boolean | undefined = undefined;
   const canToggleActingAsHost = false;

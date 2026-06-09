@@ -78,27 +78,17 @@ describe('Phase I — narrow auto-host capability to super_admin only', () => {
   describe('client LiveSessionPage — admin no longer in isHost gate', () => {
     const src = readClient('features/live/LiveSessionPage.tsx');
 
-    it('baseIsHost gate covers only formal roles (director + cohost); admin/super_admin reach host UI via Phase M opt-in', () => {
-      // Phase M (12 May) layered an acting-as-host override on top of the
-      // base form, so the literal `const isHost = isOriginalHost ||
-      // isCohost || isSuperAdmin` line moved to `baseIsHost`. Bug D
-      // (15 May Ali) tightened it further: even SUPER_ADMIN must now
-      // explicitly pick "Join as host" before host UI surfaces. The Phase I
-      // invariant (admin NOT in the role-derived host gate) continues to
-      // hold and is in fact strengthened — super_admin no longer auto-
-      // passes either; both reach host UI only via Phase M opt-in.
-      expect(src).toMatch(/const\s+baseIsHost\s*=\s*isOriginalHost\s*\|\|\s*isCohost\s*;/);
-      // Forbid the broad form — admin should no longer fold into the
-      // role-derived host gate. (The old `const isAdmin = role === 'admin'
-      // || role === 'super_admin'` expression must not appear in the
-      // baseIsHost calculation, and neither does super_admin now.)
+    it('baseIsHost = director || cohost || super_admin — admin still NOT auto-host (Stefan 9 Jun)', () => {
+      // The Phase I invariant that a plain ADMIN is not in the role-derived
+      // host gate STILL holds. Stefan's 9-Jun rule changed only super_admin:
+      // it ALWAYS has host authority on every event, so isSuperAdmin folds into
+      // baseIsHost. Admins remain participants until promoted to cohost.
+      expect(src).toMatch(/const\s+baseIsHost\s*=\s*isOriginalHost\s*\|\|\s*isCohost\s*\|\|\s*isSuperAdmin\s*;/);
       const baseLine = src.match(/const\s+baseIsHost\s*=[^;]+;/);
       expect(baseLine).toBeTruthy();
-      expect(baseLine![0]).not.toMatch(/isAdmin/);
-      expect(baseLine![0]).not.toMatch(/isSuperAdmin/);
-      // 23 May (Stefan + Ali) — acting-as-host removed; there is no longer a
-      // Phase M opt-in pathway. The Phase I invariant is now absolute: admins
-      // and super-admins are plain participants in events, isHost = baseIsHost.
+      // a plain admin (`isAdmin`) must NOT fold into the gate — only super_admin.
+      expect(baseLine![0]).not.toMatch(/isAdmin\b/);
+      expect(baseLine![0]).toMatch(/isSuperAdmin/);
       expect(src).toMatch(/const\s+isHost\s*=\s*baseIsHost\s*;/);
     });
   });

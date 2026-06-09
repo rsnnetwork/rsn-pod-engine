@@ -198,20 +198,20 @@ describe('Phase S — host-initiated demote/promote endpoint', () => {
   describe('Server — refuseIfAdminTarget defence-in-depth on admin promote/demote/kick', () => {
     const src = readServer('services/orchestration/handlers/host-actions.ts');
 
-    it('declares refuseIfAdminTarget helper that emits ADMIN_TARGET on platform admin or super_admin targets', () => {
-      // Bug J (15 May Ali) — defence in depth. The HCC disables the
-      // buttons client-side, but a forged socket frame would still
-      // succeed without this gate.
+    it('refuseIfAdminTarget: super_admin is undemotable by anyone; admin only by the director', () => {
+      // Bug J (15 May Ali) — defence in depth. Stefan's 9-Jun rule split the
+      // old combined `admin || super_admin` check: a SUPER_ADMIN is refused
+      // BEFORE the director shortcut (so even the director can't demote them),
+      // while a plain ADMIN is refused only for non-directors (the director CAN).
       expect(src).toMatch(/async function refuseIfAdminTarget\(/);
-      // Reads the global role from users.role.
       expect(src).toMatch(
         /SELECT\s+role[\s\S]{0,50}FROM\s+users\s+WHERE\s+id\s*=\s*\$1/i,
       );
-      // Refuses on either tier.
-      expect(src).toMatch(
-        /targetRole\s*===\s*['"]admin['"]\s*\|\|\s*targetRole\s*===\s*['"]super_admin['"]/,
-      );
-      // Emits an error frame so the caller's UI can surface the refusal.
+      // super_admin → never demotable (own error code), checked first.
+      expect(src).toMatch(/targetRole\s*===\s*['"]super_admin['"]/);
+      expect(src).toMatch(/code:\s*['"]SUPER_ADMIN_TARGET['"]/);
+      // plain admin → still refused for non-directors.
+      expect(src).toMatch(/targetRole\s*===\s*['"]admin['"]/);
       expect(src).toMatch(/code:\s*['"]ADMIN_TARGET['"]/);
     });
 

@@ -168,7 +168,22 @@ export async function getAllHostIds(sessionId: string, hostUserId: string): Prom
     `SELECT user_id FROM session_cohosts WHERE session_id = $1`,
     [sessionId]
   );
-  return Array.from(new Set<string>([hostUserId, ...cohostResult.rows.map(r => r.user_id)]));
+  // Stefan's rule (9 Jun) — a super_admin (only Stefan now) ALWAYS acts as host
+  // on every event, even without a cohost row, so they belong in the host set
+  // wherever they appear: excluded from matching and counted as a host. Scoped
+  // to THIS session's participants so it never pulls in super_admins who aren't
+  // actually here.
+  const superAdminResult = await query<{ user_id: string }>(
+    `SELECT sp.user_id FROM session_participants sp
+       JOIN users u ON u.id = sp.user_id
+      WHERE sp.session_id = $1 AND u.role = 'super_admin'`,
+    [sessionId]
+  );
+  return Array.from(new Set<string>([
+    hostUserId,
+    ...cohostResult.rows.map(r => r.user_id),
+    ...superAdminResult.rows.map(r => r.user_id),
+  ]));
 }
 
 // ─── Verify Host ────────────────────────────────────────────────────────────
@@ -222,9 +237,28 @@ async function refuseIfAdminTarget(
   const callerUserId = getUserIdFromSocket(socket);
   if (!callerUserId) return false;
 
+  const targetRow = await query<{ role: string }>(
+    `SELECT role::text AS role FROM users WHERE id = $1`,
+    [targetUserId],
+  );
+  const targetRole = targetRow.rows[0]?.role;
+
+  // Stefan's rule (9 Jun) — a SUPER_ADMIN can NEVER be demoted/kicked from host
+  // authority by anyone, not even the event director. Their host power is global
+  // (not a cohost row), so this is also structurally true; the guard makes the UI
+  // path return a clear refusal instead of a silent no-op. Checked BEFORE the
+  // director shortcut so the director carve-out cannot override it.
+  if (targetRole === 'super_admin') {
+    socket.emit('error', {
+      code: 'SUPER_ADMIN_TARGET',
+      message: 'A super-admin is always a host and cannot be demoted or removed.',
+    });
+    return false;
+  }
+
   // Bug 2 (18 May Stefan) — director shortcut. Reads the session row
   // directly to avoid an in-memory cache hit when the session is still
-  // warming up.
+  // warming up. The director CAN manage ordinary admin targets.
   const sessionRow = await query<{ host_user_id: string }>(
     `SELECT host_user_id FROM sessions WHERE id = $1`,
     [sessionId],
@@ -233,12 +267,9 @@ async function refuseIfAdminTarget(
     return true;
   }
 
-  const targetRow = await query<{ role: string }>(
-    `SELECT role::text AS role FROM users WHERE id = $1`,
-    [targetUserId],
-  );
-  const targetRole = targetRow.rows[0]?.role;
-  if (targetRole === 'admin' || targetRole === 'super_admin') {
+  // Bug J (15 May Ali) — a non-director acting host cannot make/remove a platform
+  // admin as co-host (admins manage their own per-event role).
+  if (targetRole === 'admin') {
     socket.emit('error', {
       code: 'ADMIN_TARGET',
       message:

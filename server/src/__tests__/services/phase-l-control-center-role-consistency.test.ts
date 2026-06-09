@@ -54,25 +54,20 @@ describe('Phase L — control center role consistency (item 6)', () => {
       // formal cohosts only).
     });
 
-    it('baseIsHost is the canonical role-derived disjunction (no broad isAdmin, no super_admin auto-pass)', () => {
-      // Phase M (12 May item 1) layered an acting-as-host override on top
-      // of the base form, so the literal `const isHost = isOriginalHost ||
-      // isCohost || isSuperAdmin` line moved to `baseIsHost`. Bug D
-      // (15 May Ali) tightened it further: super_admin no longer folds
-      // into baseIsHost either — admin/super_admin now reach host UI
-      // exclusively through the Phase M opt-in pathway.
+    it('baseIsHost = director || cohost || super_admin (Stefan 9 Jun: super_admin always a host)', () => {
+      // Stefan's 9-Jun rule REVERSED the 15-May "no super_admin auto-pass":
+      // a super_admin (only Stefan now) ALWAYS has host authority on every
+      // event — director or not — and sees all host controls, so isSuperAdmin
+      // folds back into baseIsHost. Plain ADMINS still do NOT (they join as
+      // participants, promoted to cohost to get controls).
       expect(src).toMatch(
-        /const\s+baseIsHost\s*=\s*isOriginalHost\s*\|\|\s*isCohost\s*;/,
+        /const\s+baseIsHost\s*=\s*isOriginalHost\s*\|\|\s*isCohost\s*\|\|\s*isSuperAdmin\s*;/,
       );
-      // The broad isAdmin form (admin || super_admin) must NOT appear in
-      // the baseIsHost expression. It can still exist elsewhere on the
-      // page for admin-only buttons, but does not fold into baseIsHost.
       const baseLine = src.match(/const\s+baseIsHost\s*=[^;]+;/);
       expect(baseLine).toBeTruthy();
-      expect(baseLine![0]).not.toMatch(/isAdmin/);
-      expect(baseLine![0]).not.toMatch(/isSuperAdmin/);
-      // 23 May (Stefan + Ali) — isHost is now just baseIsHost; the
-      // acting-as-host override layer was removed.
+      expect(baseLine![0]).toMatch(/isSuperAdmin/);    // super_admin auto-host
+      expect(baseLine![0]).not.toMatch(/isAdmin\b/);   // but NOT broad admin
+      expect(src).toMatch(/const\s+isSuperAdmin\s*=\s*\(user as any\)\?\.role\s*===\s*'super_admin'/);
       expect(src).toMatch(/const\s+isHost\s*=\s*baseIsHost\s*;/);
     });
   });

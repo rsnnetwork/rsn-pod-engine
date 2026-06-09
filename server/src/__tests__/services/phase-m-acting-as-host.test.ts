@@ -112,9 +112,13 @@ describe('Phase M — acting-as-host toggle (item 1)', () => {
     const fnEnd = src.indexOf('\nexport ', fnStart + 1);
     const fn = src.slice(fnStart, fnEnd > -1 ? fnEnd : src.length);
 
-    it('returns the director plus formally-assigned cohosts', () => {
+    it('returns the director, formally-assigned cohosts, AND super_admins (Stefan 9 Jun)', () => {
       expect(fn).toMatch(/SELECT\s+user_id\s+FROM\s+session_cohosts\s+WHERE\s+session_id\s*=\s*\$1/i);
-      expect(fn).toMatch(/\[hostUserId,\s*\.\.\.cohostResult\.rows\.map/);
+      // Stefan's rule — a super_admin is ALWAYS in the host set (excluded from
+      // matching, counted as host), scoped to this session's participants.
+      expect(fn).toMatch(/u\.role\s*=\s*'super_admin'/);
+      expect(fn).toMatch(/superAdminResult\.rows\.map/);
+      expect(fn).toMatch(/\[\s*hostUserId,/);
     });
 
     it('no longer applies acting-as-host opt-in / opt-out overrides', () => {

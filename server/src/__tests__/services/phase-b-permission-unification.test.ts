@@ -76,20 +76,17 @@ describe('Phase B — permission model unification', () => {
     // UI only via Phase M opt-in (explicit "Join as host" click). The
     // narrow-admin invariant from Phase I still holds in the new shape:
     // the broad `admin || super_admin` form never folds in.
-    it('baseIsHost is the formal role-derived disjunction (no admin, no super_admin auto-pass)', () => {
+    it('baseIsHost = director || cohost || super_admin — admin still not auto-host (Stefan 9 Jun)', () => {
       expect(liveSrc).toMatch(
-        /const\s+baseIsHost\s*=\s*isOriginalHost\s*\|\|\s*isCohost\s*;/,
+        /const\s+baseIsHost\s*=\s*isOriginalHost\s*\|\|\s*isCohost\s*\|\|\s*isSuperAdmin\s*;/,
       );
-      // 23 May (Stefan + Ali) — acting-as-host removed; no Phase M opt-in
-      // pathway remains. isHost is now just baseIsHost.
       expect(liveSrc).toMatch(/const\s+isHost\s*=\s*baseIsHost\s*;/);
-      // The broad `isAdmin = admin || super_admin` form must NOT appear
-      // in the baseIsHost expression (Phase I narrow still holds — under
-      // its new, stricter Bug D shape).
+      // Stefan's 9-Jun rule: super_admin DOES fold in (always a host); a plain
+      // ADMIN still must NOT (joins as participant, promoted to cohost).
       const baseLine = liveSrc.match(/const\s+baseIsHost\s*=[^;]+;/);
       expect(baseLine).toBeTruthy();
-      expect(baseLine![0]).not.toMatch(/isAdmin/);
-      expect(baseLine![0]).not.toMatch(/isSuperAdmin/);
+      expect(baseLine![0]).toMatch(/isSuperAdmin/);
+      expect(baseLine![0]).not.toMatch(/isAdmin\b/);
     });
   });
 });
