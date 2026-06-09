@@ -1,7 +1,7 @@
 import { test, expect, chromium, Browser, Page, BrowserContext } from '@playwright/test';
 import { io, Socket } from 'socket.io-client';
 import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers/auth';
-import { createPod, addPodMember, createSession, registerForSession, startSession, endSession } from '../helpers/api';
+import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
 
 // HEADED end-to-end coverage for the "RSN test 9 june" punch list:
 //   #1 invite "Search by name or email" text is visible (not white-on-white)
@@ -152,7 +152,10 @@ test('#1: the invite "Search by name or email" input renders dark, readable text
 // ── #4 — co-host promote gives instant feedback + real host powers ────────────
 test('#2 + #4: no internal plan toasts; host promotes a co-host who instantly gains host UI', async () => {
   test.setTimeout(240_000);
-  await startSession(host, sessionId);
+  // Sessions start via the orchestration socket, not a REST route.
+  const starter = await connectSocket(host);
+  await new Promise<void>((r) => { starter.emit('host:start_session', { sessionId }); setTimeout(r, 2500); });
+  starter.disconnect();
 
   const hostCtx = await browser.newContext();
   const aliceCtx = await browser.newContext();
