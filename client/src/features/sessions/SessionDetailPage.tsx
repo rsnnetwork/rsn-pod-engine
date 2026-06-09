@@ -1015,7 +1015,7 @@ export default function SessionDetailPage() {
           {/* Option 3: Generate Shareable Link */}
           <div className="rounded-lg border border-gray-200 p-4 space-y-3">
             <h3 className="text-sm font-semibold text-[#1a1a2e]">Option 3 — Generate Shareable Link</h3>
-            <p className="text-xs text-gray-500">Create a reusable link to share manually (up to 10 uses, expires in 7 days).</p>
+            <p className="text-xs text-gray-500">Create a reusable link to share manually (up to {session?.config?.maxParticipants ?? 500} uses — the event capacity; expires in 7 days). Change the limit by changing this event's Max Participants.</p>
             {!inviteLink ? (
               <Button
                 variant="secondary"

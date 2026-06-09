@@ -287,7 +287,9 @@ export default function PodDetailPage() {
     mutationFn: (data: { inviteeEmail?: string }) => api.post('/invites', {
       type: 'pod', podId,
       inviteeEmail: data.inviteeEmail || undefined,
-      maxUses: data.inviteeEmail ? 1 : 10,
+      // Shareable pod link covers the pod capacity (max_members), not a hard 10
+      // (Ali, 9 Jun). Falls back to 500 when the pod has no member cap.
+      maxUses: data.inviteeEmail ? 1 : ((pod as any)?.maxMembers ?? 500),
       expiresInHours: 168,
     }),
     onSuccess: (res, variables) => {
