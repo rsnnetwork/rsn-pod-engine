@@ -99,7 +99,9 @@ test('host pressing a control fires an info toast but sees NO banner', async () 
 
     // Non-vacuous sanity: the page must be a working host live surface, so a
     // zero banner count means "suppressed", not "page broken / control missing".
-    const hint = page.getByRole('button', { name: /Match People|Another Round/ });
+    // Match by VISIBLE TEXT, not accessible name — in the disabled state the
+    // button's aria-label is the hint string, not "Match People".
+    const hint = page.getByRole('button').filter({ hasText: /Match People|Another Round/ }).first();
     await expect(hint, 'host live surface must render the Match People control').toBeVisible({ timeout: 20_000 });
     await expect(page.locator('div.fixed.top-4.right-4'), 'the toast container must be mounted').toHaveCount(1);
 
