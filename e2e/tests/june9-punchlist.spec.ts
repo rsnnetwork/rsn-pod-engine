@@ -15,7 +15,7 @@ const SERVER = process.env.E2E_SERVER_URL || 'https://api.rsn.network';
 const API = process.env.E2E_API_URL || 'https://rsn-api-h04m.onrender.com';
 const APP = process.env.E2E_APP_URL || 'https://app.rsn.network';
 
-let host: TestUser, alice: TestUser, bob: TestUser;
+let host: TestUser, alice: TestUser, bob: TestUser, sadmin: TestUser;
 let podId: string, sessionId: string;
 let browser: Browser;
 const sockets: Socket[] = [];
@@ -62,13 +62,19 @@ test.beforeAll(async () => {
   host = await createTestUser('j9host', 'super_admin');
   alice = await createTestUser('j9alice');
   bob = await createTestUser('j9bob');
+  sadmin = await createTestUser('j9sadmin', 'super_admin'); // NOT the director
   const pod = await createPod(host, 'E2E June9 Pod');
   podId = pod.id;
   await addPodMember(host, podId, alice.id);
   await addPodMember(host, podId, bob.id);
+  await addPodMember(host, podId, sadmin.id);
   const sess = await createSession(host, podId, 'E2E June9', new Date(Date.now() + 60_000));
   sessionId = sess.id;
-  await Promise.all([registerForSession(alice, sessionId), registerForSession(bob, sessionId)]);
+  await Promise.all([
+    registerForSession(alice, sessionId),
+    registerForSession(bob, sessionId),
+    registerForSession(sadmin, sessionId),
+  ]);
 
   browser = await chromium.launch({
     headless: false,
@@ -119,6 +125,28 @@ test('#6: revoking an invite blocks the old link and a fresh re-invite succeeds'
   const reinvite = await apiAs(host, 'POST', '/invites', { type: 'session', sessionId, inviteeEmail: email, maxUses: 1, expiresInHours: 168 });
   console.log(`  re-invite status=${reinvite.status} (must succeed)`);
   expect(reinvite.ok, 're-inviting a revoked person must succeed').toBe(true);
+});
+
+// ── #3 — a super_admin who is NOT the director still sees host controls ───────
+test('#3: a super_admin (not the director) always sees host controls', async () => {
+  test.setTimeout(120_000);
+  // ensure the session is live so the live page mounts host controls
+  const starter = await connectSocket(host);
+  await new Promise<void>((r) => { starter.emit('host:start_session', { sessionId }); setTimeout(r, 2500); });
+  starter.disconnect();
+
+  const ctx = await browser.newContext();
+  await login(ctx, sadmin);
+  const page = await ctx.newPage();
+  try {
+    await page.goto(`${APP}/session/${sessionId}/live`, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(9000);
+    // sadmin is a super_admin and NOT the event director, yet must see host UI.
+    const ctrl = page.getByRole('button', { name: /Control Center|End Event/ });
+    await expect(ctrl, 'a non-director super_admin must see host controls').toBeVisible({ timeout: 20_000 });
+    await page.screenshot({ path: 'test-results/j9-superadmin-host.png' }).catch(() => {});
+    console.log('  ✓ non-director super_admin sees host controls');
+  } finally { await ctx.close(); }
 });
 
 // ── #1 — invite search input text is visible (dark, not white-on-white) ───────
