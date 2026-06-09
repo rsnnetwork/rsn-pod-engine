@@ -180,8 +180,11 @@ export default function LiveSessionPage() {
           (e.g. the BG auto-disable notice) fired into the void (Ali, 2026-06-08:
           "removes BG and doesn't inform user"). Mount one here so event-time
           toasts are visible. Self-contained, fixed-position; no duplicate
-          because this page bypasses AppLayout. */}
-      <ToastContainer />
+          because this page bypasses AppLayout. The HOST runs the event and the
+          UI already reflects every action, so confirmation banners are noise
+          that piled up on each click (Ali, 2026-06-09) — hostQuiet shows the
+          host only actionable errors. Participants still see all their toasts. */}
+      <ToastContainer hostQuiet={isHost} />
       {/* Phase 5B (5 May spec) — test-mode banner.
           Shown to ALL participants when the server detects multiple
           accounts sharing the host's email-username root, OR when the

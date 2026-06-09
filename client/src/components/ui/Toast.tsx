@@ -10,12 +10,26 @@ const styles = {
   info: 'border-blue-500/30 bg-blue-500/10 text-blue-400',
 };
 
-export default function ToastContainer() {
+interface Props {
+  /** Live-event host surface: the host is running the event and the UI already
+   *  reflects their actions, so confirmation banners (info / success) are pure
+   *  noise — they fired on every button press (Ali, 2026-06-09). In this mode we
+   *  show ONLY actionable errors (failed to start round, couldn't re-match, etc.
+   *  — the things the host genuinely needs to react to), minus any error a caller
+   *  flagged hostSilent. Participants and dashboard surfaces pass false and see
+   *  everything as before. */
+  hostQuiet?: boolean;
+}
+
+export default function ToastContainer({ hostQuiet = false }: Props) {
   const { toasts, removeToast } = useToastStore();
+  const visible = hostQuiet
+    ? toasts.filter(t => t.type === 'error' && !t.hostSilent)
+    : toasts;
   return (
     <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2 max-w-sm">
       <AnimatePresence>
-        {toasts.map(t => {
+        {visible.map(t => {
           const Icon = icons[t.type];
           return (
             <motion.div

@@ -93,7 +93,9 @@ describe('Background effects — event-scoped engine wiring', () => {
     // (Ali, 2026-06-08). The /session/:id/live route bypasses AppLayout.
     const page = clientSrc('features/live/LiveSessionPage.tsx');
     expect(page).toMatch(/import ToastContainer from '@\/components\/ui\/Toast'/);
-    expect(page).toMatch(/<ToastContainer \/>/);
+    // hostQuiet (2026-06-09): the host runs the event and the UI reflects every
+    // action, so confirmation banners are noise — host sees only actionable errors.
+    expect(page).toMatch(/<ToastContainer hostQuiet=\{isHost\} \/>/);
   });
 
   it('Bug④ — no-flash transformer is flag-gated, ALL-PATHS (mobile too), code-split, library-wrapped, same proven mask', () => {

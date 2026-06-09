@@ -241,7 +241,11 @@ export default function RatingPrompt(props: Props) {
   useEffect(() => {
     if (noMatchData && !hasRedirected.current) {
       hasRedirected.current = true;
-      addToast('No match data available to rate', 'error');
+      // hostSilent: a host running the event gets dropped through the rating
+      // phase with no match of their own — that's not an error THEY can act on,
+      // so don't banner it at them (Ali, 2026-06-09). Participants, for whom a
+      // missing match IS meaningful, still see it.
+      addToast('No match data available to rate', 'error', { hostSilent: true });
       setPhase('lobby');
     }
   }, [noMatchData, addToast, setPhase]);
