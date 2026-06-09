@@ -63,6 +63,7 @@ export default function ParticipantList({ onClose, sessionId, isHost = false }: 
 
     if (currentlyACohost) {
       if (formallyACohost) {
+        useSessionStore.getState().removeCohost(userId); // #4 — optimistic instant feedback
         socket?.emit('host:remove_cohost', { sessionId, userId });
       }
       if (optedIn) {
@@ -73,6 +74,7 @@ export default function ParticipantList({ onClose, sessionId, isHost = false }: 
         }
       }
     } else {
+      useSessionStore.getState().addCohost(userId); // #4 — optimistic instant feedback
       socket?.emit('host:assign_cohost', { sessionId, userId, role: 'co_host' });
     }
   };

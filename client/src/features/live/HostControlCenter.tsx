@@ -301,12 +301,20 @@ export default function HostControlCenter({
   if (!open) return null;
 
   // ── Action wiring ─────────────────────────────────────────────────────
+  // #4 (9 Jun, Ali) — optimistic co-host change so the host gets INSTANT
+  // feedback instead of "nothing happened" while the socket round-trips. The
+  // server confirms via cohost:assigned/removed + roster:changed (idempotent
+  // Set ops); a later snapshot resync reconciles the rare rejection. Director
+  // promotes always succeed (refuseIfAdminTarget director carve-out), so a
+  // phantom is effectively impossible here.
   const makeCohost = (userId: string) =>
     runLocked(`make_cohost:${userId}`, () => {
+      useSessionStore.getState().addCohost(userId);
       socket?.emit('host:assign_cohost', { sessionId, userId, role: 'co_host' });
     });
   const removeCohost = (userId: string) =>
     runLocked(`remove_cohost:${userId}`, () => {
+      useSessionStore.getState().removeCohost(userId);
       socket?.emit('host:remove_cohost', { sessionId, userId });
     });
   // Bug 26 (19 May Ali) — director-only visual tile resize for a cohost.

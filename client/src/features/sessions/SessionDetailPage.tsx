@@ -190,6 +190,21 @@ export default function SessionDetailPage() {
     onError: () => addToast('Failed to send bulk reminders', 'error'),
   });
 
+  // #6 (9 Jun, Ali) — revoke a pending invite from the event page. The backend
+  // marks it revoked; the accept flow already blocks a revoked link
+  // (WHERE status NOT IN ('revoked','expired')). Re-inviting the same person
+  // then works, because a revoked invite is no longer 'pending' (so the
+  // duplicate-pending guard doesn't fire).
+  const revokeInviteMutation = useMutation({
+    mutationFn: (inviteId: string) => api.delete(`/invites/${inviteId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['session-pending-invites', sessionId] });
+      qc.invalidateQueries({ queryKey: ['session', sessionId] });
+      addToast('Invite revoked — the old link no longer works. You can re-invite them.', 'success');
+    },
+    onError: () => addToast('Failed to revoke invite', 'error'),
+  });
+
   const isRegistered = (participants || []).some((p: any) => p.userId === user?.id && p.status !== 'removed');
   const isMember = !!pod?.memberRole || isAdmin;
   const isRestrictedPod = pod?.visibility === 'invite_only' || pod?.visibility === 'private';
@@ -693,6 +708,19 @@ export default function SessionDetailPage() {
                             <Send className="h-3 w-3 mr-1" /> Remind
                           </Button>
                         )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                          onClick={() => {
+                            if (confirm('Revoke this invite? The old link will stop working. You can re-invite them afterwards.')) {
+                              revokeInviteMutation.mutate(inv.id);
+                            }
+                          }}
+                          isLoading={revokeInviteMutation.isPending}
+                        >
+                          <Trash2 className="h-3 w-3 mr-1" /> Revoke
+                        </Button>
                       </div>
                     </div>
                   </Card>
