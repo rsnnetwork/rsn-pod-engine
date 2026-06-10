@@ -12,7 +12,7 @@ import Modal from '@/components/ui/Modal';
 import { PageLoader } from '@/components/ui/Spinner';
 import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
-import { formatDateTime, LOCAL_TIME_LABEL } from '@/lib/utils';
+import { formatDateTime, LOCAL_TIME_LABEL, toLocalDatetimeInput, localTimezoneLabel } from '@/lib/utils';
 import { useAuthStore } from '@/stores/authStore';
 import { E } from '@/realtime/entities';
 import { sessionStatusLabel, sessionStatusColor, sessionStatusPhase } from './statusConfig';
@@ -262,7 +262,9 @@ export default function SessionDetailPage() {
   const openEdit = () => {
     setEditTitle(session?.title || '');
     setEditDescription(session?.description || '');
-    setEditScheduledAt(session?.scheduledAt ? new Date(session.scheduledAt).toISOString().slice(0, 16) : '');
+    // LOCAL time for the datetime-local input (NOT toISOString — that's UTC and
+    // would shift the time by the viewer's offset every edit; Ali 10 Jun).
+    setEditScheduledAt(session?.scheduledAt ? toLocalDatetimeInput(session.scheduledAt) : '');
     setEditNumberOfRounds(session?.config?.numberOfRounds ?? 5);
     setEditRoundDurationMinutes(Math.round((session?.config?.roundDurationSeconds ?? 480) / 60));
     setEditTimerVisibility(session?.config?.timerVisibility ?? 'always_visible');
@@ -1065,7 +1067,10 @@ export default function SessionDetailPage() {
               rows={3} value={editDescription} onChange={e => setEditDescription(e.target.value)}
             />
           </div>
-          <Input label="Scheduled At" type="datetime-local" value={editScheduledAt} onChange={e => setEditScheduledAt(e.target.value)} />
+          <div>
+            <Input label="Scheduled At" type="datetime-local" value={editScheduledAt} onChange={e => setEditScheduledAt(e.target.value)} />
+            <p className="text-xs text-gray-400 mt-1">Shown in your local time — {localTimezoneLabel()}.</p>
+          </div>
 
           {/* Timing Configuration — matches Create Event form */}
           <div className="border-t border-gray-200 pt-4 mt-4">

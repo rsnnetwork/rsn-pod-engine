@@ -9,6 +9,7 @@ import { useToastStore } from '@/stores/toastStore';
 import { useAuthStore } from '@/stores/authStore';
 import { ArrowLeft, Clock, Users, Settings, Radio } from 'lucide-react';
 import api from '@/lib/api';
+import { localTimezoneLabel } from '@/lib/utils';
 import { E } from '@/realtime/entities';
 
 interface SessionForm {
@@ -199,12 +200,17 @@ export default function CreateSessionPage() {
                 {EVENT_TYPES.find(t => t.value === 'speed_networking')?.description}
               </p>
             </div>
-            <Input
-              label="Scheduled At"
-              type="datetime-local"
-              {...register('scheduledAt', { required: 'Required' })}
-              error={errors.scheduledAt?.message}
-            />
+            <div>
+              <Input
+                label="Scheduled At"
+                type="datetime-local"
+                {...register('scheduledAt', { required: 'Required' })}
+                error={errors.scheduledAt?.message}
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                Shown in your local time — {localTimezoneLabel()}. Each person sees the event in their own timezone.
+              </p>
+            </div>
           </div>
         </Card>
 
