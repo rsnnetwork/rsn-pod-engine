@@ -729,7 +729,9 @@ export default function PodDetailPage() {
                 value={podUserSearch}
                 onChange={e => setPodUserSearch(e.target.value)}
                 placeholder="Search by name or email..."
-                className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-[#1a1a2e]"
+                // White-on-white fix — the raw input had no explicit text colour, so
+                // typed text inherited the cascade (invisible against the light field).
+                className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-200 bg-gray-50 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a1a2e]"
               />
             </div>
             {podUserSearch.length >= 1 && podSearchResults && podSearchResults.length === 0 && (
