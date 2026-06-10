@@ -921,9 +921,13 @@ export async function handleHostRemoveParticipant(
     // departed_user_ids). The kicked user gets NO rating form. Terminal
     // status is 'completed' per the host-remove precedent: removed users'
     // partners are sent to rate, so the match is real regardless of duration.
+    // #4 (June-10) — captured so we can evict the kicked user from their breakout
+    // LiveKit room after the match-end flow runs (a trio's room survives for the
+    // survivors, so the kicked user must be removed from it explicitly).
+    let kickMatchRoomId: string | null = null;
     try {
-      const kickMatchRes = await query<{ id: string; participant_a_id: string; participant_b_id: string | null; participant_c_id: string | null }>(
-        `SELECT id, participant_a_id, participant_b_id, participant_c_id
+      const kickMatchRes = await query<{ id: string; participant_a_id: string; participant_b_id: string | null; participant_c_id: string | null; room_id: string | null }>(
+        `SELECT id, participant_a_id, participant_b_id, participant_c_id, room_id
          FROM matches WHERE session_id = $1 AND status = 'active'
            AND (participant_a_id = $2 OR participant_b_id = $2 OR participant_c_id = $2)
          LIMIT 1`,
@@ -931,6 +935,7 @@ export async function handleHostRemoveParticipant(
       );
       if (kickMatchRes.rows.length > 0) {
         const kickMatch = kickMatchRes.rows[0];
+        kickMatchRoomId = kickMatch.room_id;
         const kickDemote = await matchingService.demoteParticipantFromMatch(
           kickMatch.id, data.userId, 'completed',
         );
@@ -989,7 +994,19 @@ export async function handleHostRemoveParticipant(
         }
         setPresence(data.sessionId, data.userId, null);
       }
+      // Drop the in-memory room tracking so the host dashboard's "connected"
+      // flag for this user clears immediately (it keyed off roomParticipants).
+      activeSession.roomParticipants?.delete(data.userId);
     }
+
+    // #4 (June-10 debrief) — THE missing piece. The kick previously stopped at the
+    // socket + DB layer, leaving the user LIVE in the LiveKit SFU: their camera and
+    // mic kept flowing and others still saw/heard them (TESTEVENT "JACK"). Evict
+    // them from the main/lobby room AND any breakout room. evictFromRoom is
+    // best-effort and never throws, so evicting a room they already left (or one
+    // that was just closed for a pair) is a harmless no-op.
+    await videoService.evictFromRoom(data.userId, videoService.lobbyRoomId(data.sessionId));
+    if (kickMatchRoomId) await videoService.evictFromRoom(data.userId, kickMatchRoomId);
 
     io.to(sessionRoom(data.sessionId)).emit('participant:left', { userId: data.userId });
     // Bug 68 (18 May Stefan) — broadcast roster mutation so every viewer
