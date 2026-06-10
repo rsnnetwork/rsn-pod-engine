@@ -17,11 +17,13 @@ import { E } from '@/realtime/entities';
 // /messages/new/:userId route. Same component used by SessionComplete and
 // RecapPage so behaviour is uniform across both recap views.
 function MessagePartnerButton({ userId, displayName }: { userId: string; displayName: string }) {
-  const navigate = useNavigate();
+  // UX3 (June-10 debrief) — open the conversation in a NEW TAB instead of
+  // navigating away from the recap. The host/participant keeps their recap (and
+  // its scroll/context) intact while messaging a connection.
   const openConversation = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    navigate(`/messages/new/${userId}`);
+    window.open(`/messages/new/${userId}`, '_blank', 'noopener,noreferrer');
   };
   return (
     <button

@@ -60,11 +60,12 @@ interface PeopleMetData {
 // both the "existing conversation" and "compose new" cases via the
 // /messages/new/:userId route.
 function MessagePartnerButton({ userId, displayName }: { userId: string; displayName: string }) {
-  const navigate = useNavigate();
+  // UX3 (June-10 debrief) — open the conversation in a NEW TAB instead of
+  // navigating away from the recap, so the recap stays put.
   const openConversation = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    navigate(`/messages/new/${userId}`);
+    window.open(`/messages/new/${userId}`, '_blank', 'noopener,noreferrer');
   };
   return (
     <button
