@@ -948,6 +948,25 @@ export default function HostControls({ sessionId }: Props) {
               </Button>
             )}
 
+            {/* #5 (June-10 debrief) — Skip Ratings escape hatch. Shown ONLY while
+                the event is in the rating phase; the moment rating auto-advances
+                (all-rated early-close or the backstop), sessionStatus/phase flips
+                and this button disappears. The server handler is idempotent, so a
+                click racing the auto-advance safely no-ops. Closes the rating
+                window now → host then uses Match People for the next round. */}
+            {(sessionStatus === 'round_rating' || phase === 'rating') && (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => runLocked('force_close_rating', () => {
+                  socket?.emit('host:force_close_rating', { sessionId });
+                })}
+                title="Close the rating window now and continue (skips any pending ratings)"
+              >
+                <SkipForward className="h-4 w-4 mr-1" /> Skip Ratings
+              </Button>
+            )}
+
             {/* Phase 8C.1 (8 May spec) — Stefan #5: bottom bar slimmed.
                 Invite, Room creation, Broadcast, and bulk room ops moved
                 into Control Center > Actions tab. The host now manages

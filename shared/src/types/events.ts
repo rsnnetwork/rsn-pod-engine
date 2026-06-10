@@ -274,6 +274,8 @@ export interface ClientToServerEvents {
   // Host controls
   'host:start_session': (data: { sessionId: string }) => void;
   'host:start_round': (data: { sessionId: string }) => void;
+  // #5 (June-10 debrief) — host escape hatch to close a wedged rating window.
+  'host:force_close_rating': (data: { sessionId: string }) => void;
   'host:pause_session': (data: { sessionId: string }) => void;
   'host:resume_session': (data: { sessionId: string }) => void;
   'host:end_session': (data: { sessionId: string; endEvent?: boolean }) => void;

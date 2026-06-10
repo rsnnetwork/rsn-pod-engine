@@ -41,7 +41,7 @@ import {
 
 // Handlers — Host Actions
 import {
-  handleHostStart, handleHostStartRound, handleHostPause, handleHostResume,
+  handleHostStart, handleHostStartRound, handleHostForceCloseRating, handleHostPause, handleHostResume,
   handleHostEnd, handleHostBroadcast, handleHostRemoveParticipant, handleHostReassign,
   handleHostMuteParticipant, handleHostMuteAll, handleHostRemoveFromRoom,
   handleHostMoveToRoom, handleAssignCohost, handleRemoveCohost, handlePromoteCohost, handleHostExtendRound,
@@ -296,6 +296,7 @@ export function initOrchestration(socketServer: SocketServer): void {
     // ── Host Events (guarded — state-mutating) ──
     wrapHandler('host:start_session', socket, handleHostStart);
     wrapHandler('host:start_round', socket, handleHostStartRound);
+    wrapHandler('host:force_close_rating', socket, handleHostForceCloseRating);
     wrapHandler('host:pause_session', socket, handleHostPause);
     wrapHandler('host:resume_session', socket, handleHostResume);
     wrapHandler('host:end_session', socket, handleHostEnd);

@@ -548,6 +548,52 @@ export async function handleHostStartRound(
   });
 }
 
+// ─── Host Force-Close Rating ──────────────────────────────────────────────────
+// #5 (June-10 debrief) — discoverable escape hatch when the rating window
+// wedges. The all-rated early-close (participant-flow.ts) correctly waits on
+// present participants who still owe a rating; if they simply never rate and
+// never skip, the round used to limp to the silent 90s backstop with no host
+// control to advance it (TESTEVENT c624b66a sat there every round). This closes
+// the rating window immediately and hands off to the normal post-rating flow
+// (→ ROUND_TRANSITION, or CLOSING_LOBBY after the last round). It does NOT start
+// the next round — the host then uses "Match People" as usual — so it stays a
+// minimal, single-purpose action. Idempotent: a second click (or a click that
+// races the auto-advance) finds status != ROUND_RATING and no-ops harmlessly;
+// the withSessionGuard serializes concurrent calls.
+export async function handleHostForceCloseRating(
+  io: SocketServer,
+  socket: Socket,
+  data: { sessionId: string }
+): Promise<void> {
+  return withSessionGuard(data.sessionId, async () => {
+    try {
+      if (!await verifyHost(socket, data.sessionId)) return;
+
+      const activeSession = activeSessions.get(data.sessionId);
+      if (!activeSession || activeSession.status !== SessionStatus.ROUND_RATING) {
+        // Already advanced (auto early-close / backstop / a prior click) — nothing to do.
+        socket.emit('error', { code: 'INVALID_STATE', message: 'No rating window to close' });
+        return;
+      }
+
+      if (!_endRatingWindow) {
+        logger.error({ sessionId: data.sessionId },
+          'endRatingWindow not injected — cannot force-close rating');
+        socket.emit('error', { code: 'INTERNAL_ERROR', message: 'Cannot close rating right now' });
+        return;
+      }
+
+      logger.info({ sessionId: data.sessionId, roundNumber: activeSession.currentRound },
+        '#5 — host force-closed the rating window');
+      // Direct (non-guard-wrapped) call — we already hold the session guard.
+      await _endRatingWindow(io, data.sessionId, activeSession.currentRound);
+    } catch (err: any) {
+      logger.error({ err, sessionId: data.sessionId }, 'Error force-closing rating window');
+      socket.emit('error', { code: 'FORCE_CLOSE_RATING_FAILED', message: err.message });
+    }
+  });
+}
+
 // ─── Host Pause ─────────────────────────────────────────────────────────────
 
 export async function handleHostPause(
