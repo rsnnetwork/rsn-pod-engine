@@ -23,6 +23,10 @@ describe('#4B — kicked user re-admitted only by a fresh personal invite', () =
     expect(inviteSvc).toMatch(/registerParticipant\([^)]*\{\s*allowRemovedReadmit\s*\}/s);
   });
 
+  it('the host can create a fresh invite for a kicked user (removed/left not counted as an active participant)', () => {
+    expect(inviteSvc).toMatch(/JOIN session_participants sp[\s\S]{0,160}sp\.status NOT IN \('removed', 'left'\)/);
+  });
+
   it('the kick revokes the kicked user\'s personal session invites so old links die', () => {
     const start = hostActions.indexOf('export async function handleHostRemoveParticipant(');
     const fn = hostActions.slice(start, hostActions.indexOf('\nexport ', start + 1));

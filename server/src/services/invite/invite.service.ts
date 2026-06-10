@@ -141,12 +141,16 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
       throw new AppError(403, 'AUTH_FORBIDDEN', 'Only the event host can send event invites');
     }
 
-    // Check if invitee is already a participant of this session
+    // Check if invitee is already an ACTIVE participant of this session.
+    // #4B (June-10 debrief) — a kicked user (status='removed', or 'left') is NOT
+    // an active participant, so the host MUST be able to send them a fresh
+    // personal invite to re-admit them. Counting their terminal row here blocked
+    // exactly that ("already a participant"), so exclude those statuses.
     if (input.inviteeEmail) {
       const existingParticipant = await query<{ id: string }>(
         `SELECT u.id FROM users u
          JOIN session_participants sp ON sp.user_id = u.id
-         WHERE u.email = $1 AND sp.session_id = $2`,
+         WHERE u.email = $1 AND sp.session_id = $2 AND sp.status NOT IN ('removed', 'left')`,
         [input.inviteeEmail.toLowerCase(), input.sessionId]
       );
       if (existingParticipant.rows.length > 0) {
