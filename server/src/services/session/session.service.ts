@@ -225,6 +225,12 @@ export async function registerParticipant(
   sessionId: string,
   userId: string,
   userRole?: UserRole,
+  // #4B (June-10 debrief) — a kicked (status='removed') user is normally barred
+  // from re-entry. The ONLY way back is a FRESH, personal invite from the host:
+  // the invite-accept path sets allowRemovedReadmit=true for a targeted-email
+  // invite, which lifts the bar and re-registers them. Every other caller
+  // (direct join, socket reconnect, shared link) leaves it false → still bounced.
+  options?: { allowRemovedReadmit?: boolean },
 ): Promise<SessionParticipant & { isNewRegistration: boolean }> {
   const participant = await transaction(async (client) => {
     // Read session without lock — ON CONFLICT handles concurrent inserts safely.
@@ -305,7 +311,9 @@ export async function registerParticipant(
       // back to 'registered', so a kicked user could walk back into the
       // event (the socket join path auto-registers on page load). REMOVED
       // is terminal in the participant state machine; honor it here too.
-      if (existingStatus === 'removed') {
+      // #4B — EXCEPT when re-admitted by a fresh personal host invite
+      // (allowRemovedReadmit); then we fall through to the re-register UPDATE.
+      if (existingStatus === 'removed' && !options?.allowRemovedReadmit) {
         throw new AppError(403, 'REMOVED_FROM_EVENT' as ErrorCode, 'You have been removed from this event by the host');
       }
       // Re-register

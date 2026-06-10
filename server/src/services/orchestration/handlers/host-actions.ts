@@ -975,6 +975,27 @@ export async function handleHostRemoveParticipant(
       data.sessionId, data.userId, ParticipantStatus.REMOVED
     );
 
+    // #4B (June-10 debrief) — kill the kicked user's OLD personal invite link(s)
+    // so the only way back in is a FRESH invite from the host. Targets only the
+    // user's own targeted-email invites (a shareable multi-use link is left
+    // intact for everyone else; it can't re-admit a removed user anyway). Best
+    // effort — never fail the kick on a revoke hiccup.
+    try {
+      const revoked = await query(
+        `UPDATE invites SET status = 'revoked'
+           WHERE session_id = $1
+             AND invitee_email = lower((SELECT email FROM users WHERE id = $2))
+             AND status IN ('pending', 'accepted')`,
+        [data.sessionId, data.userId],
+      );
+      if (revoked.rowCount) {
+        logger.info({ sessionId: data.sessionId, userId: data.userId, revoked: revoked.rowCount },
+          '#4B — revoked kicked user\'s personal invites');
+      }
+    } catch (err) {
+      logger.warn({ err, sessionId: data.sessionId, userId: data.userId }, '#4B — invite revoke failed (non-fatal)');
+    }
+
     // Disconnect the user's socket
     io.to(userRoom(data.userId)).emit('host:participant_removed', {
       userId: data.userId,

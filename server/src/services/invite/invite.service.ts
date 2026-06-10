@@ -428,7 +428,12 @@ async function applyInviteRegistration(
     }
 
     try {
-      await sessionService.registerParticipant(invite.sessionId, userId);
+      // #4B (June-10 debrief) — a fresh PERSONAL invite (targeted email) is the
+      // host's way to re-admit a kicked user, so it lifts the removed-bar. A
+      // shareable/multi-use link (no inviteeEmail) must NOT silently re-admit a
+      // removed user — they stay bounced until personally re-invited.
+      const allowRemovedReadmit = !!invite.inviteeEmail;
+      await sessionService.registerParticipant(invite.sessionId, userId, undefined, { allowRemovedReadmit });
     } catch (err) {
       if (err instanceof ConflictError) {
         // Already registered — fine, idempotent.
@@ -457,12 +462,12 @@ async function applyInviteRegistration(
 }
 
 function computeRedirectTo(_invite: Invite, registered: { sessionId?: string; podId?: string }): string {
-  // Session invite → land in the live lobby. Pod invite → land on the pod page.
-  // Route is `/session/:sessionId/live` (singular) — see client/src/App.tsx.
-  // Plural `/sessions/...` is the registration-list namespace; an email link
-  // pointing there fell into the SPA 404 catch-all. Kept regressing because
-  // tests pinned the broken URL — the route is now the source of truth.
-  if (registered.sessionId) return `/session/${registered.sessionId}/live`;
+  // #1 (June-10 debrief) — a SESSION invite lands on the event DETAILS page
+  // (`/sessions/:sessionId`, see client/src/App.tsx), NOT straight into the live
+  // room. The details page shows event info + an explicit "Enter Event" button;
+  // camera/mic are only acquired once the user clicks through to `/session/:id/
+  // live`. Pod invite → the pod page.
+  if (registered.sessionId) return `/sessions/${registered.sessionId}`;
   if (registered.podId) return `/pods/${registered.podId}`;
   // Fallback for malformed invites (no podId or sessionId attached) — never
   // hit in practice, present for type completeness.

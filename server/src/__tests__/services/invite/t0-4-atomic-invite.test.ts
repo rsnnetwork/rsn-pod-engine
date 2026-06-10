@@ -183,9 +183,13 @@ describe('T0-4 — atomic invite acceptance', () => {
     // Plural `/sessions/...` is the registration-list namespace and falls into
     // the SPA NotFoundPage. Pre-fix this test pinned the broken plural URL,
     // which is why every "fix" of the email-invite 404 regressed.
-    it('session invites land on /session/:id/live (singular — must match App.tsx Route)', () => {
-      expect(src).toMatch(/return\s*`\/session\/\$\{registered\.sessionId\}\/live`/);
-      expect(src).not.toMatch(/return\s*`\/sessions\/\$\{registered\.sessionId\}\/live`/);
+    // #1 (June-10 debrief) — a session invite lands on the event DETAILS page
+    // (`/sessions/:sessionId`), not straight into the live room, so the user sees
+    // event info + an explicit "Enter Event" button and camera/mic are only
+    // acquired after they click through to the live page.
+    it('session invites land on the event details page /sessions/:id (not the live room)', () => {
+      expect(src).toMatch(/return\s*`\/sessions\/\$\{registered\.sessionId\}`/);
+      expect(src).not.toMatch(/return\s*`\/session\/\$\{registered\.sessionId\}\/live`/);
     });
 
     it('pod invites land on /pods/:id', () => {
@@ -203,10 +207,10 @@ describe('T0-4 — atomic invite acceptance', () => {
         nodePath.join(__dirname, '../../../../../client/src/App.tsx'),
         'utf8',
       );
-      // The live-session route in App.tsx
+      // The event-details route the invite now lands on (#1).
+      expect(appSrc).toMatch(/<Route\s+path="\/sessions\/:sessionId"\s+element=\{<SessionDetailPage/);
+      // The live-session route the "Enter Event" button leads to.
       expect(appSrc).toMatch(/<Route\s+path="\/session\/:sessionId\/live"/);
-      // Backward-compat redirect for old plural-URL emails already in inboxes
-      expect(appSrc).toMatch(/<Route\s+path="\/sessions\/:sessionId\/live"\s+element=\{<LiveRedirectCompat/);
     });
   });
 
