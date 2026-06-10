@@ -17,10 +17,11 @@ import {
   useLocalParticipant,
   RoomAudioRenderer,
   useConnectionState,
+  useRoomContext,
 } from '@livekit/components-react';
 import { isTrackReference } from '@livekit/components-core';
 import '@livekit/components-styles';
-import { Track, ConnectionState } from 'livekit-client';
+import { Track, ConnectionState, RoomEvent } from 'livekit-client';
 
 // Bug 10 (April 19) — Meet/Zoom-style reaction badge anchored above
 // the lobby tile name plate. Subscribes only to this user's entry so
@@ -43,6 +44,32 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
   );
   const participants = useParticipants();
   const { localParticipant } = useLocalParticipant();
+  // UX2 (June-10 debrief) — a remote tile's mic/cam icon could show the wrong
+  // state because the mosaic didn't re-render when a REMOTE participant toggled
+  // their track (renderTile reads participant.isMicrophoneEnabled at render
+  // time, but useTracks/useParticipants don't re-run on a remote mute/unmute).
+  // Force a re-render on the room's mute events so the icon always reflects the
+  // live LiveKit track state. (The local tile was already reactive via
+  // useLocalParticipant — Bug 11.)
+  const room = useRoomContext();
+  const [, setMuteTick] = useState(0);
+  useEffect(() => {
+    if (!room) return;
+    const bump = () => setMuteTick(t => t + 1);
+    // Mute/unmute drives the mic icon; subscribe/unsubscribe drives whether a
+    // remote camera tile shows video vs the "camera off" placeholder, which
+    // could lag behind reality on a slow subscribe.
+    room.on(RoomEvent.TrackMuted, bump)
+      .on(RoomEvent.TrackUnmuted, bump)
+      .on(RoomEvent.TrackSubscribed, bump)
+      .on(RoomEvent.TrackUnsubscribed, bump);
+    return () => {
+      room.off(RoomEvent.TrackMuted, bump)
+        .off(RoomEvent.TrackUnmuted, bump)
+        .off(RoomEvent.TrackSubscribed, bump)
+        .off(RoomEvent.TrackUnsubscribed, bump);
+    };
+  }, [room]);
   const hostUserId = useSessionStore(s => s.hostUserId);
   const lobbyDensity = useSessionStore(s => s.lobbyDensity);
   // Phase N (12 May spec item 2) — host visibility mode per host/cohost.
