@@ -938,36 +938,34 @@ export async function repairFutureRounds(
   // Regenerate each future round in order. Each call's excludedPairs picks
   // up the previously-completed rounds AND any rounds already regenerated
   // in this loop (so cross-round no-repeat is preserved).
-  const allHostIds: string[] = [];
-  if (session.hostUserId) allHostIds.push(session.hostUserId);
-  // Phase R6 (20 May 2026) — session_cohosts is the canonical cohort table.
-  // Pre-fix queried session_participants.role which doesn't exist; the silent
-  // catch swallowed the missing-column error and returned [], so cohosts were
-  // never excluded from matching for any event with cohosts. Also honours
-  // Phase M (12 May spec) acting_as_host overrides so admin opt-ins get
-  // excluded too and admin opt-outs stay matchable.
+  // Host set = director + formally-assigned cohosts + super_admins. MUST stay
+  // in lockstep with getAllHostIds() in orchestration/handlers/host-actions.ts;
+  // it can't be imported here because host-actions imports this module, which
+  // would create a require cycle in the hot matching path. Two divergences fixed
+  // in the 10-Jun audit: (1) super_admins were never queried, so a repair re-made
+  // Stefan matchable and could pair him into a breakout — the 9-Jun policy says a
+  // super_admin is ALWAYS a host; (2) the opt-in/opt-out host overrides were
+  // dropped — the self-select picker was removed 23 May, so the set is
+  // role-derived only and those overrides must not reappear.
+  const hostIdSet = new Set<string>();
+  if (session.hostUserId) hostIdSet.add(session.hostUserId);
   try {
     const cohostsRes = await query<{ user_id: string }>(
       `SELECT user_id FROM session_cohosts WHERE session_id = $1`,
       [sessionId],
     );
-    for (const r of cohostsRes.rows) allHostIds.push(r.user_id);
-    const overrideRes = await query<{ user_id: string; acting_as_host: boolean }>(
-      `SELECT user_id, acting_as_host FROM session_participants
-       WHERE session_id = $1 AND acting_as_host IS NOT NULL`,
+    for (const r of cohostsRes.rows) hostIdSet.add(r.user_id);
+    const superAdminRes = await query<{ user_id: string }>(
+      `SELECT sp.user_id FROM session_participants sp
+         JOIN users u ON u.id = sp.user_id
+        WHERE sp.session_id = $1 AND u.role = 'super_admin'`,
       [sessionId],
     );
-    for (const r of overrideRes.rows) {
-      if (r.acting_as_host === true) {
-        if (!allHostIds.includes(r.user_id)) allHostIds.push(r.user_id);
-      } else if (r.acting_as_host === false) {
-        const idx = allHostIds.indexOf(r.user_id);
-        if (idx >= 0) allHostIds.splice(idx, 1);
-      }
-    }
+    for (const r of superAdminRes.rows) hostIdSet.add(r.user_id);
   } catch (err) {
-    logger.warn({ err, sessionId }, 'Phase R6 — failed to fetch cohost / acting_as_host exclusions');
+    logger.warn({ err, sessionId }, 'repairFutureRounds — failed to fetch host exclusions');
   }
+  const allHostIds = Array.from(hostIdSet);
 
   const regeneratedRounds: number[] = [];
   const errors: Array<{ roundNumber: number; error: string }> = [];

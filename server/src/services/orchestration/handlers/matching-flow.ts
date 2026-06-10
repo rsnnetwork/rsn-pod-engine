@@ -1541,17 +1541,25 @@ async function emitHostDashboardImmediate(io: SocketServer, sessionId: string): 
     // both counts derived. Fail-open: if presence is empty/unavailable, fall
     // back to the DB-eligible count so we never wrongly show zero.
     const presenceSet = presentSet;
+    // 10-Jun audit — exclude the FULL host set (director + cohosts + super_admins),
+    // not just the director, so the "Match People: N eligible" label matches what
+    // the real matching path (getAllHostIds → getEligibleParticipants) will pair.
+    // Resolved once here and reused as the dashboard audience below. Fail-open to
+    // the director if the lookup throws, mirroring the audience fallback.
+    const hostIds = await getAllHostIds(sessionId, activeSession.hostUserId).catch(() => [
+      activeSession.hostUserId,
+    ]);
     const eligibleRows = (await query<{ user_id: string }>(
       `SELECT sp.user_id FROM session_participants sp
        WHERE sp.session_id = $1
          AND sp.status NOT IN ('removed', 'left', 'no_show')
-         AND sp.user_id != $2
+         AND sp.user_id != ALL($2::uuid[])
          AND NOT EXISTS (
            SELECT 1 FROM matches m
            WHERE m.session_id = $1 AND m.status = 'active'
              AND (m.participant_a_id = sp.user_id OR m.participant_b_id = sp.user_id OR m.participant_c_id = sp.user_id)
          )`,
-      [sessionId, activeSession.hostUserId],
+      [sessionId, hostIds],
     )).rows;
     const presentMainRoomCount = eligibleRows.filter(r => presenceSet.has(r.user_id)).length;
     const eligibleMainRoomCount = presenceSet.size > 0 ? presentMainRoomCount : eligibleRows.length;
@@ -1602,9 +1610,7 @@ async function emitHostDashboardImmediate(io: SocketServer, sessionId: string): 
     // room / participant changes all alter the fingerprint, so real changes
     // always flow. An unchanged payload is still pushed every 30s as a
     // heartbeat belt.
-    const hostIds = await getAllHostIds(sessionId, activeSession.hostUserId).catch(() => [
-      activeSession.hostUserId,
-    ]);
+    // hostIds resolved above (shared with the eligible-count query).
     // The AUDIENCE is part of the fingerprint: a newly-added co-host changes
     // hostIds, so their first dashboard is never withheld by the skip.
     const fp = JSON.stringify({ ...dashboardPayload, timerSecondsRemaining: 0, _audience: hostIds });
