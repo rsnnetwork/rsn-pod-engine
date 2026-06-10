@@ -95,13 +95,16 @@ describe('Phase D — UI bug batch', () => {
       expect(fn).toMatch(/participant\$\{participantCount\s*!==\s*1\s*\?\s*'s'\s*:\s*''\}/);
     });
 
-    it('LobbyStatusOverlay uses the helper with actingAsHostOverrides (no inline duplicate logic)', () => {
-      const fnStart = src.indexOf('function LobbyStatusOverlay');
+    it('the top-bar count uses the helper with actingAsHostOverrides (no inline duplicate logic)', () => {
+      // June-10 — the count moved to the top bar (TopBarParticipantCount in
+      // LiveSessionPage); it still uses the single formatParticipantHeader
+      // helper with the acting-as-host overrides (no re-implemented counting).
+      const liveSrc = readClient('features/live/LiveSessionPage.tsx');
+      const fnStart = liveSrc.indexOf('function TopBarParticipantCount');
       expect(fnStart).toBeGreaterThan(-1);
-      const fnEnd = src.indexOf('\nfunction ', fnStart + 1);
-      const fn = src.slice(fnStart, fnEnd);
+      const fn = liveSrc.slice(fnStart, fnStart + 900);
       expect(fn).toMatch(
-        /formatParticipantHeader\(\s*participants,\s*hostUserId,\s*cohosts,\s*actingAsHostOverrides,\s*hostOnline\s*\)/,
+        /formatParticipantHeader\(\s*roster,\s*hostUserId,\s*cohosts,\s*actingAsHostOverrides\s*\?\?\s*\{\},\s*null\s*\)/,
       );
       // No inline `+ host` string concatenation should remain in this fn.
       expect(fn).not.toMatch(/\?\s*['"][^'"]*\+\s*host['"]/);

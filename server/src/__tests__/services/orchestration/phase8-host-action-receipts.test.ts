@@ -82,20 +82,26 @@ describe('Phase 8 — host action receipts', () => {
 
   describe('Lobby compact header (Stefan: too much top space)', () => {
     const src = readClient('features/live/Lobby.tsx');
+    const liveSrc = readClient('features/live/LiveSessionPage.tsx');
 
-    it('Main Room header is single-row inline (h2 base size, not the old text-xl stack)', () => {
-      // Pre-Phase-8: stacked icon (h-12 w-12) + text-xl h2 + paragraph + count
-      // = ~150px before the video grid.
-      // Now: inline-flex single row with text-base h2 and gap-3 spacing.
-      expect(src).toMatch(/inline-flex items-center justify-center gap-3[\s\S]+?text-base font-semibold[\s\S]+?Main Room/);
+    it('the steady-state Main Room heading + "Click Match People" copy is gone from above the tiles', () => {
+      // June-10 — the redundant "Main Room · Click Match People" heading was
+      // removed from LobbyStatusOverlay; the top bar already shows the room
+      // state, so above the tiles only the density toggle remains.
+      expect(src).not.toMatch(/Click Match People/);
     });
 
     it('outer lobby container uses p-3 sm:p-6 + gap-3 sm:gap-4 (was p-6 gap-6)', () => {
       expect(src).toMatch(/p-3 sm:p-6 gap-3 sm:gap-4/);
     });
 
-    it('participant count line uses gap-1.5 + h-3 icon (was h-3.5 + larger gap)', () => {
-      expect(src).toMatch(/gap-1\.5 text-gray-500 text-xs[\s\S]+?Users className="h-3 w-3"/);
+    it('the participant count moved to the top bar with the compact h-3 icon', () => {
+      // June-10 — the count line left LobbyStatusOverlay and now renders in the
+      // top bar (TopBarParticipantCount), still compact (text-xs + h-3 icon).
+      const idx = liveSrc.indexOf('function TopBarParticipantCount');
+      expect(idx).toBeGreaterThan(-1);
+      const fn = liveSrc.slice(idx, idx + 1400);
+      expect(fn).toMatch(/text-xs text-gray-500[\s\S]+?Users className="h-3 w-3"/);
     });
   });
 

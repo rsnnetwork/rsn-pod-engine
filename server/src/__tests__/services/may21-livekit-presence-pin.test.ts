@@ -80,13 +80,16 @@ describe('F3 (21 May Ali) — LiveKit presence is the source of truth for in-roo
       expect(block).toMatch(/<LiveKitPresenceSync\s*\/>/);
     });
 
-    it('LobbyStatusOverlay reads the realtime in-room list', () => {
-      const idx = src.indexOf('function LobbyStatusOverlay');
+    it('the top-bar participant count reads the realtime in-room list', () => {
+      // June-10 — the count moved to the top bar (TopBarParticipantCount in
+      // LiveSessionPage). It still prefers the realtime in-room roster
+      // (liveRoomParticipants, synced from LiveKit by LiveKitPresenceSync)
+      // over the durable socket roster.
+      const liveSrc = readClient('src/features/live/LiveSessionPage.tsx');
+      const idx = liveSrc.indexOf('function TopBarParticipantCount');
       expect(idx).toBeGreaterThan(-1);
-      // window widened 600→1000: P2-1 expanded the whole-store destructure
-      // into per-field selectors above the call
-      const body = src.slice(idx, idx + 1000);
-      expect(body).toMatch(/useInRoomParticipants\(\)/);
+      const body = liveSrc.slice(idx, idx + 900);
+      expect(body).toMatch(/liveRoomParticipants/);
     });
 
     it('HostParticipantPanel reads the realtime in-room list', () => {

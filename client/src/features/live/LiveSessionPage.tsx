@@ -5,7 +5,7 @@ import { useSessionStore } from '@/stores/sessionStore';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import useSessionSocket from '@/hooks/useSessionSocket';
-import Lobby, { clearAppliedPrefMarkers } from './Lobby';
+import Lobby, { clearAppliedPrefMarkers, formatParticipantHeader } from './Lobby';
 import VideoRoom from './VideoRoom';
 import RatingPrompt from './RatingPrompt';
 import SessionComplete from './SessionComplete';
@@ -204,6 +204,12 @@ export default function LiveSessionPage() {
         {/* Inline room-state chip (was a separate full-width banner row). */}
         {connectionStatus === 'connected' && phase !== 'matched' && phase !== 'rating' && (
           <EventStateBanner sessionStatus={sessionStatus} currentRound={currentRound} totalRounds={totalRounds} bonusRoundsAdded={bonusRoundsAdded} phase={phase} />
+        )}
+        {/* UX (June-10) — the participant count moved OFF the area above the
+            video tiles (where it ate vertical space) and INTO the top bar, next
+            to the room-state chip. Only shown in the main room (lobby phase). */}
+        {connectionStatus === 'connected' && phase === 'lobby' && (
+          <TopBarParticipantCount />
         )}
         {/* Bug 10 (13 May live test) — once the event ends, the top-bar
             participant + leave controls must vanish along with chat /
@@ -674,6 +680,30 @@ function EventStateBanner({ sessionStatus, currentRound, totalRounds, bonusRound
         </span>
       )}
     </div>
+  );
+}
+
+/* ─── Top-bar participant count (moved out of the above-tiles header) ─────── */
+
+function TopBarParticipantCount() {
+  // Realtime in-room roster (synced from LiveKit by LiveKitPresenceSync) when
+  // available, else the durable socket roster. Same breakdown the lobby header
+  // used ("N participants · 1 host"), just relocated to the top bar.
+  const liveRoomParticipants = useSessionStore(s => s.liveRoomParticipants);
+  const participants = useSessionStore(s => s.participants);
+  const hostUserId = useSessionStore(s => s.hostUserId);
+  const cohosts = useSessionStore(s => s.cohosts);
+  const actingAsHostOverrides = useSessionStore(s => s.actingAsHostOverrides);
+
+  const roster = (liveRoomParticipants.length > 0 ? liveRoomParticipants : participants) as { userId: string }[];
+  if (roster.length === 0) return null;
+  const text = formatParticipantHeader(roster, hostUserId, cohosts, actingAsHostOverrides ?? {}, null);
+
+  return (
+    <span className="hidden sm:inline-flex items-center gap-1 shrink-0 text-xs text-gray-500 whitespace-nowrap">
+      <Users className="h-3 w-3" />
+      {text}
+    </span>
   );
 }
 

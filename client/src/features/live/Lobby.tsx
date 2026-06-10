@@ -1051,16 +1051,14 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
   // participant:joined/left fan-out misses a client. useInRoomParticipants
   // returns the LiveKit identity set when the room is mounted, falling
   // back to the durable roster pre-LiveKit.
-  // P2-1 — field selectors (header rebuilt itself on every store write before)
+  // P2-1 — field selectors (header rebuilt itself on every store write before).
+  // The participant-count selectors that used to live here moved to the top bar
+  // (TopBarParticipantCount) along with the count itself — this overlay now only
+  // renders transient state messages, not the steady-state heading/count.
   const isByeRound = useSessionStore(s => s.isByeRound);
   const transitionStatus = useSessionStore(s => s.transitionStatus);
   const sessionStatus = useSessionStore(s => s.sessionStatus);
-  const hostUserId = useSessionStore(s => s.hostUserId);
   const leftCurrentRound = useSessionStore(s => s.leftCurrentRound);
-  const cohosts = useSessionStore(s => s.cohosts);
-  const participants = useInRoomParticipants();
-  // Bug E (15 May Ali) — header count needs acting-as-host opt-ins.
-  const actingAsHostOverrides = useSessionStore(s => s.actingAsHostOverrides);
   const hostOnline = useHostPresence();
 
   // Session hasn't been started yet by host
@@ -1131,20 +1129,15 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
           </span>
         </div>
       ) : (
-        <div className="inline-flex items-center justify-center gap-3">
-          <Sparkles className="h-4 w-4 text-gray-400" />
-          <h2 className="text-base font-semibold text-[#1a1a2e]">Main Room</h2>
-          {isHost && (
-            <span className="text-xs text-gray-400 hidden sm:inline">· Click Match People below</span>
-          )}
-        </div>
+        // UX (June-10) — the steady-state main-room heading and the
+        // "X participants · Y host" count are gone from here: the top bar already
+        // shows the room state, and the participant count now lives there too.
+        // Above the tiles we keep ONLY the density toggle, so the video grid
+        // reclaims that vertical space. The transient overlays above (bye round,
+        // "Next round starting…", "Round in progress", "Back in Main Room") still
+        // render — those are momentary states with no tiles to crowd.
+        null
       )}
-      <div className="flex items-center justify-center gap-1.5 text-gray-500 text-xs">
-        <Users className="h-3 w-3" />
-        <span>
-          {formatParticipantHeader(participants, hostUserId, cohosts, actingAsHostOverrides, hostOnline)}
-        </span>
-      </div>
     </div>
   );
 }
@@ -1157,7 +1150,7 @@ function LobbyStatusOverlay({ isHost }: { isHost: boolean }) {
 //   1 participant            (no host present, no cohosts)
 //   3 participants + host    (host present, no cohosts)
 //   3 participants + 2 hosts (host + 1 cohost; or 2 cohosts no host present)
-function formatParticipantHeader(
+export function formatParticipantHeader(
   participants: { userId: string }[],
   hostUserId: string | null,
   cohosts: Set<string>,
