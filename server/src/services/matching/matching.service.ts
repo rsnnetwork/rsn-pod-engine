@@ -10,6 +10,7 @@ import {
 } from '@rsn/shared';
 import { getMatchingEngine, DEFAULT_ENGINE_ID } from './matching.registry';
 import { pairKey } from './matching.interface';
+import { reduceRepeatPairs } from './repeat-reduction';
 import * as sessionService from '../session/session.service';
 import * as blockService from '../block/block.service';
 import { NotFoundError } from '../../middleware/errors';
@@ -508,6 +509,24 @@ export async function generateSingleRound(
         'Fallback ladder exhausted at L4 — accepting incomplete matching',
       );
     }
+  }
+
+  // #6 (June-10 debrief) — when the ladder had to reuse already-met pairs,
+  // minimize them so the first "Match People" of a bonus round shows fresh pairs
+  // whenever fresh pairs exist (TESTEVENT R5 produced 2 repeats where 1 was
+  // forced). Bounded 2-opt; runs ONLY when repeats were needed (landedAtLevel>0),
+  // so the all-fresh L0 path is untouched. Respects the landed level's hard
+  // exclusions plus the never-relax current-preview keys, and can only reduce
+  // repeats (never increase them, never drop a participant). Tagging below then
+  // recomputes repeatInEvent / usedRepeats on the final pairing.
+  if (landedAtLevel > 0 && round) {
+    const levelHard = landedAtLevel >= 4 ? new Set<string>()
+                    : landedAtLevel >= 3 ? halfExcludedPairs
+                    : excludedPairs;
+    const hard = options?.excludePairKeys?.length
+      ? new Set<string>([...levelHard, ...options.excludePairKeys])
+      : levelHard;
+    reduceRepeatPairs(round.pairs, excludedPairs, hard);
   }
 
   // Tag pairs with the level they landed at for audit (Spec §13).

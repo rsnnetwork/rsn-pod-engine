@@ -90,12 +90,19 @@ function wireDbForGenerateSingleRound(opts: { matchingPolicy: string }) {
       });
     }
     if (/FROM encounter_history/i.test(s)) {
-      // u1 & u2 met in a PRIOR event (different session).
+      // u1 met u2, u3 AND u4 in PRIOR events. u1 having met everyone makes at
+      // least one repeat mathematically FORCED in any matching — so the #6
+      // repeat-minimization (reduceRepeatPairs) cannot drive usedRepeats to
+      // false, which is exactly what the "ladder relaxed → surfaces a repeat"
+      // test needs. (Pre-#6 this was just u1&u2; with only one excluded pair a
+      // fully-fresh re-pairing existed, so the 2-opt correctly removed it.)
+      const base = { timesMet: 2, lastMetAt: new Date(), mutualMeetAgain: false, averageRating: null };
       return Promise.resolve({
-        rows: [{
-          userAId: 'u1', userBId: 'u2', timesMet: 2,
-          lastMetAt: new Date(), mutualMeetAgain: false, averageRating: null,
-        }],
+        rows: [
+          { userAId: 'u1', userBId: 'u2', ...base },
+          { userAId: 'u1', userBId: 'u3', ...base },
+          { userAId: 'u1', userBId: 'u4', ...base },
+        ],
       });
     }
     if (/FROM matches\b/i.test(s) && /round_number != /i.test(s)) {
