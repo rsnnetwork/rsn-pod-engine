@@ -103,8 +103,12 @@ test('Kicked AFTER a round: terminal across refresh, URL paste, and a direct tok
   await ctx2.addInitScript((t: { a: string; r: string }) => { localStorage.setItem('rsn_access', t.a); localStorage.setItem('rsn_refresh', t.r); }, { a: victim.accessToken, r: victim.refreshToken });
   const page2 = await ctx2.newPage();
   await gotoRetry(page2, `${APP}/session/${sessionId}/live`);
-  await expect.poll(async () => await inMainRoom(page2), { timeout: 25_000, message: 'URL paste must not re-admit a removed user' }).toBe(false);
-  for (let i = 0; i < 6; i++) { expect(await inMainRoom(page2), `victim got in via URL paste ${i}s`).toBe(false); await wait(1000); }
+  // Let the COLD fresh context fully load (connect → auto-register 403 →
+  // terminal recap) before asserting — the brief loading shell is not a rejoin
+  // (no token is possible: the direct /token above already 403'd). Then require
+  // a sustained OUT.
+  await page2.waitForTimeout(14000);
+  for (let i = 0; i < 8; i++) { expect(await inMainRoom(page2), `victim got into the main room via URL paste, ${i}s after settling`).toBe(false); await wait(1000); }
   expect(await partStatus(victim.id), 'victim still removed').toBe('removed');
   await page2.screenshot({ path: 'test-results/kickround-urlpaste-out.png' }).catch(() => {});
   await ctx2.close();
