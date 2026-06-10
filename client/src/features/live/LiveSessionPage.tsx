@@ -185,17 +185,26 @@ export default function LiveSessionPage() {
           host explicitly set session.config.testMode=true. Stefan #2:
           "clearly separate test mode vs real users". */}
       <TestModeBanner />
-      {/* Top bar */}
-      <div className="flex items-center justify-between px-4 py-2 bg-white border-b border-gray-200">
-        <div className="flex items-center gap-1.5 min-w-0">
+      {/* Top bar — UX1 (June-10): a SINGLE compact line carrying the event title,
+          the inline room-state chip (merged in from the old EventStateBanner row),
+          and the participant/leave controls. Collapsing the two stacked header
+          rows into one reclaims a full row of vertical space so the main-room
+          video grid (flex-1 below) fits more participant tiles without scrolling
+          — for hosts, co-hosts and participants alike. */}
+      <div className="flex items-center gap-2 px-4 py-1.5 bg-white border-b border-gray-200">
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
           {session?.podId && session?.podName && (
-            <span className="text-xs text-gray-400 shrink-0">
+            <span className="hidden sm:inline text-xs text-gray-400 shrink-0">
               <a href={`/pods/${session.podId}`} className="hover:text-gray-600 transition-colors">{session.podName}</a>
               <span className="mx-1">/</span>
             </span>
           )}
           <h2 className="text-sm font-medium text-[#1a1a2e] truncate">{session?.title || 'Live Event'}</h2>
         </div>
+        {/* Inline room-state chip (was a separate full-width banner row). */}
+        {connectionStatus === 'connected' && phase !== 'matched' && phase !== 'rating' && (
+          <EventStateBanner sessionStatus={sessionStatus} currentRound={currentRound} totalRounds={totalRounds} bonusRoundsAdded={bonusRoundsAdded} phase={phase} />
+        )}
         {/* Bug 10 (13 May live test) — once the event ends, the top-bar
             participant + leave controls must vanish along with chat /
             reactions / host controls. The recap page below has its own
@@ -226,10 +235,7 @@ export default function LiveSessionPage() {
         )}
       </div>
 
-      {/* Persistent event state banner — hidden during breakout/rating (they have own UI) */}
-      {connectionStatus === 'connected' && phase !== 'matched' && phase !== 'rating' && (
-        <EventStateBanner sessionStatus={sessionStatus} currentRound={currentRound} totalRounds={totalRounds} bonusRoundsAdded={bonusRoundsAdded} phase={phase} />
-      )}
+      {/* (UX1) Event-state row removed — it now renders inline in the top bar above. */}
 
       {/* Broadcast banner */}
       {broadcasts.length > 0 && (
@@ -653,10 +659,15 @@ function EventStateBanner({ sessionStatus, currentRound, totalRounds, bonusRound
     && sessionStatus !== 'completed'
     && sessionStatus !== 'scheduled';
 
+  // UX1 (June-10 debrief) — rendered INLINE inside the single top bar (not as a
+  // separate full-width row) so the main-room video grid reclaims that vertical
+  // space and more participant tiles fit on screen without scrolling. The
+  // rounded chip keeps it readable against the white bar; it shrinks/hides its
+  // text gracefully on narrow phones via truncate on the bar's title sibling.
   return (
-    <div className={`px-4 py-1.5 flex items-center justify-center gap-2 text-xs font-medium ${config.color}`}>
+    <div className={`inline-flex items-center gap-1.5 shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${config.color}`}>
       {config.icon}
-      <span>{display}</span>
+      <span className="whitespace-nowrap">{display}</span>
       {isBonusRound && (
         <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-amber-900 bg-amber-100 border border-amber-300 rounded-full px-1.5 py-px">
           Bonus
