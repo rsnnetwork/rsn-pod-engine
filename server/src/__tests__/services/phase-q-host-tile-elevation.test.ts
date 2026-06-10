@@ -78,7 +78,7 @@ describe('Phase Q — host tile elevation in Lobby grid', () => {
     it('renderTile derives isActingHost from hostsSet membership', () => {
       const renderIdx = src.indexOf('const renderTile = ');
       expect(renderIdx).toBeGreaterThan(-1);
-      const block = src.slice(renderIdx, renderIdx + 1500);
+      const block = src.slice(renderIdx, renderIdx + 1800);
       expect(block).toMatch(/isActingHost\s*=[\s\S]{0,150}hostsSet\.has\(trackRef\.participant\.identity\)/);
     });
 

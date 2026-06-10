@@ -338,7 +338,10 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
   // Helper to render a single video tile with all overlays
   const renderTile = (trackRef: any, { isPinned = false, onClick }: { isPinned?: boolean; onClick?: () => void } = {}) => {
     const name = trackRef.participant.name || trackRef.participant.identity || 'User';
-    const hasVideo = !!trackRef.publication?.track;
+    // UX2 (June-10 debrief) — camera "on" means a published video track that is
+    // NOT muted. Turning a camera off MUTES the track (it stays published), so
+    // checking track-presence alone left a muted (off) camera showing as on.
+    const hasVideo = !!trackRef.publication?.track && !trackRef.publication?.isMuted;
     const isLocal = trackRef.participant.sid === localParticipant.sid;
     const tileIsHost = trackRef.participant.identity === hostUserId;
     // Phase Q (12 May spec item 2 — Ali's 13 May clarification) — hosts

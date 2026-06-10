@@ -18,7 +18,7 @@ import {
   RoomAudioRenderer,
 } from '@livekit/components-react';
 import '@livekit/components-styles';
-import { Track, ConnectionState } from 'livekit-client';
+import { Track, ConnectionState, RoomEvent } from 'livekit-client';
 import api from '@/lib/api';
 
 // Prefer displayName → name → email local-part → "Partner".
@@ -68,7 +68,11 @@ const TileReaction = memo(function TileReaction({ userId }: { userId?: string })
 });
 
 function VideoTile({ trackRef, label, isWaiting, isPinned, userId, fillMode = 'contain' }: { trackRef?: any; label: string; isWaiting?: boolean; isPinned?: boolean; userId?: string; fillMode?: 'contain' | 'cover' }) {
-  const hasVideo = trackRef?.publication?.track;
+  // UX2 (June-10 debrief) — camera "on" means a published video track that is
+  // NOT muted. Turning a camera off mutes (not unpublishes) the track, so a
+  // track-presence-only check left a muted (off) camera still showing video in
+  // the breakout room instead of the "camera off" placeholder.
+  const hasVideo = !!trackRef?.publication?.track && !trackRef.publication?.isMuted;
   // Bug 2 + Bug 6 (April 18 Dr Arch): VideoTile fills its parent cell, but
   // the inner VideoTrack uses object-CONTAIN (not cover). Reasoning:
   //   - object-cover crops the source to fill the cell. Portrait phone video
@@ -106,6 +110,27 @@ function VideoTile({ trackRef, label, isWaiting, isPinned, userId, fillMode = 'c
 // own re-renders when relevant. Memoization stops it from re-rendering
 // when the parent VideoRoom re-renders for unrelated reasons.
 const VideoStage = memo(function VideoStage() {
+  // UX2 (June-10 debrief) — keep the breakout tiles' camera/mic state in sync
+  // with LiveKit. useTracks/useParticipants don't re-run on a remote
+  // mute/unmute, so a partner toggling their camera/mic could leave the tile
+  // showing the stale state. Force a re-render on the room's track events (same
+  // fix applied to the main-room Lobby mosaic).
+  const stageRoom = useRoomContext();
+  const [, setTrackTick] = useState(0);
+  useEffect(() => {
+    if (!stageRoom) return;
+    const bump = () => setTrackTick(t => t + 1);
+    stageRoom.on(RoomEvent.TrackMuted, bump)
+      .on(RoomEvent.TrackUnmuted, bump)
+      .on(RoomEvent.TrackSubscribed, bump)
+      .on(RoomEvent.TrackUnsubscribed, bump);
+    return () => {
+      stageRoom.off(RoomEvent.TrackMuted, bump)
+        .off(RoomEvent.TrackUnmuted, bump)
+        .off(RoomEvent.TrackSubscribed, bump)
+        .off(RoomEvent.TrackUnsubscribed, bump);
+    };
+  }, [stageRoom]);
   const tracks = useTracks(
     [
       { source: Track.Source.Camera, withPlaceholder: true },
