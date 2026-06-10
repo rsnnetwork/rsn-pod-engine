@@ -106,9 +106,13 @@ test('A kicked user lands terminally on the recap and never reverts to the main 
   // rejoin and the client treats it as terminal.
   console.log('  >>> reloading victim (the reconnect that caused the revert) <<<');
   await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-  await page.waitForTimeout(7000);
+  // A reload reconnects from scratch; allow the brief loading/connecting shell
+  // to settle, then require the victim to land terminally OUT of the main room
+  // (the server bars re-registration → recap). Then assert it HOLDS — the bug
+  // was a revert back IN, so a sustained "out" is the real proof.
+  await expect.poll(async () => await inMainRoom(page), { timeout: 25_000, message: 'after a reload the kicked victim must settle terminally OUT of the main room' }).toBe(false);
   for (let i = 0; i < 8; i++) {
-    expect(await inMainRoom(page), `victim got back into the main room ${i}s after a reload`).toBe(false);
+    expect(await inMainRoom(page), `victim reverted back into the main room ${i}s after settling (reload)`).toBe(false);
     await wait(1000);
   }
   await page.screenshot({ path: 'test-results/kick-3-still-out-after-reload.png' }).catch(() => {});
