@@ -93,7 +93,7 @@ describe('S12 — remaining 27-May audit gaps closed', () => {
     const src = readServer('services/orchestration/handlers/participant-flow.ts');
     expect(src).toMatch(/REMOVED_FROM_EVENT/);
     const idx = src.indexOf("'REMOVED_FROM_EVENT'");
-    const block = src.slice(idx, idx + 400);
+    const block = src.slice(idx, idx + 700);
     expect(block).toMatch(/session:evicted/);
   });
 });

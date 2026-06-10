@@ -571,7 +571,11 @@ export async function handleJoinSession(
         // them explicitly and don't proceed with the join flow.
         if (regErr?.code === 'REMOVED_FROM_EVENT') {
           socket.leave(sessionRoom(data.sessionId));
-          socket.emit('session:evicted', {});
+          // June-10 — a kicked user is TERMINALLY out. Tag the bounce so the
+          // client shows the recap (and locks it) instead of the duplicate-tab
+          // "reconnect here" lobby path, which would remount LiveKit and pull
+          // them back into the main room with their still-valid token.
+          socket.emit('session:evicted', { reason: 'removed_from_event' });
           logger.info({ sessionId: data.sessionId, userId }, 'Removed user attempted to rejoin — evicted');
           return;
         }

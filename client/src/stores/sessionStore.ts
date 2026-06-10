@@ -237,7 +237,16 @@ interface SessionLiveState {
   // Initialized to -1 so the first snapshot (seq ≥ 0) is always accepted.
   snapshotSeq: number;
 
+  /**
+   * June-10 — sticky terminal flag: the host kicked this user out of the event.
+   * Once set, the user is locked on the recap (setPhase refuses to leave
+   * 'complete'), so no late reconnect/eviction/snapshot can pull them back into
+   * the main room. Cleared only by a full store reset (a fresh invite re-entry).
+   */
+  removedFromEvent: boolean;
+
   setPhase: (phase: SessionPhase) => void;
+  setRemovedFromEvent: (removed: boolean) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setTransitionStatus: (status: TransitionStatus) => void;
   setSessionStatus: (status: SessionStatus) => void;
@@ -379,6 +388,7 @@ export interface SessionStateSnapshot {
 
 export const useSessionStore = create<SessionLiveState>((set) => ({
   phase: 'lobby',
+  removedFromEvent: false,
   connectionStatus: 'connecting',
   transitionStatus: null,
   sessionStatus: 'scheduled',
@@ -437,7 +447,12 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   tileReactions: {},
   snapshotSeq: -1,
 
-  setPhase: (phase) => set({ phase }),
+  // June-10 — once kicked (removedFromEvent), the phase is LOCKED to 'complete'
+  // (the recap). A late reconnect/eviction/snapshot that tries to move the user
+  // back to 'lobby'/'matched' is ignored, so a kicked user can never be pulled
+  // back into the main room. A fresh-invite re-entry resets the store first.
+  setPhase: (phase) => set((s) => (s.removedFromEvent && phase !== 'complete') ? {} : { phase }),
+  setRemovedFromEvent: (removedFromEvent) => set({ removedFromEvent }),
   setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
   setTransitionStatus: (transitionStatus) => set({ transitionStatus }),
   setSessionStatus: (sessionStatus) => set({ sessionStatus }),
@@ -681,7 +696,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
     };
   }),
   reset: () => set({
-    phase: 'lobby', connectionStatus: 'connecting', transitionStatus: null,
+    phase: 'lobby', removedFromEvent: false, connectionStatus: 'connecting', transitionStatus: null,
     sessionStatus: 'scheduled', hostInLobby: false, hostUserId: null, sessionStateLoaded: false, serverPinnedUserId: null, tileDemotedUserIds: [], hccParticipants: [], totalRounds: 5, bonusRoundsAdded: 0,
     participants: [], liveRoomParticipants: [], currentMatch: null, currentPartners: [], currentMatchId: null, ratingReason: null, timerWarning: null, roomNotice: null,
     timerSeconds: 0, timerEndsAt: null, clockOffset: 0, hasClockOffset: false, currentRound: 0, broadcasts: [], error: null, tileReactions: {},

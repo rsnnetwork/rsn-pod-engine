@@ -332,8 +332,20 @@ export default function useSessionSocket(sessionId: string) {
     });
 
     // ── Eviction (duplicate tab/device) ──
-    socket.on('session:evicted', () => {
+    socket.on('session:evicted', (data: any) => {
       store.setConnectionStatus('disconnected');
+      // June-10 — a REMOVED/kicked user's rejoin bounce is terminal: show the
+      // recap and lock it, never the duplicate-tab "reconnect here" lobby path.
+      // That path remounts <LiveKitRoom> and re-joins the main room with the
+      // still-valid token — the revert Ali saw. Honour the server's reason tag
+      // AND the sticky flag (covers a reconnect that races the kick event).
+      if (data?.reason === 'removed_from_event' || useSessionStore.getState().removedFromEvent) {
+        store.setRemovedFromEvent(true);
+        store.setLiveKitToken(null, null);
+        store.setError('You have been removed from this event.');
+        store.setPhase('complete');
+        return;
+      }
       store.setPhase('lobby');
       // Signal will be picked up by UI to show "connected from another tab" message
       store.setTransitionStatus('evicted');
@@ -876,6 +888,12 @@ export default function useSessionSocket(sessionId: string) {
     });
 
     socket.on('host:participant_removed', () => {
+      // June-10 — a kick is TERMINAL. Mark removed (sticky: setPhase is now
+      // locked to 'complete'), drop the LiveKit token so a stray remount can't
+      // re-join the room, and show the recap. The user is out of the event;
+      // re-entry is only via a fresh invite (which resets the store first).
+      store.setRemovedFromEvent(true);
+      store.setLiveKitToken(null, null);
       store.setError('You have been removed from this event.');
       store.setPhase('complete');
     });
