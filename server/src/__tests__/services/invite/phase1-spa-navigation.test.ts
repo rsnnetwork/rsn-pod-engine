@@ -125,7 +125,7 @@ describe('Phase 1 — SPA navigation + name-fallback architecture', () => {
       // not be a bare `.catch(() => {})`.
       const idx = src.indexOf("/sessions/${sessionId}/register");
       expect(idx).toBeGreaterThan(-1);
-      const block = src.slice(idx, idx + 400);
+      const block = src.slice(idx, idx + 900);
       expect(block).not.toMatch(/\.catch\(\(\)\s*=>\s*\{\s*\}\)/);
       expect(block).toMatch(/console\.warn|addToast/);
     });

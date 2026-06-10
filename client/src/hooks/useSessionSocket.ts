@@ -126,6 +126,19 @@ export default function useSessionSocket(sessionId: string) {
     // best-effort warmup, so console.warn is the right level of noise.
     api.post(`/sessions/${sessionId}/register`).catch(err => {
       const code = err?.response?.data?.error?.code;
+      // June-10 — a kicked user reloaded the live page. The server bars
+      // re-registration (403 REMOVED_FROM_EVENT). This HTTP reply is the
+      // EARLIEST terminal signal on reload — act on it now (before the socket's
+      // session:join bounce) so the live room / LiveKit never mount for a
+      // removed user and there's no window where they flash back into the main
+      // room. setPhase is then locked to 'complete' (removedFromEvent).
+      if (code === 'REMOVED_FROM_EVENT') {
+        store.setRemovedFromEvent(true);
+        store.setLiveKitToken(null, null);
+        store.setError('You have been removed from this event.');
+        store.setPhase('complete');
+        return;
+      }
       if (code !== 'SESSION_ALREADY_REGISTERED') {
         console.warn('auto-register failed', { sessionId, code, err });
       }

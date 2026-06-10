@@ -81,5 +81,14 @@ describe('June-10 — a kicked user is terminally removed (no revert to main roo
       expect(block).toMatch(/removed_from_event|removedFromEvent/);
       expect(block).toMatch(/setPhase\('complete'\)/);
     });
+    it('the auto-register 403 (reload) is handled terminally — no main-room flash', () => {
+      const src = sock();
+      const i = src.indexOf('/register`).catch');
+      expect(i).toBeGreaterThan(-1);
+      const block = src.slice(i, i + 900);
+      expect(block).toMatch(/code === 'REMOVED_FROM_EVENT'/);
+      expect(block).toMatch(/setRemovedFromEvent\(true\)/);
+      expect(block).toMatch(/setPhase\('complete'\)/);
+    });
   });
 });
