@@ -520,13 +520,22 @@ export async function generateSingleRound(
   // repeats (never increase them, never drop a participant). Tagging below then
   // recomputes repeatInEvent / usedRepeats on the final pairing.
   if (landedAtLevel > 0 && round) {
-    const levelHard = landedAtLevel >= 4 ? new Set<string>()
-                    : landedAtLevel >= 3 ? halfExcludedPairs
-                    : excludedPairs;
-    const hard = options?.excludePairKeys?.length
-      ? new Set<string>([...levelHard, ...options.excludePairKeys])
-      : levelHard;
-    reduceRepeatPairs(round.pairs, excludedPairs, hard);
+    // The already-met pairs (excludedPairs / its relaxed halves) are exactly what
+    // we MINIMIZE — they must NOT block a swap. (Earlier this passed the level's
+    // half-excluded set as "hard", which at L3 blocked the very repeat-reducing
+    // swap we want — pairing the two "met-everyone" people together — leaving an
+    // avoidable repeat ~40% of the time.) The only pairs that may never be created
+    // are genuine hard constraints — user blocks and inviter↔invitee avoidance —
+    // plus, on Re-match, the current arrangement we must rotate away from.
+    const neverPair = new Set<string>();
+    for (const s of [...blockedPairs, ...inviterInviteePairs]) {
+      const [a, b] = s.split(':');
+      if (a && b) neverPair.add(pairKey(a, b));
+    }
+    if (options?.excludePairKeys?.length) {
+      for (const k of options.excludePairKeys) neverPair.add(k);
+    }
+    reduceRepeatPairs(round.pairs, excludedPairs, neverPair);
   }
 
   // Tag pairs with the level they landed at for audit (Spec §13).
