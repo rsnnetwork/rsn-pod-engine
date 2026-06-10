@@ -688,6 +688,14 @@ export default function useSessionSocket(sessionId: string) {
       // events can arrive out of order after reconnect, so don't gate on sessionStatus
       const currentState = useSessionStore.getState();
       if (currentState.sessionStatus === 'completed') return;
+      // June-10 live — once round N's rating window has CLOSED for me (host
+      // Skip Ratings, the 90s backstop, or all-rated), a late or replayed
+      // rating:window_open carrying that same/earlier round must NOT snap me
+      // back into the form after I've been returned to the main room. Mirrors
+      // the round_rating-status guard (lastRatedRound). roundNumber is absent
+      // on the early-leave prompts (an active round, window still open), so
+      // those still show.
+      if (data.roundNumber != null && data.roundNumber <= currentState.lastRatedRound) return;
       // #2 (26 May, live-test-2) — if the user already FULLY handled this exact
       // match (rated or skipped every partner — recorded in ratedMatchIds when
       // RatingPrompt hit allDone), a re-emitted rating:window_open during

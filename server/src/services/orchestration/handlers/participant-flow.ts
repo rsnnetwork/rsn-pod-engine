@@ -1018,10 +1018,16 @@ export async function handleJoinSession(
         }
       }
 
-      // If session is in or recently past rating phase, re-send rating window
-      // so reconnected users who missed it can still rate their conversation.
-      // Also covers round_transition — user may have disconnected during rating.
-      const ratingReplayStatuses = [SessionStatus.ROUND_RATING, SessionStatus.ROUND_TRANSITION, SessionStatus.CLOSING_LOBBY];
+      // Re-send the rating window ONLY while it is genuinely OPEN
+      // (ROUND_RATING) so a reconnect during the live window still shows the
+      // form. June-10 live: this used to also replay during ROUND_TRANSITION /
+      // CLOSING_LOBBY, but those are the post-close states — the host's Skip
+      // Ratings, the 90s backstop, or all-rated have ALREADY closed the window
+      // and pulled everyone to the main room. Replaying then snapped a
+      // reconnecting desktop user (Waseem's multi-tab "Rejoin here") back into
+      // the form after they'd left it. Once the window is closed it stays
+      // closed; unrated partners surface at recap.
+      const ratingReplayStatuses = [SessionStatus.ROUND_RATING];
       if (activeSession && ratingReplayStatuses.includes(activeSession.status)) {
         const matches = await matchingService.getMatchesByRound(
           data.sessionId, activeSession.currentRound
