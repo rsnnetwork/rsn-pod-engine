@@ -429,10 +429,14 @@ const MediaControls = memo(function MediaControls() {
   return (
     <div className="flex items-center gap-3 relative">
       <button onClick={toggleMic}
+        aria-label={micEnabled ? 'Mic on' : 'Mic off'}
+        title={micEnabled ? 'Click to mute' : 'Click to unmute'}
         className={`p-2 rounded-full transition-colors ${micEnabled ? 'bg-gray-200 hover:bg-gray-300 text-gray-700' : 'bg-red-100 text-red-500 hover:bg-red-200'}`}>
         {micEnabled ? <Mic className="h-5 w-5" /> : <MicOff className="h-5 w-5" />}
       </button>
       <button onClick={toggleCam}
+        aria-label={camEnabled ? 'Camera on' : 'Camera off'}
+        title={camEnabled ? 'Click to turn camera off' : 'Click to turn camera on'}
         className={`p-2 rounded-full transition-colors ${camEnabled ? 'bg-gray-200 hover:bg-gray-300 text-gray-700' : 'bg-red-100 text-red-500 hover:bg-red-200'}`}>
         {camEnabled ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
       </button>
