@@ -694,6 +694,7 @@ export default function HostControlCenter({
                               (p.globalRole === 'admin' || p.globalRole === 'super_admin')
                               && currentUserId !== hostUserId
                             }
+                            isViewerDirector={currentUserId === hostUserId}
                             onMakeCohost={() => makeCohost(p.userId)}
                             onRemoveCohost={() => removeCohost(p.userId)}
                             onReassign={() => reassign(p.userId)}
@@ -1042,6 +1043,7 @@ function RowActions({
   isCohost,
   state,
   targetIsAdmin,
+  isViewerDirector,
   onMakeCohost,
   onRemoveCohost,
   onReassign,
@@ -1055,6 +1057,9 @@ function RowActions({
   // admin or super_admin. Disables Make/Remove co-host + Kick with an
   // explanatory tooltip; admins manage their own role via Phase M.
   targetIsAdmin: boolean;
+  // June-11 (Ali) — only the event director may ASSIGN/REMOVE co-hosts. A
+  // co-host using the control center sees every other action but not these.
+  isViewerDirector: boolean;
   onMakeCohost: () => void;
   onRemoveCohost: () => void;
   onReassign: () => void;
@@ -1082,7 +1087,7 @@ function RowActions({
           preemptively before the user reconnects (e.g. a known co-host
           whose Wi-Fi dropped). Server-side state checks still gate the
           action. */}
-      {state !== 'left' && (
+      {state !== 'left' && isViewerDirector && (
         isCohost ? (
           <ActionButton
             onClick={onRemoveCohost}

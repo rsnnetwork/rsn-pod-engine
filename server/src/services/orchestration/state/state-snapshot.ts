@@ -178,6 +178,25 @@ export async function handleResync(_io: SocketServer, socket: Socket, data: { se
       } as CanonicalSessionState['participants'][string];
     }
     if (userId && p) {
+      // June-11 — a kicked user reconnecting (refresh / URL paste) must NOT be
+      // re-minted a lobby token. Their canonical entry can still read
+      // location=main (the kick cleared-to-main), so gate on the authoritative
+      // DB status and send a terminal eviction instead of a token. The token
+      // mint is ALSO blocked at source (generateLiveKitToken rejects a removed
+      // member), so this is the clean UX signal that drives them to the recap;
+      // a status-lookup failure degrades to the token-gate (best-effort).
+      try {
+        const { query } = await import('../../../db');
+        const statusRow = await query<{ status: string }>(
+          `SELECT status FROM session_participants WHERE session_id = $1 AND user_id = $2`,
+          [data.sessionId, userId],
+        );
+        const st = statusRow.rows[0]?.status;
+        if (st === 'removed' || st === 'left') {
+          socket.emit('session:evicted', { reason: 'removed_from_event' });
+          return;
+        }
+      } catch { /* status check best-effort — buildYou still gates the token */ }
       const you = await buildYou(data.sessionId, userId, p, true);
       // Record the location we answered with so the next co-emit doesn't
       // immediately re-mint for this user.

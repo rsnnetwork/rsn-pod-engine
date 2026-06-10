@@ -2033,6 +2033,23 @@ export async function handleAssignCohost(
     // routes through canActAsHost which accepts cohost + super_admin
     // (Phase I narrowed regular admin out of the auto-host set).
     if (!await verifyHost(socket, sessionId)) return;
+    // June-11 (Ali) — ASSIGNING a new co-host is the DIRECTOR's call alone (the
+    // platform super_admin keeps an emergency override). A co-host may use the
+    // rest of the control center (mute, kick, pin, end a round, skip ratings)
+    // but cannot mint more co-hosts. verifyHost above accepts co-hosts, so this
+    // explicit director gate is what enforces the limitation.
+    {
+      const directorRow = await query<{ host_user_id: string }>(
+        `SELECT host_user_id FROM sessions WHERE id = $1`, [sessionId],
+      );
+      const directorId = directorRow.rows[0]?.host_user_id;
+      const isSuperAdmin = ((socket.data as any)?.role as string | undefined) === 'super_admin';
+      if (hostId !== directorId && !isSuperAdmin) {
+        logger.info({ sessionId, callerId: hostId }, 'June-11 — non-director assign-cohost refused');
+        socket.emit('error', { code: 'FORBIDDEN', message: 'Only the event host can assign co-hosts.' });
+        return;
+      }
+    }
     // Bug J (15 May Ali) — co-hosts cannot make a platform admin a co-host.
     // Bug 2 (18 May Stefan) — but the event director CAN; they hold
     // supreme authority over their own event. refuseIfAdminTarget now

@@ -105,7 +105,9 @@ describe('Phase 8A — Stefan 8 May server fixes (architectural pins)', () => {
       // Look inside handleAssignCohost for a repair call.
       const fnStart = src.indexOf('export async function handleAssignCohost');
       expect(fnStart).toBeGreaterThan(-1);
-      const fnSlice = src.slice(fnStart, fnStart + 4000);
+      // window widened 4000→4800 (June-11): a director-only assign-cohost guard
+      // now sits above the repair call.
+      const fnSlice = src.slice(fnStart, fnStart + 4800);
       expect(fnSlice).toMatch(/maybeRepairFutureRounds|repairFutureRounds/);
     });
 

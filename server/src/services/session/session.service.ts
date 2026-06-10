@@ -740,13 +740,22 @@ export async function generateLiveKitToken(sessionId: string, userId: string, ro
   // Verify session exists
   const session = await getSessionById(sessionId);
 
-  // Verify user is a participant or host
+  // Verify user is an ACTIVE participant or the host.
   const participantResult = await query<SessionParticipant>(
     `SELECT * FROM session_participants WHERE session_id = $1 AND user_id = $2`,
     [sessionId, userId]
   );
 
-  if (participantResult.rows.length === 0 && session.hostUserId !== userId) {
+  // June-11 — a kicked/left user keeps their session_participants ROW (status
+  // 'removed'/'left'). The old existence-only check therefore still minted them
+  // a video token on reconnect/refresh — via state:resync, the synthetic-resync
+  // path, AND the REST /token fallback — so a removed user rejoined the SFU and
+  // reappeared in the main room. Gate on STATUS: only an active membership (or
+  // the event host) may mint a token. This is the single chokepoint for every
+  // token rail.
+  const membership = participantResult.rows[0];
+  const isActiveMember = !!membership && membership.status !== 'removed' && membership.status !== 'left';
+  if (!isActiveMember && session.hostUserId !== userId) {
     throw new ForbiddenError('User is not a participant in this event');
   }
 
