@@ -188,12 +188,13 @@ describe('Phase X — 13 May live-test bug fixes', () => {
       expect(app).toMatch(/\/messages\/new\/:userId/);
     });
 
-    it('SessionComplete + RecapPage navigate directly to /messages/new/:userId — no prompt() flow', () => {
-      // Both helpers should be a simple navigate call. The earlier prompt-
-      // then-create flow is forbidden because it surfaces a jarring native
-      // dialog before the user can type in the actual chat input.
-      expect(sessionComplete).toMatch(/navigate\(`\/messages\/new\/\$\{userId\}`\)/);
-      expect(recapPage).toMatch(/navigate\(`\/messages\/new\/\$\{userId\}`\)/);
+    it('SessionComplete + RecapPage open /messages/new/:userId directly — no prompt() flow', () => {
+      // UX3 (June-10) — the helpers now open the conversation in a NEW TAB
+      // (window.open) instead of navigating away from the recap, but still go
+      // straight to /messages/new/:userId. The earlier prompt-then-create flow
+      // is forbidden because it surfaces a jarring native dialog first.
+      expect(sessionComplete).toMatch(/window\.open\(`\/messages\/new\/\$\{userId\}`/);
+      expect(recapPage).toMatch(/window\.open\(`\/messages\/new\/\$\{userId\}`/);
       // Forbid the regression to the prompt() flow.
       expect(sessionComplete).not.toMatch(/prompt\(`Send your first message/);
       expect(recapPage).not.toMatch(/prompt\(`Send your first message/);

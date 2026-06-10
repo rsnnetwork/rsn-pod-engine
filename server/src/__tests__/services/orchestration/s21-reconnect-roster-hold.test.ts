@@ -22,7 +22,7 @@ const lobbySrc = () => readClient('features/live/Lobby.tsx');
 describe('S21 — LobbyMosaic reconnect hold', () => {
   it('reads the LiveKit connection state and derives the hold from it', () => {
     const src = lobbySrc();
-    expect(src).toMatch(/useConnectionState,?\s*\n?\} from '@livekit\/components-react'/);
+    expect(src).toMatch(/useConnectionState,[\s\S]*?from '@livekit\/components-react'/);
     expect(src).toMatch(/reconnecting = connectionState !== ConnectionState\.Connected/);
   });
 
