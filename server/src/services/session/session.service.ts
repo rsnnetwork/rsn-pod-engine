@@ -746,15 +746,21 @@ export async function generateLiveKitToken(sessionId: string, userId: string, ro
     [sessionId, userId]
   );
 
-  // June-11 — a kicked/left user keeps their session_participants ROW (status
-  // 'removed'/'left'). The old existence-only check therefore still minted them
-  // a video token on reconnect/refresh — via state:resync, the synthetic-resync
-  // path, AND the REST /token fallback — so a removed user rejoined the SFU and
-  // reappeared in the main room. Gate on STATUS: only an active membership (or
-  // the event host) may mint a token. This is the single chokepoint for every
-  // token rail.
+  // June-11 — a KICKED user keeps their session_participants ROW (status
+  // 'removed'). The old existence-only check still minted them a video token on
+  // reconnect/refresh — via state:resync, the synthetic-resync path, AND the
+  // REST /token fallback — so a removed user rejoined the SFU and reappeared in
+  // the main room. Gate on STATUS so a removed member can't mint a token.
+  //
+  // June-12 (Stefan's event) — ONLY 'removed' is terminal here. 'left' is a
+  // RECOVERABLE state in RSN: an explicit leave-and-rejoin, or a stale leave
+  // after a network drop. The participant-flow reconnect path resets
+  // LEFT → IN_MAIN_ROOM (FIX A), so a returning 'left' participant MUST still be
+  // able to mint a lobby token to land back in the main room. Barring 'left'
+  // here stranded every returning participant — they got no main-room video and
+  // were stuck (and handleResync evicted them to the recap).
   const membership = participantResult.rows[0];
-  const isActiveMember = !!membership && membership.status !== 'removed' && membership.status !== 'left';
+  const isActiveMember = !!membership && membership.status !== 'removed';
   if (!isActiveMember && session.hostUserId !== userId) {
     throw new ForbiddenError('User is not a participant in this event');
   }

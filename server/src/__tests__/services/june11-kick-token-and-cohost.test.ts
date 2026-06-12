@@ -36,11 +36,14 @@ function sliceFn(src: string, marker: string): string {
 describe('June-11 (A) — a removed user can never mint a LiveKit token', () => {
   const svc = () => readServer('services/session/session.service.ts');
 
-  it('generateLiveKitToken gates on ACTIVE membership status, not row existence', () => {
+  it('generateLiveKitToken bars ONLY a removed (kicked) member, not a recoverable left one', () => {
     const fn = sliceFn(svc(), 'export async function generateLiveKitToken');
-    // The membership check must consider status, excluding removed/left.
+    // Gate on status so a kicked ('removed') member can't mint a token...
     expect(fn).toMatch(/status !== 'removed'/);
-    expect(fn).toMatch(/status !== 'left'/);
+    // ...but a 'left' member is RECOVERABLE (leave-and-rejoin / stale leave after
+    // a drop) and MUST still be able to mint a lobby token — June-12 regression
+    // fix (Stefan's event). 'left' must NOT be in the bar.
+    expect(fn).not.toMatch(/status !== 'left'/);
     // And still throw for a non-active, non-host caller.
     expect(fn).toMatch(/ForbiddenError\('User is not a participant in this event'\)/);
     // The old existence-only guard is gone.
@@ -54,6 +57,10 @@ describe('June-11 (A) — resync sends a terminal eviction to a removed user', (
     const fn = sliceFn(snap(), 'export async function handleResync');
     expect(fn).toMatch(/removed_from_event/);
     expect(fn).toMatch(/session:evicted/);
+    // June-12 regression fix — evict ONLY a 'removed' member. A 'left' member is
+    // recoverable and must NOT be bounced to the recap on resync.
+    expect(fn).toMatch(/st === 'removed'/);
+    expect(fn).not.toMatch(/st === 'removed' \|\| st === 'left'/);
     // The removed gate must run BEFORE the token-minting buildYou call.
     const guardIdx = fn.indexOf('removed_from_event');
     const buildIdx = fn.indexOf('buildYou(');

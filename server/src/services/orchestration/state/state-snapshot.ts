@@ -178,13 +178,17 @@ export async function handleResync(_io: SocketServer, socket: Socket, data: { se
       } as CanonicalSessionState['participants'][string];
     }
     if (userId && p) {
-      // June-11 — a kicked user reconnecting (refresh / URL paste) must NOT be
+      // June-11 — a KICKED user reconnecting (refresh / URL paste) must NOT be
       // re-minted a lobby token. Their canonical entry can still read
       // location=main (the kick cleared-to-main), so gate on the authoritative
-      // DB status and send a terminal eviction instead of a token. The token
-      // mint is ALSO blocked at source (generateLiveKitToken rejects a removed
-      // member), so this is the clean UX signal that drives them to the recap;
-      // a status-lookup failure degrades to the token-gate (best-effort).
+      // DB status and send a terminal eviction instead of a token.
+      //
+      // June-12 (Stefan's event) — evict ONLY a 'removed' (kicked) member. 'left'
+      // is RECOVERABLE: a returning/reconnecting participant is briefly 'left'
+      // and the reconnect path resets them to the main room (FIX A). Evicting
+      // 'left' here bounced legitimate returners to the recap — they never got
+      // back to the main room. A status-lookup failure degrades to the token
+      // gate (best-effort).
       try {
         const { query } = await import('../../../db');
         const statusRow = await query<{ status: string }>(
@@ -192,7 +196,7 @@ export async function handleResync(_io: SocketServer, socket: Socket, data: { se
           [data.sessionId, userId],
         );
         const st = statusRow.rows[0]?.status;
-        if (st === 'removed' || st === 'left') {
+        if (st === 'removed') {
           socket.emit('session:evicted', { reason: 'removed_from_event' });
           return;
         }
