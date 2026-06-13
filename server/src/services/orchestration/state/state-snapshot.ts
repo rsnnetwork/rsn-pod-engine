@@ -201,6 +201,32 @@ export async function handleResync(_io: SocketServer, socket: Socket, data: { se
           return;
         }
       } catch { /* status check best-effort — buildYou still gates the token */ }
+      // June-13 (Stefan's event #2) — STALE BREAKOUT HEAL. A participant whose
+      // tab was throttled/backgrounded during a round-end can be left with a
+      // canonical 'breakout' location pointing at a match that has already
+      // ENDED (the round-end clear missed them, or their late heartbeat
+      // re-asserted the old room). The resync token rail then mints them a token
+      // for that dead breakout room on every reconnect — they sit ISOLATED in
+      // the main room (seeing only themself) and a REFRESH does NOT fix it,
+      // because the bad location persists in Redis. Heal it: if the breakout's
+      // match is no longer active, rewrite the canonical location to 'main' and
+      // mint a LOBBY token so they land back with everyone else.
+      if (p.location.type === 'breakout') {
+        const staleMatchId = p.location.matchId;
+        try {
+          const { query } = await import('../../../db');
+          const m = await query<{ status: string }>(
+            `SELECT status FROM matches WHERE id = $1`, [staleMatchId],
+          );
+          if (m.rows[0]?.status !== 'active') {
+            const { clearCanonicalLocationToMain } = await import('./canonical-state');
+            await clearCanonicalLocationToMain(data.sessionId, userId);
+            p = { ...p, location: { type: 'main' } };
+            logger.info({ sessionId: data.sessionId, userId, staleMatchId },
+              'resync heal: stale breakout location → main (match not active)');
+          }
+        } catch { /* heal best-effort — buildYou falls back to the canonical location */ }
+      }
       const you = await buildYou(data.sessionId, userId, p, true);
       // Record the location we answered with so the next co-emit doesn't
       // immediately re-mint for this user.

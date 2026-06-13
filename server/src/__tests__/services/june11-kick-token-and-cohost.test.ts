@@ -30,7 +30,7 @@ function sliceFn(src: string, marker: string): string {
   const i = src.indexOf(marker);
   expect(i).toBeGreaterThan(-1);
   const end = src.indexOf('\nexport ', i + 1);
-  return src.slice(i, end === -1 ? i + 4000 : end);
+  return src.slice(i, end === -1 ? i + 6000 : end);
 }
 
 describe('June-11 (A) — a removed user can never mint a LiveKit token', () => {
