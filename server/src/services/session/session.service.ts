@@ -799,28 +799,50 @@ export async function generateLiveKitToken(sessionId: string, userId: string, ro
     const lobbyRoomName = session.lobbyRoomId || `session-${sessionId}`;
     let roomName = lobbyRoomName;
     if (roomId && roomId !== lobbyRoomName) {
-      const isHostOrCohost =
-        session.hostUserId === userId ||
-        (await query(
-          `SELECT 1 FROM session_cohosts WHERE session_id = $1 AND user_id = $2 LIMIT 1`,
-          [sessionId, userId],
-        )).rows.length > 0;
-      if (isHostOrCohost) {
-        roomName = roomId;
+      // June-14 (Stefan + Ali live test) — STALE-BREAKOUT HEAL for the REST
+      // /token rail. This is the analog of the June-13 handleResync heal, on the
+      // rail that was missed. When a round ends the match is set 'completed' and
+      // LiveKit auto-deletes the now-empty breakout room. But the client's backup
+      // token fetch (VideoRoom) still passes the stale `currentRoomId`, so minting
+      // a token for that DEAD room walks the client into a deleted room →
+      // "invalid token: revoked" → retry → (multi-tab) 429 storm → stranded, and a
+      // refresh re-requests the same dead room. Gate EVERY breakout grant on the
+      // match still being ACTIVE; otherwise fall back to the lobby so the stranded
+      // client lands back in the main room. Critically this also covers a
+      // HOST/COHOST (the old host/cohost branch granted any room unconditionally —
+      // a co-host's own stale breakout is just as dead; this was the exact trigger
+      // when Ali made Waseem a co-host before the final round).
+      const activeMatch = await query(
+        `SELECT 1 FROM matches WHERE session_id = $1 AND room_id = $2 AND status = 'active' LIMIT 1`,
+        [sessionId, roomId],
+      );
+      if (activeMatch.rows.length === 0) {
+        logger.warn({ sessionId, userId, requestedRoomId: roomId },
+          'LiveKit token: requested breakout has no ACTIVE match — granting lobby instead (stale-breakout heal)');
       } else {
-        const memberOfRoom = await query(
-          `SELECT 1 FROM matches
-             WHERE session_id = $1 AND room_id = $2
-               AND ($3 = participant_a_id OR $3 = participant_b_id OR $3 = participant_c_id
-                    OR $3 = ANY(departed_user_ids))
-             LIMIT 1`,
-          [sessionId, roomId, userId],
-        );
-        if (memberOfRoom.rows.length > 0) {
+        const isHostOrCohost =
+          session.hostUserId === userId ||
+          (await query(
+            `SELECT 1 FROM session_cohosts WHERE session_id = $1 AND user_id = $2 LIMIT 1`,
+            [sessionId, userId],
+          )).rows.length > 0;
+        if (isHostOrCohost) {
           roomName = roomId;
         } else {
-          logger.warn({ sessionId, userId, requestedRoomId: roomId },
-            'LiveKit token: unauthorized roomId — granting lobby instead');
+          const memberOfRoom = await query(
+            `SELECT 1 FROM matches
+               WHERE session_id = $1 AND room_id = $2
+                 AND ($3 = participant_a_id OR $3 = participant_b_id OR $3 = participant_c_id
+                      OR $3 = ANY(departed_user_ids))
+               LIMIT 1`,
+            [sessionId, roomId, userId],
+          );
+          if (memberOfRoom.rows.length > 0) {
+            roomName = roomId;
+          } else {
+            logger.warn({ sessionId, userId, requestedRoomId: roomId },
+              'LiveKit token: unauthorized roomId — granting lobby instead');
+          }
         }
       }
     }
