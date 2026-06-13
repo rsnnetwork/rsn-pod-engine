@@ -824,7 +824,18 @@ export async function endRatingWindow(
             const uid = (s.data as any)?.userId;
             if (!uid) continue;
             const rp = activeSession.roomParticipants?.get(uid);
-            if (rp?.roomId) await videoService.evictFromRoom(uid, rp.roomId);
+            // June-13 (Stefan's event #2) — NEVER evict from the lobby. This
+            // sweep exists to clear stale BREAKOUT connections after a round.
+            // But roomParticipants[uid] races to the lobby the moment a user
+            // (re)joins the main room on the status-change resync, so a fast
+            // returner could be evicted from the lobby they'd JUST landed in —
+            // leaving them with no video (UI shows the main room, but they're in
+            // NO LiveKit room). The participant who STAYED hit this most (the
+            // one who left+rejoined got a fresh join). Skip the lobby so the
+            // sweep only ever clears breakouts; the intent is unchanged.
+            if (rp?.roomId && rp.roomId !== session.lobbyRoomId) {
+              await videoService.evictFromRoom(uid, rp.roomId);
+            }
           } catch { /* skip */ }
         }
       }
