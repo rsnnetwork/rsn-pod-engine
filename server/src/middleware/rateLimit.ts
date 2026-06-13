@@ -1,10 +1,37 @@
 // ─── Rate Limiting Middleware ─────────────────────────────────────────────────
 import rateLimit, { Options as RateLimitOptions } from 'express-rate-limit';
 import RedisStore from 'rate-limit-redis';
+import { Request } from 'express';
+import jwt from 'jsonwebtoken';
 import config from '../config';
 import logger from '../config/logger';
 import { getRedisClient } from '../services/redis/redis.client';
 import { ApiResponse } from '@rsn/shared';
+
+/**
+ * June-14 — key the global API limiter by AUTHENTICATED USER, not IP.
+ *
+ * IP keying throttles every attendee behind one NAT as a SINGLE bucket. RSN
+ * networking events routinely run with many people on one venue / office / VPN
+ * network, so an IP quota punishes a legitimate crowd. It also let ONE stuck
+ * client's reconnect retries exhaust the quota for everyone sharing its IP — the
+ * amplifier behind "refresh doesn't help" in the stuck-after-round incident (a
+ * stranded participant 429'd the /token + /state calls their own recovery
+ * needed, and took their neighbours down with them). The limiter runs before
+ * `authenticate`, so we DECODE (not verify — keying needs no trust; the request
+ * still has to pass auth downstream) the bearer token for its `sub`. Anonymous
+ * requests fall back to per-IP, which is the right granularity for them.
+ */
+function userOrIpKey(req: Request): string {
+  const auth = req.headers?.authorization;
+  if (auth && auth.startsWith('Bearer ')) {
+    try {
+      const decoded = jwt.decode(auth.slice(7)) as { sub?: string } | null;
+      if (decoded?.sub) return `u:${decoded.sub}`;
+    } catch { /* malformed token — fall through to IP */ }
+  }
+  return `ip:${req.ip}`;
+}
 
 /**
  * Tier-1 A7 — optional Redis-backed store factory.
@@ -51,6 +78,7 @@ export const apiLimiter = rateLimit({
   max: config.rateLimitMaxRequests,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: userOrIpKey,
   store: buildStore('api'),
   handler: (_req, res) => {
     const response: ApiResponse = {

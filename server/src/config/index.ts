@@ -53,8 +53,12 @@ export const config = {
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
 
   // Rate Limiting
+  // Now keyed PER USER (see middleware/rateLimit.ts userOrIpKey), so the quota
+  // is per-person, not per-NAT. 240/min gives a single client comfortable
+  // headroom for a reconnect/refresh burst (token + state + resync rails) while
+  // staying far below anything abusive for one authenticated user.
   rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
-  rateLimitMaxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100', 10),
+  rateLimitMaxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '240', 10),
 
   // Logging
   logLevel: process.env.LOG_LEVEL || 'debug',
