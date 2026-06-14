@@ -145,7 +145,9 @@ describe('May 21 test post-mortem — M1 + M3 architectural fixes', () => {
       // Search the M3-tagged block.
       const m3Idx = src.indexOf('M3 fix (21 May Ali)');
       expect(m3Idx).toBeGreaterThan(-1);
-      const block = src.slice(m3Idx, m3Idx + 2000);
+      // Window widened (June-14) — the excludedPairs query gained an explanatory
+      // comment, pushing the .add() expansion lines past the old 2000 slice.
+      const block = src.slice(m3Idx, m3Idx + 3500);
       // (a,b) always added.
       expect(block).toMatch(/excludedPairs\.add\(\s*pairKey\(r\.participant_a_id,\s*r\.participant_b_id\)\s*\)/);
       // (a,c) and (b,c) added when c is set.

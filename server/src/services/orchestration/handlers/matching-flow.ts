@@ -138,9 +138,14 @@ async function resolvePendingRound(
 // fresh.
 async function priorRoundPairKeys(sessionId: string, exceptRound: number): Promise<Set<string>> {
   const res = await query<{ participant_a_id: string; participant_b_id: string; participant_c_id: string | null }>(
+    // June-14 — mirror the matching.service excludedPairs fix: count only PLAYED
+    // rounds (completed/active), never pre-planned 'scheduled' future rounds, so
+    // the "does this pre-plan repeat a prior round?" guard agrees with the engine
+    // and a pre-plan for a future round can't be misread as a repeat (which had
+    // forced an unnecessary regenerate straight into the poisoned L4 path).
     `SELECT participant_a_id, participant_b_id, participant_c_id FROM matches
        WHERE session_id = $1 AND round_number != $2
-         AND status NOT IN ('cancelled', 'no_show')
+         AND status IN ('completed', 'active')
          AND is_manual = FALSE`,
     [sessionId, exceptRound],
   );

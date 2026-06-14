@@ -308,9 +308,20 @@ export async function generateSingleRound(
       participant_b_id: string;
       participant_c_id: string | null;
     }>(
+      // June-14 (Ali bonus-round test) — count only rounds that have actually
+      // been PLAYED (completed/active), NOT pre-planned future rounds. The pre-
+      // plan (generateSessionSchedule, run at Start) inserts every future round as
+      // status='scheduled'; the old `status NOT IN ('cancelled','no_show')` swept
+      // those in, so the live no-repeat set already contained pairings the people
+      // hadn't met yet. For a small pool the pre-plan covers ALL possible pairings,
+      // so EVERY live round found zero fresh candidates → the fallback ladder was
+      // forced to L4 and the first "Match People" surfaced a repeat ("Met 1×")
+      // while fresh pairs were still available (they only appeared on Re-match).
+      // The preview met-count (matching-flow) already scoped to prior rounds only —
+      // which is why the label read correctly while the engine was repeating.
       `SELECT participant_a_id, participant_b_id, participant_c_id FROM matches
        WHERE session_id = $1 AND round_number != $2
-         AND status NOT IN ('cancelled', 'no_show')
+         AND status IN ('completed', 'active')
          AND is_manual = FALSE`,
       [sessionId, roundNumber]
     );
