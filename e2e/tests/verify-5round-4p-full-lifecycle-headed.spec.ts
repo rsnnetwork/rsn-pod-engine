@@ -181,7 +181,7 @@ test('5 rounds · host + co-host + 4 participants · matching → breakout → r
   // Promote the co-host (before any round) so they sit in the main room with the
   // host control bar throughout — never matched (hosts/co-hosts are excluded from
   // matching), so they can drive Skip Ratings.
-  hostSock.emit('host:assign_cohost', { sessionId, userId: coh.id }); await wait(2500);
+  hostSock.emit('host:assign_cohost', { sessionId, userId: coh.id, role: 'co_host' }); await wait(2500);
   for (const c of ctxs) { try { await c.pages()[0].reload(); } catch {} await wait(400); }
   await wait(4000);
   await allInMain('pre-round (lobby open)');
