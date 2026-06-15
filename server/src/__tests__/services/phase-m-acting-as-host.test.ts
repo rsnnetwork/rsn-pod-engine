@@ -155,7 +155,10 @@ describe('Phase M — acting-as-host toggle (item 1)', () => {
 
     it('notifies the caller via permissions:updated so their snapshot resyncs', () => {
       const routeIdx = src.indexOf("'/:id/host/acting-as-host'");
-      const slice = src.slice(routeIdx, routeIdx + 1500);
+      // SEC-1 (13 Jun audit C1) widened the handler with the platform-admin
+      // opt-in gate before setActingAsHost, pushing emitPermissionsUpdated to
+      // ~offset 1672. Window grown 1500 → 2200 so the call still lands.
+      const slice = src.slice(routeIdx, routeIdx + 2200);
       // Phase 5: notifyPermissionsUpdated wrapper deleted from
       // orchestration.service.ts; routes now call emitPermissionsUpdated
       // directly from server/src/realtime/fanout.ts.

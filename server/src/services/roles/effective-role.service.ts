@@ -107,6 +107,23 @@ export async function getEffectiveRole(
     // actingOverride is ignored (Phase P enforcement).
     return 'event_host';
   }
+
+  // SEC-1 (audit C1) — defense in depth for the acting-as-host opt-in.
+  // A TRUE override only escalates a bare participant to the 'cohost' floor
+  // below; honour it solely for platform admins/super_admins. A TRUE on any
+  // other row is poisoned data (formerly writable via the un-gated REST
+  // endpoint, or written by the old instance during a deploy overlap) and is
+  // treated as NULL so it cannot grant host powers. Opt-out (FALSE) is a
+  // de-escalation and stays honoured for everyone; a formal co-host keeps
+  // 'cohost' via the session_cohosts layer regardless of this.
+  if (
+    actingOverride === true &&
+    globalUserRole !== UserRole.SUPER_ADMIN &&
+    globalUserRole !== UserRole.ADMIN
+  ) {
+    actingOverride = null;
+  }
+
   if (actingOverride === false) {
     // Honour the opt-out: regardless of base role, the user is acting as a
     // participant on this event. The session_participants row must already

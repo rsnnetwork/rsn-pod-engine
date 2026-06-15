@@ -203,6 +203,16 @@ router.post(
         ));
         return;
       }
+      // SEC-1 (audit C1) — opting in to host (value:true) is an escalation;
+      // allow only platform admins. false/null are de-escalations, open to all.
+      if (
+        req.body.value === true &&
+        req.user!.role !== UserRole.SUPER_ADMIN &&
+        req.user!.role !== UserRole.ADMIN
+      ) {
+        next(new ForbiddenError('Only platform admins can act as host on an event.'));
+        return;
+      }
       await sessionService.setActingAsHost(sessionId, userId, req.body.value);
       // Notify the user's own sockets so the snapshot resyncs the new
       // override (and the UI re-derives isHost). Reuse permissions:updated
