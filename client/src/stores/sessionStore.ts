@@ -237,6 +237,12 @@ interface SessionLiveState {
   // Initialized to -1 so the first snapshot (seq ≥ 0) is always accepted.
   snapshotSeq: number;
 
+  // TRF-1 — monotonic timestamp (ms, from snapshot.serverNow) of the most
+  // recent REST /state applied. A strictly-older REST response is dropped so
+  // two overlapping /state fetches can never apply out of order and regress
+  // the visible roster. Separate from snapshotSeq (the socket rail's counter).
+  fullStateStamp: number;
+
   /**
    * June-10 — sticky terminal flag: the host kicked this user out of the event.
    * Once set, the user is locked on the recap (setPhase refuses to leave
@@ -446,6 +452,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   isPaused: false,
   tileReactions: {},
   snapshotSeq: -1,
+  fullStateStamp: 0,
 
   // June-10 — once kicked (removedFromEvent), the phase is LOCKED to 'complete'
   // (the recap). A late reconnect/eviction/snapshot that tries to move the user
@@ -617,6 +624,24 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   // Does NOT touch fields the snapshot doesn't carry (currentMatch, broadcasts,
   // chat, etc.) — those have their own update paths.
   applyFullState: (snapshot) => set((s) => {
+    // TRF-1 — drop a STALE REST /state response. Two /state fetches can be in
+    // flight at once (roster refetch + periodic resync); without this an older
+    // response landing later would regress the roster. serverNow is monotonic
+    // server wall-clock; a strictly-older stamp is a no-op. Equal is allowed
+    // (idempotent re-apply). serverNow absent (old server mid-deploy) -> apply
+    // unguarded (prior behavior).
+    const stamp = snapshot.serverNow ? Date.parse(snapshot.serverNow) : null;
+    if (stamp !== null && stamp < s.fullStateStamp) return {};
+    // TRF-1 — if the seq-guarded socket rail already applied a NEWER participant
+    // list than this REST response carries, keep the socket's list (omit
+    // `participants` from the patch). Every other field still applies — the
+    // socket snapshot doesn't carry them. seq absent / socket rail disabled
+    // (snapshotSeq === -1) -> guard never fires.
+    const restSeq = (snapshot as any).seq;
+    const participantsPatch = (typeof restSeq === 'number' && restSeq < s.snapshotSeq)
+      ? {}
+      : { participants: snapshot.connectedParticipants.map(p => ({ userId: p.userId, displayName: p.displayName })) };
+
     // Clock-offset correction for the late-join / reconnect path. The snapshot
     // carries the server's absolute timerEndsAt; computing remaining against a
     // skewed local Date.now() is exactly what made a joining client show a
@@ -637,6 +662,8 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
       : 0;
 
     return {
+      ...participantsPatch,
+      fullStateStamp: stamp ?? s.fullStateStamp,
       sessionStatus: snapshot.sessionStatus,
       currentRound: snapshot.currentRound,
       totalRounds: snapshot.totalRounds,
@@ -653,10 +680,6 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
       timerSeconds,
       hostUserId: snapshot.hostUserId,
       hostInLobby: snapshot.hostInLobby,
-      participants: snapshot.connectedParticipants.map(p => ({
-        userId: p.userId,
-        displayName: p.displayName,
-      })),
       cohosts: new Set(snapshot.cohosts),
       hostVisibilityModes: (snapshot.hostVisibilityModes as any) || {},
       actingAsHostOverrides: snapshot.actingAsHostOverrides || {},
@@ -708,6 +731,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
     chatMessages: [], unreadChatCount: 0, chatOpen: false, matchingOverlay: null, preparingMatches: false, lobbyDensity: 'normal' as const,
     cohosts: new Set<string>(), hostVisibilityModes: {}, actingAsHostOverrides: {}, hostMutedUserIds: new Set<string>(), leftCurrentRound: false, lastRatedRound: 0, ratedMatchIds: new Set<string>(), isPaused: false,
     snapshotSeq: -1,
+    fullStateStamp: 0,
   }),
 }));
 

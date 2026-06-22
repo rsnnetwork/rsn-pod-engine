@@ -254,13 +254,46 @@ export default function useSessionSocket(sessionId: string) {
     // ── Bug 68 (18 May Stefan) — universal "no refresh needed" path ──
     // The server fires roster:changed whenever ANY session-roster mutation
     // happens (cohost assigned/removed, acting-as-host toggled, kick,
-    // participant join/leave, etc). Refetching the snapshot pulls down
-    // every derived state in one round-trip — cohorts Set, acting-as-host
-    // overrides, participant counts, hccParticipants for the HCC drawer.
-    // Result: every client's UI converges to the new state within one
-    // network round-trip of the mutation, no refresh ever needed.
+    // participant join/leave, etc). Refetching the snapshot pulls down every
+    // derived state in one round-trip — cohorts Set, acting-as-host overrides,
+    // participant counts, hccParticipants for the HCC drawer.
+    //
+    // TRF-1 (audit C3) — COALESCE + JITTER instead of one fetch per event. At
+    // 50 participants a join wave fires N broadcasts × N clients = O(N²) /state
+    // builds. Throttle to ~1 fetch per 3s window per client, de-synced with
+    // jitter so the N clients don't stampede on the same broadcast. A guaranteed
+    // TRAILING fetch (and the one-in-flight re-schedule) means a fetch always
+    // STARTS after the LAST roster:changed — every client still converges to the
+    // final roster (Bug 68's "no refresh needed" guarantee preserved), just a
+    // few seconds later instead of instantly. fetchSessionStateSnapshot is
+    // defined later in this effect; the timer only fires after the effect body
+    // runs, so the forward reference is safe.
+    const ROSTER_FETCH_WINDOW_MS = 3000;
+    let rosterTimer: ReturnType<typeof setTimeout> | null = null;
+    let rosterFetchInFlight = false;
+    let rosterPending = false;
+    let lastRosterFetchAt = 0;
+    const runRosterFetch = () => {
+      if (rosterFetchInFlight) { rosterPending = true; return; }
+      rosterFetchInFlight = true;
+      lastRosterFetchAt = Date.now();
+      fetchSessionStateSnapshot()
+        .catch(() => { /* best-effort */ })
+        .finally(() => {
+          rosterFetchInFlight = false;
+          if (rosterPending) { rosterPending = false; scheduleRosterFetch(); }
+        });
+    };
+    const scheduleRosterFetch = () => {
+      if (rosterTimer) return; // coalesce into the already-pending timer
+      const elapsed = Date.now() - lastRosterFetchAt;
+      const delay = elapsed >= ROSTER_FETCH_WINDOW_MS
+        ? Math.random() * 300                                          // leading edge + de-sync jitter
+        : (ROSTER_FETCH_WINDOW_MS - elapsed) + Math.random() * 1000;   // trailing edge + jitter
+      rosterTimer = setTimeout(() => { rosterTimer = null; runRosterFetch(); }, delay);
+    };
     socket.on('roster:changed', () => {
-      fetchSessionStateSnapshot().catch(() => { /* best-effort */ });
+      scheduleRosterFetch();
     });
 
     // ── Phase 5 — versioned state:snapshot (seq-guarded) ──
@@ -1261,6 +1294,7 @@ export default function useSessionSocket(sessionId: string) {
       clearByeTimeout();
       clearInterval(heartbeatInterval);
       clearTimeout(initialSnapshotTimer);
+      if (rosterTimer) clearTimeout(rosterTimer);
       clearInterval(periodicResyncInterval);
 
       // Remove ALL socket event listeners we attached

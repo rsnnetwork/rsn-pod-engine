@@ -20,6 +20,7 @@ import { Server as SocketServer } from 'socket.io';
 import { query } from '../../db';
 import { SessionStatus, SessionConfig } from '@rsn/shared';
 import { activeSessions, sessionRoom } from '../orchestration/state/session-state';
+import { readCanonical } from '../orchestration/state/canonical-state';
 import * as sessionService from './session.service';
 
 export interface SessionStateSnapshot {
@@ -45,6 +46,13 @@ export interface SessionStateSnapshot {
    * is skewed — the same anchor carried on socket timer:sync / round_started.
    */
   serverNow: string;
+  /**
+   * TRF-1 (audit C3) — the canonical doc's monotonic seq at the moment this
+   * snapshot was read (null when no canonical doc exists, e.g. scheduled /
+   * completed sessions). Lets the client drop a stale REST response whose seq
+   * is older than the roster already applied by the seq-guarded socket rail.
+   */
+  seq: number | null;
   /** Frozen remaining ms when paused. null otherwise. Used by clients to render the held value. */
   pausedTimeRemainingMs: number | null;
   /** Pre-generated round number awaiting host confirm (null when none). */
@@ -202,6 +210,11 @@ export async function buildSessionStateSnapshot(
   // ── DB row (source of truth for static fields) ─────────────────────────
   const session = await sessionService.getSessionById(sessionId).catch(() => null);
   if (!session) return null;
+
+  // TRF-1 — read the canonical seq FIRST (before the roster/cohost reads) so
+  // the stamp is conservative: never newer than the data composed below. Same
+  // seq source the seq-guarded socket rail uses. Fail-safe to null.
+  const canonical = await readCanonical(sessionId).catch(() => null);
 
   const config: SessionConfig =
     typeof session.config === 'string'
@@ -445,6 +458,7 @@ export async function buildSessionStateSnapshot(
     isPaused: activeSession?.isPaused ?? false,
     timerEndsAt: activeSession?.timerEndsAt?.toISOString() ?? null,
     serverNow: new Date().toISOString(),
+    seq: canonical?.seq ?? null,
     pausedTimeRemainingMs: activeSession?.pausedTimeRemaining ?? null,
     pendingRoundNumber: activeSession?.pendingRoundNumber ?? null,
 
