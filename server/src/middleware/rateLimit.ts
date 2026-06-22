@@ -17,18 +17,24 @@ import { ApiResponse } from '@rsn/shared';
  * client's reconnect retries exhaust the quota for everyone sharing its IP — the
  * amplifier behind "refresh doesn't help" in the stuck-after-round incident (a
  * stranded participant 429'd the /token + /state calls their own recovery
- * needed, and took their neighbours down with them). The limiter runs before
- * `authenticate`, so we DECODE (not verify — keying needs no trust; the request
- * still has to pass auth downstream) the bearer token for its `sub`. Anonymous
- * requests fall back to per-IP, which is the right granularity for them.
+ * needed, and took their neighbours down with them). Anonymous requests fall
+ * back to per-IP, which is the right granularity for them.
+ *
+ * TRF-2 (audit C3) — the bucket key MUST come from a jwt.VERIFY, not a decode.
+ * Keying off an unverified `sub` IS a trust decision: a forged token lets an
+ * attacker either mint unlimited fresh buckets (forge a random sub per request
+ * → bypass the limiter entirely) or set sub=<victim> to exhaust that victim's
+ * bucket and lock them out. Verifying the HS256 signature is microseconds and
+ * `authenticate` re-verifies downstream anyway. Any verify failure (forged,
+ * expired, malformed) falls through to the per-IP bucket — fail-safe.
  */
-function userOrIpKey(req: Request): string {
+export function userOrIpKey(req: Request): string {
   const auth = req.headers?.authorization;
   if (auth && auth.startsWith('Bearer ')) {
     try {
-      const decoded = jwt.decode(auth.slice(7)) as { sub?: string } | null;
-      if (decoded?.sub) return `u:${decoded.sub}`;
-    } catch { /* malformed token — fall through to IP */ }
+      const payload = jwt.verify(auth.slice(7), config.jwtSecret) as { sub?: string };
+      if (payload?.sub) return `u:${payload.sub}`;
+    } catch { /* forged / expired / malformed — fall through to IP */ }
   }
   return `ip:${req.ip}`;
 }

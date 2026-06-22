@@ -180,6 +180,14 @@ app.set('trust proxy', 1);
 // Used by T0-3 GET /api/sessions/:id/state to compute live socket presence.
 app.set('io', io);
 
+// TRF-2 (audit C3) — LiveKit webhooks are signature-authenticated
+// (WebhookReceiver) and must never be shed by the API limiter: a round
+// transition emits 100+ events/min from a few LiveKit Cloud IPs, which would
+// 429 against the IP bucket exactly when connState reconciliation matters.
+// Mounted BEFORE the limiter so Express short-circuits it here. (It therefore
+// runs above the request logger below; webhooks.ts logs its own events.)
+app.use('/api/webhooks', webhooksRouter);
+
 // Global rate limiter — applies to /api/* only.
 // Tier-1 A6: /socket.io/* is deliberately excluded. Long-polling fallback
 // emits ~6 HTTP requests/min per client, which with 20+ users behind a
@@ -331,10 +339,10 @@ app.use('/api/pokes', pokeRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/groups', groupRoutes);
 app.use('/api/notification-prefs', notificationPrefsRoutes);
-// Phase 4 — LiveKit webhook receiver (raw body; must come before error handlers).
-// express.json() only processes application/json so application/webhook+json is
-// still raw when this per-route raw() middleware runs.
-app.use('/api/webhooks', webhooksRouter);
+// Phase 4 — LiveKit webhook receiver is mounted ABOVE the rate limiter (see
+// TRF-2 note near the limiter) so signed webhooks are never 429'd. The raw-body
+// handling lives on the route itself (express.raw on /livekit), so mount
+// position relative to express.json() is irrelevant.
 
 // ─── Error Handling ─────────────────────────────────────────────────────────
 

@@ -5,9 +5,9 @@
 // ONE venue/office/VPN network, so an IP quota throttles a legitimate crowd as a
 // single bucket — and one stranded client's reconnect retries 429'd the /token +
 // /state calls that everyone sharing its IP needed to recover ("refresh doesn't
-// help"). Fix: key the limiter by the authenticated user (decoded from the
-// bearer token, since the limiter runs before `authenticate`), with a per-IP
-// fallback for anonymous requests.
+// help"). Fix: key the limiter by the authenticated user (VERIFIED from the
+// bearer token — see TRF-2 below; the limiter runs before `authenticate`), with
+// a per-IP fallback for anonymous requests.
 
 import * as nodeFs from 'fs';
 import * as nodePath from 'path';
@@ -19,11 +19,15 @@ function readServer(rel: string): string {
 describe('June-14 — API rate limiter keys by user', () => {
   const mw = () => readServer('middleware/rateLimit.ts');
 
-  it('apiLimiter uses a user/IP keyGenerator (decodes the bearer sub)', () => {
+  it('apiLimiter uses a user/IP keyGenerator (VERIFIES the bearer sub)', () => {
     const src = mw();
     expect(src).toMatch(/function userOrIpKey/);
-    expect(src).toMatch(/jwt\.decode/);
-    expect(src).toMatch(/return `u:\$\{decoded\.sub\}`/);
+    // TRF-2 (audit C3): the key MUST come from jwt.verify, not jwt.decode —
+    // an unverified sub is forgeable (mint unlimited buckets / DoS a victim's
+    // bucket). Pin verify present AND decode absent so it can't regress.
+    expect(src).toMatch(/jwt\.verify\(/);
+    expect(src).not.toMatch(/jwt\.decode/);
+    expect(src).toMatch(/return `u:\$\{payload\.sub\}`/);
     expect(src).toMatch(/return `ip:\$\{req\.ip\}`/);
     // …and it is wired into the global apiLimiter.
     const limiterIdx = src.indexOf('export const apiLimiter');
