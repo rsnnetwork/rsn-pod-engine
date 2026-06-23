@@ -95,7 +95,11 @@ export default function ChatbotOnboarding() {
   // Keep the transcript pinned to the latest message / typing indicator.
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    if (!el) return;
+    // rAF so the scroll runs after the new bubble has been laid out.
+    requestAnimationFrame(() => {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    });
   }, [messages, sending, ready]);
 
   function autoGrow() {
@@ -182,8 +186,8 @@ export default function ChatbotOnboarding() {
 
   return (
     <div
-      className="flex min-h-screen flex-col bg-gradient-to-b from-white to-gray-50/50"
-      style={{ minHeight: '100dvh' }}
+      className="flex h-screen flex-col overflow-hidden bg-gradient-to-b from-white to-gray-50/50"
+      style={{ height: '100dvh' }}
     >
       {/* Header — appears once the conversation has started */}
       <AnimatePresence>

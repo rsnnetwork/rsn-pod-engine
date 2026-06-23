@@ -26,7 +26,10 @@ export default function VerifyPage() {
       const inviteCode = params.get('inviteCode');
       const redirect = sessionStorage.getItem('rsn_redirect');
       sessionStorage.removeItem('rsn_redirect');
-      const destination = inviteCode ? `/invite/${inviteCode}` : redirect || '/';
+      // Route new / not-yet-onboarded users straight into the onboarding host,
+      // unless they arrived via an invite or an explicit redirect target.
+      const onboardingDone = (useAuthStore.getState().user as any)?.onboardingCompleted === true;
+      const destination = inviteCode ? `/invite/${inviteCode}` : (redirect || (onboardingDone ? '/' : '/onboarding'));
 
       // Clear magic link flag so original tab knows auth is done
       localStorage.removeItem('rsn_magic_link_sent');
