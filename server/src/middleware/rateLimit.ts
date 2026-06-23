@@ -140,3 +140,27 @@ export const inviteLimiter = rateLimit({
     res.status(429).json(response);
   },
 });
+
+/**
+ * Onboarding chatbot limiter — bounds LLM cost/abuse on the chat + confirm
+ * endpoints. Keyed per authenticated user (these routes require auth). 30
+ * turns/min is generous for a 4–7 message flow while capping a runaway client.
+ */
+export const onboardingChatLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('onboarding'),
+  handler: (_req, res) => {
+    const response: ApiResponse = {
+      success: false,
+      error: {
+        code: 'RATE_LIMIT_EXCEEDED',
+        message: 'Too many messages. Please slow down for a moment.',
+      },
+    };
+    res.status(429).json(response);
+  },
+});

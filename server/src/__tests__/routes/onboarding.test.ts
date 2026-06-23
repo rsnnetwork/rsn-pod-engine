@@ -1,0 +1,179 @@
+// ─── /onboarding chatbot route tests ────────────────────────────────────────
+// Covers auth, validation, the LLM-disabled form-fallback (503), and that
+// /confirm runs extraction → save → returns the gate result. The service and
+// repo are mocked; the real auth/validate/rate-limit middleware run.
+
+import express from 'express';
+import request from 'supertest';
+import * as jwt from 'jsonwebtoken';
+
+const JWT_SECRET = 'test-jwt-secret';
+
+jest.mock('../../config', () => ({
+  default: {
+    jwtSecret: JWT_SECRET,
+    env: 'test',
+    isDev: false,
+    isProd: false,
+    isTest: true,
+    rateLimitWindowMs: 60000,
+    rateLimitMaxRequests: 1000,
+  },
+  __esModule: true,
+}));
+
+jest.mock('../../config/logger', () => ({
+  default: { error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() },
+  __esModule: true,
+}));
+
+jest.mock('../../db', () => ({
+  query: jest.fn(),
+  transaction: jest.fn(),
+  __esModule: true,
+}));
+
+jest.mock('../../services/redis/redis.client', () => ({
+  getRedisClient: () => null,
+  __esModule: true,
+}));
+
+jest.mock('../../services/onboarding/chatbot.service', () => ({
+  isEnabled: jest.fn(),
+  converse: jest.fn(),
+  extractIntent: jest.fn(),
+  __esModule: true,
+}));
+
+jest.mock('../../services/onboarding/intent.repo', () => ({
+  getOnboardingStatus: jest.fn(),
+  markInProgress: jest.fn(),
+  saveIntentAndComplete: jest.fn(),
+  __esModule: true,
+}));
+
+import { query as dbQuery } from '../../db';
+import onboardingRoutes from '../../routes/onboarding';
+import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
+import * as chatbot from '../../services/onboarding/chatbot.service';
+import * as intentRepo from '../../services/onboarding/intent.repo';
+
+function createApp() {
+  const app = express();
+  app.use(express.json());
+  app.use('/onboarding', onboardingRoutes);
+  app.use(notFoundHandler);
+  app.use(errorHandler);
+  return app;
+}
+
+function makeToken(userId = 'user-abc') {
+  return jwt.sign(
+    { sub: userId, email: 'u@e.com', role: 'member', sessionId: 'sess-1' },
+    JWT_SECRET,
+    { expiresIn: '15m' }
+  );
+}
+
+const app = createApp();
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  // authenticate's status check + any stray db call default to an active user.
+  (dbQuery as jest.Mock).mockResolvedValue({ rows: [{ status: 'active' }], rowCount: 1 });
+  (intentRepo.markInProgress as jest.Mock).mockResolvedValue(undefined);
+});
+
+describe('GET /onboarding/status', () => {
+  it('rejects an unauthenticated request', async () => {
+    const res = await request(app).get('/onboarding/status');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns the onboarding status', async () => {
+    (intentRepo.getOnboardingStatus as jest.Mock).mockResolvedValue('completed');
+    const res = await request(app)
+      .get('/onboarding/status')
+      .set('Authorization', `Bearer ${makeToken()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.status).toBe('completed');
+  });
+});
+
+describe('POST /onboarding/chat', () => {
+  const body = { messages: [{ role: 'user', content: 'I want to meet founders' }] };
+
+  it('returns 503 LLM_DISABLED when no key is configured', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(false);
+    const res = await request(app)
+      .post('/onboarding/chat')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send(body);
+    expect(res.status).toBe(503);
+    expect(res.body.error.code).toBe('LLM_DISABLED');
+    expect(chatbot.converse).not.toHaveBeenCalled();
+  });
+
+  it('returns the host reply and ready flag when enabled', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+    (chatbot.converse as jest.Mock).mockResolvedValue({
+      reply: 'What kind of founder?',
+      ready: false,
+    });
+    const res = await request(app)
+      .post('/onboarding/chat')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send(body);
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ reply: 'What kind of founder?', ready: false });
+    expect(intentRepo.markInProgress).toHaveBeenCalledWith('user-abc');
+  });
+
+  it('rejects an empty messages array', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+    const res = await request(app)
+      .post('/onboarding/chat')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ messages: [] });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('POST /onboarding/confirm', () => {
+  const body = {
+    messages: [
+      { role: 'user', content: 'I want to meet founders' },
+      { role: 'assistant', content: "Here's what we heard." },
+    ],
+  };
+
+  it('returns 503 when no key is configured', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(false);
+    const res = await request(app)
+      .post('/onboarding/confirm')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send(body);
+    expect(res.status).toBe(503);
+    expect(chatbot.extractIntent).not.toHaveBeenCalled();
+  });
+
+  it('extracts intent, saves, and returns summary + profileComplete', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+    (chatbot.extractIntent as jest.Mock).mockResolvedValue({
+      userProfileSummary: 'A B2B founder and advisor.',
+      profileStrength: 'strong',
+    });
+    (intentRepo.saveIntentAndComplete as jest.Mock).mockResolvedValue({ profileComplete: true });
+
+    const res = await request(app)
+      .post('/onboarding/confirm')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send(body);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.summary).toBe('A B2B founder and advisor.');
+    expect(res.body.data.profileComplete).toBe(true);
+    expect(intentRepo.saveIntentAndComplete).toHaveBeenCalledTimes(1);
+  });
+});

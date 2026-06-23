@@ -49,7 +49,7 @@ import BillingPage from '@/features/billing/BillingPage';
 import SupportPage from '@/features/support/SupportPage';
 import NotFoundPage from '@/features/misc/NotFoundPage';
 import RequestToJoinPage from '@/features/auth/RequestToJoinPage';
-import OnboardingPage from '@/features/onboarding/OnboardingPage';
+import ChatbotOnboarding from '@/features/onboarding/ChatbotOnboarding';
 
 export default function App() {
   const { checkSession } = useAuthStore();
@@ -200,7 +200,7 @@ export default function App() {
       </Route>
 
       {/* Protected without layout (full-screen) */}
-      <Route path="/onboarding" element={<ProtectedRoute><OnboardingPage /></ProtectedRoute>} />
+      <Route path="/onboarding" element={<ProtectedRoute><ChatbotOnboarding /></ProtectedRoute>} />
       <Route path="/session/:sessionId/live" element={<ProtectedRoute><SessionGuard><LiveSessionPage /></SessionGuard></ProtectedRoute>} />
       <Route path="/session/:sessionId/host" element={<ProtectedRoute><HostDashboardPage /></ProtectedRoute>} />
       <Route path="/sessions/:sessionId/live" element={<LiveRedirectCompat />} />

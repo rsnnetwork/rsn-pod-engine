@@ -42,6 +42,7 @@ import { processPendingJobs } from './services/post-event-message/post-event-mes
 // Routes
 import authRoutes from './routes/auth';
 import userRoutes from './routes/users';
+import onboardingRoutes from './routes/onboarding';
 import podRoutes from './routes/pods';
 import sessionRoutes from './routes/sessions';
 import inviteRoutes from './routes/invites';
@@ -323,6 +324,7 @@ app.get('/health/deep', async (_req, res) => {
 
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/pods', podRoutes);
 app.use('/api/sessions', sessionRoutes);
 app.use('/api/invites', inviteRoutes);

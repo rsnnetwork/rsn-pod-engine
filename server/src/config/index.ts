@@ -52,6 +52,14 @@ export const config = {
   googleClientId: process.env.GOOGLE_CLIENT_ID || '',
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
 
+  // Anthropic — onboarding chatbot (REASON intent capture). An empty key means
+  // the LLM is disabled and onboarding falls back to the minimal form, so
+  // signup is never blocked. Model IDs live here so swapping the model or adding
+  // streaming later is a one-line change.
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
+  onboardingChatModel: process.env.ONBOARDING_CHAT_MODEL || 'claude-haiku-4-5',
+  onboardingExtractModel: process.env.ONBOARDING_EXTRACT_MODEL || 'claude-haiku-4-5',
+
   // Rate Limiting
   // Now keyed PER USER (see middleware/rateLimit.ts userOrIpKey), so the quota
   // is per-person, not per-NAT. 240/min gives a single client comfortable
