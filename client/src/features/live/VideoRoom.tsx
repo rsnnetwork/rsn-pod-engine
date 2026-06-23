@@ -18,7 +18,7 @@ import {
   RoomAudioRenderer,
 } from '@livekit/components-react';
 import '@livekit/components-styles';
-import { Track, ConnectionState, RoomEvent } from 'livekit-client';
+import { Track, ConnectionState, RoomEvent, VideoPresets } from 'livekit-client';
 import api from '@/lib/api';
 
 // Prefer displayName → name → email local-part → "Partner".
@@ -660,7 +660,17 @@ export default function VideoRoom({ isHost = false }: { isHost?: boolean }) {
       video={false}
       audio={true}
       options={{
+        // C2/VID-1 (audit 2026-06-12) — same video diet as the lobby room for
+        // one mental model: adaptiveStream selects the layer per rendered tile
+        // size and pauses off-screen video; dynacast drops unconsumed layers.
+        // Audio is never affected — RoomAudioRenderer below renders every mic.
+        adaptiveStream: true,
+        dynacast: true,
         videoCaptureDefaults: { resolution: { ...BG_CAPTURE_RESOLUTION } },
+        publishDefaults: {
+          videoSimulcastLayers: [VideoPresets.h180, VideoPresets.h360],
+          videoEncoding: { maxBitrate: 800_000, maxFramerate: 24 },
+        },
         // WS3/E4 — explicit echo/noise processing on the mic capture. The
         // browser defaults usually include these, but several "echo / hears
         // themselves" reports came from devices where they were off; pin

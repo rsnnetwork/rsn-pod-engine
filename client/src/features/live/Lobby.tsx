@@ -21,7 +21,7 @@ import {
 } from '@livekit/components-react';
 import { isTrackReference } from '@livekit/components-core';
 import '@livekit/components-styles';
-import { Track, ConnectionState, RoomEvent } from 'livekit-client';
+import { Track, ConnectionState, RoomEvent, VideoPresets } from 'livekit-client';
 
 // Bug 10 (April 19) — Meet/Zoom-style reaction badge anchored above
 // the lobby tile name plate. Subscribes only to this user's entry so
@@ -1616,7 +1616,21 @@ export default function Lobby({ isHost = false, sessionId }: { isHost?: boolean;
           audio={isHost}
           className="flex-1 w-full max-w-4xl"
           options={{
+            // C2/VID-1 (audit 2026-06-12) — subscriber-side diet: each remote
+            // video uses the simulcast layer matching its rendered tile size,
+            // and unattached / off-screen tiles are paused. AUDIO IS NEVER
+            // AFFECTED — every mic stays subscribed and rendered below.
+            adaptiveStream: true,
+            // Publisher-side diet: stop encoding simulcast layers nobody consumes.
+            dynacast: true,
             videoCaptureDefaults: { resolution: { ...BG_CAPTURE_RESOLUTION } },
+            // Pin the sub-layers (today's library default, explicit so an
+            // upgrade can't silently fatten the room) + cap the top layer at
+            // 800kbps/24fps at the ENCODER (no change to BG capture resolution).
+            publishDefaults: {
+              videoSimulcastLayers: [VideoPresets.h180, VideoPresets.h360],
+              videoEncoding: { maxBitrate: 800_000, maxFramerate: 24 },
+            },
             // WS3/E4 — pin echo/noise processing on for the main-room mic.
             audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
           }}
