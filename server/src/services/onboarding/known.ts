@@ -77,8 +77,14 @@ export async function inferKnownProfile(req: Request, userId: string): Promise<O
     location: string | null;
     job_title: string | null;
     linkedin_url: string | null;
+    inviter_name: string | null;
+    inviter_email: string | null;
   }>(
-    'SELECT email, display_name, first_name, company, location, job_title, linkedin_url FROM users WHERE id = $1',
+    `SELECT u.email, u.display_name, u.first_name, u.company, u.location, u.job_title, u.linkedin_url,
+            inv.display_name AS inviter_name, inv.email AS inviter_email
+       FROM users u
+       LEFT JOIN users inv ON inv.id = u.invited_by_user_id
+      WHERE u.id = $1`,
     [userId]
   );
   const u = r.rows[0];
@@ -121,5 +127,6 @@ export async function inferKnownProfile(req: Request, userId: string): Promise<O
     role: u?.job_title?.trim() || null,
     linkedin: u?.linkedin_url?.trim() || null,
     previousEvents,
+    invitedBy: u?.inviter_name?.trim() || u?.inviter_email?.trim() || null,
   };
 }

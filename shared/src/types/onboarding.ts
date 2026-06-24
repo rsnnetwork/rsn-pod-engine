@@ -124,6 +124,8 @@ export interface OnboardingKnownProfile {
   linkedin: string | null;
   /** How many past Reason events the member has joined (0 for new members). */
   previousEvents: number;
+  /** Who invited this member (inviter's name or email), if they joined via an invite. */
+  invitedBy: string | null;
 }
 
 /** The member-confirmed basics, sent back on chat/confirm so the host never re-asks. */
