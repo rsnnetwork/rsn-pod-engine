@@ -51,7 +51,9 @@ export const createSessionSchema = z.object({
     // rematch" selection, so sessions silently persisted matchingPolicy=
     // within_event and prior-event pairs were re-matched. Must be listed to
     // survive validation.
-    matchingPolicy: z.enum(['platform_wide', 'within_event', 'none']).optional(),
+    matchingPolicy: z.enum(['platform_wide', 'within_event', 'none', 'cooldown']).optional(),
+    // Phase 2 (matching) — months a pair stays un-rematchable under 'cooldown'.
+    cooldownMonths: z.coerce.number().int().min(1).max(60).optional(),
   }).optional(),
 });
 
@@ -78,7 +80,9 @@ export const updateSessionSchema = z.object({
     // rematch" selection, so sessions silently persisted matchingPolicy=
     // within_event and prior-event pairs were re-matched. Must be listed to
     // survive validation.
-    matchingPolicy: z.enum(['platform_wide', 'within_event', 'none']).optional(),
+    matchingPolicy: z.enum(['platform_wide', 'within_event', 'none', 'cooldown']).optional(),
+    // Phase 2 (matching) — months a pair stays un-rematchable under 'cooldown'.
+    cooldownMonths: z.coerce.number().int().min(1).max(60).optional(),
   }).optional(),
 });
 
