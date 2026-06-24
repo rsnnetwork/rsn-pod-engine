@@ -37,8 +37,12 @@ describe('onboarding prompts (v1.1)', () => {
     expect(p).toContain('invite');
   });
 
-  it('injects a finish instruction only when forceWrapUp is set', () => {
-    expect(buildHostSystemPrompt(undefined, true)).toContain('asked to finish');
-    expect(buildHostSystemPrompt(undefined, false)).not.toContain('asked to finish');
+  it('injects the right finish instruction per wrapMode', () => {
+    expect(buildHostSystemPrompt(undefined, 'hard')).toContain('asked to finish');
+    expect(buildHostSystemPrompt(undefined, 'soft')).toContain('wants to finish');
+    expect(buildHostSystemPrompt(undefined, 'soft').toLowerCase()).toContain('they can skip');
+    const none = buildHostSystemPrompt(undefined);
+    expect(none).not.toContain('asked to finish');
+    expect(none).not.toContain('wants to finish');
   });
 });

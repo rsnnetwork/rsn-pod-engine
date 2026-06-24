@@ -8,6 +8,7 @@ import Card from '@/components/ui/Card';
 import Avatar from '@/components/ui/Avatar';
 import { X, User, Briefcase, MapPin, Globe, Languages, Sparkles, Camera, Info, Target, Heart, HelpCircle, Users, MessageSquare } from 'lucide-react';
 import api from '@/lib/api';
+import OnboardingWelcomeModal from '@/features/onboarding/OnboardingWelcomeModal';
 
 interface ProfileForm {
   displayName: string;
@@ -195,6 +196,7 @@ export default function ProfilePage() {
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
+      <OnboardingWelcomeModal />
       <h1 className="text-2xl font-bold text-[#1a1a2e] animate-fade-in">Profile</h1>
 
       {/* Profile Header Card */}

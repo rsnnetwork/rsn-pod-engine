@@ -209,15 +209,24 @@ describe('POST /onboarding/chat', () => {
     expect(args[1]).toMatchObject({ country: 'Denmark', company: 'Mister Raw' });
   });
 
-  it('passes the finish flag through to converse (force wrap up)', async () => {
+  it('passes wrapMode=soft to converse on a soft finish', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+    (chatbot.converse as jest.Mock).mockResolvedValue({ reply: 'ok', ready: false });
+    await request(app)
+      .post('/onboarding/chat')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ ...body, finish: true });
+    expect((chatbot.converse as jest.Mock).mock.calls[0][2]).toBe('soft');
+  });
+
+  it('passes wrapMode=hard to converse on a hard finish', async () => {
     (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
     (chatbot.converse as jest.Mock).mockResolvedValue({ reply: 'ok', ready: true });
     await request(app)
       .post('/onboarding/chat')
       .set('Authorization', `Bearer ${makeToken()}`)
-      .send({ ...body, finish: true });
-    const args = (chatbot.converse as jest.Mock).mock.calls[0];
-    expect(args[2]).toBe(true);
+      .send({ ...body, hardFinish: true });
+    expect((chatbot.converse as jest.Mock).mock.calls[0][2]).toBe('hard');
   });
 
   it('runs per-answer extraction in the background', async () => {

@@ -133,6 +133,7 @@ export default function ChatbotOnboarding() {
   const [ready, setReady] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [fallback, setFallback] = useState(false);
+  const [finishAttempts, setFinishAttempts] = useState(0);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -242,15 +243,18 @@ export default function ChatbotOnboarding() {
     el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
   }
 
-  // One host turn. `finish` asks the host to summarise now (the "I'm done" control).
-  async function sendTurn(next: OnboardingMessage[], finish: boolean) {
+  // One host turn. wrapMode drives the "I'm done" control: 'soft' lets the host
+  // ask one last skippable thing if it's missing what the member offers; 'hard'
+  // wraps up unconditionally.
+  async function sendTurn(next: OnboardingMessage[], wrapMode: 'none' | 'soft' | 'hard' = 'none') {
     setReady(false);
     setSending(true);
     try {
       const res = await api.post('/onboarding/chat', {
         messages: next.slice(1),
         profile: confirmedProfile(),
-        finish,
+        finish: wrapMode === 'soft',
+        hardFinish: wrapMode === 'hard',
       });
       const data = res.data.data as { reply: string; ready: boolean };
       setMessages((m) => [...m, { role: 'assistant', content: data.reply }]);
@@ -276,20 +280,24 @@ export default function ChatbotOnboarding() {
     requestAnimationFrame(() => {
       if (inputRef.current) inputRef.current.style.height = 'auto';
     });
-    await sendTurn(next, false);
+    await sendTurn(next, 'none');
   }
 
   async function handleFinish() {
     if (sending || confirming) return;
     if (!messages.some((m) => m.role === 'user')) return; // nothing to wrap up yet
-    // Append a short closing user turn so the host has a member message to
-    // respond to (the model needs the last turn to be the member) and summarises.
+    // Append a short closing user turn so the host has a member message to respond
+    // to (the model needs the last turn to be the member). First press is a soft
+    // finish (host may ask one last skippable thing if it's still missing what the
+    // member offers); a second press wraps up hard.
+    const hard = finishAttempts >= 1;
+    setFinishAttempts((n) => n + 1);
     const next: OnboardingMessage[] = [
       ...messages,
-      { role: 'user', content: 'I think that is everything for now.' },
+      { role: 'user', content: hard ? 'Let us wrap up now.' : 'I think that is everything for now.' },
     ];
     setMessages(next);
-    await sendTurn(next, true);
+    await sendTurn(next, hard ? 'hard' : 'soft');
   }
 
   async function handleConfirm() {

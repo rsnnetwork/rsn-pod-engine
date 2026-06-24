@@ -43,8 +43,10 @@ const messagesSchema = z.object({
     .min(1)
     .max(60),
   profile: profileSchema,
-  /** Member-initiated "I'm done" — tells the host to summarise now. */
+  /** Member-initiated "I'm done" (soft): host asks one last skippable thing if missing. */
   finish: z.boolean().optional(),
+  /** Second press / skip (hard): host wraps up unconditionally. */
+  hardFinish: z.boolean().optional(),
 });
 
 function sendLlmDisabled(res: Response): void {
@@ -126,8 +128,9 @@ router.post(
         .markInProgress(userId)
         .catch((err) => logger.warn({ err, userId }, 'onboarding markInProgress failed'));
 
-      const finish = req.body.finish === true;
-      const { reply, ready } = await chatbot.converse(messages, profile, finish);
+      const wrapMode: 'none' | 'soft' | 'hard' =
+        req.body.hardFinish === true ? 'hard' : req.body.finish === true ? 'soft' : 'none';
+      const { reply, ready } = await chatbot.converse(messages, profile, wrapMode);
       const response: ApiResponse = { success: true, data: { reply, ready } };
       res.json(response);
 

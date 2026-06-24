@@ -7,6 +7,7 @@ import { PageLoader } from '@/components/ui/Spinner';
 import { useAuthStore } from '@/stores/authStore';
 import api from '@/lib/api';
 import { E } from '@/realtime/entities';
+import OnboardingWelcomeModal from '@/features/onboarding/OnboardingWelcomeModal';
 
 export default function HomePage() {
   const { user } = useAuthStore();
@@ -54,6 +55,7 @@ export default function HomePage() {
 
   return (
     <div className="max-w-5xl mx-auto space-y-8">
+      <OnboardingWelcomeModal />
       {/* Welcome header */}
       <div className="animate-fade-in">
         <h1 className="text-2xl font-bold text-[#1a1a2e]">

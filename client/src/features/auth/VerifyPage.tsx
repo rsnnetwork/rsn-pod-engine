@@ -26,10 +26,10 @@ export default function VerifyPage() {
       const inviteCode = params.get('inviteCode');
       const redirect = sessionStorage.getItem('rsn_redirect');
       sessionStorage.removeItem('rsn_redirect');
-      // Route new / not-yet-onboarded users straight into the onboarding host,
-      // unless they arrived via an invite or an explicit redirect target.
-      const onboardingDone = (useAuthStore.getState().user as any)?.onboardingCompleted === true;
-      const destination = inviteCode ? `/invite/${inviteCode}` : (redirect || (onboardingDone ? '/' : '/onboarding'));
+      // Land on the destination (or the dashboard). New / not-yet-onboarded users
+      // are INVITED into the host chat by a welcome popup on the dashboard, never
+      // auto-redirected here.
+      const destination = inviteCode ? `/invite/${inviteCode}` : (redirect || '/');
 
       // Clear magic link flag so original tab knows auth is done
       localStorage.removeItem('rsn_magic_link_sent');
