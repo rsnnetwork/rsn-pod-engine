@@ -133,6 +133,14 @@ export interface MatchingParticipant {
   // up reciprocal requests to detect mutual premium pairs.
   isPremium?: boolean;
   requestedUserIds?: string[];
+  // Matching enhancement (onboarding intent) — all optional + backward
+  // compatible. A participant without these scores exactly as before.
+  /** Normalised designation bucket (founder/investor/ceo/...) from job title. */
+  designation?: string | null;
+  /** Free terms for who this member wants to meet (desired roles/people/industries). */
+  wantsToMeet?: string[];
+  /** Free terms for who this member does NOT want to meet (avoid_preferences). */
+  avoid?: string[];
 }
 
 export interface MatchingConfig {
@@ -165,6 +173,14 @@ export interface MatchingWeights {
   // Only applied when matchingPolicy allows repeats (otherwise the
   // no-repeat constraint trumps any score).
   mutualMeetAgainBoost?: number;
+  // Matching enhancement (onboarding intent) — additive relevance signals.
+  // intentAlignment: directional "who you want to meet" vs the other's identity.
+  // designationDiversity: complementary designations (e.g. founder + investor).
+  // avoidPenalty: drops the pair's score on this dimension when either side's
+  //   "do not want to meet" matches the other (soft, never a hard exclusion).
+  intentAlignment?: number;
+  designationDiversity?: number;
+  avoidPenalty?: number;
   [key: string]: number | undefined;
 }
 

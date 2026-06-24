@@ -9,6 +9,7 @@ import {
   RoundAssignment, MatchPair, EncounterHistoryEntry, HardConstraint,
 } from '@rsn/shared';
 import { IMatchingEngine, pairKey } from './matching.interface';
+import { intentAlignmentScore, avoidConflict, designationAffinity } from './intent-signals';
 import { ValidationError } from '../../middleware/errors';
 import logger from '../../config/logger';
 
@@ -536,6 +537,38 @@ export class MatchingEngineV1 implements IMatchingEngine {
 
       totalScore += freshnessScore * weights.encounterFreshness;
       totalWeight += weights.encounterFreshness;
+    }
+
+    // ── Onboarding-intent enhancement — additive relevance signals ──
+    // These only fire when their weight is set, so existing callers/tests that
+    // pass the legacy weights are unaffected, and a participant with no
+    // onboarding data contributes neutrally (no exclusion is ever relaxed).
+
+    // 8. Intent alignment — who you said you want to meet vs who the other is.
+    if (weights.intentAlignment) {
+      const { score: intentScore, aWantsB, bWantsA } = intentAlignmentScore(a, b);
+      totalScore += intentScore * weights.intentAlignment;
+      totalWeight += weights.intentAlignment;
+      if (aWantsB > 0 && bWantsA > 0) reasonTags.push('mutual_intent');
+      else if (aWantsB > 0 || bWantsA > 0) reasonTags.push('intent_match');
+    }
+
+    // 9. Designation complementarity (e.g. founder + investor).
+    if (weights.designationDiversity) {
+      const dScore = designationAffinity(a.designation, b.designation);
+      totalScore += dScore * weights.designationDiversity;
+      totalWeight += weights.designationDiversity;
+      if (a.designation && b.designation && a.designation !== b.designation) {
+        reasonTags.push(`designation:${[a.designation, b.designation].sort().join('+')}`);
+      }
+    }
+
+    // 10. Avoid penalty — "who I do not want to meet" (soft, never a hard block).
+    if (weights.avoidPenalty) {
+      const conflict = avoidConflict(a, b);
+      totalScore += (conflict ? 0 : 1) * weights.avoidPenalty;
+      totalWeight += weights.avoidPenalty;
+      if (conflict) reasonTags.push('avoid_conflict');
     }
 
     // ── Matching Engine 1.0 spec, Section 8 — Feedback learning ─────

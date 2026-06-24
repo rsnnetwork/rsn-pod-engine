@@ -13,6 +13,7 @@ import { pairKey } from './matching.interface';
 import { reduceRepeatPairs } from './repeat-reduction';
 import * as sessionService from '../session/session.service';
 import * as blockService from '../block/block.service';
+import { normalizeDesignation } from './intent-signals';
 import { NotFoundError } from '../../middleware/errors';
 
 // ─── Default Weights ────────────────────────────────────────────────────────
@@ -38,7 +39,59 @@ const DEFAULT_WEIGHTS: MatchingWeights = {
   // Section 8 — feedback learning lift (tiny by default, only matters when
   // policy allows repeats).
   mutualMeetAgainBoost: 0.05,
+  // Onboarding-intent enhancement — additive relevance from data we already
+  // capture (who you want to meet, who you avoid, your designation). Modest so
+  // they sharpen relevance without dominating the existing diversity/freshness.
+  intentAlignment: 0.20,
+  designationDiversity: 0.10,
+  avoidPenalty: 0.15,
 };
+
+/**
+ * Onboarding-intent enrichment — attach designation / wantsToMeet / avoid to
+ * each participant from data we already capture (job_title, who_i_want_to_meet,
+ * and user_intent_profiles). Best-effort: on any failure participants simply
+ * lack these optional fields and the engine scores them neutrally. Never throws
+ * into the matching flow, and never relaxes an exclusion.
+ */
+async function attachIntentSignals(participants: MatchingParticipant[]): Promise<void> {
+  if (!participants.length) return;
+  try {
+    const ids = participants.map((p) => p.userId);
+    const res = await query<{
+      id: string;
+      job_title: string | null;
+      who_i_want_to_meet: string | null;
+      avoid_preferences: string[] | null;
+      matching_intent: any;
+    }>(
+      `SELECT u.id, u.job_title, u.who_i_want_to_meet,
+              p.avoid_preferences, p.matching_intent
+         FROM users u
+         LEFT JOIN user_intent_profiles p ON p.user_id = u.id
+        WHERE u.id = ANY($1::uuid[])`,
+      [ids]
+    );
+    const byId = new Map(res.rows.map((r) => [r.id, r]));
+    const arr = (v: unknown): string[] => (Array.isArray(v) ? (v as string[]) : []);
+    for (const part of participants) {
+      const r = byId.get(part.userId);
+      if (!r) continue;
+      part.designation = normalizeDesignation(r.job_title);
+      const mi = r.matching_intent && typeof r.matching_intent === 'object' ? r.matching_intent : {};
+      part.wantsToMeet = [
+        ...arr(mi.desiredRoles),
+        ...arr(mi.desiredPeople),
+        ...arr(mi.desiredIndustries),
+        ...arr(mi.desiredDesignations),
+        ...(r.who_i_want_to_meet ? [r.who_i_want_to_meet] : []),
+      ];
+      part.avoid = [...arr(r.avoid_preferences), ...arr(mi.avoidPreferences)];
+    }
+  } catch (err) {
+    logger.warn({ err }, 'attachIntentSignals failed — matching proceeds without onboarding signals');
+  }
+}
 
 /**
  * Matching Engine 1.0 spec, Section 7 — load all pending premium match
@@ -131,6 +184,8 @@ export async function generateSessionSchedule(
   for (const p of participants) {
     p.requestedUserIds = requests.get(p.userId) || [];
   }
+  // Onboarding-intent enhancement — designation / wantsToMeet / avoid signals.
+  await attachIntentSignals(participants);
 
   // Phase 4 (29 April 2026 spec) — matching policy chosen at event creation.
   // Replaces the legacy binary `crossEventMemory` flag with a tri-state
@@ -420,6 +475,10 @@ export async function generateSingleRound(
         singlePremiumRequest: DEFAULT_WEIGHTS.singlePremiumRequest,
         premiumBoost: DEFAULT_WEIGHTS.premiumBoost,
         mutualMeetAgainBoost: DEFAULT_WEIGHTS.mutualMeetAgainBoost,
+        // Carry the onboarding-intent signals forward for templated events too.
+        intentAlignment: DEFAULT_WEIGHTS.intentAlignment,
+        designationDiversity: DEFAULT_WEIGHTS.designationDiversity,
+        avoidPenalty: DEFAULT_WEIGHTS.avoidPenalty,
       };
       logger.info({ templateId: templateId || tplId, weights }, 'Using matching template weights');
     }
@@ -442,6 +501,8 @@ export async function generateSingleRound(
   for (const p of participantsResult.rows) {
     p.requestedUserIds = requestsForRound.get(p.userId) || [];
   }
+  // Onboarding-intent enhancement — designation / wantsToMeet / avoid signals.
+  await attachIntentSignals(participantsResult.rows);
 
   // Phase 3 (1 May spec) — engine lookup via registry.
   const engine = getMatchingEngine(sessionConfig.matchingAlgorithmId || DEFAULT_ENGINE_ID);
