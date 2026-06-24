@@ -96,6 +96,8 @@ export interface OnboardingConfirmResponse {
 export interface OnboardingKnownProfile {
   name: string | null;
   firstName: string | null;
+  /** true when the name was derived from the email (no saved name yet). */
+  nameGuessed: boolean;
   email: string;
   country: string | null;
   /** true when country came from an IP geo guess (not a saved value). */

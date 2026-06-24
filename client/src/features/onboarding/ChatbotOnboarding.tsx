@@ -285,17 +285,31 @@ export default function ChatbotOnboarding() {
             transition={{ duration: 0.5 }}
             className="flex w-full max-w-md flex-col items-center gap-5 text-center"
           >
-            <HostPresence size={96} state="idle" />
-            <div>
-              <h1 className="font-display text-2xl font-semibold leading-snug text-[#1a1a2e]">
-                Hi {firstName}. Welcome to Reason.
-              </h1>
+            <HostPresence size={104} state="idle" />
+            <div className="flex flex-col items-center gap-1">
+              <motion.p
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.15, duration: 0.4 }}
+                className="text-base font-medium tracking-wide text-gray-500"
+              >
+                Welcome to Reason
+              </motion.p>
+              <motion.h1
+                key={(draft.name || firstName).trim()}
+                initial={{ opacity: 0, y: 10, scale: 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ delay: 0.25, type: 'spring', stiffness: 150, damping: 15 }}
+                className="bg-gradient-to-r from-rsn-red to-[#ff7a5c] bg-clip-text font-display text-3xl font-extrabold leading-tight text-transparent sm:text-4xl"
+              >
+                {(draft.name || firstName || 'there').trim()}
+              </motion.h1>
               <p className="mt-2 text-sm text-gray-500">
                 Good to have you here. Here is what we have so far. Is it right?
               </p>
             </div>
             <div className="w-full rounded-2xl border border-gray-200 bg-white p-4 text-left shadow-sm">
-              <ConfirmRow label="Name" value={draft.name} editing={editing} placeholder="Your name" onChange={(v) => setDraft((d) => ({ ...d, name: v }))} />
+              <ConfirmRow label="Name" value={draft.name} editing={editing} placeholder="Your name" guessed={known?.nameGuessed} onChange={(v) => setDraft((d) => ({ ...d, name: v }))} />
               <ConfirmRow label="Country" value={draft.country} editing={editing} placeholder="Where you are based" guessed={known?.countryGuessed} onChange={(v) => setDraft((d) => ({ ...d, country: v }))} />
               <ConfirmRow label="Company" value={draft.company} editing={editing} placeholder="Where you work" guessed={known?.companyGuessed} last onChange={(v) => setDraft((d) => ({ ...d, company: v }))} />
             </div>

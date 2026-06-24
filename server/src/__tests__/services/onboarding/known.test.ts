@@ -2,7 +2,20 @@
 // importing the module has no side effects (the pure helpers don't query).
 jest.mock('../../../db', () => ({ query: jest.fn(), __esModule: true }));
 
-import { companyFromEmail, countryFromHeaders } from '../../../services/onboarding/known';
+import { companyFromEmail, countryFromHeaders, nameFromEmail } from '../../../services/onboarding/known';
+
+describe('nameFromEmail', () => {
+  it('derives a presentable name from the local part', () => {
+    expect(nameFromEmail('stefan.avivson@gmail.com')).toBe('Stefan Avivson');
+    expect(nameFromEmail('stefanavivson@gmail.com')).toBe('Stefanavivson');
+    expect(nameFromEmail('waseemjaved069123@gmail.com')).toBe('Waseemjaved');
+  });
+
+  it('returns null for a malformed email', () => {
+    expect(nameFromEmail('nope')).toBeNull();
+    expect(nameFromEmail('@x.com')).toBeNull();
+  });
+});
 
 describe('companyFromEmail', () => {
   it('infers a company from a non-generic domain', () => {

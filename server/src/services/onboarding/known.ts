@@ -37,6 +37,21 @@ export function countryFromHeaders(req: Request): string | null {
   }
 }
 
+/**
+ * Derive a presentable name from an email local part, for magic-link signups
+ * that have no saved name yet (a guess to confirm). e.g. "stefan.avivson@x.com"
+ * -> "Stefan Avivson"; "waseemjaved069123@x.com" -> "Waseemjaved".
+ */
+export function nameFromEmail(email: string): string | null {
+  const at = email.indexOf('@');
+  if (at <= 0) return null;
+  const local = email.slice(0, at).replace(/\d+$/, ''); // drop trailing digits
+  const parts = local.split(/[._\-+]+/).filter(Boolean);
+  if (!parts.length) return null;
+  const titled = parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ').trim();
+  return titled || null;
+}
+
 /** Infer a company name from a non-generic email domain (a guess to confirm). */
 export function companyFromEmail(email: string): string | null {
   const at = email.lastIndexOf('@');
@@ -69,9 +84,17 @@ export async function inferKnownProfile(req: Request, userId: string): Promise<O
   const savedCountry = u?.location?.trim() || '';
   const guessedCountry = savedCountry ? null : countryFromHeaders(req);
 
+  const savedName = (u?.display_name || '').trim();
+  const guessedName = savedName ? null : nameFromEmail(email);
+  const effectiveName = savedName || guessedName || null;
+  const firstName =
+    (u?.first_name?.trim() || '') ||
+    (effectiveName ? effectiveName.split(/\s+/)[0] : '');
+
   return {
-    name: u?.display_name || null,
-    firstName: u?.first_name || (u?.display_name ? u.display_name.split(/\s+/)[0] : null),
+    name: effectiveName,
+    firstName: firstName || null,
+    nameGuessed: !savedName && !!guessedName,
     email,
     country: savedCountry || guessedCountry || null,
     countryGuessed: !savedCountry && !!guessedCountry,
