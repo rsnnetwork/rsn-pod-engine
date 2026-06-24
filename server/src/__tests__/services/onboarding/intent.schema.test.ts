@@ -16,6 +16,11 @@ const validIntent = {
   userExpertise: ['sales'],
   userCanOffer: ['sales coaching'],
   userInterests: ['startups'],
+  userCity: null,
+  userValuableTo: ['early-stage founders'],
+  suggestedInvitees: [],
+  currentFocus: 'scaling sales',
+  matchPriority: 'high',
   avoidPreferences: ['recruiters'],
   privacyRecommendation: 'normal',
   matchingTags: ['b2b', 'sales', 'founder'],
@@ -49,6 +54,16 @@ describe('IntentSchema', () => {
   it('rejects an invalid profileStrength value', () => {
     const result = IntentSchema.safeParse({ ...validIntent, profileStrength: 'medium' });
     expect(result.success).toBe(false);
+  });
+
+  it('rejects an invalid matchPriority value', () => {
+    const result = IntentSchema.safeParse({ ...validIntent, matchPriority: 'urgent' });
+    expect(result.success).toBe(false);
+  });
+
+  it('requires the Round B dimensions', () => {
+    const { userValuableTo, ...missing } = validIntent;
+    expect(IntentSchema.safeParse(missing).success).toBe(false);
   });
 
   it('rejects a non-array desiredPeople', () => {

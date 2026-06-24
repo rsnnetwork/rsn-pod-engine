@@ -30,6 +30,9 @@ export interface OnboardingMessage {
 /** How strong/usable the captured intent is — drives weak-profile handling. */
 export type ProfileStrength = 'strong' | 'weak';
 
+/** How strongly to prioritise this member in matching (derived from clarity/urgency). */
+export type MatchPriority = 'high' | 'medium' | 'low';
+
 /**
  * Structured intent extracted from the onboarding conversation (canvas §18/§32).
  * This is the contract the matching layer will read; the DB stores it as the
@@ -55,6 +58,16 @@ export interface OnboardingIntent {
   userExpertise: string[];
   userCanOffer: string[];
   userInterests: string[];
+  userCity: string | null;
+  // Round B: richer matching dimensions
+  /** Who the member would be valuable to (Q4). */
+  userValuableTo: string[];
+  /** People the member would like to invite (Q6, names/handles only; no send). */
+  suggestedInvitees: string[];
+  /** What the member is focused on right now. */
+  currentFocus: string;
+  /** How strongly to prioritise this member in matching. */
+  matchPriority: MatchPriority;
   // Guardrails + matching signals
   avoidPreferences: string[];
   privacyRecommendation: string;
@@ -105,6 +118,12 @@ export interface OnboardingKnownProfile {
   company: string | null;
   /** true when company was inferred from the email domain (not a saved value). */
   companyGuessed: boolean;
+  /** Saved role / job title, if any (Round B; not inferred, so no guessed flag). */
+  role: string | null;
+  /** Saved LinkedIn URL, if any (Round B). */
+  linkedin: string | null;
+  /** How many past Reason events the member has joined (0 for new members). */
+  previousEvents: number;
 }
 
 /** The member-confirmed basics, sent back on chat/confirm so the host never re-asks. */
@@ -113,4 +132,12 @@ export interface OnboardingConfirmedProfile {
   firstName?: string | null;
   country?: string | null;
   company?: string | null;
+  role?: string | null;
+  linkedin?: string | null;
+}
+
+/** GET /onboarding/resume — lets a member continue an in-progress onboarding. */
+export interface OnboardingResume {
+  status: OnboardingStatus;
+  messages: OnboardingMessage[];
 }

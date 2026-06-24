@@ -44,13 +44,14 @@ export function isEnabled(): boolean {
  */
 export async function converse(
   messages: OnboardingMessage[],
-  profile?: OnboardingConfirmedProfile
+  profile?: OnboardingConfirmedProfile,
+  forceWrapUp = false
 ): Promise<{ reply: string; ready: boolean }> {
   const anthropic = getClient();
   const resp = await anthropic.messages.create({
     model: config.onboardingChatModel,
     max_tokens: 1024,
-    system: buildHostSystemPrompt(profile),
+    system: buildHostSystemPrompt(profile, forceWrapUp),
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
   });
 

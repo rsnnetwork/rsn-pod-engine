@@ -30,4 +30,15 @@ describe('onboarding prompts (v1.1)', () => {
     expect(p).toContain('wrapping up sooner');
     expect(p).toContain('go straight to the summary');
   });
+
+  it('includes the Round B optional dimensions (valuable to / invite)', () => {
+    const p = buildHostSystemPrompt().toLowerCase();
+    expect(p).toContain('valuable to');
+    expect(p).toContain('invite');
+  });
+
+  it('injects a finish instruction only when forceWrapUp is set', () => {
+    expect(buildHostSystemPrompt(undefined, true)).toContain('asked to finish');
+    expect(buildHostSystemPrompt(undefined, false)).not.toContain('asked to finish');
+  });
 });

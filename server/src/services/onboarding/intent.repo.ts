@@ -10,7 +10,12 @@
 //      and sets onboarding_status='completed' + last_onboarded_at.
 
 import { query, transaction } from '../../db';
-import { OnboardingMessage, OnboardingStatus, OnboardingConfirmedProfile } from '@rsn/shared';
+import {
+  OnboardingMessage,
+  OnboardingStatus,
+  OnboardingConfirmedProfile,
+  OnboardingKnownProfile,
+} from '@rsn/shared';
 import { ExtractedIntent } from './intent.schema';
 
 function orNull(s: string | null | undefined): string | null {
@@ -56,7 +61,8 @@ export async function saveIntentAndComplete(
   userId: string,
   intent: ExtractedIntent,
   conversation: OnboardingMessage[],
-  profile?: OnboardingConfirmedProfile
+  profile?: OnboardingConfirmedProfile,
+  inferred?: OnboardingKnownProfile
 ): Promise<{ profileComplete: boolean }> {
   // ── Dual-write values for the existing users columns ──────────────────────
   const reasonsToConnect = cleanArr(
@@ -69,9 +75,11 @@ export async function saveIntentAndComplete(
 
   // Confirmed known data (from the confirm-known card) wins over chat-extracted.
   const company = truncate(orNull(profile?.company) || orNull(intent.userCompany), 200);
-  const jobTitle = truncate(orNull(intent.userRole), 200);
+  // Confirmed role (from the card) wins over chat-extracted.
+  const jobTitle = truncate(orNull(profile?.role) || orNull(intent.userRole), 200);
   const industry = truncate(orNull(intent.userIndustry), 100);
   const location = truncate(orNull(profile?.country), 200);
+  const linkedin = truncate(orNull(profile?.linkedin), 1000);
   const displayNameOverride = truncate(orNull(profile?.name), 100);
   const whoIWantToMeet = joinList([...intent.desiredPeople, ...intent.desiredRoles]);
   const whyIWantToMeet = orNull(intent.reasonForMeeting);
@@ -91,6 +99,17 @@ export async function saveIntentAndComplete(
   const profileStrength = truncate(intent.profileStrength, 20);
   const embeddingText = orNull(intent.embeddingText);
   const profileSummary = orNull(intent.userProfileSummary);
+
+  // Confirmed (what the member confirmed on the card) vs inferred (what we
+  // guessed + which fields were guesses) — stored separately per Stefan's doc.
+  const confirmedProfileJson = JSON.stringify({
+    name: orNull(profile?.name),
+    country: orNull(profile?.country),
+    company: orNull(profile?.company),
+    role: orNull(profile?.role),
+    linkedin: orNull(profile?.linkedin),
+  });
+  const inferredProfileJson = JSON.stringify(inferred ?? {});
 
   return transaction(async (client) => {
     // Backfill first/last name from display_name when missing — same reasoning as
@@ -135,6 +154,7 @@ export async function saveIntentAndComplete(
          last_name = $17,
          location = COALESCE($18, location),
          display_name = COALESCE($19, display_name),
+         linkedin_url = COALESCE($20, linkedin_url),
          onboarding_completed = true,
          onboarding_status = 'completed',
          last_onboarded_at = NOW()
@@ -159,6 +179,7 @@ export async function saveIntentAndComplete(
         lastName || null,
         location,
         displayNameOverride,
+        linkedin,
       ]
     );
 
@@ -197,8 +218,8 @@ export async function saveIntentAndComplete(
       `INSERT INTO user_intent_profiles
          (user_id, matching_intent, matching_tags, embedding_text, profile_summary,
           avoid_preferences, privacy_preference, confidence, profile_strength,
-          onboarding_conversation, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+          onboarding_conversation, confirmed_profile, inferred_profile, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
        ON CONFLICT (user_id) DO UPDATE SET
          matching_intent = EXCLUDED.matching_intent,
          matching_tags = EXCLUDED.matching_tags,
@@ -209,6 +230,8 @@ export async function saveIntentAndComplete(
          confidence = EXCLUDED.confidence,
          profile_strength = EXCLUDED.profile_strength,
          onboarding_conversation = EXCLUDED.onboarding_conversation,
+         confirmed_profile = EXCLUDED.confirmed_profile,
+         inferred_profile = EXCLUDED.inferred_profile,
          updated_at = NOW()`,
       [
         userId,
@@ -221,9 +244,100 @@ export async function saveIntentAndComplete(
         confidence,
         profileStrength,
         conversationJson,
+        confirmedProfileJson,
+        inferredProfileJson,
       ]
     );
 
     return { profileComplete: isComplete };
   });
+}
+
+/**
+ * Per-answer extraction (Round B): upsert the running intent blob + transcript
+ * after each host turn, WITHOUT flipping the onboarding gate, so the profile
+ * updates live and a member can resume an in-progress conversation. Best-effort:
+ * callers fire-and-forget this; it must never block or break the chat turn.
+ */
+export async function savePartialIntent(
+  userId: string,
+  intent: ExtractedIntent,
+  conversation: OnboardingMessage[]
+): Promise<void> {
+  // Don't clobber a finished profile if a stray background extraction lands late.
+  const st = await query<{ onboarding_status: OnboardingStatus }>(
+    'SELECT onboarding_status FROM users WHERE id = $1',
+    [userId]
+  );
+  if (st.rows[0]?.onboarding_status === 'completed') return;
+
+  const matchingIntent = JSON.stringify(intent);
+  const confidence = JSON.stringify(intent.confidenceScores);
+  const conversationJson = JSON.stringify(conversation);
+  const matchingTags = cleanArr(intent.matchingTags, 24);
+  const avoidPreferences = cleanArr(intent.avoidPreferences, 24);
+  const privacyPreference = truncate(orNull(intent.privacyRecommendation), 40) ?? 'normal';
+  const profileStrength = truncate(intent.profileStrength, 20);
+  const embeddingText = orNull(intent.embeddingText);
+  const profileSummary = orNull(intent.userProfileSummary);
+
+  await query(
+    `INSERT INTO user_intent_profiles
+       (user_id, matching_intent, matching_tags, embedding_text, profile_summary,
+        avoid_preferences, privacy_preference, confidence, profile_strength,
+        onboarding_conversation, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+     ON CONFLICT (user_id) DO UPDATE SET
+       matching_intent = EXCLUDED.matching_intent,
+       matching_tags = EXCLUDED.matching_tags,
+       embedding_text = EXCLUDED.embedding_text,
+       profile_summary = EXCLUDED.profile_summary,
+       avoid_preferences = EXCLUDED.avoid_preferences,
+       privacy_preference = EXCLUDED.privacy_preference,
+       confidence = EXCLUDED.confidence,
+       profile_strength = EXCLUDED.profile_strength,
+       onboarding_conversation = EXCLUDED.onboarding_conversation,
+       updated_at = NOW()`,
+    [
+      userId,
+      matchingIntent,
+      matchingTags,
+      embeddingText,
+      profileSummary,
+      avoidPreferences,
+      privacyPreference,
+      confidence,
+      profileStrength,
+      conversationJson,
+    ]
+  );
+
+  await query(
+    `UPDATE users SET onboarding_status = 'in_progress'
+       WHERE id = $1 AND onboarding_status IN ('not_started', 'in_progress')`,
+    [userId]
+  );
+}
+
+/**
+ * Load any in-progress onboarding so the member can resume where they left off.
+ * Returns the saved transcript (empty if none) plus the current status.
+ */
+export async function getResume(
+  userId: string
+): Promise<{ status: OnboardingStatus; messages: OnboardingMessage[] }> {
+  const r = await query<{
+    onboarding_status: OnboardingStatus;
+    onboarding_conversation: OnboardingMessage[] | null;
+  }>(
+    `SELECT u.onboarding_status, p.onboarding_conversation
+       FROM users u
+       LEFT JOIN user_intent_profiles p ON p.user_id = u.id
+      WHERE u.id = $1`,
+    [userId]
+  );
+  const row = r.rows[0];
+  const status = row?.onboarding_status ?? 'not_started';
+  const conv = row?.onboarding_conversation;
+  return { status, messages: Array.isArray(conv) ? conv : [] };
 }

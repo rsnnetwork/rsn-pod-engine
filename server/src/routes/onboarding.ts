@@ -27,6 +27,8 @@ const profileSchema = z
     firstName: z.string().trim().max(120).nullish(),
     country: z.string().trim().max(120).nullish(),
     company: z.string().trim().max(200).nullish(),
+    role: z.string().trim().max(200).nullish(),
+    linkedin: z.string().trim().max(500).nullish(),
   })
   .optional();
 
@@ -41,6 +43,8 @@ const messagesSchema = z.object({
     .min(1)
     .max(60),
   profile: profileSchema,
+  /** Member-initiated "I'm done" — tells the host to summarise now. */
+  finish: z.boolean().optional(),
 });
 
 function sendLlmDisabled(res: Response): void {
@@ -86,6 +90,22 @@ router.get(
   }
 );
 
+// ─── GET /onboarding/resume ──────────────────────────────────────────────────
+// Lets a member continue an in-progress onboarding (loads the saved transcript).
+router.get(
+  '/resume',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const resume = await intentRepo.getResume(req.user!.userId);
+      const response: ApiResponse = { success: true, data: resume };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // ─── POST /onboarding/chat ───────────────────────────────────────────────────
 router.post(
   '/chat',
@@ -106,9 +126,24 @@ router.post(
         .markInProgress(userId)
         .catch((err) => logger.warn({ err, userId }, 'onboarding markInProgress failed'));
 
-      const { reply, ready } = await chatbot.converse(messages, profile);
+      const finish = req.body.finish === true;
+      const { reply, ready } = await chatbot.converse(messages, profile, finish);
       const response: ApiResponse = { success: true, data: { reply, ready } };
       res.json(response);
+
+      // Per-answer extraction (Round B): update the running profile + transcript
+      // in the background so it stays live and the member can resume. This must
+      // never block or break the chat turn — fire and forget, log on failure.
+      const fullConversation: OnboardingMessage[] = [
+        ...messages,
+        { role: 'assistant', content: reply },
+      ];
+      chatbot
+        .extractIntent(fullConversation)
+        .then((intent) => intentRepo.savePartialIntent(userId, intent, fullConversation))
+        .catch((err) =>
+          logger.warn({ err, userId }, 'onboarding per-answer extraction failed')
+        );
     } catch (err) {
       next(err);
     }
@@ -132,11 +167,14 @@ router.post(
       const profile = req.body.profile as OnboardingConfirmedProfile | undefined;
 
       const intent = await chatbot.extractIntent(messages);
+      // Snapshot what we inferred so confirmed-vs-guessed can be stored separately.
+      const inferred = await inferKnownProfile(req, userId).catch(() => undefined);
       const { profileComplete } = await intentRepo.saveIntentAndComplete(
         userId,
         intent,
         messages,
-        profile
+        profile,
+        inferred
       );
 
       const response: ApiResponse = {

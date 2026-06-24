@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowUp, Check, Pencil } from 'lucide-react';
+import { ArrowUp, Check, Pencil, RotateCcw } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { Button } from '@/components/ui/Button';
@@ -10,6 +10,7 @@ import {
   type OnboardingMessage,
   type OnboardingKnownProfile,
   type OnboardingConfirmedProfile,
+  type OnboardingResume,
 } from '@rsn/shared';
 import OnboardingPage from './OnboardingPage';
 import HostPresence from './HostPresence';
@@ -21,7 +22,7 @@ import HostPresence from './HostPresence';
 const FIRST_QUESTION =
   "Reason works best when we understand why you're here. What is your reason for joining? One sentence is enough.";
 
-type Stage = 'loading' | 'confirm' | 'chat';
+type Stage = 'loading' | 'resume' | 'confirm' | 'chat';
 
 function HostBubble({ text }: { text: string }) {
   return (
@@ -91,7 +92,9 @@ function ConfirmRow({
     <div className={last ? 'py-2.5' : 'border-b border-gray-100 py-2.5'}>
       <div className="text-xs font-medium uppercase tracking-wide text-gray-400">
         {label}
-        {!editing && guessed && value ? <span className="ml-1.5 normal-case text-gray-400">(a guess, fix if wrong)</span> : null}
+        {!editing && guessed && value ? (
+          <span className="ml-1.5 normal-case text-gray-400">(a guess, fix if wrong)</span>
+        ) : null}
       </div>
       {editing ? (
         <input
@@ -109,6 +112,8 @@ function ConfirmRow({
   );
 }
 
+const emptyDraft = { name: '', country: '', company: '', role: '', linkedin: '' };
+
 export default function ChatbotOnboarding() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -119,7 +124,8 @@ export default function ChatbotOnboarding() {
   const [stage, setStage] = useState<Stage>('loading');
   const [known, setKnown] = useState<OnboardingKnownProfile | null>(null);
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState({ name: '', country: '', company: '' });
+  const [draft, setDraft] = useState({ ...emptyDraft });
+  const [resumeMessages, setResumeMessages] = useState<OnboardingMessage[]>([]);
 
   const [messages, setMessages] = useState<OnboardingMessage[]>([]);
   const [input, setInput] = useState('');
@@ -138,21 +144,47 @@ export default function ChatbotOnboarding() {
     u?.firstName ||
     (u?.displayName ? u.displayName.split(/\s+/)[0] : '') ||
     'there';
+  const welcomeLine = (known?.previousEvents ?? 0) > 0 ? 'Welcome back to Reason' : 'Welcome to Reason';
 
-  // Fetch what we already know, then show the confirm card.
+  // Fetch what we already know + any in-progress conversation, then route to the
+  // right opening stage (resume / confirm / chat).
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        const res = await api.get('/onboarding/known');
-        if (cancelled) return;
-        const k = res.data.data as OnboardingKnownProfile;
+      const [knownRes, resumeRes] = await Promise.allSettled([
+        api.get('/onboarding/known'),
+        api.get('/onboarding/resume'),
+      ]);
+      if (cancelled) return;
+
+      let haveKnown = false;
+      if (knownRes.status === 'fulfilled') {
+        const k = knownRes.value.data.data as OnboardingKnownProfile;
         setKnown(k);
-        setDraft({ name: k.name || '', country: k.country || '', company: k.company || '' });
+        setDraft({
+          name: k.name || '',
+          country: k.country || '',
+          company: k.company || '',
+          role: k.role || '',
+          linkedin: k.linkedin || '',
+        });
+        haveKnown = true;
+      }
+
+      // Offer to resume only when there's a real in-progress exchange.
+      if (resumeRes.status === 'fulfilled') {
+        const r = resumeRes.value.data.data as OnboardingResume;
+        const saved = Array.isArray(r.messages) ? r.messages : [];
+        if (r.status === 'in_progress' && saved.some((m) => m.role === 'user')) {
+          setResumeMessages(saved);
+          setStage('resume');
+          return;
+        }
+      }
+
+      if (haveKnown) {
         setStage('confirm');
-      } catch {
-        // Could not load known data, just start the chat without it.
-        if (cancelled) return;
+      } else {
         setMessages([{ role: 'assistant', content: FIRST_QUESTION }]);
         setStage('chat');
       }
@@ -175,6 +207,8 @@ export default function ChatbotOnboarding() {
       name: draft.name.trim() || null,
       country: draft.country.trim() || null,
       company: draft.company.trim() || null,
+      role: draft.role.trim() || null,
+      linkedin: draft.linkedin.trim() || null,
     };
   }
 
@@ -185,6 +219,22 @@ export default function ChatbotOnboarding() {
     requestAnimationFrame(() => inputRef.current?.focus());
   }
 
+  function resumeChat() {
+    // The saved transcript starts at the member's first reply; the opening
+    // question is client-only, so prepend it for display.
+    setMessages([{ role: 'assistant', content: FIRST_QUESTION }, ...resumeMessages]);
+    setStage('chat');
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }
+
+  function startOver() {
+    setResumeMessages([]);
+    setStage(known ? 'confirm' : 'chat');
+    if (!known) {
+      setMessages([{ role: 'assistant', content: FIRST_QUESTION }]);
+    }
+  }
+
   function autoGrow() {
     const el = inputRef.current;
     if (!el) return;
@@ -192,21 +242,15 @@ export default function ChatbotOnboarding() {
     el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
   }
 
-  async function handleSend() {
-    const text = input.trim();
-    if (!text || sending || confirming) return;
-    const next: OnboardingMessage[] = [...messages, { role: 'user', content: text }];
-    setMessages(next);
-    setInput('');
+  // One host turn. `finish` asks the host to summarise now (the "I'm done" control).
+  async function sendTurn(next: OnboardingMessage[], finish: boolean) {
     setReady(false);
     setSending(true);
-    requestAnimationFrame(() => {
-      if (inputRef.current) inputRef.current.style.height = 'auto';
-    });
     try {
       const res = await api.post('/onboarding/chat', {
         messages: next.slice(1),
         profile: confirmedProfile(),
+        finish,
       });
       const data = res.data.data as { reply: string; ready: boolean };
       setMessages((m) => [...m, { role: 'assistant', content: data.reply }]);
@@ -221,6 +265,24 @@ export default function ChatbotOnboarding() {
       setSending(false);
       requestAnimationFrame(() => inputRef.current?.focus());
     }
+  }
+
+  async function handleSend() {
+    const text = input.trim();
+    if (!text || sending || confirming) return;
+    const next: OnboardingMessage[] = [...messages, { role: 'user', content: text }];
+    setMessages(next);
+    setInput('');
+    requestAnimationFrame(() => {
+      if (inputRef.current) inputRef.current.style.height = 'auto';
+    });
+    await sendTurn(next, false);
+  }
+
+  async function handleFinish() {
+    if (sending || confirming) return;
+    if (!messages.some((m) => m.role === 'user')) return; // nothing to wrap up yet
+    await sendTurn(messages, true);
   }
 
   async function handleConfirm() {
@@ -245,7 +307,7 @@ export default function ChatbotOnboarding() {
     }
   }
 
-  function handleKeepTalking() {
+  function handleEditAnswers() {
     setReady(false);
     requestAnimationFrame(() => inputRef.current?.focus());
   }
@@ -272,6 +334,46 @@ export default function ChatbotOnboarding() {
     );
   }
 
+  if (stage === 'resume') {
+    return (
+      <div className={shellClass} style={{ height: '100dvh' }}>
+        <div
+          className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-8"
+          style={{ paddingTop: 'max(env(safe-area-inset-top), 2rem)', paddingBottom: 'max(env(safe-area-inset-bottom), 2rem)' }}
+        >
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.45 }}
+            className="flex w-full max-w-md flex-col items-center gap-5 text-center"
+          >
+            <HostPresence size={96} state="idle" />
+            <div>
+              <h1 className="font-display text-2xl font-semibold leading-snug text-[#1a1a2e]">
+                Welcome back, {firstName}.
+              </h1>
+              <p className="mt-2 text-sm text-gray-500">
+                You already started telling us your reason. Want to pick up where you left off?
+              </p>
+            </div>
+            <div className="flex w-full flex-col gap-2 sm:flex-row">
+              <Button onClick={resumeChat} className="min-h-[48px] flex-1 justify-center text-base">
+                <Check className="mr-1.5 h-4 w-4" /> Continue
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={startOver}
+                className="min-h-[48px] flex-1 justify-center text-base"
+              >
+                <RotateCcw className="mr-1.5 h-4 w-4" /> Start over
+              </Button>
+            </div>
+          </motion.div>
+        </div>
+      </div>
+    );
+  }
+
   if (stage === 'confirm') {
     return (
       <div className={shellClass} style={{ height: '100dvh' }}>
@@ -293,7 +395,7 @@ export default function ChatbotOnboarding() {
                 transition={{ delay: 0.15, duration: 0.4 }}
                 className="text-base font-medium tracking-wide text-gray-500"
               >
-                Welcome to Reason
+                {welcomeLine}
               </motion.p>
               <motion.h1
                 key={(draft.name || firstName).trim()}
@@ -311,7 +413,9 @@ export default function ChatbotOnboarding() {
             <div className="w-full rounded-2xl border border-gray-200 bg-white p-4 text-left shadow-sm">
               <ConfirmRow label="Name" value={draft.name} editing={editing} placeholder="Your name" guessed={known?.nameGuessed} onChange={(v) => setDraft((d) => ({ ...d, name: v }))} />
               <ConfirmRow label="Country" value={draft.country} editing={editing} placeholder="Where you are based" guessed={known?.countryGuessed} onChange={(v) => setDraft((d) => ({ ...d, country: v }))} />
-              <ConfirmRow label="Company" value={draft.company} editing={editing} placeholder="Where you work" guessed={known?.companyGuessed} last onChange={(v) => setDraft((d) => ({ ...d, company: v }))} />
+              <ConfirmRow label="Company" value={draft.company} editing={editing} placeholder="Where you work" guessed={known?.companyGuessed} onChange={(v) => setDraft((d) => ({ ...d, company: v }))} />
+              <ConfirmRow label="Role" value={draft.role} editing={editing} placeholder="Your role or title" onChange={(v) => setDraft((d) => ({ ...d, role: v }))} />
+              <ConfirmRow label="LinkedIn" value={draft.linkedin} editing={editing} placeholder="Your LinkedIn URL" last onChange={(v) => setDraft((d) => ({ ...d, linkedin: v }))} />
             </div>
             <div className="flex w-full flex-col gap-2 sm:flex-row">
               <Button onClick={startChat} className="min-h-[48px] flex-1 justify-center text-base">
@@ -332,8 +436,8 @@ export default function ChatbotOnboarding() {
   }
 
   // stage === 'chat'
-  const firstReply = messages.filter((m) => m.role === 'user').length === 0;
-  const placeholder = firstReply ? 'Write your reason here...' : 'Type your reply...';
+  const hasUserReply = messages.some((m) => m.role === 'user');
+  const placeholder = hasUserReply ? 'Type your reply...' : 'Write your reason here...';
 
   return (
     <div className={shellClass} style={{ height: '100dvh' }}>
@@ -346,6 +450,16 @@ export default function ChatbotOnboarding() {
           <div className="text-sm font-semibold text-[#1a1a2e]">Reason</div>
           <div className="text-xs text-gray-400">onboarding</div>
         </div>
+        {hasUserReply && !ready && (
+          <button
+            type="button"
+            onClick={handleFinish}
+            disabled={sending}
+            className="ml-auto min-h-[44px] rounded-lg px-3 text-sm font-medium text-gray-400 transition-colors hover:text-rsn-red disabled:opacity-50"
+          >
+            I'm done
+          </button>
+        )}
       </header>
 
       <div ref={scrollRef} className="flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-5">
@@ -363,13 +477,15 @@ export default function ChatbotOnboarding() {
               exit={{ opacity: 0, y: 10 }}
               className="mt-1 self-stretch rounded-2xl border border-rsn-red/20 bg-rsn-red-light/60 p-4"
             >
-              <p className="mb-3 text-sm text-[#1a1a2e]">Here is what we understood. Does that capture it?</p>
+              <p className="mb-3 text-sm text-[#1a1a2e]">
+                Here is how we understand you, just above. Should we use this for your matching?
+              </p>
               <div className="flex flex-col gap-2 sm:flex-row">
                 <Button onClick={handleConfirm} isLoading={confirming} className="min-h-[48px] flex-1 justify-center text-base">
                   <Check className="mr-1.5 h-4 w-4" /> Yes, use this
                 </Button>
-                <Button variant="secondary" onClick={handleKeepTalking} disabled={confirming} className="min-h-[48px] flex-1 justify-center text-base">
-                  Keep talking
+                <Button variant="secondary" onClick={handleEditAnswers} disabled={confirming} className="min-h-[48px] flex-1 justify-center text-base">
+                  <Pencil className="mr-1.5 h-4 w-4" /> Edit
                 </Button>
               </div>
             </motion.div>

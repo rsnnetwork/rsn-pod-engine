@@ -75,9 +75,27 @@ export async function inferKnownProfile(req: Request, userId: string): Promise<O
     first_name: string | null;
     company: string | null;
     location: string | null;
-  }>('SELECT email, display_name, first_name, company, location FROM users WHERE id = $1', [userId]);
+    job_title: string | null;
+    linkedin_url: string | null;
+  }>(
+    'SELECT email, display_name, first_name, company, location, job_title, linkedin_url FROM users WHERE id = $1',
+    [userId]
+  );
   const u = r.rows[0];
   const email = (u?.email || req.user?.email || '').trim();
+
+  // How many past events the member actually joined (best-effort; 0 on any error).
+  let previousEvents = 0;
+  try {
+    const ev = await query<{ n: number }>(
+      `SELECT COUNT(DISTINCT session_id)::int AS n
+         FROM session_participants WHERE user_id = $1 AND joined_at IS NOT NULL`,
+      [userId]
+    );
+    previousEvents = Number(ev.rows[0]?.n) || 0;
+  } catch {
+    previousEvents = 0;
+  }
 
   const savedCompany = u?.company?.trim() || '';
   const guessedCompany = savedCompany ? null : companyFromEmail(email);
@@ -100,5 +118,8 @@ export async function inferKnownProfile(req: Request, userId: string): Promise<O
     countryGuessed: !savedCountry && !!guessedCountry,
     company: savedCompany || guessedCompany || null,
     companyGuessed: !savedCompany && !!guessedCompany,
+    role: u?.job_title?.trim() || null,
+    linkedin: u?.linkedin_url?.trim() || null,
+    previousEvents,
   };
 }

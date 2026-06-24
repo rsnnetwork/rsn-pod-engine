@@ -49,6 +49,8 @@ jest.mock('../../services/onboarding/intent.repo', () => ({
   getOnboardingStatus: jest.fn(),
   markInProgress: jest.fn(),
   saveIntentAndComplete: jest.fn(),
+  savePartialIntent: jest.fn(),
+  getResume: jest.fn(),
   __esModule: true,
 }));
 
@@ -88,6 +90,9 @@ beforeEach(() => {
   // authenticate's status check + any stray db call default to an active user.
   (dbQuery as jest.Mock).mockResolvedValue({ rows: [{ status: 'active' }], rowCount: 1 });
   (intentRepo.markInProgress as jest.Mock).mockResolvedValue(undefined);
+  // Defaults so the /chat background per-answer extraction never errors noisily.
+  (intentRepo.savePartialIntent as jest.Mock).mockResolvedValue(undefined);
+  (chatbot.extractIntent as jest.Mock).mockResolvedValue({ userProfileSummary: 'partial' });
 });
 
 describe('GET /onboarding/status', () => {
@@ -130,6 +135,26 @@ describe('GET /onboarding/known', () => {
     expect(res.body.data.firstName).toBe('Stefan');
     expect(res.body.data.company).toBe('Misterraw');
     expect(res.body.data.countryGuessed).toBe(true);
+  });
+});
+
+describe('GET /onboarding/resume', () => {
+  it('rejects an unauthenticated request', async () => {
+    const res = await request(app).get('/onboarding/resume');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns the saved status and transcript', async () => {
+    (intentRepo.getResume as jest.Mock).mockResolvedValue({
+      status: 'in_progress',
+      messages: [{ role: 'assistant', content: 'hi' }],
+    });
+    const res = await request(app)
+      .get('/onboarding/resume')
+      .set('Authorization', `Bearer ${makeToken()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('in_progress');
+    expect(res.body.data.messages).toHaveLength(1);
   });
 });
 
@@ -182,6 +207,30 @@ describe('POST /onboarding/chat', () => {
     expect(chatbot.converse).toHaveBeenCalledTimes(1);
     const args = (chatbot.converse as jest.Mock).mock.calls[0];
     expect(args[1]).toMatchObject({ country: 'Denmark', company: 'Mister Raw' });
+  });
+
+  it('passes the finish flag through to converse (force wrap up)', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+    (chatbot.converse as jest.Mock).mockResolvedValue({ reply: 'ok', ready: true });
+    await request(app)
+      .post('/onboarding/chat')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ ...body, finish: true });
+    const args = (chatbot.converse as jest.Mock).mock.calls[0];
+    expect(args[2]).toBe(true);
+  });
+
+  it('runs per-answer extraction in the background', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+    (chatbot.converse as jest.Mock).mockResolvedValue({ reply: 'ok', ready: false });
+    await request(app)
+      .post('/onboarding/chat')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send(body);
+    // Let the fire-and-forget extraction promise resolve.
+    await new Promise((r) => setImmediate(r));
+    expect(chatbot.extractIntent).toHaveBeenCalledTimes(1);
+    expect(intentRepo.savePartialIntent).toHaveBeenCalledTimes(1);
   });
 });
 
