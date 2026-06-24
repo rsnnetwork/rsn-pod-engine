@@ -282,7 +282,14 @@ export default function ChatbotOnboarding() {
   async function handleFinish() {
     if (sending || confirming) return;
     if (!messages.some((m) => m.role === 'user')) return; // nothing to wrap up yet
-    await sendTurn(messages, true);
+    // Append a short closing user turn so the host has a member message to
+    // respond to (the model needs the last turn to be the member) and summarises.
+    const next: OnboardingMessage[] = [
+      ...messages,
+      { role: 'user', content: 'I think that is everything for now.' },
+    ];
+    setMessages(next);
+    await sendTurn(next, true);
   }
 
   async function handleConfirm() {
