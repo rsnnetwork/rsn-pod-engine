@@ -24,4 +24,10 @@ describe('onboarding prompts (v1.1)', () => {
   it('omits the known block when no profile is given', () => {
     expect(buildHostSystemPrompt()).not.toContain('CONFIRMED');
   });
+
+  it('instructs the host to wrap up efficiently', () => {
+    const p = buildHostSystemPrompt().toLowerCase();
+    expect(p).toContain('wrapping up sooner');
+    expect(p).toContain('go straight to the summary');
+  });
 });
