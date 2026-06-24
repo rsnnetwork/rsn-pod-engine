@@ -68,6 +68,13 @@ export interface OnboardingIntent {
   currentFocus: string;
   /** How strongly to prioritise this member in matching. */
   matchPriority: MatchPriority;
+  // Phase 2: structured designation categories (cleaner than free-text role).
+  /** The member's own designation bucket (founder/investor/ceo/advisor/...). */
+  userDesignation: string;
+  /** Structured designations the member wants to meet. */
+  desiredDesignations: string[];
+  /** Structured designations the member would rather avoid. */
+  avoidDesignations: string[];
   // Guardrails + matching signals
   avoidPreferences: string[];
   privacyRecommendation: string;

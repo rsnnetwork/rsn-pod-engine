@@ -33,7 +33,9 @@ describe('WS3/H5 — didnt-work rating is recorded but excluded from quality sta
     // The complete inventory of AVG(quality_score) consumers — each must
     // carry the exclusion. A new average added without it fails the count.
     const sites: Array<[string, number]> = [
-      ['routes/admin.ts', 3],
+      // Phase 2 (matching analytics) added a 4th average in /analytics/matching;
+      // it carries the excluded_from_quality_stats filter (verified by exclCount).
+      ['routes/admin.ts', 4],
       ['routes/sessions.ts', 1],
       ['services/rating/rating.service.ts', 1],
       ['services/matching/matching.service.ts', 1],

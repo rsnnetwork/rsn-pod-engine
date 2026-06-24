@@ -26,6 +26,10 @@ export interface Match {
   score: number | null;
   reasonTags: string[];
   isManual: boolean;  // TRUE = host-created breakout (independent from algorithm rounds)
+  // Phase 2 — richer storage (optional; rows from older queries may omit them).
+  matchingTemplateId?: string | null;
+  confidence?: number | null;
+  isOverride?: boolean;
   startedAt: Date | null;
   endedAt: Date | null;
   createdAt: Date;
@@ -141,6 +145,11 @@ export interface MatchingParticipant {
   wantsToMeet?: string[];
   /** Free terms for who this member does NOT want to meet (avoid_preferences). */
   avoid?: string[];
+  // Phase 2 — per-event intention captured at check-in (overlay on the profile)
+  // + openness-to-unexpected, and a 0..1 profile-completeness for tiered scoring.
+  eventIntention?: string | null;
+  openness?: string | null;
+  completeness?: number;
 }
 
 export interface MatchingConfig {
@@ -181,6 +190,8 @@ export interface MatchingWeights {
   intentAlignment?: number;
   designationDiversity?: number;
   avoidPenalty?: number;
+  // Phase 2 — per-event check-in intention overlay.
+  eventIntentionAlignment?: number;
   [key: string]: number | undefined;
 }
 
@@ -244,6 +255,8 @@ export interface MatchPair {
   fallbackUsed?: boolean;
   repeatInEvent?: boolean;
   premiumInfluenced?: boolean;
+  // Phase 2 — 0..1 confidence for this pairing (score tempered by fallback level).
+  confidence?: number;
 }
 
 export interface MatchingOutput {

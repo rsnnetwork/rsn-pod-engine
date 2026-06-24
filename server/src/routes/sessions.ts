@@ -343,6 +343,37 @@ router.post(
   }
 );
 
+// ─── POST /sessions/:id/intention ───────────────────────────────────────────
+// Phase 2 (matching) — per-event intention captured at check-in. A skippable
+// overlay on the permanent profile that feeds the engine's eventIntentionAlignment
+// signal; openness tunes serendipity. Best-effort: no-op if not registered yet.
+const eventIntentionSchema = z.object({
+  intention: z.string().trim().max(60).nullish(),
+  openness: z.enum(['very_open', 'somewhat', 'only_relevant']).nullish(),
+});
+
+router.post(
+  '/:id/intention',
+  authenticate,
+  validate(eventIntentionSchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const intention = (req.body.intention ?? '').toString().trim() || null;
+      const openness = req.body.openness ?? null;
+      const r = await query(
+        `UPDATE session_participants
+            SET event_intention = $3, openness = $4
+          WHERE session_id = $1 AND user_id = $2`,
+        [req.params.id, req.user!.userId, intention, openness],
+      );
+      const response: ApiResponse = { success: true, data: { updated: r.rowCount ?? 0 } };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 // ─── DELETE /sessions/:id/register ──────────────────────────────────────────
 
 router.delete(

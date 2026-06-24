@@ -9,7 +9,10 @@ import {
   RoundAssignment, MatchPair, EncounterHistoryEntry, HardConstraint,
 } from '@rsn/shared';
 import { IMatchingEngine, pairKey } from './matching.interface';
-import { intentAlignmentScore, avoidConflict, designationAffinity } from './intent-signals';
+import {
+  intentAlignmentScore, avoidConflict, designationAffinity,
+  eventIntentionScore, pairOpennessFactor,
+} from './intent-signals';
 import { ValidationError } from '../../middleware/errors';
 import logger from '../../config/logger';
 
@@ -545,9 +548,12 @@ export class MatchingEngineV1 implements IMatchingEngine {
     // onboarding data contributes neutrally (no exclusion is ever relaxed).
 
     // 8. Intent alignment — who you said you want to meet vs who the other is.
+    //    Phase 2: dampened by profile completeness (thin profiles get less trust;
+    //    completeness is undefined for legacy callers -> damp = 1, unchanged).
     if (weights.intentAlignment) {
       const { score: intentScore, aWantsB, bWantsA } = intentAlignmentScore(a, b);
-      totalScore += intentScore * weights.intentAlignment;
+      const damp = Math.min(a.completeness ?? 1, b.completeness ?? 1);
+      totalScore += intentScore * damp * weights.intentAlignment;
       totalWeight += weights.intentAlignment;
       if (aWantsB > 0 && bWantsA > 0) reasonTags.push('mutual_intent');
       else if (aWantsB > 0 || bWantsA > 0) reasonTags.push('intent_match');
@@ -569,6 +575,18 @@ export class MatchingEngineV1 implements IMatchingEngine {
       totalScore += (conflict ? 0 : 1) * weights.avoidPenalty;
       totalWeight += weights.avoidPenalty;
       if (conflict) reasonTags.push('avoid_conflict');
+    }
+
+    // 11. Per-event intention (check-in overlay) — Phase 2. The member's stated
+    //     intent for THIS event behaves like a high-priority want; openness tunes
+    //     it and completeness dampens it. Off when its weight is unset.
+    if (weights.eventIntentionAlignment) {
+      const raw = eventIntentionScore(a, b);
+      const damp = Math.min(a.completeness ?? 1, b.completeness ?? 1);
+      const score = Math.min(1, raw * damp * pairOpennessFactor(a, b));
+      totalScore += score * weights.eventIntentionAlignment;
+      totalWeight += weights.eventIntentionAlignment;
+      if (raw > 0) reasonTags.push('event_intent');
     }
 
     // ── Matching Engine 1.0 spec, Section 8 — Feedback learning ─────

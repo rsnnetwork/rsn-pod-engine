@@ -37,6 +37,10 @@ export const IntentSchema = z.object({
   suggestedInvitees: z.array(z.string()),
   currentFocus: z.string(),
   matchPriority: z.enum(['high', 'medium', 'low']),
+  // Phase 2: structured designation categories (cleaner than free-text role).
+  userDesignation: z.string(),
+  desiredDesignations: z.array(z.string()),
+  avoidDesignations: z.array(z.string()),
   // Guardrails + matching signals
   avoidPreferences: z.array(z.string()),
   privacyRecommendation: z.string(),
@@ -69,6 +73,7 @@ export const INTENT_JSON_SCHEMA: Record<string, unknown> = {
     'reasonForMeeting', 'desiredOutcome', 'userProfileSummary', 'userRole', 'userCompany',
     'userIndustry', 'userLocation', 'userExpertise', 'userCanOffer', 'userInterests',
     'userCity', 'userValuableTo', 'suggestedInvitees', 'currentFocus', 'matchPriority',
+    'userDesignation', 'desiredDesignations', 'avoidDesignations',
     'avoidPreferences', 'privacyRecommendation', 'matchingTags', 'embeddingText',
     'confidenceScores', 'profileStrength',
   ],
@@ -93,6 +98,9 @@ export const INTENT_JSON_SCHEMA: Record<string, unknown> = {
     suggestedInvitees: stringArray,
     currentFocus: { type: 'string' },
     matchPriority: { type: 'string', enum: ['high', 'medium', 'low'] },
+    userDesignation: { type: 'string' },
+    desiredDesignations: stringArray,
+    avoidDesignations: stringArray,
     avoidPreferences: stringArray,
     privacyRecommendation: { type: 'string' },
     matchingTags: stringArray,

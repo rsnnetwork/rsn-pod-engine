@@ -23,6 +23,7 @@ import {
   Star,
   TrendingDown,
   Network,
+  Target,
   Download,
   ExternalLink,
 } from 'lucide-react';
@@ -76,7 +77,17 @@ interface ConnectionsData {
   edges: Array<{ a: string; b: string; weight: number }>;
 }
 
-type Tab = 'overview' | 'events' | 'users' | 'connections';
+interface MatchingData {
+  windowDays: number;
+  totalMatches: number;
+  avgConfidence: number | null;
+  fallbackCount: number;
+  fallbackRate: number;
+  byTemplate: Array<{ template: string; matches: number; avgConfidence: number | null; avgRating: number | null }>;
+  reasonBreakdown: Array<{ reason: string; count: number }>;
+}
+
+type Tab = 'overview' | 'events' | 'users' | 'connections' | 'matching';
 
 export default function AdminAnalyticsPage() {
   const { user } = useAuthStore();
@@ -121,6 +132,13 @@ export default function AdminAnalyticsPage() {
     enabled: tab === 'connections',
     meta: { entities: [E.adminAnalytics] },
   });
+  const matchingQuery = useQuery<MatchingData>({
+    queryKey: ['admin-analytics-matching'],
+    queryFn: async () => (await api.get('/admin/analytics/matching')).data.data,
+    staleTime: 30_000,
+    enabled: tab === 'matching',
+    meta: { entities: [E.adminAnalytics] },
+  });
 
   const downloadCsv = (type: 'events' | 'users' | 'connections') => {
     // Use the api base URL so the auth cookie/header chain matches the
@@ -146,6 +164,7 @@ export default function AdminAnalyticsPage() {
         <TabButton active={tab === 'events'} onClick={() => setTab('events')} icon={Calendar}>Events</TabButton>
         <TabButton active={tab === 'users'} onClick={() => setTab('users')} icon={Star}>Users</TabButton>
         <TabButton active={tab === 'connections'} onClick={() => setTab('connections')} icon={Network}>Connections</TabButton>
+        <TabButton active={tab === 'matching'} onClick={() => setTab('matching')} icon={Target}>Matching</TabButton>
       </div>
 
       {/* Overview */}
@@ -167,6 +186,64 @@ export default function AdminAnalyticsPage() {
       {tab === 'connections' && (
         <ConnectionsPanel q={connectionsQuery} onDownload={() => downloadCsv('connections')} />
       )}
+
+      {/* Matching */}
+      {tab === 'matching' && <MatchingPanel q={matchingQuery} />}
+    </div>
+  );
+}
+
+function MatchingPanel({ q }: { q: ReturnType<typeof useQuery<MatchingData>> }) {
+  if (q.isLoading) return <PanelLoader />;
+  if (q.isError || !q.data) return <PanelError />;
+  const d = q.data;
+  return (
+    <div>
+      <p className="text-[11px] text-gray-400 uppercase tracking-wide mb-2">Last {d.windowDays} days · matching engine</p>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-5">
+        <Stat label="Matches" value={d.totalMatches} />
+        <Stat label="Avg confidence" value={d.avgConfidence === null ? '—' : d.avgConfidence.toFixed(2)} sub="0 to 1" />
+        <Stat label="Fallback used" value={pct(d.fallbackRate)} sub={`${d.fallbackCount} of ${d.totalMatches}`} tone={d.fallbackRate > 0.3 ? 'red' : 'gray'} />
+      </div>
+
+      <h3 className="text-sm font-medium text-gray-900 mb-2">By template</h3>
+      <Card className="mb-5 overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-gray-400 text-xs uppercase tracking-wide">
+              <th className="px-3 py-2">Template</th>
+              <th className="px-3 py-2 text-right">Matches</th>
+              <th className="px-3 py-2 text-right">Avg confidence</th>
+              <th className="px-3 py-2 text-right">Avg rating</th>
+            </tr>
+          </thead>
+          <tbody>
+            {d.byTemplate.length === 0 && (
+              <tr><td className="px-3 py-3 text-gray-400" colSpan={4}>No matches yet.</td></tr>
+            )}
+            {d.byTemplate.map((t) => (
+              <tr key={t.template} className="border-t border-gray-100">
+                <td className="px-3 py-2 text-gray-900">{t.template}</td>
+                <td className="px-3 py-2 text-right">{t.matches}</td>
+                <td className="px-3 py-2 text-right">{t.avgConfidence === null ? '—' : t.avgConfidence.toFixed(2)}</td>
+                <td className="px-3 py-2 text-right">{t.avgRating === null ? '—' : t.avgRating.toFixed(2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+
+      <h3 className="text-sm font-medium text-gray-900 mb-2">Pairing reasons</h3>
+      <Card className="overflow-x-auto">
+        <div className="flex flex-wrap gap-2 p-1">
+          {d.reasonBreakdown.length === 0 && <span className="text-sm text-gray-400 px-2 py-1">No data yet.</span>}
+          {d.reasonBreakdown.map((r) => (
+            <span key={r.reason} className="inline-flex items-center gap-1.5 rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-700">
+              {r.reason} <span className="font-semibold text-gray-900">{r.count}</span>
+            </span>
+          ))}
+        </div>
+      </Card>
     </div>
   );
 }

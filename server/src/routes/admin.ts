@@ -774,7 +774,7 @@ router.get(
 // move to Redis (one cache key per analytics shape).
 
 const ANALYTICS_CACHE_TTL_MS = 60_000;
-type AnalyticsCacheKey = 'overview' | 'events' | 'users' | 'connections';
+type AnalyticsCacheKey = 'overview' | 'events' | 'users' | 'connections' | 'matching';
 const analyticsCache = new Map<AnalyticsCacheKey, { fetchedAt: number; data: any }>();
 
 async function getAnalytics(key: AnalyticsCacheKey, compute: () => Promise<any>): Promise<any> {
@@ -786,6 +786,72 @@ async function getAnalytics(key: AnalyticsCacheKey, compute: () => Promise<any>)
   analyticsCache.set(key, { fetchedAt: Date.now(), data });
   return data;
 }
+
+// ─── /analytics/matching ──────────────────────────────────────────────────
+// Phase 2 (matching engine) — engine quality: per-template performance, fallback
+// rate, confidence, and the most-common pairing reasons. Reads matches (+ the new
+// matching_template_id / confidence), tolerating pre-migration null rows.
+async function computeMatching() {
+  const [agg, byTemplate, reasons] = await Promise.all([
+    query<{ total: string; avg_confidence: string | null; fallback_count: string }>(
+      `SELECT COUNT(*)::text AS total,
+              ROUND(AVG(confidence)::numeric, 3)::text AS avg_confidence,
+              COUNT(*) FILTER (WHERE fallback_used)::text AS fallback_count
+         FROM matches
+        WHERE created_at > NOW() - INTERVAL '30 days' AND status <> 'cancelled'`,
+    ),
+    query<{ template: string; matches: string; avg_confidence: string | null; avg_rating: string | null }>(
+      `SELECT COALESCE(t.name, '(default engine)') AS template,
+              COUNT(m.*)::text AS matches,
+              ROUND(AVG(m.confidence)::numeric, 3)::text AS avg_confidence,
+              ROUND(AVG(r.quality_score)::numeric, 2)::text AS avg_rating
+         FROM matches m
+         LEFT JOIN matching_templates t ON t.id = m.matching_template_id
+         LEFT JOIN ratings r ON r.match_id = m.id AND NOT r.excluded_from_quality_stats
+        WHERE m.created_at > NOW() - INTERVAL '30 days' AND m.status <> 'cancelled'
+        GROUP BY t.name
+        ORDER BY COUNT(m.*) DESC`,
+    ),
+    query<{ reason: string; c: string }>(
+      `SELECT COALESCE(match_reason, '(scored)') AS reason, COUNT(*)::text AS c
+         FROM matches
+        WHERE created_at > NOW() - INTERVAL '30 days' AND status <> 'cancelled'
+        GROUP BY match_reason
+        ORDER BY COUNT(*) DESC
+        LIMIT 20`,
+    ),
+  ]);
+  const total = parseInt(agg.rows[0]?.total || '0', 10);
+  const fallbackCount = parseInt(agg.rows[0]?.fallback_count || '0', 10);
+  return {
+    windowDays: 30,
+    totalMatches: total,
+    avgConfidence: agg.rows[0]?.avg_confidence ? parseFloat(agg.rows[0].avg_confidence) : null,
+    fallbackCount,
+    fallbackRate: total > 0 ? fallbackCount / total : 0,
+    byTemplate: byTemplate.rows.map((r) => ({
+      template: r.template,
+      matches: parseInt(r.matches, 10),
+      avgConfidence: r.avg_confidence ? parseFloat(r.avg_confidence) : null,
+      avgRating: r.avg_rating ? parseFloat(r.avg_rating) : null,
+    })),
+    reasonBreakdown: reasons.rows.map((r) => ({ reason: r.reason, count: parseInt(r.c, 10) })),
+  };
+}
+
+router.get(
+  '/analytics/matching',
+  authenticate,
+  requireRole(UserRole.ADMIN),
+  async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await getAnalytics('matching', computeMatching);
+      res.json({ success: true, data } as ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 // ─── /analytics/overview ──────────────────────────────────────────────────
 //

@@ -78,6 +78,9 @@ Rules:
 - suggestedInvitees: specific people the member said they would like to invite (names or handles only), otherwise an empty array.
 - currentFocus: one short phrase for what the member is focused on right now, otherwise an empty string.
 - matchPriority: "high" if their reason, who they want to meet, and what they offer are all clear and time sensitive; "medium" if mostly clear; "low" if vague.
+- userDesignation: the member's own designation as ONE lowercase word from: founder, ceo, executive, investor, advisor, consultant, board, owner, manager, employee, student, job_seeker. Use an empty string if it is unclear.
+- desiredDesignations: which of those exact designation words they want to meet (array, lowercase), otherwise an empty array.
+- avoidDesignations: which of those exact designation words they would rather not meet (array, lowercase), otherwise an empty array.
 - embeddingText: one dense paragraph (2 to 4 sentences) describing who this person is and who and why they want to meet, written for semantic search.
 - confidenceScores: a 0.0 to 1.0 score for how clearly each of the three things came through (desiredPeople, reasonForMeeting, userProfile).
 - profileStrength: "strong" if all three came through clearly, otherwise "weak".

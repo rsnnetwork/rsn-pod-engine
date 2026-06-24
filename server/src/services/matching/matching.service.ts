@@ -13,7 +13,7 @@ import { pairKey } from './matching.interface';
 import { reduceRepeatPairs } from './repeat-reduction';
 import * as sessionService from '../session/session.service';
 import * as blockService from '../block/block.service';
-import { normalizeDesignation } from './intent-signals';
+import { normalizeDesignation, pairConfidence, profileCompleteness, withinCooldown } from './intent-signals';
 import { NotFoundError } from '../../middleware/errors';
 
 // ─── Default Weights ────────────────────────────────────────────────────────
@@ -45,6 +45,8 @@ const DEFAULT_WEIGHTS: MatchingWeights = {
   intentAlignment: 0.20,
   designationDiversity: 0.10,
   avoidPenalty: 0.15,
+  // Phase 2 — per-event check-in intention overlay.
+  eventIntentionAlignment: 0.15,
 };
 
 /**
@@ -54,7 +56,10 @@ const DEFAULT_WEIGHTS: MatchingWeights = {
  * lack these optional fields and the engine scores them neutrally. Never throws
  * into the matching flow, and never relaxes an exclusion.
  */
-async function attachIntentSignals(participants: MatchingParticipant[]): Promise<void> {
+async function attachIntentSignals(
+  participants: MatchingParticipant[],
+  sessionId?: string,
+): Promise<void> {
   if (!participants.length) return;
   try {
     const ids = participants.map((p) => p.userId);
@@ -74,11 +79,14 @@ async function attachIntentSignals(participants: MatchingParticipant[]): Promise
     );
     const byId = new Map(res.rows.map((r) => [r.id, r]));
     const arr = (v: unknown): string[] => (Array.isArray(v) ? (v as string[]) : []);
+    const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
     for (const part of participants) {
       const r = byId.get(part.userId);
       if (!r) continue;
-      part.designation = normalizeDesignation(r.job_title);
       const mi = r.matching_intent && typeof r.matching_intent === 'object' ? r.matching_intent : {};
+      // Phase 2 — prefer the structured designation when onboarding captured it,
+      // else derive from the free-text job title.
+      part.designation = str(mi.userDesignation) || normalizeDesignation(r.job_title);
       part.wantsToMeet = [
         ...arr(mi.desiredRoles),
         ...arr(mi.desiredPeople),
@@ -86,7 +94,30 @@ async function attachIntentSignals(participants: MatchingParticipant[]): Promise
         ...arr(mi.desiredDesignations),
         ...(r.who_i_want_to_meet ? [r.who_i_want_to_meet] : []),
       ];
-      part.avoid = [...arr(r.avoid_preferences), ...arr(mi.avoidPreferences)];
+      part.avoid = [
+        ...arr(r.avoid_preferences),
+        ...arr(mi.avoidPreferences),
+        ...arr(mi.avoidDesignations),
+      ];
+      // Phase 2 — tiered scoring input.
+      part.completeness = profileCompleteness(part);
+    }
+
+    // Phase 2 — per-event intention captured at check-in (scoped to THIS event).
+    if (sessionId) {
+      const sp = await query<{ user_id: string; event_intention: string | null; openness: string | null }>(
+        `SELECT user_id, event_intention, openness
+           FROM session_participants
+          WHERE session_id = $1 AND user_id = ANY($2::uuid[])`,
+        [sessionId, ids]
+      );
+      const intentById = new Map(sp.rows.map((r) => [r.user_id, r]));
+      for (const part of participants) {
+        const r = intentById.get(part.userId);
+        if (!r) continue;
+        part.eventIntention = r.event_intention;
+        part.openness = r.openness;
+      }
     }
   } catch (err) {
     logger.warn({ err }, 'attachIntentSignals failed — matching proceeds without onboarding signals');
@@ -184,8 +215,8 @@ export async function generateSessionSchedule(
   for (const p of participants) {
     p.requestedUserIds = requests.get(p.userId) || [];
   }
-  // Onboarding-intent enhancement — designation / wantsToMeet / avoid signals.
-  await attachIntentSignals(participants);
+  // Onboarding-intent enhancement — designation / wantsToMeet / avoid + per-event intent.
+  await attachIntentSignals(participants, sessionId);
 
   // Phase 4 (29 April 2026 spec) — matching policy chosen at event creation.
   // Replaces the legacy binary `crossEventMemory` flag with a tri-state
@@ -229,7 +260,7 @@ export async function generateSessionSchedule(
   const output = await engine.generateSchedule(input);
 
   // Persist matches to database
-  await persistMatches(sessionId, output.rounds);
+  await persistMatches(sessionId, output.rounds, (sessionConfig as any)?.matchingTemplateId ?? null);
 
   return output;
 }
@@ -403,6 +434,16 @@ export async function generateSingleRound(
     for (const e of encounterHistory) {
       excludedPairs.add(pairKey(e.userAId, e.userBId));
     }
+  } else if (matchingPolicy === 'cooldown') {
+    // Phase 2 — hard-exclude only pairs that met within the cooldown window;
+    // older pairs remain in encounterHistory so the engine's freshness penalty
+    // still deprioritises them, but they CAN be re-paired after the window.
+    const months = Number(sessionConfig?.cooldownMonths) || 12;
+    for (const e of encounterHistory) {
+      if (withinCooldown(e.lastMetAt, months)) {
+        excludedPairs.add(pairKey(e.userAId, e.userBId));
+      }
+    }
   }
 
   // 23 May (#5b) — Re-match rotation. excludePairKeys carries the CURRENT
@@ -479,6 +520,7 @@ export async function generateSingleRound(
         intentAlignment: DEFAULT_WEIGHTS.intentAlignment,
         designationDiversity: DEFAULT_WEIGHTS.designationDiversity,
         avoidPenalty: DEFAULT_WEIGHTS.avoidPenalty,
+        eventIntentionAlignment: DEFAULT_WEIGHTS.eventIntentionAlignment,
       };
       logger.info({ templateId: templateId || tplId, weights }, 'Using matching template weights');
     }
@@ -501,8 +543,8 @@ export async function generateSingleRound(
   for (const p of participantsResult.rows) {
     p.requestedUserIds = requestsForRound.get(p.userId) || [];
   }
-  // Onboarding-intent enhancement — designation / wantsToMeet / avoid signals.
-  await attachIntentSignals(participantsResult.rows);
+  // Onboarding-intent enhancement — designation / wantsToMeet / avoid + per-event intent.
+  await attachIntentSignals(participantsResult.rows, sessionId);
 
   // Phase 3 (1 May spec) — engine lookup via registry.
   const engine = getMatchingEngine(sessionConfig.matchingAlgorithmId || DEFAULT_ENGINE_ID);
@@ -652,7 +694,7 @@ export async function generateSingleRound(
   // The return-value plumbing lands here; the client string is a follow-up.
 
   // Persist this round's matches
-  await persistMatches(sessionId, [round]);
+  await persistMatches(sessionId, [round], templateId || tplId || null);
 
   return round;
 }
@@ -894,7 +936,8 @@ import type { MatchingPolicy } from '@rsn/shared';
 export function resolveMatchingPolicy(sessionConfig: any): MatchingPolicy {
   if (sessionConfig?.matchingPolicy === 'platform_wide'
       || sessionConfig?.matchingPolicy === 'within_event'
-      || sessionConfig?.matchingPolicy === 'none') {
+      || sessionConfig?.matchingPolicy === 'none'
+      || sessionConfig?.matchingPolicy === 'cooldown') {
     return sessionConfig.matchingPolicy;
   }
   // Legacy fallback: pre-Phase-4 sessions used a binary crossEventMemory
@@ -1115,7 +1158,11 @@ async function getExistingRounds(sessionId: string): Promise<RoundAssignment[]> 
   return Array.from(roundMap.values()).sort((a, b) => a.roundNumber - b.roundNumber);
 }
 
-async function persistMatches(sessionId: string, rounds: RoundAssignment[]): Promise<void> {
+async function persistMatches(
+  sessionId: string,
+  rounds: RoundAssignment[],
+  templateId: string | null = null,
+): Promise<void> {
   await transaction(async (client) => {
     for (const round of rounds) {
       // Delete any existing scheduled matches for this round before inserting new ones
@@ -1136,11 +1183,12 @@ async function persistMatches(sessionId: string, rounds: RoundAssignment[]): Pro
         const placeholders: string[] = [];
         let paramIdx = 1;
 
+        const fallbackLevel = round.fallbackLevel || 0;
         for (const pair of round.pairs) {
           const pA = pair.participantAId < pair.participantBId ? pair.participantAId : pair.participantBId;
           const pB = pair.participantAId < pair.participantBId ? pair.participantBId : pair.participantAId;
           placeholders.push(
-            `($${paramIdx}, $${paramIdx + 1}, $${paramIdx + 2}, $${paramIdx + 3}, $${paramIdx + 4}, $${paramIdx + 5}, $${paramIdx + 6}, 'scheduled', $${paramIdx + 7}, $${paramIdx + 8}, $${paramIdx + 9}, $${paramIdx + 10})`,
+            `($${paramIdx}, $${paramIdx + 1}, $${paramIdx + 2}, $${paramIdx + 3}, $${paramIdx + 4}, $${paramIdx + 5}, $${paramIdx + 6}, 'scheduled', $${paramIdx + 7}, $${paramIdx + 8}, $${paramIdx + 9}, $${paramIdx + 10}, $${paramIdx + 11}, $${paramIdx + 12})`,
           );
           values.push(
             sessionId, round.roundNumber, pA, pB, pair.participantCId || null,
@@ -1149,15 +1197,18 @@ async function persistMatches(sessionId: string, rounds: RoundAssignment[]): Pro
             pair.fallbackUsed === true,
             pair.repeatInEvent === true,
             pair.premiumInfluenced === true,
+            templateId,
+            pairConfidence(pair.score, fallbackLevel),
           );
-          paramIdx += 11;
+          paramIdx += 13;
         }
 
         await client.query(
           `INSERT INTO matches
              (session_id, round_number, participant_a_id, participant_b_id, participant_c_id,
               score, reason_tags, status,
-              match_reason, fallback_used, repeat_in_event, premium_influenced)
+              match_reason, fallback_used, repeat_in_event, premium_influenced,
+              matching_template_id, confidence)
            VALUES ${placeholders.join(', ')}`,
           values,
         );

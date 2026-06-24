@@ -5,6 +5,11 @@ import {
   termOverlap,
   intentAlignmentScore,
   avoidConflict,
+  pairConfidence,
+  profileCompleteness,
+  eventIntentionScore,
+  pairOpennessFactor,
+  withinCooldown,
 } from '../../services/matching/intent-signals';
 import { MatchingParticipant } from '@rsn/shared';
 
@@ -80,5 +85,56 @@ describe('avoidConflict', () => {
     const a = base({ userId: 'a', avoid: ['sales'], designation: 'founder' });
     const b = base({ userId: 'b', designation: 'investor', industry: 'fintech' });
     expect(avoidConflict(a, b)).toBe(false);
+  });
+});
+
+describe('pairConfidence (Phase 2)', () => {
+  it('is the score at fallback 0 and drops 15% per level, clamped 0..1', () => {
+    expect(pairConfidence(0.8, 0)).toBe(0.8);
+    expect(pairConfidence(0.8, 1)).toBeCloseTo(0.68, 2);
+    expect(pairConfidence(1, 4)).toBeCloseTo(0.4, 2);
+    expect(pairConfidence(0, 0)).toBe(0);
+    expect(pairConfidence(2, 0)).toBe(1);
+  });
+});
+
+describe('profileCompleteness (Phase 2)', () => {
+  it('is 0 for an empty profile and 1 for a full one', () => {
+    expect(profileCompleteness(base({}))).toBe(0);
+    expect(
+      profileCompleteness(
+        base({
+          designation: 'founder', industry: 'saas', interests: ['x'],
+          reasonsToConnect: ['y'], wantsToMeet: ['investors'], company: 'Acme',
+        })
+      )
+    ).toBe(1);
+  });
+});
+
+describe('eventIntentionScore (Phase 2)', () => {
+  it('matches the per-event intent against the other identity', () => {
+    const a = base({ eventIntention: 'meet investors' });
+    const b = base({ designation: 'investor', industry: 'fintech' });
+    expect(eventIntentionScore(a, b)).toBeGreaterThan(0);
+    expect(eventIntentionScore(base({}), b)).toBe(0);
+  });
+});
+
+describe('pairOpennessFactor (Phase 2)', () => {
+  it('leans relevance for only_relevant, softens for very_open, neutral by default', () => {
+    expect(pairOpennessFactor(base({}), base({}))).toBe(1);
+    expect(pairOpennessFactor(base({ openness: 'only_relevant' }), base({ openness: 'only_relevant' }))).toBe(1.25);
+    expect(pairOpennessFactor(base({ openness: 'very_open' }), base({ openness: 'very_open' }))).toBe(0.8);
+  });
+});
+
+describe('withinCooldown (Phase 2)', () => {
+  const now = 1_700_000_000_000;
+  const monthsAgo = (m: number) => now - m * 30 * 24 * 60 * 60 * 1000;
+  it('excludes pairs inside the window, allows older ones', () => {
+    expect(withinCooldown(new Date(monthsAgo(2)), 12, now)).toBe(true);
+    expect(withinCooldown(new Date(monthsAgo(14)), 12, now)).toBe(false);
+    expect(withinCooldown(new Date(monthsAgo(0)), 12, now)).toBe(true);
   });
 });

@@ -51,7 +51,7 @@ export type TimerVisibility = 'hidden' | 'always_visible' | 'last_10s' | 'last_3
  * Encounter history is still tracked GLOBALLY across the platform —
  * the policy only governs how the matching engine USES that history.
  */
-export type MatchingPolicy = 'platform_wide' | 'within_event' | 'none';
+export type MatchingPolicy = 'platform_wide' | 'within_event' | 'none' | 'cooldown';
 
 export interface SessionConfig {
   numberOfRounds: number;
@@ -69,6 +69,12 @@ export interface SessionConfig {
    * treats the session as `'within_event'` (the new default).
    */
   matchingPolicy?: MatchingPolicy;
+  /**
+   * Phase 2 (matching) — for matchingPolicy='cooldown', how many months a pair
+   * stays un-rematchable after meeting. Older pairs become eligible again (with
+   * a freshness penalty). Defaults to 12 when absent.
+   */
+  cooldownMonths?: number;
   /**
    * Phase 3 (1 May spec) — pluggable matching engine. Each event picks
    * which algorithm to use. Speed-networking events use

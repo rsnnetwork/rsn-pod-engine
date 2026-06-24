@@ -47,4 +47,34 @@ describe('matching engine — onboarding-intent enhancement', () => {
     expect(r.reasonTags).not.toContain('avoid_conflict');
     expect(r.reasonTags.some((t) => t.startsWith('designation:'))).toBe(false);
   });
+
+  // ── Phase 2 ──────────────────────────────────────────────────────────────
+  it('per-event intention raises a relevant pair (event_intent tag)', () => {
+    const a = base({ userId: 'a', eventIntention: 'meet investors' });
+    const b = base({ userId: 'b', designation: 'investor', industry: 'fintech' });
+    const r = engine.scorePair(a, b, cfg({ eventIntentionAlignment: 0.5 }), []);
+    expect(r.reasonTags).toContain('event_intent');
+    expect(r.score).toBeGreaterThan(0);
+  });
+
+  it('completeness dampens intent for thin profiles, leaves rich ones unchanged', () => {
+    const b = base({ userId: 'b', designation: 'investor', industry: 'fintech' });
+    const thin = engine.scorePair(
+      base({ userId: 'a', designation: 'founder', wantsToMeet: ['investors'], completeness: 0.2 }),
+      b, cfg({ intentAlignment: 0.5 }), [],
+    );
+    const rich = engine.scorePair(
+      base({ userId: 'a', designation: 'founder', wantsToMeet: ['investors'], completeness: 1 }),
+      b, cfg({ intentAlignment: 0.5 }), [],
+    );
+    expect(rich.score).toBeGreaterThan(thin.score);
+  });
+
+  it('no completeness set = no dampening (Phase 1 parity)', () => {
+    const a = base({ userId: 'a', designation: 'founder', wantsToMeet: ['investors'] });
+    const b = base({ userId: 'b', designation: 'investor', industry: 'fintech' });
+    const withField = engine.scorePair({ ...a, completeness: 1 }, b, cfg({ intentAlignment: 0.5 }), []);
+    const without = engine.scorePair(a, b, cfg({ intentAlignment: 0.5 }), []);
+    expect(without.score).toBe(withField.score);
+  });
 });

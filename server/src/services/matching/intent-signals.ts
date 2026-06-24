@@ -138,3 +138,57 @@ export function avoidConflict(a: MatchingParticipant, b: MatchingParticipant): b
   const bAvoid = tokenizeTerms(b.avoid || []);
   return termOverlap(aAvoid, identityTokens(b)) > 0 || termOverlap(bAvoid, identityTokens(a)) > 0;
 }
+
+/**
+ * Phase 2 — pair confidence 0..1: the normalized score tempered by how far down
+ * the fallback ladder the round landed (fresh = full confidence; each relaxed
+ * level shaves 15%). Pure; stored on each persisted match for analytics.
+ */
+export function pairConfidence(score: number, fallbackLevel = 0): number {
+  const v = score * (1 - 0.15 * (fallbackLevel || 0));
+  return Math.max(0, Math.min(1, Number(v.toFixed(4))));
+}
+
+// ─── Phase 2: cooldown window ────────────────────────────────────────────────
+// True if a pair last met within the cooldown window (so they should NOT be
+// re-matched yet). Older pairs fall through to the freshness penalty. ~30-day
+// months. `now` is injectable for tests.
+export function withinCooldown(lastMetAt: Date | string, months: number, now = Date.now()): boolean {
+  const cutoff = now - months * 30 * 24 * 60 * 60 * 1000;
+  return new Date(lastMetAt).getTime() >= cutoff;
+}
+
+// ─── Phase 2: profile completeness (tiered scoring) ──────────────────────────
+// A 0..1 score of how filled a participant's matchable profile is. Thin profiles
+// get safer matching (the engine dampens sparse-data signals) without exclusion.
+export function profileCompleteness(p: MatchingParticipant): number {
+  const has = (v: unknown) =>
+    Array.isArray(v) ? v.length > 0 : typeof v === 'string' ? v.trim().length > 0 : !!v;
+  const checks = [
+    has(p.designation),
+    has(p.industry),
+    has(p.interests),
+    has(p.reasonsToConnect),
+    has(p.wantsToMeet),
+    has(p.company),
+  ];
+  return checks.filter(Boolean).length / checks.length;
+}
+
+// ─── Phase 2: per-event intention overlay ────────────────────────────────────
+// The member's stated intention for THIS event (captured at check-in) acts like
+// a high-priority "wantsToMeet" term against the other person's identity.
+export function eventIntentionScore(a: MatchingParticipant, b: MatchingParticipant): number {
+  const aInt = tokenizeTerms(a.eventIntention ? [a.eventIntention] : []);
+  const bInt = tokenizeTerms(b.eventIntention ? [b.eventIntention] : []);
+  const aToB = termOverlap(aInt, identityTokens(b));
+  const bToA = termOverlap(bInt, identityTokens(a));
+  return Math.max(aToB, bToA);
+}
+
+// openness-to-unexpected dial: 'only_relevant' leans harder on relevance, 'very_open'
+// softens it. Average of the pair; absent openness is neutral (1.0) → backward safe.
+export function pairOpennessFactor(a: MatchingParticipant, b: MatchingParticipant): number {
+  const f = (o?: string | null) => (o === 'only_relevant' ? 1.25 : o === 'very_open' ? 0.8 : 1.0);
+  return (f(a.openness) + f(b.openness)) / 2;
+}
