@@ -11,10 +11,10 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import config from '../../config';
-import { OnboardingMessage } from '@rsn/shared';
+import { OnboardingMessage, OnboardingConfirmedProfile } from '@rsn/shared';
 import { IntentSchema, INTENT_JSON_SCHEMA, ExtractedIntent } from './intent.schema';
 import {
-  HOST_SYSTEM_PROMPT,
+  buildHostSystemPrompt,
   EXTRACTION_PROMPT,
   READY_TOKEN,
   serializeConversation,
@@ -43,13 +43,14 @@ export function isEnabled(): boolean {
  * from the reply the user sees).
  */
 export async function converse(
-  messages: OnboardingMessage[]
+  messages: OnboardingMessage[],
+  profile?: OnboardingConfirmedProfile
 ): Promise<{ reply: string; ready: boolean }> {
   const anthropic = getClient();
   const resp = await anthropic.messages.create({
     model: config.onboardingChatModel,
     max_tokens: 1024,
-    system: HOST_SYSTEM_PROMPT,
+    system: buildHostSystemPrompt(profile),
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
   });
 

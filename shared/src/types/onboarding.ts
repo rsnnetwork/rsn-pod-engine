@@ -89,3 +89,26 @@ export interface OnboardingConfirmResponse {
   summary: string;
   profileComplete: boolean;
 }
+
+// ─── v1.1: known-data confirmation ───────────────────────────────────────────
+
+/** What the system already knows or can infer about the member (GET /onboarding/known). */
+export interface OnboardingKnownProfile {
+  name: string | null;
+  firstName: string | null;
+  email: string;
+  country: string | null;
+  /** true when country came from an IP geo guess (not a saved value). */
+  countryGuessed: boolean;
+  company: string | null;
+  /** true when company was inferred from the email domain (not a saved value). */
+  companyGuessed: boolean;
+}
+
+/** The member-confirmed basics, sent back on chat/confirm so the host never re-asks. */
+export interface OnboardingConfirmedProfile {
+  name?: string | null;
+  firstName?: string | null;
+  country?: string | null;
+  company?: string | null;
+}

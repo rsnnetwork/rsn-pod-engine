@@ -52,11 +52,17 @@ jest.mock('../../services/onboarding/intent.repo', () => ({
   __esModule: true,
 }));
 
+jest.mock('../../services/onboarding/known', () => ({
+  inferKnownProfile: jest.fn(),
+  __esModule: true,
+}));
+
 import { query as dbQuery } from '../../db';
 import onboardingRoutes from '../../routes/onboarding';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 import * as chatbot from '../../services/onboarding/chatbot.service';
 import * as intentRepo from '../../services/onboarding/intent.repo';
+import * as known from '../../services/onboarding/known';
 
 function createApp() {
   const app = express();
@@ -101,6 +107,32 @@ describe('GET /onboarding/status', () => {
   });
 });
 
+describe('GET /onboarding/known', () => {
+  it('rejects an unauthenticated request', async () => {
+    const res = await request(app).get('/onboarding/known');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns the inferred known profile', async () => {
+    (known.inferKnownProfile as jest.Mock).mockResolvedValue({
+      name: 'Stefan Avivson',
+      firstName: 'Stefan',
+      email: 'stefan@misterraw.com',
+      country: 'Denmark',
+      countryGuessed: true,
+      company: 'Misterraw',
+      companyGuessed: true,
+    });
+    const res = await request(app)
+      .get('/onboarding/known')
+      .set('Authorization', `Bearer ${makeToken()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.firstName).toBe('Stefan');
+    expect(res.body.data.company).toBe('Misterraw');
+    expect(res.body.data.countryGuessed).toBe(true);
+  });
+});
+
 describe('POST /onboarding/chat', () => {
   const body = { messages: [{ role: 'user', content: 'I want to meet founders' }] };
 
@@ -137,6 +169,19 @@ describe('POST /onboarding/chat', () => {
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ messages: [] });
     expect(res.status).toBe(400);
+  });
+
+  it('passes the confirmed profile through to converse', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+    (chatbot.converse as jest.Mock).mockResolvedValue({ reply: 'ok', ready: false });
+    const profile = { name: 'Stefan Avivson', country: 'Denmark', company: 'Mister Raw' };
+    await request(app)
+      .post('/onboarding/chat')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ ...body, profile });
+    expect(chatbot.converse).toHaveBeenCalledTimes(1);
+    const args = (chatbot.converse as jest.Mock).mock.calls[0];
+    expect(args[1]).toMatchObject({ country: 'Denmark', company: 'Mister Raw' });
   });
 });
 
@@ -175,5 +220,20 @@ describe('POST /onboarding/confirm', () => {
     expect(res.body.data.summary).toBe('A B2B founder and advisor.');
     expect(res.body.data.profileComplete).toBe(true);
     expect(intentRepo.saveIntentAndComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes the confirmed profile through to save', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+    const intent = { userProfileSummary: 'x', profileStrength: 'strong' };
+    (chatbot.extractIntent as jest.Mock).mockResolvedValue(intent);
+    (intentRepo.saveIntentAndComplete as jest.Mock).mockResolvedValue({ profileComplete: false });
+    const profile = { country: 'Denmark', company: 'Mister Raw' };
+    await request(app)
+      .post('/onboarding/confirm')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ ...body, profile });
+    const args = (intentRepo.saveIntentAndComplete as jest.Mock).mock.calls[0];
+    expect(args[0]).toBe('user-abc');
+    expect(args[3]).toMatchObject({ country: 'Denmark', company: 'Mister Raw' });
   });
 });

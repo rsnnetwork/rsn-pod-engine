@@ -13,12 +13,22 @@ import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
 import { onboardingChatLimiter } from '../middleware/rateLimit';
-import { ApiResponse, OnboardingMessage } from '@rsn/shared';
+import { ApiResponse, OnboardingMessage, OnboardingConfirmedProfile } from '@rsn/shared';
 import * as chatbot from '../services/onboarding/chatbot.service';
 import * as intentRepo from '../services/onboarding/intent.repo';
+import { inferKnownProfile } from '../services/onboarding/known';
 import logger from '../config/logger';
 
 const router = Router();
+
+const profileSchema = z
+  .object({
+    name: z.string().trim().max(120).nullish(),
+    firstName: z.string().trim().max(120).nullish(),
+    country: z.string().trim().max(120).nullish(),
+    company: z.string().trim().max(200).nullish(),
+  })
+  .optional();
 
 const messagesSchema = z.object({
   messages: z
@@ -30,6 +40,7 @@ const messagesSchema = z.object({
     )
     .min(1)
     .max(60),
+  profile: profileSchema,
 });
 
 function sendLlmDisabled(res: Response): void {
@@ -58,6 +69,23 @@ router.get(
   }
 );
 
+// ─── GET /onboarding/known ───────────────────────────────────────────────────
+// What we already know / can infer (name, email, country from IP, company from
+// email domain) so the client can show a "confirm this" card instead of a form.
+router.get(
+  '/known',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const known = await inferKnownProfile(req, req.user!.userId);
+      const response: ApiResponse = { success: true, data: known };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // ─── POST /onboarding/chat ───────────────────────────────────────────────────
 router.post(
   '/chat',
@@ -72,12 +100,13 @@ router.post(
       }
       const userId = req.user!.userId;
       const messages = req.body.messages as OnboardingMessage[];
+      const profile = req.body.profile as OnboardingConfirmedProfile | undefined;
       // Best-effort: nudge a fresh user into 'in_progress'. Never block the turn.
       intentRepo
         .markInProgress(userId)
         .catch((err) => logger.warn({ err, userId }, 'onboarding markInProgress failed'));
 
-      const { reply, ready } = await chatbot.converse(messages);
+      const { reply, ready } = await chatbot.converse(messages, profile);
       const response: ApiResponse = { success: true, data: { reply, ready } };
       res.json(response);
     } catch (err) {
@@ -100,12 +129,14 @@ router.post(
       }
       const userId = req.user!.userId;
       const messages = req.body.messages as OnboardingMessage[];
+      const profile = req.body.profile as OnboardingConfirmedProfile | undefined;
 
       const intent = await chatbot.extractIntent(messages);
       const { profileComplete } = await intentRepo.saveIntentAndComplete(
         userId,
         intent,
-        messages
+        messages,
+        profile
       );
 
       const response: ApiResponse = {

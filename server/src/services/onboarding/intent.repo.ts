@@ -10,7 +10,7 @@
 //      and sets onboarding_status='completed' + last_onboarded_at.
 
 import { query, transaction } from '../../db';
-import { OnboardingMessage, OnboardingStatus } from '@rsn/shared';
+import { OnboardingMessage, OnboardingStatus, OnboardingConfirmedProfile } from '@rsn/shared';
 import { ExtractedIntent } from './intent.schema';
 
 function orNull(s: string | null | undefined): string | null {
@@ -55,7 +55,8 @@ export async function markInProgress(userId: string): Promise<void> {
 export async function saveIntentAndComplete(
   userId: string,
   intent: ExtractedIntent,
-  conversation: OnboardingMessage[]
+  conversation: OnboardingMessage[],
+  profile?: OnboardingConfirmedProfile
 ): Promise<{ profileComplete: boolean }> {
   // ── Dual-write values for the existing users columns ──────────────────────
   const reasonsToConnect = cleanArr(
@@ -66,9 +67,12 @@ export async function saveIntentAndComplete(
   const professionalRole = cleanArr([intent.userRole], 5);
   const goals = cleanArr([intent.desiredOutcome], 5);
 
-  const company = truncate(orNull(intent.userCompany), 200);
+  // Confirmed known data (from the confirm-known card) wins over chat-extracted.
+  const company = truncate(orNull(profile?.company) || orNull(intent.userCompany), 200);
   const jobTitle = truncate(orNull(intent.userRole), 200);
   const industry = truncate(orNull(intent.userIndustry), 100);
+  const location = truncate(orNull(profile?.country), 200);
+  const displayNameOverride = truncate(orNull(profile?.name), 100);
   const whoIWantToMeet = joinList([...intent.desiredPeople, ...intent.desiredRoles]);
   const whyIWantToMeet = orNull(intent.reasonForMeeting);
   const myIntent = orNull(intent.desiredOutcome);
@@ -99,7 +103,12 @@ export async function saveIntentAndComplete(
     const row0 = cur.rows[0] || { display_name: null, first_name: null, last_name: null };
     let firstName = (row0.first_name || '').trim();
     let lastName = (row0.last_name || '').trim();
-    const displayName = (row0.display_name || '').trim();
+    const displayName = (displayNameOverride || row0.display_name || '').trim();
+    // If the member corrected their name on the confirm card, re-derive first/last.
+    if (displayNameOverride) {
+      firstName = '';
+      lastName = '';
+    }
     if ((!firstName || !lastName) && displayName) {
       const parts = displayName.split(/\s+/).filter(Boolean);
       if (!firstName) firstName = parts[0] || displayName;
@@ -108,9 +117,9 @@ export async function saveIntentAndComplete(
 
     await client.query(
       `UPDATE users SET
-         company = $2,
-         job_title = $3,
-         industry = $4,
+         company = COALESCE($2, company),
+         job_title = COALESCE($3, job_title),
+         industry = COALESCE($4, industry),
          professional_role = $5,
          goals = $6,
          interests = $7,
@@ -124,6 +133,8 @@ export async function saveIntentAndComplete(
          matching_notes = $15,
          first_name = $16,
          last_name = $17,
+         location = COALESCE($18, location),
+         display_name = COALESCE($19, display_name),
          onboarding_completed = true,
          onboarding_status = 'completed',
          last_onboarded_at = NOW()
@@ -146,6 +157,8 @@ export async function saveIntentAndComplete(
         matchingNotes,
         firstName || null,
         lastName || null,
+        location,
+        displayNameOverride,
       ]
     );
 
