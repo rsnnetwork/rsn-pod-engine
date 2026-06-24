@@ -145,6 +145,15 @@ router.get(
             role: user.role,
             profileComplete: user.profileComplete,
             onboardingCompleted: (user as any).onboardingCompleted,
+            // Matching-profile free-text fields the profile page reads. getUserById
+            // selects these; they must be surfaced here or the profile shows blank
+            // even when onboarding (or the form) saved them.
+            expertiseText: (user as any).expertiseText,
+            whatICareAbout: (user as any).whatICareAbout,
+            whatICanHelpWith: (user as any).whatICanHelpWith,
+            whoIWantToMeet: (user as any).whoIWantToMeet,
+            whyIWantToMeet: (user as any).whyIWantToMeet,
+            myIntent: (user as any).myIntent,
           },
         },
       };
