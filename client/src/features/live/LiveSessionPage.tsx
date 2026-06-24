@@ -170,8 +170,9 @@ export default function LiveSessionPage() {
     // viewport wider on mobile. min-w-0 lets flex children shrink
     // below their content width instead of pushing the parent.
     <div className="h-[100dvh] bg-white flex flex-col overflow-x-hidden min-w-0">
-      {/* Phase 2 (matching) — quick per-event check-in (intention + openness). */}
-      <EventCheckInModal />
+      {/* Phase 2 (matching) — quick per-event check-in (intention + openness).
+          Members only — never the host (it must not cover the host controls). */}
+      {!isHost && <EventCheckInModal />}
       {/* Toasts: the live event route is NOT inside AppLayout (App.tsx), so the
           app-wide ToastContainer there never mounts during an event — toasts
           (e.g. the BG auto-disable notice) fired into the void (Ali, 2026-06-08:
