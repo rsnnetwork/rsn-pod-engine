@@ -11,7 +11,7 @@ import { config } from '../../../config';
 import { query } from '../../../db';
 import { SessionStatus, ParticipantStatus } from '@rsn/shared';
 import {
-  ActiveSession, activeSessions,
+  ActiveSession, activeSessions, withSessionGuard,
   sessionRoom, userRoom, persistSessionState, clearPersistedState,
   cleanupChatMessages,
 } from '../state/session-state';
@@ -229,9 +229,9 @@ export async function transitionToRound(
   io: SocketServer,
   sessionId: string,
   roundNumber: number,
-): Promise<void> {
+): Promise<boolean> {
   const activeSession = activeSessions.get(sessionId);
-  if (!activeSession) return;
+  if (!activeSession) return false;
 
   try {
     // C2 (Phase 2) — precondition: ROUND_ACTIVE is reachable only from
@@ -241,45 +241,33 @@ export async function transitionToRound(
     if (!canTransitionSession(activeSession.status, SessionStatus.ROUND_ACTIVE)) {
       logger.warn({ sessionId, currentStatus: activeSession.status, roundNumber },
         'transitionToRound: illegal/duplicate start — skipping (C2)');
-      return;
+      // LCY-4: a duplicate start is SUCCESS iff this exact round is the one
+      // already active (covers host "Start Round" racing the transition timer).
+      return activeSession.status === SessionStatus.ROUND_ACTIVE && activeSession.currentRound === roundNumber;
     }
 
-    // 23 May (Stefan live test) — bump the round count when a bonus round
-    // actually STARTS. Moved here from the "Another Round" preview action so a
-    // previewed-but-never-started round never inflates the recap's "X of N".
-    // Idempotent: only bumps when this round exceeds the configured count.
-    if (roundNumber > (activeSession.config.numberOfRounds || 0)) {
-      const bonusRoundsAdded = (activeSession.config.bonusRoundsAdded ?? 0) + 1;
-      activeSession.config = {
-        ...activeSession.config,
-        numberOfRounds: roundNumber,
-        bonusRoundsAdded,
-      };
-      await query(
-        `UPDATE sessions SET config = jsonb_set(
-           jsonb_set(config, '{numberOfRounds}', to_jsonb($2::int), true),
-           '{bonusRoundsAdded}', to_jsonb($3::int), true) WHERE id = $1`,
-        [sessionId, roundNumber, bonusRoundsAdded],
-      ).catch(err => logger.warn({ err, sessionId, roundNumber }, 'Failed to persist bonus-round bump (non-fatal)'));
-    }
+    // LCY-4 (audit C4) — the status flip to ROUND_ACTIVE (and the bonus-round
+    // bump that rides with it) is DEFERRED to after batch-activation below, so
+    // the invariant "ROUND_ACTIVE ⇒ ≥1 active match" holds by construction.
+    // Until the flip the session still reports its previous status, so a
+    // kick/leave firing maybeAutoEndEmptyRound during room creation sees the
+    // pre-flip status and correctly no-ops (closes the ghost-room race).
 
-    // Update session state
-    activeSession.currentRound = roundNumber;
-    activeSession.status = SessionStatus.ROUND_ACTIVE;
-    activeSession.manuallyLeftRound.clear();
-
-    await sessionService.updateSessionStatus(sessionId, SessionStatus.ROUND_ACTIVE);
-    void updateCanonicalSessionStatus(sessionId, SessionStatus.ROUND_ACTIVE);
-    await query('UPDATE sessions SET current_round = $1 WHERE id = $2', [roundNumber, sessionId]);
-    persistSessionState(sessionId, activeSession).catch(() => {});
-
-    // Generate matches for this round (or load if pre-generated)
-    // Exclude host from matching — host stays in lobby to manage the event
-    let matches = await matchingService.getMatchesByRound(sessionId, roundNumber);
+    // Generate matches for this round (or load if pre-generated). Exclude host
+    // from matching — host stays in lobby to manage the event. FILTER to
+    // startable rows: 'cancelled' forensic rows (cancel-preview) must never be
+    // resurrected to 'active'; 'active' is kept so a retry after a partial
+    // failure re-enters cleanly.
+    let matches = (await matchingService.getMatchesByRound(sessionId, roundNumber))
+      .filter(m => m.status === 'scheduled' || m.status === 'active');
     if (matches.length === 0) {
-      // Generate on-the-fly for this round
+      // Generate on-the-fly for this round (LCY-7 will remove this fallback).
       await matchingService.generateSingleRound(sessionId, roundNumber, [activeSession.hostUserId]);
-      matches = await matchingService.getMatchesByRound(sessionId, roundNumber);
+      matches = (await matchingService.getMatchesByRound(sessionId, roundNumber))
+        .filter(m => m.status === 'scheduled' || m.status === 'active');
+    }
+    if (matches.length === 0) {
+      return abortRoundStart(io, activeSession, sessionId, roundNumber);
     }
 
     // Collect all matched user IDs to determine bye participants
@@ -309,6 +297,7 @@ export async function transitionToRound(
     // FIX 3E: Use createRoomWithRetry — on failure, cancel match and send bye
     const ROOM_BATCH_SIZE = 20;
     const matchList = Array.from(matches);
+    const cancelledMatchIds = new Set<string>(); // LCY-4: rooms that failed to create
     for (let i = 0; i < matchList.length; i += ROOM_BATCH_SIZE) {
       const batch = matchList.slice(i, i + ROOM_BATCH_SIZE);
       const results = await Promise.all(
@@ -323,6 +312,7 @@ export async function transitionToRound(
         if (!success) {
           // Cancel the match and send bye to affected participants
           await query(`UPDATE matches SET status = 'cancelled' WHERE id = $1`, [match.id]);
+          cancelledMatchIds.add(match.id); // LCY-4
           const affectedUserIds = [match.participantAId, match.participantBId, match.participantCId].filter(Boolean);
           for (const uid of affectedUserIds) {
             io.to(userRoom(uid)).emit('match:bye_round', { roundNumber });
@@ -335,6 +325,13 @@ export async function transitionToRound(
       // but emitting here too keeps the contract local to the UPDATE site
       // and makes the rule trivially auditable.
       emitHostDashboard(io, sessionId);
+    }
+
+    // LCY-4 (audit C4) — if EVERY room failed there is nothing to start; abort
+    // without flipping status so the session stays in its current (pre-round)
+    // state and the host can retry instead of being wedged in ROUND_ACTIVE.
+    if (cancelledMatchIds.size >= matches.length) {
+      return abortRoundStart(io, activeSession, sessionId, roundNumber);
     }
 
     // Step 3: Batch-update ALL matches to active status in one query
@@ -351,6 +348,37 @@ export async function transitionToRound(
         [matchIds]
       );
     }
+
+    // LCY-4 (audit C4) — >>> MOVED STATUS FLIP <<< matches are now batch-active,
+    // so flipping to ROUND_ACTIVE here keeps the "ROUND_ACTIVE ⇒ ≥1 active
+    // match" invariant true at every observable instant. All seven statements
+    // MUST stay together (the canonical write + persist mirror the in-memory
+    // assignment for Redis recovery — Phase 3 convention).
+    // 23 May (Stefan live test) — the bonus-round count bump rides with the flip
+    // so it runs on a real start, not a previewed-but-abandoned round.
+    if (roundNumber > (activeSession.config.numberOfRounds || 0)) {
+      const bonusRoundsAdded = (activeSession.config.bonusRoundsAdded ?? 0) + 1;
+      activeSession.config = {
+        ...activeSession.config,
+        numberOfRounds: roundNumber,
+        bonusRoundsAdded,
+      };
+      await query(
+        `UPDATE sessions SET config = jsonb_set(
+           jsonb_set(config, '{numberOfRounds}', to_jsonb($2::int), true),
+           '{bonusRoundsAdded}', to_jsonb($3::int), true) WHERE id = $1`,
+        [sessionId, roundNumber, bonusRoundsAdded],
+      ).catch(err => logger.warn({ err, sessionId, roundNumber }, 'Failed to persist bonus-round bump (non-fatal)'));
+    }
+
+    activeSession.currentRound = roundNumber;
+    activeSession.status = SessionStatus.ROUND_ACTIVE;
+    activeSession.manuallyLeftRound.clear();
+
+    await sessionService.updateSessionStatus(sessionId, SessionStatus.ROUND_ACTIVE);
+    void updateCanonicalSessionStatus(sessionId, SessionStatus.ROUND_ACTIVE);
+    await query('UPDATE sessions SET current_round = $1 WHERE id = $2', [roundNumber, sessionId]);
+    persistSessionState(sessionId, activeSession).catch(() => {});
 
     // Step 4: Batch-fetch ALL display names in one query (not per-match).
     // Isolated in its own try/catch (2026-06-08 audit): names are COSMETIC —
@@ -477,9 +505,13 @@ export async function transitionToRound(
       bonusRoundsAdded: activeSession.config.bonusRoundsAdded ?? 0,
     });
 
-    // Start round timer
+    // Start round timer. LCY-1 (audit C4) — route the fire through the
+    // guard-wrapped callback so a timer-fired endRound can't interleave with a
+    // host action / auto-end on the same session. else-branch keeps unit tests
+    // that import round-lifecycle without wiring deps working.
     startSegmentTimer(io, sessionId, activeSession.config.roundDurationSeconds, () => {
-      endRound(io, sessionId, roundNumber);
+      if (_timerCallbacks) void _timerCallbacks.endRound(sessionId, roundNumber);
+      else void endRound(io, sessionId, roundNumber);
     });
 
     // Schedule no-show detection after the configured timeout
@@ -499,9 +531,30 @@ export async function transitionToRound(
     }, 5000);
 
     logger.info({ sessionId, roundNumber }, 'Round started');
+    return true; // LCY-4
   } catch (err) {
     logger.error({ err, sessionId, roundNumber }, 'Error transitioning to round');
+    return false; // LCY-4 — caller (confirm/start) keeps pendingRoundNumber for retry
   }
+}
+
+// LCY-4 (audit C4) — clean abort when a round has no startable matches (zero
+// after generate/filter, or every room failed). Leaves status UNCHANGED so the
+// host can retry via Match People; surfaces an actionable error and clears the
+// participants' "preparing" overlay.
+function abortRoundStart(
+  io: SocketServer,
+  activeSession: ActiveSession,
+  sessionId: string,
+  roundNumber: number,
+): false {
+  logger.error({ sessionId, roundNumber }, 'Round start aborted — no startable matches');
+  io.to(userRoom(activeSession.hostUserId)).emit('error', {
+    code: 'ROUND_START_FAILED',
+    message: 'No startable matches for this round — open Match People and generate a new preview.',
+  });
+  io.to(sessionRoom(sessionId)).emit('session:matching_cancelled', { sessionId });
+  return false;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -543,6 +596,19 @@ export async function endRound(
       const { clearCanonicalBreakoutByMatch } = await import('../state/canonical-state');
       const endedMatches = await matchingService.getMatchesByRound(sessionId, roundNumber);
       await clearCanonicalBreakoutByMatch(sessionId, endedMatches.map(m => m.id));
+    }
+
+    // LCY-3 (audit C4) — act-after-lock re-check. The FSM gate at the top of
+    // endRound is separated from the status flip below by several awaits (the
+    // complete-matches UPDATE + clearCanonicalBreakoutByMatch). Re-confirm the
+    // transition is still legal HERE — synchronous with the flip, with no await
+    // between this point and the status write — so a duplicate entry that lost
+    // the race becomes a logged no-op instead of double-broadcasting
+    // session:round_ended and double-running the rating fanout/increment.
+    if (!canTransitionSession(activeSession.status, SessionStatus.ROUND_RATING)) {
+      logger.warn({ sessionId, currentStatus: activeSession.status, roundNumber },
+        'endRound: status changed during pre-flip awaits — aborting (act-after-lock)');
+      return;
     }
 
     // Architectural rule: refresh host dashboard on every match transition.
@@ -702,7 +768,13 @@ export async function endRound(
         attendanceCounts.set(pid, (attendanceCounts.get(pid) || 0) + 1);
       }
     }
-    await sessionService.incrementRoundsCompletedBatch(sessionId, attendanceCounts);
+    // LCY-3 (audit C4) — idempotent: a double endRound entry for the same round
+    // must not inflate rounds_completed (recap math drifts otherwise).
+    activeSession.roundsCompletedApplied ??= new Set<number>();
+    if (!activeSession.roundsCompletedApplied.has(roundNumber)) {
+      await sessionService.incrementRoundsCompletedBatch(sessionId, attendanceCounts);
+      activeSession.roundsCompletedApplied.add(roundNumber);
+    }
 
     // Phase 2C (5 May spec) — return each round-participant to the main room
     // through the chokepoint instead of a bulk UPDATE. The chokepoint
@@ -738,7 +810,9 @@ export async function endRound(
       const s = activeSessions.get(sessionId) ?? activeSession;
       s.timer = null;
       s.timerEndsAt = null;
-      endRatingWindow(io, sessionId, roundNumber);
+      // LCY-1 — guarded fire (see round-timer note above).
+      if (_timerCallbacks) void _timerCallbacks.endRatingWindow(sessionId, roundNumber);
+      else void endRatingWindow(io, sessionId, roundNumber);
     }, RATING_BACKSTOP_MS);
 
     logger.info({ sessionId, roundNumber }, 'Round ended → ROUND_RATING');
@@ -763,6 +837,16 @@ export async function endRatingWindow(
   if (activeSession.status !== SessionStatus.ROUND_RATING) {
     logger.warn({ sessionId, currentStatus: activeSession.status },
       'endRatingWindow called but not in ROUND_RATING — skipping');
+    return;
+  }
+
+  // LCY-3 (audit C4) — stale-round guard. A backstop/grace fire for round N
+  // that lands after the session already advanced to rating round N+1 would
+  // otherwise finalize + close the WRONG round (using N in finalizeRoundRatings
+  // and the 'more rounds' comparison). Every live caller passes currentRound.
+  if (activeSession.currentRound !== roundNumber) {
+    logger.warn({ sessionId, roundNumber, currentRound: activeSession.currentRound },
+      'endRatingWindow: stale round — skipping');
     return;
   }
 
@@ -794,6 +878,16 @@ export async function endRatingWindow(
     if (activeSession.endRequested) {
       logger.info({ sessionId, roundNumber }, '#11 endRequested — completing event after rating window');
       await completeSession(io, sessionId);
+      return;
+    }
+
+    // LCY-3 (audit C4) — act-after-gap re-check. finalizeRoundRatings + the
+    // dual-emit above are multiple awaits after the entry guard; re-confirm
+    // we're still in ROUND_RATING (synchronous with the status writes below) so
+    // a concurrent transition isn't clobbered. Covers both the ROUND_TRANSITION
+    // and CLOSING_LOBBY branches.
+    if (activeSession.status !== SessionStatus.ROUND_RATING) {
+      logger.warn({ sessionId, roundNumber }, 'endRatingWindow: status changed mid-flight — aborting');
       return;
     }
 
@@ -862,7 +956,9 @@ export async function endRatingWindow(
       // Host-controlled: no auto-end. Host must click "End Event".
       // 10-minute safety fallback prevents orphaned sessions if host disconnects.
       startSegmentTimer(io, sessionId, 600, () => {
-        completeSession(io, sessionId);
+        // LCY-1 — guarded fire (see round-timer note above).
+        if (_timerCallbacks) void _timerCallbacks.completeSession(sessionId);
+        else void completeSession(io, sessionId);
       });
 
       logger.info({ sessionId, roundNumber }, 'All rounds completed → CLOSING_LOBBY (waiting for host, 10min safety timeout)');
@@ -1269,27 +1365,36 @@ export async function maybeAutoEndEmptyRound(
   io: SocketServer,
   sessionId: string,
 ): Promise<void> {
-  const activeSession = activeSessions.get(sessionId);
-  if (!activeSession) return;
-  if (activeSession.status !== SessionStatus.ROUND_ACTIVE) return;
+  // LCY-1 (audit C4) — self-guarding chokepoint. Acquire the session guard so
+  // the ROUND_ACTIVE status check + COUNT + endRound run atomically against
+  // host actions, joins/leaves, and timer-fired transitions. The status is
+  // re-read INSIDE the guard, so a queued auto-end that lands after a
+  // legitimate endRound sees ROUND_RATING and no-ops. All call sites are
+  // fire-and-forget (never awaited from a guard-held context) EXCEPT
+  // detectNoShows, which runs unguarded — so no caller can self-deadlock.
+  return withSessionGuard(sessionId, async () => {
+    const activeSession = activeSessions.get(sessionId);
+    if (!activeSession) return;
+    if (activeSession.status !== SessionStatus.ROUND_ACTIVE) return;
 
-  try {
-    const res = await query<{ c: string }>(
-      `SELECT COUNT(*)::text AS c FROM matches
-       WHERE session_id = $1 AND round_number = $2 AND status = 'active'`,
-      [sessionId, activeSession.currentRound],
-    );
-    const activeCount = parseInt(res.rows[0]?.c || '0', 10);
-    if (activeCount > 0) return;
+    try {
+      const res = await query<{ c: string }>(
+        `SELECT COUNT(*)::text AS c FROM matches
+         WHERE session_id = $1 AND round_number = $2 AND status = 'active'`,
+        [sessionId, activeSession.currentRound],
+      );
+      const activeCount = parseInt(res.rows[0]?.c || '0', 10);
+      if (activeCount > 0) return;
 
-    logger.warn(
-      { sessionId, roundNumber: activeSession.currentRound },
-      'ROUND_ACTIVE with 0 active matches detected — auto-ending round',
-    );
-    await endRound(io, sessionId, activeSession.currentRound);
-  } catch (err) {
-    logger.error({ err, sessionId }, 'Error in maybeAutoEndEmptyRound');
-  }
+      logger.warn(
+        { sessionId, roundNumber: activeSession.currentRound },
+        'ROUND_ACTIVE with 0 active matches detected — auto-ending round',
+      );
+      await endRound(io, sessionId, activeSession.currentRound);
+    } catch (err) {
+      logger.error({ err, sessionId }, 'Error in maybeAutoEndEmptyRound');
+    }
+  });
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

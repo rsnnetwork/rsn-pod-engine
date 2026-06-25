@@ -20,7 +20,7 @@ import logger from '../../../config/logger';
 import { query } from '../../../db';
 import { SessionStatus, resolveDisplayName, placeholderName } from '@rsn/shared';
 import {
-  ActiveSession, activeSessions, withMatchGenerationLock,
+  ActiveSession, activeSessions, withMatchGenerationLock, withSessionGuard,
   sessionRoom, userRoom, persistSessionState,
 } from '../state/session-state';
 import { verifyHost, getAllHostIds } from './host-actions';
@@ -42,14 +42,14 @@ import { emitStateSnapshot } from '../state/state-snapshot';
 // ─── Cross-module references (wired in Task 7) ────────────────────────────
 // transitionToRound lives in round-lifecycle.ts.
 
-let _transitionToRound: ((io: SocketServer, sessionId: string, roundNumber: number) => Promise<void>) | null = null;
+let _transitionToRound: ((io: SocketServer, sessionId: string, roundNumber: number) => Promise<boolean>) | null = null;
 
 /**
  * Inject cross-module dependencies that live in other handler files.
  * Called during orchestration entry point wiring (Task 7).
  */
 export function injectMatchingFlowDeps(deps: {
-  transitionToRound: (io: SocketServer, sessionId: string, roundNumber: number) => Promise<void>;
+  transitionToRound: (io: SocketServer, sessionId: string, roundNumber: number) => Promise<boolean>; // LCY-4
 }) {
   _transitionToRound = deps.transitionToRound;
 }
@@ -583,7 +583,19 @@ export async function handleHostConfirmRound(
   socket: Socket,
   data: { sessionId: string }
 ): Promise<void> {
+  // LCY-2 (audit C4) — the PRIMARY start-round path previously ran with NO lock,
+  // so Confirm racing Re-match could wipe a just-activated round (the Re-match
+  // wipe-DELETE assumes the round is still pre-start). Fast-reject before
+  // queuing, then take BOTH locks in the GLOBAL order: matchGenerationLock
+  // OUTSIDE (so confirm waits for any in-flight generate/regenerate instead of
+  // racing its DELETE), withSessionGuard INSIDE (so the transition can't
+  // interleave with joins/leaves/timers). See the lock-ordering rule in
+  // session-state.ts.
+  if (!await verifyHost(socket, data.sessionId)) return;
+  return withMatchGenerationLock(data.sessionId, () =>
+    withSessionGuard(data.sessionId, async () => {
   try {
+    // Re-verify after the lock wait — privileges may have changed (TOCTOU).
     if (!await verifyHost(socket, data.sessionId)) return;
 
     const activeSession = activeSessions.get(data.sessionId);
@@ -611,15 +623,21 @@ export async function handleHostConfirmRound(
     if (!_transitionToRound) {
       throw new Error('transitionToRound not injected — call injectMatchingFlowDeps first');
     }
-    await _transitionToRound(io, data.sessionId, roundNumber!);
+    const started = await _transitionToRound(io, data.sessionId, roundNumber!);
 
-    // FIX 3A: Clear ONLY after successful transition
-    activeSession.pendingRoundNumber = null;
-    persistSessionState(data.sessionId, activeSession);
+    // FIX 3A + LCY-4: clear pendingRoundNumber ONLY on a real start. On abort
+    // (no startable matches) keep it so the host can retry Match People.
+    if (started) {
+      activeSession.pendingRoundNumber = null;
+      persistSessionState(data.sessionId, activeSession);
+    } else {
+      socket.emit('error', { code: 'CONFIRM_ROUND_FAILED', message: 'Round did not start — try Match People again.' });
+    }
   } catch (err: any) {
     logger.error({ err }, 'Error confirming round');
     socket.emit('error', { code: 'CONFIRM_ROUND_FAILED', message: err.message });
   }
+    }));
 }
 
 // ─── Host Swap Match (swap two participants between matches in preview) ────
@@ -836,6 +854,15 @@ export async function handleHostRegenerateMatches(
     const beforeMatches = await matchingService.getMatchesByRound(data.sessionId, roundNumber);
     const beforeArrangement = arrangementKey(beforeMatches);
     const beforePairKeys = arrangementPairKeys(beforeMatches);
+
+    // LCY-2 (audit C4) — refuse to wipe a round that has already started. The
+    // unconditional DELETE below assumes the round is pre-start (preview rows
+    // are only 'scheduled'/'cancelled'); if Confirm activated it in a race, a
+    // Re-match here would delete live match rows out from under participants.
+    if (beforeMatches.some(m => m.status === 'active' || m.status === 'completed')) {
+      socket.emit('error', { code: 'INVALID_STATE', message: 'That round has already started — nothing to re-match.' });
+      return;
+    }
 
     // Phase 1 (5 May spec) — wipe ALL matches for the pending round before
     // regenerating, regardless of state. Previously this filtered by status

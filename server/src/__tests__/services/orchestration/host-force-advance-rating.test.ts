@@ -77,7 +77,7 @@ beforeEach(() => {
   // handleHostStartRound's participant-count query → plenty of participants.
   hMockQuery.mockResolvedValue({ rows: [{ count: '4' }] });
 
-  transitionToRoundSpy = jest.fn(async () => {});
+  transitionToRoundSpy = jest.fn(async () => true); // LCY-4: contract now returns true on a successful start
   endRoundSpy = jest.fn(async () => {});
   completeSessionSpy = jest.fn(async () => {});
   // The injected endRatingWindow stands in for the real one. To mirror the real

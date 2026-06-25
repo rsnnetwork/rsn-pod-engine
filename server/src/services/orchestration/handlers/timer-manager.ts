@@ -16,7 +16,7 @@ import {
 // from round-lifecycle and session-lifecycle modules.
 
 export interface TimerCallbacks {
-  transitionToRound: (sessionId: string, roundNumber: number) => Promise<void>;
+  transitionToRound: (sessionId: string, roundNumber: number) => Promise<boolean>; // LCY-4: true iff round reached ROUND_ACTIVE
   endRound: (sessionId: string, roundNumber: number) => Promise<void>;
   endRatingWindow: (sessionId: string, roundNumber: number) => Promise<void>;
   completeSession: (sessionId: string) => Promise<void>;

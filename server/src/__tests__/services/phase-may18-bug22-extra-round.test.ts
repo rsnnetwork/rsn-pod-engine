@@ -29,7 +29,11 @@ describe('Bug 22 / 23 May — bonus round counted only when actually started', (
     // exceeds the configured count) and still persisted to sessions.config.
     const idx = lifecycleSrc.indexOf('export async function transitionToRound');
     expect(idx).toBeGreaterThan(-1);
-    const block = lifecycleSrc.slice(idx, idx + 2500);
+    // LCY-4 (audit C4) moved the bonus-bump to after batch-activation (~7k chars
+    // into the function), so slice the FULL function body, not a fixed 2500-char
+    // window which would now miss the bump.
+    const end = lifecycleSrc.indexOf('\nexport', idx + 1);
+    const block = lifecycleSrc.slice(idx, end > -1 ? end : idx + 9000);
     expect(block).toMatch(/roundNumber\s*>\s*\(activeSession\.config\.numberOfRounds/);
     expect(block).toMatch(/numberOfRounds:\s*roundNumber/);
     expect(block).toMatch(/jsonb_set\([\s\S]{0,160}'\{numberOfRounds\}'/);

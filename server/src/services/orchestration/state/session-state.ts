@@ -27,6 +27,7 @@ export interface ActiveSession {
   endRequested?: boolean;             // #11 (23 May) — host pressed End Event during an active round; complete the event after this round's rating instead of opening the next round
   manuallyLeftRound: Set<string>;     // Users who clicked "Leave Conversation" — skip in reconnect/reassignment
   ratingSkips?: Set<string>;          // #6 (25 May) — `${userId}:${matchId}` for users who skipped that match's rating; replay + endRound dedup honor it so a skip is never re-prompted
+  roundsCompletedApplied?: Set<number>; // LCY-3 (audit C4) — round numbers whose rounds_completed increment already ran; makes a double endRound entry idempotent. In-memory only (NOT persisted: a restart re-running endRound is blocked by the DB status FSM in updateSessionStatus)
   // Tier-1 A1: per-session cache for display names used by emitHostDashboard
   // and sendMatchPreview. Names don't change during an event, so we populate
   // on first lookup and reuse until the session ends.
@@ -112,6 +113,22 @@ export const MAX_CHAT_MESSAGES = 50;
 export const chatMessages = new Map<string, ChatMessage[]>(); // sessionId -> messages
 
 // ─── Session Guard ──────────────────────────────────────────────────────────
+//
+// GUARD-HELD CONTRACT (LCY-1, audit C4): transitionToRound, endRound,
+// endRatingWindow, and completeSession MUST run while holding withSessionGuard
+// for the session. Host handlers already hold it and call the direct functions;
+// timer-fired and 3s-grace fires route through the guard-wrapped timerCallbacks;
+// maybeAutoEndEmptyRound self-guards. Never await one of these four from a
+// context that already holds the guard (the guard is non-reentrant → deadlock).
+//
+// GLOBAL LOCK-ORDERING RULE (LCY-2): when BOTH locks are needed, acquire
+// withMatchGenerationLock FIRST (outer) and withSessionGuard SECOND (inner).
+// NEVER await withMatchGenerationLock while holding withSessionGuard — the gen
+// lock can run up to the 60s engine timeout and the guard gates joins/leaves,
+// so that ordering would freeze the session. Launching a gen-locked task
+// fire-and-forget (un-awaited) from a guard-held context is fine (it queues;
+// the holder never blocks). handleHostConfirmRound is the one site that needs
+// both, and it follows this order.
 
 /** Serialise operations on the same session to prevent race conditions */
 export async function withSessionGuard<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {

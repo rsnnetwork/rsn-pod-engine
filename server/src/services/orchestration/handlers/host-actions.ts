@@ -42,7 +42,7 @@ import { E } from '../../../realtime/entities';
 // ─── Cross-module references (wired in Task 7) ────────────────────────────
 // Functions from round-lifecycle.ts that don't exist yet.
 
-let _transitionToRound: ((io: SocketServer, sessionId: string, roundNumber: number) => Promise<void>) | null = null;
+let _transitionToRound: ((io: SocketServer, sessionId: string, roundNumber: number) => Promise<boolean>) | null = null; // LCY-4
 let _completeSession: ((io: SocketServer, sessionId: string) => Promise<void>) | null = null;
 let _endRound: ((io: SocketServer, sessionId: string, roundNumber: number) => Promise<void>) | null = null;
 // #4 (26 May live test) — DIRECT (non-guard-wrapped) endRatingWindow for the
@@ -66,7 +66,7 @@ let _maybeAutoEndEmptyRound: ((sessionId: string) => Promise<void>) | null = nul
  * Called during orchestration entry point wiring (Task 7).
  */
 export function injectHostActionDeps(deps: {
-  transitionToRound: (io: SocketServer, sessionId: string, roundNumber: number) => Promise<void>;
+  transitionToRound: (io: SocketServer, sessionId: string, roundNumber: number) => Promise<boolean>; // LCY-4
   completeSession: (io: SocketServer, sessionId: string) => Promise<void>;
   endRound: (io: SocketServer, sessionId: string, roundNumber: number) => Promise<void>;
   // #4 (26 May) — direct endRatingWindow for the host force-advance path.
@@ -540,7 +540,12 @@ export async function handleHostStartRound(
       socket.emit('error', { code: 'INTERNAL_ERROR', message: 'Round transition not available' });
       return;
     }
-    await _transitionToRound(io, data.sessionId, nextRound);
+    // LCY-4 — surface a clean failure if the round couldn't start (zero
+    // startable matches / all rooms failed) instead of leaving the host hanging.
+    const started = await _transitionToRound(io, data.sessionId, nextRound);
+    if (!started) {
+      socket.emit('error', { code: 'START_ROUND_FAILED', message: 'Round did not start — open Match People and try again.' });
+    }
   } catch (err: any) {
     logger.error({ err }, 'Error starting round');
     socket.emit('error', { code: 'START_ROUND_FAILED', message: err.message });

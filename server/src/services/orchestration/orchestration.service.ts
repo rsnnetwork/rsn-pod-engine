@@ -160,7 +160,11 @@ export function initOrchestration(socketServer: SocketServer): void {
 
   injectParticipantDeps({
     emitHostDashboard: (sessionId) => emitHostDashboard(io, sessionId),
-    endRatingWindow: (sessionId, roundNumber) => endRatingWindow(io, sessionId, roundNumber),
+    // LCY-1 (audit C4) — participant-flow's only caller is the 3s all-rated
+    // grace setTimeout, which fires on a fresh stack (no guard held), so it
+    // MUST use the guard-wrapped variant. (host-actions keeps the DIRECT
+    // endRatingWindow above — host handlers already hold the guard.)
+    endRatingWindow: (sessionId, roundNumber) => timerCallbacks.endRatingWindow(sessionId, roundNumber),
     // Bug 4 (April 18 Dr Arch): voluntary leave / disconnect may end the last
     // active match — auto-recover the round.
     maybeAutoEndEmptyRound: (sessionId) => maybeAutoEndEmptyRound(io, sessionId),
