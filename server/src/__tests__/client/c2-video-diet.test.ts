@@ -57,3 +57,27 @@ describe('C2 / VID-1 — adaptiveStream + dynacast + pinned simulcast on both ro
     }
   });
 });
+
+describe('C2 / VID-2 — lobby tile render cap + overflow', () => {
+  const lobby = readClient('features/live/Lobby.tsx');
+
+  it('windows the grid through computeTileWindow and renders gridTracks (not all cameraTracks)', () => {
+    expect(lobby).toMatch(/computeTileWindow\(/);
+    expect(lobby).toMatch(/gridTracks\.map\(/);
+  });
+
+  it('renders a single "+N more" overflow tile with the audio-still-on hint', () => {
+    expect(lobby).toMatch(/data-testid="lobby-overflow-tile"/);
+    expect(lobby).toMatch(/\+\{overflowCount\} more/);
+    expect(lobby).toMatch(/audio still on/);
+  });
+
+  it('off-screen tiles use content-visibility for cheap virtualization', () => {
+    expect(lobby).toMatch(/\[content-visibility:auto\]/);
+  });
+
+  it('keeps the pinned destructure + strip filter assignments verbatim (pin safety)', () => {
+    expect(lobby).toMatch(/normalTracks: cameraTracks/);
+    expect(lobby).toMatch(/const unpinnedTracks = cameraTracksSorted\.filter\(/);
+  });
+});

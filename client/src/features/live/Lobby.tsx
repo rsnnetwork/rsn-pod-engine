@@ -9,6 +9,8 @@ import { useSessionStore, useInRoomParticipants } from '@/stores/sessionStore';
 import { getSocket } from '@/lib/socket';
 import api from '@/lib/api';
 import { useVisibilityPartition } from './useVisibilityPartition';
+import { computeTileWindow } from './tileWindow';
+import { useMediaQuery } from '@/hooks/useMediaQuery';
 import {
   LiveKitRoom,
   VideoTrack,
@@ -72,6 +74,9 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
   }, [room]);
   const hostUserId = useSessionStore(s => s.hostUserId);
   const lobbyDensity = useSessionStore(s => s.lobbyDensity);
+  // VID-2 (audit C2) — cap rendered tiles by density × viewport. 639px aligns
+  // with the Tailwind `sm:` breakpoint the grid classes already use.
+  const isMobile = useMediaQuery('(max-width: 639px)');
   // Phase N (12 May spec item 2) — host visibility mode per host/cohost.
   // Read from the server-authoritative store; the 4 modes drive how each
   // hostly user is rendered in the lobby (and breakout) grid.
@@ -365,7 +370,7 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
         data-self={isLocal ? 'true' : undefined}
         data-host={tileIsHost ? 'true' : undefined}
         data-acting-host={isActingHost ? 'true' : undefined}
-        className={`relative rounded-xl overflow-hidden bg-[#3c4043] ${isPinned ? 'h-full w-full' : isActingHost ? (useBigHostTiles ? soloOrCompactHostTileClass : multiHostNarrowTileClass) : 'aspect-video'} flex items-center justify-center group cursor-pointer`}
+        className={`relative rounded-xl overflow-hidden bg-[#3c4043] ${isPinned ? 'h-full w-full' : isActingHost ? (useBigHostTiles ? soloOrCompactHostTileClass : multiHostNarrowTileClass) : 'aspect-video'} flex items-center justify-center group cursor-pointer [content-visibility:auto] [contain-intrinsic-size:auto_200px]`}
         onClick={onClick}
       >
         {hasVideo && isTrackReference(trackRef) ? (
@@ -577,6 +582,11 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
     const unpinnedTracks = cameraTracksSorted.filter(
       t => t.participant.sid !== effectivePinnedSid && visibilityFor(t) !== 'hidden',
     );
+    // VID-2 — cap the thumbnail strip too; the remainder collapses to a "+N" pill.
+    const { visible: stripTracks, overflowCount: stripOverflow } = computeTileWindow({
+      tracks: unpinnedTracks, density: lobbyDensity, isMobile,
+      localSid: localParticipant.sid, sidOf: (t: any) => t.participant.sid,
+    });
     return (
       <div className={`flex flex-col gap-3 w-full ${maxWClass} mx-auto h-full`}>
         <div className="flex-1 min-h-0">
@@ -584,11 +594,17 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
         </div>
         {unpinnedTracks.length > 0 && (
           <div className="flex gap-2 h-24 shrink-0 overflow-x-auto">
-            {unpinnedTracks.map(t => (
+            {stripTracks.map(t => (
               <div key={t.participant.sid} className="flex-shrink-0 w-32">
                 {renderTile(t, { onClick: () => setEffectivePin(t.participant.sid) })}
               </div>
             ))}
+            {stripOverflow > 0 && (
+              <div className="flex-shrink-0 w-20 rounded-xl bg-[#3c4043] flex flex-col items-center justify-center text-gray-300 [content-visibility:auto]">
+                <span className="text-sm font-semibold">+{stripOverflow}</span>
+                <span className="text-[9px] text-gray-500">audio still on</span>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -603,6 +619,11 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
   //   3. Producer strip (below the grid, only if any producers exist).
   //      Pills with name + audio icon; no video tile.
   // Hidden hosts/cohosts are filtered out entirely.
+  // VID-2 — cap the main grid by density × viewport; the rest become "+N more".
+  const { visible: gridTracks, overflowCount } = computeTileWindow({
+    tracks: cameraTracks, density: lobbyDensity, isMobile,
+    localSid: localParticipant.sid, sidOf: (t: any) => t.participant.sid,
+  });
   return (
     <div className={`flex flex-col gap-3 w-full ${maxWClass} mx-auto`}>
       {bigSpeakerTracks.length > 0 && (
@@ -621,8 +642,18 @@ function LobbyMosaic({ isHost, sessionId }: { isHost: boolean; sessionId?: strin
         </div>
       )}
       <div className={`grid ${gridCols} ${gapClass} w-full`}>
-        {cameraTracks.map(trackRef =>
+        {gridTracks.map(trackRef =>
           renderTile(trackRef, { onClick: () => setEffectivePin(trackRef.participant.sid) })
+        )}
+        {overflowCount > 0 && (
+          <div
+            data-testid="lobby-overflow-tile"
+            className="relative rounded-xl bg-[#3c4043] aspect-video flex flex-col items-center justify-center text-gray-300 [content-visibility:auto]"
+          >
+            <Users className="h-6 w-6 mb-1" />
+            <span className="text-sm font-semibold">+{overflowCount} more</span>
+            <span className="text-[10px] text-gray-500">audio still on</span>
+          </div>
         )}
         {cameraTracks.length === 0 && bigSpeakerTracks.length === 0 && (
           <div className="col-span-full text-center py-12 text-gray-500 text-sm">
