@@ -17,6 +17,8 @@ import { ApiResponse, OnboardingMessage, OnboardingConfirmedProfile } from '@rsn
 import * as chatbot from '../services/onboarding/chatbot.service';
 import * as intentRepo from '../services/onboarding/intent.repo';
 import { inferKnownProfile } from '../services/onboarding/known';
+import * as enrichment from '../services/onboarding/enrichment.service';
+import * as enrichRepo from '../services/onboarding/enrichment.repo';
 import logger from '../config/logger';
 
 const router = Router();
@@ -101,6 +103,67 @@ router.get(
     try {
       const resume = await intentRepo.getResume(req.user!.userId);
       const response: ApiResponse = { success: true, data: resume };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /onboarding/enrich ─────────────────────────────────────────────────
+// Look up the member's PUBLIC professional profile (LinkedIn URL if we have one,
+// else name + company + country) via web search and return a candidate to confirm.
+// Stores the candidate under inferred_profile; does NOT touch the live profile.
+const enrichSchema = z.object({ linkedinUrl: z.string().trim().max(500).nullish() });
+router.post(
+  '/enrich',
+  authenticate,
+  onboardingChatLimiter,
+  validate(enrichSchema),
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (!enrichment.isEnrichmentEnabled()) {
+        sendLlmDisabled(res);
+        return;
+      }
+      const known = await inferKnownProfile(req, req.user!.userId);
+      const result = await enrichment.enrichProfile({
+        fullName: known.name || '',
+        email: known.email,
+        country: known.country,
+        company: known.company,
+        linkedinUrl: ((req.body.linkedinUrl as string) || known.linkedin || null),
+      });
+      if (result.confidence > 0) {
+        await enrichRepo.saveEnrichedCandidate(req.user!.userId, result).catch(() => {});
+      }
+      const response: ApiResponse = { success: true, data: result };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /onboarding/enrich/apply ───────────────────────────────────────────
+// Write the member-confirmed/edited fields to the real profile (additive — only
+// provided fields change; null leaves the existing value).
+const applySchema = z.object({
+  jobTitle: z.string().trim().max(200).nullish(),
+  company: z.string().trim().max(200).nullish(),
+  industry: z.string().trim().max(100).nullish(),
+  location: z.string().trim().max(200).nullish(),
+  bio: z.string().trim().max(2000).nullish(),
+  linkedin: z.string().trim().max(500).nullish(),
+});
+router.post(
+  '/enrich/apply',
+  authenticate,
+  validate(applySchema),
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await enrichRepo.applyEnrichedToProfile(req.user!.userId, req.body);
+      const response: ApiResponse = { success: true, data: { applied: true } };
       res.json(response);
     } catch (err) {
       next(err);

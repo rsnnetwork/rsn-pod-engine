@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowUp, Check, Pencil, RotateCcw } from 'lucide-react';
+import { ArrowUp, Check, Pencil, RotateCcw, Sparkles, Loader2 } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { Button } from '@/components/ui/Button';
@@ -112,7 +112,39 @@ function ConfirmRow({
   );
 }
 
-const emptyDraft = { name: '', country: '', company: '', role: '', linkedin: '' };
+const emptyDraft = { name: '', country: '', company: '', role: '', linkedin: '', industry: '', location: '', about: '' };
+
+// Live profile card shown beside the chat (desktop) — fills in as we enrich + learn.
+function ProfileCardPreview({ d, enriched, name }: { d: typeof emptyDraft; enriched: boolean; name: string }) {
+  const Row = ({ label, value }: { label: string; value: string }) =>
+    value ? (
+      <div className="mb-3">
+        <div className="text-[11px] font-medium uppercase tracking-wide text-gray-400">{label}</div>
+        <div className="mt-0.5 text-sm leading-relaxed text-[#1a1a2e]">{value}</div>
+      </div>
+    ) : null;
+  const empty = !d.role && !d.company && !d.industry && !d.about;
+  return (
+    <div className="w-full rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+      <div className="mb-1 flex items-center gap-1.5">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Your profile</span>
+        {enriched && <Sparkles className="h-3.5 w-3.5 text-rsn-red" />}
+      </div>
+      <div className="mb-4 font-display text-xl font-bold text-[#1a1a2e]">{name || 'You'}</div>
+      <Row label="Role" value={d.role} />
+      <Row label="Company" value={d.company} />
+      <Row label="Industry" value={d.industry} />
+      <Row label="Location" value={d.location || d.country} />
+      <Row label="About" value={d.about} />
+      {d.linkedin && (
+        <a href={d.linkedin} target="_blank" rel="noreferrer" className="text-xs font-medium text-rsn-red underline">
+          LinkedIn
+        </a>
+      )}
+      {empty && <p className="text-sm text-gray-400">This fills in as we learn about you.</p>}
+    </div>
+  );
+}
 
 export default function ChatbotOnboarding() {
   const navigate = useNavigate();
@@ -134,6 +166,10 @@ export default function ChatbotOnboarding() {
   const [confirming, setConfirming] = useState(false);
   const [fallback, setFallback] = useState(false);
   const [finishAttempts, setFinishAttempts] = useState(0);
+  // Profile enrichment — pull public profile data + populate the card the user watches.
+  const [enriching, setEnriching] = useState(false);
+  const [enriched, setEnriched] = useState(false);
+  const enrichTriggered = useRef(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -168,6 +204,9 @@ export default function ChatbotOnboarding() {
           company: k.company || '',
           role: k.role || '',
           linkedin: k.linkedin || '',
+          industry: '',
+          location: '',
+          about: '',
         });
         haveKnown = true;
       }
@@ -195,6 +234,17 @@ export default function ChatbotOnboarding() {
     };
   }, []);
 
+  // Auto-enrich once we know the member: if they already have a LinkedIn on file,
+  // pull their profile immediately so the card populates as they arrive.
+  useEffect(() => {
+    if (!known || enrichTriggered.current) return;
+    if (known.linkedin) {
+      enrichTriggered.current = true;
+      void runEnrich(known.linkedin);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [known]);
+
   // Keep the chat transcript pinned to the latest message.
   useEffect(() => {
     if (stage !== 'chat') return;
@@ -213,7 +263,49 @@ export default function ChatbotOnboarding() {
     };
   }
 
+  // Pull the member's public profile (their LinkedIn URL if we have one, else
+  // name + company + country) and fill the card they're watching. Best-effort —
+  // suggestions only, fully editable; never blocks onboarding.
+  async function runEnrich(linkedinUrl?: string) {
+    if (enriching) return;
+    setEnriching(true);
+    try {
+      const res = await api.post('/onboarding/enrich', { linkedinUrl: linkedinUrl || draft.linkedin || null });
+      const r = res.data.data as { profile: any; confidence: number } | null;
+      if (r?.profile && r.confidence >= 0.4) {
+        const p = r.profile;
+        setDraft((d) => ({
+          ...d,
+          company: d.company || p.currentCompany || '',
+          role: d.role || p.currentRole || p.headline || '',
+          industry: d.industry || p.industry || '',
+          location: d.location || p.location || '',
+          about: d.about || p.summary || '',
+          linkedin: d.linkedin || p.linkedinUrl || linkedinUrl || '',
+        }));
+        setEnriched(true);
+      } else {
+        addToast("We couldn't find a confident match — fill in what you can.", 'info');
+      }
+    } catch (err: any) {
+      if (err?.response?.status !== 503) addToast('Auto-fill is unavailable right now.', 'error');
+    } finally {
+      setEnriching(false);
+    }
+  }
+
   function startChat() {
+    // Persist the confirmed/enriched fields to the real profile (best-effort).
+    api
+      .post('/onboarding/enrich/apply', {
+        jobTitle: draft.role.trim() || null,
+        company: draft.company.trim() || null,
+        industry: draft.industry.trim() || null,
+        location: (draft.location || draft.country).trim() || null,
+        bio: draft.about.trim() || null,
+        linkedin: draft.linkedin.trim() || null,
+      })
+      .catch(() => {});
     setEditing(false);
     setMessages([{ role: 'assistant', content: FIRST_QUESTION }]);
     setStage('chat');
@@ -430,8 +522,28 @@ export default function ChatbotOnboarding() {
               <ConfirmRow label="Country" value={draft.country} editing={editing} placeholder="Where you are based" guessed={known?.countryGuessed} onChange={(v) => setDraft((d) => ({ ...d, country: v }))} />
               <ConfirmRow label="Company" value={draft.company} editing={editing} placeholder="Where you work" guessed={known?.companyGuessed} onChange={(v) => setDraft((d) => ({ ...d, company: v }))} />
               <ConfirmRow label="Role" value={draft.role} editing={editing} placeholder="Your role or title" onChange={(v) => setDraft((d) => ({ ...d, role: v }))} />
-              <ConfirmRow label="LinkedIn" value={draft.linkedin} editing={editing} placeholder="Your LinkedIn URL" last onChange={(v) => setDraft((d) => ({ ...d, linkedin: v }))} />
+              <ConfirmRow label="LinkedIn" value={draft.linkedin} editing={editing} placeholder="Your LinkedIn URL" onChange={(v) => setDraft((d) => ({ ...d, linkedin: v }))} />
+              <ConfirmRow label="Industry" value={draft.industry} editing={editing} placeholder="Your industry" onChange={(v) => setDraft((d) => ({ ...d, industry: v }))} />
+              <ConfirmRow label="About" value={draft.about} editing={editing} placeholder="A short professional summary" last onChange={(v) => setDraft((d) => ({ ...d, about: v }))} />
             </div>
+            {enriching ? (
+              <div className="flex w-full items-center justify-center gap-2 text-sm text-rsn-red">
+                <Loader2 className="h-4 w-4 animate-spin" /> Pulling your details from your profile…
+              </div>
+            ) : enriched ? (
+              <div className="flex w-full items-center justify-center gap-1.5 text-xs text-gray-500">
+                <Sparkles className="h-3.5 w-3.5 text-rsn-red" /> Filled from your public profile — edit anything that's off.
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => runEnrich(draft.linkedin)}
+                disabled={!draft.linkedin.trim()}
+                className="flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-xl border border-rsn-red/30 px-3 text-sm font-medium text-rsn-red transition-colors hover:bg-rsn-red-light/40 disabled:opacity-40"
+              >
+                <Sparkles className="h-4 w-4" /> {draft.linkedin.trim() ? 'Auto-fill from my LinkedIn' : 'Add your LinkedIn above to auto-fill'}
+              </button>
+            )}
             <div className="flex w-full flex-col gap-2 sm:flex-row">
               <Button onClick={startChat} className="min-h-[48px] flex-1 justify-center text-base">
                 <Check className="mr-1.5 h-4 w-4" /> Yes, continue
@@ -455,7 +567,11 @@ export default function ChatbotOnboarding() {
   const placeholder = hasUserReply ? 'Type your reply...' : 'Write your reason here...';
 
   return (
-    <div className={shellClass} style={{ height: '100dvh' }}>
+    <div className="flex overflow-hidden bg-gradient-to-b from-white to-gray-50/50" style={{ height: '100dvh' }}>
+      <aside className="hidden w-80 shrink-0 flex-col overflow-y-auto border-r border-gray-100 bg-gray-50/40 p-5 lg:flex">
+        <ProfileCardPreview d={draft} enriched={enriched} name={(draft.name || firstName).trim()} />
+      </aside>
+      <div className={`${shellClass} min-w-0 flex-1`}>
       <header
         className="flex items-center gap-3 border-b border-gray-100 bg-white/80 px-4 pb-3 backdrop-blur"
         style={{ paddingTop: 'max(env(safe-area-inset-top), 0.75rem)' }}
@@ -546,6 +662,7 @@ export default function ChatbotOnboarding() {
           </form>
         </div>
       )}
+      </div>
     </div>
   );
 }
