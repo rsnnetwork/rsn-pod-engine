@@ -112,7 +112,7 @@ function ConfirmRow({
   );
 }
 
-const emptyDraft = { name: '', country: '', company: '', role: '', linkedin: '', industry: '', location: '', about: '' };
+const emptyDraft = { name: '', country: '', company: '', role: '', linkedin: '', industry: '', location: '', about: '', wantsToMeet: [] as string[], offers: [] as string[] };
 
 // Live profile card shown beside the chat (desktop) — fills in as we enrich + learn.
 function ProfileCardPreview({ d, enriched, name }: { d: typeof emptyDraft; enriched: boolean; name: string }) {
@@ -123,7 +123,7 @@ function ProfileCardPreview({ d, enriched, name }: { d: typeof emptyDraft; enric
         <div className="mt-0.5 text-sm leading-relaxed text-[#1a1a2e]">{value}</div>
       </div>
     ) : null;
-  const empty = !d.role && !d.company && !d.industry && !d.about;
+  const empty = !d.role && !d.company && !d.industry && !d.about && !d.wantsToMeet.length && !d.offers.length;
   return (
     <div className="w-full rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
       <div className="mb-1 flex items-center gap-1.5">
@@ -136,6 +136,26 @@ function ProfileCardPreview({ d, enriched, name }: { d: typeof emptyDraft; enric
       <Row label="Industry" value={d.industry} />
       <Row label="Location" value={d.location || d.country} />
       <Row label="About" value={d.about} />
+      {d.wantsToMeet.length > 0 && (
+        <div className="mb-3">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Looking to meet</div>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {d.wantsToMeet.map((w, i) => (
+              <span key={i} className="rounded-full bg-rsn-red-light/50 px-2 py-0.5 text-xs text-[#1a1a2e]">{w}</span>
+            ))}
+          </div>
+        </div>
+      )}
+      {d.offers.length > 0 && (
+        <div className="mb-3">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Can offer</div>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {d.offers.map((o, i) => (
+              <span key={i} className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700">{o}</span>
+            ))}
+          </div>
+        </div>
+      )}
       {d.linkedin && (
         <a href={d.linkedin} target="_blank" rel="noreferrer" className="text-xs font-medium text-rsn-red underline">
           LinkedIn
@@ -207,6 +227,8 @@ export default function ChatbotOnboarding() {
           industry: '',
           location: '',
           about: '',
+          wantsToMeet: [],
+          offers: [],
         });
         haveKnown = true;
       }
@@ -348,9 +370,25 @@ export default function ChatbotOnboarding() {
         finish: wrapMode === 'soft',
         hardFinish: wrapMode === 'hard',
       });
-      const data = res.data.data as { reply: string; ready: boolean };
+      const data = res.data.data as { reply: string; ready: boolean; profile?: any };
       setMessages((m) => [...m, { role: 'assistant', content: data.reply }]);
       setReady(!!data.ready);
+      // Live-populate the profile card from the per-turn extraction. Identity
+      // fields fill only when empty (don't clobber enrichment/edits); the
+      // chat-derived fields (about, wants, offers) take the latest.
+      const lp = data.profile;
+      if (lp) {
+        setDraft((d) => ({
+          ...d,
+          role: d.role || lp.role || '',
+          company: d.company || lp.company || '',
+          industry: d.industry || lp.industry || '',
+          location: d.location || lp.location || '',
+          about: lp.about || d.about || '',
+          wantsToMeet: Array.isArray(lp.wantsToMeet) && lp.wantsToMeet.length ? lp.wantsToMeet : d.wantsToMeet,
+          offers: Array.isArray(lp.offers) && lp.offers.length ? lp.offers : d.offers,
+        }));
+      }
     } catch (err: any) {
       if (err?.response?.status === 503) {
         setFallback(true);

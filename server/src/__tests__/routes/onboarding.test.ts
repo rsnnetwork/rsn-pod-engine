@@ -42,6 +42,7 @@ jest.mock('../../services/onboarding/chatbot.service', () => ({
   isEnabled: jest.fn(),
   converse: jest.fn(),
   extractIntent: jest.fn(),
+  liveProfileFromIntent: jest.fn(() => null),
   __esModule: true,
 }));
 
@@ -183,7 +184,8 @@ describe('POST /onboarding/chat', () => {
       .set('Authorization', `Bearer ${makeToken()}`)
       .send(body);
     expect(res.status).toBe(200);
-    expect(res.body.data).toEqual({ reply: 'What kind of founder?', ready: false });
+    // Response now also carries a live `profile` snapshot from the per-turn extraction.
+    expect(res.body.data).toMatchObject({ reply: 'What kind of founder?', ready: false });
     expect(intentRepo.markInProgress).toHaveBeenCalledWith('user-abc');
   });
 
@@ -229,14 +231,15 @@ describe('POST /onboarding/chat', () => {
     expect((chatbot.converse as jest.Mock).mock.calls[0][2]).toBe('hard');
   });
 
-  it('runs per-answer extraction in the background', async () => {
+  it('runs per-answer extraction and saves the running profile', async () => {
     (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
     (chatbot.converse as jest.Mock).mockResolvedValue({ reply: 'ok', ready: false });
+    (chatbot.extractIntent as jest.Mock).mockResolvedValue({ userRole: 'Founder' });
     await request(app)
       .post('/onboarding/chat')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send(body);
-    // Let the fire-and-forget extraction promise resolve.
+    // savePartialIntent is still fire-and-forget after the response — let it resolve.
     await new Promise((r) => setImmediate(r));
     expect(chatbot.extractIntent).toHaveBeenCalledTimes(1);
     expect(intentRepo.savePartialIntent).toHaveBeenCalledTimes(1);

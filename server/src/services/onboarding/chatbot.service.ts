@@ -107,3 +107,29 @@ export async function extractIntent(
   }
   return IntentSchema.parse(json);
 }
+
+// ─── Live profile snapshot ───────────────────────────────────────────────────
+// A light view of the running extraction for the onboarding card to populate as
+// the member talks (returned by /chat each turn).
+export interface LiveProfile {
+  role: string | null;
+  company: string | null;
+  industry: string | null;
+  location: string | null;
+  about: string | null;
+  wantsToMeet: string[];
+  offers: string[];
+}
+export function liveProfileFromIntent(i: ExtractedIntent): LiveProfile {
+  const s = (v?: string | null) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+  const a = (v?: string[] | null) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x.trim().length > 0) : []);
+  return {
+    role: s(i.userRole),
+    company: s(i.userCompany),
+    industry: s(i.userIndustry),
+    location: s(i.userCity) || s(i.userLocation),
+    about: s(i.userProfileSummary),
+    wantsToMeet: [...a(i.desiredPeople), ...a(i.desiredRoles)].slice(0, 6),
+    offers: a(i.userCanOffer).slice(0, 6),
+  };
+}
