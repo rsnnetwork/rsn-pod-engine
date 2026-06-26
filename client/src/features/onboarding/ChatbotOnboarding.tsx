@@ -291,9 +291,22 @@ export default function ChatbotOnboarding() {
     };
   }
 
+  // Persist confirmed/enriched fields to the real profile. Background-safe — runs
+  // whenever a result lands, even if the member has already continued to chat.
+  function applyFields(f: {
+    jobTitle?: string | null;
+    company?: string | null;
+    industry?: string | null;
+    location?: string | null;
+    bio?: string | null;
+    linkedin?: string | null;
+  }) {
+    api.post('/onboarding/enrich/apply', f, { timeout: 20000 }).catch(() => {});
+  }
+
   // Pull the member's public profile (their LinkedIn URL if we have one, else
-  // name + company + country) and fill the card they're watching. Best-effort —
-  // suggestions only, fully editable; never blocks onboarding.
+  // name + company + country) and fill the card they're watching. Runs in the
+  // BACKGROUND — the member can keep going; the result lands when it's ready.
   async function runEnrich(linkedinUrl?: string) {
     if (enriching) return;
     setEnriching(true);
@@ -312,6 +325,15 @@ export default function ChatbotOnboarding() {
           linkedin: d.linkedin || p.linkedinUrl || linkedinUrl || '',
         }));
         setEnriched(true);
+        // Background-save so the profile is populated even if they've moved to chat.
+        applyFields({
+          jobTitle: p.currentRole || p.headline || null,
+          company: p.currentCompany || null,
+          industry: p.industry || null,
+          location: p.location || null,
+          bio: p.summary || null,
+          linkedin: p.linkedinUrl || linkedinUrl || null,
+        });
       } else {
         addToast("We couldn't find a confident match — fill in what you can.", 'info');
       }
@@ -354,6 +376,14 @@ export default function ChatbotOnboarding() {
       linkedin: d.linkedin || p.linkedinUrl || candidate?.foundLinkedinUrl || '',
     }));
     setEnriched(true);
+    applyFields({
+      jobTitle: p.currentRole || p.headline || null,
+      company: p.currentCompany || null,
+      industry: p.industry || null,
+      location: p.location || null,
+      bio: p.summary || null,
+      linkedin: p.linkedinUrl || candidate?.foundLinkedinUrl || null,
+    });
     setCandidate(null);
   }
 
@@ -362,17 +392,15 @@ export default function ChatbotOnboarding() {
   }
 
   function startChat() {
-    // Persist the confirmed/enriched fields to the real profile (best-effort).
-    api
-      .post('/onboarding/enrich/apply', {
-        jobTitle: draft.role.trim() || null,
-        company: draft.company.trim() || null,
-        industry: draft.industry.trim() || null,
-        location: (draft.location || draft.country).trim() || null,
-        bio: draft.about.trim() || null,
-        linkedin: draft.linkedin.trim() || null,
-      })
-      .catch(() => {});
+    // Persist whatever the member confirmed/edited (background-safe).
+    applyFields({
+      jobTitle: draft.role.trim() || null,
+      company: draft.company.trim() || null,
+      industry: draft.industry.trim() || null,
+      location: (draft.location || draft.country).trim() || null,
+      bio: draft.about.trim() || null,
+      linkedin: draft.linkedin.trim() || null,
+    });
     setEditing(false);
     setMessages([{ role: 'assistant', content: FIRST_QUESTION }]);
     setStage('chat');
@@ -611,7 +639,7 @@ export default function ChatbotOnboarding() {
             </div>
             {enriching ? (
               <div className="flex w-full items-center justify-center gap-2 text-sm text-rsn-red">
-                <Loader2 className="h-4 w-4 animate-spin" /> Looking up your profile…
+                <Loader2 className="h-4 w-4 animate-spin" /> We're getting your details — your card will be ready shortly. Feel free to start the chat meanwhile.
               </div>
             ) : candidate?.profile ? (
               <div className="w-full rounded-2xl border-2 border-rsn-red/30 bg-rsn-red-light/20 p-4 text-left">
@@ -660,14 +688,13 @@ export default function ChatbotOnboarding() {
               </button>
             )}
             <div className="flex w-full flex-col gap-2 sm:flex-row">
-              {/* Disabled while the lookup runs so the member waits for the result. */}
-              <Button onClick={startChat} disabled={enriching} className="min-h-[48px] flex-1 justify-center text-base">
+              {/* Non-blocking: the lookup runs in the background, so continuing is always allowed. */}
+              <Button onClick={startChat} className="min-h-[48px] flex-1 justify-center text-base">
                 <Check className="mr-1.5 h-4 w-4" /> Yes, continue
               </Button>
               <Button
                 variant="secondary"
                 onClick={() => setEditing((e) => !e)}
-                disabled={enriching}
                 className="min-h-[48px] flex-1 justify-center text-base"
               >
                 <Pencil className="mr-1.5 h-4 w-4" /> {editing ? 'Done' : 'Edit'}
