@@ -88,13 +88,28 @@ const EMPTY: EnrichResult = { profile: null, confidence: 0, sources: [], foundLi
 const strArr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0) : []);
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
 
+/** Coerce confidence to 0..1. The model sometimes returns a word ("high") instead
+ *  of a number — map those rather than treating them as 0 (which hid real matches). */
+function toConfidence(v: unknown): number {
+  if (typeof v === 'number') return Math.max(0, Math.min(1, v));
+  if (typeof v === 'string') {
+    const t = v.trim().toLowerCase();
+    const n = Number(t);
+    if (!Number.isNaN(n)) return Math.max(0, Math.min(1, n));
+    if (t.includes('high')) return 0.9; // covers "very high"
+    if (t.includes('medium') || t.includes('moderate')) return 0.6;
+    if (t.includes('low')) return 0.2;
+  }
+  return 0;
+}
+
 /** Extract + validate the JSON object from the model's reply. Tolerant of surrounding prose. */
 export function parseEnriched(text: string): EnrichResult {
   const m = text && text.match(/\{[\s\S]*\}/);
   if (!m) return EMPTY;
   let j: any;
   try { j = JSON.parse(m[0]); } catch { return EMPTY; }
-  const confidence = Math.max(0, Math.min(1, Number(j.confidence) || 0));
+  const confidence = toConfidence(j.confidence);
   const profile: EnrichedProfile = {
     fullName: str(j.fullName), headline: str(j.headline), currentRole: str(j.currentRole),
     currentCompany: str(j.currentCompany), industry: str(j.industry), location: str(j.location),
@@ -106,7 +121,7 @@ export function parseEnriched(text: string): EnrichResult {
 }
 
 const PROMPT = (target: string) => `You are enriching a professional networking profile. Find this person's PUBLIC professional profile via web search and return ONLY a JSON object (no prose) with these keys:
-fullName, headline, currentRole, currentCompany, industry, location, summary, pastRoles (string array), education (array), skills (string array), likelyWantsToMeet (string array), likelyOffers (string array), linkedinUrl, confidence (0..1 = how sure you are this is the right person), sources (array of urls you used).
+fullName, headline, currentRole, currentCompany, industry, location, summary, pastRoles (string array), education (array), skills (string array), likelyWantsToMeet (string array), likelyOffers (string array), linkedinUrl, confidence (a NUMBER from 0 to 1, e.g. 0.85 — how sure you are this is the right person; do NOT use words like "high"), sources (array of urls you used).
 Use null or [] for anything you cannot support from search results. Do NOT invent facts. If you cannot find a confident match, set confidence low.
 
 Person: ${target}`;

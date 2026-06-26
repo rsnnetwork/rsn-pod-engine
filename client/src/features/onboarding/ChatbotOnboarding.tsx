@@ -298,7 +298,7 @@ export default function ChatbotOnboarding() {
     if (enriching) return;
     setEnriching(true);
     try {
-      const res = await api.post('/onboarding/enrich', { linkedinUrl: linkedinUrl || draft.linkedin || null }, { timeout: 45000 });
+      const res = await api.post('/onboarding/enrich', { linkedinUrl: linkedinUrl || draft.linkedin || null }, { timeout: 70000 });
       const r = res.data.data as { profile: any; confidence: number } | null;
       if (r?.profile && r.confidence >= 0.4) {
         const p = r.profile;
@@ -329,7 +329,7 @@ export default function ChatbotOnboarding() {
     if (enriching) return;
     setEnriching(true);
     try {
-      const res = await api.post('/onboarding/enrich', { linkedinUrl: null }, { timeout: 45000 });
+      const res = await api.post('/onboarding/enrich', { linkedinUrl: null }, { timeout: 70000 });
       const r = res.data.data as { profile: any; confidence: number; foundLinkedinUrl?: string } | null;
       if (r?.profile && r.confidence >= 0.4) setCandidate(r);
       // Low confidence / no match → stay quiet; they can fill in or add a LinkedIn.

@@ -64,6 +64,13 @@ describe('enrichment — parseEnriched', () => {
     expect(parseEnriched(JSON.stringify({ confidence: 1.5 })).confidence).toBe(1);
     expect(parseEnriched(JSON.stringify({ confidence: -0.5 })).confidence).toBe(0);
   });
+  it('maps word-confidence ("high"/"medium"/"low") to a number', () => {
+    expect(parseEnriched(JSON.stringify({ confidence: 'high', currentCompany: 'Stripe' })).confidence).toBe(0.9);
+    expect(parseEnriched(JSON.stringify({ confidence: 'very high' })).confidence).toBe(0.9);
+    expect(parseEnriched(JSON.stringify({ confidence: 'medium' })).confidence).toBe(0.6);
+    expect(parseEnriched(JSON.stringify({ confidence: 'low' })).confidence).toBe(0.2);
+    expect(parseEnriched(JSON.stringify({ confidence: '0.7' })).confidence).toBe(0.7);
+  });
   it('returns confidence 0 + null profile when no JSON is present', () => {
     const r = parseEnriched('no json here, sorry');
     expect(r.confidence).toBe(0);
