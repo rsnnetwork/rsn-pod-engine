@@ -477,52 +477,48 @@ export async function generateSingleRound(
     hardConstraints.push({ type: 'user_block', params: { pairs: blockedPairs } });
   }
 
-  // Load matching template weights from pod's template (or session config template, or default)
-  const templateId = sessionConfig.matchingTemplateId || null;
+  // Phase 3 — load the matching template (session-level first, then pod-level).
+  // A template's `weights` JSONB holds the FULL engine weight set; we merge it
+  // over DEFAULT_WEIGHTS so any unset signal falls back to the engine default.
+  // Pre-072 templates (no JSONB) fall back to the legacy 5-column mapping so
+  // their behaviour is unchanged.
+  const sessionTemplateId = sessionConfig.matchingTemplateId || null;
   let weights = DEFAULT_WEIGHTS;
 
-  // Try session-level template first, then pod-level, then default
-  const tplId = templateId || (session as any).podId
-    ? await query<{ matching_template_id: string | null }>(
-        `SELECT matching_template_id FROM pods WHERE id = $1`,
-        [(session as any).podId]
-      ).then(r => r.rows[0]?.matching_template_id).catch(() => null)
-    : null;
+  let effectiveTemplateId: string | null = sessionTemplateId;
+  if (!effectiveTemplateId && (session as any).podId) {
+    effectiveTemplateId = await query<{ matching_template_id: string | null }>(
+      `SELECT matching_template_id FROM pods WHERE id = $1`,
+      [(session as any).podId]
+    ).then((r) => r.rows[0]?.matching_template_id || null).catch(() => null);
+  }
 
-  if (tplId || templateId) {
+  if (effectiveTemplateId) {
     const tplResult = await query<{
-      weight_industry: number; weight_interests: number; weight_intent: number;
-      weight_experience: number; weight_location: number;
+      weights: any;
+      weight_industry: number | null; weight_interests: number | null; weight_intent: number | null;
+      weight_experience: number | null; weight_location: number | null;
       same_company_allowed: boolean;
-    }>(
-      templateId
-        ? `SELECT * FROM matching_templates WHERE id = $1`
-        : `SELECT * FROM matching_templates WHERE id = $1`,
-      [templateId || tplId]
-    );
+    }>(`SELECT * FROM matching_templates WHERE id = $1`, [effectiveTemplateId]);
     if (tplResult.rows.length > 0) {
       const t = tplResult.rows[0];
-      weights = {
-        sharedInterests: t.weight_interests,
-        sharedReasons: t.weight_intent,
-        industryDiversity: t.weight_industry,
-        companyDiversity: t.same_company_allowed ? 0 : 0.15,
-        languageMatch: t.weight_location,
-        encounterFreshness: t.weight_experience,
-        // Carry the Engine 1.0 spec defaults forward when a template is in
-        // use — template only configures the legacy six weights, premium +
-        // learning weights stay at engine defaults.
-        mutualPremiumRequest: DEFAULT_WEIGHTS.mutualPremiumRequest,
-        singlePremiumRequest: DEFAULT_WEIGHTS.singlePremiumRequest,
-        premiumBoost: DEFAULT_WEIGHTS.premiumBoost,
-        mutualMeetAgainBoost: DEFAULT_WEIGHTS.mutualMeetAgainBoost,
-        // Carry the onboarding-intent signals forward for templated events too.
-        intentAlignment: DEFAULT_WEIGHTS.intentAlignment,
-        designationDiversity: DEFAULT_WEIGHTS.designationDiversity,
-        avoidPenalty: DEFAULT_WEIGHTS.avoidPenalty,
-        eventIntentionAlignment: DEFAULT_WEIGHTS.eventIntentionAlignment,
-      };
-      logger.info({ templateId: templateId || tplId, weights }, 'Using matching template weights');
+      if (t.weights && typeof t.weights === 'object') {
+        // Phase 3 — full, correctly-named weight set, merged over defaults.
+        weights = { ...DEFAULT_WEIGHTS, ...(t.weights as Partial<typeof DEFAULT_WEIGHTS>) };
+      } else {
+        // Legacy template (pre-072): map the 5 columns; premium/learning/intent
+        // stay at engine defaults — identical to pre-Phase-3 behaviour.
+        weights = {
+          ...DEFAULT_WEIGHTS,
+          sharedInterests: t.weight_interests ?? DEFAULT_WEIGHTS.sharedInterests,
+          sharedReasons: t.weight_intent ?? DEFAULT_WEIGHTS.sharedReasons,
+          industryDiversity: t.weight_industry ?? DEFAULT_WEIGHTS.industryDiversity,
+          companyDiversity: t.same_company_allowed ? 0 : DEFAULT_WEIGHTS.companyDiversity,
+          languageMatch: t.weight_location ?? DEFAULT_WEIGHTS.languageMatch,
+          encounterFreshness: t.weight_experience ?? DEFAULT_WEIGHTS.encounterFreshness,
+        };
+      }
+      logger.info({ templateId: effectiveTemplateId }, 'Using matching template weights');
     }
   }
 
@@ -693,8 +689,8 @@ export async function generateSingleRound(
   // closest available" banner + a "finding next person" state on Re-match.
   // The return-value plumbing lands here; the client string is a follow-up.
 
-  // Persist this round's matches
-  await persistMatches(sessionId, [round], templateId || tplId || null);
+  // Persist this round's matches (store the resolved template id, if any).
+  await persistMatches(sessionId, [round], effectiveTemplateId || null);
 
   return round;
 }

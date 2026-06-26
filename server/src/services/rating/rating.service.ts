@@ -43,7 +43,7 @@ export async function submitRating(
             participant_a_id AS "participantAId", participant_b_id AS "participantBId",
             participant_c_id AS "participantCId",
             departed_user_ids AS "departedUserIds",
-            status, created_at AS "createdAt", ended_at
+            status, created_at AS "createdAt", ended_at, COALESCE(is_manual, FALSE) AS "isManual"
      FROM matches WHERE id = $1`,
     [input.matchId]
   );
@@ -148,10 +148,15 @@ export async function submitRating(
     // (they DID meet) — only the score is withheld.
     const scoreForAggregates = rating.excludedFromQualityStats ? null : input.qualityScore;
 
-    // Update encounter history
-    await upsertEncounterHistory(
-      client, fromUserId, toUserId, match.sessionId, input.matchId, scoreForAggregates, input.meetAgain
-    );
+    // Update encounter history — but NOT for manual breakout rooms (Phase 3):
+    // they are independent of the matching engine, so their ratings must never
+    // feed the cross-session learning loop (they'd tune the engine off arbitrary
+    // host-picked groupings). meeting_records below still records them for recap.
+    if (!(match as any).isManual) {
+      await upsertEncounterHistory(
+        client, fromUserId, toUserId, match.sessionId, input.matchId, scoreForAggregates, input.meetAgain
+      );
+    }
 
     // Phase 2 (1 May spec) — also update meeting_records so recap counts
     // stay deterministic. Encounter history is a cross-session aggregate;

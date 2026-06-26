@@ -415,6 +415,7 @@ router.get(
                 weight_industry AS "weightIndustry", weight_interests AS "weightInterests",
                 weight_intent AS "weightIntent", weight_experience AS "weightExperience",
                 weight_location AS "weightLocation",
+                weights, matching_policy AS "matchingPolicy", cooldown_months AS "cooldownMonths",
                 rematch_cooldown_rounds AS "rematchCooldownRounds",
                 exploration_level AS "explorationLevel",
                 same_company_allowed AS "sameCompanyAllowed",
@@ -434,6 +435,11 @@ router.get(
 const createTemplateSchema = z.object({
   name: z.string().min(1).max(200),
   description: z.string().max(2000).optional(),
+  // Phase 3 — full engine weight set (preferred). Legacy weight* fields below still accepted.
+  weights: z.record(z.string(), z.number().min(0).max(1)).optional(),
+  matchingPolicy: z.enum(['platform_wide', 'within_event', 'none', 'cooldown']).optional(),
+  cooldownMonths: z.number().int().min(1).max(60).optional(),
+  isDefault: z.boolean().optional(),
   weightIndustry: z.number().min(0).max(1).optional(),
   weightInterests: z.number().min(0).max(1).optional(),
   weightIntent: z.number().min(0).max(1).optional(),
@@ -456,12 +462,13 @@ router.post(
       const result = await query(
         `INSERT INTO matching_templates (name, description, weight_industry, weight_interests, weight_intent,
          weight_experience, weight_location, rematch_cooldown_rounds, exploration_level,
-         same_company_allowed, fallback_strategy, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+         same_company_allowed, fallback_strategy, created_by, weights, matching_policy, cooldown_months)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
         [b.name, b.description || null, b.weightIndustry ?? 0.3, b.weightInterests ?? 0.3,
          b.weightIntent ?? 0.2, b.weightExperience ?? 0.1, b.weightLocation ?? 0.1,
          b.rematchCooldownRounds ?? 3, b.explorationLevel ?? 0.2,
-         b.sameCompanyAllowed ?? false, b.fallbackStrategy ?? 'random', req.user!.userId]
+         b.sameCompanyAllowed ?? false, b.fallbackStrategy ?? 'random', req.user!.userId,
+         b.weights ? JSON.stringify(b.weights) : null, b.matchingPolicy || null, b.cooldownMonths ?? null]
       );
       // Phase May-19 realtime — admin-templates list refresh.
       fanoutAdminEntities('templates').catch(() => {});
@@ -485,12 +492,16 @@ router.put(
       await query(
         `UPDATE matching_templates SET name=$1, description=$2, weight_industry=$3, weight_interests=$4,
          weight_intent=$5, weight_experience=$6, weight_location=$7, rematch_cooldown_rounds=$8,
-         exploration_level=$9, same_company_allowed=$10, fallback_strategy=$11, updated_at=NOW()
-         WHERE id=$12`,
+         exploration_level=$9, same_company_allowed=$10, fallback_strategy=$11,
+         weights = COALESCE($12, weights), matching_policy = COALESCE($13, matching_policy),
+         cooldown_months = COALESCE($14, cooldown_months), updated_at=NOW()
+         WHERE id=$15`,
         [b.name, b.description || null, b.weightIndustry ?? 0.3, b.weightInterests ?? 0.3,
          b.weightIntent ?? 0.2, b.weightExperience ?? 0.1, b.weightLocation ?? 0.1,
          b.rematchCooldownRounds ?? 3, b.explorationLevel ?? 0.2,
-         b.sameCompanyAllowed ?? false, b.fallbackStrategy ?? 'random', req.params.id]
+         b.sameCompanyAllowed ?? false, b.fallbackStrategy ?? 'random',
+         b.weights ? JSON.stringify(b.weights) : null, b.matchingPolicy || null, b.cooldownMonths ?? null,
+         req.params.id]
       );
       // Phase May-19 realtime — admin-templates list refresh.
       fanoutAdminEntities('templates').catch(() => {});
@@ -798,7 +809,8 @@ async function computeMatching() {
               ROUND(AVG(confidence)::numeric, 3)::text AS avg_confidence,
               COUNT(*) FILTER (WHERE fallback_used)::text AS fallback_count
          FROM matches
-        WHERE created_at > NOW() - INTERVAL '30 days' AND status <> 'cancelled'`,
+        WHERE created_at > NOW() - INTERVAL '30 days' AND status <> 'cancelled'
+          AND COALESCE(is_manual, FALSE) = FALSE`,
     ),
     query<{ template: string; matches: string; avg_confidence: string | null; avg_rating: string | null }>(
       `SELECT COALESCE(t.name, '(default engine)') AS template,
@@ -809,6 +821,7 @@ async function computeMatching() {
          LEFT JOIN matching_templates t ON t.id = m.matching_template_id
          LEFT JOIN ratings r ON r.match_id = m.id AND NOT r.excluded_from_quality_stats
         WHERE m.created_at > NOW() - INTERVAL '30 days' AND m.status <> 'cancelled'
+          AND COALESCE(m.is_manual, FALSE) = FALSE
         GROUP BY t.name
         ORDER BY COUNT(m.*) DESC`,
     ),
@@ -816,6 +829,7 @@ async function computeMatching() {
       `SELECT COALESCE(match_reason, '(scored)') AS reason, COUNT(*)::text AS c
          FROM matches
         WHERE created_at > NOW() - INTERVAL '30 days' AND status <> 'cancelled'
+          AND COALESCE(is_manual, FALSE) = FALSE
         GROUP BY match_reason
         ORDER BY COUNT(*) DESC
         LIMIT 20`,
