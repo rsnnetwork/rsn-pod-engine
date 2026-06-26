@@ -189,6 +189,7 @@ export default function ChatbotOnboarding() {
   // Profile enrichment — pull public profile data + populate the card the user watches.
   const [enriching, setEnriching] = useState(false);
   const [enriched, setEnriched] = useState(false);
+  const [candidate, setCandidate] = useState<any | null>(null); // no-LinkedIn "is this you?" result
   const enrichTriggered = useRef(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -261,8 +262,13 @@ export default function ChatbotOnboarding() {
   useEffect(() => {
     if (!known || enrichTriggered.current) return;
     if (known.linkedin) {
+      // LinkedIn on file → high-confidence auto-fill.
       enrichTriggered.current = true;
       void runEnrich(known.linkedin);
+    } else if (known.name && (known.company || known.country)) {
+      // No LinkedIn → search by name + company + country, then ask "is this you?"
+      enrichTriggered.current = true;
+      void runDiscover();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [known]);
@@ -314,6 +320,45 @@ export default function ChatbotOnboarding() {
     } finally {
       setEnriching(false);
     }
+  }
+
+  // No-LinkedIn discovery: search by name + company + country and, because this is
+  // lower-confidence than a LinkedIn match, present the result as "is this you?"
+  // rather than filling silently.
+  async function runDiscover() {
+    if (enriching) return;
+    setEnriching(true);
+    try {
+      const res = await api.post('/onboarding/enrich', { linkedinUrl: null });
+      const r = res.data.data as { profile: any; confidence: number; foundLinkedinUrl?: string } | null;
+      if (r?.profile && r.confidence >= 0.4) setCandidate(r);
+      // Low confidence / no match → stay quiet; they can fill in or add a LinkedIn.
+    } catch {
+      /* best-effort — never block onboarding */
+    } finally {
+      setEnriching(false);
+    }
+  }
+
+  // Member confirmed the discovered candidate is them → fill the card from it.
+  function acceptCandidate() {
+    const p = candidate?.profile;
+    if (!p) return;
+    setDraft((d) => ({
+      ...d,
+      company: d.company || p.currentCompany || '',
+      role: d.role || p.currentRole || p.headline || '',
+      industry: d.industry || p.industry || '',
+      location: d.location || p.location || '',
+      about: d.about || p.summary || '',
+      linkedin: d.linkedin || p.linkedinUrl || candidate?.foundLinkedinUrl || '',
+    }));
+    setEnriched(true);
+    setCandidate(null);
+  }
+
+  function rejectCandidate() {
+    setCandidate(null);
   }
 
   function startChat() {
@@ -566,7 +611,39 @@ export default function ChatbotOnboarding() {
             </div>
             {enriching ? (
               <div className="flex w-full items-center justify-center gap-2 text-sm text-rsn-red">
-                <Loader2 className="h-4 w-4 animate-spin" /> Pulling your details from your profile…
+                <Loader2 className="h-4 w-4 animate-spin" /> Looking up your profile…
+              </div>
+            ) : candidate?.profile ? (
+              <div className="w-full rounded-2xl border-2 border-rsn-red/30 bg-rsn-red-light/20 p-4 text-left">
+                <div className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-[#1a1a2e]">
+                  <Sparkles className="h-4 w-4 text-rsn-red" /> Is this you?
+                </div>
+                <div className="font-semibold text-[#1a1a2e]">{candidate.profile.fullName || draft.name}</div>
+                {candidate.profile.headline && <div className="text-sm text-gray-600">{candidate.profile.headline}</div>}
+                {(candidate.profile.currentRole || candidate.profile.currentCompany) && (
+                  <div className="mt-0.5 text-sm text-gray-600">
+                    {[candidate.profile.currentRole, candidate.profile.currentCompany].filter(Boolean).join(' at ')}
+                  </div>
+                )}
+                {candidate.profile.location && <div className="text-xs text-gray-500">{candidate.profile.location}</div>}
+                {candidate.foundLinkedinUrl && (
+                  <a
+                    href={candidate.foundLinkedinUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-1 block break-all text-xs text-rsn-red underline"
+                  >
+                    {candidate.foundLinkedinUrl}
+                  </a>
+                )}
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                  <Button onClick={acceptCandidate} className="min-h-[44px] flex-1 justify-center text-sm">
+                    <Check className="mr-1.5 h-4 w-4" /> Yes, that's me
+                  </Button>
+                  <Button variant="secondary" onClick={rejectCandidate} className="min-h-[44px] flex-1 justify-center text-sm">
+                    Not me
+                  </Button>
+                </div>
               </div>
             ) : enriched ? (
               <div className="flex w-full items-center justify-center gap-1.5 text-xs text-gray-500">
