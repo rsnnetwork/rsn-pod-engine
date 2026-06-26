@@ -126,16 +126,31 @@ router.post(
         sendLlmDisabled(res);
         return;
       }
-      const known = await inferKnownProfile(req, req.user!.userId);
+      const userId = req.user!.userId;
+      const reqLinkedin = (req.body.linkedinUrl as string) || null;
+
+      // Cache: reuse a prior lookup so reloads / re-tests don't re-run (and re-pay
+      // for) a web search. Only re-search if the member supplied a NEW LinkedIn.
+      const cached = await enrichRepo.getCachedEnrichment(userId).catch(() => null);
+      if (cached && cached.confidence > 0) {
+        const cachedLinkedin = cached.foundLinkedinUrl || cached.profile?.linkedinUrl || null;
+        const sameLinkedin = !reqLinkedin || !cachedLinkedin || reqLinkedin === cachedLinkedin;
+        if (sameLinkedin) {
+          res.json({ success: true, data: cached } as ApiResponse);
+          return;
+        }
+      }
+
+      const known = await inferKnownProfile(req, userId);
       const result = await enrichment.enrichProfile({
         fullName: known.name || '',
         email: known.email,
         country: known.country,
         company: known.company,
-        linkedinUrl: ((req.body.linkedinUrl as string) || known.linkedin || null),
+        linkedinUrl: (reqLinkedin || known.linkedin || null),
       });
       if (result.confidence > 0) {
-        await enrichRepo.saveEnrichedCandidate(req.user!.userId, result).catch(() => {});
+        await enrichRepo.saveEnrichedCandidate(userId, result).catch(() => {});
       }
       const response: ApiResponse = { success: true, data: result };
       res.json(response);
@@ -193,29 +208,18 @@ router.post(
 
       const wrapMode: 'none' | 'soft' | 'hard' =
         req.body.hardFinish === true ? 'hard' : req.body.finish === true ? 'soft' : 'none';
-      // Run the host reply + per-answer extraction in PARALLEL so the live profile
-      // snapshot returns WITH the reply (the card populates as the member talks)
-      // without stacking the extraction's latency on top of the reply. Extraction
-      // runs on the member turns so far (the host reply carries no member data).
-      const [conv, intent] = await Promise.all([
-        chatbot.converse(messages, profile, wrapMode),
-        Promise.resolve(chatbot.extractIntent(messages)).catch((err) => {
-          logger.warn({ err, userId }, 'onboarding live extraction failed');
-          return null;
-        }),
-      ]);
-      const { reply, ready } = conv;
-      const liveProfile = intent ? chatbot.liveProfileFromIntent(intent) : null;
-      const response: ApiResponse = { success: true, data: { reply, ready, profile: liveProfile } };
+      // Return the host reply as soon as it's ready — NEVER wait on extraction.
+      // The per-answer extraction runs in the BACKGROUND (resume + matching), so a
+      // slow or rate-limited extraction can't delay the chat reply.
+      const { reply, ready } = await chatbot.converse(messages, profile, wrapMode);
+      const response: ApiResponse = { success: true, data: { reply, ready } };
       res.json(response);
 
-      // Persist the running profile + transcript in the background (resume support).
-      if (intent) {
-        const fullConversation: OnboardingMessage[] = [...messages, { role: 'assistant', content: reply }];
-        intentRepo
-          .savePartialIntent(userId, intent, fullConversation)
-          .catch((err) => logger.warn({ err, userId }, 'onboarding per-answer save failed'));
-      }
+      const fullConversation: OnboardingMessage[] = [...messages, { role: 'assistant', content: reply }];
+      chatbot
+        .extractIntent(fullConversation)
+        .then((intent) => intentRepo.savePartialIntent(userId, intent, fullConversation))
+        .catch((err) => logger.warn({ err, userId }, 'onboarding per-answer extraction failed'));
     } catch (err) {
       next(err);
     }

@@ -6,6 +6,17 @@
 import { query } from '../../db';
 import type { EnrichResult } from './enrichment.service';
 
+/** Read a previously-cached enrichment (so reloads/re-tests don't re-run a paid search). */
+export async function getCachedEnrichment(userId: string): Promise<EnrichResult | null> {
+  const r = await query<{ enriched: EnrichResult | null }>(
+    `SELECT inferred_profile->'enriched' AS enriched FROM user_intent_profiles WHERE user_id = $1`,
+    [userId],
+  );
+  const e = r.rows[0]?.enriched;
+  if (e && typeof e === 'object' && typeof (e as any).confidence === 'number') return e as EnrichResult;
+  return null;
+}
+
 /** Save the enriched candidate under user_intent_profiles.inferred_profile.enriched (merge, no clobber). */
 export async function saveEnrichedCandidate(userId: string, result: EnrichResult): Promise<void> {
   await query(
