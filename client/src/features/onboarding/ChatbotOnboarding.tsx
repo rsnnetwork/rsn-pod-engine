@@ -298,7 +298,7 @@ export default function ChatbotOnboarding() {
     if (enriching) return;
     setEnriching(true);
     try {
-      const res = await api.post('/onboarding/enrich', { linkedinUrl: linkedinUrl || draft.linkedin || null });
+      const res = await api.post('/onboarding/enrich', { linkedinUrl: linkedinUrl || draft.linkedin || null }, { timeout: 45000 });
       const r = res.data.data as { profile: any; confidence: number } | null;
       if (r?.profile && r.confidence >= 0.4) {
         const p = r.profile;
@@ -329,7 +329,7 @@ export default function ChatbotOnboarding() {
     if (enriching) return;
     setEnriching(true);
     try {
-      const res = await api.post('/onboarding/enrich', { linkedinUrl: null });
+      const res = await api.post('/onboarding/enrich', { linkedinUrl: null }, { timeout: 45000 });
       const r = res.data.data as { profile: any; confidence: number; foundLinkedinUrl?: string } | null;
       if (r?.profile && r.confidence >= 0.4) setCandidate(r);
       // Low confidence / no match → stay quiet; they can fill in or add a LinkedIn.
@@ -660,12 +660,14 @@ export default function ChatbotOnboarding() {
               </button>
             )}
             <div className="flex w-full flex-col gap-2 sm:flex-row">
-              <Button onClick={startChat} className="min-h-[48px] flex-1 justify-center text-base">
+              {/* Disabled while the lookup runs so the member waits for the result. */}
+              <Button onClick={startChat} disabled={enriching} className="min-h-[48px] flex-1 justify-center text-base">
                 <Check className="mr-1.5 h-4 w-4" /> Yes, continue
               </Button>
               <Button
                 variant="secondary"
                 onClick={() => setEditing((e) => !e)}
+                disabled={enriching}
                 className="min-h-[48px] flex-1 justify-center text-base"
               >
                 <Pencil className="mr-1.5 h-4 w-4" /> {editing ? 'Done' : 'Edit'}

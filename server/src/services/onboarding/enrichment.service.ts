@@ -129,7 +129,8 @@ export async function enrichProfile(signals: EnrichSignals): Promise<EnrichResul
       max_tokens: 2500,
       // web_search is incompatible with output_config.format (citations), so we prompt
       // for a JSON block and parse it — matches the validated spike.
-      tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 5 } as any],
+      // Cap web searches low — fewer round-trips = faster lookup (~15-20s vs ~35s).
+      tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 3 } as any],
       messages: [{ role: 'user', content: PROMPT(buildEnrichmentTarget(signals)) }],
     });
     const text = resp.content.map((b: any) => (b.type === 'text' ? b.text : '')).join('\n');
