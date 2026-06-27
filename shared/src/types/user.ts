@@ -103,6 +103,7 @@ export interface CreateUserInput {
   firstName: string;
   lastName: string;
   displayName?: string;
+  linkedinUrl?: string | null;
 }
 
 export interface UpdateUserInput {

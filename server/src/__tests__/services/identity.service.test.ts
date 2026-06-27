@@ -320,11 +320,12 @@ describe('Identity Service', () => {
         .mockResolvedValueOnce({ rows: [{ id: 'ml-1', email: 'newcomer@eideticdigital.com', expires_at: new Date(Date.now() + 60 * 60 * 1000), used_at: null }], rowCount: 1 }) // 1 SELECT magic_links
         .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 2 UPDATE used_at
         .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 3 getUserByEmail (verify) → null
-        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 4 getUserByEmail (createUser) → null
-        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 5 INSERT users
-        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 6 INSERT subscription
-        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 7 INSERT entitlements
-        .mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 }); // 8 getUserById → created user
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 4 getApprovedJoinRequestSeed → no approved request (fallback to email prefix)
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 5 getUserByEmail (createUser) → null
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 6 INSERT users
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 7 INSERT subscription
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 8 INSERT entitlements
+        .mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 }); // 9 getUserById → created user
 
       const result = await identityService.verifyMagicLink('some-token');
       expect(result.accessToken).toBeDefined();

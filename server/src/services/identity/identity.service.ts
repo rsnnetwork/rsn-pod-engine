@@ -131,9 +131,9 @@ export async function createUser(input: CreateUserInput): Promise<User> {
   const displayName = input.displayName || `${input.firstName} ${input.lastName}`;
 
   await query(
-    `INSERT INTO users (id, email, display_name, first_name, last_name, role, status, email_verified)
-     VALUES ($1, $2, $3, $4, $5, 'member', 'active', FALSE)`,
-    [id, input.email.toLowerCase(), displayName, input.firstName, input.lastName]
+    `INSERT INTO users (id, email, display_name, first_name, last_name, linkedin_url, role, status, email_verified)
+     VALUES ($1, $2, $3, $4, $5, $6, 'member', 'active', FALSE)`,
+    [id, input.email.toLowerCase(), displayName, input.firstName, input.lastName, input.linkedinUrl || null]
   );
 
   // Create default subscription
@@ -359,6 +359,48 @@ export async function sendMagicLink(email: string, requestedClientUrl?: string, 
 // only tolerates a near-simultaneous second hit (scanner pre-fetch / double-click).
 const MAGIC_LINK_REUSE_GRACE_MS = 2 * 60 * 1000;
 
+/**
+ * Seed values for a new account created via an approved join request: the real
+ * name + LinkedIn the applicant submitted. Falls back to the email prefix when
+ * there's no approved request (invite / other paths). This is what lets onboarding
+ * take the fast high-confidence LinkedIn path instead of a slow name search.
+ */
+async function getApprovedJoinRequestSeed(email: string): Promise<{
+  firstName: string;
+  lastName: string;
+  displayName: string;
+  linkedinUrl: string | null;
+}> {
+  const fallback = {
+    firstName: '',
+    lastName: '',
+    displayName: email.split('@')[0],
+    linkedinUrl: null as string | null,
+  };
+  try {
+    const r = await query<{ full_name: string | null; linkedin_url: string | null }>(
+      `SELECT full_name, linkedin_url FROM join_requests
+        WHERE lower(email) = lower($1) AND status = 'approved'
+        ORDER BY created_at DESC LIMIT 1`,
+      [email]
+    );
+    const jr = r.rows[0];
+    if (!jr) return fallback;
+    const linkedinUrl = jr.linkedin_url?.trim() || null;
+    const name = (jr.full_name || '').trim();
+    if (!name) return { ...fallback, linkedinUrl };
+    const parts = name.split(/\s+/);
+    return {
+      firstName: parts[0] || '',
+      lastName: parts.slice(1).join(' ') || '',
+      displayName: name,
+      linkedinUrl,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
 export async function verifyMagicLink(token: string): Promise<AuthTokenPair> {
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
 
@@ -404,12 +446,16 @@ export async function verifyMagicLink(token: string): Promise<AuthTokenPair> {
   // registration was allowed.
   let user = await getUserByEmail(magicLink.email);
   if (!user) {
+    // Seed name + LinkedIn from the applicant's approved join request so onboarding
+    // can use the fast high-confidence LinkedIn path (falls back to email prefix).
+    const seed = await getApprovedJoinRequestSeed(magicLink.email);
     try {
       user = await createUser({
         email: magicLink.email,
-        firstName: '',
-        lastName: '',
-        displayName: magicLink.email.split('@')[0],
+        firstName: seed.firstName,
+        lastName: seed.lastName,
+        displayName: seed.displayName,
+        linkedinUrl: seed.linkedinUrl,
       });
     } catch (err: any) {
       // Race condition: another request created the user between our check and insert

@@ -208,18 +208,30 @@ router.post(
 
       const wrapMode: 'none' | 'soft' | 'hard' =
         req.body.hardFinish === true ? 'hard' : req.body.finish === true ? 'soft' : 'none';
-      // Return the host reply as soon as it's ready — NEVER wait on extraction.
-      // The per-answer extraction runs in the BACKGROUND (resume + matching), so a
-      // slow or rate-limited extraction can't delay the chat reply.
-      const { reply, ready } = await chatbot.converse(messages, profile, wrapMode);
-      const response: ApiResponse = { success: true, data: { reply, ready } };
+      // Run the host reply + per-answer extraction concurrently so the live profile
+      // returns WITH the reply (the card populates every turn). The extraction is
+      // CAPPED (3s after the reply is ready) so a slow/throttled extraction can never
+      // hang the reply — that turn just returns without a profile and the next turn
+      // catches up; the background save still runs regardless.
+      const conversePromise = chatbot.converse(messages, profile, wrapMode);
+      const extractPromise = chatbot.extractIntent(messages).catch((err) => {
+        logger.warn({ err, userId }, 'onboarding live extraction failed');
+        return null;
+      });
+      const { reply, ready } = await conversePromise;
+      const intent = await Promise.race([
+        extractPromise,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+      ]);
+      const liveProfile = intent ? chatbot.liveProfileFromIntent(intent) : null;
+      const response: ApiResponse = { success: true, data: { reply, ready, profile: liveProfile } };
       res.json(response);
 
+      // Persist the running profile + transcript in the background (resume support).
       const fullConversation: OnboardingMessage[] = [...messages, { role: 'assistant', content: reply }];
-      chatbot
-        .extractIntent(fullConversation)
-        .then((intent) => intentRepo.savePartialIntent(userId, intent, fullConversation))
-        .catch((err) => logger.warn({ err, userId }, 'onboarding per-answer extraction failed'));
+      extractPromise
+        .then((i) => (i ? intentRepo.savePartialIntent(userId, i, fullConversation) : undefined))
+        .catch((err) => logger.warn({ err, userId }, 'onboarding per-answer save failed'));
     } catch (err) {
       next(err);
     }
