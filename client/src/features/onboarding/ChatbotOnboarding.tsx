@@ -114,6 +114,20 @@ function ConfirmRow({
 
 const emptyDraft = { name: '', country: '', company: '', role: '', linkedin: '', industry: '', location: '', about: '', wantsToMeet: [] as string[], offers: [] as string[] };
 
+// Merge two string lists — primary first (prioritized), de-duplicated case-insensitively.
+// The member's chat answers rank above the LinkedIn-inferred prefill, and nothing is lost.
+function mergePrioritized(primary: string[], secondary: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const x of [...(primary || []), ...(secondary || [])]) {
+    const k = (x || '').trim().toLowerCase();
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(x.trim());
+  }
+  return out;
+}
+
 // Live profile card shown beside the chat (desktop) — fills in as we enrich + learn.
 function ProfileCardPreview({ d, enriched, name }: { d: typeof emptyDraft; enriched: boolean; name: string }) {
   const Row = ({ label, value }: { label: string; value: string }) =>
@@ -323,6 +337,9 @@ export default function ChatbotOnboarding() {
           location: d.location || p.location || '',
           about: d.about || p.summary || '',
           linkedin: d.linkedin || p.linkedinUrl || linkedinUrl || '',
+          // Prefill interests/reasons-to-meet from LinkedIn; chat answers merge on top (prioritized).
+          wantsToMeet: d.wantsToMeet.length ? d.wantsToMeet : (Array.isArray(p.likelyWantsToMeet) ? p.likelyWantsToMeet : []),
+          offers: d.offers.length ? d.offers : (Array.isArray(p.likelyOffers) ? p.likelyOffers : []),
         }));
         setEnriched(true);
         // Background-save so the profile is populated even if they've moved to chat.
@@ -374,6 +391,8 @@ export default function ChatbotOnboarding() {
       location: d.location || p.location || '',
       about: d.about || p.summary || '',
       linkedin: d.linkedin || p.linkedinUrl || candidate?.foundLinkedinUrl || '',
+      wantsToMeet: d.wantsToMeet.length ? d.wantsToMeet : (Array.isArray(p.likelyWantsToMeet) ? p.likelyWantsToMeet : []),
+      offers: d.offers.length ? d.offers : (Array.isArray(p.likelyOffers) ? p.likelyOffers : []),
     }));
     setEnriched(true);
     applyFields({
@@ -458,8 +477,9 @@ export default function ChatbotOnboarding() {
           industry: d.industry || lp.industry || '',
           location: d.location || lp.location || '',
           about: lp.about || d.about || '',
-          wantsToMeet: Array.isArray(lp.wantsToMeet) && lp.wantsToMeet.length ? lp.wantsToMeet : d.wantsToMeet,
-          offers: Array.isArray(lp.offers) && lp.offers.length ? lp.offers : d.offers,
+          // Chat answers prioritized first, LinkedIn-inferred prefill kept underneath (deduped).
+          wantsToMeet: Array.isArray(lp.wantsToMeet) && lp.wantsToMeet.length ? mergePrioritized(lp.wantsToMeet, d.wantsToMeet) : d.wantsToMeet,
+          offers: Array.isArray(lp.offers) && lp.offers.length ? mergePrioritized(lp.offers, d.offers) : d.offers,
         }));
       }
     } catch (err: any) {

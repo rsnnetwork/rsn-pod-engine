@@ -373,6 +373,7 @@ async function getApprovedJoinRequestSeed(email: string): Promise<{
   displayName: string;
   linkedinUrl: string | null;
   enriched: EnrichResult | null;
+  reason: string | null;
 }> {
   const fallback = {
     firstName: '',
@@ -380,10 +381,11 @@ async function getApprovedJoinRequestSeed(email: string): Promise<{
     displayName: email.split('@')[0],
     linkedinUrl: null as string | null,
     enriched: null as EnrichResult | null,
+    reason: null as string | null,
   };
   try {
-    const r = await query<{ full_name: string | null; linkedin_url: string | null; enriched: EnrichResult | null }>(
-      `SELECT full_name, linkedin_url, enriched FROM join_requests
+    const r = await query<{ full_name: string | null; linkedin_url: string | null; enriched: EnrichResult | null; reason: string | null }>(
+      `SELECT full_name, linkedin_url, enriched, reason FROM join_requests
         WHERE lower(email) = lower($1) AND status = 'approved'
         ORDER BY created_at DESC LIMIT 1`,
       [email]
@@ -392,8 +394,9 @@ async function getApprovedJoinRequestSeed(email: string): Promise<{
     if (!jr) return fallback;
     const linkedinUrl = jr.linkedin_url?.trim() || null;
     const enriched = jr.enriched && typeof jr.enriched === 'object' ? jr.enriched : null;
+    const reason = jr.reason?.trim() || null;
     const name = (jr.full_name || '').trim();
-    if (!name) return { ...fallback, linkedinUrl, enriched };
+    if (!name) return { ...fallback, linkedinUrl, enriched, reason };
     const parts = name.split(/\s+/);
     return {
       firstName: parts[0] || '',
@@ -401,6 +404,7 @@ async function getApprovedJoinRequestSeed(email: string): Promise<{
       displayName: name,
       linkedinUrl,
       enriched,
+      reason,
     };
   } catch {
     return fallback;
@@ -479,6 +483,11 @@ export async function verifyMagicLink(token: string): Promise<AuthTokenPair> {
       await saveEnrichedCandidate(user.id, seed.enriched).catch((e) =>
         logger.warn({ err: e, userId: user!.id }, 'failed to copy preloaded enrichment')
       );
+    }
+    // Seed their stated reason for joining as an initial "why I want to meet" — the
+    // onboarding chat refines/overrides it (kept if the chat doesn't restate one).
+    if (user && seed.reason) {
+      await query('UPDATE users SET why_i_want_to_meet = $1 WHERE id = $2', [seed.reason, user.id]).catch(() => {});
     }
   }
 

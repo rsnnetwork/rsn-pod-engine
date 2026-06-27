@@ -17,10 +17,24 @@ import {
   OnboardingKnownProfile,
 } from '@rsn/shared';
 import { ExtractedIntent } from './intent.schema';
+import { getCachedEnrichment } from './enrichment.repo';
 
 function orNull(s: string | null | undefined): string | null {
   const t = (s ?? '').trim();
   return t || null;
+}
+
+/** Merge two lists, primary (chat) first, de-duplicated case-insensitively. */
+function mergeP(primary: string[], secondary: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const x of [...(primary || []), ...(secondary || [])]) {
+    const k = (x ?? '').trim().toLowerCase();
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(x.trim());
+  }
+  return out;
 }
 
 function truncate(s: string | null, n: number): string | null {
@@ -65,11 +79,20 @@ export async function saveIntentAndComplete(
   inferred?: OnboardingKnownProfile
 ): Promise<{ profileComplete: boolean }> {
   // ── Dual-write values for the existing users columns ──────────────────────
+  // Merge the chat-extracted lists with the LinkedIn-inferred prefill — chat first
+  // (prioritized), nothing lost. The prefill is the enrichment cached on the user's
+  // inferred_profile (preloaded at approval, or filled during onboarding).
+  const cached = await getCachedEnrichment(userId).catch(() => null);
+  const enr = cached?.profile;
+  const enrWants = Array.isArray(enr?.likelyWantsToMeet) ? (enr!.likelyWantsToMeet as string[]) : [];
+  const enrOffers = Array.isArray(enr?.likelyOffers) ? (enr!.likelyOffers as string[]) : [];
+  const enrSkills = Array.isArray(enr?.skills) ? (enr!.skills as string[]) : [];
+
   const reasonsToConnect = cleanArr(
     intent.matchingTags.length ? intent.matchingTags : [intent.reasonForMeeting],
     10
   );
-  const interests = cleanArr(intent.userInterests, 20);
+  const interests = cleanArr(mergeP(intent.userInterests, enrSkills), 20);
   const professionalRole = cleanArr([intent.userRole], 5);
   const goals = cleanArr([intent.desiredOutcome], 5);
 
@@ -81,12 +104,12 @@ export async function saveIntentAndComplete(
   const location = truncate(orNull(profile?.country), 200);
   const linkedin = truncate(orNull(profile?.linkedin), 1000);
   const displayNameOverride = truncate(orNull(profile?.name), 100);
-  const whoIWantToMeet = joinList([...intent.desiredPeople, ...intent.desiredRoles]);
+  const whoIWantToMeet = joinList(mergeP([...intent.desiredPeople, ...intent.desiredRoles], enrWants));
   const whyIWantToMeet = orNull(intent.reasonForMeeting);
   const myIntent = orNull(intent.desiredOutcome);
   const expertiseText = joinList(intent.userExpertise);
-  const whatICanHelpWith = joinList(intent.userCanOffer);
-  const whatICareAbout = joinList(intent.userInterests);
+  const whatICanHelpWith = joinList(mergeP(intent.userCanOffer, enrOffers));
+  const whatICareAbout = joinList(mergeP(intent.userInterests, enrSkills));
   const matchingNotes = truncate(orNull(intent.userProfileSummary), 1000);
 
   // ── Intent-profile blob ───────────────────────────────────────────────────
@@ -147,7 +170,7 @@ export async function saveIntentAndComplete(
          what_i_can_help_with = $10,
          what_i_care_about = $11,
          who_i_want_to_meet = $12,
-         why_i_want_to_meet = $13,
+         why_i_want_to_meet = COALESCE($13, why_i_want_to_meet),
          my_intent = $14,
          matching_notes = $15,
          first_name = $16,
