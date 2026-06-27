@@ -14,6 +14,8 @@ import {
 import { NotFoundError, ConflictError, UnauthorizedError, AppError } from '../../middleware/errors';
 import { invalidateUserStatusCache } from '../../middleware/auth';
 import { sendMagicLinkEmail } from '../email/email.service';
+import { saveEnrichedCandidate } from '../onboarding/enrichment.repo';
+import type { EnrichResult } from '../onboarding/enrichment.service';
 
 // ─── Registration Gate ──────────────────────────────────────────────────────
 // New users can only sign up if they have an approved join request OR a valid invite code.
@@ -370,16 +372,18 @@ async function getApprovedJoinRequestSeed(email: string): Promise<{
   lastName: string;
   displayName: string;
   linkedinUrl: string | null;
+  enriched: EnrichResult | null;
 }> {
   const fallback = {
     firstName: '',
     lastName: '',
     displayName: email.split('@')[0],
     linkedinUrl: null as string | null,
+    enriched: null as EnrichResult | null,
   };
   try {
-    const r = await query<{ full_name: string | null; linkedin_url: string | null }>(
-      `SELECT full_name, linkedin_url FROM join_requests
+    const r = await query<{ full_name: string | null; linkedin_url: string | null; enriched: EnrichResult | null }>(
+      `SELECT full_name, linkedin_url, enriched FROM join_requests
         WHERE lower(email) = lower($1) AND status = 'approved'
         ORDER BY created_at DESC LIMIT 1`,
       [email]
@@ -387,14 +391,16 @@ async function getApprovedJoinRequestSeed(email: string): Promise<{
     const jr = r.rows[0];
     if (!jr) return fallback;
     const linkedinUrl = jr.linkedin_url?.trim() || null;
+    const enriched = jr.enriched && typeof jr.enriched === 'object' ? jr.enriched : null;
     const name = (jr.full_name || '').trim();
-    if (!name) return { ...fallback, linkedinUrl };
+    if (!name) return { ...fallback, linkedinUrl, enriched };
     const parts = name.split(/\s+/);
     return {
       firstName: parts[0] || '',
       lastName: parts.slice(1).join(' ') || '',
       displayName: name,
       linkedinUrl,
+      enriched,
     };
   } catch {
     return fallback;
@@ -465,6 +471,14 @@ export async function verifyMagicLink(token: string): Promise<AuthTokenPair> {
       } else {
         throw err;
       }
+    }
+    // Copy the preloaded enrichment from the approved join request onto the new
+    // user's profile, so onboarding shows a fully-populated card with zero wait
+    // (the ~50s lookup already ran at approval time).
+    if (user && seed.enriched && seed.enriched.confidence > 0) {
+      await saveEnrichedCandidate(user.id, seed.enriched).catch((e) =>
+        logger.warn({ err: e, userId: user!.id }, 'failed to copy preloaded enrichment')
+      );
     }
   }
 

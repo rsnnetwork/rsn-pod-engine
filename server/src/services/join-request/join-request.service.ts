@@ -8,6 +8,7 @@ import config from '../../config';
 import { AppError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
 import { sendJoinRequestConfirmationEmail, sendJoinRequestWelcomeEmail, sendJoinRequestDeclineEmail, sendJoinRequestReminderEmail } from '../email/email.service';
+import { enrichProfile } from '../onboarding/enrichment.service';
 
 const APPROVAL_LINK_EXPIRY_DAYS = 7;
 
@@ -234,6 +235,17 @@ export async function reviewJoinRequest(
     sendJoinRequestWelcomeEmail(reviewed.email, reviewed.fullName, approvalLoginUrl).catch(err =>
       logger.error({ err, email: reviewed.email }, 'Failed to send welcome email')
     );
+
+    // Preload the LinkedIn enrichment NOW — during the approval → login gap — so the
+    // member's profile card is fully populated the instant they log in (instead of
+    // running the ~50s lookup at onboarding). Background; never blocks approval.
+    enrichProfile({ fullName: reviewed.fullName, email: reviewed.email, linkedinUrl: reviewed.linkedinUrl })
+      .then((result) =>
+        result.confidence > 0
+          ? query(`UPDATE join_requests SET enriched = $1::jsonb WHERE id = $2`, [JSON.stringify(result), id])
+          : undefined
+      )
+      .catch((err) => logger.warn({ err, id }, 'join-request enrichment preload failed (non-fatal)'));
 
     // In-app notification for the approved user (only if they already have an account)
     try {
