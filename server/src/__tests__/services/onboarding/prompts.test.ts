@@ -18,7 +18,19 @@ describe('onboarding prompts (v1.1)', () => {
     expect(p).toContain('Stefan');
     expect(p).toContain('Denmark');
     expect(p).toContain('Mister Raw');
-    expect(p).toContain('CONFIRMED');
+    expect(p).toContain('already KNOW');
+  });
+
+  it('weaves the full enriched profile (role, interests, who-they-want-to-meet) into the host', () => {
+    const p = buildHostSystemPrompt(
+      { name: 'Stefan', country: 'Denmark', company: 'Mister Raw' },
+      'none',
+      { role: 'Founder', industry: 'FoodTech', about: 'Builds raw pet food', wantsToMeet: ['investors'], offers: ['mentorship'], interests: ['nutrition'], whyHere: 'scale my brand' }
+    );
+    expect(p).toContain('Founder');
+    expect(p).toContain('investors');
+    expect(p).toContain('mentorship');
+    expect(p).toContain('scale my brand');
   });
 
   it('omits the known block when no profile is given', () => {

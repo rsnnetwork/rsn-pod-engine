@@ -58,6 +58,61 @@ export async function getOnboardingStatus(userId: string): Promise<OnboardingSta
   return r.rows[0]?.onboarding_status ?? 'not_started';
 }
 
+/**
+ * Everything the host should KNOW about the member — the LinkedIn enrichment plus
+ * any saved fields — so it can answer "who am I", never re-ask, and personalise.
+ * Prefers the member's saved/confirmed values, falls back to the enrichment.
+ */
+export async function getKnownProfileForHost(userId: string): Promise<{
+  role: string | null;
+  industry: string | null;
+  about: string | null;
+  wantsToMeet: string[];
+  offers: string[];
+  interests: string[];
+  whyHere: string | null;
+}> {
+  const empty = { role: null, industry: null, about: null, wantsToMeet: [] as string[], offers: [] as string[], interests: [] as string[], whyHere: null };
+  try {
+    const r = await query<{
+      job_title: string | null;
+      industry: string | null;
+      bio: string | null;
+      who_i_want_to_meet: string | null;
+      what_i_can_help_with: string | null;
+      why_i_want_to_meet: string | null;
+      interests: string[] | null;
+      enriched: any;
+    }>(
+      `SELECT u.job_title, u.industry, u.bio, u.who_i_want_to_meet, u.what_i_can_help_with,
+              u.why_i_want_to_meet, u.interests, uip.inferred_profile->'enriched' AS enriched
+         FROM users u
+         LEFT JOIN user_intent_profiles uip ON uip.user_id = u.id
+        WHERE u.id = $1`,
+      [userId]
+    );
+    const row = r.rows[0];
+    if (!row) return empty;
+    const enr = (row.enriched && typeof row.enriched === 'object' ? row.enriched.profile : null) || {};
+    const splitList = (s: string | null) => (s ? String(s).split(',').map((x) => x.trim()).filter(Boolean) : []);
+    const arr = (v: unknown) => (Array.isArray(v) ? (v as string[]).filter((x) => typeof x === 'string' && x.trim().length > 0) : []);
+    const wants = row.who_i_want_to_meet ? splitList(row.who_i_want_to_meet) : arr(enr.likelyWantsToMeet);
+    const offers = row.what_i_can_help_with ? splitList(row.what_i_can_help_with) : arr(enr.likelyOffers);
+    const interests = Array.isArray(row.interests) && row.interests.length ? row.interests : arr(enr.skills);
+    return {
+      role: orNull(row.job_title) || orNull(enr.currentRole) || orNull(enr.headline),
+      industry: orNull(row.industry) || orNull(enr.industry),
+      about: orNull(row.bio) || orNull(enr.summary),
+      wantsToMeet: wants.slice(0, 8),
+      offers: offers.slice(0, 8),
+      interests: interests.slice(0, 12),
+      whyHere: orNull(row.why_i_want_to_meet),
+    };
+  } catch {
+    return empty;
+  }
+}
+
 /** Best-effort: move a fresh user into 'in_progress' on their first host turn. */
 export async function markInProgress(userId: string): Promise<void> {
   await query(

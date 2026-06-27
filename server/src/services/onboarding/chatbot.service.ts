@@ -18,6 +18,7 @@ import {
   EXTRACTION_PROMPT,
   READY_TOKEN,
   serializeConversation,
+  type HostKnownExtra,
 } from './prompts';
 
 let client: Anthropic | null = null;
@@ -45,13 +46,14 @@ export function isEnabled(): boolean {
 export async function converse(
   messages: OnboardingMessage[],
   profile?: OnboardingConfirmedProfile,
-  wrapMode: 'none' | 'soft' | 'hard' = 'none'
+  wrapMode: 'none' | 'soft' | 'hard' = 'none',
+  extra?: HostKnownExtra
 ): Promise<{ reply: string; ready: boolean }> {
   const anthropic = getClient();
   const resp = await anthropic.messages.create({
     model: config.onboardingChatModel,
     max_tokens: 1024,
-    system: buildHostSystemPrompt(profile, wrapMode),
+    system: buildHostSystemPrompt(profile, wrapMode, extra),
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
   });
 

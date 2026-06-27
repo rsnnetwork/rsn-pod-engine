@@ -18,21 +18,41 @@ export const READY_TOKEN = '<<READY>>';
 export const FIRST_QUESTION =
   "Reason works best when we understand why you're here. What is your reason for joining? One sentence is enough.";
 
-function knownBlock(p?: OnboardingConfirmedProfile): string {
-  if (!p) return '';
+// Richer known profile, loaded server-side from the LinkedIn enrichment + the
+// user's saved fields, so the host knows the member fully (not just name/company).
+export interface HostKnownExtra {
+  role?: string | null;
+  industry?: string | null;
+  about?: string | null;
+  wantsToMeet?: string[];
+  offers?: string[];
+  interests?: string[];
+  whyHere?: string | null;
+}
+
+function knownBlock(p?: OnboardingConfirmedProfile, extra?: HostKnownExtra): string {
   const lines: string[] = [];
-  const name = p.name || p.firstName;
+  const name = p?.name || p?.firstName;
   if (name) lines.push(`  Name: ${name}`);
-  if (p.country) lines.push(`  Country: ${p.country}`);
-  if (p.company) lines.push(`  Company: ${p.company}`);
+  if (p?.country) lines.push(`  Country: ${p.country}`);
+  if (p?.company) lines.push(`  Company: ${p.company}`);
+  const role = extra?.role || p?.role;
+  if (role) lines.push(`  Role: ${role}`);
+  if (extra?.industry) lines.push(`  Industry: ${extra.industry}`);
+  if (extra?.about) lines.push(`  About them: ${extra.about}`);
+  if (extra?.wantsToMeet?.length) lines.push(`  Who they want to meet: ${extra.wantsToMeet.join(', ')}`);
+  if (extra?.offers?.length) lines.push(`  What they can offer: ${extra.offers.join(', ')}`);
+  if (extra?.interests?.length) lines.push(`  Interests: ${extra.interests.join(', ')}`);
+  if (extra?.whyHere) lines.push(`  Why they joined: ${extra.whyHere}`);
   if (!lines.length) return '';
-  return `\n\nYou already know and have CONFIRMED these about the member. Never ask for them again, and never re-introduce yourself or re-welcome them:\n${lines.join('\n')}`;
+  return `\n\nYou already KNOW these about the member, from their LinkedIn and their request. Treat them as established facts: never ask for them again, and never re-introduce or re-welcome. If the member asks what you know about them, or "who am I", tell them these plainly and warmly in a sentence or two:\n${lines.join('\n')}`;
 }
 
 /** Build the host system prompt, weaving in the confirmed known profile. */
 export function buildHostSystemPrompt(
   profile?: OnboardingConfirmedProfile,
-  wrapMode: 'none' | 'soft' | 'hard' = 'none'
+  wrapMode: 'none' | 'soft' | 'hard' = 'none',
+  extra?: HostKnownExtra
 ): string {
   const wrap =
     wrapMode === 'hard'
@@ -46,7 +66,7 @@ Style rules (strict):
 1. Never use dashes of any kind in your messages. No em dash, no en dash, no hyphen used as a pause. Use a comma or a full stop instead.
 2. No generic or corporate phrasing (for example "your space for meaningful connections", "let us dive in", "I am here to help"). No filler. No long formal explanations.
 3. One question at a time. One or two short sentences per message.
-4. Always reply in English.${knownBlock(profile)}
+4. Always reply in English.${knownBlock(profile, extra)}
 
 The member has just been welcomed by name and has confirmed their basic details. They have already been asked their reason for joining and have answered it. You want a usable sense of a few more things, in order of importance:
   1. Who would be valuable for them to meet, and roughly why.

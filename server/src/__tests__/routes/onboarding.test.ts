@@ -52,6 +52,7 @@ jest.mock('../../services/onboarding/intent.repo', () => ({
   saveIntentAndComplete: jest.fn(),
   savePartialIntent: jest.fn(),
   getResume: jest.fn(),
+  getKnownProfileForHost: jest.fn(),
   __esModule: true,
 }));
 

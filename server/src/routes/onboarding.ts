@@ -213,7 +213,10 @@ router.post(
       // CAPPED (3s after the reply is ready) so a slow/throttled extraction can never
       // hang the reply — that turn just returns without a profile and the next turn
       // catches up; the background save still runs regardless.
-      const conversePromise = chatbot.converse(messages, profile, wrapMode);
+      // Everything we already know (LinkedIn enrichment + saved fields) so the host
+      // can answer "who am I", never re-ask, and personalise.
+      const hostKnown = await Promise.resolve(intentRepo.getKnownProfileForHost(userId)).catch(() => undefined);
+      const conversePromise = chatbot.converse(messages, profile, wrapMode, hostKnown);
       const extractPromise = chatbot.extractIntent(messages).catch((err) => {
         logger.warn({ err, userId }, 'onboarding live extraction failed');
         return null;
