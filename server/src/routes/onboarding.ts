@@ -213,33 +213,53 @@ router.post(
 
       const wrapMode: 'none' | 'soft' | 'hard' =
         req.body.hardFinish === true ? 'hard' : req.body.finish === true ? 'soft' : 'none';
-      // Run the host reply + per-answer extraction concurrently so the live profile
-      // returns WITH the reply (the card populates every turn). The extraction is
-      // CAPPED (3s after the reply is ready) so a slow/throttled extraction can never
-      // hang the reply — that turn just returns without a profile and the next turn
-      // catches up; the background save still runs regardless.
       // Everything we already know (LinkedIn enrichment + saved fields) so the host
       // can answer "who am I", never re-ask, and personalise.
       const hostKnown = await Promise.resolve(intentRepo.getKnownProfileForHost(userId)).catch(() => undefined);
-      const conversePromise = chatbot.converse(messages, profile, wrapMode, hostKnown);
-      const extractPromise = chatbot.extractIntent(messages).catch((err) => {
+      // Reply is converse ONLY — kept fast. The live card update runs as a separate
+      // call (POST /onboarding/profile) so a slow extraction can never delay or cap
+      // the reply, and the card fills reliably on every turn.
+      const { reply, ready } = await chatbot.converse(messages, profile, wrapMode, hostKnown);
+      const response: ApiResponse = { success: true, data: { reply, ready } };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /onboarding/profile ────────────────────────────────────────────────
+// Extract the running intent from the conversation and return a live profile for
+// the card. Decoupled from /chat so the card fills reliably EVERY turn — no time
+// cap, and a slow extraction never delays the host reply. Also persists the
+// partial intent + transcript for resume. The client sends the full conversation
+// (including the latest host reply) and uses the result to update the card.
+router.post(
+  '/profile',
+  authenticate,
+  onboardingChatLimiter,
+  validate(messagesSchema),
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (!chatbot.isEnabled()) {
+        res.json({ success: true, data: { profile: null } } as ApiResponse);
+        return;
+      }
+      const userId = req.user!.userId;
+      const messages = req.body.messages as OnboardingMessage[];
+      const intent = await chatbot.extractIntent(messages).catch((err) => {
         logger.warn({ err, userId }, 'onboarding live extraction failed');
         return null;
       });
-      const { reply, ready } = await conversePromise;
-      const intent = await Promise.race([
-        extractPromise,
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
-      ]);
       const liveProfile = intent ? chatbot.liveProfileFromIntent(intent) : null;
-      const response: ApiResponse = { success: true, data: { reply, ready, profile: liveProfile } };
-      res.json(response);
+      res.json({ success: true, data: { profile: liveProfile } } as ApiResponse);
 
-      // Persist the running profile + transcript in the background (resume support).
-      const fullConversation: OnboardingMessage[] = [...messages, { role: 'assistant', content: reply }];
-      extractPromise
-        .then((i) => (i ? intentRepo.savePartialIntent(userId, i, fullConversation) : undefined))
-        .catch((err) => logger.warn({ err, userId }, 'onboarding per-answer save failed'));
+      // Persist the running intent + transcript in the background (resume + matching).
+      if (intent) {
+        intentRepo
+          .savePartialIntent(userId, intent, messages)
+          .catch((err) => logger.warn({ err, userId }, 'onboarding per-answer save failed'));
+      }
     } catch (err) {
       next(err);
     }

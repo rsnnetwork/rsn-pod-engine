@@ -185,7 +185,7 @@ describe('POST /onboarding/chat', () => {
       .set('Authorization', `Bearer ${makeToken()}`)
       .send(body);
     expect(res.status).toBe(200);
-    // Response now also carries a live `profile` snapshot from the per-turn extraction.
+    // Reply path is converse-only now; the live profile comes from /onboarding/profile.
     expect(res.body.data).toMatchObject({ reply: 'What kind of founder?', ready: false });
     expect(intentRepo.markInProgress).toHaveBeenCalledWith('user-abc');
   });
@@ -232,18 +232,60 @@ describe('POST /onboarding/chat', () => {
     expect((chatbot.converse as jest.Mock).mock.calls[0][2]).toBe('hard');
   });
 
-  it('runs per-answer extraction and saves the running profile', async () => {
+  it('does NOT run extraction on /chat (decoupled to /profile for a fast reply)', async () => {
     (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
     (chatbot.converse as jest.Mock).mockResolvedValue({ reply: 'ok', ready: false });
-    (chatbot.extractIntent as jest.Mock).mockResolvedValue({ userRole: 'Founder' });
     await request(app)
       .post('/onboarding/chat')
       .set('Authorization', `Bearer ${makeToken()}`)
       .send(body);
-    // savePartialIntent is still fire-and-forget after the response — let it resolve.
     await new Promise((r) => setImmediate(r));
+    expect(chatbot.extractIntent).not.toHaveBeenCalled();
+    expect(intentRepo.savePartialIntent).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /onboarding/profile', () => {
+  const profileBody = {
+    messages: [
+      { role: 'user', content: 'I want to meet founders' },
+      { role: 'assistant', content: 'Got it.' },
+    ],
+  };
+
+  it('returns 200 with a null profile when the LLM is disabled', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(false);
+    const res = await request(app)
+      .post('/onboarding/profile')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send(profileBody);
+    expect(res.status).toBe(200);
+    expect(res.body.data.profile).toBeNull();
+    expect(chatbot.extractIntent).not.toHaveBeenCalled();
+  });
+
+  it('extracts the live profile and saves the running intent (no time cap)', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+    (chatbot.extractIntent as jest.Mock).mockResolvedValue({ userRole: 'Founder' });
+    (chatbot.liveProfileFromIntent as jest.Mock).mockReturnValue({ role: 'Founder', wantsToMeet: ['investors'], offers: [] });
+    const res = await request(app)
+      .post('/onboarding/profile')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send(profileBody);
+    expect(res.status).toBe(200);
+    expect(res.body.data.profile).toMatchObject({ role: 'Founder' });
     expect(chatbot.extractIntent).toHaveBeenCalledTimes(1);
+    await new Promise((r) => setImmediate(r));
     expect(intentRepo.savePartialIntent).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an empty messages array', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+    const res = await request(app)
+      .post('/onboarding/profile')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ messages: [] });
+    expect(res.status).toBe(400);
   });
 });
 

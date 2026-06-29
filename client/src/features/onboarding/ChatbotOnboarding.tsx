@@ -468,26 +468,31 @@ export default function ChatbotOnboarding() {
         finish: wrapMode === 'soft',
         hardFinish: wrapMode === 'hard',
       });
-      const data = res.data.data as { reply: string; ready: boolean; profile?: any };
+      const data = res.data.data as { reply: string; ready: boolean };
       setMessages((m) => [...m, { role: 'assistant', content: data.reply }]);
       setReady(!!data.ready);
-      // Live-populate the profile card from the per-turn extraction. Identity
-      // fields fill only when empty (don't clobber enrichment/edits); the
-      // chat-derived fields (about, wants, offers) take the latest.
-      const lp = data.profile;
-      if (lp) {
-        setDraft((d) => ({
-          ...d,
-          role: d.role || lp.role || '',
-          company: d.company || lp.company || '',
-          industry: d.industry || lp.industry || '',
-          location: d.location || lp.location || '',
-          about: lp.about || d.about || '',
-          // Chat answers prioritized first, LinkedIn-inferred prefill kept underneath (deduped).
-          wantsToMeet: Array.isArray(lp.wantsToMeet) && lp.wantsToMeet.length ? mergePrioritized(lp.wantsToMeet, d.wantsToMeet) : d.wantsToMeet,
-          offers: Array.isArray(lp.offers) && lp.offers.length ? mergePrioritized(lp.offers, d.offers) : d.offers,
-        }));
-      }
+      // Live-populate the card from a SEPARATE extraction call (no time cap) so it
+      // fills reliably on EVERY turn without delaying the reply above. Identity
+      // fields fill only when empty (don't clobber enrichment/edits); chat-derived
+      // fields (about, wants, offers) take the latest, chat-prioritized.
+      const full: OnboardingMessage[] = [...next.slice(1), { role: 'assistant', content: data.reply }];
+      api
+        .post('/onboarding/profile', { messages: full }, { timeout: 30000 })
+        .then((pr) => {
+          const lp = pr.data.data?.profile;
+          if (!lp) return;
+          setDraft((d) => ({
+            ...d,
+            role: d.role || lp.role || '',
+            company: d.company || lp.company || '',
+            industry: d.industry || lp.industry || '',
+            location: d.location || lp.location || '',
+            about: lp.about || d.about || '',
+            wantsToMeet: Array.isArray(lp.wantsToMeet) && lp.wantsToMeet.length ? mergePrioritized(lp.wantsToMeet, d.wantsToMeet) : d.wantsToMeet,
+            offers: Array.isArray(lp.offers) && lp.offers.length ? mergePrioritized(lp.offers, d.offers) : d.offers,
+          }));
+        })
+        .catch(() => {});
     } catch (err: any) {
       if (err?.response?.status === 503) {
         setFallback(true);
