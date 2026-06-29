@@ -82,9 +82,11 @@ export interface EnrichResult {
   confidence: number;
   sources: string[];
   foundLinkedinUrl: string | null;
+  /** The LinkedIn URL we searched WITH (so the cache only re-runs on a genuinely new URL). */
+  requestedLinkedinUrl: string | null;
 }
 
-const EMPTY: EnrichResult = { profile: null, confidence: 0, sources: [], foundLinkedinUrl: null };
+const EMPTY: EnrichResult = { profile: null, confidence: 0, sources: [], foundLinkedinUrl: null, requestedLinkedinUrl: null };
 const strArr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0) : []);
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
 
@@ -117,14 +119,57 @@ export function parseEnriched(text: string): EnrichResult {
     skills: strArr(j.skills), likelyWantsToMeet: strArr(j.likelyWantsToMeet), likelyOffers: strArr(j.likelyOffers),
     linkedinUrl: str(j.linkedinUrl),
   };
-  return { profile, confidence, sources: strArr(j.sources), foundLinkedinUrl: str(j.linkedinUrl) };
+  return { profile, confidence, sources: strArr(j.sources), foundLinkedinUrl: str(j.linkedinUrl), requestedLinkedinUrl: null };
 }
 
-const PROMPT = (target: string) => `You are enriching a professional networking profile. Find this person's PUBLIC professional profile via web search and return ONLY a JSON object (no prose) with these keys:
-fullName, headline, currentRole, currentCompany, industry, location, summary, pastRoles (string array), education (array), skills (string array), likelyWantsToMeet (string array), likelyOffers (string array), linkedinUrl, confidence (a NUMBER from 0 to 1, e.g. 0.85 — how sure you are this is the right person; do NOT use words like "high"), sources (array of urls you used).
-Use null or [] for anything you cannot support from search results. Do NOT invent facts. If you cannot find a confident match, set confidence low.
+/** The /in/{slug} identity from a LinkedIn URL, lowercased — for comparing two URLs. */
+export function linkedinSlug(url?: string | null): string | null {
+  if (!url) return null;
+  const m = String(url).toLowerCase().match(/\/in\/([^/?#]+)/);
+  if (!m) return null;
+  try { return decodeURIComponent(m[1]).replace(/\/+$/, ''); } catch { return m[1].replace(/\/+$/, ''); }
+}
 
-Person: ${target}`;
+/**
+ * OUR-side identity check. The member always confirms ("is this you?"), but we must
+ * present a GOOD guess — not a random namesake. If they gave an exact LinkedIn URL
+ * and the search came back tied to a DIFFERENT profile, it's the wrong person
+ * (common-name case) — downgrade so we never auto-fill a stranger's data. Also
+ * records the URL we searched with for the cache.
+ */
+export function applyMatchVerification(result: EnrichResult, requestedLinkedinUrl: string | null): EnrichResult {
+  const out: EnrichResult = { ...result, requestedLinkedinUrl: requestedLinkedinUrl || null };
+  const reqSlug = linkedinSlug(requestedLinkedinUrl);
+  const foundSlug = linkedinSlug(result.foundLinkedinUrl);
+  if (reqSlug && foundSlug && reqSlug !== foundSlug) {
+    return { ...out, confidence: Math.min(out.confidence, 0.15) };
+  }
+  return out;
+}
+
+/** Haiku (and older models) use the basic web_search tool; Opus 4.6+/Sonnet 4.6 get dynamic filtering. */
+function webSearchToolType(model: string): 'web_search_20260209' | 'web_search_20250305' {
+  return /opus-4-(6|7|8)|sonnet-4-6/.test(model) ? 'web_search_20260209' : 'web_search_20250305';
+}
+
+const PROMPT = (s: EnrichSignals): string => {
+  const company = s.company?.trim() || companyFromEmail(s.email);
+  const loc = [s.city?.trim(), s.country?.trim()].filter(Boolean).join(', ');
+  const lines: string[] = [
+    'You are enriching a professional networking profile. Use web search to find this specific person\'s PUBLIC professional profile.',
+    `Person: ${s.fullName?.trim() || ''}`,
+  ];
+  if (s.linkedinUrl?.trim()) {
+    lines.push(`They gave THIS exact LinkedIn URL: ${s.linkedinUrl.trim()} — find the person at THIS specific profile. Many people share the same name, so only return data you are confident belongs to THIS exact profile/person, and report the LinkedIn URL you actually found.`);
+  }
+  if (company) lines.push(`We independently know their company is roughly: ${company}.`);
+  if (loc) lines.push(`We independently know their location is roughly: ${loc}.`);
+  if (company || loc) lines.push('Use those to confirm identity: if what you find matches them, be more confident; if it clearly contradicts them, be less confident.');
+  lines.push('If you CANNOT confidently identify this specific person (for example a common name with many matches and nothing to corroborate), return confidence 0 with null/empty fields. Do NOT return a different person\'s data.');
+  lines.push('Return ONLY a JSON object (no prose) with these keys: fullName, headline, currentRole, currentCompany, industry, location, summary, pastRoles (string array), education (array), skills (string array), likelyWantsToMeet (string array), likelyOffers (string array), linkedinUrl (the profile URL you actually found), confidence (a NUMBER from 0 to 1, e.g. 0.85; do NOT use words like "high"), sources (array of urls you used).');
+  lines.push('Use null or [] for anything you cannot support from search results. Do NOT invent facts.');
+  return lines.join('\n');
+};
 
 /** True when enrichment can run (key present). Routes fall back gracefully when false. */
 export function isEnrichmentEnabled(): boolean {
@@ -138,20 +183,23 @@ export function isEnrichmentEnabled(): boolean {
  */
 export async function enrichProfile(signals: EnrichSignals): Promise<EnrichResult> {
   if (!config.anthropicApiKey || !signals.fullName?.trim()) return EMPTY;
+  const requested = signals.linkedinUrl?.trim() || null;
   try {
+    const model = config.onboardingEnrichModel;
     const resp = await getClient().messages.create({
-      model: config.onboardingEnrichModel,
+      model,
       max_tokens: 2500,
       // web_search is incompatible with output_config.format (citations), so we prompt
-      // for a JSON block and parse it — matches the validated spike.
-      // Cap web searches low — fewer round-trips = faster lookup (~15-20s vs ~35s).
-      tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 3 } as any],
-      messages: [{ role: 'user', content: PROMPT(buildEnrichmentTarget(signals)) }],
+      // for a JSON block and parse it. Tool version is model-gated (Haiku → basic).
+      // Cap web searches low — fewer round-trips = faster + cheaper lookup.
+      tools: [{ type: webSearchToolType(model), name: 'web_search', max_uses: 3 } as any],
+      messages: [{ role: 'user', content: PROMPT(signals) }],
     });
     const text = resp.content.map((b: any) => (b.type === 'text' ? b.text : '')).join('\n');
-    return parseEnriched(text);
+    // OUR-side identity check before the member ever sees an "is this you?" card.
+    return applyMatchVerification(parseEnriched(text), requested);
   } catch (err) {
     logger.warn({ err }, 'enrichProfile failed — onboarding continues without enrichment');
-    return EMPTY;
+    return { ...EMPTY, requestedLinkedinUrl: requested };
   }
 }

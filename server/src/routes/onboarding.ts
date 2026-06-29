@@ -129,12 +129,17 @@ router.post(
       const userId = req.user!.userId;
       const reqLinkedin = (req.body.linkedinUrl as string) || null;
 
-      // Cache: reuse a prior lookup so reloads / re-tests don't re-run (and re-pay
-      // for) a web search. Only re-search if the member supplied a NEW LinkedIn.
+      // Cache: reuse a prior lookup (e.g. the preload run at approval) so reloads /
+      // re-tests don't re-run — and don't overwrite a good preload with a weaker
+      // re-search. Compare against the URL we SEARCHED WITH, not the one we found
+      // (a namesake's found-url must not force a re-search). Only re-search when the
+      // member supplies a genuinely NEW LinkedIn URL.
       const cached = await enrichRepo.getCachedEnrichment(userId).catch(() => null);
       if (cached && cached.confidence > 0) {
-        const cachedLinkedin = cached.foundLinkedinUrl || cached.profile?.linkedinUrl || null;
-        const sameLinkedin = !reqLinkedin || !cachedLinkedin || reqLinkedin === cachedLinkedin;
+        const sameLinkedin =
+          !reqLinkedin ||
+          !cached.requestedLinkedinUrl ||
+          enrichment.linkedinSlug(reqLinkedin) === enrichment.linkedinSlug(cached.requestedLinkedinUrl);
         if (sameLinkedin) {
           res.json({ success: true, data: cached } as ApiResponse);
           return;

@@ -2,6 +2,9 @@ import {
   companyFromEmail,
   buildEnrichmentTarget,
   parseEnriched,
+  linkedinSlug,
+  applyMatchVerification,
+  type EnrichResult,
 } from '../../../services/onboarding/enrichment.service';
 
 describe('enrichment — companyFromEmail', () => {
@@ -75,5 +78,53 @@ describe('enrichment — parseEnriched', () => {
     const r = parseEnriched('no json here, sorry');
     expect(r.confidence).toBe(0);
     expect(r.profile).toBeNull();
+  });
+});
+
+describe('enrichment — linkedinSlug', () => {
+  it('extracts the /in/ slug, lowercased, trailing slash + query stripped', () => {
+    expect(linkedinSlug('https://www.linkedin.com/in/waseem-javed/')).toBe('waseem-javed');
+    expect(linkedinSlug('https://linkedin.com/in/Pat-C?utm=x')).toBe('pat-c');
+    expect(linkedinSlug('https://www.linkedin.com/in/anton-ziniuk')).toBe('anton-ziniuk');
+  });
+  it('returns null for missing or non-profile urls', () => {
+    expect(linkedinSlug(null)).toBeNull();
+    expect(linkedinSlug('https://linkedin.com/company/acme')).toBeNull();
+    expect(linkedinSlug('')).toBeNull();
+  });
+});
+
+describe('enrichment — applyMatchVerification (our-side identity check)', () => {
+  const base = (over: Partial<EnrichResult> = {}): EnrichResult => ({
+    profile: null, confidence: 0.8, sources: [], foundLinkedinUrl: null, requestedLinkedinUrl: null, ...over,
+  });
+
+  it('downgrades a namesake — given URL ≠ found URL (the Waseem case)', () => {
+    const r = applyMatchVerification(
+      base({ confidence: 0.8, foundLinkedinUrl: 'https://linkedin.com/in/waseem-javed-xpats' }),
+      'https://www.linkedin.com/in/waseem-javed',
+    );
+    expect(r.confidence).toBeLessThanOrEqual(0.15);
+    expect(r.requestedLinkedinUrl).toBe('https://www.linkedin.com/in/waseem-javed');
+  });
+
+  it('keeps confidence when the found URL matches the requested URL', () => {
+    const r = applyMatchVerification(
+      base({ confidence: 0.7, foundLinkedinUrl: 'https://www.linkedin.com/in/anton-ziniuk/' }),
+      'https://linkedin.com/in/anton-ziniuk',
+    );
+    expect(r.confidence).toBe(0.7);
+  });
+
+  it('does not downgrade when no URL was requested (name-only path)', () => {
+    const r = applyMatchVerification(base({ confidence: 0.6, foundLinkedinUrl: 'https://linkedin.com/in/x' }), null);
+    expect(r.confidence).toBe(0.6);
+    expect(r.requestedLinkedinUrl).toBeNull();
+  });
+
+  it('records the requested URL even when the search returned no found URL', () => {
+    const r = applyMatchVerification(base({ confidence: 0.5, foundLinkedinUrl: null }), 'https://linkedin.com/in/x');
+    expect(r.confidence).toBe(0.5);
+    expect(r.requestedLinkedinUrl).toBe('https://linkedin.com/in/x');
   });
 });

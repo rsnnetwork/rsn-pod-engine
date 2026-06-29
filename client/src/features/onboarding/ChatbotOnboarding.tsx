@@ -327,7 +327,7 @@ export default function ChatbotOnboarding() {
     try {
       const res = await api.post('/onboarding/enrich', { linkedinUrl: linkedinUrl || draft.linkedin || null }, { timeout: 70000 });
       const r = res.data.data as { profile: any; confidence: number } | null;
-      if (r?.profile && r.confidence >= 0.4) {
+      if (r?.profile && r.confidence >= 0.35) {
         const p = r.profile;
         setDraft((d) => ({
           ...d,
@@ -370,7 +370,7 @@ export default function ChatbotOnboarding() {
     try {
       const res = await api.post('/onboarding/enrich', { linkedinUrl: null }, { timeout: 70000 });
       const r = res.data.data as { profile: any; confidence: number; foundLinkedinUrl?: string } | null;
-      if (r?.profile && r.confidence >= 0.4) setCandidate(r);
+      if (r?.profile && r.confidence >= 0.35) setCandidate(r);
       // Low confidence / no match → stay quiet; they can fill in or add a LinkedIn.
     } catch {
       /* best-effort — never block onboarding */
