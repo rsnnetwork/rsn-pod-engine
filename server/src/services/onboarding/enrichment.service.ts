@@ -162,9 +162,10 @@ const PROMPT = (s: EnrichSignals): string => {
   if (s.linkedinUrl?.trim()) {
     lines.push(`They gave THIS exact LinkedIn URL: ${s.linkedinUrl.trim()} — find the person at THIS specific profile. Many people share the same name, so only return data you are confident belongs to THIS exact profile/person, and report the LinkedIn URL you actually found.`);
   }
-  if (company) lines.push(`We independently know their company is roughly: ${company}.`);
-  if (loc) lines.push(`We independently know their location is roughly: ${loc}.`);
-  if (company || loc) lines.push('Use those to confirm identity: if what you find matches them, be more confident; if it clearly contradicts them, be less confident.');
+  const hints: string[] = [];
+  if (company) hints.push(`company possibly around "${company}"`);
+  if (loc) hints.push(`location possibly around "${loc}"`);
+  if (hints.length) lines.push(`Weak hints (these may be inaccurate — e.g. guessed from an email domain): ${hints.join('; ')}. Use them only as soft corroboration: if the profile you find matches them, be more confident. Do NOT lower your confidence just because they differ, especially when the LinkedIn URL is a strong match.`);
   lines.push('If you CANNOT confidently identify this specific person (for example a common name with many matches and nothing to corroborate), return confidence 0 with null/empty fields. Do NOT return a different person\'s data.');
   lines.push('Return ONLY a JSON object (no prose) with these keys: fullName, headline, currentRole, currentCompany, industry, location, summary, pastRoles (string array), education (array), skills (string array), likelyWantsToMeet (string array), likelyOffers (string array), linkedinUrl (the profile URL you actually found), confidence (a NUMBER from 0 to 1, e.g. 0.85; do NOT use words like "high"), sources (array of urls you used).');
   lines.push('Use null or [] for anything you cannot support from search results. Do NOT invent facts.');
