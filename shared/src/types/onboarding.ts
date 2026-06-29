@@ -129,6 +129,8 @@ export interface OnboardingKnownProfile {
   role: string | null;
   /** Saved LinkedIn URL, if any (Round B). */
   linkedin: string | null;
+  /** The member's stated reason for joining (from their join request), if any. */
+  reason: string | null;
   /** How many past Reason events the member has joined (0 for new members). */
   previousEvents: number;
   /** Who invited this member (inviter's name or email), if they joined via an invite. */

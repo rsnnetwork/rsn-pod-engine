@@ -21,6 +21,10 @@ import HostPresence from './HostPresence';
 // No dashes anywhere (style rule). If the LLM is down we fall back to the form.
 const FIRST_QUESTION =
   "Reason works best when we understand why you're here. What is your reason for joining? One sentence is enough.";
+// When the member already gave their reason (e.g. in a join request), don't re-ask it —
+// acknowledge it and move straight to the next thing we need for matching.
+const OPENING_WITH_REASON =
+  "Good to have you here, and thanks for sharing why you're here. To match you well, who would be most valuable for you to meet, and roughly why?";
 
 type Stage = 'loading' | 'resume' | 'confirm' | 'chat';
 
@@ -112,7 +116,7 @@ function ConfirmRow({
   );
 }
 
-const emptyDraft = { name: '', country: '', company: '', role: '', linkedin: '', industry: '', location: '', about: '', wantsToMeet: [] as string[], offers: [] as string[] };
+const emptyDraft = { name: '', country: '', reason: '', company: '', role: '', linkedin: '', industry: '', location: '', about: '', wantsToMeet: [] as string[], offers: [] as string[] };
 
 // Merge two string lists — primary first (prioritized), de-duplicated case-insensitively.
 // The member's chat answers rank above the LinkedIn-inferred prefill, and nothing is lost.
@@ -137,7 +141,7 @@ function ProfileCardPreview({ d, enriched, name }: { d: typeof emptyDraft; enric
         <div className="mt-0.5 text-sm leading-relaxed text-[#1a1a2e]">{value}</div>
       </div>
     ) : null;
-  const empty = !d.role && !d.company && !d.industry && !d.about && !d.wantsToMeet.length && !d.offers.length;
+  const empty = !d.role && !d.company && !d.industry && !d.about && !d.reason && !d.wantsToMeet.length && !d.offers.length;
   return (
     <div className="w-full rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
       <div className="mb-1 flex items-center gap-1.5">
@@ -145,6 +149,7 @@ function ProfileCardPreview({ d, enriched, name }: { d: typeof emptyDraft; enric
         {enriched && <Sparkles className="h-3.5 w-3.5 text-rsn-red" />}
       </div>
       <div className="mb-4 font-display text-xl font-bold text-[#1a1a2e]">{name || 'You'}</div>
+      <Row label="Why you're here" value={d.reason} />
       <Row label="Role" value={d.role} />
       <Row label="Company" value={d.company} />
       <Row label="Industry" value={d.industry} />
@@ -236,6 +241,7 @@ export default function ChatbotOnboarding() {
         setDraft({
           name: k.name || '',
           country: k.country || '',
+          reason: k.reason || '',
           company: k.company || '',
           role: k.role || '',
           linkedin: k.linkedin || '',
@@ -262,7 +268,7 @@ export default function ChatbotOnboarding() {
       if (haveKnown) {
         setStage('confirm');
       } else {
-        setMessages([{ role: 'assistant', content: FIRST_QUESTION }]);
+        setMessages([{ role: 'assistant', content: known?.reason ? OPENING_WITH_REASON : FIRST_QUESTION}]);
         setStage('chat');
       }
     })();
@@ -421,7 +427,7 @@ export default function ChatbotOnboarding() {
       linkedin: draft.linkedin.trim() || null,
     });
     setEditing(false);
-    setMessages([{ role: 'assistant', content: FIRST_QUESTION }]);
+    setMessages([{ role: 'assistant', content: known?.reason ? OPENING_WITH_REASON : FIRST_QUESTION}]);
     setStage('chat');
     requestAnimationFrame(() => inputRef.current?.focus());
   }
@@ -429,7 +435,7 @@ export default function ChatbotOnboarding() {
   function resumeChat() {
     // The saved transcript starts at the member's first reply; the opening
     // question is client-only, so prepend it for display.
-    setMessages([{ role: 'assistant', content: FIRST_QUESTION }, ...resumeMessages]);
+    setMessages([{ role: 'assistant', content: known?.reason ? OPENING_WITH_REASON : FIRST_QUESTION}, ...resumeMessages]);
     setStage('chat');
     requestAnimationFrame(() => inputRef.current?.focus());
   }
@@ -651,6 +657,7 @@ export default function ChatbotOnboarding() {
             <div className="w-full rounded-2xl border border-gray-200 bg-white p-4 text-left shadow-sm">
               <ConfirmRow label="Name" value={draft.name} editing={editing} placeholder="Your name" guessed={known?.nameGuessed} onChange={(v) => setDraft((d) => ({ ...d, name: v }))} />
               <ConfirmRow label="Country" value={draft.country} editing={editing} placeholder="Where you are based" guessed={known?.countryGuessed} onChange={(v) => setDraft((d) => ({ ...d, country: v }))} />
+              <ConfirmRow label="Reason for joining" value={draft.reason} editing={editing} placeholder="Why you're here" onChange={(v) => setDraft((d) => ({ ...d, reason: v }))} />
               <ConfirmRow label="Company" value={draft.company} editing={editing} placeholder="Where you work" guessed={known?.companyGuessed} onChange={(v) => setDraft((d) => ({ ...d, company: v }))} />
               <ConfirmRow label="Role" value={draft.role} editing={editing} placeholder="Your role or title" onChange={(v) => setDraft((d) => ({ ...d, role: v }))} />
               <ConfirmRow label="LinkedIn" value={draft.linkedin} editing={editing} placeholder="Your LinkedIn URL" onChange={(v) => setDraft((d) => ({ ...d, linkedin: v }))} />
