@@ -30,6 +30,16 @@ export async function saveEnrichedCandidate(userId: string, result: EnrichResult
   );
 }
 
+/** Drop the cached enrichment for a user so the next onboarding re-runs it (admin refresh). */
+export async function clearEnrichment(userId: string): Promise<void> {
+  await query(
+    `UPDATE user_intent_profiles
+        SET inferred_profile = COALESCE(inferred_profile, '{}'::jsonb) - 'enriched', updated_at = NOW()
+      WHERE user_id = $1`,
+    [userId],
+  );
+}
+
 export interface ApplyFields {
   jobTitle?: string | null;
   company?: string | null;

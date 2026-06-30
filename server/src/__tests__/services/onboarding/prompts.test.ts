@@ -21,16 +21,23 @@ describe('onboarding prompts (v1.1)', () => {
     expect(p).toContain('already KNOW');
   });
 
-  it('weaves the full enriched profile (role, interests, who-they-want-to-meet) into the host', () => {
+  it('weaves the full enriched profile + briefing (starters, verify) into the host', () => {
     const p = buildHostSystemPrompt(
       { name: 'Stefan', country: 'Denmark', company: 'Mister Raw' },
       'none',
-      { role: 'Founder', industry: 'FoodTech', about: 'Builds raw pet food', wantsToMeet: ['investors'], offers: ['mentorship'], interests: ['nutrition'], whyHere: 'scale my brand' }
+      {
+        role: 'Founder', industry: 'FoodTech', about: 'Builds raw pet food',
+        wantsToMeet: ['investors'], offers: ['mentorship'], interests: ['nutrition'], whyHere: 'scale my brand',
+        conversationStarters: ['Saw you scaled Mister Raw across the Nordics'],
+        questionsToVerify: ['Are you still focused on pet nutrition'],
+      }
     );
     expect(p).toContain('Founder');
     expect(p).toContain('investors');
     expect(p).toContain('mentorship');
     expect(p).toContain('scale my brand');
+    expect(p).toContain('Saw you scaled Mister Raw across the Nordics'); // conversation starter
+    expect(p).toContain('Are you still focused on pet nutrition'); // verify question
   });
 
   it('omits the known block when no profile is given', () => {

@@ -28,6 +28,8 @@ export interface HostKnownExtra {
   offers?: string[];
   interests?: string[];
   whyHere?: string | null;
+  conversationStarters?: string[];
+  questionsToVerify?: string[];
 }
 
 function knownBlock(p?: OnboardingConfirmedProfile, extra?: HostKnownExtra): string {
@@ -44,8 +46,19 @@ function knownBlock(p?: OnboardingConfirmedProfile, extra?: HostKnownExtra): str
   if (extra?.offers?.length) lines.push(`  What they can offer: ${extra.offers.join(', ')}`);
   if (extra?.interests?.length) lines.push(`  Interests: ${extra.interests.join(', ')}`);
   if (extra?.whyHere) lines.push(`  Why they joined: ${extra.whyHere}`);
-  if (!lines.length) return '';
-  return `\n\nYou already KNOW these about the member, from their LinkedIn and their request. Treat them as established facts: never ask for them again, and never re-introduce or re-welcome. If the member asks what you know about them, or "who am I", tell them these plainly and warmly in a sentence or two:\n${lines.join('\n')}`;
+
+  // Optional briefing guidance — openers + things to verify (never forced).
+  let guidance = '';
+  const starters = (extra?.conversationStarters || []).filter(Boolean);
+  const verify = (extra?.questionsToVerify || []).filter(Boolean);
+  if (starters.length) guidance += `\n\nOptional openers you could use if they fit naturally (do not force them):\n${starters.map((s) => `  - ${s}`).join('\n')}`;
+  if (verify.length) guidance += `\n\nThings to confirm naturally rather than assume (weave in lightly, never interrogate):\n${verify.map((v) => `  - ${v}`).join('\n')}`;
+
+  if (!lines.length && !guidance) return '';
+  const facts = lines.length
+    ? `\n\nYou already KNOW these about the member, from their LinkedIn and their request. Treat them as established facts: never ask for them again, and never re-introduce or re-welcome. If the member asks what you know about them, or "who am I", tell them these plainly and warmly in a sentence or two:\n${lines.join('\n')}`
+    : '';
+  return facts + guidance;
 }
 
 /** Build the host system prompt, weaving in the confirmed known profile. */

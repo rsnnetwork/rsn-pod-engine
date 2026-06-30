@@ -96,7 +96,7 @@ describe('enrichment — linkedinSlug', () => {
 
 describe('enrichment — applyMatchVerification (our-side identity check)', () => {
   const base = (over: Partial<EnrichResult> = {}): EnrichResult => ({
-    profile: null, confidence: 0.8, sources: [], foundLinkedinUrl: null, requestedLinkedinUrl: null, ...over,
+    profile: null, confidence: 0.8, sources: [], foundLinkedinUrl: null, requestedLinkedinUrl: null, enrichedAt: null, ...over,
   });
 
   it('downgrades a namesake — given URL ≠ found URL (the Waseem case)', () => {

@@ -12,8 +12,9 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
+import { requireRole } from '../middleware/rbac';
 import { onboardingChatLimiter } from '../middleware/rateLimit';
-import { ApiResponse, OnboardingMessage, OnboardingConfirmedProfile } from '@rsn/shared';
+import { ApiResponse, OnboardingMessage, OnboardingConfirmedProfile, UserRole } from '@rsn/shared';
 import * as chatbot from '../services/onboarding/chatbot.service';
 import * as intentRepo from '../services/onboarding/intent.repo';
 import { inferKnownProfile } from '../services/onboarding/known';
@@ -140,7 +141,11 @@ router.post(
           !reqLinkedin ||
           !cached.requestedLinkedinUrl ||
           enrichment.linkedinSlug(reqLinkedin) === enrichment.linkedinSlug(cached.requestedLinkedinUrl);
-        if (sameLinkedin) {
+        // Refresh stale caches: re-enrich if older than 90 days (roles/companies drift).
+        // A cache with no timestamp (pre-feature) is treated as fresh — no cost surge.
+        const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+        const fresh = !cached.enrichedAt || Date.now() - new Date(cached.enrichedAt).getTime() < NINETY_DAYS_MS;
+        if (sameLinkedin && fresh) {
           res.json({ success: true, data: cached } as ApiResponse);
           return;
         }
@@ -297,6 +302,26 @@ router.post(
         success: true,
         data: { summary: intent.userProfileSummary, profileComplete },
       };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── POST /onboarding/admin/refresh-enrichment (admin only) ──────────────────
+// Force a re-enrichment for a member: clears their cached enrichment so the next
+// onboarding load re-runs it (Stefan's admin-refresh trigger).
+const refreshEnrichSchema = z.object({ userId: z.string().uuid() });
+router.post(
+  '/admin/refresh-enrichment',
+  authenticate,
+  requireRole(UserRole.ADMIN),
+  validate(refreshEnrichSchema),
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await enrichRepo.clearEnrichment(req.body.userId);
+      const response: ApiResponse = { success: true, data: { cleared: true } };
       res.json(response);
     } catch (err) {
       next(err);

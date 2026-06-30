@@ -61,6 +61,8 @@ export const config = {
   onboardingExtractModel: process.env.ONBOARDING_EXTRACT_MODEL || 'claude-haiku-4-5',
   // Profile enrichment — web_search needs Sonnet 4.6+ (validated in e2e/spike-enrich.mjs).
   onboardingEnrichModel: process.env.ONBOARDING_ENRICH_MODEL || 'claude-haiku-4-5',
+  // Escalation target when the cheap (Haiku) enrichment is low-confidence (Stefan's rule).
+  onboardingEnrichFallbackModel: process.env.ONBOARDING_ENRICH_FALLBACK_MODEL || 'claude-sonnet-4-6',
 
   // Rate Limiting
   // Now keyed PER USER (see middleware/rateLimit.ts userOrIpKey), so the quota

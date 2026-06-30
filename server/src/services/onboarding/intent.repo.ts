@@ -71,8 +71,10 @@ export async function getKnownProfileForHost(userId: string): Promise<{
   offers: string[];
   interests: string[];
   whyHere: string | null;
+  conversationStarters: string[];
+  questionsToVerify: string[];
 }> {
-  const empty = { role: null, industry: null, about: null, wantsToMeet: [] as string[], offers: [] as string[], interests: [] as string[], whyHere: null };
+  const empty = { role: null, industry: null, about: null, wantsToMeet: [] as string[], offers: [] as string[], interests: [] as string[], whyHere: null, conversationStarters: [] as string[], questionsToVerify: [] as string[] };
   try {
     const r = await query<{
       job_title: string | null;
@@ -107,6 +109,8 @@ export async function getKnownProfileForHost(userId: string): Promise<{
       offers: offers.slice(0, 8),
       interests: interests.slice(0, 12),
       whyHere: orNull(row.why_i_want_to_meet),
+      conversationStarters: arr(enr.conversationStarters).slice(0, 3),
+      questionsToVerify: arr(enr.questionsToVerify).slice(0, 3),
     };
   } catch {
     return empty;

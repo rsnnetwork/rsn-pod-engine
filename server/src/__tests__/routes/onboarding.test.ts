@@ -341,3 +341,20 @@ describe('POST /onboarding/confirm', () => {
     expect(args[3]).toMatchObject({ country: 'Denmark', company: 'Mister Raw' });
   });
 });
+
+describe('POST /onboarding/admin/refresh-enrichment', () => {
+  const uid = '11111111-1111-1111-1111-111111111111';
+
+  it('rejects an unauthenticated request (401)', async () => {
+    const res = await request(app).post('/onboarding/admin/refresh-enrichment').send({ userId: uid });
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects a non-admin member (403)', async () => {
+    const res = await request(app)
+      .post('/onboarding/admin/refresh-enrichment')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ userId: uid });
+    expect(res.status).toBe(403);
+  });
+});

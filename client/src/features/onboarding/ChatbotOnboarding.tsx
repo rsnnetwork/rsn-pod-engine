@@ -22,9 +22,9 @@ import HostPresence from './HostPresence';
 const FIRST_QUESTION =
   "Reason works best when we understand why you're here. What is your reason for joining? One sentence is enough.";
 // When the member already gave their reason (e.g. in a join request), don't re-ask it —
-// acknowledge it and move straight to the next thing we need for matching.
+// acknowledge that we've looked them up, then move straight to what matters for matching.
 const OPENING_WITH_REASON =
-  "Good to have you here, and thanks for sharing why you're here. To match you well, who would be most valuable for you to meet, and roughly why?";
+  "I've had a quick look at your background so we can spend less time on basics, and thanks for sharing why you're here. To match you well, who would be most valuable for you to meet, and roughly why? If I've got anything wrong, just tell me.";
 
 type Stage = 'loading' | 'resume' | 'confirm' | 'chat';
 

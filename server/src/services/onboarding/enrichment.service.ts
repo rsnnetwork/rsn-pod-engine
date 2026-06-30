@@ -75,6 +75,10 @@ export interface EnrichedProfile {
   skills: string[];
   likelyWantsToMeet: string[];
   likelyOffers: string[];
+  /** Natural openers a warm host could use, referencing what we found. */
+  conversationStarters: string[];
+  /** Uncertain facts the host should confirm naturally rather than assume. */
+  questionsToVerify: string[];
   linkedinUrl: string | null;
 }
 export interface EnrichResult {
@@ -84,9 +88,14 @@ export interface EnrichResult {
   foundLinkedinUrl: string | null;
   /** The LinkedIn URL we searched WITH (so the cache only re-runs on a genuinely new URL). */
   requestedLinkedinUrl: string | null;
+  /** ISO timestamp of when this enrichment ran — drives the 90-day refresh. */
+  enrichedAt: string | null;
 }
 
-const EMPTY: EnrichResult = { profile: null, confidence: 0, sources: [], foundLinkedinUrl: null, requestedLinkedinUrl: null };
+const EMPTY: EnrichResult = { profile: null, confidence: 0, sources: [], foundLinkedinUrl: null, requestedLinkedinUrl: null, enrichedAt: null };
+
+/** Below this confidence, escalate the cheap (Haiku) pass to the stronger model (Stefan's rule). */
+const ENRICH_ESCALATE_BELOW = 0.6;
 const strArr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0) : []);
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
 
@@ -117,9 +126,10 @@ export function parseEnriched(text: string): EnrichResult {
     currentCompany: str(j.currentCompany), industry: str(j.industry), location: str(j.location),
     summary: str(j.summary), pastRoles: strArr(j.pastRoles), education: Array.isArray(j.education) ? j.education : [],
     skills: strArr(j.skills), likelyWantsToMeet: strArr(j.likelyWantsToMeet), likelyOffers: strArr(j.likelyOffers),
+    conversationStarters: strArr(j.conversationStarters), questionsToVerify: strArr(j.questionsToVerify),
     linkedinUrl: str(j.linkedinUrl),
   };
-  return { profile, confidence, sources: strArr(j.sources), foundLinkedinUrl: str(j.linkedinUrl), requestedLinkedinUrl: null };
+  return { profile, confidence, sources: strArr(j.sources), foundLinkedinUrl: str(j.linkedinUrl), requestedLinkedinUrl: null, enrichedAt: null };
 }
 
 /** The /in/{slug} identity from a LinkedIn URL, lowercased — for comparing two URLs. */
@@ -167,7 +177,8 @@ const PROMPT = (s: EnrichSignals): string => {
   if (loc) hints.push(`location possibly around "${loc}"`);
   if (hints.length) lines.push(`Weak hints (these may be inaccurate — e.g. guessed from an email domain): ${hints.join('; ')}. Use them only as soft corroboration: if the profile you find matches them, be more confident. Do NOT lower your confidence just because they differ, especially when the LinkedIn URL is a strong match.`);
   lines.push('If you CANNOT confidently identify this specific person (for example a common name with many matches and nothing to corroborate), return confidence 0 with null/empty fields. Do NOT return a different person\'s data.');
-  lines.push('Return ONLY a JSON object (no prose) with these keys: fullName, headline, currentRole, currentCompany, industry, location, summary, pastRoles (string array), education (array), skills (string array), likelyWantsToMeet (string array), likelyOffers (string array), linkedinUrl (the profile URL you actually found), confidence (a NUMBER from 0 to 1, e.g. 0.85; do NOT use words like "high"), sources (array of urls you used).');
+  lines.push('Also include conversationStarters (1 to 3 natural openers a warm host could use, referencing what you found) and questionsToVerify (1 to 3 facts that are uncertain and the host should confirm naturally rather than assume).');
+  lines.push('Return ONLY a JSON object (no prose) with these keys: fullName, headline, currentRole, currentCompany, industry, location, summary, pastRoles (string array), education (array), skills (string array), likelyWantsToMeet (string array), likelyOffers (string array), conversationStarters (string array), questionsToVerify (string array), linkedinUrl (the profile URL you actually found), confidence (a NUMBER from 0 to 1, e.g. 0.85; do NOT use words like "high"), sources (array of urls you used).');
   lines.push('Use null or [] for anything you cannot support from search results. Do NOT invent facts.');
   return lines.join('\n');
 };
@@ -182,23 +193,44 @@ export function isEnrichmentEnabled(): boolean {
  * (and a null profile) on a missing key, no name, or any API/parse failure, so onboarding
  * is never blocked.
  */
+/** One enrichment pass on a given model (web_search is incompatible with
+ *  output_config.format, so we prompt for a JSON block and parse it). */
+async function runEnrichOnce(signals: EnrichSignals, model: string): Promise<EnrichResult> {
+  const resp = await getClient().messages.create({
+    model,
+    max_tokens: 2500,
+    // Tool version is model-gated (Haiku → basic). Cap web searches low — fewer
+    // round-trips = faster + cheaper.
+    tools: [{ type: webSearchToolType(model), name: 'web_search', max_uses: 3 } as any],
+    messages: [{ role: 'user', content: PROMPT(signals) }],
+  });
+  const text = resp.content.map((b: any) => (b.type === 'text' ? b.text : '')).join('\n');
+  return parseEnriched(text);
+}
+
 export async function enrichProfile(signals: EnrichSignals): Promise<EnrichResult> {
   if (!config.anthropicApiKey || !signals.fullName?.trim()) return EMPTY;
   const requested = signals.linkedinUrl?.trim() || null;
+  // OUR-side identity check + stamp the run time (drives the 90-day refresh).
+  const finalize = (r: EnrichResult): EnrichResult => ({
+    ...applyMatchVerification(r, requested),
+    enrichedAt: new Date().toISOString(),
+  });
   try {
-    const model = config.onboardingEnrichModel;
-    const resp = await getClient().messages.create({
-      model,
-      max_tokens: 2500,
-      // web_search is incompatible with output_config.format (citations), so we prompt
-      // for a JSON block and parse it. Tool version is model-gated (Haiku → basic).
-      // Cap web searches low — fewer round-trips = faster + cheaper lookup.
-      tools: [{ type: webSearchToolType(model), name: 'web_search', max_uses: 3 } as any],
-      messages: [{ role: 'user', content: PROMPT(signals) }],
-    });
-    const text = resp.content.map((b: any) => (b.type === 'text' ? b.text : '')).join('\n');
-    // OUR-side identity check before the member ever sees an "is this you?" card.
-    return applyMatchVerification(parseEnriched(text), requested);
+    // Primary pass on the cheap model (Haiku).
+    let result = finalize(await runEnrichOnce(signals, config.onboardingEnrichModel));
+    // Escalate to the stronger model (Sonnet) ONLY when the cheap pass is weak —
+    // low confidence / no useful match (Stefan's cost rule). Most users never escalate.
+    const fb = config.onboardingEnrichFallbackModel;
+    if (result.confidence < ENRICH_ESCALATE_BELOW && fb && fb !== config.onboardingEnrichModel) {
+      try {
+        const better = finalize(await runEnrichOnce(signals, fb));
+        if (better.confidence > result.confidence) result = better;
+      } catch (err) {
+        logger.warn({ err }, 'enrichProfile escalation failed — keeping the primary result');
+      }
+    }
+    return result;
   } catch (err) {
     logger.warn({ err }, 'enrichProfile failed — onboarding continues without enrichment');
     return { ...EMPTY, requestedLinkedinUrl: requested };
