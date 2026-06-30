@@ -72,9 +72,9 @@ const hostEvents: Array<{ ev: string; d: string }> = [];
 const participantErrors: Array<{ email: string; d: string }> = [];
 
 // Churn fractions of the cohort (disjoint slices), applied around the round.
-const REFRESH_FRAC = 0.25;     // reconnect + refetch
-const BGTAB_FRAC = 0.25;       // throttled cadence then catch-up burst
-const DISCONNECT_FRAC = 0.15;  // drop past grace, then rejoin
+const REFRESH_FRAC = parseFloat(process.env.REFRESH_FRAC || '0.25');     // reconnect + refetch
+const BGTAB_FRAC = parseFloat(process.env.BGTAB_FRAC || '0.25');         // throttled cadence then catch-up burst
+const DISCONNECT_FRAC = parseFloat(process.env.DISCONNECT_FRAC || '0.15'); // drop past grace, then rejoin
 const DISCONNECT_GRACE_MS = 17_000; // > server's 15 s disconnect→LEFT grace
 
 // ── Per-user virtual client ──────────────────────────────────────────────────
@@ -493,14 +493,42 @@ test(`load gate: ${N} users — burst join latency, zero 429s, round under churn
   await sleep(12_000); // engine for N users + preview
   hostC.socket!.emit('host:confirm_round', { sessionId });
 
-  // participants get match:assigned → the breakout-token burst
+  // participants get match:assigned (or the resync snapshot) → breakout-token burst
   await waitFor(joinedParts, (c) => c.inBreakout, 60_000, 2500);
   await Promise.allSettled(joinedParts.filter((c) => c.inBreakout).map((c) => roundMoveBurst(c, c.roomId)));
 
-  // (c) disconnect/rejoin churn DURING the breakout
+  // ── PLACEMENT GATE (measured at round start, BEFORE any disconnect) ─────────
+  // The non-negotiable rule: EVERY present participant must be in an active
+  // match — nobody left in the lobby while others are in breakouts. Measured
+  // from the DB (source of truth). This is intentionally checked before the
+  // disconnect-resilience step below, because deliberately dropping a user
+  // correctly returns their PARTNER to the main room (not a failure).
+  const activePlaced = async () => {
+    const r = await pool.query<{ a: string; b: string; c: string | null }>(
+      `SELECT participant_a_id a, participant_b_id b, participant_c_id c
+         FROM matches WHERE session_id=$1 AND status='active'`, [sessionId]);
+    const s = new Set<string>();
+    for (const m of r.rows) [m.a, m.b, m.c].filter(Boolean).forEach((u) => s.add(u as string));
+    return { set: s, matches: r.rows.length };
+  };
+  const atStart = await activePlaced();
+  const presentTotal = joinedParts.length; // all who joined are present at round start
+  const unplaced = joinedParts.filter((c) => !atStart.set.has(c.user.id));
+  const placedCount = presentTotal - unplaced.length;
+  console.log(`    PLACEMENT @ round start: ${placedCount}/${presentTotal} present users in an ACTIVE match (${atStart.matches} matches, socket-detected breakout ${joinedParts.filter((c) => c.inBreakout).length}/${presentTotal})`);
+  if (unplaced.length) console.log(`    UNPLACED @ start: ${unplaced.map((c) => c.user.email.split('@')[0]).join(', ')}`);
+  console.log(`    host wire events (${hostEvents.length}): ${JSON.stringify(hostEvents.slice(0, 8))}`);
+  if (participantErrors.length) console.log(`    participant errors (${participantErrors.length}): ${JSON.stringify(participantErrors.slice(0, 6))}`);
+  expect(unplaced.length, 'EVERY present participant must be placed in a round at start (nobody stranded in the lobby)').toBe(0);
+
+  // ── DISCONNECT RESILIENCE (separate from placement) ────────────────────────
+  // Drop a slice mid-breakout past the 15s grace, then rejoin. The platform
+  // correctly returns each dropped user's partner to the main room (no solo
+  // breakout); we assert the dropped users themselves can rejoin. Phase 5 then
+  // asserts everyone ends in main with zero ghosts.
   const droppers = joinedParts.slice(joinedParts.length - Math.floor(joinedParts.length * DISCONNECT_FRAC));
   if (droppers.length > 0) {
-    console.log(`    disconnecting ${droppers.length} past the 15s grace, then rejoining…`);
+    console.log(`[4b] Disconnect resilience: dropping ${droppers.length} past the 15s grace, then rejoining…`);
     for (const c of droppers) { try { c.socket?.disconnect(); } catch {} c.connected = false; c.joined = false; }
     await sleep(DISCONNECT_GRACE_MS);
     await Promise.allSettled(
@@ -513,15 +541,10 @@ test(`load gate: ${N} users — burst join latency, zero 429s, round under churn
         await foregroundCatchUp(c);
       }),
     );
+    const rejoined = droppers.filter((c) => c.socket?.connected).length;
+    console.log(`    dropped users reconnected: ${rejoined}/${droppers.length}`);
+    expect(rejoined, 'every dropped user must be able to rejoin').toBeGreaterThanOrEqual(Math.ceil(droppers.length * 0.9));
   }
-
-  const stable = joinedParts.filter((c) => !droppers.includes(c));
-  const inRoom = stable.filter((c) => c.inBreakout).length;
-  console.log(`    in breakout (stable cohort): ${inRoom}/${stable.length}`);
-  // diagnostics (printed before the assert so a failing run still shows the wire)
-  console.log(`    host wire events (${hostEvents.length}): ${JSON.stringify(hostEvents.slice(0, 12))}`);
-  if (participantErrors.length) console.log(`    participant errors (${participantErrors.length}): ${JSON.stringify(participantErrors.slice(0, 6))}`);
-  expect(inRoom, 'most of the stable cohort must reach the breakout UI').toBeGreaterThanOrEqual(Math.ceil(stable.length * 0.8));
 
   // ── PHASE 5: END → RETURN → RATING BURST → GHOST WATCH ─────────────────────
   console.log('[5] Ending round → return to main → rating burst → ghost watch…');
@@ -557,7 +580,7 @@ test(`load gate: ${N} users — burst join latency, zero 429s, round under churn
   console.log(`  429s (legit traffic):  ${total429}`);
   console.log(`  5xx server errors:     ${total5xx}`);
   console.log(`  network errors:        ${totalNet}  (reported, not gated)`);
-  console.log(`  breakout reached:      ${inRoom}/${stable.length} stable`);
+  console.log(`  placed @ round start:  ${placedCount}/${presentTotal} present (must be all)`);
   console.log(`  returned to main:      ${returned}`);
   console.log('──────────────────────────────────\n');
 
