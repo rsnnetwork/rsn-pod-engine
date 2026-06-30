@@ -14,7 +14,7 @@ import { createPod, addPodMember, createSession, registerForSession, endSession 
 // Throwaway e2etest-* users, cleaned by ID.
 const SERVER = process.env.E2E_SERVER_URL || 'https://api.rsn.network';
 const APP = process.env.E2E_APP_URL || 'https://app.rsn.network';
-const N = 20;
+const N = parseInt(process.env.LOADABC_N || '20', 10); // browser count (lower for an 8GB box)
 
 let host: TestUser;
 let users: TestUser[] = [];
@@ -119,7 +119,7 @@ test('20 real browsers: lobby video → full round → clean return, no ghosts',
     if (pending.size > 0) await pages[0].waitForTimeout(3000);
   }
   console.log(`  lobby video on ${lobbyVideoCount}/${N} pages`);
-  expect(lobbyVideoCount, 'a majority of pages must render lobby video (local CPU bound)').toBeGreaterThanOrEqual(12);
+  expect(lobbyVideoCount, 'a majority of pages must render lobby video (local CPU bound)').toBeGreaterThanOrEqual(Math.ceil(N * 0.6));
 
   // ── 2. Full algorithm round for 20 users → 10 pairs ──
   const hostSock = await connectSocket(host);
@@ -144,7 +144,7 @@ test('20 real browsers: lobby video → full round → clean return, no ghosts',
   // window even though the platform re-arms their token every ~5s co-emit.
   // The STRICT assertion is the final convergence below (all 20 in main,
   // zero ghosts) — that's pure state machinery.
-  expect(inRoom, 'most pages must land in breakout UI').toBeGreaterThanOrEqual(16);
+  expect(inRoom, 'most pages must land in breakout UI').toBeGreaterThanOrEqual(Math.ceil(N * 0.8));
 
   // Spot-check real video in 4 breakout pages — poll: the lobby→room LiveKit
   // switch takes a while when 20 browsers reconnect simultaneously.
