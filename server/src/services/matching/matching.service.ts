@@ -295,6 +295,28 @@ function gatePresentRows<T>(
   return gated;
 }
 
+/**
+ * P3-2: non-dismissed violation reports between two participants become exclusion
+ * pairs ("reporterId:reportedId"), so a member is never re-paired with someone they
+ * reported. Dismissed reports (false alarms) are ignored. Best-effort — a failure
+ * never blocks matching. pairKey normalises direction, so order doesn't matter.
+ */
+async function getViolationPairsForUsers(userIds: string[]): Promise<string[]> {
+  if (userIds.length < 2) return [];
+  try {
+    const r = await query<{ reporter_id: string; reported_user_id: string }>(
+      `SELECT reporter_id, reported_user_id FROM violations
+        WHERE status <> 'dismissed' AND reporter_id IS NOT NULL
+          AND reporter_id = ANY($1::uuid[]) AND reported_user_id = ANY($1::uuid[])`,
+      [userIds],
+    );
+    return r.rows.map((v) => `${v.reporter_id}:${v.reported_user_id}`);
+  } catch (err) {
+    logger.warn({ err }, 'getViolationPairsForUsers failed — matching continues without violation exclusion');
+    return [];
+  }
+}
+
 export async function generateSingleRound(
   sessionId: string,
   roundNumber: number,
@@ -466,8 +488,15 @@ export async function generateSingleRound(
   // Phase B (1 May 2026 spec) — user-block exclusions. Blocked pairs (in
   // either direction) are added as a hard constraint so the matching engine
   // never pairs them. The same blocks gate DM sends, so this is the single
-  // source of truth for "these two should never interact".
-  const blockedPairs = await blockService.getBlockedPairsForUsers(participantsResult.rows.map(p => p.userId));
+  // source of truth for "these two should never interact". P3-2: non-dismissed
+  // violation reports between two participants are folded in here too, so a
+  // reporter is never re-paired with whom they reported (same hard-exclusion
+  // path as blocks — flows into both the engine constraint and the swap guard).
+  const participantIds = participantsResult.rows.map(p => p.userId);
+  const blockedPairs = [
+    ...await blockService.getBlockedPairsForUsers(participantIds),
+    ...await getViolationPairsForUsers(participantIds),
+  ];
 
   const hardConstraints: { type: 'inviter_invitee_block' | 'user_block'; params: { pairs: string[] } }[] = [];
   if (inviterInviteePairs.length > 0) {

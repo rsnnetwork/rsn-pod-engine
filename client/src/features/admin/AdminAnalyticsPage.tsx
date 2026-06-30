@@ -83,6 +83,7 @@ interface MatchingData {
   avgConfidence: number | null;
   fallbackCount: number;
   fallbackRate: number;
+  overrideCount: number;
   byTemplate: Array<{ template: string; matches: number; avgConfidence: number | null; avgRating: number | null }>;
   reasonBreakdown: Array<{ reason: string; count: number }>;
 }
@@ -204,6 +205,7 @@ function MatchingPanel({ q }: { q: ReturnType<typeof useQuery<MatchingData>> }) 
         <Stat label="Matches" value={d.totalMatches} />
         <Stat label="Avg confidence" value={d.avgConfidence === null ? '—' : d.avgConfidence.toFixed(2)} sub="0 to 1" />
         <Stat label="Fallback used" value={pct(d.fallbackRate)} sub={`${d.fallbackCount} of ${d.totalMatches}`} tone={d.fallbackRate > 0.3 ? 'red' : 'gray'} />
+        <Stat label="Host overrides" value={d.overrideCount ?? 0} sub={`of ${d.totalMatches} (hand-edited)`} tone={(d.overrideCount ?? 0) > 0 ? 'red' : 'gray'} />
       </div>
 
       <h3 className="text-sm font-medium text-gray-900 mb-2">By template</h3>

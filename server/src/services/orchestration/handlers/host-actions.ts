@@ -1138,8 +1138,8 @@ export async function handleHostReassign(
         const { v4: uuid } = await import('uuid');
         matchId = uuid();
         await client.query(
-          `INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, room_id, status)
-           VALUES ($1, $2, $3, $4, $5, $6, 'active')`,
+          `INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, room_id, status, is_override)
+           VALUES ($1, $2, $3, $4, $5, $6, 'active', TRUE)`,
           [matchId, data.sessionId, activeSession.currentRound,
            targetId < partner ? targetId : partner,
            targetId < partner ? partner : targetId,
@@ -1745,8 +1745,8 @@ export async function handleHostMoveToRoom(
           [targetMatchId],
         );
         const ins = await client.query<{ id: string }>(
-          `INSERT INTO matches (session_id, round_number, participant_a_id, participant_b_id, participant_c_id, room_id, status, started_at)
-           VALUES ($1, $2, $3, $4, $5, $6, 'active', NOW()) RETURNING id`,
+          `INSERT INTO matches (session_id, round_number, participant_a_id, participant_b_id, participant_c_id, room_id, status, started_at, is_override)
+           VALUES ($1, $2, $3, $4, $5, $6, 'active', NOW(), TRUE) RETURNING id`,
           [sessionId, activeSession.currentRound, pA, pB, allParticipants.length > 2 ? allParticipants[2] : null, newRoomId],
         );
         newMatchId = ins.rows[0].id;

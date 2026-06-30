@@ -804,10 +804,11 @@ async function getAnalytics(key: AnalyticsCacheKey, compute: () => Promise<any>)
 // matching_template_id / confidence), tolerating pre-migration null rows.
 async function computeMatching() {
   const [agg, byTemplate, reasons] = await Promise.all([
-    query<{ total: string; avg_confidence: string | null; fallback_count: string }>(
+    query<{ total: string; avg_confidence: string | null; fallback_count: string; override_count: string }>(
       `SELECT COUNT(*)::text AS total,
               ROUND(AVG(confidence)::numeric, 3)::text AS avg_confidence,
-              COUNT(*) FILTER (WHERE fallback_used)::text AS fallback_count
+              COUNT(*) FILTER (WHERE fallback_used)::text AS fallback_count,
+              COUNT(*) FILTER (WHERE COALESCE(is_override, FALSE))::text AS override_count
          FROM matches
         WHERE created_at > NOW() - INTERVAL '30 days' AND status <> 'cancelled'
           AND COALESCE(is_manual, FALSE) = FALSE`,
@@ -843,6 +844,9 @@ async function computeMatching() {
     avgConfidence: agg.rows[0]?.avg_confidence ? parseFloat(agg.rows[0].avg_confidence) : null,
     fallbackCount,
     fallbackRate: total > 0 ? fallbackCount / total : 0,
+    // Host overrides (reassign/move/swap of algorithm pairs) — surfaced so the
+    // algorithm-quality numbers above can be read net of host hand-edits.
+    overrideCount: parseInt(agg.rows[0]?.override_count || '0', 10),
     byTemplate: byTemplate.rows.map((r) => ({
       template: r.template,
       matches: parseInt(r.matches, 10),

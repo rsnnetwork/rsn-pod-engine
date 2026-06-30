@@ -799,6 +799,7 @@ router.get(
         `SELECT m.id, m.round_number AS "roundNumber", m.room_id AS "roomId", m.status,
                 m.participant_a_id AS "participantAId", m.participant_b_id AS "participantBId",
                 m.participant_c_id AS "participantCId",
+                COALESCE(m.is_manual, FALSE) AS "isManual", COALESCE(m.is_override, FALSE) AS "isOverride",
                 ua.display_name AS "nameA", ub.display_name AS "nameB", uc.display_name AS "nameC"
          FROM matches m
          JOIN users ua ON ua.id = m.participant_a_id

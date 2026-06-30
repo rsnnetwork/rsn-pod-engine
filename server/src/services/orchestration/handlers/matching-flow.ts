@@ -712,9 +712,9 @@ export async function handleHostSwapMatch(
       }
     }
 
-    await query('UPDATE matches SET participant_a_id = $1, participant_b_id = $2, participant_c_id = $3 WHERE id = $4',
+    await query('UPDATE matches SET participant_a_id = $1, participant_b_id = $2, participant_c_id = $3, is_override = NOT COALESCE(is_manual, FALSE) WHERE id = $4',
       [newA.a, newA.b, newA.c, matchA.id]);
-    await query('UPDATE matches SET participant_a_id = $1, participant_b_id = $2, participant_c_id = $3 WHERE id = $4',
+    await query('UPDATE matches SET participant_a_id = $1, participant_b_id = $2, participant_c_id = $3, is_override = NOT COALESCE(is_manual, FALSE) WHERE id = $4',
       [newB.a, newB.b, newB.c, matchB.id]);
 
     // Re-send updated preview (pass hostUserId so host is excluded from bye list)

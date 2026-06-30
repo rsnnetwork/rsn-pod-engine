@@ -591,9 +591,10 @@ function HostRecapSection({ sessionId }: { sessionId: string }) {
 
   const exportCSV = () => {
     if (!hostData) return;
-    const rows: string[] = ['Round,Room,Participant A,Participant B,Participant C,Status'];
+    const rows: string[] = ['Round,Room,Participant A,Participant B,Participant C,Status,Type'];
     for (const m of hostData.matches) {
-      rows.push(`${m.roundNumber},${m.roomId || ''},${m.nameA},${m.nameB},${m.nameC || ''},${m.status}`);
+      const type = m.isManual ? 'manual' : m.isOverride ? 'host-edited' : 'algorithm';
+      rows.push(`${m.roundNumber},${m.roomId || ''},${m.nameA},${m.nameB},${m.nameC || ''},${m.status},${type}`);
     }
     rows.push('');
     rows.push('Participant,Email,Rounds Completed,Status,No Show');
@@ -663,8 +664,12 @@ function HostRecapSection({ sessionId }: { sessionId: string }) {
                   <span className="text-gray-400">&</span>
                   <span className="font-medium">{m.nameB}</span>
                   {m.nameC && <><span className="text-gray-400">&</span><span className="font-medium">{m.nameC}</span></>}
-                  <span className={`ml-auto text-xs px-2 py-0.5 rounded-full ${m.status === 'completed' ? 'bg-emerald-50 text-emerald-600' : m.status === 'no_show' ? 'bg-red-50 text-red-500' : 'bg-gray-100 text-gray-500'}`}>
-                    {m.status}
+                  <span className="ml-auto flex items-center gap-1.5">
+                    {m.isManual && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">Manual</span>}
+                    {!m.isManual && m.isOverride && <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700">Host-edited</span>}
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${m.status === 'completed' ? 'bg-emerald-50 text-emerald-600' : m.status === 'no_show' ? 'bg-red-50 text-red-500' : 'bg-gray-100 text-gray-500'}`}>
+                      {m.status}
+                    </span>
                   </span>
                 </div>
               ))}

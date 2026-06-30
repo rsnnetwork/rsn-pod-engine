@@ -89,14 +89,14 @@ describe('Phase 0 — server-canonical roomParticipants assignment', () => {
     it('host force-reassign single-pair calls setRoomAssignment', () => {
       // Find first INSERT INTO matches with status='active' and verify a
       // setRoomAssignment call follows in the same handler block.
-      const firstInsert = src.indexOf("INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, room_id, status)");
+      const firstInsert = src.indexOf("INSERT INTO matches (id, session_id, round_number, participant_a_id, participant_b_id, room_id, status, is_override)");
       expect(firstInsert).toBeGreaterThan(-1);
       const after = src.slice(firstInsert, firstInsert + 2000);
       expect(after).toMatch(/setRoomAssignment\(/);
     });
 
     it('host move-to-room calls setRoomAssignment', () => {
-      const insertIdx = src.indexOf("INSERT INTO matches (session_id, round_number, participant_a_id, participant_b_id, participant_c_id, room_id, status, started_at)");
+      const insertIdx = src.indexOf("INSERT INTO matches (session_id, round_number, participant_a_id, participant_b_id, participant_c_id, room_id, status, started_at, is_override)");
       expect(insertIdx).toBeGreaterThan(-1);
       // Phase 7-audit fix added the LiveKit cleanup catch block between the
       // INSERT and the setRoomAssignment call; widened from 1500 to 3000.
