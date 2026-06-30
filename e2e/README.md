@@ -46,6 +46,21 @@ Users created via `helpers/auth.ts:createTestUser()` — directly in DB with ema
   full 10-pair round, all 20 return to main, 60s ghost watch across every page. Video counts are
   local-CPU-tolerant (20 publishers × 19 subscriptions saturate one machine); state placement
   and final convergence are strict.
+- **load-gate-40.spec.ts** — the Wave-0 SDD load gate at the PROTOCOL layer (socket.io + the real
+  per-user HTTP request pattern), so it scales to 40–50 on an 8-core box where 40 video browsers
+  can't. Asserts the gate's three things: burst-join latency (p95), ZERO 429s for legitimate
+  per-user traffic (the at-scale proof of TRF-2's `u:<sub>` bucket keying; also reports peak
+  req/60s vs the 100 limit), and round transitions under churn (refresh + background-tab +
+  disconnect/rejoin → roster reconverges, breakout reached, all return, zero ghosts). Faithful
+  presence (`presence:ready` + heartbeat) and `reconnection:true` mirror the SPA. Tunables:
+  `LOAD_N` (default 40), `LOBBY_TICKS`, `GHOST_WATCH_MS`, `JOIN_LATENCY_BUDGET_MS`. The 20-browser
+  run above remains the real video-fanout proof. Run (prod — pick an off-event window):
+  ```bash
+  cd e2e
+  $env:JWT_SECRET = (Get-Content .jwt_secret -Raw).Trim()
+  $env:LOAD_N = "40"   # 50 for the upper bound
+  npx playwright test tests/load-gate-40.spec.ts --reporter=line
+  ```
 
 Run any of them headed against prod:
 ```bash
