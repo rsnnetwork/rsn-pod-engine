@@ -473,7 +473,63 @@ export async function requestToJoin(podId: string, userId: string): Promise<PodM
   }
 
   // invite_only, public_with_approval → pending approval
-  return addMember(podId, userId, PodMemberRole.MEMBER, PodMemberStatus.PENDING_APPROVAL);
+  const member = await addMember(podId, userId, PodMemberRole.MEMBER, PodMemberStatus.PENDING_APPROVAL);
+
+  // Stefan (2 Jul) — directors/hosts never learned someone asked to join;
+  // requests sat invisible until the pod page happened to be reloaded.
+  try {
+    await notifyApproversOfJoinRequest(pod, userId);
+  } catch (err) {
+    logger.warn({ err, podId, userId }, 'Join-request notification failed (non-fatal)');
+  }
+
+  return member;
+}
+
+// Bell notification for everyone who can approve the request (active
+// directors + hosts), pushed live via notification:new + entity tags —
+// same pattern as invites, DMs, and pokes.
+async function notifyApproversOfJoinRequest(pod: Pod, requesterId: string): Promise<void> {
+  const requesterResult = await query<{ display_name: string | null; email: string | null }>(
+    `SELECT display_name, email FROM users WHERE id = $1`,
+    [requesterId]
+  );
+  const requesterName = requesterResult.rows[0]?.display_name || requesterResult.rows[0]?.email || 'Someone';
+  const title = 'New Join Request';
+  const body = `${requesterName} wants to join ${pod.name}`;
+  const link = `/pods/${pod.id}`;
+
+  const inserted = await query<{ id: string; user_id: string; created_at: Date }>(
+    `INSERT INTO notifications (user_id, type, title, body, link)
+     SELECT user_id, 'join_request', $2, $3, $4
+       FROM pod_members
+      WHERE pod_id = $1 AND role IN ('director', 'host') AND status = 'active' AND user_id <> $5
+     RETURNING id, user_id, created_at`,
+    [pod.id, title, body, link, requesterId]
+  );
+  if (inserted.rows.length === 0) return;
+
+  try {
+    const { io } = await import('../../index');
+    for (const row of inserted.rows) {
+      io.to(`user:${row.user_id}`).emit('notification:new', {
+        id: row.id,
+        type: 'join_request',
+        title,
+        body,
+        link,
+        isRead: false,
+        createdAt: row.created_at,
+      });
+    }
+    const { emitEntities } = await import('../../realtime/emit');
+    const { E } = await import('../../realtime/entities');
+    emitEntities(
+      io,
+      inserted.rows.map(r => r.user_id),
+      inserted.rows.map(r => E.userNotifications(r.user_id)),
+    ).catch(() => {});
+  } catch { /* socket push is non-fatal */ }
 }
 
 export async function approveMember(podId: string, memberUserId: string, approvedBy: string, approvedByRole?: UserRole): Promise<PodMember> {

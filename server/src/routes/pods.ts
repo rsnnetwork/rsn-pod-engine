@@ -419,6 +419,13 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const member = await podService.requestToJoin(req.params.id, req.user!.userId);
+      // Stefan (2 Jul) — same live fanout as /join: directors viewing the
+      // pod page gain the pending request + count without a refresh, and
+      // the requester's own tabs flip to "pending". The requester may not
+      // be in the active-member fanout audience yet, so emit direct to
+      // their user room too.
+      fanoutPodEntities(req.params.id, [E.userPods(req.user!.userId)]).catch(() => {});
+      emitEntities(getRealtimeIo(), [req.user!.userId], [E.pod(req.params.id), E.podMembers(req.params.id), E.userPods(req.user!.userId)]).catch(() => {});
       const response: ApiResponse = { success: true, data: member };
       res.status(201).json(response);
     } catch (err) {
