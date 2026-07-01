@@ -227,8 +227,18 @@ router.post(
       // Reply is converse ONLY — kept fast. The live card update runs as a separate
       // call (POST /onboarding/profile) so a slow extraction can never delay or cap
       // the reply, and the card fills reliably on every turn.
-      const { reply, ready } = await chatbot.converse(messages, profile, wrapMode, hostKnown);
-      const response: ApiResponse = { success: true, data: { reply, ready } };
+      let turn;
+      try {
+        turn = await chatbot.converse(messages, profile, wrapMode, hostKnown);
+      } catch (err) {
+        // LLM down (exhausted credits, revoked key, outage) → 503 LLM_DISABLED so
+        // the client falls back to the form. 2 Jul: prod credits ran out and this
+        // surfaced as a raw 500 + a dead chat instead of the designed fallback.
+        logger.error({ err, userId }, 'onboarding converse failed — sending LLM_DISABLED fallback');
+        sendLlmDisabled(res);
+        return;
+      }
+      const response: ApiResponse = { success: true, data: { reply: turn.reply, ready: turn.ready } };
       res.json(response);
     } catch (err) {
       next(err);
@@ -290,7 +300,16 @@ router.post(
       const messages = req.body.messages as OnboardingMessage[];
       const profile = req.body.profile as OnboardingConfirmedProfile | undefined;
 
-      const intent = await chatbot.extractIntent(messages);
+      let intent;
+      try {
+        intent = await chatbot.extractIntent(messages);
+      } catch (err) {
+        // Same LLM-down mapping as /chat — the client falls back to the form
+        // instead of a dead confirm button.
+        logger.error({ err, userId }, 'onboarding confirm extraction failed — sending LLM_DISABLED fallback');
+        sendLlmDisabled(res);
+        return;
+      }
       // Snapshot what we inferred so confirmed-vs-guessed can be stored separately.
       const inferred = await inferKnownProfile(req, userId).catch(() => undefined);
       const { profileComplete } = await intentRepo.saveIntentAndComplete(
