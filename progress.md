@@ -8256,3 +8256,17 @@ alihammza (mobile, event v1) hit the half-state S26 left possible: the waiting-r
 S27 = full convergence on socket-independent rails: the poll applies the whole REST snapshot atomically + emits session:resync (works on unseated sockets) + REST-mints the lobby token via POST /sessions/:id/token (works with ZERO functional sockets); the 30s tokenless-lobby belt gets the same REST mint (was riding the dead websocket only) and is gated off pre-start sessions.
 
 Matrix smoke (44.3s, prod), "entered" = video grid LIVE: A healthy 6s; B broadcast-deaf socket (same-user displacement, alihammzas shape) 6s, no refresh; C network dead across Start then restored - 6s after restoration. Stuck-at-start is structurally impossible: 4 independent delivery rails (room broadcast, per-user fan-out, 10s REST poll w/ full convergence, 30s belt w/ REST token), any one suffices.
+
+---
+
+## 2026-07-02 - Pod join requests: notify the approvers + show pending exactly once (fb18e28 + 963a5f4)
+
+**Stefan report (WhatsApp 00:46):** as pod owner he got no notification when stefanavivson@gmail.com requested to join Founding RSN Circle, and the pending person appeared twice (Pending Requests section + Members "Pending Approval" filter chip).
+
+**Root cause 1 (fb18e28, server):** POST /pods/:id/request-join created the pending_approval row and returned - no notification insert, no realtime fanout of any kind (unlike platform join requests, invites, DMs, pokes which all notify). requestToJoin now inserts a join_request bell notification for every active director/host (INSERT..SELECT, requester excluded) and pushes it live via notification:new + userNotifications entity tags; the route fans out pod entities like /join so an open pod page gains the request + count with no refresh. 4 new unit tests (pod-join-request-notify.test.ts).
+
+**Root cause 2 (963a5f4, client):** PodDetailPage rendered pending requesters twice; the Members chip variant even offered member-only actions (Make Host) on a non-member, and Members counts included pending people (32 vs the hero's 31). Pending Approval chip removed; Members header + All chip now exclude pending_approval. Pending requesters live ONLY in the actionable amber Pending Requests section.
+
+**Verified:** full server suite 2411 passed (3 load-flakes green in isolation); tsc clean both packages; Render dep-d92psan40ujc738d3li0 live + Vercel dpl_Ah1q9K6zqV19rZBeBY5yw4ZMtLXq READY on 963a5f4. Headed prod smoke (verify-pod-join-request-notify-headed.spec.ts, 15.0s): request-join -> Pending Requests (1) appeared LIVE on the director's open page (no refresh), bell badge + dropdown show New Join Request (API-verified type/title/body/link), no Pending Approval chip, Members (1) excludes pending, 390px mobile fits w/ no h-scroll, approve flips requester to active member (Members (2)). Cleanup by exact IDs.
+
+**Note:** no email is sent for pod join requests (bell only) - platform-level join requests do email admins; parity is an open product question for Ali/Stefan.
