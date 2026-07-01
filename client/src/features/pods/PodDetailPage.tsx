@@ -390,6 +390,13 @@ export default function PodDetailPage() {
   const declinedMembers  = membersList.filter((m: any) => m.status === 'declined');
   const noResponseMembers = membersList.filter((m: any) => m.status === 'no_response');
 
+  // Stefan (2 Jul) — pending requesters aren't members yet. They live in
+  // the Pending Requests section only, so every count in the Members
+  // section excludes them (the duplicate "Pending Approval" chip is gone).
+  const memberTotal = podMemberCounts
+    ? podMemberCounts.total - (podMemberCounts.pending_approval || 0)
+    : pod.memberCount ?? activeMembers.length;
+
   const myMembership     = membersList.find((m: any) => m.userId === user?.id);
   const isAdminUser      = user?.role === 'admin' || user?.role === 'super_admin';
   const isMember         = myMembership?.status === 'active' || !!pod.memberRole || isAdminUser;
@@ -982,16 +989,15 @@ export default function PodDetailPage() {
       {/* ── Members ────────────────────────────────────────────────────────── */}
       <div className="animate-fade-in-up stagger-2">
         <h2 className="text-lg font-semibold text-[#1a1a2e] mb-3 flex items-center gap-2">
-          <Users className="h-5 w-5 text-rsn-red" /> Members ({podMemberCounts?.total ?? pod.memberCount ?? activeMembers.length})
+          <Users className="h-5 w-5 text-rsn-red" /> Members ({memberTotal})
         </h2>
 
         {/* Status summary tabs (director/host only) */}
         {isDirectorOrHost && podMemberCounts && (
           <div className="flex flex-wrap gap-2 mb-3">
             {[
-              { key: null, label: 'All', count: podMemberCounts.total, color: 'bg-gray-100 text-gray-700 border-gray-200' },
+              { key: null, label: 'All', count: memberTotal, color: 'bg-gray-100 text-gray-700 border-gray-200' },
               ...(podMemberCounts.active > 0 ? [{ key: 'active', label: 'Active', count: podMemberCounts.active, color: 'bg-emerald-50 text-emerald-700 border-emerald-200' }] : []),
-              ...(podMemberCounts.pending_approval > 0 ? [{ key: 'pending_approval', label: 'Pending Approval', count: podMemberCounts.pending_approval, color: 'bg-amber-50 text-amber-700 border-amber-200' }] : []),
               ...(podMemberCounts.invited > 0 ? [{ key: 'invited', label: 'Invited', count: podMemberCounts.invited, color: 'bg-blue-50 text-blue-700 border-blue-200' }] : []),
               ...(podMemberCounts.declined > 0 ? [{ key: 'declined', label: 'Declined', count: podMemberCounts.declined, color: 'bg-red-50 text-red-600 border-red-200' }] : []),
               ...(podMemberCounts.left > 0 ? [{ key: 'left', label: 'Left', count: podMemberCounts.left, color: 'bg-gray-100 text-gray-500 border-gray-200' }] : []),
