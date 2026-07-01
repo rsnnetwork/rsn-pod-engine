@@ -3,6 +3,7 @@ import {
   buildEnrichmentTarget,
   parseEnriched,
   linkedinSlug,
+  normalizeLinkedinUrl,
   applyMatchVerification,
   type EnrichResult,
 } from '../../../services/onboarding/enrichment.service';
@@ -91,6 +92,25 @@ describe('enrichment — linkedinSlug', () => {
     expect(linkedinSlug(null)).toBeNull();
     expect(linkedinSlug('https://linkedin.com/company/acme')).toBeNull();
     expect(linkedinSlug('')).toBeNull();
+  });
+});
+
+describe('enrichment — normalizeLinkedinUrl (member input → canonical URL)', () => {
+  it('turns a bare slug into the full profile URL (the "avivson" case)', () => {
+    expect(normalizeLinkedinUrl('avivson')).toBe('https://www.linkedin.com/in/avivson');
+    expect(normalizeLinkedinUrl('@avivson')).toBe('https://www.linkedin.com/in/avivson');
+    expect(normalizeLinkedinUrl('  Waseem-Javed ')).toBe('https://www.linkedin.com/in/waseem-javed');
+  });
+  it('canonicalizes partial and full URLs', () => {
+    expect(normalizeLinkedinUrl('linkedin.com/in/avivson')).toBe('https://www.linkedin.com/in/avivson');
+    expect(normalizeLinkedinUrl('www.linkedin.com/in/Avivson/')).toBe('https://www.linkedin.com/in/avivson');
+    expect(normalizeLinkedinUrl('https://www.linkedin.com/in/avivson?utm=x')).toBe('https://www.linkedin.com/in/avivson');
+  });
+  it('returns null for empty and leaves unrecognizable input untouched', () => {
+    expect(normalizeLinkedinUrl('')).toBeNull();
+    expect(normalizeLinkedinUrl(null)).toBeNull();
+    expect(normalizeLinkedinUrl('linkedin.com')).toBe('linkedin.com'); // domain w/o slug — not guessed
+    expect(normalizeLinkedinUrl('https://example.com/me')).toBe('https://example.com/me');
   });
 });
 

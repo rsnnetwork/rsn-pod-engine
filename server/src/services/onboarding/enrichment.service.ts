@@ -132,6 +132,25 @@ export function parseEnriched(text: string): EnrichResult {
   return { profile, confidence, sources: strArr(j.sources), foundLinkedinUrl: str(j.linkedinUrl), requestedLinkedinUrl: null, enrichedAt: null };
 }
 
+/**
+ * Canonicalize whatever the member typed into a full LinkedIn profile URL.
+ * Accepts a bare slug ("avivson"), "@avivson", "linkedin.com/in/avivson", or a
+ * full URL — all become "https://www.linkedin.com/in/<slug>". Unrecognizable
+ * input is returned as-is (trimmed) rather than guessed at.
+ */
+export function normalizeLinkedinUrl(input?: string | null): string | null {
+  const s = (input ?? '').trim();
+  if (!s) return null;
+  const slug = linkedinSlug(s);
+  if (slug) return `https://www.linkedin.com/in/${slug}`;
+  // No /in/ path. A bare handle (no slashes, not a linkedin domain) is a slug.
+  const bare = s.replace(/^@/, '');
+  if (!bare.includes('/') && !/linkedin\./i.test(bare) && /^[A-Za-z0-9][A-Za-z0-9\-_.]*$/.test(bare)) {
+    return `https://www.linkedin.com/in/${bare.toLowerCase()}`;
+  }
+  return s;
+}
+
 /** The /in/{slug} identity from a LinkedIn URL, lowercased — for comparing two URLs. */
 export function linkedinSlug(url?: string | null): string | null {
   if (!url) return null;

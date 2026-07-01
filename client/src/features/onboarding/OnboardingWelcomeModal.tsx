@@ -30,6 +30,14 @@ export default function OnboardingWelcomeModal() {
   const done = (user as any)?.onboardingCompleted === true;
   const seenKey = userId ? `rsn_onb_welcome_seen_${userId}` : '';
 
+  // The field shows a fixed "linkedin.com/in/" prefix, so the member only types
+  // their profile name. Pasting a full URL still works — the slug is extracted.
+  function onLinkedinChange(raw: string) {
+    const m = raw.match(/\/in\/([^/?#\s]+)/i);
+    const slug = (m ? m[1] : raw).replace(/^@/, '').replace(/\/+$/, '').trim();
+    setLinkedin(slug);
+  }
+
   useEffect(() => {
     if (!userId || done || !seenKey) return;
     // Per-session: re-reminds each new login until onboarding is complete.
@@ -54,9 +62,10 @@ export default function OnboardingWelcomeModal() {
     setStarting(true);
     // Persist the LinkedIn (if they added one) BEFORE onboarding, so the lookup runs
     // the fast LinkedIn path the instant they land. Best-effort — never block "start".
-    const url = linkedin.trim();
-    if (needsLinkedin && url) {
-      await api.post('/onboarding/enrich/apply', { linkedin: url }).catch(() => {});
+    // The field holds a bare slug (the prefix is shown in the UI) — send the full URL.
+    const slug = linkedin.trim();
+    if (needsLinkedin && slug) {
+      await api.post('/onboarding/enrich/apply', { linkedin: `https://www.linkedin.com/in/${slug}` }).catch(() => {});
     }
     dismiss();
     navigate('/onboarding');
@@ -87,14 +96,15 @@ export default function OnboardingWelcomeModal() {
               Add your LinkedIn{' '}
               <span className="font-normal text-gray-400">(optional — we'll build your profile faster)</span>
             </label>
-            <div className="mt-1.5 flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3 focus-within:border-rsn-red/50 focus-within:ring-2 focus-within:ring-rsn-red/20">
+            <div className="mt-1.5 flex items-center gap-1.5 rounded-xl border border-gray-300 bg-white px-3 focus-within:border-rsn-red/50 focus-within:ring-2 focus-within:ring-rsn-red/20">
               <Linkedin className="h-4 w-4 shrink-0 text-gray-400" />
+              <span className="shrink-0 select-none text-[15px] text-gray-400">linkedin.com/in/</span>
               <input
                 id="onb-linkedin"
-                type="url"
+                type="text"
                 value={linkedin}
-                onChange={(e) => setLinkedin(e.target.value)}
-                placeholder="linkedin.com/in/your-name"
+                onChange={(e) => onLinkedinChange(e.target.value)}
+                placeholder="your-name"
                 className="min-h-[44px] w-full bg-transparent text-[15px] text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none"
               />
             </div>

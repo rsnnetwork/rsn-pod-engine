@@ -128,7 +128,9 @@ router.post(
         return;
       }
       const userId = req.user!.userId;
-      const reqLinkedin = (req.body.linkedinUrl as string) || null;
+      // Canonicalize member input — a bare "avivson" becomes the full profile URL,
+      // so the URL-anchored search + cache comparison always see the same shape.
+      const reqLinkedin = enrichment.normalizeLinkedinUrl(req.body.linkedinUrl as string | null);
 
       // Cache: reuse a prior lookup (e.g. the preload run at approval) so reloads /
       // re-tests don't re-run — and don't overwrite a good preload with a weaker
@@ -187,7 +189,8 @@ router.post(
   validate(applySchema),
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      await enrichRepo.applyEnrichedToProfile(req.user!.userId, req.body);
+      const fields = { ...req.body, linkedin: enrichment.normalizeLinkedinUrl(req.body.linkedin as string | null) };
+      await enrichRepo.applyEnrichedToProfile(req.user!.userId, fields);
       const response: ApiResponse = { success: true, data: { applied: true } };
       res.json(response);
     } catch (err) {

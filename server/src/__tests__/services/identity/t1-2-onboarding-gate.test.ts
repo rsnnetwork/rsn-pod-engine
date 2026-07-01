@@ -70,9 +70,10 @@ describe('T1-2 — onboarding gate decoupled from ProtectedRoute', () => {
 
     it('findOrCreateGoogleUser sets onboarding_completed=TRUE when inviteId is set', () => {
       // The INSERT INTO users statement now includes onboarding_completed column
-      // bound to a TS variable derived from inviteId presence
+      // bound to a TS variable derived from inviteId presence. (linkedin_url was
+      // appended after it for the join-request seed — the $8 binding is unchanged.)
       expect(src).toMatch(/onboardingCompletedDefault\s*=\s*inviteId\s*!==\s*null/);
-      expect(src).toMatch(/onboarding_completed\)\s*[\s\S]*?VALUES[\s\S]*?\$8/);
+      expect(src).toMatch(/onboarding_completed,\s*linkedin_url\)\s*[\s\S]*?VALUES[\s\S]*?\$8/);
     });
 
     it('non-invited Google signups still default to onboarding_completed=FALSE', () => {

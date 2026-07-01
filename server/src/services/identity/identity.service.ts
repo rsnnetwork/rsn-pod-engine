@@ -622,6 +622,12 @@ export async function findOrCreateGoogleUser(
     // Gate: require approved join request or valid invite
     await assertRegistrationAllowed(normalizedEmail, hasValidInvite);
 
+    // Seed from the applicant's approved join request — SAME behavior as the
+    // magic-link path (verifyMagicLink). Google sign-in used to skip this, so a
+    // member who gave their LinkedIn + reason at request time was asked for the
+    // LinkedIn again and lost the reason + preloaded enrichment (Stefan, 2 Jul).
+    const seed = await getApprovedJoinRequestSeed(normalizedEmail);
+
     // Create the user.
     //
     // T1-2 (Issue 1) — invited users get onboarding_completed=TRUE so they
@@ -631,15 +637,26 @@ export async function findOrCreateGoogleUser(
     // default to onboarding_completed=FALSE so they're prompted to fill
     // out the profile on first visit.
     const id = uuid();
-    const displayName = profile.name || normalizedEmail.split('@')[0];
-    const firstName = profile.givenName || (profile.name ? profile.name.split(' ')[0] : '');
-    const lastName = profile.familyName || (profile.name && profile.name.includes(' ') ? profile.name.split(' ').slice(1).join(' ') : '');
+    // Google's verified name wins; the join-request name is the fallback.
+    const displayName = profile.name || seed.displayName || normalizedEmail.split('@')[0];
+    const firstName = profile.givenName || (profile.name ? profile.name.split(' ')[0] : '') || seed.firstName;
+    const lastName = profile.familyName || (profile.name && profile.name.includes(' ') ? profile.name.split(' ').slice(1).join(' ') : '') || seed.lastName;
     const onboardingCompletedDefault = inviteId !== null;
     await query(
-      `INSERT INTO users (id, email, display_name, first_name, last_name, avatar_url, invited_by_user_id, role, status, email_verified, onboarding_completed)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'member', 'active', TRUE, $8)`,
-      [id, normalizedEmail, displayName, firstName, lastName, profile.picture || null, inviterId, onboardingCompletedDefault]
+      `INSERT INTO users (id, email, display_name, first_name, last_name, avatar_url, invited_by_user_id, role, status, email_verified, onboarding_completed, linkedin_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'member', 'active', TRUE, $8, $9)`,
+      [id, normalizedEmail, displayName, firstName, lastName, profile.picture || null, inviterId, onboardingCompletedDefault, seed.linkedinUrl]
     );
+    // Copy the preloaded enrichment (ran at approval) + seed the stated reason,
+    // exactly as verifyMagicLink does — instant card, no re-asking.
+    if (seed.enriched && seed.enriched.confidence > 0) {
+      await saveEnrichedCandidate(id, seed.enriched).catch((e) =>
+        logger.warn({ err: e, userId: id }, 'failed to copy preloaded enrichment (google path)')
+      );
+    }
+    if (seed.reason) {
+      await query('UPDATE users SET why_i_want_to_meet = $1 WHERE id = $2', [seed.reason, id]).catch(() => {});
+    }
     await query(`INSERT INTO user_subscriptions (user_id, plan, status) VALUES ($1, 'free', 'active')`, [id]);
     await query(`INSERT INTO user_entitlements (user_id) VALUES ($1)`, [id]);
 
