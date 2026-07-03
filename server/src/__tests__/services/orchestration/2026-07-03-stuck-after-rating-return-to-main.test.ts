@@ -95,6 +95,17 @@ describe('return-to-main delivery rails are wired', () => {
     expect(fn).toMatch(/emitStateSnapshot/);
   });
 
+  it('rail 1b — endRatingWindow ALSO pushes on the CLOSING_LOBBY (last-round) branch', () => {
+    // 3 Jul: the last round → CLOSING_LOBBY had no proactive push (unlike
+    // ROUND_TRANSITION, which is also followed by a next-round start), so the
+    // whole room got stuck alone. Both branches must emit the snapshot.
+    const src = readSrc('services/orchestration/handlers/round-lifecycle.ts');
+    const i = src.indexOf('export async function endRatingWindow');
+    const fn = src.slice(i, src.indexOf('\nexport ', i + 10));
+    const count = (fn.match(/emitStateSnapshot/g) || []).length;
+    expect(count).toBeGreaterThanOrEqual(2);
+  });
+
   it('rail 2 — the periodic LiveKit sweep runs healStrandedBreakoutLocations', () => {
     const src = readSrc('services/orchestration/state/livekit-sweep.ts');
     const i = src.indexOf('export function startLiveKitSweep');

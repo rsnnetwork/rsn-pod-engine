@@ -963,6 +963,14 @@ export async function endRatingWindow(
       // triggers each client's resync pull, whose reply carries the goodbye-
       // lobby token (handleResync always mints for the canonical location).
 
+      // 3 Jul (Stefan/Ali last-round stuck) — parity with the ROUND_TRANSITION
+      // branch: proactively push the main-room snapshot so every connected
+      // participant is handed a fresh lobby token at the closing-lobby
+      // transition. Unlike a mid-event round there is NO next round to trigger
+      // this, and relying solely on each client's self-resync left the whole
+      // room stuck alone in the closing lobby. Self-gates on SNAPSHOT_EMIT_ENABLED.
+      void emitStateSnapshot(io, sessionId);
+
       // Host-controlled: no auto-end. Host must click "End Event".
       // 10-minute safety fallback prevents orphaned sessions if host disconnects.
       startSegmentTimer(io, sessionId, 600, () => {

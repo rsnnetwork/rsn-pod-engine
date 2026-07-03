@@ -353,11 +353,18 @@ export default function useSessionSocket(sessionId: string) {
           }
           store.setPhase('lobby');
         } else if (st.phase === 'lobby' && you.token && you.livekitUrl &&
-                   (!st.lobbyToken || (you.roomId && st.lobbyRoomId !== you.roomId))) {
+                   (!st.lobbyToken || you.token !== st.lobbyToken || (you.roomId && st.lobbyRoomId !== you.roomId))) {
           // Ship C — lobby:token retired; resync replies / location-change
           // snapshots are now the lobby token rail. Arm the lobby connection
           // whenever we're token-less (event start, post-round return) or the
           // lobby room changed.
+          // 3 Jul (Stefan/Ali last-round stuck) — ALSO re-arm when the server
+          // sent a token that differs from ours. On return to the CLOSING
+          // lobby a client holds a stale token for the SAME room, so the old
+          // guard skipped the fresh one and the client never reconnected to
+          // the populated lobby (each saw only itself). A `you.token` is only
+          // minted on a deliberate location-change / resync, so applying a
+          // changed one is safe and reconnects to the live lobby room.
           store.setLobbyToken(you.token, you.livekitUrl, you.roomId ?? null);
         }
       }
@@ -852,6 +859,14 @@ export default function useSessionSocket(sessionId: string) {
           const isLastRound = current.currentRound >= current.totalRounds && current.totalRounds > 0;
           store.setTransitionStatus(isLastRound ? 'session_ending' : null);
           store.setPhase('lobby');
+          // 3 Jul (Stefan/Ali last-round stuck) — the closing_lobby resync
+          // (fired on session:status_changed) landed while we were STILL in
+          // the rating phase, so its fresh lobby token was dropped by the
+          // snapshot re-arm guard. Now that we've force-returned to the lobby,
+          // pull a fresh resync so the lobby token rail re-arms and we
+          // reconnect to the populated (closing) lobby instead of sitting
+          // alone with a stale token.
+          socket.emit('session:resync', { sessionId, haveSeq: useSessionStore.getState().snapshotSeq });
         }
         // If phase already changed (user finished rating naturally), do nothing
       }, 3000);
