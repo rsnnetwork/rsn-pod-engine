@@ -45,6 +45,7 @@ export async function reconcileRoomRoster(
   sessionId: string,
   roomId: string,
   roster: { userId: string }[],
+  lobbyRoomId: string | null,
 ): Promise<number> {
   const doc = await readCanonical(sessionId);
   if (!doc) return 0;
@@ -53,17 +54,42 @@ export async function reconcileRoomRoster(
     if (!p.userId) continue;
     const cp = doc.participants[p.userId];
     if (!cp) continue;                    // unknown identity — not ours to heal
-    if (cp.connState === 'removed') continue; // never resurrect a kicked user
+    if (cp.connState === 'removed') continue; // never resurrect / evict a kicked user
     if (cp.connState !== 'connected') {
       await healParticipantConnState(sessionId, p.userId, 'connected');
       healed++;
       logger.info({ sessionId, roomId, userId: p.userId, was: cp.connState },
         'LiveKit sweep: healed connState (missed join webhook)');
     }
-    const expectedRoom = cp.location.type === 'breakout' ? cp.location.roomId : null;
-    if (expectedRoom && expectedRoom !== roomId) {
-      logger.warn({ sessionId, roomId, userId: p.userId, expectedRoom },
-        'LiveKit sweep: participant in unexpected room (observability only — no action)');
+    // One-active-room enforcement (3 Jul, Stefan "THE TEST"): a participant
+    // present in a room that is NOT their canonical room is a stale duplicate
+    // membership — their tile shows in two rooms at once. Remove them from
+    // THIS room when it is safe to do so:
+    //   • THIS room is a breakout that isn't theirs → always safe (a dead/old
+    //     breakout; healStrandedBreakoutLocations already ran, so canonical is
+    //     fresh).
+    //   • THIS room is the LOBBY and they canonically belong in a breakout
+    //     DURING AN ACTIVE ROUND → safe (Ali's dual-tile case: mid-round he had
+    //     no business in the lobby). But NEVER during ROUND_TRANSITION / rating
+    //     / lobby phases: returners legitimately land in the lobby then and a
+    //     late heartbeat may still read breakout — evicting there is the 13-Jun
+    //     / 14-Jun "no video after round" bug.
+    const canonicalRoom = cp.location.type === 'breakout' ? cp.location.roomId : lobbyRoomId;
+    const isStaleHere = !!canonicalRoom && roomId !== canonicalRoom;
+    const roomIsBreakout = !!lobbyRoomId && roomId !== lobbyRoomId;
+    const safeLobbyRemoval = !!lobbyRoomId && roomId === lobbyRoomId
+      && cp.location.type === 'breakout'
+      && doc.status === 'round_active';
+    if (isStaleHere && (roomIsBreakout || safeLobbyRemoval)) {
+      try {
+        const videoSvc = await import('../../video/video.service');
+        await videoSvc.evictFromRoom(p.userId, roomId);
+        logger.info({ sessionId, roomId, userId: p.userId, canonicalRoom },
+          'LiveKit sweep: removed stale breakout membership (one-active-room)');
+      } catch (err) {
+        logger.warn({ err, sessionId, roomId, userId: p.userId },
+          'LiveKit sweep: stale-membership removal failed (non-fatal)');
+      }
     }
   }
   return healed;
@@ -148,7 +174,7 @@ export function startLiveKitSweep(): void {
               new Promise<never>((_, reject) =>
                 setTimeout(() => reject(new Error('listParticipants timeout')), LIST_TIMEOUT_MS)),
             ]);
-            await reconcileRoomRoster(sessionId, roomId, roster);
+            await reconcileRoomRoster(sessionId, roomId, roster, session.lobbyRoomId ?? null);
           } catch (err) {
             logger.warn({ err, sessionId, roomId }, 'LiveKit sweep: room reconcile failed (non-fatal)');
           }
