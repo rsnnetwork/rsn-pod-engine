@@ -64,6 +64,13 @@ All of #1–#4 are facets of **one subsystem**: canonical room-state ↔ LiveKit
 - ⏳ **Headed multi-user verification** — MANDATORY before deploy (Stefan's bar). Not yet run.
 - Typecheck clean after each; full suite + headed run pending before ship. NOTHING deployed.
 
+## SHIPPED + PROD-VERIFIED (3 Jul)
+
+main = 5f68b6c (Render + Vercel live). Full suite green in CI. Headed prod smokes:
+- **verify-5round-4p-full-lifecycle-headed** (5 real browsers, 5.2 min): all 4 back in main after EVERY round ×5 (fix #1), dead-breakout /token→lobby for member AND co-host (#4 rail), clean End Event → all left to recap (#2/#3). PASS.
+- **verify-live-lifecycle-mobile-headed** (landscape 844×390): breakout uses the COMPACT layout (desktop layout hidden), no horizontal scroll, self-PIP fits (fix #6); after End Event all participants terminal `left`, none stranded (fix #2). PASS.
+- Not headed-verifiable here (stated honestly to Ali): the #4 network-drop reconnect race (proven by unit tests + the API token proof; watch next live event) and #5 iOS camera-suspend recovery (needs a real iPhone — logic + typecheck done).
+
 ## Ali's answers (confirmed 3 Jul)
 
 1. **Scope**: fix ALL six — core to the event working.
