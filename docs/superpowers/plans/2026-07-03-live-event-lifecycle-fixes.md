@@ -53,6 +53,17 @@ All of #1–#4 are facets of **one subsystem**: canonical room-state ↔ LiveKit
 - Code: `client/src/features/live/Lobby.tsx`, `VideoRoom.tsx`, `index.css`.
 - Portrait↔landscape flip produces a broken layout. Needs responsive audit at 360/390/414/768 + orientation flip, safe-area insets, tile grid reflow.
 
+## Implementation progress (branch `fix/live-event-lifecycle`, off main afc907c)
+
+- ✅ **#1 stuck-after-rating** — commit 8ed5e0f. Rail 1: `endRatingWindow` proactively `emitStateSnapshot` on ROUND_TRANSITION. Rail 2: `healStrandedBreakoutLocations` on the periodic sweep. 6 unit tests green.
+- ✅ **#4 dual-room** — commit 9e90261. Sweep removes a participant from a non-canonical room: any stale breakout always; the lobby only during an ACTIVE round when canonical is a breakout (Ali's case), never during transition/rating (13-Jun rule). 7 unit tests green.
+- ✅ **#2 session cleanup** — commit 9f04f73. `handleDisconnect` guards the DISCONNECTED write on non-completed status so a completed session's participant can't be flipped back to non-terminal (the cs@ disconnect race). Guard test green.
+- ✅ **#3 refresh recovery** — NO new code. Covered by: existing "Issue 9" client teardown (LiveSessionPage.tsx:124 → refresh of a completed session routes to recap) + #1's heal/resync rails (mid-event refresh recovers to correct room) + #2 (session reliably reaches 'completed'). To be verified in the headed test, not separately coded.
+- ⏳ **#5 iOS background** — pending (frontend: BackgroundPanel/BgCameraPublisher).
+- ⏳ **#6 mobile orientation** — pending (frontend: Lobby/VideoRoom/index.css).
+- ⏳ **Headed multi-user verification** — MANDATORY before deploy (Stefan's bar). Not yet run.
+- Typecheck clean after each; full suite + headed run pending before ship. NOTHING deployed.
+
 ## Ali's answers (confirmed 3 Jul)
 
 1. **Scope**: fix ALL six — core to the event working.
