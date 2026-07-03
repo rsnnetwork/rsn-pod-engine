@@ -26,6 +26,7 @@ import { transitionParticipant, ParticipantState } from '../state/participant-st
 // Phase 3 — make the canonical Redis doc authoritative for session status.
 // Best-effort direct write next to each in-memory status assignment.
 import { updateCanonicalSessionStatus } from '../state/canonical-state';
+import { emitStateSnapshot } from '../state/state-snapshot';
 import * as emailService from '../../email/email.service';
 // Phase 2 (19 May 2026) — realtime migration dual-emit. Each round-
 // lifecycle broadcast (match:assigned, rating:window_open/closed) gets
@@ -933,6 +934,15 @@ export async function endRatingWindow(
           } catch { /* skip */ }
         }
       }
+
+      // 3 Jul (Stefan "THE TEST") — return-to-main rail #1. The status_changed
+      // broadcast above relies on each client self-initiating a resync; a
+      // flapping/backgrounded client that misses it was left STUCK in the dead
+      // breakout, which is why the host couldn't start the next round. Push the
+      // snapshot PROACTIVELY so every connected participant is handed their
+      // main-room `you` + a fresh lobby token in this same tick — no
+      // client-initiated resync required. Self-gates on SNAPSHOT_EMIT_ENABLED.
+      void emitStateSnapshot(io, sessionId);
 
       // Host-controlled: no auto-timer. Host must click "Start Round" for next round.
       logger.info({ sessionId, roundNumber }, 'Rating window closed → ROUND_TRANSITION (waiting for host)');

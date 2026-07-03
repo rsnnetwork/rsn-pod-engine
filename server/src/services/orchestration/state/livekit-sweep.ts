@@ -17,7 +17,7 @@
 import logger from '../../../config/logger';
 import { query } from '../../../db';
 import { activeSessions } from './session-state';
-import { readCanonical, updateCanonicalParticipant } from './canonical-state';
+import { readCanonical, updateCanonicalParticipant, clearCanonicalLocationToMain } from './canonical-state';
 
 /**
  * Shared connState heal — the single write used by BOTH the LiveKit webhook
@@ -69,6 +69,42 @@ export async function reconcileRoomRoster(
   return healed;
 }
 
+/**
+ * 3 Jul (Stefan "THE TEST") — return-to-main rail #2. After a round ends,
+ * `endRound` batch-clears canonical breakout locations and the transition
+ * pushes a snapshot; but a participant who was DISCONNECTED at the clear (a
+ * flapping mobile tab) can be left with a canonical 'breakout' location
+ * pointing at an already-ended match — and if their client never sends a clean
+ * resync they sit STUCK, seeing the old breakout / a blank main. The resync
+ * heal (state-snapshot.ts) only fires on a client-initiated resync. This runs
+ * on the periodic sweep so any participant stranded in a non-active breakout is
+ * converged to main within one tick with NO client action required.
+ * Returns the userIds healed.
+ */
+export async function healStrandedBreakoutLocations(sessionId: string): Promise<string[]> {
+  const doc = await readCanonical(sessionId);
+  if (!doc) return [];
+  const healed: string[] = [];
+  for (const [userId, p] of Object.entries(doc.participants)) {
+    if (p.location.type !== 'breakout') continue;
+    const matchId = p.location.matchId;
+    try {
+      const m = await query<{ status: string }>(
+        `SELECT status FROM matches WHERE id = $1`, [matchId],
+      );
+      // Not active (completed / cancelled / vanished) → the breakout is dead;
+      // return them to main so the lobby-token rail lands them with everyone.
+      if (m.rows[0]?.status !== 'active') {
+        await clearCanonicalLocationToMain(sessionId, userId);
+        healed.push(userId);
+        logger.info({ sessionId, userId, matchId },
+          'sweep heal: stranded breakout → main (match not active)');
+      }
+    } catch { /* best-effort per participant — one bad lookup never stalls the rest */ }
+  }
+  return healed;
+}
+
 const SWEEP_INTERVAL_MS = 15_000;
 const LIST_TIMEOUT_MS = 4_000;
 let _sweepHandle: NodeJS.Timeout | null = null;
@@ -93,6 +129,9 @@ export function startLiveKitSweep(): void {
         const session = await (await import('../../session/session.service'))
           .getSessionById(sessionId).catch(() => null);
         if (!session) continue;
+        // Return-to-main rail #2 — heal anyone stranded in a dead breakout
+        // before we reconcile rosters (best-effort; never stalls the sweep).
+        await healStrandedBreakoutLocations(sessionId).catch(() => {});
         if (session.lobbyRoomId) rooms.add(session.lobbyRoomId);
         const active = await query<{ room_id: string }>(
           `SELECT DISTINCT room_id FROM matches
