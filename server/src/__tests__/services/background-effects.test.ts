@@ -51,9 +51,13 @@ describe('Background effects — event-scoped engine wiring', () => {
 
   it('a click before the camera exists acquires it instead of failing', () => {
     // bg-smoke on prod caught the gap: apply → execBuild with no track threw
-    // bg_no_track and the user's first click was silently lost. The build now
+    // bg_no_track and the user's first click was silently lost. The build
     // self-acquires (deduped with the publisher via the same trackPromise).
-    expect(engine).toMatch(/this\.track \?\? await this\.ensureTrack\(false\)/);
+    // 3 Jul (#5 iOS): the ternary also reacquires an ENDED-but-unmuted track —
+    // iOS Safari suspends the camera while the upload file picker is open — so
+    // the uploaded background never builds on a dead track (self-view blank).
+    expect(engine).toMatch(/\? this\.track : await this\.ensureTrack\(false\)/);
+    expect(engine).toMatch(/readyState === 'ended'\s*&&\s*!this\.track\.isMuted/);
   });
 
   it('applies are serialized through the core queue with switchTo reuse', () => {

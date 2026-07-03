@@ -153,7 +153,7 @@ describe('Ship B — reconcileRoomRoster (Phase-4 sweep heal)', () => {
     await writeCanonical(docBase(8, {
       u1: cp('disconnected', { type: 'breakout', roomId: 'r1', matchId: 'm1' }),
     }) as any);
-    const healed = await reconcileRoomRoster('s8', 'r1', [{ userId: 'u1' } as any]);
+    const healed = await reconcileRoomRoster('s8', 'r1', [{ userId: 'u1' } as any], 'lobby-s8');
     expect(healed).toBe(1);
     const doc = await readCanonical('s8');
     expect(doc!.participants.u1.connState).toBe('connected');
@@ -161,14 +161,14 @@ describe('Ship B — reconcileRoomRoster (Phase-4 sweep heal)', () => {
 
   it('never resurrects a removed (kicked) user', async () => {
     await writeCanonical(docBase(9, { u2: cp('removed') }) as any);
-    const healed = await reconcileRoomRoster('s8', 'lobby-1', [{ userId: 'u2' } as any]);
+    const healed = await reconcileRoomRoster('s8', 'lobby-1', [{ userId: 'u2' } as any], 'lobby-1');
     expect(healed).toBe(0);
     expect((await readCanonical('s8'))!.participants.u2.connState).toBe('removed');
   });
 
   it('does NO negative heal — a connected participant absent from the roster stays connected', async () => {
     await writeCanonical(docBase(10, { u3: cp('connected') }) as any);
-    await reconcileRoomRoster('s8', 'lobby-1', []);
+    await reconcileRoomRoster('s8', 'lobby-1', [], 'lobby-1');
     expect((await readCanonical('s8'))!.participants.u3.connState).toBe('connected');
   });
 
