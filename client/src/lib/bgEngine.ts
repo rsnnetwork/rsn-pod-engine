@@ -254,7 +254,18 @@ class BgEngine {
     // engine goes further â€” acquire the camera now (deduped with the
     // publisher's ensureTrack via the same promise) and proceed. Without this
     // the user's first click silently failed with bg_no_track.
-    const track = this.track ?? await this.ensureTrack(false);
+    // #5 (3 Jul, Stefan iOS) — iOS Safari SUSPENDS and ends the camera
+    // MediaStreamTrack while a native file picker (the background upload) is
+    // open. this.track is then non-null but 'ended'; the old `?? ensureTrack`
+    // short-circuited on the non-null dead track, so the uploaded background
+    // built on a corpse and the self-view went blank ("stopped seeing
+    // myself"). Route an ended-but-unmuted track through ensureTrack, whose
+    // self-heal reacquires the camera. A muted 'ended' track is a normal
+    // camera-off state and must NOT be reacquired.
+    const trackDead = !!this.track
+      && this.track.mediaStreamTrack?.readyState === 'ended'
+      && !this.track.isMuted;
+    const track = (this.track && !trackDead) ? this.track : await this.ensureTrack(false);
     if (!track) throw new Error('bg_no_track');
     const mod = await loadBgProcessors();
     if (!mod) throw new Error('bg_module_unavailable');

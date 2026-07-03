@@ -201,7 +201,7 @@ const VideoStage = memo(function VideoStage() {
 
   if (pinnedTile) {
     return (
-      <div className="flex-1 flex flex-col gap-3 max-h-[calc(100dvh-160px)]">
+      <div className="vr-video-area flex-1 flex flex-col gap-3 max-h-[calc(100dvh-160px)]">
         {/* Pinned tile — large. Bug 6.5: same aspect-video cap as the grid
             cells so the pinned tile matches webcam source aspect (16:9)
             and avoids the huge black bar below the video on tall windows. */}
@@ -229,7 +229,7 @@ const VideoStage = memo(function VideoStage() {
   // Mobile trio: partner grid + larger floating self-view
   // Desktop: side-by-side equal grid tiles
   return (
-    <div className="flex-1 relative max-h-[calc(100dvh-160px)]">
+    <div className="vr-video-area flex-1 relative max-h-[calc(100dvh-160px)]">
       {remoteTracks.length > 0 ? (
         <>
           {/* Desktop: equal grid tiles including self-view.
@@ -256,7 +256,7 @@ const VideoStage = memo(function VideoStage() {
               Pair (you + 1):    partner full-stage,    self PIP top-right
               Trio (you + 2):    2 partners in 2-col grid, self PIP top-right
               Quad+ (you + 3+):  responsive grid for partners, self PIP    */}
-          <div className="hidden md:block h-full relative">
+          <div className="vr-desktop-layout hidden md:block h-full relative">
             {!isTrio && remoteTracks.length === 1 ? (
               // Pair: single partner full-stage
               <div className="h-full flex items-center justify-center cursor-pointer"
@@ -289,7 +289,7 @@ const VideoStage = memo(function VideoStage() {
             {/* Self PIP — top-right corner. Click to pin large. */}
             <div
               data-self="true"
-              className="absolute top-3 right-3 w-44 lg:w-52 rounded-xl overflow-hidden shadow-lg border-2 border-white/80 z-10 bg-black cursor-pointer ring-2 ring-rsn-red/30"
+              className="vr-self-pip absolute top-3 right-3 w-44 lg:w-52 rounded-xl overflow-hidden shadow-lg border-2 border-white/80 z-10 bg-black cursor-pointer ring-2 ring-rsn-red/30"
               style={{ aspectRatio: '16 / 9' }}
               onClick={() => setPinnedSid(localParticipant.sid)}
               title="Click to pin yourself"
@@ -300,12 +300,12 @@ const VideoStage = memo(function VideoStage() {
 
           {/* Mobile 1:1: WhatsApp/Google Meet style — partner full screen, self-view PIP top-right */}
           {!isTrio && (
-            <div className="md:hidden h-full relative">
+            <div className="vr-mobile-layout md:hidden h-full relative">
               <div className="h-full cursor-pointer" onClick={() => setPinnedSid(remoteTracks[0].participant.sid)}>
                 <VideoTile trackRef={remoteTracks[0]} label={userDisplayLabel(remoteTracks[0].participant.name || currentPartners[0])} userId={remoteTracks[0].participant.identity} />
               </div>
               <div
-                className="absolute top-3 right-3 w-32 h-44 sm:w-36 sm:h-48 rounded-xl overflow-hidden shadow-lg border-2 border-white/80 z-10 bg-black"
+                className="vr-self-pip absolute top-3 right-3 w-32 h-44 sm:w-36 sm:h-48 rounded-xl overflow-hidden shadow-lg border-2 border-white/80 z-10 bg-black"
                 onClick={() => setPinnedSid(localParticipant.sid)}
                 style={{ cursor: 'pointer' }}
               >
@@ -323,7 +323,7 @@ const VideoStage = memo(function VideoStage() {
               Bug 2 (April 18 Dr Arch): each row cell is h-full + min-h-0 so the
               tiles fill vertically (otherwise aspect-video collapses them). */}
           {isTrio && (
-            <div className="md:hidden h-full relative">
+            <div className="vr-mobile-layout md:hidden h-full relative">
               <div className="h-full grid grid-cols-1 gap-2">
                 {remoteTracks.map((rt, i) => (
                   <div key={rt.participant.sid} className="h-full min-h-0 cursor-pointer" onClick={() => setPinnedSid(rt.participant.sid)}>
@@ -332,7 +332,7 @@ const VideoStage = memo(function VideoStage() {
                 ))}
               </div>
               <div
-                className="absolute top-3 right-3 w-32 h-44 sm:w-36 sm:h-48 rounded-xl overflow-hidden shadow-lg border-2 border-white/80 z-10 bg-black"
+                className="vr-self-pip absolute top-3 right-3 w-32 h-44 sm:w-36 sm:h-48 rounded-xl overflow-hidden shadow-lg border-2 border-white/80 z-10 bg-black"
                 onClick={() => setPinnedSid(localParticipant.sid)}
                 style={{ cursor: 'pointer' }}
               >

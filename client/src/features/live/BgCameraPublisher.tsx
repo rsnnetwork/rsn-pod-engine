@@ -85,5 +85,44 @@ export function BgCameraPublisher() {
     };
   }, [room, connectionState]);
 
+  // #5 (3 Jul, Stefan iOS) — iOS Safari suspends and ENDS the camera track when
+  // a native file picker (background upload) or the lock screen takes over. On
+  // return the track is dead but still "published", so the normal publish
+  // effect above short-circuits (existing.track === engine track) and the user
+  // is left staring at a frozen/blank self-view — the "stopped seeing myself"
+  // report, including when they open the picker and CANCEL (no apply fires).
+  // Heal on visibility/focus return: if the engine track is ended AND the user
+  // wants the camera on, reacquire and republish.
+  useEffect(() => {
+    const healCameraOnReturn = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (connectionState !== ConnectionState.Connected) return;
+      void (async () => {
+        const engine = getBgEngine();
+        const dead = engine.getTrack();
+        if (!dead || dead.mediaStreamTrack?.readyState !== 'ended' || dead.isMuted) return;
+        const fresh = await engine.ensureTrack(); // self-heals: reacquires camera + reapplies bg
+        if (!fresh) return;
+        const lp = room.localParticipant;
+        const existing = lp.getTrackPublication(Track.Source.Camera);
+        if (existing?.track && existing.track !== fresh) {
+          await lp.unpublishTrack(existing.track as any, false).catch(() => {});
+        }
+        if (lp.getTrackPublication(Track.Source.Camera)?.track !== fresh) {
+          await lp.publishTrack(fresh, { source: Track.Source.Camera }).catch(() => {});
+          pubDebug('camera re-published after iOS suspend/return', { room: room.name });
+        }
+      })();
+    };
+    document.addEventListener('visibilitychange', healCameraOnReturn);
+    window.addEventListener('focus', healCameraOnReturn);
+    window.addEventListener('pageshow', healCameraOnReturn);
+    return () => {
+      document.removeEventListener('visibilitychange', healCameraOnReturn);
+      window.removeEventListener('focus', healCameraOnReturn);
+      window.removeEventListener('pageshow', healCameraOnReturn);
+    };
+  }, [room, connectionState]);
+
   return null;
 }

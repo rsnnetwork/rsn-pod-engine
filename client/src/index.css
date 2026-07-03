@@ -158,3 +158,25 @@
 [data-lk-source="camera"][data-lk-local="false"] video {
   transform: none !important;
 }
+
+/* #6 (3 Jul, Stefan) — landscape phone layout fix. The video layouts switch
+   on WIDTH (Tailwind md: = 768px), but a landscape phone (e.g. 844×390) is
+   wider than 768 so it gets the DESKTOP layout — which assumes a tall window
+   and collapses into ~390px of height ("layout looked strange when tilted").
+   On any SHORT viewport, force the compact/mobile layout (partner full-stage +
+   self PIP), which is designed to fill height. Width-based md: breakpoints keep
+   working for real tablets/desktops, which are tall. */
+@media (max-height: 500px) and (orientation: landscape) {
+  .vr-desktop-layout { display: none !important; }
+  .vr-mobile-layout  { display: block !important; }
+  /* Reclaim the vertical chrome the tall-window layouts reserve. */
+  .vr-video-area { max-height: 100dvh !important; }
+  /* Keep the self-PIP small so it never dominates a 390px-tall screen, and
+     clear the notch in landscape (safe-area is on the side then). */
+  .vr-self-pip {
+    width: 6rem !important;
+    height: 4.5rem !important;
+    top: max(0.5rem, env(safe-area-inset-top)) !important;
+    right: max(0.5rem, env(safe-area-inset-right)) !important;
+  }
+}
