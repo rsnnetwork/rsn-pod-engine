@@ -72,8 +72,18 @@ test.afterAll(async () => {
   try { hostSock?.close(); } catch {}
   try { await browser?.close(); } catch {}
   const ids = [host?.id, ...P.map(p => p.id)].filter(Boolean);
-  if (sessionId) { await pool.query(`DELETE FROM invites WHERE session_id=$1`, [sessionId]).catch(()=>{}); await pool.query(`DELETE FROM sessions WHERE id=$1`, [sessionId]).catch(()=>{}); }
-  if (podId) { await pool.query(`DELETE FROM pod_members WHERE pod_id=$1`, [podId]).catch(()=>{}); await pool.query(`DELETE FROM pods WHERE id=$1`, [podId]).catch(()=>{}); }
+  if (podId) {
+    // Delete EVERY session under the pod (not just the tracked id) so no
+    // sessions.pod_id FK blocks the pod delete, then members, then the pod.
+    const sess = await pool.query(`SELECT id FROM sessions WHERE pod_id=$1`, [podId]).catch(() => ({ rows: [] as any[] }));
+    for (const s of sess.rows) {
+      await pool.query(`DELETE FROM invites WHERE session_id=$1`, [s.id]).catch(()=>{});
+      await pool.query(`DELETE FROM encounter_history WHERE last_session_id=$1`, [s.id]).catch(()=>{});
+      await pool.query(`DELETE FROM sessions WHERE id=$1`, [s.id]).catch(()=>{});
+    }
+    await pool.query(`DELETE FROM pod_members WHERE pod_id=$1`, [podId]).catch(()=>{});
+    await pool.query(`DELETE FROM pods WHERE id=$1`, [podId]).catch(()=>{});
+  }
   if (ids.length) {
     await pool.query(`DELETE FROM encounter_history WHERE user_a_id=ANY($1) OR user_b_id=ANY($1)`, [ids]).catch(()=>{});
     await pool.query(`DELETE FROM audit_log WHERE actor_id=ANY($1)`, [ids]).catch(()=>{});
