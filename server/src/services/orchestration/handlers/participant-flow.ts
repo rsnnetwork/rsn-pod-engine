@@ -1830,9 +1830,18 @@ export async function handleDisconnect(
       // through the wrapper instead of mutating roomParticipants directly.
       clearRoomParticipant(sessionId, userId);
 
-      await sessionService.updateParticipantStatus(
-        sessionId, userId, ParticipantStatus.DISCONNECTED
-      ).catch(() => {}); // Swallow errors on disconnect cleanup
+      // #2 (3 Jul, Stefan "THE TEST") — terminal state wins. completeSession
+      // sweeps everyone to 'left' but the session lingers in activeSessions
+      // during its 2–5s LiveKit cleanup; a socket dropping in that window
+      // raced the sweep and stranded the participant as 'disconnected' (cs@…
+      // never resolved to 'left', "old live session didn't close properly").
+      // Never flip a COMPLETED session's participant back to a non-terminal
+      // status.
+      if (activeSession.status !== SessionStatus.COMPLETED) {
+        await sessionService.updateParticipantStatus(
+          sessionId, userId, ParticipantStatus.DISCONNECTED
+        ).catch(() => {}); // Swallow errors on disconnect cleanup
+      }
 
       // Always notify remaining participants that this user left
       const isHost = activeSession.hostUserId === userId;
