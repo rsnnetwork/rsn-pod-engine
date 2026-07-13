@@ -1235,6 +1235,34 @@ export default function useSessionSocket(sessionId: string) {
       }
     }, PERIODIC_RESYNC_MS);
 
+    // 13 Jul (Ali live test — alihammza143 stuck on the waiting page) — the
+    // EARLIEST joiner sits in the waiting room BEFORE the host presses Start.
+    // If their session:status_changed(lobby_open) broadcast is missed (a
+    // join-wave race while the in-memory session spins up), the ONLY recovery
+    // was the 30s periodic resync above — long enough that the user gives up
+    // and refreshes. While we're still waiting for the event to go live, poll
+    // the authoritative /state FAST so the host pressing Start pulls every
+    // waiting client into the main room within a few seconds, and arm the
+    // lobby token the moment it flips live so video comes up too. No refresh,
+    // nobody stranded on the waiting screen.
+    const WAITING_HEAL_MS = 5_000;
+    const waitingHealInterval = setInterval(() => {
+      const st = useSessionStore.getState();
+      if (st.sessionStatus !== 'scheduled') return; // only while waiting for start
+      void fetchSessionStateSnapshot().then(() => {
+        const now = useSessionStore.getState();
+        if (now.sessionStatus !== 'scheduled' && now.phase === 'lobby' && !now.lobbyToken) {
+          socket.emit('session:resync', { sessionId, haveSeq: now.snapshotSeq });
+          api.post(`/sessions/${sessionId}/token`, {}).then(res => {
+            const td = res.data?.data; const cur = useSessionStore.getState();
+            if (td?.token && !cur.lobbyToken && cur.phase === 'lobby') {
+              cur.setLobbyToken(td.token, td.livekitUrl, td.roomId ?? null);
+            }
+          }).catch(() => { /* next tick / the 30s belt retries */ });
+        }
+      });
+    }, WAITING_HEAL_MS);
+
     // ── Reconnection ──
     const onReconnect = () => {
       store.setReconnecting(false);
@@ -1311,6 +1339,7 @@ export default function useSessionSocket(sessionId: string) {
       clearTimeout(initialSnapshotTimer);
       if (rosterTimer) clearTimeout(rosterTimer);
       clearInterval(periodicResyncInterval);
+      clearInterval(waitingHealInterval);
 
       // Remove ALL socket event listeners we attached
       for (const ev of SOCKET_EVENTS) socket.off(ev);

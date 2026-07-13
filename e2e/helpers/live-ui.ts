@@ -48,6 +48,18 @@ export const inBreakout = (page: Page) => page.getByRole('button', { name: /Back
 export const atRecap = (page: Page) => page.getByText(/Recap|Thanks for|see you|event (has )?ended|Rate your connections|Your connections/i).count().then(c => c > 0).catch(() => false);
 // Video tiles this page renders (self + remotes). Converged lobby => > 1.
 export const tilesSeen = (page: Page) => page.locator('video').count().catch(() => 0);
+// The per-event check-in ("intent") modal — every participant must see it.
+export const intentFormShown = (page: Page) =>
+  page.getByRole('heading', { name: /What brings you here/i }).isVisible().catch(() => false);
+
+/** Fill + submit the intent (check-in) modal if it's on screen. */
+export async function submitIntent(page: Page, openness = 'Somewhat'): Promise<boolean> {
+  if (!(await intentFormShown(page))) return false;
+  await page.getByRole('button', { name: openness, exact: true }).first().click().catch(() => {});
+  await page.getByRole('button', { name: 'Set', exact: true }).first().click().catch(() => {});
+  await wait(1000);
+  return true;
+}
 
 /** Fill and submit the REAL rating form if it's on screen. Returns true if it rated. */
 export async function rateViaForm(page: Page, opts: { stars?: number; meetAgain?: boolean } = {}): Promise<boolean> {
