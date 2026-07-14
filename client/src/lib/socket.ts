@@ -22,7 +22,14 @@ export function getSocket(): TypedSocket {
         token: useAuthStore.getState().accessToken,
       }),
       reconnection: true,
-      reconnectionAttempts: 20,
+      // 14 Jul (Ali live test — alihammza's reconnect storm on a slow mobile) —
+      // a flapping connection EXHAUSTED the previous 20-attempt cap in ~3 min,
+      // fired `reconnect_failed`, and dead-ended the user at "please refresh"
+      // — and refresh couldn't outrun the drops. A live event must NEVER stop
+      // trying to reconnect on the client's behalf: with Infinity the socket
+      // keeps retrying (capped at reconnectionDelayMax apart) and self-heals
+      // the instant the network steadies, no refresh, nobody permanently stuck.
+      reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 10000,
     });

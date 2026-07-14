@@ -32,6 +32,7 @@ export default function LiveSessionPage() {
   const sessionError = useSessionStore(s => s.error);
   const connectionStatus = useSessionStore(s => s.connectionStatus);
   const transitionStatus = useSessionStore(s => s.transitionStatus);
+  const reconnectCount = useSessionStore(s => s.reconnectCount);
   const isPaused = useSessionStore(s => s.isPaused);
   const sessionStatus = useSessionStore(s => s.sessionStatus);
   const currentRound = useSessionStore(s => s.currentRound);
@@ -264,7 +265,14 @@ export default function LiveSessionPage() {
       {connectionStatus === 'reconnecting' && (
         <div className="bg-amber-500/10 px-4 py-2 flex items-center justify-center gap-2">
           <WifiOff className="h-4 w-4 text-amber-400" />
-          <p className="text-sm text-amber-400">Reconnecting...</p>
+          {/* 14 Jul (alihammza) — after a couple of drops, tell the user it's
+              their network (unstable connection), not a frozen app. We keep
+              trying automatically (infinite reconnection), so no refresh needed. */}
+          <p className="text-sm text-amber-400">
+            {reconnectCount >= 2
+              ? 'Reconnecting… your connection looks unstable. We’ll get you back in automatically.'
+              : 'Reconnecting…'}
+          </p>
         </div>
       )}
       {connectionStatus === 'disconnected' && (

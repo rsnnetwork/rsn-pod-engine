@@ -1263,11 +1263,60 @@ export default function useSessionSocket(sessionId: string) {
       });
     }, WAITING_HEAL_MS);
 
+    // 14 Jul (Ali live test — alihammza's reconnect storm on a slow mobile) —
+    // a participant whose socket DROPS repeatedly (every ~7s) reconnected over
+    // and over but never converged: each brief online window was too short for
+    // the 30s periodic resync to fire, so after the event went live he stayed
+    // stuck at 'checked_in'. On EVERY reconnect / return-from-background we now
+    // fire a short RECOVERY BURST — fast /state polls that also REST-mint the
+    // lobby token — so a behind client re-converges within a couple of seconds
+    // of ANY good window, at ANY live phase (not only while 'scheduled', which
+    // the waiting-heal above already covers). Self-terminating and re-armed on
+    // each reconnect, so it adds zero steady-state polling load.
+    let recoveryBurstTimer: ReturnType<typeof setInterval> | null = null;
+    let recoveryBurstTicks = 0;
+    const RECOVERY_BURST_TICK_MS = 3_000;
+    const RECOVERY_BURST_MAX_TICKS = 7; // ~21s of fast healing per drop
+    const isLiveHealablePhase = (s: string | null | undefined) =>
+      s != null && s !== 'scheduled' && s !== 'completed' && s !== 'cancelled';
+    const recoveryHealTick = () => {
+      void fetchSessionStateSnapshot().then(() => {
+        const now = useSessionStore.getState();
+        // A tokenless lobby at a LIVE phase = we're behind, or a zombie socket
+        // swallowed the token grant. Resync over the socket AND REST-mint the
+        // token over pure HTTPS so it heals even while the socket still flaps.
+        if (now.phase === 'lobby' && !now.lobbyToken && isLiveHealablePhase(now.sessionStatus)) {
+          socket.emit('session:resync', { sessionId, haveSeq: now.snapshotSeq });
+          api.post(`/sessions/${sessionId}/token`, {}).then(res => {
+            const td = res.data?.data; const cur = useSessionStore.getState();
+            if (td?.token && !cur.lobbyToken && cur.phase === 'lobby') {
+              cur.setLobbyToken(td.token, td.livekitUrl, td.roomId ?? null);
+            }
+          }).catch(() => { /* next burst tick / the 30s belt retries */ });
+        }
+      });
+    };
+    const runRecoveryBurst = () => {
+      recoveryBurstTicks = 0;
+      if (recoveryBurstTimer) clearInterval(recoveryBurstTimer);
+      recoveryHealTick(); // heal immediately, don't wait a full tick
+      recoveryBurstTimer = setInterval(() => {
+        recoveryBurstTicks++;
+        recoveryHealTick();
+        if (recoveryBurstTicks >= RECOVERY_BURST_MAX_TICKS && recoveryBurstTimer) {
+          clearInterval(recoveryBurstTimer); recoveryBurstTimer = null;
+        }
+      }, RECOVERY_BURST_TICK_MS);
+    };
+
     // ── Reconnection ──
     const onReconnect = () => {
       store.setReconnecting(false);
       store.setConnectionStatus('connected');
       store.setError(null);
+      // 14 Jul — count reconnects so the UI can warn "your connection looks
+      // unstable" once this client has flapped a couple of times.
+      store.bumpReconnectCount();
       // Don't clear LiveKit token here — old token may still be valid and clearing
       // causes a race condition with VideoRoom's backup fetch + 30s timeout.
       // Server will send fresh match:assigned on session:join if needed.
@@ -1280,6 +1329,9 @@ export default function useSessionSocket(sessionId: string) {
       // T0-3 — refetch authoritative state on every reconnect to recover
       // anything we might have missed during the disconnect window.
       fetchSessionStateSnapshot();
+      // 14 Jul — fast recovery burst: a behind/flapping client re-converges in
+      // seconds instead of waiting up to 30s for the periodic resync.
+      runRecoveryBurst();
     };
 
     const onReconnectAttempt = () => {
@@ -1288,9 +1340,14 @@ export default function useSessionSocket(sessionId: string) {
     };
 
     const onReconnectFailed = () => {
-      store.setReconnecting(false);
-      store.setConnectionStatus('disconnected');
-      store.setError('Connection lost. Please refresh the page.');
+      // 14 Jul — with reconnectionAttempts:Infinity this effectively never
+      // fires, but if it ever does DON'T dead-end the user at "please refresh"
+      // (alihammza refreshed and still couldn't get back). Stay in the
+      // reconnecting state and keep trying; the online/visibility listeners and
+      // the token belt re-establish the socket the moment the network returns.
+      store.setReconnecting(true);
+      store.setConnectionStatus('reconnecting');
+      if (!socket.connected) socket.connect();
     };
 
     socket.io.on('reconnect', onReconnect);
@@ -1322,6 +1379,9 @@ export default function useSessionSocket(sessionId: string) {
       // Canonical-100% (Ship A) — a backgrounded device (phone lock, app switch)
       // may have missed room moves entirely; the resync reply re-lands us.
       socket.emit('session:resync', { sessionId, haveSeq: useSessionStore.getState().snapshotSeq });
+      // 14 Jul — same fast recovery burst on return-from-background, so a phone
+      // that was locked / app-switched re-converges in seconds, not up to 30s.
+      runRecoveryBurst();
     };
     document.addEventListener('visibilitychange', resyncPresenceOnReturn);
     window.addEventListener('focus', resyncPresenceOnReturn);
@@ -1340,6 +1400,7 @@ export default function useSessionSocket(sessionId: string) {
       if (rosterTimer) clearTimeout(rosterTimer);
       clearInterval(periodicResyncInterval);
       clearInterval(waitingHealInterval);
+      if (recoveryBurstTimer) clearInterval(recoveryBurstTimer);
 
       // Remove ALL socket event listeners we attached
       for (const ev of SOCKET_EVENTS) socket.off(ev);

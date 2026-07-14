@@ -116,6 +116,11 @@ interface SessionLiveState {
   broadcasts: string[];
   error: string | null;
   isReconnecting: boolean;
+  // 14 Jul (alihammza reconnect storm) — how many times this client has
+  // re-established the socket during THIS session. A rising count means an
+  // unstable connection; the UI uses it to tell the user "your connection
+  // looks unstable" instead of leaving them staring at a silent freeze.
+  reconnectCount: number;
   isByeRound: boolean;
   liveKitToken: string | null;
   livekitUrl: string | null;
@@ -303,6 +308,7 @@ interface SessionLiveState {
   addBroadcast: (msg: string) => void;
   setError: (err: string | null) => void;
   setReconnecting: (v: boolean) => void;
+  bumpReconnectCount: () => void;
   setByeRound: (v: boolean) => void;
   setLiveKitToken: (token: string | null, url?: string | null) => void;
   setRoomId: (roomId: string | null) => void;
@@ -421,6 +427,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   broadcasts: [],
   error: null,
   isReconnecting: false,
+  reconnectCount: 0,
   isByeRound: false,
   liveKitToken: null,
   livekitUrl: null,
@@ -542,6 +549,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
   addBroadcast: (msg) => set((s) => ({ broadcasts: [...s.broadcasts.slice(-9), msg] })),
   setError: (error) => set({ error }),
   setReconnecting: (isReconnecting) => set({ isReconnecting }),
+  bumpReconnectCount: () => set((s) => ({ reconnectCount: s.reconnectCount + 1 })),
   setByeRound: (isByeRound) => set({ isByeRound }),
   setLiveKitToken: (liveKitToken, livekitUrl = null) => set({ liveKitToken, livekitUrl }),
   setRoomId: (currentRoomId) => set({ currentRoomId }),
@@ -723,7 +731,7 @@ export const useSessionStore = create<SessionLiveState>((set) => ({
     sessionStatus: 'scheduled', hostInLobby: false, hostUserId: null, sessionStateLoaded: false, serverPinnedUserId: null, tileDemotedUserIds: [], hccParticipants: [], totalRounds: 5, bonusRoundsAdded: 0,
     participants: [], liveRoomParticipants: [], currentMatch: null, currentPartners: [], currentMatchId: null, ratingReason: null, timerWarning: null, roomNotice: null,
     timerSeconds: 0, timerEndsAt: null, clockOffset: 0, hasClockOffset: false, currentRound: 0, broadcasts: [], error: null, tileReactions: {},
-    isReconnecting: false, isByeRound: false, liveKitToken: null, livekitUrl: null, currentRoomId: null,
+    isReconnecting: false, reconnectCount: 0, isByeRound: false, liveKitToken: null, livekitUrl: null, currentRoomId: null,
     lobbyToken: null, lobbyUrl: null, lobbyRoomId: null,
     timerVisibility: 'always_visible', breakoutTimerHidden: false, matchPreview: null,
     eventPlanSummary: null, testMode: false,
