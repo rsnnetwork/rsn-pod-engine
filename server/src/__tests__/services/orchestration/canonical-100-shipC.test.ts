@@ -7,9 +7,14 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-const readSrc = (rel: string) => fs.readFileSync(path.join(__dirname, '../../../', rel), 'utf8');
-const readClient = (rel: string) => fs.readFileSync(path.join(__dirname, '../../../../../client/src/', rel), 'utf8');
-const readShared = (rel: string) => fs.readFileSync(path.join(__dirname, '../../../../../shared/src/', rel), 'utf8');
+// Line endings are normalised because these pins slice fixed-size windows out
+// of the source (e.g. `hook.slice(i, i + 3600)`). A Windows checkout is CRLF,
+// so every line costs one extra char and the window silently covers fewer
+// lines than on CI's LF checkout — pins then fail locally while CI is green.
+const read = (abs: string) => fs.readFileSync(abs, 'utf8').replace(/\r\n/g, '\n');
+const readSrc = (rel: string) => read(path.join(__dirname, '../../../', rel));
+const readClient = (rel: string) => read(path.join(__dirname, '../../../../../client/src/', rel));
+const readShared = (rel: string) => read(path.join(__dirname, '../../../../../shared/src/', rel));
 
 const HANDLER_FILES = [
   'services/orchestration/handlers/round-lifecycle.ts',
