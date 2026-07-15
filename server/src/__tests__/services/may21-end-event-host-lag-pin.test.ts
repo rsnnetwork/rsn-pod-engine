@@ -122,15 +122,28 @@ describe('F4 (21 May Ali) — End Event host lag fix', () => {
       // Pre-fix: a `for (...) { await query(...) }` block. Now: a single
       // Promise.allSettled over a .map of queries. Either substring
       // alone is enough — both should be present.
+      // 15 Jul: the map is now over `pairs` (each match expanded into every
+      // pair it holds, so trios record a-c and b-c too) rather than over
+      // matchesResult.rows directly. The property this pin protects is the
+      // parallelism, not which list is mapped.
       expect(body).toMatch(/Promise\.allSettled\(/);
-      expect(body).toMatch(/matchesResult\.rows\.map\(/);
+      expect(body).toMatch(/pairs\.map\(/);
       // No inner `await` inside the map callback (would defeat the parallelism).
       expect(body).not.toMatch(/\.map\(\s*async[^{]*\{\s*await\b/);
     });
 
-    it('still inserts into encounter_history with ON CONFLICT DO NOTHING (idempotent semantics preserved)', () => {
+    it('still upserts encounter_history idempotently (conflict branch sets, never increments)', () => {
+      // 15 Jul: DO NOTHING became DO UPDATE so a pair who met in an earlier
+      // event gets last_met_at/last_session_id refreshed when they meet again
+      // (pre-fix their row still pointed at the older event). Idempotency —
+      // which completeSession relies on, calling this fire-and-forget — is
+      // preserved because the conflict branch only SETs. An increment such as
+      // `times_met = times_met + 1` would double-count on a re-run, so pin
+      // its absence rather than the old DO NOTHING text.
       expect(body).toMatch(/INSERT INTO encounter_history/);
-      expect(body).toMatch(/ON CONFLICT \(user_a_id, user_b_id\) DO NOTHING/);
+      expect(body).toMatch(/ON CONFLICT \(user_a_id, user_b_id\) DO UPDATE/);
+      const conflictBranch = body.slice(body.indexOf('ON CONFLICT'));
+      expect(conflictBranch).not.toMatch(/times_met\s*=\s*[^,]*times_met\s*\+/);
     });
   });
 });

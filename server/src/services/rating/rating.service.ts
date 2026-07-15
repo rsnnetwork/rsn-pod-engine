@@ -883,14 +883,37 @@ export async function finalizeSessionEncounters(sessionId: string): Promise<numb
   const matchesResult = await query<{
     participantAId: string;
     participantBId: string;
+    participantCId: string | null;
     roundNumber: number;
   }>(
     `SELECT participant_a_id AS "participantAId", participant_b_id AS "participantBId",
-            round_number AS "roundNumber"
+            participant_c_id AS "participantCId", round_number AS "roundNumber"
      FROM matches
      WHERE session_id = $1 AND status IN ('completed', 'active', 'reassigned')`,
     [sessionId]
   );
+
+  // 15 Jul (Ali live test "mn") — a TRIO is ONE match row holding THREE people,
+  // i.e. THREE pairs who met: a-b, a-c and b-c. This only ever read
+  // participant_a_id/participant_b_id, so both pairs involving the third person
+  // were silently dropped: Chief met Waseem and jack in the rounds-1/4 trio and
+  // finished the event with no encounter row for either. That table is the
+  // cross-event "have these two already met" memory the matcher reads, so the
+  // lost pairs would be re-matched later as if they'd never spoken. Expand each
+  // match into every pair it actually contains, ordered to match the unique
+  // (user_a_id, user_b_id) constraint.
+  const pairs: Array<[string, string]> = [];
+  for (const m of matchesResult.rows) {
+    const people = [m.participantAId, m.participantBId, m.participantCId].filter(
+      (id): id is string => Boolean(id),
+    );
+    for (let i = 0; i < people.length; i++) {
+      for (let j = i + 1; j < people.length; j++) {
+        const [x, y] = people[i] < people[j] ? [people[i], people[j]] : [people[j], people[i]];
+        pairs.push([x, y]);
+      }
+    }
+  }
 
   // F4 (21 May Ali) — pre-fix this loop awaited each INSERT serially, so
   // for an N-match event the function took N × DB-roundtrip-ms before
@@ -901,23 +924,33 @@ export async function finalizeSessionEncounters(sessionId: string): Promise<numb
   // background work also clears in a few hundred ms rather than seconds.
   // Promise.allSettled because each row is independent — one failure
   // shouldn't poison the others.
+  // The conflict branch SETs and never increments. completeSession fires this
+  // without awaiting and documents it as idempotent, so a `times_met + 1` here
+  // would double-count on any re-run. Refreshing last_met_at/last_session_id is
+  // safe (a re-run lands the same logical state) and fixes the stale pointer Ali
+  // hit: he and saif met twice during "mn" yet their row still named the
+  // previous event. Counting unrated re-meets needs per-match tracking — a
+  // separate change, deliberately not smuggled in here.
   const results = await Promise.allSettled(
-    matchesResult.rows.map(match => {
-      const [userAId, userBId] = match.participantAId < match.participantBId
-        ? [match.participantAId, match.participantBId]
-        : [match.participantBId, match.participantAId];
-      return query(
+    pairs.map(([userAId, userBId]) =>
+      query<{ inserted: boolean }>(
         `INSERT INTO encounter_history (id, user_a_id, user_b_id, times_met, last_met_at, last_session_id)
          VALUES ($1, $2, $3, 1, NOW(), $4)
-         ON CONFLICT (user_a_id, user_b_id) DO NOTHING`,
+         ON CONFLICT (user_a_id, user_b_id) DO UPDATE
+           SET last_met_at = NOW(),
+               last_session_id = EXCLUDED.last_session_id,
+               updated_at = NOW()
+         RETURNING (xmax = 0) AS inserted`,
         [uuid(), userAId, userBId, sessionId],
-      );
-    }),
+      ),
+    ),
   );
 
+  // xmax = 0 marks a genuine INSERT, so the metric still means "new encounters"
+  // now that the conflict branch updates instead of doing nothing.
   let created = 0;
   for (const r of results) {
-    if (r.status === 'fulfilled' && r.value.rowCount && r.value.rowCount > 0) created++;
+    if (r.status === 'fulfilled' && r.value.rows[0]?.inserted === true) created++;
   }
 
   logger.info({ sessionId, totalMatches: matchesResult.rows.length, newEncounters: created },
