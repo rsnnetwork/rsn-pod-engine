@@ -1347,6 +1347,21 @@ function DeviceTest() {
     let mediaStream: MediaStream | null = null;
     let audioCtx: AudioContext | null = null;
 
+    // In-app browsers (event link opened inside TikTok / Instagram / LinkedIn)
+    // and non-secure contexts expose NO `navigator.mediaDevices` at all. Reading
+    // `.getUserMedia` off it throws a SYNCHRONOUS TypeError, which the `.catch()`
+    // below never sees — that only catches a REJECTED promise (denied
+    // permission). The throw escaped this effect into the Lobby error boundary,
+    // and since boundaries don't self-heal it stranded those users on "Something
+    // went wrong in Lobby" permanently — they could never enter the event, not
+    // even after the host started. Degrade to the same camera-less state a
+    // denied permission gives: no self-preview, but they still join and
+    // see/hear everyone.
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError("Camera isn't available in this browser. You can still join — open in Safari or Chrome for video.");
+      return;
+    }
+
     navigator.mediaDevices.getUserMedia({ video: true, audio: true })
       .then(s => {
         if (!mounted) { s.getTracks().forEach(t => t.stop()); return; }
