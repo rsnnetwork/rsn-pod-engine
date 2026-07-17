@@ -259,12 +259,19 @@ export async function expressInterest(userId: string, targetUserId: string): Pro
   const [me, target] = await Promise.all([loadProfile(userId), loadProfile(targetUserId)]);
   let message = 'We think you two should meet.';
   if (me && target) {
-    // The reason from the RECIPIENT's perspective: why the sender fits what
-    // they might want, falling back to why the sender wanted them.
+    // The message is read by the RECIPIENT, so it must be written from THEIR
+    // perspective. If their own wants fit the sender, say so ("You're looking
+    // to meet X — SENDER is a Y"). If they never stated wants, the sender-side
+    // reason would read backwards to them ("You're looking to meet investors"
+    // about someone who never said that — caught on the 17 Jul prod run), so
+    // fall back to a neutral sentence instead.
     const toRecipient = scoreFit(target, me);
-    const fromSender = scoreFit(me, target);
-    const reason = toRecipient.reason || fromSender.reason;
-    if (reason) message = `${reason}. We think you two should meet.`;
+    if (toRecipient.reason) {
+      message = `${toRecipient.reason}. We think you two should meet.`;
+    } else {
+      const myName = me.displayName || 'This member';
+      message = `${myName} thinks you fit what they're looking for. We think you two should meet.`;
+    }
   }
   return pokeService.sendPoke(userId, targetUserId, message.slice(0, 500));
 }

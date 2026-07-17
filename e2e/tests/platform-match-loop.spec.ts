@@ -100,8 +100,13 @@ test('standing match loop: suggest → I want to meet → accept → chat unlock
   // (3) HEADED: the founder's real screen shows the card + button; the baker's
   //     shows the three no-match options. Mobile viewport (390px).
   const fPage = await openAs(founder);
-  await expect(fPage.getByText(investor.displayName)).toBeVisible({ timeout: 20_000 });
-  await expect(fPage.getByRole('button', { name: /I want to meet/i }).first()).toBeVisible();
+  // CRITICAL: the founder's list also contains REAL prod users who fit the
+  // "investor" want. Scope every assertion + click to OUR investor's card
+  // (the one whose profile link is our test user) — never .first(), which once
+  // sent an introduction to a real member.
+  const investorCard = fPage.locator(`div.card-hover:has(a[href="/profile/${investor.id}"])`);
+  await expect(investorCard).toBeVisible({ timeout: 20_000 });
+  await expect(investorCard.getByRole('button', { name: /I want to meet/i })).toBeVisible();
   await fPage.screenshot({ path: 'test-results/pm-founder-match.png' }).catch(() => {});
   const bPage = await openAs(baker);
   await expect(bPage.getByText(/Join the next RSN/i)).toBeVisible({ timeout: 20_000 });
@@ -111,9 +116,10 @@ test('standing match loop: suggest → I want to meet → accept → chat unlock
   await bPage.screenshot({ path: 'test-results/pm-baker-nomatch.png' }).catch(() => {});
   console.log('  ✓ headed: match card (founder) + full no-match screen (baker) render on mobile width.');
 
-  // (4) The founder clicks the real button — the introduction goes out.
-  await fPage.getByRole('button', { name: /I want to meet/i }).first().click();
-  await expect(fPage.getByText(/Introduction requested/i)).toBeVisible({ timeout: 15_000 });
+  // (4) The founder clicks the real button ON OUR INVESTOR'S CARD — the
+  // introduction goes out to our test user, nobody else.
+  await investorCard.getByRole('button', { name: /I want to meet/i }).click();
+  await expect(investorCard.getByText(/Introduction requested/i)).toBeVisible({ timeout: 15_000 });
   console.log('  ✓ headed: "I want to meet" → Introduction requested.');
 
   // (5) The investor received it (poke rails) with the intro as the message,
