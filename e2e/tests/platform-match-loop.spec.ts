@@ -27,8 +27,9 @@ async function apiAs(u: TestUser, method: string, path: string, body?: unknown) 
   return { status: res.status, json };
 }
 
-/** Give a test user the intent profile the chatbot onboarding would have written. */
-async function setIntent(u: TestUser, cols: Record<string, string>) {
+/** Give a test user the intent profile the chatbot onboarding would have
+ *  written. NB: professional_role is text[] in the schema — pass arrays. */
+async function setIntent(u: TestUser, cols: Record<string, string | string[]>) {
   const keys = Object.keys(cols);
   await pool.query(
     `UPDATE users SET ${keys.map((k, i) => `${k} = $${i + 2}`).join(', ')} WHERE id = $1`,
@@ -53,16 +54,16 @@ test.beforeAll(async () => {
   investor = await createTestUser('pminvestor');
   baker = await createTestUser('pmbaker');
   await setIntent(founder, {
-    professional_role: 'Founder',
+    professional_role: ['Founder'],
     who_i_want_to_meet: 'investors and angels for my seed round',
     my_intent: 'raise funding for my SaaS startup',
   });
   await setIntent(investor, {
-    professional_role: 'Angel Investor',
+    professional_role: ['Angel Investor'],
     expertise_text: 'early stage SaaS investing',
   });
   await setIntent(baker, {
-    professional_role: 'Pastry Chef',
+    professional_role: ['Pastry Chef'],
     who_i_want_to_meet: 'nobody in particular',
     expertise_text: 'sourdough croissants',
   });

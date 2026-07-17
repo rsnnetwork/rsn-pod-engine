@@ -42,18 +42,22 @@ const profile = (over: Partial<IntentProfile>): IntentProfile => ({
   ...over,
 });
 
+// NB: professional_role is text[] in the real users table (as are goals and
+// interests) — node-pg hands the service ARRAYS here, and treating them as
+// strings crashed the endpoint on prod (caught by the 17 Jul E2E). These
+// fixtures deliberately use the array shape to pin that.
 const FOUNDER_SEEKING_INVESTORS = profile({
   id: 'u-founder', displayName: 'Fatima',
-  professionalRole: 'Founder', whoIWantToMeet: 'investors and angels for my seed round',
+  professionalRole: ['Founder'], whoIWantToMeet: 'investors and angels for my seed round',
   myIntent: 'raise funding for my SaaS startup',
 });
 const INVESTOR = profile({
   id: 'u-investor', displayName: 'Iqbal',
-  professionalRole: 'Angel Investor', expertiseText: 'early stage SaaS investing',
+  professionalRole: ['Angel Investor'], expertiseText: 'early stage SaaS investing',
 });
 const UNRELATED = profile({
   id: 'u-baker', displayName: 'Bilal',
-  professionalRole: 'Pastry Chef', expertiseText: 'sourdough croissants',
+  professionalRole: ['Pastry Chef'], expertiseText: 'sourdough croissants',
 });
 
 describe('scoreFit — Stefan\'s one-way rule', () => {
@@ -84,12 +88,26 @@ describe('scoreFit — Stefan\'s one-way rule', () => {
     });
     const mlEngineer = profile({
       id: 'u-b', displayName: 'Bashir',
-      professionalRole: 'ML Engineer',
+      professionalRole: 'ML Engineer', // legacy string shape must ALSO work
       expertiseText: 'machine learning, computer vision, model deployment at scale',
     });
     const fit = scoreFit(wantsAiHelp, mlEngineer);
     expect(fit.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
     expect(fit.reason.length).toBeGreaterThan(0);
+  });
+
+  it('a multi-role array renders as a readable role, never "[object" or a pg literal', () => {
+    const wantsAdvisors = profile({
+      id: 'u-w', displayName: 'Waqas', whoIWantToMeet: 'mentors and advisors',
+    });
+    const multi = profile({
+      id: 'u-m', displayName: 'Mona',
+      professionalRole: ['Advisor', 'Founder'], expertiseText: 'fundraising mentorship',
+    });
+    const fit = scoreFit(wantsAdvisors, multi);
+    expect(fit.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+    expect(fit.reason).not.toMatch(/\[object|\{/);
+    expect(fit.reason).toMatch(/Advisor, Founder|Advisor/);
   });
 
   it('wantedDesignations scans ALL wanted buckets from free text, not just the first', () => {

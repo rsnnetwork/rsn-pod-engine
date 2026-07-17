@@ -28,14 +28,14 @@ export interface IntentProfile {
   id: string;
   displayName: string | null;
   avatarUrl: string | null;
-  professionalRole: string | null;
+  professionalRole: unknown;  // text[] in DB (e.g. {Founder}) — never assume string
   jobTitle: string | null;
   company: string | null;
   expertiseText: string | null;
   whatICanHelpWith: string | null;
   whatICareAbout: string | null;
-  goals: unknown;          // text[] in DB; tokenizer stringifies safely
-  interests: unknown;      // text[] in DB
+  goals: unknown;             // text[] in DB
+  interests: unknown;         // text[] in DB
   myIntent: string | null;
   whoIWantToMeet: string | null;
   whyIWantToMeet: string | null;
@@ -74,16 +74,21 @@ function wantSources(p: IntentProfile): Array<string | null | undefined> {
 // What B is / offers. Stefan: "what B is or offers".
 function offerSources(p: IntentProfile): Array<string | null | undefined> {
   return [
-    p.professionalRole, p.jobTitle, p.company,
+    flatten(p.professionalRole), p.jobTitle, p.company,
     p.expertiseText, p.whatICanHelpWith, p.whatICareAbout,
     flatten(p.interests),
   ];
 }
 
-function flatten(v: unknown): string | null {
+function flatten(v: unknown, sep = ' '): string | null {
   if (v == null) return null;
-  if (Array.isArray(v)) return v.join(' ');
+  if (Array.isArray(v)) return v.filter(Boolean).join(sep) || null;
   return String(v);
+}
+
+/** The role as shown to humans (cards, reasons): "Founder, Investor". */
+export function displayRole(p: IntentProfile): string | null {
+  return flatten(p.professionalRole, ', ') || p.jobTitle;
 }
 
 // Designations someone says they WANT to meet, scanned from their want-text.
@@ -118,18 +123,26 @@ export function scoreFit(me: IntentProfile, other: IntentProfile): { score: numb
   const offerTokens = tokenizeTerms(offerSources(other));
   const overlap = termOverlap(wantTokens, offerTokens);
 
-  // Designation direction: I want founders + they are a founder.
-  const otherDesignation = normalizeDesignation(other.professionalRole || other.jobTitle);
+  // Designation direction: I want founders + they are a founder. A person can
+  // hold SEVERAL roles (professional_role is text[]), and they count as each
+  // of them — so bucket every role separately, not the concatenated string
+  // (where the first rule in the list would always win).
+  const roleValues = Array.isArray(other.professionalRole)
+    ? other.professionalRole
+    : [flatten(other.professionalRole)];
+  const otherDesignations = new Set(
+    [...roleValues, other.jobTitle]
+      .map(r => normalizeDesignation(typeof r === 'string' ? r : null))
+      .filter((d): d is string => Boolean(d)),
+  );
   const wanted = wantedDesignations(me);
-  const designationHit = otherDesignation
-    ? wanted.find(w => w.key === otherDesignation) ?? null
-    : null;
+  const designationHit = wanted.find(w => otherDesignations.has(w.key)) ?? null;
 
   const score = 0.7 * overlap + (designationHit ? 0.6 : 0);
   if (score <= 0) return { score: 0, reason: '' };
 
   const name = other.displayName || 'They';
-  const role = other.professionalRole || other.jobTitle;
+  const role = displayRole(other);
   let reason: string;
   if (designationHit && role) {
     reason = `You're looking to meet ${designationHit.label} — ${name} is ${/^[aeiou]/i.test(role) ? 'an' : 'a'} ${role}`;
@@ -227,7 +240,7 @@ export async function getPlatformMatches(
       userId: x.c.id,
       displayName: x.c.displayName,
       avatarUrl: x.c.avatarUrl,
-      professionalRole: x.c.professionalRole || x.c.jobTitle,
+      professionalRole: displayRole(x.c),
       company: x.c.company,
       reason: x.fit.reason,
       score: Number(x.fit.score.toFixed(3)),
