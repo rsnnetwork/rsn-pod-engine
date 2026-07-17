@@ -332,6 +332,15 @@ export async function saveIntentAndComplete(
     );
 
     return { profileComplete: isComplete };
+  }).then(result => {
+    // REASON Phase 1 (17 Jul) — the "new batch" trigger from Stefan's flow:
+    // once this member's onboarding commits, existing members whose "want"
+    // fits them get a bell notification pointing at /matches. Post-commit
+    // and fire-and-forget: matching must never block or fail onboarding.
+    import('../matching/platform-match.service')
+      .then(m => m.notifyMatchesOfNewUser(userId))
+      .catch(() => { /* non-fatal by contract */ });
+    return result;
   });
 }
 

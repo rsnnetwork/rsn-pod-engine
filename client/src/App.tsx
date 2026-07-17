@@ -33,6 +33,7 @@ import HostDashboardPage from '@/features/host/HostDashboardPage';
 import RecapPage from '@/features/sessions/RecapPage';
 import MessagesPage from '@/features/messages/MessagesPage';
 import EncounterHistoryPage from '@/features/sessions/EncounterHistoryPage';
+import MatchesPage from '@/features/matches/MatchesPage';
 import AdminDashboardPage from '@/features/admin/AdminDashboardPage';
 import AdminAnalyticsPage from '@/features/admin/AdminAnalyticsPage';
 import AdminJoinRequestActionPage from '@/features/admin/AdminJoinRequestActionPage';
@@ -175,6 +176,7 @@ export default function App() {
         <Route path="/sessions/:sessionId" element={<SessionDetailPage />} />
         <Route path="/sessions/:sessionId/recap" element={<RecapPage />} />
         <Route path="/encounters" element={<EncounterHistoryPage />} />
+        <Route path="/matches" element={<MatchesPage />} />
         <Route path="/messages" element={<MessagesPage />} />
         {/* Feature 18 (13 May spec) — one-click DM open. The recap, profile,
             and post-event pages send users to /messages/new/:userId, which

@@ -76,12 +76,21 @@ the event becomes one activity inside it.
 - AI/predictive matching (June doc forbids until behavioural data exists).
 - Calendar integration (v2 if intros actually happen).
 
-## Questions sent to Stefan (his "shall I define everything?" → ask, briefly)
-1. Match v1 definition — is mutual intent (A wants founders, B is a founder) enough?
-2. What is the intro concretely — in-app chat, video call, or email intro?
-3. Who creates circles at the start — admins only, or anyone?
-4. Which 3–5 circles to seed first?
-5. Wall v1 — text + comments only, or photos too?
+## Stefan's answers (17 Jul, via WhatsApp — gates cleared)
+1. Match v1 definition — **"Yes"**: one-way fit (what A wants matches what B
+   is/offers) is enough to SHOW the suggestion; nobody is introduced until both
+   say yes. Locked.
+2. The intro — **"we introduce them to each other"**: the PLATFORM performs the
+   introduction. v1 interpretation: on mutual accept a chat opens that STARTS
+   with an introduction of each to the other (system intro card / message with
+   both profiles + why they match), not a cold empty thread. Both notified.
+3. Circles creation — **"we do"**: admin-created v1. Locked.
+4. Seed circles — **"let's talk"**: pending a conversation; does NOT block
+   Phase 1–2 code, only the seeding content of Phase 3.
+5. Wall v1 — **"photos and videos and shares from other platforms and text"**:
+   bigger than text-only. Media uploads (Cloudinary already integrated for
+   voice messages) + external link shares with preview cards + text. Phase 4
+   scope updated accordingly.
 
 ## Notes
 - 200 founding-member conversations are pending on Stefan's side — the Phase 1
