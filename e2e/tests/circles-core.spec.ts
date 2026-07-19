@@ -99,7 +99,9 @@ test('circles core: admin creates, members join idempotently, detail aggregates 
   console.log('  ✓ headed: joined from the real card on mobile width.');
 
   await gotoRetry(page, `${APP}/circles/${circleId}`);
-  await expect(page.getByText(m2.displayName).first()).toBeVisible({ timeout: 20_000 });
+  // The member row links to /profile/<id> — unique on the page (the sidebar's
+  // own-user chip is a bare /profile link and is hidden on mobile anyway).
+  await expect(page.locator(`a[href="/profile/${m2.id}"]`)).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText('E2E Circle Event')).toBeVisible();
   await page.screenshot({ path: 'test-results/circle-detail.png' }).catch(() => {});
   console.log('  ✓ headed: detail page shows the new member + the upcoming event.');
