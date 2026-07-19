@@ -94,7 +94,10 @@ export default function CircleWall({ circleId, isMember }: { circleId: string; i
         media: pendingImage?.url ? [{ type: 'image', url: pendingImage.url }] : [],
       });
       setDraft(''); setPendingImage(null); setClientId(crypto.randomUUID());
-      await refresh();
+      // Fire-and-forget: holding `posting` through the refetch kept the
+      // composer disabled for seconds when a refetch was slow or deduped
+      // against the 30s interval (caught by the 20 Jul UI matrix).
+      void refresh();
     } catch (err: any) {
       addToast(err?.response?.data?.error?.message || 'Could not post.', 'error');
     } finally {
@@ -260,7 +263,9 @@ function PostComments({ postId, isMember, onCommented }: { postId: string; isMem
     try {
       await api.post(`/circles/posts/${postId}/comments`, { content });
       setDraft('');
-      await queryClient.invalidateQueries({ queryKey: ['wallComments', postId] });
+      // Same fire-and-forget rule as the composer: never hold the input
+      // disabled on a refetch.
+      void queryClient.invalidateQueries({ queryKey: ['wallComments', postId] });
       onCommented();
     } catch (err: any) {
       addToast(err?.response?.data?.error?.message || 'Could not comment.', 'error');
