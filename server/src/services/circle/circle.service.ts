@@ -201,6 +201,18 @@ export async function listCircles(userId: string): Promise<CircleSummary[]> {
   }));
 }
 
+/** Which circles is this pod attached to (pod page chips, P3b). */
+export async function listCirclesOfPod(podId: string): Promise<Array<{ id: string; name: string }>> {
+  const r = await query<{ id: string; name: string }>(
+    `SELECT c.id, c.name
+     FROM circle_pods cp JOIN circles c ON c.id = cp.circle_id
+     WHERE cp.pod_id = $1 AND c.archived_at IS NULL
+     ORDER BY c.name ASC`,
+    [podId],
+  );
+  return r.rows;
+}
+
 export async function getCircleDetail(circleId: string, userId: string): Promise<CircleDetail> {
   const c = await query<{
     id: string; name: string; description: string | null;

@@ -850,6 +850,9 @@ export default function PodDetailPage() {
         </div>
       </Modal>
 
+      {/* ── Circles this pod belongs to (REASON P3b) ────────────────────── */}
+      <PodCircleChips podId={podId} />
+
       {/* ── Pending Join Requests ───────────────────────────────────────── */}
       {isDirectorOrHost && pendingMembers.length > 0 && (
         <div className="animate-fade-in-up stagger-2">
@@ -1179,6 +1182,30 @@ export default function PodDetailPage() {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── REASON P3b — circles this pod is attached to (chips) ────────────────────
+function PodCircleChips({ podId }: { podId?: string }) {
+  // realtime: skip — attachment changes are rare admin actions; refetches on visit
+  const { data: circles } = useQuery<Array<{ id: string; name: string }>>({
+    queryKey: ['circlesOfPod', podId],
+    queryFn: () => api.get(`/circles/of-pod/${podId}`).then(r => r.data.data ?? []),
+    enabled: !!podId,
+  });
+  if (!circles || circles.length === 0) return null;
+  return (
+    <div className="animate-fade-in-up">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-xs font-semibold text-gray-500">In circles:</span>
+        {circles.map(c => (
+          <a
+            key={c.id} href={`/circles/${c.id}`}
+            className="text-xs font-medium text-rsn-red bg-rsn-red-light px-2.5 py-1 rounded-full hover:opacity-80 transition-opacity min-h-[28px] inline-flex items-center"
+          >{c.name}</a>
+        ))}
+      </div>
     </div>
   );
 }

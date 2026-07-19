@@ -4,15 +4,19 @@
 // are attached, upcoming events those pods run, nested child circles. The
 // wall lands here in Phase 4.
 
+import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, Users, Calendar, Box, CircleDashed } from 'lucide-react';
+import { ArrowLeft, Users, Calendar, Box, CircleDashed, MessagesSquare, Plus, X } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
 import api from '@/lib/api';
+import { isAdmin } from '@/lib/utils';
+import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
+import CircleWall from './CircleWall';
 
 interface CircleDetail {
   id: string;
@@ -30,6 +34,17 @@ export default function CircleDetailPage() {
   const { circleId } = useParams();
   const { addToast } = useToastStore();
   const queryClient = useQueryClient();
+  const { user } = useAuthStore();
+  const admin = isAdmin(user?.role);
+  const [attaching, setAttaching] = useState(false);
+  const [podChoice, setPodChoice] = useState('');
+
+  // realtime: skip — admin attach picker only; fetched when the picker opens
+  const { data: allPods } = useQuery<Array<{ id: string; name: string }>>({
+    queryKey: ['podsForAttach'],
+    queryFn: () => api.get('/pods').then(r => r.data.data ?? []),
+    enabled: admin && attaching,
+  });
 
   const { data: circle, isLoading } = useQuery<CircleDetail>({
     queryKey: ['circle', circleId],
@@ -114,23 +129,82 @@ export default function CircleDetailPage() {
         </div>
       )}
 
-      {circle.pods.length > 0 && (
+      {(circle.pods.length > 0 || admin) && (
         <div className="space-y-2 animate-fade-in-up">
-          <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5">
-            <Box className="h-4 w-4 text-rsn-red" /> Pods in this circle
-          </h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5">
+              <Box className="h-4 w-4 text-rsn-red" /> Pods in this circle
+            </h2>
+            {admin && (
+              <button
+                onClick={() => setAttaching(v => !v)}
+                className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700 min-h-[36px]"
+              >
+                {attaching ? <X className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
+                {attaching ? 'Cancel' : 'Attach pod'}
+              </button>
+            )}
+          </div>
+          {attaching && admin && (
+            <Card className="!p-3">
+              <div className="flex items-center gap-2">
+                <select
+                  value={podChoice} onChange={e => setPodChoice(e.target.value)}
+                  className="flex-1 rounded-lg border border-gray-200 px-2 py-2 text-sm min-h-[44px]"
+                >
+                  <option value="">Choose a pod…</option>
+                  {(allPods ?? [])
+                    .filter(p => !circle.pods.some(cp => cp.podId === p.id))
+                    .map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+                <Button
+                  size="sm" className="min-h-[44px]"
+                  disabled={!podChoice}
+                  onClick={async () => {
+                    try {
+                      await api.post(`/circles/${circle.id}/pods`, { podId: podChoice });
+                      setPodChoice(''); setAttaching(false);
+                      await queryClient.invalidateQueries({ queryKey: ['circle', circleId] });
+                    } catch { addToast('Could not attach that pod.', 'error'); }
+                  }}
+                >Attach</Button>
+              </div>
+            </Card>
+          )}
           <div className="grid gap-2">
             {circle.pods.map(p => (
               <Card key={p.podId} className="card-hover !p-4">
-                <Link to={`/pods/${p.podId}`} className="block min-h-[36px]">
-                  <p className="font-medium text-gray-900">{p.name}</p>
-                  {p.description && <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">{p.description}</p>}
-                </Link>
+                <div className="flex items-center justify-between gap-2">
+                  <Link to={`/pods/${p.podId}`} className="block min-h-[36px] min-w-0 flex-1">
+                    <p className="font-medium text-gray-900">{p.name}</p>
+                    {p.description && <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">{p.description}</p>}
+                  </Link>
+                  {admin && (
+                    <button
+                      onClick={async () => {
+                        if (!confirm(`Detach ${p.name} from this circle? The pod itself is untouched.`)) return;
+                        try {
+                          await api.delete(`/circles/${circle.id}/pods/${p.podId}`);
+                          await queryClient.invalidateQueries({ queryKey: ['circle', circleId] });
+                        } catch { addToast('Could not detach.', 'error'); }
+                      }}
+                      className="text-gray-300 hover:text-red-500 min-h-[36px] min-w-[36px]"
+                      title="Detach from circle"
+                    ><X className="h-4 w-4" /></button>
+                  )}
+                </div>
               </Card>
             ))}
           </div>
         </div>
       )}
+
+      <div className="space-y-2 animate-fade-in-up">
+        <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5">
+          <MessagesSquare className="h-4 w-4 text-rsn-red" /> Wall
+        </h2>
+        <CircleWall circleId={circle.id} isMember={circle.isMember} />
+      </div>
 
       <div className="space-y-2 animate-fade-in-up">
         <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5">
