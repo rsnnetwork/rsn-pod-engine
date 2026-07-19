@@ -106,7 +106,9 @@ test('intro lands in the thread, both set availability, overlap confirms — ful
   page.on('pageerror', () => {});
   await gotoRetry(page, `${APP}/messages/${conversationId}`);
 
-  await expect(page.getByText(/should meet/i).first()).toBeVisible({ timeout: 20_000 });
+  // NB: the inbox pane's hidden preview line ALSO matches this text — .first()
+  // latches onto that hidden node. Assert on the visible thread bubble instead.
+  await expect(page.locator(':text-matches("should meet", "i"):visible').first()).toBeVisible({ timeout: 20_000 });
   console.log('  ✓ headed: intro message visible in the thread.');
 
   await page.getByRole('button', { name: /Find a time to meet/i }).click();
