@@ -116,7 +116,11 @@ test('UI matrix 1 — circles admin surfaces: create modal, attach/detach picker
 
 test('UI matrix 2 — the wall end-to-end through real clicks: gate, image, link card, comments, pin, delete, load more', async () => {
   test.setTimeout(420_000);
-  expect(circleId, 'matrix 1 must have created the circle').toBeTruthy();
+  // Self-sufficient when run solo (-g "matrix 2"): create the circle via REST.
+  if (!circleId) {
+    const created = await apiAs(admin, 'POST', '/circles', { name: 'E2E UI Matrix Circle' });
+    circleId = created.json.data.id;
+  }
 
   // (1) Non-member sees the JOIN-TO-POST gate, joins from the detail page,
   //     and the composer appears.
@@ -134,15 +138,46 @@ test('UI matrix 2 — the wall end-to-end through real clicks: gate, image, link
   await mPage.locator('input[type="file"]').setInputFiles(pngPath);
   // Wait for the Cloudinary round-trip (preview swaps from spinner to <img>).
   await expect(mPage.locator('img[src*="res.cloudinary.com"]').first()).toBeVisible({ timeout: 30_000 });
-  await mPage.getByPlaceholder(/Share something/i).fill('Real image upload from the matrix');
+  // NB: REAL KEYSTROKES ONLY in this composer. Playwright's fill() set the
+  // DOM value without React registering it (state stayed empty), leaving
+  // stale text that a later mid-caret type interleaved into — the earlier
+  // matrix runs' failure. Users type; the test types.
+  const composerBox = mPage.getByPlaceholder(/Share something/i);
+  // The join success toast can briefly overlay the composer at 390px — make
+  // sure focus actually landed before typing, and verify the value stuck.
+  await composerBox.click();
+  await expect(composerBox).toBeFocused({ timeout: 5_000 });
+  await composerBox.pressSequentially('Real image upload from the matrix');
+  await expect(composerBox).toHaveValue('Real image upload from the matrix', { timeout: 5_000 });
+  const postResp = mPage.waitForResponse(r => r.url().includes('/posts') && r.request().method() === 'POST', { timeout: 10_000 });
   await mPage.getByRole('button', { name: /^Post$/ }).click();
-  await expect(mPage.getByText('Real image upload from the matrix')).toBeVisible({ timeout: 15_000 });
+  const pr = await postResp;
+  console.log('  post API status:', pr.status(), '| body:', JSON.stringify(await pr.json().catch(() => null))?.slice(0, 200));
+  // Assert on the POSTED CARD, never bare text (bare getByText can false-match
+  // the textarea's own value).
+  const imageCard = mPage.locator('div.rounded-2xl').filter({ hasText: 'Real image upload from the matrix' });
+  await expect(imageCard).toBeVisible({ timeout: 15_000 });
+  await expect(imageCard.locator('img[src*="res.cloudinary.com"]')).toBeVisible();
+  // The composer must be EMPTY again after a successful post.
+  await expect(composerBox).toHaveValue('', { timeout: 5_000 });
   console.log('  ✓ image uploaded through the real file input (Cloudinary round-trip) and posted.');
 
-  // (3) LINK CARD renders for a posted URL.
-  await mPage.getByPlaceholder(/Share something/i).fill('Worth reading https://example.com/deep/article today');
-  await mPage.getByRole('button', { name: /^Post$/ }).click();
-  await expect(mPage.getByText('example.com').first()).toBeVisible({ timeout: 15_000 });
+  // (3) LINK CARD renders for a posted URL. NB: diagnostics — the first two
+  // matrix runs found the Post button disabled here, meaning the fill didn't
+  // stick in React state. Assert the value landed, retry once if not, and
+  // wait for enabled explicitly so the failure names the real culprit.
+  const composer = mPage.getByPlaceholder(/Share something/i);
+  await composer.click();
+  await composer.press('Control+a');
+  await composer.press('Delete'); // human-style clear — no stale DOM value can survive
+  await composer.pressSequentially('Worth reading https://example.com/deep/article today');
+  await expect(composer).toHaveValue('Worth reading https://example.com/deep/article today', { timeout: 5_000 });
+  const postBtn = mPage.getByRole('button', { name: /^Post$/ });
+  await expect(postBtn, 'composer has text so Post must be enabled').toBeEnabled({ timeout: 10_000 });
+  await postBtn.click();
+  const linkCard = mPage.locator('div.rounded-2xl').filter({ hasText: 'Worth reading' });
+  await expect(linkCard).toBeVisible({ timeout: 15_000 });
+  await expect(linkCard.getByText('example.com').first()).toBeVisible();
   console.log('  ✓ link card rendered from the URL (domain shown, nothing fetched).');
 
   // (4) COMMENT via the UI from a second member.
@@ -158,17 +193,27 @@ test('UI matrix 2 — the wall end-to-end through real clicks: gate, image, link
   // (5) ADMIN PIN via the pin button; badge appears.
   const aPage = await openAs(admin, `/circles/${circleId}`);
   await expect(aPage.getByText('Real image upload from the matrix')).toBeVisible({ timeout: 20_000 });
+  const pinResp = aPage.waitForResponse(r => r.url().includes('/pin'), { timeout: 10_000 });
   await aPage.locator('button[title="Pin"]').first().click();
-  await expect(aPage.getByText(/^Pinned$/).first()).toBeVisible({ timeout: 15_000 });
-  console.log('  ✓ admin pinned via the UI, badge shown.');
+  expect((await pinResp).status()).toBe(200);
+  // Post-pin refetch flips the button title to Unpin — a sturdier signal than
+  // badge text matching. Server-verify the pinned strip too.
+  await expect(aPage.locator('button[title="Unpin"]').first()).toBeVisible({ timeout: 15_000 });
+  const pinnedRest = await apiAs(admin, 'GET', `/circles/${circleId}/posts`);
+  expect(pinnedRest.json.data.pinned.length).toBeGreaterThanOrEqual(1);
+  console.log('  ✓ admin pinned via the UI (Unpin state + pinned strip served).');
 
   // (6) DELETE OWN POST via the trash button (confirm dialog auto-accepted).
-  await mPage.getByPlaceholder(/Share something/i).fill('Short-lived post');
+  await composer.click();
+  await composer.press('Control+a');
+  await composer.press('Delete');
+  await composer.pressSequentially('Short-lived post');
   await mPage.getByRole('button', { name: /^Post$/ }).click();
-  await expect(mPage.getByText('Short-lived post')).toBeVisible({ timeout: 15_000 });
-  const shortLived = mPage.locator('[data-testid^="wall-post-"]').filter({ hasText: 'Short-lived post' });
+  await expect(mPage.locator('div.rounded-2xl').filter({ hasText: 'Short-lived post' }))
+    .toBeVisible({ timeout: 15_000 });
+  const shortLived = mPage.locator('div.rounded-2xl').filter({ hasText: 'Short-lived post' });
   await shortLived.locator('button[title="Delete"]').click();
-  await expect(mPage.getByText('Short-lived post')).toBeHidden({ timeout: 15_000 });
+  await expect(shortLived).toBeHidden({ timeout: 15_000 });
   console.log('  ✓ own post deleted via the UI.');
 
   // (7) LOAD MORE: seed 25 posts (rate limit is 6/min per user, so spread
