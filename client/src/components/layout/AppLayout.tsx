@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, Calendar, Mail, User, LogOut, Menu, X, Shield, Settings, HelpCircle, Heart, MessageSquare, Sparkles } from 'lucide-react';
+import { LayoutDashboard, Users, Calendar, Mail, User, LogOut, Menu, X, Shield, Settings, HelpCircle, Heart, MessageSquare, Sparkles, CircleDashed } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import api from '@/lib/api';
 import { cn, isAdmin } from '@/lib/utils';
 import { useAuthStore } from '@/stores/authStore';
 import { useScrollReveal } from '@/hooks/useScrollReveal';
@@ -33,9 +35,21 @@ export default function AppLayout() {
     navigate('/login');
   };
 
+  // REASON P3a — ship ≠ launch: the Circles nav appears only once circles
+  // exist (or for admins, who can create the first one). Deploying the code
+  // activates nothing until the seed circles are created.
+  // realtime: skip — nav visibility only; circles are admin-created rarities and the list refetches on every /circles visit
+  const { data: circlesForNav } = useQuery({
+    queryKey: ['circles'],
+    queryFn: () => api.get('/circles').then(r => r.data.data ?? []),
+    staleTime: 60_000,
+  });
+  const showCircles = isAdmin(user?.role) || (circlesForNav?.length ?? 0) > 0;
+
   const mainLinks = [
     { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/matches', icon: Sparkles, label: 'Matches' },
+    ...(showCircles ? [{ to: '/circles', icon: CircleDashed, label: 'Circles' }] : []),
     { to: '/pods', icon: Users, label: 'Pods' },
     { to: '/invites', icon: Mail, label: 'Invite' },
     { to: '/sessions', icon: Calendar, label: 'Events' },
