@@ -55,6 +55,7 @@ import notificationRoutes from './routes/notifications';
 import dmRoutes from './routes/dm';
 import pokeRoutes from './routes/pokes';
 import matchesRoutes from './routes/matches';
+import meetingRoutes from './routes/meeting';
 import reportRoutes from './routes/reports';
 import groupRoutes from './routes/groups';
 import notificationPrefsRoutes from './routes/notification-prefs';
@@ -338,6 +339,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/admin/join-request-action', adminActionRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/dm', dmRoutes);
+app.use('/api/dm', meetingRoutes); // scheduling endpoints — path shapes disjoint from dmRoutes
 app.use('/api/pokes', pokeRoutes);
 app.use('/api/matches', matchesRoutes);
 app.use('/api/reports', reportRoutes);

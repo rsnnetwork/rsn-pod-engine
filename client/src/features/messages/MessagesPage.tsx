@@ -10,7 +10,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare } from 'lucide-react';
+import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare, CalendarClock } from 'lucide-react';
+import MeetingScheduler from './MeetingScheduler';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { PageLoader, Spinner } from '@/components/ui/Spinner';
@@ -158,6 +159,8 @@ export default function MessagesPage() {
   const myUserId = user?.id;
   const [draft, setDraft] = useState('');
   const [showEmoji, setShowEmoji] = useState(false);
+  // REASON Phase 2 — "Find a time" panel (availability windows) per thread.
+  const [schedulerOpen, setSchedulerOpen] = useState(false);
   // Feature 19 (13 May spec) — pending image attachment for the next send.
   // pendingImage holds the file picked from the file dialog; previewUrl is
   // an object URL so the user sees a thumbnail before the upload kicks off.
@@ -716,6 +719,19 @@ export default function MessagesPage() {
               <Link to={`/profile/${headerContext.otherUserId}`} className="flex-1 min-w-0">
                 <p className="text-sm font-semibold text-[#1a1a2e] truncate hover:underline">{headerContext.otherDisplayName || 'User'}</p>
               </Link>
+              {/* REASON Phase 2 — arrange a time to meet (availability windows). */}
+              {activeConv && (
+                <button
+                  onClick={() => setSchedulerOpen(o => !o)}
+                  className={`p-1.5 rounded-lg min-h-[36px] min-w-[36px] transition-colors ${
+                    schedulerOpen ? 'bg-rsn-red-light text-rsn-red' : 'hover:bg-gray-100 text-gray-400 hover:text-gray-600'
+                  }`}
+                  title="Find a time to meet"
+                  aria-label="Find a time to meet"
+                >
+                  <CalendarClock className="h-4 w-4" />
+                </button>
+              )}
               {/* Delete is only available for existing conversations (compose-new
                   mode has nothing to delete yet). */}
               {activeConv && (
@@ -732,6 +748,11 @@ export default function MessagesPage() {
                 </button>
               )}
             </div>
+
+            {/* Availability grid — collapsible so the thread stays primary. */}
+            {activeConv && schedulerOpen && (
+              <MeetingScheduler conversationId={activeConv.conversationId} />
+            )}
 
             {/* Messages — clustered by sender + day. In compose-new mode there's
                 no conversation yet, so we render the empty-state and let the

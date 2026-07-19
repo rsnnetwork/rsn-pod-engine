@@ -184,7 +184,7 @@ export async function acceptPoke(
       [uuid(), a, b],
     );
 
-    // Create the conversation row (no message yet — they need to DM).
+    // Create the conversation row.
     const convResult = await client.query<{ id: string }>(
       `INSERT INTO dm_conversations (id, user_a_id, user_b_id)
        VALUES ($1, $2, $3)
@@ -193,6 +193,24 @@ export async function acceptPoke(
        RETURNING id`,
       [uuid(), a, b],
     );
+
+    // REASON Phase 2 (19 Jul) — "we introduce them to each other": the poke's
+    // message (for platform matches, the composed introduction) becomes the
+    // FIRST message of the new thread instead of dying with the accepted poke.
+    // Pre-fix the chat opened cold and the intro text was lost. Sender-authored
+    // (it is their expressed interest), same transaction so accept+intro are
+    // atomic. Skipped for message-less pokes — nothing to carry over.
+    if (p.message && p.message.trim().length > 0) {
+      await client.query(
+        `INSERT INTO direct_messages (id, conversation_id, from_user_id, content)
+         VALUES ($1, $2, $3, $4)`,
+        [uuid(), convResult.rows[0].id, p.sender_id, p.message.trim().slice(0, 4000)],
+      );
+      await client.query(
+        `UPDATE dm_conversations SET last_message_at = NOW() WHERE id = $1`,
+        [convResult.rows[0].id],
+      );
+    }
 
     logger.info({ pokeId, accepterId: userId, conversationId: convResult.rows[0].id }, 'Poke accepted');
 
