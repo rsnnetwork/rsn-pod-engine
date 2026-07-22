@@ -80,6 +80,8 @@ export interface EnrichedProfile {
   /** Uncertain facts the host should confirm naturally rather than assume. */
   questionsToVerify: string[];
   linkedinUrl: string | null;
+  /** Profile photo URL (ScrapingDog path only; the Claude web-search path never has one). */
+  photoUrl: string | null;
 }
 export interface EnrichResult {
   profile: EnrichedProfile | null;
@@ -127,7 +129,7 @@ export function parseEnriched(text: string): EnrichResult {
     summary: str(j.summary), pastRoles: strArr(j.pastRoles), education: Array.isArray(j.education) ? j.education : [],
     skills: strArr(j.skills), likelyWantsToMeet: strArr(j.likelyWantsToMeet), likelyOffers: strArr(j.likelyOffers),
     conversationStarters: strArr(j.conversationStarters), questionsToVerify: strArr(j.questionsToVerify),
-    linkedinUrl: str(j.linkedinUrl),
+    linkedinUrl: str(j.linkedinUrl), photoUrl: null,
   };
   return { profile, confidence, sources: strArr(j.sources), foundLinkedinUrl: str(j.linkedinUrl), requestedLinkedinUrl: null, enrichedAt: null };
 }
