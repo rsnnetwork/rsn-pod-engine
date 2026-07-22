@@ -46,7 +46,7 @@ import { getCachedEnrichment, getEnrichmentState, saveEnrichedCandidate, setEnri
 import { resolveEnrichProvider, runProvider, statusFromConfidence, type EnrichProviderName } from './providers/registry';
 import type { ProviderOutcome } from './providers/provider.types';
 import { captureAvatar } from './avatar.service';
-import { record as recordStageEvent, type StageEventStage } from './stage-events.repo';
+import { record as recordStageEvent, type StageEventStage, sanitizeErrorMessage } from './stage-events.repo';
 
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
 /** How fresh a persisted 'searching' state has to be to be trusted as "still
@@ -327,7 +327,7 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
           })
           .catch((err) => {
             logger.warn({ err, userId }, 'enrichment: captureAvatar rejected unexpectedly (non-fatal)');
-            const reason = err instanceof Error ? err.message : 'unknown avatar capture error';
+            const reason = sanitizeErrorMessage(err instanceof Error ? err.message : 'unknown avatar capture error');
             recordStageEvent(userId, 'photo_failed', { reason }, Date.now() - photoStartedAtMs).catch(() => {});
           });
       }
@@ -338,12 +338,12 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
     // Step 7: not_found / retry_exhausted / provider_error.
     const { status, error } = mapFailureOutcome(outcome);
     await writeState(userId, { status, error, source: provider });
-    logTerminal(userId, provider, status, startedAtMs, error ? { reason: error } : undefined);
+    logTerminal(userId, provider, status, startedAtMs, error ? { reason: sanitizeErrorMessage(error) } : undefined);
   } catch (err) {
     // Never throws: any unexpected failure still lands in a terminal, visible
     // state rather than disappearing into an unhandled rejection.
     logger.error({ err, userId, provider }, 'enrichment orchestrator crashed — marking failed');
-    const crashReason = err instanceof Error ? err.message : 'unknown orchestrator error';
+    const crashReason = sanitizeErrorMessage(err instanceof Error ? err.message : 'unknown orchestrator error');
     await writeState(userId, {
       status: 'failed',
       error: crashReason,

@@ -9,6 +9,20 @@
 import { query } from '../../db';
 import logger from '../../config/logger';
 
+/**
+ * Reduce an error to a short, safe string for stage-event details — message only
+ * (never a stack), with any bearer-token / API-key-shaped substring redacted
+ * defensively before it's persisted. Applied to all error-derived reason/message
+ * fields in stage-event details to prevent credential leaks into admin-visible JSONB.
+ */
+export function sanitizeErrorMessage(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg
+    .replace(/Bearer\s+\S+/gi, '[redacted]')
+    .replace(/sk-[A-Za-z0-9_-]{10,}/gi, '[redacted]')
+    .slice(0, 500);
+}
+
 export type StageEventStage =
   | 'enrich_started'
   | 'enrich_found'

@@ -18,7 +18,7 @@ jest.mock('../../../config/logger', () => ({
 }));
 
 import logger from '../../../config/logger';
-import { record, listForUser } from '../../../services/onboarding/stage-events.repo';
+import { record, listForUser, sanitizeErrorMessage } from '../../../services/onboarding/stage-events.repo';
 
 describe('record', () => {
   beforeEach(() => {
@@ -138,5 +138,46 @@ describe('listForUser', () => {
 
     const [event] = await listForUser('u1');
     expect(event.detail).toEqual({});
+  });
+});
+
+describe('sanitizeErrorMessage', () => {
+  it('redacts Bearer tokens', () => {
+    const msg = 'Request failed with Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.SflKxw';
+    const sanitized = sanitizeErrorMessage(msg);
+    expect(sanitized).toContain('[redacted]');
+    expect(sanitized).not.toContain('Bearer');
+    expect(sanitized).not.toContain('eyJhbGciOiJIUzI1NiJ9');
+  });
+
+  it('redacts sk-ant-... and similar API keys', () => {
+    const msg = 'Anthropic API key sk-ant-v0-1234567890123456789 is invalid';
+    const sanitized = sanitizeErrorMessage(msg);
+    expect(sanitized).toContain('[redacted]');
+    expect(sanitized).not.toContain('sk-ant-v0-1234567890123456789');
+  });
+
+  it('redacts multiple tokens in one message', () => {
+    const msg = 'Bearer abc123def456 and sk-ant-xyz789 both leaked';
+    const sanitized = sanitizeErrorMessage(msg);
+    const matches = (sanitized.match(/\[redacted\]/g) || []).length;
+    expect(matches).toBe(2);
+  });
+
+  it('caps output at 500 chars', () => {
+    const longMsg = 'x'.repeat(600);
+    const sanitized = sanitizeErrorMessage(longMsg);
+    expect(sanitized.length).toBe(500);
+  });
+
+  it('handles Error objects', () => {
+    const err = new Error('Bearer token123 failed');
+    const sanitized = sanitizeErrorMessage(err);
+    expect(sanitized).toContain('[redacted]');
+  });
+
+  it('handles non-Error values', () => {
+    const sanitized = sanitizeErrorMessage('Plain string with Bearer abc');
+    expect(sanitized).toContain('[redacted]');
   });
 });

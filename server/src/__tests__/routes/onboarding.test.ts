@@ -86,6 +86,13 @@ jest.mock('../../services/onboarding/enrichment.orchestrator', () => {
 
 jest.mock('../../services/onboarding/stage-events.repo', () => ({
   record: jest.fn().mockResolvedValue(undefined),
+  sanitizeErrorMessage: (err: unknown): string => {
+    const msg = err instanceof Error ? err.message : String(err);
+    return msg
+      .replace(/Bearer\s+\S+/gi, '[redacted]')
+      .replace(/sk-[A-Za-z0-9_-]{10,}/gi, '[redacted]')
+      .slice(0, 500);
+  },
   __esModule: true,
 }));
 
@@ -516,7 +523,7 @@ describe('POST /onboarding/profile', () => {
 
   // E1: extractIntent throwing here is swallowed (200, profile:null) but is
   // still an extraction failure the admin inspector needs visibility into.
-  it('E1: records extract_failed (sanitized message) when extraction throws, still returns 200 with a null profile', async () => {
+  it('E1: records extract_failed (sanitized message, source=profile) when extraction throws, still returns 200 with a null profile', async () => {
     (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
     (chatbot.extractIntent as jest.Mock).mockRejectedValue(new Error('anthropic 500: sk-ant-verysecretkey1234567890'));
 
@@ -530,7 +537,7 @@ describe('POST /onboarding/profile', () => {
     expect(recordStageEvent).toHaveBeenCalledWith(
       'user-e1-profile-1',
       'extract_failed',
-      expect.objectContaining({ message: expect.any(String) }),
+      expect.objectContaining({ message: expect.any(String), source: 'profile' }),
     );
     const [, , detail] = (recordStageEvent as jest.Mock).mock.calls.find((c) => c[1] === 'extract_failed')!;
     expect(detail.message).not.toContain('sk-ant-verysecretkey1234567890');
@@ -626,7 +633,7 @@ describe('POST /onboarding/confirm', () => {
 
   // ─── E1: extract_failed stage event (LLM_DISABLED fallback path) ────────
   describe('E1: extract_failed stage event', () => {
-    it('records extract_failed with a sanitized error message when extraction throws', async () => {
+    it('records extract_failed with a sanitized error message and source=confirm when extraction throws', async () => {
       (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
       (chatbot.extractIntent as jest.Mock).mockRejectedValue(new Error('anthropic 500: Bearer sk-ant-verysecretkey1234567890'));
 
@@ -639,7 +646,7 @@ describe('POST /onboarding/confirm', () => {
       expect(recordStageEvent).toHaveBeenCalledWith(
         'user-e1-confirm-3',
         'extract_failed',
-        expect.objectContaining({ message: expect.any(String) }),
+        expect.objectContaining({ message: expect.any(String), source: 'confirm' }),
       );
       const [, , detail] = (recordStageEvent as jest.Mock).mock.calls.find((c) => c[1] === 'extract_failed')!;
       expect(detail.message).not.toContain('sk-ant-verysecretkey1234567890');

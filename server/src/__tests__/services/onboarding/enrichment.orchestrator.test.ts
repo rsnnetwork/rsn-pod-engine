@@ -45,6 +45,13 @@ jest.mock('../../../services/onboarding/avatar.service', () => ({
 jest.mock('../../../services/onboarding/stage-events.repo', () => ({
   __esModule: true,
   record: jest.fn().mockResolvedValue(undefined),
+  sanitizeErrorMessage: (err: unknown): string => {
+    const msg = err instanceof Error ? err.message : String(err);
+    return msg
+      .replace(/Bearer\s+\S+/gi, '[redacted]')
+      .replace(/sk-[A-Za-z0-9_-]{10,}/gi, '[redacted]')
+      .slice(0, 500);
+  },
 }));
 
 jest.mock('../../../services/onboarding/enrichment.service', () => {
@@ -717,6 +724,54 @@ describe('runEnrichment', () => {
 
       const [, params] = lastStateCall();
       expect(params).toMatchObject({ status: 'found' });
+    });
+
+    // E1: Error sanitization (Finding 1) — all error-derived reason fields must redact Bearer tokens + sk-ant-... keys
+    describe('error sanitization in stage events', () => {
+      it('enrich_failed sanitizes Bearer tokens in the crash reason', async () => {
+        mockScrapingdogEnrich.mockRejectedValue(new Error('API failed: Bearer token-abc-123 is invalid'));
+
+        await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+        const call = stageCall('enrich_failed');
+        expect(call![2]).toMatchObject({ reason: expect.stringContaining('[redacted]') });
+        expect(call![2].reason).not.toContain('token-abc-123');
+      });
+
+      it('enrich_failed sanitizes sk-ant-... API keys in the crash reason', async () => {
+        mockScrapingdogEnrich.mockRejectedValue(new Error('Anthropic key sk-ant-v0-abc123def456xyz invalid'));
+
+        await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+        const call = stageCall('enrich_failed');
+        expect(call![2].reason).not.toContain('sk-ant-');
+        expect(call![2].reason).toContain('[redacted]');
+      });
+
+      it('photo_failed sanitizes error messages containing Bearer tokens', async () => {
+        mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: 'https://cdn.example.com/jane.jpg' });
+        mockCaptureAvatar.mockRejectedValue(new Error('Download failed: Bearer secret-token'));
+
+        await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+        await new Promise((r) => setImmediate(r));
+
+        const call = stageCall('photo_failed');
+        expect(call![2].reason).not.toContain('Bearer');
+        expect(call![2].reason).toContain('[redacted]');
+      });
+
+      it('enrich_failed (provider_error) sanitizes the provider reason field', async () => {
+        mockScrapingdogEnrich.mockResolvedValue({
+          kind: 'provider_error',
+          reason: 'Provider API: authentication failed (sk-ant-v0-secret-key)',
+        });
+
+        await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+        const call = stageCall('enrich_failed');
+        expect(call![2].reason).not.toContain('sk-ant-');
+        expect(call![2].reason).toContain('[redacted]');
+      });
     });
   });
 });

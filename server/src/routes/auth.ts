@@ -373,7 +373,7 @@ router.post('/onboarding/complete', authenticate, async (req: Request, res: Resp
 
     // E1: fallback_form — the member completed onboarding via the minimal
     // form rather than the chat flow (admin-inspector stage trail).
-    recordStageEvent(userId, 'fallback_form');
+    recordStageEvent(userId, 'fallback_form').catch(() => {});
 
     res.json({
       success: true,
