@@ -269,7 +269,39 @@ describe('Auth Routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data.user.onboardingStatus).toBe('update_required');
-      expect(new Date(res.body.data.user.lastOnboardedAt).toISOString()).toBe(lastOnboardedAt.toISOString());
+      expect(res.body.data.user.lastOnboardedAt).toBe(lastOnboardedAt.toISOString());
+    });
+
+    it('should serialize Date to ISO string in session response', async () => {
+      const dateValue = new Date('2026-06-15T10:30:45.123Z');
+      (identityService.getUserById as jest.Mock).mockResolvedValue({
+        ...mockUser,
+        lastOnboardedAt: dateValue,
+      });
+
+      const token = makeToken();
+      const res = await request(app)
+        .get('/auth/session')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(typeof res.body.data.user.lastOnboardedAt).toBe('string');
+      expect(res.body.data.user.lastOnboardedAt).toBe(dateValue.toISOString());
+    });
+
+    it('should handle null lastOnboardedAt as JSON null', async () => {
+      (identityService.getUserById as jest.Mock).mockResolvedValue({
+        ...mockUser,
+        lastOnboardedAt: null,
+      });
+
+      const token = makeToken();
+      const res = await request(app)
+        .get('/auth/session')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.user.lastOnboardedAt).toBeNull();
     });
   });
 });

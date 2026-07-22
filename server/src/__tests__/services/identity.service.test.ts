@@ -83,6 +83,16 @@ describe('Identity Service', () => {
         .rejects
         .toThrow('User with id missing-id not found');
     });
+
+    it('should include onboarding_status and last_onboarded_at in SQL query', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 });
+
+      await identityService.getUserById('user-123');
+
+      const sqlCall = mockQuery.mock.calls[0][0];
+      expect(sqlCall).toContain('onboarding_status AS "onboardingStatus"');
+      expect(sqlCall).toContain('last_onboarded_at AS "lastOnboardedAt"');
+    });
   });
 
   describe('getUserByEmail', () => {

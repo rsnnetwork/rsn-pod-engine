@@ -146,7 +146,8 @@ router.get(
             profileComplete: user.profileComplete,
             onboardingCompleted: (user as any).onboardingCompleted,
             onboardingStatus: user.onboardingStatus,
-            lastOnboardedAt: user.lastOnboardedAt,
+            // pg returns Date; the shared contract is ISO string or null
+            lastOnboardedAt: (user.lastOnboardedAt as any) instanceof Date ? ((user.lastOnboardedAt as any) as Date).toISOString() : (user.lastOnboardedAt ?? null),
             // Matching-profile free-text fields the profile page reads. getUserById
             // selects these; they must be surfaced here or the profile shows blank
             // even when onboarding (or the form) saved them.
