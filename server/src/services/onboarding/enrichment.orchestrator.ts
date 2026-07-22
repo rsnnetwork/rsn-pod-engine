@@ -7,12 +7,24 @@
 // this without awaiting completion — it NEVER throws, so a crash here can
 // never surface as an unhandled rejection or a 500.
 //
-// Steps (task A5 spec):
-//   1. provider 'none' or no linkedinUrl           → not_found, return
-//   2. fresh 90-day cache + same slug              → reflect cached status, return
+// Steps (task A5 spec, revised in fix round 1 — see the review findings this
+// file's tests are organized around):
+//   0. concurrency guards — an in-flight Map (same process) and a persisted
+//      'searching' state fresher than 5 minutes (crash-tolerant, cross-process)
+//      both short-circuit a duplicate attempt before it can double-spend a
+//      provider call.
+//   1. fresh 90-day cache — evaluated BEFORE the no-URL branch below, using
+//      whatever URL this call was given (which may be null). A null URL this
+//      call is not itself a reason to distrust a fresh cache: isFreshCacheHit
+//      treats "nothing supplied to compare against" as a match.
+//   2. no URL resolvable at all (neither this call's input nor a recoverable
+//      cached.requestedLinkedinUrl anchor), or provider 'none' → not_found, return
 //   3. write 'searching' + log start
 //   4. call the resolved provider (registry.ts)
-//   5. found/partial → facts-grounded extras pass (tolerant of failure)
+//   5. found/partial → facts-grounded extras pass, SCRAPINGDOG OUTCOMES ONLY
+//      (tolerant of failure) — claude_web's own prompt already produces these
+//      fields in one pass, so running extras there would double-spend the LLM
+//      call and clobber its answers.
 //   6. save candidate + terminal state (found/partial)
 //   7. not_found/retry_exhausted/provider_error → terminal state (not_found/failed)
 //   8. every terminal transition logs { userId, provider, outcome, durationMs }
@@ -30,11 +42,15 @@ import {
   type EnrichedProfile,
   type EnrichResult,
 } from './enrichment.service';
-import { getCachedEnrichment, saveEnrichedCandidate, setEnrichmentState } from './enrichment.repo';
+import { getCachedEnrichment, getEnrichmentState, saveEnrichedCandidate, setEnrichmentState } from './enrichment.repo';
 import { resolveEnrichProvider, runProvider, statusFromConfidence, type EnrichProviderName } from './providers/registry';
 import type { ProviderOutcome } from './providers/provider.types';
 
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+/** How fresh a persisted 'searching' state has to be to be trusted as "still
+ *  actually running" rather than a crashed attempt that never reached a
+ *  terminal state. See the module-level in-flight guard below for layer (i). */
+const SEARCHING_LOCK_MS = 5 * 60 * 1000;
 
 export interface RunEnrichmentInput {
   linkedinUrl: string | null;
@@ -58,6 +74,10 @@ export function isFreshCacheHit(cached: EnrichResult | null, requestedLinkedinUr
 function logTerminal(userId: string, provider: EnrichProviderName, outcome: string, startedAtMs: number, extra?: Record<string, unknown>): void {
   // stage-event recording (E1) lands with the admin-inspector workstream — this
   // call site is the single seam it will hook into once that table exists.
+  // durationMs spans the WHOLE attempt — from startedAtMs (stamped at the top
+  // of runEnrichmentOnce, before the cache check) through this terminal write —
+  // so it includes the cache lookup, the provider call, and the extras pass
+  // when one runs (scrapingdog found/partial), not just the provider call.
   logger.info({ userId, provider, outcome, durationMs: Date.now() - startedAtMs, ...extra }, 'enrichment terminal');
 }
 
@@ -147,21 +167,81 @@ function mapFailureOutcome(
   }
 }
 
+// ─── Concurrency guard, layer (i): in-flight de-dupe ────────────────────────
+// Two near-simultaneous calls for the same user (e.g. a double-click, or a
+// client retry that races the original request) must not both pay for a
+// provider + extras call. A second runEnrichment call for a userId already
+// running joins the SAME promise instead of starting a second attempt.
+// Process-local only — replace with a Redis lock (SET NX PX) the day this
+// server runs multi-instance; a single Map can't coordinate across processes.
+const inFlightByUser = new Map<string, Promise<void>>();
+
 /**
  * Run one enrichment attempt for `userId`. Fire-and-forget-safe: writes every
  * state transition itself and NEVER throws, so callers only need `.catch()`
  * as a belt-and-braces guard against a truly unexpected rejection escaping
  * the try/catch below (there shouldn't be one).
  */
-export async function runEnrichment(userId: string, input: RunEnrichmentInput): Promise<void> {
+export function runEnrichment(userId: string, input: RunEnrichmentInput): Promise<void> {
+  const existing = inFlightByUser.get(userId);
+  if (existing) return existing;
+  const run = runEnrichmentOnce(userId, input).finally(() => {
+    inFlightByUser.delete(userId);
+  });
+  inFlightByUser.set(userId, run);
+  return run;
+}
+
+async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Promise<void> {
   const startedAtMs = Date.now();
   let provider: EnrichProviderName = 'none';
   try {
     provider = resolveEnrichProvider();
+
+    // ─── Concurrency guard, layer (ii): persisted 'searching' lock ──────────
+    // Crash-tolerant backstop for layer (i) above (which only protects a
+    // single process/instance, and only for the lifetime of the in-memory
+    // Map): if the DB already says 'searching' and that attempt started under
+    // 5 minutes ago, assume it's still genuinely running and skip rather than
+    // double-spend. Older than 5 minutes means that attempt crashed before
+    // reaching a terminal state — safe (and necessary) to re-run.
+    const existingState = await getEnrichmentState(userId).catch(() => null);
+    if (existingState?.status === 'searching' && existingState.startedAt) {
+      const ageMs = Date.now() - new Date(existingState.startedAt).getTime();
+      if (ageMs < SEARCHING_LOCK_MS) {
+        logger.info({ userId, ageMs }, 'enrichment: skipping — already searching');
+        return;
+      }
+    }
+
     const linkedinUrl = normalizeLinkedinUrl(input.linkedinUrl);
 
-    // Step 1: no URL at all, or enrichment deliberately killed.
-    if (!linkedinUrl) {
+    // Step 1: 90-day cache — evaluated BEFORE the no-URL branch below. Fixes
+    // the bug where a fresh cached found/partial got downgraded to not_found
+    // just because THIS call's body carried no linkedinUrl (e.g. an empty
+    // POST — the client already read the cached state via the route's own
+    // cache check and only fires this job to keep state in sync). Passing the
+    // (possibly null) `linkedinUrl` straight to isFreshCacheHit is correct:
+    // it already treats "no URL supplied this call" as "nothing new to
+    // compare against", so a fresh cache still counts as a hit.
+    const cached = await getCachedEnrichment(userId).catch(() => null);
+    if (isFreshCacheHit(cached, linkedinUrl)) {
+      const status = statusFromConfidence(cached!.confidence);
+      await writeState(userId, { status });
+      logTerminal(userId, provider, status, startedAtMs, { cacheHit: true });
+      return;
+    }
+
+    // The cache wasn't a fresh hit (none, stale, confidence 0, or genuinely a
+    // different URL). When THIS call carries no URL of its own, the cache's
+    // own requested URL is a recoverable identity anchor — re-enrich against
+    // it rather than forcing not_found purely because this particular call
+    // happened to arrive with an empty body. Only when there is truly no URL
+    // anywhere (this call AND no cached anchor) do we give up.
+    const resolvedLinkedinUrl = linkedinUrl || cached?.requestedLinkedinUrl || null;
+
+    // Step 2: no URL resolvable at all, or enrichment deliberately killed.
+    if (!resolvedLinkedinUrl) {
       await writeState(userId, { status: 'not_found', error: 'no linkedin url', source: null });
       logTerminal(userId, provider, 'not_found', startedAtMs);
       return;
@@ -172,29 +252,26 @@ export async function runEnrichment(userId: string, input: RunEnrichmentInput): 
       return;
     }
 
-    // Step 2: 90-day cache.
-    const cached = await getCachedEnrichment(userId).catch(() => null);
-    if (isFreshCacheHit(cached, linkedinUrl)) {
-      const status = statusFromConfidence(cached!.confidence);
-      await writeState(userId, { status });
-      logTerminal(userId, provider, status, startedAtMs, { cacheHit: true });
-      return;
-    }
-
     // Step 3: searching.
     await writeState(userId, { status: 'searching', source: provider });
-    logger.info({ userId, slug: linkedinSlug(linkedinUrl), provider }, 'enrichment searching');
+    logger.info({ userId, slug: linkedinSlug(resolvedLinkedinUrl), provider }, 'enrichment searching');
 
     // Step 4: call the provider.
     const outcome = await runProvider(provider as Exclude<EnrichProviderName, 'none'>, {
-      linkedinUrl,
+      linkedinUrl: resolvedLinkedinUrl,
       fullName: input.fullName,
     });
 
     // Steps 5-6: found/partial.
     if (outcome.kind === 'found' || outcome.kind === 'partial') {
-      let result = applyMatchVerification(outcome.result, linkedinUrl);
-      result = await withExtras(result, userId);
+      let result = applyMatchVerification(outcome.result, resolvedLinkedinUrl);
+      // Extras is a second, facts-grounded LLM call — scrapingdog outcomes
+      // only. claude_web's own prompt already asks for these same four hint
+      // fields in its single pass; running extras on top would double-spend
+      // the LLM call and overwrite what that prompt already produced.
+      if (provider === 'scrapingdog') {
+        result = await withExtras(result, userId);
+      }
       await saveEnrichedCandidate(userId, result).catch((err) =>
         logger.warn({ err, userId }, 'enrichment: saveEnrichedCandidate failed (non-fatal)'),
       );

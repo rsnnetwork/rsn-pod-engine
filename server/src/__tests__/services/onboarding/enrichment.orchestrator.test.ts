@@ -27,6 +27,7 @@ jest.mock('../../../config/logger', () => ({
 jest.mock('../../../services/onboarding/enrichment.repo', () => ({
   __esModule: true,
   getCachedEnrichment: jest.fn(),
+  getEnrichmentState: jest.fn(),
   saveEnrichedCandidate: jest.fn(),
   setEnrichmentState: jest.fn(),
 }));
@@ -47,12 +48,13 @@ jest.mock('../../../services/onboarding/enrichment.service', () => {
 });
 
 import logger from '../../../config/logger';
-import { getCachedEnrichment, saveEnrichedCandidate, setEnrichmentState } from '../../../services/onboarding/enrichment.repo';
+import { getCachedEnrichment, getEnrichmentState, saveEnrichedCandidate, setEnrichmentState } from '../../../services/onboarding/enrichment.repo';
 import { scrapingdogProvider } from '../../../services/onboarding/providers/scrapingdog.provider';
 import { enrichProfile, getClient, type EnrichResult, type EnrichedProfile } from '../../../services/onboarding/enrichment.service';
 import { runEnrichment } from '../../../services/onboarding/enrichment.orchestrator';
 
 const mockGetCachedEnrichment = getCachedEnrichment as jest.Mock;
+const mockGetEnrichmentState = getEnrichmentState as jest.Mock;
 const mockSaveEnrichedCandidate = saveEnrichedCandidate as jest.Mock;
 const mockSetEnrichmentState = setEnrichmentState as jest.Mock;
 const mockScrapingdogEnrich = scrapingdogProvider.enrich as jest.Mock;
@@ -93,6 +95,7 @@ describe('runEnrichment', () => {
     mockConfig.scrapingdogApiKey = 'sd-key';
     mockConfig.anthropicApiKey = 'anthropic-key';
     mockGetCachedEnrichment.mockResolvedValue(null);
+    mockGetEnrichmentState.mockResolvedValue({ status: 'none', source: null, error: null, startedAt: null, completedAt: null });
     mockSetEnrichmentState.mockResolvedValue(undefined);
     mockSaveEnrichedCandidate.mockResolvedValue(undefined);
     // Default: extras pass "succeeds" with no extra fields (keeps most tests
@@ -137,7 +140,9 @@ describe('runEnrichment', () => {
     expect(params).toMatchObject({ status: 'not_found', error: 'scrapingdog 404', source: 'scrapingdog' });
   });
 
-  it('not_found on null linkedinUrl: never calls the provider, error is "no linkedin url"', async () => {
+  it('(c) not_found on null linkedinUrl + no cache: never calls the provider, error is "no linkedin url"', async () => {
+    // mockGetCachedEnrichment defaults to null (beforeEach) — no cache at all,
+    // so there is nothing to recover an identity from.
     await runEnrichment('u1', { linkedinUrl: null });
 
     expect(mockScrapingdogEnrich).not.toHaveBeenCalled();
@@ -233,6 +238,52 @@ describe('runEnrichment', () => {
     });
   });
 
+  // ─── Cache-first identity resolution (fresh cache must beat a null URL) ────
+  // Regression coverage for the critical review finding: the cache check now
+  // runs BEFORE the no-URL branch, so an empty POST body (linkedinUrl: null)
+  // can never downgrade a fresh cached found/partial to not_found.
+  describe('cache-first identity resolution (empty-body input)', () => {
+    it('(a) empty input + fresh cache: no provider call, state lands/stays found', async () => {
+      mockGetCachedEnrichment.mockResolvedValue(foundResult({ confidence: 0.95, requestedLinkedinUrl: REQ_URL }));
+
+      await runEnrichment('u1', { linkedinUrl: null, fullName: 'Jane Doe' });
+
+      expect(mockScrapingdogEnrich).not.toHaveBeenCalled();
+      expect(mockSaveEnrichedCandidate).not.toHaveBeenCalled();
+      const [, params] = lastStateCall();
+      expect(params.status).toBe('found');
+    });
+
+    // Behavior refinement (b): the cached requestedLinkedinUrl is itself a
+    // recoverable identity anchor. A stale cache means we can't trust the
+    // CONTENT anymore, but we can still trust WHO it was about — so re-enrich
+    // against that URL instead of forcing not_found just because this call's
+    // body happened to carry no URL.
+    it('(b) empty input + stale cache WITH a recoverable requestedLinkedinUrl: re-enriches against it', async () => {
+      const stale = new Date(Date.now() - 91 * 24 * 60 * 60 * 1000).toISOString();
+      mockGetCachedEnrichment.mockResolvedValue(foundResult({ enrichedAt: stale, requestedLinkedinUrl: REQ_URL }));
+      mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: null });
+
+      await runEnrichment('u1', { linkedinUrl: null, fullName: 'Jane Doe' });
+
+      expect(mockScrapingdogEnrich).toHaveBeenCalledTimes(1);
+      expect(mockScrapingdogEnrich.mock.calls[0][0]).toMatchObject({ linkedinUrl: REQ_URL });
+      const [, params] = lastStateCall();
+      expect(params.status).toBe('found');
+    });
+
+    it('(b) empty input + stale cache with NO recoverable URL: not_found ("no linkedin url")', async () => {
+      const stale = new Date(Date.now() - 91 * 24 * 60 * 60 * 1000).toISOString();
+      mockGetCachedEnrichment.mockResolvedValue(foundResult({ enrichedAt: stale, requestedLinkedinUrl: null }));
+
+      await runEnrichment('u1', { linkedinUrl: null, fullName: 'Jane Doe' });
+
+      expect(mockScrapingdogEnrich).not.toHaveBeenCalled();
+      const [, params] = lastStateCall();
+      expect(params).toMatchObject({ status: 'not_found', error: 'no linkedin url' });
+    });
+  });
+
   // ─── Extras pass (facts-grounded, no-tools Haiku call) ─────────────────────
 
   describe('facts-grounded extras pass', () => {
@@ -280,6 +331,73 @@ describe('runEnrichment', () => {
       await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
 
       expect(create).not.toHaveBeenCalled();
+    });
+
+    it('extras pass is skipped for the claude_web legacy path — no double-spend, legacy hint fields untouched', async () => {
+      mockConfig.enrichProvider = 'claude_web';
+      const legacyResult = foundResult({
+        confidence: 0.9,
+        profile: baseProfile({
+          likelyWantsToMeet: ['investors'],
+          likelyOffers: ['mentorship'],
+          conversationStarters: ['Ask about their last raise'],
+          questionsToVerify: ['Still leading Eng?'],
+        }),
+      });
+      mockEnrichProfile.mockResolvedValue(legacyResult);
+      const create = jest.fn();
+      mockGetClient.mockReturnValue({ messages: { create } });
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      expect(create).not.toHaveBeenCalled();
+      const saved = mockSaveEnrichedCandidate.mock.calls[0][1] as EnrichResult;
+      expect(saved.profile?.likelyWantsToMeet).toEqual(['investors']);
+      expect(saved.profile?.likelyOffers).toEqual(['mentorship']);
+      expect(saved.profile?.conversationStarters).toEqual(['Ask about their last raise']);
+      expect(saved.profile?.questionsToVerify).toEqual(['Still leading Eng?']);
+    });
+  });
+
+  // ─── Concurrency guards ─────────────────────────────────────────────────────
+
+  describe('concurrency guards', () => {
+    it('same-user concurrent calls: the second joins the in-flight run — only one provider call', async () => {
+      mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: null });
+
+      // Called back-to-back, synchronously — the in-flight Map entry from the
+      // first call is set before the second call's lookup runs, so it joins
+      // rather than starting a second attempt.
+      const p1 = runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+      const p2 = runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      await Promise.all([p1, p2]);
+
+      expect(mockScrapingdogEnrich).toHaveBeenCalledTimes(1);
+    });
+
+    it('stale "searching" (older than 5 minutes) is treated as crashed and re-runs', async () => {
+      const staleStart = new Date(Date.now() - 6 * 60 * 1000).toISOString();
+      mockGetEnrichmentState.mockResolvedValue({
+        status: 'searching', source: 'scrapingdog', error: null, startedAt: staleStart, completedAt: null,
+      });
+      mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: null });
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      expect(mockScrapingdogEnrich).toHaveBeenCalledTimes(1);
+    });
+
+    it('fresh "searching" (within 5 minutes) skips — no provider call, no state write', async () => {
+      const freshStart = new Date(Date.now() - 60 * 1000).toISOString();
+      mockGetEnrichmentState.mockResolvedValue({
+        status: 'searching', source: 'scrapingdog', error: null, startedAt: freshStart, completedAt: null,
+      });
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      expect(mockScrapingdogEnrich).not.toHaveBeenCalled();
+      expect(mockSetEnrichmentState).not.toHaveBeenCalled();
     });
   });
 

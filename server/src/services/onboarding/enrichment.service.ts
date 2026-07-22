@@ -206,11 +206,6 @@ const PROMPT = (s: EnrichSignals): string => {
   return lines.join('\n');
 };
 
-/** True when enrichment can run (key present). Routes fall back gracefully when false. */
-export function isEnrichmentEnabled(): boolean {
-  return !!config.anthropicApiKey;
-}
-
 /**
  * Enrich a member's profile from public web data. Never throws — returns confidence 0
  * (and a null profile) on a missing key, no name, or any API/parse failure, so onboarding

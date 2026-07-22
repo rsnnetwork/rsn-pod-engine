@@ -406,6 +406,8 @@ describe('POST /onboarding/enrich', () => {
       .send({});
 
     expect(res.status).toBe(202);
+    expect(res.body.data.status).toBe('searching');
+    expect(runEnrichment).toHaveBeenCalledTimes(1);
     const [, input] = (runEnrichment as jest.Mock).mock.calls[0];
     expect(input.linkedinUrl).toBe('https://www.linkedin.com/in/jane-doe');
   });
@@ -447,6 +449,7 @@ describe('POST /onboarding/enrich', () => {
 
     expect(res.status).toBe(202);
     expect(res.body.data.status).toBe('searching');
+    expect(runEnrichment).toHaveBeenCalledTimes(1);
   });
 
   it('503s ENRICHMENT_DISABLED (and never fires runEnrichment) when the resolved provider is "none"', async () => {
