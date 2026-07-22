@@ -170,6 +170,12 @@ export async function saveIntentAndComplete(
   const whatICanHelpWith = joinList(mergeP(intent.userCanOffer, enrOffers));
   const whatICareAbout = joinList(mergeP(intent.userInterests, enrSkills));
   const matchingNotes = truncate(orNull(intent.userProfileSummary), 1000);
+  // C2: the only new users-column promotion — userLanguages -> users.languages
+  // (text[], existing since migration 001). null (not []) when nothing came
+  // through, so COALESCE below preserves whatever the column already has
+  // rather than clobbering it, same defensive pattern as company/industry/etc.
+  const languagesArr = cleanArr(intent.userLanguages, 20);
+  const languages = languagesArr.length ? languagesArr : null;
 
   // ── Intent-profile blob ───────────────────────────────────────────────────
   const matchingIntent = JSON.stringify(intent);
@@ -237,6 +243,7 @@ export async function saveIntentAndComplete(
          location = COALESCE($18, location),
          display_name = COALESCE($19, display_name),
          linkedin_url = COALESCE($20, linkedin_url),
+         languages = COALESCE($21, languages),
          onboarding_completed = true,
          onboarding_status = 'completed',
          last_onboarded_at = NOW()
@@ -262,6 +269,7 @@ export async function saveIntentAndComplete(
         location,
         displayNameOverride,
         linkedin,
+        languages,
       ]
     );
 

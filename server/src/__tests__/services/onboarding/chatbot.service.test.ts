@@ -54,6 +54,19 @@ const validIntent = {
   embeddingText: 'A B2B sales advisor who wants to meet revenue-stage founders.',
   confidenceScores: { desiredPeople: 0.9, reasonForMeeting: 0.8, userProfile: 0.85 },
   profileStrength: 'strong',
+  userLanguages: ['English'],
+  problemTheySolve: 'helps B2B teams shorten their sales cycle',
+  authorityLevel: 'final decision maker',
+  needsHelpWith: ['finding pilot customers'],
+  meetingValueCriteria: 'a concrete intro to a warm pilot customer',
+  restrictions: {
+    noCompetitors: false,
+    competitorNote: null,
+    geography: [],
+    industriesToAvoid: [],
+    seniorityToAvoid: [],
+    requiredLanguages: [],
+  },
 };
 
 describe('chatbot.service', () => {

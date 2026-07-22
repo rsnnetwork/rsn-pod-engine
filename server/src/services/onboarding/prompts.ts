@@ -95,9 +95,9 @@ Style rules (strict):
 4. Always reply in English.${knownBlock(profile, extra)}${honestyClause(enrichmentStatus)}
 
 The member has just been welcomed by name and has confirmed their basic details. They have already been asked their reason for joining and have answered it. You want a usable sense of a few more things, in order of importance:
-  1. Who would be valuable for them to meet, and roughly why.
+  1. Who would be valuable for them to meet, roughly why, and what would actually make a meeting with someone feel valuable to them.
   2. What they can help others with, and who they would be valuable to.
-  3. Optional bonus, only if the chat is flowing: anyone they would rather not be matched with again, or anyone they would like to invite.
+  3. Optional bonus, only if the chat is flowing: which language works best for them if not English, anyone they would rather not be matched with (for example a competitor, or a geography that does not work for them), or anyone they would like to invite.
 
 Be efficient. Never make the member feel interrogated:
 - Accept brief answers. People are busy. If their reply already covers who they want to meet and what they can offer, do not ask for more. Go straight to the summary.
@@ -130,6 +130,18 @@ Rules:
 - embeddingText: one dense paragraph (2 to 4 sentences) describing who this person is and who and why they want to meet, written for semantic search.
 - confidenceScores: a 0.0 to 1.0 score for how clearly each of the three things came through (desiredPeople, reasonForMeeting, userProfile).
 - profileStrength: "strong" if all three came through clearly, otherwise "weak".
+- userLanguages: languages the Member said they speak, as a normalised list (for example ["English", "French"]), otherwise an empty array. Never infer a language from a name, country, or company.
+- problemTheySolve: one short sentence describing the problem the Member solves for others, otherwise an empty string.
+- authorityLevel: the Member's decision making authority in one short phrase (for example "final decision maker", "influences budget", "individual contributor"), otherwise an empty string. Only use this if the Member described their own authority; never guess it from a job title alone.
+- needsHelpWith: what the Member explicitly said they need help with right now, distinct from desiredOutcome, as a few short phrases, otherwise an empty array.
+- meetingValueCriteria: what the Member said would make a meeting genuinely valuable to them, otherwise an empty string.
+- restrictions: never invent a restriction that was not stated. Only record what the Member actually said.
+  - restrictions.noCompetitors: true only if the Member explicitly said they do not want to meet competitors, otherwise false.
+  - restrictions.competitorNote: a short note on what "competitor" means to them if they said so, otherwise null.
+  - restrictions.geography: any geographic exclusions or requirements the Member stated, otherwise an empty array.
+  - restrictions.industriesToAvoid: industries the Member said they do not want to meet, otherwise an empty array.
+  - restrictions.seniorityToAvoid: seniority levels the Member said they do not want to meet, otherwise an empty array.
+  - restrictions.requiredLanguages: languages the Member said the other person must speak, otherwise an empty array.
 
 Conversation:
 `;

@@ -94,6 +94,27 @@ export interface OnboardingIntent {
   embeddingText: string;
   confidenceScores: Record<string, number>;
   profileStrength: ProfileStrength;
+  // C2: minimum structured profile additions. All empty-safe (empty array/string,
+  // false, or null) rather than guessed when the member didn't say.
+  /** Languages the member speaks or wants to meet others in. */
+  userLanguages: string[];
+  /** One short sentence describing the problem the member solves for others. */
+  problemTheySolve: string;
+  /** The member's decision making authority (for example "final decision maker", "influences budget", "individual contributor"). */
+  authorityLevel: string;
+  /** What the member explicitly said they need help with right now (distinct from desiredOutcome). */
+  needsHelpWith: string[];
+  /** What the member said would make a meeting valuable to them. */
+  meetingValueCriteria: string;
+  /** Who the member does NOT want to be matched with, only what they actually stated. */
+  restrictions: {
+    noCompetitors: boolean;
+    competitorNote: string | null;
+    geography: string[];
+    industriesToAvoid: string[];
+    seniorityToAvoid: string[];
+    requiredLanguages: string[];
+  };
 }
 
 /** Enrichment lifecycle, as surfaced to the member (provider identity/`source` stays admin-only). */

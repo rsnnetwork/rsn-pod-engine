@@ -52,6 +52,21 @@ export const IntentSchema = z.object({
     userProfile: z.number(),
   }),
   profileStrength: z.enum(['strong', 'weak']),
+  // C2: minimum structured profile additions. All empty-safe (see EXTRACTION_PROMPT):
+  // the extractor returns [] / '' / false / null rather than guessing.
+  userLanguages: z.array(z.string()),
+  problemTheySolve: z.string(),
+  authorityLevel: z.string(),
+  needsHelpWith: z.array(z.string()),
+  meetingValueCriteria: z.string(),
+  restrictions: z.object({
+    noCompetitors: z.boolean(),
+    competitorNote: z.string().nullable(),
+    geography: z.array(z.string()),
+    industriesToAvoid: z.array(z.string()),
+    seniorityToAvoid: z.array(z.string()),
+    requiredLanguages: z.array(z.string()),
+  }),
 });
 
 export type ExtractedIntent = z.infer<typeof IntentSchema>;
@@ -76,6 +91,8 @@ export const INTENT_JSON_SCHEMA: Record<string, unknown> = {
     'userDesignation', 'desiredDesignations', 'avoidDesignations',
     'avoidPreferences', 'privacyRecommendation', 'matchingTags', 'embeddingText',
     'confidenceScores', 'profileStrength',
+    'userLanguages', 'problemTheySolve', 'authorityLevel', 'needsHelpWith',
+    'meetingValueCriteria', 'restrictions',
   ],
   properties: {
     desiredPeople: stringArray,
@@ -116,5 +133,26 @@ export const INTENT_JSON_SCHEMA: Record<string, unknown> = {
       },
     },
     profileStrength: { type: 'string', enum: ['strong', 'weak'] },
+    userLanguages: stringArray,
+    problemTheySolve: { type: 'string' },
+    authorityLevel: { type: 'string' },
+    needsHelpWith: stringArray,
+    meetingValueCriteria: { type: 'string' },
+    restrictions: {
+      type: 'object',
+      additionalProperties: false,
+      required: [
+        'noCompetitors', 'competitorNote', 'geography',
+        'industriesToAvoid', 'seniorityToAvoid', 'requiredLanguages',
+      ],
+      properties: {
+        noCompetitors: { type: 'boolean' },
+        competitorNote: { type: ['string', 'null'] },
+        geography: stringArray,
+        industriesToAvoid: stringArray,
+        seniorityToAvoid: stringArray,
+        requiredLanguages: stringArray,
+      },
+    },
   },
 };
