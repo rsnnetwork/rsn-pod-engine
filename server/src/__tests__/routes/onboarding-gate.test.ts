@@ -42,10 +42,16 @@ jest.mock('../../db', () => ({
 
 jest.mock('../../services/identity/identity.service');
 
+jest.mock('../../services/onboarding/stage-events.repo', () => ({
+  record: jest.fn().mockResolvedValue(undefined),
+  __esModule: true,
+}));
+
 import { query as dbQuery } from '../../db';
 import authRoutes from '../../routes/auth';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 import { invalidateUserStatusCache } from '../../middleware/auth';
+import { record as recordStageEvent } from '../../services/onboarding/stage-events.repo';
 
 function createApp() {
   const app = express();
@@ -88,6 +94,7 @@ describe('POST /auth/onboarding/complete', () => {
     jest.clearAllMocks();
     // Default: auth middleware's SELECT status query returns 'active'.
     (dbQuery as jest.Mock).mockResolvedValue({ rows: [{ status: 'active' }], rowCount: 1 });
+    (recordStageEvent as jest.Mock).mockResolvedValue(undefined);
   });
 
   afterAll(() => {
@@ -287,5 +294,43 @@ describe('POST /auth/onboarding/complete', () => {
 
     const completeCall = (dbQuery as jest.Mock).mock.calls.find(c => /SET profile_complete/.test(c[0]));
     expect(completeCall![1][0]).toBe(false);
+  });
+
+  // ─── E1: fallback_form stage event ─────────────────────────────────────
+  describe('E1: fallback_form stage event', () => {
+    it('records fallback_form on a successful completion', async () => {
+      const userId = freshUserId();
+      (dbQuery as jest.Mock)
+        .mockResolvedValueOnce({ rows: [{ status: 'active' }], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [{ first_name: 'Jane', last_name: 'Doe' }], rowCount: 1 })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] })
+        .mockResolvedValueOnce({
+          rows: [{
+            first_name: 'Jane', last_name: 'Doe', display_name: 'Jane Doe',
+            company: 'Acme Inc', job_title: 'Founder', industry: 'SaaS',
+            reasons_to_connect: ['mentorship', 'hiring'],
+          }],
+          rowCount: 1,
+        })
+        .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+
+      const res = await request(app)
+        .post('/auth/onboarding/complete')
+        .set('Authorization', `Bearer ${makeToken(userId)}`)
+        .send(validBody);
+
+      expect(res.status).toBe(200);
+      expect(recordStageEvent).toHaveBeenCalledWith(userId, 'fallback_form');
+    });
+
+    it('does NOT record fallback_form on a validation failure (400)', async () => {
+      const res = await request(app)
+        .post('/auth/onboarding/complete')
+        .set('Authorization', `Bearer ${makeToken(freshUserId())}`)
+        .send({});
+
+      expect(res.status).toBe(400);
+      expect(recordStageEvent).not.toHaveBeenCalled();
+    });
   });
 });

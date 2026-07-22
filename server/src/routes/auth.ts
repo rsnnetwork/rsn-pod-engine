@@ -8,6 +8,7 @@ import * as identityService from '../services/identity/identity.service';
 import { ApiResponse } from '@rsn/shared';
 import config from '../config';
 import logger from '../config/logger';
+import { record as recordStageEvent } from '../services/onboarding/stage-events.repo';
 
 const router = Router();
 
@@ -369,6 +370,10 @@ router.post('/onboarding/complete', authenticate, async (req: Request, res: Resp
       Array.isArray(row.reasons_to_connect) && row.reasons_to_connect.length > 0
     );
     await query('UPDATE users SET profile_complete = $1 WHERE id = $2', [isComplete, userId]);
+
+    // E1: fallback_form — the member completed onboarding via the minimal
+    // form rather than the chat flow (admin-inspector stage trail).
+    recordStageEvent(userId, 'fallback_form');
 
     res.json({
       success: true,

@@ -42,6 +42,11 @@ jest.mock('../../../services/onboarding/avatar.service', () => ({
   captureAvatar: jest.fn(),
 }));
 
+jest.mock('../../../services/onboarding/stage-events.repo', () => ({
+  __esModule: true,
+  record: jest.fn().mockResolvedValue(undefined),
+}));
+
 jest.mock('../../../services/onboarding/enrichment.service', () => {
   const actual = jest.requireActual('../../../services/onboarding/enrichment.service');
   return {
@@ -57,6 +62,7 @@ import { getCachedEnrichment, getEnrichmentState, saveEnrichedCandidate, setEnri
 import { scrapingdogProvider } from '../../../services/onboarding/providers/scrapingdog.provider';
 import { enrichProfile, getClient, type EnrichResult, type EnrichedProfile } from '../../../services/onboarding/enrichment.service';
 import { captureAvatar } from '../../../services/onboarding/avatar.service';
+import { record as recordStageEvent } from '../../../services/onboarding/stage-events.repo';
 import { runEnrichment } from '../../../services/onboarding/enrichment.orchestrator';
 
 const mockGetCachedEnrichment = getCachedEnrichment as jest.Mock;
@@ -67,6 +73,12 @@ const mockScrapingdogEnrich = scrapingdogProvider.enrich as jest.Mock;
 const mockEnrichProfile = enrichProfile as jest.Mock;
 const mockGetClient = getClient as jest.Mock;
 const mockCaptureAvatar = captureAvatar as jest.Mock;
+const mockRecordStageEvent = recordStageEvent as jest.Mock;
+
+/** Find a recorded stage-event call by stage name (there may be several calls per run). */
+function stageCall(stage: string) {
+  return mockRecordStageEvent.mock.calls.find((c) => c[1] === stage);
+}
 
 const REQ_URL = 'https://www.linkedin.com/in/jane-doe';
 
@@ -106,6 +118,7 @@ describe('runEnrichment', () => {
     mockSetEnrichmentState.mockResolvedValue(undefined);
     mockSaveEnrichedCandidate.mockResolvedValue(undefined);
     mockCaptureAvatar.mockResolvedValue(true);
+    mockRecordStageEvent.mockResolvedValue(undefined);
     // Default: extras pass "succeeds" with no extra fields (keeps most tests
     // from needing to think about the extras call at all).
     mockGetClient.mockReturnValue({
@@ -540,6 +553,170 @@ describe('runEnrichment', () => {
 
       const [, params] = lastStateCall();
       expect(params).toMatchObject({ status: 'found', source: 'scrapingdog' });
+    });
+
+    // ─── E1: photo_captured / photo_failed stage-event telemetry ────────────
+    describe('E1: photo capture stage events', () => {
+      it('a successful capture records photo_captured with a duration_ms', async () => {
+        mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: 'https://cdn.example.com/jane.jpg' });
+        mockCaptureAvatar.mockResolvedValue(true);
+
+        await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+        await new Promise((r) => setImmediate(r));
+
+        const call = stageCall('photo_captured');
+        expect(call).toBeDefined();
+        expect(call![0]).toBe('u1');
+        expect(typeof call![3]).toBe('number');
+      });
+
+      it('captureAvatar resolving false records photo_failed', async () => {
+        mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: 'https://cdn.example.com/jane.jpg' });
+        mockCaptureAvatar.mockResolvedValue(false);
+
+        await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+        await new Promise((r) => setImmediate(r));
+
+        expect(stageCall('photo_failed')).toBeDefined();
+        expect(stageCall('photo_captured')).toBeUndefined();
+      });
+
+      it('captureAvatar rejecting records photo_failed with the error message as reason', async () => {
+        mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: 'https://cdn.example.com/jane.jpg' });
+        mockCaptureAvatar.mockRejectedValue(new Error('avatar capture blew up'));
+
+        await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+        await new Promise((r) => setImmediate(r));
+
+        const call = stageCall('photo_failed');
+        expect(call).toBeDefined();
+        expect(call![2]).toMatchObject({ reason: 'avatar capture blew up' });
+      });
+
+      it('photoUrl null: no photo stage event at all', async () => {
+        mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: null });
+
+        await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+        await new Promise((r) => setImmediate(r));
+
+        expect(stageCall('photo_captured')).toBeUndefined();
+        expect(stageCall('photo_failed')).toBeUndefined();
+      });
+    });
+  });
+
+  // ─── E1: enrichment stage-event telemetry ──────────────────────────────────
+  // record() is fire-and-forget from the orchestrator's point of view (mirrors
+  // captureAvatar/markInProgress elsewhere): a stage-event write must never be
+  // able to affect the enrichment outcome it's describing.
+  describe('E1: enrichment stage-event telemetry', () => {
+    it('enrich_started fires when the searching state is written, detail={provider}', async () => {
+      mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: null });
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      const call = stageCall('enrich_started');
+      expect(call).toBeDefined();
+      expect(call![0]).toBe('u1');
+      expect(call![2]).toEqual({ provider: 'scrapingdog' });
+    });
+
+    it('enrich_found fires on a found terminal transition with a duration_ms', async () => {
+      mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: null });
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      const call = stageCall('enrich_found');
+      expect(call).toBeDefined();
+      expect(call![2]).toEqual({ provider: 'scrapingdog' });
+      expect(typeof call![3]).toBe('number');
+    });
+
+    it('enrich_partial fires on a partial terminal transition', async () => {
+      mockScrapingdogEnrich.mockResolvedValue({
+        kind: 'partial', result: foundResult({ confidence: 0.7 }), photoUrl: null, missing: ['headline'],
+      });
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      expect(stageCall('enrich_partial')).toBeDefined();
+    });
+
+    it('enrich_not_found fires with reason "no linkedin url" when nothing is resolvable', async () => {
+      await runEnrichment('u1', { linkedinUrl: null });
+
+      const call = stageCall('enrich_not_found');
+      expect(call).toBeDefined();
+      expect(call![2]).toMatchObject({ reason: 'no linkedin url' });
+    });
+
+    it('enrich_not_found fires with the provider\'s reason on a provider not_found', async () => {
+      mockScrapingdogEnrich.mockResolvedValue({ kind: 'not_found', reason: 'scrapingdog 404' });
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      const call = stageCall('enrich_not_found');
+      expect(call![2]).toMatchObject({ provider: 'scrapingdog', reason: 'scrapingdog 404' });
+    });
+
+    it('enrich_not_found fires (no forced reason) when the resolved provider is "none"', async () => {
+      mockConfig.enrichProvider = 'none';
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      const call = stageCall('enrich_not_found');
+      expect(call).toBeDefined();
+      expect(call![2]).toEqual({ provider: 'none' });
+    });
+
+    it('enrich_failed fires with the provider\'s reason on a provider_error', async () => {
+      mockScrapingdogEnrich.mockResolvedValue({ kind: 'provider_error', reason: 'scrapingdog 500' });
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      const call = stageCall('enrich_failed');
+      expect(call![2]).toMatchObject({ provider: 'scrapingdog', reason: 'scrapingdog 500' });
+    });
+
+    it('enrich_failed fires on an unexpected orchestrator crash, reason = the error message', async () => {
+      mockScrapingdogEnrich.mockRejectedValue(new Error('unexpected crash'));
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      const call = stageCall('enrich_failed');
+      expect(call).toBeDefined();
+      expect(call![2]).toMatchObject({ reason: 'unexpected crash' });
+    });
+
+    it('a fresh cache hit still records the enrich_* stage matching the cached outcome (no enrich_started, no provider call)', async () => {
+      mockGetCachedEnrichment.mockResolvedValue(foundResult({ confidence: 0.95, requestedLinkedinUrl: REQ_URL }));
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      expect(mockScrapingdogEnrich).not.toHaveBeenCalled();
+      expect(stageCall('enrich_started')).toBeUndefined();
+      expect(stageCall('enrich_found')).toBeDefined();
+    });
+
+    it('the fresh "searching" concurrency short-circuit records no stage event at all', async () => {
+      const freshStart = new Date(Date.now() - 60 * 1000).toISOString();
+      mockGetEnrichmentState.mockResolvedValue({
+        status: 'searching', source: 'scrapingdog', error: null, startedAt: freshStart, completedAt: null,
+      });
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      expect(mockRecordStageEvent).not.toHaveBeenCalled();
+    });
+
+    it('never throws: a rejecting stage-event record() call cannot surface (repo contract — mocked here as a rejection to prove the orchestrator does not await/depend on it)', async () => {
+      mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: null });
+      mockRecordStageEvent.mockRejectedValue(new Error('telemetry db down'));
+
+      await expect(runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' })).resolves.toBeUndefined();
+
+      const [, params] = lastStateCall();
+      expect(params).toMatchObject({ status: 'found' });
     });
   });
 });

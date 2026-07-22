@@ -46,6 +46,7 @@ import { getCachedEnrichment, getEnrichmentState, saveEnrichedCandidate, setEnri
 import { resolveEnrichProvider, runProvider, statusFromConfidence, type EnrichProviderName } from './providers/registry';
 import type { ProviderOutcome } from './providers/provider.types';
 import { captureAvatar } from './avatar.service';
+import { record as recordStageEvent, type StageEventStage } from './stage-events.repo';
 
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
 /** How fresh a persisted 'searching' state has to be to be trusted as "still
@@ -72,14 +73,43 @@ export function isFreshCacheHit(cached: EnrichResult | null, requestedLinkedinUr
   return sameLinkedin && fresh;
 }
 
+/** Maps a terminal outcome string to its stage-event name. Returns null for
+ *  anything that isn't one of the four terminal outcomes (defensive only —
+ *  every logTerminal call site today passes one of these four). */
+function stageForOutcome(outcome: string): StageEventStage | null {
+  switch (outcome) {
+    case 'found':
+      return 'enrich_found';
+    case 'partial':
+      return 'enrich_partial';
+    case 'not_found':
+      return 'enrich_not_found';
+    case 'failed':
+      return 'enrich_failed';
+    default:
+      return null;
+  }
+}
+
 function logTerminal(userId: string, provider: EnrichProviderName, outcome: string, startedAtMs: number, extra?: Record<string, unknown>): void {
-  // stage-event recording (E1) lands with the admin-inspector workstream — this
-  // call site is the single seam it will hook into once that table exists.
   // durationMs spans the WHOLE attempt — from startedAtMs (stamped at the top
   // of runEnrichmentOnce, before the cache check) through this terminal write —
   // so it includes the cache lookup, the provider call, and the extras pass
   // when one runs (scrapingdog found/partial), not just the provider call.
-  logger.info({ userId, provider, outcome, durationMs: Date.now() - startedAtMs, ...extra }, 'enrichment terminal');
+  const durationMs = Date.now() - startedAtMs;
+  logger.info({ userId, provider, outcome, durationMs, ...extra }, 'enrichment terminal');
+
+  // E1 stage-event telemetry (admin inspector): {provider, reason?} only —
+  // cacheHit/crashed stay log-only flags, not part of the persisted detail.
+  const stage = stageForOutcome(outcome);
+  if (stage) {
+    const reason = typeof extra?.reason === 'string' ? extra.reason : undefined;
+    const detail: Record<string, unknown> = reason ? { provider, reason } : { provider };
+    // Fire-and-forget — record() never throws, but the .catch() here is
+    // belt-and-braces against a truly unexpected rejection, mirroring every
+    // other fire-and-forget call site in this file.
+    recordStageEvent(userId, stage, detail, durationMs).catch(() => {});
+  }
 }
 
 async function writeState(userId: string, state: Parameters<typeof setEnrichmentState>[1]): Promise<void> {
@@ -244,7 +274,7 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
     // Step 2: no URL resolvable at all, or enrichment deliberately killed.
     if (!resolvedLinkedinUrl) {
       await writeState(userId, { status: 'not_found', error: 'no linkedin url', source: null });
-      logTerminal(userId, provider, 'not_found', startedAtMs);
+      logTerminal(userId, provider, 'not_found', startedAtMs, { reason: 'no linkedin url' });
       return;
     }
     if (provider === 'none') {
@@ -256,6 +286,7 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
     // Step 3: searching.
     await writeState(userId, { status: 'searching', source: provider });
     logger.info({ userId, slug: linkedinSlug(resolvedLinkedinUrl), provider }, 'enrichment searching');
+    recordStageEvent(userId, 'enrich_started', { provider }).catch(() => {});
 
     // Step 4: call the provider.
     const outcome = await runProvider(provider as Exclude<EnrichProviderName, 'none'>, {
@@ -284,13 +315,21 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
       // never throws (it returns false + logs on every failure path) — so
       // this guards against a truly unexpected rejection escaping it,
       // mirroring runEnrichment's own top-level never-throws guarantee.
-      // Stage-event seam (E1, admin-inspector workstream): once
-      // stage_events exists, record a photo_captured/photo_failed event
-      // from inside captureAvatar itself rather than here.
+      // E1: photo_captured/photo_failed recorded from THIS call site (not
+      // inside avatar.service.ts, which stays photo-only) — duration_ms
+      // spans just the capture itself, not the enrichment attempt above.
       if (outcome.photoUrl) {
-        captureAvatar(userId, outcome.photoUrl).catch((err) => {
-          logger.warn({ err, userId }, 'enrichment: captureAvatar rejected unexpectedly (non-fatal)');
-        });
+        const photoStartedAtMs = Date.now();
+        captureAvatar(userId, outcome.photoUrl)
+          .then((captured) => {
+            const stage = captured ? 'photo_captured' : 'photo_failed';
+            recordStageEvent(userId, stage, {}, Date.now() - photoStartedAtMs).catch(() => {});
+          })
+          .catch((err) => {
+            logger.warn({ err, userId }, 'enrichment: captureAvatar rejected unexpectedly (non-fatal)');
+            const reason = err instanceof Error ? err.message : 'unknown avatar capture error';
+            recordStageEvent(userId, 'photo_failed', { reason }, Date.now() - photoStartedAtMs).catch(() => {});
+          });
       }
       logTerminal(userId, provider, outcome.kind, startedAtMs);
       return;
@@ -299,16 +338,17 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
     // Step 7: not_found / retry_exhausted / provider_error.
     const { status, error } = mapFailureOutcome(outcome);
     await writeState(userId, { status, error, source: provider });
-    logTerminal(userId, provider, status, startedAtMs);
+    logTerminal(userId, provider, status, startedAtMs, error ? { reason: error } : undefined);
   } catch (err) {
     // Never throws: any unexpected failure still lands in a terminal, visible
     // state rather than disappearing into an unhandled rejection.
     logger.error({ err, userId, provider }, 'enrichment orchestrator crashed — marking failed');
+    const crashReason = err instanceof Error ? err.message : 'unknown orchestrator error';
     await writeState(userId, {
       status: 'failed',
-      error: err instanceof Error ? err.message : 'unknown orchestrator error',
+      error: crashReason,
       source: provider === 'none' ? null : provider,
     });
-    logTerminal(userId, provider, 'failed', startedAtMs, { crashed: true });
+    logTerminal(userId, provider, 'failed', startedAtMs, { crashed: true, reason: crashReason });
   }
 }

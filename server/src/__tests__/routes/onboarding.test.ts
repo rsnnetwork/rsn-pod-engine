@@ -84,6 +84,11 @@ jest.mock('../../services/onboarding/enrichment.orchestrator', () => {
   };
 });
 
+jest.mock('../../services/onboarding/stage-events.repo', () => ({
+  record: jest.fn().mockResolvedValue(undefined),
+  __esModule: true,
+}));
+
 import { query as dbQuery } from '../../db';
 import config from '../../config';
 import onboardingRoutes from '../../routes/onboarding';
@@ -94,6 +99,7 @@ import * as intentRepo from '../../services/onboarding/intent.repo';
 import * as known from '../../services/onboarding/known';
 import * as enrichRepo from '../../services/onboarding/enrichment.repo';
 import { runEnrichment } from '../../services/onboarding/enrichment.orchestrator';
+import { record as recordStageEvent } from '../../services/onboarding/stage-events.repo';
 
 function createApp() {
   const app = express();
@@ -118,7 +124,8 @@ beforeEach(() => {
   jest.clearAllMocks();
   // authenticate's status check + any stray db call default to an active user.
   (dbQuery as jest.Mock).mockResolvedValue({ rows: [{ status: 'active' }], rowCount: 1 });
-  (intentRepo.markInProgress as jest.Mock).mockResolvedValue(undefined);
+  (intentRepo.markInProgress as jest.Mock).mockResolvedValue(false);
+  (recordStageEvent as jest.Mock).mockResolvedValue(undefined);
   // Defaults so the /chat background per-answer extraction never errors noisily.
   (intentRepo.savePartialIntent as jest.Mock).mockResolvedValue(undefined);
   (chatbot.extractIntent as jest.Mock).mockResolvedValue({ userProfileSummary: 'partial' });
@@ -361,6 +368,57 @@ describe('POST /onboarding/chat', () => {
     expect(intentRepo.savePartialIntent).not.toHaveBeenCalled();
   });
 
+  // ─── E1: chat_started fires ONLY on the user's first turn ─────────────────
+  // markInProgress resolves true only when it actually performed the
+  // not_started/update_required -> in_progress transition — the route must
+  // key the stage event off THAT signal, not off every turn.
+  // Each test uses its own userId (distinct rate-limit key) — onboardingChatLimiter
+  // is a shared, process-wide budget (30/60s per user) across every test in this file.
+  describe('E1: chat_started stage event', () => {
+    it('fires when markInProgress reports a real transition (first turn)', async () => {
+      (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+      (chatbot.converse as jest.Mock).mockResolvedValue({ reply: 'ok', ready: false });
+      (intentRepo.markInProgress as jest.Mock).mockResolvedValue(true);
+
+      await request(app)
+        .post('/onboarding/chat')
+        .set('Authorization', `Bearer ${makeToken('user-e1-chat-1')}`)
+        .send(body);
+      await new Promise((r) => setImmediate(r));
+
+      expect(recordStageEvent).toHaveBeenCalledWith('user-e1-chat-1', 'chat_started');
+    });
+
+    it('does NOT fire on a later turn (markInProgress reports no transition)', async () => {
+      (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+      (chatbot.converse as jest.Mock).mockResolvedValue({ reply: 'ok', ready: false });
+      (intentRepo.markInProgress as jest.Mock).mockResolvedValue(false);
+
+      await request(app)
+        .post('/onboarding/chat')
+        .set('Authorization', `Bearer ${makeToken('user-e1-chat-2')}`)
+        .send(body);
+      await new Promise((r) => setImmediate(r));
+
+      expect(recordStageEvent).not.toHaveBeenCalledWith('user-e1-chat-2', 'chat_started');
+    });
+
+    it('does NOT fire when markInProgress rejects (best-effort, non-fatal)', async () => {
+      (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+      (chatbot.converse as jest.Mock).mockResolvedValue({ reply: 'ok', ready: false });
+      (intentRepo.markInProgress as jest.Mock).mockRejectedValue(new Error('db down'));
+
+      const res = await request(app)
+        .post('/onboarding/chat')
+        .set('Authorization', `Bearer ${makeToken('user-e1-chat-3')}`)
+        .send(body);
+      await new Promise((r) => setImmediate(r));
+
+      expect(res.status).toBe(200);
+      expect(recordStageEvent).not.toHaveBeenCalledWith('user-e1-chat-3', 'chat_started');
+    });
+  });
+
   describe('honesty clause: enrichment state reaches the host system prompt', () => {
     it.each([
       ['found', 'retrieved parts of their public profile'],
@@ -455,6 +513,28 @@ describe('POST /onboarding/profile', () => {
       .send({ messages: [] });
     expect(res.status).toBe(400);
   });
+
+  // E1: extractIntent throwing here is swallowed (200, profile:null) but is
+  // still an extraction failure the admin inspector needs visibility into.
+  it('E1: records extract_failed (sanitized message) when extraction throws, still returns 200 with a null profile', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+    (chatbot.extractIntent as jest.Mock).mockRejectedValue(new Error('anthropic 500: sk-ant-verysecretkey1234567890'));
+
+    const res = await request(app)
+      .post('/onboarding/profile')
+      .set('Authorization', `Bearer ${makeToken('user-e1-profile-1')}`)
+      .send(profileBody);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.profile).toBeNull();
+    expect(recordStageEvent).toHaveBeenCalledWith(
+      'user-e1-profile-1',
+      'extract_failed',
+      expect.objectContaining({ message: expect.any(String) }),
+    );
+    const [, , detail] = (recordStageEvent as jest.Mock).mock.calls.find((c) => c[1] === 'extract_failed')!;
+    expect(detail.message).not.toContain('sk-ant-verysecretkey1234567890');
+  });
 });
 
 describe('POST /onboarding/confirm', () => {
@@ -507,6 +587,79 @@ describe('POST /onboarding/confirm', () => {
     const args = (intentRepo.saveIntentAndComplete as jest.Mock).mock.calls[0];
     expect(args[0]).toBe('user-abc');
     expect(args[3]).toMatchObject({ country: 'Denmark', company: 'Mister Raw' });
+  });
+
+  // ─── E1: confirmed stage event ──────────────────────────────────────────
+  // Each test uses its own userId (distinct rate-limit key) — see the
+  // chat_started describe block above for why.
+  describe('E1: confirmed stage event', () => {
+    it('records confirmed with profileStrength on success', async () => {
+      (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+      (chatbot.extractIntent as jest.Mock).mockResolvedValue({
+        userProfileSummary: 'A B2B founder.',
+        profileStrength: 'strong',
+      });
+      (intentRepo.saveIntentAndComplete as jest.Mock).mockResolvedValue({ profileComplete: true });
+
+      const res = await request(app)
+        .post('/onboarding/confirm')
+        .set('Authorization', `Bearer ${makeToken('user-e1-confirm-1')}`)
+        .send(body);
+
+      expect(res.status).toBe(200);
+      expect(recordStageEvent).toHaveBeenCalledWith('user-e1-confirm-1', 'confirmed', { profileStrength: 'strong' });
+    });
+
+    it('records confirmed with an empty detail when profileStrength is not present', async () => {
+      (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+      (chatbot.extractIntent as jest.Mock).mockResolvedValue({ userProfileSummary: 'A B2B founder.' });
+      (intentRepo.saveIntentAndComplete as jest.Mock).mockResolvedValue({ profileComplete: true });
+
+      await request(app)
+        .post('/onboarding/confirm')
+        .set('Authorization', `Bearer ${makeToken('user-e1-confirm-2')}`)
+        .send(body);
+
+      expect(recordStageEvent).toHaveBeenCalledWith('user-e1-confirm-2', 'confirmed', {});
+    });
+  });
+
+  // ─── E1: extract_failed stage event (LLM_DISABLED fallback path) ────────
+  describe('E1: extract_failed stage event', () => {
+    it('records extract_failed with a sanitized error message when extraction throws', async () => {
+      (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+      (chatbot.extractIntent as jest.Mock).mockRejectedValue(new Error('anthropic 500: Bearer sk-ant-verysecretkey1234567890'));
+
+      const res = await request(app)
+        .post('/onboarding/confirm')
+        .set('Authorization', `Bearer ${makeToken('user-e1-confirm-3')}`)
+        .send(body);
+
+      expect(res.status).toBe(503);
+      expect(recordStageEvent).toHaveBeenCalledWith(
+        'user-e1-confirm-3',
+        'extract_failed',
+        expect.objectContaining({ message: expect.any(String) }),
+      );
+      const [, , detail] = (recordStageEvent as jest.Mock).mock.calls.find((c) => c[1] === 'extract_failed')!;
+      expect(detail.message).not.toContain('sk-ant-verysecretkey1234567890');
+      expect(detail.message).not.toContain('Bearer');
+    });
+
+    it('does not record extract_failed on the LLM_DISABLED (isEnabled=false) path — that is not an extraction failure', async () => {
+      (chatbot.isEnabled as jest.Mock).mockReturnValue(false);
+
+      await request(app)
+        .post('/onboarding/confirm')
+        .set('Authorization', `Bearer ${makeToken('user-e1-confirm-4')}`)
+        .send(body);
+
+      expect(recordStageEvent).not.toHaveBeenCalledWith(
+        'user-e1-confirm-4',
+        'extract_failed',
+        expect.anything(),
+      );
+    });
   });
 });
 

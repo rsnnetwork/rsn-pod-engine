@@ -170,6 +170,19 @@ describe('markInProgress: accepts update_required as a starting state', () => {
     expect(sql).toMatch(/'update_required'/);
     expect(params).toEqual(['user-1']);
   });
+
+  // E1: the route needs to know whether THIS call actually performed the
+  // not_started/update_required -> in_progress transition, so it can emit a
+  // chat_started stage event on the user's first turn only, not every turn.
+  it('E1: resolves true when the UPDATE actually matched a row (a real transition)', async () => {
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 1 });
+    await expect(markInProgress('user-1')).resolves.toBe(true);
+  });
+
+  it('E1: resolves false when the WHERE clause matched nothing (already in_progress/completed)', async () => {
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+    await expect(markInProgress('user-1')).resolves.toBe(false);
+  });
 });
 
 describe('savePartialIntent: re-arms from update_required', () => {

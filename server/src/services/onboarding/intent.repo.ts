@@ -120,14 +120,17 @@ export async function getKnownProfileForHost(userId: string): Promise<{
 /**
  * Best-effort: move a fresh ('not_started') or re-onboarding ('update_required',
  * set by the D3 backfill for pre-existing users) member into 'in_progress' on
- * their first host turn.
+ * their first host turn. Resolves true only when THIS call actually performed
+ * the transition (rowCount > 0) — E1's chat_started stage event fires off that
+ * signal so it lands once, on the first turn, not on every turn.
  */
-export async function markInProgress(userId: string): Promise<void> {
-  await query(
+export async function markInProgress(userId: string): Promise<boolean> {
+  const r = await query(
     `UPDATE users SET onboarding_status = 'in_progress'
        WHERE id = $1 AND onboarding_status IN ('not_started', 'update_required')`,
     [userId]
   );
+  return (r.rowCount ?? 0) > 0;
 }
 
 /**

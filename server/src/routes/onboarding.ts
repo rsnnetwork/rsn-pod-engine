@@ -29,7 +29,19 @@ import * as enrichment from '../services/onboarding/enrichment.service';
 import * as enrichRepo from '../services/onboarding/enrichment.repo';
 import { runEnrichment, isFreshCacheHit } from '../services/onboarding/enrichment.orchestrator';
 import { resolveEnrichProvider, statusFromConfidence } from '../services/onboarding/providers/registry';
+import { record as recordStageEvent } from '../services/onboarding/stage-events.repo';
 import logger from '../config/logger';
+
+/** Reduce an extraction-failure error to a short, safe string for the E1
+ *  stage-event trail — message only (never a stack), with any bearer-token /
+ *  API-key-shaped substring redacted defensively before it's persisted. */
+function sanitizeErrorMessage(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg
+    .replace(/Bearer\s+\S+/gi, '[redacted]')
+    .replace(/sk-[A-Za-z0-9_-]{10,}/gi, '[redacted]')
+    .slice(0, 500);
+}
 
 const router = Router();
 
@@ -255,8 +267,13 @@ router.post(
       const messages = req.body.messages as OnboardingMessage[];
       const profile = req.body.profile as OnboardingConfirmedProfile | undefined;
       // Best-effort: nudge a fresh user into 'in_progress'. Never block the turn.
+      // E1: chat_started fires only when THIS call actually performed the
+      // transition (the user's first turn), not on every subsequent turn.
       intentRepo
         .markInProgress(userId)
+        .then((transitioned) => {
+          if (transitioned) recordStageEvent(userId, 'chat_started');
+        })
         .catch((err) => logger.warn({ err, userId }, 'onboarding markInProgress failed'));
 
       const wrapMode: 'none' | 'soft' | 'hard' =
@@ -314,6 +331,7 @@ router.post(
       const messages = req.body.messages as OnboardingMessage[];
       const intent = await chatbot.extractIntent(messages).catch((err) => {
         logger.warn({ err, userId }, 'onboarding live extraction failed');
+        recordStageEvent(userId, 'extract_failed', { message: sanitizeErrorMessage(err) });
         return null;
       });
       const liveProfile = intent ? chatbot.liveProfileFromIntent(intent) : null;
@@ -354,6 +372,7 @@ router.post(
         // Same LLM-down mapping as /chat — the client falls back to the form
         // instead of a dead confirm button.
         logger.error({ err, userId }, 'onboarding confirm extraction failed — sending LLM_DISABLED fallback');
+        recordStageEvent(userId, 'extract_failed', { message: sanitizeErrorMessage(err) });
         sendLlmDisabled(res);
         return;
       }
@@ -366,6 +385,7 @@ router.post(
         profile,
         inferred
       );
+      recordStageEvent(userId, 'confirmed', intent.profileStrength ? { profileStrength: intent.profileStrength } : {});
 
       const response: ApiResponse = {
         success: true,
