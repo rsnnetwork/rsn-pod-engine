@@ -47,19 +47,39 @@ function formatPastRole(e: any): string {
   return [role, company ? `at ${company}` : null, duration ? `(${duration})` : null].filter(Boolean).join(' ');
 }
 
-function mapProfile(raw: any, requestedUrl: string): { profile: EnrichedProfile; missing: string[] } {
+/**
+ * Map a raw 200 body to a profile. Returns `null` when the body carries no
+ * usable profile signal at all (null body, `[]`, `{}`, or any shape with no
+ * name candidate, no headline, and no experience) — ScrapingDog's own
+ * convention for "no such profile" under a 200 status. Never throws: an
+ * `experience` that isn't an array, or that contains null entries, is
+ * tolerated and mapped as best-effort rather than crashing.
+ */
+function mapProfile(raw: any, requestedUrl: string): { profile: EnrichedProfile; missing: string[] } | null {
   const p = Array.isArray(raw) ? raw[0] : raw;
-  const exp: any[] = p.experience ?? [];
+  if (!p || typeof p !== 'object') return null;
+
+  const exp: any[] = Array.isArray(p.experience) ? p.experience : [];
   const current = exp[0] ?? {};
+  const fullName = p.fullName ?? [p.first_name, p.last_name].filter(Boolean).join(' ') ?? null;
+  const headline = p.headline ?? null;
+
+  const hasSignal = !!fullName || !!headline || exp.some((e: any) => e != null);
+  if (!hasSignal) return null;
+
   const profile: EnrichedProfile = {
-    fullName: p.fullName ?? [p.first_name, p.last_name].filter(Boolean).join(' ') ?? null,
-    headline: p.headline ?? null,
+    fullName,
+    headline,
     currentRole: current.position ?? current.title ?? null,
     currentCompany: current.company_name ?? current.company ?? null,
     industry: p.industry ?? null,
     location: p.location ?? null,
     summary: p.about ?? null,
-    pastRoles: exp.slice(1).map(formatPastRole).filter((s: string) => s.length > 0),
+    pastRoles: exp
+      .slice(1)
+      .filter((e: any) => e != null)
+      .map(formatPastRole)
+      .filter((s: string) => s.length > 0),
     education: p.education ?? [],
     skills: p.skills ?? [],
     photoUrl: p.profile_photo ?? p.profile_pic_url ?? null,
@@ -82,7 +102,9 @@ export const scrapingdogProvider: EnrichmentProvider = {
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         const { status, body } = await fetchOnce(slug);
         if (status === 200) {
-          const { profile, missing } = mapProfile(body, normalizeLinkedinUrl(linkedinUrl)!);
+          const mapped = mapProfile(body, normalizeLinkedinUrl(linkedinUrl)!);
+          if (!mapped) return { kind: 'not_found', reason: 'empty profile body' };
+          const { profile, missing } = mapped;
           const result: EnrichResult = {
             profile,
             confidence: missing.length === 0 ? 0.95 : 0.7,
@@ -96,7 +118,7 @@ export const scrapingdogProvider: EnrichmentProvider = {
             : { kind: 'partial', result, photoUrl: profile.photoUrl, missing };
         }
         if (status === 202) {
-          await sleep(RETRY_DELAY_MS);
+          if (attempt < MAX_ATTEMPTS) await sleep(RETRY_DELAY_MS);
           continue;
         }
         if ([400, 404, 410].includes(status)) return { kind: 'not_found', reason: `scrapingdog ${status}` };

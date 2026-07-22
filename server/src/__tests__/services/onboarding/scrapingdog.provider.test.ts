@@ -16,6 +16,10 @@ function mockResponse(status: number, body?: any): Response {
 }
 
 describe('scrapingdogProvider', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it('maps a 200 profile to EnrichResult with confidence 0.95 and echoes the requested URL', async () => {
     const raw = {
       fullName: 'Jane Doe',
@@ -66,6 +70,57 @@ describe('scrapingdogProvider', () => {
     expect(outcome.result.profile?.currentCompany).toBeNull();
   });
 
+  it('returns not_found when a 200 body is null (no usable profile signal)', async () => {
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockResponse(200, null));
+    const outcome = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/null-body' });
+    expect(outcome).toEqual({ kind: 'not_found', reason: 'empty profile body' });
+  });
+
+  it('returns not_found when a 200 body is an empty array', async () => {
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockResponse(200, []));
+    const outcome = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/empty-array' });
+    expect(outcome).toEqual({ kind: 'not_found', reason: 'empty profile body' });
+  });
+
+  it('returns not_found when a 200 body is an empty object', async () => {
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockResponse(200, {}));
+    const outcome = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/empty-object' });
+    expect(outcome).toEqual({ kind: 'not_found', reason: 'empty profile body' });
+  });
+
+  it('tolerates a non-array experience field and maps pastRoles as empty', async () => {
+    const raw = { fullName: 'Alex Kim', headline: 'Product Lead', experience: 'not-an-array' };
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockResponse(200, raw));
+
+    const outcome = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/alex-kim' });
+
+    expect(outcome.kind).toBe('partial');
+    if (outcome.kind !== 'partial') throw new Error('expected partial');
+    expect(outcome.result.profile?.pastRoles).toEqual([]);
+    expect(outcome.result.profile?.fullName).toBe('Alex Kim');
+  });
+
+  it('skips a null entry inside experience without crashing', async () => {
+    const raw = {
+      fullName: 'Jordan Park',
+      headline: 'Design Lead',
+      experience: [
+        { position: 'Designer', company_name: 'Curr Co' },
+        null,
+        { position: 'Junior Designer', company_name: 'Old Co', duration: '2018 - 2020' },
+      ],
+    };
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockResponse(200, raw));
+
+    const outcome = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/jordan-park' });
+
+    expect(outcome.kind).toBe('found');
+    if (outcome.kind !== 'found') throw new Error('expected found');
+    expect(outcome.result.profile?.currentRole).toBe('Designer');
+    expect(outcome.result.profile?.pastRoles).toHaveLength(1);
+    expect(outcome.result.profile?.pastRoles[0]).toContain('Junior Designer');
+  });
+
   it('returns not_found on 404 and 400', async () => {
     jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockResponse(404));
     const r1 = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/nobody' });
@@ -82,16 +137,15 @@ describe('scrapingdogProvider', () => {
 
     const promise = scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/slow-index' });
 
-    // MAX_ATTEMPTS=6, RETRY_DELAY_MS=20_000 per the brief — advance past each retry sleep.
-    for (let i = 0; i < 6; i++) {
+    // MAX_ATTEMPTS=6, RETRY_DELAY_MS=20_000 — the loop sleeps only BETWEEN attempts
+    // (no sleep after the final 202), so 5 advances cover all 6 fetch attempts.
+    for (let i = 0; i < 5; i++) {
       await jest.advanceTimersByTimeAsync(20_000);
     }
 
     const outcome = await promise;
     expect(outcome).toEqual({ kind: 'retry_exhausted' });
     expect(fetchMock).toHaveBeenCalledTimes(6);
-
-    jest.useRealTimers();
   });
 
   it('returns provider_error on network failure and 5xx', async () => {
