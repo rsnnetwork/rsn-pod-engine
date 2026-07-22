@@ -253,6 +253,24 @@ describe('Auth Routes', () => {
 
       expect(res.status).toBe(401);
     });
+
+    it('should surface onboardingStatus and lastOnboardedAt from the user record', async () => {
+      const lastOnboardedAt = new Date('2026-07-01T12:00:00Z');
+      (identityService.getUserById as jest.Mock).mockResolvedValue({
+        ...mockUser,
+        onboardingStatus: 'update_required',
+        lastOnboardedAt,
+      });
+
+      const token = makeToken();
+      const res = await request(app)
+        .get('/auth/session')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.user.onboardingStatus).toBe('update_required');
+      expect(new Date(res.body.data.user.lastOnboardedAt).toISOString()).toBe(lastOnboardedAt.toISOString());
+    });
   });
 });
 

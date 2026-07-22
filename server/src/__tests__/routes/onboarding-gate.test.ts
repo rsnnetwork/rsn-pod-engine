@@ -198,6 +198,38 @@ describe('POST /auth/onboarding/complete', () => {
     expect(completeCall![1][0]).toBe(true);
   });
 
+  it('sets onboarding_status to completed and stamps last_onboarded_at in the same UPDATE (closes the loop trap)', async () => {
+    (dbQuery as jest.Mock)
+      .mockResolvedValueOnce({ rows: [{ status: 'active' }], rowCount: 1 })           // auth middleware
+      .mockResolvedValueOnce({ rows: [{ first_name: 'Jane', last_name: 'Doe' }], rowCount: 1 }) // existing names
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] })                                 // UPDATE users SET ...
+      .mockResolvedValueOnce({                                                          // SELECT for recompute
+        rows: [{
+          first_name: 'Jane', last_name: 'Doe', display_name: 'Jane Doe',
+          company: 'Acme Inc', job_title: 'Founder', industry: 'SaaS',
+          reasons_to_connect: ['mentorship', 'hiring'],
+        }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] });                                // UPDATE profile_complete
+
+    const res = await request(app)
+      .post('/auth/onboarding/complete')
+      .set('Authorization', `Bearer ${makeToken(freshUserId())}`)
+      .send(validBody);
+
+    expect(res.status).toBe(200);
+
+    // A status-keyed route guard (D2) redirects on onboarding_status, not just
+    // onboarding_completed — the form-fallback path must set BOTH in the same
+    // UPDATE or a user completing via the form stays 'not_started'/'update_required'
+    // and gets redirected back into onboarding forever.
+    const updateCall = (dbQuery as jest.Mock).mock.calls.find(c => /UPDATE users[\s\S]*onboarding_completed/.test(c[0]));
+    expect(updateCall).toBeDefined();
+    expect(updateCall![0]).toMatch(/onboarding_status\s*=\s*'completed'/i);
+    expect(updateCall![0]).toMatch(/last_onboarded_at\s*=\s*NOW\(\)/i);
+  });
+
   it('backfills first_name and last_name from displayName when missing', async () => {
     (dbQuery as jest.Mock).mockReset();
     (dbQuery as jest.Mock)

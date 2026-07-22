@@ -1,5 +1,7 @@
 // ─── User Domain Types ───────────────────────────────────────────────────────
 
+import type { OnboardingStatus } from './onboarding';
+
 export enum UserRole {
   SUPER_ADMIN = 'super_admin',
   ADMIN = 'admin',
@@ -73,6 +75,8 @@ export interface User {
   notifyMatches: boolean;
   profileVisible: boolean;
   inviteOptOutPublicEvents: boolean;
+  onboardingStatus?: OnboardingStatus;
+  lastOnboardedAt?: string | null;
   lastActiveAt: Date | null;
   createdAt: Date;
   updatedAt: Date;

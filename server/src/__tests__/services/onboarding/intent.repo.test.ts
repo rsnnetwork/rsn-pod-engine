@@ -30,7 +30,7 @@ jest.mock('../../../services/matching/platform-match.service', () => ({
   notifyMatchesOfNewUser: (...args: unknown[]) => mockNotifyMatchesOfNewUser(...args),
 }));
 
-import { saveIntentAndComplete } from '../../../services/onboarding/intent.repo';
+import { saveIntentAndComplete, markInProgress, savePartialIntent } from '../../../services/onboarding/intent.repo';
 import { ExtractedIntent } from '../../../services/onboarding/intent.schema';
 
 const baseIntent: ExtractedIntent = {
@@ -146,5 +146,72 @@ describe('saveIntentAndComplete: userLanguages -> users.languages promotion', ()
     // matching how company/industry/etc are handled when nothing new came through.
     expect(update!.params).toEqual(expect.arrayContaining([null]));
     expect(update!.sql).toMatch(/languages\s*=\s*COALESCE/i);
+  });
+});
+
+// ─── update_required must be treated like not_started (loop-trap closure) ──
+// D3's backfill sets existing users to 'update_required'. Every guard that
+// currently re-arms/advances a fresh ('not_started') user must do the same
+// for 'update_required', or those users get stuck forever.
+
+describe('markInProgress: accepts update_required as a starting state', () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+    mockQuery.mockResolvedValue({ rows: [] });
+  });
+
+  it('issues an UPDATE whose WHERE clause accepts both not_started and update_required', async () => {
+    await markInProgress('user-1');
+
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/onboarding_status\s*=\s*'in_progress'/i);
+    expect(sql).toMatch(/'not_started'/);
+    expect(sql).toMatch(/'update_required'/);
+    expect(params).toEqual(['user-1']);
+  });
+});
+
+describe('savePartialIntent: re-arms from update_required', () => {
+  const intent = { ...baseIntent };
+
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  it('does not bail out early when the current status is update_required', async () => {
+    // 1st call: guard SELECT onboarding_status -> 'update_required' (not 'completed',
+    // so the save must proceed, not return early).
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ onboarding_status: 'update_required' }] })
+      .mockResolvedValueOnce({ rows: [] }) // upsert into user_intent_profiles
+      .mockResolvedValueOnce({ rows: [] }); // UPDATE users SET onboarding_status = 'in_progress' ...
+
+    await savePartialIntent('user-1', intent, []);
+
+    // The upsert AND the re-arm UPDATE both ran — proves the guard didn't return early.
+    expect(mockQuery).toHaveBeenCalledTimes(3);
+  });
+
+  it('re-arms onboarding_status to in_progress from update_required (not just not_started)', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ onboarding_status: 'update_required' }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await savePartialIntent('user-1', intent, []);
+
+    const rearmCall = mockQuery.mock.calls.find((c: any[]) => /UPDATE users SET onboarding_status = 'in_progress'/i.test(c[0]));
+    expect(rearmCall).toBeDefined();
+    expect(rearmCall![0]).toMatch(/'not_started'/);
+    expect(rearmCall![0]).toMatch(/'update_required'/);
+  });
+
+  it('still bails out early when the current status is completed (does not clobber a finished profile)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ onboarding_status: 'completed' }] });
+
+    await savePartialIntent('user-1', intent, []);
+
+    expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 });

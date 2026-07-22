@@ -117,11 +117,15 @@ export async function getKnownProfileForHost(userId: string): Promise<{
   }
 }
 
-/** Best-effort: move a fresh user into 'in_progress' on their first host turn. */
+/**
+ * Best-effort: move a fresh ('not_started') or re-onboarding ('update_required',
+ * set by the D3 backfill for pre-existing users) member into 'in_progress' on
+ * their first host turn.
+ */
 export async function markInProgress(userId: string): Promise<void> {
   await query(
     `UPDATE users SET onboarding_status = 'in_progress'
-       WHERE id = $1 AND onboarding_status = 'not_started'`,
+       WHERE id = $1 AND onboarding_status IN ('not_started', 'update_required')`,
     [userId]
   );
 }
@@ -413,7 +417,7 @@ export async function savePartialIntent(
 
   await query(
     `UPDATE users SET onboarding_status = 'in_progress'
-       WHERE id = $1 AND onboarding_status IN ('not_started', 'in_progress')`,
+       WHERE id = $1 AND onboarding_status IN ('not_started', 'in_progress', 'update_required')`,
     [userId]
   );
 }

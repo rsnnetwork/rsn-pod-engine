@@ -145,6 +145,8 @@ router.get(
             role: user.role,
             profileComplete: user.profileComplete,
             onboardingCompleted: (user as any).onboardingCompleted,
+            onboardingStatus: user.onboardingStatus,
+            lastOnboardedAt: user.lastOnboardedAt,
             // Matching-profile free-text fields the profile page reads. getUserById
             // selects these; they must be surfaced here or the profile shows blank
             // even when onboarding (or the form) saved them.
@@ -323,6 +325,11 @@ router.post('/onboarding/complete', authenticate, async (req: Request, res: Resp
 
     // Persist the fields on the user record. We don't trust that PUT /users/me was
     // already called — saving them here guarantees the server is the source of truth.
+    // Also sets onboarding_status='completed' + last_onboarded_at: D2's route
+    // guard redirects on onboarding_status, not onboarding_completed — without
+    // this, a user completing via this fallback form would stay
+    // 'not_started'/'update_required' and get redirected back into onboarding
+    // forever (the loop trap).
     await query(
       `UPDATE users
          SET display_name = $2,
@@ -332,7 +339,9 @@ router.post('/onboarding/complete', authenticate, async (req: Request, res: Resp
              job_title = $6,
              industry = $7,
              reasons_to_connect = $8,
-             onboarding_completed = true
+             onboarding_completed = true,
+             onboarding_status = 'completed',
+             last_onboarded_at = NOW()
        WHERE id = $1`,
       [userId, displayName, firstName, lastName, company, jobTitle, industry, reasonsToConnect]
     );

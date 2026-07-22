@@ -84,6 +84,8 @@ export async function getUserById(id: string): Promise<User> {
             notify_matches AS "notifyMatches", profile_visible AS "profileVisible",
             invite_opt_out_public_events AS "inviteOptOutPublicEvents",
             onboarding_completed AS "onboardingCompleted",
+            onboarding_status AS "onboardingStatus",
+            last_onboarded_at AS "lastOnboardedAt",
             last_active_at AS "lastActiveAt",
             created_at AS "createdAt", updated_at AS "updatedAt"
      FROM users WHERE id = $1`,
