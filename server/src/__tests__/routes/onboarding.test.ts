@@ -65,6 +65,7 @@ jest.mock('../../services/onboarding/enrichment.repo', () => ({
   getCachedEnrichment: jest.fn(),
   saveEnrichedCandidate: jest.fn(),
   setEnrichmentState: jest.fn(),
+  getEnrichmentState: jest.fn(),
   clearEnrichment: jest.fn(),
   applyEnrichedToProfile: jest.fn(),
   __esModule: true,
@@ -122,6 +123,13 @@ beforeEach(() => {
   (chatbot.extractIntent as jest.Mock).mockResolvedValue({ userProfileSummary: 'partial' });
   (enrichRepo.getCachedEnrichment as jest.Mock).mockResolvedValue(null);
   (runEnrichment as jest.Mock).mockResolvedValue(undefined);
+  (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
+    status: 'none',
+    source: null,
+    error: null,
+    startedAt: null,
+    completedAt: null,
+  });
 });
 
 describe('GET /onboarding/status', () => {
@@ -138,6 +146,71 @@ describe('GET /onboarding/status', () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.data.status).toBe('completed');
+  });
+
+  it('carries the enrichment block and preserves existing fields', async () => {
+    (intentRepo.getOnboardingStatus as jest.Mock).mockResolvedValue('in_progress');
+    (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
+      status: 'found',
+      source: 'linkedin-provider',
+      error: null,
+      startedAt: '2026-07-01T00:00:00.000Z',
+      completedAt: '2026-07-01T00:00:05.000Z',
+    });
+    const res = await request(app)
+      .get('/onboarding/status')
+      .set('Authorization', `Bearer ${makeToken()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('in_progress');
+    expect(res.body.data.enrichment).toEqual({
+      status: 'found',
+      error: null,
+      startedAt: '2026-07-01T00:00:00.000Z',
+      completedAt: '2026-07-01T00:00:05.000Z',
+    });
+    // provider identity is internal — never exposed on this member-facing payload
+    expect(res.body.data.enrichment.source).toBeUndefined();
+  });
+
+  it.each([
+    ['searching', 'searching'],
+    ['found', 'found'],
+    ['partial', 'partial'],
+    ['none', 'not_found'],
+    ['not_found', 'not_found'],
+    ['failed', 'not_found'],
+  ])('maps enrichment.status=%s to opening=%s', async (enrichmentStatus, expectedOpening) => {
+    (intentRepo.getOnboardingStatus as jest.Mock).mockResolvedValue('not_started');
+    (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
+      status: enrichmentStatus,
+      source: null,
+      error: enrichmentStatus === 'failed' ? 'provider timeout' : null,
+      startedAt: null,
+      completedAt: null,
+    });
+    const res = await request(app)
+      .get('/onboarding/status')
+      .set('Authorization', `Bearer ${makeToken()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.enrichment.status).toBe(enrichmentStatus);
+    expect(res.body.data.opening).toBe(expectedOpening);
+  });
+
+  it('includes the enrichment error for a failed run (admin-visible; opening still reads as not_found)', async () => {
+    (intentRepo.getOnboardingStatus as jest.Mock).mockResolvedValue('not_started');
+    (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
+      status: 'failed',
+      source: null,
+      error: 'provider timeout',
+      startedAt: '2026-07-01T00:00:00.000Z',
+      completedAt: '2026-07-01T00:00:05.000Z',
+    });
+    const res = await request(app)
+      .get('/onboarding/status')
+      .set('Authorization', `Bearer ${makeToken()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.enrichment.error).toBe('provider timeout');
+    expect(res.body.data.opening).toBe('not_found');
   });
 });
 

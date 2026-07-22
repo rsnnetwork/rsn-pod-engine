@@ -7,11 +7,23 @@
 // share.
 
 /**
- * The host's fixed opening line. Rendered client-side (instant, no latency) and
- * referenced in the server host prompt so the model never repeats it.
+ * Enrichment lifecycle as surfaced to the member (mirrors the server-side
+ * EnrichmentStatus, collapsed at the boundary — see `openingFromEnrichment`
+ * mapping in the status route: none/not_found/failed all read as not_found).
  */
-export const ONBOARDING_OPENING_LINE =
-  "We believe you're here for a reason — do you mind sharing that reason with us?";
+export type OnboardingOpening = 'searching' | 'found' | 'partial' | 'not_found';
+
+/**
+ * The host's opening line for each enrichment state — server-derived and
+ * client-rendered verbatim (instant, no latency) as the chatbot's first
+ * message. Exact product-spec wording; do not edit.
+ */
+export const OPENINGS: Record<OnboardingOpening, string> = {
+  searching: 'I am retrieving your public profile. This normally takes less than a minute.',
+  found: 'I found your profile. Let me confirm what I understand about you.',
+  partial: 'I found part of your profile, but I need your help filling the gaps.',
+  not_found: 'I could not reliably identify your profile. Let us build it together.',
+} as const;
 
 /** Lifecycle of a user's onboarding conversation. Mirrors the SQL enum in 069. */
 export type OnboardingStatus =
@@ -84,9 +96,21 @@ export interface OnboardingIntent {
   profileStrength: ProfileStrength;
 }
 
+/** Enrichment lifecycle, as surfaced to the member (provider identity/`source` stays admin-only). */
+export type OnboardingEnrichmentStatus = 'none' | 'searching' | 'found' | 'partial' | 'not_found' | 'failed';
+
+export interface OnboardingEnrichmentState {
+  status: OnboardingEnrichmentStatus;
+  error: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
 /** GET /onboarding/status */
 export interface OnboardingStatusResponse {
   status: OnboardingStatus;
+  enrichment: OnboardingEnrichmentState;
+  opening: OnboardingOpening;
 }
 
 /** POST /onboarding/chat — one host turn. */

@@ -14,7 +14,14 @@ import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import { onboardingChatLimiter } from '../middleware/rateLimit';
-import { ApiResponse, OnboardingMessage, OnboardingConfirmedProfile, UserRole } from '@rsn/shared';
+import {
+  ApiResponse,
+  OnboardingMessage,
+  OnboardingConfirmedProfile,
+  OnboardingEnrichmentState,
+  OnboardingOpening,
+  UserRole,
+} from '@rsn/shared';
 import * as chatbot from '../services/onboarding/chatbot.service';
 import * as intentRepo from '../services/onboarding/intent.repo';
 import { inferKnownProfile } from '../services/onboarding/known';
@@ -76,14 +83,41 @@ function sendEnrichmentDisabled(res: Response): void {
   res.status(503).json(response);
 }
 
+// A failure and a genuine miss read identically to the member — the host still
+// says "let's build it together" either way. The distinction (why it failed)
+// stays admin-visible via enrichment.error, never surfaced in the `opening`.
+function openingFromEnrichment(status: OnboardingEnrichmentState['status']): OnboardingOpening {
+  switch (status) {
+    case 'searching':
+      return 'searching';
+    case 'found':
+      return 'found';
+    case 'partial':
+      return 'partial';
+    case 'none':
+    case 'not_found':
+    case 'failed':
+      return 'not_found';
+  }
+}
+
 // ─── GET /onboarding/status ──────────────────────────────────────────────────
 router.get(
   '/status',
   authenticate,
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const status = await intentRepo.getOnboardingStatus(req.user!.userId);
-      const response: ApiResponse = { success: true, data: { status } };
+      const userId = req.user!.userId;
+      const status = await intentRepo.getOnboardingStatus(userId);
+      const enrichmentState = await enrichRepo.getEnrichmentState(userId);
+      const enrichment: OnboardingEnrichmentState = {
+        status: enrichmentState.status,
+        error: enrichmentState.error,
+        startedAt: enrichmentState.startedAt,
+        completedAt: enrichmentState.completedAt,
+      };
+      const opening = openingFromEnrichment(enrichment.status);
+      const response: ApiResponse = { success: true, data: { status, enrichment, opening } };
       res.json(response);
     } catch (err) {
       next(err);
