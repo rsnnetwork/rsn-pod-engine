@@ -5,7 +5,7 @@
 // never re-asks what we already know. Plus a fixed first question and the JSON
 // extraction prompt. Style: calm human host, NO dashes.
 
-import { OnboardingMessage, OnboardingConfirmedProfile } from '@rsn/shared';
+import { OnboardingMessage, OnboardingConfirmedProfile, OnboardingEnrichmentStatus } from '@rsn/shared';
 
 /** Silent signal the host appends once it has everything and has summarised. */
 export const READY_TOKEN = '<<READY>>';
@@ -61,11 +61,24 @@ function knownBlock(p?: OnboardingConfirmedProfile, extra?: HostKnownExtra): str
   return facts + guidance;
 }
 
+// The honesty clause: the host never pretends it has data it does not have.
+// found/partial → we genuinely retrieved something, so confirm before building on
+// it. Everything else (not_found, none, failed, and searching, which should never
+// reach the chat but is treated the same if it somehow does) → we retrieved
+// nothing, so never imply a review happened. Exactly one of the two always
+// applies. No dashes (style rule).
+function honestyClause(enrichmentStatus?: OnboardingEnrichmentStatus): string {
+  return enrichmentStatus === 'found' || enrichmentStatus === 'partial'
+    ? '\n\nWe retrieved parts of their public profile before this chat. Confirm the facts above before you build on them, and never invent anything about them that is not in the known profile block.'
+    : '\n\nWe could not retrieve their profile before this chat. Never imply that we already reviewed anything about them. Build their profile together, entirely from what they tell you here.';
+}
+
 /** Build the host system prompt, weaving in the confirmed known profile. */
 export function buildHostSystemPrompt(
   profile?: OnboardingConfirmedProfile,
   wrapMode: 'none' | 'soft' | 'hard' = 'none',
-  extra?: HostKnownExtra
+  extra?: HostKnownExtra,
+  enrichmentStatus?: OnboardingEnrichmentStatus
 ): string {
   const wrap =
     wrapMode === 'hard'
@@ -79,7 +92,7 @@ Style rules (strict):
 1. Never use dashes of any kind in your messages. No em dash, no en dash, no hyphen used as a pause. Use a comma or a full stop instead.
 2. No generic or corporate phrasing (for example "your space for meaningful connections", "let us dive in", "I am here to help"). No filler. No long formal explanations.
 3. One question at a time. One or two short sentences per message.
-4. Always reply in English.${knownBlock(profile, extra)}
+4. Always reply in English.${knownBlock(profile, extra)}${honestyClause(enrichmentStatus)}
 
 The member has just been welcomed by name and has confirmed their basic details. They have already been asked their reason for joining and have answered it. You want a usable sense of a few more things, in order of importance:
   1. Who would be valuable for them to meet, and roughly why.

@@ -64,4 +64,48 @@ describe('onboarding prompts (v1.1)', () => {
     expect(none).not.toContain('asked to finish');
     expect(none).not.toContain('wants to finish');
   });
+
+  describe('honesty clause (driven by enrichment state)', () => {
+    const RETRIEVED = 'retrieved parts of their public profile';
+    const NOT_RETRIEVED = 'we could not retrieve their profile';
+
+    it('found: instructs the host to confirm retrieved facts and never invent beyond the known block', () => {
+      const p = buildHostSystemPrompt(undefined, 'none', undefined, 'found').toLowerCase();
+      expect(p).toContain(RETRIEVED);
+      expect(p).toContain('never invent');
+      expect(p).not.toContain(NOT_RETRIEVED);
+    });
+
+    it('partial: gets the same retrieved-profile honesty clause as found', () => {
+      const p = buildHostSystemPrompt(undefined, 'none', undefined, 'partial').toLowerCase();
+      expect(p).toContain(RETRIEVED);
+      expect(p).not.toContain(NOT_RETRIEVED);
+    });
+
+    it.each([['not_found'], ['none'], ['failed'], ['searching'], [undefined]])(
+      'treats %s as not retrieved: never implies a review happened, builds the profile together from answers',
+      (status) => {
+        const p = buildHostSystemPrompt(undefined, 'none', undefined, status as any).toLowerCase();
+        expect(p).toContain(NOT_RETRIEVED);
+        expect(p).toContain('build their profile together');
+        expect(p).not.toContain(RETRIEVED);
+      }
+    );
+
+    it('the two honesty clauses are mutually exclusive', () => {
+      const found = buildHostSystemPrompt(undefined, 'none', undefined, 'found').toLowerCase();
+      const notFound = buildHostSystemPrompt(undefined, 'none', undefined, 'not_found').toLowerCase();
+      expect(found).toContain(RETRIEVED);
+      expect(found).not.toContain(NOT_RETRIEVED);
+      expect(notFound).toContain(NOT_RETRIEVED);
+      expect(notFound).not.toContain(RETRIEVED);
+    });
+
+    it('the honesty clause text contains no dashes (style rule)', () => {
+      const found = buildHostSystemPrompt(undefined, 'none', undefined, 'found');
+      const notFound = buildHostSystemPrompt(undefined, 'none', undefined, 'not_found');
+      expect(EM_OR_EN_DASH.test(found)).toBe(false);
+      expect(EM_OR_EN_DASH.test(notFound)).toBe(false);
+    });
+  });
 });

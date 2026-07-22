@@ -262,14 +262,21 @@ router.post(
       const wrapMode: 'none' | 'soft' | 'hard' =
         req.body.hardFinish === true ? 'hard' : req.body.finish === true ? 'soft' : 'none';
       // Everything we already know (LinkedIn enrichment + saved fields) so the host
-      // can answer "who am I", never re-ask, and personalise.
-      const hostKnown = await Promise.resolve(intentRepo.getKnownProfileForHost(userId)).catch(() => undefined);
+      // can answer "who am I", never re-ask, and personalise. Also the enrichment
+      // state itself, so the honesty clause in the system prompt can tell the host
+      // whether we actually retrieved anything (never pretend we did when we did not).
+      const [hostKnown, enrichmentState] = await Promise.all([
+        Promise.resolve(intentRepo.getKnownProfileForHost(userId)).catch(() => undefined),
+        enrichRepo
+          .getEnrichmentState(userId)
+          .catch(() => ({ status: 'failed' as const, source: null, error: null, startedAt: null, completedAt: null })),
+      ]);
       // Reply is converse ONLY — kept fast. The live card update runs as a separate
       // call (POST /onboarding/profile) so a slow extraction can never delay or cap
       // the reply, and the card fills reliably on every turn.
       let turn;
       try {
-        turn = await chatbot.converse(messages, profile, wrapMode, hostKnown);
+        turn = await chatbot.converse(messages, profile, wrapMode, hostKnown, enrichmentState.status);
       } catch (err) {
         // LLM down (exhausted credits, revoked key, outage) → 503 LLM_DISABLED so
         // the client falls back to the form. 2 Jul: prod credits ran out and this

@@ -87,6 +87,7 @@ jest.mock('../../services/onboarding/enrichment.orchestrator', () => {
 import { query as dbQuery } from '../../db';
 import config from '../../config';
 import onboardingRoutes from '../../routes/onboarding';
+import { buildHostSystemPrompt } from '../../services/onboarding/prompts';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 import * as chatbot from '../../services/onboarding/chatbot.service';
 import * as intentRepo from '../../services/onboarding/intent.repo';
@@ -358,6 +359,57 @@ describe('POST /onboarding/chat', () => {
     await new Promise((r) => setImmediate(r));
     expect(chatbot.extractIntent).not.toHaveBeenCalled();
     expect(intentRepo.savePartialIntent).not.toHaveBeenCalled();
+  });
+
+  describe('honesty clause: enrichment state reaches the host system prompt', () => {
+    it.each([
+      ['found', 'retrieved parts of their public profile'],
+      ['partial', 'retrieved parts of their public profile'],
+      ['not_found', 'we could not retrieve their profile'],
+      ['none', 'we could not retrieve their profile'],
+      ['failed', 'we could not retrieve their profile'],
+      ['searching', 'we could not retrieve their profile'],
+    ])('enrichment status %s drives converse toward the "%s" honesty clause', async (status, expectedClause) => {
+      (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+      (chatbot.converse as jest.Mock).mockResolvedValue({ reply: 'ok', ready: false });
+      (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
+        status,
+        source: null,
+        error: null,
+        startedAt: null,
+        completedAt: null,
+      });
+
+      await request(app)
+        .post('/onboarding/chat')
+        .set('Authorization', `Bearer ${makeToken()}`)
+        .send(body);
+
+      expect(chatbot.converse).toHaveBeenCalledTimes(1);
+      const args = (chatbot.converse as jest.Mock).mock.calls[0];
+      expect(args[4]).toBe(status);
+      // Feed the same args converse received into the real (unmocked) prompt
+      // builder — proves the state the route passed actually resolves to the
+      // right, and only the right, honesty clause.
+      const prompt = buildHostSystemPrompt(args[1], args[2], args[3], args[4]).toLowerCase();
+      expect(prompt).toContain(expectedClause);
+    });
+
+    it('a failed enrichment lookup degrades to the not-retrieved clause rather than 500ing the chat', async () => {
+      (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+      (chatbot.converse as jest.Mock).mockResolvedValue({ reply: 'ok', ready: false });
+      (enrichRepo.getEnrichmentState as jest.Mock).mockRejectedValue(new Error('db down'));
+
+      const res = await request(app)
+        .post('/onboarding/chat')
+        .set('Authorization', `Bearer ${makeToken()}`)
+        .send(body);
+
+      expect(res.status).toBe(200);
+      const args = (chatbot.converse as jest.Mock).mock.calls[0];
+      const prompt = buildHostSystemPrompt(args[1], args[2], args[3], args[4]).toLowerCase();
+      expect(prompt).toContain('we could not retrieve their profile');
+    });
   });
 });
 

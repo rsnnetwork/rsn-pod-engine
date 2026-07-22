@@ -11,7 +11,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import config from '../../config';
-import { OnboardingMessage, OnboardingConfirmedProfile } from '@rsn/shared';
+import { OnboardingMessage, OnboardingConfirmedProfile, OnboardingEnrichmentStatus } from '@rsn/shared';
 import { IntentSchema, INTENT_JSON_SCHEMA, ExtractedIntent } from './intent.schema';
 import {
   buildHostSystemPrompt,
@@ -47,13 +47,14 @@ export async function converse(
   messages: OnboardingMessage[],
   profile?: OnboardingConfirmedProfile,
   wrapMode: 'none' | 'soft' | 'hard' = 'none',
-  extra?: HostKnownExtra
+  extra?: HostKnownExtra,
+  enrichmentStatus?: OnboardingEnrichmentStatus
 ): Promise<{ reply: string; ready: boolean }> {
   const anthropic = getClient();
   const resp = await anthropic.messages.create({
     model: config.onboardingChatModel,
     max_tokens: 1024,
-    system: buildHostSystemPrompt(profile, wrapMode, extra),
+    system: buildHostSystemPrompt(profile, wrapMode, extra, enrichmentStatus),
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
   });
 
