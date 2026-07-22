@@ -6,13 +6,15 @@
 //   2. Invited users (new signups via invite) got intercepted before they
 //      could enter the event/lobby
 //
-// Post-fix:
-//   - Server: invited users are created with onboarding_completed=TRUE so
-//     they bypass any client-side gate and can join their event immediately
-//   - Client: ProtectedRoute checks ONLY auth (not onboarding); a non-
-//     blocking banner in AppLayout nudges incomplete users instead
-//   - Feature flag VITE_LEGACY_ONBOARDING_GATE=true restores the old gate
-//     for emergency rollback (still exempts /invite/:code, the documented bug)
+// Post-fix (T1-2): ProtectedRoute checked ONLY auth; a non-blocking banner
+// in AppLayout nudged incomplete users instead. The legacy blocking gate was
+// kept behind VITE_LEGACY_ONBOARDING_GATE for emergency rollback.
+//
+// D2 supersedes T1-2's flag-gated legacy block with an always-on gate keyed
+// on `onboarding_status` (see shared/src/types/onboarding.ts and D1). The
+// legacy flag and its block are deleted entirely — see
+// client/src/components/layout/ProtectedRoute.tsx and
+// e2e/tests/reonboarding-gate.spec.ts for the new contract.
 
 import * as nodeFs from 'fs';
 import * as nodePath from 'path';
@@ -26,24 +28,34 @@ function readServer(rel: string): string {
 }
 
 describe('T1-2 — onboarding gate decoupled from ProtectedRoute', () => {
-  describe('client/src/components/layout/ProtectedRoute.tsx', () => {
+  describe('client/src/components/layout/ProtectedRoute.tsx (D2: always-on status gate)', () => {
     const src = readClient('components/layout/ProtectedRoute.tsx');
 
-    it('the legacy onboarding gate runs ONLY when VITE_LEGACY_ONBOARDING_GATE=true', () => {
-      expect(src).toMatch(/import\.meta\.env\.VITE_LEGACY_ONBOARDING_GATE\s*===\s*['"]true['"]/);
+    it('the legacy env-flagged gate is gone — no VITE_LEGACY_ONBOARDING_GATE anywhere', () => {
+      expect(src).not.toMatch(/VITE_LEGACY_ONBOARDING_GATE/);
     });
 
-    it('the gate exemption now includes /invite/:code (was missing pre-fix)', () => {
-      // Even in the legacy code path, /invite/:code must be exempt — this was the documented bug
-      const legacyBlock = src.slice(src.indexOf('VITE_LEGACY_ONBOARDING_GATE'));
-      expect(legacyBlock).toMatch(/isInviteLanding/);
-      expect(legacyBlock).toMatch(/location\.pathname\.startsWith\(['"]\/invite\/['"]\)/);
+    it('gates on user.onboardingStatus, redirecting to /onboarding unless completed', () => {
+      expect(src).toMatch(/user\.onboardingStatus/);
+      expect(src).toMatch(/status\s*!==\s*undefined\s*&&\s*status\s*!==\s*['"]completed['"]/);
     });
 
-    it('the default code path returns children without onboarding redirect', () => {
-      // After the legacy block, no other onboardingCompleted check
-      const afterLegacy = src.slice(src.lastIndexOf('VITE_LEGACY_ONBOARDING_GATE'));
-      expect(afterLegacy).toMatch(/return <>\{children\}<\/>/);
+    it('undefined onboardingStatus fails open (no redirect for a stale cached session)', () => {
+      // needsOnboarding must require status !== undefined — an old cached
+      // payload without the field must never trigger the redirect.
+      expect(src).toMatch(/status\s*!==\s*undefined/);
+    });
+
+    it('exempts /onboarding itself, /invite/:code, and live-session paths', () => {
+      expect(src).toMatch(/location\.pathname === ['"]\/onboarding['"]/);
+      expect(src).toMatch(/location\.pathname\.startsWith\(['"]\/invite\/['"]\)/);
+      expect(src).toMatch(/location\.pathname\.startsWith\(['"]\/session\/['"]\)/);
+      expect(src).toMatch(/location\.pathname\.includes\(['"]\/live['"]\)/);
+    });
+
+    it('has no role exemption — no role/admin check gates the redirect', () => {
+      expect(src).not.toMatch(/role\s*===\s*['"]admin['"]/);
+      expect(src).not.toMatch(/UserRole\.(ADMIN|SUPER_ADMIN)/);
     });
   });
 

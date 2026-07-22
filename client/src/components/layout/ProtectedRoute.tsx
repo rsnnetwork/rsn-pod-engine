@@ -4,22 +4,19 @@ import { PageLoader } from '@/components/ui/Spinner';
 import { type ReactNode } from 'react';
 
 /**
- * T1-2 (Issue 1) — auth-only gate. The onboarding redirect that used to
- * live here was over-broad: it forced returning users with stale
- * `onboarding_completed=false` flags to re-fill their profile, AND it
- * intercepted /invite/:code → onboarding redirects that broke the
- * "click invite, land in event" UX.
+ * D2 — always-on re-onboarding gate, keyed on `user.onboardingStatus`
+ * (D1: GET /auth/session now returns this; see shared/src/types/user.ts).
+ * Supersedes T1-2's flag-gated legacy block (env-flagged, off by default),
+ * which is deleted entirely — no rollback flag, this gate is always on.
  *
- * Now ProtectedRoute checks ONLY auth. Onboarding is invited via:
- *   1. New magic-link signups land on /auth/verify → /onboarding directly
- *      (legacy path, unchanged for that specific flow)
- *   2. Returning users with incomplete profiles see a non-blocking banner
- *      in AppLayout — they can use the app, complete profile when ready
- *   3. Invited users (created with onboarding_completed=true server-side)
- *      go straight into the event/lobby
- *
- * Rollback flag: VITE_LEGACY_ONBOARDING_GATE=true restores the pre-T1-2
- * blocking gate. Default off (new behaviour).
+ *   - Any status other than 'completed' gates the user to /onboarding,
+ *     except the exempt paths below (deliberately no role exemption —
+ *     admins go through onboarding too, they're the first test cohort).
+ *   - `undefined` (a stale cached session payload mid-deploy, from before
+ *     D1 shipped) fails OPEN — never lock a client out over a field it
+ *     doesn't know about yet.
+ *   - Exempt: /onboarding itself (no redirect loop), /invite/:code (accept
+ *     flow must complete), and live-event session paths (/session/:id/live).
  */
 export default function ProtectedRoute({ children }: { children?: ReactNode }) {
   const { user, isLoading } = useAuthStore();
@@ -28,19 +25,15 @@ export default function ProtectedRoute({ children }: { children?: ReactNode }) {
   if (isLoading) return <div className="h-screen w-screen bg-white flex items-center justify-center"><PageLoader /></div>;
   if (!user) return <Navigate to="/welcome" state={{ from: location }} replace />;
 
-  // Legacy gate (env-flagged for emergency rollback only)
-  if (import.meta.env.VITE_LEGACY_ONBOARDING_GATE === 'true') {
-    const isOnboarding = location.pathname === '/onboarding';
-    const isLiveSession = location.pathname.startsWith('/session/') && location.pathname.includes('/live');
-    const isInviteLanding = location.pathname.startsWith('/invite/');
-    const onboardingCompleted = (user as any).onboardingCompleted === true;
-    // Even in legacy mode, exempt /invite/:code so the invite-acceptance
-    // flow can complete (this was the documented bug from the 22nd April
-    // review — old gate intercepted invite landings too).
-    if (!onboardingCompleted && !isOnboarding && !isLiveSession && !isInviteLanding) {
-      const safeRedirect = location.pathname.startsWith('/onboarding') ? '/' : location.pathname;
-      return <Navigate to={`/onboarding?redirect=${encodeURIComponent(safeRedirect)}`} replace />;
-    }
+  const status = user.onboardingStatus;
+  const needsOnboarding = status !== undefined && status !== 'completed';
+  const exempt =
+    location.pathname === '/onboarding' ||
+    location.pathname.startsWith('/invite/') ||
+    (location.pathname.startsWith('/session/') && location.pathname.includes('/live'));
+  if (needsOnboarding && !exempt) {
+    const safeRedirect = location.pathname.startsWith('/onboarding') ? '/' : location.pathname;
+    return <Navigate to={`/onboarding?redirect=${encodeURIComponent(safeRedirect)}`} replace />;
   }
 
   return <>{children}</>;
