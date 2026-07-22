@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowUp, Check, ChevronDown, Pencil, RotateCcw, Sparkles, Loader2 } from 'lucide-react';
+import { ArrowUp, Check, ChevronDown, Pencil, RotateCcw, Sparkles } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { Button } from '@/components/ui/Button';
@@ -11,22 +11,35 @@ import {
   type OnboardingKnownProfile,
   type OnboardingConfirmedProfile,
   type OnboardingResume,
+  type OnboardingOpening,
+  type OnboardingStatusResponse,
+  OPENINGS,
 } from '@rsn/shared';
 import OnboardingPage from './OnboardingPage';
 import HostPresence from './HostPresence';
 
-// v1.1 staged onboarding: welcome by name + confirm what we already know, then a
-// short chat (the host knows the confirmed profile so it never re-asks), then a
-// summary and save. The first chat question mirrors FIRST_QUESTION on the server.
+// v1.2 truthful, state-driven onboarding: welcome by name, wait for the
+// background enrichment job (server-owned, no client retries), then either
+// confirm what it found or build the profile together in chat — the opening
+// line always comes from OPENINGS[opening] (the server-derived enrichment
+// state, `@rsn/shared`), never a client guess. The follow-up question after
+// that opening line still depends on known?.reason (skip it when we already
+// have one) — that branch is orthogonal to the opening and unchanged.
 // No dashes anywhere (style rule). If the LLM is down we fall back to the form.
 const FIRST_QUESTION =
   "Reason works best when we understand why you're here. What is your reason for joining? One sentence is enough.";
 // When the member already gave their reason (e.g. in a join request), don't re-ask it —
 // acknowledge that we've looked them up, then move straight to what matters for matching.
-const OPENING_WITH_REASON =
+const REASON_KNOWN_QUESTION =
   "I've had a quick look at your background so we can spend less time on basics, and thanks for sharing why you're here. To match you well, who would be most valuable for you to meet, and roughly why? If I've got anything wrong, just tell me.";
 
-type Stage = 'loading' | 'resume' | 'confirm' | 'chat';
+// How often the searching stage polls GET /onboarding/status, and the belt
+// timeout (server will have terminal-ed long before this) that forces the
+// not_found path if polling never resolves.
+const STATUS_POLL_MS = 2500;
+const SEARCH_BELT_TIMEOUT_MS = 3 * 60 * 1000;
+
+type Stage = 'loading' | 'searching' | 'resume' | 'confirm' | 'chat';
 
 function HostBubble({ text }: { text: string }) {
   return (
@@ -281,11 +294,12 @@ export default function ChatbotOnboarding() {
   const [confirming, setConfirming] = useState(false);
   const [fallback, setFallback] = useState(false);
   const [finishAttempts, setFinishAttempts] = useState(0);
-  // Profile enrichment — pull public profile data + populate the card the user watches.
-  const [enriching, setEnriching] = useState(false);
-  const [enriched, setEnriched] = useState(false);
-  const [candidate, setCandidate] = useState<any | null>(null); // no-LinkedIn "is this you?" result
-  const enrichTriggered = useRef(false);
+  // Truthful enrichment outcome, read from GET /onboarding/status while in the
+  // 'searching' stage — the single source of truth for the opening line and
+  // for whether the confirm card shows at all (see settleOpening below). The
+  // server job owns retries; the client only ever reads this state.
+  const [opening, setOpening] = useState<OnboardingOpening | null>(null);
+  const enriched = opening === 'found' || opening === 'partial';
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -299,8 +313,10 @@ export default function ChatbotOnboarding() {
     'there';
   const welcomeLine = (known?.previousEvents ?? 0) > 0 ? 'Welcome back to Reason' : 'Welcome to Reason';
 
-  // Fetch what we already know + any in-progress conversation, then route to the
-  // right opening stage (resume / confirm / chat).
+  // Fetch what we already know + any in-progress conversation, then route to
+  // 'resume' if one exists, otherwise to 'searching' — the enrichment outcome
+  // (not raw "do we know anything") now decides confirm vs. chat, so every
+  // fresh arrival waits on the status poll below before that decision is made.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -310,7 +326,6 @@ export default function ChatbotOnboarding() {
       ]);
       if (cancelled) return;
 
-      let haveKnown = false;
       if (knownRes.status === 'fulfilled') {
         const k = knownRes.value.data.data as OnboardingKnownProfile;
         setKnown(k);
@@ -327,7 +342,6 @@ export default function ChatbotOnboarding() {
           wantsToMeet: [],
           offers: [],
         });
-        haveKnown = true;
       }
 
       // Offer to resume only when there's a real in-progress exchange.
@@ -341,33 +355,93 @@ export default function ChatbotOnboarding() {
         }
       }
 
-      if (haveKnown) {
-        setStage('confirm');
-      } else {
-        setMessages([{ role: 'assistant', content: known?.reason ? OPENING_WITH_REASON : FIRST_QUESTION}]);
-        setStage('chat');
-      }
+      setStage('searching');
     })();
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // Auto-enrich once we know the member: if they already have a LinkedIn on file,
-  // pull their profile immediately so the card populates as they arrive.
-  useEffect(() => {
-    if (!known || enrichTriggered.current) return;
-    if (known.linkedin) {
-      // LinkedIn on file → high-confidence auto-fill.
-      enrichTriggered.current = true;
-      void runEnrich(known.linkedin);
-    } else if (known.name && (known.company || known.country)) {
-      // No LinkedIn → search by name + company + country, then ask "is this you?"
-      enrichTriggered.current = true;
-      void runDiscover();
+  // Build the messages an opening starts with: the truthful OPENINGS[opening]
+  // line (server-derived, verbatim), followed by the existing question flow —
+  // known?.reason still decides whether the reason question is skipped, which
+  // stays orthogonal to the opening itself.
+  function openingMessages(op: OnboardingOpening): OnboardingMessage[] {
+    return [
+      { role: 'assistant', content: OPENINGS[op] },
+      { role: 'assistant', content: known?.reason ? REASON_KNOWN_QUESTION : FIRST_QUESTION },
+    ];
+  }
+
+  // Land on the right stage for a resolved (non-searching) opening: found/partial
+  // keep the confirm card before chat; not_found skips it entirely.
+  function settleOpening(op: OnboardingOpening) {
+    setOpening(op);
+    if (op === 'found' || op === 'partial') {
+      setStage('confirm');
+    } else {
+      setMessages(openingMessages(op));
+      setStage('chat');
     }
+  }
+
+  // The 'searching' stage: poll GET /onboarding/status every 2.5s until the
+  // opening resolves away from 'searching'. Fires the enrichment trigger
+  // exactly once (only when a LinkedIn URL is on file and no job has ever
+  // run) — the background job owns every retry from here; the client never
+  // times out a request or swallows a 503 itself. A 3-minute belt forces the
+  // not_found path if polling somehow never resolves (server will have
+  // terminal-ed long before this fires).
+  useEffect(() => {
+    if (stage !== 'searching') return;
+    let cancelled = false;
+    let settled = false;
+    let pollInFlight = false;
+    let enrichFired = false;
+    const startedAtMs = Date.now();
+
+    function finish(op: OnboardingOpening) {
+      if (cancelled || settled) return;
+      settled = true;
+      settleOpening(op);
+    }
+
+    async function poll() {
+      if (cancelled || settled || pollInFlight) return;
+      pollInFlight = true;
+      try {
+        const res = await api.get('/onboarding/status');
+        if (cancelled || settled) return;
+        const data = res.data.data as OnboardingStatusResponse;
+
+        if (!enrichFired && data.enrichment.status === 'none' && known?.linkedin) {
+          enrichFired = true;
+          api.post('/onboarding/enrich', { linkedinUrl: known.linkedin }).catch(() => {});
+        }
+
+        if (data.opening !== 'searching') {
+          finish(data.opening);
+          return;
+        }
+      } catch {
+        // Transient network hiccup — keep polling; the belt timeout below
+        // still guarantees this stage never hangs forever.
+      } finally {
+        pollInFlight = false;
+      }
+      if (Date.now() - startedAtMs >= SEARCH_BELT_TIMEOUT_MS) {
+        finish('not_found');
+      }
+    }
+
+    void poll();
+    const intervalId = setInterval(poll, STATUS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [known]);
+  }, [stage]);
 
   // Keep the chat transcript pinned to the latest message.
   useEffect(() => {
@@ -400,98 +474,6 @@ export default function ChatbotOnboarding() {
     api.post('/onboarding/enrich/apply', f, { timeout: 20000 }).catch(() => {});
   }
 
-  // Pull the member's public profile (their LinkedIn URL if we have one, else
-  // name + company + country) and fill the card they're watching. Runs in the
-  // BACKGROUND — the member can keep going; the result lands when it's ready.
-  async function runEnrich(linkedinUrl?: string) {
-    if (enriching) return;
-    setEnriching(true);
-    try {
-      const res = await api.post('/onboarding/enrich', { linkedinUrl: linkedinUrl || draft.linkedin || null }, { timeout: 70000 });
-      const r = res.data.data as { profile: any; confidence: number } | null;
-      if (r?.profile && r.confidence >= 0.35) {
-        const p = r.profile;
-        setDraft((d) => ({
-          ...d,
-          company: d.company || p.currentCompany || '',
-          role: d.role || p.currentRole || p.headline || '',
-          industry: d.industry || p.industry || '',
-          location: d.location || p.location || '',
-          about: d.about || p.summary || '',
-          linkedin: d.linkedin || p.linkedinUrl || linkedinUrl || '',
-          // Prefill interests/reasons-to-meet from LinkedIn; chat answers merge on top (prioritized).
-          wantsToMeet: d.wantsToMeet.length ? d.wantsToMeet : (Array.isArray(p.likelyWantsToMeet) ? p.likelyWantsToMeet : []),
-          offers: d.offers.length ? d.offers : (Array.isArray(p.likelyOffers) ? p.likelyOffers : []),
-        }));
-        setEnriched(true);
-        // Background-save so the profile is populated even if they've moved to chat.
-        applyFields({
-          jobTitle: p.currentRole || p.headline || null,
-          company: p.currentCompany || null,
-          industry: p.industry || null,
-          location: p.location || null,
-          bio: p.summary || null,
-          linkedin: p.linkedinUrl || linkedinUrl || null,
-        });
-      } else {
-        addToast("We couldn't find a confident match — fill in what you can.", 'info');
-      }
-    } catch (err: any) {
-      if (err?.response?.status !== 503) addToast('Auto-fill is unavailable right now.', 'error');
-    } finally {
-      setEnriching(false);
-    }
-  }
-
-  // No-LinkedIn discovery: search by name + company + country and, because this is
-  // lower-confidence than a LinkedIn match, present the result as "is this you?"
-  // rather than filling silently.
-  async function runDiscover() {
-    if (enriching) return;
-    setEnriching(true);
-    try {
-      const res = await api.post('/onboarding/enrich', { linkedinUrl: null }, { timeout: 70000 });
-      const r = res.data.data as { profile: any; confidence: number; foundLinkedinUrl?: string } | null;
-      if (r?.profile && r.confidence >= 0.35) setCandidate(r);
-      // Low confidence / no match → stay quiet; they can fill in or add a LinkedIn.
-    } catch {
-      /* best-effort — never block onboarding */
-    } finally {
-      setEnriching(false);
-    }
-  }
-
-  // Member confirmed the discovered candidate is them → fill the card from it.
-  function acceptCandidate() {
-    const p = candidate?.profile;
-    if (!p) return;
-    setDraft((d) => ({
-      ...d,
-      company: d.company || p.currentCompany || '',
-      role: d.role || p.currentRole || p.headline || '',
-      industry: d.industry || p.industry || '',
-      location: d.location || p.location || '',
-      about: d.about || p.summary || '',
-      linkedin: d.linkedin || p.linkedinUrl || candidate?.foundLinkedinUrl || '',
-      wantsToMeet: d.wantsToMeet.length ? d.wantsToMeet : (Array.isArray(p.likelyWantsToMeet) ? p.likelyWantsToMeet : []),
-      offers: d.offers.length ? d.offers : (Array.isArray(p.likelyOffers) ? p.likelyOffers : []),
-    }));
-    setEnriched(true);
-    applyFields({
-      jobTitle: p.currentRole || p.headline || null,
-      company: p.currentCompany || null,
-      industry: p.industry || null,
-      location: p.location || null,
-      bio: p.summary || null,
-      linkedin: p.linkedinUrl || candidate?.foundLinkedinUrl || null,
-    });
-    setCandidate(null);
-  }
-
-  function rejectCandidate() {
-    setCandidate(null);
-  }
-
   function startChat() {
     // Persist whatever the member confirmed/edited (background-safe).
     applyFields({
@@ -503,7 +485,7 @@ export default function ChatbotOnboarding() {
       linkedin: draft.linkedin.trim() || null,
     });
     setEditing(false);
-    setMessages([{ role: 'assistant', content: known?.reason ? OPENING_WITH_REASON : FIRST_QUESTION}]);
+    setMessages(openingMessages(opening || 'not_found'));
     setStage('chat');
     requestAnimationFrame(() => inputRef.current?.focus());
   }
@@ -511,17 +493,19 @@ export default function ChatbotOnboarding() {
   function resumeChat() {
     // The saved transcript starts at the member's first reply; the opening
     // question is client-only, so prepend it for display.
-    setMessages([{ role: 'assistant', content: known?.reason ? OPENING_WITH_REASON : FIRST_QUESTION}, ...resumeMessages]);
+    setMessages([{ role: 'assistant', content: known?.reason ? REASON_KNOWN_QUESTION : FIRST_QUESTION}, ...resumeMessages]);
     setStage('chat');
     requestAnimationFrame(() => inputRef.current?.focus());
   }
 
   function startOver() {
+    // The 'resume' stage returns before the searching poll ever runs (see the
+    // mount effect above), so a fresh member choosing to start over still
+    // needs the enrichment-gated confirm/chat decision — route back through
+    // 'searching' rather than guessing from raw `known` presence.
     setResumeMessages([]);
-    setStage(known ? 'confirm' : 'chat');
-    if (!known) {
-      setMessages([{ role: 'assistant', content: FIRST_QUESTION }]);
-    }
+    setOpening(null);
+    setStage('searching');
   }
 
   function autoGrow() {
@@ -659,6 +643,35 @@ export default function ChatbotOnboarding() {
     );
   }
 
+  // Waiting on the background enrichment job (GET /onboarding/status polling,
+  // see the effect above). Calm, non-interactive — no dead ends, it always
+  // resolves on its own (found/partial/not_found), belt-timed at 3 minutes.
+  if (stage === 'searching') {
+    return (
+      <div className={shellClass} style={{ height: '100dvh' }}>
+        <div
+          className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-8"
+          style={{ paddingTop: 'max(env(safe-area-inset-top), 2rem)', paddingBottom: 'max(env(safe-area-inset-bottom), 2rem)' }}
+        >
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.45 }}
+            className="flex w-full max-w-md flex-col items-center gap-5 text-center"
+          >
+            <HostPresence size={104} state="thinking" />
+            <div>
+              <h1 className="font-display text-2xl font-semibold leading-snug text-[#1a1a2e]">
+                {welcomeLine}, {firstName}.
+              </h1>
+              <p className="mt-2 text-sm text-gray-500">{OPENINGS.searching}</p>
+            </div>
+          </motion.div>
+        </div>
+      </div>
+    );
+  }
+
   if (stage === 'resume') {
     return (
       <div className={shellClass} style={{ height: '100dvh' }}>
@@ -745,56 +758,15 @@ export default function ChatbotOnboarding() {
               <ConfirmRow label="Industry" value={draft.industry} editing={editing} placeholder="Your industry" onChange={(v) => setDraft((d) => ({ ...d, industry: v }))} />
               <ConfirmRow label="About" value={draft.about} editing={editing} placeholder="A short professional summary" last onChange={(v) => setDraft((d) => ({ ...d, about: v }))} />
             </div>
-            {enriching ? (
-              <div className="flex w-full items-center justify-center gap-2 text-sm text-rsn-red">
-                <Loader2 className="h-4 w-4 animate-spin" /> We're getting your details — your card will be ready shortly. Feel free to start the chat meanwhile.
-              </div>
-            ) : candidate?.profile ? (
-              <div className="w-full rounded-2xl border-2 border-rsn-red/30 bg-rsn-red-light/20 p-4 text-left">
-                <div className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-[#1a1a2e]">
-                  <Sparkles className="h-4 w-4 text-rsn-red" /> Is this you?
-                </div>
-                <div className="font-semibold text-[#1a1a2e]">{candidate.profile.fullName || draft.name}</div>
-                {candidate.profile.headline && <div className="text-sm text-gray-600">{candidate.profile.headline}</div>}
-                {(candidate.profile.currentRole || candidate.profile.currentCompany) && (
-                  <div className="mt-0.5 text-sm text-gray-600">
-                    {[candidate.profile.currentRole, candidate.profile.currentCompany].filter(Boolean).join(' at ')}
-                  </div>
-                )}
-                {candidate.profile.location && <div className="text-xs text-gray-500">{candidate.profile.location}</div>}
-                {candidate.foundLinkedinUrl && (
-                  <a
-                    href={candidate.foundLinkedinUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-1 block break-all text-xs text-rsn-red underline"
-                  >
-                    {candidate.foundLinkedinUrl}
-                  </a>
-                )}
-                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                  <Button onClick={acceptCandidate} className="min-h-[44px] flex-1 justify-center text-sm">
-                    <Check className="mr-1.5 h-4 w-4" /> Yes, that's me
-                  </Button>
-                  <Button variant="secondary" onClick={rejectCandidate} className="min-h-[44px] flex-1 justify-center text-sm">
-                    Not me
-                  </Button>
-                </div>
-              </div>
-            ) : enriched ? (
-              <div className="flex w-full items-center justify-center gap-1.5 text-xs text-gray-500">
-                <Sparkles className="h-3.5 w-3.5 text-rsn-red" /> Filled from your public profile — edit anything that's off.
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => runEnrich(draft.linkedin)}
-                disabled={!draft.linkedin.trim()}
-                className="flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-xl border border-rsn-red/30 px-3 text-sm font-medium text-rsn-red transition-colors hover:bg-rsn-red-light/40 disabled:opacity-40"
-              >
-                <Sparkles className="h-4 w-4" /> {draft.linkedin.trim() ? 'Auto-fill from my LinkedIn' : 'Add your LinkedIn above to auto-fill'}
-              </button>
-            )}
+            {/* This card only ever shows for a resolved found/partial opening (see
+                settleOpening) — enrichment is already terminal by now, so the
+                message is a simple truthful hint, not a spinner or a re-fetch. */}
+            <div className="flex w-full items-center justify-center gap-1.5 text-xs text-gray-500">
+              <Sparkles className="h-3.5 w-3.5 text-rsn-red" />
+              {opening === 'found'
+                ? 'Filled from your public profile — edit anything that\'s off.'
+                : 'We found part of your public profile — please fill in the rest below.'}
+            </div>
             <div className="flex w-full flex-col gap-2 sm:flex-row">
               {/* Non-blocking: the lookup runs in the background, so continuing is always allowed. */}
               <Button onClick={startChat} className="min-h-[48px] flex-1 justify-center text-base">
