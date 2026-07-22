@@ -15,7 +15,9 @@ import config from '../../config';
 import logger from '../../config/logger';
 
 let client: Anthropic | null = null;
-function getClient(): Anthropic {
+/** Exported so the enrichment orchestrator's facts-grounded extras pass (A5)
+ *  reuses this exact lazy-client pattern instead of standing up a second one. */
+export function getClient(): Anthropic {
   if (!client) {
     if (!config.anthropicApiKey) throw new Error('ANTHROPIC_API_KEY is not configured');
     client = new Anthropic({ apiKey: config.anthropicApiKey });

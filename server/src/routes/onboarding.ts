@@ -20,6 +20,8 @@ import * as intentRepo from '../services/onboarding/intent.repo';
 import { inferKnownProfile } from '../services/onboarding/known';
 import * as enrichment from '../services/onboarding/enrichment.service';
 import * as enrichRepo from '../services/onboarding/enrichment.repo';
+import { runEnrichment, isFreshCacheHit } from '../services/onboarding/enrichment.orchestrator';
+import { resolveEnrichProvider, statusFromConfidence } from '../services/onboarding/providers/registry';
 import logger from '../config/logger';
 
 const router = Router();
@@ -58,6 +60,17 @@ function sendLlmDisabled(res: Response): void {
     error: {
       code: 'LLM_DISABLED',
       message: 'Onboarding chat is unavailable right now. Please use the form.',
+    },
+  };
+  res.status(503).json(response);
+}
+
+function sendEnrichmentDisabled(res: Response): void {
+  const response: ApiResponse = {
+    success: false,
+    error: {
+      code: 'ENRICHMENT_DISABLED',
+      message: 'Profile enrichment is unavailable right now. Please fill in your profile manually.',
     },
   };
   res.status(503).json(response);
@@ -112,9 +125,13 @@ router.get(
 );
 
 // ─── POST /onboarding/enrich ─────────────────────────────────────────────────
-// Look up the member's PUBLIC professional profile (LinkedIn URL if we have one,
-// else name + company + country) via web search and return a candidate to confirm.
-// Stores the candidate under inferred_profile; does NOT touch the live profile.
+// Kicks off (or reuses a cached) LinkedIn profile lookup as a BACKGROUND job —
+// runEnrichment (A5) writes state transitions + the result blob itself and is
+// fire-and-forget-safe (never throws), so this handler never waits on it. The
+// client learns the outcome by polling the enrichment state (Task B2).
+// Returns 202 { status: 'searching' } for a fresh run, or 200 { status } when
+// a fresh 90-day cache already answers the question. 503 only when the
+// resolved provider is 'none' (the rollback kill switch).
 const enrichSchema = z.object({ linkedinUrl: z.string().trim().max(500).nullish() });
 router.post(
   '/enrich',
@@ -123,49 +140,34 @@ router.post(
   validate(enrichSchema),
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      if (!enrichment.isEnrichmentEnabled()) {
-        sendLlmDisabled(res);
+      const provider = resolveEnrichProvider();
+      if (provider === 'none') {
+        sendEnrichmentDisabled(res);
         return;
       }
       const userId = req.user!.userId;
       // Canonicalize member input — a bare "avivson" becomes the full profile URL,
       // so the URL-anchored search + cache comparison always see the same shape.
-      const reqLinkedin = enrichment.normalizeLinkedinUrl(req.body.linkedinUrl as string | null);
-
-      // Cache: reuse a prior lookup (e.g. the preload run at approval) so reloads /
-      // re-tests don't re-run — and don't overwrite a good preload with a weaker
-      // re-search. Compare against the URL we SEARCHED WITH, not the one we found
-      // (a namesake's found-url must not force a re-search). Only re-search when the
-      // member supplies a genuinely NEW LinkedIn URL.
-      const cached = await enrichRepo.getCachedEnrichment(userId).catch(() => null);
-      if (cached && cached.confidence > 0) {
-        const sameLinkedin =
-          !reqLinkedin ||
-          !cached.requestedLinkedinUrl ||
-          enrichment.linkedinSlug(reqLinkedin) === enrichment.linkedinSlug(cached.requestedLinkedinUrl);
-        // Refresh stale caches: re-enrich if older than 90 days (roles/companies drift).
-        // A cache with no timestamp (pre-feature) is treated as fresh — no cost surge.
-        const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
-        const fresh = !cached.enrichedAt || Date.now() - new Date(cached.enrichedAt).getTime() < NINETY_DAYS_MS;
-        if (sameLinkedin && fresh) {
-          res.json({ success: true, data: cached } as ApiResponse);
-          return;
-        }
-      }
-
+      // Falls back to a previously-known LinkedIn URL when none is supplied now.
       const known = await inferKnownProfile(req, userId);
-      const result = await enrichment.enrichProfile({
-        fullName: known.name || '',
-        email: known.email,
-        country: known.country,
-        company: known.company,
-        linkedinUrl: (reqLinkedin || known.linkedin || null),
-      });
-      if (result.confidence > 0) {
-        await enrichRepo.saveEnrichedCandidate(userId, result).catch(() => {});
+      const reqLinkedin = enrichment.normalizeLinkedinUrl(req.body.linkedinUrl as string | null);
+      const linkedinUrl = reqLinkedin || known.linkedin || null;
+
+      const cached = await enrichRepo.getCachedEnrichment(userId).catch(() => null);
+      if (isFreshCacheHit(cached, linkedinUrl)) {
+        const response: ApiResponse = { success: true, data: { status: statusFromConfidence(cached!.confidence) } };
+        res.json(response);
+      } else {
+        const response: ApiResponse = { success: true, data: { status: 'searching' } };
+        res.status(202).json(response);
       }
-      const response: ApiResponse = { success: true, data: result };
-      res.json(response);
+
+      // Fire-and-forget: runEnrichment persists every transition (including
+      // re-confirming the cache-hit path above) and never throws, but the
+      // .catch() here is belt-and-braces against a truly unexpected rejection.
+      runEnrichment(userId, { linkedinUrl, fullName: known.name || undefined }).catch((err) =>
+        logger.error({ err, userId }, 'runEnrichment fire-and-forget rejected unexpectedly'),
+      );
     } catch (err) {
       next(err);
     }

@@ -61,12 +61,37 @@ jest.mock('../../services/onboarding/known', () => ({
   __esModule: true,
 }));
 
+jest.mock('../../services/onboarding/enrichment.repo', () => ({
+  getCachedEnrichment: jest.fn(),
+  saveEnrichedCandidate: jest.fn(),
+  setEnrichmentState: jest.fn(),
+  clearEnrichment: jest.fn(),
+  applyEnrichedToProfile: jest.fn(),
+  __esModule: true,
+}));
+
+// runEnrichment is the background job — stubbed here so route tests only
+// assert it was FIRED (fire-and-forget), never awaited. isFreshCacheHit is
+// the one bit of real (pure) logic the route depends on for its 202-vs-200
+// decision, so it runs for real via requireActual.
+jest.mock('../../services/onboarding/enrichment.orchestrator', () => {
+  const actual = jest.requireActual('../../services/onboarding/enrichment.orchestrator');
+  return {
+    isFreshCacheHit: actual.isFreshCacheHit,
+    runEnrichment: jest.fn().mockResolvedValue(undefined),
+    __esModule: true,
+  };
+});
+
 import { query as dbQuery } from '../../db';
+import config from '../../config';
 import onboardingRoutes from '../../routes/onboarding';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 import * as chatbot from '../../services/onboarding/chatbot.service';
 import * as intentRepo from '../../services/onboarding/intent.repo';
 import * as known from '../../services/onboarding/known';
+import * as enrichRepo from '../../services/onboarding/enrichment.repo';
+import { runEnrichment } from '../../services/onboarding/enrichment.orchestrator';
 
 function createApp() {
   const app = express();
@@ -95,6 +120,8 @@ beforeEach(() => {
   // Defaults so the /chat background per-answer extraction never errors noisily.
   (intentRepo.savePartialIntent as jest.Mock).mockResolvedValue(undefined);
   (chatbot.extractIntent as jest.Mock).mockResolvedValue({ userProfileSummary: 'partial' });
+  (enrichRepo.getCachedEnrichment as jest.Mock).mockResolvedValue(null);
+  (runEnrichment as jest.Mock).mockResolvedValue(undefined);
 });
 
 describe('GET /onboarding/status', () => {
@@ -339,6 +366,112 @@ describe('POST /onboarding/confirm', () => {
     const args = (intentRepo.saveIntentAndComplete as jest.Mock).mock.calls[0];
     expect(args[0]).toBe('user-abc');
     expect(args[3]).toMatchObject({ country: 'Denmark', company: 'Mister Raw' });
+  });
+});
+
+describe('POST /onboarding/enrich', () => {
+  beforeEach(() => {
+    (known.inferKnownProfile as jest.Mock).mockResolvedValue({
+      name: 'Jane Doe', email: 'jane@acme.com', country: 'DE', company: 'Acme', linkedin: null,
+    });
+  });
+
+  it('rejects an unauthenticated request', async () => {
+    const res = await request(app).post('/onboarding/enrich').send({ linkedinUrl: 'jane-doe' });
+    expect(res.status).toBe(401);
+  });
+
+  it('202s with status "searching" and fires runEnrichment without awaiting it', async () => {
+    const res = await request(app)
+      .post('/onboarding/enrich')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ linkedinUrl: 'jane-doe' });
+
+    expect(res.status).toBe(202);
+    expect(res.body.data.status).toBe('searching');
+    expect(runEnrichment).toHaveBeenCalledTimes(1);
+    const [userId, input] = (runEnrichment as jest.Mock).mock.calls[0];
+    expect(userId).toBe('user-abc');
+    expect(input).toEqual({ linkedinUrl: 'https://www.linkedin.com/in/jane-doe', fullName: 'Jane Doe' });
+  });
+
+  it('falls back to the known LinkedIn URL when none is supplied on this call', async () => {
+    (known.inferKnownProfile as jest.Mock).mockResolvedValue({
+      name: 'Jane Doe', linkedin: 'https://www.linkedin.com/in/jane-doe',
+    });
+
+    const res = await request(app)
+      .post('/onboarding/enrich')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({});
+
+    expect(res.status).toBe(202);
+    const [, input] = (runEnrichment as jest.Mock).mock.calls[0];
+    expect(input.linkedinUrl).toBe('https://www.linkedin.com/in/jane-doe');
+  });
+
+  it('200s with the cached status on a fresh 90-day cache hit (still fires the orchestrator to keep state in sync)', async () => {
+    (enrichRepo.getCachedEnrichment as jest.Mock).mockResolvedValue({
+      profile: { fullName: 'Jane Doe' },
+      confidence: 0.95,
+      sources: [],
+      foundLinkedinUrl: 'https://www.linkedin.com/in/jane-doe',
+      requestedLinkedinUrl: 'https://www.linkedin.com/in/jane-doe',
+      enrichedAt: new Date().toISOString(),
+    });
+
+    const res = await request(app)
+      .post('/onboarding/enrich')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ linkedinUrl: 'jane-doe' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('found');
+    expect(runEnrichment).toHaveBeenCalledTimes(1);
+  });
+
+  it('202s (searching) when the cache is stale (>90 days)', async () => {
+    (enrichRepo.getCachedEnrichment as jest.Mock).mockResolvedValue({
+      profile: { fullName: 'Jane Doe' },
+      confidence: 0.95,
+      sources: [],
+      foundLinkedinUrl: 'https://www.linkedin.com/in/jane-doe',
+      requestedLinkedinUrl: 'https://www.linkedin.com/in/jane-doe',
+      enrichedAt: new Date(Date.now() - 91 * 24 * 60 * 60 * 1000).toISOString(),
+    });
+
+    const res = await request(app)
+      .post('/onboarding/enrich')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ linkedinUrl: 'jane-doe' });
+
+    expect(res.status).toBe(202);
+    expect(res.body.data.status).toBe('searching');
+  });
+
+  it('503s ENRICHMENT_DISABLED (and never fires runEnrichment) when the resolved provider is "none"', async () => {
+    const original = (config as any).enrichProvider;
+    (config as any).enrichProvider = 'none';
+    try {
+      const res = await request(app)
+        .post('/onboarding/enrich')
+        .set('Authorization', `Bearer ${makeToken()}`)
+        .send({ linkedinUrl: 'jane-doe' });
+      expect(res.status).toBe(503);
+      expect(res.body.error.code).toBe('ENRICHMENT_DISABLED');
+      expect(runEnrichment).not.toHaveBeenCalled();
+    } finally {
+      (config as any).enrichProvider = original;
+    }
+  });
+
+  it('rejects an over-length linkedinUrl (400) and never fires runEnrichment', async () => {
+    const res = await request(app)
+      .post('/onboarding/enrich')
+      .set('Authorization', `Bearer ${makeToken()}`)
+      .send({ linkedinUrl: 'x'.repeat(501) });
+    expect(res.status).toBe(400);
+    expect(runEnrichment).not.toHaveBeenCalled();
   });
 });
 

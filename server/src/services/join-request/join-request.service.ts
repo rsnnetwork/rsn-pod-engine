@@ -8,7 +8,8 @@ import config from '../../config';
 import { AppError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
 import { sendJoinRequestConfirmationEmail, sendJoinRequestWelcomeEmail, sendJoinRequestDeclineEmail, sendJoinRequestReminderEmail } from '../email/email.service';
-import { enrichProfile } from '../onboarding/enrichment.service';
+import { applyMatchVerification, normalizeLinkedinUrl } from '../onboarding/enrichment.service';
+import { resolveEnrichProvider, runProvider, resultFromOutcome } from '../onboarding/providers/registry';
 
 const APPROVAL_LINK_EXPIRY_DAYS = 7;
 
@@ -239,13 +240,27 @@ export async function reviewJoinRequest(
     // Preload the LinkedIn enrichment NOW — during the approval → login gap — so the
     // member's profile card is fully populated the instant they log in (instead of
     // running the ~50s lookup at onboarding). Background; never blocks approval.
-    enrichProfile({ fullName: reviewed.fullName, email: reviewed.email, linkedinUrl: reviewed.linkedinUrl })
-      .then((result) =>
-        result.confidence > 0
-          ? query(`UPDATE join_requests SET enriched = $1::jsonb WHERE id = $2`, [JSON.stringify(result), id])
-          : undefined
-      )
-      .catch((err) => logger.warn({ err, id }, 'join-request enrichment preload failed (non-fatal)'));
+    // Routed through the same provider registry the onboarding orchestrator uses
+    // (A5) — but this preload has no user row yet, so it CANNOT use the
+    // user-scoped enrichment state machine; it keeps its original shape (write
+    // straight to join_requests.enriched, fire-and-forget).
+    (async (): Promise<void> => {
+      const provider = resolveEnrichProvider();
+      if (provider === 'none') return;
+      const linkedinUrl = normalizeLinkedinUrl(reviewed.linkedinUrl);
+      if (!linkedinUrl) return;
+      const outcome = await runProvider(provider, {
+        linkedinUrl,
+        fullName: reviewed.fullName,
+        email: reviewed.email,
+      });
+      const result = resultFromOutcome(outcome);
+      if (!result) return;
+      const verified = applyMatchVerification(result, linkedinUrl);
+      if (verified.confidence > 0) {
+        await query(`UPDATE join_requests SET enriched = $1::jsonb WHERE id = $2`, [JSON.stringify(verified), id]);
+      }
+    })().catch((err) => logger.warn({ err, id }, 'join-request enrichment preload failed (non-fatal)'));
 
     // In-app notification for the approved user (only if they already have an account)
     try {
