@@ -18,12 +18,12 @@ export type OnboardingOpening = 'searching' | 'found' | 'partial' | 'not_found';
  * client-rendered verbatim (instant, no latency) as the chatbot's first
  * message. Exact product-spec wording; do not edit.
  */
-export const OPENINGS: Record<OnboardingOpening, string> = {
+export const OPENINGS = {
   searching: 'I am retrieving your public profile. This normally takes less than a minute.',
   found: 'I found your profile. Let me confirm what I understand about you.',
   partial: 'I found part of your profile, but I need your help filling the gaps.',
   not_found: 'I could not reliably identify your profile. Let us build it together.',
-} as const;
+} as const satisfies Record<OnboardingOpening, string>;
 
 /** Lifecycle of a user's onboarding conversation. Mirrors the SQL enum in 069. */
 export type OnboardingStatus =

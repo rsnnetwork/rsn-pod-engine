@@ -212,6 +212,22 @@ describe('GET /onboarding/status', () => {
     expect(res.body.data.enrichment.error).toBe('provider timeout');
     expect(res.body.data.opening).toBe('not_found');
   });
+
+  it('defaults to not_found for an unrecognized enrichment status (fail-safe)', async () => {
+    (intentRepo.getOnboardingStatus as jest.Mock).mockResolvedValue('not_started');
+    (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
+      status: 'unknown_status' as any,
+      source: null,
+      error: null,
+      startedAt: null,
+      completedAt: null,
+    });
+    const res = await request(app)
+      .get('/onboarding/status')
+      .set('Authorization', `Bearer ${makeToken()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.opening).toBe('not_found');
+  });
 });
 
 describe('GET /onboarding/known', () => {

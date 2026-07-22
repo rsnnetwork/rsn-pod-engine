@@ -98,6 +98,8 @@ function openingFromEnrichment(status: OnboardingEnrichmentState['status']): Onb
     case 'not_found':
     case 'failed':
       return 'not_found';
+    default:
+      return 'not_found';
   }
 }
 
@@ -108,16 +110,18 @@ router.get(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const userId = req.user!.userId;
-      const status = await intentRepo.getOnboardingStatus(userId);
-      const enrichmentState = await enrichRepo.getEnrichmentState(userId);
-      const enrichment: OnboardingEnrichmentState = {
+      const [status, enrichmentState] = await Promise.all([
+        intentRepo.getOnboardingStatus(userId),
+        enrichRepo.getEnrichmentState(userId),
+      ]);
+      const enrichmentPayload: OnboardingEnrichmentState = {
         status: enrichmentState.status,
         error: enrichmentState.error,
         startedAt: enrichmentState.startedAt,
         completedAt: enrichmentState.completedAt,
       };
-      const opening = openingFromEnrichment(enrichment.status);
-      const response: ApiResponse = { success: true, data: { status, enrichment, opening } };
+      const opening = openingFromEnrichment(enrichmentPayload.status);
+      const response: ApiResponse = { success: true, data: { status, enrichment: enrichmentPayload, opening } };
       res.json(response);
     } catch (err) {
       next(err);
