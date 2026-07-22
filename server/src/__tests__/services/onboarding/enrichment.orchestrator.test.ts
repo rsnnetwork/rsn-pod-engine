@@ -37,6 +37,11 @@ jest.mock('../../../services/onboarding/providers/scrapingdog.provider', () => (
   scrapingdogProvider: { name: 'scrapingdog', enrich: jest.fn() },
 }));
 
+jest.mock('../../../services/onboarding/avatar.service', () => ({
+  __esModule: true,
+  captureAvatar: jest.fn(),
+}));
+
 jest.mock('../../../services/onboarding/enrichment.service', () => {
   const actual = jest.requireActual('../../../services/onboarding/enrichment.service');
   return {
@@ -51,6 +56,7 @@ import logger from '../../../config/logger';
 import { getCachedEnrichment, getEnrichmentState, saveEnrichedCandidate, setEnrichmentState } from '../../../services/onboarding/enrichment.repo';
 import { scrapingdogProvider } from '../../../services/onboarding/providers/scrapingdog.provider';
 import { enrichProfile, getClient, type EnrichResult, type EnrichedProfile } from '../../../services/onboarding/enrichment.service';
+import { captureAvatar } from '../../../services/onboarding/avatar.service';
 import { runEnrichment } from '../../../services/onboarding/enrichment.orchestrator';
 
 const mockGetCachedEnrichment = getCachedEnrichment as jest.Mock;
@@ -60,6 +66,7 @@ const mockSetEnrichmentState = setEnrichmentState as jest.Mock;
 const mockScrapingdogEnrich = scrapingdogProvider.enrich as jest.Mock;
 const mockEnrichProfile = enrichProfile as jest.Mock;
 const mockGetClient = getClient as jest.Mock;
+const mockCaptureAvatar = captureAvatar as jest.Mock;
 
 const REQ_URL = 'https://www.linkedin.com/in/jane-doe';
 
@@ -98,6 +105,7 @@ describe('runEnrichment', () => {
     mockGetEnrichmentState.mockResolvedValue({ status: 'none', source: null, error: null, startedAt: null, completedAt: null });
     mockSetEnrichmentState.mockResolvedValue(undefined);
     mockSaveEnrichedCandidate.mockResolvedValue(undefined);
+    mockCaptureAvatar.mockResolvedValue(true);
     // Default: extras pass "succeeds" with no extra fields (keeps most tests
     // from needing to think about the extras call at all).
     mockGetClient.mockReturnValue({
@@ -471,5 +479,67 @@ describe('runEnrichment', () => {
     const saved = mockSaveEnrichedCandidate.mock.calls[0][1] as EnrichResult;
     expect(saved.confidence).toBe(0.95);
     expect(saved.requestedLinkedinUrl).toBe(REQ_URL);
+  });
+
+  // ─── A7: LinkedIn photo capture wiring ──────────────────────────────────────
+  // captureAvatar is fire-and-forget from the orchestrator's point of view —
+  // it's kicked from the found/partial branch but never awaited, and a
+  // rejection must never change (or delay) the enrichment's own terminal
+  // state. See avatar.service.test.ts for captureAvatar's own behavior.
+  describe('A7: photo capture wiring', () => {
+    it('found outcome with a photoUrl triggers captureAvatar(userId, photoUrl)', async () => {
+      mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: 'https://cdn.example.com/jane.jpg' });
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      expect(mockCaptureAvatar).toHaveBeenCalledWith('u1', 'https://cdn.example.com/jane.jpg');
+    });
+
+    it('partial outcome with a photoUrl also triggers captureAvatar', async () => {
+      mockScrapingdogEnrich.mockResolvedValue({
+        kind: 'partial', result: foundResult({ confidence: 0.7 }), photoUrl: 'https://cdn.example.com/jane.jpg', missing: ['headline'],
+      });
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      expect(mockCaptureAvatar).toHaveBeenCalledWith('u1', 'https://cdn.example.com/jane.jpg');
+    });
+
+    it('photoUrl null: skips captureAvatar entirely', async () => {
+      mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: null });
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      expect(mockCaptureAvatar).not.toHaveBeenCalled();
+    });
+
+    it('not_found/failed outcomes never call captureAvatar', async () => {
+      mockScrapingdogEnrich.mockResolvedValue({ kind: 'not_found', reason: 'scrapingdog 404' });
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      expect(mockCaptureAvatar).not.toHaveBeenCalled();
+    });
+
+    it('captureAvatar rejecting does not change the enrichment terminal state (fire-and-forget-safe)', async () => {
+      mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: 'https://cdn.example.com/jane.jpg' });
+      mockCaptureAvatar.mockRejectedValue(new Error('avatar capture blew up'));
+
+      await expect(runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' })).resolves.toBeUndefined();
+
+      const [, params] = lastStateCall();
+      expect(params).toMatchObject({ status: 'found', source: 'scrapingdog' });
+      expect(mockSaveEnrichedCandidate).toHaveBeenCalledTimes(1);
+    });
+
+    it('captureAvatar returning false (a handled download failure) does not change the enrichment terminal state', async () => {
+      mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: 'https://cdn.example.com/jane.jpg' });
+      mockCaptureAvatar.mockResolvedValue(false);
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      const [, params] = lastStateCall();
+      expect(params).toMatchObject({ status: 'found', source: 'scrapingdog' });
+    });
   });
 });

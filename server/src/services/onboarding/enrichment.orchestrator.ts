@@ -45,6 +45,7 @@ import {
 import { getCachedEnrichment, getEnrichmentState, saveEnrichedCandidate, setEnrichmentState } from './enrichment.repo';
 import { resolveEnrichProvider, runProvider, statusFromConfidence, type EnrichProviderName } from './providers/registry';
 import type { ProviderOutcome } from './providers/provider.types';
+import { captureAvatar } from './avatar.service';
 
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
 /** How fresh a persisted 'searching' state has to be to be trusted as "still
@@ -276,8 +277,21 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
         logger.warn({ err, userId }, 'enrichment: saveEnrichedCandidate failed (non-fatal)'),
       );
       await writeState(userId, { status: outcome.kind, source: provider });
-      // A7 (photo capture) hooks in here — outcome.photoUrl is available once
-      // that task exists; nothing to kick yet.
+      // A7: LinkedIn photo capture — fire-and-forget, deliberately NOT
+      // awaited. A photo failure must never affect (or delay) the
+      // enrichment outcome above, which has already been written. The
+      // .catch() here is a defensive backstop only — captureAvatar itself
+      // never throws (it returns false + logs on every failure path) — so
+      // this guards against a truly unexpected rejection escaping it,
+      // mirroring runEnrichment's own top-level never-throws guarantee.
+      // Stage-event seam (E1, admin-inspector workstream): once
+      // stage_events exists, record a photo_captured/photo_failed event
+      // from inside captureAvatar itself rather than here.
+      if (outcome.photoUrl) {
+        captureAvatar(userId, outcome.photoUrl).catch((err) => {
+          logger.warn({ err, userId }, 'enrichment: captureAvatar rejected unexpectedly (non-fatal)');
+        });
+      }
       logTerminal(userId, provider, outcome.kind, startedAtMs);
       return;
     }

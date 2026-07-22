@@ -7,6 +7,7 @@ import { requireRole } from '../middleware/rbac';
 import * as identityService from '../services/identity/identity.service';
 import { searchConnectedUsers } from '../services/invite/connected-users';
 import * as blockService from '../services/block/block.service';
+import { getAvatarBlob } from '../services/onboarding/avatar.service';
 import {
   fanoutAdminEntities,
   fanoutPodEntities,
@@ -456,6 +457,38 @@ router.get(
       const hasBlocked = await blockService.hasBlocked(req.user!.userId, req.params.id);
       const response: ApiResponse = { success: true, data: { hasBlocked } };
       res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── GET /users/:id/avatar (public — no auth) ───────────────────────────────
+// A7: serves the LinkedIn photo captureAvatar() downloaded, from our own
+// storage rather than LinkedIn's expiring CDN URL. Deliberately public
+// (no `authenticate`) — avatars render in public profile contexts (search
+// results, cards, other members' event rosters) where the viewer may not be
+// signed in. This route has its own 2-segment path (`/:id/avatar`), so it
+// never collides with the single-segment `/:id` route above regardless of
+// declaration order — but it's kept unauthenticated deliberately: don't add
+// `authenticate` here without re-checking that public profile surfaces can
+// still render this image for logged-out/other-session viewers.
+//
+// Cache-Control is a flat 24h — the URL is stable per user (userId never
+// changes), so a coarse max-age is enough; no ETag/If-None-Match machinery
+// (accepted staleness up to 24h rather than building one, per A7 spec).
+router.get(
+  '/:id/avatar',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const avatar = await getAvatarBlob(req.params.id);
+      if (!avatar) {
+        res.status(404).end();
+        return;
+      }
+      res.setHeader('Content-Type', avatar.contentType);
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.send(avatar.blob);
     } catch (err) {
       next(err);
     }
