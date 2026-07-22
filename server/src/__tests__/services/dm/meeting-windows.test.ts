@@ -37,6 +37,13 @@ const key = (offsetDays: number, part = 'morning') => {
   return `${d.toISOString().slice(0, 10)}:${part}`;
 };
 
+// Service tests validate against the real clock, not the injected NOW. Compute dates dynamically.
+const futureKey = (daysAhead: number, part: 'morning' | 'afternoon' | 'evening' = 'morning') => {
+  const d = new Date();
+  d.setDate(d.getDate() + daysAhead);
+  return `${d.toISOString().slice(0, 10)}:${part}`;
+};
+
 const CONV = {
   id: 'conv-1', user_a_id: 'u-a', user_b_id: 'u-b',
   meeting_confirmed_window: null, meeting_confirmed_by: null, meeting_confirmed_at: null,
@@ -98,7 +105,7 @@ describe('getScheduling', () => {
 describe('setAvailability', () => {
   it('replaces my selection: DELETE mine then INSERT each window', async () => {
     armConv([]);
-    await setAvailability('conv-1', 'u-a', [key(1), key(2, 'evening')]);
+    await setAvailability('conv-1', 'u-a', [futureKey(1), futureKey(2, 'evening')]);
     const sqls = mockQuery.mock.calls.map(c => c[0] as string);
     expect(sqls.some(s => /DELETE FROM meeting_availability/.test(s))).toBe(true);
     expect(sqls.filter(s => /INSERT INTO meeting_availability/.test(s)).length).toBe(2);
@@ -106,26 +113,28 @@ describe('setAvailability', () => {
 
   it('rejects an out-of-range window with a 400', async () => {
     armConv([]);
-    await expect(setAvailability('conv-1', 'u-a', [key(-1)]))
+    await expect(setAvailability('conv-1', 'u-a', [futureKey(-1)]))
       .rejects.toMatchObject({ statusCode: 400 });
   });
 });
 
 describe('confirmWindow', () => {
   it('rejects a window only ONE side selected', async () => {
-    armConv([{ user_id: 'u-a', window_key: key(2) }]); // partner never picked it
-    await expect(confirmWindow('conv-1', 'u-a', key(2)))
+    const windowKey = futureKey(2);
+    armConv([{ user_id: 'u-a', window_key: windowKey }]); // partner never picked it
+    await expect(confirmWindow('conv-1', 'u-a', windowKey))
       .rejects.toMatchObject({ statusCode: 400 });
   });
 
   it('confirms an overlap window: updates the conversation, drops a thread message, notifies the partner', async () => {
+    const windowKey = futureKey(2, 'evening');
     armConv([
-      { user_id: 'u-a', window_key: key(2, 'evening') },
-      { user_id: 'u-b', window_key: key(2, 'evening') },
+      { user_id: 'u-a', window_key: windowKey },
+      { user_id: 'u-b', window_key: windowKey },
     ]);
     mockSendMessage.mockResolvedValue({ message: { id: 'm1' }, conversationId: 'conv-1' });
 
-    await confirmWindow('conv-1', 'u-a', key(2, 'evening'));
+    await confirmWindow('conv-1', 'u-a', windowKey);
 
     const sqls = mockQuery.mock.calls.map(c => c[0] as string);
     expect(sqls.some(s => /UPDATE dm_conversations\s+SET meeting_confirmed_window/.test(s))).toBe(true);
@@ -142,12 +151,13 @@ describe('confirmWindow', () => {
   });
 
   it('a failed thread message does not lose the confirmation itself', async () => {
+    const windowKey = futureKey(2);
     armConv([
-      { user_id: 'u-a', window_key: key(2) },
-      { user_id: 'u-b', window_key: key(2) },
+      { user_id: 'u-a', window_key: windowKey },
+      { user_id: 'u-b', window_key: windowKey },
     ]);
     mockSendMessage.mockRejectedValue(new Error('dm down'));
-    await expect(confirmWindow('conv-1', 'u-a', key(2))).resolves.toBeTruthy();
+    await expect(confirmWindow('conv-1', 'u-a', windowKey)).resolves.toBeTruthy();
     const sqls = mockQuery.mock.calls.map(c => c[0] as string);
     expect(sqls.some(s => /UPDATE dm_conversations\s+SET meeting_confirmed_window/.test(s))).toBe(true);
   });
