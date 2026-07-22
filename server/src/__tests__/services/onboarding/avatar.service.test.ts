@@ -9,9 +9,15 @@
 // uses — null when nothing has been captured yet.
 
 const mockQuery = jest.fn();
+const mockConfig = { apiBaseUrl: 'https://api.example.com' };
 
 jest.mock('../../../db', () => ({
   query: (...args: unknown[]) => mockQuery(...args),
+  __esModule: true,
+}));
+
+jest.mock('../../../config', () => ({
+  default: mockConfig,
   __esModule: true,
 }));
 
@@ -21,7 +27,7 @@ jest.mock('../../../config/logger', () => ({
 }));
 
 import logger from '../../../config/logger';
-import { captureAvatar, getAvatarBlob } from '../../../services/onboarding/avatar.service';
+import { avatarUrlFor, captureAvatar, getAvatarBlob } from '../../../services/onboarding/avatar.service';
 
 const USER_ID = 'user-abc';
 const PHOTO_URL = 'https://cdn.example.com/jane.jpg';
@@ -55,9 +61,10 @@ describe('captureAvatar', () => {
     jest.restoreAllMocks();
     mockQuery.mockReset();
     mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+    mockConfig.apiBaseUrl = 'https://api.example.com';
   });
 
-  it('happy path: stores the blob + content-type and sets avatar_url to the serving endpoint', async () => {
+  it('happy path: stores the blob + content-type and sets avatar_url to an ABSOLUTE serving endpoint', async () => {
     const bytes = new TextEncoder().encode('fake-jpeg-bytes');
     jest.spyOn(globalThis, 'fetch').mockResolvedValue(mockImageResponse(200, 'image/jpeg', bytes));
 
@@ -72,7 +79,9 @@ describe('captureAvatar', () => {
     expect(sql).toMatch(/avatar_url/i);
     expect(params).toContain(USER_ID);
     expect(params).toContain('image/jpeg');
-    expect(params).toContain(`/api/users/${USER_ID}/avatar`);
+    // Absolute, not relative — a relative `/api/...` resolves against the
+    // Vercel client origin (no API there) and renders a broken image.
+    expect(params).toContain(`https://api.example.com/api/users/${USER_ID}/avatar`);
     const blobParam = params.find((p: unknown) => Buffer.isBuffer(p)) as Buffer;
     expect(blobParam.toString('utf8')).toBe('fake-jpeg-bytes');
   });
@@ -87,7 +96,7 @@ describe('captureAvatar', () => {
 
     expect(result).toBe(true);
     const [, params] = mockQuery.mock.calls[0];
-    expect(params).toContain(`/api/users/${USER_ID}/avatar`);
+    expect(params).toContain(`https://api.example.com/api/users/${USER_ID}/avatar`);
   });
 
   it('download failure (non-2xx status): returns false, logs, writes nothing', async () => {
@@ -174,6 +183,27 @@ describe('captureAvatar', () => {
     jest.spyOn(globalThis, 'fetch').mockRejectedValue('not even an Error instance');
 
     await expect(captureAvatar(USER_ID, PHOTO_URL)).resolves.toBe(false);
+  });
+});
+
+describe('avatarUrlFor', () => {
+  afterEach(() => {
+    mockConfig.apiBaseUrl = 'https://api.example.com';
+  });
+
+  it('joins an absolute base with no double slash, even when the base has a trailing slash', () => {
+    mockConfig.apiBaseUrl = 'https://api.example.com/';
+    expect(avatarUrlFor(USER_ID)).toBe(`https://api.example.com/api/users/${USER_ID}/avatar`);
+  });
+
+  it('joins an absolute base with no trailing slash cleanly', () => {
+    mockConfig.apiBaseUrl = 'https://api.example.com';
+    expect(avatarUrlFor(USER_ID)).toBe(`https://api.example.com/api/users/${USER_ID}/avatar`);
+  });
+
+  it('falls back to the relative path when the configured base is empty (local dev without API_BASE_URL set)', () => {
+    mockConfig.apiBaseUrl = '';
+    expect(avatarUrlFor(USER_ID)).toBe(`/api/users/${USER_ID}/avatar`);
   });
 });
 

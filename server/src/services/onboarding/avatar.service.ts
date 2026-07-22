@@ -15,10 +15,32 @@
 // check is needed since we never touch avatar_url on failure.
 
 import { query } from '../../db';
+import config from '../../config';
 import logger from '../../config/logger';
 
 const DOWNLOAD_TIMEOUT_MS = 10_000;
 const MAX_AVATAR_BYTES = 2 * 1024 * 1024; // 2MB
+
+/**
+ * The URL we write to users.avatar_url on a successful capture.
+ *
+ * MUST be absolute. The production client (app.rsn.network) is a Vercel
+ * static deploy with only a catch-all SPA rewrite — there is no `/api/*`
+ * proxy at that origin. A relative `/api/users/:id/avatar` resolves against
+ * the Vercel origin instead of the API, so `<img src>` gets back `index.html`
+ * and renders a broken image. The client only ever reaches the API through
+ * an absolute base URL in its fetch layer, so we store the same shape here.
+ *
+ * `config.apiBaseUrl` defaults to '' only if API_BASE_URL is explicitly set
+ * empty (its normal dev default is http://localhost:3001) — in that edge
+ * case we fall back to the relative path, which is harmless for local/dev
+ * use since same-origin `/api` works fine there.
+ */
+export function avatarUrlFor(userId: string): string {
+  const relative = `/api/users/${userId}/avatar`;
+  const base = config.apiBaseUrl.replace(/\/+$/, '');
+  return base ? `${base}${relative}` : relative;
+}
 
 /** Read the previously-captured avatar for the public serving route. Null
  *  when the user has no row, or has a row but nothing captured yet. */
@@ -83,7 +105,7 @@ export async function captureAvatar(userId: string, photoUrl: string): Promise<b
     }
 
     const blob = Buffer.concat(chunks);
-    const avatarUrl = `/api/users/${userId}/avatar`;
+    const avatarUrl = avatarUrlFor(userId);
     await query(
       `UPDATE users SET avatar_blob = $2, avatar_blob_type = $3, avatar_url = $4, updated_at = NOW() WHERE id = $1`,
       [userId, blob, contentType, avatarUrl],
