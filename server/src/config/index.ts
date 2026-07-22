@@ -64,6 +64,11 @@ export const config = {
   // Escalation target when the cheap (Haiku) enrichment is low-confidence (Stefan's rule).
   onboardingEnrichFallbackModel: process.env.ONBOARDING_ENRICH_FALLBACK_MODEL || 'claude-sonnet-4-6',
 
+  // ScrapingDog API — deterministic LinkedIn profile scraping. Empty key means disabled.
+  scrapingdogApiKey: process.env.SCRAPINGDOG_API_KEY || '',
+  // rollback switch: 'scrapingdog' (default), 'claude_web' (old path), 'none' (kill)
+  enrichProvider: (process.env.ENRICH_PROVIDER || 'scrapingdog') as 'scrapingdog' | 'claude_web' | 'none',
+
   // Rate Limiting
   // Now keyed PER USER (see middleware/rateLimit.ts userOrIpKey), so the quota
   // is per-person, not per-NAT. 240/min gives a single client comfortable

@@ -49,6 +49,8 @@ services:
         value: "60"
       - key: RESEND_API_KEY
         sync: false
+      - key: SCRAPINGDOG_API_KEY
+        sync: false
       - key: LIVEKIT_API_KEY
         sync: false
       - key: LIVEKIT_API_SECRET
