@@ -69,6 +69,20 @@ jest.mock('../../../services/email/email.service', () => ({
   __esModule: true,
 }));
 
+// pokes-notification-prefs (23 Jul 2026) — the Settings "Pokes" bell/email
+// toggles. Mocked at the service boundary (same convention as email.service
+// above) so gating tests can flip poke_bell/poke_email independently of the
+// global notify_email + email_config gates, which stay wired through
+// mockQuery/mockIsEmailTypeEnabled untouched.
+const mockShouldSendEmail = jest.fn().mockResolvedValue(true);
+const mockShouldSendBell = jest.fn().mockResolvedValue(true);
+
+jest.mock('../../../services/notification-prefs/notification-prefs.service', () => ({
+  shouldSendEmail: (...args: unknown[]) => mockShouldSendEmail(...args),
+  shouldSendBell: (...args: unknown[]) => mockShouldSendBell(...args),
+  __esModule: true,
+}));
+
 import * as pokeService from '../../../services/poke/poke.service';
 import config from '../../../config';
 
@@ -209,6 +223,8 @@ beforeEach(() => {
   mockSendPokeReceivedEmail.mockClear();
   mockSendPokeAcceptedEmail.mockClear();
   mockIsEmailTypeEnabled.mockReset().mockResolvedValue(true);
+  mockShouldSendEmail.mockReset().mockResolvedValue(true);
+  mockShouldSendBell.mockReset().mockResolvedValue(true);
 });
 
 describe('acceptPoke — F1 acceptance notification for the sender', () => {
@@ -515,6 +531,131 @@ describe('sendPoke — F2 email notification to the recipient', () => {
     // sibling) are best-effort, exactly like the pre-existing notifErr catch.
     expect(result.status).toBe('pending');
     expect(mockSendPokeReceivedEmail).not.toHaveBeenCalled();
+  });
+});
+
+describe('sendPoke — pokes-prefs bell gating (Settings "Pokes" bell toggle)', () => {
+  it('poke_bell = false suppresses the notifications INSERT and the live socket push, but the email still fires (channels are independent)', async () => {
+    armSend('hi');
+    mockShouldSendBell.mockResolvedValue(false);
+
+    const result = await pokeService.sendPoke(SENDER, RECIPIENT, 'hi');
+    await flushPromises();
+
+    expect(mockShouldSendBell).toHaveBeenCalledWith(RECIPIENT, 'poke');
+    expect(mockQuery.mock.calls.some(c => /INSERT INTO notifications/.test(c[0] as string))).toBe(false);
+    expect(mockTo).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+    expect(mockEmitEntities).not.toHaveBeenCalled();
+    expect(result.status).toBe('pending');
+    expect(mockSendPokeReceivedEmail).toHaveBeenCalled();
+  });
+
+  it('poke_bell absent/true (default) still inserts the notification and pushes the socket event (unchanged behaviour)', async () => {
+    armSend('hi');
+
+    await pokeService.sendPoke(SENDER, RECIPIENT, 'hi');
+
+    expect(mockQuery.mock.calls.some(c => /INSERT INTO notifications/.test(c[0] as string))).toBe(true);
+    expect(mockTo).toHaveBeenCalledWith(`user:${RECIPIENT}`);
+    expect(mockEmit).toHaveBeenCalledWith('notification:new', expect.objectContaining({ type: 'poke' }));
+  });
+});
+
+describe('sendPoke — pokes-prefs email gating (Settings "Pokes" email toggle)', () => {
+  it('poke_email = false suppresses the recipient email even though notify_email + email_config are both on', async () => {
+    armSend('hi');
+    mockShouldSendEmail.mockResolvedValue(false);
+
+    await pokeService.sendPoke(SENDER, RECIPIENT, 'hi');
+    await flushPromises();
+
+    expect(mockShouldSendEmail).toHaveBeenCalledWith(RECIPIENT, 'poke');
+    expect(mockSendPokeReceivedEmail).not.toHaveBeenCalled();
+  });
+
+  it('global notify_email = false still suppresses the email even when poke_email = true (global switch > category switch)', async () => {
+    armSend('hi', { recipientNotifyEmail: false });
+    mockShouldSendEmail.mockResolvedValue(true);
+
+    await pokeService.sendPoke(SENDER, RECIPIENT, 'hi');
+    await flushPromises();
+
+    expect(mockSendPokeReceivedEmail).not.toHaveBeenCalled();
+  });
+
+  it('poke_email absent/true (default) sends the email (unchanged behaviour)', async () => {
+    armSend('hi');
+
+    await pokeService.sendPoke(SENDER, RECIPIENT, 'hi');
+    await flushPromises();
+
+    expect(mockSendPokeReceivedEmail).toHaveBeenCalled();
+  });
+});
+
+describe('acceptPoke — pokes-prefs email gating (Settings "Pokes" email toggle)', () => {
+  it('poke_email = false suppresses the sender email even though notify_email + email_config are both on', async () => {
+    armAccept('Hello there');
+    mockShouldSendEmail.mockResolvedValue(false);
+
+    await pokeService.acceptPoke('poke-1', RECIPIENT);
+    await flushPromises();
+
+    expect(mockShouldSendEmail).toHaveBeenCalledWith(SENDER, 'poke');
+    expect(mockSendPokeAcceptedEmail).not.toHaveBeenCalled();
+  });
+
+  it('global notify_email = false still suppresses the email even when poke_email = true (global switch > category switch)', async () => {
+    armAccept('Hello there', { senderNotifyEmail: false });
+    mockShouldSendEmail.mockResolvedValue(true);
+
+    await pokeService.acceptPoke('poke-1', RECIPIENT);
+    await flushPromises();
+
+    expect(mockSendPokeAcceptedEmail).not.toHaveBeenCalled();
+  });
+
+  it('poke_email absent/true (default) sends the email (unchanged behaviour)', async () => {
+    armAccept('Hello there');
+
+    await pokeService.acceptPoke('poke-1', RECIPIENT);
+    await flushPromises();
+
+    expect(mockSendPokeAcceptedEmail).toHaveBeenCalled();
+  });
+});
+
+describe('acceptPoke — the poke_accepted bell is NOT gated by prefs (DoD-critical, deliberate)', () => {
+  it('still inserts the poke_accepted notification and pushes the socket event even when poke_bell AND poke_email are both false for the sender', async () => {
+    armAccept('Hello there');
+    mockShouldSendBell.mockResolvedValue(false);
+    mockShouldSendEmail.mockResolvedValue(false);
+
+    await pokeService.acceptPoke('poke-1', RECIPIENT);
+
+    expect(mockQuery.mock.calls.some(c => /INSERT INTO notifications/.test(c[0] as string))).toBe(true);
+    expect(mockTo).toHaveBeenCalledWith(`user:${SENDER}`);
+    expect(mockEmit).toHaveBeenCalledWith('notification:new', expect.objectContaining({ type: 'poke_accepted' }));
+    // shouldSendBell is never even consulted for the accept path — the bell
+    // is unconditional by design (see the Task F1 / pokes-prefs comment in
+    // poke.service.ts above the notifications INSERT inside acceptPoke).
+    expect(mockShouldSendBell).not.toHaveBeenCalled();
+  });
+});
+
+describe('notification-prefs.service.ts — pokes-prefs default flip', () => {
+  const fsMod: typeof import('fs') = require('fs');
+  const pathMod: typeof import('path') = require('path');
+  const src: string = fsMod.readFileSync(
+    pathMod.join(__dirname, '../../../services/notification-prefs/notification-prefs.service.ts'), 'utf8',
+  );
+
+  it('DEFAULT_PREFS.poke_email is true, so an absent key resolves to "send" (migration 084 flips the seeded false)', () => {
+    const i = src.indexOf('export const DEFAULT_PREFS');
+    expect(i).toBeGreaterThan(-1);
+    const block = src.slice(i, src.indexOf('};', i));
+    expect(block).toMatch(/poke_email:\s*true/);
   });
 });
 

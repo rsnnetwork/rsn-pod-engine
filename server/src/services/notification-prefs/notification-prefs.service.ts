@@ -20,11 +20,17 @@ export interface NotificationPrefs {
   report_resolved_email: boolean;
 }
 
+// pokes-notification-prefs (23 Jul 2026) — poke_email flipped false → true.
+// The stored false (053) was an invisible seeded default for a toggle that
+// had no enforcement behind it; nobody consciously opted out of anything
+// real. Migration 084 flips the column DEFAULT + backfills existing rows to
+// match — this constant is the in-process fallback for the same shape, used
+// when a row's notification_prefs is missing a key entirely.
 export const DEFAULT_PREFS: NotificationPrefs = {
   dm_bell: true,
   dm_email: true,
   poke_bell: true,
-  poke_email: false,
+  poke_email: true,
   group_bell: true,
   group_email: false,
   invite_bell: true,

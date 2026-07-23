@@ -14,6 +14,7 @@ import { AppError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
 import * as blockService from '../block/block.service';
 import * as emailService from '../email/email.service';
+import * as prefsService from '../notification-prefs/notification-prefs.service';
 
 // Task F2 (23 Jul 2026) — the truthful-loop audit found the poke loop was
 // in-app-only: a logged-out founder never learned someone wanted to meet
@@ -44,9 +45,14 @@ async function notifyPokeReceivedByEmail(
       [recipientId],
     );
     const recipient = recipientResult.rows[0];
+    // Global switch (notify_email) > category switch (poke_email): the
+    // global gates below are checked first and short-circuit before the
+    // finer-grained Settings "Pokes" email toggle is even consulted.
     if (!recipient?.email || !recipient.notify_email) return;
     // Asymmetric gates: notify_email fails closed (user preference), email_config fails open (operational safety).
     if (!(await emailService.isEmailTypeEnabled(POKE_REQUEST_EMAIL_TYPE))) return;
+    // pokes-notification-prefs (23 Jul 2026) — Settings "Pokes" email toggle.
+    if (!(await prefsService.shouldSendEmail(recipientId, 'poke'))) return;
 
     await emailService.sendPokeReceivedEmail(recipient.email, recipient.display_name || 'there', {
       senderName,
@@ -74,8 +80,13 @@ async function notifyPokeAcceptedByEmail(
       [senderId],
     );
     const sender = senderResult.rows[0];
+    // Global switch (notify_email) > category switch (poke_email): the
+    // global gates below are checked first and short-circuit before the
+    // finer-grained Settings "Pokes" email toggle is even consulted.
     if (!sender?.email || !sender.notify_email) return;
     if (!(await emailService.isEmailTypeEnabled(POKE_ACCEPTED_EMAIL_TYPE))) return;
+    // pokes-notification-prefs (23 Jul 2026) — Settings "Pokes" email toggle.
+    if (!(await prefsService.shouldSendEmail(senderId, 'poke'))) return;
 
     await emailService.sendPokeAcceptedEmail(sender.email, sender.display_name || 'there', {
       accepterName,
@@ -166,41 +177,50 @@ export async function sendPoke(
         `SELECT display_name FROM users WHERE id = $1`, [senderId],
       );
       const senderName = senderResult.rows[0]?.display_name || 'Someone';
-      const notifId = uuid();
-      const notifResult = await query<{ id: string; created_at: Date }>(
-        `INSERT INTO notifications (id, user_id, type, title, body, link)
-         VALUES ($1, $2, 'poke', $3, $4, $5)
-         RETURNING id, created_at`,
-        [notifId, recipientId, `${senderName} poked you`, trimmedMessage || 'They want to connect — accept to start chatting.', '/messages'],
-      );
+
+      // pokes-notification-prefs (23 Jul 2026) — Settings "Pokes" bell toggle.
+      // Gates the notification row + its live socket push only; the email
+      // channel below is independent and gated separately inside
+      // notifyPokeReceivedByEmail, so either channel can be turned off
+      // without silencing the other.
+      if (await prefsService.shouldSendBell(recipientId, 'poke')) {
+        const notifId = uuid();
+        const notifResult = await query<{ id: string; created_at: Date }>(
+          `INSERT INTO notifications (id, user_id, type, title, body, link)
+           VALUES ($1, $2, 'poke', $3, $4, $5)
+           RETURNING id, created_at`,
+          [notifId, recipientId, `${senderName} poked you`, trimmedMessage || 'They want to connect — accept to start chatting.', '/messages'],
+        );
+
+        // Emit via dynamic import of the io instance (same pattern as invites).
+        try {
+          const { io } = await import('../../index');
+          io.to(`user:${recipientId}`).emit('notification:new', {
+            id: notifResult.rows[0].id,
+            type: 'poke',
+            title: `${senderName} poked you`,
+            body: trimmedMessage || 'They want to connect — accept to start chatting.',
+            link: '/messages',
+            isRead: false,
+            createdAt: notifResult.rows[0].created_at,
+          });
+          // Phase 2 dual-emit — notifications + invites for the recipient
+          // so their bell counter / received-invites surfaces refresh.
+          const { emitEntities } = await import('../../realtime/emit');
+          const { E } = await import('../../realtime/entities');
+          emitEntities(
+            io, [recipientId],
+            [E.userNotifications(recipientId), E.userInvites(recipientId)],
+          ).catch(() => {});
+        } catch { /* socket push is non-fatal */ }
+      }
 
       // Task F2 — email the recipient, fire-and-forget, right alongside the
-      // socket push below. Gated on notify_email + email_config inside the
-      // helper; a rejection there is already caught internally so this can
-      // never throw or block the poke response.
+      // socket push above (or independently, when poke_bell is off). Gated
+      // on notify_email + email_config + poke_email inside the helper; a
+      // rejection there is already caught internally so this can never
+      // throw or block the poke response.
       void notifyPokeReceivedByEmail(recipientId, senderName, trimmedMessage);
-
-      // Emit via dynamic import of the io instance (same pattern as invites).
-      try {
-        const { io } = await import('../../index');
-        io.to(`user:${recipientId}`).emit('notification:new', {
-          id: notifResult.rows[0].id,
-          type: 'poke',
-          title: `${senderName} poked you`,
-          body: trimmedMessage || 'They want to connect — accept to start chatting.',
-          link: '/messages',
-          isRead: false,
-          createdAt: notifResult.rows[0].created_at,
-        });
-        // Phase 2 dual-emit — notifications + invites for the recipient
-        // so their bell counter / received-invites surfaces refresh.
-        const { emitEntities } = await import('../../realtime/emit');
-        const { E } = await import('../../realtime/entities');
-        emitEntities(
-          io, [recipientId],
-          [E.userNotifications(recipientId), E.userInvites(recipientId)],
-        ).catch(() => {});
-      } catch { /* socket push is non-fatal */ }
     } catch (notifErr) {
       logger.warn({ notifErr }, 'Poke notification insert failed (non-fatal)');
     }
@@ -330,6 +350,12 @@ export async function acceptPoke(
     // with the accept by design (see the Task F1 comment above this
     // function) so this can never exist without a corresponding accepted
     // poke. Do not move it to a post-commit "fire and forget" block.
+    //
+    // pokes-notification-prefs (23 Jul 2026) — also deliberately NOT gated
+    // by shouldSendBell(poke_bell): this is the DoD-critical "clear
+    // notification" telling the sender their poke landed, same tradeoff as
+    // the F1 comment above. Only the poke_accepted EMAIL (post-commit,
+    // below) respects the Settings "Pokes" toggle.
     const notifResult = await client.query<{ id: string; created_at: Date }>(
       `INSERT INTO notifications (id, user_id, type, title, body, link)
        VALUES ($1, $2, 'poke_accepted', $3, $4, '/messages')
