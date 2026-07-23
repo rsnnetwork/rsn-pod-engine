@@ -25,8 +25,21 @@ export interface TestUser {
 /**
  * Create a test user directly in DB and return JWT tokens.
  * Marks the user with email prefix `e2etest-` so we can clean up later.
+ *
+ * `onboarding_status` (migration 069) defaults to 'not_started' at the DB
+ * level, which the always-on re-onboarding gate (ProtectedRoute, keyed on
+ * user.onboardingStatus) would bounce to /onboarding on any gated route
+ * (/, /matches, /messages, /admin/*, /profile/*, etc). Test users are
+ * onboarded-by-construction, so default this to 'completed' here; pass
+ * `onboardingStatus` explicitly to seed a specific state for specs that
+ * TEST the gate itself (e.g. reonboarding-gate.spec.ts, which flips it via
+ * direct pool.query post-creation instead — both styles are fine).
  */
-export async function createTestUser(suffix: string, role: 'member' | 'admin' | 'super_admin' = 'member'): Promise<TestUser> {
+export async function createTestUser(
+  suffix: string,
+  role: 'member' | 'admin' | 'super_admin' = 'member',
+  onboardingStatus: string = 'completed',
+): Promise<TestUser> {
   const id = uuid();
   const email = `e2etest-${suffix}-${Date.now()}@example.com`;
   const displayName = `E2E Test ${suffix}`;
@@ -34,9 +47,9 @@ export async function createTestUser(suffix: string, role: 'member' | 'admin' | 
   const lastName = `Test ${suffix}`;
 
   await pool.query(
-    `INSERT INTO users (id, email, display_name, first_name, last_name, status, role, profile_complete, onboarding_completed, email_verified, company, job_title, industry, reasons_to_connect)
-     VALUES ($1, $2, $3, $4, $5, 'active', $6, true, true, true, 'TestCo', 'Test Engineer', 'Tech', ARRAY['Testing']::text[])`,
-    [id, email, displayName, firstName, lastName, role]
+    `INSERT INTO users (id, email, display_name, first_name, last_name, status, role, profile_complete, onboarding_completed, onboarding_status, email_verified, company, job_title, industry, reasons_to_connect)
+     VALUES ($1, $2, $3, $4, $5, 'active', $6, true, true, $7, true, 'TestCo', 'Test Engineer', 'Tech', ARRAY['Testing']::text[])`,
+    [id, email, displayName, firstName, lastName, role, onboardingStatus]
   );
 
   const sessionId = uuid();

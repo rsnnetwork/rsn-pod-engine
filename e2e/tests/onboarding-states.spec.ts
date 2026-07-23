@@ -82,7 +82,11 @@ async function openOnboarding(viewport = { width: 390, height: 844 }): Promise<P
 const firstBubble = (page: Page) => page.locator('.whitespace-pre-wrap').first();
 
 test.beforeAll(async () => {
-  user = await createTestUser('onbstates');
+  // This spec is entirely about the client-side onboarding stage machine, so
+  // the seeded user should stay in the pre-onboarding state its intent
+  // describes rather than picking up createTestUser()'s 'completed' default
+  // (opt-out via the explicit onboardingStatus param — see e2e/helpers/auth.ts).
+  user = await createTestUser('onbstates', 'member', 'not_started');
   browser = await chromium.launch({ headless: false });
 });
 
