@@ -223,7 +223,7 @@ export async function sendPoke(
  * a corresponding encounter_history row so DMs unlock from now on, and
  * upserts the dm_conversation so they can start chatting.
  *
- * Task F1 (1 Aug 2026) — the sender previously heard nothing when their
+ * Task F1 (23 Jul 2026) — the sender previously heard nothing when their
  * poke was accepted (only a silent fanoutUserEntity badge refresh from the
  * route). A 'poke_accepted' bell notification is now inserted for the
  * sender in the same transaction as the accept, then pushed live via
@@ -231,7 +231,7 @@ export async function sendPoke(
  * notify-then-emit pattern (L90-126) and guarantees a rolled-back accept
  * can never leave a dangling socket push.
  *
- * Task F3 (1 Aug 2026) — a message-less poke used to leave the new
+ * Task F3 (23 Jul 2026) — a message-less poke used to leave the new
  * conversation with zero messages, which canMessage()'s grandfather
  * clause can never open (dm.service.ts L138-165: the "existing thread
  * with >=1 message" gate never fires, and encounter_history.mutual_meet_again

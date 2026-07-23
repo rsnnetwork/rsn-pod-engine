@@ -9,9 +9,9 @@ import { gotoRetry, cleanup, APP, SERVER } from '../helpers/live-ui';
 // paths (/onboarding itself, /invite/:code, and /session/:id/live). See
 // client/src/components/layout/ProtectedRoute.tsx.
 //
-// createTestUser() only sets the legacy onboarding_completed boolean; the
-// new onboarding_status column defaults to 'not_started' (migration 069),
-// so every scenario here sets it explicitly via `pool` to the exact status
+// createTestUser() seeds onboarding_status as 'completed' by default (see
+// e2e/helpers/auth.ts — gate compatibility for every other spec), so every
+// scenario here overrides it explicitly via `pool` to the exact status
 // under test — the same "real user + direct DB setup" pattern the rest of
 // the harness uses (see e2e/helpers/auth.ts, e2e/tests/onboarding-states.spec.ts).
 //

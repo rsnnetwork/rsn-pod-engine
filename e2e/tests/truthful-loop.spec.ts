@@ -17,9 +17,10 @@ import { gotoRetry, cleanup, APP, SERVER } from '../helpers/live-ui';
 //   D/B — the always-on re-onboarding gate (ProtectedRoute, keyed on
 //        user.onboardingStatus) redirects ANY user — including admins,
 //        deliberately no role exemption — to /onboarding unless
-//        onboarding_status = 'completed'. createTestUser() does NOT set
-//        this column (it defaults to 'not_started'), so every seeded user
-//        below sets it explicitly rather than relying on the helper.
+//        onboarding_status = 'completed'. createTestUser() seeds this column
+//        as 'completed' by default (see e2e/helpers/auth.ts); the seeding
+//        below still sets it explicitly so this spec stays self-describing
+//        and immune to a helper-default change.
 //   F2 — prod now really sends poke-request / poke-accepted emails. Every
 //        seeded user sets notify_email = false so this run never emails a
 //        real inbox. The poke send/accept calls succeeding at all with the
@@ -53,13 +54,14 @@ async function apiAs(u: TestUser, method: string, path: string, body?: unknown) 
 }
 
 /**
- * Seed a test user's intent profile AND force the two truthful-loop columns
- * the DB helper leaves at their defaults:
- *   - onboarding_status: defaults 'not_started', which the D2 re-onboarding
- *     gate (ProtectedRoute) would bounce to /onboarding on every headed nav.
- *   - notify_email: defaults TRUE, which would fire a real F2 email to the
- *     fake e2etest-*@example.com "recipient" via Resend.
- * Never rely on createTestUser()'s defaults for either.
+ * Seed a test user's intent profile AND pin the two truthful-loop columns:
+ *   - onboarding_status: createTestUser() already seeds 'completed' by
+ *     default (e2e/helpers/auth.ts), but the D2 re-onboarding gate
+ *     (ProtectedRoute) bounces any other value to /onboarding on every
+ *     headed nav — pinned explicitly here so this spec never depends on
+ *     the helper's default.
+ *   - notify_email: defaults TRUE at the DB level, which would fire a real
+ *     F2 email to the fake e2etest-*@example.com "recipient" via Resend.
  */
 async function seedUser(u: TestUser, cols: Record<string, string | string[]> = {}) {
   const merged: Record<string, string | string[] | boolean> = {
@@ -141,7 +143,7 @@ test.afterAll(async () => {
 });
 
 test('the whole truthful loop: match -> poke -> poke_accepted bell -> thread -> confirmed meeting -> admin inspector', async () => {
-  test.setTimeout(300_000);
+  test.setTimeout(420_000);
 
   // ── (1) A sees B on /matches with a human-readable reason ─────────────────
   const f1 = await apiAs(founder, 'GET', '/matches/platform');

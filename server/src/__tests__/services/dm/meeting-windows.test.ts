@@ -204,7 +204,7 @@ describe('acceptPoke intro seeding', () => {
     expect(params[3]).toMatch(/should meet/);
   });
 
-  // Task F3 (1 Aug 2026) — a message-less poke used to seed nothing, leaving
+  // Task F3 (23 Jul 2026) — a message-less poke used to seed nothing, leaving
   // a 0-message conversation canMessage()'s grandfather clause could never
   // open. It now seeds a fallback line instead, sender-authored, so the
   // thread is always usable. Full coverage of this edge lives in

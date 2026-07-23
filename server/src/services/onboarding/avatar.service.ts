@@ -13,6 +13,19 @@
 // LinkedIn wins. The overwrite is skipped only by virtue of never running the
 // UPDATE at all when the download fails; no separate "should I overwrite"
 // check is needed since we never touch avatar_url on failure.
+//
+// Trust model / SSRF posture: photoUrl originates ONLY from ScrapingDog's
+// authenticated API response (the claude_web provider pins photoUrl to null),
+// so this is a semi-trusted input — not member-supplied — but we still guard
+// the obvious abuse shapes before fetching: the URL must parse with an https:
+// protocol, and literal-IP hosts (IPv4 in any spelling — the WHATWG parser
+// canonicalizes hex/octal/decimal forms to dotted-quad — and bracketed IPv6)
+// are rejected, which blocks direct loopback/link-local/metadata targets.
+// Content-type (image/*) and the 2MB mid-stream cap still apply. Redirects
+// are still followed (a hostname redirecting to an internal IP is not
+// re-checked) — residual risk accepted at current scale for a provider-owned
+// input; revisit with a redirect:'manual' hop-by-hop check if photoUrl ever
+// becomes member-supplied.
 
 import { query } from '../../db';
 import config from '../../config';
@@ -54,10 +67,30 @@ export async function getAvatarBlob(userId: string): Promise<{ blob: Buffer; con
   return { blob: row.avatar_blob, contentType: row.avatar_blob_type };
 }
 
+/** SSRF guard (see the trust-model paragraph in the header): null when the
+ *  URL is fetchable, else a short reason. https-only, no literal-IP hosts. */
+function rejectedPhotoUrlReason(photoUrl: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(photoUrl);
+  } catch {
+    return 'unparseable url';
+  }
+  if (url.protocol !== 'https:') return 'non-https protocol';
+  // Bracketed IPv6 literals keep their brackets in WHATWG hostname ('[::1]');
+  // IPv4 literals in ANY spelling (hex/octal/plain decimal) come back
+  // canonicalized to dotted-quad, so one regex covers them all.
+  if (url.hostname.startsWith('[') || /^\d{1,3}(\.\d{1,3}){3}$/.test(url.hostname)) {
+    return 'literal ip host';
+  }
+  return null;
+}
+
 /**
  * Download `photoUrl`, validate it, and store it as the user's avatar.
  * Guards (any violation → false, logged, nothing written — avatar_url is
  * left exactly as it was):
+ *   - URL must parse, be https:, and not target a literal-IP host (SSRF)
  *   - 10s network timeout
  *   - response must be a 2xx
  *   - Content-Type must start with "image/"
@@ -67,6 +100,11 @@ export async function getAvatarBlob(userId: string): Promise<{ blob: Buffer; con
  * Never throws — every failure path is caught and mapped to `false`.
  */
 export async function captureAvatar(userId: string, photoUrl: string): Promise<boolean> {
+  const rejectedReason = rejectedPhotoUrlReason(photoUrl);
+  if (rejectedReason) {
+    logger.warn({ userId, reason: rejectedReason }, 'avatar: rejected photo url before fetch');
+    return false;
+  }
   try {
     const res = await fetch(photoUrl, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
     if (!res.ok) {

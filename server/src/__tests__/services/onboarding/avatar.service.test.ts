@@ -184,6 +184,68 @@ describe('captureAvatar', () => {
 
     await expect(captureAvatar(USER_ID, PHOTO_URL)).resolves.toBe(false);
   });
+
+  // ─── SSRF guard: https-only, no literal-IP hosts (checked BEFORE fetch) ────
+  describe('URL guard (SSRF)', () => {
+    it('rejects an http:// URL before any network call', async () => {
+      const fetchSpy = jest.spyOn(globalThis, 'fetch');
+
+      const result = await captureAvatar(USER_ID, 'http://cdn.example.com/jane.jpg');
+
+      expect(result).toBe(false);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalled();
+    });
+
+    it('rejects a literal IPv4 host before any network call', async () => {
+      const fetchSpy = jest.spyOn(globalThis, 'fetch');
+
+      const result = await captureAvatar(USER_ID, 'https://169.254.169.254/latest/meta-data');
+
+      expect(result).toBe(false);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it('rejects a decimal-form IPv4 host (the parser canonicalizes it to dotted-quad)', async () => {
+      const fetchSpy = jest.spyOn(globalThis, 'fetch');
+
+      // 2130706433 === 127.0.0.1
+      const result = await captureAvatar(USER_ID, 'https://2130706433/x.jpg');
+
+      expect(result).toBe(false);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('rejects a bracketed IPv6 host before any network call', async () => {
+      const fetchSpy = jest.spyOn(globalThis, 'fetch');
+
+      const result = await captureAvatar(USER_ID, 'https://[::1]/x.jpg');
+
+      expect(result).toBe(false);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unparseable URL before any network call', async () => {
+      const fetchSpy = jest.spyOn(globalThis, 'fetch');
+
+      const result = await captureAvatar(USER_ID, 'not a url at all');
+
+      expect(result).toBe(false);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('passes an https URL with a real hostname through to the download', async () => {
+      const bytes = new TextEncoder().encode('jpeg');
+      const fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(mockImageResponse(200, 'image/jpeg', bytes));
+
+      const result = await captureAvatar(USER_ID, PHOTO_URL);
+
+      expect(result).toBe(true);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 describe('avatarUrlFor', () => {
