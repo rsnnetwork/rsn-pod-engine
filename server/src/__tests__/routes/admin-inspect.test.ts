@@ -107,6 +107,7 @@ describe('authz', () => {
       .get(`/admin/users/${USER_ID}/onboarding`)
       .set('Authorization', `Bearer ${makeToken('member', 'member-1')}`);
     expect(member.status).toBe(403);
+    expect(member.body.data).toBeUndefined();
 
     const admin = await request(app)
       .get(`/admin/users/${USER_ID}/onboarding`)
@@ -124,6 +125,7 @@ describe('authz', () => {
       .get(`/admin/users/${USER_ID}/conversations`)
       .set('Authorization', `Bearer ${makeToken('member', 'member-1')}`);
     expect(member.status).toBe(403);
+    expect(member.body.data).toBeUndefined();
 
     const admin = await request(app)
       .get(`/admin/users/${USER_ID}/conversations`)
@@ -145,6 +147,7 @@ describe('authz', () => {
       .get(`/admin/conversations/${CONV_ID}/messages`)
       .set('Authorization', `Bearer ${makeToken('member', 'member-1')}`);
     expect(member.status).toBe(403);
+    expect(member.body.data).toBeUndefined();
 
     const admin = await request(app)
       .get(`/admin/conversations/${CONV_ID}/messages`)
@@ -162,6 +165,7 @@ describe('authz', () => {
       .get(`/admin/users/${USER_ID}/interactions`)
       .set('Authorization', `Bearer ${makeToken('member', 'member-1')}`);
     expect(member.status).toBe(403);
+    expect(member.body.data).toBeUndefined();
 
     const admin = await request(app)
       .get(`/admin/users/${USER_ID}/interactions`)
@@ -182,9 +186,7 @@ describe('authz', () => {
 
 describe('GET /users/:id/onboarding', () => {
   it('404s for an unknown user id', async () => {
-    mockQuery(
-      [(sql) => (/LEFT JOIN user_intent_profiles/i.test(sql) ? { rows: [], rowCount: 0 } : undefined)],
-    );
+    mockQuery([], false);
     const res = await request(app)
       .get(`/admin/users/${USER_ID}/onboarding`)
       .set('Authorization', `Bearer ${makeToken('admin', ADMIN_ID)}`);
@@ -291,8 +293,9 @@ describe('GET /users/:id/onboarding', () => {
   });
 
   it('propagates an unexpected DB failure as a 500 with no data payload', async () => {
-    (dbQuery as jest.Mock).mockImplementation((sql: string) => {
+    (dbQuery as jest.Mock).mockImplementation((sql: string, params: any[] = []) => {
       if (/SELECT\s+status\s+FROM\s+users/i.test(sql)) return Promise.resolve({ rows: [{ status: 'active' }], rowCount: 1 });
+      if (/^SELECT\s+id\s+FROM\s+users\s+WHERE\s+id\s*=\s*\$1/i.test(sql.trim())) return Promise.resolve({ rows: [{ id: params[0] }], rowCount: 1 });
       if (/LEFT JOIN user_intent_profiles/i.test(sql)) return Promise.reject(new Error('db down'));
       return Promise.resolve({ rows: [], rowCount: 0 });
     });

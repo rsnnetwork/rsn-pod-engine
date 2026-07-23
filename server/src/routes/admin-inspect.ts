@@ -40,6 +40,7 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.params.id;
+      await assertUserExists(userId);
 
       const [joined, stageEvents] = await Promise.all([
         query<{
