@@ -198,6 +198,10 @@ export interface OnboardingKnownProfile {
   companyGuessed: boolean;
   /** Saved role / job title, if any (Round B; not inferred, so no guessed flag). */
   role: string | null;
+  /** Saved bio / professional summary, if any (not inferred, so no guessed flag).
+   *  Surfaced so a bio-only profile (no company/role saved) still prefills the
+   *  confirm card's About field instead of rendering blank. */
+  about: string | null;
   /** Saved LinkedIn URL, if any (Round B). */
   linkedin: string | null;
   /** The member's stated reason for joining (from their join request), if any. */

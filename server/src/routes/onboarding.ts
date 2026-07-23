@@ -118,6 +118,30 @@ function openingFromEnrichment(
   }
 }
 
+// Only the none/not_found/failed/unrecognized branches of openingFromEnrichment
+// actually consult hasProfileData — searching/found/partial ignore it entirely.
+// GET /onboarding/status is polled every 2.5s while searching, so paying for a
+// DB round trip on every poll whose result gets thrown away is wasted work.
+function openingDependsOnProfileData(status: OnboardingEnrichmentState['status']): boolean {
+  return status !== 'searching' && status !== 'found' && status !== 'partial';
+}
+
+// Single source of truth for "the opening this member should see right now",
+// shared by GET /onboarding/status (the payload the client polls) and
+// POST /onboarding/chat (the honesty clause in the system prompt) — so the two
+// can never disagree about whether we already have something to work with (the
+// Claus rule: an on-file company/role/bio counts even when the LinkedIn lookup
+// itself came back none/not_found/failed/unrecognized).
+async function resolveEffectiveOpening(
+  userId: string,
+  status: OnboardingEnrichmentState['status']
+): Promise<OnboardingOpening> {
+  const hasProfileData = openingDependsOnProfileData(status)
+    ? await intentRepo.hasSubstantiveProfileData(userId)
+    : false;
+  return openingFromEnrichment(status, hasProfileData);
+}
+
 // ─── GET /onboarding/status ──────────────────────────────────────────────────
 router.get(
   '/status',
@@ -125,10 +149,9 @@ router.get(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const userId = req.user!.userId;
-      const [status, enrichmentState, hasProfileData] = await Promise.all([
+      const [status, enrichmentState] = await Promise.all([
         intentRepo.getOnboardingStatus(userId),
         enrichRepo.getEnrichmentState(userId),
-        intentRepo.hasSubstantiveProfileData(userId),
       ]);
       const enrichmentPayload: OnboardingEnrichmentState = {
         status: enrichmentState.status,
@@ -146,7 +169,7 @@ router.get(
         const cached = await enrichRepo.getCachedEnrichment(userId).catch(() => null);
         if (cached?.profile) enrichmentPayload.candidate = cached.profile;
       }
-      const opening = openingFromEnrichment(enrichmentPayload.status, hasProfileData);
+      const opening = await resolveEffectiveOpening(userId, enrichmentPayload.status);
       const response: ApiResponse = { success: true, data: { status, enrichment: enrichmentPayload, opening } };
       res.json(response);
     } catch (err) {
@@ -302,12 +325,20 @@ router.post(
           .getEnrichmentState(userId)
           .catch(() => ({ status: 'failed' as const, source: null, error: null, startedAt: null, completedAt: null })),
       ]);
+      // The Claus rule reaching the chat: the honesty clause must key off the
+      // SAME effective opening GET /onboarding/status reports (raw enrichment
+      // status + hasSubstantiveProfileData), never the raw status alone — a
+      // failed/none/not_found lookup that nonetheless has substantive on-file
+      // data effectively opened 'partial' for the client, so the system prompt
+      // must speak the same "what we already have" branch, not "we could not
+      // retrieve", or the host would contradict the client's own opening bubble.
+      const effectiveOpening = await resolveEffectiveOpening(userId, enrichmentState.status);
       // Reply is converse ONLY — kept fast. The live card update runs as a separate
       // call (POST /onboarding/profile) so a slow extraction can never delay or cap
       // the reply, and the card fills reliably on every turn.
       let turn;
       try {
-        turn = await chatbot.converse(messages, profile, wrapMode, hostKnown, enrichmentState.status);
+        turn = await chatbot.converse(messages, profile, wrapMode, hostKnown, effectiveOpening);
       } catch (err) {
         // LLM down (exhausted credits, revoked key, outage) → 503 LLM_DISABLED so
         // the client falls back to the form. 2 Jul: prod credits ran out and this

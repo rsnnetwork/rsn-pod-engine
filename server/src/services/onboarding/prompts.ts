@@ -5,7 +5,7 @@
 // never re-asks what we already know. Plus a fixed first question and the JSON
 // extraction prompt. Style: calm human host, NO dashes.
 
-import { OnboardingMessage, OnboardingConfirmedProfile, OnboardingEnrichmentStatus } from '@rsn/shared';
+import { OnboardingMessage, OnboardingConfirmedProfile, OnboardingOpening } from '@rsn/shared';
 
 /** Silent signal the host appends once it has everything and has summarised. */
 export const READY_TOKEN = '<<READY>>';
@@ -74,8 +74,16 @@ function knownBlock(p?: OnboardingConfirmedProfile, extra?: HostKnownExtra): str
 // rather than anything actually retrieved from a public profile. Claiming a
 // specific retrieval here would overstate what happened, so the clause speaks
 // of "what we already have" rather than "retrieved... their public profile".
-function honestyClause(enrichmentStatus?: OnboardingEnrichmentStatus): string {
-  return enrichmentStatus === 'found' || enrichmentStatus === 'partial'
+//
+// `effectiveOpening` must be the EFFECTIVE opening (openingFromEnrichment +
+// hasSubstantiveProfileData, the same value GET /onboarding/status reports),
+// never the raw enrichment status — otherwise a failed/none/not_found lookup
+// with substantive on-file data would say "we could not retrieve their
+// profile" here while the client's own opening bubble (settled 'partial')
+// already told the member we had something to work with. The caller
+// (POST /onboarding/chat) resolves that effective value before calling in.
+function honestyClause(effectiveOpening?: OnboardingOpening): string {
+  return effectiveOpening === 'found' || effectiveOpening === 'partial'
     ? '\n\nThe known profile block above is what we already have for them, whether it came from what is on file or from their public profile. Confirm those facts before you build on them, and never invent anything about them beyond what is in that block.'
     : '\n\nWe could not retrieve their profile before this chat. Never imply that we already reviewed anything about them. Build their profile together, entirely from what they tell you here.';
 }
@@ -85,7 +93,7 @@ export function buildHostSystemPrompt(
   profile?: OnboardingConfirmedProfile,
   wrapMode: 'none' | 'soft' | 'hard' = 'none',
   extra?: HostKnownExtra,
-  enrichmentStatus?: OnboardingEnrichmentStatus
+  effectiveOpening?: OnboardingOpening
 ): string {
   const wrap =
     wrapMode === 'hard'
@@ -99,7 +107,7 @@ Style rules (strict):
 1. Never use dashes of any kind in your messages. No em dash, no en dash, no hyphen used as a pause. Use a comma or a full stop instead.
 2. No generic or corporate phrasing (for example "your space for meaningful connections", "let us dive in", "I am here to help"). No filler. No long formal explanations.
 3. One question at a time. One or two short sentences per message.
-4. Always reply in English.${knownBlock(profile, extra)}${honestyClause(enrichmentStatus)}
+4. Always reply in English.${knownBlock(profile, extra)}${honestyClause(effectiveOpening)}
 
 The member has just been welcomed by name and has confirmed their basic details. They have already been asked their reason for joining and have answered it. You want a usable sense of a few more things, in order of importance:
   1. Who would be valuable for them to meet, roughly why, and what would actually make a meeting with someone feel valuable to them.

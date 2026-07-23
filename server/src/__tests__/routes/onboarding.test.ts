@@ -336,8 +336,15 @@ describe('GET /onboarding/status', () => {
     });
   });
 
-  it('defaults to not_found for an unrecognized enrichment status (fail-safe)', async () => {
+  // Finding 4: a genuinely unrecognized status string still goes through
+  // openingFromEnrichment's default branch, and that branch honors the Claus
+  // rule exactly like the terminal-failure states, not a bespoke always-not_found rule.
+  it.each([
+    [false, 'not_found'],
+    [true, 'partial'],
+  ])('an unrecognized enrichment status (hasProfileData=%s) opens as %s (fail-safe + Claus rule)', async (hasProfileData, expectedOpening) => {
     (intentRepo.getOnboardingStatus as jest.Mock).mockResolvedValue('not_started');
+    (intentRepo.hasSubstantiveProfileData as jest.Mock).mockResolvedValue(hasProfileData);
     (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
       status: 'unknown_status' as any,
       source: null,
@@ -349,7 +356,43 @@ describe('GET /onboarding/status', () => {
       .get('/onboarding/status')
       .set('Authorization', `Bearer ${makeToken()}`);
     expect(res.status).toBe(200);
-    expect(res.body.data.opening).toBe('not_found');
+    expect(res.body.data.opening).toBe(expectedOpening);
+  });
+
+  // Finding 2: hasSubstantiveProfileData is a real DB query. openingFromEnrichment
+  // only consults it for the none/not_found/failed/unrecognized branches — a
+  // status of searching/found/partial ignores the flag entirely, so the route
+  // must not pay for that query on every 2.5s client poll for those statuses.
+  describe('hasSubstantiveProfileData short-circuit (only queried when the opening would use it)', () => {
+    it.each(['searching', 'found', 'partial'] as const)(
+      'does NOT query profile data when enrichment.status=%s (the opening ignores it)',
+      async (status) => {
+        (intentRepo.getOnboardingStatus as jest.Mock).mockResolvedValue('not_started');
+        (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
+          status, source: null, error: null, startedAt: null, completedAt: null,
+        });
+        const res = await request(app)
+          .get('/onboarding/status')
+          .set('Authorization', `Bearer ${makeToken()}`);
+        expect(res.status).toBe(200);
+        expect(intentRepo.hasSubstantiveProfileData).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(['none', 'not_found', 'failed', 'unknown_status'] as const)(
+      'DOES query profile data when enrichment.status=%s (the opening depends on it)',
+      async (status) => {
+        (intentRepo.getOnboardingStatus as jest.Mock).mockResolvedValue('not_started');
+        (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
+          status: status as any, source: null, error: null, startedAt: null, completedAt: null,
+        });
+        const res = await request(app)
+          .get('/onboarding/status')
+          .set('Authorization', `Bearer ${makeToken()}`);
+        expect(res.status).toBe(200);
+        expect(intentRepo.hasSubstantiveProfileData).toHaveBeenCalledWith('user-abc');
+      }
+    );
   });
 });
 
@@ -534,38 +577,118 @@ describe('POST /onboarding/chat', () => {
     });
   });
 
-  describe('honesty clause: enrichment state reaches the host system prompt', () => {
+  // Finding 1 (the Claus rule reaching the chat): /chat used to pass the RAW
+  // enrichment status straight into converse -> honestyClause. That let the
+  // system prompt say "we could not retrieve their profile" in the exact same
+  // turn where the client's second opening bubble (gated on the settled
+  // 'partial' opening, which already honors on-file data) told the member we
+  // had looked at their background — a direct contradiction inside one
+  // conversation. Fixed: the route now resolves the SAME effective opening
+  // GET /onboarding/status computes (openingFromEnrichment + the
+  // hasSubstantiveProfileData short-circuit) and passes THAT to converse, so
+  // the prompt, the status payload, and the client bubbles can never disagree.
+  describe('honesty clause: the EFFECTIVE opening (not the raw status) reaches the host system prompt', () => {
     it.each([
-      ['found', 'what we already have for them'],
-      ['partial', 'what we already have for them'],
-      ['not_found', 'we could not retrieve their profile'],
-      ['none', 'we could not retrieve their profile'],
-      ['failed', 'we could not retrieve their profile'],
-      ['searching', 'we could not retrieve their profile'],
-    ])('enrichment status %s drives converse toward the "%s" honesty clause', async (status, expectedClause) => {
+      // status, hasProfileData, expected effective opening, expected clause
+      ['found', false, 'found', 'what we already have for them'],
+      ['partial', false, 'partial', 'what we already have for them'],
+      ['not_found', false, 'not_found', 'we could not retrieve their profile'],
+      ['none', false, 'not_found', 'we could not retrieve their profile'],
+      ['failed', false, 'not_found', 'we could not retrieve their profile'],
+      ['searching', false, 'searching', 'we could not retrieve their profile'],
+      // found/partial ignore hasProfileData (unaffected by the Claus rule).
+      ['found', true, 'found', 'what we already have for them'],
+      ['partial', true, 'partial', 'what we already have for them'],
+      ['searching', true, 'searching', 'we could not retrieve their profile'],
+      // The Claus rule itself reaching the chat: a terminal-failure status
+      // with substantive on-file data effectively opens 'partial', so the
+      // clause must switch to the "what we already have" branch too.
+      ['none', true, 'partial', 'what we already have for them'],
+      ['not_found', true, 'partial', 'what we already have for them'],
+      ['failed', true, 'partial', 'what we already have for them'],
+    ] as const)(
+      'status=%s, hasProfileData=%s -> effective opening=%s -> converse receives the "%s" honesty clause',
+      async (status, hasProfileData, expectedOpening, expectedClause) => {
+        // Distinct userId per row (distinct rate-limit key) — onboardingChatLimiter
+        // is a shared, process-wide budget (30/60s per user) across every test in
+        // this file, same discipline as the E1 block above.
+        const userId = `user-honesty-${status}-${hasProfileData}`;
+        (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+        (chatbot.converse as jest.Mock).mockResolvedValue({ reply: 'ok', ready: false });
+        (intentRepo.hasSubstantiveProfileData as jest.Mock).mockResolvedValue(hasProfileData);
+        (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
+          status,
+          source: null,
+          error: null,
+          startedAt: null,
+          completedAt: null,
+        });
+
+        await request(app)
+          .post('/onboarding/chat')
+          .set('Authorization', `Bearer ${makeToken(userId)}`)
+          .send(body);
+
+        expect(chatbot.converse).toHaveBeenCalledTimes(1);
+        const args = (chatbot.converse as jest.Mock).mock.calls[0];
+        // converse receives the EFFECTIVE opening, never the raw status.
+        expect(args[4]).toBe(expectedOpening);
+        // Finding 2 (kept consistent here): the profile-data query only runs
+        // for the branches whose opening actually depends on it.
+        const needsLookup = status === 'none' || status === 'not_found' || status === 'failed';
+        if (needsLookup) {
+          expect(intentRepo.hasSubstantiveProfileData).toHaveBeenCalledWith(userId);
+        } else {
+          expect(intentRepo.hasSubstantiveProfileData).not.toHaveBeenCalled();
+        }
+        // Feed the same args converse received into the real (unmocked) prompt
+        // builder — proves the state the route passed actually resolves to the
+        // right, and only the right, honesty clause.
+        const prompt = buildHostSystemPrompt(args[1], args[2], args[3], args[4]).toLowerCase();
+        expect(prompt).toContain(expectedClause);
+      }
+    );
+
+    // The exact scenario from the review finding, spelled out explicitly
+    // rather than folded into the table above.
+    it('failed status + substantive on-file company data: converse receives the partial-side (what we already have) clause', async () => {
       (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
       (chatbot.converse as jest.Mock).mockResolvedValue({ reply: 'ok', ready: false });
+      (intentRepo.hasSubstantiveProfileData as jest.Mock).mockResolvedValue(true);
       (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
-        status,
-        source: null,
-        error: null,
-        startedAt: null,
-        completedAt: null,
+        status: 'failed', source: null, error: 'provider timeout', startedAt: null, completedAt: null,
       });
 
       await request(app)
         .post('/onboarding/chat')
-        .set('Authorization', `Bearer ${makeToken()}`)
+        .set('Authorization', `Bearer ${makeToken('user-honesty-explicit-1')}`)
         .send(body);
 
-      expect(chatbot.converse).toHaveBeenCalledTimes(1);
       const args = (chatbot.converse as jest.Mock).mock.calls[0];
-      expect(args[4]).toBe(status);
-      // Feed the same args converse received into the real (unmocked) prompt
-      // builder — proves the state the route passed actually resolves to the
-      // right, and only the right, honesty clause.
+      expect(args[4]).toBe('partial');
       const prompt = buildHostSystemPrompt(args[1], args[2], args[3], args[4]).toLowerCase();
-      expect(prompt).toContain(expectedClause);
+      expect(prompt).toContain('what we already have for them');
+      expect(prompt).not.toContain('we could not retrieve their profile');
+    });
+
+    it('failed status + a blank profile (nothing on file): converse receives the not-retrieved clause', async () => {
+      (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+      (chatbot.converse as jest.Mock).mockResolvedValue({ reply: 'ok', ready: false });
+      (intentRepo.hasSubstantiveProfileData as jest.Mock).mockResolvedValue(false);
+      (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
+        status: 'failed', source: null, error: 'provider timeout', startedAt: null, completedAt: null,
+      });
+
+      await request(app)
+        .post('/onboarding/chat')
+        .set('Authorization', `Bearer ${makeToken('user-honesty-explicit-2')}`)
+        .send(body);
+
+      const args = (chatbot.converse as jest.Mock).mock.calls[0];
+      expect(args[4]).toBe('not_found');
+      const prompt = buildHostSystemPrompt(args[1], args[2], args[3], args[4]).toLowerCase();
+      expect(prompt).toContain('we could not retrieve their profile');
+      expect(prompt).not.toContain('what we already have for them');
     });
 
     it('a failed enrichment lookup degrades to the not-retrieved clause rather than 500ing the chat', async () => {

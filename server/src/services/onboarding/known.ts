@@ -78,11 +78,12 @@ export async function inferKnownProfile(req: Request, userId: string): Promise<O
     job_title: string | null;
     linkedin_url: string | null;
     why_i_want_to_meet: string | null;
+    bio: string | null;
     inviter_name: string | null;
     inviter_email: string | null;
   }>(
     `SELECT u.email, u.display_name, u.first_name, u.company, u.location, u.job_title, u.linkedin_url,
-            u.why_i_want_to_meet,
+            u.why_i_want_to_meet, u.bio,
             inv.display_name AS inviter_name, inv.email AS inviter_email
        FROM users u
        LEFT JOIN users inv ON inv.id = u.invited_by_user_id
@@ -127,6 +128,7 @@ export async function inferKnownProfile(req: Request, userId: string): Promise<O
     company: savedCompany || guessedCompany || null,
     companyGuessed: !savedCompany && !!guessedCompany,
     role: u?.job_title?.trim() || null,
+    about: u?.bio?.trim() || null,
     linkedin: u?.linkedin_url?.trim() || null,
     reason: u?.why_i_want_to_meet?.trim() || null,
     previousEvents,

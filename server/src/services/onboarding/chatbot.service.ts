@@ -11,7 +11,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import config from '../../config';
-import { OnboardingMessage, OnboardingConfirmedProfile, OnboardingEnrichmentStatus } from '@rsn/shared';
+import { OnboardingMessage, OnboardingConfirmedProfile, OnboardingOpening } from '@rsn/shared';
 import { IntentSchema, INTENT_JSON_SCHEMA, ExtractedIntent } from './intent.schema';
 import {
   buildHostSystemPrompt,
@@ -42,19 +42,26 @@ export function isEnabled(): boolean {
  * Claude call #1 — one host turn. Returns the reply plus `ready`, which flips
  * true once the host has summarised and emitted the silent READY_TOKEN (stripped
  * from the reply the user sees).
+ *
+ * `effectiveOpening` drives the honesty clause and MUST be the same effective
+ * opening GET /onboarding/status reports (openingFromEnrichment + the
+ * hasSubstantiveProfileData Claus rule), not the raw enrichment status — the
+ * caller (POST /onboarding/chat) resolves it before calling in, so the system
+ * prompt can never contradict what the client's opening bubble already told
+ * the member.
  */
 export async function converse(
   messages: OnboardingMessage[],
   profile?: OnboardingConfirmedProfile,
   wrapMode: 'none' | 'soft' | 'hard' = 'none',
   extra?: HostKnownExtra,
-  enrichmentStatus?: OnboardingEnrichmentStatus
+  effectiveOpening?: OnboardingOpening
 ): Promise<{ reply: string; ready: boolean }> {
   const anthropic = getClient();
   const resp = await anthropic.messages.create({
     model: config.onboardingChatModel,
     max_tokens: 1024,
-    system: buildHostSystemPrompt(profile, wrapMode, extra, enrichmentStatus),
+    system: buildHostSystemPrompt(profile, wrapMode, extra, effectiveOpening),
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
   });
 

@@ -363,7 +363,10 @@ export default function ChatbotOnboarding() {
           linkedin: k.linkedin || '',
           industry: '',
           location: '',
-          about: '',
+          // Bio-only members (no company/role saved) still get a populated
+          // confirm card: about seeds from the saved bio, ahead of the
+          // candidate/chat prefills below, which only ever fill it when empty.
+          about: k.about || '',
           wantsToMeet: [],
           offers: [],
         });
