@@ -146,6 +146,21 @@ function mergePrioritized(primary: string[], secondary: string[]): string[] {
   return out;
 }
 
+// Resolve a field that may have been prefilled from a weak known-email-domain guess
+// (GET /onboarding/known's *Guessed flags). Priority: member-typed > verified LinkedIn
+// candidate > untouched known guess > empty — a draft value still equal to the guess it
+// was seeded with hasn't been touched by the member, so the candidate may still replace
+// it; any value that differs from that guess was typed by the member and always wins.
+function resolveGuessable(
+  current: string,
+  guessValue: string | null | undefined,
+  wasGuessed: boolean | undefined,
+  candidateValue: string | null | undefined
+): string {
+  const untouched = !current || (!!wasGuessed && current === (guessValue || ''));
+  return untouched ? candidateValue || current || '' : current;
+}
+
 // How complete the card is — drives the progress bar + mobile chips. Counts the
 // fields the chat can actually fill (not name/country, which are known upfront).
 function cardProgress(d: typeof emptyDraft): { filled: number; total: number } {
@@ -386,7 +401,10 @@ export default function ChatbotOnboarding() {
       if (candidate) {
         setDraft((d) => ({
           ...d,
-          company: d.company || candidate.currentCompany || '',
+          // Priority: member-typed > verified LinkedIn candidate > known email-domain guess > empty.
+          // Only `company` has a known-guess counterpart today (known.companyGuessed); role,
+          // industry, location, about and linkedin have none, so empty-only fill stays correct.
+          company: resolveGuessable(d.company, known?.company, known?.companyGuessed, candidate.currentCompany),
           role: d.role || candidate.currentRole || candidate.headline || '',
           industry: d.industry || candidate.industry || '',
           location: d.location || candidate.location || '',
