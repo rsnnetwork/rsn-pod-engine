@@ -354,8 +354,12 @@ test('searching wait card fits at tablet and desktop widths (768, 1024, 1280)', 
       `wait card must fit within the ${width}px viewport`
     ).toBeLessThanOrEqual(width + 0.5);
 
-    // Close context before next width
-    await (await cardLocator.page())?.context().close();
+    // Detach route handlers BEFORE closing: the client polls /status every
+    // 2.5s, and a poll in flight during teardown makes the handler's
+    // route.fetch() throw "context has been closed". ignoreErrors swallows
+    // exactly that race.
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    await page.context().close();
     console.log(`  ✓ searching card: fits at ${width}px.`);
   }
 });
