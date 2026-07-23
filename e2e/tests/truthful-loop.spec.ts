@@ -102,7 +102,10 @@ async function assertFitsViewport(locator: ReturnType<Page['locator']>, viewport
   const box = await locator.boundingBox();
   expect(box, `${label} must have a bounding box`).toBeTruthy();
   expect(box!.x, `${label} must not start off-screen`).toBeGreaterThanOrEqual(0);
-  expect(box!.x + box!.width, `${label} must fit within the ${viewportWidth}px viewport`).toBeLessThanOrEqual(viewportWidth);
+  // 0.5px tolerance: under non-integer devicePixelRatio (Windows display scaling)
+  // Chromium reports fractional boundingBox readback for CSS-pinned (inset-x-0)
+  // elements — 390.4 for a provably 390-wide sheet. Real overflow is >=1px.
+  expect(box!.x + box!.width, `${label} must fit within the ${viewportWidth}px viewport`).toBeLessThanOrEqual(viewportWidth + 0.5);
 }
 
 test.beforeAll(async () => {
