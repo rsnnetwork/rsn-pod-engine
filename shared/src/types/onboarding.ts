@@ -120,11 +120,34 @@ export interface OnboardingIntent {
 /** Enrichment lifecycle, as surfaced to the member (provider identity/`source` stays admin-only). */
 export type OnboardingEnrichmentStatus = 'none' | 'searching' | 'found' | 'partial' | 'not_found' | 'failed';
 
+/**
+ * The enriched profile found for the member — the confirm-card prefill.
+ * Typed pragmatically (shared cannot import the server's EnrichedProfile):
+ * these mirror the field names the client consumes; the server may send
+ * additional fields the client ignores.
+ */
+export interface OnboardingEnrichmentCandidate {
+  fullName?: string | null;
+  headline?: string | null;
+  currentRole?: string | null;
+  currentCompany?: string | null;
+  industry?: string | null;
+  location?: string | null;
+  summary?: string | null;
+  likelyWantsToMeet?: string[];
+  likelyOffers?: string[];
+  linkedinUrl?: string | null;
+}
+
 export interface OnboardingEnrichmentState {
   status: OnboardingEnrichmentStatus;
   error: string | null;
   startedAt: string | null;
   completedAt: string | null;
+  /** Present ONLY when status is 'found' or 'partial' — the member's own
+   *  cached enriched profile, so the client can seed the confirm card. Never
+   *  included on any other status. */
+  candidate?: OnboardingEnrichmentCandidate;
 }
 
 /** GET /onboarding/status */

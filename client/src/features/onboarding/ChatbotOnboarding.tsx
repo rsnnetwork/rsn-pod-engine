@@ -13,6 +13,7 @@ import {
   type OnboardingResume,
   type OnboardingOpening,
   type OnboardingStatusResponse,
+  type OnboardingEnrichmentCandidate,
   OPENINGS,
 } from '@rsn/shared';
 import OnboardingPage from './OnboardingPage';
@@ -374,10 +375,28 @@ export default function ChatbotOnboarding() {
   }
 
   // Land on the right stage for a resolved (non-searching) opening: found/partial
-  // keep the confirm card before chat; not_found skips it entirely.
-  function settleOpening(op: OnboardingOpening) {
+  // seed the confirm card from the enrichment candidate (the found profile —
+  // same field mapping the pre-202 runEnrich used) and show it before chat;
+  // not_found skips it entirely. Identity fields fill only when empty (never
+  // clobber known/edited values); accepting the card persists via startChat's
+  // applyFields, exactly like the old accept path.
+  function settleOpening(op: OnboardingOpening, candidate?: OnboardingEnrichmentCandidate) {
     setOpening(op);
     if (op === 'found' || op === 'partial') {
+      if (candidate) {
+        setDraft((d) => ({
+          ...d,
+          company: d.company || candidate.currentCompany || '',
+          role: d.role || candidate.currentRole || candidate.headline || '',
+          industry: d.industry || candidate.industry || '',
+          location: d.location || candidate.location || '',
+          about: d.about || candidate.summary || '',
+          linkedin: d.linkedin || candidate.linkedinUrl || '',
+          // Prefill interests/reasons-to-meet from LinkedIn; chat answers merge on top (prioritized).
+          wantsToMeet: d.wantsToMeet.length ? d.wantsToMeet : (Array.isArray(candidate.likelyWantsToMeet) ? candidate.likelyWantsToMeet : []),
+          offers: d.offers.length ? d.offers : (Array.isArray(candidate.likelyOffers) ? candidate.likelyOffers : []),
+        }));
+      }
       setStage('confirm');
     } else {
       setMessages(openingMessages(op));
@@ -388,10 +407,12 @@ export default function ChatbotOnboarding() {
   // The 'searching' stage: poll GET /onboarding/status every 2.5s until the
   // opening resolves away from 'searching'. Fires the enrichment trigger
   // exactly once (only when a LinkedIn URL is on file and no job has ever
-  // run) — the background job owns every retry from here; the client never
-  // times out a request or swallows a 503 itself. A 3-minute belt forces the
-  // not_found path if polling somehow never resolves (server will have
-  // terminal-ed long before this fires).
+  // run) — and keeps polling through that first 'none' response instead of
+  // settling on it (the search it just triggered is still running). The
+  // background job owns every retry from here; the client never times out a
+  // request or swallows a 503 itself. A 3-minute belt forces the not_found
+  // path if polling somehow never resolves (server will have terminal-ed
+  // long before this fires).
   useEffect(() => {
     if (stage !== 'searching') return;
     let cancelled = false;
@@ -400,10 +421,10 @@ export default function ChatbotOnboarding() {
     let enrichFired = false;
     const startedAtMs = Date.now();
 
-    function finish(op: OnboardingOpening) {
+    function finish(op: OnboardingOpening, candidate?: OnboardingEnrichmentCandidate) {
       if (cancelled || settled) return;
       settled = true;
-      settleOpening(op);
+      settleOpening(op, candidate);
     }
 
     async function poll() {
@@ -414,13 +435,21 @@ export default function ChatbotOnboarding() {
         if (cancelled || settled) return;
         const data = res.data.data as OnboardingStatusResponse;
 
-        if (!enrichFired && data.enrichment.status === 'none' && known?.linkedin) {
-          enrichFired = true;
-          api.post('/onboarding/enrich', { linkedinUrl: known.linkedin }).catch(() => {});
-        }
-
-        if (data.opening !== 'searching') {
-          finish(data.opening);
+        // status 'none' with a LinkedIn URL on file means no job has run YET —
+        // fire the trigger (once) and treat this poll as still-searching. The
+        // server maps 'none' to opening 'not_found', so settling here would
+        // settle on the very response that triggered the search (the approved
+        // join-request preload case: cached blob, state columns still 'none').
+        // The trigger + cache-first orchestrator move it to a real state
+        // within a poll cycle; the belt below still bounds the wait. Only a
+        // 'none' with NO URL to search settles immediately.
+        if (data.enrichment.status === 'none' && known?.linkedin) {
+          if (!enrichFired) {
+            enrichFired = true;
+            api.post('/onboarding/enrich', { linkedinUrl: known.linkedin }).catch(() => {});
+          }
+        } else if (data.opening !== 'searching') {
+          finish(data.opening, data.enrichment.candidate);
           return;
         }
       } catch {

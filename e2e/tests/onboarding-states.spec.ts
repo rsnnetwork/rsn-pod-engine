@@ -16,7 +16,11 @@ import { gotoRetry, cleanup, APP, SERVER } from '../helpers/live-ui';
 // hits the real backend: our test user never has a linkedin_url, so the
 // client's own enrichment auto-trigger (fires only when known.linkedin
 // exists) never calls POST /onboarding/enrich, and a fresh user always has
-// no in-progress resume — so 'resume'/'enrich' need no stub either.
+// no in-progress resume — so 'resume'/'enrich' need no stub either. The one
+// exception is the none -> searching -> found transition test at the bottom,
+// which is ABOUT the auto-trigger: it stubs /known (adds a linkedin) and
+// answers POST /onboarding/enrich synthetically so no real provider run can
+// ever start from this spec.
 //
 // The four strings mirror shared/src/types/onboarding.ts's OPENINGS. e2e is
 // not an npm-workspace member (see e2e/package.json) so it can't import
@@ -171,6 +175,115 @@ test('searching -> found transitions live: the wait card swaps for the confirm c
   const navCount = await page.evaluate(() => (window as unknown as { __navCount: number }).__navCount);
   expect(navCount).toBe(1);
   console.log('  ✓ searching→found: swapped live in place, no reload.');
+});
+
+test('none with a LinkedIn on file does NOT settle: the client fires the enrich trigger, keeps polling through none -> searching, and lands found', async () => {
+  // Pins the CRITICAL-1 fix: enrichment.status 'none' maps to opening
+  // 'not_found' server-side, but when a LinkedIn URL is on file that first
+  // response is the very poll that TRIGGERS the search — settling on it
+  // would flash "could not identify" while the job it just started runs
+  // (the approved join-request preload case: cached blob, state columns
+  // still 'none'). The client must keep polling instead.
+  test.setTimeout(90_000);
+  let phase: 'none' | 'searching' | 'found' = 'none';
+  let enrichCalls = 0;
+  let statusCalls = 0;
+  const candidate = {
+    fullName: 'Onb States',
+    currentRole: 'CTO',
+    currentCompany: 'Acme GmbH',
+    industry: 'Software',
+    location: 'Berlin',
+    summary: 'Builds things.',
+    likelyWantsToMeet: ['investors'],
+    likelyOffers: ['engineering leadership'],
+    linkedinUrl: 'https://www.linkedin.com/in/onbstates-e2e',
+  };
+
+  const page = await openOnboarding();
+
+  // The trigger only fires when known.linkedin exists — add one to the real
+  // /known response (route.fetch keeps the genuine CORS headers).
+  await page.route(`${SERVER}/api/onboarding/known`, async (route) => {
+    const response = await route.fetch();
+    const json = await response.json();
+    json.data = { ...json.data, linkedin: candidate.linkedinUrl };
+    await route.fulfill({ response, json });
+  });
+
+  // Answer the enrich trigger synthetically — 202 searching, no real provider
+  // run. OPTIONS preflight continues to the real backend (it answers CORS);
+  // the POST itself never leaves the browser, so ACAO is hand-rolled ('*' is
+  // fine — the client's axios never uses credentials mode).
+  await page.route(`${SERVER}/api/onboarding/enrich`, async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+    enrichCalls += 1;
+    await route.fulfill({
+      status: 202,
+      headers: { 'access-control-allow-origin': '*' },
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, data: { status: 'searching' } }),
+    });
+  });
+
+  // Status stub mirrors the real server mapping per phase: 'none' reads as
+  // opening 'not_found' (that is the trap), then searching, then found with
+  // the candidate riding along exactly like the fixed GET /onboarding/status.
+  await page.route(`${SERVER}/api/onboarding/status`, async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.continue();
+      return;
+    }
+    statusCalls += 1;
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      json: {
+        success: true,
+        data: {
+          status: 'not_started',
+          enrichment: {
+            status: phase,
+            error: null,
+            startedAt: null,
+            completedAt: null,
+            ...(phase === 'found' ? { candidate } : {}),
+          },
+          opening: phase === 'none' ? 'not_found' : phase,
+        },
+      },
+    });
+  });
+
+  await gotoRetry(page, `${APP}/onboarding`);
+
+  // The 'none' poll fired the trigger...
+  await expect.poll(() => enrichCalls, { timeout: 20_000 }).toBeGreaterThan(0);
+  // ...and the client did NOT settle on that same response: two more polls
+  // later it is still on the wait card — no chat, no confirm card, and above
+  // all no "could not identify" opening.
+  const settledAt = statusCalls;
+  await expect.poll(() => statusCalls, { timeout: 20_000 }).toBeGreaterThanOrEqual(settledAt + 2);
+  await expect(page.getByText(OPENINGS.searching)).toBeVisible();
+  await expect(page.locator('textarea[aria-label="Your answer"]')).toHaveCount(0);
+  await expect(page.getByText(/Is it right\?/i)).toHaveCount(0);
+  console.log('  ✓ none+linkedin: trigger fired, client kept polling instead of settling not_found.');
+
+  // The triggered job progresses: none -> searching (still waiting) -> found.
+  phase = 'searching';
+  await expect(page.getByText(OPENINGS.searching)).toBeVisible();
+  phase = 'found';
+  await expect(page.getByText(/Is it right\?/i)).toBeVisible({ timeout: 15_000 });
+  // CRITICAL-2 seam: the candidate seeded the confirm card.
+  await expect(page.getByText('Acme GmbH')).toBeVisible();
+  await expect(page.getByText('Builds things.')).toBeVisible();
+
+  await page.getByRole('button', { name: /Yes, continue/i }).click();
+  await expect(firstBubble(page)).toHaveText(OPENINGS.found, { timeout: 15_000 });
+  console.log('  ✓ none→searching→found: landed the found opening with the candidate on the card.');
 });
 
 test('searching wait card has no horizontal overflow at 360px (mobile-first floor)', async () => {

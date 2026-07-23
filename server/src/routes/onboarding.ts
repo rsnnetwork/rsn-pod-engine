@@ -122,6 +122,14 @@ router.get(
         startedAt: enrichmentState.startedAt,
         completedAt: enrichmentState.completedAt,
       };
+      // Surface the found/partial result to the client's confirm card: the 202
+      // enrich contract carries no body, so the cached enriched profile (the
+      // member's OWN data) rides along here — and ONLY on found/partial; every
+      // other state stays candidate-free.
+      if (enrichmentState.status === 'found' || enrichmentState.status === 'partial') {
+        const cached = await enrichRepo.getCachedEnrichment(userId).catch(() => null);
+        if (cached?.profile) enrichmentPayload.candidate = cached.profile;
+      }
       const opening = openingFromEnrichment(enrichmentPayload.status);
       const response: ApiResponse = { success: true, data: { status, enrichment: enrichmentPayload, opening } };
       res.json(response);

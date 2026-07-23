@@ -229,6 +229,75 @@ describe('GET /onboarding/status', () => {
     expect(res.body.data.opening).toBe('not_found');
   });
 
+  describe('enrichment.candidate (the confirm-card prefill)', () => {
+    const cachedResult = {
+      profile: {
+        fullName: 'Jane Doe',
+        currentRole: 'CTO',
+        currentCompany: 'Acme',
+        industry: 'Software',
+        location: 'Berlin',
+        summary: 'Builds things.',
+        likelyWantsToMeet: ['investors'],
+        likelyOffers: ['engineering leadership'],
+        linkedinUrl: 'https://www.linkedin.com/in/jane-doe',
+      },
+      confidence: 0.95,
+      sources: [],
+      foundLinkedinUrl: 'https://www.linkedin.com/in/jane-doe',
+      requestedLinkedinUrl: 'https://www.linkedin.com/in/jane-doe',
+      enrichedAt: new Date().toISOString(),
+    };
+
+    it.each(['found', 'partial'] as const)(
+      'includes the cached enriched profile as enrichment.candidate when status=%s',
+      async (status) => {
+        (intentRepo.getOnboardingStatus as jest.Mock).mockResolvedValue('not_started');
+        (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
+          status, source: 'scrapingdog', error: null, startedAt: null, completedAt: null,
+        });
+        (enrichRepo.getCachedEnrichment as jest.Mock).mockResolvedValue(cachedResult);
+        const res = await request(app)
+          .get('/onboarding/status')
+          .set('Authorization', `Bearer ${makeToken()}`);
+        expect(res.status).toBe(200);
+        expect(res.body.data.enrichment.candidate).toEqual(cachedResult.profile);
+      },
+    );
+
+    it.each(['none', 'searching', 'not_found', 'failed'] as const)(
+      'never includes candidate when status=%s, even when a cached blob exists',
+      async (status) => {
+        (intentRepo.getOnboardingStatus as jest.Mock).mockResolvedValue('not_started');
+        (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
+          status, source: null, error: null, startedAt: null, completedAt: null,
+        });
+        (enrichRepo.getCachedEnrichment as jest.Mock).mockResolvedValue(cachedResult);
+        const res = await request(app)
+          .get('/onboarding/status')
+          .set('Authorization', `Bearer ${makeToken()}`);
+        expect(res.status).toBe(200);
+        expect(res.body.data.enrichment.candidate).toBeUndefined();
+        // Not even looked up — the cache read only runs for found/partial.
+        expect(enrichRepo.getCachedEnrichment).not.toHaveBeenCalled();
+      },
+    );
+
+    it('omits candidate when found but the cache read fails or is empty (degrades, never 500s)', async () => {
+      (intentRepo.getOnboardingStatus as jest.Mock).mockResolvedValue('not_started');
+      (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
+        status: 'found', source: 'scrapingdog', error: null, startedAt: null, completedAt: null,
+      });
+      (enrichRepo.getCachedEnrichment as jest.Mock).mockRejectedValue(new Error('db down'));
+      const res = await request(app)
+        .get('/onboarding/status')
+        .set('Authorization', `Bearer ${makeToken()}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.enrichment.candidate).toBeUndefined();
+      expect(res.body.data.opening).toBe('found');
+    });
+  });
+
   it('defaults to not_found for an unrecognized enrichment status (fail-safe)', async () => {
     (intentRepo.getOnboardingStatus as jest.Mock).mockResolvedValue('not_started');
     (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
