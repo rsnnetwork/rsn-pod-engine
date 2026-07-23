@@ -12,6 +12,11 @@
 -- working feature — the Settings "Pokes" email toggle becomes a genuine
 -- opt-out starting today, default on.
 --
+-- Side effect (deliberate, harmless): the backfill UPDATE touches every
+-- users row, so the update_users_updated_at trigger (001) bumps
+-- users.updated_at across the table. Nothing reads updated_at for logic
+-- today; noted so a future reader doesn't chase the timestamp jump.
+--
 -- Additive-safe + idempotent: the ALTER only changes what future INSERTs
 -- default to; the UPDATE unconditionally re-sets the same key to the same
 -- value on every row, so re-running this migration is a no-op the second
