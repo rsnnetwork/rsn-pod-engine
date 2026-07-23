@@ -317,7 +317,9 @@ test('searching wait card has no horizontal overflow at 360px (mobile-first floo
 });
 
 test('searching wait card fits at tablet and desktop widths (768, 1024, 1280)', async () => {
-  test.setTimeout(60_000);
+  // Three sequential full page loads against prod; 60s flaked under
+  // parallel-file CPU contention (timeout, never an assert failure).
+  test.setTimeout(150_000);
   const viewports = [768, 1024, 1280];
 
   for (const width of viewports) {
