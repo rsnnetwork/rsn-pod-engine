@@ -315,3 +315,47 @@ test('searching wait card has no horizontal overflow at 360px (mobile-first floo
   ).toBe(true);
   console.log('  ✓ searching card: no horizontal overflow at 360px.');
 });
+
+test('searching wait card fits at tablet and desktop widths (768, 1024, 1280)', async () => {
+  test.setTimeout(60_000);
+  const viewports = [768, 1024, 1280];
+
+  for (const width of viewports) {
+    const page = await openOnboarding({ width, height: 900 });
+    await stubStatus(page, () => 'searching');
+    await gotoRetry(page, `${APP}/onboarding`);
+
+    // (a) The searching copy is visible
+    await expect(page.getByText(OPENINGS.searching)).toBeVisible({ timeout: 20_000 });
+
+    // (b) No horizontal overflow at the document level
+    await expect.poll(
+      async () => {
+        const [scrollWidth, clientWidth] = await page.evaluate(() => [
+          document.documentElement.scrollWidth,
+          document.documentElement.clientWidth,
+        ]);
+        return scrollWidth <= clientWidth + 1; // +1: sub-pixel rounding
+      },
+      { timeout: 10_000 }
+    ).toBe(true);
+
+    // (c) The wait card's boundingBox fits within the viewport width
+    // 0.5px tolerance: under non-integer devicePixelRatio (Windows display scaling)
+    // Chromium reports fractional boundingBox readback for CSS-pinned elements.
+    const cardLocator = page.locator('div').filter({
+      has: page.getByText(OPENINGS.searching),
+    }).first();
+    const box = await cardLocator.boundingBox();
+    expect(box, `wait card must have a bounding box at ${width}px`).toBeTruthy();
+    expect(box!.x, `wait card must not start off-screen at ${width}px`).toBeGreaterThanOrEqual(0);
+    expect(
+      box!.x + box!.width,
+      `wait card must fit within the ${width}px viewport`
+    ).toBeLessThanOrEqual(width + 0.5);
+
+    // Close context before next width
+    await (await cardLocator.page())?.context().close();
+    console.log(`  ✓ searching card: fits at ${width}px.`);
+  }
+});
