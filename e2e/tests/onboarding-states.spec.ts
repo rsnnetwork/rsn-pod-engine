@@ -37,6 +37,7 @@ type Opening = keyof typeof OPENINGS;
 
 let browser: Browser;
 let user: TestUser;
+let freshUser: TestUser; // For test 6: candidate seeding with no saved profile
 const ctxs: BrowserContext[] = [];
 
 /** Stub GET /onboarding/status to always answer with whatever `getOpening()`
@@ -65,14 +66,14 @@ async function stubStatus(page: Page, getOpening: () => Opening): Promise<void> 
   });
 }
 
-async function openOnboarding(viewport = { width: 390, height: 844 }): Promise<Page> {
+async function openOnboarding(viewport = { width: 390, height: 844 }, testUser = user): Promise<Page> {
   const ctx = await browser.newContext({ viewport });
   await ctx.addInitScript(
     (t: { a: string; r: string }) => {
       localStorage.setItem('rsn_access', t.a);
       localStorage.setItem('rsn_refresh', t.r);
     },
-    { a: user.accessToken, r: user.refreshToken },
+    { a: testUser.accessToken, r: testUser.refreshToken },
   );
   ctxs.push(ctx);
   const page = await ctx.newPage();
@@ -91,6 +92,14 @@ test.beforeAll(async () => {
   // describes rather than picking up createTestUser()'s 'completed' default
   // (opt-out via the explicit onboardingStatus param — see e2e/helpers/auth.ts).
   user = await createTestUser('onbstates', 'member', 'not_started');
+  // Test 6 (none → searching → found) requires a fresh profile with no saved
+  // fields so that the LinkedIn candidate fills the confirm card. createTestUser
+  // seeds company='TestCo', so create a dedicated user and blank those fields.
+  freshUser = await createTestUser('onbfresh', 'member', 'not_started');
+  await pool.query(
+    "UPDATE users SET company = NULL, job_title = NULL, bio = NULL, industry = NULL, location = NULL WHERE id = $1",
+    [freshUser.id]
+  );
   browser = await chromium.launch({ headless: false });
 });
 
@@ -98,7 +107,7 @@ test.afterAll(async () => {
   try {
     await browser?.close();
   } catch {}
-  await cleanup(pool, { ids: [user?.id].filter(Boolean) });
+  await cleanup(pool, { ids: [user?.id, freshUser?.id].filter(Boolean) });
 });
 
 test('searching blocks chat and the confirm card, and shows the searching copy', async () => {
@@ -200,7 +209,7 @@ test('none with a LinkedIn on file does NOT settle: the client fires the enrich 
     linkedinUrl: 'https://www.linkedin.com/in/onbstates-e2e',
   };
 
-  const page = await openOnboarding();
+  const page = await openOnboarding({ width: 390, height: 844 }, freshUser);
 
   // The trigger only fires when known.linkedin exists — add one to the real
   // /known response (route.fetch keeps the genuine CORS headers).
@@ -293,10 +302,16 @@ test('searching wait card has no horizontal overflow at 360px (mobile-first floo
   await gotoRetry(page, `${APP}/onboarding`);
 
   await expect(page.getByText(OPENINGS.searching)).toBeVisible({ timeout: 20_000 });
-  const [scrollWidth, clientWidth] = await page.evaluate(() => [
-    document.documentElement.scrollWidth,
-    document.documentElement.clientWidth,
-  ]);
-  expect(scrollWidth).toBeLessThanOrEqual(clientWidth + 1); // +1: sub-pixel rounding
+  // Poll until animations settle and the overflow assertion is stable.
+  await expect.poll(
+    async () => {
+      const [scrollWidth, clientWidth] = await page.evaluate(() => [
+        document.documentElement.scrollWidth,
+        document.documentElement.clientWidth,
+      ]);
+      return scrollWidth <= clientWidth + 1; // +1: sub-pixel rounding
+    },
+    { timeout: 10_000 }
+  ).toBe(true);
   console.log('  ✓ searching card: no horizontal overflow at 360px.');
 });
