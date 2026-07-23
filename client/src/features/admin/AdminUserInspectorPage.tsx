@@ -95,6 +95,7 @@ export default function AdminUserInspectorPage() {
   useEffect(() => {
     setSelectedConvId(null);
     setTab('onboarding');
+    refreshMutation.reset();
   }, [id]);
 
   // Admin-only E2 diagnostic endpoint — no realtime entity is emitted for it
@@ -146,10 +147,10 @@ export default function AdminUserInspectorPage() {
   });
 
   const refreshMutation = useMutation({
-    mutationFn: () => api.post('/onboarding/admin/refresh-enrichment', { userId: id }),
-    onSuccess: () => {
+    mutationFn: (targetId: string) => api.post('/onboarding/admin/refresh-enrichment', { userId: targetId }),
+    onSuccess: (_data, targetId) => {
       addToast('Re-enrichment started for this member', 'success');
-      qc.invalidateQueries({ queryKey: ['admin-inspect-onboarding', id] });
+      qc.invalidateQueries({ queryKey: ['admin-inspect-onboarding', targetId] });
     },
     onError: (err: any) => {
       addToast(err?.response?.data?.error?.message || 'Failed to start re-enrichment', 'error');
@@ -208,12 +209,13 @@ export default function AdminUserInspectorPage() {
 
       {tab === 'onboarding' && (
         <OnboardingTab
+          key={id}
           data={onboardingQuery.data}
           isLoading={onboardingQuery.isLoading}
           isError={onboardingQuery.isError}
           onRefresh={() => {
             if (confirm('Force a re-enrichment for this member? This clears their cached LinkedIn lookup and re-runs it in the background.')) {
-              refreshMutation.mutate();
+              refreshMutation.mutate(id!);
             }
           }}
           refreshing={refreshMutation.isPending}
