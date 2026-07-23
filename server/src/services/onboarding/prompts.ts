@@ -133,6 +133,7 @@ Rules:
 - Base everything ONLY on what the Member actually said. Never invent facts.
 - If something was not mentioned, use an empty array, an empty string, or null (for userCompany, userIndustry, userLocation). Do not guess.
 - Normalise everything to English.
+- desiredPeople / desiredRoles: who the Member wants to meet. Put short descriptions in desiredPeople (for example "early-stage investors", "B2B founders") and bare role words in desiredRoles (for example "investor", "founder"). Asking for funding, investment, customers, partners, or hires counts as wanting to meet those people.
 - matchingTags: 5 to 12 short, lowercase tags capturing the most matchable signals (roles, industries, stage, intent).
 - userCity: the member's city if they mentioned one, otherwise null.
 - userValuableTo: who this member would be valuable to (the inverse of who they want to meet), as a few short phrases, otherwise an empty array.

@@ -30,7 +30,7 @@ jest.mock('../../../services/matching/platform-match.service', () => ({
   notifyMatchesOfNewUser: (...args: unknown[]) => mockNotifyMatchesOfNewUser(...args),
 }));
 
-import { saveIntentAndComplete, markInProgress, savePartialIntent } from '../../../services/onboarding/intent.repo';
+import { saveIntentAndComplete, markInProgress, savePartialIntent, saveTranscriptOnly } from '../../../services/onboarding/intent.repo';
 import { ExtractedIntent } from '../../../services/onboarding/intent.schema';
 
 const baseIntent: ExtractedIntent = {
@@ -224,6 +224,42 @@ describe('savePartialIntent: re-arms from update_required', () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ onboarding_status: 'completed' }] });
 
     await savePartialIntent('user-1', intent, []);
+
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The transcript must survive an extraction failure — when every extraction
+// 400'd in prod, conversations were lost because the only save path required
+// an intent. saveTranscriptOnly upserts just the conversation.
+describe('saveTranscriptOnly', () => {
+  const conversation = [
+    { role: 'user' as const, content: 'I build software' },
+    { role: 'assistant' as const, content: 'Great — for whom?' },
+  ];
+
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  it('upserts the conversation without touching intent columns', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ onboarding_status: 'in_progress' }] })
+      .mockResolvedValueOnce({ rows: [] }); // upsert
+
+    await saveTranscriptOnly('user-1', conversation);
+
+    const upsert = mockQuery.mock.calls.find((c: any[]) => /INSERT INTO user_intent_profiles/i.test(c[0]));
+    expect(upsert).toBeDefined();
+    expect(upsert![0]).toMatch(/onboarding_conversation/);
+    expect(upsert![0]).not.toMatch(/matching_intent\s*=\s*EXCLUDED/i);
+    expect(upsert![1]).toEqual(['user-1', JSON.stringify(conversation)]);
+  });
+
+  it('bails out when the profile is already completed', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ onboarding_status: 'completed' }] });
+
+    await saveTranscriptOnly('user-1', conversation);
 
     expect(mockQuery).toHaveBeenCalledTimes(1);
   });

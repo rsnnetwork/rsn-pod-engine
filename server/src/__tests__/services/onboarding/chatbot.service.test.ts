@@ -137,5 +137,38 @@ describe('chatbot.service', () => {
       mockCreate.mockResolvedValue({ content: [] });
       await expect(extractIntent(history)).rejects.toThrow(/no content/i);
     });
+
+    // The 35-field schema exceeds the API's structured-output grammar compiler
+    // limit ("The compiled grammar is too large" 400) — every prod extraction
+    // failed while mocked tests stayed green. The contract now travels in the
+    // prompt instead, so no request may carry an output_config grammar.
+    it('sends no output_config grammar and embeds the JSON contract in the prompt', async () => {
+      mockCreate.mockResolvedValue({
+        content: [{ type: 'text', text: JSON.stringify(validIntent) }],
+      });
+      await extractIntent(history);
+      const req = mockCreate.mock.calls[0][0];
+      expect(req.output_config).toBeUndefined();
+      const prompt = req.messages[0].content as string;
+      expect(prompt).toContain('"restrictions"');
+      expect(prompt).toContain('"confidenceScores"');
+      expect(prompt).toMatch(/only.*json/i);
+    });
+
+    it('parses a reply wrapped in markdown code fences', async () => {
+      mockCreate.mockResolvedValue({
+        content: [{ type: 'text', text: '```json\n' + JSON.stringify(validIntent) + '\n```' }],
+      });
+      const result = await extractIntent(history);
+      expect(result.userCompany).toBe('Acme');
+    });
+
+    it('parses a reply with prose before and after the JSON object', async () => {
+      mockCreate.mockResolvedValue({
+        content: [{ type: 'text', text: 'Here is the extraction:\n' + JSON.stringify(validIntent) + '\nDone.' }],
+      });
+      const result = await extractIntent(history);
+      expect(result.profileStrength).toBe('strong');
+    });
   });
 });

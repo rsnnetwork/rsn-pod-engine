@@ -1,9 +1,9 @@
 // ─── Onboarding Intent Schema (extraction call) ──────────────────────────────
 //
-// Zod schema for Claude's structured-output extraction call. Lives server-side
-// (the shared package has no zod dependency) and mirrors the OnboardingIntent
-// type in @rsn/shared. Used with `messages.parse` + `zodOutputFormat` so the
-// model's JSON is validated against this shape before we ever touch it.
+// Zod schema for Claude's extraction call. Lives server-side (the shared
+// package has no zod dependency) and mirrors the OnboardingIntent type in
+// @rsn/shared. The model's JSON reply is validated against this shape before
+// we ever touch it.
 //
 // Structured-output JSON-schema rules we obey here: no min/max/length
 // constraints, every object closed (no open records — confidenceScores is a
@@ -71,13 +71,15 @@ export const IntentSchema = z.object({
 
 export type ExtractedIntent = z.infer<typeof IntentSchema>;
 
-// Raw JSON Schema for the structured-output extraction call. We pass this to
-// `messages.create({ output_config: { format: { type: 'json_schema', schema } } })`
-// and validate the model's reply against IntentSchema (zod) afterwards. We hand-
-// author the JSON Schema rather than derive it from zod because the SDK's
-// zodOutputFormat helper targets zod v4 and this project is pinned to zod v3.
-// Structured-output rules: every object closed (additionalProperties:false),
-// every key required, optional fields modelled as a ["string","null"] union.
+// Raw JSON Schema for the extraction call. Embedded as TEXT in the extraction
+// prompt (chatbot.service.ts) — NOT sent as an output_config grammar: at this
+// size the API's structured-output grammar compiler rejects every request with
+// "The compiled grammar is too large" (400), which mocked tests never see.
+// The model's reply is validated against IntentSchema (zod) afterwards. Hand-
+// authored rather than derived from zod because the SDK's zodOutputFormat
+// helper targets zod v4 and this project is pinned to zod v3.
+// Shape rules: every object closed (additionalProperties:false), every key
+// required, optional fields modelled as a ["string","null"] union.
 const stringArray = { type: 'array', items: { type: 'string' } } as const;
 
 export const INTENT_JSON_SCHEMA: Record<string, unknown> = {

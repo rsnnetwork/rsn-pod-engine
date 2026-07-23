@@ -448,6 +448,39 @@ export async function savePartialIntent(
 }
 
 /**
+ * Persist ONLY the transcript when extraction failed — the conversation must
+ * never be lost just because the LLM call did not succeed (a compiled-grammar
+ * 400 once wiped every prod conversation this way). Same completed-guard and
+ * in_progress re-arm as savePartialIntent; intent columns are left untouched
+ * so a later successful extraction fills them from the saved transcript.
+ */
+export async function saveTranscriptOnly(
+  userId: string,
+  conversation: OnboardingMessage[]
+): Promise<void> {
+  const st = await query<{ onboarding_status: OnboardingStatus }>(
+    'SELECT onboarding_status FROM users WHERE id = $1',
+    [userId]
+  );
+  if (st.rows[0]?.onboarding_status === 'completed') return;
+
+  await query(
+    `INSERT INTO user_intent_profiles (user_id, onboarding_conversation, updated_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (user_id) DO UPDATE SET
+       onboarding_conversation = EXCLUDED.onboarding_conversation,
+       updated_at = NOW()`,
+    [userId, JSON.stringify(conversation)]
+  );
+
+  await query(
+    `UPDATE users SET onboarding_status = 'in_progress'
+       WHERE id = $1 AND onboarding_status IN ('not_started', 'in_progress', 'update_required')`,
+    [userId]
+  );
+}
+
+/**
  * Load any in-progress onboarding so the member can resume where they left off.
  * Returns the saved transcript (empty if none) plus the current status.
  */

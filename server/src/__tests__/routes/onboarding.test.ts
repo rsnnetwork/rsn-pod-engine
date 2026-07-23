@@ -52,6 +52,7 @@ jest.mock('../../services/onboarding/intent.repo', () => ({
   markInProgress: jest.fn(),
   saveIntentAndComplete: jest.fn(),
   savePartialIntent: jest.fn(),
+  saveTranscriptOnly: jest.fn(),
   getResume: jest.fn(),
   getKnownProfileForHost: jest.fn(),
   __esModule: true,
@@ -141,6 +142,7 @@ beforeEach(() => {
   (recordStageEvent as jest.Mock).mockResolvedValue(undefined);
   // Defaults so the /chat background per-answer extraction never errors noisily.
   (intentRepo.savePartialIntent as jest.Mock).mockResolvedValue(undefined);
+  (intentRepo.saveTranscriptOnly as jest.Mock).mockResolvedValue(undefined);
   (chatbot.extractIntent as jest.Mock).mockResolvedValue({ userProfileSummary: 'partial' });
   (enrichRepo.getCachedEnrichment as jest.Mock).mockResolvedValue(null);
   (runEnrichment as jest.Mock).mockResolvedValue(undefined);
@@ -773,6 +775,23 @@ describe('POST /onboarding/profile', () => {
     const [, , detail] = (recordStageEvent as jest.Mock).mock.calls.find((c) => c[1] === 'extract_failed')!;
     expect(detail.message).not.toContain('sk-ant-verysecretkey1234567890');
   });
+
+  // The transcript must never depend on the LLM succeeding: when the compiled-
+  // grammar 400 killed every extraction, whole conversations were lost (turns=0).
+  it('still persists the transcript when extraction fails', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+    (chatbot.extractIntent as jest.Mock).mockRejectedValue(new Error('anthropic down'));
+
+    const res = await request(app)
+      .post('/onboarding/profile')
+      .set('Authorization', `Bearer ${makeToken('user-transcript-1')}`)
+      .send(profileBody);
+
+    expect(res.status).toBe(200);
+    await new Promise((r) => setImmediate(r));
+    expect(intentRepo.saveTranscriptOnly).toHaveBeenCalledWith('user-transcript-1', profileBody.messages);
+    expect(intentRepo.savePartialIntent).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /onboarding/confirm', () => {
@@ -882,6 +901,20 @@ describe('POST /onboarding/confirm', () => {
       const [, , detail] = (recordStageEvent as jest.Mock).mock.calls.find((c) => c[1] === 'extract_failed')!;
       expect(detail.message).not.toContain('sk-ant-verysecretkey1234567890');
       expect(detail.message).not.toContain('Bearer');
+    });
+
+    it('persists the transcript before falling back when confirm extraction throws', async () => {
+      (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+      (chatbot.extractIntent as jest.Mock).mockRejectedValue(new Error('grammar too large'));
+
+      const res = await request(app)
+        .post('/onboarding/confirm')
+        .set('Authorization', `Bearer ${makeToken('user-e1-confirm-5')}`)
+        .send(body);
+
+      expect(res.status).toBe(503);
+      await new Promise((r) => setImmediate(r));
+      expect(intentRepo.saveTranscriptOnly).toHaveBeenCalledWith('user-e1-confirm-5', body.messages);
     });
 
     it('does not record extract_failed on the LLM_DISABLED (isEnabled=false) path — that is not an extraction failure', async () => {

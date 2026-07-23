@@ -79,12 +79,43 @@ export async function converse(
 }
 
 /**
- * Claude call #2 — structured extraction. We constrain the model with a raw
- * JSON Schema via `output_config.format`, then validate the reply against
- * IntentSchema (zod) so a malformed payload throws instead of corrupting the
- * profile. (We don't use the SDK's zodOutputFormat helper — it targets zod v4
- * and this project is pinned to zod v3.)
+ * Claude call #2 — structured extraction. The JSON contract travels IN the
+ * prompt (schema text + a strict output instruction) and the reply is parsed
+ * tolerantly, then validated against IntentSchema (zod) so a malformed payload
+ * throws instead of corrupting the profile.
+ *
+ * Deliberately NOT `output_config.format`: the 35-field schema exceeds the
+ * API's structured-output grammar compiler limit and every request 400s with
+ * "The compiled grammar is too large" — a failure only real calls surface
+ * (tests mock the SDK). Do not reintroduce a grammar here without proving one
+ * real API call succeeds with the full current schema.
  */
+const EXTRACTION_OUTPUT_CONTRACT = `
+
+Output contract:
+Respond with ONLY a single JSON object and nothing else — no prose, no markdown fences. It must match this JSON Schema exactly (every key present; use [] / "" / false / null as the rules above describe):
+${JSON.stringify(INTENT_JSON_SCHEMA)}
+
+`;
+
+/** Pull the JSON object out of a model reply that may carry fences or prose. */
+function parseModelJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const start = raw.indexOf('{');
+    const end = raw.lastIndexOf('}');
+    if (start !== -1 && end > start) {
+      try {
+        return JSON.parse(raw.slice(start, end + 1));
+      } catch {
+        // fall through to the shared error below
+      }
+    }
+    throw new Error('Onboarding extraction returned invalid JSON');
+  }
+}
+
 export async function extractIntent(
   messages: OnboardingMessage[]
 ): Promise<ExtractedIntent> {
@@ -95,10 +126,9 @@ export async function extractIntent(
     messages: [
       {
         role: 'user',
-        content: EXTRACTION_PROMPT + serializeConversation(messages),
+        content: EXTRACTION_PROMPT + serializeConversation(messages) + EXTRACTION_OUTPUT_CONTRACT,
       },
     ],
-    output_config: { format: { type: 'json_schema', schema: INTENT_JSON_SCHEMA } },
   });
 
   const raw = resp.content
@@ -109,13 +139,7 @@ export async function extractIntent(
     throw new Error('Onboarding extraction returned no content');
   }
 
-  let json: unknown;
-  try {
-    json = JSON.parse(raw);
-  } catch {
-    throw new Error('Onboarding extraction returned invalid JSON');
-  }
-  return IntentSchema.parse(json);
+  return IntentSchema.parse(parseModelJson(raw));
 }
 
 // ─── Live profile snapshot ───────────────────────────────────────────────────

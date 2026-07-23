@@ -382,11 +382,17 @@ router.post(
       const liveProfile = intent ? chatbot.liveProfileFromIntent(intent) : null;
       res.json({ success: true, data: { profile: liveProfile } } as ApiResponse);
 
-      // Persist the running intent + transcript in the background (resume + matching).
+      // Persist the running intent + transcript in the background (resume +
+      // matching). The transcript must survive even when extraction failed —
+      // a member's conversation is never allowed to depend on the LLM.
       if (intent) {
         intentRepo
           .savePartialIntent(userId, intent, messages)
           .catch((err) => logger.warn({ err, userId }, 'onboarding per-answer save failed'));
+      } else {
+        intentRepo
+          .saveTranscriptOnly(userId, messages)
+          .catch((err) => logger.warn({ err, userId }, 'onboarding transcript-only save failed'));
       }
     } catch (err) {
       next(err);
@@ -415,9 +421,11 @@ router.post(
         intent = await chatbot.extractIntent(messages);
       } catch (err) {
         // Same LLM-down mapping as /chat — the client falls back to the form
-        // instead of a dead confirm button.
+        // instead of a dead confirm button. Save the transcript first so the
+        // conversation survives the failed confirm.
         logger.error({ err, userId }, 'onboarding confirm extraction failed — sending LLM_DISABLED fallback');
         recordStageEvent(userId, 'extract_failed', { source: 'confirm', message: sanitizeErrorMessage(err) }).catch(() => {});
+        intentRepo.saveTranscriptOnly(userId, messages).catch(() => {});
         sendLlmDisabled(res);
         return;
       }
