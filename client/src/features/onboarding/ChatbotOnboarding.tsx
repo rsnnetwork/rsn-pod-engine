@@ -49,7 +49,7 @@ const REASON_KNOWN_QUESTION_NO_BACKGROUND =
 const STATUS_POLL_MS = 2500;
 const SEARCH_BELT_TIMEOUT_MS = 3 * 60 * 1000;
 
-type Stage = 'loading' | 'searching' | 'resume' | 'confirm' | 'chat';
+type Stage = 'loading' | 'asklink' | 'searching' | 'resume' | 'confirm' | 'chat';
 
 function HostBubble({ text }: { text: string }) {
   return (
@@ -168,6 +168,27 @@ function resolveGuessable(
 ): string {
   const untouched = !current || (!!wasGuessed && current === (guessValue || ''));
   return untouched ? candidateValue || current || '' : current;
+}
+
+// Lenient client-side check + canonicalization for the ask-for-LinkedIn stage:
+// a member can paste a full profile URL (with or without the scheme — the
+// placeholder shows the protocol-less form) or just their bare username.
+// Mirrors the server's own normalizeLinkedinUrl (enrichment.service.ts)
+// closely enough that what's shown here is what the server will resolve to;
+// the server re-normalizes independently and stays the source of truth.
+function isValidLinkedinInput(v: string): boolean {
+  const s = v.trim();
+  if (!s || /\s/.test(s)) return false;
+  if (/\/in\//i.test(s)) return true;
+  return /^[A-Za-z0-9][A-Za-z0-9\-_.]*$/.test(s.replace(/^@/, ''));
+}
+
+function canonicalizeLinkedinInput(v: string): string {
+  const s = v.trim();
+  if (/\/in\//i.test(s)) {
+    return /^https?:\/\//i.test(s) ? s : `https://${s.replace(/^\/+/, '')}`;
+  }
+  return `https://www.linkedin.com/in/${s.replace(/^@/, '').toLowerCase()}`;
 }
 
 // How complete the card is — drives the progress bar + mobile chips. Counts the
@@ -308,6 +329,7 @@ export default function ChatbotOnboarding() {
 
   const [stage, setStage] = useState<Stage>('loading');
   const [known, setKnown] = useState<OnboardingKnownProfile | null>(null);
+  const [askInput, setAskInput] = useState('');
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState({ ...emptyDraft });
   const [resumeMessages, setResumeMessages] = useState<OnboardingMessage[]>([]);
@@ -339,9 +361,12 @@ export default function ChatbotOnboarding() {
   const welcomeLine = (known?.previousEvents ?? 0) > 0 ? 'Welcome back to Reason' : 'Welcome to Reason';
 
   // Fetch what we already know + any in-progress conversation, then route to
-  // 'resume' if one exists, otherwise to 'searching' — the enrichment outcome
-  // (not raw "do we know anything") now decides confirm vs. chat, so every
-  // fresh arrival waits on the status poll below before that decision is made.
+  // 'resume' if one exists, 'asklink' if we have no LinkedIn URL on file (ask
+  // once, up front — paste it and get the same searching card as everyone
+  // else, or skip straight into the honest build-together path), otherwise
+  // 'searching' — the enrichment outcome (not raw "do we know anything") then
+  // decides confirm vs. chat, so every fresh arrival waits on the status poll
+  // below before that decision is made.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -351,8 +376,9 @@ export default function ChatbotOnboarding() {
       ]);
       if (cancelled) return;
 
+      let k: OnboardingKnownProfile | undefined;
       if (knownRes.status === 'fulfilled') {
-        const k = knownRes.value.data.data as OnboardingKnownProfile;
+        k = knownRes.value.data.data as OnboardingKnownProfile;
         setKnown(k);
         setDraft({
           name: k.name || '',
@@ -383,12 +409,34 @@ export default function ChatbotOnboarding() {
         }
       }
 
-      setStage('searching');
+      setStage(k?.linkedin ? 'searching' : 'asklink');
     })();
     return () => {
       cancelled = true;
     };
   }, []);
+
+  // Ask-for-LinkedIn submit: feeds BOTH known (the searching-effect's trigger
+  // condition below reads known.linkedin, and settleOpening's candidate
+  // seeding does too) and draft (so the pasted URL survives even the
+  // not_found path, which jumps straight to chat with no confirm-card/
+  // applyFields step — it still reaches the server via confirmedProfile() at
+  // the final POST /onboarding/confirm). The searching-effect fires the
+  // enrich trigger itself once it sees known.linkedin; no POST here.
+  function submitAskLink() {
+    if (!isValidLinkedinInput(askInput)) return;
+    const canonical = canonicalizeLinkedinInput(askInput);
+    setKnown((k) => (k ? { ...k, linkedin: canonical } : k));
+    setDraft((d) => ({ ...d, linkedin: canonical }));
+    setStage('searching');
+  }
+
+  // Skip: no URL is set. The poll settles on the server's honest opening on
+  // the first response (none + no URL settles immediately by design) — no
+  // special-cased skip path needed here.
+  function skipAskLink() {
+    setStage('searching');
+  }
 
   // Build the messages an opening starts with: the truthful OPENINGS[opening]
   // line (server-derived, verbatim), followed by the existing question flow —
@@ -731,6 +779,65 @@ export default function ChatbotOnboarding() {
       <div className={shellClass} style={{ height: '100dvh' }}>
         <div className="flex flex-1 items-center justify-center">
           <HostPresence size={96} state="thinking" />
+        </div>
+      </div>
+    );
+  }
+
+  // No LinkedIn URL on file: ask once, up front. Same visual shell as the
+  // wait card below so the transition into 'searching' feels continuous.
+  if (stage === 'asklink') {
+    const canSubmit = isValidLinkedinInput(askInput);
+    return (
+      <div className={shellClass} style={{ height: '100dvh' }}>
+        <div
+          className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-8"
+          style={{ paddingTop: 'max(env(safe-area-inset-top), 2rem)', paddingBottom: 'max(env(safe-area-inset-bottom), 2rem)' }}
+        >
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.45 }}
+            className="flex w-full max-w-md flex-col items-center gap-5 text-center"
+          >
+            <HostPresence size={104} state="idle" />
+            <div>
+              <h1 className="font-display text-2xl font-semibold leading-snug text-[#1a1a2e]">
+                {welcomeLine}, {firstName}.
+              </h1>
+              <p className="mt-2 text-sm text-gray-500">
+                Share your LinkedIn and we will pull in your profile for you. If you would rather not, that is fine too.
+              </p>
+            </div>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                submitAskLink();
+              }}
+              className="flex w-full flex-col items-center gap-3"
+            >
+              <input
+                value={askInput}
+                onChange={(e) => setAskInput(e.target.value)}
+                placeholder="linkedin.com/in/your-name"
+                aria-label="Your LinkedIn URL"
+                autoFocus
+                autoCapitalize="off"
+                autoCorrect="off"
+                className="min-h-[48px] w-full rounded-2xl border-2 border-gray-300 bg-white px-4 py-3 text-base text-[#1a1a2e] placeholder:text-gray-500 focus:border-rsn-red focus:outline-none focus:ring-2 focus:ring-rsn-red/20"
+              />
+              <Button type="submit" disabled={!canSubmit} className="min-h-[48px] w-full justify-center text-base">
+                Fetch my details
+              </Button>
+            </form>
+            <button
+              type="button"
+              onClick={skipAskLink}
+              className="min-h-[44px] px-3 text-sm font-medium text-gray-400 transition-colors hover:text-rsn-red"
+            >
+              Skip for now
+            </button>
+          </motion.div>
         </div>
       </div>
     );

@@ -95,6 +95,18 @@ test('completing onboarding (stubbed chat + confirm) exits the gate and lands on
   const user = await createTestUser('reonb-b');
   userIds.push(user.id);
   await setStatus(user.id, 'update_required');
+  // Task asklink: ChatbotOnboarding now asks once for a LinkedIn URL up front
+  // when GET /onboarding/known has none on file (a new 'asklink' stage,
+  // decided before this test's stubbed /onboarding/status is ever consulted
+  // — see ChatbotOnboarding.tsx). createTestUser() never seeds linkedin_url,
+  // so without this the member would land on the ask screen instead of the
+  // chat textarea this test drives. This test is about the re-onboarding
+  // GATE/confirm flow, not the ask screen, so give it a linkedin_url here
+  // (same reconciliation as e2e/tests/onboarding-states.spec.ts).
+  await pool.query("UPDATE users SET linkedin_url = $2 WHERE id = $1", [
+    user.id,
+    'https://www.linkedin.com/in/reonb-b-e2e',
+  ]);
 
   const page = await openPage(user);
 

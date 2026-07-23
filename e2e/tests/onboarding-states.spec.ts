@@ -38,6 +38,7 @@ type Opening = keyof typeof OPENINGS;
 let browser: Browser;
 let user: TestUser;
 let freshUser: TestUser; // For test 6: candidate seeding with no saved profile
+let asklinkUser: TestUser; // For the ask-for-LinkedIn tests: no linkedin_url on file
 const ctxs: BrowserContext[] = [];
 
 /** Stub GET /onboarding/status to always answer with whatever `getOpening()`
@@ -92,6 +93,20 @@ test.beforeAll(async () => {
   // describes rather than picking up createTestUser()'s 'completed' default
   // (opt-out via the explicit onboardingStatus param — see e2e/helpers/auth.ts).
   user = await createTestUser('onbstates', 'member', 'not_started');
+  // Task asklink: ChatbotOnboarding now asks once for a LinkedIn URL up front
+  // when known.linkedin is empty (a new 'asklink' stage, decided before the
+  // searching poll ever runs — see ChatbotOnboarding.tsx). createTestUser never
+  // seeds linkedin_url, so every test below that reuses this shared `user`
+  // would now land on the ask screen instead of the state it means to test.
+  // Reconciliation: give the shared user a linkedin_url here (least invasive —
+  // one line, vs. stubbing GET /onboarding/known in every existing test body)
+  // so those tests keep exercising the states they're actually about; the
+  // ask-screen behavior itself gets its own dedicated tests below, using a
+  // separate user with no linkedin_url.
+  await pool.query("UPDATE users SET linkedin_url = $2 WHERE id = $1", [
+    user.id,
+    'https://www.linkedin.com/in/onbstates-shared-e2e',
+  ]);
   // Test 6 (none → searching → found) requires a fresh profile with no saved
   // fields so that the LinkedIn candidate fills the confirm card. createTestUser
   // seeds company='TestCo', so create a dedicated user and blank those fields.
@@ -100,6 +115,13 @@ test.beforeAll(async () => {
     "UPDATE users SET company = NULL, job_title = NULL, bio = NULL, industry = NULL, location = NULL WHERE id = $1",
     [freshUser.id]
   );
+  // Task asklink: dedicated user with NO linkedin_url on file, for the two
+  // ask-screen tests below.
+  asklinkUser = await createTestUser('onbasklink', 'member', 'not_started');
+  await pool.query(
+    "UPDATE users SET company = NULL, job_title = NULL, bio = NULL, industry = NULL, location = NULL, linkedin_url = NULL WHERE id = $1",
+    [asklinkUser.id]
+  );
   browser = await chromium.launch({ headless: false });
 });
 
@@ -107,7 +129,7 @@ test.afterAll(async () => {
   try {
     await browser?.close();
   } catch {}
-  await cleanup(pool, { ids: [user?.id, freshUser?.id].filter(Boolean) });
+  await cleanup(pool, { ids: [user?.id, freshUser?.id, asklinkUser?.id].filter(Boolean) });
 });
 
 test('searching blocks chat and the confirm card, and shows the searching copy', async () => {
@@ -447,4 +469,127 @@ test('searching wait card fits at tablet and desktop widths (768, 1024, 1280)', 
     await page.context().close();
     console.log(`  ✓ searching card: fits at ${width}px.`);
   }
+});
+
+// Task asklink — members with no LinkedIn URL on file are asked once, up
+// front, before the searching poll ever starts (a new 'asklink' stage, keyed
+// on GET /onboarding/known's linkedin field, decided in ChatbotOnboarding's
+// mount effect). asklinkUser has linkedin_url = NULL (see beforeAll), so the
+// real /onboarding/known response naturally has no linkedin — no need to stub
+// that route for either test below.
+
+test('asklink: a member with no LinkedIn on file sees the ask screen; Skip settles on the honest not_found opening with no confirm card', async () => {
+  test.setTimeout(60_000);
+  const page = await openOnboarding({ width: 390, height: 844 }, asklinkUser);
+  await stubStatus(page, () => 'not_found');
+  await gotoRetry(page, `${APP}/onboarding`);
+
+  await expect(page.locator('input[aria-label="Your LinkedIn URL"]')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('button', { name: /Fetch my details/i })).toBeDisabled();
+  // Blocked, same as the searching wait card: no chat, no confirm card yet.
+  await expect(page.locator('textarea[aria-label="Your answer"]')).toHaveCount(0);
+  await expect(page.getByText(/Is it right\?/i)).toHaveCount(0);
+
+  await page.getByRole('button', { name: /Skip for now/i }).click();
+
+  // Skip sets no URL client-side; the searching effect's poll settles on the
+  // server's honest opening on the very first response (no confirm card,
+  // straight to chat) — same "none + no URL" settle-immediately behavior the
+  // other states tests above already pin.
+  await expect(firstBubble(page)).toHaveText(OPENINGS.not_found, { timeout: 20_000 });
+  await expect(page.getByText(/Is it right\?/i)).toHaveCount(0);
+  console.log('  ✓ asklink: ask screen shown for a no-URL member; Skip settled the honest not_found opening.');
+});
+
+test('asklink: a pasted bare slug canonicalizes into the enrich trigger and lands on the confirm card', async () => {
+  test.setTimeout(90_000);
+  let phase: 'none' | 'searching' | 'found' = 'none';
+  let enrichBody: unknown = null;
+  const candidate = {
+    fullName: 'Onb Asklink',
+    currentRole: 'Founder',
+    currentCompany: 'Slug Co',
+    industry: 'Software',
+    location: 'Berlin',
+    summary: 'Builds things.',
+    likelyWantsToMeet: ['investors'],
+    likelyOffers: ['engineering leadership'],
+    linkedinUrl: 'https://www.linkedin.com/in/onbasklink-e2e-slug',
+  };
+
+  const page = await openOnboarding({ width: 390, height: 844 }, asklinkUser);
+
+  // Answer the enrich trigger synthetically — 202 searching, no real provider
+  // run — and capture the body so the canonicalized URL can be asserted.
+  await page.route(`${SERVER}/api/onboarding/enrich`, async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+    enrichBody = route.request().postDataJSON();
+    await route.fulfill({
+      status: 202,
+      headers: { 'access-control-allow-origin': '*' },
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, data: { status: 'searching' } }),
+    });
+  });
+
+  // 'none' -> the trap (client must keep polling instead of settling
+  // not_found, same as the none+linkedin test above) -> searching -> found.
+  await page.route(`${SERVER}/api/onboarding/status`, async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      json: {
+        success: true,
+        data: {
+          status: 'not_started',
+          enrichment: {
+            status: phase,
+            error: null,
+            startedAt: null,
+            completedAt: null,
+            ...(phase === 'found' ? { candidate } : {}),
+          },
+          opening: phase === 'none' ? 'not_found' : phase,
+        },
+      },
+    });
+  });
+
+  await gotoRetry(page, `${APP}/onboarding`);
+
+  const askInput = page.locator('input[aria-label="Your LinkedIn URL"]');
+  await expect(askInput).toBeVisible({ timeout: 20_000 });
+  const fetchButton = page.getByRole('button', { name: /Fetch my details/i });
+  await expect(fetchButton).toBeDisabled();
+
+  // A bare slug (no scheme, no /in/) — the lenient case the design calls out.
+  await askInput.fill('onbasklink-e2e-slug');
+  await expect(fetchButton).toBeEnabled();
+  await fetchButton.click();
+
+  // Submitting routes straight into 'searching', which fires the enrich
+  // trigger with the canonicalized URL — never the raw slug the member typed.
+  await expect(page.getByText(OPENINGS.searching)).toBeVisible({ timeout: 20_000 });
+  await expect
+    .poll(() => enrichBody, { timeout: 20_000 })
+    .toEqual({ linkedinUrl: 'https://www.linkedin.com/in/onbasklink-e2e-slug' });
+  console.log('  ✓ asklink: bare slug canonicalized before the enrich trigger fired.');
+
+  // The triggered job progresses: none -> searching (still waiting) -> found.
+  phase = 'searching';
+  await expect(page.getByText(OPENINGS.searching)).toBeVisible();
+  phase = 'found';
+  await expect(page.getByText(/Is it right\?/i)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('Slug Co')).toBeVisible();
+
+  await page.getByRole('button', { name: /Yes, continue/i }).click();
+  await expect(firstBubble(page)).toHaveText(OPENINGS.found, { timeout: 15_000 });
+  console.log('  ✓ asklink: none→searching→found landed the found opening with the candidate on the card.');
 });
