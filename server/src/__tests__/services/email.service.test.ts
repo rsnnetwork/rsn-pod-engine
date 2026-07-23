@@ -21,7 +21,14 @@ jest.mock('../../config/logger', () => ({
   },
 }));
 
+jest.mock('../../db', () => ({
+  query: jest.fn(),
+  transaction: jest.fn(),
+}));
+
 import * as emailService from '../../services/email/email.service';
+import { query } from '../../db';
+import logger from '../../config/logger';
 
 describe('Email Service', () => {
   describe('sendSessionRecapEmail', () => {
@@ -111,6 +118,45 @@ describe('Email Service', () => {
       await expect(
         emailService.sendJoinRequestDeclineEmail('declined@example.com', 'John Doe')
       ).resolves.not.toThrow();
+    });
+  });
+
+  describe('isEmailTypeEnabled', () => {
+    it('should return enabled status from database row', async () => {
+      (query as jest.Mock).mockResolvedValueOnce({
+        rows: [{ enabled: false }],
+      });
+
+      const result = await emailService.isEmailTypeEnabled('poke_request');
+
+      expect(result).toBe(false);
+      expect(query).toHaveBeenCalledWith(
+        'SELECT enabled FROM email_config WHERE email_type = $1',
+        ['poke_request']
+      );
+    });
+
+    it('should return true (fail-open) when email_type row does not exist', async () => {
+      (query as jest.Mock).mockResolvedValueOnce({
+        rows: [],
+      });
+
+      const result = await emailService.isEmailTypeEnabled('unknown_type');
+
+      expect(result).toBe(true);
+    });
+
+    it('should return true (fail-open) and log warning when query rejects', async () => {
+      const testError = new Error('Database connection failed');
+      (query as jest.Mock).mockRejectedValueOnce(testError);
+
+      const result = await emailService.isEmailTypeEnabled('poke_request');
+
+      expect(result).toBe(true);
+      expect(logger.warn).toHaveBeenCalledWith(
+        { err: testError, emailType: 'poke_request' },
+        'email_config lookup failed — defaulting to enabled'
+      );
     });
   });
 });

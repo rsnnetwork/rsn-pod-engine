@@ -45,6 +45,7 @@ async function notifyPokeReceivedByEmail(
     );
     const recipient = recipientResult.rows[0];
     if (!recipient?.email || !recipient.notify_email) return;
+    // Asymmetric gates: notify_email fails closed (user preference), email_config fails open (operational safety).
     if (!(await emailService.isEmailTypeEnabled(POKE_REQUEST_EMAIL_TYPE))) return;
 
     await emailService.sendPokeReceivedEmail(recipient.email, recipient.display_name || 'there', {
