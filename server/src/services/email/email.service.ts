@@ -6,6 +6,7 @@ import { v4 as uuid } from 'uuid';
 import config from '../../config';
 import logger from '../../config/logger';
 import { generateIcsContent } from '../calendar/calendar.service';
+import { query } from '../../db';
 
 let resend: Resend | null = null;
 
@@ -939,6 +940,130 @@ export async function sendJoinRequestAdminReviewEmail(
   }
 
   logger.warn({ to, applicantEmail: data.applicantEmail }, 'No email provider — admin review email skipped');
+}
+
+// ─── Poke Received Email (Task F2, 23 Jul 2026) ─────────────────────────────
+// The truthful-loop audit found the poke request was in-app-only — a
+// logged-out (or just not-currently-online) member never learned someone
+// wanted to meet them, which stalled the whole founder test. This mirrors
+// sendDmNotificationEmail's shape (offline-notification pattern). Gating
+// (recipient's notify_email toggle + the email_config kill-switch) is the
+// caller's job (poke.service.ts) — this function only renders and sends.
+
+interface PokeReceivedEmailData {
+  senderName: string;
+  introMessage: string | null;
+  messagesUrl: string;
+}
+
+export async function sendPokeReceivedEmail(
+  to: string,
+  recipientDisplayName: string,
+  data: PokeReceivedEmailData,
+): Promise<void> {
+  const subject = `${data.senderName} wants to meet you on RSN`;
+  const introBlock = data.introMessage
+    ? `<div style="background:#f8f9fa;border-left:3px solid #DE322E;border-radius:6px;padding:12px 16px;margin:0 0 24px 0;">
+         <p style="color:#374151;font-size:14px;line-height:1.5;margin:0;">${escapeHtml(data.introMessage)}</p>
+       </div>`
+    : '';
+  const html = `
+    <!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
+        <div style="background:#fff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
+          <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
+          <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">Meeting request</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">Hey ${recipientDisplayName},</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
+            <strong>${escapeHtml(data.senderName)}</strong> wants to meet you on RSN.
+          </p>
+          ${introBlock}
+          <div style="text-align:center;margin:24px 0;">
+            <a href="${data.messagesUrl}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 32px;border-radius:8px;">View Request</a>
+          </div>
+          <p style="color:#9ca3af;font-size:12px;text-align:center;margin:24px 0 0 0;">
+            You're receiving this because someone wants to meet you on RSN.
+            You can change your notification preferences in Settings.
+          </p>
+        </div>
+      </div>
+    </body></html>`;
+
+  if (config.resendApiKey) {
+    const text = `Hey ${recipientDisplayName},\n\n${data.senderName} wants to meet you on RSN.${data.introMessage ? `\n\n"${data.introMessage}"` : ''}\n\nView it: ${data.messagesUrl}\n\nRSN — Connect with Reason`;
+    await sendEmail({ to, subject, html, text });
+    return;
+  }
+
+  logger.warn({ to, senderName: data.senderName }, 'No email provider — poke received email skipped');
+}
+
+// ─── Poke Accepted Email (Task F2, 23 Jul 2026) ─────────────────────────────
+// Mirrors the in-app 'poke_accepted' bell notification (F1) with an email so
+// the original sender learns about the acceptance even when offline.
+
+interface PokeAcceptedEmailData {
+  accepterName: string;
+  messagesUrl: string;
+}
+
+export async function sendPokeAcceptedEmail(
+  to: string,
+  recipientDisplayName: string,
+  data: PokeAcceptedEmailData,
+): Promise<void> {
+  const subject = `${data.accepterName} accepted your meeting request`;
+  const html = `
+    <!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
+        <div style="background:#fff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
+          <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
+          <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">Meeting request accepted</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">Hey ${recipientDisplayName},</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
+            <strong>${escapeHtml(data.accepterName)}</strong> accepted your meeting request. You're connected — start the conversation.
+          </p>
+          <div style="text-align:center;margin:24px 0;">
+            <a href="${data.messagesUrl}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 32px;border-radius:8px;">Open Conversation</a>
+          </div>
+          <p style="color:#9ca3af;font-size:12px;text-align:center;margin:24px 0 0 0;">
+            You're receiving this because your meeting request was accepted on RSN.
+            You can change your notification preferences in Settings.
+          </p>
+        </div>
+      </div>
+    </body></html>`;
+
+  if (config.resendApiKey) {
+    const text = `Hey ${recipientDisplayName},\n\n${data.accepterName} accepted your meeting request on RSN. You're connected — start the conversation.\n\nOpen conversation: ${data.messagesUrl}\n\nRSN — Connect with Reason`;
+    await sendEmail({ to, subject, html, text });
+    return;
+  }
+
+  logger.warn({ to, accepterName: data.accepterName }, 'No email provider — poke accepted email skipped');
+}
+
+// ─── Email Admin Kill-Switch (Task F2, 23 Jul 2026) ─────────────────────────
+// `email_config` (migration 020) already backs the admin dashboard's
+// per-type enable/disable toggle (routes/admin.ts L542-576), but nothing
+// ever actually consulted it before send — the admin switch was decorative.
+// Callers that want to honor it (poke.service.ts) check this first.
+export async function isEmailTypeEnabled(emailType: string): Promise<boolean> {
+  try {
+    const result = await query<{ enabled: boolean }>(
+      `SELECT enabled FROM email_config WHERE email_type = $1`,
+      [emailType],
+    );
+    // Fail open — an email type with no seeded row yet, or a DB hiccup on
+    // this lookup, must never silently block a notification the product
+    // wants live.
+    return result.rows.length === 0 ? true : result.rows[0].enabled;
+  } catch (err) {
+    logger.warn({ err, emailType }, 'email_config lookup failed — defaulting to enabled');
+    return true;
+  }
 }
 
 // HTML-escape helpers for the admin review email. Other templates render

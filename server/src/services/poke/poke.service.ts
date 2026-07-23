@@ -9,9 +9,81 @@
 import { v4 as uuid } from 'uuid';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
+import config from '../../config';
 import { AppError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
 import * as blockService from '../block/block.service';
+import * as emailService from '../email/email.service';
+
+// Task F2 (23 Jul 2026) — the truthful-loop audit found the poke loop was
+// in-app-only: a logged-out founder never learned someone wanted to meet
+// them, or that their request had been accepted. Both email types are
+// gated by TWO independent kill-switches, mirrored from the closest
+// existing patterns in this codebase: the per-user `users.notify_email`
+// column (Settings toggle) and the admin `email_config` table (dashboard
+// toggle, routes/admin.ts L542-576) — neither of which any send actually
+// checked before this. Both must be true for the email to go out.
+const POKE_REQUEST_EMAIL_TYPE = 'poke_request';
+const POKE_ACCEPTED_EMAIL_TYPE = 'poke_accepted';
+
+/**
+ * Email the poke recipient that someone wants to meet them. Fire-and-forget:
+ * any failure (missing email, DB hiccup, Resend error) is logged and
+ * swallowed here — sendPoke has already succeeded by the time this runs.
+ */
+async function notifyPokeReceivedByEmail(
+  recipientId: string,
+  senderName: string,
+  introMessage: string | null,
+): Promise<void> {
+  try {
+    const recipientResult = await query<{
+      email: string | null; display_name: string | null; notify_email: boolean;
+    }>(
+      `SELECT email, display_name, notify_email FROM users WHERE id = $1`,
+      [recipientId],
+    );
+    const recipient = recipientResult.rows[0];
+    if (!recipient?.email || !recipient.notify_email) return;
+    if (!(await emailService.isEmailTypeEnabled(POKE_REQUEST_EMAIL_TYPE))) return;
+
+    await emailService.sendPokeReceivedEmail(recipient.email, recipient.display_name || 'there', {
+      senderName,
+      introMessage,
+      messagesUrl: `${config.clientUrl}/messages`,
+    });
+  } catch (err) {
+    logger.warn({ err, recipientId }, 'Poke received email failed to send (non-fatal)');
+  }
+}
+
+/**
+ * Email the original poke sender that their meeting request was accepted.
+ * Same fire-and-forget contract as notifyPokeReceivedByEmail above.
+ */
+async function notifyPokeAcceptedByEmail(
+  senderId: string,
+  accepterName: string,
+): Promise<void> {
+  try {
+    const senderResult = await query<{
+      email: string | null; display_name: string | null; notify_email: boolean;
+    }>(
+      `SELECT email, display_name, notify_email FROM users WHERE id = $1`,
+      [senderId],
+    );
+    const sender = senderResult.rows[0];
+    if (!sender?.email || !sender.notify_email) return;
+    if (!(await emailService.isEmailTypeEnabled(POKE_ACCEPTED_EMAIL_TYPE))) return;
+
+    await emailService.sendPokeAcceptedEmail(sender.email, sender.display_name || 'there', {
+      accepterName,
+      messagesUrl: `${config.clientUrl}/messages`,
+    });
+  } catch (err) {
+    logger.warn({ err, senderId }, 'Poke accepted email failed to send (non-fatal)');
+  }
+}
 
 export interface UserPoke {
   id: string;
@@ -100,6 +172,13 @@ export async function sendPoke(
          RETURNING id, created_at`,
         [notifId, recipientId, `${senderName} poked you`, trimmedMessage || 'They want to connect — accept to start chatting.', '/messages'],
       );
+
+      // Task F2 — email the recipient, fire-and-forget, right alongside the
+      // socket push below. Gated on notify_email + email_config inside the
+      // helper; a rejection there is already caught internally so this can
+      // never throw or block the poke response.
+      void notifyPokeReceivedByEmail(recipientId, senderName, trimmedMessage);
+
       // Emit via dynamic import of the io instance (same pattern as invites).
       try {
         const { io } = await import('../../index');
@@ -246,6 +325,10 @@ export async function acceptPoke(
     const title = `${accepterName} accepted your meeting request`;
     const body = introText.slice(0, 120);
     const notifId = uuid();
+    // Deliberately INSIDE this transaction, not best-effort — it's atomic
+    // with the accept by design (see the Task F1 comment above this
+    // function) so this can never exist without a corresponding accepted
+    // poke. Do not move it to a post-commit "fire and forget" block.
     const notifResult = await client.query<{ id: string; created_at: Date }>(
       `INSERT INTO notifications (id, user_id, type, title, body, link)
        VALUES ($1, $2, 'poke_accepted', $3, $4, '/messages')
@@ -264,13 +347,13 @@ export async function acceptPoke(
       conversationId: convResult.rows[0].id,
       senderNotif: {
         id: notifResult.rows[0].id, senderId: p.sender_id, title, body,
-        createdAt: notifResult.rows[0].created_at,
+        createdAt: notifResult.rows[0].created_at, accepterName,
       },
     };
   });
 
-  // Post-commit only — mirrors sendPoke's ordering so a socket push can
-  // never fire for a transaction that ended up rolled back.
+  // Post-commit only — mirrors sendPoke's ordering so a socket push (or an
+  // email) can never fire for a transaction that ended up rolled back.
   try {
     const { io } = await import('../../index');
     io.to(`user:${senderNotif.senderId}`).emit('notification:new', {
@@ -287,8 +370,15 @@ export async function acceptPoke(
     emitEntities(
       io, [senderNotif.senderId],
       [E.userNotifications(senderNotif.senderId), E.userInvites(senderNotif.senderId)],
-    ).catch(() => {});
-  } catch { /* socket push is non-fatal */ }
+    ).catch((err) => logger.warn({ err, senderId: senderNotif.senderId }, 'Poke-accepted entity fanout failed (non-fatal)'));
+  } catch (err) {
+    logger.warn({ err, senderId: senderNotif.senderId }, 'Poke-accepted socket push failed (non-fatal)');
+  }
+
+  // Task F2 — email the original sender, fire-and-forget, right alongside
+  // the socket push above. Gated on notify_email + email_config inside the
+  // helper; internally self-catching, so it can never throw here.
+  void notifyPokeAcceptedByEmail(senderNotif.senderId, senderNotif.accepterName);
 
   return { poke, conversationId };
 }
