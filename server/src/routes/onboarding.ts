@@ -87,7 +87,8 @@ function sendEnrichmentDisabled(res: Response): void {
 
 // A failure and a genuine miss read identically to the member — the host still
 // says "let's build it together" either way. The distinction (why it failed)
-// stays admin-visible via enrichment.error, never surfaced in the `opening`.
+// stays admin-only via GET /admin/inspect/users/:id/onboarding — never in the
+// `opening`, and never in the member payload's enrichment.error (always null).
 function openingFromEnrichment(status: OnboardingEnrichmentState['status']): OnboardingOpening {
   switch (status) {
     case 'searching':
@@ -118,7 +119,9 @@ router.get(
       ]);
       const enrichmentPayload: OnboardingEnrichmentState = {
         status: enrichmentState.status,
-        error: enrichmentState.error,
+        // The raw enrichment_error is admin-only (admin-inspect surfaces it);
+        // the member payload keeps the field for shape stability, always null.
+        error: null,
         startedAt: enrichmentState.startedAt,
         completedAt: enrichmentState.completedAt,
       };

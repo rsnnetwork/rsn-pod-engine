@@ -212,7 +212,7 @@ describe('GET /onboarding/status', () => {
     expect(res.body.data.opening).toBe(expectedOpening);
   });
 
-  it('includes the enrichment error for a failed run (admin-visible; opening still reads as not_found)', async () => {
+  it('withholds the enrichment error from the member payload (admin-only via admin-inspect); opening still reads as not_found', async () => {
     (intentRepo.getOnboardingStatus as jest.Mock).mockResolvedValue('not_started');
     (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
       status: 'failed',
@@ -225,7 +225,8 @@ describe('GET /onboarding/status', () => {
       .get('/onboarding/status')
       .set('Authorization', `Bearer ${makeToken()}`);
     expect(res.status).toBe(200);
-    expect(res.body.data.enrichment.error).toBe('provider timeout');
+    // Shape stability: the field exists, but the raw error never reaches a member.
+    expect(res.body.data.enrichment).toHaveProperty('error', null);
     expect(res.body.data.opening).toBe('not_found');
   });
 

@@ -141,6 +141,9 @@ export interface OnboardingEnrichmentCandidate {
 
 export interface OnboardingEnrichmentState {
   status: OnboardingEnrichmentStatus;
+  /** Always null on the member-facing payload — the raw enrichment error is
+   *  admin-only (GET /admin/inspect/users/:id/onboarding surfaces the real
+   *  one). Kept in the shape for stability, never populated for members. */
   error: string | null;
   startedAt: string | null;
   completedAt: string | null;
