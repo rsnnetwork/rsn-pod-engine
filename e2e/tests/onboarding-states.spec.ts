@@ -295,6 +295,89 @@ test('none with a LinkedIn on file does NOT settle: the client fires the enrich 
   console.log('  ✓ none→searching→found: landed the found opening with the candidate on the card.');
 });
 
+test('failed status with a LinkedIn on file retries once via the enrich trigger; a second failed response settles on the partial opening (profile data already on file)', async () => {
+  // Pins the retry-once fix: enrichment.status 'failed' is no longer a life
+  // sentence when a LinkedIn URL is on file — the client fires ONE retry (same
+  // trigger as the none-branch above) and treats that first failed response as
+  // still-searching rather than settling on it. If the retry itself concludes
+  // in failure again, the client settles this time, using the server's honest
+  // opening: since this member has substantive profile data on file, the
+  // Claus-rule mapping opens 'partial' (never the not_found "could not
+  // identify" copy next to a card that already shows real data) even though
+  // enrichment genuinely failed twice. This stub sets `opening` directly to
+  // mirror what GET /onboarding/status now returns for failed+hasProfileData.
+  test.setTimeout(60_000);
+  let enrichCalls = 0;
+
+  const page = await openOnboarding({ width: 390, height: 844 }, freshUser);
+
+  // The trigger only fires when known.linkedin exists.
+  await page.route(`${SERVER}/api/onboarding/known`, async (route) => {
+    const response = await route.fetch();
+    const json = await response.json();
+    json.data = { ...json.data, linkedin: 'https://www.linkedin.com/in/onbstates-failed-e2e' };
+    await route.fulfill({ response, json });
+  });
+
+  // Answer the retry synthetically — 202 searching, no real provider run.
+  await page.route(`${SERVER}/api/onboarding/enrich`, async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+    enrichCalls += 1;
+    await route.fulfill({
+      status: 202,
+      headers: { 'access-control-allow-origin': '*' },
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, data: { status: 'searching' } }),
+    });
+  });
+
+  // enrichment.status stays 'failed' on every poll (the retry concludes in
+  // failure again), but opening is 'partial' throughout, mirroring the fixed
+  // server mapping for failed+hasProfileData=true.
+  await page.route(`${SERVER}/api/onboarding/status`, async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      json: {
+        success: true,
+        data: {
+          status: 'not_started',
+          enrichment: { status: 'failed', error: null, startedAt: null, completedAt: null },
+          opening: 'partial',
+        },
+      },
+    });
+  });
+
+  await gotoRetry(page, `${APP}/onboarding`);
+
+  // The first 'failed' poll fires the retry trigger and does NOT settle: still
+  // the searching wait card, no confirm card, no chat input.
+  await expect.poll(() => enrichCalls, { timeout: 20_000 }).toBeGreaterThan(0);
+  await expect(page.getByText(OPENINGS.searching)).toBeVisible();
+  await expect(page.locator('textarea[aria-label="Your answer"]')).toHaveCount(0);
+  await expect(page.getByText(/Is it right\?/i)).toHaveCount(0);
+  console.log('  ✓ failed+linkedin: first response not settled, retry trigger fired once.');
+
+  // The very next poll settles: the retry concluded in failure again, but the
+  // opening honors the profile data on file — partial, never not_found.
+  await expect(page.getByText(/Is it right\?/i)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(OPENINGS.not_found)).toHaveCount(0);
+  await page.getByRole('button', { name: /Yes, continue/i }).click();
+  await expect(firstBubble(page)).toHaveText(OPENINGS.partial, { timeout: 15_000 });
+
+  // Retry-once: exactly one enrich call ever fired, no infinite loop.
+  expect(enrichCalls).toBe(1);
+  console.log('  ✓ failed→failed: retried once, settled partial (profile data on file), never not_found.');
+});
+
 test('searching wait card has no horizontal overflow at 360px (mobile-first floor)', async () => {
   test.setTimeout(60_000);
   const page = await openOnboarding({ width: 360, height: 740 });

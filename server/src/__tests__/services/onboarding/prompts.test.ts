@@ -66,17 +66,23 @@ describe('onboarding prompts (v1.1)', () => {
   });
 
   describe('honesty clause (driven by enrichment state)', () => {
-    const RETRIEVED = 'retrieved parts of their public profile';
+    // Source-agnostic wording: the known profile block can be populated from
+    // on-file columns (job_title/company/bio) as readily as from a genuine
+    // LinkedIn hit (see getKnownProfileForHost's on-file-first fallback), so
+    // the clause must never claim a specific retrieval that may not have
+    // happened. It speaks of "what we already have", not "retrieved... public
+    // profile".
+    const RETRIEVED = 'what we already have for them';
     const NOT_RETRIEVED = 'we could not retrieve their profile';
 
-    it('found: instructs the host to confirm retrieved facts and never invent beyond the known block', () => {
+    it('found: instructs the host to confirm the known facts and never invent beyond the known block, without claiming a specific retrieval', () => {
       const p = buildHostSystemPrompt(undefined, 'none', undefined, 'found').toLowerCase();
       expect(p).toContain(RETRIEVED);
       expect(p).toContain('never invent');
       expect(p).not.toContain(NOT_RETRIEVED);
     });
 
-    it('partial: gets the same retrieved-profile honesty clause as found', () => {
+    it('partial: gets the same known-facts honesty clause as found', () => {
       const p = buildHostSystemPrompt(undefined, 'none', undefined, 'partial').toLowerCase();
       expect(p).toContain(RETRIEVED);
       expect(p).not.toContain(NOT_RETRIEVED);

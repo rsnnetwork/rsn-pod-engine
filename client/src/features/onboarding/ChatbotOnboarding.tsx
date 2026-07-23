@@ -31,8 +31,17 @@ const FIRST_QUESTION =
   "Reason works best when we understand why you're here. What is your reason for joining? One sentence is enough.";
 // When the member already gave their reason (e.g. in a join request), don't re-ask it —
 // acknowledge that we've looked them up, then move straight to what matters for matching.
+// Only truthful when the settled opening is 'found' or 'partial' (we genuinely
+// have SOME known profile data, whether retrieved or already on file) — see
+// REASON_KNOWN_QUESTION_NO_BACKGROUND for the not_found case, where nothing
+// was found and claiming a "look at your background" would be a lie.
 const REASON_KNOWN_QUESTION =
   "I've had a quick look at your background so we can spend less time on basics, and thanks for sharing why you're here. To match you well, who would be most valuable for you to meet, and roughly why? If I've got anything wrong, just tell me.";
+// Same follow-up for when the opening settled not_found: thanks the member for
+// the reason they already gave, without claiming any background review that
+// never happened.
+const REASON_KNOWN_QUESTION_NO_BACKGROUND =
+  "Thanks for sharing why you're here. To match you well, who would be most valuable for you to meet, and roughly why?";
 
 // How often the searching stage polls GET /onboarding/status, and the belt
 // timeout (server will have terminal-ed long before this) that forces the
@@ -381,11 +390,20 @@ export default function ChatbotOnboarding() {
   // Build the messages an opening starts with: the truthful OPENINGS[opening]
   // line (server-derived, verbatim), followed by the existing question flow —
   // known?.reason still decides whether the reason question is skipped, which
-  // stays orthogonal to the opening itself.
+  // stays orthogonal to the opening itself. The known-reason follow-up's
+  // "quick look at your background" claim is only truthful when `op` is found
+  // or partial (we genuinely have SOME known profile data); not_found gets the
+  // no-background variant so it never claims a review that never happened.
   function openingMessages(op: OnboardingOpening): OnboardingMessage[] {
+    const hasBackground = op === 'found' || op === 'partial';
     return [
       { role: 'assistant', content: OPENINGS[op] },
-      { role: 'assistant', content: known?.reason ? REASON_KNOWN_QUESTION : FIRST_QUESTION },
+      {
+        role: 'assistant',
+        content: known?.reason
+          ? (hasBackground ? REASON_KNOWN_QUESTION : REASON_KNOWN_QUESTION_NO_BACKGROUND)
+          : FIRST_QUESTION,
+      },
     ];
   }
 
@@ -424,13 +442,26 @@ export default function ChatbotOnboarding() {
 
   // The 'searching' stage: poll GET /onboarding/status every 2.5s until the
   // opening resolves away from 'searching'. Fires the enrichment trigger
-  // exactly once (only when a LinkedIn URL is on file and no job has ever
-  // run) — and keeps polling through that first 'none' response instead of
-  // settling on it (the search it just triggered is still running). The
-  // background job owns every retry from here; the client never times out a
-  // request or swallows a 503 itself. A 3-minute belt forces the not_found
-  // path if polling somehow never resolves (server will have terminal-ed
-  // long before this fires).
+  // exactly once per searching-session (only when a LinkedIn URL is on file
+  // and no job has ever run THIS session) when status is 'none' (no job has
+  // run yet) OR 'failed' (the last run hit a transient provider error, e.g. a
+  // free-quota exhaustion that has since been upgraded) — and keeps polling
+  // through that first response instead of settling on it (the search it just
+  // triggered is still running). A failed enrichment is never a life
+  // sentence: this is the ONE retry a member gets per searching-session.
+  //
+  // Retry-once semantics: once the trigger has fired, a LATER poll reporting
+  // 'failed' again means the retry itself concluded in failure, not that this
+  // is still the original stale response — settle on it (the normal branch
+  // below, using the server's honest opening) rather than looping forever.
+  // 'none' stays exempt from that fall-through: as long as status is 'none'
+  // the job genuinely hasn't started or reported back yet, so it never
+  // settles on its own (the belt below still bounds the wait either way).
+  //
+  // The background job owns every retry from here; the client never times
+  // out a request or swallows a 503 itself. A 3-minute belt forces the
+  // not_found path if polling somehow never resolves (server will have
+  // terminal-ed long before this fires).
   useEffect(() => {
     if (stage !== 'searching') return;
     let cancelled = false;
@@ -453,15 +484,21 @@ export default function ChatbotOnboarding() {
         if (cancelled || settled) return;
         const data = res.data.data as OnboardingStatusResponse;
 
-        // status 'none' with a LinkedIn URL on file means no job has run YET —
-        // fire the trigger (once) and treat this poll as still-searching. The
-        // server maps 'none' to opening 'not_found', so settling here would
-        // settle on the very response that triggered the search (the approved
-        // join-request preload case: cached blob, state columns still 'none').
-        // The trigger + cache-first orchestrator move it to a real state
-        // within a poll cycle; the belt below still bounds the wait. Only a
-        // 'none' with NO URL to search settles immediately.
-        if (data.enrichment.status === 'none' && known?.linkedin) {
+        // status 'none' (no job has run YET) or a first-time 'failed' (the
+        // last run hit a transient provider error) with a LinkedIn URL on
+        // file means it's worth firing the trigger (once) and treating this
+        // poll as still-searching. The server maps both to a terminal
+        // opening, so settling here would settle on the very response that
+        // triggered the search (the approved join-request preload case:
+        // cached blob, state columns still 'none') or on a failure that has
+        // since been retried. The trigger + cache-first orchestrator move it
+        // to a real state within a poll cycle; the belt below still bounds
+        // the wait. Only a 'none'/'failed' with NO URL to search, or a
+        // 'failed' seen AGAIN after the retry already fired, settles instead.
+        const stillUntried =
+          data.enrichment.status === 'none' ||
+          (data.enrichment.status === 'failed' && !enrichFired);
+        if (stillUntried && known?.linkedin) {
           if (!enrichFired) {
             enrichFired = true;
             api.post('/onboarding/enrich', { linkedinUrl: known.linkedin }).catch(() => {});
@@ -539,8 +576,14 @@ export default function ChatbotOnboarding() {
 
   function resumeChat() {
     // The saved transcript starts at the member's first reply; the opening
-    // question is client-only, so prepend it for display.
-    setMessages([{ role: 'assistant', content: known?.reason ? REASON_KNOWN_QUESTION : FIRST_QUESTION}, ...resumeMessages]);
+    // question is client-only, so prepend it for display. The 'resume' stage
+    // bypasses the searching poll entirely (see the mount effect above), so
+    // `opening` is never settled here — there's no basis to claim a background
+    // review happened, so this always uses the no-background variant.
+    setMessages([
+      { role: 'assistant', content: known?.reason ? REASON_KNOWN_QUESTION_NO_BACKGROUND : FIRST_QUESTION },
+      ...resumeMessages,
+    ]);
     setStage('chat');
     requestAnimationFrame(() => inputRef.current?.focus());
   }

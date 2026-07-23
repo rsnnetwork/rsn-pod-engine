@@ -86,10 +86,17 @@ function sendEnrichmentDisabled(res: Response): void {
 }
 
 // A failure and a genuine miss read identically to the member — the host still
-// says "let's build it together" either way. The distinction (why it failed)
-// stays admin-only via GET /admin/inspect/users/:id/onboarding — never in the
-// `opening`, and never in the member payload's enrichment.error (always null).
-function openingFromEnrichment(status: OnboardingEnrichmentState['status']): OnboardingOpening {
+// says "let's build it together" either way, UNLESS the system already has
+// substantive profile data on file (the Claus rule: the opening reflects the
+// SUM of what we have, not just the LinkedIn lookup's outcome). In that case
+// both read as 'partial' instead, since on-file data is real, truthful ground
+// to build on. The distinction (why enrichment itself failed) stays admin-only
+// via GET /admin/inspect/users/:id/onboarding — never in the `opening`, and
+// never in the member payload's enrichment.error (always null).
+function openingFromEnrichment(
+  status: OnboardingEnrichmentState['status'],
+  hasProfileData: boolean
+): OnboardingOpening {
   switch (status) {
     case 'searching':
       return 'searching';
@@ -100,9 +107,14 @@ function openingFromEnrichment(status: OnboardingEnrichmentState['status']): Onb
     case 'none':
     case 'not_found':
     case 'failed':
-      return 'not_found';
+      return hasProfileData ? 'partial' : 'not_found';
     default:
-      return 'not_found';
+      // Unrecognized status (fail-safe): same hasProfileData branch as the
+      // terminal-failure states above, for consistency, rather than a bespoke
+      // rule. The fail-safe intent (never guess a state we don't recognize)
+      // stays intact either way; whether it reads as partial or not_found
+      // still honestly reflects what's on file. See the route tests for both.
+      return hasProfileData ? 'partial' : 'not_found';
   }
 }
 
@@ -113,9 +125,10 @@ router.get(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const userId = req.user!.userId;
-      const [status, enrichmentState] = await Promise.all([
+      const [status, enrichmentState, hasProfileData] = await Promise.all([
         intentRepo.getOnboardingStatus(userId),
         enrichRepo.getEnrichmentState(userId),
+        intentRepo.hasSubstantiveProfileData(userId),
       ]);
       const enrichmentPayload: OnboardingEnrichmentState = {
         status: enrichmentState.status,
@@ -133,7 +146,7 @@ router.get(
         const cached = await enrichRepo.getCachedEnrichment(userId).catch(() => null);
         if (cached?.profile) enrichmentPayload.candidate = cached.profile;
       }
-      const opening = openingFromEnrichment(enrichmentPayload.status);
+      const opening = openingFromEnrichment(enrichmentPayload.status, hasProfileData);
       const response: ApiResponse = { success: true, data: { status, enrichment: enrichmentPayload, opening } };
       res.json(response);
     } catch (err) {

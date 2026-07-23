@@ -62,14 +62,21 @@ function knownBlock(p?: OnboardingConfirmedProfile, extra?: HostKnownExtra): str
 }
 
 // The honesty clause: the host never pretends it has data it does not have.
-// found/partial → we genuinely retrieved something, so confirm before building on
-// it. Everything else (not_found, none, failed, and searching, which should never
-// reach the chat but is treated the same if it somehow does) → we retrieved
-// nothing, so never imply a review happened. Exactly one of the two always
-// applies. No dashes (style rule).
+// found/partial → the known profile block above carries something real, so
+// confirm before building on it. Everything else (not_found, none, failed, and
+// searching, which should never reach the chat but is treated the same if it
+// somehow does) → the block carries nothing, so never imply a review happened.
+// Exactly one of the two always applies. No dashes (style rule).
+//
+// Wording is source-agnostic on purpose: knownBlock() prefers the member's own
+// saved columns (job_title/company/bio) over the LinkedIn enrichment, so even
+// on a genuine found/partial the facts above may be substantially on-file data
+// rather than anything actually retrieved from a public profile. Claiming a
+// specific retrieval here would overstate what happened, so the clause speaks
+// of "what we already have" rather than "retrieved... their public profile".
 function honestyClause(enrichmentStatus?: OnboardingEnrichmentStatus): string {
   return enrichmentStatus === 'found' || enrichmentStatus === 'partial'
-    ? '\n\nWe retrieved parts of their public profile before this chat. Confirm the facts above before you build on them, and never invent anything about them that is not in the known profile block.'
+    ? '\n\nThe known profile block above is what we already have for them, whether it came from what is on file or from their public profile. Confirm those facts before you build on them, and never invent anything about them beyond what is in that block.'
     : '\n\nWe could not retrieve their profile before this chat. Never imply that we already reviewed anything about them. Build their profile together, entirely from what they tell you here.';
 }
 

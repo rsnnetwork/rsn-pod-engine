@@ -23,7 +23,15 @@ import type { EnrichmentProvider } from './provider.types';
 const BASE = 'https://api.scrapingdog.com/linkedin/';
 const RETRY_DELAY_MS = 20_000;
 const MAX_ATTEMPTS = 6;
-const FETCH_TIMEOUT_MS = 30_000;
+// 23 Jul 2026 live test: a valid, never-before-scraped profile (ali-hamza-b0650a281)
+// failed end to end with "The operation was aborted due to timeout" at both the
+// approval-time preload and the user-side run. ScrapingDog answers a cached
+// profile in seconds, but a genuinely cold scrape can take 60-90s — the prior
+// 30s abort fired right before the real answer arrived. 100s gives a cold
+// scrape comfortable headroom without materially changing the worst-case
+// total wait (see the provider's own MAX_ATTEMPTS/RETRY_DELAY_MS 202-loop,
+// unchanged here).
+const FETCH_TIMEOUT_MS = 100_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

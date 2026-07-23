@@ -59,6 +59,28 @@ export async function getOnboardingStatus(userId: string): Promise<OnboardingSta
 }
 
 /**
+ * True when the member's saved profile columns already carry substantive data
+ * (company, job title, or bio). Used by GET /onboarding/status so a
+ * none/not_found/failed enrichment outcome can still open as 'partial' when the
+ * system already has real profile data on file (the "Claus rule": the opening
+ * reflects the SUM of what we have, not just the LinkedIn lookup's outcome).
+ * Degrades to false on a DB error, the same safe default as no data on file.
+ */
+export async function hasSubstantiveProfileData(userId: string): Promise<boolean> {
+  try {
+    const r = await query<{ company: string | null; job_title: string | null; bio: string | null }>(
+      'SELECT company, job_title, bio FROM users WHERE id = $1',
+      [userId]
+    );
+    const row = r.rows[0];
+    if (!row) return false;
+    return !!(orNull(row.company) || orNull(row.job_title) || orNull(row.bio));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Everything the host should KNOW about the member — the LinkedIn enrichment plus
  * any saved fields — so it can answer "who am I", never re-ask, and personalise.
  * Prefers the member's saved/confirmed values, falls back to the enrichment.

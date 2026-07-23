@@ -48,6 +48,7 @@ jest.mock('../../services/onboarding/chatbot.service', () => ({
 
 jest.mock('../../services/onboarding/intent.repo', () => ({
   getOnboardingStatus: jest.fn(),
+  hasSubstantiveProfileData: jest.fn(),
   markInProgress: jest.fn(),
   saveIntentAndComplete: jest.fn(),
   savePartialIntent: jest.fn(),
@@ -133,6 +134,10 @@ beforeEach(() => {
   // authenticate's status check + any stray db call default to an active user.
   (dbQuery as jest.Mock).mockResolvedValue({ rows: [{ status: 'active' }], rowCount: 1 });
   (intentRepo.markInProgress as jest.Mock).mockResolvedValue(false);
+  // Default: no on-file profile data (the pre-existing not_found mapping for
+  // none/not_found/failed). Tests that want the Claus-rule partial branch
+  // override this per-case.
+  (intentRepo.hasSubstantiveProfileData as jest.Mock).mockResolvedValue(false);
   (recordStageEvent as jest.Mock).mockResolvedValue(undefined);
   // Defaults so the /chat background per-answer extraction never errors noisily.
   (intentRepo.savePartialIntent as jest.Mock).mockResolvedValue(undefined);
@@ -188,15 +193,28 @@ describe('GET /onboarding/status', () => {
     expect(res.body.data.enrichment.source).toBeUndefined();
   });
 
+  // The Claus rule: none/not_found/failed no longer collapse unconditionally to
+  // not_found. When the member's saved columns already carry substantive data
+  // (GET intentRepo.hasSubstantiveProfileData), the opening honors it instead
+  // (opening='partial') so the chat never opens with "could not identify"
+  // beside a card that already shows role/company/location. searching/found/
+  // partial are untouched by this dimension.
   it.each([
-    ['searching', 'searching'],
-    ['found', 'found'],
-    ['partial', 'partial'],
-    ['none', 'not_found'],
-    ['not_found', 'not_found'],
-    ['failed', 'not_found'],
-  ])('maps enrichment.status=%s to opening=%s', async (enrichmentStatus, expectedOpening) => {
+    ['searching', false, 'searching'],
+    ['searching', true, 'searching'],
+    ['found', false, 'found'],
+    ['found', true, 'found'],
+    ['partial', false, 'partial'],
+    ['partial', true, 'partial'],
+    ['none', false, 'not_found'],
+    ['none', true, 'partial'],
+    ['not_found', false, 'not_found'],
+    ['not_found', true, 'partial'],
+    ['failed', false, 'not_found'],
+    ['failed', true, 'partial'],
+  ])('maps enrichment.status=%s (hasProfileData=%s) to opening=%s', async (enrichmentStatus, hasProfileData, expectedOpening) => {
     (intentRepo.getOnboardingStatus as jest.Mock).mockResolvedValue('not_started');
+    (intentRepo.hasSubstantiveProfileData as jest.Mock).mockResolvedValue(hasProfileData);
     (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
       status: enrichmentStatus,
       source: null,
@@ -212,8 +230,9 @@ describe('GET /onboarding/status', () => {
     expect(res.body.data.opening).toBe(expectedOpening);
   });
 
-  it('withholds the enrichment error from the member payload (admin-only via admin-inspect); opening still reads as not_found', async () => {
+  it('withholds the enrichment error from the member payload (admin-only via admin-inspect); opening still reads as not_found when no profile data is on file', async () => {
     (intentRepo.getOnboardingStatus as jest.Mock).mockResolvedValue('not_started');
+    (intentRepo.hasSubstantiveProfileData as jest.Mock).mockResolvedValue(false);
     (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
       status: 'failed',
       source: null,
@@ -228,6 +247,24 @@ describe('GET /onboarding/status', () => {
     // Shape stability: the field exists, but the raw error never reaches a member.
     expect(res.body.data.enrichment).toHaveProperty('error', null);
     expect(res.body.data.opening).toBe('not_found');
+  });
+
+  it('a failed enrichment with substantive profile data already on file opens as partial, never not_found (the Claus rule)', async () => {
+    (intentRepo.getOnboardingStatus as jest.Mock).mockResolvedValue('not_started');
+    (intentRepo.hasSubstantiveProfileData as jest.Mock).mockResolvedValue(true);
+    (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
+      status: 'failed',
+      source: null,
+      error: 'provider timeout',
+      startedAt: '2026-07-01T00:00:00.000Z',
+      completedAt: '2026-07-01T00:00:05.000Z',
+    });
+    const res = await request(app)
+      .get('/onboarding/status')
+      .set('Authorization', `Bearer ${makeToken()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.enrichment).toHaveProperty('error', null);
+    expect(res.body.data.opening).toBe('partial');
   });
 
   describe('enrichment.candidate (the confirm-card prefill)', () => {
@@ -499,8 +536,8 @@ describe('POST /onboarding/chat', () => {
 
   describe('honesty clause: enrichment state reaches the host system prompt', () => {
     it.each([
-      ['found', 'retrieved parts of their public profile'],
-      ['partial', 'retrieved parts of their public profile'],
+      ['found', 'what we already have for them'],
+      ['partial', 'what we already have for them'],
       ['not_found', 'we could not retrieve their profile'],
       ['none', 'we could not retrieve their profile'],
       ['failed', 'we could not retrieve their profile'],
