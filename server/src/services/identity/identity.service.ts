@@ -375,7 +375,7 @@ async function getApprovedJoinRequestSeed(email: string): Promise<{
   lastName: string;
   displayName: string;
   linkedinUrl: string | null;
-  enriched: EnrichResult | null;
+  enriched: (EnrichResult & { provider?: string | null }) | null;
   reason: string | null;
 }> {
   const fallback = {
@@ -383,11 +383,11 @@ async function getApprovedJoinRequestSeed(email: string): Promise<{
     lastName: '',
     displayName: email.split('@')[0],
     linkedinUrl: null as string | null,
-    enriched: null as EnrichResult | null,
+    enriched: null as (EnrichResult & { provider?: string | null }) | null,
     reason: null as string | null,
   };
   try {
-    const r = await query<{ full_name: string | null; linkedin_url: string | null; enriched: EnrichResult | null; reason: string | null }>(
+    const r = await query<{ full_name: string | null; linkedin_url: string | null; enriched: (EnrichResult & { provider?: string | null }) | null; reason: string | null }>(
       `SELECT full_name, linkedin_url, enriched, reason FROM join_requests
         WHERE lower(email) = lower($1) AND status = 'approved'
         ORDER BY created_at DESC LIMIT 1`,
@@ -497,13 +497,15 @@ export async function verifyMagicLink(token: string): Promise<AuthTokenPair> {
       // break login.
       await setEnrichmentState(user.id, {
         status: statusFromConfidence(seed.enriched.confidence),
-        // The preload blob carries no provider field (the approval-time
-        // scrape strips it before caching), so there's no honest way to
-        // attribute this to whichever provider actually ran. 'scrapingdog'
-        // is the standing default provider (registry.ts's
-        // resolveEnrichProvider fallback) and the only non-null value every
-        // other write to this column uses today.
-        source: 'scrapingdog',
+        // The preload blob carries the RESOLVED provider that produced it
+        // (join-request.service.ts stashes it at preload time). Blobs written
+        // before that field existed — including ones from the legacy
+        // claude_web rollback path, which stays live for up to 30 days on an
+        // approved-but-unactivated join request — carry no provider, and null
+        // is the honest value there: the same discipline the orchestrator's
+        // own `source: null` writes already use, not a guess at which
+        // provider actually ran.
+        source: seed.enriched.provider ?? null,
         startedAt: seed.enriched.enrichedAt,
         completedAt: seed.enriched.enrichedAt,
       }).catch((e) =>
@@ -683,7 +685,7 @@ export async function findOrCreateGoogleUser(
       // for the confidence→status mapping + source-value rationale.
       await setEnrichmentState(id, {
         status: statusFromConfidence(seed.enriched.confidence),
-        source: 'scrapingdog',
+        source: seed.enriched.provider ?? null,
         startedAt: seed.enriched.enrichedAt,
         completedAt: seed.enriched.enrichedAt,
       }).catch((e) =>

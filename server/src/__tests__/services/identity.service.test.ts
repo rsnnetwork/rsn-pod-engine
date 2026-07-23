@@ -390,6 +390,7 @@ describe('Identity Service', () => {
           foundLinkedinUrl: null,
           requestedLinkedinUrl: 'https://linkedin.com/in/preload',
           enrichedAt,
+          provider: 'scrapingdog',
         });
 
         const result = await identityService.verifyMagicLink('some-token');
@@ -415,6 +416,7 @@ describe('Identity Service', () => {
           foundLinkedinUrl: null,
           requestedLinkedinUrl: 'https://linkedin.com/in/preload',
           enrichedAt,
+          provider: 'scrapingdog',
         });
 
         await identityService.verifyMagicLink('some-token');
@@ -422,6 +424,27 @@ describe('Identity Service', () => {
         expect(enrichRepo.setEnrichmentState).toHaveBeenCalledWith(mockUser.id, {
           status: 'partial',
           source: 'scrapingdog',
+          startedAt: enrichedAt,
+          completedAt: enrichedAt,
+        });
+      });
+
+      it('legacy blob with no provider field (pre-fix cache / claude_web rollback path) → source falls back to null, not a guessed provider', async () => {
+        mockNewUserChain({
+          profile: { fullName: 'Preload Person' },
+          confidence: 0.9,
+          sources: [],
+          foundLinkedinUrl: null,
+          requestedLinkedinUrl: 'https://linkedin.com/in/preload',
+          enrichedAt,
+          // no `provider` field — mirrors a blob cached before this field existed.
+        });
+
+        await identityService.verifyMagicLink('some-token');
+
+        expect(enrichRepo.setEnrichmentState).toHaveBeenCalledWith(mockUser.id, {
+          status: 'found',
+          source: null,
           startedAt: enrichedAt,
           completedAt: enrichedAt,
         });
@@ -485,8 +508,13 @@ describe('Identity Service', () => {
   });
 
   describe('findOrCreateGoogleUser (preload copy-forward parity with verifyMagicLink)', () => {
-    it('copies a HIGH-confidence preload into enrichment state as found — same mapping + source as the magic-link path', async () => {
-      const enrichedAt = '2026-07-21T09:00:00.000Z';
+    const enrichedAt = '2026-07-21T09:00:00.000Z';
+
+    // Mirrors mockNewUserChain above, for the Google-path new-user creation
+    // sequence: getUserByEmail → isEmailApproved (registration gate) →
+    // getApprovedJoinRequestSeed → INSERT users → [preload copy-forward] →
+    // INSERT subscription → INSERT entitlements → getUserById.
+    function mockNewGoogleUserChain(enriched: unknown): void {
       mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
       mockQuery
         .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 1 getUserByEmail → null (new user)
@@ -495,14 +523,7 @@ describe('Identity Service', () => {
           rows: [{
             full_name: 'Google Preload',
             linkedin_url: 'https://linkedin.com/in/google-preload',
-            enriched: {
-              profile: { fullName: 'Google Preload' },
-              confidence: 0.9,
-              sources: [],
-              foundLinkedinUrl: null,
-              requestedLinkedinUrl: 'https://linkedin.com/in/google-preload',
-              enrichedAt,
-            },
+            enriched,
             reason: null,
           }],
           rowCount: 1,
@@ -511,6 +532,18 @@ describe('Identity Service', () => {
         .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 5 INSERT subscription
         .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 6 INSERT entitlements
         .mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 }); // 7 getUserById
+    }
+
+    it('HIGH confidence (>= found bar) → setEnrichmentState called with found + timestamps from enrichedAt', async () => {
+      mockNewGoogleUserChain({
+        profile: { fullName: 'Google Preload' },
+        confidence: 0.9,
+        sources: [],
+        foundLinkedinUrl: null,
+        requestedLinkedinUrl: 'https://linkedin.com/in/google-preload',
+        enrichedAt,
+        provider: 'scrapingdog',
+      });
 
       const result = await identityService.findOrCreateGoogleUser({
         email: 'google-preload@example.com',
@@ -518,6 +551,10 @@ describe('Identity Service', () => {
       });
 
       expect(result.accessToken).toBeDefined();
+      expect(enrichRepo.saveEnrichedCandidate).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ confidence: 0.9 })
+      );
       expect(enrichRepo.setEnrichmentState).toHaveBeenCalledWith(expect.any(String), {
         status: 'found',
         source: 'scrapingdog',
@@ -528,6 +565,90 @@ describe('Identity Service', () => {
       const savedId = (enrichRepo.saveEnrichedCandidate as jest.Mock).mock.calls[0][0];
       const stateId = (enrichRepo.setEnrichmentState as jest.Mock).mock.calls[0][0];
       expect(stateId).toBe(savedId);
+    });
+
+    it('LOW confidence (>= partial bar, below found bar) → setEnrichmentState called with partial', async () => {
+      mockNewGoogleUserChain({
+        profile: { fullName: 'Google Preload' },
+        confidence: 0.45,
+        sources: [],
+        foundLinkedinUrl: null,
+        requestedLinkedinUrl: 'https://linkedin.com/in/google-preload',
+        enrichedAt,
+        provider: 'scrapingdog',
+      });
+
+      await identityService.findOrCreateGoogleUser({
+        email: 'google-preload-partial@example.com',
+        name: 'Google Preload',
+      });
+
+      expect(enrichRepo.setEnrichmentState).toHaveBeenCalledWith(expect.any(String), {
+        status: 'partial',
+        source: 'scrapingdog',
+        startedAt: enrichedAt,
+        completedAt: enrichedAt,
+      });
+    });
+
+    it('ZERO confidence → does NOT call setEnrichmentState or saveEnrichedCandidate (client trigger handles it, stays none)', async () => {
+      mockNewGoogleUserChain({
+        profile: null,
+        confidence: 0,
+        sources: [],
+        foundLinkedinUrl: null,
+        requestedLinkedinUrl: null,
+        enrichedAt: null,
+      });
+
+      await identityService.findOrCreateGoogleUser({
+        email: 'google-preload-zero@example.com',
+        name: 'Google Preload',
+      });
+
+      expect(enrichRepo.saveEnrichedCandidate).not.toHaveBeenCalled();
+      expect(enrichRepo.setEnrichmentState).not.toHaveBeenCalled();
+    });
+
+    it('ABSENT preload (no approved request carrying an enriched blob) → does NOT call setEnrichmentState', async () => {
+      mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+      mockQuery
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 1 getUserByEmail → null (new user)
+        .mockResolvedValueOnce({ rows: [{ id: 'jr-1' }], rowCount: 1 }) // 2 isEmailApproved → approved
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 3 getApprovedJoinRequestSeed → no row
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 4 INSERT users
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 5 INSERT subscription
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 6 INSERT entitlements
+        .mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 }); // 7 getUserById
+
+      await identityService.findOrCreateGoogleUser({
+        email: 'google-nopreload@example.com',
+        name: 'Google Nopreload',
+      });
+
+      expect(enrichRepo.saveEnrichedCandidate).not.toHaveBeenCalled();
+      expect(enrichRepo.setEnrichmentState).not.toHaveBeenCalled();
+    });
+
+    it('setEnrichmentState rejecting does NOT break login (best-effort, mirrors saveEnrichedCandidate error handling)', async () => {
+      (enrichRepo.setEnrichmentState as jest.Mock).mockRejectedValueOnce(new Error('db down'));
+      mockNewGoogleUserChain({
+        profile: { fullName: 'Google Preload' },
+        confidence: 0.8,
+        sources: [],
+        foundLinkedinUrl: null,
+        requestedLinkedinUrl: 'https://linkedin.com/in/google-preload',
+        enrichedAt,
+        provider: 'scrapingdog',
+      });
+
+      const result = await identityService.findOrCreateGoogleUser({
+        email: 'google-preload-reject@example.com',
+        name: 'Google Preload',
+      });
+
+      expect(result.accessToken).toBeDefined();
+      expect(result.refreshToken).toBeDefined();
     });
   });
 

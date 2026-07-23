@@ -258,7 +258,15 @@ export async function reviewJoinRequest(
       if (!result) return;
       const verified = applyMatchVerification(result, linkedinUrl);
       if (verified.confidence > 0) {
-        await query(`UPDATE join_requests SET enriched = $1::jsonb WHERE id = $2`, [JSON.stringify(verified), id]);
+        // Stash the RESOLVED provider onto the cached blob (additive — every
+        // existing reader of this JSONB duck-types it and none reads
+        // `provider` strictly) so identity.service.ts's copy-forward can
+        // attribute the preload to whichever provider actually ran instead of
+        // assuming a fixed one.
+        await query(`UPDATE join_requests SET enriched = $1::jsonb WHERE id = $2`, [
+          JSON.stringify({ ...verified, provider }),
+          id,
+        ]);
       }
     })().catch((err) => logger.warn({ err, id }, 'join-request enrichment preload failed (non-fatal)'));
 
