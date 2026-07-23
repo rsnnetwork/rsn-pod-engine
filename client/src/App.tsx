@@ -40,6 +40,7 @@ import AdminDashboardPage from '@/features/admin/AdminDashboardPage';
 import AdminAnalyticsPage from '@/features/admin/AdminAnalyticsPage';
 import AdminJoinRequestActionPage from '@/features/admin/AdminJoinRequestActionPage';
 import AdminUsersPage from '@/features/admin/AdminUsersPage';
+import AdminUserInspectorPage from '@/features/admin/AdminUserInspectorPage';
 import AdminJoinRequestsPage from '@/features/admin/AdminJoinRequestsPage';
 import AdminPodsPage from '@/features/admin/AdminPodsPage';
 import AdminSessionsPage from '@/features/admin/AdminSessionsPage';
@@ -196,6 +197,7 @@ export default function App() {
         <Route path="/admin" element={<AdminDashboardPage />} />
         <Route path="/admin/analytics" element={<AdminAnalyticsPage />} />
         <Route path="/admin/users" element={<AdminUsersPage />} />
+        <Route path="/admin/users/:id" element={<AdminUserInspectorPage />} />
         <Route path="/admin/join-requests" element={<AdminJoinRequestsPage />} />
         <Route path="/admin/pods" element={<AdminPodsPage />} />
         <Route path="/admin/sessions" element={<AdminSessionsPage />} />

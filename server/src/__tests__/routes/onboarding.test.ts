@@ -107,6 +107,7 @@ import * as known from '../../services/onboarding/known';
 import * as enrichRepo from '../../services/onboarding/enrichment.repo';
 import { runEnrichment } from '../../services/onboarding/enrichment.orchestrator';
 import { record as recordStageEvent } from '../../services/onboarding/stage-events.repo';
+import logger from '../../config/logger';
 
 function createApp() {
   const app = express();
@@ -117,9 +118,9 @@ function createApp() {
   return app;
 }
 
-function makeToken(userId = 'user-abc') {
+function makeToken(userId = 'user-abc', role = 'member') {
   return jwt.sign(
-    { sub: userId, email: 'u@e.com', role: 'member', sessionId: 'sess-1' },
+    { sub: userId, email: 'u@e.com', role, sessionId: 'sess-1' },
     JWT_SECRET,
     { expiresIn: '15m' }
   );
@@ -793,5 +794,108 @@ describe('POST /onboarding/admin/refresh-enrichment', () => {
       .set('Authorization', `Bearer ${makeToken()}`)
       .send({ userId: uid });
     expect(res.status).toBe(403);
+  });
+
+  // ─── E3 correction: this endpoint re-runs enrichment for the TARGET member
+  // (not the calling admin) — clearEnrichment(userId) then fire-and-forget
+  // runEnrichment(userId, { linkedinUrl, fullName }) sourced from the target's
+  // own users row, finally giving the previously-orphaned POST /onboarding/enrich
+  // machinery a caller path via the orchestrator directly.
+  describe('E3: fires runEnrichment for the target user and returns 202', () => {
+    function mockUsersRow(row: { linkedin_url: string | null; display_name: string | null } | null) {
+      (dbQuery as jest.Mock).mockImplementation((sql: string) => {
+        if (/SELECT\s+status\s+FROM\s+users/i.test(sql)) {
+          return Promise.resolve({ rows: [{ status: 'active' }], rowCount: 1 });
+        }
+        if (/SELECT\s+linkedin_url,\s*display_name\s+FROM\s+users\s+WHERE\s+id\s*=\s*\$1/i.test(sql.trim())) {
+          return Promise.resolve(row ? { rows: [row], rowCount: 1 } : { rows: [], rowCount: 0 });
+        }
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      });
+    }
+
+    it('clears enrichment, fires runEnrichment with the target linkedin url + display name, 202s', async () => {
+      mockUsersRow({ linkedin_url: 'https://www.linkedin.com/in/jane-doe', display_name: 'Jane Doe' });
+
+      const res = await request(app)
+        .post('/onboarding/admin/refresh-enrichment')
+        .set('Authorization', `Bearer ${makeToken('admin-1', 'admin')}`)
+        .send({ userId: uid });
+
+      expect(res.status).toBe(202);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.cleared).toBe(true);
+
+      expect(enrichRepo.clearEnrichment).toHaveBeenCalledWith(uid);
+
+      expect(runEnrichment).toHaveBeenCalledTimes(1);
+      const [calledUserId, input] = (runEnrichment as jest.Mock).mock.calls[0];
+      expect(calledUserId).toBe(uid);
+      expect(input).toEqual({ linkedinUrl: 'https://www.linkedin.com/in/jane-doe', fullName: 'Jane Doe' });
+    });
+
+    it('clears BEFORE firing runEnrichment (ordering matters — the run must see the cleared state)', async () => {
+      mockUsersRow({ linkedin_url: null, display_name: 'Jane Doe' });
+      const order: string[] = [];
+      (enrichRepo.clearEnrichment as jest.Mock).mockImplementation(async () => {
+        order.push('clear');
+      });
+      (runEnrichment as jest.Mock).mockImplementation(async () => {
+        order.push('run');
+      });
+
+      await request(app)
+        .post('/onboarding/admin/refresh-enrichment')
+        .set('Authorization', `Bearer ${makeToken('admin-1', 'admin')}`)
+        .send({ userId: uid });
+
+      expect(order).toEqual(['clear', 'run']);
+    });
+
+    it('passes a null linkedinUrl and undefined fullName when the target has neither set', async () => {
+      mockUsersRow({ linkedin_url: null, display_name: null });
+
+      const res = await request(app)
+        .post('/onboarding/admin/refresh-enrichment')
+        .set('Authorization', `Bearer ${makeToken('admin-1', 'admin')}`)
+        .send({ userId: uid });
+
+      expect(res.status).toBe(202);
+      const [, input] = (runEnrichment as jest.Mock).mock.calls[0];
+      expect(input).toEqual({ linkedinUrl: null, fullName: undefined });
+    });
+
+    it('a super_admin also passes (role hierarchy)', async () => {
+      mockUsersRow({ linkedin_url: null, display_name: null });
+      const res = await request(app)
+        .post('/onboarding/admin/refresh-enrichment')
+        .set('Authorization', `Bearer ${makeToken('super-1', 'super_admin')}`)
+        .send({ userId: uid });
+      expect(res.status).toBe(202);
+    });
+
+    it('does not fail the request when runEnrichment rejects (fire-and-forget, logged, never awaited)', async () => {
+      mockUsersRow({ linkedin_url: null, display_name: 'Jane Doe' });
+      (runEnrichment as jest.Mock).mockRejectedValue(new Error('boom'));
+
+      const res = await request(app)
+        .post('/onboarding/admin/refresh-enrichment')
+        .set('Authorization', `Bearer ${makeToken('admin-1', 'admin')}`)
+        .send({ userId: uid });
+
+      expect(res.status).toBe(202);
+      await new Promise((r) => setImmediate(r));
+      expect(logger.error).toHaveBeenCalled();
+    });
+
+    it('rejects a missing userId (400) and never touches clearEnrichment/runEnrichment', async () => {
+      const res = await request(app)
+        .post('/onboarding/admin/refresh-enrichment')
+        .set('Authorization', `Bearer ${makeToken('admin-1', 'admin')}`)
+        .send({});
+      expect(res.status).toBe(400);
+      expect(enrichRepo.clearEnrichment).not.toHaveBeenCalled();
+      expect(runEnrichment).not.toHaveBeenCalled();
+    });
   });
 });

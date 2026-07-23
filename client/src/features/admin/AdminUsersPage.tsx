@@ -261,7 +261,7 @@ export default function AdminUsersPage() {
                       className="h-4 w-4 rounded border-gray-300 text-rsn-red focus:ring-rsn-red shrink-0"
                     />
                   )}
-                  <a href={`/profile/${u.id}`} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+                  <a href={`/admin/users/${u.id}`} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
                     <Avatar src={u.avatarUrl} name={u.displayName || u.email} size="sm" />
                     <div>
                       <p className="text-sm font-medium text-gray-800">{u.displayName || 'No name'}</p>

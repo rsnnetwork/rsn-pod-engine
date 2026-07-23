@@ -14,6 +14,7 @@ import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import { onboardingChatLimiter } from '../middleware/rateLimit';
+import { query } from '../db';
 import {
   ApiResponse,
   OnboardingMessage,
@@ -388,8 +389,12 @@ router.post(
 );
 
 // ─── POST /onboarding/admin/refresh-enrichment (admin only) ──────────────────
-// Force a re-enrichment for a member: clears their cached enrichment so the next
-// onboarding load re-runs it (Stefan's admin-refresh trigger).
+// Force a re-enrichment for a member: clears their cached enrichment, then
+// fires the SAME background job POST /onboarding/enrich uses — runEnrichment
+// (A5) — as a fire-and-forget call against the TARGET member's own linkedin_url
+// + display_name (not the calling admin's; the member-facing /onboarding/enrich
+// endpoint enriches whoever's token is on the request, so it cannot be reused
+// here). This is the admin inspector's caller for that job (Task E3).
 const refreshEnrichSchema = z.object({ userId: z.string().uuid() });
 router.post(
   '/admin/refresh-enrichment',
@@ -398,9 +403,26 @@ router.post(
   validate(refreshEnrichSchema),
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      await enrichRepo.clearEnrichment(req.body.userId);
-      const response: ApiResponse = { success: true, data: { cleared: true } };
-      res.json(response);
+      const userId = req.body.userId as string;
+      await enrichRepo.clearEnrichment(userId);
+
+      const target = await query<{ linkedin_url: string | null; display_name: string | null }>(
+        `SELECT linkedin_url, display_name FROM users WHERE id = $1`,
+        [userId],
+      );
+      const row = target.rows[0];
+      const linkedinUrl = row?.linkedin_url ?? null;
+      const fullName = row?.display_name || undefined;
+
+      // Fire-and-forget, same discipline as /onboarding/enrich: runEnrichment
+      // persists every state transition itself and never throws; the .catch()
+      // here only guards a truly unexpected rejection.
+      runEnrichment(userId, { linkedinUrl, fullName }).catch((err) =>
+        logger.error({ err, userId }, 'admin refresh-enrichment: runEnrichment fire-and-forget rejected'),
+      );
+
+      const response: ApiResponse = { success: true, data: { cleared: true, status: 'searching' } };
+      res.status(202).json(response);
     } catch (err) {
       next(err);
     }
