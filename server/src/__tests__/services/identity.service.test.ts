@@ -31,7 +31,16 @@ jest.mock('../../config/logger', () => ({
   __esModule: true,
 }));
 
+// Mock the enrichment repo so preload-copy tests can assert setEnrichmentState
+// calls directly, without reverse-engineering them from raw SQL.
+jest.mock('../../services/onboarding/enrichment.repo', () => ({
+  saveEnrichedCandidate: jest.fn(),
+  setEnrichmentState: jest.fn(),
+  __esModule: true,
+}));
+
 import * as identityService from '../../services/identity/identity.service';
+import * as enrichRepo from '../../services/onboarding/enrichment.repo';
 
 const mockUser = {
   id: 'user-123',
@@ -62,6 +71,8 @@ const mockUser = {
 describe('Identity Service', () => {
   beforeEach(() => {
     mockQuery.mockReset();
+    (enrichRepo.saveEnrichedCandidate as jest.Mock).mockReset().mockResolvedValue(undefined);
+    (enrichRepo.setEnrichmentState as jest.Mock).mockReset().mockResolvedValue(undefined);
   });
 
   describe('getUserById', () => {
@@ -340,6 +351,183 @@ describe('Identity Service', () => {
       const result = await identityService.verifyMagicLink('some-token');
       expect(result.accessToken).toBeDefined();
       // crucially: it did NOT throw the registration gate
+    });
+
+    // Instant-found-card: the approved join request's preloaded ScrapingDog
+    // enrichment (join_requests.enriched) must also seed the enrichment STATE
+    // machine (user_intent_profiles.enrichment_*), not just the candidate blob
+    // — otherwise the member's first GET /onboarding/status still reads 'none'
+    // and the client shows a few seconds of "searching" before its own trigger
+    // cache-hits and flips to found.
+    describe('preload → enrichment state seeding (instant found/partial card)', () => {
+      const enrichedAt = '2026-07-20T12:00:00.000Z';
+
+      function mockNewUserChain(enriched: unknown): void {
+        mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+        mockQuery
+          .mockResolvedValueOnce({
+            rows: [{ id: 'ml-1', email: 'preload@example.com', expires_at: new Date(Date.now() + 60 * 60 * 1000), used_at: null }],
+            rowCount: 1,
+          }) // 1 SELECT magic_links
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 2 UPDATE used_at
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 3 getUserByEmail (verify) → null
+          .mockResolvedValueOnce({
+            rows: [{ full_name: 'Preload Person', linkedin_url: 'https://linkedin.com/in/preload', enriched, reason: null }],
+            rowCount: 1,
+          }) // 4 getApprovedJoinRequestSeed → approved request with preload
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 5 getUserByEmail (createUser) → null
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 6 INSERT users
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 7 INSERT subscription
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 8 INSERT entitlements
+          .mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 }); // 9 getUserById → created user
+      }
+
+      it('HIGH confidence (>= found bar) → setEnrichmentState called with found + timestamps from enrichedAt', async () => {
+        mockNewUserChain({
+          profile: { fullName: 'Preload Person' },
+          confidence: 0.9,
+          sources: [],
+          foundLinkedinUrl: null,
+          requestedLinkedinUrl: 'https://linkedin.com/in/preload',
+          enrichedAt,
+        });
+
+        const result = await identityService.verifyMagicLink('some-token');
+
+        expect(result.accessToken).toBeDefined();
+        expect(enrichRepo.saveEnrichedCandidate).toHaveBeenCalledWith(
+          mockUser.id,
+          expect.objectContaining({ confidence: 0.9 })
+        );
+        expect(enrichRepo.setEnrichmentState).toHaveBeenCalledWith(mockUser.id, {
+          status: 'found',
+          source: 'scrapingdog',
+          startedAt: enrichedAt,
+          completedAt: enrichedAt,
+        });
+      });
+
+      it('LOW confidence (>= partial bar, below found bar) → setEnrichmentState called with partial', async () => {
+        mockNewUserChain({
+          profile: { fullName: 'Preload Person' },
+          confidence: 0.45,
+          sources: [],
+          foundLinkedinUrl: null,
+          requestedLinkedinUrl: 'https://linkedin.com/in/preload',
+          enrichedAt,
+        });
+
+        await identityService.verifyMagicLink('some-token');
+
+        expect(enrichRepo.setEnrichmentState).toHaveBeenCalledWith(mockUser.id, {
+          status: 'partial',
+          source: 'scrapingdog',
+          startedAt: enrichedAt,
+          completedAt: enrichedAt,
+        });
+      });
+
+      it('ZERO confidence → does NOT call setEnrichmentState or saveEnrichedCandidate (client trigger handles it, stays none)', async () => {
+        mockNewUserChain({
+          profile: null,
+          confidence: 0,
+          sources: [],
+          foundLinkedinUrl: null,
+          requestedLinkedinUrl: null,
+          enrichedAt: null,
+        });
+
+        await identityService.verifyMagicLink('some-token');
+
+        expect(enrichRepo.saveEnrichedCandidate).not.toHaveBeenCalled();
+        expect(enrichRepo.setEnrichmentState).not.toHaveBeenCalled();
+      });
+
+      it('ABSENT preload (no approved request) → does NOT call setEnrichmentState', async () => {
+        mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+        mockQuery
+          .mockResolvedValueOnce({
+            rows: [{ id: 'ml-1', email: 'nopreload@example.com', expires_at: new Date(Date.now() + 60 * 60 * 1000), used_at: null }],
+            rowCount: 1,
+          })
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // getUserByEmail (verify) → null
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // getApprovedJoinRequestSeed → no approved request
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // getUserByEmail (createUser) → null
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // INSERT users
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // INSERT subscription
+          .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // INSERT entitlements
+          .mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 }); // getUserById
+
+        await identityService.verifyMagicLink('some-token');
+
+        expect(enrichRepo.saveEnrichedCandidate).not.toHaveBeenCalled();
+        expect(enrichRepo.setEnrichmentState).not.toHaveBeenCalled();
+      });
+
+      it('setEnrichmentState rejecting does NOT break login (best-effort, mirrors saveEnrichedCandidate error handling)', async () => {
+        (enrichRepo.setEnrichmentState as jest.Mock).mockRejectedValueOnce(new Error('db down'));
+        mockNewUserChain({
+          profile: { fullName: 'Preload Person' },
+          confidence: 0.8,
+          sources: [],
+          foundLinkedinUrl: null,
+          requestedLinkedinUrl: 'https://linkedin.com/in/preload',
+          enrichedAt,
+        });
+
+        const result = await identityService.verifyMagicLink('some-token');
+
+        expect(result.accessToken).toBeDefined();
+        expect(result.refreshToken).toBeDefined();
+      });
+    });
+  });
+
+  describe('findOrCreateGoogleUser (preload copy-forward parity with verifyMagicLink)', () => {
+    it('copies a HIGH-confidence preload into enrichment state as found — same mapping + source as the magic-link path', async () => {
+      const enrichedAt = '2026-07-21T09:00:00.000Z';
+      mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+      mockQuery
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 1 getUserByEmail → null (new user)
+        .mockResolvedValueOnce({ rows: [{ id: 'jr-1' }], rowCount: 1 }) // 2 isEmailApproved → approved
+        .mockResolvedValueOnce({
+          rows: [{
+            full_name: 'Google Preload',
+            linkedin_url: 'https://linkedin.com/in/google-preload',
+            enriched: {
+              profile: { fullName: 'Google Preload' },
+              confidence: 0.9,
+              sources: [],
+              foundLinkedinUrl: null,
+              requestedLinkedinUrl: 'https://linkedin.com/in/google-preload',
+              enrichedAt,
+            },
+            reason: null,
+          }],
+          rowCount: 1,
+        }) // 3 getApprovedJoinRequestSeed
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 4 INSERT users
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 5 INSERT subscription
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 6 INSERT entitlements
+        .mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 }); // 7 getUserById
+
+      const result = await identityService.findOrCreateGoogleUser({
+        email: 'google-preload@example.com',
+        name: 'Google Preload',
+      });
+
+      expect(result.accessToken).toBeDefined();
+      expect(enrichRepo.setEnrichmentState).toHaveBeenCalledWith(expect.any(String), {
+        status: 'found',
+        source: 'scrapingdog',
+        startedAt: enrichedAt,
+        completedAt: enrichedAt,
+      });
+      // Both writes must target the SAME newly-created user id.
+      const savedId = (enrichRepo.saveEnrichedCandidate as jest.Mock).mock.calls[0][0];
+      const stateId = (enrichRepo.setEnrichmentState as jest.Mock).mock.calls[0][0];
+      expect(stateId).toBe(savedId);
     });
   });
 

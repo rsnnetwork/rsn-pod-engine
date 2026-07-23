@@ -14,8 +14,9 @@ import {
 import { NotFoundError, ConflictError, UnauthorizedError, AppError } from '../../middleware/errors';
 import { invalidateUserStatusCache } from '../../middleware/auth';
 import { sendMagicLinkEmail } from '../email/email.service';
-import { saveEnrichedCandidate } from '../onboarding/enrichment.repo';
+import { saveEnrichedCandidate, setEnrichmentState } from '../onboarding/enrichment.repo';
 import type { EnrichResult } from '../onboarding/enrichment.service';
+import { statusFromConfidence } from '../onboarding/providers/registry';
 
 // ─── Registration Gate ──────────────────────────────────────────────────────
 // New users can only sign up if they have an approved join request OR a valid invite code.
@@ -485,6 +486,29 @@ export async function verifyMagicLink(token: string): Promise<AuthTokenPair> {
       await saveEnrichedCandidate(user.id, seed.enriched).catch((e) =>
         logger.warn({ err: e, userId: user!.id }, 'failed to copy preloaded enrichment')
       );
+      // Also seed the enrichment STATE machine (user_intent_profiles.enrichment_*)
+      // from the same blob, using the SAME confidence→status mapping the
+      // orchestrator's 90-day cache-hit path uses (statusFromConfidence,
+      // providers/registry.ts) — so GET /onboarding/status already returns
+      // found/partial on this member's very first call instead of 'none' (the
+      // ~3-5s "searching" flash the client used to show while its own trigger
+      // caught up to the already-cached candidate). Best-effort, same
+      // discipline as saveEnrichedCandidate above: a write failure must never
+      // break login.
+      await setEnrichmentState(user.id, {
+        status: statusFromConfidence(seed.enriched.confidence),
+        // The preload blob carries no provider field (the approval-time
+        // scrape strips it before caching), so there's no honest way to
+        // attribute this to whichever provider actually ran. 'scrapingdog'
+        // is the standing default provider (registry.ts's
+        // resolveEnrichProvider fallback) and the only non-null value every
+        // other write to this column uses today.
+        source: 'scrapingdog',
+        startedAt: seed.enriched.enrichedAt,
+        completedAt: seed.enriched.enrichedAt,
+      }).catch((e) =>
+        logger.warn({ err: e, userId: user!.id }, 'failed to copy preloaded enrichment state')
+      );
     }
     // Seed their stated reason for joining as an initial "why I want to meet" — the
     // onboarding chat refines/overrides it (kept if the chat doesn't restate one).
@@ -654,6 +678,16 @@ export async function findOrCreateGoogleUser(
     if (seed.enriched && seed.enriched.confidence > 0) {
       await saveEnrichedCandidate(id, seed.enriched).catch((e) =>
         logger.warn({ err: e, userId: id }, 'failed to copy preloaded enrichment (google path)')
+      );
+      // Same enrichment-state seeding as verifyMagicLink — see its comment
+      // for the confidence→status mapping + source-value rationale.
+      await setEnrichmentState(id, {
+        status: statusFromConfidence(seed.enriched.confidence),
+        source: 'scrapingdog',
+        startedAt: seed.enriched.enrichedAt,
+        completedAt: seed.enriched.enrichedAt,
+      }).catch((e) =>
+        logger.warn({ err: e, userId: id }, 'failed to copy preloaded enrichment state (google path)')
       );
     }
     if (seed.reason) {
