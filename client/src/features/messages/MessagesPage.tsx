@@ -10,11 +10,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare, CalendarClock } from 'lucide-react';
+import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare, CalendarClock, Flag } from 'lucide-react';
 import MeetingScheduler from './MeetingScheduler';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { PageLoader, Spinner } from '@/components/ui/Spinner';
+import ReportUserModal from '@/components/ReportUserModal';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { getSocket } from '@/lib/socket';
@@ -161,6 +162,8 @@ export default function MessagesPage() {
   const [showEmoji, setShowEmoji] = useState(false);
   // REASON Phase 2 — "Find a time" panel (availability windows) per thread.
   const [schedulerOpen, setSchedulerOpen] = useState(false);
+  // Task E4 — report entry point for the thread's conversation partner.
+  const [reportOpen, setReportOpen] = useState(false);
   // Feature 19 (13 May spec) — pending image attachment for the next send.
   // pendingImage holds the file picked from the file dialog; previewUrl is
   // an object URL so the user sees a thumbnail before the upload kicks off.
@@ -747,7 +750,28 @@ export default function MessagesPage() {
                   <Trash2 className="h-4 w-4" />
                 </button>
               )}
+              {/* Task E4 — report entry point, targets the conversation partner.
+                  headerContext.otherUserId is never myUserId via normal
+                  navigation, but this guard is a defensive backstop against
+                  self-reports. */}
+              {headerContext.otherUserId !== myUserId && (
+                <button
+                  onClick={() => setReportOpen(true)}
+                  className="p-1.5 rounded-lg min-h-[44px] min-w-[44px] flex items-center justify-center hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
+                  title="Report this member"
+                  aria-label="Report this member"
+                >
+                  <Flag className="h-4 w-4" />
+                </button>
+              )}
             </div>
+
+            <ReportUserModal
+              open={reportOpen}
+              onClose={() => setReportOpen(false)}
+              reportedId={headerContext.otherUserId}
+              reportedDisplayName={headerContext.otherDisplayName}
+            />
 
             {/* Availability grid — collapsible so the thread stays primary. */}
             {activeConv && schedulerOpen && (

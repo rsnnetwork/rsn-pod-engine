@@ -1,12 +1,14 @@
+import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
+import ReportUserModal from '@/components/ReportUserModal';
 import {
   ArrowLeft, MapPin, Globe, Sparkles, Target, Heart,
   HelpCircle, Users, User, Award, Compass, Link2, Languages, Linkedin,
-  Ban, ShieldOff, MessageSquare,
+  Ban, ShieldOff, MessageSquare, Flag,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
@@ -23,6 +25,7 @@ export default function PublicProfilePage() {
   const currentUserId = currentUser?.id;
   const { addToast } = useToastStore();
   const isOwnProfile = currentUser?.id === userId;
+  const [reportOpen, setReportOpen] = useState(false);
 
   const { data: user, isLoading, error } = useQuery({
     queryKey: ['user', userId],
@@ -220,6 +223,19 @@ export default function PublicProfilePage() {
               )}
             </div>
           )}
+
+          {/* Task E4 — report entry point. Hidden on own profile; self-reports
+              are blocked client-side (and rejected server-side as a backstop). */}
+          {!isOwnProfile && currentUser?.id && (
+            <div className="mt-2">
+              <button
+                onClick={() => setReportOpen(true)}
+                className="inline-flex items-center gap-1.5 text-xs text-gray-400 hover:text-red-500 transition-colors min-h-[44px] px-3"
+              >
+                <Flag className="h-3.5 w-3.5" /> Report this member
+              </button>
+            </div>
+          )}
         </div>
 
         {/* ─── About ─── */}
@@ -270,6 +286,15 @@ export default function PublicProfilePage() {
           </div>
         </div>
       </div>
+
+      {!isOwnProfile && (
+        <ReportUserModal
+          open={reportOpen}
+          onClose={() => setReportOpen(false)}
+          reportedId={userId!}
+          reportedDisplayName={user.displayName}
+        />
+      )}
     </div>
   );
 }

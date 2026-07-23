@@ -200,3 +200,36 @@ test('Refresh enrichment fires the admin endpoint with the target user id (via r
 
   console.log('  ✓ Refresh enrichment: POST /onboarding/admin/refresh-enrichment fired with { userId: target.id }.');
 });
+
+// Task E4 — the report front door. Drives the REAL modal from a member's
+// profile page (not a direct DB insert like the seed above) to prove the
+// client now actually calls POST /api/reports, and that the report lands
+// in the same admin queue E3's inspector reads (user_reports ∪ violations,
+// source discriminator 'user_report').
+test('a member reports another member from the profile page, and it appears in the admin inspector as source user_report', async () => {
+  test.setTimeout(60_000);
+
+  const reporter = await createTestUser('e4reporter');
+  const reported = await createTestUser('e4reported');
+  userIds.push(reporter.id, reported.id);
+
+  const reporterPage = await openPage(reporter);
+  await gotoRetry(reporterPage, `${APP}/profile/${reported.id}`);
+
+  const reportEntry = reporterPage.getByRole('button', { name: /Report this member/i });
+  await expect(reportEntry).toBeVisible({ timeout: 20_000 });
+  await reportEntry.click();
+
+  await reporterPage.getByLabel('Reason').selectOption('inappropriate_content');
+  await reporterPage.getByPlaceholder(/helps our team understand/i).fill('Kept sending unsolicited spammy links.');
+  await reporterPage.getByRole('button', { name: 'Submit report' }).click();
+  await expect(reporterPage.getByText('Thanks. Our team will review this.')).toBeVisible({ timeout: 15_000 });
+
+  const adminPage = await openPage(admin);
+  await gotoRetry(adminPage, `${APP}/admin/users/${reported.id}`);
+  await adminPage.getByRole('button', { name: 'Reports & Interactions' }).click();
+  await expect(adminPage.getByText('user_report')).toBeVisible({ timeout: 15_000 });
+  await expect(adminPage.getByText('inappropriate_content')).toBeVisible();
+
+  console.log('  ✓ member-filed report (via the real modal) shows up in the admin inspector as source user_report.');
+});
