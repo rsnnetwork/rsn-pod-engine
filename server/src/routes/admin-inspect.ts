@@ -298,17 +298,18 @@ router.get(
             resolved_by: string | null;
             resolved_at: Date | null;
             created_at: Date;
+            detail_text: string | null;
           }>(
             `SELECT * FROM (
                SELECT 'violation'::text AS source, id, reporter_id, reported_user_id AS reported_id,
                       reason, status::text AS status, admin_notes AS resolution_notes,
-                      resolved_by, resolved_at, created_at
+                      resolved_by, resolved_at, created_at, details AS detail_text
                  FROM violations
                 WHERE reporter_id = $1 OR reported_user_id = $1
                UNION ALL
                SELECT 'user_report'::text AS source, id, reporter_id, reported_id,
                       reason, status::text AS status, resolution_notes,
-                      resolved_by, resolved_at, created_at
+                      resolved_by, resolved_at, created_at, description AS detail_text
                  FROM user_reports
                 WHERE reporter_id = $1 OR reported_id = $1
              ) combined
@@ -345,6 +346,7 @@ router.get(
           resolvedAt: r.resolved_at,
           resolutionNotes: r.resolution_notes,
           createdAt: r.created_at,
+          detailText: r.detail_text ?? null,
         })),
         blocks: {
           given: blocksGiven,

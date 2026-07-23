@@ -596,7 +596,12 @@ function ReportsTab({ data, isLoading, isError, targetUserId }: { data: any; isL
                       {filedByTarget ? 'Filed by this member' : 'Filed against this member'}
                     </Badge>
                   </div>
-                  <div className="flex-1 min-w-0 text-sm text-gray-700">{r.reason}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm text-gray-700">{r.reason}</div>
+                    {r.detailText && (
+                      <p className="text-xs text-gray-500 mt-0.5 whitespace-pre-wrap break-words">{r.detailText}</p>
+                    )}
+                  </div>
                   <div className="text-xs text-gray-400 shrink-0">{fmtDateTime(r.createdAt)}</div>
                 </div>
               );

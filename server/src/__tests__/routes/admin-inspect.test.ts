@@ -468,8 +468,8 @@ describe('GET /users/:id/interactions', () => {
         /FROM\s+violations/i.test(sql)
           ? {
               rows: [
-                { source: 'violation', id: 'v-1', reporter_id: OTHER_ID, reported_id: USER_ID, reason: 'harassment', status: 'open', resolution_notes: null, resolved_by: null, resolved_at: null, created_at: new Date('2026-07-03T00:00:00.000Z') },
-                { source: 'user_report', id: 'r-1', reporter_id: USER_ID, reported_id: OTHER_ID, reason: 'spam', status: 'resolved', resolution_notes: 'actioned', resolved_by: ADMIN_ID, resolved_at: new Date('2026-07-04T00:00:00.000Z'), created_at: new Date('2026-07-04T00:00:00.000Z') },
+                { source: 'violation', id: 'v-1', reporter_id: OTHER_ID, reported_id: USER_ID, reason: 'harassment', status: 'open', resolution_notes: null, resolved_by: null, resolved_at: null, created_at: new Date('2026-07-03T00:00:00.000Z'), detail_text: 'They kept messaging after I said stop.' },
+                { source: 'user_report', id: 'r-1', reporter_id: USER_ID, reported_id: OTHER_ID, reason: 'spam', status: 'resolved', resolution_notes: 'actioned', resolved_by: ADMIN_ID, resolved_at: new Date('2026-07-04T00:00:00.000Z'), created_at: new Date('2026-07-04T00:00:00.000Z'), detail_text: 'Spam links in every message.' },
               ],
               rowCount: 2,
             }
@@ -510,7 +510,11 @@ describe('GET /users/:id/interactions', () => {
     const sources = res.body.data.reports.map((r: any) => r.source).sort();
     expect(sources).toEqual(['user_report', 'violation']);
     const resolved = res.body.data.reports.find((r: any) => r.source === 'user_report');
-    expect(resolved).toMatchObject({ reporterId: USER_ID, reportedId: OTHER_ID, reason: 'spam', status: 'resolved', resolutionNotes: 'actioned' });
+    expect(resolved).toMatchObject({ reporterId: USER_ID, reportedId: OTHER_ID, reason: 'spam', status: 'resolved', resolutionNotes: 'actioned', detailText: 'Spam links in every message.' });
+    // The free-text field must carry through from both union branches — violations.details
+    // and user_reports.description both alias to detailText.
+    const violation = res.body.data.reports.find((r: any) => r.source === 'violation');
+    expect(violation).toMatchObject({ detailText: 'They kept messaging after I said stop.' });
 
     expect(res.body.data.blocks.given).toHaveLength(1);
     expect(res.body.data.blocks.given[0]).toMatchObject({ blockedId: OTHER_ID, displayName: 'Blocked Barb' });
