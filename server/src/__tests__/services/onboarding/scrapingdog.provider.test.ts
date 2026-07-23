@@ -8,7 +8,13 @@ jest.mock('../../../config', () => ({
   },
 }));
 
+import fs from 'fs';
+import path from 'path';
 import { scrapingdogProvider } from '../../../services/onboarding/providers/scrapingdog.provider';
+
+const REAL_PROFILE_FIXTURE = JSON.parse(
+  fs.readFileSync(path.join(__dirname, '../../fixtures/scrapingdog-profile.json'), 'utf-8'),
+);
 
 /** Build a minimal fetch-like Response the provider only ever reads .status/.json() from. */
 function mockResponse(status: number, body?: any): Response {
@@ -121,14 +127,65 @@ describe('scrapingdogProvider', () => {
     expect(outcome.result.profile?.pastRoles[0]).toContain('Junior Designer');
   });
 
-  it('returns not_found on 404 and 400', async () => {
+  it('returns not_found on a pure 404/410 (no success:false body)', async () => {
     jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockResponse(404));
     const r1 = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/nobody' });
     expect(r1).toEqual({ kind: 'not_found', reason: 'scrapingdog 404' });
 
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockResponse(410));
+    const r2 = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/gone' });
+    expect(r2).toEqual({ kind: 'not_found', reason: 'scrapingdog 410' });
+  });
+
+  it('returns provider_error on a plain 400 (request/plan problem now that premium is always sent, not "profile unavailable")', async () => {
     jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockResponse(400));
-    const r2 = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/bad-request' });
-    expect(r2).toEqual({ kind: 'not_found', reason: 'scrapingdog 400' });
+    const outcome = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/bad-request' });
+    expect(outcome).toEqual({ kind: 'provider_error', reason: 'scrapingdog 400' });
+  });
+
+  it('classifies a success:false body as provider_error regardless of HTTP status, never not_found (quota exhaustion is not "this person doesn\'t exist")', async () => {
+    const quotaBody = {
+      message: 'Free pack allows 4 LinkedIn calls only. Upgrade or contact info@scrapingdog.com.',
+      success: false,
+    };
+
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockResponse(200, quotaBody));
+    const r1 = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/quota-200' });
+    expect(r1.kind).toBe('provider_error');
+    if (r1.kind === 'provider_error') expect(r1.reason).toContain('Free pack');
+
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockResponse(400, quotaBody));
+    const r2 = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/quota-400' });
+    expect(r2.kind).toBe('provider_error');
+    if (r2.kind === 'provider_error') expect(r2.reason).toContain('Free pack');
+  });
+
+  it('requests premium=true (not private=true) and URL-encodes a unicode slug', async () => {
+    const fetchMock = jest
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(mockResponse(200, { fullName: 'Claus', headline: 'Eng', experience: [{ position: 'Eng', company_name: 'X' }] }));
+
+    await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/claus-sønderskov-51b2943' });
+
+    const calledUrl = String(fetchMock.mock.calls[0][0]);
+    expect(calledUrl).toContain('linkId=claus-s%C3%B8nderskov-51b2943');
+    expect(calledUrl).toContain('premium=true');
+    expect(calledUrl).not.toContain('private=true');
+  });
+
+  it('maps the real captured fixture (Ali Hamza) to partial with the confirmed field shape', async () => {
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockResponse(200, REAL_PROFILE_FIXTURE));
+
+    const outcome = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/ali-hamza-web-seo' });
+
+    expect(outcome.kind).toBe('partial');
+    if (outcome.kind !== 'partial') throw new Error('expected partial');
+    expect(outcome.missing.sort()).toEqual(['currentRole', 'headline'].sort());
+    expect(outcome.result.profile?.fullName).toBe('Ali Hamza');
+    expect(outcome.result.profile?.currentCompany).toBe('RankViz Pvt Limited');
+    expect(outcome.result.profile?.photoUrl).toMatch(/^https:\/\/media\.licdn\.com\//);
+    expect(outcome.result.profile?.pastRoles).toHaveLength(2);
+    expect(outcome.result.profile?.education).toHaveLength(2);
   });
 
   it('retries on 202 up to maxAttempts then retry_exhausted', async () => {

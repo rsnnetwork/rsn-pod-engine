@@ -6,6 +6,9 @@
  * The recorded fixture MUST have all sensitive data (personal details, emails,
  * phone numbers, private URLs) stripped before committing to the repository.
  *
+ * The committed fixture (server/src/__tests__/fixtures/scrapingdog-profile.json)
+ * was captured live on 2026-07-24 against Ali Hamza's own public profile.
+ *
  * Usage: node e2e/scrapingdog-discover.mjs <linkedin-url-or-slug>
  * Example: node e2e/scrapingdog-discover.mjs /in/alihamza143
  *
@@ -13,6 +16,13 @@
  * - Reads SCRAPINGDOG_API_KEY from process.env if set
  * - Otherwise, parses server/.env for the line SCRAPINGDOG_API_KEY=...
  * - Exits with a friendly message if the key is not found
+ *
+ * API notes from the live A2 discovery call (2026-07-24):
+ * - `private=true` returns a hard HTTP 400 ("Try again or use premium=true").
+ *   The working parameter is `premium=true` (this script now sends it).
+ * - A quota/plan problem arrives as a JSON body `{"success":false,"message":
+ *   "..."}`, which can show up under a 200 OR a 400 status — it is NOT the
+ *   same thing as "no such profile" and is reported distinctly below.
  */
 
 import fs from 'fs';
@@ -147,7 +157,7 @@ async function fetchProfile(apiKey, slug, attemptNum = 1) {
   url.searchParams.set('api_key', apiKey);
   url.searchParams.set('type', 'profile');
   url.searchParams.set('linkId', slug);
-  url.searchParams.set('private', 'true');
+  url.searchParams.set('premium', 'true');
 
   try {
     const response = await fetch(url.toString());
@@ -163,6 +173,24 @@ async function fetchProfile(apiKey, slug, attemptNum = 1) {
         console.error(`Failed: max retries (${MAX_RETRIES}) exceeded. Last status: 202`);
         process.exit(1);
       }
+    }
+
+    // A `{"success":false,"message":"..."}` body is ScrapingDog's own signal
+    // for a request/plan problem — can arrive under a 200 OR a 400 status.
+    // Distinguish a quota block (out of credits — fix the plan, not the URL)
+    // from any other success:false message, and report clearly either way.
+    let parsedBody;
+    try {
+      parsedBody = JSON.parse(body);
+    } catch {
+      parsedBody = undefined;
+    }
+    if (parsedBody && !Array.isArray(parsedBody) && typeof parsedBody === 'object' && parsedBody.success === false) {
+      const message = typeof parsedBody.message === 'string' ? parsedBody.message : '(no message)';
+      const isQuota = /free pack|upgrade|quota/i.test(message);
+      console.error(`\n${isQuota ? 'QUOTA/PLAN LIMIT' : 'PROVIDER ERROR'} (HTTP ${status}, success:false):`);
+      console.error(`  ${message}`);
+      process.exit(1);
     }
 
     if (status === 200) {
@@ -193,8 +221,8 @@ async function fetchProfile(apiKey, slug, attemptNum = 1) {
       return json;
     }
 
-    if ([400, 404, 410].includes(status)) {
-      console.error(`\nError: HTTP ${status}`);
+    if ([404, 410].includes(status)) {
+      console.error(`\nError: HTTP ${status} (profile genuinely unretrievable)`);
       console.error(`Response: ${body.slice(0, 500)}`);
       process.exit(1);
     }
