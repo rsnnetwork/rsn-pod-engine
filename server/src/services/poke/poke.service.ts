@@ -142,12 +142,30 @@ export async function sendPoke(
  * Accept a poke. Caller must be the recipient. Marks as accepted, creates
  * a corresponding encounter_history row so DMs unlock from now on, and
  * upserts the dm_conversation so they can start chatting.
+ *
+ * Task F1 (1 Aug 2026) — the sender previously heard nothing when their
+ * poke was accepted (only a silent fanoutUserEntity badge refresh from the
+ * route). A 'poke_accepted' bell notification is now inserted for the
+ * sender in the same transaction as the accept, then pushed live via
+ * socket ONLY after the transaction commits — mirrors sendPoke's
+ * notify-then-emit pattern (L90-126) and guarantees a rolled-back accept
+ * can never leave a dangling socket push.
+ *
+ * Task F3 (1 Aug 2026) — a message-less poke used to leave the new
+ * conversation with zero messages, which canMessage()'s grandfather
+ * clause can never open (dm.service.ts L138-165: the "existing thread
+ * with >=1 message" gate never fires, and encounter_history.mutual_meet_again
+ * starts false, so `not_mutual` blocks the pair forever). Every accepted
+ * poke now seeds a first message — the poke's own message when present,
+ * else a fallback line — so the thread is always usable.
  */
 export async function acceptPoke(
   pokeId: string,
   userId: string,
 ): Promise<{ poke: UserPoke; conversationId: string }> {
-  return transaction(async (client) => {
+  const FALLBACK_INTRO = "You're connected. Say hello.";
+
+  const { poke, conversationId, senderNotif } = await transaction(async (client) => {
     const pokeResult = await client.query<{
       id: string; sender_id: string; recipient_id: string; status: string;
       message: string | null; responded_at: Date | null; created_at: Date;
@@ -199,31 +217,80 @@ export async function acceptPoke(
     // FIRST message of the new thread instead of dying with the accepted poke.
     // Pre-fix the chat opened cold and the intro text was lost. Sender-authored
     // (it is their expressed interest), same transaction so accept+intro are
-    // atomic. Skipped for message-less pokes — nothing to carry over.
-    if (p.message && p.message.trim().length > 0) {
-      await client.query(
-        `INSERT INTO direct_messages (id, conversation_id, from_user_id, content)
-         VALUES ($1, $2, $3, $4)`,
-        [uuid(), convResult.rows[0].id, p.sender_id, p.message.trim().slice(0, 4000)],
-      );
-      await client.query(
-        `UPDATE dm_conversations SET last_message_at = NOW() WHERE id = $1`,
-        [convResult.rows[0].id],
-      );
-    }
+    // atomic.
+    //
+    // Task F3 — message-less pokes used to skip this block entirely, leaving
+    // a 0-message conversation canMessage() can never open. Now a fallback
+    // line seeds the thread instead, still sender-authored, so the grandfather
+    // clause opens it from the first read.
+    const introText = p.message && p.message.trim().length > 0
+      ? p.message.trim().slice(0, 4000)
+      : FALLBACK_INTRO;
+    await client.query(
+      `INSERT INTO direct_messages (id, conversation_id, from_user_id, content)
+       VALUES ($1, $2, $3, $4)`,
+      [uuid(), convResult.rows[0].id, p.sender_id, introText],
+    );
+    await client.query(
+      `UPDATE dm_conversations SET last_message_at = NOW() WHERE id = $1`,
+      [convResult.rows[0].id],
+    );
 
+    // Task F1 — bell notification for the SENDER, inserted in the same
+    // transaction as the accept so it can never exist without a
+    // corresponding accepted poke (and vice versa).
+    const accepterResult = await client.query<{ display_name: string | null }>(
+      `SELECT display_name FROM users WHERE id = $1`, [userId],
+    );
+    const accepterName = accepterResult.rows[0]?.display_name || 'Someone';
+    const title = `${accepterName} accepted your meeting request`;
+    const body = introText.slice(0, 120);
+    const notifId = uuid();
+    const notifResult = await client.query<{ id: string; created_at: Date }>(
+      `INSERT INTO notifications (id, user_id, type, title, body, link)
+       VALUES ($1, $2, 'poke_accepted', $3, $4, '/messages')
+       RETURNING id, created_at`,
+      [notifId, p.sender_id, title, body],
+    );
     logger.info({ pokeId, accepterId: userId, conversationId: convResult.rows[0].id }, 'Poke accepted');
 
     return {
       poke: {
         id: p.id, senderId: p.sender_id, recipientId: p.recipient_id,
-        status: 'accepted', message: p.message,
+        status: 'accepted' as const, message: p.message,
         respondedAt: updated.rows[0].responded_at,
         createdAt: p.created_at,
       },
       conversationId: convResult.rows[0].id,
+      senderNotif: {
+        id: notifResult.rows[0].id, senderId: p.sender_id, title, body,
+        createdAt: notifResult.rows[0].created_at,
+      },
     };
   });
+
+  // Post-commit only — mirrors sendPoke's ordering so a socket push can
+  // never fire for a transaction that ended up rolled back.
+  try {
+    const { io } = await import('../../index');
+    io.to(`user:${senderNotif.senderId}`).emit('notification:new', {
+      id: senderNotif.id,
+      type: 'poke_accepted',
+      title: senderNotif.title,
+      body: senderNotif.body,
+      link: '/messages',
+      isRead: false,
+      createdAt: senderNotif.createdAt,
+    });
+    const { emitEntities } = await import('../../realtime/emit');
+    const { E } = await import('../../realtime/entities');
+    emitEntities(
+      io, [senderNotif.senderId],
+      [E.userNotifications(senderNotif.senderId), E.userInvites(senderNotif.senderId)],
+    ).catch(() => {});
+  } catch { /* socket push is non-fatal */ }
+
+  return { poke, conversationId };
 }
 
 /**

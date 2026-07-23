@@ -186,6 +186,8 @@ describe('acceptPoke intro seeding', () => {
       }
       if (/UPDATE user_pokes/.test(sql)) return Promise.resolve({ rows: [{ responded_at: new Date() }] });
       if (/INSERT INTO dm_conversations/.test(sql)) return Promise.resolve({ rows: [{ id: 'conv-9' }] });
+      if (/SELECT display_name FROM users WHERE id/.test(sql)) return Promise.resolve({ rows: [{ display_name: 'Recv Person' }] });
+      if (/INSERT INTO notifications/.test(sql)) return Promise.resolve({ rows: [{ id: 'notif-1', created_at: new Date() }] });
       return Promise.resolve({ rows: [] });
     });
   }
@@ -202,10 +204,20 @@ describe('acceptPoke intro seeding', () => {
     expect(params[3]).toMatch(/should meet/);
   });
 
-  it('a message-less poke seeds nothing', async () => {
+  // Task F3 (1 Aug 2026) — a message-less poke used to seed nothing, leaving
+  // a 0-message conversation canMessage()'s grandfather clause could never
+  // open. It now seeds a fallback line instead, sender-authored, so the
+  // thread is always usable. Full coverage of this edge lives in
+  // __tests__/services/poke/poke.service.test.ts; this pin just confirms
+  // the old "seeds nothing" behavior is gone.
+  it('a message-less poke seeds the fallback intro instead of nothing', async () => {
     const pokeService = await import('../../../services/poke/poke.service');
     armAccept(null);
     await pokeService.acceptPoke('poke-1', 'u-recv');
-    expect(mockQuery.mock.calls.some(c => /INSERT INTO direct_messages/.test(c[0] as string))).toBe(false);
+    const dmInsert = mockQuery.mock.calls.find(c => /INSERT INTO direct_messages/.test(c[0] as string));
+    expect(dmInsert).toBeTruthy();
+    const params = dmInsert![1] as string[];
+    expect(params[2]).toBe('u-send');
+    expect(params[3]).toBe("You're connected. Say hello.");
   });
 });
