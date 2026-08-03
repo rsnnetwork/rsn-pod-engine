@@ -1,11 +1,16 @@
-import { FIRST_QUESTION, buildHostSystemPrompt, EXTRACTION_PROMPT } from '../../../services/onboarding/prompts';
+import { buildHostSystemPrompt, EXTRACTION_PROMPT } from '../../../services/onboarding/prompts';
 
 const EM_OR_EN_DASH = /[—–]/;
 
 describe('onboarding prompts (v1.1)', () => {
-  it('the first chat question contains no dashes', () => {
-    expect(EM_OR_EN_DASH.test(FIRST_QUESTION)).toBe(false);
-    expect(FIRST_QUESTION.includes(' - ')).toBe(false);
+  // 30 Jul 2026 — "every step should ask one clear question and stop". The
+  // prompt previously carried a single soft brevity line against seven
+  // counter-pressures that pushed the host toward paragraphs.
+  it('the host is instructed to ask exactly one question and keep messages short', () => {
+    const p = buildHostSystemPrompt().toLowerCase();
+    expect(p).toContain('one question per message');
+    expect(p).toMatch(/never stack two questions/);
+    expect(p).toMatch(/under \d+ words/);
   });
 
   it('the host system prompt forbids dashes', () => {

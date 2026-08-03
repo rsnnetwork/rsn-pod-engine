@@ -10,13 +10,9 @@ import { OnboardingMessage, OnboardingConfirmedProfile, OnboardingOpening } from
 /** Silent signal the host appends once it has everything and has summarised. */
 export const READY_TOKEN = '<<READY>>';
 
-/**
- * The first question the host asks in chat. The personalized "Hi {name}, welcome"
- * greeting and the known-data confirmation happen on a card BEFORE the chat, so
- * the chat opens straight on the reason for joining. No dashes (style rule).
- */
-export const FIRST_QUESTION =
-  "Reason works best when we understand why you're here. What is your reason for joining? One sentence is enough.";
+// The opening question is client-only (ChatbotOnboarding seeds it so it renders
+// instantly, with no round trip). A stale server copy lived here until 30 Jul
+// 2026, referenced by nothing but its own test while the real string drifted.
 
 // Richer known profile, loaded server-side from the LinkedIn enrichment + the
 // user's saved fields, so the host knows the member fully (not just name/company).
@@ -97,7 +93,7 @@ export function buildHostSystemPrompt(
 ): string {
   const wrap =
     wrapMode === 'hard'
-      ? '\nThe member has asked to finish. Do not ask anything else. Summarise what you already have in two or three short warm sentences, then emit the ready token immediately.\n'
+      ? '\nThe member has asked to finish. Do not ask anything else. Summarise what you already have in one or two short warm sentences, then emit the ready token immediately.\n'
       : wrapMode === 'soft'
         ? '\nThe member wants to finish. If they have NOT yet told you what they can help others with or offer, ask exactly ONE short question about it, and make clear they can skip (for example by saying skip, or by pressing done again). Do not summarise and do not emit the ready token yet. If they have already covered what they can offer, summarise now and emit the ready token.\n'
         : '';
@@ -106,13 +102,14 @@ export function buildHostSystemPrompt(
 Style rules (strict):
 1. Never use dashes of any kind in your messages. No em dash, no en dash, no hyphen used as a pause. Use a comma or a full stop instead.
 2. No generic or corporate phrasing (for example "your space for meaningful connections", "let us dive in", "I am here to help"). No filler. No long formal explanations.
-3. One question at a time. One or two short sentences per message.
+3. Ask ONE question per message and then stop. Never stack two questions, never add a second ask after the first. Keep every message under 30 words, ideally one sentence. People will not read more than that.
 4. Always reply in English.${knownBlock(profile, extra)}${honestyClause(effectiveOpening)}
 
-The member has just been welcomed by name and has confirmed their basic details. They have already been asked their reason for joining and have answered it. You want a usable sense of a few more things, in order of importance:
-  1. Who would be valuable for them to meet, roughly why, and what would actually make a meeting with someone feel valuable to them.
-  2. What they can help others with, and who they would be valuable to.
-  3. Optional bonus, only if the chat is flowing: which language works best for them if not English, anyone they would rather not be matched with (for example a competitor, or a geography that does not work for them), or anyone they would like to invite.
+The member has just been welcomed by name and has confirmed their basic details. They have already been asked their reason for joining and have answered it. You want a usable sense of a few more things, in order of importance. Ask about ONE of these per message, never two at once:
+  1. Who would be valuable for them to meet.
+  2. Why, or what would make a meeting with that person feel worth their time.
+  3. What they can help others with, and who they would be valuable to.
+  4. Optional bonus, only if the chat is flowing: which language works best for them if not English, anyone they would rather not be matched with (for example a competitor, or a geography that does not work for them), or anyone they would like to invite.
 
 Be efficient. Never make the member feel interrogated:
 - Accept brief answers. People are busy. If their reply already covers who they want to meet and what they can offer, do not ask for more. Go straight to the summary.
@@ -123,7 +120,7 @@ Be efficient. Never make the member feel interrogated:
 - Never re-ask anything already known. Never mention profiles, fields, data, or matching. Just talk.
 ${wrap}
 Closing:
-- Reflect back what you understood in two or three short, warm sentences.
+- Reflect back what you understood in ONE or two short, warm sentences. No lists, no headings, no recap of every answer.
 - Immediately after that summary, and only then, output the token ${READY_TOKEN} on its own final line. It is a silent signal. Never explain it or mention it.`;
 }
 

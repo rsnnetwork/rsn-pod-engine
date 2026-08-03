@@ -27,21 +27,12 @@ import HostPresence from './HostPresence';
 // that opening line still depends on known?.reason (skip it when we already
 // have one) — that branch is orthogonal to the opening and unchanged.
 // No dashes anywhere (style rule). If the LLM is down we fall back to the form.
-const FIRST_QUESTION =
-  "Reason works best when we understand why you're here. What is your reason for joining? One sentence is enough.";
-// When the member already gave their reason (e.g. in a join request), don't re-ask it —
-// acknowledge that we've looked them up, then move straight to what matters for matching.
-// Only truthful when the settled opening is 'found' or 'partial' (we genuinely
-// have SOME known profile data, whether retrieved or already on file) — see
-// REASON_KNOWN_QUESTION_NO_BACKGROUND for the not_found case, where nothing
-// was found and claiming a "look at your background" would be a lie.
-const REASON_KNOWN_QUESTION =
-  "I've had a quick look at your background so we can spend less time on basics, and thanks for sharing why you're here. To match you well, who would be most valuable for you to meet, and roughly why? If I've got anything wrong, just tell me.";
-// Same follow-up for when the opening settled not_found: thanks the member for
-// the reason they already gave, without claiming any background review that
-// never happened.
-const REASON_KNOWN_QUESTION_NO_BACKGROUND =
-  "Thanks for sharing why you're here. To match you well, who would be most valuable for you to meet, and roughly why?";
+// One question, nothing else. The 30-Jul test: "the onboarding text is too
+// long, people will not read it. Every step should ask one clear question and
+// stop." These are the only two things we ever open with, and which one depends
+// solely on whether the member already gave a reason (join request).
+const FIRST_QUESTION = 'What brings you to Reason?';
+const REASON_KNOWN_QUESTION = 'Who would be most valuable for you to meet?';
 
 // How often the searching stage polls GET /onboarding/status, and the belt
 // timeout (server will have terminal-ed long before this) that forces the
@@ -446,16 +437,13 @@ export default function ChatbotOnboarding() {
   // or partial (we genuinely have SOME known profile data); not_found gets the
   // no-background variant so it never claims a review that never happened.
   function openingMessages(op: OnboardingOpening): OnboardingMessage[] {
-    const hasBackground = op === 'found' || op === 'partial';
-    return [
-      { role: 'assistant', content: OPENINGS[op] },
-      {
-        role: 'assistant',
-        content: known?.reason
-          ? (hasBackground ? REASON_KNOWN_QUESTION : REASON_KNOWN_QUESTION_NO_BACKGROUND)
-          : FIRST_QUESTION,
-      },
-    ];
+    const question = known?.reason ? REASON_KNOWN_QUESTION : FIRST_QUESTION;
+    // ONE bubble. found/partial already stated what we have on the confirm card
+    // the member just accepted, so restating it here is the duplication the
+    // 30-Jul test flagged; not_found has no card, so it carries the honest
+    // "we could not identify you" line itself, once, ahead of the question.
+    const content = op === 'not_found' ? `${OPENINGS.not_found} ${question}` : question;
+    return [{ role: 'assistant', content }];
   }
 
   // Land on the right stage for a resolved (non-searching) opening: found/partial
@@ -629,10 +617,10 @@ export default function ChatbotOnboarding() {
     // The saved transcript starts at the member's first reply; the opening
     // question is client-only, so prepend it for display. The 'resume' stage
     // bypasses the searching poll entirely (see the mount effect above), so
-    // `opening` is never settled here — there's no basis to claim a background
-    // review happened, so this always uses the no-background variant.
+    // `opening` is never settled here — the bare question claims nothing about
+    // any lookup, which is exactly right when we have no settled state.
     setMessages([
-      { role: 'assistant', content: known?.reason ? REASON_KNOWN_QUESTION_NO_BACKGROUND : FIRST_QUESTION },
+      { role: 'assistant', content: known?.reason ? REASON_KNOWN_QUESTION : FIRST_QUESTION },
       ...resumeMessages,
     ]);
     setStage('chat');
@@ -664,7 +652,12 @@ export default function ChatbotOnboarding() {
     setSending(true);
     try {
       const res = await api.post('/onboarding/chat', {
-        messages: next.slice(1),
+        // Send the whole thread. This used to slice(1) to drop the first of TWO
+        // seeded bubbles; there is now exactly one, and it is the question the
+        // member is answering, so slicing would strip the context their reply
+        // depends on. The shape the server sees is unchanged: a leading
+        // assistant turn followed by the exchange.
+        messages: next,
         profile: confirmedProfile(),
         finish: wrapMode === 'soft',
         hardFinish: wrapMode === 'hard',
@@ -676,7 +669,7 @@ export default function ChatbotOnboarding() {
       // fills reliably on EVERY turn without delaying the reply above. Identity
       // fields fill only when empty (don't clobber enrichment/edits); chat-derived
       // fields (about, wants, offers) take the latest, chat-prioritized.
-      const full: OnboardingMessage[] = [...next.slice(1), { role: 'assistant', content: data.reply }];
+      const full: OnboardingMessage[] = [...next, { role: 'assistant', content: data.reply }];
       api
         .post('/onboarding/profile', { messages: full }, { timeout: 30000 })
         .then((pr) => {
@@ -961,11 +954,11 @@ export default function ChatbotOnboarding() {
             {/* This card only ever shows for a resolved found/partial opening (see
                 settleOpening) — enrichment is already terminal by now, so the
                 message is a simple truthful hint, not a spinner or a re-fetch. */}
+            {/* The single statement of what we retrieved (see OPENINGS). The chat
+                deliberately does not repeat it for found/partial. */}
             <div className="flex w-full items-center justify-center gap-1.5 text-xs text-gray-500">
               <Sparkles className="h-3.5 w-3.5 text-rsn-red" />
-              {opening === 'found'
-                ? 'Filled from your public profile — edit anything that\'s off.'
-                : 'We found part of your public profile — please fill in the rest below.'}
+              {opening === 'found' ? OPENINGS.found : OPENINGS.partial}
             </div>
             <div className="flex w-full flex-col gap-2 sm:flex-row">
               {/* Non-blocking: the lookup runs in the background, so continuing is always allowed. */}

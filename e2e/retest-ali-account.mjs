@@ -38,7 +38,7 @@ const page = await ctx.newPage();
 // --- Pass 1: self-heal (stored failed -> retry -> found) ---
 const t0 = Date.now();
 await page.goto(`${APP}/onboarding`, { waitUntil: 'domcontentloaded' });
-const searching = page.getByText('I am retrieving your public profile');
+const searching = page.getByText('We are retrieving your public profile');
 const card = page.getByText(/Is it right\?/i);
 const sawSearching = await searching.waitFor({ state: 'visible', timeout: 20_000 }).then(() => true).catch(() => false);
 console.log('PASS1: searching card shown:', sawSearching, `(+${((Date.now()-t0)/1000).toFixed(1)}s)`);

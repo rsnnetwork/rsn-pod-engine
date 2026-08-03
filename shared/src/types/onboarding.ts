@@ -14,15 +14,23 @@
 export type OnboardingOpening = 'searching' | 'found' | 'partial' | 'not_found';
 
 /**
- * The host's opening line for each enrichment state — server-derived and
- * client-rendered verbatim (instant, no latency) as the chatbot's first
- * message. Exact product-spec wording; do not edit.
+ * The honest statement of what we retrieved, per enrichment state. Server-derived
+ * and rendered verbatim by the client (instant, no latency).
+ *
+ * Shown EXACTLY ONCE per member: on the searching screen while the lookup runs,
+ * as the confirm card's hint for found/partial, or as the opening chat line for
+ * not_found (which has no card). The 30-Jul test found all three states saying
+ * a variant of "we found part of your profile" up to three times in a row — the
+ * card hint, then two seeded chat bubbles. Keep this the single source: if you
+ * render one of these, nothing else may restate it.
+ *
+ * Voice is "we", matching the host prompt (prompts.ts forbids "I"). No dashes.
  */
 export const OPENINGS = {
-  searching: 'I am retrieving your public profile. This normally takes less than a minute.',
-  found: 'I found your profile. Let me confirm what I understand about you.',
-  partial: 'I found part of your profile, but I need your help filling the gaps.',
-  not_found: 'I could not reliably identify your profile. Let us build it together.',
+  searching: 'We are retrieving your public profile. This normally takes less than a minute.',
+  found: 'Filled in from your public profile. Change anything that is wrong.',
+  partial: 'We found part of your public profile. Please fill in the rest.',
+  not_found: 'We could not identify your profile, so let us build it together.',
 } as const satisfies Record<OnboardingOpening, string>;
 
 /** Lifecycle of a user's onboarding conversation. Mirrors the SQL enum in 069. */

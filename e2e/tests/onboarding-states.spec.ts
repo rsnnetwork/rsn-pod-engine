@@ -28,12 +28,19 @@ import { gotoRetry, cleanup, APP, SERVER } from '../helpers/live-ui';
 // client itself never duplicates these (imports OPENINGS as a value, see
 // ChatbotOnboarding.tsx).
 const OPENINGS = {
-  searching: 'I am retrieving your public profile. This normally takes less than a minute.',
-  found: 'I found your profile. Let me confirm what I understand about you.',
-  partial: 'I found part of your profile, but I need your help filling the gaps.',
-  not_found: 'I could not reliably identify your profile. Let us build it together.',
+  searching: 'We are retrieving your public profile. This normally takes less than a minute.',
+  found: 'Filled in from your public profile. Change anything that is wrong.',
+  partial: 'We found part of your public profile. Please fill in the rest.',
+  not_found: 'We could not identify your profile, so let us build it together.',
 } as const;
 type Opening = keyof typeof OPENINGS;
+
+// 30 Jul 2026 — the state statement is shown EXACTLY ONCE. found/partial say it
+// on the confirm card, so the chat opens on the bare question; not_found has no
+// card, so its single chat bubble carries the statement plus the question.
+// These are the questions the chat can open with (ChatbotOnboarding.tsx).
+const FIRST_QUESTION = 'What brings you to Reason?';
+const REASON_KNOWN_QUESTION = 'Who would be most valuable for you to meet?';
 
 let browser: Browser;
 let user: TestUser;
@@ -84,8 +91,21 @@ async function openOnboarding(viewport = { width: 390, height: 844 }, testUser =
 
 // HostBubble + UserBubble both render with `whitespace-pre-wrap`; before any
 // reply is sent only assistant bubbles exist, so `.first()` is reliably the
-// opening line (openingMessages() pushes [opening, question] together).
+// opening line. openingMessages() now seeds exactly ONE bubble.
 const firstBubble = (page: Page) => page.locator('.whitespace-pre-wrap').first();
+const chatBubbles = (page: Page) => page.locator('.whitespace-pre-wrap');
+
+/** The chat must open with exactly one host bubble, and must not restate
+ *  anything the confirm card already said. This is the 30-Jul duplication
+ *  regression guard: three near-identical "we found your profile" statements
+ *  in a row is what the live test flagged. */
+async function assertSingleOpeningBubble(page: Page, expected: string): Promise<void> {
+  await expect(firstBubble(page)).toHaveText(expected, { timeout: 20_000 });
+  await expect(chatBubbles(page)).toHaveCount(1);
+  for (const restated of [OPENINGS.found, OPENINGS.partial] as const) {
+    await expect(page.getByText(restated)).toHaveCount(0);
+  }
+}
 
 test.beforeAll(async () => {
   // This spec is entirely about the client-side onboarding stage machine, so
@@ -151,13 +171,15 @@ test('not_found skips the confirm card entirely and opens straight to chat', asy
   await stubStatus(page, () => 'not_found');
   await gotoRetry(page, `${APP}/onboarding`);
 
-  await expect(firstBubble(page)).toHaveText(OPENINGS.not_found, { timeout: 20_000 });
+  // The one bubble carries the honest statement AND the question, together.
+  await expect(firstBubble(page)).toHaveText(`${OPENINGS.not_found} ${FIRST_QUESTION}`, { timeout: 20_000 });
+  await expect(chatBubbles(page)).toHaveCount(1);
   await expect(page.getByText(/Is it right\?/i)).toHaveCount(0); // never, not even transiently
   await expect(page.locator('textarea[aria-label="Your answer"]')).toBeVisible();
-  console.log('  ✓ not_found: no confirm card, chat opens directly with the not_found opening.');
+  console.log('  ✓ not_found: no confirm card, one bubble stating what we could not do plus one question.');
 });
 
-test('found shows the confirm card first, then its opening as the first chat bubble', async () => {
+test('found states what we have on the card, then opens the chat on one question only', async () => {
   test.setTimeout(60_000);
   const page = await openOnboarding();
   await stubStatus(page, () => 'found');
@@ -165,23 +187,25 @@ test('found shows the confirm card first, then its opening as the first chat bub
 
   await expect(page.getByText(/Is it right\?/i)).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(OPENINGS.searching)).toHaveCount(0); // wait card is gone by now
+  await expect(page.getByText(OPENINGS.found)).toBeVisible(); // stated once, here
   await page.getByRole('button', { name: /Yes, continue/i }).click();
 
-  await expect(firstBubble(page)).toHaveText(OPENINGS.found, { timeout: 15_000 });
-  console.log('  ✓ found: confirm card first, then the found opening on continue.');
+  await assertSingleOpeningBubble(page, FIRST_QUESTION);
+  console.log('  ✓ found: card states it once, chat opens on the bare question.');
 });
 
-test('partial shows the confirm card first, then its opening as the first chat bubble', async () => {
+test('partial states what we have on the card, then opens the chat on one question only', async () => {
   test.setTimeout(60_000);
   const page = await openOnboarding();
   await stubStatus(page, () => 'partial');
   await gotoRetry(page, `${APP}/onboarding`);
 
   await expect(page.getByText(/Is it right\?/i)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(OPENINGS.partial)).toBeVisible(); // stated once, here
   await page.getByRole('button', { name: /Yes, continue/i }).click();
 
-  await expect(firstBubble(page)).toHaveText(OPENINGS.partial, { timeout: 15_000 });
-  console.log('  ✓ partial: confirm card first, then the partial opening on continue.');
+  await assertSingleOpeningBubble(page, FIRST_QUESTION);
+  console.log('  ✓ partial: card states it once, chat opens on the bare question.');
 });
 
 test('searching -> found transitions live: the wait card swaps for the confirm card without a reload', async () => {
@@ -313,8 +337,8 @@ test('none with a LinkedIn on file does NOT settle: the client fires the enrich 
   await expect(page.getByText('Builds things.')).toBeVisible();
 
   await page.getByRole('button', { name: /Yes, continue/i }).click();
-  await expect(firstBubble(page)).toHaveText(OPENINGS.found, { timeout: 15_000 });
-  console.log('  ✓ none→searching→found: landed the found opening with the candidate on the card.');
+  await assertSingleOpeningBubble(page, FIRST_QUESTION);
+  console.log('  ✓ none→searching→found: candidate on the card, chat opens on one question.');
 });
 
 test('failed status with a LinkedIn on file retries once via the enrich trigger; a second failed response settles on the partial opening (profile data already on file)', async () => {
@@ -393,7 +417,7 @@ test('failed status with a LinkedIn on file retries once via the enrich trigger;
   await expect(page.getByText(/Is it right\?/i)).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText(OPENINGS.not_found)).toHaveCount(0);
   await page.getByRole('button', { name: /Yes, continue/i }).click();
-  await expect(firstBubble(page)).toHaveText(OPENINGS.partial, { timeout: 15_000 });
+  await assertSingleOpeningBubble(page, FIRST_QUESTION);
 
   // Retry-once: exactly one enrich call ever fired, no infinite loop.
   expect(enrichCalls).toBe(1);
@@ -496,7 +520,7 @@ test('asklink: a member with no LinkedIn on file sees the ask screen; Skip settl
   // server's honest opening on the very first response (no confirm card,
   // straight to chat) — same "none + no URL" settle-immediately behavior the
   // other states tests above already pin.
-  await expect(firstBubble(page)).toHaveText(OPENINGS.not_found, { timeout: 20_000 });
+  await expect(firstBubble(page)).toHaveText(`${OPENINGS.not_found} ${FIRST_QUESTION}`, { timeout: 20_000 });
   await expect(page.getByText(/Is it right\?/i)).toHaveCount(0);
   console.log('  ✓ asklink: ask screen shown for a no-URL member; Skip settled the honest not_found opening.');
 });
@@ -590,6 +614,6 @@ test('asklink: a pasted bare slug canonicalizes into the enrich trigger and land
   await expect(page.getByText('Slug Co')).toBeVisible();
 
   await page.getByRole('button', { name: /Yes, continue/i }).click();
-  await expect(firstBubble(page)).toHaveText(OPENINGS.found, { timeout: 15_000 });
-  console.log('  ✓ asklink: none→searching→found landed the found opening with the candidate on the card.');
+  await assertSingleOpeningBubble(page, FIRST_QUESTION);
+  console.log('  ✓ asklink: none→searching→found landed the candidate card, chat opens on one question.');
 });
