@@ -50,6 +50,20 @@ async function openAs(u: TestUser, path = '/agents', viewport = { width: 390, he
   return page;
 }
 
+/** Look an agent up by name, failing loudly with what actually exists. */
+async function agentByLabel(u: TestUser, label: string): Promise<any> {
+  const r = await apiAs(u, 'GET', '/agents');
+  const list = r.json?.data;
+  if (!Array.isArray(list)) {
+    throw new Error(`GET /agents did not return a list (status ${r.status}): ${JSON.stringify(r.json).slice(0, 300)}`);
+  }
+  const found = list.find((a: any) => a.label === label);
+  if (!found) {
+    throw new Error(`no agent named "${label}". Existing: ${list.map((a: any) => `${a.label}(${a.status})`).join(', ') || 'none'}`);
+  }
+  return found;
+}
+
 /** Poll the API until an agent's stored count settles (scoring is async). */
 async function countFor(u: TestUser, agentId: string, timeoutMs = 45_000): Promise<number> {
   const deadline = Date.now() + timeoutMs;
@@ -138,16 +152,19 @@ test('several agents run at once, each with its own count', async () => {
   createdAgentIds.push(created.json.data.id);
   await countFor(owner, created.json.data.id);
 
-  const page = await openAs(owner);
-  await expect(page.getByText('Developers')).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText('Investors')).toBeVisible();
+  const devAgent = await agentByLabel(owner, 'Developers');
+  const invAgent = await agentByLabel(owner, 'Investors');
 
-  const list = await apiAs(owner, 'GET', '/agents');
-  const byLabel = Object.fromEntries(list.json.data.map((a: any) => [a.label, a]));
-  expect(byLabel['Developers'].id).not.toBe(byLabel['Investors'].id);
+  const page = await openAs(owner);
+  // Scope to the cards: the want text also contains the word "investors", so a
+  // bare text match is ambiguous by design here.
+  await expect(page.getByTestId(`agent-${devAgent.id}`)).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId(`agent-${invAgent.id}`)).toBeVisible();
+
+  expect(devAgent.id).not.toBe(invAgent.id);
   // Each agent found its own kind of person, independently.
-  const devMatches = await pool.query(`SELECT candidate_user_id FROM agent_matches WHERE agent_id = $1`, [byLabel['Developers'].id]);
-  const invMatches = await pool.query(`SELECT candidate_user_id FROM agent_matches WHERE agent_id = $1`, [byLabel['Investors'].id]);
+  const devMatches = await pool.query(`SELECT candidate_user_id FROM agent_matches WHERE agent_id = $1`, [devAgent.id]);
+  const invMatches = await pool.query(`SELECT candidate_user_id FROM agent_matches WHERE agent_id = $1`, [invAgent.id]);
   expect(devMatches.rows.map(r => r.candidate_user_id)).toContain(dev.id);
   expect(invMatches.rows.map(r => r.candidate_user_id)).toContain(investor.id);
   console.log('  ✓ two concurrent agents, each holding its own matches.');
@@ -162,9 +179,8 @@ test('an introduction from one agent does not hide the person from another', asy
     expertise_text: 'react engineering and angel investing',
   });
 
-  const list = await apiAs(owner, 'GET', '/agents');
-  const devAgent = list.json.data.find((a: any) => a.label === 'Developers');
-  const invAgent = list.json.data.find((a: any) => a.label === 'Investors');
+  const devAgent = await agentByLabel(owner, 'Developers');
+  const invAgent = await agentByLabel(owner, 'Investors');
   await apiAs(owner, 'POST', `/agents/${devAgent.id}/status`, { status: 'active' });
   await apiAs(owner, 'POST', `/agents/${invAgent.id}/status`, { status: 'active' });
   await countFor(owner, devAgent.id);
@@ -220,8 +236,7 @@ test('editing what an agent looks for re-runs the search', async () => {
 
 test('pause stops it appearing as active, resume brings it back', async () => {
   test.setTimeout(240_000);
-  const list = await apiAs(owner, 'GET', '/agents');
-  const agent = list.json.data.find((a: any) => a.label === 'Bakers');
+  const agent = await agentByLabel(owner, 'Bakers');
 
   const page = await openAs(owner);
   const card = page.getByTestId(`agent-${agent.id}`);
@@ -241,8 +256,7 @@ test('pause stops it appearing as active, resume brings it back', async () => {
 
 test('archiving removes it from the dashboard without destroying it', async () => {
   test.setTimeout(240_000);
-  const list = await apiAs(owner, 'GET', '/agents');
-  const agent = list.json.data.find((a: any) => a.label === 'Bakers');
+  const agent = await agentByLabel(owner, 'Bakers');
 
   const page = await openAs(owner);
   const card = page.getByTestId(`agent-${agent.id}`);
@@ -258,8 +272,7 @@ test('archiving removes it from the dashboard without destroying it', async () =
 
 test('someone joining later becomes a match automatically', async () => {
   test.setTimeout(300_000);
-  const list = await apiAs(owner, 'GET', '/agents');
-  const devAgent = list.json.data.find((a: any) => a.label === 'Developers');
+  const devAgent = await agentByLabel(owner, 'Developers');
 
   // A brand-new developer appears AFTER the agent was created.
   const latecomer = await createTestUser('agLate');
@@ -288,9 +301,10 @@ test('someone joining later becomes a match automatically', async () => {
 
 test('the dashboard fits phone and desktop widths with no overflow', async () => {
   test.setTimeout(240_000);
+  const devAgent = await agentByLabel(owner, 'Developers');
   for (const vp of [{ width: 360, height: 800 }, { width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 1280, height: 900 }]) {
     const page = await openAs(owner, '/agents', vp);
-    await expect(page.getByText('Developers')).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId(`agent-${devAgent.id}`)).toBeVisible({ timeout: 30_000 });
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow, `no horizontal scroll at ${vp.width}px`).toBeLessThanOrEqual(1);
   }
