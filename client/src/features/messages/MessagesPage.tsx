@@ -12,6 +12,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare, CalendarClock, Flag } from 'lucide-react';
 import MeetingScheduler from './MeetingScheduler';
+import MeetingRequests from './MeetingRequests';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { PageLoader, Spinner } from '@/components/ui/Spinner';
@@ -665,6 +666,9 @@ export default function MessagesPage() {
           <h2 className="text-sm font-semibold text-[#1a1a2e]">Messages</h2>
         </div>
         <div className="flex-1 overflow-y-auto">
+          {/* Pending meeting requests sit above the inbox — this is the page the
+              'poke' notification links to, so the accept must live here. */}
+          <MeetingRequests myUserId={myUserId} />
           {inboxData === undefined ? (
             <div className="flex items-center justify-center py-12"><Spinner /></div>
           ) : inboxData.length === 0 ? (
