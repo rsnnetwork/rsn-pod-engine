@@ -1,6 +1,7 @@
 import { test, expect, chromium, Browser, BrowserContext, Page } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
 import { gotoRetry, cleanup, APP, SERVER } from '../helpers/live-ui';
+import { primePreview } from '../helpers/preview-bypass';
 
 // Task B2 — client-side truthful state-driven onboarding openings + the
 // 'searching' wait stage. The server's own enrichment/status behavior is
@@ -84,6 +85,7 @@ async function openOnboarding(viewport = { width: 390, height: 844 }, testUser =
     { a: testUser.accessToken, r: testUser.refreshToken },
   );
   ctxs.push(ctx);
+  await primePreview(ctx);
   const page = await ctx.newPage();
   page.on('pageerror', () => {});
   return page;
