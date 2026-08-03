@@ -36,6 +36,13 @@ export default function MeetingRequests({ myUserId }: { myUserId: string }) {
     queryKey: ['pokes-received'],
     queryFn: () => api.get('/pokes/received').then(r => r.data.data as PendingRequest[]),
     refetchOnWindowFocus: true,
+    // The entity fanout is the fast path, but it is a one-shot socket event:
+    // a request that lands while the socket is reconnecting (backgrounded
+    // phone, network blip — both routine here) would otherwise stay invisible
+    // until a manual refresh. Poll as the guaranteed path; one indexed query
+    // per open Messages page is cheap next to a silently missed request.
+    refetchInterval: 20_000,
+    refetchOnReconnect: true,
     meta: { entities: [E.userInvites(myUserId)] },
   });
 

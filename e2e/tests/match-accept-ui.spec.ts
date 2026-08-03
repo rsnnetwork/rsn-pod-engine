@@ -1,6 +1,7 @@
 import { test, expect, chromium, Browser, BrowserContext, Page } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
 import { gotoRetry, cleanup, wait, APP, SERVER } from '../helpers/live-ui';
+import { primePreview } from '../helpers/preview-bypass';
 
 // P1 — MATCH ACCEPT, DRIVEN ENTIRELY THROUGH THE UI (30 Jul 2026 evaluation).
 //
@@ -39,6 +40,7 @@ async function openAs(u: TestUser, path = '/messages', viewport = { width: 390, 
     localStorage.setItem('rsn_access', t.a); localStorage.setItem('rsn_refresh', t.r);
   }, { a: u.accessToken, r: u.refreshToken });
   ctxs.push(ctx);
+  await primePreview(ctx);
   const page = await ctx.newPage();
   page.on('pageerror', () => {});
   await gotoRetry(page, `${APP}${path}`);
@@ -71,7 +73,9 @@ test.afterAll(async () => {
 test('a member with no requests sees no pending section (empty state)', async () => {
   test.setTimeout(120_000);
   const page = await openAs(lonely);
-  await expect(page.getByText(/Messages/i).first()).toBeVisible({ timeout: 30_000 });
+  // Scope to the panel heading — the sidebar nav's "Messages" link is
+  // display:none at phone width, so a bare getByText().first() picks a hidden node.
+  await expect(page.getByRole('heading', { name: 'Messages', exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(page.locator('[data-testid="meeting-request"]')).toHaveCount(0);
   await expect(page.getByText(/Meeting requests/i)).toHaveCount(0);
   console.log('  ✓ no phantom section when there is nothing pending.');
@@ -164,11 +168,15 @@ test('a request arriving while the page is open appears without a refresh', asyn
   test.setTimeout(240_000);
   const live = await createTestUser('maLive');
   const page = await openAs(recipient);
-  await expect(page.getByText(/Messages/i).first()).toBeVisible({ timeout: 30_000 });
+  // Scope to the panel heading — the sidebar nav's "Messages" link is
+  // display:none at phone width, so a bare getByText().first() picks a hidden node.
+  await expect(page.getByRole('heading', { name: 'Messages', exact: true })).toBeVisible({ timeout: 30_000 });
 
   await apiAs(live, 'POST', '/pokes', { recipientId: recipient.id, message: 'Just joined, would love to talk.' });
-  await expect(requestCard(page, live.id), 'live socket push must surface the request').toBeVisible({ timeout: 30_000 });
-  console.log('  ✓ realtime arrival, no refresh needed.');
+  // Socket fanout is the fast path; the 20s poll is the guarantee. Allow for
+  // the slower of the two so this asserts the guarantee, not a lucky race.
+  await expect(requestCard(page, live.id), 'an arriving request must surface with no refresh').toBeVisible({ timeout: 60_000 });
+  console.log('  ✓ arrives with no refresh (socket fast path + poll belt).');
 
   await pool.query(`DELETE FROM user_pokes WHERE sender_id = $1`, [live.id]).catch(() => {});
   await cleanup(pool, { ids: [live.id] });
