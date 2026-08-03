@@ -34,6 +34,8 @@ import RecapPage from '@/features/sessions/RecapPage';
 import MessagesPage from '@/features/messages/MessagesPage';
 import EncounterHistoryPage from '@/features/sessions/EncounterHistoryPage';
 import MatchesPage from '@/features/matches/MatchesPage';
+import AgentsPage from '@/features/agents/AgentsPage';
+import AgentDetailPage from '@/features/agents/AgentDetailPage';
 import CirclesPage from '@/features/circles/CirclesPage';
 import CircleDetailPage from '@/features/circles/CircleDetailPage';
 import AdminDashboardPage from '@/features/admin/AdminDashboardPage';
@@ -180,6 +182,10 @@ export default function App() {
         <Route path="/sessions/:sessionId/recap" element={<RecapPage />} />
         <Route path="/encounters" element={<EncounterHistoryPage />} />
         <Route path="/matches" element={<MatchesPage />} />
+        {/* Wave 2: agents are the primary way to look for people. /matches
+            stays as the browse-everyone fallback. */}
+        <Route path="/agents" element={<AgentsPage />} />
+        <Route path="/agents/:id" element={<AgentDetailPage />} />
         <Route path="/circles" element={<CirclesPage />} />
         <Route path="/circles/:circleId" element={<CircleDetailPage />} />
         <Route path="/messages" element={<MessagesPage />} />

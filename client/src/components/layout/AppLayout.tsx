@@ -48,7 +48,9 @@ export default function AppLayout() {
 
   const mainLinks = [
     { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
-    { to: '/matches', icon: Sparkles, label: 'Matches' },
+    // Wave 2: agents are how you look for people now. /matches remains
+    // reachable as the browse-everyone fallback, just not the front door.
+    { to: '/agents', icon: Sparkles, label: 'Matches' },
     ...(showCircles ? [{ to: '/circles', icon: CircleDashed, label: 'Circles' }] : []),
     { to: '/pods', icon: Users, label: 'Pods' },
     { to: '/invites', icon: Mail, label: 'Invite' },

@@ -106,7 +106,14 @@ const WANT_DESIGNATIONS: Array<[RegExp, string, string]> = [
 ];
 
 export function wantedDesignations(p: IntentProfile): Array<{ key: string; label: string }> {
-  const text = wantSources(p).filter(Boolean).join(' ').toLowerCase();
+  return wantedDesignationsFrom(wantSources(p));
+}
+
+/** Same scan over raw want-text, so a matching agent can use it (Wave 2). */
+export function wantedDesignationsFrom(
+  wants: Array<string | null | undefined>,
+): Array<{ key: string; label: string }> {
+  const text = wants.filter(Boolean).join(' ').toLowerCase();
   const out: Array<{ key: string; label: string }> = [];
   for (const [re, key, label] of WANT_DESIGNATIONS) {
     if (re.test(text)) out.push({ key, label });
@@ -119,7 +126,21 @@ export function wantedDesignations(p: IntentProfile): Array<{ key: string; label
  * human-readable and shown on the match card AND used as the introduction text.
  */
 export function scoreFit(me: IntentProfile, other: IntentProfile): { score: number; reason: string } {
-  const wantTokens = tokenizeTerms(wantSources(me));
+  return scoreWants(wantSources(me), other);
+}
+
+/**
+ * The same rule, with the want side supplied directly instead of read off a
+ * user row. Wave 2 (matching agents): a member holds several concurrent wants,
+ * each its own agent, so the thing being matched is a want-text — not a person.
+ * `scoreFit` is now a thin wrapper, keeping the profile-level behaviour and its
+ * tests exactly as they were.
+ */
+export function scoreWants(
+  wants: Array<string | null | undefined>,
+  other: IntentProfile,
+): { score: number; reason: string } {
+  const wantTokens = tokenizeTerms(wants);
   const offerTokens = tokenizeTerms(offerSources(other));
   const overlap = termOverlap(wantTokens, offerTokens);
 
@@ -135,7 +156,7 @@ export function scoreFit(me: IntentProfile, other: IntentProfile): { score: numb
       .map(r => normalizeDesignation(typeof r === 'string' ? r : null))
       .filter((d): d is string => Boolean(d)),
   );
-  const wanted = wantedDesignations(me);
+  const wanted = wantedDesignationsFrom(wants);
   const designationHit = wanted.find(w => otherDesignations.has(w.key)) ?? null;
 
   const score = 0.7 * overlap + (designationHit ? 0.6 : 0);
@@ -255,7 +276,14 @@ export async function getPlatformMatches(
  * unlocks the DM + creates the conversation (existing acceptPoke behaviour).
  * The poke message carries the introduction (why these two fit).
  */
-export async function expressInterest(userId: string, targetUserId: string): Promise<UserPoke> {
+export async function expressInterest(
+  userId: string,
+  targetUserId: string,
+  /** Which matching agent produced this introduction, when it came from one.
+   *  Recorded on the poke so the exclusion it creates is scoped to that agent
+   *  (Wave 2, decision D3) rather than hiding the person everywhere. */
+  agentId?: string,
+): Promise<UserPoke> {
   const [me, target] = await Promise.all([loadProfile(userId), loadProfile(targetUserId)]);
   let message = 'We think you two should meet.';
   if (me && target) {
@@ -273,7 +301,7 @@ export async function expressInterest(userId: string, targetUserId: string): Pro
       message = `${myName} thinks you fit what they're looking for. We think you two should meet.`;
     }
   }
-  return pokeService.sendPoke(userId, targetUserId, message.slice(0, 500));
+  return pokeService.sendPoke(userId, targetUserId, message.slice(0, 500), agentId);
 }
 
 /**
@@ -281,11 +309,18 @@ export async function expressInterest(userId: string, targetUserId: string): Pro
  * members whose "want" fits the NEW user get one bell notification pointing at
  * /matches — Stefan's "he will get notified when there is a new batch".
  * Deduped per-recipient per-24h so a signup wave can't spam anyone.
+ *
+ * Wave 2: agents run FIRST and own the notification when one of them wanted
+ * this person, because "your Developer agent found someone" says far more than
+ * "someone new matches what you're looking for". This profile-level pass then
+ * covers members who have no agent yet, and skips anyone an agent already told.
  */
 export async function notifyMatchesOfNewUser(newUserId: string): Promise<number> {
   try {
     const newcomer = await loadProfile(newUserId);
     if (!newcomer || !newcomer.onboardingCompleted) return 0;
+
+    const notifiedByAgent = await notifyAgentsOfNewUser(newUserId);
 
     const existing = await query<IntentProfile>(
       `SELECT ${PROFILE_COLUMNS}
@@ -301,6 +336,8 @@ export async function notifyMatchesOfNewUser(newUserId: string): Promise<number>
     let notified = 0;
     for (const member of existing.rows) {
       if (notified >= 25) break; // signup-wave guard
+      // An agent already told this member, with a better reason. Don't repeat.
+      if (notifiedByAgent.has(member.id)) continue;
       const fit = scoreFit(member, newcomer);
       if (fit.score < MATCH_THRESHOLD) continue;
 
@@ -335,9 +372,69 @@ export async function notifyMatchesOfNewUser(newUserId: string): Promise<number>
     if (notified > 0) {
       logger.info({ newUserId, notified }, 'Platform-match notifications sent for new user');
     }
-    return notified;
+    return notified + notifiedByAgent.size;
   } catch (err) {
     logger.warn({ err, newUserId }, 'notifyMatchesOfNewUser failed (non-fatal)');
     return 0;
   }
+}
+
+/**
+ * Wave 2 continuous matching: a member who joins today is scored against every
+ * ACTIVE agent in the network, and each owner whose agent wanted them is told
+ * by that agent's name. Stefan's brief: "if Stefan is searching for a developer
+ * and Ali joins tomorrow, Ali should automatically become a potential match."
+ *
+ * Dedupe is per (owner, agent) rather than the blanket 24h window the profile
+ * pass uses, so a member running three agents can hear about three different
+ * people on the same day — one notification each, not one in total.
+ *
+ * Returns the owners it notified so the profile-level pass can skip them.
+ */
+async function notifyAgentsOfNewUser(newUserId: string): Promise<Set<string>> {
+  const owners = new Set<string>();
+  try {
+    // Imported lazily: agent-matching imports this module for the scorer, and a
+    // static import both ways would be a cycle.
+    const { scoreNewcomerAgainstAgents } = await import('./agent-matching.service');
+    const gained = await scoreNewcomerAgainstAgents(newUserId);
+
+    for (const g of gained) {
+      const dedupe = await query<{ id: string }>(
+        `SELECT id FROM notifications
+          WHERE user_id = $1 AND type = 'platform_match'
+            AND link = $2
+            AND created_at > NOW() - INTERVAL '24 hours' LIMIT 1`,
+        [g.ownerId, `/agents/${g.agentId}`],
+      );
+      if (dedupe.rows.length > 0) continue;
+
+      const title = `Your ${g.label} agent found someone`;
+      const inserted = await query<{ id: string; created_at: Date }>(
+        `INSERT INTO notifications (id, user_id, type, title, body, link)
+         VALUES (gen_random_uuid(), $1, 'platform_match', $2, $3, $4)
+         RETURNING id, created_at`,
+        [g.ownerId, title, g.reason, `/agents/${g.agentId}`],
+      );
+      owners.add(g.ownerId);
+      try {
+        const { io } = await import('../../index');
+        io.to(`user:${g.ownerId}`).emit('notification:new', {
+          id: inserted.rows[0].id,
+          type: 'platform_match',
+          title,
+          body: g.reason,
+          link: `/agents/${g.agentId}`,
+          isRead: false,
+          createdAt: inserted.rows[0].created_at,
+        });
+      } catch { /* socket push is non-fatal */ }
+    }
+    if (owners.size > 0) {
+      logger.info({ newUserId, agents: gained.length, owners: owners.size }, 'Agent match notifications sent');
+    }
+  } catch (err) {
+    logger.warn({ err, newUserId }, 'notifyAgentsOfNewUser failed (non-fatal)');
+  }
+  return owners;
 }

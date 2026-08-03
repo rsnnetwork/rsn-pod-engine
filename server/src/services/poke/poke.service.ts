@@ -127,6 +127,10 @@ export async function sendPoke(
   senderId: string,
   recipientId: string,
   message?: string,
+  /** The matching agent this introduction came from, when it came from one
+   *  (Wave 2). Stored so the exclusion it creates is scoped to that agent
+   *  instead of hiding the person from every other reason to meet them. */
+  agentId?: string,
 ): Promise<UserPoke> {
   if (senderId === recipientId) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'You cannot poke yourself');
@@ -163,10 +167,10 @@ export async function sendPoke(
       responded_at: Date | null;
       created_at: Date;
     }>(
-      `INSERT INTO user_pokes (id, sender_id, recipient_id, message, status)
-       VALUES ($1, $2, $3, $4, 'pending')
+      `INSERT INTO user_pokes (id, sender_id, recipient_id, message, status, agent_id)
+       VALUES ($1, $2, $3, $4, 'pending', $5)
        RETURNING id, sender_id, recipient_id, status, message, responded_at, created_at`,
-      [pokeId, senderId, recipientId, trimmedMessage],
+      [pokeId, senderId, recipientId, trimmedMessage, agentId ?? null],
     );
     const r = result.rows[0];
     logger.info({ senderId, recipientId, pokeId: r.id }, 'Poke sent');
