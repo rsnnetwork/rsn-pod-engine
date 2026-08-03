@@ -299,6 +299,47 @@ test('someone joining later becomes a match automatically', async () => {
   await cleanup(pool, { ids: [latecomer.id] });
 });
 
+// The 3 Aug miss: migration 086 seeded one agent per existing member straight
+// into SQL. Creating an agent through the API runs a search; INSERTing a row
+// does not, so all 38 seeded agents sat at "0 potential matches" and the smoke
+// never noticed because every agent it tested had been created through the API.
+// This test builds an agent the way the MIGRATION does and demands it works.
+test('an agent inserted directly, as the migration seeds them, still gets scored', async () => {
+  test.setTimeout(240_000);
+  const seeded = await createTestUser('agSeeded');
+  await setProfile(seeded, { who_i_want_to_meet: 'react developers who can build my product' });
+
+  // Exactly what migration 086 does: a row, and nothing else.
+  const ins = await pool.query(
+    `INSERT INTO matching_agents (user_id, label, want_text, status)
+     VALUES ($1, 'Developers', 'react developers who can build my product', 'active')
+     RETURNING id`,
+    [seeded.id],
+  );
+  const agentId = ins.rows[0].id;
+  createdAgentIds.push(agentId);
+
+  const before = await pool.query(`SELECT last_matched_at FROM matching_agents WHERE id = $1`, [agentId]);
+  expect(before.rows[0].last_matched_at, 'a seeded agent starts unscored').toBeNull();
+
+  // Opening the dashboard must be enough to make it work.
+  const page = await openAs(seeded);
+  await expect(page.getByTestId(`agent-${agentId}`)).toBeVisible({ timeout: 30_000 });
+
+  const count = await countFor(seeded, agentId);
+  expect(count, 'a seeded agent must find people, not sit at zero').toBeGreaterThanOrEqual(1);
+
+  const stored = await pool.query(`SELECT candidate_user_id FROM agent_matches WHERE agent_id = $1`, [agentId]);
+  expect(stored.rows.map(r => r.candidate_user_id)).toContain(dev.id);
+
+  await expect(page.getByTestId(`agent-count-${agentId}`)).toContainText(/[1-9]\d* potential match/, { timeout: 30_000 });
+  console.log(`  ✓ migration-seeded agent scored itself on first view (${count}).`);
+
+  await pool.query(`DELETE FROM agent_matches WHERE agent_id = $1`, [agentId]).catch(() => {});
+  await pool.query(`DELETE FROM matching_agents WHERE id = $1`, [agentId]).catch(() => {});
+  await cleanup(pool, { ids: [seeded.id] });
+});
+
 test('the dashboard fits phone and desktop widths with no overflow', async () => {
   test.setTimeout(240_000);
   const devAgent = await agentByLabel(owner, 'Developers');

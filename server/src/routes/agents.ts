@@ -48,10 +48,19 @@ function rescoreInBackground(agent: { id: string; userId: string; wantText: stri
 }
 
 // GET /agents — the dashboard: every agent with its live count.
+//
+// An agent that has never been scored is answered immediately and then scored
+// in the background, so it fills in on the next poll. This is what makes the
+// seeded agents work: migration 086 created one per existing member from what
+// they already told us, but creating a row runs no search, and without this
+// every one of them would sit at "0 potential matches" forever.
 router.get('/', authenticate, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const agents = await agentRepo.listAgents(req.user!.userId);
     res.json({ success: true, data: agents } as ApiResponse);
+    for (const a of agents) {
+      if (a.status === 'active' && a.lastMatchedAt === null) rescoreInBackground(a);
+    }
   } catch (err) { next(err); }
 });
 

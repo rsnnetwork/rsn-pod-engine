@@ -73,6 +73,31 @@ describe('GET /agents', () => {
     const res = await request(app).get('/agents');
     expect(res.status).toBe(401);
   });
+
+  // Migration 086 seeds one agent per existing member, but inserting a row runs
+  // no search. Without this, every seeded agent would read "0 potential
+  // matches" forever — which is exactly what happened on the 3 Aug deploy.
+  it('scores an agent that has never been searched, in the background', async () => {
+    mockRepo.listAgents.mockResolvedValue([agent({ lastMatchedAt: null, matchCount: 0 })]);
+    const res = await request(app).get('/agents').set('Authorization', `Bearer ${token()}`);
+    expect(res.status).toBe(200);
+    await new Promise(r => setImmediate(r));
+    expect(mockRecompute).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not rescore agents that have already run', async () => {
+    mockRepo.listAgents.mockResolvedValue([agent({ lastMatchedAt: new Date() })]);
+    await request(app).get('/agents').set('Authorization', `Bearer ${token()}`);
+    await new Promise(r => setImmediate(r));
+    expect(mockRecompute).not.toHaveBeenCalled();
+  });
+
+  it('leaves a paused agent alone even if it never ran', async () => {
+    mockRepo.listAgents.mockResolvedValue([agent({ lastMatchedAt: null, status: 'paused' })]);
+    await request(app).get('/agents').set('Authorization', `Bearer ${token()}`);
+    await new Promise(r => setImmediate(r));
+    expect(mockRecompute).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /agents', () => {
