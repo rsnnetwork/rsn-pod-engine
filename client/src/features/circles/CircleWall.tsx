@@ -15,6 +15,7 @@ import Card from '@/components/ui/Card';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
+import Linkify from '@/components/ui/Linkify';
 import api from '@/lib/api';
 import {
   isCloudinaryConfigured, uploadImageToCloudinary,
@@ -139,7 +140,9 @@ export default function CircleWall({ circleId, isMember }: { circleId: string; i
             )}
           </div>
           {p.content && (
-            <p className="text-sm text-gray-800 mt-1 whitespace-pre-wrap break-words">{p.content}</p>
+            <p className="text-sm text-gray-800 mt-1 whitespace-pre-wrap break-words">
+              <Linkify text={p.content} />
+            </p>
           )}
           {p.media.filter(m => m.type === 'image').map(m => (
             <img
@@ -283,7 +286,9 @@ function PostComments({ postId, isMember, onCommented }: { postId: string; isMem
             <p className="text-[11px] font-semibold text-gray-700">
               {c.authorName || 'Member'} <span className="font-normal text-gray-400">· {timeAgo(c.createdAt)}</span>
             </p>
-            <p className="text-xs text-gray-800 whitespace-pre-wrap break-words">{c.content}</p>
+            <p className="text-xs text-gray-800 whitespace-pre-wrap break-words">
+              <Linkify text={c.content} />
+            </p>
           </div>
         </div>
       ))}
