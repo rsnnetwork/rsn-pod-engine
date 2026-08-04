@@ -1,6 +1,6 @@
 import { test, expect, chromium, Browser, BrowserContext, Page } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
-import { gotoRetry, cleanup, wait, APP, SERVER } from '../helpers/live-ui';
+import { gotoRetry, cleanup, cleanupByPrefix, wait, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
 
 // P1 — MATCH ACCEPT, DRIVEN ENTIRELY THROUGH THE UI (30 Jul 2026 evaluation).
@@ -68,6 +68,10 @@ test.afterAll(async () => {
   await pool.query(`DELETE FROM user_pokes WHERE sender_id = ANY($1) OR recipient_id = ANY($1)`, [ids]).catch(() => {});
   await pool.query(`DELETE FROM encounter_history WHERE user_a_id = ANY($1) OR user_b_id = ANY($1)`, [ids]).catch(() => {});
   await cleanup(pool, { ids });
+  // Belt for users created inside a test (maLive, maStale, maMultiA/B): their
+  // per-test cleanup is skipped when an assertion above it fails.
+  const swept = await cleanupByPrefix(pool, 'e2etest-ma');
+  if (swept) console.log(`  swept ${swept} leftover ma* test account(s)`);
 });
 
 test('a member with no requests sees no pending section (empty state)', async () => {

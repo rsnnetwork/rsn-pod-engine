@@ -86,6 +86,30 @@ export async function skipRating(page: Page): Promise<boolean> {
 }
 
 /** Robust teardown: sessions under the pod → members → pod → users. */
+/**
+ * Sweep every account a spec created, by its email prefix.
+ *
+ * Specs that create users INSIDE a test (a late joiner, a second sender) clean
+ * them on the last line of that test — which never runs when an assertion above
+ * it fails. On 3 Aug 2026 that left 11 test accounts live in production, where
+ * they surfaced in real members' matching agents. afterAll should call this so
+ * a failed test cannot leak an account into the network.
+ *
+ * Prefix-scoped on purpose: only ever `e2etest-<spec>` emails, never a name or
+ * a LIKE that could reach a real member.
+ */
+export async function cleanupByPrefix(pool: Pool, prefix: string): Promise<number> {
+  if (!prefix.startsWith('e2etest-')) {
+    throw new Error(`refusing to sweep on "${prefix}" — must start with e2etest-`);
+  }
+  const { rows } = await pool.query<{ id: string }>(
+    `SELECT id FROM users WHERE email LIKE $1`, [`${prefix}%`]);
+  const ids = rows.map(r => r.id);
+  if (ids.length === 0) return 0;
+  await cleanup(pool, { ids });
+  return ids.length;
+}
+
 export async function cleanup(pool: Pool, opts: { ids: string[]; podId?: string }): Promise<void> {
   const { ids, podId } = opts;
   if (podId) {
@@ -103,10 +127,27 @@ export async function cleanup(pool: Pool, opts: { ids: string[]; podId?: string 
     await pool.query(`DELETE FROM audit_log WHERE actor_id=ANY($1)`, [ids]).catch(() => {});
     await pool.query(`DELETE FROM refresh_tokens WHERE user_id=ANY($1)`, [ids]).catch(() => {});
     await pool.query(`DELETE FROM notifications WHERE user_id=ANY($1)`, [ids]).catch(() => {});
+    // Wave 2: a test user that appears in someone's stored agent matches, or
+    // that owns an agent, held a foreign key that made the DELETE below fail —
+    // silently, because every statement here is best-effort. That is how 11
+    // test accounts stayed live in production on 3 Aug and turned up in real
+    // members' matches. Clear the matching layer first.
+    await pool.query(`DELETE FROM agent_matches WHERE candidate_user_id=ANY($1)`, [ids]).catch(() => {});
+    await pool.query(`DELETE FROM agent_matches WHERE agent_id IN (SELECT id FROM matching_agents WHERE user_id=ANY($1))`, [ids]).catch(() => {});
+    await pool.query(`DELETE FROM matching_agents WHERE user_id=ANY($1)`, [ids]).catch(() => {});
+    await pool.query(`DELETE FROM direct_messages WHERE from_user_id=ANY($1)`, [ids]).catch(() => {});
+    await pool.query(`DELETE FROM dm_conversations WHERE user_a_id=ANY($1) OR user_b_id=ANY($1)`, [ids]).catch(() => {});
+    await pool.query(`DELETE FROM user_pokes WHERE sender_id=ANY($1) OR recipient_id=ANY($1)`, [ids]).catch(() => {});
+    await pool.query(`DELETE FROM user_intent_profiles WHERE user_id=ANY($1)`, [ids]).catch(() => {});
+    await pool.query(`DELETE FROM onboarding_stage_events WHERE user_id=ANY($1)`, [ids]).catch(() => {});
     // Best-effort — a transient DNS/network blip during teardown must never
     // fail an otherwise-passing test (leftovers get swept by clean_ux).
     const del = await pool.query(`DELETE FROM users WHERE id=ANY($1) RETURNING id`, [ids]).catch(() => ({ rows: [] as any[] }));
     console.log(`Cleanup: ${del.rows.length} users, pod ${podId ?? '-'}`);
+    // Say so loudly rather than leaving accounts in production unnoticed.
+    if (del.rows.length < ids.length) {
+      console.warn(`  ⚠ ${ids.length - del.rows.length} test account(s) SURVIVED cleanup — sweep them before they reach real members' matches`);
+    }
   }
 }
 

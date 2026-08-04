@@ -1,6 +1,6 @@
 import { test, expect, chromium, Browser, BrowserContext, Page } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
-import { gotoRetry, cleanup, APP, SERVER } from '../helpers/live-ui';
+import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
 
 // WAVE 2 — MATCHING AGENTS (3 Aug 2026), driven through the real UI.
@@ -103,6 +103,11 @@ test.afterAll(async () => {
   await pool.query(`DELETE FROM user_pokes WHERE sender_id = ANY($1) OR recipient_id = ANY($1)`, [ids]).catch(() => {});
   await pool.query(`DELETE FROM matching_agents WHERE user_id = ANY($1)`, [ids]).catch(() => {});
   await cleanup(pool, { ids });
+  // Belt: users created INSIDE a test (the late joiner, the generalist) are
+  // cleaned on that test's last line, which never runs if an assertion above
+  // fails. Sweep the whole prefix so nothing is left in the live network.
+  const swept = await cleanupByPrefix(pool, 'e2etest-ag');
+  if (swept) console.log(`  swept ${swept} leftover ag* test account(s)`);
 });
 
 test('a member with no agents is invited to create their first one', async () => {
