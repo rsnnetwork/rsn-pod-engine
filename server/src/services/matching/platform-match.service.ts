@@ -18,7 +18,7 @@
 
 import { query } from '../../db';
 import logger from '../../config/logger';
-import { normalizeDesignation, tokenizeTerms, termOverlap } from './intent-signals';
+import { normalizeDesignation, tokenizeTerms, termOverlap, designationsWanted } from './intent-signals';
 import * as pokeService from '../poke/poke.service';
 import { UserPoke } from '../poke/poke.service';
 
@@ -91,19 +91,11 @@ export function displayRole(p: IntentProfile): string | null {
   return flatten(p.professionalRole, ', ') || p.jobTitle;
 }
 
-// Designations someone says they WANT to meet, scanned from their want-text.
-// normalizeDesignation() maps a single title to one bucket; a want-sentence
-// ("founders and investors") can name several, so scan per-bucket here.
-const WANT_DESIGNATIONS: Array<[RegExp, string, string]> = [
-  [/\b(co[-\s]?founder|founder)s?\b/, 'founder', 'founders'],
-  [/\b(investor|angel|venture|vc)s?\b/, 'investor', 'investors'],
-  [/\b(advisor|adviser|mentor)s?\b/, 'advisor', 'mentors and advisors'],
-  [/\b(consultant|freelancer)s?\b/, 'consultant', 'consultants'],
-  [/\b(ceo|chief executive)s?\b/, 'ceo', 'CEOs'],
-  [/\b(student|intern)s?\b/, 'student', 'students'],
-  [/\b(recruit|hire|hiring|talent|candidate)/, 'job_seeker', 'candidates'],
-  [/\b(job|role|work|position)\b.*\b(find|seek|look)|\b(find|seek|look)\w*\b.*\b(job|role|position)\b/, 'employer', 'people hiring'],
-];
+// The want side reads the SAME taxonomy the person side does (ROLE_TAXONOMY in
+// intent-signals). A second, rival list lived here until 3 Aug 2026: it had 8
+// buckets to that one's 12 and no developer bucket at all, so "find me
+// developers" could never score a role match and fell through to loose word
+// overlap — which is how a Developers agent surfaced a CEO.
 
 export function wantedDesignations(p: IntentProfile): Array<{ key: string; label: string }> {
   return wantedDesignationsFrom(wantSources(p));
@@ -113,12 +105,7 @@ export function wantedDesignations(p: IntentProfile): Array<{ key: string; label
 export function wantedDesignationsFrom(
   wants: Array<string | null | undefined>,
 ): Array<{ key: string; label: string }> {
-  const text = wants.filter(Boolean).join(' ').toLowerCase();
-  const out: Array<{ key: string; label: string }> = [];
-  for (const [re, key, label] of WANT_DESIGNATIONS) {
-    if (re.test(text)) out.push({ key, label });
-  }
-  return out;
+  return designationsWanted(wants.filter(Boolean).join(' '));
 }
 
 /**

@@ -42,7 +42,7 @@ beforeEach(() => {
 
 describe('recomputeAgent', () => {
   it('stores the people who fit what THIS agent is looking for', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [candidate(), candidate({ id: 'u-chef', professionalRole: ['Chef'], expertiseText: 'pastry', whatICanHelpWith: 'baking' })] });
+    mockQuery.mockResolvedValueOnce({ rows: [candidate(), candidate({ id: 'u-chef', professionalRole: ['Chef'], jobTitle: 'Pastry Chef', expertiseText: 'pastry', whatICanHelpWith: 'baking' })] });
     const n = await recomputeAgent(AGENT);
     expect(n).toBe(1);
     const [agentId, matches] = mockReplaceMatches.mock.calls[0];

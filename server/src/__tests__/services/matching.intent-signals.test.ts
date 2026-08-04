@@ -23,7 +23,11 @@ describe('normalizeDesignation', () => {
     expect(normalizeDesignation('Co-Founder & CEO')).toBe('founder');
     expect(normalizeDesignation('Managing Partner at Acme Ventures')).toBe('investor');
     expect(normalizeDesignation('Angel Investor')).toBe('investor');
-    expect(normalizeDesignation('Senior Software Engineer')).toBe('employee');
+    // Was 'employee' until 3 Aug 2026: engineers, developers, designers and
+    // analysts all shared one bucket, so nobody searching for developers could
+    // ever match one by role. Engineers are their own kind of person now.
+    expect(normalizeDesignation('Senior Software Engineer')).toBe('developer');
+    expect(normalizeDesignation('Data Analyst')).toBe('employee');
     expect(normalizeDesignation('Looking for a job')).toBe('job_seeker');
   });
   it('returns null for empty/unknown', () => {

@@ -12,28 +12,91 @@ import { MatchingParticipant } from '@rsn/shared';
 // Free-text job titles are normalised into one of these buckets so designation
 // compatibility (e.g. founder + investor) can be scored. Returns null when the
 // title does not clearly map (treated as neutral by designationAffinity).
-const DESIGNATION_RULES: Array<[RegExp, string]> = [
-  [/\b(co[-\s]?founder|founder)\b/, 'founder'],
-  [/\b(ceo|chief executive)\b/, 'ceo'],
-  [/\b(cto|cfo|coo|cmo|chief)\b/, 'executive'],
-  [/\b(investor|angel|venture|vc|general partner|managing partner|lp)\b/, 'investor'],
-  [/\b(advisor|adviser|mentor)\b/, 'advisor'],
-  [/\b(consultant|freelanc|contractor)\b/, 'consultant'],
-  [/\b(board member|board director)\b/, 'board'],
-  [/\b(owner|proprietor)\b/, 'owner'],
-  [/\b(manager|director|head of|lead|vp|vice president)\b/, 'manager'],
-  [/\b(student|intern|undergrad|graduate)\b/, 'student'],
-  [/\b(job\s?seeker|seeking|candidate|between jobs|looking for (a )?(job|role|work))\b/, 'job_seeker'],
-  [/\b(engineer|developer|designer|analyst|employee|specialist|associate|operator)\b/, 'employee'],
+/**
+ * THE role taxonomy. One list, used for both directions:
+ *   `is`    — recognising what a person IS, from their title/role
+ *   `wants` — recognising what a searcher is ASKING FOR, from their own words
+ *
+ * There used to be two rival lists that disagreed: this one had 12 buckets and
+ * filed every engineer, developer, designer and analyst under 'employee', while
+ * the want-side list in platform-match.service had 8 buckets and no developer
+ * at all. A member searching for "developers" could therefore never get a role
+ * match, so their agent fell back to loose word overlap and surfaced a CEO
+ * because the words "can" and "build" happened to appear in her profile
+ * (reported live, 3 Aug 2026).
+ *
+ * Both directions now derive from here, so the two can never drift apart again.
+ * Order matters — the first bucket that matches wins, so specific roles come
+ * before the generic ones ("Marketing Manager" is a marketer, not a manager).
+ */
+export interface RoleBucket {
+  key: string;
+  /** Plain-English plural used in match reasons: "You're looking to meet …". */
+  label: string;
+  /** Matches a person's own title or role. */
+  is: RegExp;
+  /** Matches a request for this kind of person. Defaults to `is`. */
+  wants?: RegExp;
+}
+
+export const ROLE_TAXONOMY: RoleBucket[] = [
+  { key: 'founder', label: 'founders', is: /\b(co[-\s]?founder|founder)s?\b/ },
+  { key: 'investor', label: 'investors', is: /\b(investor|angel|venture capital|vc|general partner|managing partner)s?\b/ },
+  { key: 'advisor', label: 'mentors and advisors', is: /\b(advisor|adviser|mentor)s?\b/ },
+  { key: 'board', label: 'board members', is: /\b(board member|board director)s?\b/ },
+  { key: 'developer', label: 'developers and engineers', is: /\b(developer|engineer|programmer|coder|software|full[-\s]?stack|front[-\s]?end|back[-\s]?end|devops|architect)s?\b/ },
+  { key: 'designer', label: 'designers', is: /\b(designer|ux|ui|creative director)s?\b/ },
+  { key: 'marketer', label: 'marketing people', is: /\b(marketer|marketing|growth|brand|content strategist|seo)s?\b/ },
+  { key: 'sales', label: 'sales people', is: /\b(sales|business development|bizdev|account executive)s?\b/ },
+  { key: 'hr', label: 'HR and people leads', is: /\b(hr|human resources|people (lead|ops|officer|partner)|recruit(er|ing|ment)?|talent)s?\b/ },
+  { key: 'product_manager', label: 'product and project managers', is: /\b(product manager|project manager|programme manager|program manager|product owner|scrum master)s?\b/ },
+  { key: 'manufacturer', label: 'manufacturers and suppliers', is: /\b(manufacturer|supplier|factory|fabricator|distributor)s?\b/ },
+  { key: 'consultant', label: 'consultants', is: /\b(consultant|freelanc|contractor)s?\b/ },
+  { key: 'ceo', label: 'CEOs', is: /\b(ceo|chief executive)s?\b/ },
+  { key: 'executive', label: 'executives', is: /\b(cto|cfo|coo|cmo|cso|cco|chief|c[-\s]?suite|executive)s?\b/ },
+  { key: 'owner', label: 'business owners', is: /\b(owner|proprietor)s?\b/ },
+  { key: 'manager', label: 'managers and leads', is: /\b(manager|director|head of|team lead|vp|vice president)s?\b/ },
+  { key: 'student', label: 'students', is: /\b(student|intern|undergrad|graduate)s?\b/ },
+  {
+    key: 'job_seeker', label: 'candidates',
+    is: /\b(job\s?seeker|candidate|between jobs|looking for (a )?(job|role|work))s?\b/,
+    // As a WANT, this is someone hiring: "we are recruiting", "looking to hire".
+    wants: /\b(recruit|hire|hiring|talent|candidate)s?\b/,
+  },
+  {
+    key: 'customer', label: 'customers and clients',
+    is: /\b(customer|client|buyer)s?\b/,
+  },
+  {
+    key: 'partner', label: 'partners',
+    is: /\b(partner|collaborator|reseller)s?\b/,
+  },
+  // Catch-all: a recognisable working title that fits none of the above.
+  { key: 'employee', label: 'specialists and analysts', is: /\b(analyst|employee|specialist|associate|operator|coordinator|assistant)s?\b/ },
 ];
 
+/** What a person IS, from their job title or role. */
 export function normalizeDesignation(title?: string | null): string | null {
   if (!title) return null;
   const t = title.toLowerCase();
-  for (const [re, d] of DESIGNATION_RULES) {
-    if (re.test(t)) return d;
+  for (const bucket of ROLE_TAXONOMY) {
+    if (bucket.is.test(t)) return bucket.key;
   }
   return null;
+}
+
+/**
+ * What a searcher is ASKING FOR, scanned from their own words. A sentence can
+ * name several ("founders and investors"), so every bucket is tested rather
+ * than stopping at the first.
+ */
+export function designationsWanted(text: string): Array<{ key: string; label: string }> {
+  const t = text.toLowerCase();
+  const out: Array<{ key: string; label: string }> = [];
+  for (const bucket of ROLE_TAXONOMY) {
+    if ((bucket.wants ?? bucket.is).test(t)) out.push({ key: bucket.key, label: bucket.label });
+  }
+  return out;
 }
 
 // Complementarity affinity, 0..1, symmetric. Higher = a more useful pairing.
@@ -70,10 +133,44 @@ export function designationAffinity(a?: string | null, b?: string | null): numbe
   return AFFINITY.get([a, b].sort().join('|')) ?? 0.6; // different, unlisted -> slightly positive
 }
 
+// Words that appear in almost any profile and therefore carry no matching
+// signal. Two of them agreeing is not a reason to introduce two strangers: on
+// 3 Aug 2026 a "react developer who can build my product" search surfaced a
+// CEO because "can" and "build" both hit her profile, scoring 0.467 against a
+// 0.45 bar. Specific terms (react, saas, sourdough) and role designations are
+// what should carry a match, so only genuinely generic language belongs here.
 const STOP = new Set([
-  'the', 'and', 'a', 'an', 'to', 'of', 'for', 'in', 'with', 'people', 'person',
-  'someone', 'who', 'want', 'meet', 'meeting', 'looking', 'other', 'others',
-  'more', 'my', 'me', 'their', 'they', 'are', 'is', 'at', 'on', 'or',
+  // articles, pronouns, connectives
+  'the', 'and', 'a', 'an', 'to', 'of', 'for', 'in', 'with', 'my', 'me', 'our',
+  'we', 'us', 'you', 'your', 'their', 'they', 'them', 'his', 'her', 'its',
+  'this', 'that', 'these', 'those', 'who', 'whom', 'which', 'what', 'when',
+  'where', 'why', 'how', 'are', 'is', 'was', 'were', 'be', 'been', 'being',
+  'at', 'on', 'or', 'but', 'not', 'from', 'by', 'as', 'it', 'into', 'over',
+  'out', 'up', 'down', 'about', 'than', 'then', 'so', 'if', 'all', 'any',
+  'some', 'one', 'two', 'each', 'both', 'via',
+  // generic people words
+  'people', 'person', 'someone', 'somebody', 'anyone', 'everyone', 'other',
+  'others', 'guy', 'guys', 'folks', 'member', 'members', 'individual',
+  // generic intent verbs
+  'want', 'wants', 'wanting', 'meet', 'meeting', 'looking', 'look', 'seek',
+  'seeking', 'find', 'finding', 'need', 'needs', 'needing', 'like', 'love',
+  'can', 'could', 'would', 'should', 'will', 'have', 'has', 'had', 'get',
+  'getting', 'make', 'making', 'build', 'building', 'built', 'help', 'helps',
+  'helping', 'work', 'works', 'working', 'join', 'joining', 'share', 'sharing',
+  'learn', 'learning', 'grow', 'growing', 'connect', 'connecting', 'bring',
+  'take', 'use', 'using', 'do', 'does', 'doing', 'go', 'going', 'come',
+  'start', 'starting', 'run', 'running', 'give', 'know', 'knowing',
+  // generic business nouns
+  'product', 'products', 'business', 'businesses', 'company', 'companies',
+  'thing', 'things', 'way', 'ways', 'time', 'idea', 'ideas', 'project',
+  'projects', 'team', 'teams', 'network', 'networking', 'opportunity',
+  'opportunities', 'experience', 'skills', 'service', 'services', 'solution',
+  'solutions', 'value', 'world', 'life', 'stuff', 'lot', 'lots', 'level',
+  'space', 'area', 'field', 'sector', 'side', 'part', 'kind', 'type',
+  // generic qualifiers
+  'more', 'most', 'new', 'good', 'great', 'best', 'better', 'big', 'small',
+  'also', 'just', 'very', 'really', 'much', 'many', 'well', 'own', 'next',
+  'first', 'last', 'same', 'right', 'able', 'interested', 'interesting',
 ]);
 
 /** Lowercased, de-duped word tokens (length >= 3, stopwords dropped). */
