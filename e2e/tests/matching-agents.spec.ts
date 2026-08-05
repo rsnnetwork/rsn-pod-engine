@@ -94,11 +94,16 @@ test.beforeAll(async () => {
     professional_role: ['Developer'], job_title: 'Senior React Engineer',
     expertise_text: 'react typescript node', what_i_can_help_with: 'building web products',
   });
+  // Set job_title too, not just professional_role: the matcher buckets BOTH,
+  // so leaving the factory default in place hands every fixture a second,
+  // unintended role.
   await setProfile(investor, {
-    professional_role: ['Angel Investor'], expertise_text: 'early stage saas investing',
+    professional_role: ['Angel Investor'], job_title: 'Angel Investor',
+    expertise_text: 'early stage saas investing',
   });
   await setProfile(chef, {
-    professional_role: ['Pastry Chef'], expertise_text: 'sourdough croissants',
+    professional_role: ['Pastry Chef'], job_title: 'Head Pastry Chef',
+    expertise_text: 'sourdough croissants',
   });
   browser = await chromium.launch({ headless: false });
 });
@@ -280,6 +285,9 @@ test('an introduction from one agent does not hide the person from another', asy
   expect(inDev.rows.length, 'fits the developer search').toBe(1);
   expect(inInv.rows.length, 'fits the investor search too').toBe(1);
 
+  const devBefore = await countNow(owner, devAgent.id);
+  const invBefore = await countNow(owner, invAgent.id);
+
   // Ask to meet them THROUGH the developer agent only.
   const intro = await apiAs(owner, 'POST', `/agents/${devAgent.id}/interest`, { userId: generalist.id });
   expect(intro.status).toBe(201);
@@ -295,13 +303,13 @@ test('an introduction from one agent does not hide the person from another', asy
   expect(afterDev.rows.length, 'stays on the agent that introduced them, badged').toBe(1);
   expect(afterInv.rows.length, 'and stays on the other one, still relevant there').toBe(1);
 
-  // The introduction is only OUTSTANDING on neither: it has been sent, so the
-  // person is no longer counted as someone to act on, on either agent.
-  const devCount = await countNow(owner, devAgent.id);
-  const invCount = await countNow(owner, invAgent.id);
-  expect(devCount, 'asked, so not outstanding here').toBe(0);
-  expect(invCount, 'asking once is asking — not outstanding there either').toBe(0);
-  console.log('  ✓ kept on both agents, counted as outstanding on neither.');
+  // Asked once is asked: they stop being OUTSTANDING on both agents, so each
+  // count drops by exactly one. Everyone else on those agents is untouched.
+  const devAfter = await countNow(owner, devAgent.id);
+  const invAfter = await countNow(owner, invAgent.id);
+  expect(devAfter, 'asked, so no longer outstanding here').toBe(devBefore - 1);
+  expect(invAfter, 'and not outstanding there either').toBe(invBefore - 1);
+  console.log(`  ✓ kept on both agents; counts ${devBefore}→${devAfter} and ${invBefore}→${invAfter}.`);
 
   await pool.query(`DELETE FROM user_pokes WHERE sender_id = $1 AND recipient_id = $2`, [owner.id, generalist.id]).catch(() => {});
   await cleanup(pool, { ids: [generalist.id] });

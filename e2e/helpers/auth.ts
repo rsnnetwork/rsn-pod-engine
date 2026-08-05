@@ -48,7 +48,11 @@ export async function createTestUser(
 
   await pool.query(
     `INSERT INTO users (id, email, display_name, first_name, last_name, status, role, profile_complete, onboarding_completed, onboarding_status, email_verified, company, job_title, industry, reasons_to_connect)
-     VALUES ($1, $2, $3, $4, $5, 'active', $6, true, true, $7, true, 'TestCo', 'Test Engineer', 'Tech', ARRAY['Testing']::text[])`,
+     VALUES ($1, $2, $3, $4, $5, 'active', $6, true, true, $7, true, 'TestCo', 'Test Account', 'Tech', ARRAY['Testing']::text[])`,
+    // job_title is deliberately NOT a real role. It used to be "Test Engineer",
+    // which the matcher correctly reads as an engineer — so every test account
+    // in the network silently qualified as a developer, and a Pastry Chef
+    // fixture matched a React search. Any test that needs a role sets one.
     [id, email, displayName, firstName, lastName, role, onboardingStatus]
   );
 
