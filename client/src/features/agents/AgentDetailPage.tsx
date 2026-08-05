@@ -37,9 +37,13 @@ function introState(m: AgentMatch): string | null {
 }
 
 function roleLine(m: AgentMatch): string {
-  const role = Array.isArray(m.professionalRole)
-    ? m.professionalRole.filter(Boolean).join(', ')
-    : m.professionalRole || m.jobTitle || '';
+  // professional_role is text[] and is very often an EMPTY array. Treating
+  // "is an array" as "has a role" short-circuited the job-title fallback, so a
+  // card could read "jack" — the company — directly above a reason calling him
+  // a frontend engineer. Fall through on empty, exactly as a null role does.
+  const roles = (Array.isArray(m.professionalRole) ? m.professionalRole : [m.professionalRole])
+    .filter((r): r is string => typeof r === 'string' && r.trim().length > 0);
+  const role = roles.length ? roles.join(', ') : (m.jobTitle || '');
   return [role, m.company].filter(Boolean).join(' · ');
 }
 

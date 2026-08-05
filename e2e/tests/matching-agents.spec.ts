@@ -193,8 +193,10 @@ test('several agents run at once, each with its own count', async () => {
 test('accepting an introduction keeps them on the agent, through a re-search', async () => {
   test.setTimeout(300_000);
   const accepter = await createTestUser('agAccept');
+  // EMPTY professional_role on purpose — the common real shape (jack rajaa's),
+  // and the one that used to skip the job-title fallback on the card.
   await setProfile(accepter, {
-    professional_role: ['Developer'], job_title: 'Senior React Developer',
+    professional_role: [], job_title: 'Senior React Developer',
     expertise_text: 'react and typescript',
   });
 
@@ -229,6 +231,11 @@ test('accepting an introduction keeps them on the agent, through a re-search', a
   const page = await openAs(owner, `/agents/${devAgent.id}`);
   await expect(page.getByTestId(`agent-match-state-${accepter.id}`)).toHaveText(/Connected/i, { timeout: 30_000 });
   await expect(page.getByRole('link', { name: /Open conversation/i })).toBeVisible();
+  // professional_role is text[] and is usually EMPTY. The card must fall
+  // through to the job title, not skip to the company: jack rajaa read "jack"
+  // right above a reason calling him a frontend engineer.
+  await expect(page.getByTestId(`agent-match-${accepter.id}`))
+    .toContainText(/Senior React Developer/i);
   console.log('  ✓ accepted introduction still on the agent, badged Connected.');
 
   await pool.query(`DELETE FROM encounter_history WHERE user_a_id = LEAST($1::uuid,$2::uuid) AND user_b_id = GREATEST($1::uuid,$2::uuid)`, [owner.id, accepter.id]).catch(() => {});
