@@ -23,7 +23,7 @@ const row = (over: Record<string, unknown> = {}) => ({
   id: 'a-1', user_id: 'u-1', label: 'Developers', want_text: 'senior react developers',
   intent: {}, matching_tags: ['react'], status: 'active',
   last_matched_at: null, archived_at: null,
-  created_at: new Date(), updated_at: new Date(), match_count: 3,
+  created_at: new Date(), updated_at: new Date(), match_count: 3, asked_count: 1,
   ...over,
 });
 
@@ -186,5 +186,35 @@ describe('a rescore never evicts someone you already asked', () => {
     const [sql, params] = mockQuery.mock.calls[0];
     expect(sql).toMatch(/WHERE am\.agent_id = \$1/);
     expect(params).toEqual(['a-1']);
+  });
+});
+
+// Ali, 6 Aug: "agent shows 1 still, but there were actually 2 inside". The card
+// summarises the agent, so one number could not describe it honestly.
+describe('an agent card accounts for everyone inside it', () => {
+  it('reports both the outstanding and the already-asked counts', async () => {
+    mockQuery.mockResolvedValue({ rows: [row()] });
+    const [a] = await repo.listAgents('u-1');
+    expect(a.matchCount).toBe(3);
+    expect(a.askedCount).toBe(1);
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/AS match_count/);
+    expect(sql).toMatch(/AS asked_count/);
+  });
+
+  it('splits on the same introduction test, so nobody is counted twice or lost', async () => {
+    mockQuery.mockResolvedValue({ rows: [row()] });
+    await repo.listAgents('u-1');
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM user_pokes p/);
+    expect(sql).toMatch(/AND EXISTS \(\s*SELECT 1 FROM user_pokes p/);
+    // A decline hides the person entirely, so it counts on neither side.
+    expect((sql.match(/p\.status <> 'declined'/g) ?? []).length).toBe(2);
+  });
+
+  it('carries both counts back from a status change too', async () => {
+    mockQuery.mockResolvedValue({ rows: [row({ status: 'paused' })] });
+    const a = await repo.setStatus('a-1', 'u-1', 'paused');
+    expect(a?.askedCount).toBe(1);
   });
 });

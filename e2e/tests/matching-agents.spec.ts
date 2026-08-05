@@ -279,6 +279,11 @@ test('asking someone to meet keeps them on the agent, badged, and drops the coun
   const after = await countNow(owner, devAgent.id);
   expect(after, 'no longer outstanding').toBe(before - 1);
 
+  // The card must still account for them: one number could not describe an
+  // agent holding two people (Ali, 6 Aug).
+  const dash = await openAs(owner);
+  await expect(dash.getByTestId(`agent-count-${devAgent.id}`)).toContainText(/already asked/i, { timeout: 30_000 });
+
   await pool.query(`DELETE FROM user_pokes WHERE sender_id = $1 AND recipient_id = $2`, [owner.id, stayDev.id]).catch(() => {});
   await cleanup(pool, { ids: [stayDev.id] });
 });

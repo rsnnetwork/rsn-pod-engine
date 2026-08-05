@@ -54,7 +54,7 @@ const token = (sub = 'u-1') =>
 const agent = (over: Record<string, unknown> = {}) => ({
   id: 'a-1', userId: 'u-1', label: 'Developers', wantText: 'react developers',
   matchingTags: [], status: 'active', lastMatchedAt: new Date(),
-  createdAt: new Date(), updatedAt: new Date(), matchCount: 3, ...over,
+  createdAt: new Date(), updatedAt: new Date(), matchCount: 3, askedCount: 0, ...over,
 });
 
 beforeEach(() => {

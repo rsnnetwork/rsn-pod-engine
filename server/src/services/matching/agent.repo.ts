@@ -26,8 +26,10 @@ export interface MatchingAgent {
   lastMatchedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
-  /** From agent_matches — the number the dashboard shows. */
+  /** Still worth acting on: found, active, and not yet asked. */
   matchCount: number;
+  /** Found and already reached — still on the agent, badged. */
+  askedCount: number;
 }
 
 export interface AgentMatchInput {
@@ -41,6 +43,7 @@ interface AgentRow {
   matching_tags: string[] | null; status: AgentStatus;
   last_matched_at: Date | null; created_at: Date; updated_at: Date;
   match_count?: number | string | null;
+  asked_count?: number | string | null;
 }
 
 function mapAgent(r: AgentRow): MatchingAgent {
@@ -55,33 +58,39 @@ function mapAgent(r: AgentRow): MatchingAgent {
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     matchCount: Number(r.match_count ?? 0),
+    askedCount: Number(r.asked_count ?? 0),
   };
 }
 
 /**
- * The headline number counts people you can still ACT on: active members you
- * have not already asked to meet. Two bugs lived in the old `COUNT(*)`:
- *  - it counted deactivated members that `listMatches` then filtered out, so
- *    the dashboard and the agent screen disagreed;
- *  - once someone was asked they stayed in the count, so "3 potential matches"
- *    could be three people already sitting in your sent list.
- * They still appear on the agent, badged with where the introduction got to —
- * they are simply not counted as outstanding.
+ * Two numbers, because one could not describe the card honestly. `match_count`
+ * is who is still worth acting on; `asked_count` is who you already reached and
+ * who therefore still sits on the agent, badged. Showing only the first meant a
+ * card read "1 potential match" while the agent it summarised held two people —
+ * exactly the confusion Ali hit on 6 Aug.
+ *
+ * `negate` picks which side of the introduction test the count lands on. Both
+ * ignore deactivated members, which listMatches has always filtered — counting
+ * them was how the dashboard and the agent screen came to disagree.
  */
-const actionableCount = (agent: string) => `
+const countExpr = (agent: string, negate: boolean) => `
   (SELECT COUNT(*)
      FROM agent_matches m
      JOIN users cu ON cu.id = m.candidate_user_id AND cu.status = 'active'
     WHERE m.agent_id = ${agent}.id
-      AND NOT EXISTS (
+      AND ${negate ? 'NOT EXISTS' : 'EXISTS'} (
         SELECT 1 FROM user_pokes p
-         WHERE (p.sender_id = ${agent}.user_id AND p.recipient_id = m.candidate_user_id)
-            OR (p.sender_id = m.candidate_user_id AND p.recipient_id = ${agent}.user_id)))`;
+         WHERE p.status <> 'declined'
+           AND ((p.sender_id = ${agent}.user_id AND p.recipient_id = m.candidate_user_id)
+             OR (p.sender_id = m.candidate_user_id AND p.recipient_id = ${agent}.user_id))))`;
+
+const counts = (agent: string) =>
+  `${countExpr(agent, true)} AS match_count, ${countExpr(agent, false)} AS asked_count`;
 
 const SELECT_WITH_COUNT = `
   SELECT a.id, a.user_id, a.label, a.want_text, a.matching_tags, a.status,
          a.last_matched_at, a.created_at, a.updated_at,
-         ${actionableCount('a')} AS match_count
+         ${counts('a')}
   FROM matching_agents a`;
 
 /**
@@ -119,7 +128,7 @@ export async function createAgent(
     `INSERT INTO matching_agents (user_id, label, want_text, matching_tags)
      VALUES ($1, $2, $3, $4)
      RETURNING id, user_id, label, want_text, matching_tags, status,
-               last_matched_at, created_at, updated_at, 0 AS match_count`,
+               last_matched_at, created_at, updated_at, 0 AS match_count, 0 AS asked_count`,
     [userId, input.label.trim(), input.wantText.trim(), input.matchingTags ?? []],
   );
   return mapAgent(r.rows[0]);
@@ -139,7 +148,7 @@ export async function updateAgent(
       WHERE id = $1 AND user_id = $2
       RETURNING id, user_id, label, want_text, matching_tags, status,
                 last_matched_at, created_at, updated_at,
-                ${actionableCount('matching_agents')} AS match_count`,
+                ${counts('matching_agents')}`,
     [agentId, userId, input.label?.trim() ?? null, input.wantText?.trim() ?? null],
   );
   return r.rows[0] ? mapAgent(r.rows[0]) : null;
@@ -159,7 +168,7 @@ export async function setStatus(
       WHERE id = $1 AND user_id = $2
       RETURNING id, user_id, label, want_text, matching_tags, status,
                 last_matched_at, created_at, updated_at,
-                ${actionableCount('matching_agents')} AS match_count`,
+                ${counts('matching_agents')}`,
     [agentId, userId, status],
   );
   return r.rows[0] ? mapAgent(r.rows[0]) : null;

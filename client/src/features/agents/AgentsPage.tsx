@@ -24,6 +24,8 @@ export interface Agent {
   wantText: string;
   status: 'active' | 'paused' | 'archived';
   matchCount: number;
+  /** People this agent found that you already reached — still on it, badged. */
+  askedCount: number;
   lastMatchedAt: string | null;
 }
 
@@ -171,11 +173,16 @@ export default function AgentsPage() {
                     )}
                   </div>
                   <p className="mt-0.5 line-clamp-2 text-xs text-gray-500">{a.wantText}</p>
-                  <p
-                    className={`mt-2 text-sm font-medium ${a.matchCount > 0 ? 'text-rsn-red' : 'text-gray-400'}`}
-                    data-testid={`agent-count-${a.id}`}
-                  >
-                    {a.matchCount} {a.matchCount === 1 ? 'potential match' : 'potential matches'}
+                  {/* Both numbers, or the card lies about what is inside it:
+                      "1 potential match" on an agent holding two people reads
+                      as a bug, however defensible the definition. */}
+                  <p className="mt-2 text-sm font-medium" data-testid={`agent-count-${a.id}`}>
+                    <span className={a.matchCount > 0 ? 'text-rsn-red' : 'text-gray-400'}>
+                      {a.matchCount} {a.matchCount === 1 ? 'potential match' : 'potential matches'}
+                    </span>
+                    {a.askedCount > 0 && (
+                      <span className="text-gray-400"> · {a.askedCount} already asked</span>
+                    )}
                   </p>
                 </Link>
                 <div className="flex shrink-0 items-center gap-1">

@@ -228,7 +228,7 @@ export default function AgentDetailPage() {
       {inProgress.length > 0 && (
         <>
           <p className="mb-2 mt-6 text-xs font-semibold uppercase tracking-wider text-gray-400">
-            Already asked
+            Already asked ({inProgress.length})
           </p>
           <div className="flex flex-col gap-3">
             {inProgress.map(m => renderMatch(m))}
