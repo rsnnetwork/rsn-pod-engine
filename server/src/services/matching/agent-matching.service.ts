@@ -29,11 +29,16 @@ const CANDIDATE_COLUMNS = `
 
 /**
  * Who this agent may surface. Global exclusions (already met, blocked either
- * way) plus the per-agent one: an introduction already sent FROM THIS AGENT.
- * A poke sent from a different agent, or from a profile, leaves the person
- * available here — that is decision D3.
+ * way) plus a declined introduction — a decline is the one answer that means
+ * "not this person", so it is honoured in both directions.
+ *
+ * Someone you have merely ASKED stays in the pool. Dropping them here (the
+ * original decision D3) is what made a person disappear from the agent that
+ * found them the moment you asked to meet them; they now stay put, badged with
+ * where the introduction got to (see agent.repo listMatches), and are simply
+ * not counted as still outstanding.
  */
-async function loadCandidatesForAgent(agentId: string, ownerId: string): Promise<IntentProfile[]> {
+async function loadCandidatesForAgent(ownerId: string): Promise<IntentProfile[]> {
   const r = await query<IntentProfile>(
     `SELECT ${CANDIDATE_COLUMNS}
        FROM users u
@@ -49,10 +54,10 @@ async function loadCandidatesForAgent(agentId: string, ownerId: string): Promise
               OR (b.blocker_id = u.id AND b.blocked_id = $1))
         AND NOT EXISTS (
           SELECT 1 FROM user_pokes p
-           WHERE p.agent_id = $2
+           WHERE p.status = 'declined'
              AND ((p.sender_id = $1 AND p.recipient_id = u.id)
                OR (p.sender_id = u.id AND p.recipient_id = $1)))`,
-    [ownerId, agentId],
+    [ownerId],
   );
   return r.rows;
 }
@@ -70,7 +75,7 @@ export async function recomputeAgent(agent: {
       await agentRepo.replaceMatches(agent.id, []);
       return 0;
     }
-    const candidates = await loadCandidatesForAgent(agent.id, agent.userId);
+    const candidates = await loadCandidatesForAgent(agent.userId);
     const scored = candidates
       .map(c => ({ c, fit: scoreWants([agent.wantText], c) }))
       .filter(x => x.fit.score >= MATCH_THRESHOLD)

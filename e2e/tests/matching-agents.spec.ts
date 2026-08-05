@@ -78,6 +78,13 @@ async function countFor(u: TestUser, agentId: string, timeoutMs = 45_000): Promi
   return last;
 }
 
+/** Read an agent's count once, without waiting for it to become non-zero. */
+async function countNow(u: TestUser, agentId: string): Promise<number> {
+  const r = await apiAs(u, 'GET', '/agents');
+  const a = (r.json?.data ?? []).find((x: any) => x.id === agentId);
+  return a?.matchCount ?? -1;
+}
+
 test.beforeAll(async () => {
   owner = await createTestUser('agOwner');
   dev = await createTestUser('agDev');
@@ -175,6 +182,81 @@ test('several agents run at once, each with its own count', async () => {
   console.log('  ✓ two concurrent agents, each holding its own matches.');
 });
 
+// Ali, 5 Aug: he asked jack rajaa to meet through his Developers agent and jack
+// disappeared from it. Asking someone is not an answer — they stay, carrying
+// the state of the introduction, and stop counting as outstanding.
+test('asking someone to meet keeps them on the agent, badged, and drops the count', async () => {
+  test.setTimeout(240_000);
+  const stayDev = await createTestUser('agStay');
+  await setProfile(stayDev, {
+    professional_role: ['Developer'],
+    job_title: 'Senior React Developer',
+    expertise_text: 'react and typescript',
+  });
+
+  const devAgent = await agentByLabel(owner, 'Developers');
+  await apiAs(owner, 'POST', `/agents/${devAgent.id}/status`, { status: 'active' });
+  const before = await countFor(owner, devAgent.id);
+  expect(before, 'the new developer is an outstanding match').toBeGreaterThan(0);
+
+  const page = await openAs(owner, `/agents/${devAgent.id}`);
+  const card = page.getByTestId(`agent-match-${stayDev.id}`);
+  await expect(card).toBeVisible({ timeout: 30_000 });
+  await card.getByRole('button', { name: 'I want to meet' }).click();
+
+  // Still on the agent, now with its state — not deleted.
+  await expect(card).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId(`agent-match-state-${stayDev.id}`)).toHaveText(/Invite sent/i, { timeout: 20_000 });
+  await expect(card.getByRole('button', { name: 'I want to meet' })).toHaveCount(0);
+  await expect(page.getByText('Already asked')).toBeVisible();
+
+  const stillStored = await pool.query(
+    `SELECT 1 FROM agent_matches WHERE agent_id = $1 AND candidate_user_id = $2`, [devAgent.id, stayDev.id]);
+  expect(stillStored.rows.length, 'the match row survives the introduction').toBe(1);
+
+  // The headline count drops, because it counts people not yet asked.
+  const after = await countNow(owner, devAgent.id);
+  expect(after, 'no longer outstanding').toBe(before - 1);
+
+  await pool.query(`DELETE FROM user_pokes WHERE sender_id = $1 AND recipient_id = $2`, [owner.id, stayDev.id]).catch(() => {});
+  await cleanup(pool, { ids: [stayDev.id] });
+});
+
+// The introduction has to state the cause it actually came from. jack rajaa was
+// told "You're looking to meet founders — Raja Ali King is a Founder": true of
+// his own profile, and the wrong reason — what reached him was a DEVELOPERS
+// agent.
+test('the introduction names the agent that caused it, in the recipient\'s voice', async () => {
+  test.setTimeout(240_000);
+  const voiceDev = await createTestUser('agVoice');
+  await setProfile(voiceDev, {
+    professional_role: ['Manager'],
+    job_title: 'frontend engineer',
+    // He wants founders, exactly like jack. This must NOT become the reason.
+    who_i_want_to_meet: 'founders building something new',
+  });
+
+  const devAgent = await agentByLabel(owner, 'Developers');
+  await apiAs(owner, 'POST', `/agents/${devAgent.id}/status`, { status: 'active' });
+  await countFor(owner, devAgent.id);
+
+  const intro = await apiAs(owner, 'POST', `/agents/${devAgent.id}/interest`, { userId: voiceDev.id });
+  expect(intro.status).toBe(201);
+
+  const msg = await pool.query<{ message: string }>(
+    `SELECT message FROM user_pokes WHERE sender_id = $1 AND recipient_id = $2
+      ORDER BY created_at DESC LIMIT 1`, [owner.id, voiceDev.id]);
+  const text = msg.rows[0]?.message ?? '';
+  console.log(`  introduction sent: "${text}"`);
+  expect(text, 'names the sender as the one looking').toMatch(/is looking to meet/);
+  expect(text, 'addressed to the reader').not.toMatch(/^You're looking to meet/);
+  expect(text, 'the cause was the developer agent').toMatch(/developers and engineers/i);
+  expect(text, 'his own want must not be passed off as the cause').not.toMatch(/founders/i);
+
+  await pool.query(`DELETE FROM user_pokes WHERE sender_id = $1 AND recipient_id = $2`, [owner.id, voiceDev.id]).catch(() => {});
+  await cleanup(pool, { ids: [voiceDev.id] });
+});
+
 test('an introduction from one agent does not hide the person from another', async () => {
   test.setTimeout(240_000);
   // Someone who fits BOTH searches.
@@ -210,9 +292,16 @@ test('an introduction from one agent does not hide the person from another', asy
     `SELECT 1 FROM agent_matches WHERE agent_id = $1 AND candidate_user_id = $2`, [devAgent.id, generalist.id]);
   const afterInv = await pool.query(
     `SELECT 1 FROM agent_matches WHERE agent_id = $1 AND candidate_user_id = $2`, [invAgent.id, generalist.id]);
-  expect(afterDev.rows.length, 'gone from the agent that introduced them').toBe(0);
-  expect(afterInv.rows.length, 'STILL there for the other reason (D3)').toBe(1);
-  console.log('  ✓ per-agent exclusion: hidden where introduced, kept where still relevant.');
+  expect(afterDev.rows.length, 'stays on the agent that introduced them, badged').toBe(1);
+  expect(afterInv.rows.length, 'and stays on the other one, still relevant there').toBe(1);
+
+  // The introduction is only OUTSTANDING on neither: it has been sent, so the
+  // person is no longer counted as someone to act on, on either agent.
+  const devCount = await countNow(owner, devAgent.id);
+  const invCount = await countNow(owner, invAgent.id);
+  expect(devCount, 'asked, so not outstanding here').toBe(0);
+  expect(invCount, 'asking once is asking — not outstanding there either').toBe(0);
+  console.log('  ✓ kept on both agents, counted as outstanding on neither.');
 
   await pool.query(`DELETE FROM user_pokes WHERE sender_id = $1 AND recipient_id = $2`, [owner.id, generalist.id]).catch(() => {});
   await cleanup(pool, { ids: [generalist.id] });

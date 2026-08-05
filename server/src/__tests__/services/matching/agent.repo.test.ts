@@ -125,3 +125,45 @@ describe('listActiveAgentsForMatching', () => {
     expect(sql).toMatch(/status = 'active'/);
   });
 });
+
+// ─── Someone you already asked stays on the agent (5 Aug 2026) ───────────────
+//
+// Ali asked jack rajaa to meet through his Developers agent and jack vanished
+// from it. Deleting the match was deliberate (decision D3) and reads as a bug
+// every time: nothing distinguishes "never matched" from "asked an hour ago".
+describe('already-asked people keep their place, badged', () => {
+  it('reports where the introduction got to, and who sent it', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    await repo.listMatches('a-1');
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/"pokeStatus"/);
+    expect(sql).toMatch(/"pokeSentByOwner"/);
+    // Newest poke wins, so a re-ask does not report a stale state.
+    expect(sql).toMatch(/ORDER BY pk\.created_at DESC/);
+  });
+
+  it('hides a declined introduction — that one IS an answer', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    await repo.listMatches('a-1');
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/p\.status IS NULL OR p\.status <> 'declined'/);
+  });
+
+  it('counts only people still worth acting on', async () => {
+    mockQuery.mockResolvedValue({ rows: [row()] });
+    await repo.listAgents('u-1');
+    const [sql] = mockQuery.mock.calls[0];
+    // Already asked: not outstanding, so not in the headline number.
+    expect(sql).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM user_pokes/);
+    // Deactivated members were counted but never listed, so the dashboard and
+    // the agent screen could disagree on the same agent.
+    expect(sql).toMatch(/cu\.status = 'active'/);
+  });
+
+  it('applies the same count when an agent is paused or archived', async () => {
+    mockQuery.mockResolvedValue({ rows: [row({ status: 'archived' })] });
+    await repo.setStatus('a-1', 'u-1', 'archived');
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM user_pokes/);
+  });
+});

@@ -58,10 +58,30 @@ function mapAgent(r: AgentRow): MatchingAgent {
   };
 }
 
+/**
+ * The headline number counts people you can still ACT on: active members you
+ * have not already asked to meet. Two bugs lived in the old `COUNT(*)`:
+ *  - it counted deactivated members that `listMatches` then filtered out, so
+ *    the dashboard and the agent screen disagreed;
+ *  - once someone was asked they stayed in the count, so "3 potential matches"
+ *    could be three people already sitting in your sent list.
+ * They still appear on the agent, badged with where the introduction got to —
+ * they are simply not counted as outstanding.
+ */
+const actionableCount = (agent: string) => `
+  (SELECT COUNT(*)
+     FROM agent_matches m
+     JOIN users cu ON cu.id = m.candidate_user_id AND cu.status = 'active'
+    WHERE m.agent_id = ${agent}.id
+      AND NOT EXISTS (
+        SELECT 1 FROM user_pokes p
+         WHERE (p.sender_id = ${agent}.user_id AND p.recipient_id = m.candidate_user_id)
+            OR (p.sender_id = m.candidate_user_id AND p.recipient_id = ${agent}.user_id)))`;
+
 const SELECT_WITH_COUNT = `
   SELECT a.id, a.user_id, a.label, a.want_text, a.matching_tags, a.status,
          a.last_matched_at, a.created_at, a.updated_at,
-         (SELECT COUNT(*) FROM agent_matches m WHERE m.agent_id = a.id) AS match_count
+         ${actionableCount('a')} AS match_count
   FROM matching_agents a`;
 
 /**
@@ -119,7 +139,7 @@ export async function updateAgent(
       WHERE id = $1 AND user_id = $2
       RETURNING id, user_id, label, want_text, matching_tags, status,
                 last_matched_at, created_at, updated_at,
-                (SELECT COUNT(*) FROM agent_matches m WHERE m.agent_id = matching_agents.id) AS match_count`,
+                ${actionableCount('matching_agents')} AS match_count`,
     [agentId, userId, input.label?.trim() ?? null, input.wantText?.trim() ?? null],
   );
   return r.rows[0] ? mapAgent(r.rows[0]) : null;
@@ -139,7 +159,7 @@ export async function setStatus(
       WHERE id = $1 AND user_id = $2
       RETURNING id, user_id, label, want_text, matching_tags, status,
                 last_matched_at, created_at, updated_at,
-                (SELECT COUNT(*) FROM agent_matches m WHERE m.agent_id = matching_agents.id) AS match_count`,
+                ${actionableCount('matching_agents')} AS match_count`,
     [agentId, userId, status],
   );
   return r.rows[0] ? mapAgent(r.rows[0]) : null;
@@ -180,19 +200,45 @@ export interface StoredAgentMatch {
   professionalRole: unknown;
   jobTitle: string | null;
   company: string | null;
+  /** Where an introduction between these two got to, if one was ever sent. */
+  pokeStatus: 'pending' | 'accepted' | 'declined' | null;
+  /** True when the owner sent it; false when the candidate did. */
+  pokeSentByOwner: boolean | null;
 }
 
-/** The people one agent found, best first — the agent detail screen. */
+/**
+ * The people one agent found, best first — the agent detail screen.
+ *
+ * Someone you already asked STAYS on the list, carrying the state of that
+ * introduction. Deleting them (the original decision D3) meant a person you had
+ * just asked to meet silently vanished from the agent that found them, which
+ * reads as a bug every time: there is no way to tell "we never matched" from
+ * "you asked them an hour ago". Declines are the one exception — that is a real
+ * "not this person" answer, so it is honoured everywhere.
+ */
 export async function listMatches(agentId: string, limit = 25): Promise<StoredAgentMatch[]> {
   const r = await query<StoredAgentMatch>(
     `SELECT m.candidate_user_id AS "candidateUserId", m.score, m.reason,
             u.display_name AS "displayName", u.avatar_url AS "avatarUrl",
             u.professional_role AS "professionalRole", u.job_title AS "jobTitle",
-            u.company
+            u.company,
+            p.status AS "pokeStatus",
+            CASE WHEN p.id IS NULL THEN NULL ELSE p.sender_id = a.user_id END AS "pokeSentByOwner"
        FROM agent_matches m
+       JOIN matching_agents a ON a.id = m.agent_id
        JOIN users u ON u.id = m.candidate_user_id
-      WHERE m.agent_id = $1 AND u.status = 'active'
-      ORDER BY m.score DESC
+       LEFT JOIN LATERAL (
+         SELECT pk.id, pk.status, pk.sender_id
+           FROM user_pokes pk
+          WHERE (pk.sender_id = a.user_id AND pk.recipient_id = m.candidate_user_id)
+             OR (pk.sender_id = m.candidate_user_id AND pk.recipient_id = a.user_id)
+          ORDER BY pk.created_at DESC
+          LIMIT 1
+       ) p ON TRUE
+      WHERE m.agent_id = $1
+        AND u.status = 'active'
+        AND (p.status IS NULL OR p.status <> 'declined')
+      ORDER BY (p.id IS NOT NULL), m.score DESC
       LIMIT $2`,
     [agentId, limit],
   );

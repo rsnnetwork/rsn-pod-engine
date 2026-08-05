@@ -125,9 +125,10 @@ router.post('/:id/interest', authenticate, validate(interestSchema), async (req:
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'You cannot introduce yourself');
     }
     const poke = await platformMatch.expressInterest(req.user!.userId, req.body.userId, agent.id);
-    // Drop them from THIS agent's list right away so the count is honest
-    // before the next rescore.
-    await agentRepo.removeMatch(agent.id, req.body.userId).catch(() => {});
+    // They STAY on the agent, now carrying the state of this introduction.
+    // Removing them (the original decision D3) made someone vanish from the
+    // agent that found them the second you asked to meet them. The count drops
+    // by one on its own, because it counts only people not yet asked.
     res.status(201).json({ success: true, data: poke } as ApiResponse);
   } catch (err) { next(err); }
 });

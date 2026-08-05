@@ -127,6 +127,69 @@ export function scoreWants(
   wants: Array<string | null | undefined>,
   other: IntentProfile,
 ): { score: number; reason: string } {
+  const f = analyzeWants(wants, other);
+  return { score: f.score, reason: f.score <= 0 ? '' : formatForSeeker(f) };
+}
+
+/**
+ * The SAME fit, addressed to the person who was found rather than the person
+ * searching. An introduction is read by the recipient, so the sentence has to
+ * name the sender as the one doing the looking:
+ *
+ *   seeker:    "You're looking to meet developers — jack rajaa is a frontend engineer"
+ *   recipient: "Raja Ali King is looking to meet developers — you're a frontend engineer"
+ *
+ * Until now the introduction dodged this by scoring the RECIPIENT's wants
+ * instead, which reads fine but states the wrong cause: jack was told "you're
+ * looking to meet founders" when what actually reached him was Ali's Developers
+ * agent. Same facts, wrong reason — so the flip is done in the wording, not by
+ * swapping whose want it is.
+ */
+export function scoreWantsForRecipient(
+  wants: Array<string | null | undefined>,
+  recipient: IntentProfile,
+  senderName: string,
+): { score: number; reason: string } {
+  const f = analyzeWants(wants, recipient);
+  return { score: f.score, reason: f.score <= 0 ? '' : formatForRecipient(f, senderName) };
+}
+
+interface WantFit {
+  score: number;
+  /** "developers and engineers" — the bucket that matched, if any. */
+  designationLabel: string | null;
+  /** The title that actually produced the hit ("frontend engineer"). */
+  matchedTitle: string | null;
+  sharedTerms: string[];
+  name: string;
+}
+
+const article = (w: string) => (/^[aeiou]/i.test(w) ? 'an' : 'a');
+
+function formatForSeeker(f: WantFit): string {
+  if (f.designationLabel && f.matchedTitle) {
+    return `You're looking to meet ${f.designationLabel} — ${f.name} is ${article(f.matchedTitle)} ${f.matchedTitle}`;
+  }
+  if (f.designationLabel) return `You're looking to meet ${f.designationLabel} — ${f.name} fits`;
+  return f.sharedTerms.length
+    ? `What you're looking for matches their profile: ${f.sharedTerms.join(', ')}`
+    : `Their profile matches what you're looking for`;
+}
+
+function formatForRecipient(f: WantFit, senderName: string): string {
+  if (f.designationLabel && f.matchedTitle) {
+    return `${senderName} is looking to meet ${f.designationLabel} — you're ${article(f.matchedTitle)} ${f.matchedTitle}`;
+  }
+  if (f.designationLabel) return `${senderName} is looking to meet ${f.designationLabel} — you fit`;
+  return f.sharedTerms.length
+    ? `What ${senderName} is looking for matches your profile: ${f.sharedTerms.join(', ')}`
+    : `Your profile matches what ${senderName} is looking for`;
+}
+
+function analyzeWants(
+  wants: Array<string | null | undefined>,
+  other: IntentProfile,
+): WantFit {
   const wantTokens = tokenizeTerms(wants);
   const offerTokens = tokenizeTerms(offerSources(other));
   const overlap = termOverlap(wantTokens, offerTokens);
@@ -154,25 +217,22 @@ export function scoreWants(
   const matchedTitle = designationHit ? titleByDesignation.get(designationHit.key)! : null;
 
   const score = 0.7 * overlap + (designationHit ? 0.6 : 0);
-  if (score <= 0) return { score: 0, reason: '' };
-
   const name = other.displayName || 'They';
   // Name the title that actually matched; fall back to their headline role.
   const role = matchedTitle || displayRole(other);
-  let reason: string;
-  if (designationHit && role) {
-    reason = `You're looking to meet ${designationHit.label} — ${name} is ${/^[aeiou]/i.test(role) ? 'an' : 'a'} ${role}`;
-  } else if (designationHit) {
-    reason = `You're looking to meet ${designationHit.label} — ${name} fits`;
-  } else {
-    const shared = wantTokens.filter(w =>
+  const shared = designationHit
+    ? []
+    : wantTokens.filter(w =>
       offerTokens.some(o => o === w || (w.length >= 4 && o.includes(w)) || (o.length >= 4 && w.includes(o)))
     ).slice(0, 3);
-    reason = shared.length
-      ? `What you're looking for matches their profile: ${shared.join(', ')}`
-      : `Their profile matches what you're looking for`;
-  }
-  return { score: Math.min(1, score), reason };
+
+  return {
+    score: Math.min(1, score),
+    designationLabel: designationHit ? designationHit.label : null,
+    matchedTitle: designationHit && role ? role : null,
+    sharedTerms: shared,
+    name,
+  };
 }
 
 // ── Data access ──────────────────────────────────────────────────────────────
@@ -282,21 +342,42 @@ export async function expressInterest(
   const [me, target] = await Promise.all([loadProfile(userId), loadProfile(targetUserId)]);
   let message = 'We think you two should meet.';
   if (me && target) {
-    // The message is read by the RECIPIENT, so it must be written from THEIR
-    // perspective. If their own wants fit the sender, say so ("You're looking
-    // to meet X — SENDER is a Y"). If they never stated wants, the sender-side
-    // reason would read backwards to them ("You're looking to meet investors"
-    // about someone who never said that — caught on the 17 Jul prod run), so
-    // fall back to a neutral sentence instead.
-    const toRecipient = scoreFit(target, me);
-    if (toRecipient.reason) {
-      message = `${toRecipient.reason}. We think you two should meet.`;
-    } else {
-      const myName = me.displayName || 'This member';
-      message = `${myName} thinks you fit what they're looking for. We think you two should meet.`;
-    }
+    const senderName = me.displayName || 'This member';
+    // Say WHY this introduction exists, strongest known cause first.
+    //
+    // 1. An agent sent it → that agent is the cause, and nothing else may
+    //    stand in for it. Reading the recipient's own wants instead (what this
+    //    did until 5 Aug) yields a true sentence about the wrong thing: jack
+    //    rajaa was told "you're looking to meet founders" when what actually
+    //    reached him was Ali's Developers agent.
+    // 2. No agent, but the sender stated who they want → that is the cause.
+    // 3. Neither, but the recipient's own want fits the sender → the best
+    //    honest explanation of the fit that is left, and useful to them.
+    // 4. Nothing to say → a neutral sentence, never an invented reason.
+    const agentWant = agentId ? await agentWantText(agentId) : null;
+    const fromSender = scoreWantsForRecipient(
+      agentWant ? [agentWant] : wantSources(me), target, senderName,
+    );
+    const toRecipient = agentWant ? { reason: '' } : scoreFit(target, me);
+    const reason = fromSender.reason || toRecipient.reason;
+    message = reason
+      ? `${reason}. We think you two should meet.`
+      : `${senderName} thinks you fit what they're looking for. We think you two should meet.`;
   }
   return pokeService.sendPoke(userId, targetUserId, message.slice(0, 500), agentId);
+}
+
+/** The want-text of one agent, for wording the introduction it produced. */
+async function agentWantText(agentId: string): Promise<string | null> {
+  try {
+    const r = await query<{ want_text: string | null }>(
+      `SELECT want_text FROM matching_agents WHERE id = $1`,
+      [agentId],
+    );
+    return r.rows[0]?.want_text ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**

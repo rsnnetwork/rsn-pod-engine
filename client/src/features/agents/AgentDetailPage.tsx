@@ -25,6 +25,15 @@ interface AgentMatch {
   professionalRole: string[] | string | null;
   jobTitle: string | null;
   company: string | null;
+  pokeStatus: 'pending' | 'accepted' | 'declined' | null;
+  pokeSentByOwner: boolean | null;
+}
+
+/** Where an introduction with this person stands, in plain words. */
+function introState(m: AgentMatch): string | null {
+  if (!m.pokeStatus) return null;
+  if (m.pokeStatus === 'accepted') return 'Connected';
+  return m.pokeSentByOwner ? 'Invite sent' : 'They asked to meet you';
 }
 
 function roleLine(m: AgentMatch): string {
@@ -67,7 +76,8 @@ export default function AgentDetailPage() {
     onSuccess: (_d, userId) => {
       setRequested(prev => new Set(prev).add(userId));
       addToast('Introduction requested', 'success');
-      qc.invalidateQueries({ queryKey: ['agents'] });
+      qc.invalidateQueries({ queryKey: ['agent', id] });
+      qc.invalidateQueries({ queryKey: ['agents'], exact: false });
     },
     onError: (err: any) => addToast(err?.response?.data?.error?.message || 'Could not send that', 'error'),
   });
@@ -82,6 +92,61 @@ export default function AgentDetailPage() {
   }
 
   const { agent, matches } = data;
+  // `requested` covers the moment between clicking and the next refetch, so a
+  // card never jumps back to an un-asked state for a few seconds.
+  const asked = (m: AgentMatch) => Boolean(m.pokeStatus) || requested.has(m.candidateUserId);
+  const outstanding = matches.filter(m => !asked(m));
+  const inProgress = matches.filter(asked);
+
+  const renderMatch = (m: AgentMatch) => {
+    const state = introState(m) ?? (requested.has(m.candidateUserId) ? 'Invite sent' : null);
+    return (
+      <Card key={m.candidateUserId} className="!p-4" data-testid={`agent-match-${m.candidateUserId}`}>
+        <div className="flex items-start gap-3">
+          <Avatar src={m.avatarUrl || undefined} name={m.displayName || 'Member'} size="md" />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <Link to={`/profile/${m.candidateUserId}`} className="truncate text-sm font-semibold text-[#1a1a2e] hover:underline">
+                {m.displayName || 'A member'}
+              </Link>
+              {state && (
+                <span
+                  data-testid={`agent-match-state-${m.candidateUserId}`}
+                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${
+                    m.pokeStatus === 'accepted' ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'
+                  }`}
+                >
+                  {state}
+                </span>
+              )}
+            </div>
+            <p className="truncate text-xs text-gray-500">{roleLine(m)}</p>
+            <p className="mt-1 text-xs text-gray-600">{m.reason}</p>
+          </div>
+        </div>
+        {m.pokeStatus === 'accepted' ? (
+          <Link
+            to="/messages"
+            className="mt-3 flex min-h-[44px] w-full items-center justify-center rounded-lg border border-gray-300 text-sm font-medium text-[#1a1a2e] hover:bg-gray-50"
+          >
+            Open conversation
+          </Link>
+        ) : state ? (
+          <p className="mt-3 text-center text-xs text-gray-400">
+            {m.pokeSentByOwner === false ? 'Waiting on you in Messages' : 'Waiting for them to reply'}
+          </p>
+        ) : (
+          <Button
+            onClick={() => interestMutation.mutate(m.candidateUserId)}
+            disabled={interestMutation.isPending}
+            className="mt-3 min-h-[44px] w-full justify-center"
+          >
+            I want to meet
+          </Button>
+        )}
+      </Card>
+    );
+  };
 
   return (
     <div className="mx-auto w-full max-w-3xl">
@@ -135,41 +200,36 @@ export default function AgentDetailPage() {
       </Card>
 
       <p className="mb-2 mt-5 text-xs font-semibold uppercase tracking-wider text-gray-400">
-        {matches.length} {matches.length === 1 ? 'potential match' : 'potential matches'}
+        {outstanding.length} {outstanding.length === 1 ? 'potential match' : 'potential matches'}
       </p>
 
-      {matches.length === 0 ? (
+      {outstanding.length === 0 ? (
         <Card className="!p-8 text-center">
           <Search className="mx-auto h-8 w-8 text-gray-300" />
-          <p className="mt-3 text-sm font-medium text-[#1a1a2e]">Nobody fits this yet</p>
+          <p className="mt-3 text-sm font-medium text-[#1a1a2e]">
+            {inProgress.length > 0 ? 'Nobody new right now' : 'Nobody fits this yet'}
+          </p>
           <p className="mx-auto mt-1 max-w-sm text-sm text-gray-500">
             This agent keeps searching. You will be told the moment someone who fits joins.
           </p>
         </Card>
       ) : (
         <div className="flex flex-col gap-3">
-          {matches.map(m => (
-            <Card key={m.candidateUserId} className="!p-4" data-testid={`agent-match-${m.candidateUserId}`}>
-              <div className="flex items-start gap-3">
-                <Avatar src={m.avatarUrl || undefined} name={m.displayName || 'Member'} size="md" />
-                <div className="min-w-0 flex-1">
-                  <Link to={`/profile/${m.candidateUserId}`} className="truncate text-sm font-semibold text-[#1a1a2e] hover:underline">
-                    {m.displayName || 'A member'}
-                  </Link>
-                  <p className="truncate text-xs text-gray-500">{roleLine(m)}</p>
-                  <p className="mt-1 text-xs text-gray-600">{m.reason}</p>
-                </div>
-              </div>
-              <Button
-                onClick={() => interestMutation.mutate(m.candidateUserId)}
-                disabled={requested.has(m.candidateUserId) || interestMutation.isPending}
-                className="mt-3 min-h-[44px] w-full justify-center"
-              >
-                {requested.has(m.candidateUserId) ? 'Introduction requested' : 'I want to meet'}
-              </Button>
-            </Card>
-          ))}
+          {outstanding.map(m => renderMatch(m))}
         </div>
+      )}
+
+      {/* Asking to meet someone used to delete them from the agent that found
+          them. They stay here now, with where the introduction got to. */}
+      {inProgress.length > 0 && (
+        <>
+          <p className="mb-2 mt-6 text-xs font-semibold uppercase tracking-wider text-gray-400">
+            Already asked
+          </p>
+          <div className="flex flex-col gap-3">
+            {inProgress.map(m => renderMatch(m))}
+          </div>
+        </>
       )}
     </div>
   );

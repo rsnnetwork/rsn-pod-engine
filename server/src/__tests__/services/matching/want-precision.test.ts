@@ -10,7 +10,7 @@
 // be able to introduce two strangers on their own. Specific terms (react,
 // saas, sourdough) and role designations still must.
 
-import { scoreWants, IntentProfile } from '../../../services/matching/platform-match.service';
+import { scoreWants, scoreWantsForRecipient, IntentProfile } from '../../../services/matching/platform-match.service';
 import { tokenizeTerms, normalizeDesignation, designationsWanted, ROLE_TAXONOMY } from '../../../services/matching/intent-signals';
 
 const profile = (over: Partial<IntentProfile>): IntentProfile => ({
@@ -168,5 +168,58 @@ describe('real signals still match', () => {
       professionalRole: ['Pastry Chef'], expertiseText: 'sourdough croissants',
     });
     expect(scoreWants([WANT_DEVELOPER], chef).score).toBeLessThan(0.45);
+  });
+});
+
+// ─── Who the introduction is addressed to (5 Aug 2026) ───────────────────────
+//
+// Live report: Ali's "Developers" agent found jack rajaa and sent an
+// introduction. What jack received said "You're looking to meet founders —
+// Raja Ali King is a Founder." True of jack's own profile, and completely the
+// wrong reason: what reached him was Ali's DEVELOPERS agent. An introduction
+// has to state the cause it actually came from, in the voice of whoever reads
+// it.
+describe('an introduction states its real cause, addressed to the reader', () => {
+  const JACK = profile({
+    id: 'u-jack', displayName: 'jack rajaa',
+    professionalRole: ['Manager'], jobTitle: 'frontend engineer',
+    whoIWantToMeet: 'founders building something new',
+  });
+
+  it('names the sender as the one looking, never the recipient', () => {
+    const { reason } = scoreWantsForRecipient([WANT_DEVELOPER], JACK, 'Raja Ali King');
+    expect(reason).toMatch(/^Raja Ali King is looking to meet/);
+    expect(reason).not.toMatch(/You're looking to meet/);
+  });
+
+  it('names the designation the agent searched for and the title that matched', () => {
+    const { reason } = scoreWantsForRecipient([WANT_DEVELOPER], JACK, 'Raja Ali King');
+    expect(reason).toMatch(/developers and engineers/);
+    expect(reason).toMatch(/you're a frontend engineer/);
+    // The exact sentence that went out was about founders. It must not survive.
+    expect(reason).not.toMatch(/founders/i);
+  });
+
+  it('addresses the recipient in the second person throughout', () => {
+    const { reason } = scoreWantsForRecipient([WANT_DEVELOPER], JACK, 'Raja Ali King');
+    expect(reason).not.toMatch(/jack rajaa/);
+  });
+
+  it('says the same thing to the seeker, in their voice', () => {
+    const { reason } = scoreWants([WANT_DEVELOPER], JACK);
+    expect(reason).toMatch(/^You're looking to meet developers and engineers/);
+    expect(reason).toMatch(/jack rajaa is a frontend engineer/);
+  });
+
+  it('scores identically whichever voice is used — same rule, same numbers', () => {
+    expect(scoreWantsForRecipient([WANT_DEVELOPER], JACK, 'Raja Ali King').score)
+      .toBe(scoreWants([WANT_DEVELOPER], JACK).score);
+  });
+
+  it('falls back without inventing a reason when nothing fits', () => {
+    const chef = profile({ id: 'u-c', displayName: 'Bilal', professionalRole: ['Pastry Chef'] });
+    const { reason, score } = scoreWantsForRecipient(['react developers'], chef, 'Raja Ali King');
+    expect(score).toBe(0);
+    expect(reason).toBe('');
   });
 });

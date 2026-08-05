@@ -222,19 +222,20 @@ describe('POST /agents/:id/status', () => {
 });
 
 describe('POST /agents/:id/interest', () => {
-  it('introduces through the agent and drops them from THIS agent only', async () => {
+  it('introduces through the agent and LEAVES them on it, badged', async () => {
     mockRepo.getAgent.mockResolvedValue(agent());
     mockExpressInterest.mockResolvedValue({ id: 'p-1', status: 'pending' });
-    mockRepo.removeMatch.mockResolvedValue(undefined);
 
     const res = await request(app).post('/agents/a-1/interest')
       .set('Authorization', `Bearer ${token()}`)
       .send({ userId: '11111111-1111-4111-8111-111111111111' });
 
     expect(res.status).toBe(201);
-    // The agent id must reach expressInterest — that is what scopes the exclusion.
+    // The agent id must reach expressInterest — it is what words the introduction.
     expect(mockExpressInterest).toHaveBeenCalledWith('u-1', '11111111-1111-4111-8111-111111111111', 'a-1');
-    expect(mockRepo.removeMatch).toHaveBeenCalledWith('a-1', '11111111-1111-4111-8111-111111111111');
+    // Asking someone used to DELETE them from the agent that found them, so a
+    // person vanished the moment you asked to meet them. They stay put now.
+    expect(mockRepo.removeMatch).not.toHaveBeenCalled();
   });
 
   it('refuses to introduce someone to themselves', async () => {

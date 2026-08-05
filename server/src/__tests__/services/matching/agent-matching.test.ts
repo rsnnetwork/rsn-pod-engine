@@ -52,13 +52,22 @@ describe('recomputeAgent', () => {
     expect(matches[0].reason).toBeTruthy();
   });
 
-  it('excludes people already introduced THROUGH THIS AGENT, not through others', async () => {
+  // Was: dropped anyone already introduced through this agent. That is what
+  // made a person disappear from the agent that found them the moment you
+  // asked to meet them (Ali, 5 Aug). Being asked is not an answer — they stay
+  // in the pool and the UI badges them. A DECLINE is an answer, and is the one
+  // thing that removes someone, in either direction.
+  it('keeps someone you have merely asked, and drops only a decline', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
     await recomputeAgent(AGENT);
     const [sql, params] = mockQuery.mock.calls[0];
-    // The poke exclusion must be scoped by agent_id — that is decision D3.
-    expect(sql).toMatch(/p\.agent_id = \$2/);
-    expect(params).toEqual(['u-owner', 'a-1']);
+    expect(sql).toMatch(/user_pokes/);
+    expect(sql).toMatch(/p\.status = 'declined'/);
+    expect(sql).not.toMatch(/p\.agent_id/);
+    // Both directions of the pair, so a decline sticks whoever sent it.
+    expect(sql).toMatch(/p\.sender_id = \$1 AND p\.recipient_id = u\.id/);
+    expect(sql).toMatch(/p\.sender_id = u\.id AND p\.recipient_id = \$1/);
+    expect(params).toEqual(['u-owner']);
   });
 
   it('still excludes people already met and blocks, which are global facts', async () => {
