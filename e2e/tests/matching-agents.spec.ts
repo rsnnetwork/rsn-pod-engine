@@ -187,6 +187,55 @@ test('several agents run at once, each with its own count', async () => {
   console.log('  ✓ two concurrent agents, each holding its own matches.');
 });
 
+// Ali, 6 Aug: jack rajaa ACCEPTED and disappeared anyway. Accepting writes an
+// encounter_history row, and the candidate pool reads that as "already met", so
+// the next re-search swept him out. Asking kept him; saying yes removed him.
+test('accepting an introduction keeps them on the agent, through a re-search', async () => {
+  test.setTimeout(300_000);
+  const accepter = await createTestUser('agAccept');
+  await setProfile(accepter, {
+    professional_role: ['Developer'], job_title: 'Senior React Developer',
+    expertise_text: 'react and typescript',
+  });
+
+  const devAgent = await agentByLabel(owner, 'Developers');
+  await apiAs(owner, 'POST', `/agents/${devAgent.id}/status`, { status: 'active' });
+  await countFor(owner, devAgent.id);
+
+  const intro = await apiAs(owner, 'POST', `/agents/${devAgent.id}/interest`, { userId: accepter.id });
+  expect(intro.status).toBe(201);
+  const pokeId = intro.json?.data?.id;
+  expect(pokeId, 'the introduction must come back with an id').toBeTruthy();
+
+  // They say YES.
+  const acc = await apiAs(accepter, 'POST', `/pokes/${pokeId}/accept`);
+  expect(acc.status, 'the recipient accepts').toBeLessThan(300);
+
+  const met = await pool.query(
+    `SELECT 1 FROM encounter_history
+      WHERE user_a_id = LEAST($1::uuid,$2::uuid) AND user_b_id = GREATEST($1::uuid,$2::uuid)`,
+    [owner.id, accepter.id]);
+  expect(met.rows.length, 'accepting records an encounter — the thing that used to evict them').toBe(1);
+
+  // Force a full re-search, which is what actually swept jack away.
+  await apiAs(owner, 'POST', `/agents/${devAgent.id}/status`, { status: 'paused' });
+  await apiAs(owner, 'POST', `/agents/${devAgent.id}/status`, { status: 'active' });
+  await new Promise(r => setTimeout(r, 8000));
+
+  const stored = await pool.query(
+    `SELECT 1 FROM agent_matches WHERE agent_id = $1 AND candidate_user_id = $2`, [devAgent.id, accepter.id]);
+  expect(stored.rows.length, 'survives the re-search after accepting').toBe(1);
+
+  const page = await openAs(owner, `/agents/${devAgent.id}`);
+  await expect(page.getByTestId(`agent-match-state-${accepter.id}`)).toHaveText(/Connected/i, { timeout: 30_000 });
+  await expect(page.getByRole('link', { name: /Open conversation/i })).toBeVisible();
+  console.log('  ✓ accepted introduction still on the agent, badged Connected.');
+
+  await pool.query(`DELETE FROM encounter_history WHERE user_a_id = LEAST($1::uuid,$2::uuid) AND user_b_id = GREATEST($1::uuid,$2::uuid)`, [owner.id, accepter.id]).catch(() => {});
+  await pool.query(`DELETE FROM user_pokes WHERE sender_id = $1 AND recipient_id = $2`, [owner.id, accepter.id]).catch(() => {});
+  await cleanup(pool, { ids: [accepter.id] });
+});
+
 // Ali, 5 Aug: he asked jack rajaa to meet through his Developers agent and jack
 // disappeared from it. Asking someone is not an answer — they stay, carrying
 // the state of the introduction, and stop counting as outstanding.

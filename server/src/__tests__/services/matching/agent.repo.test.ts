@@ -167,3 +167,24 @@ describe('already-asked people keep their place, badged', () => {
     expect(sql).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM user_pokes/);
   });
 });
+
+// A rescore replaces the stored set. Anyone the member already acted on must
+// survive that sweep, whatever dropped them out of the candidate pool.
+describe('a rescore never evicts someone you already asked', () => {
+  it('spares matches that have a live introduction', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    await repo.replaceMatches('a-1', []);
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/DELETE FROM agent_matches am/);
+    expect(sql).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM user_pokes p/);
+    expect(sql).toMatch(/p\.status <> 'declined'/);
+  });
+
+  it('still clears everyone else, so a stale match cannot linger', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    await repo.replaceMatches('a-1', []);
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/WHERE am\.agent_id = \$1/);
+    expect(params).toEqual(['a-1']);
+  });
+});

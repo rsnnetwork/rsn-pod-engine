@@ -137,3 +137,27 @@ describe('scoreNewcomerAgainstAgents', () => {
     await expect(scoreNewcomerAgainstAgents('u-x')).resolves.toEqual([]);
   });
 });
+
+// Ali, 6 Aug: jack rajaa ACCEPTED the introduction and disappeared from the
+// Developers agent anyway. Accepting writes an encounter_history row
+// (times_met = 0), and the pool treats that as "already met". Same
+// disappearance as delete-on-ask, through a different door.
+describe('accepting an introduction does not evict you from the agent', () => {
+  it('keeps someone in the pool when an introduction exists, despite an encounter row', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await recomputeAgent(AGENT);
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/encounter_history/);
+    // The encounter exclusion must be escapable by a live introduction.
+    expect(sql).toMatch(/OR EXISTS \(\s*SELECT 1 FROM user_pokes ip/);
+    expect(sql).toMatch(/ip\.status <> 'declined'/);
+  });
+
+  it('still hides someone genuinely met with no introduction between them', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await recomputeAgent(AGENT);
+    const [sql] = mockQuery.mock.calls[0];
+    // The encounter exclusion is still there — it is only relaxed by a poke.
+    expect(sql).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM encounter_history e/);
+  });
+});

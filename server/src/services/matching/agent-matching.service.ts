@@ -45,9 +45,22 @@ async function loadCandidatesForAgent(ownerId: string): Promise<IntentProfile[]>
       WHERE u.id <> $1
         AND u.status = 'active'
         AND u.onboarding_completed = true
-        AND NOT EXISTS (
-          SELECT 1 FROM encounter_history e
-           WHERE e.user_a_id = LEAST($1, u.id) AND e.user_b_id = GREATEST($1, u.id))
+        -- "Already met" hides people you have genuinely met, at an event or
+        -- otherwise. It must NOT hide someone you reached through this
+        -- platform: accepting an introduction writes an encounter row (with
+        -- times_met = 0), so a person vanished from the agent that found them
+        -- the moment they said yes — the same disappearance as delete-on-ask,
+        -- through a different door. An introduction between the two keeps them
+        -- visible; they show under "Already asked", not as outstanding.
+        AND (
+          NOT EXISTS (
+            SELECT 1 FROM encounter_history e
+             WHERE e.user_a_id = LEAST($1, u.id) AND e.user_b_id = GREATEST($1, u.id))
+          OR EXISTS (
+            SELECT 1 FROM user_pokes ip
+             WHERE ip.status <> 'declined'
+               AND ((ip.sender_id = $1 AND ip.recipient_id = u.id)
+                 OR (ip.sender_id = u.id AND ip.recipient_id = $1))))
         AND NOT EXISTS (
           SELECT 1 FROM user_blocks b
            WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)

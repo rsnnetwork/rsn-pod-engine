@@ -171,7 +171,21 @@ export async function setStatus(
  * count nobody can explain.
  */
 export async function replaceMatches(agentId: string, matches: AgentMatchInput[]): Promise<void> {
-  await query(`DELETE FROM agent_matches WHERE agent_id = $1`, [agentId]);
+  // Anyone with a live introduction is STICKY: whatever reason drops them out
+  // of the candidate pool — already met, or anything added later — they keep
+  // their place on the agent that found them, badged. Without this the sweep
+  // silently evicts the very people the member acted on.
+  await query(
+    `DELETE FROM agent_matches am
+      WHERE am.agent_id = $1
+        AND NOT EXISTS (
+          SELECT 1 FROM user_pokes p, matching_agents a
+           WHERE a.id = $1
+             AND p.status <> 'declined'
+             AND ((p.sender_id = a.user_id AND p.recipient_id = am.candidate_user_id)
+               OR (p.sender_id = am.candidate_user_id AND p.recipient_id = a.user_id)))`,
+    [agentId],
+  );
   if (matches.length > 0) {
     const values: string[] = [];
     const params: unknown[] = [agentId];
