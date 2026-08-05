@@ -64,11 +64,19 @@ const SELECT_WITH_COUNT = `
          (SELECT COUNT(*) FROM agent_matches m WHERE m.agent_id = a.id) AS match_count
   FROM matching_agents a`;
 
-/** A member's agents for the dashboard, newest first. Archived stay hidden. */
-export async function listAgents(userId: string): Promise<MatchingAgent[]> {
+/**
+ * A member's agents for the dashboard, oldest first. Archived are hidden unless
+ * asked for: archiving is reversible ("archive it once the need is solved" is
+ * not "delete it"), so the dashboard needs a way to list them and bring one
+ * back. Without this the UI had no screen that could reach an archived agent.
+ */
+export async function listAgents(
+  userId: string,
+  opts: { includeArchived?: boolean } = {},
+): Promise<MatchingAgent[]> {
   const r = await query<AgentRow>(
     `${SELECT_WITH_COUNT}
-     WHERE a.user_id = $1 AND a.status <> 'archived'
+     WHERE a.user_id = $1 ${opts.includeArchived ? '' : `AND a.status <> 'archived'`}
      ORDER BY a.created_at ASC`,
     [userId],
   );

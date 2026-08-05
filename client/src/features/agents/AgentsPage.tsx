@@ -35,9 +35,11 @@ export default function AgentsPage() {
   const [label, setLabel] = useState('');
   const [wantText, setWantText] = useState('');
 
+  const [showArchived, setShowArchived] = useState(false);
+
   const { data: agents, isLoading } = useQuery({
-    queryKey: ['agents'],
-    queryFn: () => api.get('/agents').then(r => r.data.data as Agent[]),
+    queryKey: ['agents', showArchived],
+    queryFn: () => api.get(showArchived ? '/agents?includeArchived=1' : '/agents').then(r => r.data.data as Agent[]),
     refetchOnWindowFocus: true,
     // Scoring runs in the background after any change, so the count arrives a
     // moment after the agent does.
@@ -50,7 +52,7 @@ export default function AgentsPage() {
     onSuccess: () => {
       setCreating(false); setLabel(''); setWantText('');
       addToast('Agent created. Searching now.', 'success');
-      qc.invalidateQueries({ queryKey: ['agents'] });
+      qc.invalidateQueries({ queryKey: ['agents'], exact: false });
     },
     onError: (err: any) => addToast(err?.response?.data?.error?.message || 'Could not create that agent', 'error'),
   });
@@ -65,7 +67,7 @@ export default function AgentsPage() {
             : 'Agent searching again',
         'info',
       );
-      qc.invalidateQueries({ queryKey: ['agents'] });
+      qc.invalidateQueries({ queryKey: ['agents'], exact: false });
     },
     onError: () => addToast('Could not update that agent', 'error'),
   });
@@ -129,6 +131,15 @@ export default function AgentsPage() {
         </Card>
       )}
 
+      {/* Archiving is reversible, so there has to be a way back to one. */}
+      <button
+        type="button"
+        onClick={() => setShowArchived(v => !v)}
+        className="mb-3 min-h-[44px] text-sm font-medium text-gray-500 underline-offset-2 hover:text-rsn-red hover:underline"
+      >
+        {showArchived ? 'Hide archived agents' : 'Show archived agents'}
+      </button>
+
       {list.length === 0 && !creating ? (
         <Card className="!p-8 text-center">
           <Search className="mx-auto h-8 w-8 text-gray-300" />
@@ -148,9 +159,9 @@ export default function AgentsPage() {
                 <Link to={`/agents/${a.id}`} className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <p className="truncate text-base font-semibold text-[#1a1a2e]">{a.label}</p>
-                    {a.status === 'paused' && (
+                    {a.status !== 'active' && (
                       <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-gray-500">
-                        Paused
+                        {a.status === 'paused' ? 'Paused' : 'Archived'}
                       </span>
                     )}
                   </div>
@@ -163,6 +174,16 @@ export default function AgentsPage() {
                   </p>
                 </Link>
                 <div className="flex shrink-0 items-center gap-1">
+                  {a.status === 'archived' ? (
+                    <button
+                      type="button"
+                      onClick={() => statusMutation.mutate({ id: a.id, status: 'active' })}
+                      className="min-h-[44px] rounded-lg border border-rsn-red/30 px-3 text-sm font-medium text-rsn-red hover:bg-rsn-red-light"
+                    >
+                      Reactivate
+                    </button>
+                  ) : (
+                  <>
                   <button
                     type="button"
                     aria-label={a.status === 'active' ? 'Pause agent' : 'Resume agent'}
@@ -179,6 +200,8 @@ export default function AgentsPage() {
                   >
                     <Archive className="h-4 w-4" />
                   </button>
+                  </>
+                  )}
                   <Link
                     to={`/agents/${a.id}`}
                     aria-label={`Open ${a.label}`}

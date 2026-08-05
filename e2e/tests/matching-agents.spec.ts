@@ -275,6 +275,40 @@ test('archiving removes it from the dashboard without destroying it', async () =
   console.log('  ✓ archive hides it and keeps the record.');
 });
 
+// Archiving is reversible by design, but the dashboard hid archived agents and
+// offered no route back, so archiving was a one-way door in the app.
+test('an archived agent can be found again and reactivated from the UI', async () => {
+  test.setTimeout(240_000);
+  const created = await apiAs(owner, 'POST', '/agents', {
+    label: 'Recoverable', wantText: 'react developers and engineers',
+  });
+  const agentId = created.json.data.id;
+  createdAgentIds.push(agentId);
+  await apiAs(owner, 'POST', `/agents/${agentId}/status`, { status: 'archived' });
+
+  const page = await openAs(owner);
+  // Hidden by default...
+  await expect(page.getByTestId(`agent-${agentId}`)).toHaveCount(0, { timeout: 30_000 });
+  // ...but reachable, and reversible.
+  await page.getByRole('button', { name: /Show archived agents/i }).click();
+  const card = page.getByTestId(`agent-${agentId}`);
+  await expect(card).toBeVisible({ timeout: 20_000 });
+  await expect(card.getByText(/Archived/i)).toBeVisible();
+  await card.getByRole('button', { name: /Reactivate/i }).click();
+
+  await expect.poll(async () => {
+    const r = await pool.query(`SELECT status FROM matching_agents WHERE id = $1`, [agentId]);
+    return r.rows[0]?.status;
+  }, { timeout: 30_000 }).toBe('active');
+
+  // Back on the normal dashboard without the toggle, and searching again.
+  const fresh = await openAs(owner);
+  await expect(fresh.getByTestId(`agent-${agentId}`)).toBeVisible({ timeout: 30_000 });
+  const count = await countFor(owner, agentId);
+  expect(count, 'a reactivated agent searches again').toBeGreaterThanOrEqual(1);
+  console.log(`  ✓ archived agent recovered and re-searched (${count}).`);
+});
+
 test('someone joining later becomes a match automatically', async () => {
   test.setTimeout(300_000);
   const devAgent = await agentByLabel(owner, 'Developers');

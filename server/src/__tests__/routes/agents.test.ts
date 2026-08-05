@@ -70,7 +70,33 @@ describe('GET /agents', () => {
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(2);
     expect(res.body.data[0]).toMatchObject({ label: 'Developers', matchCount: 3 });
-    expect(mockRepo.listAgents).toHaveBeenCalledWith('u-1');
+    expect(mockRepo.listAgents).toHaveBeenCalledWith('u-1', { includeArchived: false });
+  });
+
+  // Archiving is reversible, but the dashboard hid archived agents with no way
+  // to reach one, so an archived agent was unrecoverable from the app.
+  it('can list archived agents so one can be brought back', async () => {
+    mockRepo.listAgents.mockResolvedValue([agent({ status: 'archived' })]);
+    const res = await request(app).get('/agents?includeArchived=1').set('Authorization', `Bearer ${token()}`);
+    expect(res.status).toBe(200);
+    expect(mockRepo.listAgents).toHaveBeenCalledWith('u-1', { includeArchived: true });
+    expect(res.body.data[0].status).toBe('archived');
+  });
+
+  it('never rescores an archived agent just because it was listed', async () => {
+    mockRepo.listAgents.mockResolvedValue([agent({ status: 'archived', lastMatchedAt: null })]);
+    await request(app).get('/agents?includeArchived=1').set('Authorization', `Bearer ${token()}`);
+    await new Promise(r => setImmediate(r));
+    expect(mockRecompute).not.toHaveBeenCalled();
+  });
+
+  it('reactivating an archived agent searches again', async () => {
+    mockRepo.setStatus.mockResolvedValue(agent({ status: 'active' }));
+    const res = await request(app).post('/agents/a-1/status')
+      .set('Authorization', `Bearer ${token()}`).send({ status: 'active' });
+    expect(res.status).toBe(200);
+    await new Promise(r => setImmediate(r));
+    expect(mockRecompute).toHaveBeenCalledTimes(1);
   });
 
   it('requires auth', async () => {

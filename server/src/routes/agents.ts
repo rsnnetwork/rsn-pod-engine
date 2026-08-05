@@ -56,7 +56,8 @@ function rescoreInBackground(agent: { id: string; userId: string; wantText: stri
 // every one of them would sit at "0 potential matches" forever.
 router.get('/', authenticate, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const agents = await agentRepo.listAgents(req.user!.userId);
+    const includeArchived = req.query.includeArchived === '1' || req.query.includeArchived === 'true';
+    const agents = await agentRepo.listAgents(req.user!.userId, { includeArchived });
     res.json({ success: true, data: agents } as ApiResponse);
     for (const a of agents) {
       if (a.status === 'active' && a.lastMatchedAt === null) rescoreInBackground(a);
