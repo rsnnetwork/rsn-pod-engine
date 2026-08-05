@@ -73,7 +73,10 @@ export default function AgentsPage() {
   });
 
   if (isLoading) return <PageLoader />;
-  const list = agents ?? [];
+  // The archived view shows ONLY archived agents. The server returns both so a
+  // single request covers either view, but mixing them on screen makes the
+  // toggle meaningless.
+  const list = (agents ?? []).filter(a => (showArchived ? a.status === 'archived' : a.status !== 'archived'));
 
   return (
     <div className="mx-auto w-full max-w-3xl">
@@ -137,10 +140,12 @@ export default function AgentsPage() {
         onClick={() => setShowArchived(v => !v)}
         className="mb-3 min-h-[44px] text-sm font-medium text-gray-500 underline-offset-2 hover:text-rsn-red hover:underline"
       >
-        {showArchived ? 'Hide archived agents' : 'Show archived agents'}
+        {showArchived ? '← Back to your agents' : 'View archived agents'}
       </button>
 
-      {list.length === 0 && !creating ? (
+      {showArchived && list.length === 0 ? (
+        <Card className="!p-8 text-center text-sm text-gray-500">You have no archived agents.</Card>
+      ) : list.length === 0 && !creating ? (
         <Card className="!p-8 text-center">
           <Search className="mx-auto h-8 w-8 text-gray-300" />
           <p className="mt-3 text-sm font-medium text-[#1a1a2e]">You have no agents yet</p>

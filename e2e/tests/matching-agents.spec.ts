@@ -290,10 +290,13 @@ test('an archived agent can be found again and reactivated from the UI', async (
   // Hidden by default...
   await expect(page.getByTestId(`agent-${agentId}`)).toHaveCount(0, { timeout: 30_000 });
   // ...but reachable, and reversible.
-  await page.getByRole('button', { name: /Show archived agents/i }).click();
+  await page.getByRole('button', { name: /View archived agents/i }).click();
   const card = page.getByTestId(`agent-${agentId}`);
   await expect(card).toBeVisible({ timeout: 20_000 });
   await expect(card.getByText(/Archived/i)).toBeVisible();
+  // The archived view shows ONLY archived agents — an active one must not leak in.
+  const active = await agentByLabel(owner, 'Investors').catch(() => null);
+  if (active) await expect(page.getByTestId(`agent-${active.id}`)).toHaveCount(0);
   await card.getByRole('button', { name: /Reactivate/i }).click();
 
   await expect.poll(async () => {
