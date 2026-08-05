@@ -138,19 +138,27 @@ export function scoreWants(
   const roleValues = Array.isArray(other.professionalRole)
     ? other.professionalRole
     : [flatten(other.professionalRole)];
-  const otherDesignations = new Set(
-    [...roleValues, other.jobTitle]
-      .map(r => normalizeDesignation(typeof r === 'string' ? r : null))
-      .filter((d): d is string => Boolean(d)),
-  );
+  // Keep the TITLE that produced each designation, not just the bucket. The
+  // reason below names it, so "you want developers, X is a Manager" (matched on
+  // a job title of "frontend engineer" while displaying a role of "Manager")
+  // can no longer contradict itself.
+  const titleByDesignation = new Map<string, string>();
+  for (const r of [...roleValues, other.jobTitle]) {
+    const title = typeof r === 'string' ? r.trim() : null;
+    if (!title) continue;
+    const key = normalizeDesignation(title);
+    if (key && !titleByDesignation.has(key)) titleByDesignation.set(key, title);
+  }
   const wanted = wantedDesignationsFrom(wants);
-  const designationHit = wanted.find(w => otherDesignations.has(w.key)) ?? null;
+  const designationHit = wanted.find(w => titleByDesignation.has(w.key)) ?? null;
+  const matchedTitle = designationHit ? titleByDesignation.get(designationHit.key)! : null;
 
   const score = 0.7 * overlap + (designationHit ? 0.6 : 0);
   if (score <= 0) return { score: 0, reason: '' };
 
   const name = other.displayName || 'They';
-  const role = displayRole(other);
+  // Name the title that actually matched; fall back to their headline role.
+  const role = matchedTitle || displayRole(other);
   let reason: string;
   if (designationHit && role) {
     reason = `You're looking to meet ${designationHit.label} — ${name} is ${/^[aeiou]/i.test(role) ? 'an' : 'a'} ${role}`;

@@ -47,9 +47,13 @@ app.use(errorHandler);
 const token = (sub = 'u-1') =>
   jwt.sign({ sub, email: 'a@b.c', role: 'member', displayName: 'A', sessionId: 's' }, 'test-secret');
 
+// Default to an agent that has ALREADY been searched: that is the normal state,
+// and leaving it null made every GET fire a background rescore whose floating
+// promise kept Jest workers alive and crashed suites under parallel load. The
+// self-heal tests set lastMatchedAt: null explicitly.
 const agent = (over: Record<string, unknown> = {}) => ({
   id: 'a-1', userId: 'u-1', label: 'Developers', wantText: 'react developers',
-  matchingTags: [], status: 'active', lastMatchedAt: null,
+  matchingTags: [], status: 'active', lastMatchedAt: new Date(),
   createdAt: new Date(), updatedAt: new Date(), matchCount: 3, ...over,
 });
 

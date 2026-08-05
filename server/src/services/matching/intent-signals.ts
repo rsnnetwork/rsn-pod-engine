@@ -44,7 +44,10 @@ export const ROLE_TAXONOMY: RoleBucket[] = [
   { key: 'investor', label: 'investors', is: /\b(investor|angel|venture capital|vc|general partner|managing partner)s?\b/ },
   { key: 'advisor', label: 'mentors and advisors', is: /\b(advisor|adviser|mentor)s?\b/ },
   { key: 'board', label: 'board members', is: /\b(board member|board director)s?\b/ },
-  { key: 'developer', label: 'developers and engineers', is: /\b(developer|engineer|programmer|coder|software|full[-\s]?stack|front[-\s]?end|back[-\s]?end|devops|architect)s?\b/ },
+  // "software" alone is not a developer: "owner of software company" is an
+  // owner, and matching that bare word made one on 3 Aug 2026. The word has to
+  // be part of an actual doing-the-work title.
+  { key: 'developer', label: 'developers and engineers', is: /\b(developer|engineer|programmer|coder|full[-\s]?stack|front[-\s]?end|back[-\s]?end|devops|software (engineer|developer|architect)|architect)s?\b/ },
   { key: 'designer', label: 'designers', is: /\b(designer|ux|ui|creative director)s?\b/ },
   { key: 'marketer', label: 'marketing people', is: /\b(marketer|marketing|growth|brand|content strategist|seo)s?\b/ },
   { key: 'sales', label: 'sales people', is: /\b(sales|business development|bizdev|account executive)s?\b/ },

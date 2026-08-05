@@ -72,6 +72,27 @@ describe('the roles people actually search for are recognised', () => {
     expect(reason).toMatch(/developer/i);
   });
 
+  it('someone who OWNS a software company is an owner, not a developer', () => {
+    expect(normalizeDesignation('owner of software company')).toBe('owner');
+    const owner = profile({
+      id: 'u-own', displayName: 'Nik',
+      jobTitle: 'Director', professionalRole: ['owner of software company'],
+    });
+    expect(scoreWants(['developers and engineers'], owner).score).toBeLessThan(0.45);
+  });
+
+  it('the reason names the title that matched, never a different one', () => {
+    // Live: matched on the job title "frontend engineer" but the sentence read
+    // "is a Manager", because it printed the declared role instead.
+    const engineerWhoIsAlsoAManager = profile({
+      id: 'u-jack', displayName: 'jack rajaa',
+      jobTitle: 'frontend engineer', professionalRole: ['Manager'],
+    });
+    const { reason } = scoreWants(['developers and engineers'], engineerWhoIsAlsoAManager);
+    expect(reason).toMatch(/frontend engineer/i);
+    expect(reason).not.toMatch(/is a Manager/i);
+  });
+
   it('a developer search does not surface a marketer', () => {
     const marketer = profile({
       id: 'u-mkt', displayName: 'Mia', jobTitle: 'Head of Marketing',
