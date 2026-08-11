@@ -49,7 +49,11 @@ export const ROLE_TAXONOMY: RoleBucket[] = [
   // be part of an actual doing-the-work title.
   { key: 'developer', label: 'developers and engineers', is: /\b(developer|engineer|programmer|coder|full[-\s]?stack|front[-\s]?end|back[-\s]?end|devops|software (engineer|developer|architect)|architect)s?\b/ },
   { key: 'designer', label: 'designers', is: /\b(designer|ux|ui|creative director)s?\b/ },
-  { key: 'marketer', label: 'marketing people', is: /\b(marketer|marketing|growth|brand|content strategist|seo)s?\b/ },
+  // "growth" and "brand" on their own are not roles: "growth-stage tech
+  // startups" made a Fractional COO's profile read as a marketing search, the
+  // same false positive bare "software" caused for developers. Require the
+  // role-shaped forms.
+  { key: 'marketer', label: 'marketing people', is: /\b(marketer|marketing|growth (marketer|marketing|lead|hacker|manager)|brand (manager|lead|strategist|director)|branding|content strategist|seo)s?\b/ },
   { key: 'sales', label: 'sales people', is: /\b(sales|business development|bizdev|account executive)s?\b/ },
   { key: 'hr', label: 'HR and people leads', is: /\b(hr|human resources|people (lead|ops|officer|partner)|recruit(er|ing|ment)?|talent)s?\b/ },
   { key: 'product_manager', label: 'product and project managers', is: /\b(product manager|project manager|programme manager|program manager|product owner|scrum master)s?\b/ },

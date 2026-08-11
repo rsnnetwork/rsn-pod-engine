@@ -223,3 +223,36 @@ describe('an introduction states its real cause, addressed to the reader', () =>
     expect(reason).toBe('');
   });
 });
+
+// ─── "growth" and "brand" are not roles (6 Aug 2026) ─────────────────────────
+//
+// Live: a member whose text read "I am a Fractional COO working with
+// growth-stage tech startups" had her agent classified as a marketing search —
+// "growth-stage" is a company stage, not a job. Same shape as bare "software"
+// making every owner of a software company a developer.
+describe('company-stage and product words are not job roles', () => {
+  it.each([
+    'growth-stage tech startups',
+    'a growth stage company',
+    'building our brand new product',
+    'brand new founders',
+  ])('"%s" is not a marketing search', (text) => {
+    expect(designationsWanted(text).map(d => d.key)).not.toContain('marketer');
+  });
+
+  it.each([
+    'growth marketers',
+    'a growth lead',
+    'marketing leaders',
+    'a brand manager',
+    'branding help',
+    'seo people',
+  ])('"%s" still is', (text) => {
+    expect(designationsWanted(text).map(d => d.key)).toContain('marketer');
+  });
+
+  it('does not match a Fractional COO describing her own company', () => {
+    const text = 'I am a Fractional COO working with growth-stage tech startups, and looking to build a community with people!';
+    expect(designationsWanted(text).map(d => d.key)).not.toContain('marketer');
+  });
+});
