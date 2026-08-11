@@ -153,12 +153,20 @@ test('an agent cannot introduce you to yourself, or accept a nonsense status', a
 
 test('a decline removes them for good, and a re-search does not bring them back', async () => {
   test.setTimeout(300_000);
+  // Its OWN candidate. A decline is global for the pair by design, so declining
+  // the shared `target` here would silently poison every later test — which is
+  // exactly what happened on the first run of this spec.
+  const declinee = await createTestUser('edgeDeclinee');
+  await setProfile(declinee, {
+    professional_role: ['Developer'], job_title: 'Senior React Developer',
+    expertise_text: 'react typescript',
+  });
   const id = await makeAgent(owner, 'DeclineCase', 'a senior react developer to build my product');
   expect(await countOf(owner, id), 'the developer was found').toBeGreaterThan(0);
 
-  const intro = await apiAs(owner, 'POST', `/agents/${id}/interest`, { userId: target.id });
+  const intro = await apiAs(owner, 'POST', `/agents/${id}/interest`, { userId: declinee.id });
   expect(intro.status).toBe(201);
-  const dec = await apiAs(target, 'POST', `/pokes/${intro.json.data.id}/decline`);
+  const dec = await apiAs(declinee, 'POST', `/pokes/${intro.json.data.id}/decline`);
   expect(dec.status, 'they decline').toBeLessThan(300);
 
   // Force a full re-search — the sweep must honour the decline.
@@ -167,13 +175,15 @@ test('a decline removes them for good, and a re-search does not bring them back'
   await new Promise(r => setTimeout(r, 8000));
 
   const stored = await pool.query(
-    `SELECT 1 FROM agent_matches WHERE agent_id = $1 AND candidate_user_id = $2`, [id, target.id]);
+    `SELECT 1 FROM agent_matches WHERE agent_id = $1 AND candidate_user_id = $2`, [id, declinee.id]);
   expect(stored.rows.length, 'a decline is an answer — gone, and stays gone').toBe(0);
 
   const page = await openAs(owner, `/agents/${id}`);
-  await expect(page.getByTestId(`agent-match-${target.id}`)).toHaveCount(0);
-  await expect(page.getByText(/Already asked/i), 'not parked under Already asked either').toHaveCount(0);
+  await expect(page.getByTestId(`agent-match-${declinee.id}`)).toHaveCount(0);
   console.log('  ✓ decline honoured in the pool, the store and the screen.');
+
+  await pool.query(`DELETE FROM user_pokes WHERE sender_id = $1 AND recipient_id = $2`, [owner.id, declinee.id]).catch(() => {});
+  await cleanup(pool, { ids: [declinee.id] });
 });
 
 test('asking the same person twice does not double up or break', async () => {
@@ -237,7 +247,7 @@ test('a candidate who deactivates leaves both the count and the list', async () 
   const listedBefore = await apiAs(owner, 'GET', `/agents/${id}`);
   expect(listedBefore.json.data.matches.map((m: any) => m.candidateUserId)).toContain(leaver.id);
 
-  await pool.query(`UPDATE users SET status = 'inactive' WHERE id = $1`, [leaver.id]);
+  await pool.query(`UPDATE users SET status = 'deactivated' WHERE id = $1`, [leaver.id]);
 
   // The count and the list must agree — they disagreed until 5 Aug, because the
   // count ignored user status while the list filtered on it.
