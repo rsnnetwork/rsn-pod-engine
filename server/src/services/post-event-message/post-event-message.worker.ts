@@ -55,6 +55,22 @@ const dateFormatter = new Intl.DateTimeFormat('en-GB', {
  * no pending jobs exist or if another instance holds the Redis lock.
  */
 export async function processPendingJobs(io: SocketServer): Promise<void> {
+  // ── 0. Is there anything to do at all? ─────────────────────────────────────
+  //
+  // This runs every 10 s forever. Taking the Redis lock first meant a SET plus
+  // a DEL on every idle tick — roughly 17k commands a day against an Upstash
+  // free tier of 10k, so the quota was gone before any real work happened, and
+  // the lock protecting that work was the thing that exhausted it.
+  //
+  // Postgres is already in the hot path and this probe hits an indexed status
+  // column, so ask it first and touch Redis only when there is a job to guard.
+  // The lock is still acquired BEFORE any row is claimed, so two instances
+  // cannot process the same job: the loser exits at the lock, as before.
+  const pending = await query<{ exists: boolean }>(
+    `SELECT TRUE AS exists FROM post_event_message_jobs WHERE status = 'pending' LIMIT 1`,
+  );
+  if (pending.rows.length === 0) return;
+
   const redis = getRedisClient();
   let lockAcquired = false;
 

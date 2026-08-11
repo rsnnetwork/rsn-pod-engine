@@ -8,7 +8,7 @@ import ReportUserModal from '@/components/ReportUserModal';
 import {
   ArrowLeft, MapPin, Globe, Sparkles, Target, Heart,
   HelpCircle, Users, User, Award, Compass, Link2, Languages, Linkedin,
-  Ban, ShieldOff, MessageSquare, Flag,
+  Ban, ShieldOff, MessageSquare, Flag, Send,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
@@ -62,6 +62,27 @@ export default function PublicProfilePage() {
   });
   const canMessage = dmGate?.allowed === true;
   const cantMessageReason = dmGate?.reason as string | undefined;
+
+  // Where a meeting request between us stands. Without this the profile showed
+  // a dead "Message — meet first" button to someone already asked, with no hint
+  // that a request was in flight or, worse, waiting on YOU.
+  const { data: meetingRequest } = useQuery({
+    queryKey: ['poke-with', userId],
+    queryFn: () => api.get(`/pokes/with/${userId}`).then(r => r.data.data as
+      { id: string; status: 'pending' | 'accepted' | 'declined'; sentByMe: boolean } | null),
+    enabled: !!userId && !isOwnProfile && !!currentUser?.id,
+    meta: { entities: currentUserId ? [E.user(currentUserId)] : [] },
+  });
+
+  const interestMutation = useMutation({
+    mutationFn: () => api.post(`/matches/platform/${userId}/interest`),
+    onSuccess: () => {
+      addToast('Meeting request sent', 'success');
+      qc.invalidateQueries({ queryKey: ['poke-with', userId] });
+    },
+    onError: (err: any) =>
+      addToast(err?.response?.data?.error?.message || 'Could not send that request', 'error'),
+  });
 
   const blockMutation = useMutation({
     mutationFn: () => api.post(`/users/${userId}/block`),
@@ -183,11 +204,42 @@ export default function PublicProfilePage() {
                   <span className="text-[11px] text-gray-400">DMs unlock when you both say “meet again”</span>
                 </div>
               ) : cantMessageReason === 'no_encounter' ? (
+                // A dead button is the wrong answer when there IS a way through:
+                // ask to meet. And if a request already exists, say where it got
+                // to rather than pretending nothing has happened.
                 <div className="flex flex-col items-center gap-1">
-                  <Button size="sm" variant="ghost" disabled className="text-xs cursor-not-allowed" title="DMs unlock after you meet at an event">
-                    <MessageSquare className="h-3.5 w-3.5 mr-1.5" /> Message — meet first
-                  </Button>
-                  <span className="text-[11px] text-gray-400">DMs unlock after you meet at an event</span>
+                  {meetingRequest?.status === 'pending' && meetingRequest.sentByMe ? (
+                    <>
+                      <Button size="sm" variant="ghost" disabled className="min-h-[44px] text-xs" data-testid="meet-state">
+                        <Send className="mr-1.5 h-3.5 w-3.5" /> Meeting request sent
+                      </Button>
+                      <span className="text-[11px] text-gray-400">You can message once they accept</span>
+                    </>
+                  ) : meetingRequest?.status === 'pending' ? (
+                    <>
+                      <Button size="sm" onClick={() => navigate('/messages')} className="min-h-[44px] text-xs" data-testid="meet-state">
+                        <MessageSquare className="mr-1.5 h-3.5 w-3.5" /> They asked to meet you — respond
+                      </Button>
+                      <span className="text-[11px] text-gray-400">Waiting on you in Messages</span>
+                    </>
+                  ) : (
+                    <>
+                      <Button
+                        size="sm"
+                        onClick={() => interestMutation.mutate()}
+                        isLoading={interestMutation.isPending}
+                        className="min-h-[44px] text-xs"
+                        data-testid="meet-state"
+                      >
+                        <Send className="mr-1.5 h-3.5 w-3.5" /> I want to meet
+                      </Button>
+                      <span className="text-[11px] text-gray-400">
+                        {meetingRequest?.status === 'declined'
+                          ? 'A previous request was declined'
+                          : 'Messaging unlocks once they accept'}
+                      </span>
+                    </>
+                  )}
                 </div>
               ) : null}
             </div>

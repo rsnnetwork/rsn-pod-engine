@@ -691,3 +691,45 @@ describe('email.service.ts — F2 poke email templates + kill-switch', () => {
     expect(fn).toMatch(/rows\.length === 0 \? true/);
   });
 });
+
+// ─── Where a meeting request stands (6 Aug 2026) ─────────────────────────────
+//
+// The profile showed a dead "Message — meet first" button to someone who had
+// already been asked, or who had asked YOU — a wall where the way through was
+// right there. The page needs the state to say so.
+describe('getPokeWith — the state of a request between two people', () => {
+  beforeEach(() => mockQuery.mockReset());
+
+  it('looks both ways, newest first', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    await pokeService.getPokeWith('u-me', 'u-them');
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(String(sql)).toMatch(/sender_id = \$1 AND recipient_id = \$2/);
+    expect(String(sql)).toMatch(/sender_id = \$2 AND recipient_id = \$1/);
+    expect(String(sql)).toMatch(/ORDER BY created_at DESC/);
+    expect(params).toEqual(['u-me', 'u-them']);
+  });
+
+  it('reports one I sent', async () => {
+    mockQuery.mockResolvedValue({ rows: [{ id: 'p1', status: 'pending', sender_id: 'u-me' }] });
+    expect(await pokeService.getPokeWith('u-me', 'u-them'))
+      .toEqual({ id: 'p1', status: 'pending', sentByMe: true });
+  });
+
+  it('reports one I received, so the profile can point at Messages', async () => {
+    mockQuery.mockResolvedValue({ rows: [{ id: 'p2', status: 'pending', sender_id: 'u-them' }] });
+    expect(await pokeService.getPokeWith('u-me', 'u-them'))
+      .toEqual({ id: 'p2', status: 'pending', sentByMe: false });
+  });
+
+  it('returns null when nothing was ever sent, so the page offers to ask', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    expect(await pokeService.getPokeWith('u-me', 'u-them')).toBeNull();
+  });
+
+  it('surfaces a decline rather than hiding it', async () => {
+    mockQuery.mockResolvedValue({ rows: [{ id: 'p3', status: 'declined', sender_id: 'u-me' }] });
+    const r = await pokeService.getPokeWith('u-me', 'u-them');
+    expect(r?.status).toBe('declined');
+  });
+});

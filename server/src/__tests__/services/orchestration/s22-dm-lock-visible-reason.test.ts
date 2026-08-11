@@ -44,11 +44,37 @@ describe('S22 — the reason is VISIBLE on the profile page (not tooltip-only)',
   it('both locked states render the explanation as text under the button', () => {
     const src = readClient('features/profile/PublicProfilePage.tsx');
     expect(src).toMatch(/DMs unlock when you both say “meet again”/);
-    expect(src).toMatch(/DMs unlock after you meet at an event/);
     // The visible span sits alongside (not instead of) the title attribute.
     const notMutualIdx = src.indexOf("cantMessageReason === 'not_mutual'");
     const block = src.slice(notMutualIdx, notMutualIdx + 900);
     expect(block).toMatch(/title="DMs unlock when you both say 'meet again'"/);
     expect(block).toMatch(/<span className="text-\[11px\] text-gray-400">/);
+  });
+
+  // 6 Aug: the no_encounter state used to be a DEAD button reading "Message —
+  // meet first", shown even to someone who had already been asked, or who had
+  // asked YOU. S22's requirement is that the WHY is visible text rather than a
+  // tooltip; it never required the button be inert. Every branch now carries its
+  // own visible line, and two of the three are a way through rather than a wall.
+  it('the no-encounter state explains itself in visible text, in every branch', () => {
+    const src = readClient('features/profile/PublicProfilePage.tsx');
+    const i = src.indexOf("cantMessageReason === 'no_encounter'");
+    if (i < 0) throw new Error('the no_encounter branch has gone from PublicProfilePage');
+    const block = src.slice(i, src.indexOf(') : null}', i));
+
+    // Three states, each with a visible explanation under it.
+    expect(block).toMatch(/Meeting request sent/);
+    expect(block).toMatch(/You can message once they accept/);
+    expect(block).toMatch(/They asked to meet you — respond/);
+    expect(block).toMatch(/Waiting on you in Messages/);
+    expect(block).toMatch(/I want to meet/);
+    expect(block).toMatch(/Messaging unlocks once they accept/);
+    // A decline is surfaced, not silently swallowed.
+    expect(block).toMatch(/A previous request was declined/);
+    // Reasons are visible spans, not tooltip-only — three of them.
+    expect((block.match(/<span className="text-\[11px\] text-gray-400">/g) ?? []).length)
+      .toBeGreaterThanOrEqual(2);
+    // And the state is reachable by a test, so the E2E can assert the outcome.
+    expect(block).toMatch(/data-testid="meet-state"/);
   });
 });

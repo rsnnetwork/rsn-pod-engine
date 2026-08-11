@@ -4,6 +4,7 @@ import { useSessionStore, ChatMessage, useInRoomParticipants } from '@/stores/se
 import { useAuthStore } from '@/stores/authStore';
 import ProfileLink from '@/components/ui/ProfileLink';
 import { getSocket } from '@/lib/socket';
+import Linkify from '@/components/ui/Linkify';
 
 const CHAT_EMOJIS = [
   { type: 'heart', emoji: '❤️' },
@@ -278,7 +279,7 @@ function MessageBubble({ msg, isOwn, sessionId }: { msg: ChatMessage; isOwn: boo
             </ProfileLink>
           </div>
         )}
-        <p className="text-sm leading-relaxed break-words text-gray-800"><Linkify text={msg.message} /></p>
+        <p className="text-sm leading-relaxed break-words text-gray-800"><Linkify text={msg.message} className="break-all text-blue-600 underline hover:text-blue-700" /></p>
         <div className={`flex ${isOwn ? 'justify-end' : 'justify-start'} mt-0.5`}>
           <span className="text-[10px] text-gray-400">
             {msg.scope === 'room' && <span className="mr-1">Room</span>}
@@ -331,21 +332,4 @@ function MessageBubble({ msg, isOwn, sessionId }: { msg: ChatMessage; isOwn: boo
   );
 }
 
-const URL_REGEX = /(https?:\/\/[^\s<]+)/g;
 
-function Linkify({ text }: { text: string }) {
-  const parts = text.split(URL_REGEX);
-  return (
-    <>
-      {parts.map((part, i) =>
-        URL_REGEX.test(part) ? (
-          <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline hover:text-blue-700 break-all">
-            {part}
-          </a>
-        ) : (
-          <span key={i}>{part}</span>
-        )
-      )}
-    </>
-  );
-}

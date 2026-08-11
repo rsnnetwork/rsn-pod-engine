@@ -78,6 +78,24 @@ router.post(
   }
 );
 
+// GET /pokes/with/:userId — where a meeting request between us stands, so a
+// profile can show "Request sent" or "They asked to meet you" instead of a
+// dead button. Declared BEFORE /received would ever be reachable as a param;
+// both are literal paths, so order is not load-bearing, but keep them adjacent.
+router.get(
+  '/with/:userId',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await pokeService.getPokeWith(req.user!.userId, req.params.userId);
+      const response: ApiResponse = { success: true, data: result };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // GET /pokes/received — list pending pokes I've received
 router.get(
   '/received',

@@ -23,6 +23,7 @@ import api from '@/lib/api';
 import { E } from '@/realtime/entities';
 import { disconnectSocket, connectSocket, getSocket } from '@/lib/socket';
 import { destroyBgEngine } from '@/lib/bgEngine';
+import Linkify from '@/components/ui/Linkify';
 
 export default function LiveSessionPage() {
   const { sessionId } = useParams();
@@ -251,7 +252,7 @@ export default function LiveSessionPage() {
       {/* Broadcast banner */}
       {broadcasts.length > 0 && (
         <div className="bg-rsn-red px-4 py-2 text-center">
-          <p className="text-sm font-medium text-white"><LinkifyText text={broadcasts[broadcasts.length - 1]} /></p>
+          <p className="text-sm font-medium text-white"><Linkify text={broadcasts[broadcasts.length - 1]} className="break-all text-white underline hover:opacity-80" /></p>
         </div>
       )}
 
@@ -719,23 +720,4 @@ function TopBarParticipantCount() {
   );
 }
 
-/* ─── Linkify helper for broadcast banner ───────────────────────────────── */
 
-const LINK_REGEX = /(https?:\/\/[^\s<]+)/g;
-
-function LinkifyText({ text }: { text: string }) {
-  const parts = text.split(LINK_REGEX);
-  return (
-    <>
-      {parts.map((part, i) =>
-        /^https?:\/\//.test(part) ? (
-          <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="underline hover:opacity-80 break-all">
-            {part}
-          </a>
-        ) : (
-          <span key={i}>{part}</span>
-        )
-      )}
-    </>
-  );
-}

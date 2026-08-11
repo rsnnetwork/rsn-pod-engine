@@ -477,6 +477,32 @@ export async function listReceivedPokes(userId: string): Promise<PokeWithSender[
   }));
 }
 
+export interface PokeWith {
+  id: string;
+  status: 'pending' | 'accepted' | 'declined';
+  /** True when the caller sent it, false when they received it. */
+  sentByMe: boolean;
+}
+
+/**
+ * Where a meeting request between these two stands, newest first — either
+ * direction. The profile showed a dead "Message — meet first" button to
+ * someone who had ALREADY been asked (or who had asked YOU), which reads as a
+ * wall when the way through is right there. The page needs the state to say so.
+ */
+export async function getPokeWith(userId: string, otherId: string): Promise<PokeWith | null> {
+  const r = await query<{ id: string; status: PokeWith['status']; sender_id: string }>(
+    `SELECT id, status, sender_id FROM user_pokes
+      WHERE (sender_id = $1 AND recipient_id = $2)
+         OR (sender_id = $2 AND recipient_id = $1)
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    [userId, otherId],
+  );
+  const row = r.rows[0];
+  return row ? { id: row.id, status: row.status, sentByMe: row.sender_id === userId } : null;
+}
+
 /**
  * Has the current user already poked the target with a pending poke?
  * Used by the profile UI to render Poke vs Pending state.
