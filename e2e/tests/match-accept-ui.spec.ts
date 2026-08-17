@@ -132,6 +132,14 @@ test('golden path: request is visible, accept opens the conversation with the in
   await expect(header).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(/Senior React Developer/i)).toBeVisible();
 
+  // 13 Aug (review fix): the inbox ROW — not just the thread header — must
+  // carry the who-is-writing signal. A stranger's FIRST encounter with a
+  // new sender is that row, before they ever choose to open the thread.
+  // Navigate back to the inbox list (same page, mobile back-button flow)
+  // and confirm the row itself shows the job title.
+  await page.getByRole('button', { name: 'Back to inbox' }).click();
+  await expect(page.getByText(/Senior React Developer/i), 'the inbox row must show job title, not just a name').toBeVisible({ timeout: 20_000 });
+
   // DB truth: poke accepted, conversation + seeded intro exist, DMs unlocked.
   const poke = await pool.query(
     `SELECT status FROM user_pokes WHERE sender_id = $1 AND recipient_id = $2`, [sender.id, recipient.id]);

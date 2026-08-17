@@ -705,6 +705,19 @@ export default function MessagesPage() {
                     <p className="text-sm font-medium text-[#1a1a2e] truncate">{c.otherDisplayName || 'User'}</p>
                     {c.lastMessageAt && <span className="text-[10px] text-gray-400 flex-shrink-0 ml-2">{formatRelative(c.lastMessageAt)}</span>}
                   </div>
+                  {/* 13 Aug 2026 overhaul (task A5 review fix) — the inbox row, not
+                      the thread header, is a stranger's FIRST encounter with a new
+                      sender. listConversations() already returns otherJobTitle /
+                      otherCompany over the wire; this line is what stops them being
+                      dead payload weight. Own <p>, own truncate — it can never
+                      collide with the timestamp on the row above, which lives in a
+                      separate flex row. Bio deliberately excluded here (row density
+                      + it already lives in the thread header). */}
+                  {(c.otherJobTitle || c.otherCompany) && (
+                    <p className="truncate text-xs text-gray-500">
+                      {[c.otherJobTitle, c.otherCompany].filter(Boolean).join(' · ')}
+                    </p>
+                  )}
                   <p className={`text-xs truncate ${c.unreadCount > 0 && !c.lastMessageFromMe ? 'font-semibold text-[#1a1a2e]' : 'text-gray-500'}`}>
                     {c.lastMessageFromMe ? 'You: ' : ''}{c.lastMessage || <em className="text-gray-300">No messages yet</em>}
                   </p>
