@@ -361,3 +361,31 @@ test('resizing across the breakpoint with the drawer open never duplicates the n
 
   await cleanup(pool, { ids: [seeker.id, found.id] });
 });
+
+test('the dashboard leads with Suggestions, then Pods, Circles, Messages', async () => {
+  test.setTimeout(180_000);
+  const page = await openAs(owner, '/');
+  const tiles = page.locator('[data-testid^="tile-"]');
+  await expect(tiles.first()).toBeVisible({ timeout: 30_000 });
+
+  const order = await tiles.evaluateAll(els =>
+    els.map(e => e.getAttribute('data-testid')));
+  expect(order.slice(0, 4)).toEqual([
+    'tile-suggestions', 'tile-pods', 'tile-circles', 'tile-messages',
+  ]);
+
+  // Each tile owns its action rather than a separate button elsewhere.
+  for (const id of order.slice(0, 4)) {
+    const btn = page.locator(`[data-testid="${id}"] a, [data-testid="${id}"] button`);
+    expect(await btn.count(), `${id} has its own action`).toBeGreaterThan(0);
+    const box = await btn.first().boundingBox();
+    expect(box!.height, `${id} tap target`).toBeGreaterThanOrEqual(44);
+  }
+
+  // 360px floor: no horizontal overflow.
+  await page.setViewportSize({ width: 360, height: 800 });
+  const overflow = await page.evaluate(() =>
+    document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow, 'no sideways scroll at 360px').toBeLessThanOrEqual(0);
+  console.log('  ✓ dashboard order, per-tile actions, 44px targets, 360px clean.');
+});
