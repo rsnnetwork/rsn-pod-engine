@@ -128,9 +128,13 @@ test('golden path: request is visible, accept opens the conversation with the in
   // 13 Aug: the header must say who this person is, not just their name —
   // bold/clickable name linking to the profile, plus job title so the
   // recipient can tell a stranger from a colleague at a glance.
+  // Scope to the header LINK, not the page. Once the inbox row carries the job
+  // title too (the review fix below), a bare page.getByText() matches both and
+  // Playwright strict mode rightly refuses it — the ambiguity is the feature
+  // working, not a bug.
   const header = page.getByRole('link', { name: new RegExp(sender.displayName, 'i') });
   await expect(header).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText(/Senior React Developer/i)).toBeVisible();
+  await expect(header, 'the thread header names who is writing').toContainText(/Senior React Developer/i);
 
   // 13 Aug (review fix): the inbox ROW — not just the thread header — must
   // carry the who-is-writing signal. A stranger's FIRST encounter with a
@@ -138,7 +142,10 @@ test('golden path: request is visible, accept opens the conversation with the in
   // Navigate back to the inbox list (same page, mobile back-button flow)
   // and confirm the row itself shows the job title.
   await page.getByRole('button', { name: 'Back to inbox' }).click();
-  await expect(page.getByText(/Senior React Developer/i), 'the inbox row must show job title, not just a name').toBeVisible({ timeout: 20_000 });
+  // Scope to the row's own link so this cannot pass on a stale header.
+  const inboxRow = page.getByRole('link', { name: new RegExp(sender.displayName, 'i') });
+  await expect(inboxRow.first(), 'the inbox row must show job title, not just a name')
+    .toContainText(/Senior React Developer/i, { timeout: 20_000 });
 
   // DB truth: poke accepted, conversation + seeded intro exist, DMs unlocked.
   const poke = await pool.query(
