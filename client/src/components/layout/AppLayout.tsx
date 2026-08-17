@@ -50,7 +50,9 @@ export default function AppLayout() {
     { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
     // Wave 2: agents are how you look for people now. /matches remains
     // reachable as the browse-everyone fallback, just not the front door.
-    { to: '/agents', icon: Sparkles, label: 'Matches' },
+    // 13 Aug: labelled "Suggestions" — the page holds standing searches and
+    // what they found, which is not the same as a list of matches.
+    { to: '/agents', icon: Sparkles, label: 'Suggestions' },
     ...(showCircles ? [{ to: '/circles', icon: CircleDashed, label: 'Circles' }] : []),
     { to: '/pods', icon: Users, label: 'Pods' },
     { to: '/invites', icon: Mail, label: 'Invite' },

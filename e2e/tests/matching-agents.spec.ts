@@ -548,6 +548,14 @@ test('the dashboard fits phone and desktop widths with no overflow', async () =>
     await expect(page.getByTestId(`agent-${devAgent.id}`)).toBeVisible({ timeout: 30_000 });
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow, `no horizontal scroll at ${vp.width}px`).toBeLessThanOrEqual(1);
+
+    // 13 Aug: "Matches" became "Suggestions" in the nav. The route did not change.
+    // The desktop sidebar (md+, >=768px) carries this link; the mobile bottom
+    // nav never included it, so only assert where it's actually rendered.
+    if (vp.width >= 768) {
+      await expect(page.getByRole('link', { name: 'Suggestions' })).toBeVisible();
+      await expect(page.getByRole('link', { name: /^Matches$/ })).toHaveCount(0);
+    }
   }
   console.log('  ✓ 360 / 390 / 768 / 1280 all clean.');
 });
