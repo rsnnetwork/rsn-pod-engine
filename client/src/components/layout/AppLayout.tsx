@@ -117,7 +117,18 @@ export default function AppLayout() {
     >
       <l.icon className="h-4.5 w-4.5 shrink-0" />
       <span className="truncate">{l.label}</span>
-      {isDesktopNav && l.label === 'Suggestions' && suggestionCount > 0 && (
+      {/* `!closeMobile` (true only for the drawer's call to renderLink, never
+          the always-mounted desktop aside) is load-bearing, not decorative.
+          `isDesktopNav` alone raced: `mobileOpen` is never reset on resize,
+          so rotating a tablet/foldable past 768px while the drawer was open
+          left BOTH this instance and the aside's instance satisfying
+          `isDesktopNav && label === 'Suggestions'` at once — two DOM nodes
+          sharing data-testid="nav-suggestions-badge", which breaks a
+          strict-mode Playwright locator. The drawer already doesn't need its
+          own copy: on mobile the count rides the hamburger badge in the
+          header instead, so the drawer's sidebar-style badge is suppressed
+          unconditionally, not just "while desktop nav is active". */}
+      {isDesktopNav && !closeMobile && l.label === 'Suggestions' && suggestionCount > 0 && (
         <span
           data-testid="nav-suggestions-badge"
           className="ml-auto min-w-[20px] shrink-0 rounded-full bg-rsn-red px-1.5 py-0.5 text-center text-[11px] font-bold text-white"
@@ -200,7 +211,11 @@ export default function AppLayout() {
             <ChatQuickAccess />
             <NotificationBell />
             <div className="relative">
-              <button onClick={() => setMobileOpen(!mobileOpen)} className="text-gray-500 hover:text-gray-800 transition-colors ml-1">
+              <button
+                onClick={() => setMobileOpen(!mobileOpen)}
+                aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
+                className="text-gray-500 hover:text-gray-800 transition-colors ml-1"
+              >
                 {mobileOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
               </button>
               {/* Mobile has no persistently-visible "Suggestions" nav item (the

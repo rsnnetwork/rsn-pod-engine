@@ -328,3 +328,36 @@ test('a new suggestion shows a badge on the nav from any page', async () => {
 
   await cleanup(pool, { ids: [seeker.id, found.id] });
 });
+
+test('resizing across the breakpoint with the drawer open never duplicates the nav badge', async () => {
+  test.setTimeout(300_000);
+  // Regression: `isDesktopNav` alone raced, because `mobileOpen` is never
+  // reset on resize. Open the drawer on a phone, then cross the md
+  // breakpoint (768px) live — a tablet rotation or a foldable unfold, not a
+  // reload — and confirm the aside's badge and the drawer's badge never both
+  // satisfy the render condition at once. Two nodes sharing
+  // data-testid="nav-suggestions-badge" would break a strict-mode locator.
+  const seeker = await createTestUser('edgeResize');
+  const found = await createTestUser('edgeResizeFound');
+  await setProfile(found, {
+    professional_role: ['Developer'], job_title: 'Senior React Developer',
+    expertise_text: 'react typescript',
+  });
+  const id = await makeAgent(seeker, 'Resize', 'a senior react developer to build my product');
+  expect(await countOf(seeker, id)).toBeGreaterThan(0);
+
+  const page = await openAs(seeker, '/messages', { width: 390, height: 844 });
+  await expect(page.getByTestId('nav-suggestions-badge')).toHaveCount(1);
+
+  // Open the mobile drawer — this is the state that must survive the resize.
+  await page.getByRole('button', { name: /open menu/i }).click();
+  await expect(page.getByRole('link', { name: 'Suggestions' })).toBeVisible({ timeout: 30_000 });
+
+  // Cross the breakpoint with the drawer still open, no navigation, no reload.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(page.getByTestId('nav-suggestions-badge')).toHaveCount(1);
+  await expect(page.getByTestId('nav-suggestions-badge')).toBeVisible({ timeout: 30_000 });
+  console.log('  ✓ exactly one badge node survives a drawer-open cross-breakpoint resize.');
+
+  await cleanup(pool, { ids: [seeker.id, found.id] });
+});
