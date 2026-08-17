@@ -92,6 +92,37 @@ test('several URLs in one post all become links, and trailing punctuation stays 
   console.log('  ✓ multiple links per post; sentence punctuation excluded from the href.');
 });
 
+const BARE = 'www.fathom.video/share/abc123';
+
+test('a bare www link is clickable and gets an https scheme', async () => {
+  test.setTimeout(180_000);
+  await apiAs(member, 'POST', `/circles/${circleId}/posts`, {
+    clientId: uuid(), content: `Recording is at ${BARE} — have a look.`,
+  });
+
+  const page = await openWall(member);
+  // The href must be absolute, or the browser resolves it against app.rsn.network.
+  const link = page.locator(`a[href="https://${BARE}"]`).first();
+  await expect(link).toBeVisible({ timeout: 30_000 });
+  // The visible text stays as the member typed it.
+  await expect(link).toHaveText(BARE);
+  console.log('  ✓ bare www link resolved to an absolute https href.');
+});
+
+test('a bare domain is NOT invented out of ordinary prose', async () => {
+  test.setTimeout(180_000);
+  await apiAs(member, 'POST', `/circles/${circleId}/posts`, {
+    clientId: uuid(), content: 'Ask me about node.js vs deno. Costs approx.4 hours. See e.g. below.',
+  });
+
+  const page = await openWall(member);
+  // node.js, approx.4 and e.g. must never become links.
+  await expect(page.locator('a[href*="node.js"]')).toHaveCount(0);
+  await expect(page.locator('a[href*="approx"]')).toHaveCount(0);
+  await expect(page.locator('a[href*="e.g"]')).toHaveCount(0);
+  console.log('  ✓ prose containing dots stayed prose.');
+});
+
 test('a URL inside a comment is a real link too', async () => {
   test.setTimeout(180_000);
   const post = await apiAs(member, 'POST', `/circles/${circleId}/posts`, {
