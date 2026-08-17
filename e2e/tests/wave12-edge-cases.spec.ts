@@ -296,3 +296,35 @@ test('a profile offers a way through instead of a dead button, and tracks the re
   await pool.query(`DELETE FROM user_pokes WHERE sender_id = $1 AND recipient_id = $2`, [asker.id, askee.id]).catch(() => {});
   await cleanup(pool, { ids: [asker.id, askee.id] });
 });
+
+// ─── New-suggestion badge on the nav, from anywhere (13 Aug follow-up) ───────
+
+test('a new suggestion shows a badge on the nav from any page', async () => {
+  test.setTimeout(300_000);
+  const seeker = await createTestUser('edgeBadge');
+  const found = await createTestUser('edgeFound');
+  await setProfile(found, {
+    professional_role: ['Developer'], job_title: 'Senior React Developer',
+    expertise_text: 'react typescript',
+  });
+  const id = await makeAgent(seeker, 'Badge', 'a senior react developer to build my product');
+  expect(await countOf(seeker, id)).toBeGreaterThan(0);
+
+  // Land somewhere that is NOT the suggestions page.
+  const page = await openAs(seeker, '/messages');
+  const badge = page.getByTestId('nav-suggestions-badge');
+  await expect(badge).toBeVisible({ timeout: 30_000 });
+  await expect(badge).toHaveText(/^[1-9]\d*$/);
+  console.log('  ✓ suggestion badge visible from /messages.');
+
+  // Mobile-first: the badge must not push the page into horizontal overflow
+  // at the smallest supported width (360px), where it rides the hamburger
+  // rather than a sidebar row.
+  const narrow = await openAs(seeker, '/messages', { width: 360, height: 800 });
+  await expect(narrow.getByTestId('nav-suggestions-badge')).toBeVisible({ timeout: 30_000 });
+  const overflow = await narrow.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow, 'no horizontal scroll at 360px with the badge showing').toBeLessThanOrEqual(1);
+  console.log('  ✓ badge does not overflow at 360px.');
+
+  await cleanup(pool, { ids: [seeker.id, found.id] });
+});

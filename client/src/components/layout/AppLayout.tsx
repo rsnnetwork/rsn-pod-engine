@@ -6,7 +6,9 @@ import api from '@/lib/api';
 import { cn, isAdmin } from '@/lib/utils';
 import { useAuthStore } from '@/stores/authStore';
 import { useScrollReveal } from '@/hooks/useScrollReveal';
+import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { connectSocket } from '@/lib/socket';
+import { E } from '@/realtime/entities';
 import Avatar from '@/components/ui/Avatar';
 import Modal from '@/components/ui/Modal';
 import ToastContainer from '@/components/ui/Toast';
@@ -45,6 +47,27 @@ export default function AppLayout() {
     staleTime: 60_000,
   });
   const showCircles = isAdmin(user?.role) || (circlesForNav?.length ?? 0) > 0;
+
+  // The badge has to be live from ANY page, so the count is fetched in the
+  // layout rather than on the suggestions page. It rides the same entity
+  // invalidation as everything else keyed on the user.
+  const { data: agentList } = useQuery({
+    queryKey: ['agents', false],
+    queryFn: () => api.get('/agents').then(r => r.data.data as Array<{ matchCount: number }>),
+    enabled: !!user?.id,
+    meta: { entities: user?.id ? [E.user(user.id)] : [] },
+  });
+  const suggestionCount = (agentList ?? []).reduce((n, a) => n + (a.matchCount || 0), 0);
+
+  // The desktop sidebar and the mobile drawer share `renderLink` below, but the
+  // sidebar is only CSS-hidden on mobile (`hidden md:flex`) — it stays mounted
+  // in the DOM, and the drawer is closed by default. A badge inside `renderLink`
+  // alone would be invisible from any page on a phone unless the hamburger menu
+  // is open. `isDesktopNav` decides which single spot actually mounts the badge
+  // element, so there's always exactly one in the DOM (never a duplicate node
+  // for the same `data-testid`, which would break a strict-mode Playwright
+  // locator) and it is visible without opening the drawer on mobile.
+  const isDesktopNav = useMediaQuery('(min-width: 768px)');
 
   const mainLinks = [
     { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -93,7 +116,15 @@ export default function AppLayout() {
       )}
     >
       <l.icon className="h-4.5 w-4.5 shrink-0" />
-      {l.label}
+      <span className="truncate">{l.label}</span>
+      {isDesktopNav && l.label === 'Suggestions' && suggestionCount > 0 && (
+        <span
+          data-testid="nav-suggestions-badge"
+          className="ml-auto min-w-[20px] shrink-0 rounded-full bg-rsn-red px-1.5 py-0.5 text-center text-[11px] font-bold text-white"
+        >
+          {suggestionCount}
+        </span>
+      )}
     </NavLink>
   );
 
@@ -168,9 +199,23 @@ export default function AppLayout() {
           <div className="flex items-center gap-1">
             <ChatQuickAccess />
             <NotificationBell />
-            <button onClick={() => setMobileOpen(!mobileOpen)} className="text-gray-500 hover:text-gray-800 transition-colors ml-1">
-              {mobileOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
-            </button>
+            <div className="relative">
+              <button onClick={() => setMobileOpen(!mobileOpen)} className="text-gray-500 hover:text-gray-800 transition-colors ml-1">
+                {mobileOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
+              </button>
+              {/* Mobile has no persistently-visible "Suggestions" nav item (the
+                  drawer that carries it is closed by default), so the badge
+                  rides the hamburger here instead — same count, same testid as
+                  the desktop sidebar's badge, never both mounted at once. */}
+              {!isDesktopNav && suggestionCount > 0 && (
+                <span
+                  data-testid="nav-suggestions-badge"
+                  className="pointer-events-none absolute -top-1 -right-0.5 min-w-[16px] rounded-full bg-rsn-red px-1 py-0.5 text-center text-[10px] font-bold leading-none text-white"
+                >
+                  {suggestionCount}
+                </span>
+              )}
+            </div>
           </div>
         </header>
 
