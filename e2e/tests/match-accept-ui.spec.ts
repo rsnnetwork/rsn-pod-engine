@@ -57,6 +57,12 @@ test.beforeAll(async () => {
   recipient = await createTestUser('maRecipient');
   second = await createTestUser('maSecond');
   lonely = await createTestUser('maLonely');
+  // 13 Aug 2026 overhaul (task A5) — createTestUser seeds job_title as the
+  // deliberately-inert "Test Account" (see helpers/auth.ts) so fixtures
+  // never accidentally qualify for role-based matching. The
+  // who-is-writing-to-you header assertion below needs a real-looking
+  // title on the sender, so set one explicitly for just this fixture.
+  await pool.query(`UPDATE users SET job_title = $1 WHERE id = $2`, ['Senior React Developer', sender.id]);
   browser = await chromium.launch({ headless: false });
 });
 
@@ -118,6 +124,13 @@ test('golden path: request is visible, accept opens the conversation with the in
   await expect(page.getByText(/seed round/i).first()).toBeVisible({ timeout: 30_000 });
   await expect(card, 'the handled request must leave the pending list').toHaveCount(0, { timeout: 15_000 });
   await page.screenshot({ path: 'test-results/ma-after-accept.png' }).catch(() => {});
+
+  // 13 Aug: the header must say who this person is, not just their name —
+  // bold/clickable name linking to the profile, plus job title so the
+  // recipient can tell a stranger from a colleague at a glance.
+  const header = page.getByRole('link', { name: new RegExp(sender.displayName, 'i') });
+  await expect(header).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/Senior React Developer/i)).toBeVisible();
 
   // DB truth: poke accepted, conversation + seeded intro exist, DMs unlocked.
   const poke = await pool.query(

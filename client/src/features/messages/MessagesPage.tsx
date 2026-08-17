@@ -37,6 +37,11 @@ interface ConversationSummary {
   otherUserId: string;
   otherDisplayName: string | null;
   otherAvatarUrl: string | null;
+  // 13 Aug 2026 overhaul (task A5) — "unclear who's messaging you". The
+  // header needs more than a name to say WHO is writing.
+  otherJobTitle: string | null;
+  otherCompany: string | null;
+  otherBio: string | null;
   lastMessage: string | null;
   lastMessageAt: string | null;
   lastMessageFromMe: boolean;
@@ -323,10 +328,22 @@ export default function MessagesPage() {
         otherUserId: composeToUserId,
         otherDisplayName: composeTargetUser.displayName ?? null,
         otherAvatarUrl: composeTargetUser.avatarUrl ?? null,
+        // 13 Aug 2026 overhaul (task A5) — /users/:id already returns these
+        // public profile fields for non-owner viewers, so compose-new mode
+        // gets the same "who is this" context as an existing conversation.
+        otherJobTitle: composeTargetUser.jobTitle ?? null,
+        otherCompany: composeTargetUser.company ?? null,
+        otherBio: composeTargetUser.bio ?? null,
       }
     : null;
-  const headerContext: { otherUserId: string; otherDisplayName: string | null; otherAvatarUrl: string | null } | null
-    = activeConv ?? composeTarget;
+  const headerContext: {
+    otherUserId: string;
+    otherDisplayName: string | null;
+    otherAvatarUrl: string | null;
+    otherJobTitle: string | null;
+    otherCompany: string | null;
+    otherBio: string | null;
+  } | null = activeConv ?? composeTarget;
 
   const sendMutation = useMutation({
     mutationFn: async (args: {
@@ -723,8 +740,23 @@ export default function MessagesPage() {
                 <ArrowLeft className="h-4 w-4 text-gray-500" />
               </button>
               <Avatar src={headerContext.otherAvatarUrl || undefined} name={headerContext.otherDisplayName || 'User'} size="sm" />
-              <Link to={`/profile/${headerContext.otherUserId}`} className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-[#1a1a2e] truncate hover:underline">{headerContext.otherDisplayName || 'User'}</p>
+              {/* 13 Aug 2026 overhaul (task A5) — "unclear who's messaging you".
+                  The name-only link is now bold + prominent, and job title /
+                  company / bio give the recipient a sense of who this is
+                  before they even open the thread. truncate + line-clamp-2
+                  keep this from overflowing at 360px. */}
+              <Link to={`/profile/${headerContext.otherUserId}`} className="min-w-0 flex-1 hover:opacity-80">
+                <p className="truncate text-sm font-bold text-[#1a1a2e] hover:underline">
+                  {headerContext.otherDisplayName || 'User'}
+                </p>
+                {(headerContext.otherJobTitle || headerContext.otherCompany) && (
+                  <p className="truncate text-xs text-gray-500">
+                    {[headerContext.otherJobTitle, headerContext.otherCompany].filter(Boolean).join(' · ')}
+                  </p>
+                )}
+                {headerContext.otherBio && (
+                  <p className="mt-0.5 line-clamp-2 text-xs text-gray-400">{headerContext.otherBio}</p>
+                )}
               </Link>
               {/* REASON Phase 2 — arrange a time to meet (availability windows). */}
               {activeConv && (

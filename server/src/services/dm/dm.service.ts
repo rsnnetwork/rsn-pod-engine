@@ -79,6 +79,14 @@ export interface ConversationSummary {
   otherUserId: string;
   otherDisplayName: string | null;
   otherAvatarUrl: string | null;
+  // 13 Aug 2026 overhaul (task A5) — "unclear who's messaging you". The
+  // inbox now carries enough of the other person's public profile that the
+  // message view can say WHO is writing, not just their name. otherBio is
+  // truncated at the SQL layer (LEFT(u.bio, 180)) — the message view wants
+  // a line, not an essay.
+  otherJobTitle: string | null;
+  otherCompany: string | null;
+  otherBio: string | null;
   lastMessage: string | null;
   lastMessageAt: Date | null;
   lastMessageFromMe: boolean;
@@ -369,6 +377,9 @@ export async function listConversations(
     other_user_id: string;
     other_display_name: string | null;
     other_avatar_url: string | null;
+    other_job_title: string | null;
+    other_company: string | null;
+    other_bio: string | null;
     last_message: string | null;
     last_message_at: Date | null;
     last_message_from: string | null;
@@ -378,11 +389,19 @@ export async function listConversations(
     // Feature 19 (13 May spec) — also surface the last message's attachment
     // type so the inbox can render "📷 Photo" when an image was the most
     // recent send and there's no text caption.
+    //
+    // 13 Aug 2026 overhaul (task A5) — also surface job title, company, and
+    // a truncated bio so the message view can say WHO is writing, not just
+    // their name. LEFT(u.bio, 180) keeps the payload small — the inbox
+    // wants a line, not an essay.
     `SELECT
         c.id AS conversation_id,
         CASE WHEN c.user_a_id = $1 THEN c.user_b_id ELSE c.user_a_id END AS other_user_id,
         u.display_name AS other_display_name,
         u.avatar_url   AS other_avatar_url,
+        u.job_title    AS other_job_title,
+        u.company      AS other_company,
+        LEFT(u.bio, 180) AS other_bio,
         last_msg.content    AS last_message,
         c.last_message_at,
         last_msg.from_user_id AS last_message_from,
@@ -429,6 +448,9 @@ export async function listConversations(
         otherUserId: r.other_user_id,
         otherDisplayName: r.other_display_name,
         otherAvatarUrl: r.other_avatar_url,
+        otherJobTitle: r.other_job_title,
+        otherCompany: r.other_company,
+        otherBio: r.other_bio,
         lastMessage: previewText,
         lastMessageAt: r.last_message_at,
         lastMessageFromMe: r.last_message_from === userId,
