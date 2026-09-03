@@ -136,9 +136,12 @@ test('a circle member cannot email-invite someone already in the circle', async 
 test('the circle page offers Invite to a member, and the invites page creates a circle link at 360px', async () => {
   test.setTimeout(180_000);
   const circlePage = await openAs(member, `/circles/${circleId}`, { width: 360, height: 780 });
-  const inviteBtn = circlePage.getByRole('link', { name: /^Invite$/ }).or(circlePage.getByRole('button', { name: /^Invite$/ }));
-  await expect(inviteBtn.first()).toBeVisible({ timeout: 30_000 });
-  await inviteBtn.first().click();
+  // Scoped by test id: the phone bottom bar also carries an "Invite" nav link.
+  const inviteBtn = circlePage.getByTestId('circle-invite');
+  await expect(inviteBtn).toBeVisible({ timeout: 30_000 });
+  const ib = await inviteBtn.boundingBox();
+  expect(ib!.height, 'Invite tap target').toBeGreaterThanOrEqual(44);
+  await inviteBtn.click();
   await expect(circlePage).toHaveURL(/\/invites\?type=circle&circleId=/);
 
   // Preselected from the URL: the type is Circle and the circle is chosen.
@@ -165,5 +168,5 @@ test('the circle page offers Invite to a member, and the invites page creates a 
 test('an outsider sees no Invite on the circle page', async () => {
   const page = await openAs(outsider, `/circles/${circleId}`, { width: 390, height: 844 });
   await expect(page.getByRole('button', { name: /Join circle/i })).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByRole('link', { name: /^Invite$/ })).toHaveCount(0);
+  await expect(page.getByTestId('circle-invite')).toHaveCount(0);
 });

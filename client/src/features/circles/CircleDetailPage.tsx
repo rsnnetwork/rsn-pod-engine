@@ -89,6 +89,7 @@ export default function CircleDetailPage() {
           {circle.isMember && (
             <Link
               to={`/invites?type=circle&circleId=${circle.id}`}
+              data-testid="circle-invite"
               className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-gray-200 px-3 text-sm font-medium text-[#1a1a2e] hover:bg-gray-50"
             >
               <Mail className="h-4 w-4" /> Invite
