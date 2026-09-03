@@ -158,6 +158,89 @@ describe('runEnrichment', () => {
     expect(params).toMatchObject({ status: 'partial', source: 'scrapingdog' });
   });
 
+  // ─── 3 Sep 2026: the web provider fills what scrapingdog leaves empty ──────
+  // ScrapingDog returns an empty headline and empty positions for every profile
+  // we have tried, so members reached the confirm card with Role "Not set".
+  describe('gap fill from the web provider', () => {
+    const scrapedNoRole = () => foundResult({
+      confidence: 0.7,
+      profile: baseProfile({ headline: null, currentRole: null, currentCompany: 'Acme', location: null, summary: 'As a VP Eng at Acme, I…' }),
+    });
+    const webFound = (over: Partial<EnrichResult> = {}): EnrichResult => ({
+      profile: baseProfile({ headline: 'VP Engineering | Acme', currentRole: 'VP Eng', currentCompany: 'Acme Inc', location: 'Berlin', summary: 'As a VP Eng at Acme, I run platform and data.' , skills: ['Go', 'Kubernetes'] }),
+      confidence: 0.9, sources: ['https://www.linkedin.com/in/jane-doe'],
+      foundLinkedinUrl: REQ_URL, requestedLinkedinUrl: REQ_URL, enrichedAt: new Date().toISOString(), ...over,
+    });
+
+    it('a partial with no role gets headline, role, location, skills and the fuller summary from the web, and becomes found', async () => {
+      mockScrapingdogEnrich.mockResolvedValue({ kind: 'partial', result: scrapedNoRole(), photoUrl: null, missing: ['headline', 'currentRole'] });
+      mockEnrichProfile.mockResolvedValue(webFound());
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      expect(mockEnrichProfile).toHaveBeenCalledTimes(1);
+      expect(mockEnrichProfile.mock.calls[0][0]).toMatchObject({ linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+      const saved: EnrichResult = mockSaveEnrichedCandidate.mock.calls[0][1];
+      expect(saved.profile).toMatchObject({
+        headline: 'VP Engineering | Acme', currentRole: 'VP Eng', location: 'Berlin', skills: ['Go', 'Kubernetes'],
+        summary: 'As a VP Eng at Acme, I run platform and data.',
+      });
+      // A scraped fact is never overwritten by a searched one.
+      expect(saved.profile!.currentCompany).toBe('Acme');
+      expect(saved.sources).toEqual(expect.arrayContaining(['scrapingdog:jane-doe', 'https://www.linkedin.com/in/jane-doe']));
+      expect(saved.confidence).toBe(0.95);
+      const [, params] = lastStateCall();
+      expect(params).toMatchObject({ status: 'found', source: 'scrapingdog' });
+    });
+
+    it('a web result that cannot identify the person (confidence 0) changes nothing and stays partial', async () => {
+      mockScrapingdogEnrich.mockResolvedValue({ kind: 'partial', result: scrapedNoRole(), photoUrl: null, missing: ['headline', 'currentRole'] });
+      mockEnrichProfile.mockResolvedValue({ profile: null, confidence: 0, sources: [], foundLinkedinUrl: REQ_URL, requestedLinkedinUrl: REQ_URL, enrichedAt: null });
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      const saved: EnrichResult = mockSaveEnrichedCandidate.mock.calls[0][1];
+      expect(saved.profile!.currentRole).toBeNull();
+      expect(lastStateCall()[1]).toMatchObject({ status: 'partial' });
+    });
+
+    it('a web result for a DIFFERENT profile is ignored, even at high confidence', async () => {
+      mockScrapingdogEnrich.mockResolvedValue({ kind: 'partial', result: scrapedNoRole(), photoUrl: null, missing: ['headline', 'currentRole'] });
+      mockEnrichProfile.mockResolvedValue(webFound({ foundLinkedinUrl: 'https://www.linkedin.com/in/another-jane' }));
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      const saved: EnrichResult = mockSaveEnrichedCandidate.mock.calls[0][1];
+      expect(saved.profile!.currentRole).toBeNull();
+      expect(lastStateCall()[1]).toMatchObject({ status: 'partial' });
+    });
+
+    it('a complete scrapingdog result never spends a web call', async () => {
+      mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: null });
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+      expect(mockEnrichProfile).not.toHaveBeenCalled();
+    });
+
+    it('a partial that already has headline and role (only company missing) does not spend a web call', async () => {
+      mockScrapingdogEnrich.mockResolvedValue({
+        kind: 'partial', result: foundResult({ confidence: 0.7, profile: baseProfile({ currentCompany: null }) }), photoUrl: null, missing: ['currentCompany'],
+      });
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+      expect(mockEnrichProfile).not.toHaveBeenCalled();
+      expect(lastStateCall()[1]).toMatchObject({ status: 'partial' });
+    });
+
+    it('a web provider failure keeps the scraped result and still lands partial', async () => {
+      mockScrapingdogEnrich.mockResolvedValue({ kind: 'partial', result: scrapedNoRole(), photoUrl: null, missing: ['headline', 'currentRole'] });
+      mockEnrichProfile.mockRejectedValue(new Error('web search down'));
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      expect(mockSaveEnrichedCandidate).toHaveBeenCalledTimes(1);
+      expect(lastStateCall()[1]).toMatchObject({ status: 'partial', source: 'scrapingdog' });
+    });
+  });
+
   it('not_found via provider: no save, marks enrichment_status=not_found with the provider reason', async () => {
     mockScrapingdogEnrich.mockResolvedValue({ kind: 'not_found', reason: 'scrapingdog 404' });
 

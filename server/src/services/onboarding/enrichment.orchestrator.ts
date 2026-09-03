@@ -36,12 +36,61 @@ import config from '../../config';
 import logger from '../../config/logger';
 import {
   applyMatchVerification,
+  enrichProfile,
   getClient,
   linkedinSlug,
   normalizeLinkedinUrl,
   type EnrichedProfile,
   type EnrichResult,
 } from './enrichment.service';
+
+// ─── Gap fill (3 Sep 2026) ───────────────────────────────────────────────────
+// ScrapingDog's LinkedIn payload arrives with an EMPTY headline and empty
+// positions for every profile we have tried (the July fixture, Ali, Ahmed),
+// so every member reached the confirm card with Role "Not set" even though
+// LinkedIn shows one. The Claude web-search provider reads the public page and
+// returns the stated headline and role (Ali: 0.92, verified against the exact
+// URL) while honestly returning nothing for a profile it cannot identify
+// (Ahmed: 0). So when scrapingdog is partial on headline or role, ask the web
+// provider to fill ONLY the fields that are empty, and only when it verified
+// the same profile. A scraped fact is never overwritten by a searched one.
+const GAP_FILL_MIN_CONFIDENCE = 0.6;
+const GAP_FIELDS = ['headline', 'currentRole', 'currentCompany', 'industry', 'location'] as const;
+
+async function fillGapsFromWeb(
+  result: EnrichResult,
+  fullName: string | undefined,
+  linkedinUrl: string,
+  userId: string,
+): Promise<{ result: EnrichResult; filled: string[] }> {
+  const scraped = result.profile;
+  if (!scraped || (scraped.headline && scraped.currentRole)) return { result, filled: [] };
+  try {
+    const web = applyMatchVerification(
+      await enrichProfile({ fullName: fullName || scraped.fullName || '', linkedinUrl }),
+      linkedinUrl,
+    );
+    if (!web.profile || web.confidence < GAP_FILL_MIN_CONFIDENCE) return { result, filled: [] };
+
+    const merged: EnrichedProfile = { ...scraped };
+    const filled: string[] = [];
+    for (const k of GAP_FIELDS) {
+      if (!merged[k] && web.profile[k]) { merged[k] = web.profile[k]; filled.push(k); }
+    }
+    if (!merged.skills.length && web.profile.skills.length) { merged.skills = web.profile.skills; filled.push('skills'); }
+    // ScrapingDog truncates About with an ellipsis; a longer searched summary is the fuller text.
+    if (web.profile.summary && (!merged.summary || (merged.summary.endsWith('…') && web.profile.summary.length > merged.summary.length))) {
+      merged.summary = web.profile.summary; filled.push('summary');
+    }
+    if (!filled.length) return { result, filled };
+
+    const sources = [...result.sources, ...web.sources.filter((s) => !result.sources.includes(s))];
+    return { result: { ...result, profile: merged, sources }, filled };
+  } catch (err) {
+    logger.warn({ err, userId }, 'enrichment gap fill failed — keeping the scraped result');
+    return { result, filled: [] };
+  }
+}
 import { getCachedEnrichment, getEnrichmentState, saveEnrichedCandidate, setEnrichmentState } from './enrichment.repo';
 import { resolveEnrichProvider, runProvider, statusFromConfidence, type EnrichProviderName } from './providers/registry';
 import type { ProviderOutcome } from './providers/provider.types';
@@ -297,17 +346,32 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
     // Steps 5-6: found/partial.
     if (outcome.kind === 'found' || outcome.kind === 'partial') {
       let result = applyMatchVerification(outcome.result, resolvedLinkedinUrl);
-      // Extras is a second, facts-grounded LLM call — scrapingdog outcomes
-      // only. claude_web's own prompt already asks for these same four hint
-      // fields in its single pass; running extras on top would double-spend
-      // the LLM call and overwrite what that prompt already produced.
+      let kind: 'found' | 'partial' = outcome.kind;
       if (provider === 'scrapingdog') {
+        // A partial with no headline or role gets one more, verified, look at
+        // the public page before the member sees "Not set" (see fillGapsFromWeb).
+        if (outcome.kind === 'partial') {
+          const gap = await fillGapsFromWeb(result, input.fullName, resolvedLinkedinUrl, userId);
+          result = gap.result;
+          if (gap.filled.length) {
+            const p = result.profile!;
+            if (p.headline && p.currentRole && p.currentCompany) {
+              kind = 'found';
+              result = { ...result, confidence: 0.95 };
+            }
+            logger.info({ userId, filled: gap.filled, kind }, 'enrichment: web search filled the gaps scrapingdog left');
+          }
+        }
+        // Extras is a second, facts-grounded LLM call — scrapingdog outcomes
+        // only. claude_web's own prompt already asks for these same four hint
+        // fields in its single pass; running extras on top would double-spend
+        // the LLM call and overwrite what that prompt already produced.
         result = await withExtras(result, userId);
       }
       await saveEnrichedCandidate(userId, result).catch((err) =>
         logger.warn({ err, userId }, 'enrichment: saveEnrichedCandidate failed (non-fatal)'),
       );
-      await writeState(userId, { status: outcome.kind, source: provider });
+      await writeState(userId, { status: kind, source: provider });
       // A7: LinkedIn photo capture — fire-and-forget, deliberately NOT
       // awaited. A photo failure must never affect (or delay) the
       // enrichment outcome above, which has already been written. The
@@ -331,7 +395,7 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
             recordStageEvent(userId, 'photo_failed', { reason }, Date.now() - photoStartedAtMs).catch(() => {});
           });
       }
-      logTerminal(userId, provider, outcome.kind, startedAtMs);
+      logTerminal(userId, provider, kind, startedAtMs);
       return;
     }
 
