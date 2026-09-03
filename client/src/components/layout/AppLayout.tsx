@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, Calendar, Mail, User, LogOut, Menu, X, Shield, Settings, HelpCircle, Heart, MessageSquare, Sparkles, CircleDashed } from 'lucide-react';
+import { LayoutDashboard, Users, Calendar, Mail, User, LogOut, Menu, X, Shield, Settings, HelpCircle, Heart, MessageSquare, Sparkles, CircleDashed, Search } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
 import { cn, isAdmin } from '@/lib/utils';
@@ -76,6 +76,8 @@ export default function AppLayout() {
     // 13 Aug: labelled "Suggestions" — the page holds standing searches and
     // what they found, which is not the same as a list of matches.
     { to: '/agents', icon: Sparkles, label: 'Suggestions' },
+    // 13 Aug: Claus could not find himself. Search over everyone, thin cards.
+    { to: '/search', icon: Search, label: 'Find people' },
     ...(showCircles ? [{ to: '/circles', icon: CircleDashed, label: 'Circles' }] : []),
     { to: '/pods', icon: Users, label: 'Pods' },
     { to: '/invites', icon: Mail, label: 'Invite' },

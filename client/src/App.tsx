@@ -35,6 +35,7 @@ import MessagesPage from '@/features/messages/MessagesPage';
 import EncounterHistoryPage from '@/features/sessions/EncounterHistoryPage';
 import MatchesPage from '@/features/matches/MatchesPage';
 import AgentsPage from '@/features/agents/AgentsPage';
+import SearchPage from '@/features/search/SearchPage';
 import AgentDetailPage from '@/features/agents/AgentDetailPage';
 import CirclesPage from '@/features/circles/CirclesPage';
 import CircleDetailPage from '@/features/circles/CircleDetailPage';
@@ -185,6 +186,7 @@ export default function App() {
         {/* Wave 2: agents are the primary way to look for people. /matches
             stays as the browse-everyone fallback. */}
         <Route path="/agents" element={<AgentsPage />} />
+        <Route path="/search" element={<SearchPage />} />
         <Route path="/agents/:id" element={<AgentDetailPage />} />
         <Route path="/circles" element={<CirclesPage />} />
         <Route path="/circles/:circleId" element={<CircleDetailPage />} />

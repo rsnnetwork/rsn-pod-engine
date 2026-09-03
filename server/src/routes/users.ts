@@ -6,6 +6,7 @@ import { authenticate } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import * as identityService from '../services/identity/identity.service';
 import { searchConnectedUsers } from '../services/invite/connected-users';
+import { searchMembers } from '../services/user/user-search.service';
 import * as blockService from '../services/block/block.service';
 import { getAvatarBlob } from '../services/onboarding/avatar.service';
 import {
@@ -166,6 +167,25 @@ router.get(
         industry: u.industry,
         avatarUrl: u.avatar_url,
       }));
+      res.json({ success: true, data } as ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── GET /users/find — find anyone on the platform by name, title or company ─
+// 13 Aug 2026 (C1). Distinct from /connected, which only searches people you
+// have already met, and from /search below, which is admin moderation and
+// returns emails. This one is for members and returns a thin card only.
+router.get(
+  '/find',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const q = String(req.query.q || '');
+      const limit = parseInt(String(req.query.limit || '20'), 10) || 20;
+      const data = await searchMembers(req.user!.userId, q, limit);
       res.json({ success: true, data } as ApiResponse);
     } catch (err) {
       next(err);

@@ -8304,3 +8304,15 @@ Matrix smoke (44.3s, prod), "entered" = video grid LIVE: A healthy 6s; B broadca
 ## 2026-09-03 - 13 Aug overhaul, Task D2: the host reacts before it asks
 
 **Stefan (13 Aug):** the onboarding chat prompt is "too transactional/cold; needs to feel more human." Every efficiency rule from 30 Jul stays (one question per message, wrap up early, never re-ask). Added: the host is "genuinely curious about the person in front of you"; style rule 4 makes it react to what the member just said in one short specific line, in their own words where possible, before asking the next thing, with no flattery or fake enthusiasm ("great question", "love that" banned); the word budget goes 30 -> 40 so a reaction plus one question fits; and the efficiency block opens with "Be efficient without being cold" plus a line telling the host to let something concrete from the last answer shape the next question. 5 new prompt tests pin the tone rules alongside the 30 Jul brevity pins (34 green). Live transcript check against the real model is pending the Anthropic top-up.
+
+---
+
+## 2026-09-03 - 13 Aug overhaul, Task C1: platform-wide people search
+
+**Claus (13 Aug):** no way to search for a known person on the platform; decision: build search inside RSN. Ali's recorded scope: every active, onboarded member is findable by name, job title and company; results show name, title, company and photo plus the existing "I want to meet" action; full profile and messaging keep their gates; no opt-out in this pass.
+
+**Server:** `GET /users/find?q=&limit=` (member-facing, registered ahead of `/:id`) -> `searchMembers(viewerId, q, limit)` in `services/user/user-search.service.ts`: ILIKE over display_name / job_title / company with `%` and `_` escaped, active + onboarding_completed only, never the caller, never anyone in a `user_blocks` row either way, name matches first, min 2 chars (1 char = scrape), cap 50. Thin SELECT: id, display_name, avatar_url, job_title, company, location - no email, bio or LinkedIn. The pre-existing admin-only `/users/search` (moderation, returns emails, no client caller) is untouched. Migration 088: `pg_trgm` + GIN trigram indexes on the three columns (Neon owner role can install it; probed inside a rolled-back transaction first).
+
+**Client:** `/search` page (Find people): settled input (250ms), thin cards with `data-testid=search-result-<id>`, name links to `/profile/:id` (where the existing gates apply), "I want to meet" posts to the existing `/matches/platform/:id/interest`, empty state, 44px targets, 360px clean. Nav item "Find people" after Suggestions (sidebar + drawer; the 5-item phone bottom bar is unchanged).
+
+**Tests:** 10 service tests (columns, gates, escaping, cap, thin shape), 5 route tests (auth, caller id, member allowed, ahead of /:id, admin search still 403 for members). E2E `e2e/tests/search.spec.ts`: found by name/title/company with the exact thin key set; name outranks company; self / blocked both ways / deactivated / not-onboarded hidden; 1-char and `%%` return nothing; page finds a stranger at 360px, meets (poke row asserted), links to the profile; empty state + desktop nav link.
