@@ -388,7 +388,7 @@ export async function sendHostRecapEmail(
 
 interface InviteEmailData {
   inviterName: string;
-  type: 'pod' | 'session' | 'platform';
+  type: 'pod' | 'session' | 'platform' | 'circle';
   targetName?: string; // pod or session name
   inviteUrl: string;
   calendarEvent?: {
@@ -410,7 +410,7 @@ interface InviteEmailData {
  * A pure builder, so the copy is testable without an email provider.
  */
 export function buildInviteEmail(data: InviteEmailData): { subject: string; html: string; text: string } {
-  const typeLabel = data.type === 'pod' ? 'a pod' : data.type === 'session' ? 'an event' : 'the platform';
+  const typeLabel = data.type === 'pod' ? 'a pod' : data.type === 'session' ? 'an event' : data.type === 'circle' ? 'a circle' : 'the platform';
   const targetLine = data.targetName ? ` — <strong>${data.targetName}</strong>` : '';
   const targetText = data.targetName ? ` — ${data.targetName}` : '';
 

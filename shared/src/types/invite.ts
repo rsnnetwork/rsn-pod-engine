@@ -11,6 +11,8 @@ export enum InviteType {
   POD = 'pod',
   SESSION = 'session',
   PLATFORM = 'platform',
+  /** 13 Aug 2026 (C3): circle-level invites, mirroring the pod path. */
+  CIRCLE = 'circle',
 }
 
 export interface Invite {
@@ -21,6 +23,7 @@ export interface Invite {
   inviteeEmail: string | null;
   podId: string | null;
   sessionId: string | null;
+  circleId: string | null;
   status: InviteStatus;
   maxUses: number;
   useCount: number;
@@ -36,6 +39,7 @@ export interface CreateInviteInput {
   inviteeEmail?: string;
   podId?: string;
   sessionId?: string;
+  circleId?: string;
   maxUses?: number;
   expiresInHours?: number;
 }

@@ -10,6 +10,7 @@ import {
 import { NotFoundError, ConflictError, AppError } from '../../middleware/errors';
 import * as podService from '../pod/pod.service';
 import * as sessionService from '../session/session.service';
+import * as circleService from '../circle/circle.service';
 import * as emailService from '../email/email.service';
 import config from '../../config';
 
@@ -18,7 +19,7 @@ const generateCode = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuv
 
 const INVITE_COLUMNS = `
   id, code, type, inviter_id AS "inviterId", invitee_email AS "inviteeEmail",
-  pod_id AS "podId", session_id AS "sessionId", status, max_uses AS "maxUses",
+  pod_id AS "podId", session_id AS "sessionId", circle_id AS "circleId", status, max_uses AS "maxUses",
   use_count AS "useCount", expires_at AS "expiresAt",
   accepted_by_user_id AS "acceptedByUserId", accepted_at AS "acceptedAt",
   created_at AS "createdAt", updated_at AS "updatedAt"
@@ -85,6 +86,34 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
   // Validate pod/session references — require target for pod/session invites
   // IMPORTANT: membership checks come BEFORE duplicate-invite checks so the
   // user sees "already a member" instead of "pending invite exists"
+  // 13 Aug 2026 (C3): circle-level invites, mirroring the pod path. Circles
+  // are open-join, so this is a doorway rather than a gate: you must be IN the
+  // circle to invite to it, and accepting joins the circle.
+  if (input.type === InviteType.CIRCLE) {
+    if (!input.circleId) {
+      throw new AppError(400, 'VALIDATION_ERROR', 'Circle invite requires a circle to be selected');
+    }
+    const circle = await query<{ id: string }>(
+      `SELECT id FROM circles WHERE id = $1 AND archived_at IS NULL`, [input.circleId]);
+    if (circle.rows.length === 0) {
+      throw new NotFoundError('Circle', input.circleId);
+    }
+    if (!isAdmin && !(await circleService.isCircleMember(input.circleId, userId))) {
+      throw new AppError(403, 'AUTH_FORBIDDEN', 'Only circle members can invite to a circle');
+    }
+    if (input.inviteeEmail) {
+      const existingMember = await query<{ id: string }>(
+        `SELECT u.id FROM users u
+         JOIN circle_members cm ON cm.user_id = u.id
+         WHERE u.email = $1 AND cm.circle_id = $2`,
+        [input.inviteeEmail.toLowerCase(), input.circleId]
+      );
+      if (existingMember.rows.length > 0) {
+        throw new AppError(409, 'CIRCLE_MEMBER_EXISTS', 'This user is already a member of this circle');
+      }
+    }
+  }
+
   if (input.type === InviteType.POD) {
     if (!input.podId) {
       throw new AppError(400, 'VALIDATION_ERROR', 'Pod invite requires a pod to be selected');
@@ -165,8 +194,9 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
       `SELECT id FROM invites
        WHERE invitee_email = $1 AND type = $2 AND status = 'pending'
          AND ($3::uuid IS NULL OR pod_id = $3)
-         AND ($4::uuid IS NULL OR session_id = $4)`,
-      [input.inviteeEmail.toLowerCase(), input.type, input.podId || null, input.sessionId || null]
+         AND ($4::uuid IS NULL OR session_id = $4)
+         AND ($5::uuid IS NULL OR circle_id = $5)`,
+      [input.inviteeEmail.toLowerCase(), input.type, input.podId || null, input.sessionId || null, input.circleId || null]
     );
     if (dupCheck.rows.length > 0) {
       throw new AppError(409, 'DUPLICATE_INVITE', 'A pending invite already exists for this user');
@@ -174,8 +204,8 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
   }
 
   const result = await query<Invite>(
-    `INSERT INTO invites (code, type, inviter_id, invitee_email, pod_id, session_id, max_uses, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO invites (code, type, inviter_id, invitee_email, pod_id, session_id, max_uses, expires_at, circle_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING ${INVITE_COLUMNS}`,
     [
       code,
@@ -186,6 +216,7 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
       input.sessionId || null,
       input.maxUses || 2,
       expiresAt,
+      input.circleId || null,
     ]
   );
 
@@ -203,6 +234,10 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
     if (input.type === InviteType.POD && input.podId) {
       const podResult = await query<{ name: string }>('SELECT name FROM pods WHERE id = $1', [input.podId]);
       targetName = podResult.rows[0]?.name;
+    }
+    if (input.type === InviteType.CIRCLE && input.circleId) {
+      const circleResult = await query<{ name: string }>('SELECT name FROM circles WHERE id = $1', [input.circleId]);
+      targetName = circleResult.rows[0]?.name;
     }
     let calendarEvent: any = undefined;
     if (input.type === InviteType.SESSION && input.sessionId) {
@@ -252,7 +287,7 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
     try {
       await emailService.sendInviteEmail(input.inviteeEmail, {
         inviterName,
-        type: (input.type || 'platform') as 'pod' | 'session' | 'platform',
+        type: (input.type || 'platform') as 'pod' | 'session' | 'platform' | 'circle',
         targetName,
         inviteUrl: `${config.clientUrl}/invite/${code}`,
         calendarEvent,
@@ -265,10 +300,13 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
     // Create in-app notification for existing users
     const inviteeUser = await query<{ id: string }>(`SELECT id FROM users WHERE email = $1`, [input.inviteeEmail.toLowerCase()]);
     if (inviteeUser.rows.length > 0) {
-      const notifType = input.type === InviteType.POD ? 'pod_invite' : 'event_invite';
+      const notifType = input.type === InviteType.POD ? 'pod_invite'
+        : input.type === InviteType.CIRCLE ? 'circle_invite' : 'event_invite';
       const notifTitle = input.type === InviteType.POD
         ? `${inviterName} invited you to ${targetName || 'a pod'}`
-        : `${inviterName} invited you to ${targetName || 'an event'}`;
+        : input.type === InviteType.CIRCLE
+          ? `${inviterName} invited you to ${targetName || 'a circle'}`
+          : `${inviterName} invited you to ${targetName || 'an event'}`;
       const notifLink = `/invite/${code}`;
       // Build a richer body with event details when available
       let notifBody = `Invite from ${inviterName}`;
@@ -402,8 +440,15 @@ export interface AcceptInviteResult {
 async function applyInviteRegistration(
   invite: Invite,
   userId: string,
-): Promise<{ sessionId?: string; podId?: string }> {
-  const out: { sessionId?: string; podId?: string } = {};
+): Promise<{ sessionId?: string; podId?: string; circleId?: string }> {
+  const out: { sessionId?: string; podId?: string; circleId?: string } = {};
+
+  // 13 Aug 2026 (C3): a circle invite joins the circle. joinCircle is
+  // idempotent (ON CONFLICT DO NOTHING, counter moves only on a real insert).
+  if (invite.type === InviteType.CIRCLE && invite.circleId) {
+    await circleService.joinCircle(invite.circleId, userId);
+    out.circleId = invite.circleId;
+  }
 
   if (invite.type === InviteType.POD && invite.podId) {
     try {
@@ -471,7 +516,7 @@ async function applyInviteRegistration(
   return out;
 }
 
-function computeRedirectTo(_invite: Invite, registered: { sessionId?: string; podId?: string }): string {
+function computeRedirectTo(_invite: Invite, registered: { sessionId?: string; podId?: string; circleId?: string }): string {
   // #1 (June-10 debrief) — a SESSION invite lands on the event DETAILS page
   // (`/sessions/:sessionId`, see client/src/App.tsx), NOT straight into the live
   // room. The details page shows event info + an explicit "Enter Event" button;
@@ -479,6 +524,7 @@ function computeRedirectTo(_invite: Invite, registered: { sessionId?: string; po
   // live`. Pod invite → the pod page.
   if (registered.sessionId) return `/sessions/${registered.sessionId}`;
   if (registered.podId) return `/pods/${registered.podId}`;
+  if (registered.circleId) return `/circles/${registered.circleId}`;
   // Fallback for malformed invites (no podId or sessionId attached) — never
   // hit in practice, present for type completeness.
   return '/dashboard';

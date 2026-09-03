@@ -102,6 +102,14 @@ describe('Email Service', () => {
       expect(text).toContain('Accept Invite: http://localhost:5173/invite/ABC123');
     });
 
+    it('a circle invite reads as an invitation to a circle', () => {
+      const { html, text } = emailService.buildInviteEmail({
+        inviterName: 'Claus', type: 'circle', targetName: 'Nordic Founders', inviteUrl: 'http://x/invite/1',
+      });
+      expect(html).toMatch(/invited you to join a circle — <strong>Nordic Founders<\/strong>/);
+      expect(text).toMatch(/invited you to join a circle — Nordic Founders/);
+    });
+
     it('a pod invite says what Reason is but does not promise a sign-up conversation to someone who may already be in', () => {
       const { subject, html, text } = emailService.buildInviteEmail({
         inviterName: 'Stefan', type: 'pod', targetName: 'Founding Circle', inviteUrl: 'http://localhost:5173/invite/ABC123',

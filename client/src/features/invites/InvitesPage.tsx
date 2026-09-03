@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Mail, Copy, Check, Users, Calendar, Globe, Trash2, Send, Link, Search, Inbox, UserCheck, X } from 'lucide-react';
+import { Mail, Copy, Check, Users, Calendar, Globe, Trash2, Send, Link, Search, Inbox, UserCheck, X, CircleDashed } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -19,6 +19,8 @@ const TYPE_CONFIG: Record<string, { label: string; icon: typeof Users; variant: 
   pod: { label: 'Pod Invite', icon: Users, variant: 'info' },
   session: { label: 'Event Invite', icon: Calendar, variant: 'warning' },
   platform: { label: 'Platform Invite', icon: Globe, variant: 'default' },
+  // 13 Aug 2026 (C3): circle-level invites, mirroring pods.
+  circle: { label: 'Circle Invite', icon: CircleDashed, variant: 'info' },
 };
 
 export default function InvitesPage() {
@@ -31,9 +33,13 @@ export default function InvitesPage() {
   const userIsAdmin = isAdmin(user?.role);
   const qc = useQueryClient();
 
-  // Inline create form state
-  const [inviteType, setInviteType] = useState('pod');
+  // Inline create form state. The circle page deep-links here with the
+  // circle preselected (?type=circle&circleId=...), so read the URL once.
+  const [searchParams] = useSearchParams();
+  const presetType = searchParams.get('type');
+  const [inviteType, setInviteType] = useState(presetType === 'circle' ? 'circle' : 'pod');
   const [podId, setPodId] = useState('');
+  const [circleId, setCircleId] = useState(presetType === 'circle' ? (searchParams.get('circleId') || '') : '');
   const [sessionId, setSessionId] = useState('');
   const [inviteeEmail, setInviteeEmail] = useState('');
   const [maxUses, setMaxUses] = useState(10);
@@ -52,6 +58,13 @@ export default function InvitesPage() {
     queryKey: ['my-pods'],
     queryFn: () => api.get('/pods').then(r => r.data.data ?? []),
     meta: { entities: currentUserId ? [E.userPods(currentUserId)] : [] },
+  });
+
+  // realtime: skip — the circle selector lists what the member belongs to; it refetches on every visit and membership changes are rare
+  const { data: circles } = useQuery({
+    queryKey: ['circles'],
+    queryFn: () => api.get('/circles').then(r => r.data.data ?? []),
+    enabled: inviteType === 'circle',
   });
 
   const { data: sessions } = useQuery({
@@ -155,10 +168,11 @@ export default function InvitesPage() {
 
   const sendEmailMutation = useMutation({
     mutationFn: () => {
-      if (needsTarget) { throw new Error('Please select a pod or event first'); }
+      if (needsTarget) { throw new Error('Please select a pod, event or circle first'); }
       const payload: any = { type: inviteType, maxUses: 1, inviteeEmail };
       if (inviteType === 'pod') payload.podId = podId;
       if (inviteType === 'session') payload.sessionId = sessionId;
+      if (inviteType === 'circle') payload.circleId = circleId;
       return api.post('/invites', payload);
     },
     onSuccess: () => {
@@ -171,10 +185,11 @@ export default function InvitesPage() {
 
   const createLinkMutation = useMutation({
     mutationFn: () => {
-      if (needsTarget) { throw new Error('Please select a pod or event first'); }
+      if (needsTarget) { throw new Error('Please select a pod, event or circle first'); }
       const payload: any = { type: inviteType, maxUses: maxUses || 10 };
       if (inviteType === 'pod') payload.podId = podId;
       if (inviteType === 'session') payload.sessionId = sessionId;
+      if (inviteType === 'circle') payload.circleId = circleId;
       return api.post('/invites', payload);
     },
     onSuccess: async (res) => {
@@ -194,12 +209,13 @@ export default function InvitesPage() {
 
   const bulkInviteMutation = useMutation({
     mutationFn: async (emails: string[]) => {
-      if (needsTarget) { throw new Error('Please select a pod or event first'); }
+      if (needsTarget) { throw new Error('Please select a pod, event or circle first'); }
       const results = [];
       for (const email of emails) {
         const payload: any = { type: inviteType, maxUses: 1, inviteeEmail: email };
         if (inviteType === 'pod') payload.podId = podId;
         if (inviteType === 'session') payload.sessionId = sessionId;
+        if (inviteType === 'circle') payload.circleId = circleId;
         try {
           await api.post('/invites', payload);
           results.push({ email, ok: true });
@@ -234,7 +250,11 @@ export default function InvitesPage() {
     return userIsAdmin || s.hostUserId === user?.id;
   });
 
-  const needsTarget = (inviteType === 'pod' && !podId) || (inviteType === 'session' && !sessionId);
+  // Circles you are in (admins: all). Circles are open-join, so the gate is
+  // membership, not a director role.
+  const invitableCircles = (circles || []).filter((c: any) => userIsAdmin || c.isMember);
+
+  const needsTarget = (inviteType === 'pod' && !podId) || (inviteType === 'session' && !sessionId) || (inviteType === 'circle' && !circleId);
 
   // Status filter counts (client-side from full data)
   const allInvites = data || [];
@@ -323,11 +343,12 @@ export default function InvitesPage() {
               <label className="block text-sm font-medium text-gray-600 mb-1.5">Invite Type</label>
               <select
                 value={inviteType}
-                onChange={e => { setInviteType(e.target.value); setPodId(''); setSessionId(''); }}
+                onChange={e => { setInviteType(e.target.value); setPodId(''); setSessionId(''); setCircleId(''); }}
                 className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] focus:outline-none focus:ring-2 focus:ring-[#1a1a2e]"
               >
                 <option value="pod">Pod Invite</option>
                 <option value="session">Event Invite</option>
+                <option value="circle">Circle Invite</option>
                 <option value="platform">Platform Invite</option>
               </select>
             </div>
@@ -369,11 +390,30 @@ export default function InvitesPage() {
                 )}
               </div>
             )}
+            {inviteType === 'circle' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-600 mb-1.5">Circle</label>
+                {invitableCircles.length === 0 ? (
+                  <p className="text-sm text-gray-400 bg-gray-50 rounded-xl px-4 py-2.5 border border-gray-200">
+                    No circles available. Join a circle to invite people to it.
+                  </p>
+                ) : (
+                  <select
+                    value={circleId}
+                    onChange={e => setCircleId(e.target.value)}
+                    className="w-full min-h-[44px] rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] focus:outline-none focus:ring-2 focus:ring-[#1a1a2e]"
+                  >
+                    <option value="">Select circle</option>
+                    {invitableCircles.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                )}
+              </div>
+            )}
           </div>
 
           {needsTarget && (
             <p className="text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-              Please select a {inviteType === 'pod' ? 'pod' : 'event'} above before sending invites.
+              Please select a {inviteType === 'pod' ? 'pod' : inviteType === 'circle' ? 'circle' : 'event'} above before sending invites.
             </p>
           )}
 

@@ -165,6 +165,15 @@ export async function joinCircle(circleId: string, userId: string): Promise<void
   });
 }
 
+/** Is this member in the circle? The gate for circle-level invites (C3). */
+export async function isCircleMember(circleId: string, userId: string): Promise<boolean> {
+  const r = await query(
+    `SELECT 1 FROM circle_members WHERE circle_id = $1 AND user_id = $2`,
+    [circleId, userId],
+  );
+  return r.rows.length > 0;
+}
+
 export async function leaveCircle(circleId: string, userId: string): Promise<void> {
   await transaction(async (client) => {
     const del = await client.query(

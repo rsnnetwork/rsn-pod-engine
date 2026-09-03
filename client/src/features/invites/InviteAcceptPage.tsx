@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/Button';
 import Card from '@/components/ui/Card';
 import { PageLoader } from '@/components/ui/Spinner';
 import { useToastStore } from '@/stores/toastStore';
-import { Users, Calendar, LogIn, UserPlus, Clock, User, AlertCircle } from 'lucide-react';
+import { Users, Calendar, LogIn, UserPlus, Clock, User, AlertCircle, CircleDashed } from 'lucide-react';
 import api from '@/lib/api';
 
 /** Map accept-invite error codes to user-friendly messages */
@@ -172,13 +172,13 @@ export default function InviteAcceptPage() {
   // Show loader while fetching invite only — never auto-accept on landing
   if (loading) return <PageLoader />;
 
-  const InviteIcon = invite?.type === 'session' ? Calendar : Users;
-  const inviteLabel = invite?.type === 'pod' ? 'a pod' : invite?.type === 'session' ? 'an event' : 'RSN';
+  const InviteIcon = invite?.type === 'session' ? Calendar : invite?.type === 'circle' ? CircleDashed : Users;
+  const inviteLabel = invite?.type === 'pod' ? 'a pod' : invite?.type === 'session' ? 'an event' : invite?.type === 'circle' ? 'a circle' : 'RSN';
 
   // Derive display values from enriched invite data
-  const targetName = invite?.sessionTitle || invite?.podName;
+  const targetName = invite?.sessionTitle || invite?.podName || invite?.circleName;
   const inviterName = invite?.inviterName;
-  const description = invite?.sessionDescription || invite?.podDescription;
+  const description = invite?.sessionDescription || invite?.podDescription || invite?.circleDescription;
   const scheduledAt = invite?.sessionScheduledAt;
 
   return (

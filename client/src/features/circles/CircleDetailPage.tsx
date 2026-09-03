@@ -7,7 +7,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, Users, Calendar, Box, CircleDashed, MessagesSquare, Plus, X } from 'lucide-react';
+import { ArrowLeft, Users, Calendar, Box, CircleDashed, MessagesSquare, Plus, X, Mail } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
@@ -82,13 +82,26 @@ export default function CircleDetailPage() {
             <Users className="h-3.5 w-3.5" /> {circle.memberCount} {circle.memberCount === 1 ? 'member' : 'members'}
           </p>
         </div>
-        <Button
-          variant={circle.isMember ? 'ghost' : 'primary'}
-          onClick={joinLeave}
-          className="min-h-[44px] shrink-0"
-        >
-          {circle.isMember ? 'Leave' : 'Join circle'}
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          {/* 13 Aug 2026 (C3): circle-level invites. The Invites page carries
+              the email / people / link options, so this hands off to it with
+              the circle preselected rather than duplicating the form here. */}
+          {circle.isMember && (
+            <Link
+              to={`/invites?type=circle&circleId=${circle.id}`}
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-gray-200 px-3 text-sm font-medium text-[#1a1a2e] hover:bg-gray-50"
+            >
+              <Mail className="h-4 w-4" /> Invite
+            </Link>
+          )}
+          <Button
+            variant={circle.isMember ? 'ghost' : 'primary'}
+            onClick={joinLeave}
+            className="min-h-[44px] shrink-0"
+          >
+            {circle.isMember ? 'Leave' : 'Join circle'}
+          </Button>
+        </div>
       </div>
 
       {circle.children.length > 0 && (

@@ -21,6 +21,7 @@ const createInviteSchema = z.object({
   inviteeEmail: z.string().email().optional(),
   podId: z.string().uuid().optional(),
   sessionId: z.string().uuid().optional(),
+  circleId: z.string().uuid().optional(),
   maxUses: z.number().int().min(1).max(1_000_000).optional(),
   expiresInHours: z.number().positive().max(720).optional(), // max 30 days
 });
@@ -403,6 +404,18 @@ router.get(
         podDescription = podResult.rows[0]?.description;
       }
 
+      // 13 Aug 2026 (C3): a circle invite names the circle to a stranger.
+      let circleName: string | undefined;
+      let circleDescription: string | undefined;
+      if (invite.circleId) {
+        const circleResult = await query<{ name: string; description: string | null }>(
+          `SELECT name, description FROM circles WHERE id = $1`,
+          [invite.circleId]
+        );
+        circleName = circleResult.rows[0]?.name;
+        circleDescription = circleResult.rows[0]?.description ?? undefined;
+      }
+
       // Fetch session details
       if (invite.sessionId) {
         const sessionResult = await query<{ title: string; scheduledAt: string; description: string; status: string }>(
@@ -415,7 +428,7 @@ router.get(
         sessionStatus = sessionResult.rows[0]?.status;
       }
 
-      const context = { inviterName, podName, podDescription, sessionTitle, sessionScheduledAt, sessionDescription, sessionStatus };
+      const context = { inviterName, podName, podDescription, sessionTitle, sessionScheduledAt, sessionDescription, sessionStatus, circleName, circleDescription };
 
       // Non-authenticated users see limited invite fields but full context
       const data = req.user
@@ -426,6 +439,7 @@ router.get(
             status: invite.status,
             podId: invite.podId,
             sessionId: invite.sessionId,
+            circleId: invite.circleId,
             expiresAt: invite.expiresAt,
             ...context,
           };

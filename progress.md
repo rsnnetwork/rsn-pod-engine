@@ -8338,3 +8338,15 @@ Matrix smoke (44.3s, prod), "entered" = video grid LIVE: A healthy 6s; B broadca
 **Matcher:** `jobTitleSource` rides `IntentProfile` (both candidate column lists). Naming only, scoring unchanged: a `stated` title is the most specific thing we know so it names the introduction ahead of the generic role bucket ("Senior React Developer" not "Developer"); `inferred` and NULL keep roles-first, so a guess never becomes the reason we give when a stated role covers the same bucket. No rescore needed at deploy: every row is NULL today, so stored reasons are unaffected until members state titles.
 
 **Tests:** enrichment-provenance (repo stamp, COALESCE-keyed CASE, sameTitle, prompt pins), 4 route tests on /enrich/apply, 4 matcher tests (stated names, inferred defers, NULL identical to before, inferred counts alone), identity suite green.
+
+---
+
+## 2026-09-03 - 13 Aug overhaul, Task C3: circle-level invites
+
+**Stefan (13 Aug):** "Circle-level invites also needed, not just pod-level." Mirrors the pod path end to end. Migration 090: `invite_type` enum gains `circle` (PG 17, ADD VALUE inside the runner's transaction, unused in the same txn), `invites.circle_id` FK + partial index. Shared: `InviteType.CIRCLE`, `Invite.circleId`, `CreateInviteInput.circleId`, `ErrorCodes.CIRCLE_MEMBER_EXISTS`.
+
+**Server:** `createInvite` circle branch - requires `circleId`, circle must exist and not be archived (404), caller must be a circle member or admin (403), an emailed invitee already in the circle is 409; duplicate-pending check and INSERT carry `circle_id`; the email names the circle ("invited you to join a circle - Nordic Founders"); existing-user notification type `circle_invite`. `applyInviteRegistration` joins the circle on accept (`joinCircle` is idempotent, counter moves only on a real insert) and the redirect lands on `/circles/:id`. `GET /invites/:code` returns `circleName` / `circleDescription` to strangers. New `circleService.isCircleMember`.
+
+**Client:** Invites page gets a "Circle Invite" type with a selector over circles the member belongs to (admins: all), wired into email / people / link flows, and reads `?type=circle&circleId=` so the circle page's new **Invite** entry (members only) lands with the circle preselected. Invite accept page shows the circle name and icon.
+
+**Tests:** 4 service tests (member creates, non-member 403, no circle 400 before any lookup, archived/unknown 404), email copy test, shared ErrorCodes. E2E `e2e/tests/circle-invites.spec.ts` on a throwaway admin-created circle: member invite resolves with the circle name for a stranger; outsider 403 + missing circle 400; accept joins (circle_members row, member_count +1, redirect), idempotent on re-accept; 409 for a member already in; circle page -> invites page preselected -> link created at 360px; outsider sees no Invite.

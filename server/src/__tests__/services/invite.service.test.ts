@@ -190,6 +190,56 @@ describe('Invite Service', () => {
       }, 'member')).rejects.toMatchObject({ code: 'INVITE_LIMIT_REACHED' });
     });
 
+    // ─── 13 Aug 2026 (C3): circle-level invites ───────────────────────────────
+    it('a circle member can create a circle invite, and the row carries the circle', async () => {
+      const circleInvite = { ...mockInvite, type: InviteType.CIRCLE, inviterId: 'user-member', podId: null, circleId: 'circle-1' };
+      mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 100 }], rowCount: 1 }); // entitlement
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });               // sent today
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'circle-1' }], rowCount: 1 });           // circle exists, not archived
+      mockQuery.mockResolvedValueOnce({ rows: [{ '?column?': 1 }], rowCount: 1 });            // caller is a member
+      mockQuery.mockResolvedValueOnce({ rows: [circleInvite], rowCount: 1 });                 // INSERT
+
+      const invite = await inviteService.createInvite('user-member', {
+        type: InviteType.CIRCLE, circleId: 'circle-1', maxUses: 5,
+      }, 'member');
+
+      expect(invite).toEqual(circleInvite);
+      const insert = mockQuery.mock.calls.find(c => String(c[0]).includes('INSERT INTO invites'));
+      expect(String(insert![0])).toMatch(/circle_id/);
+      expect(insert![1]).toContain('circle-1');
+    });
+
+    it('someone who is not in the circle cannot invite to it', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 100 }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'circle-1' }], rowCount: 1 }); // circle exists
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });                   // not a member
+
+      await expect(inviteService.createInvite('user-outsider', {
+        type: InviteType.CIRCLE, circleId: 'circle-1',
+      }, 'member')).rejects.toMatchObject({ code: 'AUTH_FORBIDDEN' });
+    });
+
+    it('a circle invite without a circle is rejected before anything is looked up', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 100 }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });
+
+      await expect(inviteService.createInvite('user-member', {
+        type: InviteType.CIRCLE,
+      }, 'member')).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+      expect(mockQuery.mock.calls.some(c => String(c[0]).includes('FROM circles'))).toBe(false);
+    });
+
+    it('an archived or unknown circle cannot be invited to', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 100 }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 }); // no live circle
+
+      await expect(inviteService.createInvite('user-member', {
+        type: InviteType.CIRCLE, circleId: 'circle-gone',
+      }, 'member')).rejects.toMatchObject({ statusCode: 404 });
+    });
+
     it('should reject invites to archived pods', async () => {
       // 1. Rate limit: get user entitlements
       mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 50 }], rowCount: 1 });
