@@ -8298,3 +8298,9 @@ Matrix smoke (44.3s, prod), "entered" = video grid LIVE: A healthy 6s; B broadca
 ## 2026-09-03 - 13 Aug overhaul, Task D3: the invite email says what Reason is
 
 **Claus (13 Aug):** a new user has no idea what RSN is when landing from an invite link; explain it in the invite email rather than build an on-platform explainer. `buildInviteEmail` (pure, exported) now opens with "<inviter> invited you to Reason", then two plain paragraphs: what Reason is (people meet for a stated reason; you say who you are looking for and it keeps looking) and, for platform invites only, what happens next (a short conversation about who you want to meet). Pod and event invites get the what-it-is line but not the sign-up promise, since the recipient may already be a member. Plain-text part carries the same copy. Subject: "<inviter> invited you to Reason" (was "RSN"). 3 unit tests pin the copy in html and text.
+
+---
+
+## 2026-09-03 - 13 Aug overhaul, Task D2: the host reacts before it asks
+
+**Stefan (13 Aug):** the onboarding chat prompt is "too transactional/cold; needs to feel more human." Every efficiency rule from 30 Jul stays (one question per message, wrap up early, never re-ask). Added: the host is "genuinely curious about the person in front of you"; style rule 4 makes it react to what the member just said in one short specific line, in their own words where possible, before asking the next thing, with no flattery or fake enthusiasm ("great question", "love that" banned); the word budget goes 30 -> 40 so a reaction plus one question fits; and the efficiency block opens with "Be efficient without being cold" plus a line telling the host to let something concrete from the last answer shape the next question. 5 new prompt tests pin the tone rules alongside the 30 Jul brevity pins (34 green). Live transcript check against the real model is pending the Anthropic top-up.

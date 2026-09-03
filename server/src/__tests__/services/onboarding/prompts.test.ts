@@ -120,6 +120,39 @@ describe('onboarding prompts (v1.1)', () => {
     });
   });
 
+  // 13 Aug 2026: Stefan: "The prompt is too transactional and cold; it needs
+  // to feel more human." The efficiency rules stay. What changes is that the
+  // host reacts to what the member just said before it asks the next thing.
+  describe('the host sounds like a person (13 Aug)', () => {
+    it('reacts to what the member said before asking the next thing, one question at a time', () => {
+      const p = buildHostSystemPrompt().toLowerCase();
+      expect(p).toContain('react to what they just said');
+      expect(p).toContain('one question at a time');
+    });
+
+    it('does not flatter, fake enthusiasm, or interrogate', () => {
+      const p = buildHostSystemPrompt().toLowerCase();
+      expect(p).toContain('no flattery');
+      expect(p).toContain('in their own words');
+      expect(p).toContain('interrogat');
+    });
+
+    it('still collects who they want to meet and who they would be valuable to', () => {
+      const p = buildHostSystemPrompt().toLowerCase();
+      expect(p).toContain('valuable for them to meet');
+      expect(p).toContain('valuable to');
+    });
+
+    it('a reaction plus one question still fits the word budget', () => {
+      const m = buildHostSystemPrompt().match(/under (\d+) words/);
+      expect(Number(m![1])).toBeGreaterThanOrEqual(35);
+    });
+
+    it('the tone rules contain no dashes (style rule)', () => {
+      expect(EM_OR_EN_DASH.test(buildHostSystemPrompt())).toBe(false);
+    });
+  });
+
   describe('C2: host guidance naturally asks about languages, meeting value, and restrictions', () => {
     it('weaves in a language question', () => {
       const p = buildHostSystemPrompt().toLowerCase();
