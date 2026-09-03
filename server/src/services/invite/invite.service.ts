@@ -64,12 +64,12 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
     }
   }
 
-  // Platform invites: only admin/super_admin can invite to the platform
-  if (!input.type || input.type === InviteType.PLATFORM) {
-    if (!isAdmin) {
-      throw new AppError(403, 'AUTH_FORBIDDEN', 'Only admins can send platform invitations');
-    }
-  }
+  // 13 Aug 2026: any member may invite to the platform, with the same effect
+  // an admin invite has — Ali's explicit decision, taken over routing member
+  // invites through admin approval. Nothing new is added on top: the existing
+  // per-member entitlement (max_invites_per_day, default 100) keeps applying
+  // exactly as it does to their pod invites, and the audit entry the route
+  // writes is what keeps every invite's origin traceable.
 
   // Platform invites: reject if user is already registered
   if ((!input.type || input.type === InviteType.PLATFORM) && input.inviteeEmail) {

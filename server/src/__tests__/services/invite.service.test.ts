@@ -142,6 +142,54 @@ describe('Invite Service', () => {
       })).rejects.toThrow('pending invite already exists');
     });
 
+    // ─── 13 Aug 2026: any member can invite to the platform ─────────────────
+    // Stefan: "Currently only admins can send platform invitations — I want any
+    // user to be able to invite." Ali's decision: direct and unlimited, the
+    // same effect an admin invite has. The audit trail is what stays.
+    it('a plain member can create a platform invite, and the row records who sent it', async () => {
+      const platformInvite = { ...mockInvite, type: InviteType.PLATFORM, inviterId: 'user-member', podId: null };
+      mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 100 }], rowCount: 1 }); // entitlement
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });               // sent today
+      mockQuery.mockResolvedValueOnce({ rows: [{ email: 'member@example.com' }], rowCount: 1 }); // self-invite check
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });                             // already registered?
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });                             // duplicate pending?
+      mockQuery.mockResolvedValueOnce({ rows: [platformInvite], rowCount: 1 });               // INSERT
+      mockQuery.mockResolvedValueOnce({ rows: [{ displayName: 'A Member' }], rowCount: 1 });  // inviter name for the email
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });                             // notification: invitee is not a user
+
+      const invite = await inviteService.createInvite('user-member', {
+        type: InviteType.PLATFORM,
+        inviteeEmail: 'guest@example.com',
+      }, 'member');
+
+      expect(invite).toEqual(platformInvite);
+      const insert = mockQuery.mock.calls.find(c => String(c[0]).includes('INSERT INTO invites'));
+      expect(insert).toBeDefined(); // a real row was written
+      expect(insert![1][2]).toBe('user-member'); // inviter_id is the member — origin stays traceable
+    });
+
+    it('a member still cannot platform-invite someone who is already registered', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 100 }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ email: 'member@example.com' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'u-existing' }], rowCount: 1 }); // already registered
+
+      await expect(inviteService.createInvite('user-member', {
+        type: InviteType.PLATFORM,
+        inviteeEmail: 'existing@example.com',
+      }, 'member')).rejects.toMatchObject({ code: 'ALREADY_REGISTERED' });
+    });
+
+    it("a member's existing daily entitlement still applies to platform invites — the one lever left", async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 5 }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: '5' }], rowCount: 1 });
+
+      await expect(inviteService.createInvite('user-member', {
+        type: InviteType.PLATFORM,
+        inviteeEmail: 'guest@example.com',
+      }, 'member')).rejects.toMatchObject({ code: 'INVITE_LIMIT_REACHED' });
+    });
+
     it('should reject invites to archived pods', async () => {
       // 1. Rate limit: get user entitlements
       mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 50 }], rowCount: 1 });
