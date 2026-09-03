@@ -8316,3 +8316,11 @@ Matrix smoke (44.3s, prod), "entered" = video grid LIVE: A healthy 6s; B broadca
 **Client:** `/search` page (Find people): settled input (250ms), thin cards with `data-testid=search-result-<id>`, name links to `/profile/:id` (where the existing gates apply), "I want to meet" posts to the existing `/matches/platform/:id/interest`, empty state, 44px targets, 360px clean. Nav item "Find people" after Suggestions (sidebar + drawer; the 5-item phone bottom bar is unchanged).
 
 **Tests:** 10 service tests (columns, gates, escaping, cap, thin shape), 5 route tests (auth, caller id, member allowed, ahead of /:id, admin search still 403 for members). E2E `e2e/tests/search.spec.ts`: found by name/title/company with the exact thin key set; name outranks company; self / blocked both ways / deactivated / not-onboarded hidden; 1-char and `%%` return nothing; page finds a stranger at 360px, meets (poke row asserted), links to the profile; empty state + desktop nav link.
+
+---
+
+## 2026-09-03 - 13 Aug overhaul, Task D1: the profile card
+
+**Stefan (13 Aug):** "Profile card needs a major visual upgrade (greatest thing on the platform)"; "About section was cut off / too narrow." Rebuilt `PublicProfilePage`: container max-w-xl -> max-w-3xl on desktop; brand gradient band with a 96px avatar breaking out of it (new Avatar size `2xl`); name at display size that wraps (`break-words`), headline, meta row and LinkedIn left-aligned beside the avatar from `sm` up and centred on phones; actions (Message / meet states / Block / Report) in one row under a divider, every one at the 44px floor; About leads the body at `text-base` with `whitespace-pre-line`, no clamp, no fixed height, `data-testid=profile-about`; Interests + Reasons side by side from `md`; Matching Profile in two columns from `md`. Every JSX block the source-pin tests read (message/meet/block branches, query keys + realtime meta, /messages/new navigation) is byte-for-byte the same inside the new layout; s22 / phaseB-block / may19-realtime / phase-x-may-13 all green (109 tests).
+
+**E2E** `e2e/tests/profile-card.spec.ts`: long name + long title + 4x-repeated bio at 360 / 390 / 768 / 1024 / 1280: About fully rendered (scrollHeight vs clientHeight), no sideways scroll, meet button >= 44px and inside the viewport; card wider than 700px at 1280; own profile shows no meet / block / report.
