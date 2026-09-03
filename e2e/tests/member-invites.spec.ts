@@ -51,9 +51,9 @@ const invitesBy = (u: TestUser) =>
   pool.query(`SELECT id, code, type, inviter_id, invitee_email, max_uses, status FROM invites WHERE inviter_id = $1 ORDER BY created_at`, [u.id]);
 
 test.beforeAll(async () => {
-  member = await createTestUser('memberInv', 'member');
-  admin = await createTestUser('memberInvAdmin', 'admin');
-  registered = await createTestUser('memberInvReg', 'member');
+  member = await createTestUser('memberinv', 'member');
+  admin = await createTestUser('memberinvadmin', 'admin');
+  registered = await createTestUser('memberinvreg', 'member');
   browser = await chromium.launch({ headless: false });
 });
 
@@ -62,7 +62,7 @@ test.afterAll(async () => {
   const ids = [member?.id, admin?.id, registered?.id].filter(Boolean);
   await pool.query(`DELETE FROM invites WHERE inviter_id = ANY($1)`, [ids]).catch(() => {});
   await cleanup(pool, { ids });
-  const swept = await cleanupByPrefix(pool, 'e2etest-memberInv');
+  const swept = await cleanupByPrefix(pool, 'e2etest-memberinv');
   if (swept) console.log(`  swept ${swept} leftover memberInv* account(s)`);
 });
 
