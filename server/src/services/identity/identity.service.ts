@@ -207,6 +207,12 @@ export async function updateUser(id: string, input: UpdateUserInput): Promise<Us
     }
   }
 
+  // 13 Aug 2026 (B1): a title the member types on their own profile is
+  // stated, whatever enrichment once proposed.
+  if ('jobTitle' in input && String((input as Record<string, unknown>).jobTitle ?? '').trim()) {
+    setClauses.push(`job_title_source = 'stated'`);
+  }
+
   if (setClauses.length === 0) {
     return getUserById(id);
   }

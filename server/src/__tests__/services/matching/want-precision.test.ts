@@ -256,3 +256,40 @@ describe('company-stage and product words are not job roles', () => {
     expect(designationsWanted(text).map(d => d.key)).not.toContain('marketer');
   });
 });
+
+// ─── 13 Aug 2026 (B1): where the title came from decides what names the intro ─
+describe('a stated title names the introduction; an inferred one defers to the stated role', () => {
+  const dev = (jobTitleSource: 'stated' | 'inferred' | null) => profile({
+    id: 'u-dev', displayName: 'Dana',
+    professionalRole: ['Developer'], jobTitle: 'Senior React Developer',
+    jobTitleSource,
+  });
+
+  it('stated: the specific title is the reason, not the generic role bucket', () => {
+    const { reason, score } = scoreWants(['developers and engineers'], dev('stated'));
+    expect(reason).toMatch(/Senior React Developer/);
+    expect(score).toBeGreaterThanOrEqual(0.6);
+  });
+
+  it('inferred: the role the member stated names it, and the score is the same', () => {
+    const { reason, score } = scoreWants(['developers and engineers'], dev('inferred'));
+    expect(reason).toMatch(/Developer/);
+    expect(reason).not.toMatch(/Senior React Developer/);
+    expect(score).toBeGreaterThanOrEqual(0.6);
+  });
+
+  it('unknown provenance (pre-089 rows) behaves exactly as before: roles first', () => {
+    const before = scoreWants(['developers and engineers'], dev(null));
+    const inferred = scoreWants(['developers and engineers'], dev('inferred'));
+    expect(before.reason).toBe(inferred.reason);
+    expect(before.score).toBe(inferred.score);
+  });
+
+  it('an inferred title still counts when it is the only signal', () => {
+    const only = profile({
+      id: 'u-x', displayName: 'Sam', professionalRole: null,
+      jobTitle: 'Growth Marketing Lead', jobTitleSource: 'inferred',
+    });
+    expect(scoreWants(['marketing people'], only).score).toBeGreaterThanOrEqual(0.6);
+  });
+});

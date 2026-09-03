@@ -136,11 +136,37 @@ export interface ApplyFields {
   linkedin?: string | null;
 }
 
-/** Write the confirmed/edited fields to the real profile. COALESCE → only provided fields change. */
-export async function applyEnrichedToProfile(userId: string, f: ApplyFields): Promise<void> {
+export type JobTitleSource = 'stated' | 'inferred';
+
+/**
+ * "Accepted unchanged" is a forgiving comparison: case, surrounding space and
+ * repeated spaces do not make a proposal into an edit.
+ */
+export function sameTitle(a: string | null | undefined, b: string | null | undefined): boolean {
+  const norm = (s: string | null | undefined) => (s || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const x = norm(a);
+  const y = norm(b);
+  return x.length > 0 && x === y;
+}
+
+/**
+ * Write the confirmed/edited fields to the real profile. COALESCE → only
+ * provided fields change.
+ *
+ * 13 Aug 2026 (B1): job_title is a MATCHING INPUT, so record where it came
+ * from whenever one is written. The caller knows whether the member accepted
+ * enrichment's proposal unchanged ('inferred') or typed something ('stated');
+ * with no title in the update the provenance column is left as it was.
+ */
+export async function applyEnrichedToProfile(
+  userId: string,
+  f: ApplyFields,
+  titleSource: JobTitleSource = 'stated',
+): Promise<void> {
   await query(
     `UPDATE users SET
        job_title    = COALESCE($2, job_title),
+       job_title_source = CASE WHEN $2::text IS NULL THEN job_title_source ELSE $8 END,
        company      = COALESCE($3, company),
        industry     = COALESCE($4, industry),
        location     = COALESCE($5, location),
@@ -148,6 +174,6 @@ export async function applyEnrichedToProfile(userId: string, f: ApplyFields): Pr
        linkedin_url = COALESCE($7, linkedin_url),
        updated_at   = NOW()
      WHERE id = $1`,
-    [userId, f.jobTitle ?? null, f.company ?? null, f.industry ?? null, f.location ?? null, f.bio ?? null, f.linkedin ?? null],
+    [userId, f.jobTitle ?? null, f.company ?? null, f.industry ?? null, f.location ?? null, f.bio ?? null, f.linkedin ?? null, titleSource],
   );
 }

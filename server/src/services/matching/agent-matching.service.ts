@@ -20,6 +20,7 @@ import { scoreWants, MATCH_THRESHOLD, IntentProfile } from './platform-match.ser
 const CANDIDATE_COLUMNS = `
   u.id, u.display_name AS "displayName", u.avatar_url AS "avatarUrl",
   u.professional_role AS "professionalRole", u.job_title AS "jobTitle",
+  u.job_title_source AS "jobTitleSource",
   u.company, u.expertise_text AS "expertiseText",
   u.what_i_can_help_with AS "whatICanHelpWith",
   u.what_i_care_about AS "whatICareAbout",

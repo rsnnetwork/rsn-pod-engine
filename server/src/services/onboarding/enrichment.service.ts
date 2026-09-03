@@ -203,6 +203,10 @@ const PROMPT = (s: EnrichSignals): string => {
   lines.push('Also include conversationStarters (1 to 3 natural openers a warm host could use, referencing what you found) and questionsToVerify (1 to 3 facts that are uncertain and the host should confirm naturally rather than assume).');
   lines.push('Return ONLY a JSON object (no prose) with these keys: fullName, headline, currentRole, currentCompany, industry, location, summary, pastRoles (string array), education (array), skills (string array), likelyWantsToMeet (string array), likelyOffers (string array), conversationStarters (string array), questionsToVerify (string array), linkedinUrl (the profile URL you actually found), confidence (a NUMBER from 0 to 1, e.g. 0.85; do NOT use words like "high"), sources (array of urls you used).');
   lines.push('Use null or [] for anything you cannot support from search results. Do NOT invent facts.');
+  // 13 Aug 2026 (B1): the platform matches on the title, so a guessed one is
+  // worse than none. Stefan saw roles pulled from LinkedIn that were never on
+  // the profile.
+  lines.push('ROLE AND TITLE: return currentRole ONLY if it is stated outright on the profile or in a source you found; otherwise return null. Do NOT infer a role or title from the company, the industry, their posts, or what they seem to do: "works at a design studio" is not "Designer", and "founded a company" is not "CEO". A null currentRole is correct and useful; a guessed one is harmful, because the platform matches people on it. If several titles appear, choose the one the person uses for themselves, not the most senior-sounding one.');
   return lines.join('\n');
 };
 

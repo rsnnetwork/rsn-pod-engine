@@ -30,6 +30,8 @@ export interface IntentProfile {
   avatarUrl: string | null;
   professionalRole: unknown;  // text[] in DB (e.g. {Founder}) — never assume string
   jobTitle: string | null;
+  /** 13 Aug (B1): stated = the member's own; inferred = enrichment's proposal, accepted unchanged; null = pre-089. */
+  jobTitleSource?: 'stated' | 'inferred' | null;
   company: string | null;
   expertiseText: string | null;
   whatICanHelpWith: string | null;
@@ -206,7 +208,15 @@ function analyzeWants(
   // a job title of "frontend engineer" while displaying a role of "Manager")
   // can no longer contradict itself.
   const titleByDesignation = new Map<string, string>();
-  for (const r of [...roleValues, other.jobTitle]) {
+  // 13 Aug (B1): a title the member STATED is the most specific thing we know,
+  // so it names the introduction ahead of a generic role bucket. An inferred
+  // one (enrichment's proposal, accepted unchanged) or an unknown provenance
+  // keeps roles first, so a guess never becomes the reason we give when a
+  // stated role covers the same bucket. Scoring is unchanged either way.
+  const ordered = other.jobTitleSource === 'stated'
+    ? [other.jobTitle, ...roleValues]
+    : [...roleValues, other.jobTitle];
+  for (const r of ordered) {
     const title = typeof r === 'string' ? r.trim() : null;
     if (!title) continue;
     const key = normalizeDesignation(title);
@@ -240,6 +250,7 @@ function analyzeWants(
 const PROFILE_COLUMNS = `
   u.id, u.display_name AS "displayName", u.avatar_url AS "avatarUrl",
   u.professional_role AS "professionalRole", u.job_title AS "jobTitle",
+  u.job_title_source AS "jobTitleSource",
   u.company, u.expertise_text AS "expertiseText",
   u.what_i_can_help_with AS "whatICanHelpWith",
   u.what_i_care_about AS "whatICareAbout",

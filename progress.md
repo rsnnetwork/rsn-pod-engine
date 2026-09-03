@@ -8324,3 +8324,17 @@ Matrix smoke (44.3s, prod), "entered" = video grid LIVE: A healthy 6s; B broadca
 **Stefan (13 Aug):** "Profile card needs a major visual upgrade (greatest thing on the platform)"; "About section was cut off / too narrow." Rebuilt `PublicProfilePage`: container max-w-xl -> max-w-3xl on desktop; brand gradient band with a 96px avatar breaking out of it (new Avatar size `2xl`); name at display size that wraps (`break-words`), headline, meta row and LinkedIn left-aligned beside the avatar from `sm` up and centred on phones; actions (Message / meet states / Block / Report) in one row under a divider, every one at the 44px floor; About leads the body at `text-base` with `whitespace-pre-line`, no clamp, no fixed height, `data-testid=profile-about`; Interests + Reasons side by side from `md`; Matching Profile in two columns from `md`. Every JSX block the source-pin tests read (message/meet/block branches, query keys + realtime meta, /messages/new navigation) is byte-for-byte the same inside the new layout; s22 / phaseB-block / may19-realtime / phase-x-may-13 all green (109 tests).
 
 **E2E** `e2e/tests/profile-card.spec.ts`: long name + long title + 4x-repeated bio at 360 / 390 / 768 / 1024 / 1280: About fully rendered (scrollHeight vs clientHeight), no sideways scroll, meet button >= 44px and inside the viewport; card wider than 700px at 1280; own profile shows no meet / block / report.
+
+---
+
+## 2026-09-03 - 13 Aug overhaul, Task B1: where a job title came from
+
+**Stefan (13 Aug):** "Bot pulls role/title from LinkedIn even when not explicitly set on the profile - needs a prompt fix so it doesn't misattribute roles." Audit correction to the plan: enrichment never writes `job_title` silently. `POST /onboarding/enrich/apply` writes what the member confirmed on the card, and `saveIntentAndComplete` writes the card role or the chat-extracted role. The real leak is the enrichment PROMPT proposing a `currentRole` that was never on the profile, which members then accept unchanged.
+
+**Prompt:** explicit ROLE AND TITLE rule: return `currentRole` ONLY if stated outright on the profile or a found source, otherwise null; never infer from company / industry / posts / activity ("works at a design studio" is not "Designer"); prefer the title the person uses for themselves over the most senior-sounding one. Pinned by 3 tests.
+
+**Provenance (migration 089, `users.job_title_source` stated|inferred|NULL):** `/enrich/apply` compares the submitted title with the cached enrichment proposal (`sameTitle`: case/space-insensitive) - identical = `inferred`, edited = `stated`; the chat completion path does the same against the card; a member editing their own title in Settings (`updateUser`) stamps `stated`. Pre-089 rows stay NULL and are treated exactly as before.
+
+**Matcher:** `jobTitleSource` rides `IntentProfile` (both candidate column lists). Naming only, scoring unchanged: a `stated` title is the most specific thing we know so it names the introduction ahead of the generic role bucket ("Senior React Developer" not "Developer"); `inferred` and NULL keep roles-first, so a guess never becomes the reason we give when a stated role covers the same bucket. No rescore needed at deploy: every row is NULL today, so stored reasons are unaffected until members state titles.
+
+**Tests:** enrichment-provenance (repo stamp, COALESCE-keyed CASE, sameTitle, prompt pins), 4 route tests on /enrich/apply, 4 matcher tests (stated names, inferred defers, NULL identical to before, inferred counts alone), identity suite green.

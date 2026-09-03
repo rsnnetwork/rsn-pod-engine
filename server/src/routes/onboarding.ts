@@ -281,7 +281,13 @@ router.post(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const fields = { ...req.body, linkedin: enrichment.normalizeLinkedinUrl(req.body.linkedin as string | null) };
-      await enrichRepo.applyEnrichedToProfile(req.user!.userId, fields);
+      // 13 Aug 2026 (B1): a title identical to what enrichment proposed was
+      // accepted, not stated. The matcher treats the two differently.
+      const cached = fields.jobTitle
+        ? await enrichRepo.getCachedEnrichment(req.user!.userId).catch(() => null)
+        : null;
+      const titleSource = enrichRepo.sameTitle(fields.jobTitle, cached?.profile?.currentRole) ? 'inferred' : 'stated';
+      await enrichRepo.applyEnrichedToProfile(req.user!.userId, fields, titleSource);
       const response: ApiResponse = { success: true, data: { applied: true } };
       res.json(response);
     } catch (err) {

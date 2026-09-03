@@ -74,6 +74,11 @@ jest.mock('../../services/onboarding/known', () => ({
 
 jest.mock('../../services/onboarding/enrichment.repo', () => ({
   getCachedEnrichment: jest.fn(),
+  // The real comparison is pure; a faithful stand-in keeps the route honest.
+  sameTitle: (a: unknown, b: unknown) => {
+    const n = (s: unknown) => String(s ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+    return n(a).length > 0 && n(a) === n(b);
+  },
   saveEnrichedCandidate: jest.fn(),
   setEnrichmentState: jest.fn(),
   getEnrichmentState: jest.fn(),
@@ -804,6 +809,59 @@ describe('POST /onboarding/profile', () => {
 });
 
 import { createFirstAgents } from '../../services/matching/first-agent.service';
+import * as enrichRepoMock from '../../services/onboarding/enrichment.repo';
+
+// ─── 13 Aug 2026 (B1): the apply step records where the title came from ─────
+describe('POST /onboarding/enrich/apply provenance', () => {
+  beforeEach(() => {
+    (enrichRepoMock.applyEnrichedToProfile as jest.Mock).mockResolvedValue(undefined);
+  });
+
+  it('a title accepted exactly as enrichment proposed it is recorded as inferred', async () => {
+    (enrichRepoMock.getCachedEnrichment as jest.Mock).mockResolvedValue({
+      confidence: 0.9, profile: { currentRole: 'Head of Growth' },
+    });
+    const res = await request(app)
+      .post('/onboarding/enrich/apply')
+      .set('Authorization', `Bearer ${makeToken('user-b1-a')}`)
+      .send({ jobTitle: 'Head of Growth', company: 'Acme' });
+    expect(res.status).toBe(200);
+    const [, , source] = (enrichRepoMock.applyEnrichedToProfile as jest.Mock).mock.calls[0];
+    expect(source).toBe('inferred');
+  });
+
+  it('a title the member edited on the card is recorded as stated', async () => {
+    (enrichRepoMock.getCachedEnrichment as jest.Mock).mockResolvedValue({
+      confidence: 0.9, profile: { currentRole: 'Head of Growth' },
+    });
+    const res = await request(app)
+      .post('/onboarding/enrich/apply')
+      .set('Authorization', `Bearer ${makeToken('user-b1-b')}`)
+      .send({ jobTitle: 'Founder' });
+    expect(res.status).toBe(200);
+    const [, , source] = (enrichRepoMock.applyEnrichedToProfile as jest.Mock).mock.calls[0];
+    expect(source).toBe('stated');
+  });
+
+  it('with no cached proposal at all, a title is the member\'s own', async () => {
+    (enrichRepoMock.getCachedEnrichment as jest.Mock).mockResolvedValue(null);
+    await request(app)
+      .post('/onboarding/enrich/apply')
+      .set('Authorization', `Bearer ${makeToken('user-b1-c')}`)
+      .send({ jobTitle: 'Founder' });
+    const [, , source] = (enrichRepoMock.applyEnrichedToProfile as jest.Mock).mock.calls[0];
+    expect(source).toBe('stated');
+  });
+
+  it('does not look up the cache when no title is being written', async () => {
+    (enrichRepoMock.getCachedEnrichment as jest.Mock).mockClear();
+    await request(app)
+      .post('/onboarding/enrich/apply')
+      .set('Authorization', `Bearer ${makeToken('user-b1-d')}`)
+      .send({ company: 'Acme' });
+    expect(enrichRepoMock.getCachedEnrichment).not.toHaveBeenCalled();
+  });
+});
 
 describe('POST /onboarding/confirm', () => {
   beforeEach(() => {

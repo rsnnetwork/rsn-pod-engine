@@ -17,7 +17,7 @@ import {
   OnboardingKnownProfile,
 } from '@rsn/shared';
 import { ExtractedIntent } from './intent.schema';
-import { getCachedEnrichment } from './enrichment.repo';
+import { getCachedEnrichment, sameTitle } from './enrichment.repo';
 
 function orNull(s: string | null | undefined): string | null {
   const t = (s ?? '').trim();
@@ -188,6 +188,12 @@ export async function saveIntentAndComplete(
   const company = truncate(orNull(profile?.company) || orNull(intent.userCompany), 200);
   // Confirmed role (from the card) wins over chat-extracted.
   const jobTitle = truncate(orNull(profile?.role) || orNull(intent.userRole), 200);
+  // 13 Aug 2026 (B1): where that title came from. A card value identical to
+  // what enrichment proposed was accepted, not stated; anything the member
+  // edited, or said in the chat, is theirs.
+  const titleSource: 'stated' | 'inferred' | null = jobTitle
+    ? (profile?.role && sameTitle(profile.role, enr?.currentRole) ? 'inferred' : 'stated')
+    : null;
   const industry = truncate(orNull(intent.userIndustry), 100);
   const location = truncate(orNull(profile?.country), 200);
   const linkedin = truncate(orNull(profile?.linkedin), 1000);
@@ -273,6 +279,7 @@ export async function saveIntentAndComplete(
          display_name = COALESCE($19, display_name),
          linkedin_url = COALESCE($20, linkedin_url),
          languages = COALESCE($21, languages),
+         job_title_source = CASE WHEN $3::text IS NULL THEN job_title_source ELSE $22 END,
          onboarding_completed = true,
          onboarding_status = 'completed',
          last_onboarded_at = NOW()
@@ -299,6 +306,7 @@ export async function saveIntentAndComplete(
         displayNameOverride,
         linkedin,
         languages,
+        titleSource,
       ]
     );
 
