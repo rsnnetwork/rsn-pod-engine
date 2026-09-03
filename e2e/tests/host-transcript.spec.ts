@@ -92,4 +92,12 @@ test('the host reacts before it asks, keeps it short, never uses a dash, and the
     expect(a.last_matched_at, `${a.label} searched`).not.toBeNull();
     console.log(`  ${a.label} ← "${String(a.want_text).slice(0, 90)}"`);
   }
+
+  // 3 Sep 2026 (Stefan): the people you ASK FOR must never become who you ARE.
+  // This member asked for developers and investors; their own roles may be
+  // empty or "founder", never one of those.
+  const me = await pool.query(`SELECT job_title, professional_role FROM users WHERE id = $1`, [member.id]);
+  const own = [...(me.rows[0].professional_role || []), me.rows[0].job_title || ''].join(' | ').toLowerCase();
+  console.log(`  OWN ROLES: ${own || '(none)'}`);
+  expect(own).not.toMatch(/developer|engineer|investor|angel/);
 });

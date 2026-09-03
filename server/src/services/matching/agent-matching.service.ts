@@ -15,7 +15,35 @@
 import { query } from '../../db';
 import logger from '../../config/logger';
 import * as agentRepo from './agent.repo';
-import { scoreWants, MATCH_THRESHOLD, IntentProfile } from './platform-match.service';
+import { scoreWants, MATCH_THRESHOLD, IntentProfile, displayRole } from './platform-match.service';
+
+/**
+ * Candidates the owner has a live introduction with (asked, or been asked by,
+ * not declined). replaceMatches keeps these rows whatever the score, so their
+ * stored reason must be refreshed here or it goes stale: on 3 Sep 2026 Stefan
+ * stopped being a "developer" in the data and his card on Ali's Developers
+ * agent kept saying he was one, because he no longer scored and the upsert
+ * never touched his row.
+ */
+async function stickyCandidateIds(ownerId: string, candidateIds: string[]): Promise<Set<string>> {
+  if (!candidateIds.length) return new Set();
+  const r = await query<{ id: string }>(
+    `SELECT DISTINCT CASE WHEN p.sender_id = $1 THEN p.recipient_id ELSE p.sender_id END AS id
+       FROM user_pokes p
+      WHERE p.status <> 'declined'
+        AND (p.sender_id = $1 OR p.recipient_id = $1)`,
+    [ownerId],
+  );
+  const wanted = new Set(candidateIds);
+  return new Set(r.rows.map((x) => x.id).filter((id) => wanted.has(id)));
+}
+
+/** A reason for a kept row that no longer fits: say who they are, plainly. */
+function keptReason(c: IntentProfile): string {
+  const name = c.displayName || 'They';
+  const role = displayRole(c);
+  return role ? `${name} is a ${role}` : `You asked to meet ${name}`;
+}
 
 const CANDIDATE_COLUMNS = `
   u.id, u.display_name AS "displayName", u.avatar_url AS "avatarUrl",
@@ -90,20 +118,27 @@ export async function recomputeAgent(agent: {
       return 0;
     }
     const candidates = await loadCandidatesForAgent(agent.userId);
-    const scored = candidates
-      .map(c => ({ c, fit: scoreWants([agent.wantText], c) }))
+    const all = candidates.map(c => ({ c, fit: scoreWants([agent.wantText], c) }));
+    const fresh = all
       .filter(x => x.fit.score >= MATCH_THRESHOLD)
       .sort((a, b) => b.fit.score - a.fit.score)
-      .slice(0, 50)
-      .map(x => ({
-        candidateUserId: x.c.id,
-        score: Number(x.fit.score.toFixed(4)),
-        reason: x.fit.reason,
-      }));
+      .slice(0, 50);
+
+    // Kept rows (a live introduction) travel with a CURRENT reason, at their
+    // real score, so the card never describes who someone used to be.
+    const freshIds = new Set(fresh.map(x => x.c.id));
+    const sticky = await stickyCandidateIds(agent.userId, candidates.map(c => c.id));
+    const kept = all.filter(x => sticky.has(x.c.id) && !freshIds.has(x.c.id));
+
+    const scored = [...fresh, ...kept].map(x => ({
+      candidateUserId: x.c.id,
+      score: Number(x.fit.score.toFixed(4)),
+      reason: x.fit.reason || keptReason(x.c),
+    }));
 
     await agentRepo.replaceMatches(agent.id, scored);
-    logger.info({ agentId: agent.id, matches: scored.length }, 'Agent rescored');
-    return scored.length;
+    logger.info({ agentId: agent.id, matches: fresh.length, kept: kept.length }, 'Agent rescored');
+    return fresh.length;
   } catch (err) {
     logger.warn({ err, agentId: agent.id }, 'Agent rescore failed (non-fatal)');
     return 0;

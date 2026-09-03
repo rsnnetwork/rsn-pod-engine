@@ -38,6 +38,9 @@ beforeEach(() => {
   mockQuery.mockReset(); mockReplaceMatches.mockReset();
   mockListAgents.mockReset(); mockListActive.mockReset();
   mockReplaceMatches.mockResolvedValue(undefined);
+  // Any query a test did not script (e.g. the sticky-introduction lookup that
+  // follows the candidate load since 3 Sep 2026) answers empty.
+  mockQuery.mockResolvedValue({ rows: [] });
 });
 
 describe('recomputeAgent', () => {
@@ -50,6 +53,38 @@ describe('recomputeAgent', () => {
     expect(matches).toHaveLength(1);
     expect(matches[0].candidateUserId).toBe('u-dev');
     expect(matches[0].reason).toBeTruthy();
+  });
+
+  // 3 Sep 2026: Stefan's profile stopped saying "developer", but Ali's Developers
+  // agent kept "Stefan Avivson is a developer" on his card: the rescore kept the
+  // row (live introduction) yet never rewrote its reason because he no longer
+  // scored. Kept rows now carry a current reason at their real score.
+  it('refreshes the reason of someone already asked even when they no longer fit, without counting them', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [
+        candidate(),
+        candidate({ id: 'u-stefan', displayName: 'Stefan Avivson', professionalRole: ['CEO', 'Founder'], jobTitle: 'CEO', expertiseText: 'networking events', whatICanHelpWith: 'founder introductions' }),
+      ] })
+      .mockResolvedValueOnce({ rows: [{ id: 'u-stefan' }] }); // live introduction with Stefan
+
+    const n = await recomputeAgent(AGENT);
+
+    expect(n).toBe(1); // kept rows are not counted as outstanding
+    const [, matches] = mockReplaceMatches.mock.calls[0];
+    const stefan = matches.find((m: any) => m.candidateUserId === 'u-stefan');
+    expect(stefan).toBeDefined();
+    expect(stefan.reason).toMatch(/CEO/);
+    expect(stefan.reason).not.toMatch(/developer/i);
+    expect(stefan.score).toBeLessThan(0.6);
+  });
+
+  it('someone with no introduction who does not fit is simply not stored', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [candidate({ id: 'u-chef', professionalRole: ['Chef'], jobTitle: 'Pastry Chef', expertiseText: 'pastry', whatICanHelpWith: 'baking' })] })
+      .mockResolvedValueOnce({ rows: [] });
+    await recomputeAgent(AGENT);
+    const [, matches] = mockReplaceMatches.mock.calls[0];
+    expect(matches).toHaveLength(0);
   });
 
   // Was: dropped anyone already introduced through this agent. That is what

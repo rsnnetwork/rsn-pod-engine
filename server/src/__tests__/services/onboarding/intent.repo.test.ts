@@ -23,6 +23,11 @@ jest.mock('../../../config/logger', () => ({
 const mockGetCachedEnrichment = jest.fn<any>();
 jest.mock('../../../services/onboarding/enrichment.repo', () => ({
   getCachedEnrichment: (...args: unknown[]) => mockGetCachedEnrichment(...args),
+  // Pure comparison; the real one lives in enrichment.repo (B1, 3 Sep 2026).
+  sameTitle: (a: unknown, b: unknown) => {
+    const n = (s: unknown) => String(s ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+    return n(a).length > 0 && n(a) === n(b);
+  },
 }));
 
 const mockNotifyMatchesOfNewUser = jest.fn<any>();
@@ -146,6 +151,58 @@ describe('saveIntentAndComplete: userLanguages -> users.languages promotion', ()
     // matching how company/industry/etc are handled when nothing new came through.
     expect(update!.params).toEqual(expect.arrayContaining([null]));
     expect(update!.sql).toMatch(/languages\s*=\s*COALESCE/i);
+  });
+});
+
+// ─── 3 Sep 2026: professional_role is who the member IS, never who they asked for ──
+// Stefan answered "I need a developer"; the extractor set userRole="developer";
+// this column was written from it unconditionally, and Stefan surfaced in every
+// Developers agent. Four members who said nothing had their roles wiped to [].
+describe('saveIntentAndComplete: professional_role comes from who the member is', () => {
+  beforeEach(() => {
+    mockGetCachedEnrichment.mockResolvedValue(null);
+    mockNotifyMatchesOfNewUser.mockResolvedValue(0);
+  });
+  const rolesParam = (calls: { sql: string; params: any[] }[]) => updateUsersCall(calls)!.params[4];
+
+  it("Stefan's case: the role he asked for is dropped; the card role and his own designation stay", async () => {
+    const { client, calls } = makeFakeClient();
+    mockTransaction.mockImplementation(async (cb: any) => cb(client));
+    await saveIntentAndComplete('stefan', {
+      ...baseIntent, userRole: 'developer', userDesignation: 'founder',
+      desiredRoles: ['developer'], desiredPeople: ['web developer'],
+    }, [], { role: 'CEO', company: 'Raw Speed Networking | RSN' } as any);
+    expect(rolesParam(calls)).toEqual(['CEO', 'Founder']);
+  });
+
+  it('a role the member gave for themselves is kept even when it is a designation', async () => {
+    const { client, calls } = makeFakeClient();
+    mockTransaction.mockImplementation(async (cb: any) => cb(client));
+    await saveIntentAndComplete('lorin', {
+      ...baseIntent, userRole: 'operations consultant', userDesignation: 'consultant',
+      desiredRoles: ['founder'], desiredPeople: ['tech founders scaling delivery operations'],
+    }, [], { role: 'Owner' } as any);
+    expect(rolesParam(calls)).toEqual(['Owner', 'Consultant']);
+  });
+
+  it('a founder looking for founders keeps Founder because the card confirmed it', async () => {
+    const { client, calls } = makeFakeClient();
+    mockTransaction.mockImplementation(async (cb: any) => cb(client));
+    await saveIntentAndComplete('cofounder', {
+      ...baseIntent, userRole: 'founder', userDesignation: 'founder',
+      desiredRoles: ['founder'], desiredPeople: ['a technical co-founder'],
+    }, [], { role: 'Founder' } as any);
+    expect(rolesParam(calls)).toEqual(['Founder']);
+  });
+
+  it('silence about oneself no longer wipes the column: null → COALESCE keeps what was there', async () => {
+    const { client, calls } = makeFakeClient();
+    mockTransaction.mockImplementation(async (cb: any) => cb(client));
+    await saveIntentAndComplete('quiet', {
+      ...baseIntent, userRole: '', userDesignation: '', desiredRoles: ['investor'], desiredPeople: ['angels'],
+    }, [], undefined);
+    expect(rolesParam(calls)).toBeNull();
+    expect(updateUsersCall(calls)!.sql).toMatch(/professional_role\s*=\s*COALESCE\(\$5, professional_role\)/);
   });
 });
 

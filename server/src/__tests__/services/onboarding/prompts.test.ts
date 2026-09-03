@@ -220,4 +220,13 @@ describe('EXTRACTION_PROMPT (C2 additions)', () => {
   it('never infer restrictions that were not stated', () => {
     expect(p).toContain('never invent a restriction');
   });
+
+  // 3 Sep 2026: Stefan answered "I need a developer" and the extractor set
+  // userRole to "developer"; the save wrote it into professional_role and he
+  // surfaced in every Developers agent. The prompt never said what userRole IS.
+  it('userRole is the member\'s own role, never the role they are looking for', () => {
+    expect(p).toContain('userrole: the member\'s own current role');
+    expect(p).toContain('never the kind of person they are looking for');
+    expect(p).toContain('"i need a developer", userrole is not "developer"');
+  });
 });

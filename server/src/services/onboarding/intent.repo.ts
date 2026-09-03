@@ -18,6 +18,48 @@ import {
 } from '@rsn/shared';
 import { ExtractedIntent } from './intent.schema';
 import { getCachedEnrichment, sameTitle } from './enrichment.repo';
+import { designationsWanted, normalizeDesignation } from '../matching/intent-signals';
+
+/**
+ * Who the member IS, for users.professional_role — a MATCHING INPUT.
+ *
+ * 3 Sep 2026: Stefan answered "I need a developer" in the chat; the extractor
+ * put that into the free-text userRole, and this column was written straight
+ * from it, so Stefan surfaced in every Developers agent as "Stefan Avivson is
+ * a developer". Four other members who said nothing about themselves had
+ * their roles wiped to [] by the same unconditional write.
+ *
+ * Own roles now come, in order, from: what the member confirmed on the card
+ * (trusted as-is), the extractor's structured own designation, and the free-
+ * text userRole — the last two only when they are not a kind of person the
+ * member asked to MEET. Returns null when nothing survives, so the caller can
+ * COALESCE and leave the existing column alone.
+ */
+export function ownRoles(
+  intent: Pick<ExtractedIntent, 'userRole' | 'userDesignation' | 'desiredRoles' | 'desiredPeople'>,
+  profile?: Pick<OnboardingConfirmedProfile, 'role'> | null,
+): string[] | null {
+  const wanted = new Set(
+    designationsWanted([...(intent.desiredPeople ?? []), ...(intent.desiredRoles ?? [])].join(', ')).map((d) => d.key),
+  );
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (raw: string | null | undefined, trusted: boolean) => {
+    const s = orNull(raw);
+    if (!s) return;
+    const key = normalizeDesignation(s);
+    if (!trusted && key && wanted.has(key)) return;
+    const dedupe = key ?? s.toLowerCase();
+    if (seen.has(dedupe)) return;
+    seen.add(dedupe);
+    out.push(s);
+  };
+  add(profile?.role, true);
+  const designation = orNull(intent.userDesignation);
+  add(designation ? (designation === 'ceo' ? 'CEO' : designation.charAt(0).toUpperCase() + designation.slice(1).replace(/_/g, ' ')) : null, false);
+  add(intent.userRole, false);
+  return out.length ? cleanArr(out, 5) : null;
+}
 
 function orNull(s: string | null | undefined): string | null {
   const t = (s ?? '').trim();
@@ -181,7 +223,8 @@ export async function saveIntentAndComplete(
     10
   );
   const interests = cleanArr(mergeP(intent.userInterests, enrSkills), 20);
-  const professionalRole = cleanArr([intent.userRole], 5);
+  // Who they ARE — never who they asked to meet, and never wiped by silence (see ownRoles).
+  const professionalRole = ownRoles(intent, profile);
   const goals = cleanArr([intent.desiredOutcome], 5);
 
   // Confirmed known data (from the confirm-known card) wins over chat-extracted.
@@ -262,7 +305,7 @@ export async function saveIntentAndComplete(
          company = COALESCE($2, company),
          job_title = COALESCE($3, job_title),
          industry = COALESCE($4, industry),
-         professional_role = $5,
+         professional_role = COALESCE($5, professional_role),
          goals = $6,
          interests = $7,
          reasons_to_connect = $8,
