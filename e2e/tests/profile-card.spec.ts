@@ -77,7 +77,15 @@ test('the whole About shows at every width, nothing scrolls sideways, and the me
     expect(clipped, `About clipped at ${width}px`).toBe(false);
 
     // Long name and title wrap rather than overflow.
-    await expect(page.getByRole('heading', { level: 1 })).toContainText('Featherstonehaugh');
+    const h1 = page.getByRole('heading', { level: 1 });
+    await expect(h1).toContainText('Featherstonehaugh');
+
+    // The name must sit BELOW the brand band, never on it: dark text on the
+    // dark band was invisible at desktop widths on the first cut (3 Sep).
+    const band = page.getByTestId('profile-card').locator('[aria-hidden="true"]').first();
+    const bandBox = await band.boundingBox();
+    const nameBox = await h1.boundingBox();
+    expect(nameBox!.y, `name clear of the band at ${width}px`).toBeGreaterThanOrEqual(bandBox!.y + bandBox!.height);
     const overflow = await page.evaluate(() =>
       document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow, `sideways scroll at ${width}px`).toBeLessThanOrEqual(0);

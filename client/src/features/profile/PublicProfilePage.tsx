@@ -148,11 +148,14 @@ export default function PublicProfilePage() {
         {/* ─── Brand band + identity ─── */}
         <div className="h-24 bg-gradient-to-r from-[#1a1a2e] via-[#3a1f3d] to-rsn-red sm:h-28" aria-hidden="true" />
         <div className="px-5 pb-6 sm:px-8">
-          <div className="-mt-12 flex flex-col items-center text-center sm:-mt-14 sm:flex-row sm:items-end sm:gap-5 sm:text-left">
+          {/* Only the avatar breaks into the band. The row is pulled up 56px
+              into it, so from sm the text column pads down past the band's
+              bottom edge (64px) rather than rendering dark text on a dark band. */}
+          <div className="-mt-12 flex flex-col items-center text-center sm:-mt-14 sm:flex-row sm:items-start sm:gap-5 sm:text-left">
             <div className="flex-shrink-0 rounded-full bg-white p-1 shadow-md">
               <Avatar src={user.avatarUrl} name={user.displayName || 'User'} size="2xl" />
             </div>
-            <div className="mt-3 min-w-0 flex-1 sm:mt-0 sm:pb-1">
+            <div className="mt-3 min-w-0 flex-1 sm:mt-0 sm:pt-16">
               <h1 className="break-words font-display text-2xl font-bold text-[#1a1a2e] sm:text-3xl">
                 {user.displayName || 'User'}
               </h1>

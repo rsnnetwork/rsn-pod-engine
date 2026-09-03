@@ -23,6 +23,23 @@
   - The client lands the member on `/agents` with a toast naming the agents, rather than a closing chat bubble (the confirm step already navigates away).
   - E2E: `e2e/tests/first-agent.spec.ts` drives the real `/confirm` (real Anthropic extraction). A 503 there means the prepaid key is empty and the test says so.
 
+### Shipped 3 Sep 2026 (all to production via staging CI → main)
+
+| Task | Commit | Prod smoke |
+|---|---|---|
+| B2 first agents at onboarding (+ backfill of 12 agents for 4 members) | c6b3da0 | **blocked**: prod `/onboarding/confirm` is 503, Anthropic prepaid balance empty (Render log 10:50 UTC) |
+| C2 any member can invite | 98ed324 | ✅ member-invites.spec 5/5 |
+| D3 invite email says what Reason is | 0262e37 | unit-pinned; live email needs a real send after the deploy |
+| D2 warmer host prompt | 8dba7db | **blocked** on the same Anthropic balance (transcripts unreadable without the model) |
+| C1 people search (+ migration 088 pg_trgm) | a902fe8 | ✅ search.spec 6/6 |
+| D1 profile card | 22096e4 | ✅ profile-card.spec 3/3 at 360/390/768/1024/1280 |
+| B1 job-title provenance (+ migration 089) | 261dd28 | ✅ matching-agents + wave12 + onboarding-states 36/36 |
+| C3 circle invites (+ migration 090) | 5992f12 | see progress.md for the result |
+
+Also found and fixed on the way: the three Invites-page create buttons were 30px tall (a902fe8 raises them to the 44px floor).
+
+**Deviations recorded:** C2 keeps the pre-existing per-member entitlement (`max_invites_per_day`, default 100) rather than removing every rail; it is the one lever left, and it applied to members' pod invites already. C1 is a new member endpoint `GET /users/find`; the admin-only `/users/search` (returns emails) is untouched. B1's premise was corrected: the title is never written silently, so "inferred" means "enrichment proposed it and the member accepted it unchanged"; scoring is unchanged, only the name given for an introduction prefers a stated title.
+
 ## Global Constraints
 
 - **Mobile-first, non-negotiable.** Every UI change must work at 360px, 390–414px, 768px, 1024px and 1280px+. Tap targets ≥44px. No horizontal scroll. Verify with Playwright `boundingBox()` against the viewport, not `isVisible()`.
