@@ -402,14 +402,36 @@ interface InviteEmailData {
   };
 }
 
-export async function sendInviteEmail(
-  to: string,
-  data: InviteEmailData
-): Promise<void> {
+/**
+ * 13 Aug 2026: "New user has no idea what RSN is when landing after clicking
+ * an invite link." Claus preferred fixing this in the email rather than
+ * building an on-platform explainer, so the invite now says what Reason is
+ * and what happens next, in plain prose, before it asks anyone to join.
+ * A pure builder, so the copy is testable without an email provider.
+ */
+export function buildInviteEmail(data: InviteEmailData): { subject: string; html: string; text: string } {
   const typeLabel = data.type === 'pod' ? 'a pod' : data.type === 'session' ? 'an event' : 'the platform';
   const targetLine = data.targetName ? ` — <strong>${data.targetName}</strong>` : '';
+  const targetText = data.targetName ? ` — ${data.targetName}` : '';
 
-  const subject = `${data.inviterName} invited you to ${data.targetName || 'RSN'}`;
+  const subject = `${data.inviterName} invited you to ${data.targetName || 'Reason'}`;
+
+  const openingHtml = data.type === 'platform'
+    ? `<strong>${data.inviterName}</strong> invited you to Reason.`
+    : `<strong>${data.inviterName}</strong> has invited you to join ${typeLabel}${targetLine} on Reason.`;
+  const openingText = data.type === 'platform'
+    ? `${data.inviterName} invited you to Reason.`
+    : `${data.inviterName} has invited you to join ${typeLabel}${targetText} on Reason.`;
+
+  const whatItIs =
+    'Reason is a private network where people meet for a stated reason rather than by browsing profiles. ' +
+    'You say who you are looking for, and it keeps looking, including as new people join.';
+  // A pod or event invite may reach someone who is already a member, so only a
+  // platform invite promises them the sign-up conversation.
+  const whatHappensNext = data.type === 'platform'
+    ? 'Joining takes a few minutes: a short conversation about who you want to meet, and you are in.'
+    : '';
+
   const html = `
     <!DOCTYPE html>
     <html>
@@ -423,9 +445,13 @@ export async function sendInviteEmail(
           <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
           <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
 
-          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
-            <strong>${data.inviterName}</strong> has invited you to join ${typeLabel}${targetLine} on RSN.
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
+            ${openingHtml}
           </p>
+          <p style="color:#1a1a2e;font-size:15px;line-height:1.6;margin:0 0 16px 0;">
+            ${whatItIs}
+          </p>
+          ${whatHappensNext ? `<p style="color:#1a1a2e;font-size:15px;line-height:1.6;margin:0 0 24px 0;">${whatHappensNext}</p>` : ''}
 
           <div style="text-align:center;margin:32px 0;">
             <a href="${data.inviteUrl}"
@@ -450,8 +476,20 @@ export async function sendInviteEmail(
     </html>
   `;
 
+  const text = [openingText, '', whatItIs, whatHappensNext, '', `Accept Invite: ${data.inviteUrl}`, '', 'RSN — Connect with Reason']
+    .filter((line, i, all) => !(line === '' && all[i - 1] === ''))
+    .join('\n');
+
+  return { subject, html, text };
+}
+
+export async function sendInviteEmail(
+  to: string,
+  data: InviteEmailData
+): Promise<void> {
+  const { subject, html, text } = buildInviteEmail(data);
+
   if (config.resendApiKey) {
-    const text = `${data.inviterName} has invited you to join ${typeLabel}${data.targetName ? ` — ${data.targetName}` : ''} on RSN.\n\nAccept Invite: ${data.inviteUrl}\n\nRSN — Connect with Reason`;
     const attachments: { filename: string; content: string }[] = [];
 
     // Attach .ics calendar invite for session invites with scheduled time

@@ -8284,3 +8284,17 @@ Matrix smoke (44.3s, prod), "entered" = video grid LIVE: A healthy 6s; B broadca
 **Tests:** 13 unit (planner + creation, incl. order-said cap and self-description guard), 2 route (source text + save-before-agents ordering), full suite 2906 passed (3 load-flake suites green in isolation). E2E `e2e/tests/first-agent.spec.ts` drives the real /confirm and asserts rows + last_matched_at + /agents render + 360px + no-duplicate for a returning member.
 
 **BLOCKER found by the E2E red run:** prod POST /onboarding/confirm answers 503 LLM_DISABLED. Render log 10:50 UTC: "Your credit balance is too low to access the Anthropic API". Chat onboarding, extraction and enrichment are all down until the prepaid key is topped up; new users get the form fallback and no agent. Headed prod smoke of B2 is pending that top-up.
+
+---
+
+## 2026-09-03 - 13 Aug overhaul, Task C2: any member can invite to the platform
+
+**Stefan (13 Aug):** "Currently only admins can send platform invitations - I want any user to be able to invite." Ali's recorded decision: direct and unlimited, the same effect an admin invite has; no admin approval step. The admin-only check lived in `invite.service.createInvite` (not in the route gates the plan pointed at, which guard viewing/reminding and stay as they are). Removed. Nothing new added on top: the existing per-member entitlement (`user_entitlements.max_invites_per_day`, default 100, admin-adjustable) keeps applying to members exactly as it does for their pod invites, `auditMiddleware('create_invite')` keeps every invite's origin traceable, and ALREADY_REGISTERED / SELF_INVITE / DUPLICATE_INVITE still apply. The Invites page already offered "Platform Invite" to everyone (the server was the only gate), so no client change.
+
+**Tests:** 3 service tests (member creates + row records inviter; already-registered still 409; entitlement still 429). E2E `e2e/tests/member-invites.spec.ts`: member creates a platform invite via API (code-only, no email sent) and a stranger resolves the code; 409 for a registered address; 400 self-invite; member lists only their own invites; member creates a shareable platform link on the page at 360px (44px target, no h-scroll).
+
+---
+
+## 2026-09-03 - 13 Aug overhaul, Task D3: the invite email says what Reason is
+
+**Claus (13 Aug):** a new user has no idea what RSN is when landing from an invite link; explain it in the invite email rather than build an on-platform explainer. `buildInviteEmail` (pure, exported) now opens with "<inviter> invited you to Reason", then two plain paragraphs: what Reason is (people meet for a stated reason; you say who you are looking for and it keeps looking) and, for platform invites only, what happens next (a short conversation about who you want to meet). Pod and event invites get the what-it-is line but not the sign-up promise, since the recipient may already be a member. Plain-text part carries the same copy. Subject: "<inviter> invited you to Reason" (was "RSN"). 3 unit tests pin the copy in html and text.

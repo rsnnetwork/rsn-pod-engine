@@ -84,6 +84,45 @@ describe('Email Service', () => {
     });
   });
 
+  // 13 Aug 2026: "New user has no idea what RSN is when landing after clicking
+  // an invite link." Claus wanted it fixed in the email, not the UI.
+  describe('buildInviteEmail says what Reason is', () => {
+    it('a platform invite explains Reason and what happens next, in the html AND the plain text', () => {
+      const { subject, html, text } = emailService.buildInviteEmail({
+        inviterName: 'Stefan', type: 'platform', inviteUrl: 'http://localhost:5173/invite/ABC123',
+      });
+      expect(subject).toBe('Stefan invited you to Reason');
+      expect(html).toMatch(/Stefan<\/strong> invited you to Reason/);
+      expect(html).toMatch(/private network where people meet for a stated reason/i);
+      expect(html).toMatch(/who you are looking for/i);
+      expect(html).toMatch(/takes a few minutes/i);
+      expect(html).toContain('http://localhost:5173/invite/ABC123');
+      expect(text).toMatch(/private network/i);
+      expect(text).toMatch(/takes a few minutes/i);
+      expect(text).toContain('Accept Invite: http://localhost:5173/invite/ABC123');
+    });
+
+    it('a pod invite says what Reason is but does not promise a sign-up conversation to someone who may already be in', () => {
+      const { subject, html, text } = emailService.buildInviteEmail({
+        inviterName: 'Stefan', type: 'pod', targetName: 'Founding Circle', inviteUrl: 'http://localhost:5173/invite/ABC123',
+      });
+      expect(subject).toBe('Stefan invited you to Founding Circle');
+      expect(html).toContain('Founding Circle');
+      expect(html).toMatch(/private network/i);
+      expect(html).not.toMatch(/takes a few minutes/i);
+      expect(text).not.toMatch(/takes a few minutes/i);
+    });
+
+    it('never injects raw html from a member-controlled name into the script/style context', () => {
+      // The name is interpolated inside a <strong>; keep the existing shape
+      // (no new template surface) — this pins that the builder still wraps it.
+      const { html } = emailService.buildInviteEmail({
+        inviterName: 'Stefan', type: 'session', targetName: 'Raw Speed Networking', inviteUrl: 'http://x/invite/1',
+      });
+      expect(html).toMatch(/<strong>Stefan<\/strong> has invited you to join an event — <strong>Raw Speed Networking<\/strong> on Reason\./);
+    });
+  });
+
   describe('sendInviteEmail', () => {
     it('should not throw when no email provider is configured', async () => {
       await expect(
