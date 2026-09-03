@@ -160,6 +160,39 @@ describe('scrapingdogProvider', () => {
     if (r2.kind === 'provider_error') expect(r2.reason).toContain('Free pack');
   });
 
+  // 3 Sep 2026: three real members enriched at once on the Lite plan (2
+  // concurrent LinkedIn scrapes); the third got "Too many requests" and was
+  // marked failed as though the plan were exhausted. A rate limit is a wait.
+  it('a "Too many requests" body is retried with backoff, not treated as a plan error', async () => {
+    jest.useFakeTimers();
+    const fetchMock = jest.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(mockResponse(200, { success: false, message: 'Too many requests, please wait.' }))
+      .mockResolvedValueOnce(mockResponse(429, { success: false, message: 'Too many requests, please wait.' }))
+      .mockResolvedValueOnce(mockResponse(200, { fullName: 'Jane Doe', headline: 'CTO', experience: [{ position: 'CTO', company_name: 'X' }] }));
+
+    const promise = scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/burst-third' });
+    await jest.advanceTimersByTimeAsync(5_000);   // after attempt 1
+    await jest.advanceTimersByTimeAsync(10_000);  // after attempt 2 (grows per attempt)
+
+    const outcome = await promise;
+    expect(outcome.kind).toBe('found');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('a rate limit that never clears ends as retry_exhausted, still never not_found', async () => {
+    jest.useFakeTimers();
+    const fetchMock = jest.spyOn(globalThis, 'fetch')
+      .mockResolvedValue(mockResponse(200, { success: false, message: 'Too many requests, please wait.' }));
+
+    const promise = scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/burst-forever' });
+    // Backoff is 5s × attempt between the 6 attempts: 5+10+15+20+25 = 75s.
+    for (const ms of [5_000, 10_000, 15_000, 20_000, 25_000]) await jest.advanceTimersByTimeAsync(ms);
+
+    const outcome = await promise;
+    expect(outcome).toEqual({ kind: 'retry_exhausted' });
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+  });
+
   it('requests premium=true (not private=true) and URL-encodes a unicode slug', async () => {
     const fetchMock = jest
       .spyOn(globalThis, 'fetch')

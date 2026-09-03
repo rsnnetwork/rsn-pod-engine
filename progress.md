@@ -8354,3 +8354,13 @@ Matrix smoke (44.3s, prod), "entered" = video grid LIVE: A healthy 6s; B broadca
 **3 Sep 14:40 UTC - Anthropic balance topped up.** first-agent.spec 3/3 on prod (new member lands on a searched agent; 083 re-onboarder gains only what is new; tile counts 4). host-transcript.spec: real 4-turn chat on prod, host reacts before each question, no dashes, short, ends on Developers + Investors agents. Every 13 Aug item is now production-verified.
 
 **3 Sep 14:55 UTC - the whole onboarding in the browser, on prod (onboarding-journey.spec).** Gate -> /onboarding -> LinkedIn ask -> Skip -> not_found opening -> 3 real chat turns (host reacted before each question) -> host summarised and went ready on its own -> "Yes, use this" -> /agents with toast "Welcome to Reason! Your Developers and engineers and Investors agents are searching now." -> both agents rendered and searched, member completed, 390px clean. 1/1.
+
+---
+
+## 2026-09-03 - real-profile enrichment on prod + ScrapingDog rate-limit retry
+
+**Ali supplied LinkedIn URLs for his own account (alihamzaraja) and Malik Ahmed Javed's two accounts (malik-ahmed-748738186).** Set by exact id, then the admin refresh job (the same `runEnrichment` onboarding uses) was fired on prod for each. Results: all three `partial` at confidence 0.7 via scrapingdog in ~9s: name, current company and About come back; headline and current position arrive EMPTY and some past companies masked with asterisks - the same shape as the July fixture, i.e. how ScrapingDog returns LinkedIn public data, not a regression. The member's confirm card shows exactly that ("We found part of your public profile. Please fill in the rest.", Role "Not set"), and a completed member's own saved columns win over the scrape (Ali's card kept his stated role and About).
+
+**Bug found:** firing three at once against the Lite plan's LinkedIn concurrency of 2 got `{success:false, message:"Too many requests, please wait."}` for the third, which the provider classified as a plan-level `provider_error` -> enrichment FAILED immediately. Fix in `scrapingdog.provider.ts`: a 429, or a success:false body matching /too many requests|rate limit/i, now backs off 5s x attempt within the existing 6-attempt budget (up to 75s) and ends as `retry_exhausted` only if it never clears. 2 new unit tests (18 green). Real-world relevance: several members onboarding in the same minute on Monday.
+
+Scripts kept: `e2e/enrich-real-profiles.mjs` (fires the prod refresh job for the three accounts, prints the extraction, temp admin deleted by id; optional id-prefix arg) and `e2e/tests/shots-real-enrichment.spec.ts` (SHOTS=1: admin inspector + member confirm card screenshots).

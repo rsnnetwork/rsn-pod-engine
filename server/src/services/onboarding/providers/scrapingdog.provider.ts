@@ -23,6 +23,14 @@ import type { EnrichmentProvider } from './provider.types';
 const BASE = 'https://api.scrapingdog.com/linkedin/';
 const RETRY_DELAY_MS = 20_000;
 const MAX_ATTEMPTS = 6;
+// 3 Sep 2026: the Lite plan allows 2 concurrent LinkedIn scrapes. A third
+// member onboarding at the same moment got `{success:false, message:"Too many
+// requests, please wait."}` and was marked FAILED on the spot, as if the plan
+// were exhausted. A rate limit is a "wait", not a "no": back off and retry
+// within the same attempt budget. Grows per attempt so a burst drains rather
+// than hammers.
+const RATE_LIMIT_DELAY_MS = 5_000;
+const RATE_LIMITED = /too many requests|rate limit/i;
 // 23 Jul 2026 live test: a valid, never-before-scraped profile (ali-hamza-b0650a281)
 // failed end to end with "The operation was aborted due to timeout" at both the
 // approval-time preload and the user-side run. ScrapingDog answers a cached
@@ -131,7 +139,15 @@ export const scrapingdogProvider: EnrichmentProvider = {
         // plain 404/410 with NO such body falls through to not_found below.
         if (body && !Array.isArray(body) && typeof body === 'object' && body.success === false) {
           const message = typeof body.message === 'string' ? body.message : 'scrapingdog error';
+          if (status === 429 || RATE_LIMITED.test(message)) {
+            if (attempt < MAX_ATTEMPTS) { await sleep(RATE_LIMIT_DELAY_MS * attempt); continue; }
+            return { kind: 'retry_exhausted' };
+          }
           return { kind: 'provider_error', reason: redact(message) };
+        }
+        if (status === 429) {
+          if (attempt < MAX_ATTEMPTS) { await sleep(RATE_LIMIT_DELAY_MS * attempt); continue; }
+          return { kind: 'retry_exhausted' };
         }
 
         if (status === 200) {
