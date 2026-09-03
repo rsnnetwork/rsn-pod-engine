@@ -34,9 +34,12 @@
 | C1 people search (+ migration 088 pg_trgm) | a902fe8 | ✅ search.spec 6/6 |
 | D1 profile card | 22096e4 | ✅ profile-card.spec 3/3 at 360/390/768/1024/1280 |
 | B1 job-title provenance (+ migration 089) | 261dd28 | ✅ matching-agents + wave12 + onboarding-states 36/36 |
-| C3 circle invites (+ migration 090) | 5992f12 | see progress.md for the result |
+| C3 circle invites (+ migration 090) | 5992f12 | ✅ circle-invites.spec 6/6 (after 3899fe3 scoped one selector) |
+| D1 follow-up: name below the band on desktop | 52a4c01 | ✅ profile-card.spec 3/3 with the band assertion at 360–1280 |
 
-Also found and fixed on the way: the three Invites-page create buttons were 30px tall (a902fe8 raises them to the 44px floor).
+Final state 3 Sep 2026 ~12:50 UTC: main = staging = 3899fe3, Render live + Vercel bundle rebuilt, health ok, prod data clean (0 test users, 0 unscored agents, migrations 088/089/090 recorded).
+
+Also found and fixed on the way: the three Invites-page create buttons were 30px tall (a902fe8 raises them to the 44px floor), and the first cut of the profile card rendered the name on the dark band at ≥640px (caught by the report screenshots, fixed in 52a4c01).
 
 **Deviations recorded:** C2 keeps the pre-existing per-member entitlement (`max_invites_per_day`, default 100) rather than removing every rail; it is the one lever left, and it applied to members' pod invites already. C1 is a new member endpoint `GET /users/find`; the admin-only `/users/search` (returns emails) is untouched. B1's premise was corrected: the title is never written silently, so "inferred" means "enrichment proposed it and the member accepted it unchanged"; scoring is unchanged, only the name given for an introduction prefers a stated title.
 
