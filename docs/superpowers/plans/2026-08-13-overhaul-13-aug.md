@@ -27,10 +27,10 @@
 
 | Task | Commit | Prod smoke |
 |---|---|---|
-| B2 first agents at onboarding (+ backfill of 12 agents for 4 members) | c6b3da0 | **blocked**: prod `/onboarding/confirm` is 503, Anthropic prepaid balance empty (Render log 10:50 UTC) |
+| B2 first agents at onboarding (+ backfill of 12 agents for 4 members) | c6b3da0 | ✅ first-agent.spec 3/3 after the Anthropic top-up (14:40 UTC): new member lands on a searched "Developers and engineers" agent; 083 re-onboarder kept Founders and gained only Investors; tile shows 4 |
 | C2 any member can invite | 98ed324 | ✅ member-invites.spec 5/5 |
 | D3 invite email says what Reason is | 0262e37 | unit-pinned; live email needs a real send after the deploy |
-| D2 warmer host prompt | 8dba7db | **blocked** on the same Anthropic balance (transcripts unreadable without the model) |
+| D2 warmer host prompt | 8dba7db | ✅ host-transcript.spec: real 4-turn chat on prod, host reacted before every question ("That's a solid niche.", "Those are two different things you're after.", "Good to know what you bring."), no dashes, ≤ 40 words, ended on Developers + Investors agents |
 | C1 people search (+ migration 088 pg_trgm) | a902fe8 | ✅ search.spec 6/6 |
 | D1 profile card | 22096e4 | ✅ profile-card.spec 3/3 at 360/390/768/1024/1280 |
 | B1 job-title provenance (+ migration 089) | 261dd28 | ✅ matching-agents + wave12 + onboarding-states 36/36 |
