@@ -389,7 +389,7 @@ export default function InvitesPage() {
                 onClick={() => sendEmailMutation.mutate()}
                 isLoading={sendEmailMutation.isPending}
                 disabled={!inviteeEmail || needsTarget}
-                className="w-full"
+                className="w-full min-h-[44px]"
               >
                 <Send className="h-4 w-4 mr-1" /> Send Invite Email
               </Button>
@@ -483,7 +483,7 @@ export default function InvitesPage() {
                       onClick={() => bulkInviteMutation.mutate(selectedUsers.map(u => u.email))}
                       isLoading={bulkInviteMutation.isPending}
                       disabled={needsTarget}
-                      className="w-full"
+                      className="w-full min-h-[44px]"
                     >
                       <Mail className="h-4 w-4 mr-1" /> Send {selectedUsers.length} Invite(s)
                     </Button>
@@ -511,7 +511,7 @@ export default function InvitesPage() {
                 onClick={() => createLinkMutation.mutate()}
                 isLoading={createLinkMutation.isPending}
                 disabled={needsTarget || maxUses < 1}
-                className="w-full"
+                className="w-full min-h-[44px]"
               >
                 <Copy className="h-4 w-4 mr-1" /> Create & Copy Link
               </Button>
