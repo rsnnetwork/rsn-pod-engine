@@ -10,6 +10,7 @@ import {
   type OnboardingMessage,
   type OnboardingKnownProfile,
   type OnboardingConfirmedProfile,
+  type OnboardingConfirmResponse,
   type OnboardingResume,
   type OnboardingOpening,
   type OnboardingStatusResponse,
@@ -732,11 +733,24 @@ export default function ChatbotOnboarding() {
     if (confirming) return;
     setConfirming(true);
     try {
-      await api.post('/onboarding/confirm', {
+      const res = await api.post<{ data: OnboardingConfirmResponse }>('/onboarding/confirm', {
         messages: messages.slice(1),
         profile: confirmedProfile(),
       });
       await checkSession();
+      // 13 Aug 2026: the chat ends on something concrete the member can go and
+      // look at — the agents their answers produced, already searching —
+      // rather than a summary they cannot act on.
+      const firstAgents = res.data?.data?.firstAgents ?? [];
+      if (firstAgents.length > 0) {
+        const names = firstAgents.map((a) => a.label).join(' and ');
+        addToast(
+          `Welcome to Reason! Your ${names} agent${firstAgents.length > 1 ? 's are' : ' is'} searching now.`,
+          'success',
+        );
+        navigate(redirect === '/' ? '/agents' : redirect, { replace: true });
+        return;
+      }
       addToast('Welcome to Reason!', 'success');
       navigate(redirect, { replace: true });
     } catch (err: any) {

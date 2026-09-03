@@ -32,6 +32,8 @@ import { runEnrichment, isFreshCacheHit } from '../services/onboarding/enrichmen
 import { resolveEnrichProvider, statusFromConfidence } from '../services/onboarding/providers/registry';
 import { record as recordStageEvent, sanitizeErrorMessage } from '../services/onboarding/stage-events.repo';
 import logger from '../config/logger';
+import { createFirstAgents } from '../services/matching/first-agent.service';
+import { fanoutUserEntity } from '../realtime/fanout';
 
 const router = Router();
 
@@ -440,9 +442,23 @@ router.post(
       );
       recordStageEvent(userId, 'confirmed', intent.profileStrength ? { profileStrength: intent.profileStrength } : {}).catch(() => {});
 
+      // 13 Aug 2026: give them the agents their answers describe, searched now,
+      // so the Suggestions page has something on it the first time they open
+      // it. Built from what the member SAID they want, not from what enrichment
+      // guessed, and never a duplicate for a member re-onboarding under 083.
+      const firstAgents = await createFirstAgents(userId, {
+        whoText: [...(intent.desiredPeople ?? []), ...(intent.desiredRoles ?? [])].join(', '),
+        whyText: intent.reasonForMeeting,
+      });
+      if (firstAgents.length) fanoutUserEntity(userId).catch(() => {});
+
       const response: ApiResponse = {
         success: true,
-        data: { summary: intent.userProfileSummary, profileComplete },
+        data: {
+          summary: intent.userProfileSummary,
+          profileComplete,
+          firstAgents: firstAgents.map(a => ({ id: a.id, label: a.label })),
+        },
       };
       res.json(response);
     } catch (err) {

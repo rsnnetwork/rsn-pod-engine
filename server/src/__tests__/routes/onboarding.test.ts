@@ -58,6 +58,15 @@ jest.mock('../../services/onboarding/intent.repo', () => ({
   __esModule: true,
 }));
 
+jest.mock('../../services/matching/first-agent.service', () => ({
+  createFirstAgents: jest.fn(async () => []),
+  __esModule: true,
+}));
+jest.mock('../../realtime/fanout', () => ({
+  fanoutUserEntity: jest.fn(async () => undefined),
+  __esModule: true,
+}));
+
 jest.mock('../../services/onboarding/known', () => ({
   inferKnownProfile: jest.fn(),
   __esModule: true,
@@ -794,7 +803,13 @@ describe('POST /onboarding/profile', () => {
   });
 });
 
+import { createFirstAgents } from '../../services/matching/first-agent.service';
+
 describe('POST /onboarding/confirm', () => {
+  beforeEach(() => {
+    (createFirstAgents as jest.Mock).mockResolvedValue([]);
+  });
+
   const body = {
     messages: [
       { role: 'user', content: 'I want to meet founders' },
@@ -829,6 +844,52 @@ describe('POST /onboarding/confirm', () => {
     expect(res.body.data.summary).toBe('A B2B founder and advisor.');
     expect(res.body.data.profileComplete).toBe(true);
     expect(intentRepo.saveIntentAndComplete).toHaveBeenCalledTimes(1);
+  });
+
+  // ─── 13 Aug 2026: the first agent ────────────────────────────────────────
+  it('builds the first agents from what the member said they want, and returns them', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+    (chatbot.extractIntent as jest.Mock).mockResolvedValue({
+      userProfileSummary: 'x', profileStrength: 'strong',
+      desiredPeople: ['react developers who can build my product'],
+      desiredRoles: ['developer'],
+      reasonForMeeting: 'I need help shipping',
+    });
+    (intentRepo.saveIntentAndComplete as jest.Mock).mockResolvedValue({ profileComplete: true });
+    (createFirstAgents as jest.Mock).mockResolvedValue([
+      { id: 'a-1', label: 'Developers and engineers', wantText: 'x' },
+    ]);
+
+    const res = await request(app)
+      .post('/onboarding/confirm')
+      .set('Authorization', `Bearer ${makeToken('user-first-agent-1')}`)
+      .send(body);
+
+    expect(res.status).toBe(200);
+    const [userId, source] = (createFirstAgents as jest.Mock).mock.calls[0];
+    expect(userId).toBe('user-first-agent-1');
+    // From what they SAID, both fields, not from enrichment.
+    expect(source.whoText).toBe('react developers who can build my product, developer');
+    expect(source.whyText).toBe('I need help shipping');
+    // And the client is told what was made, so the chat can end on it.
+    expect(res.body.data.firstAgents).toEqual([{ id: 'a-1', label: 'Developers and engineers' }]);
+  });
+
+  it('runs the first agents AFTER the intent is saved, so they see the finished profile', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+    (chatbot.extractIntent as jest.Mock).mockResolvedValue({ userProfileSummary: 'x', profileStrength: 'strong' });
+    const order: string[] = [];
+    (intentRepo.saveIntentAndComplete as jest.Mock).mockImplementation(async () => { order.push('save'); return { profileComplete: true }; });
+    (createFirstAgents as jest.Mock).mockImplementation(async () => { order.push('agents'); return []; });
+
+    const res = await request(app)
+      .post('/onboarding/confirm')
+      .set('Authorization', `Bearer ${makeToken('user-first-agent-2')}`)
+      .send(body);
+
+    expect(res.status).toBe(200);
+    expect(order).toEqual(['save', 'agents']);
+    expect(res.body.data.firstAgents).toEqual([]);
   });
 
   it('passes the confirmed profile through to save', async () => {

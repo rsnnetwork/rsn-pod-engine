@@ -8270,3 +8270,17 @@ Matrix smoke (44.3s, prod), "entered" = video grid LIVE: A healthy 6s; B broadca
 **Verified:** full server suite 2411 passed (3 load-flakes green in isolation); tsc clean both packages; Render dep-d92psan40ujc738d3li0 live + Vercel dpl_Ah1q9K6zqV19rZBeBY5yw4ZMtLXq READY on 963a5f4. Headed prod smoke (verify-pod-join-request-notify-headed.spec.ts, 15.0s): request-join -> Pending Requests (1) appeared LIVE on the director's open page (no refresh), bell badge + dropdown show New Join Request (API-verified type/title/body/link), no Pending Approval chip, Members (1) excludes pending, 390px mobile fits w/ no h-scroll, approve flips requester to active member (Members (2)). Cleanup by exact IDs.
 
 **Note:** no email is sent for pod join requests (bell only) - platform-level join requests do email admins; parity is an open product question for Ali/Stefan.
+
+---
+
+## 2026-09-03 - 13 Aug overhaul, Task B2: onboarding ends on the member's first agents
+
+**Stefan (13 Aug):** "First agent isn't auto-creating after onboarding as it should." It never did: migration 087 seeded agents for members who already existed; nothing on the completion path created one for someone new. A member finishing the chat landed on an empty Suggestions page having just described exactly who they want to meet.
+
+**Server:** `createFirstAgents` (first-agent.service.ts) runs in POST /onboarding/confirm right after `saveIntentAndComplete`, from what the member SAID (desiredPeople + desiredRoles; reasonForMeeting only when it names a kind of person - a self-description never becomes a search). One agent per designation named, in the order the member said them, capped at 4; one designation keeps the sentence as the search; none named -> a single "People I want to meet" agent, only for a member with no agents yet. Never a duplicate label for a member re-onboarding under 083. Each agent is scored before the response returns. Response carries `firstAgents: [{id,label}]`; client lands the member on /agents with a toast naming them.
+
+**Backfill:** `server/scripts/backfill-first-agents.ts` (dry run by default, `--apply`) gives the 7 members who completed the chat after 087 ran (4 Aug) the same treatment. Dry run: 12 agents across 4 members; 3 skipped (nothing searchable about WHO - Stefan, Mike Orchard, Chris Kirkpatrick). The 26 `update_required` members have not logged in since the gate shipped (23 Jul); they get their agents when they finish the chat.
+
+**Tests:** 13 unit (planner + creation, incl. order-said cap and self-description guard), 2 route (source text + save-before-agents ordering), full suite 2906 passed (3 load-flake suites green in isolation). E2E `e2e/tests/first-agent.spec.ts` drives the real /confirm and asserts rows + last_matched_at + /agents render + 360px + no-duplicate for a returning member.
+
+**BLOCKER found by the E2E red run:** prod POST /onboarding/confirm answers 503 LLM_DISABLED. Render log 10:50 UTC: "Your credit balance is too low to access the Anthropic API". Chat onboarding, extraction and enrichment are all down until the prepaid key is topped up; new users get the form fallback and no agent. Headed prod smoke of B2 is pending that top-up.
