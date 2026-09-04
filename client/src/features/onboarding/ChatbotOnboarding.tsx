@@ -760,10 +760,18 @@ export default function ChatbotOnboarding() {
       // rather than a summary they cannot act on.
       const firstAgents = res.data?.data?.firstAgents ?? [];
       if (firstAgents.length > 0) {
-        const names = firstAgents.map((a) => a.label).join(' and ');
+        // 4 Sep 2026: one main agent searches now; the other kinds of person
+        // they named wait as paused drafts, and the toast says so.
+        const main = firstAgents.find((a) => a.status !== 'paused') ?? firstAgents[0];
+        const drafts = firstAgents.filter((a) => a.id !== main.id);
+        const draftNames = drafts.map((a) => a.label).join(drafts.length === 2 ? ' and ' : ', ');
         addToast(
-          `Welcome to Reason! Your ${names} agent${firstAgents.length > 1 ? 's are' : ' is'} searching now.`,
+          `Welcome to Reason! Your ${main.label} agent is searching now.` +
+            (drafts.length
+              ? ` We also drafted ${draftNames} for you, paused until you resume ${drafts.length === 1 ? 'it' : 'them'}.`
+              : ''),
           'success',
+          { duration: drafts.length ? 9000 : 4000 },
         );
         navigate(redirect === '/' ? '/agents' : redirect, { replace: true });
         return;

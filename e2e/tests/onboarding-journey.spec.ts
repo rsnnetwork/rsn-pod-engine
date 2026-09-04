@@ -50,7 +50,6 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   for (const c of ctxs) await c.close().catch(() => {});
   try { await browser?.close(); } catch {}
-  if (known) await pool.query(`DELETE FROM join_requests WHERE lower(email) = $1`, [known.email.toLowerCase()]).catch(() => {});
   const ids = [member?.id, known?.id].filter(Boolean);
   await pool.query(`DELETE FROM agent_matches WHERE agent_id IN (SELECT id FROM matching_agents WHERE user_id = ANY($1))`, [ids]).catch(() => {});
   await pool.query(`DELETE FROM matching_agents WHERE user_id = ANY($1)`, [ids]).catch(() => {});
@@ -65,14 +64,12 @@ test.afterAll(async () => {
 test('a member whose card already holds a reason and a company is not asked the reason again', async () => {
   test.setTimeout(300_000);
   known = await createTestUser('journeyknown', 'member', 'not_started');
+  // The reason the card shows is users.why_i_want_to_meet (copied from the
+  // join request at approval); the company is on file too.
   await pool.query(
     `UPDATE users SET onboarding_completed = false, company = 'Fjord Analytics', job_title = NULL, bio = NULL,
-       industry = NULL, location = NULL, linkedin_url = NULL WHERE id = $1`, [known.id]);
-  // The reason lives on the join request the member came in through.
-  await pool.query(
-    `INSERT INTO join_requests (id, full_name, email, linkedin_url, reason, status, reviewed_at)
-     VALUES (gen_random_uuid(), 'E2E Journey Known', $1, 'https://www.linkedin.com/in/e2e-journey-known', 'because i want to meet recruiters', 'approved', NOW())`,
-    [known.email]);
+       industry = NULL, location = NULL, linkedin_url = NULL, why_i_want_to_meet = 'because i want to meet recruiters'
+     WHERE id = $1`, [known.id]);
 
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
   await ctx.addInitScript((t: { a: string; r: string }) => {
@@ -154,15 +151,18 @@ test('a new member chats, confirms, and lands on Suggestions with their agents n
   const toastText = (await toast.textContent()) || '';
   console.log(`  TOAST:  ${toastText.trim()}`);
   expect(toastText).toMatch(/Developers|Investors/);
+  // Two kinds of person named: one searches, the other is a draft, and the toast says so.
+  expect(toastText).toMatch(/drafted/i);
 
-  // And the agents are real: rows, searched, rendered.
-  const rows = await pool.query(`SELECT id, label, last_matched_at FROM matching_agents WHERE user_id = $1 ORDER BY created_at`, [member.id]);
+  // And the agents are real: rows, the main one searched, all rendered.
+  const rows = await pool.query(`SELECT id, label, status, last_matched_at FROM matching_agents WHERE user_id = $1 ORDER BY created_at`, [member.id]);
   expect(rows.rows.length).toBeGreaterThan(0);
+  expect(rows.rows.filter(r => r.status === 'active').length, 'exactly one main agent').toBe(1);
   for (const a of rows.rows) {
-    expect(a.last_matched_at, `${a.label} has searched`).not.toBeNull();
+    if (a.status === 'active') expect(a.last_matched_at, `${a.label} has searched`).not.toBeNull();
     await expect(page.getByTestId(`agent-${a.id}`)).toBeVisible({ timeout: 30_000 });
   }
-  console.log(`  AGENTS: ${rows.rows.map(r => r.label).join(' | ')}`);
+  console.log(`  AGENTS: ${rows.rows.map(r => `${r.label} [${r.status}]`).join(' | ')}`);
 
   // The gate is open now: the member is completed and not sent back.
   const u = await pool.query(`SELECT onboarding_status::text s, onboarding_completed c FROM users WHERE id = $1`, [member.id]);

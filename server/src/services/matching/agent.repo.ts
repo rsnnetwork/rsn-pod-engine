@@ -122,14 +122,14 @@ export async function getAgent(agentId: string, userId: string): Promise<Matchin
 
 export async function createAgent(
   userId: string,
-  input: { label: string; wantText: string; matchingTags?: string[] },
+  input: { label: string; wantText: string; matchingTags?: string[]; status?: AgentStatus },
 ): Promise<MatchingAgent> {
   const r = await query<AgentRow>(
-    `INSERT INTO matching_agents (user_id, label, want_text, matching_tags)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO matching_agents (user_id, label, want_text, matching_tags, status)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING id, user_id, label, want_text, matching_tags, status,
                last_matched_at, created_at, updated_at, 0 AS match_count, 0 AS asked_count`,
-    [userId, input.label.trim(), input.wantText.trim(), input.matchingTags ?? []],
+    [userId, input.label.trim(), input.wantText.trim(), input.matchingTags ?? [], input.status ?? 'active'],
   );
   return mapAgent(r.rows[0]);
 }

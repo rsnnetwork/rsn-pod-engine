@@ -9,6 +9,9 @@
 // The service mirrors 087's convention so new and old members look the same:
 // one agent per designation the member named, a single "People I want to meet"
 // agent when they named none, and never a duplicate of something they have.
+//
+// 4 Sep 2026 (Ali): one MAIN agent searches at once; the other kinds of
+// person named become paused drafts the member can resume.
 
 const mockCreate = jest.fn<any, any[]>();
 const mockList = jest.fn<any, any[]>();
@@ -34,8 +37,8 @@ let seq = 0;
 beforeEach(() => {
   seq = 0;
   mockCreate.mockReset();
-  mockCreate.mockImplementation(async (userId: string, input: { label: string; wantText: string }) => ({
-    id: `a-${++seq}`, userId, label: input.label, wantText: input.wantText, status: 'active',
+  mockCreate.mockImplementation(async (userId: string, input: { label: string; wantText: string; status?: string }) => ({
+    id: `a-${++seq}`, userId, label: input.label, wantText: input.wantText, status: input.status ?? 'active',
   }));
   mockList.mockReset();
   mockList.mockResolvedValue([]);
@@ -43,7 +46,7 @@ beforeEach(() => {
   mockRecompute.mockResolvedValue(2);
 });
 
-const created = () => mockCreate.mock.calls.map(([, input]) => input as { label: string; wantText: string });
+const created = () => mockCreate.mock.calls.map(([, input]) => input as { label: string; wantText: string; status: 'active' | 'paused' });
 
 describe('createFirstAgents', () => {
   it('creates one agent from what the member said they want, keeping their words', async () => {
@@ -58,6 +61,7 @@ describe('createFirstAgents', () => {
     // is the member's own sentence, so "react" still counts when scoring.
     expect(created()[0].label).toBe('Developers and engineers');
     expect(created()[0].wantText).toBe('react developers who can build my product');
+    expect(created()[0].status).toBe('active');
   });
 
   it('splits several named designations into one agent each, like migration 087', async () => {
@@ -71,12 +75,15 @@ describe('createFirstAgents', () => {
     // would let a stray word pull the Founders agent toward investors.
     expect(created()[0].wantText).toBe('founders');
     expect(created()[1].wantText).toBe('investors');
+    // The first kind they named is the main agent; the second is a draft.
+    expect(created().map(c => c.status)).toEqual(['active', 'paused']);
+    expect(agents.map(a => a.status)).toEqual(['active', 'paused']);
   });
 
   it('falls back to a single generic agent when no known designation is named', async () => {
     await createFirstAgents('u-1', { whoText: 'interesting people in Copenhagen', whyText: '' });
     expect(created()).toEqual([
-      { label: 'People I want to meet', wantText: 'interesting people in Copenhagen' },
+      { label: 'People I want to meet', wantText: 'interesting people in Copenhagen', status: 'active' },
     ]);
   });
 
@@ -109,12 +116,22 @@ describe('createFirstAgents', () => {
     expect(created().map(c => c.label)).toEqual([
       'Business owners', 'Founders', 'HR and people leads', 'Marketing people',
     ]);
+    // One searches; three wait as drafts.
+    expect(created().map(c => c.status)).toEqual(['active', 'paused', 'paused', 'paused']);
   });
 
-  it('searches every agent immediately, so the member does not land on an empty page', async () => {
+  it('searches the main agent immediately, so the member does not land on an empty page; drafts wait for resume', async () => {
     await createFirstAgents('u-1', { whoText: 'founders and investors', whyText: '' });
-    expect(mockRecompute).toHaveBeenCalledTimes(2);
-    expect(mockRecompute.mock.calls[0][0]).toMatchObject({ id: 'a-1', label: 'Founders' });
+    expect(mockRecompute).toHaveBeenCalledTimes(1);
+    expect(mockRecompute.mock.calls[0][0]).toMatchObject({ id: 'a-1', label: 'Founders', status: 'active' });
+  });
+
+  it('a member who already holds agents gets their first new one active and the rest as drafts', async () => {
+    mockList.mockResolvedValue([{ id: 'old', label: 'Founders', status: 'active' }]);
+    await createFirstAgents('u-1', { whoText: 'founders, investors, developers and designers', whyText: '' });
+    expect(created().map(c => [c.label, c.status])).toEqual([
+      ['Investors', 'active'], ['Developers and engineers', 'paused'], ['Designers', 'paused'],
+    ]);
   });
 
   it('creates nothing when the member said nothing searchable', async () => {

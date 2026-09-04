@@ -187,8 +187,8 @@ export interface OnboardingConfirmRequest {
 export interface OnboardingConfirmResponse {
   summary: string;
   profileComplete: boolean;
-  /** 13 Aug 2026: the standing searches built from what the member said they want, already searching. */
-  firstAgents: Array<{ id: string; label: string }>;
+  /** 13 Aug 2026: the standing searches built from what the member said they want. 4 Sep 2026: the first is active (searching now); the rest are paused drafts. */
+  firstAgents: Array<{ id: string; label: string; status: 'active' | 'paused' }>;
 }
 
 // ─── v1.1: known-data confirmation ───────────────────────────────────────────

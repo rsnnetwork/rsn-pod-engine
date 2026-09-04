@@ -60,7 +60,7 @@ async function confirm(u: TestUser, memberSaid: string) {
 }
 
 const agentsOf = (u: TestUser) =>
-  pool.query(`SELECT id, label, want_text, last_matched_at FROM matching_agents WHERE user_id = $1 ORDER BY created_at`, [u.id]);
+  pool.query(`SELECT id, label, want_text, status, last_matched_at FROM matching_agents WHERE user_id = $1 ORDER BY created_at`, [u.id]);
 
 test.beforeAll(async () => {
   fresh = await createTestUser('firstAgentFresh', 'member', 'not_started');
@@ -88,17 +88,24 @@ test('finishing onboarding leaves a new member with a first agent that has alrea
   test.setTimeout(300_000);
 
   const r = await confirm(fresh,
-    'I run a small fintech startup in Copenhagen. I am looking for react developers who can build my product with me. I can help others with go-to-market and pricing.');
+    'I run a small fintech startup in Copenhagen. I am looking for react developers who can build my product with me, and maybe an angel investor who knows fintech. I can help others with go-to-market and pricing.');
   expect(r.status, `confirm accepted: ${JSON.stringify(r.json)}`).toBe(200);
   expect(r.json.data.firstAgents.length, 'the response names what was made').toBeGreaterThan(0);
+  expect(r.json.data.firstAgents.filter((a: any) => a.status === 'active').length, 'the response marks exactly one main agent').toBe(1);
 
-  // Stored, built from what they said, and searched — not just inserted.
+  // Stored, built from what they said. 4 Sep 2026: ONE agent searches now (the
+  // first kind of person they named); the rest are paused drafts.
   const rows = (await agentsOf(fresh)).rows;
   expect(rows.length, 'at least one agent row').toBeGreaterThan(0);
   expect(rows.length, 'and not a pile of them').toBeLessThanOrEqual(4);
-  expect(rows.map(x => x.label).join(' | ')).toMatch(/developer|engineer/i);
-  for (const a of rows) expect(a.last_matched_at, `${a.label} has actually searched`).not.toBeNull();
-  console.log(`  ✓ first agents: ${rows.map(x => `${x.label} ← "${x.want_text}"`).join('; ')}`);
+  const active = rows.filter(x => x.status === 'active');
+  const drafts = rows.filter(x => x.status === 'paused');
+  expect(active.length, 'exactly one main agent').toBe(1);
+  expect(active[0].label, 'the main agent is the first thing they asked for').toMatch(/developer|engineer/i);
+  expect(active[0].last_matched_at, 'the main agent has actually searched').not.toBeNull();
+  expect(drafts.length, 'the investor they also mentioned waits as a draft').toBeGreaterThanOrEqual(1);
+  expect(drafts.map(x => x.label).join(' | ')).toMatch(/investor/i);
+  console.log(`  ✓ first agents: ${rows.map(x => `${x.label} [${x.status}] ← "${x.want_text}"`).join('; ')}`);
 
   // The gate flipped: the member is completed, not sent back into onboarding.
   const u = await pool.query(`SELECT onboarding_status, onboarding_completed FROM users WHERE id = $1`, [fresh.id]);
@@ -109,8 +116,24 @@ test('finishing onboarding leaves a new member with a first agent that has alrea
   for (const a of rows) {
     await expect(page.getByTestId(`agent-${a.id}`)).toBeVisible({ timeout: 30_000 });
   }
+  // Drafts are visibly paused, with a Resume control the member can press.
+  for (const d of drafts) {
+    await expect(page.getByTestId(`agent-${d.id}`).getByText('Paused')).toBeVisible();
+    await expect(page.getByTestId(`agent-${d.id}`).getByRole('button', { name: 'Resume agent' })).toBeVisible();
+  }
+  await expect(page.getByTestId(`agent-${active[0].id}`).getByText('Paused')).toHaveCount(0);
   await expect(page).toHaveURL(/\/agents/);
-  console.log('  ✓ agents rendered on /agents for the new member.');
+  console.log('  ✓ agents rendered on /agents for the new member: one searching, drafts paused.');
+
+  // Resuming a draft is one tap, and it starts searching.
+  if (drafts.length) {
+    await page.getByTestId(`agent-${drafts[0].id}`).getByRole('button', { name: 'Resume agent' }).click();
+    await expect(page.getByTestId(`agent-${drafts[0].id}`).getByText('Paused')).toHaveCount(0, { timeout: 15_000 });
+    await expect.poll(async () =>
+      (await pool.query(`SELECT status, last_matched_at FROM matching_agents WHERE id = $1`, [drafts[0].id])).rows[0],
+      { timeout: 60_000 }).toMatchObject({ status: 'active' });
+    console.log('  ✓ a draft resumed from the page is active again.');
+  }
 
   // 360px floor: the landing page fits a small phone.
   await page.setViewportSize({ width: 360, height: 780 });

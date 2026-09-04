@@ -8411,3 +8411,15 @@ Scripts kept: `e2e/enrich-real-profiles.mjs` (fires the prod refresh job for the
 - Opening turn: `POST /onboarding/open` asks the host for its first line (wrapMode `opening`: name one concrete thing from the known block, ask what the reason leaves open, never ask what brings them here, one question, never the ready token). `ChatbotOnboarding` calls it from both entry points (card accepted; skipped / not found), shows the typing dots meanwhile, and falls back to the fixed line on error or 503.
 - Tests: registry.gapfill (3 own-words cases), prompts (opening block pins), onboarding routes (`/open`: 503 when disabled, single cue message + wrapMode, model failure → 503). E2E: the journey spec now asserts a non-static opening; a new "reason known" test seeds a join-request reason + company and asserts the host names it and does not ask it again.
 - Bell smoke on prod (186f8ae): 2/2 green. Two spec-side fixes on the way: the bell locator now targets the visible header (`:visible`; the layout renders the bell twice), and headed runs must sign with the prod secret (`JWT_SECRET` from `e2e/.jwt_secret`; a bare run signs with server/.env's local secret and gets 401 "Invalid token").
+
+---
+
+## 2026-09-04 - one main agent from onboarding; the rest are drafts
+
+**Ali (4 Sep):** four agents searching after onboarding was more than the spec asked for ("first agent") and more than a first visit reads. Decision: one main agent, the other kinds of person named become paused drafts, and the welcome toast says so.
+
+- `planFirstAgents` marks the first new agent (the first kind of person the member named) `active` and the rest `paused`; `createFirstAgents` scores only the main one (a draft is scored when the member resumes it: the status route already rescores on activation). `agent.repo.createAgent` takes a status.
+- `/onboarding/confirm` returns `status` per agent; the toast reads "Your Developers and engineers agent is searching now. We also drafted Investors for you, paused until you resume it." and stays 9s. The Suggestions page already renders Paused + Resume.
+- Tests: first-agent unit (statuses, main-only scoring, re-onboarding member gets one new active + drafts); E2E first-agent (exactly one active row, drafts paused with a Resume control, resuming from the page reactivates); journey (toast says drafted, exactly one active).
+- Journey "reason known" case fixed: the known reason is `users.why_i_want_to_meet` (copied from the join request at approval), not the join_requests row; the spec now seeds that column.
+- Items 3+4 landed on prod as 2ee7d9f: the journey smoke's host opened with "You're with Example in Pakistan and looking to connect with people around your work. What kind of person would be most useful to meet right now?" (card read back, one question); the admin refresh of Ali's test account now returns currentRole "MLOps & Geospatial Engineer" from his About with an empty headline.

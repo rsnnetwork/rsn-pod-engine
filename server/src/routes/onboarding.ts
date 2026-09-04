@@ -509,7 +509,7 @@ router.post(
         data: {
           summary: intent.userProfileSummary,
           profileComplete,
-          firstAgents: firstAgents.map(a => ({ id: a.id, label: a.label })),
+          firstAgents: firstAgents.map(a => ({ id: a.id, label: a.label, status: a.status })),
         },
       };
       res.json(response);

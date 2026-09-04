@@ -10,6 +10,12 @@
 // "People I want to meet" agent when they named none, and never a duplicate
 // of an agent the member already has — a member routed back through
 // onboarding (migration 083) keeps what 087 gave them.
+//
+// 4 Sep 2026 (Ali): four agents searching at once was more than a first visit
+// can read, and the spec only ever asked for a first agent. So ONE agent is
+// active, the first kind of person the member named, and the others are
+// created paused: drafts they can resume from the Suggestions page. The toast
+// at the end of onboarding tells them both things.
 
 import * as agentRepo from './agent.repo';
 import { recomputeAgent } from './agent-matching.service';
@@ -36,6 +42,8 @@ export interface FirstAgentSource {
 export interface FirstAgentPlan {
   label: string;
   wantText: string;
+  /** The main agent searches now; every other one waits as a paused draft. */
+  status: 'active' | 'paused';
 }
 
 /**
@@ -80,7 +88,7 @@ export function planFirstAgents(source: FirstAgentSource, existingLabels: string
   }
 
   const held = new Set(existingLabels.map(l => l.trim().toLowerCase()));
-  const plans: FirstAgentPlan[] = [];
+  const plans: Array<Omit<FirstAgentPlan, 'status'>> = [];
   if (wanted.length === 1) {
     // One kind of person: keep the member's sentence as the search, so the
     // nuance ("react developers") still counts when scoring.
@@ -98,13 +106,20 @@ export function planFirstAgents(source: FirstAgentSource, existingLabels: string
     plans.push({ label: GENERIC_LABEL, wantText: text });
   }
 
-  return plans.filter(p => !held.has(p.label.toLowerCase()));
+  // The first NEW agent is the one that searches; the rest are drafts. Order
+  // is the order the member said them, so the main agent is the first kind
+  // of person they asked for.
+  return plans
+    .filter(p => !held.has(p.label.toLowerCase()))
+    .map((p, i) => ({ ...p, status: i === 0 ? 'active' as const : 'paused' as const }));
 }
 
 /**
- * Build the agents a member's onboarding answers describe, and search each one
- * now. Returns the agents created — possibly none, when the member said nothing
- * searchable or already holds every agent their answers would produce.
+ * Build the agents a member's onboarding answers describe, and search the main
+ * one now; drafts are scored when the member resumes them (the status route
+ * rescores on activation). Returns the agents created — possibly none, when the
+ * member said nothing searchable or already holds every agent their answers
+ * would produce.
  *
  * Never throws: this runs on the completion path, and a failure here must not
  * cost the member the onboarding they just finished.
@@ -121,15 +136,18 @@ export async function createFirstAgents(
     for (const plan of plans) {
       const agent = await agentRepo.createAgent(userId, plan);
       made.push(agent);
+      if (plan.status !== 'active') continue;
 
-      // Score it now. Inserting a row runs no search — that is exactly why the
-      // 087-seeded agents all read "0 potential matches" on 3 Aug.
+      // Score the main agent now. Inserting a row runs no search — that is
+      // exactly why the 087-seeded agents all read "0 potential matches" on 3 Aug.
       await recomputeAgent(agent).catch(err =>
         logger.warn({ err, agentId: agent.id }, 'first agent will be scored on next open'));
     }
 
     if (made.length) {
-      logger.info({ userId, labels: made.map(a => a.label) }, 'First agents created from onboarding');
+      logger.info(
+        { userId, active: made.filter(a => a.status === 'active').map(a => a.label), drafts: made.filter(a => a.status === 'paused').map(a => a.label) },
+        'First agents created from onboarding');
     }
     return made;
   } catch (err) {

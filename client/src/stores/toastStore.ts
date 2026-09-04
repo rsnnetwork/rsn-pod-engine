@@ -19,6 +19,8 @@ interface Toast {
 interface ToastOptions {
   hostSilent?: boolean;
   internal?: boolean;
+  /** Override the per-type default (ms); a two-sentence welcome needs longer than 2.5s. */
+  duration?: number;
 }
 
 interface ToastState {
@@ -31,7 +33,7 @@ export const useToastStore = create<ToastState>((set) => ({
   toasts: [],
   addToast: (message, type, opts) => {
     const id = crypto.randomUUID();
-    const duration = type === 'error' ? 6000 : type === 'success' ? 2500 : 4000;
+    const duration = opts?.duration ?? (type === 'error' ? 6000 : type === 'success' ? 2500 : 4000);
     set((s) => ({ toasts: [...s.toasts, { id, message, type, hostSilent: opts?.hostSilent, internal: opts?.internal }] }));
     setTimeout(() => set((s) => ({ toasts: s.toasts.filter((x) => x.id !== id) })), duration);
   },

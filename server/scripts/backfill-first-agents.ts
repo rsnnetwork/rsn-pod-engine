@@ -49,7 +49,7 @@ interface Row {
     console.log(`• ${u.display_name ?? '?'} <${u.email}>`);
     console.log(`    said: "${who}"${u.why ? ` / why: "${(u.why || '').slice(0, 60)}"` : ''}`);
     if (!plans.length) { console.log('    → nothing searchable; skipped'); continue; }
-    for (const p of plans) console.log(`    → ${p.label}  ← "${p.wantText.slice(0, 80)}"`);
+    for (const p of plans) console.log(`    → ${p.label} [${p.status}]  ← "${p.wantText.slice(0, 80)}"`);
     planned += plans.length;
 
     if (apply) {
