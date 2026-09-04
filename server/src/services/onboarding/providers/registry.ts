@@ -14,7 +14,7 @@
 import config from '../../../config';
 import logger from '../../../config/logger';
 import { scrapingdogProvider } from './scrapingdog.provider';
-import { enrichProfile, type EnrichResult } from '../enrichment.service';
+import { enrichProfile, applyMatchVerification, type EnrichResult, type EnrichedProfile } from '../enrichment.service';
 import type { ProviderOutcome } from './provider.types';
 
 export type EnrichProviderName = 'scrapingdog' | 'claude_web' | 'none';
@@ -74,7 +74,8 @@ export async function runProvider(
   input: RunProviderInput,
 ): Promise<ProviderOutcome> {
   if (provider === 'scrapingdog') {
-    return scrapingdogProvider.enrich({ linkedinUrl: input.linkedinUrl, fullName: input.fullName });
+    const outcome = await scrapingdogProvider.enrich({ linkedinUrl: input.linkedinUrl, fullName: input.fullName });
+    return outcome.kind === 'partial' ? fillGapsFromWeb(outcome, input) : outcome;
   }
   // Legacy claude_web path. The Haiku→Sonnet escalation loop lives entirely
   // inside enrichProfile() — scrapingdog has no equivalent (identity is
@@ -88,6 +89,63 @@ export async function runProvider(
     linkedinUrl: input.linkedinUrl,
   });
   return legacyOutcome(result);
+}
+
+// ─── Gap fill (3 Sep 2026) ───────────────────────────────────────────────────
+// ScrapingDog's LinkedIn payload arrives with an EMPTY headline and empty
+// positions for every profile we have tried (the July fixture, Ali, Ahmed),
+// so every member reached the confirm card with Role "Not set" even though
+// LinkedIn shows one. The Claude web-search provider reads the public page and
+// returns the stated headline and role (Ali: 0.92, verified against the exact
+// URL) while honestly returning nothing for a profile it cannot identify
+// (Ahmed: 0). So when scrapingdog is partial on headline or role, ask the web
+// provider to fill ONLY the fields that are empty, and only when it verified
+// the same profile. A scraped fact is never overwritten by a searched one.
+//
+// It lives HERE, not in the onboarding orchestrator, because the approval-time
+// preload (join-request.service) calls runProvider directly and caches what
+// comes back for 90 days; a fill that only ran at onboarding left every
+// approved-then-logged-in member with a role-less card.
+const GAP_FILL_MIN_CONFIDENCE = 0.6;
+const GAP_FIELDS = ['headline', 'currentRole', 'currentCompany', 'industry', 'location'] as const;
+const REQUIRED_FOR_FOUND = ['headline', 'currentRole', 'currentCompany'] as const;
+
+async function fillGapsFromWeb(
+  outcome: Extract<ProviderOutcome, { kind: 'partial' }>,
+  input: RunProviderInput,
+): Promise<ProviderOutcome> {
+  const scraped = outcome.result.profile;
+  if (!scraped || (scraped.headline && scraped.currentRole)) return outcome;
+  try {
+    const web = applyMatchVerification(
+      await enrichProfile({ fullName: input.fullName || scraped.fullName || '', linkedinUrl: input.linkedinUrl }),
+      input.linkedinUrl,
+    );
+    if (!web.profile || web.confidence < GAP_FILL_MIN_CONFIDENCE) return outcome;
+
+    const merged: EnrichedProfile = { ...scraped };
+    const filled: string[] = [];
+    for (const k of GAP_FIELDS) {
+      if (!merged[k] && web.profile[k]) { merged[k] = web.profile[k]; filled.push(k); }
+    }
+    if (!merged.skills.length && web.profile.skills.length) { merged.skills = web.profile.skills; filled.push('skills'); }
+    // ScrapingDog truncates About with an ellipsis; a longer searched summary is the fuller text.
+    if (web.profile.summary && (!merged.summary || (merged.summary.endsWith('…') && web.profile.summary.length > merged.summary.length))) {
+      merged.summary = web.profile.summary; filled.push('summary');
+    }
+    if (!filled.length) return outcome;
+
+    const sources = [...outcome.result.sources, ...web.sources.filter((s) => !outcome.result.sources.includes(s))];
+    const missing = REQUIRED_FOR_FOUND.filter((k) => !merged[k]);
+    logger.info({ linkedinUrl: input.linkedinUrl, filled, missing }, 'enrichment: web search filled the gaps scrapingdog left');
+    if (missing.length === 0) {
+      return { kind: 'found', result: { ...outcome.result, profile: merged, sources, confidence: 0.95 }, photoUrl: outcome.photoUrl };
+    }
+    return { ...outcome, result: { ...outcome.result, profile: merged, sources }, missing };
+  } catch (err) {
+    logger.warn({ err, linkedinUrl: input.linkedinUrl }, 'enrichment gap fill failed — keeping the scraped result');
+    return outcome;
+  }
 }
 
 /** Extract the EnrichResult out of a ProviderOutcome, or null when the
