@@ -193,7 +193,10 @@ export async function sendPoke(
           `INSERT INTO notifications (id, user_id, type, title, body, link)
            VALUES ($1, $2, 'poke', $3, $4, $5)
            RETURNING id, created_at`,
-          [notifId, recipientId, `${senderName} poked you`, trimmedMessage || 'They want to connect — accept to start chatting.', '/messages'],
+          // 4 Sep 2026 (Ali): "asked to meet you" is the product's language, "poke"
+          // was ours. The poke id rides in the link so the bell can answer the
+          // request in place and accept straight into the conversation.
+          [notifId, recipientId, `${senderName} asked to meet you`, trimmedMessage || 'Accept to start chatting.', `/messages?poke=${pokeId}`],
         );
 
         // Emit via dynamic import of the io instance (same pattern as invites).
@@ -202,9 +205,9 @@ export async function sendPoke(
           io.to(`user:${recipientId}`).emit('notification:new', {
             id: notifResult.rows[0].id,
             type: 'poke',
-            title: `${senderName} poked you`,
-            body: trimmedMessage || 'They want to connect — accept to start chatting.',
-            link: '/messages',
+            title: `${senderName} asked to meet you`,
+            body: trimmedMessage || 'Accept to start chatting.',
+            link: `/messages?poke=${pokeId}`,
             isRead: false,
             createdAt: notifResult.rows[0].created_at,
           });
@@ -362,9 +365,10 @@ export async function acceptPoke(
     // below) respects the Settings "Pokes" toggle.
     const notifResult = await client.query<{ id: string; created_at: Date }>(
       `INSERT INTO notifications (id, user_id, type, title, body, link)
-       VALUES ($1, $2, 'poke_accepted', $3, $4, '/messages')
+       VALUES ($1, $2, 'poke_accepted', $3, $4, $5)
        RETURNING id, created_at`,
-      [notifId, p.sender_id, title, body],
+      // Straight into the conversation that just opened, not the inbox.
+      [notifId, p.sender_id, title, body, `/messages/${convResult.rows[0].id}`],
     );
     logger.info({ pokeId, accepterId: userId, conversationId: convResult.rows[0].id }, 'Poke accepted');
 
@@ -392,7 +396,7 @@ export async function acceptPoke(
       type: 'poke_accepted',
       title: senderNotif.title,
       body: senderNotif.body,
-      link: '/messages',
+      link: `/messages/${conversationId}`,
       isRead: false,
       createdAt: senderNotif.createdAt,
     });

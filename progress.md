@@ -8390,3 +8390,13 @@ Scripts kept: `e2e/enrich-real-profiles.mjs` (fires the prod refresh job for the
 **4 Sep - sweep findings.** First warm sweep over 43 LinkedIn accounts: the web step filled headline/industry/location/skills/About for nearly all but returned a role for few, because the ROLE rule read as excluding the LinkedIn headline. Prompt now says the headline (and the current experience title) count as stated when they name a role, with worked examples, and that a slogan/company-name headline names no role. ScrapingDog's transient "Something went wrong. Try again" is now retried like a rate limit (Mateusz Giera failed on it mid-sweep). `e2e/warm-cards.mjs --missing-role-only` re-runs just the accounts still without a role.
 
 **4 Sep 11:20 UTC - both sweeps done.** 43 LinkedIn accounts refreshed through the shared gap fill (two at a time). Roles on the card 1 → 20; headlines 1 → ~27; fully found 13. The rest stay partial: the web cannot identify them (common names / thin public profiles) or the headline is a slogan/company name, so their card shows what is on file and they type their role. Gate verified: 57 to onboarding, 15 straight to the dashboard (stefan@avivson.com corrected to completed, he had finished the chat).
+
+---
+
+## 2026-09-04 - links in messages; meeting requests answered from the bell
+
+**Ali (4 Sep):** a pasted www. address in a direct message stayed dead text; a meeting request in the bell was a plain link to the inbox, with Accept living on the Messages page; the wording "poked you" was ours, not the product's.
+
+- Direct messages now render through the same `Linkify` the wall and live chat use (MessagesPage bubble).
+- Meeting-request notifications carry the request id in their link (`/messages?poke=<id>`) and read "<name> asked to meet you"; the bell offers Accept / Decline in place (44px targets), Accept navigates straight to `/messages/<conversationId>` returned by the accept endpoint, Decline marks the row and hides the buttons. The sender's "accepted your meeting request" entry now links to that conversation too, in the row and the socket push.
+- E2E `e2e/tests/meeting-request-bell.spec.ts`: accept from the bell → conversation URL + poke row accepted + sender link; www. and https:// anchors on both sides of the chat with target=_blank; decline from the bell → row declined, buttons gone.

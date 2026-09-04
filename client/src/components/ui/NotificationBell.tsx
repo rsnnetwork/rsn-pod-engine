@@ -23,9 +23,18 @@ interface Notification {
   inviteStatus?: string | null; // 'pending' | 'accepted' | 'revoked' | 'expired'
   podId?: string | null;
   sessionId?: string | null;
+  /** 4 Sep 2026: a meeting request acted on from the bell, local state only. */
+  pokeStatus?: 'accepted' | 'declined';
 }
 
 const INVITE_TYPES = ['pod_invite', 'event_invite'];
+
+/** A meeting request's id travels in its link: `/messages?poke={id}` (4 Sep 2026). */
+function extractPokeId(link?: string): string | null {
+  if (!link) return null;
+  const match = link.match(/^\/messages\?poke=([0-9a-fA-F-]{36})$/);
+  return match ? match[1] : null;
+}
 
 /** Extract invite code from `/invite/{code}` link */
 function extractInviteCode(link?: string): string | null {
@@ -227,6 +236,53 @@ export default function NotificationBell() {
     setActionLoading(null);
   };
 
+  // 4 Sep 2026 (Ali): a meeting request must be answerable from the bell, and
+  // accepting must land straight in the conversation with the person who asked.
+  // The accept endpoint already returns the conversation id.
+  const handleAcceptPoke = async (n: Notification) => {
+    const pokeId = extractPokeId(n.link);
+    if (!pokeId) return;
+    setActionLoading(n.id);
+    try {
+      const res = await api.post(`/pokes/${pokeId}/accept`);
+      const conversationId: string | undefined = res.data?.data?.conversationId;
+      if (!n.isRead) markRead(n.id);
+      setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, pokeStatus: 'accepted', isRead: true } : x));
+      qc.invalidateQueries({ queryKey: ['conversations'] });
+      qc.invalidateQueries({ queryKey: ['pending-pokes'] });
+      setOpen(false);
+      navigate(conversationId ? `/messages/${conversationId}` : '/messages');
+    } catch (err: any) {
+      const code = err?.response?.data?.error?.code;
+      if (code === 'POKE_ALREADY_RESPONDED' || err?.response?.status === 409) {
+        setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, pokeStatus: 'accepted', isRead: true } : x));
+        setOpen(false);
+        navigate('/messages');
+      } else {
+        addToast(err?.response?.data?.error?.message || 'Could not accept that request', 'error');
+      }
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleDeclinePoke = async (n: Notification) => {
+    const pokeId = extractPokeId(n.link);
+    if (!pokeId) return;
+    setActionLoading(n.id);
+    try {
+      await api.post(`/pokes/${pokeId}/decline`);
+      if (!n.isRead) markRead(n.id);
+      setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, pokeStatus: 'declined', isRead: true } : x));
+      qc.invalidateQueries({ queryKey: ['pending-pokes'] });
+      addToast('Request declined', 'info');
+    } catch (err: any) {
+      addToast(err?.response?.data?.error?.message || 'Could not decline that request', 'error');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const handleDeclineInvite = async (n: Notification) => {
     const code = extractInviteCode(n.link);
     if (!code) return;
@@ -404,6 +460,32 @@ export default function NotificationBell() {
                         Decline
                       </button>
                     </div>
+                  )}
+                  {/* Meeting request: answer it here, accept lands in the conversation. */}
+                  {n.type === 'poke' && extractPokeId(n.link) && !n.pokeStatus && (
+                    <div className="flex items-center gap-2 mt-2 ml-4" data-testid={`poke-actions-${n.id}`}>
+                      <button
+                        onClick={() => handleAcceptPoke(n)}
+                        disabled={isActing}
+                        className="flex min-h-[44px] items-center gap-1 rounded-full bg-emerald-500 px-4 text-xs font-medium text-white transition-colors hover:bg-emerald-600 disabled:opacity-50"
+                      >
+                        {isActing ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle className="h-3 w-3" />}
+                        Accept
+                      </button>
+                      <button
+                        onClick={() => handleDeclinePoke(n)}
+                        disabled={isActing}
+                        className="flex min-h-[44px] items-center gap-1 rounded-full bg-gray-100 px-4 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-200 disabled:opacity-50"
+                      >
+                        <X className="h-3 w-3" />
+                        Decline
+                      </button>
+                    </div>
+                  )}
+                  {n.type === 'poke' && n.pokeStatus && (
+                    <p className={`ml-4 mt-1 text-[10px] font-medium ${n.pokeStatus === 'accepted' ? 'text-emerald-500' : 'text-gray-400'}`}>
+                      {n.pokeStatus === 'accepted' ? 'Accepted' : 'Declined'}
+                    </p>
                   )}
                 </div>
               );

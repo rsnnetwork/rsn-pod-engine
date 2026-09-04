@@ -228,7 +228,7 @@ beforeEach(() => {
 });
 
 describe('acceptPoke — F1 acceptance notification for the sender', () => {
-  it('inserts a poke_accepted notification for the SENDER, titled with the accepter\'s name, linking to /messages', async () => {
+  it('inserts a poke_accepted notification for the SENDER, titled with the accepter\'s name, linking to the conversation', async () => {
     armAccept('You fit what they want. We think you two should meet.');
 
     await pokeService.acceptPoke('poke-1', RECIPIENT);
@@ -280,7 +280,7 @@ describe('acceptPoke — F1 acceptance notification for the sender', () => {
     expect(mockEmit).toHaveBeenCalledWith('notification:new', expect.objectContaining({
       type: 'poke_accepted',
       title: `${ACCEPTER_NAME} accepted your meeting request`,
-      link: '/messages',
+      link: '/messages/conv-9',
       isRead: false,
       id: 'notif-accept-1',
     }));

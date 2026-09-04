@@ -12,6 +12,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare, CalendarClock, Flag } from 'lucide-react';
 import MeetingScheduler from './MeetingScheduler';
+import Linkify from '@/components/ui/Linkify';
 import MeetingRequests from './MeetingRequests';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
@@ -932,7 +933,9 @@ export default function MessagesPage() {
                                     </div>
                                   )}
                                   {m.content && (
-                                    <div className={m.attachmentUrl ? 'px-3.5 py-2' : ''}>{m.content}</div>
+                                    // 4 Sep 2026: a pasted www. or https:// address is a real link
+                                    // here too, the same Linkify the wall and live chat use.
+                                    <div className={m.attachmentUrl ? 'px-3.5 py-2' : ''}><Linkify text={m.content} /></div>
                                   )}
                                 </div>
                                 {/* Phase E — reaction trigger.
