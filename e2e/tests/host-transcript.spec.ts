@@ -87,10 +87,14 @@ test('the host reacts before it asks, keeps it short, never uses a dash, and the
   expect(agents.length, 'the chat ended on at least one agent').toBeGreaterThan(0);
   expect(agents.map(a => a.label).join(' ')).toMatch(/Developers|Investors/);
 
-  const rows = await pool.query(`SELECT label, want_text, last_matched_at FROM matching_agents WHERE user_id = $1`, [member.id]);
+  // 4 Sep 2026: ONE main agent searches at the end of the chat; the other
+  // kinds of person named are paused drafts until the member resumes them.
+  const rows = await pool.query(`SELECT label, want_text, status, last_matched_at FROM matching_agents WHERE user_id = $1`, [member.id]);
+  expect(rows.rows.filter(a => a.status === 'active').length, 'exactly one main agent').toBe(1);
   for (const a of rows.rows) {
-    expect(a.last_matched_at, `${a.label} searched`).not.toBeNull();
-    console.log(`  ${a.label} ← "${String(a.want_text).slice(0, 90)}"`);
+    if (a.status === 'active') expect(a.last_matched_at, `${a.label} searched`).not.toBeNull();
+    else expect(a.status, `${a.label} is a paused draft`).toBe('paused');
+    console.log(`  ${a.label} [${a.status}] ← "${String(a.want_text).slice(0, 90)}"`);
   }
 
   // 3 Sep 2026 (Stefan): the people you ASK FOR must never become who you ARE.
