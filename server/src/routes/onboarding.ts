@@ -296,6 +296,52 @@ router.post(
   }
 );
 
+// ─── POST /onboarding/open ───────────────────────────────────────────────────
+// 4 Sep 2026 (Ali): the host's FIRST line, generated from what the card already
+// holds, instead of a fixed question that ignored it. Same known block, same
+// honesty clause as /chat; the model is told the one message it receives is a
+// system cue, not the member. Falls back to 503 LLM_DISABLED like /chat so the
+// client can show its static opening instead.
+const OPENING_CUE = '(system cue: the member has just confirmed their card and is waiting for you to open the conversation)';
+const openSchema = z.object({ profile: profileSchema });
+router.post(
+  '/open',
+  authenticate,
+  onboardingChatLimiter,
+  validate(openSchema),
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (!chatbot.isEnabled()) {
+        sendLlmDisabled(res);
+        return;
+      }
+      const userId = req.user!.userId;
+      const profile = req.body.profile as OnboardingConfirmedProfile | undefined;
+      const [hostKnown, enrichmentState] = await Promise.all([
+        Promise.resolve(intentRepo.getKnownProfileForHost(userId)).catch(() => undefined),
+        enrichRepo
+          .getEnrichmentState(userId)
+          .catch(() => ({ status: 'failed' as const, source: null, error: null, startedAt: null, completedAt: null })),
+      ]);
+      const effectiveOpening = await resolveEffectiveOpening(userId, enrichmentState.status);
+      let turn;
+      try {
+        turn = await chatbot.converse(
+          [{ role: 'user', content: OPENING_CUE }], profile, 'opening', hostKnown, effectiveOpening,
+        );
+      } catch (err) {
+        logger.error({ err, userId }, 'onboarding open failed — sending LLM_DISABLED fallback');
+        sendLlmDisabled(res);
+        return;
+      }
+      const response: ApiResponse = { success: true, data: { reply: turn.reply } };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // ─── POST /onboarding/chat ───────────────────────────────────────────────────
 router.post(
   '/chat',

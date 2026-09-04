@@ -447,6 +447,24 @@ export default function ChatbotOnboarding() {
     return [{ role: 'assistant', content }];
   }
 
+  // 4 Sep 2026 (Ali): the first line comes from the host, built from what the
+  // card already holds, so a member whose reason is known is not asked it
+  // again. The static line above is the fallback when the model is unavailable.
+  async function openWithHost(op: OnboardingOpening) {
+    setMessages([]);
+    setSending(true);
+    try {
+      const res = await api.post('/onboarding/open', { profile: confirmedProfile() });
+      const reply = String(res.data?.data?.reply || '').trim();
+      setMessages(reply ? [{ role: 'assistant', content: reply }] : openingMessages(op));
+    } catch {
+      setMessages(openingMessages(op));
+    } finally {
+      setSending(false);
+      requestAnimationFrame(() => inputRef.current?.focus());
+    }
+  }
+
   // Land on the right stage for a resolved (non-searching) opening: found/partial
   // seed the confirm card from the enrichment candidate (the found profile —
   // same field mapping the pre-202 runEnrich used) and show it before chat;
@@ -475,8 +493,8 @@ export default function ChatbotOnboarding() {
       }
       setStage('confirm');
     } else {
-      setMessages(openingMessages(op));
       setStage('chat');
+      void openWithHost(op);
     }
   }
 
@@ -609,9 +627,8 @@ export default function ChatbotOnboarding() {
       linkedin: draft.linkedin.trim() || null,
     });
     setEditing(false);
-    setMessages(openingMessages(opening || 'not_found'));
     setStage('chat');
-    requestAnimationFrame(() => inputRef.current?.focus());
+    void openWithHost(opening || 'not_found');
   }
 
   function resumeChat() {

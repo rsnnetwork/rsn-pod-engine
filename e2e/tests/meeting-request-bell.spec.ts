@@ -43,7 +43,7 @@ async function openAs(u: TestUser, path: string, viewport = { width: 390, height
   return page;
 }
 
-const bellButton = (page: Page) => page.locator('button:has(svg.lucide-bell)').first();
+const bellButton = (page: Page) => page.locator('button:has(.lucide-bell):visible').first();
 
 test.beforeAll(async () => {
   sender = await createTestUser('mrbellsender');

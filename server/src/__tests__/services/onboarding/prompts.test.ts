@@ -61,6 +61,16 @@ describe('onboarding prompts (v1.1)', () => {
     expect(p).toContain('invite');
   });
 
+  // 4 Sep 2026: the chat used to open on a fixed line that ignored the card.
+  it('the opening turn reads the card back and asks what the reason leaves open, never the reason itself', () => {
+    const p = buildHostSystemPrompt(undefined, 'opening');
+    expect(p).toContain('OPENING TURN');
+    expect(p).toMatch(/never quote it or answer it/);
+    expect(p).toMatch(/never ask what brings them here/);
+    expect(p).toMatch(/never the ready token/);
+    expect(buildHostSystemPrompt(undefined, 'none')).not.toContain('OPENING TURN');
+  });
+
   it('injects the right finish instruction per wrapMode', () => {
     expect(buildHostSystemPrompt(undefined, 'hard')).toContain('asked to finish');
     expect(buildHostSystemPrompt(undefined, 'soft')).toContain('wants to finish');

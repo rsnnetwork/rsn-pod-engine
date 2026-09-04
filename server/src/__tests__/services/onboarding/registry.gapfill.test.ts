@@ -21,15 +21,20 @@ jest.mock('../../../services/onboarding/providers/scrapingdog.provider', () => (
 }));
 jest.mock('../../../services/onboarding/enrichment.service', () => {
   const actual = jest.requireActual('../../../services/onboarding/enrichment.service');
-  return { __esModule: true, ...actual, enrichProfile: jest.fn() };
+  return { __esModule: true, ...actual, enrichProfile: jest.fn(), getClient: jest.fn() };
 });
 
 import { scrapingdogProvider } from '../../../services/onboarding/providers/scrapingdog.provider';
-import { enrichProfile, type EnrichResult, type EnrichedProfile } from '../../../services/onboarding/enrichment.service';
+import { enrichProfile, getClient, type EnrichResult, type EnrichedProfile } from '../../../services/onboarding/enrichment.service';
 import { runProvider } from '../../../services/onboarding/providers/registry';
 
 const mockScrape = scrapingdogProvider.enrich as jest.Mock;
 const mockWeb = enrichProfile as jest.Mock;
+const mockCreate = jest.fn();
+(getClient as jest.Mock).mockReturnValue({ messages: { create: (...a: unknown[]) => mockCreate(...a) } });
+/** What the own-words model call answers. */
+const ownWordsSay = (role: string | null) =>
+  mockCreate.mockResolvedValue({ content: [{ type: 'text', text: JSON.stringify({ currentRole: role }) }] });
 const URL = 'https://www.linkedin.com/in/ali-hamza';
 
 const profile = (over: Partial<EnrichedProfile> = {}): EnrichedProfile => ({
@@ -43,7 +48,53 @@ const result = (p: EnrichedProfile, over: Partial<EnrichResult> = {}): EnrichRes
   enrichedAt: new Date().toISOString(), ...over,
 });
 
-beforeEach(() => { mockScrape.mockReset(); mockWeb.mockReset(); });
+beforeEach(() => { mockScrape.mockReset(); mockWeb.mockReset(); mockCreate.mockReset(); ownWordsSay(null); });
+
+// ─── 4 Sep 2026: the role in the person's own About ─────────────────────────
+describe('the role comes from the person\'s own words when the web cannot identify them', () => {
+  const aliLike = () => result(profile({
+    summary: 'Hi, I’m Ali Hamza — a passionate MLOps & Geospatial Engineer specializing in Geo AI and…',
+  }));
+  const webNothing = { profile: null, confidence: 0, sources: [], foundLinkedinUrl: null, requestedLinkedinUrl: URL, enrichedAt: null };
+
+  it('fills currentRole from a stated About sentence, staying partial while the headline is still empty', async () => {
+    mockScrape.mockResolvedValue({ kind: 'partial', result: aliLike(), photoUrl: null, missing: ['headline', 'currentRole'] });
+    mockWeb.mockResolvedValue(webNothing);
+    ownWordsSay('MLOps & Geospatial Engineer');
+
+    const out = await runProvider('scrapingdog', { linkedinUrl: URL, fullName: 'Ali Hamza' });
+    expect(out.kind).toBe('partial');
+    if (out.kind === 'partial') expect(out.result.profile!.currentRole).toBe('MLOps & Geospatial Engineer');
+    // The model only ever sees the text we already hold, never a search tool.
+    const call = mockCreate.mock.calls[0][0];
+    expect(call.tools).toBeUndefined();
+    expect(call.messages[0].content).toContain('MLOps & Geospatial Engineer specializing');
+  });
+
+  it('an About that names no role leaves it empty, and a web result that already found one is not second-guessed', async () => {
+    mockScrape.mockResolvedValue({ kind: 'partial', result: result(profile({ summary: 'I love hiking and building things.' })), photoUrl: null, missing: ['headline', 'currentRole'] });
+    mockWeb.mockResolvedValue(webNothing);
+    ownWordsSay(null);
+    const out = await runProvider('scrapingdog', { linkedinUrl: URL, fullName: 'X' });
+    expect(out.kind).toBe('partial');
+    if (out.kind === 'partial') expect(out.result.profile!.currentRole).toBeNull();
+
+    mockCreate.mockClear();
+    mockScrape.mockResolvedValue({ kind: 'partial', result: aliLike(), photoUrl: null, missing: ['headline', 'currentRole'] });
+    mockWeb.mockResolvedValue(result(profile({ headline: 'Senior Team Lead', currentRole: 'Senior Team Lead' }), { confidence: 0.9 }));
+    await runProvider('scrapingdog', { linkedinUrl: URL, fullName: 'Ali Hamza' });
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('a failing own-words call keeps whatever the web filled', async () => {
+    mockScrape.mockResolvedValue({ kind: 'partial', result: aliLike(), photoUrl: null, missing: ['headline', 'currentRole'] });
+    mockWeb.mockResolvedValue(result(profile({ headline: 'Geo AI', location: 'Islamabad' }), { confidence: 0.8 }));
+    mockCreate.mockRejectedValue(new Error('model down'));
+    const out = await runProvider('scrapingdog', { linkedinUrl: URL, fullName: 'Ali Hamza' });
+    expect(out.kind).toBe('partial');
+    if (out.kind === 'partial') expect(out.result.profile).toMatchObject({ headline: 'Geo AI', location: 'Islamabad', currentRole: null });
+  });
+});
 
 describe('runProvider(scrapingdog) fills what the scrape left empty', () => {
   it('a role-less partial becomes found with the web headline, role, industry, location and fuller summary', async () => {

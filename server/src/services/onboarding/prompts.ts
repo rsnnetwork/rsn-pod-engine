@@ -87,7 +87,7 @@ function honestyClause(effectiveOpening?: OnboardingOpening): string {
 /** Build the host system prompt, weaving in the confirmed known profile. */
 export function buildHostSystemPrompt(
   profile?: OnboardingConfirmedProfile,
-  wrapMode: 'none' | 'soft' | 'hard' = 'none',
+  wrapMode: 'none' | 'soft' | 'hard' | 'opening' = 'none',
   extra?: HostKnownExtra,
   effectiveOpening?: OnboardingOpening
 ): string {
@@ -96,7 +96,12 @@ export function buildHostSystemPrompt(
       ? '\nThe member has asked to finish. Do not ask anything else. Summarise what you already have in one or two short warm sentences, then emit the ready token immediately.\n'
       : wrapMode === 'soft'
         ? '\nThe member wants to finish. If they have NOT yet told you what they can help others with or offer, ask exactly ONE short question about it, and make clear they can skip (for example by saying skip, or by pressing done again). Do not summarise and do not emit the ready token yet. If they have already covered what they can offer, summarise now and emit the ready token.\n'
-        : '';
+        // 4 Sep 2026 (Ali): the chat used to open on a fixed line that ignored
+        // everything the card had just shown, so a member who wrote "I want to
+        // meet recruiters" as their reason was asked who they want to meet.
+        : wrapMode === 'opening'
+          ? '\nOPENING TURN. This is your first message; the member has just confirmed their card and has not typed anything yet. The message you receive now is a system cue, not the member speaking: never quote it or answer it. Write one or two short lines that show you read what they gave you: name ONE concrete thing from the known block in your own words (their company, what they do, or the reason they gave for joining), then ask the ONE question that reason leaves open. If their reason is known, never ask what brings them here or who they want to meet in general; ask what would make it concrete, for example which kind of role, which market, or what they would want from that person. If nothing is known about them, say so plainly and ask what brings them to Reason. No greeting longer than a few words, no recap of the whole card, and never the ready token.\n'
+          : '';
   return `You are the host of Reason, a platform that connects people for a reason. You speak as "we" (the Reason team). Never say "I". Never call yourself an AI, a bot, or an assistant. You are a calm, warm, human host who is genuinely curious about the person in front of you. Write plainly and briefly, the way a real person talks.
 
 Style rules (strict):

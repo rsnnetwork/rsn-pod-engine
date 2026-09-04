@@ -14,7 +14,7 @@
 import config from '../../../config';
 import logger from '../../../config/logger';
 import { scrapingdogProvider } from './scrapingdog.provider';
-import { enrichProfile, applyMatchVerification, type EnrichResult, type EnrichedProfile } from '../enrichment.service';
+import { enrichProfile, applyMatchVerification, getClient, type EnrichResult, type EnrichedProfile } from '../enrichment.service';
 import type { ProviderOutcome } from './provider.types';
 
 export type EnrichProviderName = 'scrapingdog' | 'claude_web' | 'none';
@@ -110,42 +110,85 @@ const GAP_FILL_MIN_CONFIDENCE = 0.6;
 const GAP_FIELDS = ['headline', 'currentRole', 'currentCompany', 'industry', 'location'] as const;
 const REQUIRED_FOR_FOUND = ['headline', 'currentRole', 'currentCompany'] as const;
 
+/**
+ * 4 Sep 2026 (Ali's own test): the About we DID fetch said "a passionate
+ * MLOps & Geospatial Engineer" while the card showed Role "Not set", because
+ * the web step could not identify that thin profile. When the person's own
+ * headline or About states their role, that is stated, not guessed: one
+ * no-search call reads only the text we already hold and returns the role or
+ * null. Never invents; a slogan, a company name or a list of interests → null.
+ */
+async function roleFromOwnWords(profile: EnrichedProfile): Promise<string | null> {
+  const text = [profile.headline, profile.summary].filter(Boolean).join('\n').trim();
+  if (!text) return null;
+  const resp = await getClient().messages.create({
+    model: config.onboardingChatModel,
+    max_tokens: 120,
+    messages: [{
+      role: 'user',
+      content:
+        'Below is a person\'s own LinkedIn headline and About text. If the text STATES the person\'s current role or job title in their own words (for example "I\'m a passionate MLOps & Geospatial Engineer" → "MLOps & Geospatial Engineer"; "Founder of Rise" → "Founder"; "Fractional CMO for scale-ups" → "Fractional CMO"), return it, shortest form that is still their title. If it only names a company, an industry, interests, skills, a slogan or what they like doing, return null. Never infer a title from what they seem to do. Reply with ONLY JSON: {"currentRole": string | null}\n\n' +
+        text.slice(0, 1500),
+    }],
+  });
+  const raw = resp.content.map((b: any) => (b.type === 'text' ? b.text : '')).join('');
+  const m = raw.match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  const j = JSON.parse(m[0]) as { currentRole?: unknown };
+  const role = typeof j.currentRole === 'string' ? j.currentRole.trim() : '';
+  return role && role.length <= 120 ? role : null;
+}
+
 async function fillGapsFromWeb(
   outcome: Extract<ProviderOutcome, { kind: 'partial' }>,
   input: RunProviderInput,
 ): Promise<ProviderOutcome> {
   const scraped = outcome.result.profile;
   if (!scraped || (scraped.headline && scraped.currentRole)) return outcome;
+
+  const merged: EnrichedProfile = { ...scraped };
+  const filled: string[] = [];
+  let sources = [...outcome.result.sources];
+
+  // Step 1: the public page, only when the web can verify it is the same person.
   try {
     const web = applyMatchVerification(
       await enrichProfile({ fullName: input.fullName || scraped.fullName || '', linkedinUrl: input.linkedinUrl }),
       input.linkedinUrl,
     );
-    if (!web.profile || web.confidence < GAP_FILL_MIN_CONFIDENCE) return outcome;
-
-    const merged: EnrichedProfile = { ...scraped };
-    const filled: string[] = [];
-    for (const k of GAP_FIELDS) {
-      if (!merged[k] && web.profile[k]) { merged[k] = web.profile[k]; filled.push(k); }
+    if (web.profile && web.confidence >= GAP_FILL_MIN_CONFIDENCE) {
+      for (const k of GAP_FIELDS) {
+        if (!merged[k] && web.profile[k]) { merged[k] = web.profile[k]; filled.push(k); }
+      }
+      if (!merged.skills.length && web.profile.skills.length) { merged.skills = web.profile.skills; filled.push('skills'); }
+      // ScrapingDog truncates About with an ellipsis; a longer searched summary is the fuller text.
+      if (web.profile.summary && (!merged.summary || (merged.summary.endsWith('…') && web.profile.summary.length > merged.summary.length))) {
+        merged.summary = web.profile.summary; filled.push('summary');
+      }
+      sources = [...sources, ...web.sources.filter((s) => !sources.includes(s))];
     }
-    if (!merged.skills.length && web.profile.skills.length) { merged.skills = web.profile.skills; filled.push('skills'); }
-    // ScrapingDog truncates About with an ellipsis; a longer searched summary is the fuller text.
-    if (web.profile.summary && (!merged.summary || (merged.summary.endsWith('…') && web.profile.summary.length > merged.summary.length))) {
-      merged.summary = web.profile.summary; filled.push('summary');
-    }
-    if (!filled.length) return outcome;
-
-    const sources = [...outcome.result.sources, ...web.sources.filter((s) => !outcome.result.sources.includes(s))];
-    const missing = REQUIRED_FOR_FOUND.filter((k) => !merged[k]);
-    logger.info({ linkedinUrl: input.linkedinUrl, filled, missing }, 'enrichment: web search filled the gaps scrapingdog left');
-    if (missing.length === 0) {
-      return { kind: 'found', result: { ...outcome.result, profile: merged, sources, confidence: 0.95 }, photoUrl: outcome.photoUrl };
-    }
-    return { ...outcome, result: { ...outcome.result, profile: merged, sources }, missing };
   } catch (err) {
-    logger.warn({ err, linkedinUrl: input.linkedinUrl }, 'enrichment gap fill failed — keeping the scraped result');
-    return outcome;
+    logger.warn({ err, linkedinUrl: input.linkedinUrl }, 'enrichment gap fill (web) failed — continuing with what we hold');
   }
+
+  // Step 2: the person's own words, when the role is still missing.
+  if (!merged.currentRole) {
+    try {
+      const own = await roleFromOwnWords(merged);
+      if (own) { merged.currentRole = own; filled.push('currentRole (own words)'); }
+    } catch (err) {
+      logger.warn({ err, linkedinUrl: input.linkedinUrl }, 'enrichment gap fill (own words) failed — leaving the role empty');
+    }
+  }
+
+  if (!filled.length) return outcome;
+
+  const missing = REQUIRED_FOR_FOUND.filter((k) => !merged[k]);
+  logger.info({ linkedinUrl: input.linkedinUrl, filled, missing }, 'enrichment: gap fill added what scrapingdog left empty');
+  if (missing.length === 0) {
+    return { kind: 'found', result: { ...outcome.result, profile: merged, sources, confidence: 0.95 }, photoUrl: outcome.photoUrl };
+  }
+  return { ...outcome, result: { ...outcome.result, profile: merged, sources }, missing };
 }
 
 /** Extract the EnrichResult out of a ProviderOutcome, or null when the

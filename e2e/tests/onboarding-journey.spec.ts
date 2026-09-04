@@ -17,6 +17,7 @@ import { primePreview } from '../helpers/preview-bypass';
 
 let browser: Browser;
 let member: TestUser;
+let known: TestUser; // a member whose card already holds a reason and a company
 const ctxs: BrowserContext[] = [];
 
 const bubbles = (page: Page) => page.locator('.whitespace-pre-wrap');
@@ -47,12 +48,58 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
+  for (const c of ctxs) await c.close().catch(() => {});
   try { await browser?.close(); } catch {}
-  const ids = [member?.id].filter(Boolean);
+  if (known) await pool.query(`DELETE FROM join_requests WHERE lower(email) = $1`, [known.email.toLowerCase()]).catch(() => {});
+  const ids = [member?.id, known?.id].filter(Boolean);
   await pool.query(`DELETE FROM agent_matches WHERE agent_id IN (SELECT id FROM matching_agents WHERE user_id = ANY($1))`, [ids]).catch(() => {});
   await pool.query(`DELETE FROM matching_agents WHERE user_id = ANY($1)`, [ids]).catch(() => {});
   await cleanup(pool, { ids });
   await cleanupByPrefix(pool, 'e2etest-journey');
+});
+
+// 4 Sep 2026 (Ali's own run): his card said "because i want to meet
+// recruiters" and the chat opened with "Who would be most valuable for you to
+// meet?". The host must read the card back and ask what the reason leaves
+// open, never the reason itself.
+test('a member whose card already holds a reason and a company is not asked the reason again', async () => {
+  test.setTimeout(300_000);
+  known = await createTestUser('journeyknown', 'member', 'not_started');
+  await pool.query(
+    `UPDATE users SET onboarding_completed = false, company = 'Fjord Analytics', job_title = NULL, bio = NULL,
+       industry = NULL, location = NULL, linkedin_url = NULL WHERE id = $1`, [known.id]);
+  // The reason lives on the join request the member came in through.
+  await pool.query(
+    `INSERT INTO join_requests (id, full_name, email, linkedin_url, reason, status, reviewed_at)
+     VALUES (gen_random_uuid(), 'E2E Journey Known', $1, 'https://www.linkedin.com/in/e2e-journey-known', 'because i want to meet recruiters', 'approved', NOW())`,
+    [known.email]);
+
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  await ctx.addInitScript((t: { a: string; r: string }) => {
+    localStorage.setItem('rsn_access', t.a); localStorage.setItem('rsn_refresh', t.r);
+  }, { a: known.accessToken, r: known.refreshToken });
+  ctxs.push(ctx);
+  await primePreview(ctx);
+  const page = await ctx.newPage();
+  page.on('pageerror', () => {});
+  await gotoRetry(page, `${APP}/onboarding`);
+
+  // No LinkedIn: the ask screen, skip; company on file settles the card; accept it.
+  await expect(page.locator('input[aria-label="Your LinkedIn URL"]')).toBeVisible({ timeout: 30_000 });
+  await page.getByRole('button', { name: /Skip for now/i }).click();
+  const cont = page.getByRole('button', { name: /Yes, continue/i });
+  await expect(cont).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText('because i want to meet recruiters')).toBeVisible();
+  await cont.click();
+
+  await expect(bubbles(page).first()).toBeVisible({ timeout: 60_000 });
+  const opening = ((await bubbles(page).first().textContent()) || '').trim();
+  console.log(`  HOST (reason known): ${opening}`);
+  expect(opening).not.toBe('Who would be most valuable for you to meet?');
+  expect(opening).not.toMatch(/what brings you/i);
+  // It read the card: the reason, the company, or both, in its own words.
+  expect(opening).toMatch(/recruit|Fjord/i);
+  expect((opening.match(/\?/g) || []).length).toBeLessThanOrEqual(1);
 });
 
 test('a new member chats, confirms, and lands on Suggestions with their agents named and rendered', async () => {
@@ -73,8 +120,13 @@ test('a new member chats, confirms, and lands on Suggestions with their agents n
   // No LinkedIn on file: the ask screen, then skip into the chat.
   await expect(page.locator('input[aria-label="Your LinkedIn URL"]')).toBeVisible({ timeout: 30_000 });
   await page.getByRole('button', { name: /Skip for now/i }).click();
-  await expect(bubbles(page).first()).toBeVisible({ timeout: 30_000 });
-  console.log(`  HOST:   ${((await bubbles(page).first().textContent()) || '').trim()}`);
+  await expect(bubbles(page).first()).toBeVisible({ timeout: 60_000 });
+  const opening = ((await bubbles(page).first().textContent()) || '').trim();
+  console.log(`  HOST:   ${opening}`);
+  // 4 Sep 2026: the opening is the host's own line now, not the fixed one.
+  expect(opening).not.toBe('What brings you to Reason?');
+  expect(opening).not.toBe('Who would be most valuable for you to meet?');
+  expect(opening.split(/\s+/).length).toBeLessThanOrEqual(60);
 
   await say(page, 'I run a small fintech startup in Copenhagen, eight people, invoicing for freelancers.');
   await say(page, 'I want to meet senior React developers who have shipped consumer products, and maybe an angel investor who knows Nordic fintech.');

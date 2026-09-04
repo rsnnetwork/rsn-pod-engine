@@ -458,6 +458,46 @@ describe('GET /onboarding/resume', () => {
   });
 });
 
+// ─── 4 Sep 2026: the host's first line is generated from what the card holds ─
+describe('POST /onboarding/open', () => {
+  it('returns 503 LLM_DISABLED when no key is configured', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(false);
+    const res = await request(app)
+      .post('/onboarding/open')
+      .set('Authorization', `Bearer ${makeToken('user-open-1')}`)
+      .send({});
+    expect(res.status).toBe(503);
+    expect(chatbot.converse).not.toHaveBeenCalled();
+  });
+
+  it('asks the host for an opening turn: a single system cue, in opening mode, with the confirmed card', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+    (chatbot.converse as jest.Mock).mockResolvedValue({ reply: 'Recruiters, you said. For which kind of role?', ready: false });
+    const res = await request(app)
+      .post('/onboarding/open')
+      .set('Authorization', `Bearer ${makeToken('user-open-2')}`)
+      .send({ profile: { company: 'Axorvian', reason: 'because i want to meet recruiters' } });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ reply: 'Recruiters, you said. For which kind of role?' });
+    const [messages, profile, wrapMode] = (chatbot.converse as jest.Mock).mock.calls[0];
+    expect(messages).toHaveLength(1);
+    expect(messages[0].role).toBe('user');
+    expect(messages[0].content).toMatch(/system cue/);
+    expect(profile).toMatchObject({ company: 'Axorvian' });
+    expect(wrapMode).toBe('opening');
+  });
+
+  it('maps a model failure to 503 so the client falls back to its static opening', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+    (chatbot.converse as jest.Mock).mockRejectedValue(new Error('boom'));
+    const res = await request(app)
+      .post('/onboarding/open')
+      .set('Authorization', `Bearer ${makeToken('user-open-3')}`)
+      .send({});
+    expect(res.status).toBe(503);
+  });
+});
+
 describe('POST /onboarding/chat', () => {
   const body = { messages: [{ role: 'user', content: 'I want to meet founders' }] };
 

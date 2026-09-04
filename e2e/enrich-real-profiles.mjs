@@ -23,6 +23,7 @@ const TARGETS = ([
   { id: 'c52d876d-b314-4b7c-9c24-c2008d35af37', who: 'Raja Ali King (alihamza891840)', linkedin: 'https://www.linkedin.com/in/alihamzaraja/' },
   { id: 'af509ec9-3628-4ef5-ab78-2d8ea8aea955', who: 'Malik Ahmed Javed (…882)', linkedin: 'https://www.linkedin.com/in/malik-ahmed-748738186/' },
   { id: 'cdabda51-1eee-452f-b29e-5c9c62dbe3fe', who: 'Malik Ahmed Javed (…1011)', linkedin: 'https://www.linkedin.com/in/malik-ahmed-748738186/' },
+  { id: '7ddf177b-3689-463b-a271-4a7ee170ff67', who: 'Ali Hamzaa (alihammza143, 4 Sep re-signup)', linkedin: 'https://www.linkedin.com/in/ali-hamza-b0650a281' },
 ]).filter(t => !ONLY || t.id.startsWith(ONLY));
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));

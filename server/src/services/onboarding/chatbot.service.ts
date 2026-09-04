@@ -53,7 +53,7 @@ export function isEnabled(): boolean {
 export async function converse(
   messages: OnboardingMessage[],
   profile?: OnboardingConfirmedProfile,
-  wrapMode: 'none' | 'soft' | 'hard' = 'none',
+  wrapMode: 'none' | 'soft' | 'hard' | 'opening' = 'none',
   extra?: HostKnownExtra,
   effectiveOpening?: OnboardingOpening
 ): Promise<{ reply: string; ready: boolean }> {
