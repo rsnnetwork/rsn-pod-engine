@@ -68,9 +68,17 @@ describe('IntentSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('rejects an invalid profileStrength value', () => {
-    const result = IntentSchema.safeParse({ ...validIntent, profileStrength: 'medium' });
-    expect(result.success).toBe(false);
+  // 4 Sep 2026: the model answered "medium" on 11 Aug, 17 Aug and twice on
+  // 4 Sep, and the ZodError turned a finished chat into a dead confirm button
+  // (503 LLM_DISABLED). Anything but "strong" reads as "weak"; never a throw.
+  it('an off-menu profileStrength reads as weak instead of failing the whole extraction', () => {
+    const medium = IntentSchema.safeParse({ ...validIntent, profileStrength: 'medium' });
+    expect(medium.success).toBe(true);
+    if (medium.success) expect(medium.data.profileStrength).toBe('weak');
+    const strong = IntentSchema.safeParse({ ...validIntent, profileStrength: 'strong' });
+    if (strong.success) expect(strong.data.profileStrength).toBe('strong');
+    const missing = IntentSchema.safeParse({ ...validIntent, profileStrength: undefined });
+    expect(missing.success).toBe(true);
   });
 
   it('rejects an invalid matchPriority value', () => {

@@ -150,7 +150,7 @@ Rules:
 - avoidDesignations: which of those exact designation words they would rather not meet (array, lowercase), otherwise an empty array.
 - embeddingText: one dense paragraph (2 to 4 sentences) describing who this person is and who and why they want to meet, written for semantic search.
 - confidenceScores: a 0.0 to 1.0 score for how clearly each of the three things came through (desiredPeople, reasonForMeeting, userProfile).
-- profileStrength: "strong" if all three came through clearly, otherwise "weak".
+- profileStrength: "strong" if all three came through clearly, otherwise "weak". Only those two words, never "medium".
 - userLanguages: languages the Member said they speak, as a normalised list (for example ["English", "French"]), otherwise an empty array. Never infer a language from a name, country, or company.
 - problemTheySolve: one short sentence describing the problem the Member solves for others, otherwise an empty string.
 - authorityLevel: the Member's decision making authority in one short phrase (for example "final decision maker", "influences budget", "individual contributor"), otherwise an empty string. Only use this if the Member described their own authority; never guess it from a job title alone.

@@ -51,7 +51,10 @@ export const IntentSchema = z.object({
     reasonForMeeting: z.number(),
     userProfile: z.number(),
   }),
-  profileStrength: z.enum(['strong', 'weak']),
+  // 4 Sep 2026: the model answers "medium" now and then (11 Aug, 17 Aug, twice
+  // on 4 Sep), and a ZodError here turned a finished chat into a dead confirm
+  // button (503 LLM_DISABLED). Anything but "strong" is "weak".
+  profileStrength: z.enum(['strong', 'weak']).catch('weak'),
   // C2: minimum structured profile additions. All empty-safe (see EXTRACTION_PROMPT):
   // the extractor returns [] / '' / false / null rather than guessing.
   userLanguages: z.array(z.string()),
