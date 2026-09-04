@@ -37,6 +37,16 @@
 | C3 circle invites (+ migration 090) | 5992f12 | ✅ circle-invites.spec 6/6 (after 3899fe3 scoped one selector) |
 | D1 follow-up: name below the band on desktop | 52a4c01 | ✅ profile-card.spec 3/3 with the band assertion at 360–1280 |
 
+### Shipped 4 Sep 2026 (from Ali's own request-to-join → onboarding run; each via staging CI → main → Render/Vercel → headed prod smoke)
+
+| Item | Commit | Prod smoke |
+|---|---|---|
+| Links in direct messages; meeting request answered from the bell (Accept → straight into the conversation, Decline in place; "X asked to meet you") | 5a22564 + 186f8ae | ✅ meeting-request-bell.spec 2/2 |
+| Role from the member's own About when the web cannot identify them (gap fill step 2, no-tools call, stated roles only) | 2ee7d9f | ✅ admin refresh of Ali's test account: Role "MLOps & Geospatial Engineer", headline empty |
+| The host opens from the card (`POST /onboarding/open`, wrapMode `opening`): names what it knows, asks what the reason leaves open, never "what brings you" | 2ee7d9f | ✅ onboarding-journey.spec 2/2: "You're at Fjord Analytics and looking to connect with recruiters. Who would be the right fit for you to meet…" |
+| One MAIN agent from onboarding (first kind of person named, searching now); other designations created as PAUSED drafts; toast says both | 425847d | ✅ first-agent.spec 3/3 (one active + Investors draft, resume from the page rescored it; re-onboarding case green on re-run after a transient 503) + journey toast "We also drafted Investors for you" |
+| The wall as a social feed: reactions (5 kinds, one per member), replies one level deep, likes on comments, delete with cascade, share (copy link / repost into another circle with attribution), bells, `?post=` deep link (migration 091) | 4e46521 | ✅ circle-wall-social.spec 2/2 (API rules + bells, then the phone flow end to end) + circle-wall.spec and circle-links.spec 7/7 unchanged |
+
 Final state 3 Sep 2026 ~12:50 UTC: main = staging = 3899fe3, Render live + Vercel bundle rebuilt, health ok, prod data clean (0 test users, 0 unscored agents, migrations 088/089/090 recorded).
 
 Also found and fixed on the way: the three Invites-page create buttons were 30px tall (a902fe8 raises them to the 44px floor), and the first cut of the profile card rendered the name on the dark band at ≥640px (caught by the report screenshots, fixed in 52a4c01).
