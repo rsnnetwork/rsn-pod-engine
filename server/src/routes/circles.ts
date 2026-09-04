@@ -122,7 +122,19 @@ const createPostSchema = z.object({
     meta: z.record(z.any()).optional().nullable(),
   })).max(4).optional(),
 });
-const commentSchema = z.object({ content: z.string().min(1).max(4000) });
+// 4 Sep 2026: replies (one level; the service attaches a reply-to-a-reply to
+// the top-level comment), reactions, comment likes, shares into another circle.
+const commentSchema = z.object({
+  content: z.string().min(1).max(4000),
+  parentCommentId: z.string().uuid().optional().nullable(),
+});
+const reactSchema = z.object({ reaction: z.enum(['like', 'love', 'applause', 'insightful', 'celebrate']).nullable() });
+const likeSchema = z.object({ liked: z.boolean() });
+const shareSchema = z.object({
+  circleId: z.string().uuid(),
+  clientId: z.string().uuid(),
+  content: z.string().max(2000).optional(),
+});
 
 // GET /circles/:id/posts — the wall feed (any member; keyset cursor)
 router.get('/:id/posts', authenticate, async (req: Request, res: Response, next: NextFunction) => {
@@ -139,6 +151,36 @@ router.post('/:id/posts', authenticate, validate(createPostSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const data = await wallService.createPost(req.params.id, req.user!.userId, req.body);
+      res.status(201).json({ success: true, data } satisfies ApiResponse);
+    } catch (err) { next(err); }
+  });
+
+// GET /circles/posts/:postId — one post (any member; blocks respected → 404). Backs ?post= deep links.
+router.get('/posts/:postId', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const data = await wallService.getPost(req.params.postId, req.user!.userId);
+    if (!data) {
+      res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Post not found' } } satisfies ApiResponse);
+      return;
+    }
+    res.json({ success: true, data } satisfies ApiResponse);
+  } catch (err) { next(err); }
+});
+
+// POST /circles/posts/:postId/react — set or clear (reaction: null) the member's one reaction
+router.post('/posts/:postId/react', authenticate, validate(reactSchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await wallService.reactToPost(req.params.postId, req.user!.userId, req.body.reaction);
+      res.json({ success: true, data } satisfies ApiResponse);
+    } catch (err) { next(err); }
+  });
+
+// POST /circles/posts/:postId/share — repost into another circle with attribution
+router.post('/posts/:postId/share', authenticate, validate(shareSchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await wallService.sharePost(req.params.postId, req.user!.userId, req.body);
       res.status(201).json({ success: true, data } satisfies ApiResponse);
     } catch (err) { next(err); }
   });
@@ -179,12 +221,21 @@ router.get('/posts/:postId/comments', authenticate, async (req: Request, res: Re
 router.post('/posts/:postId/comments', authenticate, validate(commentSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const data = await wallService.addComment(req.params.postId, req.user!.userId, req.body.content);
+      const data = await wallService.addComment(req.params.postId, req.user!.userId, req.body.content, req.body.parentCommentId ?? null);
       res.status(201).json({ success: true, data } satisfies ApiResponse);
     } catch (err) { next(err); }
   });
 
-// DELETE /circles/comments/:commentId — author or admin; soft delete
+// POST /circles/comments/:commentId/like — like / unlike a comment (members)
+router.post('/comments/:commentId/like', authenticate, validate(likeSchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await wallService.likeComment(req.params.commentId, req.user!.userId, req.body.liked);
+      res.json({ success: true, data } satisfies ApiResponse);
+    } catch (err) { next(err); }
+  });
+
+// DELETE /circles/comments/:commentId — author or admin; soft delete (replies go with it)
 router.delete('/comments/:commentId', authenticate, async (req: Request, res: Response, next: NextFunction) => {
   try {
     await wallService.deleteComment(req.params.commentId, req.user!.userId, isAdminRole(req.user!.role));

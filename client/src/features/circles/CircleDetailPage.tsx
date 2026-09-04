@@ -6,7 +6,7 @@
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Users, Calendar, Box, CircleDashed, MessagesSquare, Plus, X, Mail } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Avatar from '@/components/ui/Avatar';
@@ -32,6 +32,9 @@ interface CircleDetail {
 
 export default function CircleDetailPage() {
   const { circleId } = useParams();
+  // ?post=<id>: a shared link or a bell entry lands on one post; the wall scrolls to it.
+  const [searchParams] = useSearchParams();
+  const highlightPostId = searchParams.get('post') || undefined;
   const { addToast } = useToastStore();
   const queryClient = useQueryClient();
   const { user } = useAuthStore();
@@ -217,7 +220,7 @@ export default function CircleDetailPage() {
         <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5">
           <MessagesSquare className="h-4 w-4 text-rsn-red" /> Wall
         </h2>
-        <CircleWall circleId={circle.id} isMember={circle.isMember} />
+        <CircleWall circleId={circle.id} isMember={circle.isMember} highlightPostId={highlightPostId} />
       </div>
 
       <div className="space-y-2 animate-fade-in-up">
