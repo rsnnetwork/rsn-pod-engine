@@ -68,7 +68,11 @@ export const ROLE_TAXONOMY: RoleBucket[] = [
     key: 'job_seeker', label: 'candidates',
     is: /\b(job\s?seeker|candidate|between jobs|looking for (a )?(job|role|work))s?\b/,
     // As a WANT, this is someone hiring: "we are recruiting", "looking to hire".
-    wants: /\b(recruit|hire|hiring|talent|candidate)s?\b/,
+    // 4 Sep 2026 (Ali's own run): "recruiters and hiring managers" is someone
+    // who wants to BE hired, so "hiring manager(s)", "talent lead" and the like
+    // must not read as a want for candidates. Those phrases name the manager,
+    // which the manager bucket already catches.
+    wants: /\b(recruit|hire|hiring|talent|candidate)s?\b(?!\s+(manager|lead|director|partner|head)s?\b)/,
   },
   {
     key: 'customer', label: 'customers and clients',

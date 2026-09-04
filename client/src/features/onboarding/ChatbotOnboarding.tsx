@@ -1020,7 +1020,9 @@ export default function ChatbotOnboarding() {
 
   // stage === 'chat'
   const hasUserReply = messages.some((m) => m.role === 'user');
-  const placeholder = hasUserReply ? 'Type your reply...' : 'Write your reason here...';
+  // 4 Sep 2026: the host's opening is generated from the card, so the first
+  // box only asks for "your reason" when the reason is not on the card.
+  const placeholder = hasUserReply ? 'Type your reply...' : known?.reason ? 'Write your answer...' : 'Write your reason here...';
 
   return (
     <div className="flex overflow-hidden bg-gradient-to-b from-white to-gray-50/50" style={{ height: '100dvh' }}>

@@ -62,6 +62,17 @@ describe('the roles people actually search for are recognised', () => {
     expect(normalizeDesignation(title)).toBe(expected);
   });
 
+  // 4 Sep 2026 (Ali's own run): "recruiters and hiring managers" spawned a
+  // Candidates draft, because "hiring" read as someone who is hiring.
+  it('wanting to meet hiring managers is not wanting candidates; wanting to hire still is', () => {
+    const keys = (t: string) => designationsWanted(t).map(d => d.key);
+    const ali = 'I want to meet recruiters and hiring managers at geospatial or AI companies';
+    expect(keys(ali)).not.toContain('job_seeker');
+    expect(keys(ali)).toEqual(expect.arrayContaining(['hr', 'manager']));
+    expect(keys('we are hiring senior engineers and need candidates')).toContain('job_seeker');
+    expect(keys('looking to hire a designer')).toContain('job_seeker');
+  });
+
   it('a developer search finds a developer by role, not by chance wording', () => {
     const dev = profile({
       id: 'u-dev2', displayName: 'Sam',
