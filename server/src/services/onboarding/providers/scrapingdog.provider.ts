@@ -30,7 +30,10 @@ const MAX_ATTEMPTS = 6;
 // within the same attempt budget. Grows per attempt so a burst drains rather
 // than hammers.
 const RATE_LIMIT_DELAY_MS = 5_000;
-const RATE_LIMITED = /too many requests|rate limit/i;
+// 4 Sep 2026: "Something went wrong. Try again or use premium=true." arrived
+// mid-sweep for a profile that scraped fine minutes later. ScrapingDog says
+// "try again"; take it at its word and retry that too.
+const RATE_LIMITED = /too many requests|rate limit|try again|something went wrong/i;
 // 23 Jul 2026 live test: a valid, never-before-scraped profile (ali-hamza-b0650a281)
 // failed end to end with "The operation was aborted due to timeout" at both the
 // approval-time preload and the user-side run. ScrapingDog answers a cached

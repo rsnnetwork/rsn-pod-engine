@@ -179,6 +179,20 @@ describe('scrapingdogProvider', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it('a transient "Something went wrong. Try again" body is retried like a rate limit', async () => {
+    jest.useFakeTimers();
+    const fetchMock = jest.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(mockResponse(200, { success: false, message: 'Something went wrong. Try again or use premium=true.' }))
+      .mockResolvedValueOnce(mockResponse(200, { fullName: 'Mateusz Giera', headline: 'Founder', experience: [{ position: 'Founder', company_name: 'X' }] }));
+
+    const promise = scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/transient' });
+    await jest.advanceTimersByTimeAsync(5_000);
+
+    const outcome = await promise;
+    expect(outcome.kind).toBe('found');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('a rate limit that never clears ends as retry_exhausted, still never not_found', async () => {
     jest.useFakeTimers();
     const fetchMock = jest.spyOn(globalThis, 'fetch')

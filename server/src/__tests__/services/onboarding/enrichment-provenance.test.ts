@@ -86,4 +86,13 @@ describe('the enrichment prompt refuses to invent a role', () => {
   it('prefers the title the person uses for themselves over the most senior-sounding one', () => {
     expect(src).toMatch(/the one the person uses for themselves/i);
   });
+
+  // 4 Sep 2026: the first sweep left currentRole null for most members because
+  // the model excluded the LinkedIn headline. A headline that names a role is
+  // the person's own statement of it.
+  it('treats a headline that names a role as stated, and a slogan or company name as no role', () => {
+    expect(src).toMatch(/headline .* COUNT as stated/i);
+    expect(src).toMatch(/"Founder of Rise of the Phoenix Coach LLC" gives "Founder"/);
+    expect(src).toMatch(/only a company name, a slogan or an industry .* currentRole stays null/i);
+  });
 });

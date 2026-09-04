@@ -207,6 +207,11 @@ const PROMPT = (s: EnrichSignals): string => {
   // worse than none. Stefan saw roles pulled from LinkedIn that were never on
   // the profile.
   lines.push('ROLE AND TITLE: return currentRole ONLY if it is stated outright on the profile or in a source you found; otherwise return null. Do NOT infer a role or title from the company, the industry, their posts, or what they seem to do: "works at a design studio" is not "Designer", and "founded a company" is not "CEO". A null currentRole is correct and useful; a guessed one is harmful, because the platform matches people on it. If several titles appear, choose the one the person uses for themselves, not the most senior-sounding one.');
+  // 4 Sep 2026: a first sweep over 43 members filled headline/industry/location
+  // for nearly everyone but left currentRole null for most, because the model
+  // read the rule above as excluding the LinkedIn headline. The headline is the
+  // person's own words: when it names a role, that IS stated.
+  lines.push('The LinkedIn headline and the title of their current experience entry COUNT as stated. When the headline names a role, use that role as currentRole: "Founder of Rise of the Phoenix Coach LLC" gives "Founder"; "Fractional CMO & CRO for B2B scale-ups" gives "Fractional CMO & CRO"; "Independent Relocation Agent / Property Finder" gives "Independent Relocation Agent"; "Senior sales and marketing executive" gives "Senior sales and marketing executive". When the headline is only a company name, a slogan or an industry ("Linvi AI", "How This Works co", "Hospitality & Event Industry"), it names no role, so currentRole stays null.');
   return lines.join('\n');
 };
 
