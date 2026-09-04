@@ -100,6 +100,9 @@ test('a meeting request can be accepted from the bell and lands in the conversat
   await input.press('Enter');
   const mine = page.locator(`a[href="https://www.example.com"]`).first();
   await expect(mine).toBeVisible({ timeout: 30_000 });
+  // "Visible" is not "readable": on the sender's own red bubble the link must
+  // be white, not the brand red (the walkthrough screenshot showed red on red).
+  expect(await mine.evaluate(el => getComputedStyle(el).color)).toBe('rgb(255, 255, 255)');
   await expect(page.locator(`a[href="https://rsn.network/about"]`).first()).toBeVisible();
 
   const senderPage = await openAs(sender, `/messages/${conv.rows[0].id}`, { width: 1280, height: 900 });

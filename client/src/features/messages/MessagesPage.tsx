@@ -935,7 +935,11 @@ export default function MessagesPage() {
                                   {m.content && (
                                     // 4 Sep 2026: a pasted www. or https:// address is a real link
                                     // here too, the same Linkify the wall and live chat use.
-                                    <div className={m.attachmentUrl ? 'px-3.5 py-2' : ''}><Linkify text={m.content} /></div>
+                                    // 4 Sep 2026 (walkthrough screenshot): the default link colour is
+                                    // the brand red, which vanishes on the sender's own red bubble.
+                                    <div className={m.attachmentUrl ? 'px-3.5 py-2' : ''}>
+                                      <Linkify text={m.content} className={fromMe ? 'break-all text-white underline hover:opacity-80' : undefined} />
+                                    </div>
                                   )}
                                 </div>
                                 {/* Phase E — reaction trigger.
