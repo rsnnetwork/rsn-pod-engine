@@ -238,7 +238,7 @@ describe('acceptPoke — F1 acceptance notification for the sender', () => {
     );
     expect(notifCall).toBeDefined();
     expect(notifCall![0]).toMatch(/'poke_accepted'/);
-    expect(notifCall![0]).toMatch(/'\/messages'/);
+    expect(notifCall![1]).toContain('/messages/conv-9'); // straight into the conversation, not the inbox
     const params = notifCall![1] as unknown[];
     // user_id (notification recipient) is the SENDER of the poke, not the accepter.
     expect(params).toContain(SENDER);
