@@ -8458,3 +8458,5 @@ Scripts kept: `e2e/enrich-real-profiles.mjs` (fires the prod refresh job for the
 - **iOS zoom**: global rule, touch devices only: inputs/selects/textareas render at 16px.
 - **Legibility**: wall comment text 12 → 14px, wall meta 11 → 12px, message times 10 → 11px; agent names wrap instead of truncating; "· 1 already asked" wraps under the count on phones.
 - Left as is: notification count badges at 10px (badges, not reading text); the request-to-join and login pages scroll normally (the audit's "covered" number there is a measurement artefact in WebKit).
+
+**4 Sep, from the audit screenshots:** a member opening Invites landed on "Pod Invite" with a dead-end pod selector ("you must be a director or host of a pod"). Since 13 Aug any member can invite someone to Reason, so the platform invite is the default now and first in the list; pod, event and circle invites stay one tap away and deep links still preselect them.

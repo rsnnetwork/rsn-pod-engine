@@ -37,7 +37,13 @@ export default function InvitesPage() {
   // circle preselected (?type=circle&circleId=...), so read the URL once.
   const [searchParams] = useSearchParams();
   const presetType = searchParams.get('type');
-  const [inviteType, setInviteType] = useState(presetType === 'circle' ? 'circle' : 'pod');
+  // 4 Sep 2026 (device audit): a member landing here saw "Pod Invite" first
+  // and a dead-end pod selector ("you must be a director or host"). Since
+  // 13 Aug any member can invite someone to Reason, so that is the default;
+  // pod and circle stay one tap away (and deep links still preselect them).
+  const [inviteType, setInviteType] = useState(
+    presetType === 'circle' ? 'circle' : presetType === 'pod' ? 'pod' : presetType === 'session' ? 'session' : 'platform',
+  );
   const [podId, setPodId] = useState('');
   const [circleId, setCircleId] = useState(presetType === 'circle' ? (searchParams.get('circleId') || '') : '');
   const [sessionId, setSessionId] = useState('');
@@ -346,10 +352,10 @@ export default function InvitesPage() {
                 onChange={e => { setInviteType(e.target.value); setPodId(''); setSessionId(''); setCircleId(''); }}
                 className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] focus:outline-none focus:ring-2 focus:ring-[#1a1a2e]"
               >
+                <option value="platform">Platform Invite (someone new to Reason)</option>
                 <option value="pod">Pod Invite</option>
                 <option value="session">Event Invite</option>
                 <option value="circle">Circle Invite</option>
-                <option value="platform">Platform Invite</option>
               </select>
             </div>
             {inviteType === 'pod' && (
