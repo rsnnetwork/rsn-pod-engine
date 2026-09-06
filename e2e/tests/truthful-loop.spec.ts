@@ -249,7 +249,7 @@ test('the whole truthful loop: match -> poke -> poke_accepted bell -> thread -> 
 
   await gotoRetry(fPage, `${APP}/messages/${conversationId}`);
   // On phones the thread actions live under "More actions" (4 Sep 2026).
-  { const more = fPage.getByRole('button', { name: 'More actions' }); if (await more.isVisible().catch(() => false)) await more.click(); }
+  { const either = fPage.locator('button[aria-label="More actions"]:visible, button[aria-label="Find a time to meet"]:visible').first(); await either.waitFor({ timeout: 30_000 }); if ((await either.getAttribute('aria-label')) === 'More actions') await either.click(); }
   await fPage.getByRole('button', { name: /Find a time to meet/i }).locator('visible=true').click();
   await expect(fPage.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 10_000 });
   await expect(fPage.getByText('Both can').first()).toBeVisible({ timeout: 10_000 });

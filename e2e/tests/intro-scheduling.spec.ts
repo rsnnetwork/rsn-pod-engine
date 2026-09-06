@@ -112,7 +112,7 @@ test('intro lands in the thread, both set availability, overlap confirms — ful
   console.log('  ✓ headed: intro message visible in the thread.');
 
   // On phones the thread actions live under "More actions" (4 Sep 2026).
-  { const more = page.getByRole('button', { name: 'More actions' }); if (await more.isVisible().catch(() => false)) await more.click(); }
+  { const either = page.locator('button[aria-label="More actions"]:visible, button[aria-label="Find a time to meet"]:visible').first(); await either.waitFor({ timeout: 30_000 }); if ((await either.getAttribute('aria-label')) === 'More actions') await either.click(); }
   await page.getByRole('button', { name: /Find a time to meet/i }).locator('visible=true').click();
   await expect(page.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText('Both can').first()).toBeVisible({ timeout: 10_000 });

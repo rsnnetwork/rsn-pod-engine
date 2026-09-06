@@ -309,7 +309,7 @@ test('UI matrix 4 — scheduler: tap cells + Save through the UI, partner overla
   // member TAPS CELLS + SAVES through the real grid.
   const mPage = await openAs(member, `/messages/${conversationId}`);
   // On phones the thread actions live under "More actions" (4 Sep 2026).
-  { const more = mPage.getByRole('button', { name: 'More actions' }); if (await more.isVisible().catch(() => false)) await more.click(); }
+  { const either = mPage.locator('button[aria-label="More actions"]:visible, button[aria-label="Find a time to meet"]:visible').first(); await either.waitFor({ timeout: 30_000 }); if ((await either.getAttribute('aria-label')) === 'More actions') await either.click(); }
   await mPage.getByRole('button', { name: /Find a time to meet/i }).locator('visible=true').click();
   await expect(mPage.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 15_000 });
   const cells = mPage.getByTestId('meeting-scheduler').locator('tbody button');
@@ -334,7 +334,7 @@ test('UI matrix 4 — scheduler: tap cells + Save through the UI, partner overla
 
   await mPage.reload();
   // On phones the thread actions live under "More actions" (4 Sep 2026).
-  { const more = mPage.getByRole('button', { name: 'More actions' }); if (await more.isVisible().catch(() => false)) await more.click(); }
+  { const either = mPage.locator('button[aria-label="More actions"]:visible, button[aria-label="Find a time to meet"]:visible').first(); await either.waitFor({ timeout: 30_000 }); if ((await either.getAttribute('aria-label')) === 'More actions') await either.click(); }
   await mPage.getByRole('button', { name: /Find a time to meet/i }).locator('visible=true').click();
   await expect(mPage.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 15_000 });
   await expect(mPage.getByText('Both can').first()).toBeVisible({ timeout: 15_000 });
