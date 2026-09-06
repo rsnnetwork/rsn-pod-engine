@@ -17,9 +17,11 @@ const variants: Record<string, string> = {
 };
 
 const sizes: Record<string, string> = {
-  sm: 'px-3 py-1.5 text-xs',
-  md: 'px-4 py-2 text-sm',
-  lg: 'px-6 py-3 text-base',
+  // 4 Sep 2026 device audit: filter chips measured 28px and primary buttons
+  // 36px on phones. Minimum heights, so the paddings above still shape the look.
+  sm: 'px-3 py-1.5 text-xs min-h-[40px]',
+  md: 'px-4 py-2 text-sm min-h-[44px]',
+  lg: 'px-6 py-3 text-base min-h-[48px]',
 };
 
 const Button = forwardRef<HTMLButtonElement, ButtonProps>(

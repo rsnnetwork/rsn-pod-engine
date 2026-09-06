@@ -233,7 +233,7 @@ export default function ProfilePage() {
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="text-xs text-rsn-red hover:text-rsn-red-hover mt-1 font-medium"
+              className="inline-flex min-h-[44px] items-center text-xs text-rsn-red hover:text-rsn-red-hover font-medium"
             >
               {avatarUploading ? 'Uploading...' : 'Change photo'}
             </button>

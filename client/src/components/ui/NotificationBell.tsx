@@ -370,7 +370,7 @@ export default function NotificationBell() {
 
   return (
     <div ref={ref} className="relative z-50">
-      <button ref={btnRef} onClick={handleOpen} className="relative p-2 text-gray-500 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors">
+      <button ref={btnRef} onClick={handleOpen} aria-label="Notifications" className="relative flex h-11 w-11 items-center justify-center text-gray-500 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors">
         <Bell className="h-5 w-5" />
         {unreadCount > 0 && (
           <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] flex items-center justify-center bg-rsn-red text-white text-[10px] font-bold rounded-full px-1">

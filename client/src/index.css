@@ -180,3 +180,14 @@
     right: max(0.5rem, env(safe-area-inset-right)) !important;
   }
 }
+
+/* 4 Sep 2026 device audit: iOS Safari zooms the whole page when a focused
+   field is under 16px, and it stays zoomed after. Touch devices only, so
+   desktop forms keep their compact text. */
+@media (pointer: coarse) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}

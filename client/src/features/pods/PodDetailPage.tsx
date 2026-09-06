@@ -361,7 +361,7 @@ export default function PodDetailPage() {
   if ((podError as any)?.response?.status === 404) {
     return (
       <div className="max-w-3xl mx-auto space-y-6">
-        <button onClick={() => navigate('/pods')} className="flex items-center gap-2 text-gray-500 hover:text-gray-800 transition-colors text-sm">
+        <button onClick={() => navigate('/pods')} className="flex min-h-[44px] items-center gap-2 text-gray-500 hover:text-gray-800 transition-colors text-sm">
           <ArrowLeft className="h-4 w-4" /> Back to Pods
         </button>
         <Card className="animate-fade-in-up">

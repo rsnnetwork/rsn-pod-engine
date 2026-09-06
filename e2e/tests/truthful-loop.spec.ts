@@ -248,7 +248,9 @@ test('the whole truthful loop: match -> poke -> poke_accepted bell -> thread -> 
   console.log('  ✓ (5) both sides set availability — overlap:', fSet.json.data.overlap);
 
   await gotoRetry(fPage, `${APP}/messages/${conversationId}`);
-  await fPage.getByRole('button', { name: /Find a time to meet/i }).click();
+  // On phones the thread actions live under "More actions" (4 Sep 2026).
+  { const more = fPage.getByRole('button', { name: 'More actions' }); if (await more.isVisible().catch(() => false)) await more.click(); }
+  await fPage.getByRole('button', { name: /Find a time to meet/i }).locator('visible=true').click();
   await expect(fPage.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 10_000 });
   await expect(fPage.getByText('Both can').first()).toBeVisible({ timeout: 10_000 });
   await fPage.getByRole('button', { name: /^Confirm / }).first().click();

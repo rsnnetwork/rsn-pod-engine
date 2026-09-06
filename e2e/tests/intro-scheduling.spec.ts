@@ -111,7 +111,9 @@ test('intro lands in the thread, both set availability, overlap confirms — ful
   await expect(page.locator(':text-matches("should meet", "i"):visible').first()).toBeVisible({ timeout: 20_000 });
   console.log('  ✓ headed: intro message visible in the thread.');
 
-  await page.getByRole('button', { name: /Find a time to meet/i }).click();
+  // On phones the thread actions live under "More actions" (4 Sep 2026).
+  { const more = page.getByRole('button', { name: 'More actions' }); if (await more.isVisible().catch(() => false)) await more.click(); }
+  await page.getByRole('button', { name: /Find a time to meet/i }).locator('visible=true').click();
   await expect(page.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText('Both can').first()).toBeVisible({ timeout: 10_000 });
   await page.screenshot({ path: 'test-results/sch-grid-overlap.png' }).catch(() => {});

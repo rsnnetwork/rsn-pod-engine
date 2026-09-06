@@ -112,7 +112,7 @@ export default function ChatQuickAccess() {
       <button
         ref={btnRef}
         onClick={handleOpen}
-        className="relative p-2 rounded-lg hover:bg-gray-100 transition-colors"
+        className="relative flex h-11 w-11 items-center justify-center rounded-lg hover:bg-gray-100 transition-colors"
         title="Messages"
         aria-label="Messages"
       >

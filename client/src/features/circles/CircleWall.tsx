@@ -322,7 +322,7 @@ function PostCard({ post: p, showPinBadge, linked, highlighted, circleId, isMemb
               className="mt-2 block rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 hover:bg-gray-100 transition-colors"
               data-testid={`shared-from-${p.id}`}
             >
-              <p className="text-[11px] font-semibold text-gray-500 flex items-center gap-1">
+              <p className="text-xs font-semibold text-gray-500 flex items-center gap-1">
                 <Share2 className="h-3 w-3" /> Shared from {p.sharedFrom.circleName}
                 {p.sharedFrom.authorName ? ` · ${p.sharedFrom.authorName}` : ''}
               </p>
@@ -353,7 +353,7 @@ function PostCard({ post: p, showPinBadge, linked, highlighted, circleId, isMemb
           )}
 
           {(reactionCount > 0 || p.commentCount > 0) && (
-            <div className="mt-2 flex items-center justify-between text-[11px] text-gray-500">
+            <div className="mt-2 flex items-center justify-between text-xs text-gray-500">
               <span data-testid={`reaction-summary-${p.id}`} className="flex items-center gap-1">
                 {reactionCount > 0 && (
                   <>
@@ -384,7 +384,7 @@ function PostCard({ post: p, showPinBadge, linked, highlighted, circleId, isMemb
               onClick={() => setPickerOpen(v => !v)}
               aria-label="Choose a reaction"
               aria-expanded={pickerOpen}
-              className="flex h-11 w-9 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-50 hover:text-gray-700"
+              className="flex h-11 w-11 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-50 hover:text-gray-700"
               data-testid={`reaction-picker-toggle-${p.id}`}
             >
               <ChevronDown className="h-3.5 w-3.5" />
@@ -597,10 +597,10 @@ function PostComments({ postId, isMember, admin, userId, onChanged }: {
       <Avatar src={c.authorAvatarUrl || undefined} name={c.authorName || 'Member'} size="sm" />
       <div className="min-w-0 flex-1">
         <div className="bg-gray-50 rounded-lg px-2.5 py-1.5">
-          <p className="text-[11px] font-semibold text-gray-700">
+          <p className="text-xs font-semibold text-gray-700">
             {c.authorName || 'Member'} <span className="font-normal text-gray-400">· {timeAgo(c.createdAt)}</span>
           </p>
-          <p className="text-xs text-gray-800 whitespace-pre-wrap break-words">
+          <p className="text-sm text-gray-800 whitespace-pre-wrap break-words">
             <Linkify text={c.content} />
           </p>
         </div>
@@ -608,7 +608,7 @@ function PostComments({ postId, isMember, admin, userId, onChanged }: {
           <button
             type="button" onClick={() => like(c)}
             aria-pressed={c.likedByMe}
-            className={`min-h-[44px] px-2 text-[11px] font-semibold ${c.likedByMe ? 'text-rsn-red' : 'text-gray-500 hover:text-gray-800'}`}
+            className={`min-h-[44px] min-w-[44px] px-2 text-xs font-semibold ${c.likedByMe ? 'text-rsn-red' : 'text-gray-500 hover:text-gray-800'}`}
             data-testid={`comment-like-${c.id}`}
           >
             {c.likedByMe ? 'Liked' : 'Like'}{c.likeCount > 0 ? ` · ${c.likeCount}` : ''}
@@ -617,7 +617,7 @@ function PostComments({ postId, isMember, admin, userId, onChanged }: {
             <button
               type="button"
               onClick={() => { setReplyTo(replyTo === c.id ? null : c.id); setReplyDraft(''); requestAnimationFrame(() => replyRef.current?.focus()); }}
-              className="min-h-[44px] px-2 text-[11px] font-semibold text-gray-500 hover:text-gray-800"
+              className="min-h-[44px] min-w-[44px] px-2 text-xs font-semibold text-gray-500 hover:text-gray-800"
               data-testid={`reply-button-${c.id}`}
             >
               Reply
@@ -627,7 +627,7 @@ function PostComments({ postId, isMember, admin, userId, onChanged }: {
             <button
               type="button" onClick={() => remove(c)}
               aria-label="Delete comment"
-              className="min-h-[44px] px-2 text-gray-300 hover:text-red-500"
+              className="flex min-h-[44px] min-w-[44px] items-center justify-center px-2 text-gray-300 hover:text-red-500"
               data-testid={`comment-delete-${c.id}`}
             >
               <Trash2 className="h-3.5 w-3.5" />
@@ -644,9 +644,9 @@ function PostComments({ postId, isMember, admin, userId, onChanged }: {
               placeholder={`Reply to ${c.authorName || 'this comment'}…`}
               maxLength={4000}
               aria-label="Your reply"
-              className="flex-1 min-w-0 rounded-lg border border-gray-200 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-rsn-red/30 min-h-[44px]"
+              className="flex-1 min-w-0 rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rsn-red/30 min-h-[44px]"
             />
-            <Button size="sm" onClick={() => send(replyDraft, c.id)} disabled={sending || !replyDraft.trim()} className="min-h-[44px]" aria-label="Send reply">
+            <Button size="sm" onClick={() => send(replyDraft, c.id)} disabled={sending || !replyDraft.trim()} className="min-h-[44px] min-w-[44px]" aria-label="Send reply">
               <Send className="h-3.5 w-3.5" />
             </Button>
           </div>
@@ -666,9 +666,9 @@ function PostComments({ postId, isMember, admin, userId, onChanged }: {
             placeholder="Write a comment…"
             maxLength={4000}
             aria-label="Your comment"
-            className="flex-1 min-w-0 rounded-lg border border-gray-200 px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-rsn-red/30 min-h-[44px]"
+            className="flex-1 min-w-0 rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rsn-red/30 min-h-[44px]"
           />
-          <Button size="sm" onClick={() => send(draft)} disabled={sending || !draft.trim()} className="min-h-[44px]" aria-label="Send comment">
+          <Button size="sm" onClick={() => send(draft)} disabled={sending || !draft.trim()} className="min-h-[44px] min-w-[44px]" aria-label="Send comment">
             <Send className="h-3.5 w-3.5" />
           </Button>
         </div>

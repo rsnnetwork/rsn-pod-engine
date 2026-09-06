@@ -216,7 +216,7 @@ export default function AppLayout() {
               <button
                 onClick={() => setMobileOpen(!mobileOpen)}
                 aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
-                className="text-gray-500 hover:text-gray-800 transition-colors ml-1"
+                className="flex h-11 w-11 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors"
               >
                 {mobileOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
               </button>

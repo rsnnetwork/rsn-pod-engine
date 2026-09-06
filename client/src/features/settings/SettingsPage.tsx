@@ -60,14 +60,14 @@ function MessageNotificationPrefsCard() {
             </div>
             <button
               onClick={() => set(`${row.key}_bell`, !prefs[`${row.key}_bell`])}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${prefs[`${row.key}_bell`] ? 'bg-rsn-red' : 'bg-gray-200'}`}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors after:absolute after:inset-x-0 after:-inset-y-2.5 after:content-[''] ${prefs[`${row.key}_bell`] ? 'bg-rsn-red' : 'bg-gray-200'}`}
               aria-label={`Toggle ${row.label} bell`}
             >
               <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${prefs[`${row.key}_bell`] ? 'translate-x-6' : 'translate-x-1'}`} />
             </button>
             <button
               onClick={() => set(`${row.key}_email`, !prefs[`${row.key}_email`])}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${prefs[`${row.key}_email`] ? 'bg-rsn-red' : 'bg-gray-200'}`}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors after:absolute after:inset-x-0 after:-inset-y-2.5 after:content-[''] ${prefs[`${row.key}_email`] ? 'bg-rsn-red' : 'bg-gray-200'}`}
               aria-label={`Toggle ${row.label} email`}
             >
               <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${prefs[`${row.key}_email`] ? 'translate-x-6' : 'translate-x-1'}`} />
@@ -90,7 +90,7 @@ function Toggle({ enabled, onToggle, label, description }: {
       </div>
       <button
         onClick={onToggle}
-        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${enabled ? 'bg-rsn-red' : 'bg-gray-200'}`}
+        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors after:absolute after:inset-x-0 after:-inset-y-2.5 after:content-[''] ${enabled ? 'bg-rsn-red' : 'bg-gray-200'}`}
       >
         <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${enabled ? 'translate-x-6' : 'translate-x-1'}`} />
       </button>

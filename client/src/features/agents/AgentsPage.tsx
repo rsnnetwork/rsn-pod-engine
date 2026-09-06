@@ -165,7 +165,7 @@ export default function AgentsPage() {
               <div className="flex items-start justify-between gap-3">
                 <Link to={`/agents/${a.id}`} className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <p className="truncate text-base font-semibold text-[#1a1a2e]">{a.label}</p>
+                    <p className="line-clamp-2 text-base font-semibold leading-snug text-[#1a1a2e]">{a.label}</p>
                     {a.status !== 'active' && (
                       <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-gray-500">
                         {a.status === 'paused' ? 'Paused' : 'Archived'}
@@ -181,7 +181,8 @@ export default function AgentsPage() {
                       {a.matchCount} {a.matchCount === 1 ? 'potential match' : 'potential matches'}
                     </span>
                     {a.askedCount > 0 && (
-                      <span className="text-gray-400"> · {a.askedCount} already asked</span>
+                      // On a phone this wraps under the count instead of leaving a lone "·" at a line start.
+                      <span className="block text-gray-400 sm:inline"><span className="hidden sm:inline"> · </span>{a.askedCount} already asked</span>
                     )}
                   </p>
                 </Link>

@@ -8443,3 +8443,18 @@ Scripts kept: `e2e/enrich-real-profiles.mjs` (fires the prod refresh job for the
 **4 Sep 20:35 UTC - seen in walkthrough screenshot 09, fixed:** a link inside the sender's OWN message bubble rendered in the brand red on the red bubble, invisible although clickable (the smoke had asserted "visible", which is not "readable"). Own-bubble links are white now; `meeting-request-bell.spec` pins the computed colour. Also noted, not changed: at 390px the message box is narrow enough that its placeholder wraps under the emoji, image and mic buttons.
 
 **4 Sep 20:45 UTC - the "transient 503" was not transient.** Render logs for both first-agent re-onboarding failures (19:38, 20:26) show a ZodError: the extractor returned `profileStrength: "medium"` and the schema only allowed strong | weak, so `/onboarding/confirm` answered 503 LLM_DISABLED and the member would have landed on the form fallback with a finished chat. Same error in stage events on 11 Aug and 17 Aug for real members. Fix: the schema reads anything but "strong" as "weak" (`.catch('weak')`) and the prompt says "only those two words, never medium". Own-bubble link colour fix (ae5752a) is live; bell smoke 2/2 with the computed-colour pin.
+
+---
+
+## 2026-09-04 - device audit: phones, iPad, desktop
+
+**Ali (4 Sep):** "check that the UI/UX is the best one for desktop and mobile users (iPhone/Android/iPads), handy and easy to use." `e2e/tests/uiux-audit.spec.ts` opens every member page with seeded data on small Android (360), Pixel 7, iPhone 14 (WebKit), iPad portrait and landscape (WebKit) and two desktop widths, screenshots the first screen and measures sideways overflow, tap targets under 40px, fields under 16px (iOS zooms on focus), text under 12px. 133 screenshots + `summary.json` under `e2e/shots/uiux/`. No page overflowed sideways on any device. What the screenshots and numbers showed, and what changed:
+
+- **Thread view on phones** was sized by a guess (`100vh - 100px`), taller than the space between the header and the bottom nav: the page scrolled, the other person's NAME slid out of view and the composer sat half under the nav. It now fills exactly what `<main>` gives it (ResizeObserver).
+- **Thread header on phones**: three icon buttons left ~100px for the name ("Tomas Lindqv…"). On phones they collapse into one "More actions" menu (Find a time, Report, Delete); the bio is one line there. Specs that press "Find a time to meet" at 390px open the menu first.
+- **Messages on iPad portrait** split into two panes at 768px, leaving the thread ~170px wide (bubbles wrapped every two words). Two panes from 1024px now.
+- **Composer on phones**: the emoji button is hidden (the OS keyboard has emoji), the box keeps its width (`min-w-0`).
+- **Tap targets**: header chat/bell/menu buttons 36/36/24 → 44; Button sizes now carry minimum heights (sm 40, md 44, lg 48: filter chips were 28px, primary buttons 36); back links, "Change photo", agent candidate names, circle member rows, invite search and select-all, thread back/schedule/delete, add-reaction and settings toggles (pseudo-element hit box, track unchanged) all reach 44.
+- **iOS zoom**: global rule, touch devices only: inputs/selects/textareas render at 16px.
+- **Legibility**: wall comment text 12 → 14px, wall meta 11 → 12px, message times 10 → 11px; agent names wrap instead of truncating; "· 1 already asked" wraps under the count on phones.
+- Left as is: notification count badges at 10px (badges, not reading text); the request-to-join and login pages scroll normally (the audit's "covered" number there is a measurement artefact in WebKit).

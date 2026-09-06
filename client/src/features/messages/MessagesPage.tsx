@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare, CalendarClock, Flag } from 'lucide-react';
+import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare, CalendarClock, Flag, MoreVertical } from 'lucide-react';
 import MeetingScheduler from './MeetingScheduler';
 import Linkify from '@/components/ui/Linkify';
 import MeetingRequests from './MeetingRequests';
@@ -171,6 +171,26 @@ export default function MessagesPage() {
   const [schedulerOpen, setSchedulerOpen] = useState(false);
   // Task E4 — report entry point for the thread's conversation partner.
   const [reportOpen, setReportOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  // 4 Sep 2026 (device audit): a guessed calc(100vh - 100px) was taller than the
+  // space between the phone header and the bottom nav, so the page scrolled,
+  // the thread header's first line (the name) slid away and the composer sat
+  // half under the nav. Fill exactly what <main> gives us instead.
+  const fillRef = useRef<HTMLDivElement>(null);
+  const [fillHeight, setFillHeight] = useState<number | null>(null);
+  useEffect(() => {
+    const main = fillRef.current?.closest('main') ?? document.querySelector('main');
+    if (!main) return;
+    const compute = () => {
+      const cs = getComputedStyle(main);
+      setFillHeight(Math.max(320, main.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)));
+    };
+    compute();
+    const ro = new ResizeObserver(compute);
+    ro.observe(main);
+    window.addEventListener('resize', compute);
+    return () => { ro.disconnect(); window.removeEventListener('resize', compute); };
+  }, [myUserId]);
   // Feature 19 (13 May spec) — pending image attachment for the next send.
   // pendingImage holds the file picked from the file dialog; previewUrl is
   // an object URL so the user sees a thumbnail before the upload kicks off.
@@ -676,9 +696,9 @@ export default function MessagesPage() {
   if (!myUserId) return <PageLoader />;
 
   return (
-    <div className="flex flex-col md:flex-row gap-4 h-[calc(100vh-100px)]">
+    <div ref={fillRef} className="flex min-h-0 flex-col lg:flex-row gap-4" style={{ height: fillHeight ?? 'calc(100dvh - 100px)' }}>
       {/* Conversation list (left, hidden on mobile when a thread is open) */}
-      <div className={`md:w-80 md:flex-shrink-0 bg-white rounded-xl border border-gray-200 overflow-hidden ${activeId ? 'hidden md:flex' : 'flex'} flex-col`}>
+      <div className={`lg:w-80 lg:flex-shrink-0 bg-white rounded-xl border border-gray-200 overflow-hidden ${activeId ? 'hidden lg:flex' : 'flex'} flex-col`}>
         <div className="px-4 py-3 border-b border-gray-200 flex items-center gap-2">
           <MessageSquare className="h-4 w-4 text-gray-500" />
           <h2 className="text-sm font-semibold text-[#1a1a2e]">Messages</h2>
@@ -704,7 +724,7 @@ export default function MessagesPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-baseline justify-between">
                     <p className="text-sm font-medium text-[#1a1a2e] truncate">{c.otherDisplayName || 'User'}</p>
-                    {c.lastMessageAt && <span className="text-[10px] text-gray-400 flex-shrink-0 ml-2">{formatRelative(c.lastMessageAt)}</span>}
+                    {c.lastMessageAt && <span className="text-[11px] text-gray-400 flex-shrink-0 ml-2">{formatRelative(c.lastMessageAt)}</span>}
                   </div>
                   {/* 13 Aug 2026 overhaul (task A5 review fix) — the inbox row, not
                       the thread header, is a stranger's FIRST encounter with a new
@@ -735,7 +755,7 @@ export default function MessagesPage() {
       </div>
 
       {/* Thread view (right) */}
-      <div className={`flex-1 bg-white rounded-xl border border-gray-200 overflow-hidden ${(activeId || isComposeMode) ? 'flex' : 'hidden md:flex'} flex-col`}>
+      <div className={`flex-1 bg-white rounded-xl border border-gray-200 overflow-hidden ${(activeId || isComposeMode) ? 'flex' : 'hidden lg:flex'} flex-col`}>
         {!headerContext ? (
           <div className="flex-1 flex items-center justify-center text-sm text-gray-500 px-6 text-center">
             {composeToUserId
@@ -748,7 +768,7 @@ export default function MessagesPage() {
             <div className="px-4 py-3 border-b border-gray-200 flex items-center gap-3">
               <button
                 onClick={() => navigate('/messages')}
-                className="md:hidden p-1 rounded-lg hover:bg-gray-100"
+                className="lg:hidden -ml-2 flex h-11 w-11 items-center justify-center rounded-lg hover:bg-gray-100"
                 aria-label="Back to inbox"
               >
                 <ArrowLeft className="h-4 w-4 text-gray-500" />
@@ -769,14 +789,15 @@ export default function MessagesPage() {
                   </p>
                 )}
                 {headerContext.otherBio && (
-                  <p className="mt-0.5 line-clamp-2 text-xs text-gray-400">{headerContext.otherBio}</p>
+                  <p className="mt-0.5 line-clamp-1 sm:line-clamp-2 text-xs text-gray-400">{headerContext.otherBio}</p>
                 )}
               </Link>
+              <div className="hidden sm:flex items-center gap-1">
               {/* REASON Phase 2 — arrange a time to meet (availability windows). */}
               {activeConv && (
                 <button
                   onClick={() => setSchedulerOpen(o => !o)}
-                  className={`p-1.5 rounded-lg min-h-[36px] min-w-[36px] transition-colors ${
+                  className={`flex h-11 w-11 items-center justify-center rounded-lg transition-colors ${
                     schedulerOpen ? 'bg-rsn-red-light text-rsn-red' : 'hover:bg-gray-100 text-gray-400 hover:text-gray-600'
                   }`}
                   title="Find a time to meet"
@@ -794,8 +815,9 @@ export default function MessagesPage() {
                       deleteMutation.mutate(activeConv.conversationId);
                     }
                   }}
-                  className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500"
+                  className="flex h-11 w-11 items-center justify-center rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500"
                   title="Delete conversation"
+                  aria-label="Delete conversation"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
@@ -814,6 +836,48 @@ export default function MessagesPage() {
                   <Flag className="h-4 w-4" />
                 </button>
               )}
+              </div>
+              {/* On a phone the three actions collapse into one menu, so the
+                  name keeps the width it needs. */}
+              <div className="relative sm:hidden">
+                <button
+                  type="button"
+                  onClick={() => setMoreOpen(o => !o)}
+                  aria-label="More actions"
+                  aria-expanded={moreOpen}
+                  className="flex h-11 w-11 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100"
+                >
+                  <MoreVertical className="h-5 w-5" />
+                </button>
+                {moreOpen && (
+                  <div className="absolute right-0 top-12 z-30 w-60 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg">
+                    {activeConv && (
+                      <button type="button" onClick={() => { setMoreOpen(false); setSchedulerOpen(o => !o); }}
+                        className="flex min-h-[44px] w-full items-center gap-2 px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50">
+                        <CalendarClock className="h-4 w-4 text-gray-400" /> Find a time to meet
+                      </button>
+                    )}
+                    {headerContext.otherUserId !== myUserId && (
+                      <button type="button" onClick={() => { setMoreOpen(false); setReportOpen(true); }}
+                        className="flex min-h-[44px] w-full items-center gap-2 px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50">
+                        <Flag className="h-4 w-4 text-gray-400" /> Report this member
+                      </button>
+                    )}
+                    {activeConv && (
+                      <button type="button"
+                        onClick={() => {
+                          setMoreOpen(false);
+                          if (confirm('Delete this conversation from your view? The other person\'s view is unaffected.')) {
+                            deleteMutation.mutate(activeConv.conversationId);
+                          }
+                        }}
+                        className="flex min-h-[44px] w-full items-center gap-2 px-4 py-3 text-left text-sm text-red-600 hover:bg-red-50">
+                        <Trash2 className="h-4 w-4" /> Delete conversation
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
 
             <ReportUserModal
@@ -947,7 +1011,7 @@ export default function MessagesPage() {
                                 <button
                                   type="button"
                                   onClick={() => setReactionPickerFor(prev => prev === m.id ? null : m.id)}
-                                  className="opacity-50 sm:opacity-0 sm:group-hover/bubble:opacity-100 hover:!opacity-100 active:!opacity-100 transition-opacity p-1 rounded-full bg-white border border-gray-200 shadow-sm text-gray-500 hover:text-gray-700"
+                                  className="relative opacity-50 sm:opacity-0 sm:group-hover/bubble:opacity-100 hover:!opacity-100 active:!opacity-100 transition-opacity p-1 rounded-full bg-white border border-gray-200 shadow-sm text-gray-500 hover:text-gray-700 after:absolute after:-inset-2.5 after:content-['']"
                                   aria-label="Add reaction"
                                   title="Add reaction"
                                 >
@@ -1003,7 +1067,7 @@ export default function MessagesPage() {
                               </div>
                             );
                           })}
-                          <p className="text-[10px] text-gray-400 mt-1 px-1">
+                          <p className="text-[11px] text-gray-400 mt-1 px-1">
                             {timeOnly(lastDate)}
                             {fromMe && lastMsg.readAt ? ' · seen' : ''}
                           </p>
@@ -1160,7 +1224,7 @@ export default function MessagesPage() {
                 <button
                   type="button"
                   onClick={() => setShowEmoji(s => !s)}
-                  className="w-11 h-11 sm:w-9 sm:h-9 flex items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex-shrink-0"
+                  className="hidden sm:flex w-11 h-11 sm:w-9 sm:h-9 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex-shrink-0"
                   aria-label="Add emoji"
                   title="Add emoji"
                 >
@@ -1221,7 +1285,7 @@ export default function MessagesPage() {
                   }}
                   rows={1}
                   placeholder={pendingImage ? 'Add a caption (optional)...' : 'Type a message...'}
-                  className="flex-1 resize-none px-3 py-2 text-base sm:text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-rsn-red max-h-32"
+                  className="flex-1 min-w-0 resize-none px-3 py-2 text-base sm:text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-rsn-red max-h-32"
                   maxLength={4000}
                 />
                 <Button

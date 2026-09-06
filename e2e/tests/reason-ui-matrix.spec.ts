@@ -308,7 +308,9 @@ test('UI matrix 4 — scheduler: tap cells + Save through the UI, partner overla
 
   // member TAPS CELLS + SAVES through the real grid.
   const mPage = await openAs(member, `/messages/${conversationId}`);
-  await mPage.getByRole('button', { name: /Find a time to meet/i }).click();
+  // On phones the thread actions live under "More actions" (4 Sep 2026).
+  { const more = mPage.getByRole('button', { name: 'More actions' }); if (await more.isVisible().catch(() => false)) await more.click(); }
+  await mPage.getByRole('button', { name: /Find a time to meet/i }).locator('visible=true').click();
   await expect(mPage.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 15_000 });
   const cells = mPage.getByTestId('meeting-scheduler').locator('tbody button');
   await cells.nth(4).click();  // day 2 afternoon
@@ -331,7 +333,9 @@ test('UI matrix 4 — scheduler: tap cells + Save through the UI, partner overla
   expect(overlapCheck.json.data.overlap, 'server must compute the overlap').toEqual([mine[0]]);
 
   await mPage.reload();
-  await mPage.getByRole('button', { name: /Find a time to meet/i }).click();
+  // On phones the thread actions live under "More actions" (4 Sep 2026).
+  { const more = mPage.getByRole('button', { name: 'More actions' }); if (await more.isVisible().catch(() => false)) await more.click(); }
+  await mPage.getByRole('button', { name: /Find a time to meet/i }).locator('visible=true').click();
   await expect(mPage.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 15_000 });
   await expect(mPage.getByText('Both can').first()).toBeVisible({ timeout: 15_000 });
   await mPage.screenshot({ path: 'test-results/uim-scheduler-overlap.png' }).catch(() => {});

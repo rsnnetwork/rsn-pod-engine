@@ -126,10 +126,10 @@ export default function RequestToJoinPage() {
 
         {/* Back links */}
         <div className="flex items-center justify-center gap-6 mt-6 text-sm">
-          <button onClick={() => navigate('/welcome')} className="text-gray-400 hover:text-[#1a1a2e] transition-colors inline-flex items-center gap-1">
+          <button onClick={() => navigate('/welcome')} className="min-h-[44px] text-gray-400 hover:text-[#1a1a2e] transition-colors inline-flex items-center gap-1">
             <ArrowLeft className="h-4 w-4" /> Back to RSN
           </button>
-          <button onClick={() => navigate('/login')} className="text-gray-400 hover:text-[#1a1a2e] transition-colors">
+          <button onClick={() => navigate('/login')} className="min-h-[44px] inline-flex items-center text-gray-400 hover:text-[#1a1a2e] transition-colors">
             Already have access? Sign in
           </button>
         </div>

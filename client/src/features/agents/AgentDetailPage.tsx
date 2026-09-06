@@ -110,7 +110,7 @@ export default function AgentDetailPage() {
           <Avatar src={m.avatarUrl || undefined} name={m.displayName || 'Member'} size="md" />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <Link to={`/profile/${m.candidateUserId}`} className="truncate text-sm font-semibold text-[#1a1a2e] hover:underline">
+              <Link to={`/profile/${m.candidateUserId}`} className="inline-flex min-h-[44px] items-center truncate text-sm font-semibold text-[#1a1a2e] hover:underline">
                 {m.displayName || 'A member'}
               </Link>
               {state && (

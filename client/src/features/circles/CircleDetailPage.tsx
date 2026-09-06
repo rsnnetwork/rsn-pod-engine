@@ -233,7 +233,7 @@ export default function CircleDetailPage() {
           <div className="grid gap-2">
             {circle.members.map(m => (
               <Card key={m.userId} className="!p-3">
-                <Link to={`/profile/${m.userId}`} className="flex items-center gap-3 min-h-[36px] hover:opacity-80 transition-opacity">
+                <Link to={`/profile/${m.userId}`} className="flex items-center gap-3 min-h-[44px] hover:opacity-80 transition-opacity">
                   <Avatar src={m.avatarUrl || undefined} name={m.displayName || 'User'} size="sm" />
                   <p className="text-sm font-medium text-gray-900 truncate">{m.displayName || 'Member'}</p>
                   {m.role === 'moderator' && (
