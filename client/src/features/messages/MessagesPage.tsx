@@ -172,6 +172,9 @@ export default function MessagesPage() {
   // Task E4 — report entry point for the thread's conversation partner.
   const [reportOpen, setReportOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  // 360px phones: image + mic + send leave ~150px for the box, where "Type a
+  // message..." wraps under its own first word. A shorter prompt fits.
+  const narrowPhone = typeof window !== 'undefined' && window.matchMedia('(max-width: 379px)').matches;
   // 4 Sep 2026 (device audit): a guessed calc(100vh - 100px) was taller than the
   // space between the phone header and the bottom nav, so the page scrolled,
   // the thread header's first line (the name) slid away and the composer sat
@@ -1284,7 +1287,7 @@ export default function MessagesPage() {
                     }
                   }}
                   rows={1}
-                  placeholder={pendingImage ? 'Add a caption (optional)...' : 'Type a message...'}
+                  placeholder={pendingImage ? 'Add a caption (optional)...' : narrowPhone ? 'Message…' : 'Type a message...'}
                   className="flex-1 min-w-0 resize-none px-3 py-2 text-base sm:text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-rsn-red max-h-32"
                   maxLength={4000}
                 />
