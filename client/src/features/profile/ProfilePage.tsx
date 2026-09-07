@@ -325,12 +325,12 @@ export default function ProfilePage() {
             <p className="text-xs text-gray-400 mt-1">Optional — for WhatsApp group invites and direct communication</p>
           </div>
           <div className="mt-4">
-            <label className="block text-sm font-medium text-gray-600 mb-1.5">Bio</label>
+            <label className="block text-sm font-medium text-gray-600 mb-1.5">About / Bio</label>
             <textarea
               {...register('bio')}
-              rows={3}
-              placeholder="Tell others about yourself..."
-              className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200 resize-none"
+              rows={6}
+              placeholder="Tell others who you are and what you do, so they can understand you before connecting..."
+              className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm leading-relaxed text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200 resize-y"
             />
           </div>
         </Card>

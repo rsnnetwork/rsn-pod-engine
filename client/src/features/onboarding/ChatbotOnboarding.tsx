@@ -99,6 +99,7 @@ function ConfirmRow({
   placeholder,
   guessed,
   last,
+  multiline,
 }: {
   label: string;
   value: string;
@@ -107,6 +108,7 @@ function ConfirmRow({
   placeholder: string;
   guessed?: boolean;
   last?: boolean;
+  multiline?: boolean;
 }) {
   return (
     <div className={last ? 'py-2.5' : 'border-b border-gray-100 py-2.5'}>
@@ -117,14 +119,26 @@ function ConfirmRow({
         ) : null}
       </div>
       {editing ? (
-        <input
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder}
-          className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-[15px] text-[#1a1a2e] placeholder:text-gray-400 focus:border-rsn-red/50 focus:outline-none focus:ring-2 focus:ring-rsn-red/20"
-        />
+        multiline ? (
+          // 7 Sep 2026 (Stefan: "About is too small"): About is a paragraph, not
+          // a one-liner — edit it in a roomy, resizable box.
+          <textarea
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={placeholder}
+            rows={4}
+            className="mt-1.5 w-full resize-y rounded-lg border border-gray-300 bg-white px-3 py-2 text-[15px] leading-relaxed text-[#1a1a2e] placeholder:text-gray-400 focus:border-rsn-red/50 focus:outline-none focus:ring-2 focus:ring-rsn-red/20"
+          />
+        ) : (
+          <input
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={placeholder}
+            className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-[15px] text-[#1a1a2e] placeholder:text-gray-400 focus:border-rsn-red/50 focus:outline-none focus:ring-2 focus:ring-rsn-red/20"
+          />
+        )
       ) : (
-        <div className="mt-0.5 text-[15px] text-[#1a1a2e]">
+        <div className={`mt-0.5 text-[15px] text-[#1a1a2e] ${multiline ? 'whitespace-pre-line leading-relaxed' : ''}`}>
           {value || <span className="text-gray-300">Not set</span>}
         </div>
       )}
@@ -1075,7 +1089,7 @@ export default function ChatbotOnboarding() {
               <ConfirmRow label="Role" value={draft.role} editing={editing} placeholder="Your role or title" onChange={(v) => setDraft((d) => ({ ...d, role: v }))} />
               <ConfirmRow label="LinkedIn" value={draft.linkedin} editing={editing} placeholder="Your LinkedIn URL" onChange={(v) => setDraft((d) => ({ ...d, linkedin: v }))} />
               <ConfirmRow label="Industry" value={draft.industry} editing={editing} placeholder="Your industry" onChange={(v) => setDraft((d) => ({ ...d, industry: v }))} />
-              <ConfirmRow label="About" value={draft.about} editing={editing} placeholder="A short professional summary" last onChange={(v) => setDraft((d) => ({ ...d, about: v }))} />
+              <ConfirmRow label="About" value={draft.about} editing={editing} placeholder="A short professional summary" multiline last onChange={(v) => setDraft((d) => ({ ...d, about: v }))} />
             </div>
             {/* This card only ever shows for a resolved found/partial opening (see
                 settleOpening) — enrichment is already terminal by now, so the

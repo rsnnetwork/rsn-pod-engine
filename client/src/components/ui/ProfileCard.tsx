@@ -88,7 +88,7 @@ export default function ProfileCard({ user, compact = false, className = '', onC
       </div>
 
       {user.bio && (
-        <p className="text-xs text-gray-500 line-clamp-2 mb-2">{user.bio}</p>
+        <p className="text-sm text-gray-600 line-clamp-4 mb-2 leading-relaxed">{user.bio}</p>
       )}
 
       {user.interests && user.interests.length > 0 && (
@@ -107,15 +107,15 @@ export default function ProfileCard({ user, compact = false, className = '', onC
       {(user.whoIWantToMeet || user.myIntent) && (
         <div className="border-t border-gray-100 pt-2 mt-2 space-y-1">
           {user.whoIWantToMeet && (
-            <p className="text-[11px] text-gray-500 flex items-start gap-1">
+            <p className="text-xs text-gray-600 flex items-start gap-1">
               <Users className="h-3 w-3 shrink-0 mt-0.5 text-gray-400" />
-              <span className="line-clamp-1">{user.whoIWantToMeet}</span>
+              <span className="line-clamp-2">{user.whoIWantToMeet}</span>
             </p>
           )}
           {user.myIntent && (
-            <p className="text-[11px] text-gray-500 flex items-start gap-1">
+            <p className="text-xs text-gray-600 flex items-start gap-1">
               <Target className="h-3 w-3 shrink-0 mt-0.5 text-gray-400" />
-              <span className="line-clamp-1">{user.myIntent}</span>
+              <span className="line-clamp-2">{user.myIntent}</span>
             </p>
           )}
         </div>

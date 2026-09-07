@@ -719,7 +719,7 @@ export default function MessagesPage() {
             <div className="flex items-center justify-center py-12"><Spinner /></div>
           ) : inboxData.length === 0 ? (
             <div className="text-center py-12 px-4 text-sm text-gray-500">
-              No conversations yet. Once you meet someone in an event, you can DM them from their profile.
+              No conversations yet. When you accept a meeting request — or someone accepts yours — the chat opens here.
             </div>
           ) : (
             inboxData.map(c => (
