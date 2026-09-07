@@ -8,7 +8,7 @@
 // + thread view update without polling.
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare, CalendarClock, Flag, MoreVertical } from 'lucide-react';
 import MeetingScheduler from './MeetingScheduler';
@@ -161,6 +161,11 @@ export default function MessagesPage() {
     userId?: string;
   }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  // The 'X asked to meet you' bell links here as /messages?poke=<id>. Focus that
+  // specific request so the recipient sees whose profile to check, instead of
+  // landing on the generic page (7 Sep 2026, Ali).
+  const focusPokeId = searchParams.get('poke');
   const qc = useQueryClient();
   const { user } = useAuthStore();
   const { addToast } = useToastStore();
@@ -709,7 +714,7 @@ export default function MessagesPage() {
         <div className="flex-1 overflow-y-auto">
           {/* Pending meeting requests sit above the inbox — this is the page the
               'poke' notification links to, so the accept must live here. */}
-          <MeetingRequests myUserId={myUserId} />
+          <MeetingRequests myUserId={myUserId} focusPokeId={focusPokeId} />
           {inboxData === undefined ? (
             <div className="flex items-center justify-center py-12"><Spinner /></div>
           ) : inboxData.length === 0 ? (

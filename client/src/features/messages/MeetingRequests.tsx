@@ -10,10 +10,12 @@
 // Realtime: sendPoke fans out E.userInvites(recipient), so keying this query to
 // that entity makes a new request appear without a refresh.
 
+import { useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Check, X } from 'lucide-react';
 import Avatar from '@/components/ui/Avatar';
+import ProfileLink from '@/components/ui/ProfileLink';
 import { useToastStore } from '@/stores/toastStore';
 import { E } from '@/realtime/entities';
 import api from '@/lib/api';
@@ -25,12 +27,15 @@ export interface PendingRequest {
   createdAt: string;
   senderDisplayName: string | null;
   senderAvatarUrl: string | null;
+  senderJobTitle: string | null;
+  senderCompany: string | null;
 }
 
-export default function MeetingRequests({ myUserId }: { myUserId: string }) {
+export default function MeetingRequests({ myUserId, focusPokeId }: { myUserId: string; focusPokeId?: string | null }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const addToast = useToastStore(s => s.addToast);
+  const focusRef = useRef<HTMLDivElement>(null);
 
   const { data: requests } = useQuery({
     queryKey: ['pokes-received'],
@@ -74,6 +79,13 @@ export default function MeetingRequests({ myUserId }: { myUserId: string }) {
     onError: (err) => settle(err, 'That request was already handled'),
   });
 
+  // Scroll the bell-linked request into view once it renders.
+  useEffect(() => {
+    if (focusPokeId && focusRef.current) {
+      focusRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [focusPokeId, requests]);
+
   const pending = acceptMutation.isPending || declineMutation.isPending;
   if (!requests || requests.length === 0) return null;
 
@@ -88,17 +100,35 @@ export default function MeetingRequests({ myUserId }: { myUserId: string }) {
         {requests.map(r => (
           <div
             key={r.id}
+            ref={focusPokeId === r.id ? focusRef : undefined}
             data-testid="meeting-request"
             data-sender-id={r.senderId}
-            className="rounded-xl border border-rsn-red/20 bg-white p-3"
+            data-poke-id={r.id}
+            className={`rounded-xl border bg-white p-3 transition-shadow ${
+              focusPokeId === r.id ? 'border-rsn-red ring-2 ring-rsn-red/40' : 'border-rsn-red/20'
+            }`}
           >
             <div className="flex items-start gap-3">
-              <Avatar src={r.senderAvatarUrl || undefined} name={r.senderDisplayName || 'Member'} size="md" />
+              {/* 7 Sep 2026 (Ali): the request is a profile card — avatar and
+                  name open the sender's profile (new tab) so the recipient can
+                  check who is asking before accepting. */}
+              <ProfileLink userId={r.senderId} title={`View ${r.senderDisplayName || 'this member'}'s profile`} className="shrink-0">
+                <Avatar src={r.senderAvatarUrl || undefined} name={r.senderDisplayName || 'Member'} size="md" />
+              </ProfileLink>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-[#1a1a2e]">
+                <ProfileLink
+                  userId={r.senderId}
+                  className="block truncate text-sm font-semibold text-[#1a1a2e] hover:text-rsn-red hover:underline"
+                  title={`View ${r.senderDisplayName || 'this member'}'s profile`}
+                >
                   {r.senderDisplayName || 'A member'}
-                </p>
-                <p className="mt-0.5 break-words text-xs text-gray-600">
+                </ProfileLink>
+                {(r.senderJobTitle || r.senderCompany) && (
+                  <p className="truncate text-xs text-gray-500">
+                    {[r.senderJobTitle, r.senderCompany].filter(Boolean).join(' · ')}
+                  </p>
+                )}
+                <p className="mt-1 break-words text-xs text-gray-600">
                   {r.message || 'They would like to meet you.'}
                 </p>
               </div>

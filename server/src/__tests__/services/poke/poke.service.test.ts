@@ -770,3 +770,25 @@ describe('getPokeWith — the state of a request between two people', () => {
     expect(r?.status).toBe('declined');
   });
 });
+
+// 7 Sep 2026 (Ali): a meeting request must show WHO is asking — a profile card,
+// not just a name — so the recipient can decide before accepting.
+describe('listReceivedPokes — the accept surface shows who is asking', () => {
+  beforeEach(() => mockQuery.mockReset());
+
+  it("returns the sender's role and company so the request renders as a profile card", async () => {
+    mockQuery.mockResolvedValue({ rows: [{
+      id: 'p1', sender_id: 'u-them', recipient_id: 'u-me', status: 'pending',
+      message: 'hi', responded_at: null, created_at: new Date(),
+      display_name: 'Dana Dev', avatar_url: 'http://x/a.png',
+      job_title: 'Founder', company: 'Acme',
+    }] });
+    const [row] = await pokeService.listReceivedPokes('u-me');
+    expect(row.senderDisplayName).toBe('Dana Dev');
+    expect(row.senderJobTitle).toBe('Founder');
+    expect(row.senderCompany).toBe('Acme');
+    const [sql] = mockQuery.mock.calls[0];
+    expect(String(sql)).toMatch(/u\.job_title/);
+    expect(String(sql)).toMatch(/u\.company/);
+  });
+});

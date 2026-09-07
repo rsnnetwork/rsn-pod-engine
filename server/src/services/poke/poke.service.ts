@@ -110,6 +110,10 @@ export interface UserPoke {
 export interface PokeWithSender extends UserPoke {
   senderDisplayName: string | null;
   senderAvatarUrl: string | null;
+  // 7 Sep 2026 (Ali): the accept surface shows a profile card, so the recipient
+  // can see WHO is asking before deciding.
+  senderJobTitle: string | null;
+  senderCompany: string | null;
 }
 
 function normalizePair(a: string, b: string): [string, string] {
@@ -488,10 +492,11 @@ export async function listReceivedPokes(userId: string): Promise<PokeWithSender[
     id: string; sender_id: string; recipient_id: string; status: 'pending' | 'accepted' | 'declined';
     message: string | null; responded_at: Date | null; created_at: Date;
     display_name: string | null; avatar_url: string | null;
+    job_title: string | null; company: string | null;
   }>(
     `SELECT p.id, p.sender_id, p.recipient_id, p.status, p.message,
             p.responded_at, p.created_at,
-            u.display_name, u.avatar_url
+            u.display_name, u.avatar_url, u.job_title, u.company
      FROM user_pokes p
      JOIN users u ON u.id = p.sender_id
      WHERE p.recipient_id = $1 AND p.status = 'pending'
@@ -504,6 +509,8 @@ export async function listReceivedPokes(userId: string): Promise<PokeWithSender[
     createdAt: r.created_at,
     senderDisplayName: r.display_name,
     senderAvatarUrl: r.avatar_url,
+    senderJobTitle: r.job_title,
+    senderCompany: r.company,
   }));
 }
 
