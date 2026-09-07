@@ -34,6 +34,20 @@ jest.mock('../../../services/orchestration/handlers/dm-handlers', () => ({
   __esModule: true,
 }));
 
+// W6: an exact-time confirm emails both people an .ics invite. Mock the
+// calendar + email services so we can assert the invite is sent without hitting
+// Resend.
+const mockSendMtgEmail = jest.fn().mockResolvedValue(undefined);
+jest.mock('../../../services/calendar/calendar.service', () => ({
+  generateIcsContent: () => 'ICSCONTENT',
+  buildGoogleCalendarUrl: () => 'https://calendar.google.com/x',
+  __esModule: true,
+}));
+jest.mock('../../../services/email/email.service', () => ({
+  sendMeetingConfirmedEmail: (...args: unknown[]) => mockSendMtgEmail(...args),
+  __esModule: true,
+}));
+
 import {
   isValidWindowKey, windowLabel, getScheduling, setAvailability, confirmWindow,
   HORIZON_DAYS,
@@ -165,6 +179,46 @@ describe('confirmWindow', () => {
     const notif = mockQuery.mock.calls.find(c => /INSERT INTO notifications/.test(c[0] as string))!;
     expect(notif[0]).toMatch(/'meeting_confirmed'/);
     expect((notif[1] as unknown[])[0]).toBe('u-b');
+  });
+
+  it('an exact time is stored and emailed to both people as a calendar invite (W6)', async () => {
+    const windowKey = futureKey(3, 'afternoon');
+    const day = windowKey.split(':')[0];
+    const startAt = new Date(`${day}T14:00:00Z`).toISOString();
+    // Answer the users lookup with two real emails; everything else as before.
+    mockQuery.mockImplementation((sql: string) => {
+      if (/FROM dm_conversations WHERE id/.test(sql)) return Promise.resolve({ rows: [CONV] });
+      if (/FROM meeting_availability/.test(sql)) return Promise.resolve({ rows: [
+        { user_id: 'u-a', window_key: windowKey }, { user_id: 'u-b', window_key: windowKey },
+      ] });
+      if (/FROM users WHERE id = ANY/.test(sql)) return Promise.resolve({ rows: [
+        { id: 'u-a', display_name: 'Ana', email: 'ana@example.com', timezone: 'Europe/Berlin' },
+        { id: 'u-b', display_name: 'Bo', email: 'bo@example.com', timezone: 'America/New_York' },
+      ] });
+      return Promise.resolve({ rows: [{ id: 'n1', created_at: NOW }] });
+    });
+    mockSendMessage.mockResolvedValue({ message: { id: 'm1' }, conversationId: 'conv-1' });
+    mockSendMtgEmail.mockClear();
+
+    await confirmWindow('conv-1', 'u-a', windowKey, { startAt, durationMin: 45 });
+
+    const upd = mockQuery.mock.calls.find(c => /UPDATE dm_conversations\s+SET meeting_confirmed_window/.test(c[0] as string))!;
+    expect(String(upd[0])).toMatch(/meeting_start_at = \$4, meeting_duration_min = \$5/);
+    expect((upd[1] as unknown[])[3]).toBeInstanceOf(Date);       // startAt
+    expect((upd[1] as unknown[])[4]).toBe(45);                    // durationMin
+    // Both people get the invite, each with their own timezone.
+    expect(mockSendMtgEmail).toHaveBeenCalledTimes(2);
+    const recipients = mockSendMtgEmail.mock.calls.map(c => c[0]).sort();
+    expect(recipients).toEqual(['ana@example.com', 'bo@example.com']);
+  });
+
+  it('rejects an exact time in the past', async () => {
+    const windowKey = futureKey(3, 'afternoon');
+    armConv([
+      { user_id: 'u-a', window_key: windowKey }, { user_id: 'u-b', window_key: windowKey },
+    ]);
+    await expect(confirmWindow('conv-1', 'u-a', windowKey, { startAt: '2020-01-01T10:00:00Z', durationMin: 30 }))
+      .rejects.toMatchObject({ statusCode: 400 });
   });
 
   it('a failed thread message does not lose the confirmation itself', async () => {

@@ -1123,6 +1123,66 @@ export async function sendLlmBalanceAlertEmail(opts: { to: string; where: string
   return sendEmail({ to: opts.to, subject, html, text });
 }
 
+// ─── Meeting-confirmed email (W6, 7 Sep 2026) ───────────────────────────────
+// Sent to BOTH people when a 1:1 meeting time is confirmed. Carries a real .ics
+// invite (attendees + RSVP) and an "Add to Google Calendar" link. The time is
+// rendered in the RECIPIENT's timezone so each person sees their own local time.
+export interface MeetingConfirmedEmailData {
+  partnerName: string;
+  startAt: Date;
+  durationMin: number;
+  recipientTimezone?: string | null;
+  threadUrl: string;
+  googleCalendarUrl: string;
+  icsContent: string;
+}
+
+export async function sendMeetingConfirmedEmail(
+  to: string,
+  recipientDisplayName: string,
+  data: MeetingConfirmedEmailData,
+): Promise<void> {
+  const tz = data.recipientTimezone || undefined;
+  const when = data.startAt.toLocaleString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+    ...(tz ? { timeZone: tz } : {}),
+  });
+  const subject = `Meeting confirmed with ${data.partnerName}`;
+  const html = `
+    <!DOCTYPE html><html><head><meta charset="utf-8"></head>
+    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+      <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
+        <div style="background:#fff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
+          <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
+          <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">Meeting confirmed</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">Hey ${escapeHtml(recipientDisplayName)},</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
+            Your meeting with <strong>${escapeHtml(data.partnerName)}</strong> is confirmed.
+          </p>
+          <div style="background:#f0fdf4;border-left:3px solid #16a34a;border-radius:6px;padding:12px 16px;margin:0 0 20px 0;">
+            <p style="color:#166534;font-size:15px;line-height:1.5;margin:0;"><strong>${when}</strong></p>
+            <p style="color:#374151;font-size:13px;line-height:1.5;margin:6px 0 0 0;">Duration: ${data.durationMin} minutes</p>
+          </div>
+          <div style="text-align:center;margin:20px 0;">
+            <a href="${data.googleCalendarUrl}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 28px;border-radius:8px;">Add to Google Calendar</a>
+          </div>
+          <p style="color:#9ca3af;font-size:13px;text-align:center;margin:0 0 16px 0;">The calendar invite is attached (.ics) — open it to add the meeting to any calendar.</p>
+          <div style="text-align:center;margin:8px 0;">
+            <a href="${data.threadUrl}" style="color:#DE322E;font-size:14px;">Open the conversation</a>
+          </div>
+        </div>
+      </div>
+    </body></html>`;
+  const text = `Hey ${recipientDisplayName},\n\nYour meeting with ${data.partnerName} is confirmed.\n\n${when}\nDuration: ${data.durationMin} minutes\n\nAdd to Google Calendar: ${data.googleCalendarUrl}\nOpen the conversation: ${data.threadUrl}\n\n(The .ics invite is attached.)\n\nRSN — Connect with Reason`;
+
+  if (config.resendApiKey) {
+    await sendEmail({ to, subject, html, text, attachments: [{ filename: 'meeting.ics', content: data.icsContent }] });
+    return;
+  }
+  logger.warn({ to, partnerName: data.partnerName }, 'No email provider — meeting-confirmed email skipped');
+}
+
 // HTML-escape helpers for the admin review email. Other templates render
 // trusted internal copy; this one renders applicant-supplied free-text
 // (name + reason + linkedin URL) into HTML, so we escape every interpolation.

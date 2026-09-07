@@ -13,6 +13,9 @@ interface CalendarEventData {
   organizerName?: string;
   organizerEmail?: string;
   location?: string;
+  /** Invitees — emitting ATTENDEE lines makes Gmail/Outlook render this as a
+   *  real invite with RSVP, not just an "add to calendar" file. */
+  attendees?: Array<{ name?: string; email: string }>;
 }
 
 /**
@@ -48,6 +51,12 @@ export function generateIcsContent(data: CalendarEventData): string {
 
   if (data.organizerName && data.organizerEmail) {
     lines.push(`ORGANIZER;CN=${escapeIcsText(data.organizerName)}:mailto:${data.organizerEmail}`);
+  }
+
+  for (const a of data.attendees ?? []) {
+    if (!a.email) continue;
+    const cn = a.name ? `;CN=${escapeIcsText(a.name)}` : '';
+    lines.push(`ATTENDEE${cn};ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${a.email}`);
   }
 
   lines.push(
@@ -123,6 +132,30 @@ export async function buildSessionCalendarEvent(sessionId: string): Promise<Sess
     organizerEmail: host?.email,
     sessionId,
   };
+}
+
+/**
+ * An "Add to Google Calendar" template URL — no OAuth, opens a prefilled event
+ * the recipient can save in one click. Times are UTC (the Z-suffixed compact
+ * form Google expects); Google renders them in the viewer's own timezone.
+ */
+export function buildGoogleCalendarUrl(data: {
+  title: string;
+  startTime: Date;
+  durationMinutes: number;
+  description?: string;
+  location?: string;
+}): string {
+  const start = formatIcsDate(data.startTime);
+  const end = formatIcsDate(new Date(data.startTime.getTime() + data.durationMinutes * 60 * 1000));
+  const params = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: data.title,
+    dates: `${start}/${end}`,
+  });
+  if (data.description) params.set('details', data.description);
+  if (data.location) params.set('location', data.location);
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
 }
 
 function formatIcsDate(date: Date): string {

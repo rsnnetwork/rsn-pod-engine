@@ -21,6 +21,9 @@ const availabilityBodySchema = z.object({
 
 const confirmBodySchema = z.object({
   window: z.string().max(30),
+  // W6: optional exact instant (ISO) + duration; absent = legacy daypart-only.
+  startAt: z.string().datetime().optional(),
+  durationMin: z.number().int().min(15).max(240).optional(),
 });
 
 router.get(
@@ -62,6 +65,7 @@ router.post(
     try {
       const result = await meetingService.confirmWindow(
         req.params.id, req.user!.userId, req.body.window,
+        { startAt: req.body.startAt, durationMin: req.body.durationMin },
       );
       const response: ApiResponse = { success: true, data: result };
       res.json(response);

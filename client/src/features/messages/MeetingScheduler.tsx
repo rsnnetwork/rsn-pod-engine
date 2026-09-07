@@ -21,7 +21,26 @@ interface Scheduling {
   mine: string[];
   theirs: string[];
   overlap: string[];
-  confirmed: { window: string; byUserId: string; at: string } | null;
+  confirmed: { window: string; byUserId: string; at: string; startAt: string | null; durationMin: number | null } | null;
+}
+
+// Sensible default start hour for each daypart when finalising an exact time.
+const DAYPART_DEFAULT_TIME: Record<string, string> = { morning: '09:00', afternoon: '14:00', evening: '18:00' };
+
+/** Build an "Add to Google Calendar" link (opens a prefilled event, no OAuth). */
+function googleCalUrl(startAtIso: string, durationMin: number): string {
+  const fmt = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const start = new Date(startAtIso);
+  const end = new Date(start.getTime() + durationMin * 60_000);
+  const p = new URLSearchParams({ action: 'TEMPLATE', text: 'RSN meeting', dates: `${fmt(start)}/${fmt(end)}` });
+  return `https://calendar.google.com/calendar/render?${p.toString()}`;
+}
+
+/** The viewer's own local rendering of an absolute instant. */
+function localWhen(startAtIso: string): string {
+  return new Date(startAtIso).toLocaleString([], {
+    weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+  });
 }
 
 const DAYPARTS = [
@@ -61,6 +80,10 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
   const [staged, setStaged] = useState<Set<string> | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
+  // The daypart the user is finalising into an exact time, plus their picks.
+  const [finalizing, setFinalizing] = useState<string | null>(null);
+  const [startTime, setStartTime] = useState('14:00');
+  const [durationMin, setDurationMin] = useState(30);
 
   const { data, isLoading } = useQuery<Scheduling>({
     queryKey: ['meetingScheduling', conversationId],
@@ -113,11 +136,25 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
     }
   };
 
+  // Open the exact-time step for a green overlap window.
+  const openFinalize = (windowKey: string) => {
+    const part = windowKey.split(':')[1];
+    setStartTime(DAYPART_DEFAULT_TIME[part] ?? '14:00');
+    setDurationMin(30);
+    setFinalizing(windowKey);
+  };
+
   const confirm = async (windowKey: string) => {
     if (confirming) return;
     setConfirming(windowKey);
     try {
-      await api.post(`/dm/conversations/${conversationId}/scheduling/confirm`, { window: windowKey });
+      // Combine the confirmed day with the chosen local time into an absolute
+      // instant (toISOString), so the server stores one instant and every
+      // client renders it in its own timezone.
+      const day = windowKey.split(':')[0];
+      const startAt = new Date(`${day}T${startTime}:00`).toISOString();
+      await api.post(`/dm/conversations/${conversationId}/scheduling/confirm`, { window: windowKey, startAt, durationMin });
+      setFinalizing(null);
       await queryClient.invalidateQueries({ queryKey: ['meetingScheduling', conversationId] });
       // The confirmation message lands in the thread — invalidate the REAL
       // thread key (['dm-messages', id]); the old ['dmMessages'] key matched
@@ -135,11 +172,31 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
   return (
     <div className="border-b border-gray-200 bg-gray-50/60 px-3 py-3 space-y-3" data-testid="meeting-scheduler">
       {data.confirmed && (
-        <div className="flex items-center gap-2 rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2">
-          <CalendarCheck className="h-4 w-4 text-emerald-600 shrink-0" />
-          <p className="text-sm text-emerald-700 font-medium">
-            Meeting confirmed: {labelFor(data.confirmed.window)}
-          </p>
+        <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2.5">
+          <div className="flex items-center gap-2">
+            <CalendarCheck className="h-4 w-4 text-emerald-600 shrink-0" />
+            <p className="text-sm text-emerald-800 font-semibold">
+              {data.confirmed.startAt
+                ? `Meeting confirmed — ${localWhen(data.confirmed.startAt)}`
+                : `Meeting confirmed: ${labelFor(data.confirmed.window)}`}
+            </p>
+          </div>
+          {data.confirmed.startAt && (
+            <div className="mt-1 pl-6 space-y-1">
+              <p className="text-xs text-emerald-700">
+                {data.confirmed.durationMin} minutes · shown in your local time
+              </p>
+              <a
+                href={googleCalUrl(data.confirmed.startAt, data.confirmed.durationMin ?? 30)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-block text-xs font-medium text-emerald-700 underline hover:text-emerald-900"
+              >
+                Add to Google Calendar
+              </a>
+              <p className="text-[11px] text-emerald-600">A calendar invite was emailed to you both.</p>
+            </div>
+          )}
         </div>
       )}
 
@@ -207,15 +264,62 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
       {savedOverlap.length > 0 && !data.confirmed && (
         <div className="space-y-1.5">
           {savedOverlap.map(w => (
-            <button
-              key={w}
-              onClick={() => confirm(w)}
-              disabled={confirming !== null}
-              className="w-full min-h-[44px] flex items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 text-sm font-medium text-emerald-700 hover:bg-emerald-100 transition-colors"
-            >
-              <Check className="h-4 w-4" />
-              {confirming === w ? 'Confirming…' : `Confirm ${labelFor(w)}`}
-            </button>
+            finalizing === w ? (
+              <div key={w} className="rounded-lg border border-emerald-300 bg-emerald-50 p-3 space-y-2">
+                <p className="text-xs font-medium text-emerald-800">Pick a start time for {labelFor(w)}</p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <label className="text-[11px] text-emerald-700">Start
+                    <input
+                      type="time"
+                      value={startTime}
+                      onChange={e => setStartTime(e.target.value)}
+                      className="ml-1 rounded border border-emerald-300 bg-white px-2 py-1 text-sm text-gray-800"
+                    />
+                  </label>
+                  <label className="text-[11px] text-emerald-700">For
+                    <select
+                      value={durationMin}
+                      onChange={e => setDurationMin(Number(e.target.value))}
+                      className="ml-1 rounded border border-emerald-300 bg-white px-2 py-1 text-sm text-gray-800"
+                    >
+                      <option value={30}>30 min</option>
+                      <option value={45}>45 min</option>
+                      <option value={60}>60 min</option>
+                    </select>
+                  </label>
+                </div>
+                <p className="text-[11px] text-emerald-600">
+                  {(() => { try { return `That is ${localWhen(new Date(`${w.split(':')[0]}T${startTime}:00`).toISOString())} your time.`; } catch { return ''; } })()}
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => confirm(w)}
+                    disabled={confirming !== null}
+                    className="flex-1 min-h-[44px] flex items-center justify-center gap-2 rounded-lg bg-emerald-600 text-sm font-medium text-white hover:bg-emerald-700 transition-colors disabled:opacity-50"
+                  >
+                    <Check className="h-4 w-4" />
+                    {confirming === w ? 'Confirming…' : 'Confirm meeting'}
+                  </button>
+                  <button
+                    onClick={() => setFinalizing(null)}
+                    disabled={confirming !== null}
+                    className="min-h-[44px] rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-600 hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                key={w}
+                onClick={() => openFinalize(w)}
+                disabled={confirming !== null}
+                className="w-full min-h-[44px] flex items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 text-sm font-medium text-emerald-700 hover:bg-emerald-100 transition-colors"
+              >
+                <Check className="h-4 w-4" />
+                {`Confirm ${labelFor(w)}`}
+              </button>
+            )
           ))}
         </div>
       )}
