@@ -100,6 +100,31 @@ describe('chatbot.service', () => {
       expect(reply).not.toContain(READY_TOKEN);
     });
 
+    // 7 Sep 2026 (Stefan saw "Ready"): the model does not always emit the exact
+    // <<READY>> literal. A bracket variant or a bare trailing "READY" line must
+    // still be detected (so the confirm card appears) and stripped (so no token
+    // leaks into the bubble), while the ordinary word "ready" mid-sentence must
+    // NOT be mistaken for the token.
+    it.each([
+      ['single-bracket variant', 'Here is what we heard.\n<READY>'],
+      ['spaced double-bracket', 'Here is what we heard.\n<< READY >>'],
+      ['emphasised token', 'Here is what we heard.\n**<<READY>>**'],
+      ['bare trailing line', 'Here is what we heard.\nREADY'],
+    ])('detects and strips a READY variant: %s', async (_label, text) => {
+      mockCreate.mockResolvedValue({ content: [{ type: 'text', text }] });
+      const { reply, ready } = await converse(history);
+      expect(ready).toBe(true);
+      expect(reply.toLowerCase()).not.toMatch(/ready|<|>/);
+      expect(reply).toContain('Here is what we heard.');
+    });
+
+    it('does not treat the ordinary word "ready" in a sentence as the token', async () => {
+      mockCreate.mockResolvedValue({ content: [{ type: 'text', text: 'Are you ready to tell me who you want to meet?' }] });
+      const { reply, ready } = await converse(history);
+      expect(ready).toBe(false);
+      expect(reply).toBe('Are you ready to tell me who you want to meet?');
+    });
+
     it('ignores non-text content blocks', async () => {
       mockCreate.mockResolvedValue({
         content: [

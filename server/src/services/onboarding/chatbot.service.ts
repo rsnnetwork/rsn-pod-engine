@@ -95,8 +95,20 @@ async function askHost(
     .map((b) => (b.type === 'text' ? b.text : ''))
     .join('')
     .trim();
-  const ready = text.includes(READY_TOKEN);
-  if (ready) text = text.replace(READY_TOKEN, '').trim();
+  // 7 Sep 2026 (Stefan saw "Ready"): the model does not always emit the exact
+  // <<READY>> literal. Detect + strip bracket variants (<READY>, << ready >>,
+  // **<<READY>>**) and a bare trailing "READY" line, WITHOUT mistaking the
+  // ordinary word "ready" inside a sentence for the token.
+  const READY_BRACKET = /<{1,2}\s*ready\s*>{1,2}/i;                       // <READY>, << ready >>
+  const READY_BARE_TAIL = /(?:^|\n)[^\S\n]*\**\[?[^\S\n]*ready[^\S\n]*\]?\**[^\S\n]*$/i; // final line that is only "ready"/[READY]/**READY**
+  const ready = READY_BRACKET.test(text) || READY_BARE_TAIL.test(text);
+  if (ready) {
+    text = text
+      .replace(new RegExp(READY_BRACKET.source, 'gi'), '')
+      .replace(READY_BARE_TAIL, '')
+      .replace(/\*\*\s*\*\*/g, '')
+      .trim();
+  }
   // 7 Sep 2026: a reply that is only the ready token (or nothing) left an
   // empty assistant message in the transcript, and every later call
   // (/chat, /profile, /confirm) then failed validation on it: the member
@@ -124,7 +136,7 @@ export async function converse(
     const rewriteSystem = system +
       '\n\nREWRITE. Your previous draft was:\n"' + first.reply.replace(/"/g, "'") + '"\nIt broke these rules: ' + broken.join('; ') +
       '. Write the message again so it follows every style rule: no reading their answer back, at most three words of reaction, exactly one question of at most 15 words with no "or" in it, under 25 words in total' +
-      (first.ready ? ', and keep the ready token' : '') + '. Reply with the message only.';
+      (first.ready ? `, and keep the token ${READY_TOKEN} on its own final line` : '') + '. Reply with the message only.';
     const second = await askHost(rewriteSystem, messages);
     const stillBroken = styleViolations(second.reply, second.ready);
     if (stillBroken.length < broken.length) return second;
