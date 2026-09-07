@@ -73,6 +73,21 @@ describe('the roles people actually search for are recognised', () => {
     expect(keys('looking to hire a designer')).toContain('job_seeker');
   });
 
+  // 7 Sep 2026 (Stefan's fresh onboarding): "people who run manufacturing and
+  // service businesses with more than 20 employees, founders, founder, owner,
+  // operator" produced a MAIN agent for "Specialists and analysts", because
+  // "employees" (the company size) matched that bucket earlier in the sentence
+  // than "founders" or "owner". Business owners must win that sentence.
+  it('a company size is not a wish to meet employees, and "people who run businesses" are business owners', () => {
+    const keys = (t: string) => designationsWanted(t).map(d => d.key);
+    const stefan = 'people who run manufacturing and service businesses with more than 20 employees, founders, founder, owner, operator';
+    expect(keys(stefan)).not.toContain('employee');
+    expect(keys(stefan)).toEqual(expect.arrayContaining(['owner', 'founder']));
+    expect(keys('teams with 50 employees')).not.toContain('employee');
+    expect(keys('data analysts and product specialists')).toContain('employee');
+    expect(keys('someone who owns a small agency')).toContain('owner');
+  });
+
   it('a developer search finds a developer by role, not by chance wording', () => {
     const dev = profile({
       id: 'u-dev2', displayName: 'Sam',

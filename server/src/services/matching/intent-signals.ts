@@ -61,7 +61,13 @@ export const ROLE_TAXONOMY: RoleBucket[] = [
   { key: 'consultant', label: 'consultants', is: /\b(consultant|freelanc|contractor)s?\b/ },
   { key: 'ceo', label: 'CEOs', is: /\b(ceo|chief executive)s?\b/ },
   { key: 'executive', label: 'executives', is: /\b(cto|cfo|coo|cmo|cso|cco|chief|c[-\s]?suite|executive)s?\b/ },
-  { key: 'owner', label: 'business owners', is: /\b(owner|proprietor)s?\b/ },
+  {
+    key: 'owner', label: 'business owners', is: /\b(owner|proprietor)s?\b/,
+    // 7 Sep 2026 (Stefan's fresh onboarding): "people who run manufacturing
+    // and service businesses" names business owners in the first five words;
+    // the sentence must not lose that to a later, weaker match.
+    wants: /\b(owner|proprietor|owner[-\s]operator)s?\b|\b(run|runs|running|own|owns|owning|lead|leads|leading)\s+(?:\w+[\s-]){0,5}?(business|businesses|company|companies|firm|firms|shop|shops|agency|agencies|practice|practices)\b/,
+  },
   { key: 'manager', label: 'managers and leads', is: /\b(manager|director|head of|team lead|vp|vice president)s?\b/ },
   { key: 'student', label: 'students', is: /\b(student|intern|undergrad|graduate)s?\b/ },
   {
@@ -83,7 +89,14 @@ export const ROLE_TAXONOMY: RoleBucket[] = [
     is: /\b(partner|collaborator|reseller)s?\b/,
   },
   // Catch-all: a recognisable working title that fits none of the above.
-  { key: 'employee', label: 'specialists and analysts', is: /\b(analyst|employee|specialist|associate|operator|coordinator|assistant)s?\b/ },
+  {
+    key: 'employee', label: 'specialists and analysts',
+    is: /\b(analyst|employee|specialist|associate|operator|coordinator|assistant)s?\b/,
+    // 7 Sep 2026 (Stefan): "businesses with more than 20 employees" is a company
+    // size, not a wish to meet employees, and "owner, operator" is an owner.
+    // As a WANT, neither word counts; the others still do.
+    wants: /\b(analyst|specialist|associate|coordinator|assistant)s?\b/,
+  },
 ];
 
 /** What a person IS, from their job title or role. */
