@@ -63,6 +63,8 @@ export const config = {
   onboardingEnrichModel: process.env.ONBOARDING_ENRICH_MODEL || 'claude-haiku-4-5',
   // Escalation target when the cheap (Haiku) enrichment is low-confidence (Stefan's rule).
   onboardingEnrichFallbackModel: process.env.ONBOARDING_ENRICH_FALLBACK_MODEL || 'claude-sonnet-4-6',
+  // Who hears, at most once an hour, that the prepaid Anthropic balance is empty (comma-separated).
+  llmBalanceAlertTo: process.env.LLM_BALANCE_ALERT_TO || 'dev@rsn.network',
 
   // ScrapingDog API — deterministic LinkedIn profile scraping. Empty key means disabled.
   scrapingdogApiKey: process.env.SCRAPINGDOG_API_KEY || '',

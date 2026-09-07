@@ -51,13 +51,16 @@ const result = (p: EnrichedProfile, over: Partial<EnrichResult> = {}): EnrichRes
 beforeEach(() => { mockScrape.mockReset(); mockWeb.mockReset(); mockCreate.mockReset(); ownWordsSay(null); });
 
 // ─── 4 Sep 2026: the role in the person's own About ─────────────────────────
-describe('the role comes from the person\'s own words when the web cannot identify them', () => {
+// 7 Sep 2026 (cost order): the own-words call runs FIRST (a fraction of a
+// cent, reads only what we hold); the web pass (about fifty times more) runs
+// only while headline AND role are still empty, and never escalates to Sonnet.
+describe('the person\'s own words come first; the web only when they name no role', () => {
   const aliLike = () => result(profile({
     summary: 'Hi, I’m Ali Hamza — a passionate MLOps & Geospatial Engineer specializing in Geo AI and…',
   }));
   const webNothing = { profile: null, confidence: 0, sources: [], foundLinkedinUrl: null, requestedLinkedinUrl: URL, enrichedAt: null };
 
-  it('fills currentRole from a stated About sentence, staying partial while the headline is still empty', async () => {
+  it('fills currentRole from a stated About sentence without spending a web search, staying partial while the headline is empty', async () => {
     mockScrape.mockResolvedValue({ kind: 'partial', result: aliLike(), photoUrl: null, missing: ['headline', 'currentRole'] });
     mockWeb.mockResolvedValue(webNothing);
     ownWordsSay('MLOps & Geospatial Engineer');
@@ -69,24 +72,29 @@ describe('the role comes from the person\'s own words when the web cannot identi
     const call = mockCreate.mock.calls[0][0];
     expect(call.tools).toBeUndefined();
     expect(call.messages[0].content).toContain('MLOps & Geospatial Engineer specializing');
+    // The role is known: the web pass is not bought.
+    expect(mockWeb).not.toHaveBeenCalled();
   });
 
-  it('an About that names no role leaves it empty, and a web result that already found one is not second-guessed', async () => {
+  it('an About that names no role goes to the web, on the cheap model only, and takes what the web verified', async () => {
     mockScrape.mockResolvedValue({ kind: 'partial', result: result(profile({ summary: 'I love hiking and building things.' })), photoUrl: null, missing: ['headline', 'currentRole'] });
     mockWeb.mockResolvedValue(webNothing);
     ownWordsSay(null);
     const out = await runProvider('scrapingdog', { linkedinUrl: URL, fullName: 'X' });
     expect(out.kind).toBe('partial');
     if (out.kind === 'partial') expect(out.result.profile!.currentRole).toBeNull();
+    expect(mockWeb).toHaveBeenCalledTimes(1);
+    expect(mockWeb).toHaveBeenCalledWith(expect.objectContaining({ linkedinUrl: URL }), { escalate: false });
 
-    mockCreate.mockClear();
-    mockScrape.mockResolvedValue({ kind: 'partial', result: aliLike(), photoUrl: null, missing: ['headline', 'currentRole'] });
+    mockWeb.mockClear();
+    mockScrape.mockResolvedValue({ kind: 'partial', result: result(profile({ summary: 'I love hiking and building things.' })), photoUrl: null, missing: ['headline', 'currentRole'] });
     mockWeb.mockResolvedValue(result(profile({ headline: 'Senior Team Lead', currentRole: 'Senior Team Lead' }), { confidence: 0.9 }));
-    await runProvider('scrapingdog', { linkedinUrl: URL, fullName: 'Ali Hamza' });
-    expect(mockCreate).not.toHaveBeenCalled();
+    const found = await runProvider('scrapingdog', { linkedinUrl: URL, fullName: 'Ali Hamza' });
+    expect(found.kind).toBe('found');
+    if (found.kind === 'found') expect(found.result.profile).toMatchObject({ headline: 'Senior Team Lead', currentRole: 'Senior Team Lead' });
   });
 
-  it('a failing own-words call keeps whatever the web filled', async () => {
+  it('a failing own-words call still tries the web and keeps whatever it filled', async () => {
     mockScrape.mockResolvedValue({ kind: 'partial', result: aliLike(), photoUrl: null, missing: ['headline', 'currentRole'] });
     mockWeb.mockResolvedValue(result(profile({ headline: 'Geo AI', location: 'Islamabad' }), { confidence: 0.8 }));
     mockCreate.mockRejectedValue(new Error('model down'));
@@ -116,7 +124,7 @@ describe('runProvider(scrapingdog) fills what the scrape left empty', () => {
     });
     expect(out.result.confidence).toBe(0.95);
     expect(out.result.sources).toEqual(expect.arrayContaining(['scrapingdog:ali-hamza', 'https://www.linkedin.com/in/ali-hamza']));
-    expect(mockWeb).toHaveBeenCalledWith(expect.objectContaining({ linkedinUrl: URL, fullName: 'Ali Hamza' }));
+    expect(mockWeb).toHaveBeenCalledWith(expect.objectContaining({ linkedinUrl: URL, fullName: 'Ali Hamza' }), { escalate: false });
   });
 
   it('a web result the identity check rejects (different slug) changes nothing', async () => {

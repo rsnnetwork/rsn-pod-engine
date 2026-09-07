@@ -150,34 +150,42 @@ async function fillGapsFromWeb(
   const filled: string[] = [];
   let sources = [...outcome.result.sources];
 
-  // Step 1: the public page, only when the web can verify it is the same person.
-  try {
-    const web = applyMatchVerification(
-      await enrichProfile({ fullName: input.fullName || scraped.fullName || '', linkedinUrl: input.linkedinUrl }),
-      input.linkedinUrl,
-    );
-    if (web.profile && web.confidence >= GAP_FILL_MIN_CONFIDENCE) {
-      for (const k of GAP_FIELDS) {
-        if (!merged[k] && web.profile[k]) { merged[k] = web.profile[k]; filled.push(k); }
-      }
-      if (!merged.skills.length && web.profile.skills.length) { merged.skills = web.profile.skills; filled.push('skills'); }
-      // ScrapingDog truncates About with an ellipsis; a longer searched summary is the fuller text.
-      if (web.profile.summary && (!merged.summary || (merged.summary.endsWith('…') && web.profile.summary.length > merged.summary.length))) {
-        merged.summary = web.profile.summary; filled.push('summary');
-      }
-      sources = [...sources, ...web.sources.filter((s) => !sources.includes(s))];
-    }
-  } catch (err) {
-    logger.warn({ err, linkedinUrl: input.linkedinUrl }, 'enrichment gap fill (web) failed — continuing with what we hold');
-  }
-
-  // Step 2: the person's own words, when the role is still missing.
+  // Step 1 (7 Sep 2026, cost order): the person's own words first. One
+  // no-search call over the headline + About we already hold (a fraction of a
+  // cent) states the role for most thin profiles. It used to run only AFTER a
+  // web pass that cost about fifty times more and usually read nothing.
   if (!merged.currentRole) {
     try {
       const own = await roleFromOwnWords(merged);
       if (own) { merged.currentRole = own; filled.push('currentRole (own words)'); }
     } catch (err) {
-      logger.warn({ err, linkedinUrl: input.linkedinUrl }, 'enrichment gap fill (own words) failed — leaving the role empty');
+      logger.warn({ err, linkedinUrl: input.linkedinUrl }, 'enrichment gap fill (own words) failed — trying the web');
+    }
+  }
+
+  // Step 2: the public page, only while BOTH the headline and the role are
+  // still empty, and only when the web can verify it is the same person.
+  // Never the stronger model here: ScrapingDog already found the page, so what
+  // the cheap pass cannot read the expensive one cannot read either.
+  if (!merged.headline && !merged.currentRole) {
+    try {
+      const web = applyMatchVerification(
+        await enrichProfile({ fullName: input.fullName || scraped.fullName || '', linkedinUrl: input.linkedinUrl }, { escalate: false }),
+        input.linkedinUrl,
+      );
+      if (web.profile && web.confidence >= GAP_FILL_MIN_CONFIDENCE) {
+        for (const k of GAP_FIELDS) {
+          if (!merged[k] && web.profile[k]) { merged[k] = web.profile[k]; filled.push(k); }
+        }
+        if (!merged.skills.length && web.profile.skills.length) { merged.skills = web.profile.skills; filled.push('skills'); }
+        // ScrapingDog truncates About with an ellipsis; a longer searched summary is the fuller text.
+        if (web.profile.summary && (!merged.summary || (merged.summary.endsWith('…') && web.profile.summary.length > merged.summary.length))) {
+          merged.summary = web.profile.summary; filled.push('summary');
+        }
+        sources = [...sources, ...web.sources.filter((s) => !sources.includes(s))];
+      }
+    } catch (err) {
+      logger.warn({ err, linkedinUrl: input.linkedinUrl }, 'enrichment gap fill (web) failed — continuing with what we hold');
     }
   }
 

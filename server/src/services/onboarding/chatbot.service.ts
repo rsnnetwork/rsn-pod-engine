@@ -12,6 +12,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import logger from '../../config/logger';
 import config from '../../config';
+import { withBalanceAlert } from './llm-balance-alert';
 import { OnboardingMessage, OnboardingConfirmedProfile, OnboardingOpening } from '@rsn/shared';
 import { IntentSchema, INTENT_JSON_SCHEMA, ExtractedIntent } from './intent.schema';
 import {
@@ -29,7 +30,7 @@ function getClient(): Anthropic {
     if (!config.anthropicApiKey) {
       throw new Error('ANTHROPIC_API_KEY is not configured');
     }
-    client = new Anthropic({ apiKey: config.anthropicApiKey });
+    client = withBalanceAlert(new Anthropic({ apiKey: config.anthropicApiKey }));
   }
   return client;
 }

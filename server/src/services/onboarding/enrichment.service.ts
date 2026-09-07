@@ -13,6 +13,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import config from '../../config';
 import logger from '../../config/logger';
+import { withBalanceAlert } from './llm-balance-alert';
 
 let client: Anthropic | null = null;
 /** Exported so the enrichment orchestrator's facts-grounded extras pass (A5)
@@ -20,7 +21,7 @@ let client: Anthropic | null = null;
 export function getClient(): Anthropic {
   if (!client) {
     if (!config.anthropicApiKey) throw new Error('ANTHROPIC_API_KEY is not configured');
-    client = new Anthropic({ apiKey: config.anthropicApiKey });
+    client = withBalanceAlert(new Anthropic({ apiKey: config.anthropicApiKey }));
   }
   return client;
 }
@@ -235,7 +236,32 @@ async function runEnrichOnce(signals: EnrichSignals, model: string): Promise<Enr
   return parseEnriched(text);
 }
 
-export async function enrichProfile(signals: EnrichSignals): Promise<EnrichResult> {
+export interface EnrichOptions {
+  /** false: never spend the stronger model. The ScrapingDog gap fill passes
+   *  this: the person is already identified, so what the cheap pass cannot
+   *  read on the public page the expensive one cannot read either. */
+  escalate?: boolean;
+}
+
+/**
+ * Escalate ONLY when the cheap pass identified the person but scored weakly.
+ * 7 Sep 2026: about 60 of 91 runs escalated to Sonnet because confidence 0
+ * ("cannot identify this person") also sat below the threshold, and Sonnet
+ * then ran the same searches for the same answer at ten times the price. A
+ * rejected identity (different slug, capped at 0.15) is the identity check's
+ * decision, not the model's weakness, so it does not escalate either.
+ */
+export function shouldEscalate(r: EnrichResult): boolean {
+  const p = r.profile;
+  // parseEnriched hands back an all-null profile for "nobody": substance, not presence, means found.
+  const identified = !!p && !!(p.fullName || p.headline || p.currentRole || p.currentCompany || r.foundLinkedinUrl);
+  if (!identified || r.confidence <= 0 || r.confidence >= ENRICH_ESCALATE_BELOW) return false;
+  const req = linkedinSlug(r.requestedLinkedinUrl);
+  const found = linkedinSlug(r.foundLinkedinUrl);
+  return !(req && found && req !== found);
+}
+
+export async function enrichProfile(signals: EnrichSignals, opts: EnrichOptions = {}): Promise<EnrichResult> {
   if (!config.anthropicApiKey || !signals.fullName?.trim()) return EMPTY;
   const requested = signals.linkedinUrl?.trim() || null;
   // OUR-side identity check + stamp the run time (drives the 90-day refresh).
@@ -246,10 +272,11 @@ export async function enrichProfile(signals: EnrichSignals): Promise<EnrichResul
   try {
     // Primary pass on the cheap model (Haiku).
     let result = finalize(await runEnrichOnce(signals, config.onboardingEnrichModel));
-    // Escalate to the stronger model (Sonnet) ONLY when the cheap pass is weak —
-    // low confidence / no useful match (Stefan's cost rule). Most users never escalate.
+    // Escalate to the stronger model (Sonnet) ONLY when the cheap pass found
+    // the person but scored weakly (Stefan's cost rule, see shouldEscalate).
+    // "Found nobody" stays on the cheap model. Most users never escalate.
     const fb = config.onboardingEnrichFallbackModel;
-    if (result.confidence < ENRICH_ESCALATE_BELOW && fb && fb !== config.onboardingEnrichModel) {
+    if (opts.escalate !== false && shouldEscalate(result) && fb && fb !== config.onboardingEnrichModel) {
       try {
         const better = finalize(await runEnrichOnce(signals, fb));
         if (better.confidence > result.confidence) result = better;

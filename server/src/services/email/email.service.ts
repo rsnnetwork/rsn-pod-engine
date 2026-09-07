@@ -1104,6 +1104,25 @@ export async function isEmailTypeEnabled(emailType: string): Promise<boolean> {
   }
 }
 
+/**
+ * 7 Sep 2026: the prepaid Anthropic balance is empty. Sent by
+ * llm-balance-alert.ts at most once an hour while Anthropic keeps refusing.
+ */
+export async function sendLlmBalanceAlertEmail(opts: { to: string; where: string; at: string }): Promise<{ sent: boolean }> {
+  const subject = 'RSN: Anthropic balance is empty, onboarding chat and LinkedIn fill are down';
+  const text = [
+    `At ${opts.at} the Anthropic API refused a call (${opts.where}) with "Your credit balance is too low".`,
+    'Until the balance is topped up, the onboarding chat falls back to the plain form, the LinkedIn gap fill and the extras pass return nothing, and every LLM-backed test fails.',
+    'Top up at console.anthropic.com under Plans & Billing (50 dollars covers a busy week; switch on auto reload so this does not repeat).',
+    'This alert is sent at most once an hour while the failures continue.',
+  ].join('\n\n');
+  const html = `<p>At <strong>${escapeHtml(opts.at)}</strong> the Anthropic API refused a call (${escapeHtml(opts.where)}) with <em>"Your credit balance is too low"</em>.</p>
+<p>Until the balance is topped up, the onboarding chat falls back to the plain form, the LinkedIn gap fill and the extras pass return nothing, and every LLM-backed test fails.</p>
+<p>Top up at <a href="https://console.anthropic.com/settings/billing">console.anthropic.com</a> under Plans &amp; Billing (50 dollars covers a busy week; switch on auto reload so this does not repeat).</p>
+<p style="color:#666">This alert is sent at most once an hour while the failures continue.</p>`;
+  return sendEmail({ to: opts.to, subject, html, text });
+}
+
 // HTML-escape helpers for the admin review email. Other templates render
 // trusted internal copy; this one renders applicant-supplied free-text
 // (name + reason + linkedin URL) into HTML, so we escape every interpolation.
