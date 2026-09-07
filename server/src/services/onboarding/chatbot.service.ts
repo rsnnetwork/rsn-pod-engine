@@ -10,6 +10,7 @@
 // so onboarding (and signup) is never blocked by a missing/expired key.
 
 import Anthropic from '@anthropic-ai/sdk';
+import logger from '../../config/logger';
 import config from '../../config';
 import { OnboardingMessage, OnboardingConfirmedProfile, OnboardingOpening } from '@rsn/shared';
 import { IntentSchema, INTENT_JSON_SCHEMA, ExtractedIntent } from './intent.schema';
@@ -50,6 +51,54 @@ export function isEnabled(): boolean {
  * prompt can never contradict what the client's opening bubble already told
  * the member.
  */
+/**
+ * 7 Sep 2026 (Ali: "it must be easy to talk and to the point"). The rules the
+ * model still breaks now and then even when told: a two-part question, an
+ * "A or B?" question, a comment with no question, reading the answer back,
+ * or simply too many words. Returns the names of the rules a draft breaks so
+ * the host can be asked once to rewrite it. Exported for the tests.
+ */
+export function styleViolations(text: string, ready: boolean): string[] {
+  const body = text.replace(READY_TOKEN, '').trim();
+  const wordCount = body.split(/\s+/).filter(Boolean).length;
+  const out: string[] = [];
+  if (ready) {
+    if (wordCount > 40) out.push('the summary is over 30 words');
+    return out;
+  }
+  const questions = (body.match(/\?/g) || []).length;
+  if (questions === 0) out.push('it asks no question');
+  if (questions > 1) out.push('it asks more than one question');
+  if (wordCount > 28) out.push('it is over 25 words');
+  const question = body.split(/(?<=[.!])\s+/).find((s) => s.includes('?')) || '';
+  if (/\bor\b/i.test(question)) out.push('the question offers alternatives joined by "or"');
+  const afterReaction = body.replace(/^\s*[^.!?]{0,24}[.!]\s*/, '');
+  if (/^\s*(so you|you're |you are |you want |sounds like|it sounds like)/i.test(afterReaction)) {
+    out.push('it reads their answer back to them');
+  }
+  return out;
+}
+
+async function askHost(
+  system: string,
+  messages: OnboardingMessage[],
+): Promise<{ reply: string; ready: boolean }> {
+  const anthropic = getClient();
+  const resp = await anthropic.messages.create({
+    model: config.onboardingChatModel,
+    max_tokens: 1024,
+    system,
+    messages: messages.map((m) => ({ role: m.role, content: m.content })),
+  });
+  let text = resp.content
+    .map((b) => (b.type === 'text' ? b.text : ''))
+    .join('')
+    .trim();
+  const ready = text.includes(READY_TOKEN);
+  if (ready) text = text.replace(READY_TOKEN, '').trim();
+  return { reply: text, ready };
+}
+
 export async function converse(
   messages: OnboardingMessage[],
   profile?: OnboardingConfirmedProfile,
@@ -57,25 +106,27 @@ export async function converse(
   extra?: HostKnownExtra,
   effectiveOpening?: OnboardingOpening
 ): Promise<{ reply: string; ready: boolean }> {
-  const anthropic = getClient();
-  const resp = await anthropic.messages.create({
-    model: config.onboardingChatModel,
-    max_tokens: 1024,
-    system: buildHostSystemPrompt(profile, wrapMode, extra, effectiveOpening),
-    messages: messages.map((m) => ({ role: m.role, content: m.content })),
-  });
+  const system = buildHostSystemPrompt(profile, wrapMode, extra, effectiveOpening);
+  const first = await askHost(system, messages);
+  const broken = styleViolations(first.reply, first.ready);
+  if (broken.length === 0) return first;
 
-  let text = resp.content
-    .map((b) => (b.type === 'text' ? b.text : ''))
-    .join('')
-    .trim();
-
-  const ready = text.includes(READY_TOKEN);
-  if (ready) {
-    text = text.replace(READY_TOKEN, '').trim();
+  // One corrective rewrite. If that is no better, the first draft still goes
+  // out: a slightly long message beats a stalled chat.
+  logger.warn({ broken, draft: first.reply.slice(0, 160) }, 'onboarding host: draft broke the style rules, asking for a rewrite');
+  try {
+    const rewriteSystem = system +
+      '\n\nREWRITE. Your previous draft was:\n"' + first.reply.replace(/"/g, "'") + '"\nIt broke these rules: ' + broken.join('; ') +
+      '. Write the message again so it follows every style rule: no reading their answer back, at most three words of reaction, exactly one question of at most 15 words with no "or" in it, under 25 words in total' +
+      (first.ready ? ', and keep the ready token' : '') + '. Reply with the message only.';
+    const second = await askHost(rewriteSystem, messages);
+    const stillBroken = styleViolations(second.reply, second.ready);
+    if (stillBroken.length < broken.length) return second;
+    logger.warn({ stillBroken }, 'onboarding host: rewrite was no better, sending the first draft');
+  } catch (err) {
+    logger.warn({ err }, 'onboarding host: rewrite call failed, sending the first draft');
   }
-
-  return { reply: text, ready };
+  return first;
 }
 
 /**

@@ -10,6 +10,10 @@ jest.mock('@anthropic-ai/sdk', () => ({
   })),
 }));
 
+jest.mock('../../../config/logger', () => ({
+  __esModule: true,
+  default: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+}));
 jest.mock('../../../config', () => ({
   __esModule: true,
   default: {
@@ -19,7 +23,7 @@ jest.mock('../../../config', () => ({
   },
 }));
 
-import { converse, extractIntent, isEnabled } from '../../../services/onboarding/chatbot.service';
+import { converse, extractIntent, isEnabled, styleViolations } from '../../../services/onboarding/chatbot.service';
 import { READY_TOKEN } from '../../../services/onboarding/prompts';
 
 const history = [{ role: 'user' as const, content: 'I want to meet founders' }];
@@ -105,6 +109,55 @@ describe('chatbot.service', () => {
       });
       const { reply } = await converse(history);
       expect(reply).toBe('Welcome.');
+    });
+  });
+
+  // 7 Sep 2026 (Ali): "it must be easy to talk and to the point". A draft that
+  // breaks the hard style rules is sent back once for a rewrite; a compliant
+  // draft costs nothing extra; a rewrite that is no better never blocks the chat.
+  describe('style guard', () => {
+    beforeEach(() => mockCreate.mockReset());
+
+    it('a compliant draft goes out with a single call', async () => {
+      mockCreate.mockResolvedValue({ content: [{ type: 'text', text: 'Got it. Who would be most useful to meet?' }] });
+      const { reply } = await converse(history);
+      expect(reply).toBe('Got it. Who would be most useful to meet?');
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it('an "A or B?" question is rewritten once, and the rewrite is used', async () => {
+      mockCreate
+        .mockResolvedValueOnce({ content: [{ type: 'text', text: 'Makes sense. Are you after farmers already using new tech, or ones open to it?' }] })
+        .mockResolvedValueOnce({ content: [{ type: 'text', text: 'Makes sense. Which farmers would you most want to meet?' }] });
+      const { reply } = await converse(history);
+      expect(mockCreate).toHaveBeenCalledTimes(2);
+      expect(mockCreate.mock.calls[1][0].system).toContain('REWRITE');
+      expect(mockCreate.mock.calls[1][0].system).toContain('alternatives');
+      expect(reply).toBe('Makes sense. Which farmers would you most want to meet?');
+    });
+
+    it('a rewrite that is no better falls back to the first draft instead of failing', async () => {
+      mockCreate.mockResolvedValue({ content: [{ type: 'text', text: 'Do you want A, or B? And why?' }] });
+      const { reply } = await converse(history);
+      expect(reply).toBe('Do you want A, or B? And why?');
+      expect(mockCreate).toHaveBeenCalledTimes(2);
+    });
+
+    it('a failing rewrite call still returns the first draft', async () => {
+      mockCreate
+        .mockResolvedValueOnce({ content: [{ type: 'text', text: 'Interesting. What is the plan, or is it early days?' }] })
+        .mockRejectedValueOnce(new Error('model down'));
+      const { reply } = await converse(history);
+      expect(reply).toBe('Interesting. What is the plan, or is it early days?');
+    });
+
+    it('names each rule a draft breaks', () => {
+      expect(styleViolations("Got it. So you're solving invoicing pain for freelancers. Who do you want to meet?", false)).toContain('it reads their answer back to them');
+      expect(styleViolations('You have real wins there.', false)).toContain('it asks no question');
+      expect(styleViolations('Who? And why?', false)).toContain('it asks more than one question');
+      expect(styleViolations('Makes sense. Which farmers would you most want to meet?', false)).toEqual([]);
+      // The closing summary only has to stay short.
+      expect(styleViolations('Here is what we heard, in one line. ' + READY_TOKEN, true)).toEqual([]);
     });
   });
 

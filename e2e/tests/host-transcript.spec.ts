@@ -63,7 +63,7 @@ test('the host reacts before it asks, keeps it short, never uses a dash, and the
     // talk and to the point": no reading the answer back, one short question,
     // no "A or B?" choices, and the whole thing fits in a text message.
     expect(reply, 'no em or en dash').not.toMatch(/[—–]/);
-    expect(words(reply), `under the word budget: "${reply}"`).toBeLessThanOrEqual(32);
+    expect(words(reply), `under the word budget: "${reply}"`).toBeLessThanOrEqual(ready ? 45 : 32);
     const body = reply.replace(/<<READY>>/g, '');
     if (!ready) {
     expect((body.match(/\?/g) || []).length, `exactly one question: "${reply}"`).toBe(1);

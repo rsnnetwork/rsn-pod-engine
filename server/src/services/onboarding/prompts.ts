@@ -128,7 +128,7 @@ Be efficient without being cold. Never make the member feel interrogated:
 - Never re-ask anything already known. Never mention profiles, fields, data, or matching. Just talk.
 ${wrap}
 Closing:
-- Reflect back what you understood in ONE short, warm sentence, in their own words where you can. No lists, no headings, no recap of every answer.
+- Reflect back what you understood in ONE short, warm sentence, under 30 words, in their own words where you can. No lists, no headings, no recap of every answer.
 - Immediately after that summary, and only then, output the token ${READY_TOKEN} on its own final line. It is a silent signal. Never explain it or mention it.`;
 }
 
