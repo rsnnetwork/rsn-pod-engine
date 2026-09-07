@@ -1,7 +1,8 @@
-import { test, expect, chromium, Browser, BrowserContext, Page } from '@playwright/test';
+import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
 import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
+import { launchBrowser, contextOptions, engineLabel } from '../helpers/engine';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // W2 (7 Sep 2026) — DM delivery reaches the other party WITHOUT a refresh.
@@ -31,7 +32,7 @@ async function apiAs(u: TestUser, method: string, path: string, body?: unknown) 
 }
 
 async function openAs(u: TestUser, path: string): Promise<Page> {
-  const ctx = await browser.newContext({ viewport: { width: 1100, height: 800 } });
+  const ctx = await browser.newContext(contextOptions());
   await ctx.addInitScript((t: { a: string; r: string }) => {
     localStorage.setItem('rsn_access', t.a);
     localStorage.setItem('rsn_refresh', t.r);
@@ -66,7 +67,8 @@ test.beforeAll(async () => {
   // Give the sender a real-looking name so the recipient's UI has something to
   // render; not load-bearing for the assertions.
   await pool.query(`UPDATE users SET display_name = $1 WHERE id = $2`, ['DM Live Sender', sender.id]);
-  browser = await chromium.launch({ headless: false });
+  console.log(`[dm-live-delivery] engine=${engineLabel()} app=${APP}`);
+  browser = await launchBrowser();
 });
 
 test.afterAll(async () => {
@@ -127,7 +129,10 @@ test('confirmWindow: the partner\'s open thread shows the confirmation live, no 
   const confirmed = await apiAs(sender, 'POST', `/dm/conversations/${convId}/scheduling/confirm`, { window: KEY });
   expect(confirmed.status, 'confirm succeeded').toBe(200);
 
-  // The confirmation bubble must appear in the partner's open thread with no
-  // reload — the fan-out confirmWindow was missing.
-  await expect(recipPage.getByText(/Meeting confirmed/i)).toBeVisible({ timeout: 20_000 });
+  // The confirmation must appear in the partner's open view with no reload — the
+  // fan-out confirmWindow was missing. It lands in BOTH the thread bubble and the
+  // inbox preview; on mobile the inbox pane is display:hidden, so assert the
+  // VISIBLE occurrence (thread bubble on mobile, either on desktop).
+  await expect(recipPage.getByText(/Meeting confirmed/i).filter({ visible: true }).first())
+    .toBeVisible({ timeout: 20_000 });
 });

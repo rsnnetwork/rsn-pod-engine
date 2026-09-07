@@ -2,6 +2,7 @@ import { test, expect, chromium, Browser, BrowserContext, Page } from '@playwrig
 import { createTestUser, TestUser, pool } from '../helpers/auth';
 import { gotoRetry, cleanup, cleanupByPrefix, wait, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
+import { launchBrowser, contextOptions } from '../helpers/engine';
 
 // P1 — MATCH ACCEPT, DRIVEN ENTIRELY THROUGH THE UI (30 Jul 2026 evaluation).
 //
@@ -35,7 +36,7 @@ async function apiAs(u: TestUser, method: string, path: string, body?: unknown) 
 }
 
 async function openAs(u: TestUser, path = '/messages', viewport = { width: 390, height: 844 }): Promise<Page> {
-  const ctx = await browser.newContext({ viewport });
+  const ctx = await browser.newContext(contextOptions(viewport));
   await ctx.addInitScript((t: { a: string; r: string }) => {
     localStorage.setItem('rsn_access', t.a); localStorage.setItem('rsn_refresh', t.r);
   }, { a: u.accessToken, r: u.refreshToken });
@@ -63,7 +64,7 @@ test.beforeAll(async () => {
   // who-is-writing-to-you header assertion below needs a real-looking
   // title on the sender, so set one explicitly for just this fixture.
   await pool.query(`UPDATE users SET job_title = $1 WHERE id = $2`, ['Senior React Developer', sender.id]);
-  browser = await chromium.launch({ headless: false });
+  browser = await launchBrowser();
 });
 
 test.afterAll(async () => {

@@ -2,6 +2,7 @@ import { test, expect, chromium, Browser, BrowserContext, Page } from '@playwrig
 import { createTestUser, TestUser, pool } from '../helpers/auth';
 import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
+import { launchBrowser, contextOptions } from '../helpers/engine';
 
 // MEETING REQUESTS FROM THE BELL + LINKS IN MESSAGES (4 Sep 2026, Ali).
 //
@@ -31,7 +32,7 @@ async function apiAs(u: TestUser, method: string, path: string, body?: unknown) 
 }
 
 async function openAs(u: TestUser, path: string, viewport = { width: 390, height: 844 }): Promise<Page> {
-  const ctx = await browser.newContext({ viewport });
+  const ctx = await browser.newContext(contextOptions(viewport));
   await ctx.addInitScript((t: { a: string; r: string }) => {
     localStorage.setItem('rsn_access', t.a); localStorage.setItem('rsn_refresh', t.r);
   }, { a: u.accessToken, r: u.refreshToken });
@@ -50,7 +51,7 @@ test.beforeAll(async () => {
   recipient = await createTestUser('mrbellrecipient');
   decliner = await createTestUser('mrbelldecliner');
   await pool.query(`UPDATE users SET display_name = 'Bell Sender' WHERE id = $1`, [sender.id]);
-  browser = await chromium.launch({ headless: false });
+  browser = await launchBrowser();
 });
 
 test.afterAll(async () => {

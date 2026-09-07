@@ -1,4 +1,4 @@
-import { test, expect, chromium } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import type { Browser } from '@playwright/test';
 import { Pool } from 'pg';
 import jwt from 'jsonwebtoken';
@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { config as dotenvConfig } from 'dotenv';
 import path from 'node:path';
 import { APP } from '../helpers/live-ui';
+import { launchBrowser, contextOptions, engineLabel } from '../helpers/engine';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 7 Sep 2026 — Stefan's REASON test: the sign-in link "did not work on the first
@@ -66,8 +67,9 @@ test.describe('magic link login survives a second tab + stale tokens (Stefan 7 S
         [email, crypto.createHash('sha256').update(linkToken).digest('hex')],
       );
 
-      browser = await chromium.launch();
-      const ctx = await browser.newContext();
+      console.log(`[magic-link-two-tabs] engine=${engineLabel()} app=${APP}`);
+      browser = await launchBrowser();
+      const ctx = await browser.newContext(contextOptions());
 
       // When running against a protected Vercel preview, prime the context with
       // the share cookie once (E2E_VERCEL_SHARE from get_access_to_vercel_url).
