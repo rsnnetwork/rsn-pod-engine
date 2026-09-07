@@ -81,6 +81,10 @@ const countExpr = (agent: string, negate: boolean) => `
       AND ${negate ? 'NOT EXISTS' : 'EXISTS'} (
         SELECT 1 FROM user_pokes p
          WHERE p.status <> 'declined'
+           -- 7 Sep 2026 (Ali): "already asked" is PER-AGENT. A request sent
+           -- through another agent must NOT mark this agent's matches as asked;
+           -- a brand-new agent shows those people as fresh potential matches.
+           AND p.agent_id = ${agent}.id
            AND ((p.sender_id = ${agent}.user_id AND p.recipient_id = m.candidate_user_id)
              OR (p.sender_id = m.candidate_user_id AND p.recipient_id = ${agent}.user_id))))`;
 

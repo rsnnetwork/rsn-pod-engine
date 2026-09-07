@@ -218,6 +218,9 @@ describe('an agent card accounts for everyone inside it', () => {
     expect(sql).toMatch(/AND EXISTS \(\s*SELECT 1 FROM user_pokes p/);
     // A decline hides the person entirely, so it counts on neither side.
     expect((sql.match(/p\.status <> 'declined'/g) ?? []).length).toBe(2);
+    // 7 Sep 2026 — both sides are scoped to THIS agent's pokes, so "already
+    // asked" is per-agent (a new agent shows shared people as fresh matches).
+    expect((sql.match(/p\.agent_id = a\.id/g) ?? []).length).toBe(2);
   });
 
   it('carries both counts back from a status change too', async () => {
