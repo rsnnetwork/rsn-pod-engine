@@ -54,7 +54,8 @@ const CANDIDATE_COLUMNS = `
   u.what_i_care_about AS "whatICareAbout",
   u.goals, u.interests, u.my_intent AS "myIntent",
   u.who_i_want_to_meet AS "whoIWantToMeet",
-  u.why_i_want_to_meet AS "whyIWantToMeet"`;
+  u.why_i_want_to_meet AS "whyIWantToMeet",
+  u.industry, u.bio, u.location`;
 
 /**
  * Who this agent may surface. Global exclusions (already met, blocked either
@@ -110,7 +111,7 @@ async function loadCandidatesForAgent(ownerId: string): Promise<IntentProfile[]>
  * where a scoring hiccup must not break the request that triggered it.
  */
 export async function recomputeAgent(agent: {
-  id: string; userId: string; wantText: string; label: string;
+  id: string; userId: string; wantText: string; label: string; matchingTags?: string[] | null;
 }): Promise<number> {
   try {
     if (!agent.wantText.trim()) {
@@ -118,7 +119,11 @@ export async function recomputeAgent(agent: {
       return 0;
     }
     const candidates = await loadCandidatesForAgent(agent.userId);
-    const all = candidates.map(c => ({ c, fit: scoreWants([agent.wantText], c) }));
+    // W4 recall: score against the want text AND the structured tags (W3 stores
+    // industries/stage/seniority there), so a manufacturing want counts even
+    // when the label alone is a bare designation.
+    const wants = [agent.wantText, ...(agent.matchingTags ?? [])];
+    const all = candidates.map(c => ({ c, fit: scoreWants(wants, c) }));
     const fresh = all
       .filter(x => x.fit.score >= MATCH_THRESHOLD)
       .sort((a, b) => b.fit.score - a.fit.score)
@@ -178,7 +183,7 @@ export async function scoreNewcomerAgainstAgents(
     for (const a of agents) {
       if (a.userId === newUserId) continue;
       if (!a.wantText.trim()) continue;
-      const fit = scoreWants([a.wantText], profile);
+      const fit = scoreWants([a.wantText, ...(a.matchingTags ?? [])], profile);
       if (fit.score < MATCH_THRESHOLD) continue;
 
       // Respect the same exclusions a full rescore would apply.

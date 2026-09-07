@@ -20,6 +20,7 @@
 import * as agentRepo from './agent.repo';
 import { recomputeAgent } from './agent-matching.service';
 import { designationsWanted, ROLE_TAXONOMY } from './intent-signals';
+import { expandWantTags } from './want-synonyms';
 import logger from '../../config/logger';
 import type { MatchingAgent } from './agent.repo';
 
@@ -155,7 +156,16 @@ export function planFirstAgents(source: FirstAgentSource, existingLabels: string
   return bases
     .filter(b => !held.has(b.label.toLowerCase()))
     .slice(0, MAX_FIRST_AGENTS)
-    .map((b, i) => ({ ...b, matchingTags: tags, status: i === 0 ? 'active' as const : 'paused' as const }));
+    .map((b, i) => ({
+      ...b,
+      // W4: store the structured tags PLUS high-confidence synonyms (zero-cost,
+      // no LLM) so the scorer — which reads matching_tags — matches related
+      // meaning, not just the exact words. Only when there ARE structured tags;
+      // a generic "People I want to meet" agent carries none, so it stays empty
+      // rather than storing its own label as noise.
+      matchingTags: tags.length ? expandWantTags([...tags, b.label]) : [],
+      status: i === 0 ? 'active' as const : 'paused' as const,
+    }));
 }
 
 /**

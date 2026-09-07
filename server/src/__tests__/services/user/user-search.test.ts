@@ -48,20 +48,32 @@ describe('searchMembers', () => {
     expect(sqlOf()).toMatch(/blocked_id = \$1/);
   });
 
-  it('puts a name match first: someone searching "Claus" means the person, not a company', async () => {
+  it('puts a whole-term name match first: someone searching "Claus" means the person, not a company', async () => {
     await searchMembers('me', 'claus', 20);
-    expect(sqlOf()).toMatch(/ORDER BY[\s\S]*display_name ILIKE \$2\) DESC/);
+    // The whole-term param position now floats after the per-token params.
+    expect(sqlOf()).toMatch(/ORDER BY[\s\S]*display_name ILIKE \$\d+\) DESC/);
+  });
+
+  it('matches EVERY word across widened columns (W4 recall)', async () => {
+    await searchMembers('me', 'software engineer', 20);
+    const sql = sqlOf();
+    expect(sql).toMatch(/industry ILIKE/);
+    expect(sql).toMatch(/expertise_text ILIKE/);
+    // Two tokens → two AND-joined clauses.
+    expect((sql.match(/u\.display_name ILIKE \$\d+ OR/g) || []).length).toBe(2);
   });
 
   it('caps the result set however large a limit is asked for', async () => {
     await searchMembers('me', 'claus', 5000);
-    const params = mockQuery.mock.calls[0][1];
-    expect(params[2]).toBeLessThanOrEqual(50);
+    const params = mockQuery.mock.calls[0][1] as unknown[];
+    // The limit is the LAST bound param.
+    expect(params[params.length - 1]).toBeLessThanOrEqual(50);
   });
 
   it('defaults a missing or nonsense limit to something sane', async () => {
     await searchMembers('me', 'claus', 0);
-    expect(mockQuery.mock.calls[0][1][2]).toBeGreaterThan(0);
+    const params = mockQuery.mock.calls[0][1] as unknown[];
+    expect(params[params.length - 1] as number).toBeGreaterThan(0);
   });
 
   it('returns nothing for a blank or one-character query, without touching the db', async () => {

@@ -41,6 +41,12 @@ export interface IntentProfile {
   myIntent: string | null;
   whoIWantToMeet: string | null;
   whyIWantToMeet: string | null;
+  // 7 Sep 2026 (W4): the recall gap. A candidate's industry/bio/location were
+  // never loaded or scored, so "manufacturing founders" could not find someone
+  // whose industry is literally "Manufacturing".
+  industry?: string | null;
+  bio?: string | null;
+  location?: string | null;
 }
 
 export interface PlatformMatch {
@@ -79,6 +85,9 @@ function offerSources(p: IntentProfile): Array<string | null | undefined> {
     flatten(p.professionalRole), p.jobTitle, p.company,
     p.expertiseText, p.whatICanHelpWith, p.whatICareAbout,
     flatten(p.interests),
+    // W4 recall: who they are also lives in these fields — an industry match
+    // ("manufacturing") or a self-description in the bio should count.
+    p.industry, p.bio, p.location,
   ];
 }
 
@@ -256,7 +265,8 @@ const PROFILE_COLUMNS = `
   u.what_i_care_about AS "whatICareAbout",
   u.goals, u.interests, u.my_intent AS "myIntent",
   u.who_i_want_to_meet AS "whoIWantToMeet",
-  u.why_i_want_to_meet AS "whyIWantToMeet"`;
+  u.why_i_want_to_meet AS "whyIWantToMeet",
+  u.industry, u.bio, u.location`;
 
 async function loadProfile(userId: string): Promise<(IntentProfile & { onboardingCompleted: boolean }) | null> {
   const r = await query<IntentProfile & { onboardingCompleted: boolean }>(

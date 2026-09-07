@@ -17,6 +17,7 @@ import { authenticate } from '../middleware/auth';
 import * as agentRepo from '../services/matching/agent.repo';
 import * as agentMatching from '../services/matching/agent-matching.service';
 import * as platformMatch from '../services/matching/platform-match.service';
+import { expandWantTags } from '../services/matching/want-synonyms';
 import { fanoutUserEntity } from '../realtime/fanout';
 import logger from '../config/logger';
 import { ApiResponse } from '@rsn/shared';
@@ -68,9 +69,14 @@ router.get('/', authenticate, async (req: Request, res: Response, next: NextFunc
 // POST /agents — create, then rescore in the background.
 router.post('/', authenticate, validate(createSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
+    // W4: seed high-confidence synonyms (zero-cost) so a manually-created agent
+    // matches related meaning too. The scorer reads matching_tags.
+    const wantText: string = req.body.wantText ?? '';
+    const matchingTags = expandWantTags([wantText, req.body.label, ...wantText.split(/\s+/)]);
     const agent = await agentRepo.createAgent(req.user!.userId, {
       label: req.body.label,
-      wantText: req.body.wantText,
+      wantText,
+      matchingTags,
     });
     res.status(201).json({ success: true, data: agent } as ApiResponse);
     rescoreInBackground(agent);

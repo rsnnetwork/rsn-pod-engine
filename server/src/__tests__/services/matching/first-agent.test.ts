@@ -97,8 +97,10 @@ describe('createFirstAgents', () => {
     expect(inputs[0].wantText).toBe('founders, manufacturing, service businesses');
     expect(inputs[1].label).toBe('Business owners');
     expect(inputs[1].wantText).toBe('business owners, manufacturing, service businesses');
-    // Each agent keeps the structured want-side slice for later use.
-    expect(inputs[0].matchingTags).toEqual(['founder', 'owner', 'manufacturing', 'service businesses']);
+    // Each agent keeps the structured want-side slice, plus high-confidence
+    // synonyms (W4) — so it contains the originals and related terms.
+    expect(inputs[0].matchingTags).toEqual(expect.arrayContaining(['founder', 'owner', 'manufacturing', 'service businesses']));
+    expect(inputs[0].matchingTags).toEqual(expect.arrayContaining(['entrepreneur', 'production'])); // synonyms of founder / manufacturing
   });
 
   it('does not repeat a qualifier already present in the member\'s sentence', async () => {
