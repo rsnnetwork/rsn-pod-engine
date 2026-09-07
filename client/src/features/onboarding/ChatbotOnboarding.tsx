@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowUp, Check, ChevronDown, Pencil, RotateCcw, Sparkles } from 'lucide-react';
+import { ArrowUp, Camera, Check, ChevronDown, Pencil, RotateCcw, Sparkles } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { Button } from '@/components/ui/Button';
 import api from '@/lib/api';
+import Avatar from '@/components/ui/Avatar';
 import {
   type OnboardingMessage,
   type OnboardingKnownProfile,
@@ -318,6 +319,55 @@ export default function ChatbotOnboarding() {
   const redirect = searchParams.get('redirect') || '/';
   const { user, checkSession } = useAuthStore();
   const { addToast } = useToastStore();
+
+  // 7 Sep 2026 (Ali): the card carries a photo. LinkedIn or Gravatar may have
+  // filled it already; otherwise one tap fetches the Google photo (through
+  // Google's own consent screen) or a file can be added right here.
+  const [photoBusy, setPhotoBusy] = useState(false);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const photo = params.get('photo');
+    if (!photo) return;
+    params.delete('photo');
+    const rest = params.toString();
+    window.history.replaceState({}, '', `${window.location.pathname}${rest ? `?${rest}` : ''}`);
+    if (photo === 'done') { void checkSession(); addToast('Photo added from your Google account.', 'success'); }
+    else if (photo === 'none') addToast('That Google account has no photo. You can add one here.', 'info');
+    else if (photo === 'cancelled') addToast('No problem, you can add a photo any time.', 'info');
+    else addToast('Could not fetch the Google photo. You can add one here.', 'error');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  async function useGooglePhoto() {
+    if (photoBusy) return;
+    setPhotoBusy(true);
+    try {
+      const res = await api.post('/auth/google/photo-state', { redirect: '/onboarding' });
+      window.location.href = res.data?.data?.url;
+    } catch {
+      setPhotoBusy(false);
+      addToast('Google sign-in is not available right now.', 'error');
+    }
+  }
+  async function uploadPhoto(file: File) {
+    if (!file.type.startsWith('image/')) { addToast('Please choose an image.', 'error'); return; }
+    if (file.size > 5 * 1024 * 1024) { addToast('Image must be under 5MB.', 'error'); return; }
+    setPhotoBusy(true);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result as string);
+        r.onerror = () => reject(new Error('read failed'));
+        r.readAsDataURL(file);
+      });
+      await api.put('/users/me', { avatarUrl: dataUrl });
+      await checkSession();
+      addToast('Photo added.', 'success');
+    } catch {
+      addToast('Could not add that photo.', 'error');
+    } finally {
+      setPhotoBusy(false);
+    }
+  }
 
   const [stage, setStage] = useState<Stage>('loading');
   const [known, setKnown] = useState<OnboardingKnownProfile | null>(null);
@@ -979,6 +1029,42 @@ export default function ChatbotOnboarding() {
               <p className="mt-2 text-sm text-gray-500">
                 Good to have you here. Here is what we have so far. Is it right?
               </p>
+            </div>
+            <div className="flex w-full items-center gap-4 rounded-2xl border border-gray-200 bg-white p-4 text-left shadow-sm" data-testid="card-photo">
+              <Avatar src={user?.avatarUrl || undefined} name={(draft.name || firstName || 'You').trim()} size="xl" />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Photo</p>
+                <p className="mt-0.5 text-sm text-gray-600">
+                  {user?.avatarUrl ? 'Looks good. You can change it any time.' : 'No photo yet. People reply more to a face.'}
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={useGooglePhoto}
+                    disabled={photoBusy}
+                    className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-gray-300 px-3 text-sm font-medium text-[#1a1a2e] hover:border-rsn-red disabled:opacity-50"
+                    data-testid="use-google-photo"
+                  >
+                    <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden>
+                      <path fill="#4285F4" d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.9h5.4a4.6 4.6 0 0 1-2 3v2.5h3.2c1.9-1.7 3-4.3 3-7.4z" />
+                      <path fill="#34A853" d="M12 22c2.7 0 5-.9 6.6-2.4l-3.2-2.5c-.9.6-2 1-3.4 1-2.6 0-4.8-1.8-5.6-4.1H3.1v2.6A10 10 0 0 0 12 22z" />
+                      <path fill="#FBBC05" d="M6.4 14a6 6 0 0 1 0-3.9V7.5H3.1a10 10 0 0 0 0 9l3.3-2.5z" />
+                      <path fill="#EA4335" d="M12 6c1.5 0 2.8.5 3.8 1.5l2.8-2.8A10 10 0 0 0 3.1 7.5L6.4 10c.8-2.3 3-4 5.6-4z" />
+                    </svg>
+                    {user?.avatarUrl ? 'Use Google photo instead' : 'Use my Google photo'}
+                  </button>
+                  <label className={`inline-flex min-h-[44px] cursor-pointer items-center gap-1.5 rounded-xl border border-gray-300 px-3 text-sm font-medium text-[#1a1a2e] hover:border-rsn-red ${photoBusy ? 'pointer-events-none opacity-50' : ''}`}>
+                    <Camera className="h-4 w-4" /> {user?.avatarUrl ? 'Change photo' : 'Add a photo'}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      aria-label="Add a photo"
+                      onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadPhoto(f); e.target.value = ''; }}
+                    />
+                  </label>
+                </div>
+              </div>
             </div>
             <div className="w-full rounded-2xl border border-gray-200 bg-white p-4 text-left shadow-sm">
               <ConfirmRow label="Name" value={draft.name} editing={editing} placeholder="Your name" guessed={known?.nameGuessed} onChange={(v) => setDraft((d) => ({ ...d, name: v }))} />

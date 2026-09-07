@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { record as recordStageEvent } from './stage-events.repo';
 // ─── LinkedIn Avatar Capture + Serving ───────────────────────────────────────
 //
 // LinkedIn's own CDN photo URLs expire (they're signed, time-limited). We
@@ -72,6 +74,34 @@ export async function getAvatarBlob(userId: string): Promise<{ blob: Buffer; con
 export async function hasAvatar(userId: string): Promise<boolean> {
   const r = await query<{ has: boolean }>(`SELECT avatar_blob IS NOT NULL AS has FROM users WHERE id = $1`, [userId]);
   return !!r.rows[0]?.has;
+}
+
+/** Gravatar keys public photos by the SHA-256 of the lowercased, trimmed
+ *  email; d=404 asks for "no image" instead of a generated one. */
+export function gravatarUrl(email: string): string {
+  const hash = createHash('sha256').update(email.trim().toLowerCase()).digest('hex');
+  return `https://www.gravatar.com/avatar/${hash}?s=512&d=404`;
+}
+
+/**
+ * 7 Sep 2026 (Ali): a member with no LinkedIn photo may still have a public
+ * Gravatar for their email. Tried only while they have no photo; a 404 from
+ * Gravatar simply means none. Never throws.
+ */
+export async function tryGravatar(userId: string): Promise<boolean> {
+  try {
+    if (await hasAvatar(userId)) return false;
+    const r = await query<{ email: string | null }>(`SELECT email FROM users WHERE id = $1`, [userId]);
+    const email = r.rows[0]?.email;
+    if (!email) return false;
+    const startedAt = Date.now();
+    const captured = await captureAvatar(userId, gravatarUrl(email));
+    if (captured) recordStageEvent(userId, 'photo_captured', { source: 'gravatar' }, Date.now() - startedAt).catch(() => {});
+    return captured;
+  } catch (err) {
+    logger.warn({ err, userId }, 'gravatar: attempt failed (non-fatal)');
+    return false;
+  }
 }
 
 /** SSRF guard (see the trust-model paragraph in the header): null when the

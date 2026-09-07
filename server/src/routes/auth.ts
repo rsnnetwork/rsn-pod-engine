@@ -9,6 +9,9 @@ import { ApiResponse } from '@rsn/shared';
 import config from '../config';
 import logger from '../config/logger';
 import { record as recordStageEvent } from '../services/onboarding/stage-events.repo';
+import {
+  mintPhotoLinkToken, readPhotoLinkToken, safeRedirectPath, buildOauthState, parseOauthState, applyGooglePhoto,
+} from '../services/identity/google-photo-link';
 
 const router = Router();
 
@@ -179,7 +182,13 @@ router.get(
     }
 
     const inviteCode = (req.query.inviteCode as string) || '';
-    const state = Buffer.from(JSON.stringify({ inviteCode })).toString('base64url');
+    // 7 Sep 2026: "Use my Google photo" from the onboarding card. The signed
+    // token names the member; the callback attaches the picture to them.
+    const photoLinkUserId = readPhotoLinkToken(req.query.photo as string | undefined) ?? undefined;
+    const state = buildOauthState({
+      inviteCode,
+      ...(photoLinkUserId ? { photoLinkUserId, redirect: safeRedirectPath(req.query.redirect as string | undefined) } : {}),
+    });
 
     const params = new URLSearchParams({
       client_id: config.googleClientId,
@@ -195,21 +204,36 @@ router.get(
   }
 );
 
+// 7 Sep 2026: the onboarding card's "Use my Google photo". Returns the URL
+// that walks the signed-in member through Google's consent and straight back.
+router.post('/google/photo-state', authenticate, (req: Request, res: Response) => {
+  if (!config.googleClientId) {
+    res.status(501).json({ success: false, error: { message: 'Google login is not configured' } });
+    return;
+  }
+  const redirect = safeRedirectPath(typeof req.body?.redirect === 'string' ? req.body.redirect : undefined);
+  const token = mintPhotoLinkToken(req.user!.userId);
+  const url = `${config.apiBaseUrl}/api/auth/google?photo=${encodeURIComponent(token)}&redirect=${encodeURIComponent(redirect)}`;
+  res.json({ success: true, data: { url } } satisfies ApiResponse);
+});
+
 router.get(
   '/google/callback',
   async (req: Request, res: Response) => {
     const { code, state } = req.query as Record<string, string>;
+    const oauthState = parseOauthState(state);
+    const inviteCode = oauthState.inviteCode || '';
+    // Photo link: the member is already signed in; every exit goes back to
+    // where they were, with the outcome in the query string.
+    const photoReturn = oauthState.photoLinkUserId ? `${config.clientUrl}${safeRedirectPath(oauthState.redirect)}` : null;
+    const fail = (errorCode: string) =>
+      res.redirect(photoReturn ? `${photoReturn}?photo=failed` : `${config.clientUrl}/login?error=${errorCode}`);
 
     if (!code) {
-      res.redirect(`${config.clientUrl}/login?error=google_auth_failed`);
+      if (photoReturn) { res.redirect(`${photoReturn}?photo=cancelled`); return; }
+      fail('google_auth_failed');
       return;
     }
-
-    let inviteCode = '';
-    try {
-      const decoded = JSON.parse(Buffer.from(state || '', 'base64url').toString());
-      inviteCode = decoded.inviteCode || '';
-    } catch { /* ignore bad state */ }
 
     try {
       // Exchange authorization code for tokens
@@ -228,7 +252,7 @@ router.get(
 
       if (!tokenData.access_token) {
         logger.warn({ tokenData }, 'Google OAuth: failed to get access token');
-        res.redirect(`${config.clientUrl}/login?error=google_auth_failed`);
+        fail('google_auth_failed');
         return;
       }
 
@@ -239,7 +263,15 @@ router.get(
       const profile = await userInfoRes.json() as { email: string; name?: string; given_name?: string; family_name?: string; picture?: string };
 
       if (!profile.email) {
-        res.redirect(`${config.clientUrl}/login?error=google_auth_failed`);
+        fail('google_auth_failed');
+        return;
+      }
+
+      // Photo link: attach the picture to the signed-in member and go back.
+      // No account lookup by email, no new session.
+      if (oauthState.photoLinkUserId && photoReturn) {
+        const outcome = await applyGooglePhoto(oauthState.photoLinkUserId, profile.picture);
+        res.redirect(`${photoReturn}?photo=${outcome}`);
         return;
       }
 
@@ -262,7 +294,7 @@ router.get(
     } catch (err: any) {
       logger.error({ err }, 'Google OAuth callback error');
       const errorCode = err?.code === 'REGISTRATION_BLOCKED' ? 'REGISTRATION_BLOCKED' : 'google_auth_failed';
-      res.redirect(`${config.clientUrl}/login?error=${errorCode}`);
+      fail(errorCode);
     }
   }
 );

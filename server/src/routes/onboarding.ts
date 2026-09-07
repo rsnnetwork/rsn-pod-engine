@@ -29,6 +29,7 @@ import { inferKnownProfile } from '../services/onboarding/known';
 import * as enrichment from '../services/onboarding/enrichment.service';
 import * as enrichRepo from '../services/onboarding/enrichment.repo';
 import { runEnrichment, isFreshCacheHit } from '../services/onboarding/enrichment.orchestrator';
+import { tryGravatar } from '../services/onboarding/avatar.service';
 import { resolveEnrichProvider, statusFromConfidence } from '../services/onboarding/providers/registry';
 import { record as recordStageEvent, sanitizeErrorMessage } from '../services/onboarding/stage-events.repo';
 import logger from '../config/logger';
@@ -189,6 +190,9 @@ router.get(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const known = await inferKnownProfile(req, req.user!.userId);
+      // 7 Sep 2026: a public Gravatar for their email, for members who never
+      // give a LinkedIn URL. Skipped at once when they already have a photo.
+      tryGravatar(req.user!.userId).catch(() => {});
       const response: ApiResponse = { success: true, data: known };
       res.json(response);
     } catch (err) {

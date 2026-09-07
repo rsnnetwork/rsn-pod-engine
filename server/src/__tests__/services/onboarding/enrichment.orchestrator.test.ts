@@ -41,6 +41,7 @@ jest.mock('../../../services/onboarding/avatar.service', () => ({
   __esModule: true,
   captureAvatar: jest.fn(),
   hasAvatar: jest.fn(),
+  tryGravatar: jest.fn().mockResolvedValue(false),
 }));
 
 jest.mock('../../../services/onboarding/stage-events.repo', () => ({

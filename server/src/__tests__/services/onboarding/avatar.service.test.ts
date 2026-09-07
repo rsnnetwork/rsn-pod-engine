@@ -1,3 +1,4 @@
+jest.mock('../../../services/onboarding/stage-events.repo', () => ({ __esModule: true, record: jest.fn().mockResolvedValue(undefined) }));
 // ─── Avatar capture/serve — service tests ────────────────────────────────────
 // captureAvatar downloads a LinkedIn CDN photo once and stores it so we never
 // depend on LinkedIn's expiring URL again. Guards: 10s timeout, max 2MB
@@ -27,7 +28,7 @@ jest.mock('../../../config/logger', () => ({
 }));
 
 import logger from '../../../config/logger';
-import { avatarUrlFor, captureAvatar, getAvatarBlob } from '../../../services/onboarding/avatar.service';
+import { avatarUrlFor, captureAvatar, getAvatarBlob, gravatarUrl, tryGravatar } from '../../../services/onboarding/avatar.service';
 
 const USER_ID = 'user-abc';
 const PHOTO_URL = 'https://cdn.example.com/jane.jpg';
@@ -55,6 +56,28 @@ function mockImageResponse(status: number, contentType: string | null, bytes: Ui
     body,
   } as unknown as Response;
 }
+
+// 7 Sep 2026: Gravatar as the fallback when LinkedIn had no photo.
+describe('gravatar', () => {
+  it('builds the documented URL: sha256 of the trimmed, lowercased email, 404 when none', () => {
+    // Gravatar's own example: "MyEmailAddress@example.com " → 84059b07d4be67b806386c0aad8070a23f18836bbaae342275dc0a83414c32ee
+    expect(gravatarUrl(' MyEmailAddress@example.com ')).toBe('https://www.gravatar.com/avatar/84059b07d4be67b806386c0aad8070a23f18836bbaae342275dc0a83414c32ee?s=512&d=404');
+  });
+
+  it('does nothing for a member who already has a photo', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ has: true }] });
+    const fetchSpy = jest.spyOn(globalThis, 'fetch');
+    expect(await tryGravatar(USER_ID)).toBe(false);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('a 404 from Gravatar means no photo: false, nothing written, no throw', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ has: false }] }).mockResolvedValueOnce({ rows: [{ email: 'nobody@example.com' }] });
+    jest.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, status: 404, body: { cancel: async () => {} } } as any);
+    expect(await tryGravatar(USER_ID)).toBe(false);
+    expect(mockQuery.mock.calls.some(c => /UPDATE users SET avatar_blob/.test(c[0] as string))).toBe(false);
+  });
+});
 
 describe('captureAvatar', () => {
   beforeEach(() => {

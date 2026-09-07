@@ -46,7 +46,7 @@ import {
 import { getCachedEnrichment, getEnrichmentState, saveEnrichedCandidate, setEnrichmentState } from './enrichment.repo';
 import { resolveEnrichProvider, runProvider, statusFromConfidence, type EnrichProviderName } from './providers/registry';
 import type { ProviderOutcome } from './providers/provider.types';
-import { captureAvatar, hasAvatar } from './avatar.service';
+import { captureAvatar, hasAvatar, tryGravatar } from './avatar.service';
 import { record as recordStageEvent, type StageEventStage, sanitizeErrorMessage } from './stage-events.repo';
 
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
@@ -266,11 +266,14 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
       // this branch never captured the photo the scrape had found. Same
       // capture as the live path below, only while they have no photo yet.
       const cachedPhoto = cached!.profile?.photoUrl ?? null;
+      // No LinkedIn photo in the cache: a public Gravatar for their email may exist.
+      if (!cachedPhoto) tryGravatar(userId).catch(() => {});
       if (cachedPhoto && !(await hasAvatar(userId).catch(() => true))) {
         const photoStartedAtMs = Date.now();
         captureAvatar(userId, cachedPhoto)
           .then((captured) => {
             recordStageEvent(userId, captured ? 'photo_captured' : 'photo_failed', { source: 'cache' }, Date.now() - photoStartedAtMs).catch(() => {});
+            if (!captured) tryGravatar(userId).catch(() => {});
           })
           .catch((err) => {
             logger.warn({ err, userId }, 'enrichment: captureAvatar (cached) rejected unexpectedly (non-fatal)');
@@ -344,18 +347,23 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
           .then((captured) => {
             const stage = captured ? 'photo_captured' : 'photo_failed';
             recordStageEvent(userId, stage, {}, Date.now() - photoStartedAtMs).catch(() => {});
+            if (!captured) tryGravatar(userId).catch(() => {});
           })
           .catch((err) => {
             logger.warn({ err, userId }, 'enrichment: captureAvatar rejected unexpectedly (non-fatal)');
             const reason = sanitizeErrorMessage(err instanceof Error ? err.message : 'unknown avatar capture error');
             recordStageEvent(userId, 'photo_failed', { reason }, Date.now() - photoStartedAtMs).catch(() => {});
           });
+      } else {
+        // The scrape had no photo at all: try a public Gravatar for their email.
+        tryGravatar(userId).catch(() => {});
       }
       logTerminal(userId, provider, kind, startedAtMs);
       return;
     }
 
     // Step 7: not_found / retry_exhausted / provider_error.
+    tryGravatar(userId).catch(() => {});
     const { status, error } = mapFailureOutcome(outcome);
     await writeState(userId, { status, error, source: provider });
     logTerminal(userId, provider, status, startedAtMs, error ? { reason: sanitizeErrorMessage(error) } : undefined);
