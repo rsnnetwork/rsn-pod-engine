@@ -47,19 +47,26 @@ export interface FirstAgentPlan {
 }
 
 /**
- * The designations a sentence asks for, in the order the member said them —
- * not taxonomy order, which would rank "founders" above the "business owners"
- * they mentioned first, and the cap below would then drop the wrong one.
+ * The designations a sentence asks for, the kind of person named most often
+ * first, ties in the order the member said them — not taxonomy order, which
+ * would rank "founders" above the "business owners" they mentioned first, and
+ * the cap below would then drop the wrong one.
+ *
+ * 7 Sep 2026 (Stefan): "…businesses with more than 20 employees, founders,
+ * founder, owner, operator" names owners and founders three times and the
+ * stray word once; what they repeat is what they mean.
  */
 function wantedInOrderSaid(text: string): Array<{ key: string; label: string }> {
   const t = text.toLowerCase();
   return designationsWanted(text)
     .map(w => {
       const bucket = ROLE_TAXONOMY.find(b => b.key === w.key);
-      const m = bucket ? (bucket.wants ?? bucket.is).exec(t) : null;
-      return { ...w, at: m ? m.index : Number.MAX_SAFE_INTEGER };
+      const re = bucket ? (bucket.wants ?? bucket.is) : null;
+      const first = re ? re.exec(t) : null;
+      const mentions = re ? (t.match(new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g')) || []).length : 0;
+      return { ...w, at: first ? first.index : Number.MAX_SAFE_INTEGER, mentions };
     })
-    .sort((a, b) => a.at - b.at)
+    .sort((a, b) => b.mentions - a.mentions || a.at - b.at)
     .map(({ key, label }) => ({ key, label }));
 }
 

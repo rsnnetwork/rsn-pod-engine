@@ -120,6 +120,17 @@ describe('createFirstAgents', () => {
     expect(created().map(c => c.status)).toEqual(['active', 'paused', 'paused', 'paused']);
   });
 
+  // 7 Sep 2026 (Stefan): what the member repeats is what they mean.
+  it('the kind of person named most often is the main agent; ties go to the first said', async () => {
+    await createFirstAgents('u-1', {
+      whoText: 'a designer, and above all founders, founders who have raised, founder types',
+      whyText: '',
+    });
+    expect(created().map(c => [c.label, c.status])).toEqual([
+      ['Founders', 'active'], ['Designers', 'paused'],
+    ]);
+  });
+
   it('searches the main agent immediately, so the member does not land on an empty page; drafts wait for resume', async () => {
     await createFirstAgents('u-1', { whoText: 'founders and investors', whyText: '' });
     expect(mockRecompute).toHaveBeenCalledTimes(1);
