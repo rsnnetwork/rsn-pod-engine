@@ -68,6 +68,16 @@ test.describe('magic link login survives a second tab + stale tokens (Stefan 7 S
 
       browser = await chromium.launch();
       const ctx = await browser.newContext();
+
+      // When running against a protected Vercel preview, prime the context with
+      // the share cookie once (E2E_VERCEL_SHARE from get_access_to_vercel_url).
+      const SHARE = process.env.E2E_VERCEL_SHARE || '';
+      if (SHARE) {
+        const primer = await ctx.newPage();
+        await primer.goto(`${APP}/?_vercel_share=${SHARE}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+        await primer.waitForTimeout(1500);
+        await primer.close();
+      }
       // Seed the stale pair (both legacy keys AND the new atomic key) before any
       // script runs, once per context.
       await ctx.addInitScript(([a, r]) => {
