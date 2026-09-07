@@ -65,11 +65,15 @@ test('the host reacts before it asks, keeps it short, never uses a dash, and the
     expect(reply, 'no em or en dash').not.toMatch(/[—–]/);
     expect(words(reply), `under the word budget: "${reply}"`).toBeLessThanOrEqual(32);
     const body = reply.replace(/<<READY>>/g, '');
-    expect((body.match(/?/g) || []).length, `one question at most: "${reply}"`).toBeLessThanOrEqual(1);
-    expect(body, `does not read the answer back: "${reply}"`).not.toMatch(/^s*(so you|you're |you are |you want |sounds like you|it sounds like)/i);
-    const q = body.split(/(?<=[.!])s+/).find(x => x.includes('?')) || '';
+    if (!ready) {
+    expect((body.match(/\?/g) || []).length, `exactly one question: "${reply}"`).toBe(1);
+    // A reaction of up to three words may lead; what follows must not read the answer back.
+    const afterReaction = body.replace(/^\s*[^.!?]{0,24}[.!]\s*/, '');
+    expect(afterReaction, `does not read the answer back: "${reply}"`).not.toMatch(/^\s*(so you|you're |you are |you want |sounds like|it sounds like)/i);
+    const q = body.split(/(?<=[.!])\s+/).find(x => x.includes('?')) || '';
     expect(words(q), `the question itself is short: "${q}"`).toBeLessThanOrEqual(18);
-    expect(q, `no alternatives inside the question: "${q}"`).not.toMatch(/or/i);
+    expect(q, `no alternatives inside the question: "${q}"`).not.toMatch(/\bor\b/i);
+    }
     if (ready) break;
   }
 
