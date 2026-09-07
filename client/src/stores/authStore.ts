@@ -22,6 +22,88 @@ interface AuthState {
   refreshAccessToken: () => Promise<void>;
   logout: () => Promise<void>;
   setTokens: (access: string, refresh: string) => void;
+  /** Adopt whatever tokens are in storage into memory WITHOUT writing them
+   *  back (used by cross-tab sync). Returns false if none present. */
+  adoptStoredTokens: () => boolean;
+}
+
+// ── Token storage (7 Sep 2026 — Stefan's test logout bug) ────────────────────
+// Tokens used to live in two localStorage keys (rsn_access, rsn_refresh) written
+// as two separate setItem calls. A second tab's `storage` listener fired on the
+// access-key change, read the not-yet-updated refresh key, and wrote the STALE
+// refresh back over the fresh one via setTokens(). Every refresh then 401'd
+// ("Invalid refresh token") and the user was silently logged out ~15 min into
+// the session. Now the pair lives under ONE key as a single atomic JSON write —
+// no torn (new-access / old-refresh) pair is observable — and cross-tab
+// listeners ADOPT into memory only, never writing tokens back.
+const TOKENS_KEY = 'rsn_tokens';
+const LEGACY_ACCESS = 'rsn_access';
+const LEGACY_REFRESH = 'rsn_refresh';
+const AUTH_PING = 'rsn_auth_completed_at';
+
+interface StoredTokens {
+  access: string;
+  refresh: string;
+}
+
+function readStoredTokens(): StoredTokens | null {
+  try {
+    const raw = localStorage.getItem(TOKENS_KEY);
+    if (raw) {
+      const t = JSON.parse(raw);
+      if (t && typeof t.access === 'string' && typeof t.refresh === 'string') {
+        return { access: t.access, refresh: t.refresh };
+      }
+    }
+  } catch {
+    /* malformed — fall through to legacy */
+  }
+  // Migrate the pre-fix two-key layout on first read.
+  const access = localStorage.getItem(LEGACY_ACCESS);
+  const refresh = localStorage.getItem(LEGACY_REFRESH);
+  if (access && refresh) {
+    const t = { access, refresh };
+    try {
+      localStorage.setItem(TOKENS_KEY, JSON.stringify(t));
+    } catch {
+      /* ignore quota errors */
+    }
+    return t;
+  }
+  return null;
+}
+
+function writeStoredTokens(t: StoredTokens): void {
+  // Canonical key first — its `storage` event is the one other tabs act on,
+  // and it is a single atomic value so no half-updated pair can be read.
+  localStorage.setItem(TOKENS_KEY, JSON.stringify(t));
+  // Mirror to the legacy keys so a rollback to the previous bundle keeps
+  // working. New bundles never READ these for auth.
+  localStorage.setItem(LEGACY_ACCESS, t.access);
+  localStorage.setItem(LEGACY_REFRESH, t.refresh);
+}
+
+function clearStoredTokens(): void {
+  localStorage.removeItem(TOKENS_KEY);
+  localStorage.removeItem(LEGACY_ACCESS);
+  localStorage.removeItem(LEGACY_REFRESH);
+}
+
+// Bumped whenever a NEW session is installed (verify / setTokens / refresh /
+// cross-tab adopt). checkSession() captures it at the start; if it has changed
+// by the time an in-flight check FAILS, a newer login superseded this check and
+// the failure must NOT clear auth. This closes the boot-checkSession-vs-verify
+// race that bounced Stefan to /login on the first click.
+let authEpoch = 0;
+
+// Distinguishes a DEFINITIVE rejection (refresh token truly dead → log out)
+// from a TRANSIENT failure (endpoint unreachable / 5xx → keep the session).
+class RefreshError extends Error {
+  definitive: boolean;
+  constructor(message: string, definitive: boolean) {
+    super(message);
+    this.definitive = definitive;
+  }
 }
 
 // ── Refresh mutex ──
@@ -32,9 +114,9 @@ interface AuthState {
 let refreshPromise: Promise<void> | null = null;
 
 // ── Proactive refresh timer ──
-// Instead of waiting for a 401 (which then needs recovery), refresh the access
-// token 2 minutes before it expires.  This eliminates nearly all 401s during
-// normal usage and keeps sessions alive silently.
+// Refresh the access token 2 minutes before it expires so normal usage never
+// sees a 401. Backgrounded tabs throttle/freeze setTimeout, so a visibilitychange
+// handler (bottom of file) is the safety net when the tab returns to the fore.
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** Decode the JWT payload (no verification — that's server-side) to read exp. */
@@ -70,176 +152,202 @@ function clearRefreshTimer() {
   }
 }
 
-export const useAuthStore = create<AuthState>((set, get) => ({
-  user: null,
-  accessToken: localStorage.getItem('rsn_access') || null,
-  refreshToken: localStorage.getItem('rsn_refresh') || null,
-  isAuthenticated: !!localStorage.getItem('rsn_access'),
-  isLoading: true,
-  isSessionChecked: false,
+export const useAuthStore = create<AuthState>((set, get) => {
+  const initial = readStoredTokens();
 
-  login: async (email: string, clientUrl?: string, inviteCode?: string) => {
-    const { data } = await api.post('/auth/magic-link', { email, clientUrl, inviteCode });
-    return data;
-  },
-
-  verify: async (token: string) => {
-    const { data } = await api.post('/auth/verify', { token });
-    const { accessToken, refreshToken } = data.data;
-    localStorage.setItem('rsn_access', accessToken);
-    localStorage.setItem('rsn_refresh', refreshToken);
+  /** Install a freshly-issued pair: single atomic write, bump the epoch, update
+   *  memory, and (re)arm the proactive refresh. The ONLY path that writes
+   *  tokens to storage. */
+  const installTokens = (accessToken: string, refreshToken: string) => {
+    writeStoredTokens({ access: accessToken, refresh: refreshToken });
+    authEpoch += 1;
     set({ accessToken, refreshToken, isAuthenticated: true });
     scheduleProactiveRefresh(accessToken);
-    await get().checkSession();
-  },
+  };
 
-  setTokensAndLoad: async (accessToken: string, refreshToken: string) => {
-    localStorage.setItem('rsn_access', accessToken);
-    localStorage.setItem('rsn_refresh', refreshToken);
-    set({ accessToken, refreshToken, isAuthenticated: true });
-    scheduleProactiveRefresh(accessToken);
-    await get().checkSession();
-  },
+  return {
+    user: null,
+    accessToken: initial?.access ?? null,
+    refreshToken: initial?.refresh ?? null,
+    isAuthenticated: !!initial,
+    isLoading: true,
+    isSessionChecked: false,
 
-  checkSession: async () => {
-    const token = get().accessToken;
-    if (!token) {
-      set({ isLoading: false, isAuthenticated: false, user: null, isSessionChecked: true });
-      return;
-    }
-    try {
-      const { data } = await api.get('/auth/session', { timeout: 15000 });
-      set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true });
-      // Schedule proactive refresh if we haven't already (e.g. app init)
-      scheduleProactiveRefresh(token);
-    } catch (err: any) {
-      if (err?.response?.status === 401) {
-        // Token might be expired but refreshable — try refreshing before giving up.
-        // This prevents transient 401s (server cold-start, Render restart) from
-        // clearing auth state and forcing users to re-login unnecessarily.
-        try {
-          await get().refreshAccessToken();
-          // Refresh succeeded — retry checkSession with new token
-          const { data } = await api.get('/auth/session', { timeout: 15000 });
-          set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true });
-          scheduleProactiveRefresh(get().accessToken!);
-        } catch {
-          // Refresh also failed — token is genuinely dead, clear auth
-          set({ isLoading: false, isAuthenticated: false, user: null, isSessionChecked: true });
-          clearRefreshTimer();
-        }
-      } else {
-        // Network errors, timeouts, 5xx — keep user logged in. Still flip
-        // isSessionChecked so the socket layer stops waiting; the cached
-        // token is the best we have until the next attempt.
-        set({ isLoading: false, isSessionChecked: true });
+    login: async (email: string, clientUrl?: string, inviteCode?: string) => {
+      const { data } = await api.post('/auth/magic-link', { email, clientUrl, inviteCode });
+      return data;
+    },
+
+    verify: async (token: string) => {
+      const { data } = await api.post('/auth/verify', { token });
+      const { accessToken, refreshToken } = data.data;
+      installTokens(accessToken, refreshToken);
+      await get().checkSession();
+    },
+
+    setTokensAndLoad: async (accessToken: string, refreshToken: string) => {
+      installTokens(accessToken, refreshToken);
+      await get().checkSession();
+    },
+
+    adoptStoredTokens: () => {
+      const t = readStoredTokens();
+      if (!t) return false;
+      // No write — the tokens are already in storage (another tab put them
+      // there). Just bring them into this tab's memory and re-arm the timer.
+      authEpoch += 1;
+      set({ accessToken: t.access, refreshToken: t.refresh, isAuthenticated: true });
+      scheduleProactiveRefresh(t.access);
+      return true;
+    },
+
+    checkSession: async () => {
+      const token = get().accessToken;
+      if (!token) {
+        set({ isLoading: false, isAuthenticated: false, user: null, isSessionChecked: true });
+        return;
       }
-    }
-  },
-
-  refreshAccessToken: async () => {
-    // Mutex: if a refresh is already in-flight, piggyback on it
-    if (refreshPromise) return refreshPromise;
-
-    refreshPromise = (async () => {
+      const epochAtStart = authEpoch;
       try {
-        // CRITICAL: Read from localStorage, NOT Zustand state.
-        // Another tab may have already refreshed (token rotation) and stored
-        // the new token in localStorage.  Zustand state is per-tab and can be stale.
-        const refresh = localStorage.getItem('rsn_refresh') || get().refreshToken;
-        if (!refresh) throw new Error('No refresh token');
-
-        let tokens: { accessToken: string; refreshToken: string };
-        try {
-          const { data } = await api.post('/auth/refresh', { refreshToken: refresh });
-          tokens = data.data;
-        } catch (firstErr: any) {
-          // If we got 401 "revoked", another tab may have rotated the token
-          // between our localStorage read and the server call.  Re-read
-          // localStorage and retry once — the other tab's new token might be
-          // there now.
-          if (firstErr?.response?.status === 401) {
-            const retryRefresh = localStorage.getItem('rsn_refresh');
-            if (retryRefresh && retryRefresh !== refresh) {
-              const { data } = await api.post('/auth/refresh', { refreshToken: retryRefresh });
-              tokens = data.data;
+        const { data } = await api.get('/auth/session', { timeout: 15000 });
+        set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true });
+        scheduleProactiveRefresh(get().accessToken!);
+      } catch (err: any) {
+        if (err?.response?.status === 401) {
+          // Token might be expired but refreshable — try refreshing before giving up.
+          try {
+            await get().refreshAccessToken();
+            const { data } = await api.get('/auth/session', { timeout: 15000 });
+            set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true });
+            scheduleProactiveRefresh(get().accessToken!);
+          } catch (refreshErr: any) {
+            const definitive = refreshErr instanceof RefreshError ? refreshErr.definitive : true;
+            // Only clear auth when the refresh token was DEFINITIVELY rejected
+            // AND no newer session was installed while we were checking (the
+            // boot-vs-verify race). Otherwise keep whatever we have.
+            if (definitive && authEpoch === epochAtStart) {
+              clearStoredTokens();
+              clearRefreshTimer();
+              set({
+                isLoading: false, isAuthenticated: false, user: null,
+                accessToken: null, refreshToken: null, isSessionChecked: true,
+              });
             } else {
-              throw firstErr;
+              set({ isLoading: false, isSessionChecked: true });
             }
-          } else {
-            throw firstErr;
           }
+        } else {
+          // Network errors, timeouts, 5xx — keep the user logged in. Flip
+          // isSessionChecked so the socket layer stops waiting; the cached
+          // token is the best we have until the next attempt.
+          set({ isLoading: false, isSessionChecked: true });
         }
-
-        localStorage.setItem('rsn_access', tokens.accessToken);
-        localStorage.setItem('rsn_refresh', tokens.refreshToken);
-        set({ accessToken: tokens.accessToken, refreshToken: tokens.refreshToken });
-        scheduleProactiveRefresh(tokens.accessToken);
-      } finally {
-        refreshPromise = null;
       }
-    })();
+    },
 
-    return refreshPromise;
-  },
+    refreshAccessToken: async () => {
+      // Mutex: if a refresh is already in-flight, piggyback on it
+      if (refreshPromise) return refreshPromise;
 
-  logout: async () => {
-    // Prevent multiple simultaneous logout calls
-    const current = get();
-    if (!current.accessToken && !current.refreshToken) return;
+      refreshPromise = (async () => {
+        try {
+          // Read the freshest token from storage (another tab may have rotated
+          // it), falling back to in-memory state.
+          const refresh = readStoredTokens()?.refresh || get().refreshToken;
+          if (!refresh) throw new RefreshError('No refresh token', true);
 
-    // Call logout endpoint with current refresh token — server revokes only THIS token,
-    // not all tokens for the user. Other devices/tabs keep their sessions.
-    await api.post('/auth/logout', { refreshToken: current.refreshToken }).catch(() => {});
+          let tokens: { accessToken: string; refreshToken: string };
+          try {
+            const { data } = await api.post('/auth/refresh', { refreshToken: refresh });
+            tokens = data.data;
+          } catch (firstErr: any) {
+            const status = firstErr?.response?.status;
+            if (status === 401) {
+              // Another tab may have rotated the token between our read and the
+              // call. Re-read storage and retry ONCE with whatever is newest.
+              const newest = readStoredTokens()?.refresh;
+              if (newest && newest !== refresh) {
+                const { data } = await api.post('/auth/refresh', { refreshToken: newest });
+                tokens = data.data;
+              } else {
+                throw new RefreshError('Refresh token rejected', true);
+              }
+            } else {
+              // Network / timeout / 5xx — transient. Do NOT log the user out.
+              throw new RefreshError('Refresh endpoint unreachable', false);
+            }
+          }
 
-    clearRefreshTimer();
-    localStorage.removeItem('rsn_access');
-    localStorage.removeItem('rsn_refresh');
-    set({ user: null, accessToken: null, refreshToken: null, isAuthenticated: false, isLoading: false });
-  },
+          installTokens(tokens.accessToken, tokens.refreshToken);
+        } finally {
+          refreshPromise = null;
+        }
+      })();
 
-  setTokens: (access: string, refresh: string) => {
-    localStorage.setItem('rsn_access', access);
-    localStorage.setItem('rsn_refresh', refresh);
-    set({ accessToken: access, refreshToken: refresh, isAuthenticated: true });
-    scheduleProactiveRefresh(access);
-  },
-}));
+      return refreshPromise;
+    },
+
+    logout: async () => {
+      const current = get();
+      if (!current.accessToken && !current.refreshToken) return;
+
+      // Server revokes only THIS token; other devices/tabs keep their sessions.
+      await api.post('/auth/logout', { refreshToken: current.refreshToken }).catch(() => {});
+
+      clearRefreshTimer();
+      clearStoredTokens();
+      set({ user: null, accessToken: null, refreshToken: null, isAuthenticated: false, isLoading: false });
+    },
+
+    setTokens: (access: string, refresh: string) => {
+      installTokens(access, refresh);
+    },
+  };
+});
 
 // ── Cross-Tab Auth Sync ──────────────────────────────────────────────────────
-// When ANY tab logs in or out, ALL other tabs detect it and update their state.
-// This uses the browser's 'storage' event which fires in all tabs EXCEPT the
-// one that made the change. Works for 10+ tabs automatically.
+// When ANY tab logs in or out, ALL other tabs detect it via the browser's
+// 'storage' event (fires in every tab EXCEPT the one that made the change).
+// Listeners ADOPT the tokens into memory — they never write them back, which is
+// what corrupted the pair before the 7 Sep 2026 fix.
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (event: StorageEvent) => {
     const store = useAuthStore.getState();
 
-    // Another tab logged in — pick up the tokens
-    if (event.key === 'rsn_access' && event.newValue && !store.isAuthenticated) {
-      const refresh = localStorage.getItem('rsn_refresh');
-      if (refresh) {
-        store.setTokens(event.newValue, refresh);
+    // Another tab logged in (canonical key set, or the completion ping fired)
+    if (
+      (event.key === TOKENS_KEY || event.key === AUTH_PING) &&
+      event.newValue &&
+      !store.isAuthenticated
+    ) {
+      if (store.adoptStoredTokens()) {
         store.checkSession();
       }
     }
 
-    // Another tab logged out — clear this tab too
-    if (event.key === 'rsn_access' && !event.newValue && store.isAuthenticated) {
+    // Another tab logged out (canonical key removed)
+    if (event.key === TOKENS_KEY && !event.newValue && store.isAuthenticated) {
       clearRefreshTimer();
       useAuthStore.setState({
         user: null, accessToken: null, refreshToken: null,
         isAuthenticated: false, isLoading: false,
       });
     }
-
-    // Auth completion signal (from VerifyPage)
-    if (event.key === 'rsn_auth_completed_at' && event.newValue) {
-      const access = localStorage.getItem('rsn_access');
-      const refresh = localStorage.getItem('rsn_refresh');
-      if (access && refresh && !store.isAuthenticated) {
-        store.setTokens(access, refresh);
-        store.checkSession();
-      }
-    }
   });
+
+  // Backgrounded tabs throttle/freeze the proactive setTimeout, so an access
+  // token can be long expired by the time the user returns. Refresh on focus
+  // if the token is expired or within 2 min of expiry — this is what keeps a
+  // returning user signed in instead of hitting a 401 storm.
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      const s = useAuthStore.getState();
+      if (!s.isAuthenticated || !s.accessToken) return;
+      const exp = getTokenExpiryMs(s.accessToken);
+      if (exp && exp - Date.now() < 2 * 60 * 1000) {
+        s.refreshAccessToken().catch(() => {});
+      }
+    });
+  }
 }

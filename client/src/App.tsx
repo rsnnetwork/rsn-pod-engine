@@ -85,6 +85,13 @@ export default function App() {
   const connectErrorBannerShownRef = useRef(false);
 
   useEffect(() => {
+    // 7 Sep 2026 (Stefan's test): do NOT run the boot session check on the
+    // magic-link callback route. VerifyPage installs the fresh session there,
+    // and a concurrent boot check carrying the user's stale localStorage token
+    // could fail and clear auth out from under the just-completed verify,
+    // bouncing the user to /login on the first click. VerifyPage runs its own
+    // checkSession after installing the new tokens.
+    if (window.location.pathname.startsWith('/auth/verify')) return;
     checkSession();
   }, []);
 

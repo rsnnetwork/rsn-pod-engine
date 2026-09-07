@@ -539,7 +539,7 @@ export async function verifyMagicLink(token: string): Promise<AuthTokenPair> {
 
 // ─── Token Management ───────────────────────────────────────────────────────
 
-function generateTokenPair(user: User): AuthTokenPair {
+async function generateTokenPair(user: User): Promise<AuthTokenPair> {
   const sessionId = uuid();
 
   const accessPayload: Omit<JwtPayload, 'iat' | 'exp'> = {
@@ -560,13 +560,18 @@ function generateTokenPair(user: User): AuthTokenPair {
     { expiresIn: config.jwtRefreshExpiry as unknown as number }
   );
 
-  // Store refresh token hash
+  // Store refresh token hash. AWAITED — 7 Sep 2026 (Stefan's test): this used to
+  // be fire-and-forget, so a client could be handed a refresh token whose row
+  // was not committed yet (or failed to write silently). The very next refresh
+  // then hit "revoked or not found" → 401 → the client logged the user out
+  // mid-session. Await the store so login/refresh fails cleanly instead of
+  // issuing a pair the server can never honour.
   const refreshHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
   const refreshExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
-  query(
+  await query(
     `INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
     [user.id, refreshHash, refreshExpiry]
-  ).catch((err) => logger.error({ err }, 'Failed to store refresh token'));
+  );
 
   const decoded = jwt.decode(accessToken) as JwtPayload;
 

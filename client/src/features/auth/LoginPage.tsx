@@ -19,7 +19,7 @@ const ERROR_MESSAGES: Record<string, string> = {
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const { login, setTokens, checkSession } = useAuthStore();
+  const { login, checkSession } = useAuthStore();
   const [params] = useSearchParams();
   const [sent, setSent] = useState(false);
   const [devLink, setDevLink] = useState<string | null>(null);
@@ -46,13 +46,12 @@ export default function LoginPage() {
     const completeAuthInCurrentTab = async () => {
       if (!sent || handlingCrossTabAuth.current) return;
 
-      const access = localStorage.getItem('rsn_access');
-      const refresh = localStorage.getItem('rsn_refresh');
-      if (!access || !refresh) return;
+      // Adopt whatever tokens the verify tab wrote — do NOT re-write them (that
+      // was the 7 Sep 2026 bug that clobbered the fresh refresh token).
+      if (!useAuthStore.getState().adoptStoredTokens()) return;
 
       handlingCrossTabAuth.current = true;
       try {
-        setTokens(access, refresh);
         await checkSession();
         const redirect = sessionStorage.getItem('rsn_redirect');
         sessionStorage.removeItem('rsn_redirect');
@@ -63,14 +62,14 @@ export default function LoginPage() {
     };
 
     const onStorage = (event: StorageEvent) => {
-      if (event.key === 'rsn_access' || event.key === 'rsn_auth_completed_at') {
+      if (event.key === 'rsn_tokens' || event.key === 'rsn_auth_completed_at') {
         void completeAuthInCurrentTab();
       }
     };
 
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
-  }, [sent, checkSession, navigate, setTokens]);
+  }, [sent, checkSession, navigate]);
 
   const onSubmit = async (data: { email: string }) => {
     setAuthError(null);

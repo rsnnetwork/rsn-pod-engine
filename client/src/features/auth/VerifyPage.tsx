@@ -3,6 +3,21 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 import { PageLoader } from '@/components/ui/Spinner';
 
+/** Map the server's error code to a human message + whether a new link helps. */
+function messageForVerifyError(err: any): string {
+  const code = err?.response?.data?.error?.code;
+  switch (code) {
+    case 'AUTH_MAGIC_LINK_USED':
+      return 'This sign-in link has already been used. Get a fresh link below.';
+    case 'AUTH_MAGIC_LINK_EXPIRED':
+      return 'This sign-in link has expired. Get a fresh link below.';
+    case 'RATE_LIMIT_EXCEEDED':
+      return 'Too many sign-in attempts. Please wait a few minutes, then get a fresh link.';
+    default:
+      return 'We could not sign you in. Get a fresh link below and try again.';
+  }
+}
+
 export default function VerifyPage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
@@ -46,10 +61,11 @@ export default function VerifyPage() {
         .then(redirectAfterAuth)
         .catch(() => setError('Failed to authenticate with Google. Please try again.'));
     } else if (token) {
-      // Magic link flow
+      // Magic link flow — surface WHY it failed so the user knows to get a
+      // fresh link rather than staring at a generic "invalid" message.
       verify(token)
         .then(redirectAfterAuth)
-        .catch(() => setError('Invalid or expired link. Please try again.'));
+        .catch((err) => setError(messageForVerifyError(err)));
     } else {
       setError('Missing authentication token');
     }
@@ -63,7 +79,7 @@ export default function VerifyPage() {
             <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
           </div>
           <p className="text-red-400 text-lg">{error}</p>
-          <a href="/login" className="text-rsn-red underline hover:text-rsn-red-hover transition-colors">Back to login</a>
+          <a href="/login" className="text-rsn-red underline hover:text-rsn-red-hover transition-colors">Get a fresh link</a>
         </div>
       </div>
     );

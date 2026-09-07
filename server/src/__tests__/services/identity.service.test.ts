@@ -1,6 +1,7 @@
 // ─── Identity Service Tests ──────────────────────────────────────────────────
 // Unit tests with mocked database layer.
 
+import jwt from 'jsonwebtoken';
 import { UserRole } from '@rsn/shared';
 
 // Mock database module
@@ -656,6 +657,44 @@ describe('Identity Service', () => {
     it('should throw UnauthorizedError for completely invalid token', async () => {
       await expect(identityService.refreshAccessToken('not-a-jwt'))
         .rejects.toThrow('Invalid refresh token');
+    });
+
+    it('rotates: revokes the presented row and issues a new pair', async () => {
+      const rt = jwt.sign({ sub: 'user-123', sessionId: 's1', type: 'refresh' }, 'test-jwt-secret', { expiresIn: '7d' });
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 'row-1', revoked_at: null }], rowCount: 1 }) // SELECT refresh_tokens
+        .mockResolvedValueOnce({ rows: [], rowCount: 1 }) // UPDATE revoke old
+        .mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 }) // getUserById
+        .mockResolvedValueOnce({ rows: [], rowCount: 1 }); // INSERT new refresh row
+
+      const pair = await identityService.refreshAccessToken(rt);
+
+      expect(pair.accessToken).toBeTruthy();
+      expect(pair.refreshToken).toBeTruthy();
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE refresh_tokens SET revoked_at'),
+        ['row-1'],
+      );
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO refresh_tokens'),
+        expect.any(Array),
+      );
+    });
+
+    it('fails loudly when the new refresh token cannot be stored (INSERT is awaited, not fire-and-forget)', async () => {
+      const rt = jwt.sign({ sub: 'user-123', sessionId: 's1', type: 'refresh' }, 'test-jwt-secret', { expiresIn: '7d' });
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 'row-1', revoked_at: null }], rowCount: 1 }) // SELECT
+        .mockResolvedValueOnce({ rows: [], rowCount: 1 }) // UPDATE revoke
+        .mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 }) // getUserById
+        .mockRejectedValueOnce(new Error('db write failed')); // INSERT rejects
+
+      // Pre-fix the INSERT was fire-and-forget: a failed store was swallowed and
+      // the caller received tokens whose refresh row does not exist → the next
+      // refresh 401s "Invalid refresh token" and the user is logged out. The
+      // store must be awaited so the login/refresh fails instead of handing out
+      // an unusable pair.
+      await expect(identityService.refreshAccessToken(rt)).rejects.toThrow();
     });
   });
 
