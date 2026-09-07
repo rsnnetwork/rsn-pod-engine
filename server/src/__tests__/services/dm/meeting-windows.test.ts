@@ -25,6 +25,14 @@ jest.mock('../../../index', () => ({
   io: { to: () => ({ emit: () => {} }) },
   __esModule: true,
 }));
+// confirmWindow now fans the confirmation message out through broadcastDmMessage
+// (notify:false — the meeting_confirmed bell is inserted separately). acceptPoke
+// does the same for its intro; mock it here so importing poke.service is safe.
+const mockBroadcastDm = jest.fn().mockResolvedValue(undefined);
+jest.mock('../../../services/orchestration/handlers/dm-handlers', () => ({
+  broadcastDmMessage: (...args: unknown[]) => mockBroadcastDm(...args),
+  __esModule: true,
+}));
 
 import {
   isValidWindowKey, windowLabel, getScheduling, setAvailability, confirmWindow,
@@ -133,6 +141,7 @@ describe('confirmWindow', () => {
       { user_id: 'u-b', window_key: windowKey },
     ]);
     mockSendMessage.mockResolvedValue({ message: { id: 'm1' }, conversationId: 'conv-1' });
+    mockBroadcastDm.mockClear();
 
     await confirmWindow('conv-1', 'u-a', windowKey);
 
@@ -144,6 +153,14 @@ describe('confirmWindow', () => {
     expect(from).toBe('u-a');
     expect(to).toBe('u-b');
     expect(content).toMatch(/Meeting confirmed/);
+    // …and it is fanned out to both inboxes/threads in real time (notify:false —
+    // the meeting_confirmed bell below covers the notification).
+    expect(mockBroadcastDm).toHaveBeenCalledTimes(1);
+    const bcall = mockBroadcastDm.mock.calls[0] as unknown[];
+    expect(bcall[1]).toBe('u-a');
+    expect(bcall[2]).toBe('u-b');
+    expect(bcall[3]).toBe('conv-1');
+    expect(bcall[5]).toMatchObject({ notify: false });
     // Bell notification for the partner.
     const notif = mockQuery.mock.calls.find(c => /INSERT INTO notifications/.test(c[0] as string))!;
     expect(notif[0]).toMatch(/'meeting_confirmed'/);
@@ -188,6 +205,11 @@ describe('acceptPoke intro seeding', () => {
       if (/INSERT INTO dm_conversations/.test(sql)) return Promise.resolve({ rows: [{ id: 'conv-9' }] });
       if (/SELECT display_name FROM users WHERE id/.test(sql)) return Promise.resolve({ rows: [{ display_name: 'Recv Person' }] });
       if (/INSERT INTO notifications/.test(sql)) return Promise.resolve({ rows: [{ id: 'notif-1', created_at: new Date() }] });
+      if (/INSERT INTO direct_messages/.test(sql)) return Promise.resolve({ rows: [{
+        id: 'dm-1', conversation_id: 'conv-9', from_user_id: 'u-send',
+        content: message ?? "You're connected. Say hello.", read_at: null, created_at: new Date(),
+        attachment_url: null, attachment_type: null, attachment_meta: null,
+      }] });
       return Promise.resolve({ rows: [] });
     });
   }

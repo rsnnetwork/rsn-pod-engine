@@ -261,15 +261,17 @@ async function insertDirectMessage(
   return transaction(async (client) => {
     const [orderedA, orderedB] = normalizePair(fromUserId, toUserId);
 
-    const isSenderA = fromUserId === orderedA;
-    const clearDeletedColumn = isSenderA ? 'user_a_deleted_at' : 'user_b_deleted_at';
-
+    // 7 Sep 2026 (Stefan's test): clear BOTH soft-delete columns, not just the
+    // sender's. A new message must un-hide the thread for whoever deleted it —
+    // above all the RECIPIENT, or the message is stored but never resurfaces in
+    // their inbox. Mirrors acceptPoke's both-sides clear on this table.
     const convResult = await client.query<{ id: string }>(
       `INSERT INTO dm_conversations (id, user_a_id, user_b_id, last_message_at)
        VALUES ($1, $2, $3, NOW())
        ON CONFLICT (user_a_id, user_b_id) DO UPDATE
          SET last_message_at = NOW(),
-             ${clearDeletedColumn} = NULL
+             user_a_deleted_at = NULL,
+             user_b_deleted_at = NULL
        RETURNING id`,
       [uuid(), orderedA, orderedB],
     );

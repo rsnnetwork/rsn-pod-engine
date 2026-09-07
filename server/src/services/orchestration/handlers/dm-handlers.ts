@@ -165,7 +165,13 @@ export async function broadcastDmMessage(
   toUserId: string,
   conversationId: string,
   message: BroadcastableDmMessage,
+  // notify:false does the realtime fan-out (dm:message + entity refresh) but
+  // skips the "sent you a message" bell + offline email. Used by system-message
+  // paths that carry their OWN, more specific notification: the meeting-confirmed
+  // bell (confirmWindow) and the poke_accepted bell (acceptPoke). 7 Sep 2026.
+  options: { notify?: boolean } = {},
 ): Promise<void> {
+  const shouldNotify = options.notify !== false;
   // Real-time fan-out: emit to BOTH users' rooms so any open tab updates.
   // Attachment fields included so the recipient renders the image / audio
   // inline without needing to refetch the thread.
@@ -203,6 +209,7 @@ export async function broadcastDmMessage(
     [E.dmConversation(conversationId), E.userDms(fromUserId), E.userDms(toUserId)],
   ).catch(() => {});
 
+  if (shouldNotify) {
   // Bell notification — same pattern as invites so the bell icon counts
   // DMs alongside invite events consistently.
   try {
@@ -264,6 +271,7 @@ export async function broadcastDmMessage(
   } catch (err) {
     logger.warn({ err, fromUserId, toUserId }, 'DM offline-email check failed (non-fatal)');
   }
+  } // end if (shouldNotify)
 }
 
 // ─── Handlers ──────────────────────────────────────────────────────────────

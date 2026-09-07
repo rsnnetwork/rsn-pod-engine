@@ -141,14 +141,17 @@ describe('Phase C — DM data model + service + REST', () => {
       expect(fn).toMatch(/ON CONFLICT \(user_a_id, user_b_id\) DO UPDATE/);
     });
 
-    it('insertDirectMessage clears the SENDER side soft-delete on incoming send', () => {
-      // When the sender previously deleted the conversation, sending again
-      // should re-show it in their inbox by clearing user_x_deleted_at.
+    it('insertDirectMessage clears BOTH sides soft-delete so a new message re-shows the thread for whoever deleted it', () => {
+      // 7 Sep 2026 (Stefan's test): this cleared only the SENDER's column, so
+      // a recipient who had trashed the thread never saw new messages resurface
+      // it — the message was stored but silently invisible. A new message must
+      // un-hide the conversation for BOTH participants, mirroring acceptPoke's
+      // both-sides clear on the same table.
       const fnStart = src.indexOf('async function insertDirectMessage(');
       const fnEnd = src.indexOf('\n}\n', fnStart);
       const fn = src.slice(fnStart, fnEnd);
-      expect(fn).toMatch(/clearDeletedColumn/);
-      expect(fn).toMatch(/user_a_deleted_at|user_b_deleted_at/);
+      expect(fn).toMatch(/user_a_deleted_at\s*=\s*NULL/);
+      expect(fn).toMatch(/user_b_deleted_at\s*=\s*NULL/);
     });
 
     it('insertDirectMessage runs in a transaction (conversation upsert + message insert atomic)', () => {

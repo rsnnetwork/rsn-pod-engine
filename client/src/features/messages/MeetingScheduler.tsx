@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, CalendarCheck } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
+import { E } from '@/realtime/entities';
 import { Spinner } from '@/components/ui/Spinner';
 import api from '@/lib/api';
 import { useToastStore } from '@/stores/toastStore';
@@ -65,6 +66,9 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
     queryKey: ['meetingScheduling', conversationId],
     queryFn: () => api.get(`/dm/conversations/${conversationId}/scheduling`).then(r => r.data.data),
     refetchInterval: 15_000, // partner's picks appear without a refresh
+    // The confirmed window lives on dm_conversations, so a confirm on either
+    // side (which emits the dm-conversation entity) refreshes this panel live.
+    meta: { entities: [E.dmConversation(conversationId)] },
   });
 
   // Stage my saved selection once loaded (and re-sync after saves).
@@ -115,7 +119,11 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
     try {
       await api.post(`/dm/conversations/${conversationId}/scheduling/confirm`, { window: windowKey });
       await queryClient.invalidateQueries({ queryKey: ['meetingScheduling', conversationId] });
-      await queryClient.invalidateQueries({ queryKey: ['dmMessages'] });
+      // The confirmation message lands in the thread — invalidate the REAL
+      // thread key (['dm-messages', id]); the old ['dmMessages'] key matched
+      // nothing, so the confirmer never saw their own confirmation appear.
+      await queryClient.invalidateQueries({ queryKey: ['dm-messages', conversationId] });
+      await queryClient.invalidateQueries({ queryKey: ['dm-conversations'] });
       addToast('Meeting confirmed!', 'success');
     } catch (err: any) {
       addToast(err?.response?.data?.error?.message || 'Could not confirm that time.', 'error');

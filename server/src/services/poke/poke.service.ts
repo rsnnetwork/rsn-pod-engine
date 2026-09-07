@@ -272,7 +272,7 @@ export async function acceptPoke(
 ): Promise<{ poke: UserPoke; conversationId: string }> {
   const FALLBACK_INTRO = "You're connected. Say hello.";
 
-  const { poke, conversationId, senderNotif } = await transaction(async (client) => {
+  const { poke, conversationId, senderNotif, introMessage } = await transaction(async (client) => {
     const pokeResult = await client.query<{
       id: string; sender_id: string; recipient_id: string; status: string;
       message: string | null; responded_at: Date | null; created_at: Date;
@@ -333,11 +333,16 @@ export async function acceptPoke(
     const introText = p.message && p.message.trim().length > 0
       ? p.message.trim().slice(0, 4000)
       : FALLBACK_INTRO;
-    await client.query(
+    const introInsert = await client.query<{
+      id: string; conversation_id: string; from_user_id: string;
+      content: string | null; read_at: Date | null; created_at: Date;
+    }>(
       `INSERT INTO direct_messages (id, conversation_id, from_user_id, content)
-       VALUES ($1, $2, $3, $4)`,
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, conversation_id, from_user_id, content, read_at, created_at`,
       [uuid(), convResult.rows[0].id, p.sender_id, introText],
     );
+    const introRow = introInsert.rows[0];
     await client.query(
       `UPDATE dm_conversations SET last_message_at = NOW() WHERE id = $1`,
       [convResult.rows[0].id],
@@ -384,6 +389,14 @@ export async function acceptPoke(
         id: notifResult.rows[0].id, senderId: p.sender_id, title, body,
         createdAt: notifResult.rows[0].created_at, accepterName,
       },
+      introMessage: {
+        id: introRow.id,
+        conversationId: introRow.conversation_id,
+        fromUserId: introRow.from_user_id,
+        content: introRow.content,
+        readAt: introRow.read_at,
+        createdAt: introRow.created_at,
+      },
     };
   });
 
@@ -408,6 +421,19 @@ export async function acceptPoke(
     ).catch((err) => logger.warn({ err, senderId: senderNotif.senderId }, 'Poke-accepted entity fanout failed (non-fatal)'));
   } catch (err) {
     logger.warn({ err, senderId: senderNotif.senderId }, 'Poke-accepted socket push failed (non-fatal)');
+  }
+
+  // 7 Sep 2026 — fan the intro out to BOTH participants so the SENDER's inbox
+  // gains the new conversation live (pre-fix only the sender's bell fired and
+  // their Messages list stayed empty until a manual refresh) and the accepter's
+  // thread updates on every device. notify:false: the poke_accepted bell above
+  // is the notification, so no duplicate "sent you a message" bell.
+  try {
+    const { io } = await import('../../index');
+    const { broadcastDmMessage } = await import('../orchestration/handlers/dm-handlers');
+    await broadcastDmMessage(io, poke.senderId, userId, conversationId, introMessage, { notify: false });
+  } catch (err) {
+    logger.warn({ err, conversationId }, 'Poke-accepted DM fan-out failed (non-fatal)');
   }
 
   // Task F2 — email the original sender, fire-and-forget, right alongside

@@ -59,6 +59,17 @@ export default function AppLayout() {
   });
   const suggestionCount = (agentList ?? []).reduce((n, a) => n + (a.matchCount || 0), 0);
 
+  // Unread DM badge — live from any page (rides the userDms entity), so a new
+  // message shows a count on the Messages nav without opening the page.
+  // 7 Sep 2026: previously nothing surfaced unread DMs in the primary nav.
+  const { data: dmUnread } = useQuery({
+    queryKey: ['dm-unread-count'],
+    queryFn: () => api.get('/dm/unread-count').then(r => r.data.data.count as number),
+    enabled: !!user?.id,
+    meta: { entities: user?.id ? [E.userDms(user.id)] : [] },
+  });
+  const dmUnreadCount = dmUnread ?? 0;
+
   // The desktop sidebar and the mobile drawer share `renderLink` below, but the
   // sidebar is only CSS-hidden on mobile (`hidden md:flex`) — it stays mounted
   // in the DOM, and the drawer is closed by default. A badge inside `renderLink`
@@ -136,6 +147,14 @@ export default function AppLayout() {
           className="ml-auto min-w-[20px] shrink-0 rounded-full bg-rsn-red px-1.5 py-0.5 text-center text-[11px] font-bold text-white"
         >
           {suggestionCount}
+        </span>
+      )}
+      {isDesktopNav && !closeMobile && l.label === 'Messages' && dmUnreadCount > 0 && (
+        <span
+          data-testid="nav-messages-badge"
+          className="ml-auto min-w-[20px] shrink-0 rounded-full bg-rsn-red px-1.5 py-0.5 text-center text-[11px] font-bold text-white"
+        >
+          {dmUnreadCount}
         </span>
       )}
     </NavLink>
@@ -267,23 +286,34 @@ export default function AppLayout() {
           <Outlet />
         </main>
 
-        {/* Mobile bottom nav */}
+        {/* Mobile bottom nav — Messages added 7 Sep 2026 so DMs are reachable
+            (and their unread count visible) without opening the hamburger. */}
         <nav className="md:hidden flex border-t border-gray-200 bg-white/90 backdrop-blur-sm pb-[env(safe-area-inset-bottom)]">
           {[
-            { to: '/', icon: LayoutDashboard, label: 'Home' },
-            { to: '/pods', icon: Users, label: 'Pods' },
-            { to: '/sessions', icon: Calendar, label: 'Events' },
-            { to: '/invites', icon: Mail, label: 'Invite' },
-            { to: '/profile', icon: User, label: 'Profile' },
+            { to: '/', icon: LayoutDashboard, label: 'Home', badge: 0 },
+            { to: '/pods', icon: Users, label: 'Pods', badge: 0 },
+            { to: '/sessions', icon: Calendar, label: 'Events', badge: 0 },
+            { to: '/messages', icon: MessageSquare, label: 'Chats', badge: dmUnreadCount },
+            { to: '/profile', icon: User, label: 'Profile', badge: 0 },
           ].map(l => (
             <NavLink
               key={l.to} to={l.to} end={l.to === '/'}
               className={({ isActive }) => cn(
-                'flex-1 flex flex-col items-center py-2 text-xs transition-all duration-200',
+                'relative flex-1 flex flex-col items-center py-2 text-xs transition-all duration-200 min-h-[44px] justify-center',
                 isActive ? 'text-rsn-red scale-110 font-semibold' : 'text-gray-400',
               )}
             >
-              <l.icon className="h-5 w-5 mb-0.5" />
+              <div className="relative">
+                <l.icon className="h-5 w-5 mb-0.5" />
+                {l.badge > 0 && (
+                  <span
+                    data-testid="mobilenav-messages-badge"
+                    className="absolute -top-1.5 -right-2 min-w-[16px] rounded-full bg-rsn-red px-1 text-center text-[10px] font-bold leading-4 text-white"
+                  >
+                    {l.badge > 9 ? '9+' : l.badge}
+                  </span>
+                )}
+              </div>
               {l.label}
             </NavLink>
           ))}

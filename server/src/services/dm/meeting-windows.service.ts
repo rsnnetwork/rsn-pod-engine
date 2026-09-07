@@ -197,10 +197,16 @@ export async function confirmWindow(
   const partnerId = conv.user_a_id === userId ? conv.user_b_id : conv.user_a_id;
   const label = windowLabel(windowKey);
 
-  // The confirmation lives in the thread itself — sendMessage also carries the
-  // partner's unread/realtime rails so their open chat updates live.
+  // The confirmation lives in the thread itself. sendMessage only PERSISTS the
+  // message — the realtime fan-out (partner's open thread + both inboxes) comes
+  // from broadcastDmMessage, notify:false because the meeting_confirmed bell
+  // below is the notification. 7 Sep 2026: pre-fix this called sendMessage alone
+  // and the confirmation never reached the partner's screen without a refresh.
   try {
-    await dmService.sendMessage(userId, partnerId, `📅 Meeting confirmed: ${label}`);
+    const sent = await dmService.sendMessage(userId, partnerId, `📅 Meeting confirmed: ${label}`);
+    const { io } = await import('../../index');
+    const { broadcastDmMessage } = await import('../orchestration/handlers/dm-handlers');
+    await broadcastDmMessage(io, userId, partnerId, sent.conversationId, sent.message, { notify: false });
   } catch (err) {
     logger.warn({ err, conversationId }, 'Confirmation message failed (confirmation itself stored)');
   }

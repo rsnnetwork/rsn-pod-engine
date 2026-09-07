@@ -54,6 +54,17 @@ jest.mock('../../../services/block/block.service', () => ({
   __esModule: true,
 }));
 
+// 7 Sep 2026 — acceptPoke must fan the new conversation out to BOTH inboxes
+// (pre-fix only the sender's bell fired, so the sender's Messages list never
+// gained the conversation until a manual refresh). Routed through
+// broadcastDmMessage with notify:false so no duplicate DM bell is added on top
+// of the poke_accepted bell.
+const mockBroadcastDm = jest.fn().mockResolvedValue(undefined);
+jest.mock('../../../services/orchestration/handlers/dm-handlers', () => ({
+  broadcastDmMessage: (...args: unknown[]) => mockBroadcastDm(...args),
+  __esModule: true,
+}));
+
 // Task F2 — email layer is mocked entirely. Behaviour tests below assert
 // poke.service's wiring (recipient/name/link) and gating; the actual
 // subject-line rendering is pinned separately against the real
@@ -153,9 +164,17 @@ function armAccept(
       if (opts.notifInsertImpl) return opts.notifInsertImpl();
       return Promise.resolve({ rows: [{ id: 'notif-accept-1', created_at: NOTIF_CREATED_AT }] });
     }
-    // INSERT INTO encounter_history, INSERT INTO direct_messages,
-    // UPDATE dm_conversations SET last_message_at — none of these are
-    // asserted on their return shape.
+    if (/INSERT INTO direct_messages/.test(sql)) {
+      // acceptPoke now RETURNs the seeded intro row so it can broadcast it.
+      return Promise.resolve({ rows: [{
+        id: 'dm-intro-1', conversation_id: 'conv-9', from_user_id: SENDER,
+        content: message ?? "You're connected. Say hello.", read_at: null,
+        created_at: new Date('2026-07-20T00:00:01Z'),
+        attachment_url: null, attachment_type: null, attachment_meta: null,
+      }] });
+    }
+    // INSERT INTO encounter_history, UPDATE dm_conversations SET
+    // last_message_at — none of these are asserted on their return shape.
     return Promise.resolve({ rows: [] });
   });
 }
@@ -220,6 +239,7 @@ beforeEach(() => {
   mockEmit.mockClear();
   mockTo.mockClear();
   mockEmitEntities.mockClear();
+  mockBroadcastDm.mockClear();
   mockSendPokeReceivedEmail.mockClear();
   mockSendPokeAcceptedEmail.mockClear();
   mockIsEmailTypeEnabled.mockReset().mockResolvedValue(true);
@@ -315,6 +335,23 @@ describe('acceptPoke — F1 acceptance notification for the sender', () => {
 
     expect(mockQuery.mock.calls.some(c => /INSERT INTO notifications/.test(c[0] as string))).toBe(false);
     expect(mockTo).not.toHaveBeenCalled();
+  });
+});
+
+describe('acceptPoke — fans the new conversation out to BOTH inboxes', () => {
+  it('broadcasts the intro (notify:false) so the sender inbox gains the conversation with no duplicate DM bell', async () => {
+    const pokeService = await import('../../../services/poke/poke.service');
+    armAccept('You fit what they want. We think you two should meet.');
+    await pokeService.acceptPoke('poke-1', RECIPIENT);
+    await flushPromises();
+
+    expect(mockBroadcastDm).toHaveBeenCalledTimes(1);
+    const call = mockBroadcastDm.mock.calls[0] as unknown[];
+    // (io, fromUserId, toUserId, conversationId, message, options)
+    expect(call[1]).toBe(SENDER);      // intro is authored by the sender
+    expect(call[2]).toBe(RECIPIENT);   // delivered to the accepter
+    expect(call[3]).toBe('conv-9');
+    expect(call[5]).toMatchObject({ notify: false });
   });
 });
 
