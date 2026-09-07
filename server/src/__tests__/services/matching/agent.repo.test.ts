@@ -47,6 +47,14 @@ describe('listAgents', () => {
     const [sql] = mockQuery.mock.calls[0];
     expect(sql).toMatch(/status <> 'archived'|status IN \('active', ?'paused'\)/);
   });
+
+  it('orders active agents first, then newest — the member\'s latest agent is on top (7 Sep review)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await repo.listAgents('u-1');
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/status = 'active'\)\s+DESC/);
+    expect(sql).toMatch(/created_at DESC/);
+  });
 });
 
 describe('createAgent', () => {

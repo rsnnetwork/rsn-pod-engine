@@ -37,8 +37,9 @@ let seq = 0;
 beforeEach(() => {
   seq = 0;
   mockCreate.mockReset();
-  mockCreate.mockImplementation(async (userId: string, input: { label: string; wantText: string; status?: string }) => ({
-    id: `a-${++seq}`, userId, label: input.label, wantText: input.wantText, status: input.status ?? 'active',
+  mockCreate.mockImplementation(async (userId: string, input: { label: string; wantText: string; matchingTags?: string[]; status?: string }) => ({
+    id: `a-${++seq}`, userId, label: input.label, wantText: input.wantText,
+    matchingTags: input.matchingTags ?? [], status: input.status ?? 'active',
   }));
   mockList.mockReset();
   mockList.mockResolvedValue([]);
@@ -80,10 +81,56 @@ describe('createFirstAgents', () => {
     expect(agents.map(a => a.status)).toEqual(['active', 'paused']);
   });
 
+  // 7 Sep 2026 (Stefan): "people who run manufacturing and service businesses…
+  // founders, owner" produced agents that searched for the bare labels
+  // "founders" / "business owners" — the manufacturing/service criteria were
+  // dropped. Shared, non-designation qualifiers must ride onto every agent.
+  it('carries shared qualifiers onto each designation agent and stores structured tags', async () => {
+    await createFirstAgents('u-1', {
+      whoText: 'founders and owners',
+      whyText: '',
+      qualifiers: ['manufacturing', 'service businesses'],
+      tags: ['founder', 'owner', 'manufacturing', 'service businesses'],
+    });
+    const inputs = mockCreate.mock.calls.map(([, i]) => i as { label: string; wantText: string; matchingTags: string[] });
+    expect(inputs[0].label).toBe('Founders');
+    expect(inputs[0].wantText).toBe('founders, manufacturing, service businesses');
+    expect(inputs[1].label).toBe('Business owners');
+    expect(inputs[1].wantText).toBe('business owners, manufacturing, service businesses');
+    // Each agent keeps the structured want-side slice for later use.
+    expect(inputs[0].matchingTags).toEqual(['founder', 'owner', 'manufacturing', 'service businesses']);
+  });
+
+  it('does not repeat a qualifier already present in the member\'s sentence', async () => {
+    await createFirstAgents('u-1', {
+      whoText: 'react developers in fintech',
+      whyText: '',
+      qualifiers: ['fintech', 'seed stage'],
+    });
+    const i = mockCreate.mock.calls[0][1] as { label: string; wantText: string };
+    expect(i.label).toBe('Developers and engineers');
+    // 'fintech' is already in the sentence; only the genuinely-new qualifier appends.
+    expect(i.wantText).toBe('react developers in fintech, seed stage');
+  });
+
+  it('removes a held label BEFORE the four-agent cap, so a new want is not dropped', async () => {
+    mockList.mockResolvedValue([{ id: 'old', label: 'Founders', status: 'active' }]);
+    await createFirstAgents('u-1', {
+      whoText: 'founders, investors, developers, designers, marketers',
+      whyText: '',
+    });
+    const labels = created().map(c => c.label);
+    // Pre-fix slice(0,4) ran BEFORE the held filter, so with Founders held the
+    // fifth want (marketers) fell off the end. Held-first then cap keeps it.
+    expect(labels).not.toContain('Founders');
+    expect(labels).toContain('Marketing people');
+    expect(labels.length).toBe(4);
+  });
+
   it('falls back to a single generic agent when no known designation is named', async () => {
     await createFirstAgents('u-1', { whoText: 'interesting people in Copenhagen', whyText: '' });
     expect(created()).toEqual([
-      { label: 'People I want to meet', wantText: 'interesting people in Copenhagen', status: 'active' },
+      { label: 'People I want to meet', wantText: 'interesting people in Copenhagen', matchingTags: [], status: 'active' },
     ]);
   });
 

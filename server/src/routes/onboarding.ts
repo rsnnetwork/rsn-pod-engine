@@ -502,9 +502,25 @@ router.post(
       // so the Suggestions page has something on it the first time they open
       // it. Built from what the member SAID they want, not from what enrichment
       // guessed, and never a duplicate for a member re-onboarding under 083.
+      // 7 Sep 2026 (Stefan): carry the whole request, not just the roles. The
+      // shared, non-designation criteria the extractor captured (industries,
+      // stage, seniority) ride onto every agent so "manufacturing and service
+      // businesses" is no longer dropped when more than one kind of person is
+      // named; the structured slice is stored on each agent for later use.
+      const agentQualifiers = [
+        ...(intent.desiredIndustries ?? []),
+        ...(intent.desiredStage ?? []),
+        ...(intent.desiredSeniority ?? []),
+      ];
+      const agentTags = [
+        ...(intent.desiredDesignations ?? []),
+        ...agentQualifiers,
+      ];
       const firstAgents = await createFirstAgents(userId, {
         whoText: [...(intent.desiredPeople ?? []), ...(intent.desiredRoles ?? [])].join(', '),
         whyText: intent.reasonForMeeting,
+        qualifiers: agentQualifiers,
+        tags: agentTags,
       });
       if (firstAgents.length) fanoutUserEntity(userId).catch(() => {});
 

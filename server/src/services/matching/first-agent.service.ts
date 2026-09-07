@@ -37,13 +37,48 @@ export interface FirstAgentSource {
   whoText: string | null | undefined;
   /** Why they came — the fallback when they never said who. */
   whyText: string | null | undefined;
+  /**
+   * Shared, NON-designation criteria — industries, stage, seniority, company
+   * size — that apply across every agent the member's answers produce. 7 Sep
+   * 2026 (Stefan): naming more than one kind of person collapsed each agent to a
+   * bare designation label and dropped these. They ride onto every agent's
+   * search text now (the scorer reads want_text), never onto the OTHER agents'
+   * designation words, so precision is kept.
+   */
+  qualifiers?: string[];
+  /** Structured want-side slice stored on each agent (designations + qualifiers)
+   *  for analytics and later semantic matching. */
+  tags?: string[];
 }
 
 export interface FirstAgentPlan {
   label: string;
   wantText: string;
+  matchingTags: string[];
   /** The main agent searches now; every other one waits as a paused draft. */
   status: 'active' | 'paused';
+}
+
+/** Trim, drop empties, de-dupe case-insensitively, preserve order. */
+function cleanList(xs?: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of xs ?? []) {
+    const v = (raw || '').trim();
+    if (!v) continue;
+    const k = v.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(v);
+  }
+  return out;
+}
+
+/** Append qualifier terms that are not already present in the base text. */
+function withQualifiers(base: string, quals: string[]): string {
+  const low = base.toLowerCase();
+  const add = quals.filter(q => !low.includes(q.toLowerCase()));
+  return add.length ? `${base}, ${add.join(', ')}` : base;
 }
 
 /**
@@ -78,6 +113,8 @@ function wantedInOrderSaid(text: string): Array<{ key: string; label: string }> 
 export function planFirstAgents(source: FirstAgentSource, existingLabels: string[]): FirstAgentPlan[] {
   const who = (source.whoText || '').trim();
   const why = (source.whyText || '').trim();
+  const quals = cleanList(source.qualifiers);
+  const tags = cleanList(source.tags);
 
   // The SAME taxonomy the matcher searches with names the agents — a label
   // that disagrees with the search is how "Marketing people" once ended up
@@ -95,30 +132,30 @@ export function planFirstAgents(source: FirstAgentSource, existingLabels: string
   }
 
   const held = new Set(existingLabels.map(l => l.trim().toLowerCase()));
-  const plans: Array<Omit<FirstAgentPlan, 'status'>> = [];
+  let bases: Array<{ label: string; wantText: string }> = [];
   if (wanted.length === 1) {
-    // One kind of person: keep the member's sentence as the search, so the
-    // nuance ("react developers") still counts when scoring.
-    plans.push({ label: title(wanted[0].label), wantText: text });
+    // One kind of person: keep the member's sentence as the search (its nuance
+    // like "react developers" already counts) and add any qualifier not in it.
+    bases = [{ label: title(wanted[0].label), wantText: withQualifiers(text, quals) }];
   } else if (wanted.length > 1) {
-    // Several kinds: one agent each, searching for that designation alone,
-    // so a stray word cannot pull the Founders agent toward investors.
-    for (const w of wanted.slice(0, MAX_FIRST_AGENTS)) {
-      plans.push({ label: title(w.label), wantText: w.label });
-    }
+    // Several kinds: one agent each, searching for that designation PLUS the
+    // shared qualifiers (industries/stage/seniority) — never the other agents'
+    // designation words, so a stray designation cannot pull one toward another.
+    bases = wanted.map(w => ({ label: title(w.label), wantText: withQualifiers(w.label, quals) }));
   } else if (existingLabels.length === 0) {
-    // Their own words, no known role in them — one agent carrying the
-    // sentence verbatim. Only for a member with nothing yet: a member who
-    // already holds agents does not need a vaguer one added on top.
-    plans.push({ label: GENERIC_LABEL, wantText: text });
+    // Their own words, no known role in them — one agent carrying the sentence
+    // (plus qualifiers). Only for a member with nothing yet.
+    bases = [{ label: GENERIC_LABEL, wantText: withQualifiers(text, quals) }];
   }
 
-  // The first NEW agent is the one that searches; the rest are drafts. Order
-  // is the order the member said them, so the main agent is the first kind
-  // of person they asked for.
-  return plans
-    .filter(p => !held.has(p.label.toLowerCase()))
-    .map((p, i) => ({ ...p, status: i === 0 ? 'active' as const : 'paused' as const }));
+  // Remove labels the member already holds BEFORE capping — 7 Sep 2026: the cap
+  // used to run first, so a held label consumed a slot and silently dropped a
+  // genuinely-new want off the end. The first NEW agent searches; the rest are
+  // drafts, in the order the member said them.
+  return bases
+    .filter(b => !held.has(b.label.toLowerCase()))
+    .slice(0, MAX_FIRST_AGENTS)
+    .map((b, i) => ({ ...b, matchingTags: tags, status: i === 0 ? 'active' as const : 'paused' as const }));
 }
 
 /**

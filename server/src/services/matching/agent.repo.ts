@@ -94,10 +94,13 @@ const SELECT_WITH_COUNT = `
   FROM matching_agents a`;
 
 /**
- * A member's agents for the dashboard, oldest first. Archived are hidden unless
- * asked for: archiving is reversible ("archive it once the need is solved" is
- * not "delete it"), so the dashboard needs a way to list them and bring one
- * back. Without this the UI had no screen that could reach an archived agent.
+ * A member's agents for the dashboard: active ones first, then newest — so the
+ * agent a member just created sits on top (7 Sep 2026 review: "new agents
+ * appear at the bottom; the latest should be at the top"), while the active
+ * searching agent stays prominent above paused drafts. Archived are hidden
+ * unless asked for: archiving is reversible ("archive it once the need is
+ * solved" is not "delete it"), so the dashboard needs a way to list them and
+ * bring one back.
  */
 export async function listAgents(
   userId: string,
@@ -106,7 +109,7 @@ export async function listAgents(
   const r = await query<AgentRow>(
     `${SELECT_WITH_COUNT}
      WHERE a.user_id = $1 ${opts.includeArchived ? '' : `AND a.status <> 'archived'`}
-     ORDER BY a.created_at ASC`,
+     ORDER BY (a.status = 'active') DESC, a.created_at DESC`,
     [userId],
   );
   return r.rows.map(mapAgent);
