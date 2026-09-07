@@ -104,7 +104,7 @@ export default function AgentsPage() {
           <input
             value={label}
             onChange={e => setLabel(e.target.value)}
-            placeholder="Developers"
+            placeholder=""
             aria-label="Agent name"
             autoFocus
             className="mt-1 min-h-[44px] w-full rounded-lg border-2 border-gray-300 px-3 text-base focus:border-rsn-red focus:outline-none"
@@ -116,7 +116,7 @@ export default function AgentsPage() {
             value={wantText}
             onChange={e => setWantText(e.target.value)}
             rows={3}
-            placeholder="A senior React developer who can help build my product"
+            placeholder=""
             aria-label="Who you are looking for"
             className="mt-1 w-full resize-none rounded-lg border-2 border-gray-300 px-3 py-2 text-base focus:border-rsn-red focus:outline-none"
           />

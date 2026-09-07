@@ -153,9 +153,20 @@ describe('onboarding prompts (v1.1)', () => {
       expect(p).toContain('valuable to');
     });
 
-    it('a reaction plus one question still fits the word budget', () => {
-      const m = buildHostSystemPrompt().match(/under (\d+) words/);
-      expect(Number(m![1])).toBeGreaterThanOrEqual(35);
+    // 7 Sep 2026 (Ali, from his own chat): every turn read his answer back to
+    // him and then asked a two-part question. The budget is tighter now, the
+    // reaction is three words at most, and the question stands alone.
+    it('the word budget is tight and a reaction is three words at most', () => {
+      const p = buildHostSystemPrompt();
+      const m = p.match(/under (\d+) words/);
+      expect(Number(m![1])).toBeLessThanOrEqual(30);
+      expect(Number(m![1])).toBeGreaterThanOrEqual(20);
+      expect(p.toLowerCase()).toContain('never repeat or paraphrase what they just said');
+      expect(p.toLowerCase()).toContain('at most three words');
+      expect(p.toLowerCase()).toContain('at most 15 words');
+      expect(p.toLowerCase()).toContain('never offer alternatives inside the question');
+      expect(p.toLowerCase()).toContain('at most three questions in the whole chat');
+      expect(p.toLowerCase()).toContain('accept brief answers as final');
     });
 
     it('the tone rules contain no dashes (style rule)', () => {

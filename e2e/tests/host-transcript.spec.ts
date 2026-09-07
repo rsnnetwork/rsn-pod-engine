@@ -59,9 +59,17 @@ test('the host reacts before it asks, keeps it short, never uses a dash, and the
     messages.push({ role: 'assistant', content: reply });
     transcript.push(`MEMBER: ${line}`, `HOST:   ${reply}`, '');
 
-    // Hard style rules from the prompt.
+    // Hard style rules from the prompt. 7 Sep 2026 (Ali): "it must be easy to
+    // talk and to the point": no reading the answer back, one short question,
+    // no "A or B?" choices, and the whole thing fits in a text message.
     expect(reply, 'no em or en dash').not.toMatch(/[—–]/);
-    expect(words(reply), `under the word budget: "${reply}"`).toBeLessThanOrEqual(55);
+    expect(words(reply), `under the word budget: "${reply}"`).toBeLessThanOrEqual(32);
+    const body = reply.replace(/<<READY>>/g, '');
+    expect((body.match(/?/g) || []).length, `one question at most: "${reply}"`).toBeLessThanOrEqual(1);
+    expect(body, `does not read the answer back: "${reply}"`).not.toMatch(/^s*(so you|you're |you are |you want |sounds like you|it sounds like)/i);
+    const q = body.split(/(?<=[.!])s+/).find(x => x.includes('?')) || '';
+    expect(words(q), `the question itself is short: "${q}"`).toBeLessThanOrEqual(18);
+    expect(q, `no alternatives inside the question: "${q}"`).not.toMatch(/or/i);
     if (ready) break;
   }
 

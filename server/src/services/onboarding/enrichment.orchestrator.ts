@@ -46,7 +46,7 @@ import {
 import { getCachedEnrichment, getEnrichmentState, saveEnrichedCandidate, setEnrichmentState } from './enrichment.repo';
 import { resolveEnrichProvider, runProvider, statusFromConfidence, type EnrichProviderName } from './providers/registry';
 import type { ProviderOutcome } from './providers/provider.types';
-import { captureAvatar } from './avatar.service';
+import { captureAvatar, hasAvatar } from './avatar.service';
 import { record as recordStageEvent, type StageEventStage, sanitizeErrorMessage } from './stage-events.repo';
 
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
@@ -261,6 +261,21 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
       const status = statusFromConfidence(cached!.confidence);
       await writeState(userId, { status });
       logTerminal(userId, provider, status, startedAtMs, { cacheHit: true });
+      // 7 Sep 2026 (Ali: "why is it not getting my image?"): members approved
+      // before their first login arrive here with the approval-time cache, and
+      // this branch never captured the photo the scrape had found. Same
+      // capture as the live path below, only while they have no photo yet.
+      const cachedPhoto = cached!.profile?.photoUrl ?? null;
+      if (cachedPhoto && !(await hasAvatar(userId).catch(() => true))) {
+        const photoStartedAtMs = Date.now();
+        captureAvatar(userId, cachedPhoto)
+          .then((captured) => {
+            recordStageEvent(userId, captured ? 'photo_captured' : 'photo_failed', { source: 'cache' }, Date.now() - photoStartedAtMs).catch(() => {});
+          })
+          .catch((err) => {
+            logger.warn({ err, userId }, 'enrichment: captureAvatar (cached) rejected unexpectedly (non-fatal)');
+          });
+      }
       return;
     }
 

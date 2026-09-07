@@ -40,6 +40,7 @@ jest.mock('../../../services/onboarding/providers/scrapingdog.provider', () => (
 jest.mock('../../../services/onboarding/avatar.service', () => ({
   __esModule: true,
   captureAvatar: jest.fn(),
+  hasAvatar: jest.fn(),
 }));
 
 jest.mock('../../../services/onboarding/stage-events.repo', () => ({
@@ -68,7 +69,7 @@ import logger from '../../../config/logger';
 import { getCachedEnrichment, getEnrichmentState, saveEnrichedCandidate, setEnrichmentState } from '../../../services/onboarding/enrichment.repo';
 import { scrapingdogProvider } from '../../../services/onboarding/providers/scrapingdog.provider';
 import { enrichProfile, getClient, type EnrichResult, type EnrichedProfile } from '../../../services/onboarding/enrichment.service';
-import { captureAvatar } from '../../../services/onboarding/avatar.service';
+import { captureAvatar, hasAvatar } from '../../../services/onboarding/avatar.service';
 import { record as recordStageEvent } from '../../../services/onboarding/stage-events.repo';
 import { runEnrichment } from '../../../services/onboarding/enrichment.orchestrator';
 
@@ -80,6 +81,7 @@ const mockScrapingdogEnrich = scrapingdogProvider.enrich as jest.Mock;
 const mockEnrichProfile = enrichProfile as jest.Mock;
 const mockGetClient = getClient as jest.Mock;
 const mockCaptureAvatar = captureAvatar as jest.Mock;
+const mockHasAvatar = hasAvatar as jest.Mock;
 const mockRecordStageEvent = recordStageEvent as jest.Mock;
 
 /** Find a recorded stage-event call by stage name (there may be several calls per run). */
@@ -125,6 +127,8 @@ describe('runEnrichment', () => {
     mockSetEnrichmentState.mockResolvedValue(undefined);
     mockSaveEnrichedCandidate.mockResolvedValue(undefined);
     mockCaptureAvatar.mockResolvedValue(true);
+    mockHasAvatar.mockReset();
+    mockHasAvatar.mockResolvedValue(true);
     mockRecordStageEvent.mockResolvedValue(undefined);
     // Default: extras pass "succeeds" with no extra fields (keeps most tests
     // from needing to think about the extras call at all).
@@ -306,6 +310,33 @@ describe('runEnrichment', () => {
       expect(mockSaveEnrichedCandidate).not.toHaveBeenCalled();
       const [, params] = lastStateCall();
       expect(params.status).toBe('found');
+    });
+
+    // 7 Sep 2026 (Ali): members approved before their first login arrive with
+    // the approval-time cache, and this branch never captured the photo.
+    it('a fresh cache hit captures the cached photo when the member has no avatar yet', async () => {
+      mockHasAvatar.mockResolvedValue(false);
+      const cached = foundResult({ confidence: 0.95, requestedLinkedinUrl: REQ_URL });
+      cached.profile = { ...cached.profile!, photoUrl: 'https://media.licdn.com/dms/image/jane.jpg' };
+      mockGetCachedEnrichment.mockResolvedValue(cached);
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(mockScrapingdogEnrich).not.toHaveBeenCalled();
+      expect(mockCaptureAvatar).toHaveBeenCalledWith('u1', 'https://media.licdn.com/dms/image/jane.jpg');
+    });
+
+    it('a member who already has a photo is not re-captured from the cache', async () => {
+      mockHasAvatar.mockResolvedValue(true);
+      const cached = foundResult({ confidence: 0.95, requestedLinkedinUrl: REQ_URL });
+      cached.profile = { ...cached.profile!, photoUrl: 'https://media.licdn.com/dms/image/jane.jpg' };
+      mockGetCachedEnrichment.mockResolvedValue(cached);
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(mockCaptureAvatar).not.toHaveBeenCalled();
     });
 
     it('fresh cache with mid-range confidence maps to partial', async () => {

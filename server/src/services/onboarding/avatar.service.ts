@@ -67,6 +67,13 @@ export async function getAvatarBlob(userId: string): Promise<{ blob: Buffer; con
   return { blob: row.avatar_blob, contentType: row.avatar_blob_type };
 }
 
+/** True when the member already has a stored photo (blob), so a cached
+ *  enrichment does not re-download on every status check. */
+export async function hasAvatar(userId: string): Promise<boolean> {
+  const r = await query<{ has: boolean }>(`SELECT avatar_blob IS NOT NULL AS has FROM users WHERE id = $1`, [userId]);
+  return !!r.rows[0]?.has;
+}
+
 /** SSRF guard (see the trust-model paragraph in the header): null when the
  *  URL is fetchable, else a short reason. https-only, no literal-IP hosts. */
 function rejectedPhotoUrlReason(photoUrl: string): string | null {
@@ -77,6 +84,10 @@ function rejectedPhotoUrlReason(photoUrl: string): string | null {
     return 'unparseable url';
   }
   if (url.protocol !== 'https:') return 'non-https protocol';
+  // 7 Sep 2026 (Ali: "why is it not getting my image?"): a profile with no
+  // photo makes the scrape hand back LinkedIn's grey default avatar, served
+  // from static.licdn.com. Real photos live on media.licdn.com.
+  if (url.hostname === 'static.licdn.com') return 'linkedin placeholder image';
   // Bracketed IPv6 literals keep their brackets in WHATWG hostname ('[::1]');
   // IPv4 literals in ANY spelling (hex/octal/plain decimal) come back
   // canonicalized to dotted-quad, so one regex covers them all.

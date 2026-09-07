@@ -187,6 +187,18 @@ describe('captureAvatar', () => {
 
   // ─── SSRF guard: https-only, no literal-IP hosts (checked BEFORE fetch) ────
   describe('URL guard (SSRF)', () => {
+    // 7 Sep 2026: a profile without a photo makes the scrape hand back
+    // LinkedIn's grey default avatar; that must never become someone's photo.
+    it("rejects LinkedIn's default placeholder asset before any network call", async () => {
+      const fetchSpy = jest.spyOn(globalThis, 'fetch');
+
+      const result = await captureAvatar(USER_ID, 'https://static.licdn.com/aero-v1/sc/h/9c8pery4andzj6ohjkjp54ma2');
+
+      expect(result).toBe(false);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
     it('rejects an http:// URL before any network call', async () => {
       const fetchSpy = jest.spyOn(globalThis, 'fetch');
 
