@@ -801,7 +801,8 @@ export default function ChatbotOnboarding() {
     setConfirming(true);
     try {
       const res = await api.post<{ data: OnboardingConfirmResponse }>('/onboarding/confirm', {
-        messages: messages.slice(1),
+        // Never send an empty line: the server rejects it and the button would look dead.
+        messages: messages.slice(1).filter((m) => m.content.trim().length > 0),
         profile: confirmedProfile(),
       });
       await checkSession();

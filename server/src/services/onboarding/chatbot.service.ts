@@ -96,6 +96,11 @@ async function askHost(
     .trim();
   const ready = text.includes(READY_TOKEN);
   if (ready) text = text.replace(READY_TOKEN, '').trim();
+  // 7 Sep 2026: a reply that is only the ready token (or nothing) left an
+  // empty assistant message in the transcript, and every later call
+  // (/chat, /profile, /confirm) then failed validation on it: the member
+  // pressed "Yes, use this" and nothing happened. Never return empty text.
+  if (!text) text = ready ? 'Thank you, that is everything we need.' : 'Could you tell us a bit more?';
   return { reply: text, ready };
 }
 

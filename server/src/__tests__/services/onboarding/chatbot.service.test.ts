@@ -115,6 +115,24 @@ describe('chatbot.service', () => {
   // 7 Sep 2026 (Ali): "it must be easy to talk and to the point". A draft that
   // breaks the hard style rules is sent back once for a rewrite; a compliant
   // draft costs nothing extra; a rewrite that is no better never blocks the chat.
+  // 7 Sep 2026: a bare ready token used to become an empty assistant message
+  // that every later request failed validation on.
+  describe('an empty reply never reaches the transcript', () => {
+    beforeEach(() => mockCreate.mockReset());
+    it('a bare ready token becomes a short closing line, still ready', async () => {
+      mockCreate.mockResolvedValue({ content: [{ type: 'text', text: READY_TOKEN }] });
+      const { reply, ready } = await converse(history);
+      expect(ready).toBe(true);
+      expect(reply).toBe('Thank you, that is everything we need.');
+    });
+    it('an empty reply becomes a question, not an empty line', async () => {
+      mockCreate.mockResolvedValue({ content: [] });
+      const { reply, ready } = await converse(history);
+      expect(ready).toBe(false);
+      expect(reply).toBe('Could you tell us a bit more?');
+    });
+  });
+
   describe('style guard', () => {
     beforeEach(() => mockCreate.mockReset());
 
