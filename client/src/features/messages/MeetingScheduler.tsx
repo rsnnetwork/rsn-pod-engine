@@ -7,8 +7,9 @@
 // message in the thread, and notifies the partner. No calendars, no OAuth.
 
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, CalendarCheck } from 'lucide-react';
+import { Check, CalendarCheck, Video, Phone } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { E } from '@/realtime/entities';
 import { Spinner } from '@/components/ui/Spinner';
@@ -21,7 +22,9 @@ interface Scheduling {
   mine: string[];
   theirs: string[];
   overlap: string[];
-  confirmed: { window: string; byUserId: string; at: string; startAt: string | null; durationMin: number | null } | null;
+  confirmed: { window: string; byUserId: string; at: string; startAt: string | null; durationMin: number | null; type: 'audio' | 'video' | null } | null;
+  /** The partner changed availability since I last opened the scheduler. */
+  schedulingUpdated?: boolean;
 }
 
 // Sensible default start hour for each daypart when finalising an exact time.
@@ -74,8 +77,47 @@ function labelFor(windowKey: string): string {
   return `${day}, ${part}`;
 }
 
+/**
+ * A pinned banner at the top of the thread showing the confirmed meeting to
+ * BOTH people — real local time, duration, audio/video, and a Join button —
+ * so the meeting is visible in the chat, not buried in the scheduler (Ali,
+ * 8 Sep 2026). Shares the scheduling query cache with the scheduler panel.
+ */
+export function ThreadMeetingBanner({ conversationId }: { conversationId: string }) {
+  const navigate = useNavigate();
+  const { data } = useQuery<Scheduling>({
+    queryKey: ['meetingScheduling', conversationId],
+    queryFn: () => api.get(`/dm/conversations/${conversationId}/scheduling`).then(r => r.data.data),
+    meta: { entities: [E.dmConversation(conversationId)] },
+  });
+  const c = data?.confirmed;
+  if (!c || !c.startAt) return null;
+  return (
+    <div className="border-b border-emerald-200 bg-emerald-50 px-4 py-2.5" data-testid="thread-meeting-banner">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <CalendarCheck className="h-4 w-4 shrink-0 text-emerald-600" />
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-emerald-800">{localWhen(c.startAt)}</p>
+            <p className="text-[11px] text-emerald-700">
+              {c.type === 'audio' ? 'Audio call' : 'Video call'} · {c.durationMin} min · your local time
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={() => navigate(`/meet/${conversationId}?kind=${c.type ?? 'video'}`)}
+          className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700"
+        >
+          {c.type === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Join
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function MeetingScheduler({ conversationId }: { conversationId: string }) {
   const { addToast } = useToastStore();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [staged, setStaged] = useState<Set<string> | null>(null);
   const [saving, setSaving] = useState(false);
@@ -84,6 +126,7 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
   const [finalizing, setFinalizing] = useState<string | null>(null);
   const [startTime, setStartTime] = useState('14:00');
   const [durationMin, setDurationMin] = useState(30);
+  const [meetingKind, setMeetingKind] = useState<'audio' | 'video'>('video');
 
   const { data, isLoading } = useQuery<Scheduling>({
     queryKey: ['meetingScheduling', conversationId],
@@ -153,7 +196,7 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
       // client renders it in its own timezone.
       const day = windowKey.split(':')[0];
       const startAt = new Date(`${day}T${startTime}:00`).toISOString();
-      await api.post(`/dm/conversations/${conversationId}/scheduling/confirm`, { window: windowKey, startAt, durationMin });
+      await api.post(`/dm/conversations/${conversationId}/scheduling/confirm`, { window: windowKey, startAt, durationMin, type: meetingKind });
       setFinalizing(null);
       await queryClient.invalidateQueries({ queryKey: ['meetingScheduling', conversationId] });
       // The confirmation message lands in the thread — invalidate the REAL
@@ -182,18 +225,26 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
             </p>
           </div>
           {data.confirmed.startAt && (
-            <div className="mt-1 pl-6 space-y-1">
+            <div className="mt-1 pl-6 space-y-1.5">
               <p className="text-xs text-emerald-700">
-                {data.confirmed.durationMin} minutes · shown in your local time
+                {(data.confirmed.type === 'audio' ? 'Audio call' : 'Video call')} · {data.confirmed.durationMin} minutes · shown in your local time
               </p>
-              <a
-                href={googleCalUrl(data.confirmed.startAt, data.confirmed.durationMin ?? 30)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-block text-xs font-medium text-emerald-700 underline hover:text-emerald-900"
-              >
-                Add to Google Calendar
-              </a>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => navigate(`/meet/${conversationId}?kind=${data.confirmed?.type ?? 'video'}`)}
+                  className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700"
+                >
+                  {data.confirmed.type === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Join
+                </button>
+                <a
+                  href={googleCalUrl(data.confirmed.startAt, data.confirmed.durationMin ?? 30)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs font-medium text-emerald-700 underline hover:text-emerald-900"
+                >
+                  Add to Google Calendar
+                </a>
+              </div>
               <p className="text-[11px] text-emerald-600">A calendar invite was emailed to you both.</p>
             </div>
           )}
@@ -287,6 +338,19 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
                       <option value={60}>60 min</option>
                     </select>
                   </label>
+                  <div className="inline-flex overflow-hidden rounded-lg border border-emerald-300">
+                    {(['video', 'audio'] as const).map(k => (
+                      <button
+                        key={k}
+                        type="button"
+                        onClick={() => setMeetingKind(k)}
+                        className={`inline-flex min-h-[36px] items-center gap-1 px-2.5 text-xs font-medium ${meetingKind === k ? 'bg-emerald-600 text-white' : 'bg-white text-emerald-700'}`}
+                      >
+                        {k === 'video' ? <Video className="h-3.5 w-3.5" /> : <Phone className="h-3.5 w-3.5" />}
+                        {k === 'video' ? 'Video' : 'Audio'}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <p className="text-[11px] text-emerald-600">
                   {(() => { try { return `That is ${localWhen(new Date(`${w.split(':')[0]}T${startTime}:00`).toISOString())} your time.`; } catch { return ''; } })()}

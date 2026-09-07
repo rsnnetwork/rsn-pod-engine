@@ -10,8 +10,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare, CalendarClock, Flag, MoreVertical } from 'lucide-react';
-import MeetingScheduler from './MeetingScheduler';
+import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare, CalendarClock, Flag, MoreVertical, Video, Phone } from 'lucide-react';
+import MeetingScheduler, { ThreadMeetingBanner } from './MeetingScheduler';
 import Linkify from '@/components/ui/Linkify';
 import MeetingRequests, { FocusedMeetingRequest } from './MeetingRequests';
 import Avatar from '@/components/ui/Avatar';
@@ -177,6 +177,9 @@ export default function MessagesPage() {
   // Task E4 — report entry point for the thread's conversation partner.
   const [reportOpen, setReportOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  // W-meet — "Meet now" needs the other person online. Poll presence; a call is
+  // pointless if they cannot answer, so the buttons gate on it.
+  const [calling, setCalling] = useState(false);
   // 360px phones: image + mic + send leave ~150px for the box, where "Type a
   // message..." wraps under its own first word. A shorter prompt fits.
   const narrowPhone = typeof window !== 'undefined' && window.matchMedia('(max-width: 379px)').matches;
@@ -346,6 +349,51 @@ export default function MessagesPage() {
   }, [messagesData]);
 
   const activeConv = inboxData?.find(c => c.conversationId === activeId);
+
+  // realtime: skip — presence is inherently pollable; a 20s poll is the source of truth for "online now"
+  const { data: presence } = useQuery({
+    queryKey: ['partner-presence', activeId],
+    queryFn: () => api.get(`/dm/conversations/${activeId}/partner-presence`).then(r => r.data.data as { online: boolean }),
+    enabled: !!activeId,
+    refetchInterval: 20_000,
+    refetchOnWindowFocus: true,
+  });
+  const partnerOnline = !!presence?.online;
+
+  const startCall = async (kind: 'audio' | 'video') => {
+    if (!activeId || calling) return;
+    setCalling(true);
+    try {
+      await api.post(`/dm/conversations/${activeId}/call/start`, { kind });
+      navigate(`/meet/${activeId}?kind=${kind}`);
+    } catch (e: any) {
+      addToast(e?.response?.data?.error?.message || 'Could not start the call.', 'info');
+    } finally {
+      setCalling(false);
+    }
+  };
+
+  // W-meet (8 Sep 2026) — a dot on the calendar icon when the partner changed
+  // their availability since I last opened the scheduler. The dm-conversation
+  // entity makes this live; the flag is server-computed so it survives refresh.
+  const { data: scheduling } = useQuery({
+    queryKey: ['meetingScheduling', activeId],
+    queryFn: () => api.get(`/dm/conversations/${activeId}/scheduling`).then(r => r.data.data as { schedulingUpdated?: boolean }),
+    enabled: !!activeId,
+    meta: { entities: activeId ? [E.dmConversation(activeId)] : [] },
+  });
+  const availabilityDot = !!scheduling?.schedulingUpdated && !schedulerOpen;
+
+  // Opening the scheduler clears the dot (marks it seen server-side).
+  const openScheduler = () => {
+    const willOpen = !schedulerOpen;
+    setSchedulerOpen(willOpen);
+    if (willOpen && activeId) {
+      api.post(`/dm/conversations/${activeId}/scheduling/seen`)
+        .then(() => qc.invalidateQueries({ queryKey: ['meetingScheduling', activeId] }))
+        .catch(() => {});
+    }
+  };
 
   // Feature 18 — derive an "effective active context" so the thread view and
   // composer can render uniformly whether we're in an existing thread or
@@ -807,17 +855,46 @@ export default function MessagesPage() {
                 )}
               </Link>
               <div className="hidden sm:flex items-center gap-1">
-              {/* REASON Phase 2 — arrange a time to meet (availability windows). */}
+              {/* W-meet — "Meet now": video / audio call, enabled only when the
+                  other person is online (else the tooltip says to schedule). */}
               {activeConv && (
                 <button
-                  onClick={() => setSchedulerOpen(o => !o)}
-                  className={`flex h-11 w-11 items-center justify-center rounded-lg transition-colors ${
+                  onClick={() => startCall('video')}
+                  disabled={!partnerOnline || calling}
+                  className="flex h-11 w-11 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-rsn-red disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-400"
+                  title={partnerOnline ? 'Start a video call now' : 'They are offline — schedule a meeting instead'}
+                  aria-label="Start a video call now"
+                >
+                  <Video className="h-4.5 w-4.5" />
+                </button>
+              )}
+              {activeConv && (
+                <button
+                  onClick={() => startCall('audio')}
+                  disabled={!partnerOnline || calling}
+                  className="flex h-11 w-11 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-rsn-red disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-400"
+                  title={partnerOnline ? 'Start an audio call now' : 'They are offline — schedule a meeting instead'}
+                  aria-label="Start an audio call now"
+                >
+                  <Phone className="h-4 w-4" />
+                </button>
+              )}
+              {/* REASON Phase 2 — arrange a time to meet (availability windows).
+                  A red dot appears when the partner changed their availability
+                  since I last opened this (W-meet, 8 Sep 2026). */}
+              {activeConv && (
+                <button
+                  onClick={openScheduler}
+                  className={`relative flex h-11 w-11 items-center justify-center rounded-lg transition-colors ${
                     schedulerOpen ? 'bg-rsn-red-light text-rsn-red' : 'hover:bg-gray-100 text-gray-400 hover:text-gray-600'
                   }`}
-                  title="Find a time to meet"
-                  aria-label="Find a time to meet"
+                  title={availabilityDot ? 'They updated their availability' : 'Find a time to meet'}
+                  aria-label={availabilityDot ? 'They updated their availability — find a time to meet' : 'Find a time to meet'}
                 >
                   <CalendarClock className="h-4 w-4" />
+                  {availabilityDot && (
+                    <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-rsn-red ring-2 ring-white" aria-hidden="true" />
+                  )}
                 </button>
               )}
               {/* Delete is only available for existing conversations (compose-new
@@ -857,18 +934,36 @@ export default function MessagesPage() {
                 <button
                   type="button"
                   onClick={() => setMoreOpen(o => !o)}
-                  aria-label="More actions"
+                  aria-label={availabilityDot ? 'More actions — they updated their availability' : 'More actions'}
                   aria-expanded={moreOpen}
-                  className="flex h-11 w-11 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100"
+                  className="relative flex h-11 w-11 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100"
                 >
                   <MoreVertical className="h-5 w-5" />
+                  {availabilityDot && (
+                    <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-rsn-red ring-2 ring-white" aria-hidden="true" />
+                  )}
                 </button>
                 {moreOpen && (
                   <div className="absolute right-0 top-12 z-30 w-60 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg">
                     {activeConv && (
-                      <button type="button" onClick={() => { setMoreOpen(false); setSchedulerOpen(o => !o); }}
+                      <button type="button" disabled={!partnerOnline || calling}
+                        onClick={() => { setMoreOpen(false); startCall('video'); }}
+                        className="flex min-h-[44px] w-full items-center gap-2 px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40">
+                        <Video className="h-4 w-4 text-gray-400" /> {partnerOnline ? 'Video call now' : 'Video call (they are offline)'}
+                      </button>
+                    )}
+                    {activeConv && (
+                      <button type="button" disabled={!partnerOnline || calling}
+                        onClick={() => { setMoreOpen(false); startCall('audio'); }}
+                        className="flex min-h-[44px] w-full items-center gap-2 px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-40">
+                        <Phone className="h-4 w-4 text-gray-400" /> {partnerOnline ? 'Audio call now' : 'Audio call (they are offline)'}
+                      </button>
+                    )}
+                    {activeConv && (
+                      <button type="button" onClick={() => { setMoreOpen(false); openScheduler(); }}
                         className="flex min-h-[44px] w-full items-center gap-2 px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50">
                         <CalendarClock className="h-4 w-4 text-gray-400" /> Find a time to meet
+                        {availabilityDot && <span className="ml-auto h-2 w-2 rounded-full bg-rsn-red" aria-hidden="true" />}
                       </button>
                     )}
                     {headerContext.otherUserId !== myUserId && (
@@ -900,6 +995,10 @@ export default function MessagesPage() {
               reportedId={headerContext.otherUserId}
               reportedDisplayName={headerContext.otherDisplayName}
             />
+
+            {/* Confirmed meeting — always pinned so both people see it in the
+                chat, with Join, not buried in the scheduler (Ali, 8 Sep 2026). */}
+            {activeConv && <ThreadMeetingBanner conversationId={activeConv.conversationId} />}
 
             {/* Availability grid — collapsible so the thread stays primary. */}
             {activeConv && schedulerOpen && (

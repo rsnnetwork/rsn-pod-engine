@@ -1135,6 +1135,9 @@ export interface MeetingConfirmedEmailData {
   threadUrl: string;
   googleCalendarUrl: string;
   icsContent: string;
+  /** W-meet: the RSN call link + kind, so they can join from the email. */
+  joinUrl?: string;
+  kind?: 'audio' | 'video';
 }
 
 export async function sendMeetingConfirmedEmail(
@@ -1162,10 +1165,14 @@ export async function sendMeetingConfirmedEmail(
           </p>
           <div style="background:#f0fdf4;border-left:3px solid #16a34a;border-radius:6px;padding:12px 16px;margin:0 0 20px 0;">
             <p style="color:#166534;font-size:15px;line-height:1.5;margin:0;"><strong>${when}</strong></p>
-            <p style="color:#374151;font-size:13px;line-height:1.5;margin:6px 0 0 0;">Duration: ${data.durationMin} minutes</p>
+            <p style="color:#374151;font-size:13px;line-height:1.5;margin:6px 0 0 0;">${data.kind === 'audio' ? 'Audio call' : 'Video call'} · ${data.durationMin} minutes</p>
           </div>
-          <div style="text-align:center;margin:20px 0;">
-            <a href="${data.googleCalendarUrl}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 28px;border-radius:8px;">Add to Google Calendar</a>
+          ${data.joinUrl ? `<div style="text-align:center;margin:20px 0 8px 0;">
+            <a href="${data.joinUrl}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 28px;border-radius:8px;">Join the call</a>
+          </div>
+          <p style="color:#9ca3af;font-size:12px;text-align:center;margin:0 0 16px 0;">The Join link opens the call on RSN at meeting time.</p>` : ''}
+          <div style="text-align:center;margin:12px 0;">
+            <a href="${data.googleCalendarUrl}" style="display:inline-block;color:#DE322E;font-size:14px;font-weight:600;text-decoration:none;">Add to Google Calendar</a>
           </div>
           <p style="color:#9ca3af;font-size:13px;text-align:center;margin:0 0 16px 0;">The calendar invite is attached (.ics) — open it to add the meeting to any calendar.</p>
           <div style="text-align:center;margin:8px 0;">

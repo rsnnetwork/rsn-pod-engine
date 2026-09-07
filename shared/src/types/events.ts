@@ -236,6 +236,9 @@ export interface ServerToClientEvents {
   // Notifications (real-time push)
   'notification:new': (data: { id: string; type: string; title: string; body?: string; link?: string; isRead: boolean; createdAt: string; inviteStatus?: string; podId?: string | null; sessionId?: string | null }) => void;
 
+  // 1:1 "Meet now" — the callee's live ring (W-meet, 8 Sep 2026).
+  'call:incoming': (data: { conversationId: string; fromUserId: string; fromName: string; kind: 'audio' | 'video'; link: string }) => void;
+
   // DM (Phase D of chat-fix-and-dm-system, 1 May 2026) — platform-level
   // person-to-person messaging. Independent of any session/round/event.
   'dm:message': (data: { id: string; conversationId: string; fromUserId: string; content: string; readAt: string | null; createdAt: string }) => void;

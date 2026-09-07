@@ -32,6 +32,7 @@ import SessionGuard from '@/features/live/SessionGuard';
 import HostDashboardPage from '@/features/host/HostDashboardPage';
 import RecapPage from '@/features/sessions/RecapPage';
 import MessagesPage from '@/features/messages/MessagesPage';
+import MeetPage from '@/features/messages/MeetPage';
 import EncounterHistoryPage from '@/features/sessions/EncounterHistoryPage';
 import MatchesPage from '@/features/matches/MatchesPage';
 import AgentsPage from '@/features/agents/AgentsPage';
@@ -58,6 +59,7 @@ import NotFoundPage from '@/features/misc/NotFoundPage';
 import RequestToJoinPage from '@/features/auth/RequestToJoinPage';
 import ChatbotOnboarding from '@/features/onboarding/ChatbotOnboarding';
 import ToastContainer from '@/components/ui/Toast';
+import IncomingCallBanner from '@/components/ui/IncomingCallBanner';
 
 export default function App() {
   const { checkSession } = useAuthStore();
@@ -168,7 +170,9 @@ export default function App() {
   useEntityChangedHandler();
 
   return (
-    <Routes>
+    <>
+      {isAuthenticated && <IncomingCallBanner />}
+      <Routes>
       {/* Public pages */}
       <Route path="/welcome" element={<Navigate to="/login" replace />} />
       <Route path="/login" element={<LoginPage />} />
@@ -228,11 +232,13 @@ export default function App() {
           route never mounts, so nothing said during onboarding ("Photo added.",
           the Google photo outcome) was ever visible. */}
       <Route path="/onboarding" element={<ProtectedRoute><><ChatbotOnboarding /><ToastContainer /></></ProtectedRoute>} />
+      <Route path="/meet/:conversationId" element={<ProtectedRoute><MeetPage /></ProtectedRoute>} />
       <Route path="/session/:sessionId/live" element={<ProtectedRoute><SessionGuard><LiveSessionPage /></SessionGuard></ProtectedRoute>} />
       <Route path="/session/:sessionId/host" element={<ProtectedRoute><HostDashboardPage /></ProtectedRoute>} />
       <Route path="/sessions/:sessionId/live" element={<LiveRedirectCompat />} />
 
       <Route path="*" element={<NotFoundPage />} />
-    </Routes>
+      </Routes>
+    </>
   );
 }

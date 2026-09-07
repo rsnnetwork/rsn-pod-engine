@@ -50,7 +50,7 @@ jest.mock('../../../services/email/email.service', () => ({
 
 import {
   isValidWindowKey, windowLabel, getScheduling, setAvailability, confirmWindow,
-  HORIZON_DAYS,
+  markSchedulerSeen, HORIZON_DAYS,
 } from '../../../services/dm/meeting-windows.service';
 
 const NOW = new Date('2026-07-19T12:00:00Z');
@@ -124,6 +124,53 @@ describe('getScheduling', () => {
   });
 });
 
+// ── Availability-change dot (W-meet, 8 Sep 2026) ─────────────────────────────
+describe('schedulingUpdated dot', () => {
+  const older = new Date('2026-09-07T10:00:00Z');
+  const newer = new Date('2026-09-07T11:00:00Z');
+
+  it('is TRUE for me when the partner changed availability since I last looked', async () => {
+    // I am side A. Partner (B) updated at `newer`; I last opened at `older`.
+    armConv([], { ...CONV, avail_updated_at_b: newer, scheduler_seen_at_a: older });
+    const s = await getScheduling('conv-1', 'u-a');
+    expect(s.schedulingUpdated).toBe(true);
+  });
+
+  it('is FALSE once I have opened the scheduler more recently than their change', async () => {
+    armConv([], { ...CONV, avail_updated_at_b: older, scheduler_seen_at_a: newer });
+    const s = await getScheduling('conv-1', 'u-a');
+    expect(s.schedulingUpdated).toBe(false);
+  });
+
+  it('is TRUE when the partner changed and I have never opened the scheduler', async () => {
+    armConv([], { ...CONV, avail_updated_at_b: newer, scheduler_seen_at_a: null });
+    const s = await getScheduling('conv-1', 'u-a');
+    expect(s.schedulingUpdated).toBe(true);
+  });
+
+  it('does not fire from MY OWN change (only the partner\'s counts)', async () => {
+    // I am side A and only A has an update stamp — B (partner) never changed.
+    armConv([], { ...CONV, avail_updated_at_a: newer, scheduler_seen_at_a: null });
+    const s = await getScheduling('conv-1', 'u-a');
+    expect(s.schedulingUpdated).toBe(false);
+  });
+});
+
+describe('markSchedulerSeen', () => {
+  it('stamps side A\'s seen column for user_a', async () => {
+    armConv([]);
+    await markSchedulerSeen('conv-1', 'u-a');
+    const upd = mockQuery.mock.calls.find(c => /UPDATE dm_conversations SET scheduler_seen_at_a/.test(c[0] as string));
+    expect(upd).toBeTruthy();
+  });
+  it('stamps side B\'s seen column for user_b', async () => {
+    armConv([]);
+    await markSchedulerSeen('conv-1', 'u-b');
+    const upd = mockQuery.mock.calls.find(c => /UPDATE dm_conversations SET scheduler_seen_at_b/.test(c[0] as string));
+    expect(upd).toBeTruthy();
+  });
+});
+
 describe('setAvailability', () => {
   it('replaces my selection: DELETE mine then INSERT each window', async () => {
     armConv([]);
@@ -137,6 +184,13 @@ describe('setAvailability', () => {
     armConv([]);
     await expect(setAvailability('conv-1', 'u-a', [futureKey(-1)]))
       .rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it('stamps MY availability-changed time so the partner\'s dot can fire', async () => {
+    armConv([]);
+    await setAvailability('conv-1', 'u-a', [futureKey(1)]);
+    const sqls = mockQuery.mock.calls.map(c => c[0] as string);
+    expect(sqls.some(s => /UPDATE dm_conversations SET avail_updated_at_a = NOW\(\)/.test(s))).toBe(true);
   });
 });
 

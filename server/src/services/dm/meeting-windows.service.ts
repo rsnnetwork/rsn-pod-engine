@@ -37,7 +37,12 @@ export interface ConversationScheduling {
      *  confirmations; the client falls back to the daypart label then. */
     startAt: Date | null;
     durationMin: number | null;
+    /** 'audio' | 'video' — the kind of call this meeting is (W-meet). */
+    type: 'audio' | 'video' | null;
   } | null;
+  /** W-meet (8 Sep 2026): the partner changed their availability more recently
+   *  than I last opened the scheduler — drives the calendar-icon dot. */
+  schedulingUpdated: boolean;
 }
 
 // ── Validation (pure — unit-tested directly) ─────────────────────────────────
@@ -82,6 +87,11 @@ interface ConversationRow {
   meeting_confirmed_at: Date | null;
   meeting_start_at: Date | null;
   meeting_duration_min: number | null;
+  meeting_type: 'audio' | 'video' | null;
+  avail_updated_at_a: Date | null;
+  avail_updated_at_b: Date | null;
+  scheduler_seen_at_a: Date | null;
+  scheduler_seen_at_b: Date | null;
 }
 
 /** Load the conversation and prove the caller belongs to it. */
@@ -89,7 +99,9 @@ async function requireParticipant(conversationId: string, userId: string): Promi
   const r = await query<ConversationRow>(
     `SELECT id, user_a_id, user_b_id,
             meeting_confirmed_window, meeting_confirmed_by, meeting_confirmed_at,
-            meeting_start_at, meeting_duration_min
+            meeting_start_at, meeting_duration_min, meeting_type,
+            avail_updated_at_a, avail_updated_at_b,
+            scheduler_seen_at_a, scheduler_seen_at_b
      FROM dm_conversations WHERE id = $1`,
     [conversationId],
   );
@@ -109,6 +121,16 @@ function buildScheduling(
   const mine = rows.filter(r => r.user_id === userId).map(r => r.window_key).sort();
   const theirs = rows.filter(r => r.user_id !== userId).map(r => r.window_key).sort();
   const theirSet = new Set(theirs);
+
+  // Dot logic: the partner changed availability more recently than I last
+  // opened the scheduler. Which timestamp is "mine" vs "theirs" depends on
+  // whether I'm side A or B of the conversation.
+  const iAmA = conv.user_a_id === userId;
+  const partnerAvailUpdated = iAmA ? conv.avail_updated_at_b : conv.avail_updated_at_a;
+  const mySchedulerSeen = iAmA ? conv.scheduler_seen_at_a : conv.scheduler_seen_at_b;
+  const schedulingUpdated = !!partnerAvailUpdated
+    && (!mySchedulerSeen || partnerAvailUpdated.getTime() > mySchedulerSeen.getTime());
+
   return {
     conversationId: conv.id,
     partnerId: conv.user_a_id === userId ? conv.user_b_id : conv.user_a_id,
@@ -122,8 +144,10 @@ function buildScheduling(
           at: conv.meeting_confirmed_at!,
           startAt: conv.meeting_start_at,
           durationMin: conv.meeting_duration_min,
+          type: conv.meeting_type,
         }
       : null,
+    schedulingUpdated,
   };
 }
 
@@ -158,6 +182,9 @@ export async function setAvailability(
     }
   }
 
+  const iAmA = conv.user_a_id === userId;
+  const stampCol = iAmA ? 'avail_updated_at_a' : 'avail_updated_at_b';
+
   await transaction(async (client) => {
     await client.query(
       `DELETE FROM meeting_availability WHERE conversation_id = $1 AND user_id = $2`,
@@ -170,13 +197,43 @@ export async function setAvailability(
         [conversationId, userId, w],
       );
     }
+    // Stamp WHEN I changed my availability so the partner's dot can tell it's
+    // newer than the last time they looked.
+    await client.query(
+      `UPDATE dm_conversations SET ${stampCol} = NOW() WHERE id = $1`,
+      [conversationId],
+    );
   });
 
+  // Signal the partner so their calendar-icon dot lights up live (and the
+  // scheduler panel, if open, shows my new picks). The dm-conversation entity
+  // is what the client's scheduling query listens on.
+  const partnerId = iAmA ? conv.user_b_id : conv.user_a_id;
+  try {
+    const { io } = await import('../../index');
+    const { emitEntities } = await import('../../realtime/emit');
+    const { E } = await import('../../realtime/entities');
+    await emitEntities(io, [partnerId], [E.dmConversation(conversationId)]);
+  } catch (err) {
+    logger.warn({ err, conversationId }, 'availability-change signal failed (non-fatal)');
+  }
+
+  const conv2 = await requireParticipant(conversationId, userId);
   const rows = await query<{ user_id: string; window_key: string }>(
     `SELECT user_id, window_key FROM meeting_availability WHERE conversation_id = $1`,
     [conversationId],
   );
-  return buildScheduling(conv, userId, rows.rows);
+  return buildScheduling(conv2, userId, rows.rows);
+}
+
+/**
+ * Mark that I've just looked at the scheduler — clears my calendar-icon dot.
+ * Idempotent; safe to call every time the panel opens.
+ */
+export async function markSchedulerSeen(conversationId: string, userId: string): Promise<void> {
+  const conv = await requireParticipant(conversationId, userId);
+  const col = conv.user_a_id === userId ? 'scheduler_seen_at_a' : 'scheduler_seen_at_b';
+  await query(`UPDATE dm_conversations SET ${col} = NOW() WHERE id = $1`, [conversationId]);
 }
 
 /**
@@ -189,7 +246,7 @@ export async function confirmWindow(
   conversationId: string,
   userId: string,
   windowKey: string,
-  opts: { startAt?: string | null; durationMin?: number | null } = {},
+  opts: { startAt?: string | null; durationMin?: number | null; type?: 'audio' | 'video' | null } = {},
 ): Promise<ConversationScheduling> {
   const conv = await requireParticipant(conversationId, userId);
   if (!isValidWindowKey(windowKey)) {
@@ -231,13 +288,16 @@ export async function confirmWindow(
     startAt = parsed;
     durationMin = Math.min(240, Math.max(15, Math.round(opts.durationMin ?? 30)));
   }
+  const meetingType: 'audio' | 'video' | null = startAt
+    ? (opts.type === 'audio' ? 'audio' : 'video')
+    : null;
 
   await query(
     `UPDATE dm_conversations
      SET meeting_confirmed_window = $2, meeting_confirmed_by = $3, meeting_confirmed_at = NOW(),
-         meeting_start_at = $4, meeting_duration_min = $5
+         meeting_start_at = $4, meeting_duration_min = $5, meeting_type = $6
      WHERE id = $1`,
-    [conversationId, windowKey, userId, startAt, durationMin],
+    [conversationId, windowKey, userId, startAt, durationMin, meetingType],
   );
 
   const partnerId = conv.user_a_id === userId ? conv.user_b_id : conv.user_a_id;
@@ -316,6 +376,8 @@ export async function confirmWindow(
           threadUrl,
           googleCalendarUrl: googleUrl,
           icsContent: ics,
+          joinUrl: `${config.clientUrl}/meet/${conversationId}`,
+          kind: meetingType ?? 'video',
         }).catch(err => logger.warn({ err, uid }, 'meeting-confirmed email failed (non-fatal)'));
       }
     } catch (err) {
