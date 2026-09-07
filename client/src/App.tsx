@@ -57,6 +57,7 @@ import SupportPage from '@/features/support/SupportPage';
 import NotFoundPage from '@/features/misc/NotFoundPage';
 import RequestToJoinPage from '@/features/auth/RequestToJoinPage';
 import ChatbotOnboarding from '@/features/onboarding/ChatbotOnboarding';
+import ToastContainer from '@/components/ui/Toast';
 
 export default function App() {
   const { checkSession } = useAuthStore();
@@ -216,7 +217,10 @@ export default function App() {
       </Route>
 
       {/* Protected without layout (full-screen) */}
-      <Route path="/onboarding" element={<ProtectedRoute><ChatbotOnboarding /></ProtectedRoute>} />
+      {/* 7 Sep 2026: the toast container lives in AppLayout, which this full-screen
+          route never mounts, so nothing said during onboarding ("Photo added.",
+          the Google photo outcome) was ever visible. */}
+      <Route path="/onboarding" element={<ProtectedRoute><><ChatbotOnboarding /><ToastContainer /></></ProtectedRoute>} />
       <Route path="/session/:sessionId/live" element={<ProtectedRoute><SessionGuard><LiveSessionPage /></SessionGuard></ProtectedRoute>} />
       <Route path="/session/:sessionId/host" element={<ProtectedRoute><HostDashboardPage /></ProtectedRoute>} />
       <Route path="/sessions/:sessionId/live" element={<LiveRedirectCompat />} />

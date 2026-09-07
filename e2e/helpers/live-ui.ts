@@ -21,9 +21,21 @@ export function connectSocket(u: TestUser): Promise<Socket> {
 
 export async function gotoRetry(page: Page, url: string): Promise<void> {
   for (let i = 0; i < 3; i++) {
-    try { await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 }); return; }
+    try { await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 }); break; }
     catch (e) { if (i === 2) throw e; await wait(3000); }
   }
+  // 7 Sep 2026: Vercel's bot filter sometimes puts this machine behind a
+  // "Security Checkpoint" after a burst of automated runs (real visitors are
+  // unaffected). Its JS challenge does not clear under automation, so wait
+  // and reload for up to two minutes before giving up on the page.
+  for (let i = 0; i < 12; i++) {
+    const title = await page.title().catch(() => '');
+    if (!/Security Checkpoint/i.test(title)) return;
+    if (i === 0) console.log('  (Vercel Security Checkpoint on ' + new URL(url).hostname + '; waiting for it to clear)');
+    await wait(10_000);
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(() => {});
+  }
+  throw new Error('Vercel Security Checkpoint did not clear for this machine in two minutes: ' + url);
 }
 
 export async function openParticipant(

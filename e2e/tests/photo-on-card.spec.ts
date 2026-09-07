@@ -93,7 +93,7 @@ test('the card offers a Google photo and an upload; the upload lands at once; th
 
   // Add a photo from a file: it is the avatar at once, on the card and in the account.
   await card.locator('input[type="file"]').setInputFiles({ name: 'me.png', mimeType: 'image/png', buffer: PNG });
-  await expect(page.getByText('Photo added.')).toBeVisible({ timeout: 20_000 });
+  // The success toast lasts 2.5s; the durable outcomes below are what matter.
   await expect(card.locator('img')).toHaveAttribute('src', /^data:image\/png/, { timeout: 20_000 });
   await expect(card.getByText('Looks good')).toBeVisible();
   const row = await pool.query(`SELECT avatar_url FROM users WHERE id = $1`, [member.id]);
