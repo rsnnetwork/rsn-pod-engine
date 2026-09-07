@@ -108,4 +108,14 @@ test('the card offers a Google photo and an upload; the upload lands at once; th
 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow, 'no sideways scroll at 390px').toBeLessThanOrEqual(0);
+
+  // The same tap lives on the profile page for members who finished onboarding long ago.
+  await pool.query(`UPDATE users SET onboarding_status = 'completed', onboarding_completed = true WHERE id = $1`, [member.id]);
+  await gotoRetry(page, `${APP}/profile?photo=cancelled`);
+  await expect(page.getByTestId('use-google-photo')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(/No problem, nothing changed/)).toBeVisible({ timeout: 30_000 });
+  await expect(page).not.toHaveURL(/photo=/);
+  const profileState = await apiAs(member, 'POST', '/auth/google/photo-state', { redirect: '/profile' });
+  expect(profileState.json.data.url).toMatch(/redirect=%2Fprofile$/);
+  console.log('  ✓ the profile page has the Google photo tap and handles the return trip.');
 });

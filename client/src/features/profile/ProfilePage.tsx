@@ -68,6 +68,35 @@ function TagInput({ label, tags, setTags, placeholder, icon: Icon }: {
 export default function ProfilePage() {
   const { user, checkSession } = useAuthStore();
   const { addToast } = useToastStore();
+
+  // 7 Sep 2026 (Ali: "where is the card on my profile?"): the same Google
+  // photo tap as the onboarding card, from the profile page, with the
+  // outcome read back from the URL on return.
+  const [googlePhotoBusy, setGooglePhotoBusy] = useState(false);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const photo = params.get('photo');
+    if (!photo) return;
+    params.delete('photo');
+    const rest = params.toString();
+    window.history.replaceState({}, '', `${window.location.pathname}${rest ? `?${rest}` : ''}`);
+    if (photo === 'done') { void checkSession(); addToast('Photo added from your Google account.', 'success'); }
+    else if (photo === 'none') addToast('That Google account has no photo.', 'info');
+    else if (photo === 'cancelled') addToast('No problem, nothing changed.', 'info');
+    else addToast('Could not fetch the Google photo.', 'error');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  async function useGooglePhoto() {
+    if (googlePhotoBusy) return;
+    setGooglePhotoBusy(true);
+    try {
+      const res = await api.post('/auth/google/photo-state', { redirect: '/profile' });
+      window.location.href = res.data?.data?.url;
+    } catch {
+      setGooglePhotoBusy(false);
+      addToast('Google sign-in is not available right now.', 'error');
+    }
+  }
   const [interests, setInterests] = useState<string[]>([]);
   const [reasons, setReasons] = useState<string[]>([]);
   const [languages, setLanguages] = useState<string[]>([]);
@@ -230,13 +259,30 @@ export default function ProfilePage() {
             {user.jobTitle && user.company && (
               <p className="text-xs text-gray-400 mt-0.5">{user.jobTitle} at {user.company}</p>
             )}
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="inline-flex min-h-[44px] items-center text-xs text-rsn-red hover:text-rsn-red-hover font-medium"
-            >
-              {avatarUploading ? 'Uploading...' : 'Change photo'}
-            </button>
+            <div className="flex flex-wrap items-center gap-x-4">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex min-h-[44px] items-center text-xs text-rsn-red hover:text-rsn-red-hover font-medium"
+              >
+                {avatarUploading ? 'Uploading...' : 'Change photo'}
+              </button>
+              <button
+                type="button"
+                onClick={useGooglePhoto}
+                disabled={googlePhotoBusy}
+                className="inline-flex min-h-[44px] items-center gap-1.5 text-xs font-medium text-gray-600 hover:text-[#1a1a2e] disabled:opacity-50"
+                data-testid="use-google-photo"
+              >
+                <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" aria-hidden>
+                  <path fill="#4285F4" d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.9h5.4a4.6 4.6 0 0 1-2 3v2.5h3.2c1.9-1.7 3-4.3 3-7.4z" />
+                  <path fill="#34A853" d="M12 22c2.7 0 5-.9 6.6-2.4l-3.2-2.5c-.9.6-2 1-3.4 1-2.6 0-4.8-1.8-5.6-4.1H3.1v2.6A10 10 0 0 0 12 22z" />
+                  <path fill="#FBBC05" d="M6.4 14a6 6 0 0 1 0-3.9V7.5H3.1a10 10 0 0 0 0 9l3.3-2.5z" />
+                  <path fill="#EA4335" d="M12 6c1.5 0 2.8.5 3.8 1.5l2.8-2.8A10 10 0 0 0 3.1 7.5L6.4 10c.8-2.3 3-4 5.6-4z" />
+                </svg>
+                Use my Google photo
+              </button>
+            </div>
           </div>
         </div>
       </Card>
