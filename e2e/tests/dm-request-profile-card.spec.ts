@@ -88,4 +88,16 @@ test('a meeting request shows the sender as a profile card, name links to their 
   await profileTab.waitForLoadState('domcontentloaded');
   await expect(profileTab).toHaveURL(new RegExp(`/profile/${sender.id}`));
   await profileTab.close();
+
+  // 7 Sep 2026 (Ali): the MAIN pane (not just the left band) shows the
+  // requester's profile card with Accept/Decline, on desktop widths.
+  if (page.viewportSize() && page.viewportSize()!.width >= 1024) {
+    const panel = page.locator('[data-testid="focused-meeting-request"]');
+    await expect(panel).toBeVisible({ timeout: 20_000 });
+    await expect(panel).toContainText('Dana Sender');
+    await expect(panel).toContainText('Senior React Developer');
+    await expect(panel.getByRole('button', { name: /^Accept$/i })).toBeVisible();
+    await expect(panel.getByRole('button', { name: /^Decline$/i })).toBeVisible();
+    await expect(panel.locator(`a[href="/profile/${sender.id}"]`).first()).toBeVisible();
+  }
 });

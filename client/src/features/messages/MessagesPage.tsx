@@ -13,7 +13,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare, CalendarClock, Flag, MoreVertical } from 'lucide-react';
 import MeetingScheduler from './MeetingScheduler';
 import Linkify from '@/components/ui/Linkify';
-import MeetingRequests from './MeetingRequests';
+import MeetingRequests, { FocusedMeetingRequest } from './MeetingRequests';
 import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { PageLoader, Spinner } from '@/components/ui/Spinner';
@@ -765,11 +765,17 @@ export default function MessagesPage() {
       {/* Thread view (right) */}
       <div className={`flex-1 bg-white rounded-xl border border-gray-200 overflow-hidden ${(activeId || isComposeMode) ? 'flex' : 'hidden lg:flex'} flex-col`}>
         {!headerContext ? (
-          <div className="flex-1 flex items-center justify-center text-sm text-gray-500 px-6 text-center">
-            {composeToUserId
-              ? <Spinner />
-              : 'Select a conversation to start chatting.'}
-          </div>
+          composeToUserId ? (
+            <div className="flex-1 flex items-center justify-center px-6"><Spinner /></div>
+          ) : (focusPokeId && myUserId) ? (
+            // Landed from the bell's "X asked to meet you" — show that person's
+            // profile card with Accept / Decline right here (7 Sep 2026, Ali).
+            <FocusedMeetingRequest pokeId={focusPokeId} myUserId={myUserId} />
+          ) : (
+            <div className="flex-1 flex items-center justify-center text-sm text-gray-500 px-6 text-center">
+              Select a conversation to start chatting.
+            </div>
+          )
         ) : (
           <>
             {/* Thread header */}

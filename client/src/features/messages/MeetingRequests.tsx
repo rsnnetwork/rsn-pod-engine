@@ -31,6 +31,104 @@ export interface PendingRequest {
   senderCompany: string | null;
 }
 
+/** Shared accept/decline for a pending request. */
+function usePokeActions(myUserId: string) {
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const addToast = useToastStore(s => s.addToast);
+  const settle = (err: unknown, fallback: string) => {
+    addToast((err as any)?.response?.data?.error?.message || fallback, 'info');
+    qc.invalidateQueries({ queryKey: ['pokes-received'] });
+  };
+  const accept = useMutation({
+    mutationFn: (id: string) => api.post(`/pokes/${id}/accept`).then(r => r.data.data as { conversationId: string }),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['pokes-received'] });
+      qc.invalidateQueries({ queryKey: ['dm-conversations'] });
+      addToast('Connected — say hello', 'success');
+      if (data?.conversationId) navigate(`/messages/${data.conversationId}`);
+    },
+    onError: (err) => settle(err, 'That request was already handled'),
+  });
+  const decline = useMutation({
+    mutationFn: (id: string) => api.post(`/pokes/${id}/decline`),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['pokes-received'] }); navigate('/messages'); },
+    onError: (err) => settle(err, 'That request was already handled'),
+  });
+  void myUserId;
+  return { accept, decline, pending: accept.isPending || decline.isPending };
+}
+
+/**
+ * The big "who wants to meet you" panel shown in the right pane when the bell
+ * link lands on /messages?poke=<id> (7 Sep 2026, Ali): the recipient sees the
+ * requester's profile card — photo, name, role, company, why — with Accept /
+ * Decline right there, and can open the full profile before deciding.
+ */
+export function FocusedMeetingRequest({ pokeId, myUserId }: { pokeId: string; myUserId: string }) {
+  const { data: requests } = useQuery({
+    queryKey: ['pokes-received'],
+    queryFn: () => api.get('/pokes/received').then(r => r.data.data as PendingRequest[]),
+    refetchInterval: 20_000,
+    meta: { entities: [E.userInvites(myUserId)] },
+  });
+  const { accept, decline, pending } = usePokeActions(myUserId);
+  const req = (requests || []).find(r => r.id === pokeId);
+
+  if (!req) {
+    return (
+      <div className="flex-1 flex items-center justify-center px-6 text-center text-sm text-gray-500">
+        This meeting request is no longer pending. Pick a conversation on the left.
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 flex items-center justify-center p-6">
+      <div className="w-full max-w-sm rounded-2xl border border-rsn-red/30 bg-white p-6 shadow-sm text-center" data-testid="focused-meeting-request" data-poke-id={req.id}>
+        <p className="text-xs font-semibold uppercase tracking-wider text-rsn-red">Meeting request</p>
+        <ProfileLink userId={req.senderId} className="mt-4 inline-block" title={`View ${req.senderDisplayName || 'this member'}'s profile`}>
+          <Avatar src={req.senderAvatarUrl || undefined} name={req.senderDisplayName || 'Member'} size="xl" />
+        </ProfileLink>
+        <ProfileLink
+          userId={req.senderId}
+          className="mt-3 block text-lg font-bold text-[#1a1a2e] hover:text-rsn-red hover:underline"
+          title={`View ${req.senderDisplayName || 'this member'}'s profile`}
+        >
+          {req.senderDisplayName || 'A member'}
+        </ProfileLink>
+        {(req.senderJobTitle || req.senderCompany) && (
+          <p className="mt-0.5 text-sm text-gray-500">{[req.senderJobTitle, req.senderCompany].filter(Boolean).join(' · ')}</p>
+        )}
+        {req.message && (
+          <p className="mt-3 break-words text-sm text-gray-600">{req.message}</p>
+        )}
+        <ProfileLink userId={req.senderId} className="mt-3 inline-block text-xs font-medium text-rsn-red underline">
+          View full profile
+        </ProfileLink>
+        <div className="mt-5 flex gap-2">
+          <button
+            type="button"
+            onClick={() => accept.mutate(req.id)}
+            disabled={pending}
+            className="flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg bg-rsn-red px-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+          >
+            <Check className="h-4 w-4" /> Accept
+          </button>
+          <button
+            type="button"
+            onClick={() => decline.mutate(req.id)}
+            disabled={pending}
+            className="flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-50"
+          >
+            <X className="h-4 w-4" /> Decline
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function MeetingRequests({ myUserId, focusPokeId }: { myUserId: string; focusPokeId?: string | null }) {
   const qc = useQueryClient();
   const navigate = useNavigate();

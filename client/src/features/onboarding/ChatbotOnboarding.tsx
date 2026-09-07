@@ -1020,7 +1020,7 @@ export default function ChatbotOnboarding() {
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5 }}
-            className="flex w-full max-w-md flex-col items-center gap-5 text-center"
+            className="flex w-full max-w-md sm:max-w-2xl flex-col items-center gap-5 text-center"
           >
             <HostPresence size={104} state="idle" />
             <div className="flex flex-col items-center gap-1">
@@ -1081,15 +1081,21 @@ export default function ChatbotOnboarding() {
                 </div>
               </div>
             </div>
-            <div className="w-full rounded-2xl border border-gray-200 bg-white p-4 text-left shadow-sm">
-              <ConfirmRow label="Name" value={draft.name} editing={editing} placeholder="Your name" guessed={known?.nameGuessed} onChange={(v) => setDraft((d) => ({ ...d, name: v }))} />
-              <ConfirmRow label="Country" value={draft.country} editing={editing} placeholder="Where you are based" guessed={known?.countryGuessed} onChange={(v) => setDraft((d) => ({ ...d, country: v }))} />
-              <ConfirmRow label="Reason for joining" value={draft.reason} editing={editing} placeholder="Why you're here" onChange={(v) => setDraft((d) => ({ ...d, reason: v }))} />
-              <ConfirmRow label="Company" value={draft.company} editing={editing} placeholder="Where you work" guessed={known?.companyGuessed} onChange={(v) => setDraft((d) => ({ ...d, company: v }))} />
-              <ConfirmRow label="Role" value={draft.role} editing={editing} placeholder="Your role or title" onChange={(v) => setDraft((d) => ({ ...d, role: v }))} />
-              <ConfirmRow label="LinkedIn" value={draft.linkedin} editing={editing} placeholder="Your LinkedIn URL" onChange={(v) => setDraft((d) => ({ ...d, linkedin: v }))} />
-              <ConfirmRow label="Industry" value={draft.industry} editing={editing} placeholder="Your industry" onChange={(v) => setDraft((d) => ({ ...d, industry: v }))} />
-              <ConfirmRow label="About" value={draft.about} editing={editing} placeholder="A short professional summary" multiline last onChange={(v) => setDraft((d) => ({ ...d, about: v }))} />
+            <div className="w-full rounded-2xl border border-gray-200 bg-white p-4 text-left shadow-sm sm:p-5">
+              {/* Two columns on desktop so it reads as a tidy form, not a long
+                  skinny scroll; About spans the full width (7 Sep 2026, Ali). */}
+              <div className="grid grid-cols-1 gap-x-8 sm:grid-cols-2">
+                <ConfirmRow label="Name" value={draft.name} editing={editing} placeholder="Your name" guessed={known?.nameGuessed} onChange={(v) => setDraft((d) => ({ ...d, name: v }))} />
+                <ConfirmRow label="Country" value={draft.country} editing={editing} placeholder="Where you are based" guessed={known?.countryGuessed} onChange={(v) => setDraft((d) => ({ ...d, country: v }))} />
+                <ConfirmRow label="Reason for joining" value={draft.reason} editing={editing} placeholder="Why you're here" onChange={(v) => setDraft((d) => ({ ...d, reason: v }))} />
+                <ConfirmRow label="Company" value={draft.company} editing={editing} placeholder="Where you work" guessed={known?.companyGuessed} onChange={(v) => setDraft((d) => ({ ...d, company: v }))} />
+                <ConfirmRow label="Role" value={draft.role} editing={editing} placeholder="Your role or title" onChange={(v) => setDraft((d) => ({ ...d, role: v }))} />
+                <ConfirmRow label="LinkedIn" value={draft.linkedin} editing={editing} placeholder="Your LinkedIn URL" onChange={(v) => setDraft((d) => ({ ...d, linkedin: v }))} />
+                <ConfirmRow label="Industry" value={draft.industry} editing={editing} placeholder="Your industry" onChange={(v) => setDraft((d) => ({ ...d, industry: v }))} />
+                <div className="sm:col-span-2">
+                  <ConfirmRow label="About" value={draft.about} editing={editing} placeholder="A short professional summary" multiline last onChange={(v) => setDraft((d) => ({ ...d, about: v }))} />
+                </div>
+              </div>
             </div>
             {/* This card only ever shows for a resolved found/partial opening (see
                 settleOpening) — enrichment is already terminal by now, so the
