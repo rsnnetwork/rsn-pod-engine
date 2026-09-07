@@ -37,6 +37,7 @@ import { isUserActive } from './middleware/auth';
 
 // Services
 import { processAutoReminders } from './services/join-request/join-request.service';
+import { pruneExpiredAuthTokens } from './services/maintenance/token-cleanup';
 import { processPendingJobs } from './services/post-event-message/post-event-message.worker';
 
 // Routes
@@ -419,6 +420,16 @@ async function start(): Promise<void> {
         logger.error({ err }, 'Initial auto-reminder cycle failed')
       );
     }, 30_000);
+
+    // Prune expired auth tokens once a day so refresh_tokens / magic_links do
+    // not grow unbounded (7 Sep 2026, W1b). First run 60s after boot.
+    const ONE_DAY = 24 * 60 * 60 * 1000;
+    setInterval(() => {
+      pruneExpiredAuthTokens().catch(err => logger.error({ err }, 'Auth-token prune cycle failed'));
+    }, ONE_DAY);
+    setTimeout(() => {
+      pruneExpiredAuthTokens().catch(err => logger.error({ err }, 'Initial auth-token prune failed'));
+    }, 60_000);
 
     // Start listening
     server.listen(config.port, () => {

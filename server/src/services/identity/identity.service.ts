@@ -311,13 +311,17 @@ export async function sendMagicLink(email: string, requestedClientUrl?: string, 
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
   const expiresAt = new Date(Date.now() + config.magicLinkExpiryMinutes * 60 * 1000);
 
-  // Invalidate any existing magic links for this email.
-  // Phase 7-audit fix — scoped to purpose='login' so admin-action tokens
-  // (purpose='join_request_review') aren't wiped when the same admin
-  // requests a fresh login link.
+  // Invalidate existing SHORT-LIVED login links for this email, but never the
+  // long-lived (7-day) approval "one-click" link. 7 Sep 2026 (Stefan): a member
+  // who had an approval link, then tapped "send me a login link", had the
+  // approval link silently killed here — clicking it read "invalid or expired".
+  // Bounding by expiry keeps this a same-class cleanup (login vs login) and
+  // leaves the approval link alone. Phase-7 scoping to purpose='login' kept.
   await query(
     `UPDATE magic_links SET used_at = NOW()
-      WHERE email = $1 AND purpose = 'login' AND used_at IS NULL AND expires_at > NOW()`,
+      WHERE email = $1 AND purpose = 'login' AND used_at IS NULL
+        AND expires_at > NOW()
+        AND expires_at <= NOW() + INTERVAL '2 hours'`,
     [normalizedEmail]
   );
 

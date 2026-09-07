@@ -28,6 +28,24 @@ import { ApiResponse } from '@rsn/shared';
  * `authenticate` re-verifies downstream anyway. Any verify failure (forged,
  * expired, malformed) falls through to the per-IP bucket — fail-safe.
  */
+/**
+ * The real client IP. 7 Sep 2026: behind Cloudflare → Render, `req.ip` (with
+ * `trust proxy 1`) resolves to Render's proxy hop, so every request from the
+ * whole internet arrives tagged with a handful of Cloudflare EDGE IPs — one
+ * shared rate-limit bucket for unrelated people, and the reason logs showed
+ * 162.158.* / 172.70.* instead of members. Cloudflare puts the true client IP
+ * in `cf-connecting-ip`; prefer it, then Akamai-style `true-client-ip`, then
+ * `req.ip`. A spoofed header only ever gives the sender their OWN unique bucket
+ * (never lets them drain a victim's), same fail-safe posture as the JWT path.
+ */
+export function clientIp(req: Request): string {
+  const cf = req.headers['cf-connecting-ip'];
+  if (typeof cf === 'string' && cf.length > 0) return cf;
+  const tci = req.headers['true-client-ip'];
+  if (typeof tci === 'string' && tci.length > 0) return tci;
+  return req.ip ?? 'unknown';
+}
+
 export function userOrIpKey(req: Request): string {
   const auth = req.headers?.authorization;
   if (auth && auth.startsWith('Bearer ')) {
@@ -36,7 +54,7 @@ export function userOrIpKey(req: Request): string {
       if (payload?.sub) return `u:${payload.sub}`;
     } catch { /* forged / expired / malformed — fall through to IP */ }
   }
-  return `ip:${req.ip}`;
+  return `ip:${clientIp(req)}`;
 }
 
 /**
@@ -107,6 +125,9 @@ export const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: false, // count all requests
+  // Key by the REAL client IP (not Cloudflare's shared edge IP), so one venue's
+  // crowd doesn't share a single auth bucket. 7 Sep 2026.
+  keyGenerator: (req: Request) => `ip:${clientIp(req)}`,
   store: buildStore('auth'),
   handler: (_req, res) => {
     const response: ApiResponse = {

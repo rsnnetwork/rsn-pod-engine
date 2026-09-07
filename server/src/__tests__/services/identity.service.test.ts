@@ -277,6 +277,20 @@ describe('Identity Service', () => {
       expect(result.sent).toBe(true);
     });
 
+    it('invalidation spares the 7-day approval link — only short-lived login links are wiped (Stefan 7 Sep)', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 }); // getUserByEmail
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });         // invalidate
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });         // INSERT
+
+      await identityService.sendMagicLink('test@example.com');
+
+      const invalidate = mockQuery.mock.calls.find(c => /UPDATE magic_links SET used_at/.test(String(c[0])));
+      expect(invalidate).toBeTruthy();
+      // The WHERE must bound by expiry so a 7-day approval link is never killed
+      // when a member asks for a fresh login link.
+      expect(String(invalidate![0])).toMatch(/expires_at <= NOW\(\) \+ INTERVAL '2 hours'/);
+    });
+
     it('should allow existing user to login without approval', async () => {
       // getUserByEmail — existing user (login, not registration)
       mockQuery.mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 });

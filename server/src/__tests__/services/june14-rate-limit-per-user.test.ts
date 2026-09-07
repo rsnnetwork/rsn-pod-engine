@@ -28,7 +28,12 @@ describe('June-14 — API rate limiter keys by user', () => {
     expect(src).toMatch(/jwt\.verify\(/);
     expect(src).not.toMatch(/jwt\.decode/);
     expect(src).toMatch(/return `u:\$\{payload\.sub\}`/);
-    expect(src).toMatch(/return `ip:\$\{req\.ip\}`/);
+    // 7 Sep 2026 — anonymous fallback keys by the REAL client IP via clientIp()
+    // (prefers cf-connecting-ip behind Cloudflare, else req.ip), not the shared
+    // Cloudflare edge IP that plain req.ip resolves to behind the proxy.
+    expect(src).toMatch(/return `ip:\$\{clientIp\(req\)\}`/);
+    expect(src).toMatch(/cf-connecting-ip/);
+    expect(src).toMatch(/return req\.ip/);
     // …and it is wired into the global apiLimiter.
     const limiterIdx = src.indexOf('export const apiLimiter');
     const keyGenIdx = src.indexOf('keyGenerator: userOrIpKey');
