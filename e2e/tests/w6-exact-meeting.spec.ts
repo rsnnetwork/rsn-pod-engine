@@ -85,9 +85,17 @@ test('confirming a meeting pins an exact local time + duration and offers a cale
   expect((await apiAs(a, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
   expect((await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
 
-  // A opens the thread and the scheduler.
+  // A opens the thread and the scheduler. On phone widths the header actions
+  // collapse into a "More actions" menu, so open that first if present. Wait for
+  // the header to render either control before deciding (avoids a load race).
   const page = await openAs(a, `/messages/${convId}`);
-  await page.getByRole('button', { name: /Find a time to meet/i }).click();
+  const findTime = page.getByRole('button', { name: /Find a time to meet/i });
+  const more = page.getByRole('button', { name: 'More actions' });
+  await findTime.or(more).first().waitFor({ state: 'visible', timeout: 30_000 });
+  if (await more.isVisible().catch(() => false)) {
+    await more.click();
+  }
+  await findTime.filter({ visible: true }).first().click();
   await expect(page.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
 
   // Confirm the overlap window → exact-time step → confirm.
