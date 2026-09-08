@@ -59,6 +59,7 @@ export default function MeetPage() {
   const [conn, setConn] = useState<{ token: string; url: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [startAt, setStartAt] = useState<Date | null>(null);
+  const [durationMin, setDurationMin] = useState<number | null>(null);
   const [scheduleChecked, setScheduleChecked] = useState(!isScheduled);
   const [now, setNow] = useState<number>(Date.now());
   const [forceJoin, setForceJoin] = useState(false);
@@ -86,7 +87,7 @@ export default function MeetPage() {
       try {
         const { data } = await api.get(`/dm/conversations/${conversationId}/scheduling`);
         const s = data?.data?.confirmed?.startAt;
-        if (!cancelled && s) setStartAt(new Date(s));
+        if (!cancelled && s) { setStartAt(new Date(s)); setDurationMin(data?.data?.confirmed?.durationMin ?? null); }
       } catch { /* no schedule info → don't gate */ }
       finally { if (!cancelled) setScheduleChecked(true); }
     })();
@@ -108,6 +109,34 @@ export default function MeetPage() {
         style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}
       >
         <p className="max-w-sm text-lg">{error}</p>
+        <button onClick={leave} className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-white/10 px-4 text-sm font-medium hover:bg-white/20">
+          <ArrowLeft className="h-4 w-4" /> Back to chat
+        </button>
+      </div>
+    );
+  }
+
+  // A scheduled meeting whose window has fully ended (30 min past its end) —
+  // don't drop into an empty room; point them back to the chat to call now.
+  const MEETING_GRACE_MS = 30 * 60 * 1000;
+  const ended = isScheduled && !forceJoin && !!startAt
+    && now > startAt.getTime() + ((durationMin ?? 30) * 60_000) + MEETING_GRACE_MS;
+  if (ended) {
+    return (
+      <div
+        className="flex min-h-[100dvh] flex-col items-center justify-center gap-5 bg-[#0b0b12] px-6 text-center text-white"
+        style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}
+      >
+        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-white/10">
+          <CalendarClock className="h-7 w-7 text-white/60" />
+        </div>
+        <div className="space-y-1">
+          <p className="text-lg font-semibold">This meeting has ended</p>
+          <p className="text-sm text-white/50">
+            {startAt.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })}
+          </p>
+        </div>
+        <p className="max-w-xs text-xs text-white/40">You can start a new call from the chat.</p>
         <button onClick={leave} className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-white/10 px-4 text-sm font-medium hover:bg-white/20">
           <ArrowLeft className="h-4 w-4" /> Back to chat
         </button>

@@ -46,6 +46,15 @@ function localWhen(startAtIso: string): string {
   });
 }
 
+// A meeting stays joinable until 30 min after its end (overruns/reconnects);
+// after that it's "ended" and the card offers a fresh call instead (Ali, 8 Sep).
+const MEETING_GRACE_MS = 30 * 60 * 1000;
+export function isMeetingOver(startAtIso: string | null | undefined, durationMin: number | null | undefined): boolean {
+  if (!startAtIso) return false;
+  const end = new Date(startAtIso).getTime() + ((durationMin ?? 30) * 60_000) + MEETING_GRACE_MS;
+  return Date.now() > end;
+}
+
 const DAYPARTS = [
   { key: 'morning', label: 'Morning' },
   { key: 'afternoon', label: 'Afternoon' },
@@ -83,7 +92,7 @@ function labelFor(windowKey: string): string {
  * so the meeting is visible in the chat, not buried in the scheduler (Ali,
  * 8 Sep 2026). Shares the scheduling query cache with the scheduler panel.
  */
-export function ThreadMeetingBanner({ conversationId }: { conversationId: string }) {
+export function ThreadMeetingBanner({ conversationId, onCallNow }: { conversationId: string; onCallNow?: (kind: 'audio' | 'video') => void }) {
   const navigate = useNavigate();
   const { data } = useQuery<Scheduling>({
     queryKey: ['meetingScheduling', conversationId],
@@ -92,24 +101,42 @@ export function ThreadMeetingBanner({ conversationId }: { conversationId: string
   });
   const c = data?.confirmed;
   if (!c || !c.startAt) return null;
+  const kind = c.type ?? 'video';
+  const over = isMeetingOver(c.startAt, c.durationMin);
   return (
-    <div className="border-b border-emerald-200 bg-emerald-50 px-4 py-2.5" data-testid="thread-meeting-banner">
+    <div
+      className={`border-b px-4 py-2.5 ${over ? 'border-gray-200 bg-gray-50' : 'border-emerald-200 bg-emerald-50'}`}
+      data-testid="thread-meeting-banner"
+    >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
-          <CalendarCheck className="h-4 w-4 shrink-0 text-emerald-600" />
+          <CalendarCheck className={`h-4 w-4 shrink-0 ${over ? 'text-gray-400' : 'text-emerald-600'}`} />
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-emerald-800">{localWhen(c.startAt)}</p>
-            <p className="text-[11px] text-emerald-700">
-              {c.type === 'audio' ? 'Audio call' : 'Video call'} · {c.durationMin} min · your local time
+            <p className={`truncate text-sm font-semibold ${over ? 'text-gray-600' : 'text-emerald-800'}`}>
+              {over ? 'Meeting ended' : localWhen(c.startAt)}
+            </p>
+            <p className={`text-[11px] ${over ? 'text-gray-400' : 'text-emerald-700'}`}>
+              {over
+                ? `${kind === 'audio' ? 'Audio call' : 'Video call'} · ${localWhen(c.startAt)}`
+                : `${kind === 'audio' ? 'Audio call' : 'Video call'} · ${c.durationMin} min · your local time`}
             </p>
           </div>
         </div>
-        <button
-          onClick={() => navigate(`/meet/${conversationId}?kind=${c.type ?? 'video'}&scheduled=1`)}
-          className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700"
-        >
-          {c.type === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Join
-        </button>
+        {over ? (
+          <button
+            onClick={() => onCallNow?.(kind)}
+            className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-lg bg-rsn-red px-3 text-sm font-medium text-white hover:opacity-90"
+          >
+            {kind === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Call now
+          </button>
+        ) : (
+          <button
+            onClick={() => navigate(`/meet/${conversationId}?kind=${kind}&scheduled=1`)}
+            className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700"
+          >
+            {kind === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Join
+          </button>
+        )}
       </div>
     </div>
   );
@@ -212,19 +239,34 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
     }
   };
 
+  // "Call now" from an ended meeting — ring the partner (must be online) and
+  // enter a fresh call, same as Meet-now elsewhere.
+  const callNow = async (kind: 'audio' | 'video') => {
+    try {
+      await api.post(`/dm/conversations/${conversationId}/call/start`, { kind });
+      navigate(`/meet/${conversationId}?kind=${kind}`);
+    } catch (e: any) {
+      addToast(e?.response?.data?.error?.message || 'Could not start the call.', 'info');
+    }
+  };
+
+  const confirmedOver = isMeetingOver(data.confirmed?.startAt, data.confirmed?.durationMin);
+
   return (
     <div className="border-b border-gray-200 bg-gray-50/60 px-3 py-3 space-y-3" data-testid="meeting-scheduler">
       {data.confirmed && (
-        <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2.5">
+        <div className={`rounded-lg border px-3 py-2.5 ${confirmedOver ? 'bg-gray-50 border-gray-200' : 'bg-emerald-50 border-emerald-200'}`}>
           <div className="flex items-center gap-2">
-            <CalendarCheck className="h-4 w-4 text-emerald-600 shrink-0" />
-            <p className="text-sm text-emerald-800 font-semibold">
-              {data.confirmed.startAt
-                ? `Meeting confirmed — ${localWhen(data.confirmed.startAt)}`
-                : `Meeting confirmed: ${labelFor(data.confirmed.window)}`}
+            <CalendarCheck className={`h-4 w-4 shrink-0 ${confirmedOver ? 'text-gray-400' : 'text-emerald-600'}`} />
+            <p className={`text-sm font-semibold ${confirmedOver ? 'text-gray-600' : 'text-emerald-800'}`}>
+              {confirmedOver
+                ? 'Meeting ended'
+                : data.confirmed.startAt
+                  ? `Meeting confirmed — ${localWhen(data.confirmed.startAt)}`
+                  : `Meeting confirmed: ${labelFor(data.confirmed.window)}`}
             </p>
           </div>
-          {data.confirmed.startAt && (
+          {data.confirmed.startAt && !confirmedOver && (
             <div className="mt-1 pl-6 space-y-1.5">
               <p className="text-xs text-emerald-700">
                 {(data.confirmed.type === 'audio' ? 'Audio call' : 'Video call')} · {data.confirmed.durationMin} minutes · shown in your local time
@@ -246,6 +288,19 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
                 </a>
               </div>
               <p className="text-[11px] text-emerald-600">A calendar invite was emailed to you both.</p>
+            </div>
+          )}
+          {data.confirmed.startAt && confirmedOver && (
+            <div className="mt-1 pl-6 space-y-1.5">
+              <p className="text-xs text-gray-500">
+                {(data.confirmed.type === 'audio' ? 'Audio call' : 'Video call')} · {localWhen(data.confirmed.startAt)}
+              </p>
+              <button
+                onClick={() => callNow(data.confirmed?.type ?? 'video')}
+                className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg bg-rsn-red px-3 text-sm font-medium text-white hover:opacity-90"
+              >
+                {data.confirmed.type === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Call now
+              </button>
             </div>
           )}
         </div>

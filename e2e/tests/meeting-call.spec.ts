@@ -252,4 +252,33 @@ test.describe.serial('meeting + call', () => {
     await expect(page.getByText(/^Video call$/)).toBeVisible({ timeout: 15_000 });
     await page.close();
   });
+
+  test('6) once a meeting has ended, the card offers "Call now", not "Join"', async () => {
+    test.setTimeout(90_000);
+    const convId = await convBetween(a.id, b.id);
+    // The API refuses to confirm a past time, so age the confirmed meeting
+    // directly: 3h ago, 30 min long → well past the 30-min grace window.
+    await pool.query(
+      `UPDATE dm_conversations SET meeting_start_at = NOW() - INTERVAL '3 hours', meeting_duration_min = 30 WHERE id = $1`,
+      [convId],
+    );
+
+    const page = await openAs(a, `/messages/${convId}`);
+    // Pinned card shows the ended state + Call now.
+    const pinned = page.getByTestId('thread-meeting-banner');
+    await expect(pinned.getByText(/Meeting ended/i)).toBeVisible({ timeout: 25_000 });
+    await expect(pinned.getByRole('button', { name: /Call now/i })).toBeVisible();
+
+    // The confirmed-meeting message line now offers Call now, not Join.
+    const confRow = page.locator('[data-message-id]').filter({ hasText: /Meeting confirmed/i });
+    await expect(confRow.getByRole('button', { name: /Call now/i }).first()).toBeVisible({ timeout: 10_000 });
+    await expect(confRow.getByRole('button', { name: /Join meeting/i })).toHaveCount(0);
+
+    // A stale scheduled link lands on "ended", not an empty room.
+    const meet = await openAs(a, `/meet/${convId}?kind=video&scheduled=1`);
+    await expect(meet.getByText(/This meeting has ended/i)).toBeVisible({ timeout: 20_000 });
+
+    await page.close();
+    await meet.close();
+  });
 });

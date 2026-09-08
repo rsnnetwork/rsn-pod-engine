@@ -11,7 +11,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare, CalendarClock, Flag, MoreVertical, Video, Phone, Ban } from 'lucide-react';
-import MeetingScheduler, { ThreadMeetingBanner } from './MeetingScheduler';
+import MeetingScheduler, { ThreadMeetingBanner, isMeetingOver } from './MeetingScheduler';
 import Linkify from '@/components/ui/Linkify';
 import MeetingRequests, { FocusedMeetingRequest } from './MeetingRequests';
 import Avatar from '@/components/ui/Avatar';
@@ -394,13 +394,16 @@ export default function MessagesPage() {
     queryKey: ['meetingScheduling', activeId],
     queryFn: () => api.get(`/dm/conversations/${activeId}/scheduling`).then(r => r.data.data as {
       schedulingUpdated?: boolean;
-      confirmed?: { type?: 'audio' | 'video' | null } | null;
+      confirmed?: { type?: 'audio' | 'video' | null; startAt?: string | null; durationMin?: number | null } | null;
     }),
     enabled: !!activeId,
     meta: { entities: activeId ? [E.dmConversation(activeId)] : [] },
   });
   const availabilityDot = !!scheduling?.schedulingUpdated && !schedulerOpen;
   const confirmedCallKind: 'audio' | 'video' = scheduling?.confirmed?.type === 'audio' ? 'audio' : 'video';
+  // A scheduled meeting whose window has ended behaves like an instant call
+  // ("Call now") rather than "Join" (Ali, 8 Sep 2026).
+  const confirmedMeetingOver = isMeetingOver(scheduling?.confirmed?.startAt, scheduling?.confirmed?.durationMin);
 
   // A system line in the thread gets its own action button (Ali, 8 Sep 2026):
   //  - a SCHEDULED meeting ("Meeting confirmed …") → "Join meeting" (enter the room)
@@ -1049,7 +1052,7 @@ export default function MessagesPage() {
 
             {/* Confirmed meeting — always pinned so both people see it in the
                 chat, with Join, not buried in the scheduler (Ali, 8 Sep 2026). */}
-            {activeConv && <ThreadMeetingBanner conversationId={activeConv.conversationId} />}
+            {activeConv && <ThreadMeetingBanner conversationId={activeConv.conversationId} onCallNow={startCall} />}
 
             {/* Availability grid — collapsible so the thread stays primary. */}
             {activeConv && schedulerOpen && (
@@ -1175,10 +1178,15 @@ export default function MessagesPage() {
                                     const act = meetingActionForMessage(m.content);
                                     if (!act || !activeId) return null;
                                     const Icon = act.kind === 'audio' ? Phone : Video;
-                                    const label = act.scheduled
+                                    // A scheduled meeting still in play → Join; once its window has
+                                    // ended → Call now; an instant-call line → Call again/back.
+                                    const scheduledLive = act.scheduled && !confirmedMeetingOver;
+                                    const label = scheduledLive
                                       ? 'Join meeting'
-                                      : (fromMe ? 'Call again' : 'Call back');
-                                    const onClick = act.scheduled
+                                      : act.scheduled
+                                        ? 'Call now'
+                                        : (fromMe ? 'Call again' : 'Call back');
+                                    const onClick = scheduledLive
                                       ? () => navigate(`/meet/${activeId}?kind=${act.kind}&scheduled=1`)
                                       : () => startCall(act.kind);
                                     return (
