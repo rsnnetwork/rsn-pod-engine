@@ -211,10 +211,15 @@ test.describe.serial('meeting + call', () => {
     await expect(bPage.getByText(/is calling/i)).toBeVisible({ timeout: 20_000 });
 
     // An INSTANT call line in B's thread offers "Call back", NOT "Join meeting"
-    // (there's no standing room to join — Ali, 8 Sep 2026).
-    await expect(bPage.getByText(/Started a video call/i)).toBeVisible({ timeout: 20_000 });
-    await expect(bPage.getByRole('button', { name: /Call back/i })).toBeVisible({ timeout: 10_000 });
-    await expect(bPage.getByRole('button', { name: /Join meeting/i })).toHaveCount(0);
+    // (there's no standing room to join — Ali, 8 Sep 2026). Scope to that exact
+    // message row: the confirmed-meeting line elsewhere in the thread correctly
+    // still shows "Join meeting".
+    // Scope to the thread message row (data-message-id); the same text also
+    // appears in the inbox preview on single-pane widths.
+    const callRow = bPage.locator('[data-message-id]').filter({ hasText: /Started a video call/i });
+    await expect(callRow.first()).toBeVisible({ timeout: 20_000 });
+    await expect(callRow.getByRole('button', { name: /Call back/i }).first()).toBeVisible({ timeout: 10_000 });
+    await expect(callRow.getByRole('button', { name: /Join meeting/i })).toHaveCount(0);
 
     // Durable rails: a bell notification for B and a system line in the thread.
     await expect.poll(async () => {
