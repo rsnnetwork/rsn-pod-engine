@@ -4,14 +4,19 @@
 // the chat meeting card, the Join button, the bell "X is calling", or the email
 // link. Uses the same LiveKit stack the events use. Leaving returns to the chat.
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { LiveKitRoom, RoomAudioRenderer, GridLayout, ParticipantTile, ControlBar, useTracks } from '@livekit/components-react';
+import { LiveKitRoom, RoomAudioRenderer, ParticipantTile, ControlBar, useTracks, useRoomContext, type TrackReference } from '@livekit/components-react';
 import '@livekit/components-styles';
-import { Track } from 'livekit-client';
-import { ArrowLeft, CalendarClock } from 'lucide-react';
+import { Track, RoomEvent, type RemoteParticipant } from 'livekit-client';
+import { ArrowLeft, CalendarClock, Maximize2, Minimize2, PhoneOff } from 'lucide-react';
 import api from '@/lib/api';
 import { PageLoader } from '@/components/ui/Spinner';
+
+/** A stable key for a track reference (participant + source + track sid). */
+function trackId(t: TrackReference | { participant?: { identity?: string }; source?: string; publication?: { trackSid?: string } }): string {
+  return `${t.participant?.identity ?? '?'}:${t.source ?? '?'}:${t.publication?.trackSid ?? 'ph'}`;
+}
 
 // You can enter a scheduled meeting from 5 minutes before its start; earlier
 // than that, you land on a countdown (but can still force your way in).
@@ -31,6 +36,9 @@ function untilLabel(ms: number): string {
   return 'less than a minute';
 }
 
+// The call stage. Any tile can be maximized (focused) — and a screen share is
+// focused automatically — so a viewer can make what they're watching bigger or
+// smaller as they like (Ali, 8 Sep 2026).
 function CallStage() {
   const tracks = useTracks(
     [
@@ -39,13 +47,82 @@ function CallStage() {
     ],
     { onlySubscribed: false },
   );
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+
+  // Auto-focus a screen share the moment one starts (the usual thing to watch).
+  const screen = tracks.find((t) => t.source === Track.Source.ScreenShare);
+  const screenKey = screen ? trackId(screen) : null;
+  useEffect(() => {
+    if (screenKey) setFocusedId(screenKey);
+  }, [screenKey]);
+
+  const focused = tracks.find((t) => trackId(t) === focusedId) ?? null;
+
+  if (focused) {
+    const others = tracks.filter((t) => trackId(t) !== focusedId);
+    return (
+      <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
+        <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg">
+          <ParticipantTile trackRef={focused} className="h-full w-full" />
+          <button
+            onClick={() => setFocusedId(null)}
+            className="absolute right-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-lg bg-black/50 text-white hover:bg-black/70"
+            title="Shrink to grid"
+            aria-label="Shrink this view back to the grid"
+          >
+            <Minimize2 className="h-4.5 w-4.5" />
+          </button>
+        </div>
+        {others.length > 0 && (
+          <div className="flex shrink-0 gap-2 overflow-x-auto">
+            {others.map((t) => (
+              <button
+                key={trackId(t)}
+                onClick={() => setFocusedId(trackId(t))}
+                className="relative h-24 w-36 shrink-0 overflow-hidden rounded-lg ring-1 ring-white/10 hover:ring-white/40"
+                title="Make this the big view"
+                aria-label="Maximize this view"
+              >
+                <ParticipantTile trackRef={t} className="h-full w-full" />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-0 flex-1">
-      <GridLayout tracks={tracks} style={{ height: '100%' }}>
-        <ParticipantTile />
-      </GridLayout>
+    <div className="min-h-0 flex-1 p-2">
+      <div className={`grid h-full gap-2 ${tracks.length <= 1 ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2'}`}>
+        {tracks.map((t) => (
+          <div key={trackId(t)} className="relative min-h-0 overflow-hidden rounded-lg">
+            <ParticipantTile trackRef={t} className="h-full w-full" />
+            <button
+              onClick={() => setFocusedId(trackId(t))}
+              className="absolute right-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-lg bg-black/50 text-white hover:bg-black/70"
+              title="Make this bigger"
+              aria-label="Maximize this view"
+            >
+              <Maximize2 className="h-4 w-4" />
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
+}
+
+// When the other person leaves (they hung up), the call is over for both — we
+// surface a small "call ended" note and return to the chat (Ali, 8 Sep 2026).
+function CallEndWatcher({ onRemoteLeft }: { onRemoteLeft: (name: string) => void }) {
+  const room = useRoomContext();
+  useEffect(() => {
+    const handler = (p: RemoteParticipant) => onRemoteLeft(p?.name || 'The other person');
+    room.on(RoomEvent.ParticipantDisconnected, handler);
+    return () => { room.off(RoomEvent.ParticipantDisconnected, handler); };
+  }, [room, onRemoteLeft]);
+  return null;
 }
 
 export default function MeetPage() {
@@ -63,8 +140,17 @@ export default function MeetPage() {
   const [scheduleChecked, setScheduleChecked] = useState(!isScheduled);
   const [now, setNow] = useState<number>(Date.now());
   const [forceJoin, setForceJoin] = useState(false);
+  const [remoteEnded, setRemoteEnded] = useState<string | null>(null);
 
-  const leave = () => navigate(`/messages/${conversationId}`);
+  const leave = useCallback(() => navigate(`/messages/${conversationId}`), [navigate, conversationId]);
+  const handleRemoteLeft = useCallback((name: string) => setRemoteEnded(name), []);
+
+  // Once the other person leaves, show the note briefly, then return to chat.
+  useEffect(() => {
+    if (!remoteEnded) return;
+    const t = setTimeout(leave, 3500);
+    return () => clearTimeout(t);
+  }, [remoteEnded, leave]);
 
   useEffect(() => {
     let cancelled = false;
@@ -183,6 +269,28 @@ export default function MeetPage() {
     );
   }
 
+  // The other person hung up — the call is over for both. Show a small note,
+  // then go back to the chat.
+  if (remoteEnded) {
+    return (
+      <div
+        className="flex min-h-[100dvh] flex-col items-center justify-center gap-5 bg-[#0b0b12] px-6 text-center text-white"
+        style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}
+      >
+        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-white/10">
+          <PhoneOff className="h-7 w-7 text-white/70" />
+        </div>
+        <div className="space-y-1">
+          <p className="text-lg font-semibold">Call ended</p>
+          <p className="text-sm text-white/50">{remoteEnded} left the call.</p>
+        </div>
+        <button onClick={leave} className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-white/10 px-4 text-sm font-medium hover:bg-white/20">
+          <ArrowLeft className="h-4 w-4" /> Back to chat
+        </button>
+      </div>
+    );
+  }
+
   // Don't flash into the room before we know a scheduled meeting's start time.
   if (!conn || (isScheduled && !scheduleChecked)) {
     return <div className="min-h-[100dvh] bg-[#0b0b12]"><PageLoader /></div>;
@@ -220,6 +328,7 @@ export default function MeetPage() {
       >
         <CallStage />
         <RoomAudioRenderer />
+        <CallEndWatcher onRemoteLeft={handleRemoteLeft} />
         <div className="shrink-0" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
           <ControlBar variation="minimal" />
         </div>
