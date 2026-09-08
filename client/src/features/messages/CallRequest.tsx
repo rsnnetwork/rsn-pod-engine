@@ -116,7 +116,7 @@ export function CallWaitingCard({ partnerName, kind, durationMin, expiresAt, onC
         </div>
         <button
           onClick={onCancel}
-          className="inline-flex min-h-[40px] shrink-0 items-center gap-1 rounded-lg border border-gray-200 px-3 text-sm text-gray-600 hover:bg-gray-50"
+          className="inline-flex min-h-[44px] shrink-0 items-center gap-1 rounded-lg border border-gray-200 px-3 text-sm text-gray-600 hover:bg-gray-50"
         >
           <X className="h-4 w-4" /> Cancel
         </button>
@@ -145,10 +145,10 @@ export function IncomingCallCard({ fromName, kind, durationMin, onAccept, onDecl
           </div>
         </div>
         <div className="flex shrink-0 gap-2">
-          <button onClick={onAccept} disabled={busy} className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
+          <button onClick={onAccept} disabled={busy} className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
             <Check className="h-4 w-4" /> Accept
           </button>
-          <button onClick={onDecline} disabled={busy} className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50">
+          <button onClick={onDecline} disabled={busy} className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50">
             <X className="h-4 w-4" /> Decline
           </button>
         </div>

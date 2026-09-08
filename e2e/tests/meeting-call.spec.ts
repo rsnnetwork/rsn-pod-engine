@@ -55,6 +55,15 @@ function futureWindowKey(daysAhead = 3, daypart = 'afternoon'): string {
   return `${d.toISOString().slice(0, 10)}:${daypart}`;
 }
 
+/** The server's clock, not this machine's — a skewed PC clock made "now + 1 min"
+ *  land in the server's past ("Meeting time must be in the future"). */
+async function serverNowMs(): Promise<number> {
+  return new Date((await pool.query<{ n: Date }>('SELECT NOW() AS n')).rows[0].n).getTime();
+}
+function dayKeyAt(ms: number, daypart = 'afternoon'): string {
+  return `${new Date(ms).toISOString().slice(0, 10)}:${daypart}`;
+}
+
 async function convBetween(x: string, y: string): Promise<string> {
   const r = await pool.query<{ id: string }>(
     `SELECT id FROM dm_conversations WHERE (user_a_id=$1 AND user_b_id=$2) OR (user_a_id=$2 AND user_b_id=$1)`,
@@ -78,10 +87,13 @@ async function openScheduler(page: Page) {
  * then both sides enter the room → the server unlocks calls for the pair.
  */
 async function holdFirstMeeting(x: TestUser, y: TestUser, convId: string) {
-  const KEY = futureWindowKey(0, 'afternoon');
+  // Meeting starts 2 min from the SERVER's now: in the future for the server,
+  // and already inside the 5-min early-join window.
+  const now = await serverNowMs();
+  const KEY = dayKeyAt(now);
   expect((await apiAs(x, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
   expect((await apiAs(y, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
-  const startAt = new Date(Date.now() + 60_000).toISOString();
+  const startAt = new Date(now + 2 * 60_000).toISOString();
   const c = await apiAs(x, 'POST', `/dm/conversations/${convId}/scheduling/confirm`, { window: KEY, startAt, durationMin: 30, type: 'video' });
   expect(c.status).toBe(200);
   // Both "attend" (a room token inside the window is attendance).
@@ -239,10 +251,11 @@ test.describe.serial('meeting + call', () => {
     await expect(aPage.getByTestId('call-waiting')).toBeVisible({ timeout: 15_000 });
     await expect(aPage.getByTestId('call-waiting')).toContainText(/15-min video/i);
 
-    // B is rung with the length, accepts → both enter the room.
-    await expect(bPage.getByText(/wants to call/i)).toBeVisible({ timeout: 20_000 });
-    await expect(bPage.getByText(/15-min video call/i)).toBeVisible();
-    await bPage.getByRole('button', { name: /^Accept$/ }).click();
+    // B is rung with the length, accepts → both enter the room. Scope to the
+    // request dialog: the same words also land in the thread line + inbox preview.
+    const ring = bPage.getByRole('dialog', { name: /wants a 15-minute video call/i });
+    await expect(ring).toBeVisible({ timeout: 20_000 });
+    await ring.getByRole('button', { name: /^Accept$/ }).click();
     await expect(bPage).toHaveURL(new RegExp(`/meet/${convId}`), { timeout: 20_000 });
     await expect(aPage).toHaveURL(new RegExp(`/meet/${convId}`), { timeout: 20_000 });
 

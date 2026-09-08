@@ -122,7 +122,7 @@ export function ThreadMeetingBanner({ conversationId, onCallNow }: { conversatio
           unlocked ? (
             <button
               onClick={() => onCallNow?.(kind)}
-              className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-lg bg-rsn-red px-3 text-sm font-medium text-white hover:opacity-90"
+              className="inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-lg bg-rsn-red px-3 text-sm font-medium text-white hover:opacity-90"
             >
               {kind === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Call now
             </button>
@@ -132,7 +132,7 @@ export function ThreadMeetingBanner({ conversationId, onCallNow }: { conversatio
         ) : (
           <button
             onClick={() => navigate(`/meet/${conversationId}?kind=${kind}&scheduled=1`)}
-            className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700"
+            className="inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700"
           >
             {kind === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Join
           </button>
@@ -281,14 +281,14 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={() => navigate(`/meet/${conversationId}?kind=${data.confirmed?.type ?? 'video'}&scheduled=1`)}
-                  className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700"
+                  className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700"
                 >
                   {data.confirmed.type === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Join
                 </button>
                 <button
                   type="button"
                   onClick={downloadIcs}
-                  className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
+                  className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
                 >
                   <CalendarCheck className="h-4 w-4" /> Add to calendar
                 </button>
@@ -402,7 +402,7 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
                         key={k}
                         type="button"
                         onClick={() => setMeetingKind(k)}
-                        className={`inline-flex min-h-[36px] items-center gap-1 px-2.5 text-xs font-medium ${meetingKind === k ? 'bg-emerald-600 text-white' : 'bg-white text-emerald-700'}`}
+                        className={`inline-flex min-h-[44px] items-center gap-1 px-3 text-xs font-medium ${meetingKind === k ? 'bg-emerald-600 text-white' : 'bg-white text-emerald-700'}`}
                       >
                         {k === 'video' ? <Video className="h-3.5 w-3.5" /> : <Phone className="h-3.5 w-3.5" />}
                         {k === 'video' ? 'Video' : 'Audio'}

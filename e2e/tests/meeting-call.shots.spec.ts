@@ -41,6 +41,13 @@ function futureWindowKey(daysAhead = 3, daypart = 'afternoon'): string {
   const d = new Date(Date.now() + daysAhead * 86_400_000);
   return `${d.toISOString().slice(0, 10)}:${daypart}`;
 }
+/** Server clock, not this PC's (a skewed local clock puts "now + 1 min" in the server's past). */
+async function serverNowMs(): Promise<number> {
+  return new Date((await pool.query<{ n: Date }>('SELECT NOW() AS n')).rows[0].n).getTime();
+}
+function dayKeyAt(ms: number, daypart = 'afternoon'): string {
+  return `${new Date(ms).toISOString().slice(0, 10)}:${daypart}`;
+}
 async function convBetween(x: string, y: string): Promise<string> {
   const r = await pool.query<{ id: string }>(
     `SELECT id FROM dm_conversations WHERE (user_a_id=$1 AND user_b_id=$2) OR (user_a_id=$2 AND user_b_id=$1)`, [x, y],
@@ -118,12 +125,14 @@ test('capture meeting + call UI', async () => {
   await mob2.screenshot({ path: path.join(OUT, '06-mobile-availability-dot.png') });
 
   // ── Hold the first meeting: confirm one starting now, both enter → calls unlock.
-  const TODAY = futureWindowKey(0, 'afternoon');
+  const now = await serverNowMs();
+  const TODAY = dayKeyAt(now);
   await apiAs(a, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [TODAY] });
   await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [TODAY] });
-  await apiAs(a, 'POST', `/dm/conversations/${convId}/scheduling/confirm`, {
-    window: TODAY, startAt: new Date(Date.now() + 60_000).toISOString(), durationMin: 30, type: 'video',
+  const confirmed = await apiAs(a, 'POST', `/dm/conversations/${convId}/scheduling/confirm`, {
+    window: TODAY, startAt: new Date(now + 2 * 60_000).toISOString(), durationMin: 30, type: 'video',
   });
+  expect(confirmed.status, JSON.stringify(confirmed.json)).toBe(200);
   await apiAs(a, 'POST', `/dm/conversations/${convId}/call-token`, { kind: 'video' });
   await apiAs(b, 'POST', `/dm/conversations/${convId}/call-token`, { kind: 'video' });
   expect((await apiAs(a, 'GET', `/dm/conversations/${convId}/scheduling`)).json.data.callsUnlocked).toBe(true);

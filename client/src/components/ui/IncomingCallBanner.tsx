@@ -94,7 +94,7 @@ export default function IncomingCallBanner() {
         <button
           onClick={accept}
           disabled={busy}
-          className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+          className="inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
         >
           <Check className="h-4 w-4" /> Accept
         </button>
@@ -102,7 +102,7 @@ export default function IncomingCallBanner() {
           onClick={decline}
           disabled={busy}
           aria-label="Decline call"
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-50"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-50"
         >
           <X className="h-4 w-4" />
         </button>

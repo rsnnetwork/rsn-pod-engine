@@ -66,7 +66,7 @@ function CallStage() {
           <ParticipantTile trackRef={focused} className="h-full w-full" />
           <button
             onClick={() => setFocusedId(null)}
-            className="absolute right-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-lg bg-black/50 text-white hover:bg-black/70"
+            className="absolute right-3 top-3 z-10 flex h-11 w-11 items-center justify-center rounded-lg bg-black/50 text-white hover:bg-black/70"
             title="Shrink to grid"
             aria-label="Shrink this view back to the grid"
           >
@@ -100,7 +100,7 @@ function CallStage() {
             <ParticipantTile trackRef={t} className="h-full w-full" />
             <button
               onClick={() => setFocusedId(trackId(t))}
-              className="absolute right-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-lg bg-black/50 text-white hover:bg-black/70"
+              className="absolute right-2 top-2 z-10 flex h-11 w-11 items-center justify-center rounded-lg bg-black/50 text-white hover:bg-black/70"
               title="Make this bigger"
               aria-label="Maximize this view"
             >
@@ -306,7 +306,7 @@ export default function MeetPage() {
       <div className="flex h-14 shrink-0 items-center gap-3 border-b border-white/10 px-4">
         <button
           onClick={leave}
-          className="flex h-10 w-10 items-center justify-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white"
+          className="flex h-11 w-11 items-center justify-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white"
           aria-label="Leave call and go back to chat"
         >
           <ArrowLeft className="h-5 w-5" />
