@@ -107,10 +107,11 @@ test('capture meeting + call UI', async () => {
   }
   await desk.screenshot({ path: path.join(OUT, '02-desktop-scheduler-audio-video.png') });
 
-  // 3) The call room (A joins).
+  // 3) The call room (A joins) — with the per-tile maximize control.
   const meet = await pageAt(a, `/meet/${convId}?kind=video`, { width: 1280, height: 900 });
   await expect(meet.getByText(/^Video call$/)).toBeVisible({ timeout: 20_000 });
-  await meet.waitForTimeout(2500);
+  await meet.waitForTimeout(3000);
+  await expect(meet.getByRole('button', { name: /Maximize this view/i }).first()).toBeVisible({ timeout: 15_000 });
   await meet.screenshot({ path: path.join(OUT, '03-desktop-call-room.png') });
 
   // 4) Incoming-call ring on B — trigger a Meet-now from A (B online).
