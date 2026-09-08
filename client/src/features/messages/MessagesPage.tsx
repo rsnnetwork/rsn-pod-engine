@@ -402,13 +402,18 @@ export default function MessagesPage() {
   const availabilityDot = !!scheduling?.schedulingUpdated && !schedulerOpen;
   const confirmedCallKind: 'audio' | 'video' = scheduling?.confirmed?.type === 'audio' ? 'audio' : 'video';
 
-  // A confirmed-meeting or "started a call" system line in the thread should be
-  // joinable right there, not only from the pinned card (Ali, 8 Sep 2026).
-  const joinKindForMessage = (content: string | null | undefined): 'audio' | 'video' | null => {
+  // A system line in the thread gets its own action button (Ali, 8 Sep 2026):
+  //  - a SCHEDULED meeting ("Meeting confirmed …") → "Join meeting" (enter the room)
+  //  - an INSTANT "Meet now" ("Started a … call") that's already over → "Call
+  //    again" / "Call back" (re-initiate the call), NOT "join", since there's no
+  //    standing room to join.
+  const meetingActionForMessage = (
+    content: string | null | undefined,
+  ): { kind: 'audio' | 'video'; scheduled: boolean } | null => {
     if (!content) return null;
-    if (content.includes('Meeting confirmed')) return confirmedCallKind;
+    if (content.includes('Meeting confirmed')) return { kind: confirmedCallKind, scheduled: true };
     const m = content.match(/Started an? (audio|video) call/i);
-    if (m) return m[1].toLowerCase() as 'audio' | 'video';
+    if (m) return { kind: m[1].toLowerCase() as 'audio' | 'video', scheduled: false };
     return null;
   };
 
@@ -1164,19 +1169,27 @@ export default function MessagesPage() {
                                       <Linkify text={m.content} className={fromMe ? 'break-all text-white underline hover:opacity-80' : undefined} />
                                     </div>
                                   )}
-                                  {/* A confirmed-meeting / call line joins the call right here
-                                      (Ali, 8 Sep 2026) — not only from the pinned card above. */}
+                                  {/* Scheduled meeting → Join the room; an instant call that's
+                                      over → Call again/back (Ali, 8 Sep 2026). */}
                                   {(() => {
-                                    const jk = joinKindForMessage(m.content);
-                                    if (!jk || !activeId) return null;
+                                    const act = meetingActionForMessage(m.content);
+                                    if (!act || !activeId) return null;
+                                    const Icon = act.kind === 'audio' ? Phone : Video;
+                                    const label = act.scheduled
+                                      ? 'Join meeting'
+                                      : (fromMe ? 'Call again' : 'Call back');
+                                    const onClick = act.scheduled
+                                      ? () => navigate(`/meet/${activeId}?kind=${act.kind}`)
+                                      : () => startCall(act.kind);
                                     return (
                                       <div className={m.attachmentUrl ? 'px-3.5 pb-2' : 'mt-1.5'}>
                                         <button
                                           type="button"
-                                          onClick={() => navigate(`/meet/${activeId}?kind=${jk}`)}
-                                          className="inline-flex min-h-[32px] items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-xs font-semibold text-white hover:bg-emerald-700"
+                                          onClick={onClick}
+                                          disabled={!act.scheduled && calling}
+                                          className="inline-flex min-h-[32px] items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
                                         >
-                                          {jk === 'audio' ? <Phone className="h-3.5 w-3.5" /> : <Video className="h-3.5 w-3.5" />} Join meeting
+                                          <Icon className="h-3.5 w-3.5" /> {label}
                                         </button>
                                       </div>
                                     );

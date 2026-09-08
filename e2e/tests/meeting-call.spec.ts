@@ -165,6 +165,9 @@ test.describe.serial('meeting + call', () => {
     await expect(banner.getByText(/Audio call/i)).toBeVisible();
     await expect(banner.getByRole('button', { name: /^Join$/ })).toBeVisible();
 
+    // A SCHEDULED meeting line in the thread offers "Join meeting" (enter the room).
+    await expect(page.getByRole('button', { name: /Join meeting/i }).first()).toBeVisible({ timeout: 10_000 });
+
     // DB stored an absolute instant + the audio type.
     const row = (await pool.query<{ meeting_start_at: Date | null; meeting_type: string | null }>(
       `SELECT meeting_start_at, meeting_type FROM dm_conversations WHERE id=$1`, [convId],
@@ -206,6 +209,12 @@ test.describe.serial('meeting + call', () => {
 
     // B is rung: the live incoming-call banner appears anywhere in the app.
     await expect(bPage.getByText(/is calling/i)).toBeVisible({ timeout: 20_000 });
+
+    // An INSTANT call line in B's thread offers "Call back", NOT "Join meeting"
+    // (there's no standing room to join — Ali, 8 Sep 2026).
+    await expect(bPage.getByText(/Started a video call/i)).toBeVisible({ timeout: 20_000 });
+    await expect(bPage.getByRole('button', { name: /Call back/i })).toBeVisible({ timeout: 10_000 });
+    await expect(bPage.getByRole('button', { name: /Join meeting/i })).toHaveCount(0);
 
     // Durable rails: a bell notification for B and a system line in the thread.
     await expect.poll(async () => {
