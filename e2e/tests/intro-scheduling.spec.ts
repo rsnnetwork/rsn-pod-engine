@@ -105,6 +105,10 @@ test('intro lands in the thread, both set availability, overlap confirms — ful
   ctxs.push(ctx);
   const page = await ctx.newPage();
   page.on('pageerror', () => {});
+  // Diagnostics: any failing auth/scheduling API + where the page ended up.
+  page.on('response', (r) => {
+    if (/\/api\/(auth|dm)\//.test(r.url()) && r.status() >= 400) console.log(`  [api] ${r.status()} ${r.request().method()} ${r.url()}`);
+  });
   await gotoRetry(page, `${APP}/messages/${conversationId}`);
 
   // NB: the inbox pane's hidden preview line ALSO matches this text — .first()
@@ -113,7 +117,13 @@ test('intro lands in the thread, both set availability, overlap confirms — ful
   console.log('  ✓ headed: intro message visible in the thread.');
 
   // On phones the thread actions live under "More actions" (4 Sep 2026).
-  { const either = page.locator('button[aria-label="More actions"]:visible, button[aria-label="Find a time to meet"]:visible').first(); await either.waitFor({ timeout: 30_000 }); if ((await either.getAttribute('aria-label')) === 'More actions') await either.click(); }
+  { const either = page.locator('button[aria-label^="More actions"]:visible, button[aria-label="Find a time to meet"]:visible').first(); await either.waitFor({ timeout: 30_000 }).catch(async (e) => {
+      const more = page.locator('button[aria-label^="More actions"]');
+      const find = page.locator('button[aria-label*="Find a time"]');
+      console.log(`  [diag] url=${page.url()} viewport=${JSON.stringify(page.viewportSize())} more=${await more.count()} box=${JSON.stringify(await more.first().boundingBox().catch(() => null))} find=${await find.count()} presence=${await page.getByTestId('partner-presence').count()} scheduler=${await page.getByTestId('meeting-scheduler').count()}`);
+      await page.screenshot({ path: 'test-results/intro-diag.png', fullPage: true }).catch(() => {});
+      throw e;
+    }); if ((await either.getAttribute('aria-label'))?.startsWith('More actions')) await either.click(); }
   await page.getByRole('button', { name: /Find a time to meet/i }).locator('visible=true').click();
   await expect(page.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText('Both can').first()).toBeVisible({ timeout: 10_000 });

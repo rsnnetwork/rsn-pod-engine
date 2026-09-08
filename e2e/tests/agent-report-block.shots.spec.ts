@@ -73,7 +73,7 @@ test('capture report + block + join-from-message UI', async () => {
   await apiAs(a, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [KEY] });
   await apiAs(b, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [KEY] });
   await apiAs(a, 'POST', `/dm/conversations/${conv}/scheduling/confirm`, {
-    window: KEY, startAt: new Date(`${KEY.split(':')[0]}T15:30:00`).toISOString(), durationMin: 30, type: 'video',
+    window: KEY, durationMin: 30, type: 'video', // a slot key IS the start instant
   });
 
   // 1) The thread: the "Meeting confirmed" message carries its own Join button.

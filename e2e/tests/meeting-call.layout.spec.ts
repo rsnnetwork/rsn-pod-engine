@@ -103,7 +103,7 @@ test.beforeAll(async () => {
   await apiAs(a, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] });
   await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] });
   await apiAs(a, 'POST', `/dm/conversations/${convId}/scheduling/confirm`, {
-    window: KEY, startAt: new Date(`${KEY.split(':')[0]}T15:30:00`).toISOString(), durationMin: 45, type: 'video',
+    window: KEY, durationMin: 45, type: 'video', // a slot key IS the start instant
   });
   browser = await launchBrowser();
 });

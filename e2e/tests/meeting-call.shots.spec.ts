@@ -87,9 +87,8 @@ test('capture meeting + call UI', async () => {
   const KEY = futureWindowKey(3, 'afternoon');
   await apiAs(a, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] });
   await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] });
-  const day = KEY.split(':')[0];
   await apiAs(a, 'POST', `/dm/conversations/${convId}/scheduling/confirm`, {
-    window: KEY, startAt: new Date(`${day}T15:30:00`).toISOString(), durationMin: 45, type: 'audio',
+    window: KEY, durationMin: 45, type: 'audio', // a slot key IS the start instant
   });
 
   // 1) Desktop thread BEFORE the first meeting: pinned Join card, scheduler icon,

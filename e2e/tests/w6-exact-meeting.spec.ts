@@ -107,8 +107,10 @@ test('confirming a meeting pins an exact local time + duration and offers a cale
   await expect(page.getByTestId('slot-grid').getByText('Both can').first()).toBeVisible({ timeout: 20_000 });
   const chip = page.getByRole('button', { name: /^Confirm / }).first();
   const localLabel = new Date(KEY).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  await page.screenshot({ path: `shots/meeting/13-scheduler-slots-${engineLabel()}.png` }).catch(() => {});
   await expect(chip).toContainText(localLabel);
   await chip.click();
+  await page.screenshot({ path: `shots/meeting/14-confirm-card-${engineLabel()}.png` }).catch(() => {});
   await page.locator('#meeting-minutes').fill('20');
   await expect(page.getByTestId('confirm-summary')).toContainText(`${localLabel} · 20 min · Video call`);
   // Out-of-range lengths are refused before the request is ever sent.
