@@ -171,6 +171,20 @@ test.describe.serial('meeting + call', () => {
     // A SCHEDULED meeting line in the thread offers "Join meeting" (enter the room).
     await expect(page.getByRole('button', { name: /Join meeting/i }).first()).toBeVisible({ timeout: 10_000 });
 
+    // Universal calendar (Stefan, 9 Sep): the scheduler offers "Add to calendar",
+    // never a Google-only link, and the .ics endpoint serves a real invite.
+    await expect(page.getByRole('button', { name: /Add to calendar/i })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/Google Calendar/i)).toHaveCount(0);
+    const icsRes = await fetch(`${SERVER}/api/dm/conversations/${convId}/meeting.ics`, {
+      headers: { Authorization: `Bearer ${a.accessToken}` },
+    });
+    expect(icsRes.status).toBe(200);
+    expect(icsRes.headers.get('content-type') || '').toMatch(/text\/calendar/);
+    const ics = await icsRes.text();
+    expect(ics).toMatch(/BEGIN:VCALENDAR/);
+    expect(ics).toMatch(/METHOD:REQUEST/);
+    expect(ics.replace(/\r\n /g, '')).toMatch(/ATTENDEE;.*RSVP=TRUE/);
+
     // DB stored an absolute instant + the audio type.
     const row = (await pool.query<{ meeting_start_at: Date | null; meeting_type: string | null }>(
       `SELECT meeting_start_at, meeting_type FROM dm_conversations WHERE id=$1`, [convId],
