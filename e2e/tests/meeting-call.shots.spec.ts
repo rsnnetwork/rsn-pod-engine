@@ -151,5 +151,10 @@ test('capture meeting + call UI', async () => {
   await expect(aLive.getByTestId('partner-presence')).toContainText(/Online/i, { timeout: 35_000 });
   await aLive.screenshot({ path: path.join(OUT, '09-online-status.png') });
 
+  // 10) Online dot in the conversation LIST (B is online).
+  const aList = await pageAt(a, '/messages', { width: 1280, height: 900 });
+  await expect(aList.getByLabel('Online').first()).toBeVisible({ timeout: 30_000 });
+  await aList.screenshot({ path: path.join(OUT, '10-inbox-online-dot.png') });
+
   console.log('shots written to', OUT);
 });
