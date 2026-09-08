@@ -5,20 +5,20 @@ import { primePreview } from '../helpers/preview-bypass';
 import { launchBrowser, contextOptions, engineLabel } from '../helpers/engine';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// W-meet (8 Sep 2026): a meeting on RSN is a real audio/video call the two
-// people join on our own platform. This smoke covers, end to end against prod:
-//   1. "Meet now" is disabled while the partner is offline.
-//   2. Changing availability lights a dot on the partner's calendar icon,
-//      which clears when they open the scheduler.
-//   3. Confirming an AUDIO meeting pins a Join card (local time + duration) in
-//      the chat for both people.
-//   4. With both online, "Meet now" opens the call room for the caller AND
-//      rings the partner (live banner + bell notification + system line).
-//
-// No LLM — safe across chromium / webkit / iOS. NOTE: actual two-way LiveKit
-// audio/video MEDIA (camera/mic frames) cannot be asserted headlessly; this
-// smoke proves the token mint, room mount, gating and ring rails. Ali verifies
-// real A/V on a device.
+// Meetings + calls on RSN (8–9 Sep 2026), end to end against prod.
+// Ali's model (9 Sep): accepted intro → chat + scheduler, calls LOCKED. Once a
+// scheduled meeting has happened (both joined the room) → calls UNLOCK and the
+// scheduler steps aside. Calls then go request → accept with a typed duration.
+//   1. Locked state: scheduler offered, no call buttons, request API refused.
+//   2. Availability dot lights for the partner, clears when opened.
+//   3. Confirming an AUDIO meeting pins a Join card + universal "Add to calendar".
+//   4. A scheduled meeting opened early shows a countdown (join-now escape).
+//   5. Both attend → calls unlock → request (typed minutes) → accept → room.
+//   6. A declined request is recorded and the caller is told.
+//   7. Ended meeting → "Call now" (unlocked), stale link → "ended".
+//   8. Presence: partner online → offline when they close the app.
+// No LLM — safe across engines. Two-way LiveKit MEDIA is not asserted (no
+// camera/mic headlessly); token mint, room mount, gating and rails are.
 // ─────────────────────────────────────────────────────────────────────────────
 
 let browser: Browser;
@@ -63,8 +63,7 @@ async function convBetween(x: string, y: string): Promise<string> {
   return r.rows[0]?.id;
 }
 
-/** Open the thread's meeting controls, coping with the mobile "More actions"
- *  collapse. Returns once the scheduler panel is on screen. */
+/** Open the scheduler, coping with the mobile "More actions" collapse. */
 async function openScheduler(page: Page) {
   const findTime = page.getByRole('button', { name: /Find a time to meet/i });
   const more = page.getByRole('button', { name: /More actions/i });
@@ -74,12 +73,29 @@ async function openScheduler(page: Page) {
   await expect(page.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
 }
 
+/**
+ * Hold a meeting: confirm one starting in a minute (inside its join window),
+ * then both sides enter the room → the server unlocks calls for the pair.
+ */
+async function holdFirstMeeting(x: TestUser, y: TestUser, convId: string) {
+  const KEY = futureWindowKey(0, 'afternoon');
+  expect((await apiAs(x, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
+  expect((await apiAs(y, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
+  const startAt = new Date(Date.now() + 60_000).toISOString();
+  const c = await apiAs(x, 'POST', `/dm/conversations/${convId}/scheduling/confirm`, { window: KEY, startAt, durationMin: 30, type: 'video' });
+  expect(c.status).toBe(200);
+  // Both "attend" (a room token inside the window is attendance).
+  expect((await apiAs(x, 'POST', `/dm/conversations/${convId}/call-token`, { kind: 'video' })).status).toBe(200);
+  expect((await apiAs(y, 'POST', `/dm/conversations/${convId}/call-token`, { kind: 'video' })).status).toBe(200);
+  const s = await apiAs(x, 'GET', `/dm/conversations/${convId}/scheduling`);
+  expect(s.json.data.callsUnlocked, 'calls unlock once both have attended').toBe(true);
+}
+
 test.beforeAll(async () => {
   a = await createTestUser('mcalla');
   b = await createTestUser('mcallb');
   await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Meet Ana', a.id]);
   await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Meet Bo', b.id]);
-  // Connect A + B once (poke → accept) so all tests share the conversation.
   const sent = await apiAs(a, 'POST', '/pokes', { recipientId: b.id, message: 'Coffee?' });
   expect(sent.status).toBe(201);
   const accepted = await apiAs(b, 'POST', `/pokes/${sent.json.data.id}/accept`);
@@ -97,82 +113,67 @@ test.afterAll(async () => {
 });
 
 test.describe.serial('meeting + call', () => {
-  test('1) Meet now is disabled while the partner is offline', async () => {
+  test('1) before the first meeting: the scheduler is offered, calls are not', async () => {
     test.setTimeout(90_000);
     const convId = await convBetween(a.id, b.id);
     expect(convId).toBeTruthy();
 
-    // B has no browser open yet → offline. A opens the thread.
     const page = await openAs(a, `/messages/${convId}`);
-
-    // The header presence indicator reads Offline (B has no live session).
+    // B has no live session → Offline.
     await expect(page.getByTestId('partner-presence')).toContainText(/Offline/i, { timeout: 25_000 });
 
     if (MOBILE) {
       await page.getByRole('button', { name: /More actions/i }).click();
-      // The menu labels the call as offline and the item is disabled.
-      const item = page.getByRole('button', { name: /Video call \(they are offline\)/i });
-      await expect(item).toBeVisible({ timeout: 20_000 });
-      await expect(item).toBeDisabled();
+      await expect(page.getByRole('button', { name: /Find a time to meet/i })).toBeVisible({ timeout: 20_000 });
+      await expect(page.getByRole('button', { name: /Video call|Audio call/i })).toHaveCount(0);
     } else {
-      const vid = page.getByRole('button', { name: /Start a video call now/i });
-      await expect(vid).toBeVisible({ timeout: 20_000 });
-      await expect(vid).toBeDisabled();
+      await expect(page.getByRole('button', { name: /Find a time to meet/i })).toBeVisible({ timeout: 20_000 });
+      await expect(page.getByRole('button', { name: /Start a video call now|Start an audio call now/i })).toHaveCount(0);
     }
+    // The server refuses a call request while locked, whatever the client shows.
+    const r = await apiAs(a, 'POST', `/dm/conversations/${convId}/call/request`, { kind: 'video', durationMin: 15 });
+    expect(r.status).toBe(403);
     await page.close();
   });
 
-  test('2) Changing availability lights a dot on the partner\'s calendar, and it clears when opened', async () => {
+  test('2) changing availability lights a dot on the partner\'s calendar, and it clears when opened', async () => {
     test.setTimeout(90_000);
     const convId = await convBetween(a.id, b.id);
-
-    // A changes availability → stamps a fresh update time.
     const KEY = futureWindowKey(4, 'morning');
     expect((await apiAs(a, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
 
-    // B opens the thread, having never opened the scheduler → dot should show.
     const page = await openAs(b, `/messages/${convId}`);
-    // The dot is encoded in the control's accessible name.
     const dotted = MOBILE
       ? page.getByRole('button', { name: /More actions .*updated their availability/i })
       : page.getByRole('button', { name: /updated their availability/i });
     await expect(dotted).toBeVisible({ timeout: 25_000 });
-
-    // Opening the scheduler marks it seen → the dot clears.
     await openScheduler(page);
     await expect(dotted).toHaveCount(0, { timeout: 15_000 });
     await page.close();
   });
 
-  test('3) Confirming an audio meeting pins a Join card in the chat', async () => {
+  test('3) confirming an audio meeting pins a Join card and a universal calendar invite', async () => {
     test.setTimeout(120_000);
     const convId = await convBetween(a.id, b.id);
-
-    // Both save the same window so it is a confirmable overlap.
     const KEY = futureWindowKey(5, 'afternoon');
     expect((await apiAs(a, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
     expect((await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
 
     const page = await openAs(a, `/messages/${convId}`);
     await openScheduler(page);
-
-    // Confirm the overlap → exact-time step → pick AUDIO → confirm.
     await page.getByRole('button', { name: /^Confirm .*(morning|afternoon|evening)/i }).first().click();
     await page.locator('input[type="time"]').fill('15:30');
     await page.getByRole('button', { name: /^Audio$/ }).click();
     await page.getByRole('button', { name: /Confirm meeting/i }).click();
 
-    // The pinned thread card (visible to both) shows local time + Audio call + Join.
     const banner = page.getByTestId('thread-meeting-banner');
     await expect(banner).toBeVisible({ timeout: 20_000 });
     await expect(banner.getByText(/Audio call/i)).toBeVisible();
     await expect(banner.getByRole('button', { name: /^Join$/ })).toBeVisible();
-
-    // A SCHEDULED meeting line in the thread offers "Join meeting" (enter the room).
     await expect(page.getByRole('button', { name: /Join meeting/i }).first()).toBeVisible({ timeout: 10_000 });
 
-    // Universal calendar (Stefan, 9 Sep): the scheduler offers "Add to calendar",
-    // never a Google-only link, and the .ics endpoint serves a real invite.
+    // Universal calendar (Stefan, 9 Sep): "Add to calendar", never Google-only,
+    // and the .ics endpoint serves a real invite.
     await expect(page.getByRole('button', { name: /Add to calendar/i })).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText(/Google Calendar/i)).toHaveCount(0);
     const icsRes = await fetch(`${SERVER}/api/dm/conversations/${convId}/meeting.ics`, {
@@ -185,146 +186,125 @@ test.describe.serial('meeting + call', () => {
     expect(ics).toMatch(/METHOD:REQUEST/);
     expect(ics.replace(/\r\n /g, '')).toMatch(/ATTENDEE;.*RSVP=TRUE/);
 
-    // DB stored an absolute instant + the audio type.
     const row = (await pool.query<{ meeting_start_at: Date | null; meeting_type: string | null }>(
       `SELECT meeting_start_at, meeting_type FROM dm_conversations WHERE id=$1`, [convId],
     )).rows[0];
-    expect(row.meeting_start_at, 'an exact instant is stored').toBeTruthy();
+    expect(row.meeting_start_at).toBeTruthy();
     expect(row.meeting_type).toBe('audio');
     await page.close();
   });
 
-  test('4) With both online, Meet now opens the call and rings the partner', async () => {
-    test.setTimeout(120_000);
-    const convId = await convBetween(a.id, b.id);
-
-    // B goes online (any authed page connects the socket into the user room).
-    const bPage = await openAs(b, `/messages/${convId}`);
-    await bPage.waitForTimeout(2500); // let the socket join user:<b>
-
-    // A opens the thread; wait for presence to flip Meet-now to enabled.
-    const aPage = await openAs(a, `/messages/${convId}`);
-
-    // The header presence indicator reads Online once B is on the platform.
-    await expect(aPage.getByTestId('partner-presence')).toContainText(/Online/i, { timeout: 35_000 });
-
-    if (MOBILE) {
-      // Poll the menu until the online label appears, then click it.
-      await expect(async () => {
-        await aPage.getByRole('button', { name: /More actions/i }).click();
-        const online = aPage.getByRole('button', { name: /^Video call now$/ });
-        await expect(online).toBeVisible({ timeout: 2000 });
-        await expect(online).toBeEnabled();
-      }).toPass({ timeout: 35_000 });
-      await aPage.getByRole('button', { name: /^Video call now$/ }).click();
-    } else {
-      const vid = aPage.getByRole('button', { name: /Start a video call now/i });
-      await expect(vid).toBeEnabled({ timeout: 35_000 });
-      await vid.click();
-    }
-
-    // A lands in the call room (token minted, page mounted).
-    await expect(aPage).toHaveURL(new RegExp(`/meet/${convId}`), { timeout: 20_000 });
-    await expect(aPage.getByText(/^Video call$/)).toBeVisible({ timeout: 15_000 });
-
-    // B is rung: the live incoming-call banner appears anywhere in the app.
-    await expect(bPage.getByText(/is calling/i)).toBeVisible({ timeout: 20_000 });
-
-    // An INSTANT call line in B's thread offers "Call back", NOT "Join meeting"
-    // (there's no standing room to join — Ali, 8 Sep 2026). Scope to that exact
-    // message row: the confirmed-meeting line elsewhere in the thread correctly
-    // still shows "Join meeting".
-    // Scope to the thread message row (data-message-id); the same text also
-    // appears in the inbox preview on single-pane widths.
-    const callRow = bPage.locator('[data-message-id]').filter({ hasText: /Started a video call/i });
-    await expect(callRow.first()).toBeVisible({ timeout: 20_000 });
-    await expect(callRow.getByRole('button', { name: /Call back/i }).first()).toBeVisible({ timeout: 10_000 });
-    await expect(callRow.getByRole('button', { name: /Join meeting/i })).toHaveCount(0);
-
-    // Durable rails: a bell notification for B and a system line in the thread.
-    await expect.poll(async () => {
-      const n = await pool.query(
-        `SELECT COUNT(*)::int AS c FROM notifications WHERE user_id=$1 AND type='incoming_call'`, [b.id],
-      );
-      return n.rows[0].c as number;
-    }, { timeout: 15_000 }).toBeGreaterThanOrEqual(1);
-
-    const msg = await pool.query(
-      `SELECT COUNT(*)::int AS c FROM direct_messages WHERE conversation_id=$1 AND content ILIKE '%call%'`, [convId],
-    );
-    expect(msg.rows[0].c as number).toBeGreaterThanOrEqual(1);
-
-    await aPage.close();
-    await bPage.close();
-  });
-
-  test('5) a scheduled meeting opened early shows a countdown, with a join-now escape', async () => {
+  test('4) a scheduled meeting opened early shows a countdown, with a join-now escape', async () => {
     test.setTimeout(90_000);
     const convId = await convBetween(a.id, b.id);
-    // Test 3 confirmed a meeting several days out on this conversation, so
-    // opening it now (scheduled=1) is well before the 5-minute early window.
     const page = await openAs(a, `/meet/${convId}?kind=video&scheduled=1`);
     await expect(page.getByText(/Your meeting starts in/i)).toBeVisible({ timeout: 25_000 });
     await expect(page.getByRole('button', { name: /Join now anyway/i })).toBeVisible();
-
-    // The escape hatch still lets them in.
     await page.getByRole('button', { name: /Join now anyway/i }).click();
     await expect(page.getByText(/^Video call$/)).toBeVisible({ timeout: 15_000 });
     await page.close();
   });
 
-  test('6) once a meeting has ended, the card offers "Call now", not "Join"', async () => {
+  test('5) once both have attended a meeting, calls unlock: request (typed minutes) → accept → room', async () => {
+    test.setTimeout(150_000);
+    const convId = await convBetween(a.id, b.id);
+    await holdFirstMeeting(a, b, convId);
+
+    // B is on the platform.
+    const bPage = await openAs(b, `/messages/${convId}`);
+    await bPage.waitForTimeout(2500);
+
+    // A's chat: the scheduler is gone, the call buttons are there.
+    const aPage = await openAs(a, `/messages/${convId}`);
+    await expect(aPage.getByTestId('partner-presence')).toContainText(/Online/i, { timeout: 35_000 });
+    if (MOBILE) {
+      await expect(async () => {
+        await aPage.getByRole('button', { name: /More actions/i }).click();
+        await expect(aPage.getByRole('button', { name: /Find a time to meet/i })).toHaveCount(0);
+        const vid = aPage.getByRole('button', { name: /^Video call now$/ });
+        await expect(vid).toBeVisible({ timeout: 2000 });
+        await expect(vid).toBeEnabled();
+      }).toPass({ timeout: 35_000 });
+      await aPage.getByRole('button', { name: /^Video call now$/ }).click();
+    } else {
+      await expect(aPage.getByRole('button', { name: /Find a time to meet/i })).toHaveCount(0);
+      const vid = aPage.getByRole('button', { name: /Start a video call now/i });
+      await expect(vid).toBeEnabled({ timeout: 35_000 });
+      await vid.click();
+    }
+
+    // Request dialog: type the length, send.
+    await aPage.locator('#call-minutes').fill('15');
+    await aPage.getByRole('button', { name: /Send request/i }).click();
+    await expect(aPage.getByTestId('call-waiting')).toBeVisible({ timeout: 15_000 });
+    await expect(aPage.getByTestId('call-waiting')).toContainText(/15-min video/i);
+
+    // B is rung with the length, accepts → both enter the room.
+    await expect(bPage.getByText(/wants to call/i)).toBeVisible({ timeout: 20_000 });
+    await expect(bPage.getByText(/15-min video call/i)).toBeVisible();
+    await bPage.getByRole('button', { name: /^Accept$/ }).click();
+    await expect(bPage).toHaveURL(new RegExp(`/meet/${convId}`), { timeout: 20_000 });
+    await expect(aPage).toHaveURL(new RegExp(`/meet/${convId}`), { timeout: 20_000 });
+
+    const rq = (await pool.query<{ status: string; duration_min: number }>(
+      `SELECT status, duration_min FROM call_requests WHERE conversation_id=$1 ORDER BY created_at DESC LIMIT 1`, [convId],
+    )).rows[0];
+    expect(rq).toMatchObject({ status: 'accepted', duration_min: 15 });
+
+    await aPage.close();
+    await bPage.close();
+  });
+
+  test('6) a declined request is recorded and the caller is told', async () => {
+    test.setTimeout(60_000);
+    const convId = await convBetween(a.id, b.id);
+    // B must be online for A to request; open a page for B.
+    const bPage = await openAs(b, '/');
+    await bPage.waitForTimeout(2500);
+    const r = await apiAs(a, 'POST', `/dm/conversations/${convId}/call/request`, { kind: 'audio', durationMin: 10 });
+    expect(r.status).toBe(201);
+    expect(r.json.data).toMatchObject({ kind: 'audio', durationMin: 10, status: 'pending' });
+    const d = await apiAs(b, 'POST', `/dm/call/requests/${r.json.data.id}/decline`);
+    expect(d.status).toBe(200);
+    const row = (await pool.query<{ status: string }>(`SELECT status FROM call_requests WHERE id=$1`, [r.json.data.id])).rows[0];
+    expect(row.status).toBe('declined');
+    // Accepting a declined request is refused.
+    expect((await apiAs(b, 'POST', `/dm/call/requests/${r.json.data.id}/accept`)).status).toBe(409);
+    await bPage.close();
+  });
+
+  test('7) once a meeting has ended, the card offers "Call now", and a stale link says ended', async () => {
     test.setTimeout(90_000);
     const convId = await convBetween(a.id, b.id);
-    // The API refuses to confirm a past time, so age the confirmed meeting
-    // directly: 3h ago, 30 min long → well past the 30-min grace window.
     await pool.query(
       `UPDATE dm_conversations SET meeting_start_at = NOW() - INTERVAL '3 hours', meeting_duration_min = 30 WHERE id = $1`,
       [convId],
     );
-
     const page = await openAs(a, `/messages/${convId}`);
-    // Pinned card shows the ended state + Call now.
     const pinned = page.getByTestId('thread-meeting-banner');
     await expect(pinned.getByText(/Meeting ended/i)).toBeVisible({ timeout: 25_000 });
     await expect(pinned.getByRole('button', { name: /Call now/i })).toBeVisible();
-
-    // The confirmed-meeting message line now offers Call now, not Join.
     const confRow = page.locator('[data-message-id]').filter({ hasText: /Meeting confirmed/i });
     await expect(confRow.getByRole('button', { name: /Call now/i }).first()).toBeVisible({ timeout: 10_000 });
     await expect(confRow.getByRole('button', { name: /Join meeting/i })).toHaveCount(0);
 
-    // A stale scheduled link lands on "ended", not an empty room.
     const meet = await openAs(a, `/meet/${convId}?kind=video&scheduled=1`);
     await expect(meet.getByText(/This meeting has ended/i)).toBeVisible({ timeout: 20_000 });
-
     await page.close();
     await meet.close();
   });
 
-  test('7) inbox presence: a partner reads online, then offline when they close the app', async () => {
+  test('8) inbox presence: a partner reads online, then offline when they close the app', async () => {
     test.setTimeout(120_000);
-    // Fresh pair so no lingering socket from earlier tests skews presence.
     const x = await createTestUser('mcallx');
     const y = await createTestUser('mcally');
     const sent = await apiAs(x, 'POST', '/pokes', { recipientId: y.id, message: 'hi' });
     await apiAs(y, 'POST', `/pokes/${sent.json.data.id}/accept`);
-
-    // Y comes onto the platform → X's inbox presence shows Y online.
     const yPage = await openAs(y, '/');
     await yPage.waitForTimeout(2500);
-    await expect.poll(
-      async () => (await apiAs(x, 'GET', '/dm/presence')).json.data.online[y.id],
-      { timeout: 35_000 },
-    ).toBe(true);
-
-    // Y closes the app → presence clears (last socket gone) → X sees offline.
+    await expect.poll(async () => (await apiAs(x, 'GET', '/dm/presence')).json.data.online[y.id], { timeout: 35_000 }).toBe(true);
     await yPage.close();
-    await expect.poll(
-      async () => (await apiAs(x, 'GET', '/dm/presence')).json.data.online[y.id],
-      { timeout: 30_000 },
-    ).toBe(false);
-
+    await expect.poll(async () => (await apiAs(x, 'GET', '/dm/presence')).json.data.online[y.id], { timeout: 30_000 }).toBe(false);
     await cleanup(pool, { ids: [x.id, y.id] });
   });
 });

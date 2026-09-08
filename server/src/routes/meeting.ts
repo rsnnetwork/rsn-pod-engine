@@ -82,6 +82,13 @@ const callBodySchema = z.object({
   kind: z.enum(['audio', 'video']).optional(),
 });
 
+// 9 Sep 2026: a call is REQUESTED with a duration the caller types (any number
+// of minutes, clamped 5–240 server-side), then accepted by the other person.
+const callRequestBodySchema = z.object({
+  kind: z.enum(['audio', 'video']).optional(),
+  durationMin: z.number().int().min(1).max(1000),
+});
+
 const availabilityBodySchema = z.object({
   windows: z.array(z.string().max(30)).max(21),
 });
@@ -172,16 +179,64 @@ router.post(
   },
 );
 
-// POST /dm/conversations/:id/call/start — "Meet now": ring the partner (must be
-// online) and return the caller's join token.
+// POST /dm/conversations/:id/call/request — ask the partner for a call of a
+// chosen length (9 Sep 2026). Requires calls to be unlocked (first meeting
+// happened) and the partner online. The caller then waits for accept/decline.
 router.post(
-  '/conversations/:id/call/start',
+  '/conversations/:id/call/request',
   authenticate,
-  validate(callBodySchema),
+  validate(callRequestBodySchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const result = await callService.startCall(req.params.id, req.user!.userId, req.body.kind || 'video');
+      const result = await callService.requestCall(
+        req.params.id, req.user!.userId, req.body.kind || 'video', req.body.durationMin,
+      );
+      res.status(201).json({ success: true, data: result } as ApiResponse);
+    } catch (err) { next(err); }
+  },
+);
+
+// GET /dm/conversations/:id/call/pending — the live request on this thread, if
+// any, so a refreshed client can restore "waiting…" / "X wants a call".
+router.get(
+  '/conversations/:id/call/pending',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await callService.getPendingCallRequest(req.params.id, req.user!.userId);
       res.json({ success: true, data: result } as ApiResponse);
+    } catch (err) { next(err); }
+  },
+);
+
+// POST /dm/call/requests/:id/accept|decline|cancel
+router.post(
+  '/call/requests/:id/accept',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await callService.acceptCallRequest(req.params.id, req.user!.userId);
+      res.json({ success: true, data: result } as ApiResponse);
+    } catch (err) { next(err); }
+  },
+);
+router.post(
+  '/call/requests/:id/decline',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await callService.declineCallRequest(req.params.id, req.user!.userId);
+      res.json({ success: true, data: { ok: true } } as ApiResponse);
+    } catch (err) { next(err); }
+  },
+);
+router.post(
+  '/call/requests/:id/cancel',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await callService.cancelCallRequest(req.params.id, req.user!.userId);
+      res.json({ success: true, data: { ok: true } } as ApiResponse);
     } catch (err) { next(err); }
   },
 );

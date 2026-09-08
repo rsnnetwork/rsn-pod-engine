@@ -25,6 +25,8 @@ interface Scheduling {
   confirmed: { window: string; byUserId: string; at: string; startAt: string | null; durationMin: number | null; type: 'audio' | 'video' | null } | null;
   /** The partner changed availability since I last opened the scheduler. */
   schedulingUpdated?: boolean;
+  /** Calls unlock once this pair's first scheduled meeting has happened. */
+  callsUnlocked?: boolean;
 }
 
 // Sensible default start hour for each daypart when finalising an exact time.
@@ -94,6 +96,9 @@ export function ThreadMeetingBanner({ conversationId, onCallNow }: { conversatio
   if (!c || !c.startAt) return null;
   const kind = c.type ?? 'video';
   const over = isMeetingOver(c.startAt, c.durationMin);
+  // "Call now" after an ended meeting only makes sense once calls are unlocked
+  // (both attended). If it ended without that, they pick a new time instead.
+  const unlocked = !!data?.callsUnlocked;
   return (
     <div
       className={`border-b px-4 py-2.5 ${over ? 'border-gray-200 bg-gray-50' : 'border-emerald-200 bg-emerald-50'}`}
@@ -114,12 +119,16 @@ export function ThreadMeetingBanner({ conversationId, onCallNow }: { conversatio
           </div>
         </div>
         {over ? (
-          <button
-            onClick={() => onCallNow?.(kind)}
-            className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-lg bg-rsn-red px-3 text-sm font-medium text-white hover:opacity-90"
-          >
-            {kind === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Call now
-          </button>
+          unlocked ? (
+            <button
+              onClick={() => onCallNow?.(kind)}
+              className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-lg bg-rsn-red px-3 text-sm font-medium text-white hover:opacity-90"
+            >
+              {kind === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Call now
+            </button>
+          ) : (
+            <span className="text-xs text-gray-500">Pick a new time to meet.</span>
+          )
         ) : (
           <button
             onClick={() => navigate(`/meet/${conversationId}?kind=${kind}&scheduled=1`)}
@@ -230,17 +239,6 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
     }
   };
 
-  // "Call now" from an ended meeting — ring the partner (must be online) and
-  // enter a fresh call, same as Meet-now elsewhere.
-  const callNow = async (kind: 'audio' | 'video') => {
-    try {
-      await api.post(`/dm/conversations/${conversationId}/call/start`, { kind });
-      navigate(`/meet/${conversationId}?kind=${kind}`);
-    } catch (e: any) {
-      addToast(e?.response?.data?.error?.message || 'Could not start the call.', 'info');
-    }
-  };
-
   // "Add to calendar" — a universal .ics download (Google, Outlook, Apple…),
   // not a Google-only link (Stefan, 9 Sep 2026).
   const downloadIcs = async () => {
@@ -303,12 +301,9 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
               <p className="text-xs text-gray-500">
                 {(data.confirmed.type === 'audio' ? 'Audio call' : 'Video call')} · {localWhen(data.confirmed.startAt)}
               </p>
-              <button
-                onClick={() => callNow(data.confirmed?.type ?? 'video')}
-                className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg bg-rsn-red px-3 text-sm font-medium text-white hover:opacity-90"
-              >
-                {data.confirmed.type === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Call now
-              </button>
+              {/* The scheduler is only shown while calls are still locked, so an
+                  ended meeting here means they didn't both attend — pick again. */}
+              <p className="text-xs text-gray-600">That meeting has passed — pick a new time below.</p>
             </div>
           )}
         </div>

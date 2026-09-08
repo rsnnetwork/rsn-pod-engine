@@ -43,6 +43,10 @@ export interface ConversationScheduling {
   /** W-meet (8 Sep 2026): the partner changed their availability more recently
    *  than I last opened the scheduler — drives the calendar-icon dot. */
   schedulingUpdated: boolean;
+  /** 9 Sep 2026 (Ali): calls unlock once this pair's first scheduled meeting has
+   *  happened (both joined). Until then the chat shows the scheduler, not calls;
+   *  after, the scheduler steps aside and calls appear. */
+  callsUnlocked: boolean;
 }
 
 // ── Validation (pure — unit-tested directly) ─────────────────────────────────
@@ -92,6 +96,7 @@ interface ConversationRow {
   avail_updated_at_b: Date | null;
   scheduler_seen_at_a: Date | null;
   scheduler_seen_at_b: Date | null;
+  calls_unlocked_at: Date | null;
 }
 
 /** Load the conversation and prove the caller belongs to it. */
@@ -101,7 +106,8 @@ async function requireParticipant(conversationId: string, userId: string): Promi
             meeting_confirmed_window, meeting_confirmed_by, meeting_confirmed_at,
             meeting_start_at, meeting_duration_min, meeting_type,
             avail_updated_at_a, avail_updated_at_b,
-            scheduler_seen_at_a, scheduler_seen_at_b
+            scheduler_seen_at_a, scheduler_seen_at_b,
+            calls_unlocked_at
      FROM dm_conversations WHERE id = $1`,
     [conversationId],
   );
@@ -148,6 +154,7 @@ function buildScheduling(
         }
       : null,
     schedulingUpdated,
+    callsUnlocked: !!conv.calls_unlocked_at,
   };
 }
 

@@ -237,7 +237,13 @@ export interface ServerToClientEvents {
   'notification:new': (data: { id: string; type: string; title: string; body?: string; link?: string; isRead: boolean; createdAt: string; inviteStatus?: string; podId?: string | null; sessionId?: string | null }) => void;
 
   // 1:1 "Meet now" — the callee's live ring (W-meet, 8 Sep 2026).
-  'call:incoming': (data: { conversationId: string; fromUserId: string; fromName: string; kind: 'audio' | 'video'; link: string }) => void;
+  // Call requests (9 Sep 2026, Ali/Stefan): calls go request → accept once a
+  // pair's first scheduled meeting has happened. The callee gets `call:request`
+  // (with the caller's chosen duration); the caller learns the outcome.
+  'call:request': (data: { requestId: string; conversationId: string; fromUserId: string; fromName: string; kind: 'audio' | 'video'; durationMin: number }) => void;
+  'call:accepted': (data: { requestId: string; conversationId: string; kind: 'audio' | 'video'; durationMin: number }) => void;
+  'call:declined': (data: { requestId: string; conversationId: string; byName: string }) => void;
+  'call:cancelled': (data: { requestId: string; conversationId: string }) => void;
 
   // DM (Phase D of chat-fix-and-dm-system, 1 May 2026) — platform-level
   // person-to-person messaging. Independent of any session/round/event.

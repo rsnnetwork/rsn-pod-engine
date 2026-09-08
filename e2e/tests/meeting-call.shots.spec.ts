@@ -6,8 +6,9 @@ import { launchBrowser } from '../helpers/engine';
 import fs from 'fs';
 import path from 'path';
 
-// Visual evidence for the W-meet meeting/call feature (8 Sep 2026). Captures the
-// real prod UI at desktop + phone widths so Ali can eyeball it. Chromium only.
+// Visual evidence for the meeting/call feature on prod (chromium), at desktop +
+// phone widths. Order matters: shots that need a FUTURE meeting come before the
+// one that holds the meeting (which unlocks calls and moves the time to "now").
 
 const OUT = path.resolve(__dirname, '../shots/meeting');
 let browser: Browser;
@@ -22,8 +23,7 @@ async function apiAs(u: TestUser, method: string, p: string, body?: unknown) {
   });
   return { status: res.status, json: await res.json().catch(() => null) };
 }
-
-async function ctxFor(u: TestUser, viewport: { width: number; height: number }): Promise<BrowserContext> {
+async function pageAt(u: TestUser, p: string, viewport: { width: number; height: number }): Promise<Page> {
   const ctx = await browser.newContext({ viewport });
   await ctx.addInitScript((t: { a: string; r: string }) => {
     localStorage.setItem('rsn_access', t.a);
@@ -32,17 +32,11 @@ async function ctxFor(u: TestUser, viewport: { width: number; height: number }):
   }, { a: u.accessToken, r: u.refreshToken });
   ctxs.push(ctx);
   await primePreview(ctx);
-  return ctx;
-}
-
-async function pageAt(u: TestUser, p: string, viewport: { width: number; height: number }): Promise<Page> {
-  const ctx = await ctxFor(u, viewport);
   const page = await ctx.newPage();
   page.on('pageerror', () => {});
   await gotoRetry(page, `${APP}${p}`);
   return page;
 }
-
 function futureWindowKey(daysAhead = 3, daypart = 'afternoon'): string {
   const d = new Date(Date.now() + daysAhead * 86_400_000);
   return `${d.toISOString().slice(0, 10)}:${daypart}`;
@@ -75,86 +69,99 @@ test.afterAll(async () => {
 });
 
 test('capture meeting + call UI', async () => {
-  test.setTimeout(180_000);
+  test.setTimeout(300_000);
   const convId = await convBetween(a.id, b.id);
 
-  // Give the pair an overlap and a confirmed audio meeting via API.
+  // A confirmed audio meeting 3 days out.
   const KEY = futureWindowKey(3, 'afternoon');
   await apiAs(a, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] });
   await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] });
   const day = KEY.split(':')[0];
-  const startAt = new Date(`${day}T15:30:00`).toISOString();
-  await apiAs(a, 'POST', `/dm/conversations/${convId}/scheduling/confirm`, { window: KEY, startAt, durationMin: 45, type: 'audio' });
+  await apiAs(a, 'POST', `/dm/conversations/${convId}/scheduling/confirm`, {
+    window: KEY, startAt: new Date(`${day}T15:30:00`).toISOString(), durationMin: 45, type: 'audio',
+  });
 
-  // 1) Desktop thread — pinned Join card + Meet-now header buttons.
+  // 1) Desktop thread BEFORE the first meeting: pinned Join card, scheduler icon,
+  //    and NO call buttons (calls are locked until they've met).
   const desk = await pageAt(a, `/messages/${convId}`, { width: 1280, height: 900 });
   await expect(desk.getByTestId('thread-meeting-banner')).toBeVisible({ timeout: 25_000 });
-  await desk.screenshot({ path: path.join(OUT, '01-desktop-thread-join-card.png') });
+  await expect(desk.getByRole('button', { name: /Start a video call now/i })).toHaveCount(0);
+  await desk.screenshot({ path: path.join(OUT, '01-desktop-thread-join-card-locked.png') });
 
-  // 2) Desktop scheduler finalize — audio/video toggle. Use a NEW overlap so a
-  //    Confirm button is present, then open the exact-time step.
-  const KEY2 = futureWindowKey(6, 'morning');
-  await apiAs(a, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY, KEY2] });
-  await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY, KEY2] });
-  await desk.reload();
-  const findTime = desk.getByRole('button', { name: /Find a time to meet/i });
-  await findTime.first().click();
+  // 2) Scheduler panel with the confirmed meeting + "Add to calendar".
+  await desk.getByRole('button', { name: /Find a time to meet/i }).first().click();
   await expect(desk.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
-  const confirmBtn = desk.getByRole('button', { name: /^Confirm .*(morning|afternoon|evening)/i }).first();
-  if (await confirmBtn.isVisible().catch(() => false)) {
-    await confirmBtn.click();
-    await expect(desk.getByRole('button', { name: /Confirm meeting/i })).toBeVisible({ timeout: 10_000 });
-  }
-  await desk.screenshot({ path: path.join(OUT, '02-desktop-scheduler-audio-video.png') });
+  await expect(desk.getByRole('button', { name: /Add to calendar/i })).toBeVisible({ timeout: 10_000 });
+  await desk.screenshot({ path: path.join(OUT, '02-desktop-scheduler-add-to-calendar.png') });
 
-  // 3) The call room (A joins) — with the per-tile maximize control.
+  // 3) The call room, with the per-tile maximize control.
   const meet = await pageAt(a, `/meet/${convId}?kind=video`, { width: 1280, height: 900 });
   await expect(meet.getByText(/^Video call$/)).toBeVisible({ timeout: 20_000 });
   await meet.waitForTimeout(3000);
   await expect(meet.getByRole('button', { name: /Maximize this view/i }).first()).toBeVisible({ timeout: 15_000 });
   await meet.screenshot({ path: path.join(OUT, '03-desktop-call-room.png') });
 
-  // 4) Incoming-call ring on B — trigger a Meet-now from A (B online).
-  const bDesk = await pageAt(b, `/messages/${convId}`, { width: 1280, height: 900 });
-  await bDesk.waitForTimeout(2500);
-  await apiAs(a, 'POST', `/dm/conversations/${convId}/call/start`, { kind: 'video' });
-  await expect(bDesk.getByText(/is calling/i)).toBeVisible({ timeout: 20_000 });
-  await bDesk.screenshot({ path: path.join(OUT, '04-desktop-incoming-call-banner.png') });
+  // 4) Scheduled meeting opened early → countdown (needs the FUTURE meeting).
+  const wait = await pageAt(a, `/meet/${convId}?kind=video&scheduled=1`, { width: 1280, height: 900 });
+  await expect(wait.getByText(/Your meeting starts in/i)).toBeVisible({ timeout: 25_000 });
+  await wait.screenshot({ path: path.join(OUT, '04-scheduled-countdown.png') });
 
-  // 5) Mobile 390 — thread with the Join card.
+  // 5) Mobile 390 — thread with the Join card (locked: no call icons).
   const mob = await pageAt(a, `/messages/${convId}`, { width: 390, height: 844 });
   await expect(mob.getByTestId('thread-meeting-banner')).toBeVisible({ timeout: 25_000 });
   await mob.screenshot({ path: path.join(OUT, '05-mobile-thread-join-card.png') });
 
-  // 6b) Scheduled meeting opened early → countdown screen (not an empty room).
-  const wait = await pageAt(a, `/meet/${convId}?kind=video&scheduled=1`, { width: 1280, height: 900 });
-  await expect(wait.getByText(/Your meeting starts in/i)).toBeVisible({ timeout: 25_000 });
-  await wait.screenshot({ path: path.join(OUT, '07-scheduled-countdown.png') });
-
-  // 6) Mobile availability dot — B changes availability, A sees the dot behind
-  //    the More-actions button.
-  await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [futureWindowKey(8, 'evening')] });
+  // 6) Mobile availability dot — B changes availability, A sees the dot.
+  await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY, futureWindowKey(8, 'evening')] });
   const mob2 = await pageAt(a, `/messages/${convId}`, { width: 390, height: 844 });
   await expect(mob2.getByRole('button', { name: /More actions .*updated their availability/i })).toBeVisible({ timeout: 25_000 });
   await mob2.screenshot({ path: path.join(OUT, '06-mobile-availability-dot.png') });
 
-  // 8) Ended meeting → "Meeting ended · Call now" (age the meeting to the past).
+  // ── Hold the first meeting: confirm one starting now, both enter → calls unlock.
+  const TODAY = futureWindowKey(0, 'afternoon');
+  await apiAs(a, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [TODAY] });
+  await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [TODAY] });
+  await apiAs(a, 'POST', `/dm/conversations/${convId}/scheduling/confirm`, {
+    window: TODAY, startAt: new Date(Date.now() + 60_000).toISOString(), durationMin: 30, type: 'video',
+  });
+  await apiAs(a, 'POST', `/dm/conversations/${convId}/call-token`, { kind: 'video' });
+  await apiAs(b, 'POST', `/dm/conversations/${convId}/call-token`, { kind: 'video' });
+  expect((await apiAs(a, 'GET', `/dm/conversations/${convId}/scheduling`)).json.data.callsUnlocked).toBe(true);
+
+  // 7) After the meeting: B online; A's thread shows call buttons, no scheduler.
+  const bDesk = await pageAt(b, `/messages/${convId}`, { width: 1280, height: 900 });
+  await bDesk.waitForTimeout(2500);
+  const aDesk = await pageAt(a, `/messages/${convId}`, { width: 1280, height: 900 });
+  await expect(aDesk.getByTestId('partner-presence')).toContainText(/Online/i, { timeout: 35_000 });
+  await expect(aDesk.getByRole('button', { name: /Find a time to meet/i })).toHaveCount(0);
+  await aDesk.screenshot({ path: path.join(OUT, '07-desktop-unlocked-call-buttons.png') });
+
+  // 8) Request-a-call dialog: video/audio + typed minutes.
+  const vid = aDesk.getByRole('button', { name: /Start a video call now/i });
+  await expect(vid).toBeEnabled({ timeout: 35_000 });
+  await vid.click();
+  await aDesk.locator('#call-minutes').fill('15');
+  await aDesk.screenshot({ path: path.join(OUT, '08-call-request-dialog.png') });
+
+  // 9) Caller waiting; 10) callee rung with the length.
+  await aDesk.getByRole('button', { name: /Send request/i }).click();
+  await expect(aDesk.getByTestId('call-waiting')).toBeVisible({ timeout: 15_000 });
+  await aDesk.screenshot({ path: path.join(OUT, '09-call-waiting.png') });
+  await expect(bDesk.getByText(/wants to call/i)).toBeVisible({ timeout: 20_000 });
+  await bDesk.screenshot({ path: path.join(OUT, '10-incoming-call-request.png') });
+  await bDesk.getByRole('button', { name: /^Accept$/ }).click();
+  await expect(bDesk).toHaveURL(new RegExp(`/meet/${convId}`), { timeout: 20_000 });
+
+  // 11) Ended meeting (unlocked) → "Meeting ended · Call now".
   await pool.query(`UPDATE dm_conversations SET meeting_start_at = NOW() - INTERVAL '3 hours', meeting_duration_min = 30 WHERE id = $1`, [convId]);
   const ended = await pageAt(a, `/messages/${convId}`, { width: 1280, height: 900 });
   await expect(ended.getByTestId('thread-meeting-banner').getByText(/Meeting ended/i)).toBeVisible({ timeout: 25_000 });
-  await ended.screenshot({ path: path.join(OUT, '08-meeting-ended-call-now.png') });
+  await ended.screenshot({ path: path.join(OUT, '11-meeting-ended-call-now.png') });
 
-  // 9) Online status dot — bring B onto the platform, A sees "Online".
-  const bLive = await pageAt(b, `/messages/${convId}`, { width: 420, height: 700 });
-  await bLive.waitForTimeout(2500);
-  const aLive = await pageAt(a, `/messages/${convId}`, { width: 1280, height: 900 });
-  await expect(aLive.getByTestId('partner-presence')).toContainText(/Online/i, { timeout: 35_000 });
-  await aLive.screenshot({ path: path.join(OUT, '09-online-status.png') });
-
-  // 10) Online dot in the conversation LIST (B is online).
+  // 12) Online dot in the conversation list.
   const aList = await pageAt(a, '/messages', { width: 1280, height: 900 });
   await expect(aList.getByLabel('Online').first()).toBeVisible({ timeout: 30_000 });
-  await aList.screenshot({ path: path.join(OUT, '10-inbox-online-dot.png') });
+  await aList.screenshot({ path: path.join(OUT, '12-inbox-online-dot.png') });
 
   console.log('shots written to', OUT);
 });
