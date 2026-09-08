@@ -84,7 +84,7 @@ import {
 
 // Timer Manager
 import { clearSessionTimers, TimerCallbacks } from './handlers/timer-manager';
-import { markActive } from '../presence/presence.service';
+import { markActive, clearActive } from '../presence/presence.service';
 
 let io: SocketServer;
 
@@ -406,6 +406,17 @@ export function initOrchestration(socketServer: SocketServer): void {
     socket.on('disconnect', async () => {
       try { await handleDisconnect(io, socket); }
       catch (err) { logger.error({ err, userId }, 'Disconnect handler error'); }
+      // App-level presence: if this was the member's LAST socket (they closed
+      // the app, not just one of several tabs), drop them to offline right away
+      // instead of waiting out the heartbeat TTL.
+      if (userId) {
+        try {
+          const remaining = await io.in(`user:${userId}`).fetchSockets();
+          if (remaining.length === 0) await clearActive(userId);
+        } catch (err) {
+          logger.warn({ err, userId }, 'presence clear on disconnect failed (non-fatal)');
+        }
+      }
     });
   });
 }

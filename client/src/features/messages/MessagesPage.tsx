@@ -259,6 +259,15 @@ export default function MessagesPage() {
     meta: { entities: myUserId ? [E.userDms(myUserId)] : [] },
   });
 
+  // Online status of every conversation partner, for the green dot in the list.
+  // realtime: skip — presence is inherently pollable; a 20s poll is the source of truth.
+  const { data: inboxPresence } = useQuery({
+    queryKey: ['dm-inbox-presence'],
+    queryFn: () => api.get('/dm/presence').then(r => r.data.data.online as Record<string, boolean>),
+    refetchInterval: 20_000,
+    refetchOnWindowFocus: true,
+  });
+
   // Thread: messages in the active conversation.
   const { data: messagesData } = useQuery({
     queryKey: ['dm-messages', activeId],
@@ -812,7 +821,18 @@ export default function MessagesPage() {
                 to={`/messages/${c.conversationId}`}
                 className={`flex items-center gap-3 px-4 py-3 hover:bg-gray-50 border-b border-gray-100 transition-colors ${activeId === c.conversationId ? 'bg-rsn-red/5' : ''}`}
               >
-                <Avatar src={c.otherAvatarUrl || undefined} name={c.otherDisplayName || 'User'} size="md" />
+                {/* Online dot on the avatar (8 Sep 2026) — green when this
+                    partner is on the platform now. */}
+                <span className="relative shrink-0">
+                  <Avatar src={c.otherAvatarUrl || undefined} name={c.otherDisplayName || 'User'} size="md" />
+                  {inboxPresence?.[c.otherUserId] && (
+                    <span
+                      className="absolute bottom-0 right-0 h-3 w-3 rounded-full bg-emerald-500 ring-2 ring-white"
+                      title="On the platform now"
+                      aria-label="Online"
+                    />
+                  )}
+                </span>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-baseline justify-between">
                     <p className="text-sm font-medium text-[#1a1a2e] truncate">{c.otherDisplayName || 'User'}</p>

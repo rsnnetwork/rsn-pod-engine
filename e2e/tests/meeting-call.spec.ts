@@ -287,4 +287,30 @@ test.describe.serial('meeting + call', () => {
     await page.close();
     await meet.close();
   });
+
+  test('7) inbox presence: a partner reads online, then offline when they close the app', async () => {
+    test.setTimeout(120_000);
+    // Fresh pair so no lingering socket from earlier tests skews presence.
+    const x = await createTestUser('mcallx');
+    const y = await createTestUser('mcally');
+    const sent = await apiAs(x, 'POST', '/pokes', { recipientId: y.id, message: 'hi' });
+    await apiAs(y, 'POST', `/pokes/${sent.json.data.id}/accept`);
+
+    // Y comes onto the platform → X's inbox presence shows Y online.
+    const yPage = await openAs(y, '/');
+    await yPage.waitForTimeout(2500);
+    await expect.poll(
+      async () => (await apiAs(x, 'GET', '/dm/presence')).json.data.online[y.id],
+      { timeout: 35_000 },
+    ).toBe(true);
+
+    // Y closes the app → presence clears (last socket gone) → X sees offline.
+    await yPage.close();
+    await expect.poll(
+      async () => (await apiAs(x, 'GET', '/dm/presence')).json.data.online[y.id],
+      { timeout: 30_000 },
+    ).toBe(false);
+
+    await cleanup(pool, { ids: [x.id, y.id] });
+  });
 });

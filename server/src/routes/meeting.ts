@@ -12,9 +12,34 @@ import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
 import * as meetingService from '../services/dm/meeting-windows.service';
 import * as callService from '../services/dm/meeting-call.service';
+import { areActive } from '../services/presence/presence.service';
+import { query } from '../db';
 import { ApiResponse } from '@rsn/shared';
 
 const router = Router();
+
+// GET /dm/presence — online status of all my conversation partners, for the
+// green dot in the messages list (8 Sep 2026, Ali). Scoped to my own
+// conversations so it can't probe arbitrary users.
+router.get(
+  '/presence',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const me = req.user!.userId;
+      const rows = await query<{ partner_id: string }>(
+        `SELECT CASE WHEN user_a_id = $1 THEN user_b_id ELSE user_a_id END AS partner_id
+           FROM dm_conversations
+          WHERE user_a_id = $1 OR user_b_id = $1`,
+        [me],
+      );
+      const online = await areActive(rows.rows.map((r) => r.partner_id));
+      res.json({ success: true, data: { online } } as ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 const callBodySchema = z.object({
   kind: z.enum(['audio', 'video']).optional(),

@@ -46,3 +46,31 @@ export async function isActive(userId: string): Promise<boolean | null> {
     return null;
   }
 }
+
+/** Clear presence immediately — used when a member's last socket disconnects
+ *  (they closed the app), so they don't linger "online" for the TTL. */
+export async function clearActive(userId: string): Promise<void> {
+  const r = getRedisClient();
+  if (!r) return;
+  try {
+    await r.del(key(userId));
+  } catch (err) {
+    logger.warn({ err, userId }, 'presence clearActive failed (non-fatal)');
+  }
+}
+
+/** Batch presence for a set of members → { userId: online }. Empty map when
+ *  Redis is unavailable (dots simply don't show during an outage). */
+export async function areActive(userIds: string[]): Promise<Record<string, boolean>> {
+  const out: Record<string, boolean> = {};
+  const r = getRedisClient();
+  if (!r || userIds.length === 0) return out;
+  try {
+    const uniq = [...new Set(userIds)];
+    const results = await Promise.all(uniq.map((id) => r.exists(key(id))));
+    uniq.forEach((id, i) => { out[id] = results[i] === 1; });
+  } catch (err) {
+    logger.warn({ err }, 'presence areActive failed (non-fatal)');
+  }
+  return out;
+}
