@@ -881,6 +881,18 @@ export default function MessagesPage() {
                 <p className="truncate text-sm font-bold text-[#1a1a2e] hover:underline">
                   {headerContext.otherDisplayName || 'User'}
                 </p>
+                {/* Online status (8 Sep 2026) — green when the partner is actually
+                    on the platform now (drives the Meet-now buttons too). */}
+                {activeConv && (
+                  <span
+                    className="flex items-center gap-1 text-[11px]"
+                    title={partnerOnline ? 'On the platform now' : 'Not on the platform right now'}
+                    data-testid="partner-presence"
+                  >
+                    <span className={`h-2 w-2 rounded-full ${partnerOnline ? 'bg-emerald-500' : 'bg-gray-300'}`} aria-hidden="true" />
+                    <span className={partnerOnline ? 'text-emerald-600' : 'text-gray-400'}>{partnerOnline ? 'Online' : 'Offline'}</span>
+                  </span>
+                )}
                 {(headerContext.otherJobTitle || headerContext.otherCompany) && (
                   <p className="truncate text-xs text-gray-500">
                     {[headerContext.otherJobTitle, headerContext.otherCompany].filter(Boolean).join(' · ')}

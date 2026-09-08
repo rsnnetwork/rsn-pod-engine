@@ -84,6 +84,7 @@ import {
 
 // Timer Manager
 import { clearSessionTimers, TimerCallbacks } from './handlers/timer-manager';
+import { markActive } from '../presence/presence.service';
 
 let io: SocketServer;
 
@@ -268,6 +269,15 @@ export function initOrchestration(socketServer: SocketServer): void {
   io.on('connection', (socket: Socket) => {
     const userId = getUserIdFromSocket(socket);
     if (userId) socket.join(`user:${userId}`);
+
+    // App-level presence (8 Sep 2026): mark active on connect, and refresh it
+    // on each foreground ping from the client. Drives the DM online dot and the
+    // "Meet now" gate — so "online" means actually on the platform, not just a
+    // lingering socket.
+    if (userId) {
+      void markActive(userId);
+      socket.on('presence:ping', () => { void markActive(userId); });
+    }
 
     // ── Participant Events (guarded — state-mutating) ──
     wrapHandler('session:join', socket, handleJoinSession);

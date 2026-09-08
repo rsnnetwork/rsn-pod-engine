@@ -159,6 +159,27 @@ export default function App() {
     };
   }, [addToast]);
 
+  // App-level presence heartbeat (8 Sep 2026, Ali) — tell the server we're
+  // actually on the platform while the tab is open and in the foreground, so a
+  // member reads as "online" (DM dot + Meet-now gate) only when genuinely here,
+  // not from a lingering/backgrounded socket. Stops when hidden; the server key
+  // expires within a minute, flipping them to offline.
+  useEffect(() => {
+    if (!(isAuthenticated && accessToken)) return;
+    const ping = () => {
+      if (document.visibilityState === 'visible') getSocket()?.emit('presence:ping');
+    };
+    ping();
+    const iv = setInterval(ping, 25_000);
+    document.addEventListener('visibilitychange', ping);
+    window.addEventListener('focus', ping);
+    return () => {
+      clearInterval(iv);
+      document.removeEventListener('visibilitychange', ping);
+      window.removeEventListener('focus', ping);
+    };
+  }, [isAuthenticated, accessToken]);
+
   // Realtime migration Phase 1 (19 May Ali) — mount the generic
   // entity:changed handler at the app root. Every query that declares
   // meta.entities will be auto-invalidated when the server emits a

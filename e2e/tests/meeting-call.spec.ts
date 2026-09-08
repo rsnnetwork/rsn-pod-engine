@@ -105,6 +105,9 @@ test.describe.serial('meeting + call', () => {
     // B has no browser open yet → offline. A opens the thread.
     const page = await openAs(a, `/messages/${convId}`);
 
+    // The header presence indicator reads Offline (B has no live session).
+    await expect(page.getByTestId('partner-presence')).toContainText(/Offline/i, { timeout: 25_000 });
+
     if (MOBILE) {
       await page.getByRole('button', { name: /More actions/i }).click();
       // The menu labels the call as offline and the item is disabled.
@@ -187,6 +190,9 @@ test.describe.serial('meeting + call', () => {
 
     // A opens the thread; wait for presence to flip Meet-now to enabled.
     const aPage = await openAs(a, `/messages/${convId}`);
+
+    // The header presence indicator reads Online once B is on the platform.
+    await expect(aPage.getByTestId('partner-presence')).toContainText(/Online/i, { timeout: 35_000 });
 
     if (MOBILE) {
       // Poll the menu until the online label appears, then click it.

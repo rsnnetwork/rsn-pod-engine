@@ -13,6 +13,7 @@ import { AppError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
 import { getVideoProvider } from '../video/video.service';
 import * as blockService from '../block/block.service';
+import { isActive } from '../presence/presence.service';
 
 const CALL_TOKEN_TTL_SECONDS = 4 * 60 * 60; // a call can run a while
 
@@ -45,10 +46,17 @@ async function requireCallParticipant(conversationId: string, userId: string): P
   return { ...conv, partnerId };
 }
 
-/** Is the other participant online right now (has a live socket)? Used to
- *  enable "Meet now" only when they can actually answer. */
+/**
+ * Is the other participant actually on the platform right now? Uses the
+ * app-level presence heartbeat (foreground pings) so a lingering/backgrounded
+ * socket doesn't read as online. Falls back to a live socket check only when
+ * Redis (the presence store) is unavailable.
+ */
 export async function isPartnerOnline(conversationId: string, userId: string): Promise<boolean> {
   const conv = await requireCallParticipant(conversationId, userId);
+  const active = await isActive(conv.partnerId);
+  if (active !== null) return active;
+  // Redis down → best-effort socket presence.
   try {
     const { io } = await import('../../index');
     const sockets = await io.in(`user:${conv.partnerId}`).fetchSockets();
@@ -96,14 +104,20 @@ export async function startCall(
   const conv = await requireCallParticipant(conversationId, userId);
   const callKind: 'audio' | 'video' = kind === 'audio' ? 'audio' : 'video';
 
-  // Partner must be online right now.
+  // Partner must be actually online right now (foreground heartbeat), same
+  // signal that gates the button. Fall back to a socket check if Redis is down.
   let partnerOnline = false;
-  try {
-    const { io } = await import('../../index');
-    const sockets = await io.in(`user:${conv.partnerId}`).fetchSockets();
-    partnerOnline = sockets.length > 0;
-  } catch (err) {
-    logger.warn({ err, conversationId }, 'could not check partner presence for call');
+  const active = await isActive(conv.partnerId);
+  if (active !== null) {
+    partnerOnline = active;
+  } else {
+    try {
+      const { io } = await import('../../index');
+      const sockets = await io.in(`user:${conv.partnerId}`).fetchSockets();
+      partnerOnline = sockets.length > 0;
+    } catch (err) {
+      logger.warn({ err, conversationId }, 'could not check partner presence for call');
+    }
   }
   if (!partnerOnline) {
     throw new AppError(409, ErrorCodes.VALIDATION_ERROR, 'They are offline right now — schedule a meeting instead.');

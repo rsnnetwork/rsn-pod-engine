@@ -264,6 +264,11 @@ export interface ClientToServerEvents {
   // Presence
   'presence:heartbeat': (data: { sessionId: string }) => void;
   'presence:ready': (data: { sessionId: string }) => void;
+  // App-level presence (8 Sep 2026): emitted while the app is open and in the
+  // foreground, so a member reads as "online" only when actually on the platform
+  // — a lingering/backgrounded socket alone no longer counts. Drives the DM
+  // online dot and gates "Meet now".
+  'presence:ping': () => void;
   // T0-2 (Issue 7) — fired by client after LiveKit room.connect() resolves.
   // Distinct from presence:ready: confirms LiveKit room membership specifically.
   'presence:room_joined': (data: { sessionId: string; matchId: string; roomId: string }) => void;
