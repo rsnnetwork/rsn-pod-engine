@@ -164,6 +164,23 @@ test('capture meeting + call UI', async () => {
   // 11) Ended meeting (unlocked) → "Meeting ended · Call now".
   await pool.query(`UPDATE dm_conversations SET meeting_start_at = NOW() - INTERVAL '3 hours', meeting_duration_min = 30 WHERE id = $1`, [convId]);
   const ended = await pageAt(a, `/messages/${convId}`, { width: 1280, height: 900 });
+  // Diagnostics BEFORE asserting: where did the page land, which API calls
+  // failed, what did the console say, and what is on screen.
+  const failed: string[] = [];
+  const consoleErrors: string[] = [];
+  ended.on('response', (r) => { if (r.url().includes('/api/') && r.status() >= 400) failed.push(`${r.status()} ${r.request().method()} ${r.url().replace(/^https?:\/\/[^/]+/, '')}`); });
+  ended.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text().slice(0, 200)); });
+  ended.on('pageerror', (e) => consoleErrors.push(`pageerror: ${String(e).slice(0, 200)}`));
+  await ended.reload();
+  await ended.waitForTimeout(5000);
+  const schedNow = await apiAs(a, 'GET', `/dm/conversations/${convId}/scheduling`);
+  console.log('[shots 11] url=', ended.url());
+  console.log('[shots 11] failed API=', JSON.stringify(failed));
+  console.log('[shots 11] console errors=', JSON.stringify(consoleErrors));
+  console.log('[shots 11] API confirmed=', JSON.stringify(schedNow.json?.data?.confirmed), 'unlocked=', schedNow.json?.data?.callsUnlocked);
+  console.log('[shots 11] presence present=', await ended.getByTestId('partner-presence').count(), 'banner text=', JSON.stringify(await ended.getByTestId('thread-meeting-banner').textContent().catch(() => null)));
+  console.log('[shots 11] body head=', JSON.stringify((await ended.locator('main, body').first().innerText().catch(() => '')).slice(0, 300)));
+  await ended.screenshot({ path: path.join(OUT, '11-pre.png') });
   await expect(ended.getByTestId('thread-meeting-banner').getByText(/Meeting ended/i)).toBeVisible({ timeout: 25_000 });
   await ended.screenshot({ path: path.join(OUT, '11-meeting-ended-call-now.png') });
 

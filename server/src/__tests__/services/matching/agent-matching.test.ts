@@ -128,6 +128,24 @@ describe('recomputeAgent', () => {
     expect(sql).toMatch(/user_blocks/);
   });
 
+  // 9 Sep 2026 (Stefan): a narrow want must never leave the agent empty — with
+  // fewer than 3 strong matches, the closest people are stored too, labelled.
+  it('widens to "Close match" people when a narrow want finds fewer than 3 strong matches', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [
+        candidate({ id: 'u-weak', professionalRole: ['Chef'], jobTitle: 'Pastry Chef', expertiseText: 'pastry, hobby react tinkering', whatICanHelpWith: 'baking' }), // one shared token ("react") → weak, not a developer
+        candidate({ id: 'u-none', professionalRole: ['Chef'], jobTitle: 'Pastry Chef', expertiseText: 'pastry', whatICanHelpWith: 'baking' }),       // nothing shared
+      ] })
+      .mockResolvedValueOnce({ rows: [] });
+    const n = await recomputeAgent(AGENT);
+    const [, matches] = mockReplaceMatches.mock.calls[0];
+    const weak = matches.find((m: any) => m.candidateUserId === 'u-weak');
+    expect(weak).toBeDefined(); // the closest person is stored
+    expect(weak.reason).toMatch(/^Close match/);
+    expect(matches.find((m: any) => m.candidateUserId === 'u-none')).toBeUndefined();
+    expect(n).toBe(1);
+  });
+
   it('an agent with no want text stores nothing rather than matching everyone', async () => {
     const n = await recomputeAgent({ ...AGENT, wantText: '   ' });
     expect(n).toBe(0);

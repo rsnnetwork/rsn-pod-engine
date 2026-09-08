@@ -152,7 +152,11 @@ describe('getPlatformMatches', () => {
     expect(res.nextEvent).toEqual({ id: 's1', title: 'RSN August', scheduledAt: when });
   });
 
-  it('browse mode relaxes the threshold (find-other-people option)', async () => {
+  // 9 Sep 2026 (Stefan): a narrow profile must never get an empty page. With
+  // fewer than 3 strong matches the closest people are shown too, labelled —
+  // so the strict list now carries the mild candidate as a "Close match", and
+  // browse mode still shows them plainly.
+  it('a narrow profile is never empty: fewer than 3 strong matches also shows the closest people, labelled', async () => {
     const mild = profile({
       id: 'u-mild', displayName: 'Maryam',
       professionalRole: 'Marketing Consultant', expertiseText: 'growth and funding narratives',
@@ -163,8 +167,10 @@ describe('getPlatformMatches', () => {
     });
     const strict = await getPlatformMatches('u-founder');
     const browse = await getPlatformMatches('u-founder', { browse: true });
-    expect(strict.matches.length).toBe(0);
+    expect(strict.matches.length).toBe(1);
+    expect(strict.matches[0].reason).toMatch(/^Close match — /);
     expect(browse.matches.length).toBe(1);
+    expect(browse.matches[0].reason).not.toMatch(/^Close match/);
   });
 
   it('a user who has not finished onboarding gets profileIncomplete, not matches', async () => {

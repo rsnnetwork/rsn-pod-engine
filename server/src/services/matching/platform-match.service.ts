@@ -18,7 +18,9 @@
 
 import { query } from '../../db';
 import logger from '../../config/logger';
-import { normalizeDesignation, tokenizeTerms, termOverlap, designationsWanted } from './intent-signals';
+import { normalizeDesignation, tokenizeTerms, termOverlapRelated, isRelatedTerm, designationsWanted } from './intent-signals';
+import { expandWantTags } from './want-synonyms';
+import { extractConstraints, checkConstraints } from './want-constraints';
 import * as pokeService from '../poke/poke.service';
 import { UserPoke } from '../poke/poke.service';
 
@@ -173,37 +175,74 @@ interface WantFit {
   matchedTitle: string | null;
   sharedTerms: string[];
   name: string;
+  /** An explicit place in the want that this person satisfies ("united states"). */
+  placeMatched: string | null;
+  /** The want asked for N+ years but this profile doesn't state its years. */
+  yearsUnknown: boolean;
 }
 
 const article = (w: string) => (/^[aeiou]/i.test(w) ? 'an' : 'a');
+const titleCase = (s: string) => s.replace(/\b[a-z]/g, (c) => c.toUpperCase());
+
+/** Append what the explicit constraints contributed, so the card is honest
+ *  about WHY someone is here (and about what we couldn't verify). */
+function withConstraintNotes(base: string, f: WantFit): string {
+  const notes: string[] = [];
+  if (f.placeMatched) notes.push(`in ${titleCase(f.placeMatched)}`);
+  if (f.yearsUnknown) notes.push(`they don't state their years of experience`);
+  return notes.length ? `${base} (${notes.join('; ')})` : base;
+}
 
 function formatForSeeker(f: WantFit): string {
+  let base: string;
   if (f.designationLabel && f.matchedTitle) {
-    return `You're looking to meet ${f.designationLabel} — ${f.name} is ${article(f.matchedTitle)} ${f.matchedTitle}`;
+    base = `You're looking to meet ${f.designationLabel} — ${f.name} is ${article(f.matchedTitle)} ${f.matchedTitle}`;
+  } else if (f.designationLabel) {
+    base = `You're looking to meet ${f.designationLabel} — ${f.name} fits`;
+  } else {
+    base = f.sharedTerms.length
+      ? `What you're looking for matches their profile: ${f.sharedTerms.join(', ')}`
+      : `Their profile matches what you're looking for`;
   }
-  if (f.designationLabel) return `You're looking to meet ${f.designationLabel} — ${f.name} fits`;
-  return f.sharedTerms.length
-    ? `What you're looking for matches their profile: ${f.sharedTerms.join(', ')}`
-    : `Their profile matches what you're looking for`;
+  return withConstraintNotes(base, f);
 }
 
 function formatForRecipient(f: WantFit, senderName: string): string {
+  let base: string;
   if (f.designationLabel && f.matchedTitle) {
-    return `${senderName} is looking to meet ${f.designationLabel} — you're ${article(f.matchedTitle)} ${f.matchedTitle}`;
+    base = `${senderName} is looking to meet ${f.designationLabel} — you're ${article(f.matchedTitle)} ${f.matchedTitle}`;
+  } else if (f.designationLabel) {
+    base = `${senderName} is looking to meet ${f.designationLabel} — you fit`;
+  } else {
+    base = f.sharedTerms.length
+      ? `What ${senderName} is looking for matches your profile: ${f.sharedTerms.join(', ')}`
+      : `Your profile matches what ${senderName} is looking for`;
   }
-  if (f.designationLabel) return `${senderName} is looking to meet ${f.designationLabel} — you fit`;
-  return f.sharedTerms.length
-    ? `What ${senderName} is looking for matches your profile: ${f.sharedTerms.join(', ')}`
-    : `Your profile matches what ${senderName} is looking for`;
+  return withConstraintNotes(base, f);
 }
 
 function analyzeWants(
   wants: Array<string | null | undefined>,
   other: IntentProfile,
 ): WantFit {
-  const wantTokens = tokenizeTerms(wants);
+  const name = other.displayName || 'They';
+
+  // Explicit constraints (Stefan, 9 Sep 2026): a place or a minimum experience
+  // named in the want is STRICT and never widened — "manufacturer in US with 20
+  // years experience" must not surface someone in Germany, or someone who
+  // states 5 years. (Unstated years can't be verified: kept, demoted, flagged.)
+  const constraints = extractConstraints(wants);
+  const check = checkConstraints(constraints, other);
+  if (check.locationOk === false || check.yearsOk === false) {
+    return { score: 0, designationLabel: null, matchedTitle: null, sharedTerms: [], name, placeMatched: null, yearsUnknown: false };
+  }
+
+  // The CATEGORY is matched by meaning: synonyms applied at score time (not
+  // only when an agent was created) and related word forms, so "manufacturer"
+  // reaches "industrial fabrication" and "developers" reaches "development".
+  const wantTokens = tokenizeTerms([...wants, ...expandWantTags(wants)]);
   const offerTokens = tokenizeTerms(offerSources(other));
-  const overlap = termOverlap(wantTokens, offerTokens);
+  const overlap = termOverlapRelated(wantTokens, offerTokens);
 
   // Designation direction: I want founders + they are a founder. A person can
   // hold SEVERAL roles (professional_role is text[]), and they count as each
@@ -235,15 +274,15 @@ function analyzeWants(
   const designationHit = wanted.find(w => titleByDesignation.has(w.key)) ?? null;
   const matchedTitle = designationHit ? titleByDesignation.get(designationHit.key)! : null;
 
-  const score = 0.7 * overlap + (designationHit ? 0.6 : 0);
-  const name = other.displayName || 'They';
+  let score = 0.7 * overlap + (designationHit ? 0.6 : 0);
+  // A required experience the profile doesn't state: keep them, but below
+  // anyone who does state it, and say so on the card.
+  if (check.yearsUnknown) score *= 0.85;
   // Name the title that actually matched; fall back to their headline role.
   const role = matchedTitle || displayRole(other);
   const shared = designationHit
     ? []
-    : wantTokens.filter(w =>
-      offerTokens.some(o => o === w || (w.length >= 4 && o.includes(w)) || (o.length >= 4 && w.includes(o)))
-    ).slice(0, 3);
+    : wantTokens.filter(w => offerTokens.some(o => isRelatedTerm(w, o))).slice(0, 3);
 
   return {
     score: Math.min(1, score),
@@ -251,6 +290,8 @@ function analyzeWants(
     matchedTitle: designationHit && role ? role : null,
     sharedTerms: shared,
     name,
+    placeMatched: check.locationOk ? (constraints.location?.[0] ?? null) : null,
+    yearsUnknown: check.yearsUnknown,
   };
 }
 
@@ -328,9 +369,18 @@ export async function getPlatformMatches(
 
   const threshold = opts.browse ? BROWSE_THRESHOLD : MATCH_THRESHOLD;
   const candidates = await loadCandidates(userId);
-  const matches = candidates
-    .map(c => ({ c, fit: scoreFit(me, c) }))
-    .filter(x => x.fit.score >= threshold)
+  const scoredAll = candidates.map(c => ({ c, fit: scoreFit(me, c) }));
+  let picked = scoredAll.filter(x => x.fit.score >= threshold);
+  // Never empty (Stefan, 9 Sep 2026): fewer than 3 strong matches → also show
+  // the closest people, labelled. Explicit constraints are enforced inside the
+  // scorer (score 0), so this widens only the category, never place/years.
+  if (!opts.browse && picked.length < 3) {
+    const close = scoredAll
+      .filter(x => x.fit.score >= BROWSE_THRESHOLD && x.fit.score < MATCH_THRESHOLD)
+      .map(x => ({ ...x, fit: { ...x.fit, reason: `Close match — ${x.fit.reason}` } }));
+    picked = [...picked, ...close];
+  }
+  const matches = picked
     .sort((a, b) => b.fit.score - a.fit.score)
     .slice(0, limit)
     .map(x => ({

@@ -225,6 +225,30 @@ export function termOverlap(aTokens: string[], bTokens: string[]): number {
   return matches === 0 ? 0 : 1 - 1 / (1 + matches);
 }
 
+/**
+ * Overlap that also counts RELATED word forms (9 Sep 2026, Stefan: "the agent
+ * should be intelligent enough to find that company even if its name is a
+ * little bit different"): two long words sharing their first 7 letters count
+ * as the same term — manufacturer/manufacturing, developer/development — on
+ * top of the exact/substring rule. Only used by platform/agent matching; the
+ * live-event matcher keeps `termOverlap`.
+ */
+export function isRelatedTerm(a: string, b: string): boolean {
+  return a === b
+    || (a.length >= 4 && b.includes(a))
+    || (b.length >= 4 && a.includes(b))
+    || (a.length >= 8 && b.length >= 8 && a.slice(0, 7) === b.slice(0, 7));
+}
+
+export function termOverlapRelated(aTokens: string[], bTokens: string[]): number {
+  if (!aTokens.length || !bTokens.length) return 0;
+  let matches = 0;
+  for (const a of aTokens) {
+    if (bTokens.some((b) => isRelatedTerm(a, b))) matches++;
+  }
+  return matches === 0 ? 0 : 1 - 1 / (1 + matches);
+}
+
 /** Tokens describing who a participant IS (for the other side's "wants" to match against). */
 export function identityTokens(p: MatchingParticipant): string[] {
   return tokenizeTerms([

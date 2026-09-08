@@ -15,7 +15,10 @@
 import { query } from '../../db';
 import logger from '../../config/logger';
 import * as agentRepo from './agent.repo';
-import { scoreWants, MATCH_THRESHOLD, IntentProfile, displayRole } from './platform-match.service';
+import { scoreWants, MATCH_THRESHOLD, BROWSE_THRESHOLD, IntentProfile, displayRole } from './platform-match.service';
+
+/** Below this many strong matches an agent widens to the closest people. */
+const WIDEN_BELOW = 3;
 
 /**
  * Candidates the owner has a live introduction with (asked, or been asked by,
@@ -134,21 +137,36 @@ export async function recomputeAgent(agent: {
       .sort((a, b) => b.fit.score - a.fit.score)
       .slice(0, 50);
 
+    // Never empty (Stefan, 9 Sep 2026): a narrow want that finds fewer than 3
+    // strong matches also surfaces the closest people, labelled "Close match".
+    // The explicit constraints (place, years) are enforced INSIDE the scorer —
+    // an excluded person scores 0 — so widening only relaxes how strongly the
+    // category matched, never where someone is or how experienced they are.
+    let pool = fresh;
+    if (fresh.length < WIDEN_BELOW) {
+      const close = all
+        .filter(x => x.fit.score >= BROWSE_THRESHOLD && x.fit.score < MATCH_THRESHOLD)
+        .sort((a, b) => b.fit.score - a.fit.score)
+        .slice(0, 25 - fresh.length)
+        .map(x => ({ ...x, fit: { ...x.fit, reason: `Close match — ${x.fit.reason || keptReason(x.c)}` } }));
+      pool = [...fresh, ...close];
+    }
+
     // Kept rows (a live introduction) travel with a CURRENT reason, at their
     // real score, so the card never describes who someone used to be.
-    const freshIds = new Set(fresh.map(x => x.c.id));
+    const freshIds = new Set(pool.map(x => x.c.id));
     const sticky = await stickyCandidateIds(agent.userId, candidates.map(c => c.id), agent.id);
     const kept = all.filter(x => sticky.has(x.c.id) && !freshIds.has(x.c.id));
 
-    const scored = [...fresh, ...kept].map(x => ({
+    const scored = [...pool, ...kept].map(x => ({
       candidateUserId: x.c.id,
       score: Number(x.fit.score.toFixed(4)),
       reason: x.fit.reason || keptReason(x.c),
     }));
 
     await agentRepo.replaceMatches(agent.id, scored);
-    logger.info({ agentId: agent.id, matches: fresh.length, kept: kept.length }, 'Agent rescored');
-    return fresh.length;
+    logger.info({ agentId: agent.id, strong: fresh.length, shown: pool.length, kept: kept.length }, 'Agent rescored');
+    return pool.length;
   } catch (err) {
     logger.warn({ err, agentId: agent.id }, 'Agent rescore failed (non-fatal)');
     return 0;

@@ -208,39 +208,58 @@ export const useAuthStore = create<AuthState>((set, get) => {
         return;
       }
       const epochAtStart = authEpoch;
-      try {
-        const { data } = await api.get('/auth/session', { timeout: 15000 });
-        set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true });
-        scheduleProactiveRefresh(get().accessToken!);
-      } catch (err: any) {
-        if (err?.response?.status === 401) {
-          // Token might be expired but refreshable — try refreshing before giving up.
-          try {
-            await get().refreshAccessToken();
-            const { data } = await api.get('/auth/session', { timeout: 15000 });
-            set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true });
-            scheduleProactiveRefresh(get().accessToken!);
-          } catch (refreshErr: any) {
-            const definitive = refreshErr instanceof RefreshError ? refreshErr.definitive : true;
-            // Only clear auth when the refresh token was DEFINITIVELY rejected
-            // AND no newer session was installed while we were checking (the
-            // boot-vs-verify race). Otherwise keep whatever we have.
-            if (definitive && authEpoch === epochAtStart) {
-              clearStoredTokens();
-              clearRefreshTimer();
-              set({
-                isLoading: false, isAuthenticated: false, user: null,
-                accessToken: null, refreshToken: null, isSessionChecked: true,
-              });
-            } else {
-              set({ isLoading: false, isSessionChecked: true });
+      // 9 Sep 2026: a TRANSIENT failure of the boot check (429 rate-limit, 5xx,
+      // network) must not read as "logged out". ProtectedRoute gates on `user`,
+      // so giving up here bounced a real member to /login when the check was
+      // merely rate-limited (a household/office shares one IP). Retry with
+      // backoff — honouring Retry-After — before falling through.
+      const TRANSIENT_DELAYS = [2000, 5000, 10000];
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const { data } = await api.get('/auth/session', { timeout: 15000 });
+          set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true });
+          scheduleProactiveRefresh(get().accessToken!);
+          return;
+        } catch (err: any) {
+          const status: number | undefined = err?.response?.status;
+          if (status === 401) {
+            // Token might be expired but refreshable — try refreshing before giving up.
+            try {
+              await get().refreshAccessToken();
+              const { data } = await api.get('/auth/session', { timeout: 15000 });
+              set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true });
+              scheduleProactiveRefresh(get().accessToken!);
+            } catch (refreshErr: any) {
+              const definitive = refreshErr instanceof RefreshError ? refreshErr.definitive : true;
+              // Only clear auth when the refresh token was DEFINITIVELY rejected
+              // AND no newer session was installed while we were checking (the
+              // boot-vs-verify race). Otherwise keep whatever we have.
+              if (definitive && authEpoch === epochAtStart) {
+                clearStoredTokens();
+                clearRefreshTimer();
+                set({
+                  isLoading: false, isAuthenticated: false, user: null,
+                  accessToken: null, refreshToken: null, isSessionChecked: true,
+                });
+              } else {
+                set({ isLoading: false, isSessionChecked: true });
+              }
             }
+            return;
           }
-        } else {
-          // Network errors, timeouts, 5xx — keep the user logged in. Flip
-          // isSessionChecked so the socket layer stops waiting; the cached
-          // token is the best we have until the next attempt.
+          const transient = status === 429 || (typeof status === 'number' && status >= 500) || status === undefined;
+          if (transient && attempt < TRANSIENT_DELAYS.length && authEpoch === epochAtStart) {
+            const retryAfter = Number(err?.response?.headers?.['retry-after']);
+            const wait = Number.isFinite(retryAfter) && retryAfter > 0
+              ? Math.min(retryAfter * 1000, 30_000)
+              : TRANSIENT_DELAYS[attempt];
+            await new Promise((r) => setTimeout(r, wait));
+            continue;
+          }
+          // Out of retries, or a non-transient error — keep the cached token
+          // and stop the socket layer waiting; the next check will try again.
           set({ isLoading: false, isSessionChecked: true });
+          return;
         }
       }
     },
