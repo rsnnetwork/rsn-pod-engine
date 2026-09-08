@@ -143,5 +143,12 @@ test('capture meeting + call UI', async () => {
   await expect(ended.getByTestId('thread-meeting-banner').getByText(/Meeting ended/i)).toBeVisible({ timeout: 25_000 });
   await ended.screenshot({ path: path.join(OUT, '08-meeting-ended-call-now.png') });
 
+  // 9) Online status dot — bring B onto the platform, A sees "Online".
+  const bLive = await pageAt(b, `/messages/${convId}`, { width: 420, height: 700 });
+  await bLive.waitForTimeout(2500);
+  const aLive = await pageAt(a, `/messages/${convId}`, { width: 1280, height: 900 });
+  await expect(aLive.getByTestId('partner-presence')).toContainText(/Online/i, { timeout: 35_000 });
+  await aLive.screenshot({ path: path.join(OUT, '09-online-status.png') });
+
   console.log('shots written to', OUT);
 });
