@@ -125,6 +125,11 @@ test('capture meeting + call UI', async () => {
   await expect(mob.getByTestId('thread-meeting-banner')).toBeVisible({ timeout: 25_000 });
   await mob.screenshot({ path: path.join(OUT, '05-mobile-thread-join-card.png') });
 
+  // 6b) Scheduled meeting opened early → countdown screen (not an empty room).
+  const wait = await pageAt(a, `/meet/${convId}?kind=video&scheduled=1`, { width: 1280, height: 900 });
+  await expect(wait.getByText(/Your meeting starts in/i)).toBeVisible({ timeout: 25_000 });
+  await wait.screenshot({ path: path.join(OUT, '07-scheduled-countdown.png') });
+
   // 6) Mobile availability dot — B changes availability, A sees the dot behind
   //    the More-actions button.
   await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [futureWindowKey(8, 'evening')] });
