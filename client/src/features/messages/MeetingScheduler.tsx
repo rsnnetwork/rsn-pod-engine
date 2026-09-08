@@ -30,15 +30,6 @@ interface Scheduling {
 // Sensible default start hour for each daypart when finalising an exact time.
 const DAYPART_DEFAULT_TIME: Record<string, string> = { morning: '09:00', afternoon: '14:00', evening: '18:00' };
 
-/** Build an "Add to Google Calendar" link (opens a prefilled event, no OAuth). */
-function googleCalUrl(startAtIso: string, durationMin: number): string {
-  const fmt = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
-  const start = new Date(startAtIso);
-  const end = new Date(start.getTime() + durationMin * 60_000);
-  const p = new URLSearchParams({ action: 'TEMPLATE', text: 'RSN meeting', dates: `${fmt(start)}/${fmt(end)}` });
-  return `https://calendar.google.com/calendar/render?${p.toString()}`;
-}
-
 /** The viewer's own local rendering of an absolute instant. */
 function localWhen(startAtIso: string): string {
   return new Date(startAtIso).toLocaleString([], {
@@ -250,6 +241,24 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
     }
   };
 
+  // "Add to calendar" — a universal .ics download (Google, Outlook, Apple…),
+  // not a Google-only link (Stefan, 9 Sep 2026).
+  const downloadIcs = async () => {
+    try {
+      const res = await api.get(`/dm/conversations/${conversationId}/meeting.ics`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'text/calendar' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'rsn-meeting.ics';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      addToast('Could not build the calendar file — try again.', 'error');
+    }
+  };
+
   const confirmedOver = isMeetingOver(data.confirmed?.startAt, data.confirmed?.durationMin);
 
   return (
@@ -278,14 +287,13 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
                 >
                   {data.confirmed.type === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Join
                 </button>
-                <a
-                  href={googleCalUrl(data.confirmed.startAt, data.confirmed.durationMin ?? 30)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs font-medium text-emerald-700 underline hover:text-emerald-900"
+                <button
+                  type="button"
+                  onClick={downloadIcs}
+                  className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
                 >
-                  Add to Google Calendar
-                </a>
+                  <CalendarCheck className="h-4 w-4" /> Add to calendar
+                </button>
               </div>
               <p className="text-[11px] text-emerald-600">A calendar invite was emailed to you both.</p>
             </div>

@@ -60,6 +60,7 @@ export function generateIcsContent(data: CalendarEventData): string {
   }
 
   lines.push(
+    'SEQUENCE:0',
     'STATUS:CONFIRMED',
     'TRANSP:OPAQUE',
     'BEGIN:VALARM',
@@ -71,7 +72,29 @@ export function generateIcsContent(data: CalendarEventData): string {
     'END:VCALENDAR',
   );
 
-  return lines.join('\r\n');
+  // RFC 5545 §3.1: lines longer than 75 octets must be folded (CRLF + space).
+  // Outlook/Apple reject or truncate an unfolded long DESCRIPTION.
+  return lines.map(foldIcsLine).join('\r\n') + '\r\n';
+}
+
+function foldIcsLine(line: string): string {
+  const MAX = 75;
+  if (Buffer.byteLength(line, 'utf8') <= MAX) return line;
+  const out: string[] = [];
+  let current = '';
+  for (const ch of line) {
+    // Fold before the octet limit; continuation lines start with a space and
+    // count that space against the limit.
+    const limit = out.length === 0 ? MAX : MAX - 1;
+    if (Buffer.byteLength(current + ch, 'utf8') > limit) {
+      out.push(current);
+      current = ch;
+    } else {
+      current += ch;
+    }
+  }
+  out.push(current);
+  return out.join('\r\n ');
 }
 
 export interface SessionCalendarEvent {

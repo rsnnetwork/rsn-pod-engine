@@ -13,10 +13,47 @@ import { authenticate } from '../middleware/auth';
 import * as meetingService from '../services/dm/meeting-windows.service';
 import * as callService from '../services/dm/meeting-call.service';
 import { areActive } from '../services/presence/presence.service';
+import { generateIcsContent } from '../services/calendar/calendar.service';
+import { NotFoundError } from '../middleware/errors';
 import { query } from '../db';
+import config from '../config';
 import { ApiResponse } from '@rsn/shared';
 
 const router = Router();
+
+// GET /dm/conversations/:id/meeting.ics — the confirmed meeting as a universal
+// calendar file (Google, Outlook, Apple…) for the in-app "Add to calendar"
+// (Stefan, 9 Sep 2026: "it says Google Calendar — calendar could be anything").
+// Participant-only (getScheduling enforces it).
+router.get(
+  '/conversations/:id/meeting.ics',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const me = req.user!.userId;
+      const s = await meetingService.getScheduling(req.params.id, me);
+      if (!s.confirmed?.startAt) throw new NotFoundError('Meeting time', req.params.id);
+      const people = await query<{ id: string; display_name: string | null; email: string | null }>(
+        `SELECT id, display_name, email FROM users WHERE id = ANY($1)`,
+        [[me, s.partnerId]],
+      );
+      const other = people.rows.find((p) => p.id === s.partnerId);
+      const kind = s.confirmed.type ?? 'video';
+      const ics = generateIcsContent({
+        title: 'RSN meeting',
+        description: `A 1:1 ${kind} call on RSN with ${other?.display_name || 'your match'}. Join: ${config.clientUrl}/meet/${req.params.id}?scheduled=1&kind=${kind}`,
+        startTime: new Date(s.confirmed.startAt),
+        durationMinutes: s.confirmed.durationMin ?? 30,
+        attendees: people.rows.filter((p) => p.email).map((p) => ({ name: p.display_name || undefined, email: p.email! })),
+      });
+      res.setHeader('Content-Type', 'text/calendar; charset=utf-8; method=REQUEST');
+      res.setHeader('Content-Disposition', 'attachment; filename="rsn-meeting.ics"');
+      res.send(ics);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 // GET /dm/presence — online status of all my conversation partners, for the
 // green dot in the messages list (8 Sep 2026, Ali). Scoped to my own

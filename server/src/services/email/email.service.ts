@@ -27,7 +27,10 @@ async function sendEmail(opts: {
   html: string;
   text: string;
   replyTo?: string;
-  attachments?: { filename: string; content: string }[];
+  /** `contentType` matters for calendar invites: `text/calendar; method=REQUEST`
+   *  is what makes Gmail/Outlook/Apple render an inline Accept/Decline invite
+   *  instead of a bare .ics download (Stefan, 9 Sep 2026). */
+  attachments?: { filename: string; content: string; contentType?: string }[];
 }): Promise<{ sent: boolean }> {
   if (!config.resendApiKey) {
     logger.warn({ to: opts.to, subject: opts.subject }, 'No email provider — email skipped');
@@ -55,6 +58,7 @@ async function sendEmail(opts: {
     emailPayload.attachments = opts.attachments.map(a => ({
       filename: a.filename,
       content: Buffer.from(a.content).toString('base64'),
+      ...(a.contentType ? { contentType: a.contentType } : {}),
     }));
   }
 
@@ -1184,7 +1188,7 @@ export async function sendMeetingConfirmedEmail(
   const text = `Hey ${recipientDisplayName},\n\nYour meeting with ${data.partnerName} is confirmed.\n\n${when}\nDuration: ${data.durationMin} minutes\n\nAdd to Google Calendar: ${data.googleCalendarUrl}\nOpen the conversation: ${data.threadUrl}\n\n(The .ics invite is attached.)\n\nRSN — Connect with Reason`;
 
   if (config.resendApiKey) {
-    await sendEmail({ to, subject, html, text, attachments: [{ filename: 'meeting.ics', content: data.icsContent }] });
+    await sendEmail({ to, subject, html, text, attachments: [{ filename: 'meeting.ics', content: data.icsContent, contentType: 'text/calendar; charset=utf-8; method=REQUEST' }] });
     return;
   }
   logger.warn({ to, partnerName: data.partnerName }, 'No email provider — meeting-confirmed email skipped');
