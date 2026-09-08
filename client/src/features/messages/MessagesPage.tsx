@@ -11,7 +11,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare, CalendarClock, Flag, MoreVertical, Video, Phone, Ban } from 'lucide-react';
-import MeetingScheduler, { ThreadMeetingBanner, isMeetingOver } from './MeetingScheduler';
+import MeetingScheduler, { ThreadMeetingBanner, isMeetingOver, localizeMeetingText } from './MeetingScheduler';
 import { CallRequestModal, CallWaitingCard, IncomingCallCard } from './CallRequest';
 import Linkify from '@/components/ui/Linkify';
 import MeetingRequests, { FocusedMeetingRequest } from './MeetingRequests';
@@ -965,7 +965,7 @@ export default function MessagesPage() {
                     </p>
                   )}
                   <p className={`text-xs truncate ${c.unreadCount > 0 && !c.lastMessageFromMe ? 'font-semibold text-[#1a1a2e]' : 'text-gray-500'}`}>
-                    {c.lastMessageFromMe ? 'You: ' : ''}{c.lastMessage || <em className="text-gray-300">No messages yet</em>}
+                    {c.lastMessageFromMe ? 'You: ' : ''}{c.lastMessage ? localizeMeetingText(c.lastMessage) : <em className="text-gray-300">No messages yet</em>}
                   </p>
                 </div>
                 {c.unreadCount > 0 && !c.lastMessageFromMe && (
@@ -1346,7 +1346,7 @@ export default function MessagesPage() {
                                     // 4 Sep 2026 (walkthrough screenshot): the default link colour is
                                     // the brand red, which vanishes on the sender's own red bubble.
                                     <div className={m.attachmentUrl ? 'px-3.5 py-2' : ''}>
-                                      <Linkify text={m.content} className={fromMe ? 'break-all text-white underline hover:opacity-80' : undefined} />
+                                      <Linkify text={localizeMeetingText(m.content)} className={fromMe ? 'break-all text-white underline hover:opacity-80' : undefined} />
                                     </div>
                                   )}
                                   {/* Scheduled meeting → Join the room; an instant call that's

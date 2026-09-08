@@ -51,8 +51,11 @@ async function openAs(u: TestUser, path: string): Promise<Page> {
 }
 
 function futureWindowKey(daysAhead = 3, daypart = 'afternoon'): string {
-  const d = new Date(Date.now() + daysAhead * 86_400_000);
-  return `${d.toISOString().slice(0, 10)}:${daypart}`;
+  // 9 Sep 2026: a concrete 30-min slot (UTC instant) at a LOCAL hour the picker shows.
+  const dt = new Date();
+  dt.setHours(({ morning: 9, afternoon: 14, evening: 18 } as Record<string, number>)[daypart] ?? 14, 0, 0, 0);
+  dt.setDate(dt.getDate() + daysAhead);
+  return dt.toISOString().replace('.000Z', 'Z');
 }
 
 /** The server's clock, not this machine's — a skewed PC clock made "now + 1 min"
@@ -60,8 +63,9 @@ function futureWindowKey(daysAhead = 3, daypart = 'afternoon'): string {
 async function serverNowMs(): Promise<number> {
   return new Date((await pool.query<{ n: Date }>('SELECT NOW() AS n')).rows[0].n).getTime();
 }
-function dayKeyAt(ms: number, daypart = 'afternoon'): string {
-  return `${new Date(ms).toISOString().slice(0, 10)}:${daypart}`;
+function dayKeyAt(ms: number, _daypart = 'afternoon'): string {
+  // The 30-min slot at or after `ms`, as the slot key the server stores.
+  return new Date(Math.ceil(ms / 1_800_000) * 1_800_000).toISOString().replace('.000Z', 'Z');
 }
 
 async function convBetween(x: string, y: string): Promise<string> {
@@ -173,9 +177,12 @@ test.describe.serial('meeting + call', () => {
 
     const page = await openAs(a, `/messages/${convId}`);
     await openScheduler(page);
-    await page.getByRole('button', { name: /^Confirm .*(morning|afternoon|evening)/i }).first().click();
-    await page.locator('input[type="time"]').fill('15:30');
+    // 9 Sep 2026: the overlap is a concrete time — tap it, type a custom
+    // length, pick audio, and the exact time + length is shown before confirming.
+    await page.getByRole('button', { name: /^Confirm / }).first().click();
+    await page.locator('#meeting-minutes').fill('20');
     await page.getByRole('button', { name: /^Audio$/ }).click();
+    await expect(page.getByTestId('confirm-summary')).toHaveText(/20 min · Audio call/);
     await page.getByRole('button', { name: /Confirm meeting/i }).click();
 
     const banner = page.getByTestId('thread-meeting-banner');

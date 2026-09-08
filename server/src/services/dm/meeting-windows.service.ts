@@ -22,6 +22,15 @@ export type Daypart = typeof DAYPARTS[number];
 export const HORIZON_DAYS = 30; // selections allowed today..today+30
 
 const WINDOW_RE = /^(\d{4})-(\d{2})-(\d{2}):(morning|afternoon|evening)$/;
+// 9 Sep 2026 (Stefan): concrete 30-minute slots stored as UTC instants, so two
+// timezones overlap on the same instant and each side renders its own local
+// time. 'YYYY-MM-DDTHH:MM:00Z' — minutes must be :00 or :30.
+const SLOT_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):00Z$/;
+export const SLOT_MINUTES = 30;
+/** Is this key a concrete time slot (vs a legacy day-part window)? */
+export function isSlotKey(key: string): boolean {
+  return SLOT_RE.test(key);
+}
 
 export interface ConversationScheduling {
   conversationId: string;
@@ -56,6 +65,16 @@ export interface ConversationScheduling {
  * inside [today, today+HORIZON_DAYS] in UTC. `now` injectable for tests.
  */
 export function isValidWindowKey(key: string, now = new Date()): boolean {
+  // Concrete slot: a real instant, on a 30-minute boundary, from the current
+  // slot (30 min of grace) up to the horizon.
+  const s = SLOT_RE.exec(key);
+  if (s) {
+    const t = new Date(key);
+    if (isNaN(t.getTime()) || t.toISOString().replace('.000Z', 'Z') !== key) return false;
+    if (t.getUTCMinutes() % SLOT_MINUTES !== 0) return false;
+    const delta = t.getTime() - now.getTime();
+    return delta >= -SLOT_MINUTES * 60_000 && delta <= HORIZON_DAYS * 86_400_000;
+  }
   const m = WINDOW_RE.exec(key);
   if (!m) return false;
   const [, y, mo, d] = m;
@@ -70,7 +89,23 @@ export function isValidWindowKey(key: string, now = new Date()): boolean {
 }
 
 /** Human label for the confirmation message: "Tue 22 Jul, evening". */
-export function windowLabel(key: string): string {
+export function windowLabel(key: string, timeZone?: string | null): string {
+  // A concrete slot is one instant; render it in the reader's timezone when we
+  // know it (notifications), else UTC. The shared thread line embeds the
+  // instant itself and each client localises it.
+  const s = SLOT_RE.exec(key);
+  if (s) {
+    const date = new Date(key);
+    const fmt = (tz: string) => new Intl.DateTimeFormat('en-GB', {
+      timeZone: tz, weekday: 'short', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short',
+    }).formatToParts(date);
+    let parts: Intl.DateTimeFormatPart[];
+    try { parts = fmt(timeZone || 'UTC'); } catch { parts = fmt('UTC'); }
+    const p = (t: string) => parts.find(x => x.type === t)?.value ?? '';
+    // en-GB for real zone names (CEST, not GMT+2) but its "Sept" → our own month list.
+    const month = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][Number(p('month')) - 1];
+    return `${p('weekday')} ${p('day')} ${month}, ${p('hour')}:${p('minute')} ${p('timeZoneName')}`;
+  }
   const m = WINDOW_RE.exec(key);
   if (!m) return key;
   const [, y, mo, d, part] = m;
@@ -180,8 +215,9 @@ export async function setAvailability(
 ): Promise<ConversationScheduling> {
   const conv = await requireParticipant(conversationId, userId);
   const unique = [...new Set(windows)];
-  if (unique.length > 21) {
-    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Too many windows selected (max 21)');
+  // 30-min slots over a week are many more than 7×3 day-parts.
+  if (unique.length > 200) {
+    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Too many times selected (max 200)');
   }
   for (const w of unique) {
     if (!isValidWindowKey(w)) {
@@ -274,6 +310,9 @@ export async function confirmWindow(
   // — an absolute instant every client renders in its own local time, plus a
   // calendar invite. Validate the instant is real, future, and on/near the
   // confirmed day; fall back to daypart-only if absent (legacy behaviour).
+  // A concrete slot IS the start time — no separate time input (9 Sep 2026).
+  if (isSlotKey(windowKey) && !opts.startAt) opts = { ...opts, startAt: windowKey };
+
   let startAt: Date | null = null;
   let durationMin: number | null = null;
   if (opts.startAt) {
@@ -284,7 +323,7 @@ export async function confirmWindow(
     if (parsed.getTime() < Date.now() - 60_000) {
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Meeting time must be in the future');
     }
-    const dayFromKey = windowKey.split(':')[0]; // YYYY-MM-DD
+    const dayFromKey = windowKey.slice(0, 10); // YYYY-MM-DD (both key formats)
     if (parsed.toISOString().slice(0, 10) !== dayFromKey) {
       // Timezone can shift the UTC calendar day by one; allow ±1 day only.
       const keyMs = new Date(`${dayFromKey}T12:00:00Z`).getTime();
@@ -293,7 +332,8 @@ export async function confirmWindow(
       }
     }
     startAt = parsed;
-    durationMin = Math.min(240, Math.max(15, Math.round(opts.durationMin ?? 30)));
+    // Custom length (Ali, 9 Sep): any number of minutes the member types, 5–240.
+    durationMin = Math.min(240, Math.max(5, Math.round(opts.durationMin ?? 30)));
   }
   const meetingType: 'audio' | 'video' | null = startAt
     ? (opts.type === 'audio' ? 'audio' : 'video')
@@ -308,7 +348,19 @@ export async function confirmWindow(
   );
 
   const partnerId = conv.user_a_id === userId ? conv.user_b_id : conv.user_a_id;
-  const label = windowLabel(windowKey);
+  const people = await query<{ id: string; display_name: string | null; email: string | null; timezone: string | null }>(
+    `SELECT id, display_name, email, timezone FROM users WHERE id = ANY($1)`,
+    [[userId, partnerId]],
+  );
+  const byId = new Map(people.rows.map(p => [p.id, p]));
+  const lengthNote = startAt && durationMin ? ` · ${durationMin} min ${meetingType} call` : '';
+  // Bell text is per-reader, so use the partner's own timezone when we know it.
+  const label = windowLabel(windowKey, byId.get(partnerId)?.timezone) + lengthNote;
+  // The thread line is one shared text: for a slot it carries the instant
+  // itself and each client renders it in its own local time.
+  const threadLine = isSlotKey(windowKey)
+    ? `📅 Meeting confirmed: ${windowKey}${lengthNote}`
+    : `📅 Meeting confirmed: ${windowLabel(windowKey)}`;
 
   // The confirmation lives in the thread itself. sendMessage only PERSISTS the
   // message — the realtime fan-out (partner's open thread + both inboxes) comes
@@ -316,7 +368,7 @@ export async function confirmWindow(
   // below is the notification. 7 Sep 2026: pre-fix this called sendMessage alone
   // and the confirmation never reached the partner's screen without a refresh.
   try {
-    const sent = await dmService.sendMessage(userId, partnerId, `📅 Meeting confirmed: ${label}`);
+    const sent = await dmService.sendMessage(userId, partnerId, threadLine);
     const { io } = await import('../../index');
     const { broadcastDmMessage } = await import('../orchestration/handlers/dm-handlers');
     await broadcastDmMessage(io, userId, partnerId, sent.conversationId, sent.message, { notify: false });
@@ -351,11 +403,6 @@ export async function confirmWindow(
   // exact time was set. Best-effort — never let an email hiccup fail the confirm.
   if (startAt && durationMin) {
     try {
-      const people = await query<{ id: string; display_name: string | null; email: string | null; timezone: string | null }>(
-        `SELECT id, display_name, email, timezone FROM users WHERE id = ANY($1)`,
-        [[userId, partnerId]],
-      );
-      const byId = new Map(people.rows.map(p => [p.id, p]));
       const confirmer = byId.get(userId);
       const { generateIcsContent, buildGoogleCalendarUrl } = await import('../calendar/calendar.service');
       const { sendMeetingConfirmedEmail } = await import('../email/email.service');

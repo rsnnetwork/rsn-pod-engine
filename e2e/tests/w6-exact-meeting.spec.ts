@@ -40,8 +40,11 @@ async function openAs(u: TestUser, path: string): Promise<Page> {
 }
 
 function futureWindowKey(daysAhead = 3, daypart = 'afternoon'): string {
-  const d = new Date(Date.now() + daysAhead * 86_400_000);
-  return `${d.toISOString().slice(0, 10)}:${daypart}`;
+  // 9 Sep 2026: a concrete 30-min slot (UTC instant) at a LOCAL hour the picker shows.
+  const dt = new Date();
+  dt.setHours(({ morning: 9, afternoon: 14, evening: 18 } as Record<string, number>)[daypart] ?? 14, 0, 0, 0);
+  dt.setDate(dt.getDate() + daysAhead);
+  return dt.toISOString().replace('.000Z', 'Z');
 }
 
 async function convBetween(x: string, y: string): Promise<string> {
@@ -98,21 +101,39 @@ test('confirming a meeting pins an exact local time + duration and offers a cale
   await findTime.filter({ visible: true }).first().click();
   await expect(page.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
 
-  // Confirm the overlap window → exact-time step → confirm.
-  await page.getByRole('button', { name: /^Confirm .*(morning|afternoon|evening)/i }).first().click();
-  await page.locator('input[type="time"]').fill('15:30');
+  // 9 Sep 2026: the overlap IS a concrete time. The grid shows it green on the
+  // right day, the chip is labelled in local time, and confirming asks only
+  // for a custom length + audio/video — the exact time is shown before commit.
+  await expect(page.getByTestId('slot-grid').getByText('Both can').first()).toBeVisible({ timeout: 20_000 });
+  const chip = page.getByRole('button', { name: /^Confirm / }).first();
+  const localLabel = new Date(KEY).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  await expect(chip).toContainText(localLabel);
+  await chip.click();
+  await page.locator('#meeting-minutes').fill('20');
+  await expect(page.getByTestId('confirm-summary')).toContainText(`${localLabel} · 20 min · Video call`);
+  // Out-of-range lengths are refused before the request is ever sent.
+  await page.locator('#meeting-minutes').fill('3');
+  await expect(page.getByRole('button', { name: /Confirm meeting/i })).toBeDisabled();
+  await page.locator('#meeting-minutes').fill('20');
   await page.getByRole('button', { name: /Confirm meeting/i }).click();
 
-  // The confirmed banner shows a local time + duration + a Google Calendar link.
+  // The confirmed banner shows a local time + duration + a universal calendar file.
   const banner = page.locator('[data-testid="meeting-scheduler"]');
   await expect(banner.getByText(/Meeting confirmed/i)).toBeVisible({ timeout: 20_000 });
-  await expect(banner.getByText(/minutes · shown in your local time/i)).toBeVisible();
-  await expect(banner.getByRole('link', { name: /Add to Google Calendar/i })).toBeVisible();
+  await expect(banner.getByText(/20 minutes · shown in your local time/i)).toBeVisible();
+  await expect(banner.getByRole('button', { name: /Add to calendar/i })).toBeVisible();
+  await expect(page.getByText(/Google Calendar/i)).toHaveCount(0);
 
-  // The DB pinned an absolute instant + duration.
+  // The thread line carries the instant and is rendered in MY local time, not raw ISO.
+  const thread = page.locator('[data-message-id]').filter({ hasText: 'Meeting confirmed' }).first();
+  await expect(thread).toBeVisible({ timeout: 15_000 });
+  await expect(thread).toContainText(localLabel);
+  await expect(thread).not.toContainText(/\d{4}-\d{2}-\d{2}T/);
+
+  // The DB pinned the slot itself as the instant + the custom duration.
   const row = (await pool.query<{ meeting_start_at: Date | null; meeting_duration_min: number | null }>(
     `SELECT meeting_start_at, meeting_duration_min FROM dm_conversations WHERE id=$1`, [convId],
   )).rows[0];
-  expect(row.meeting_start_at, 'an exact instant is stored').toBeTruthy();
-  expect(row.meeting_duration_min).toBeGreaterThanOrEqual(15);
+  expect(row.meeting_start_at?.toISOString().replace('.000Z', 'Z')).toBe(KEY);
+  expect(row.meeting_duration_min).toBe(20);
 });

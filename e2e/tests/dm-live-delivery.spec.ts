@@ -47,8 +47,11 @@ async function openAs(u: TestUser, path: string): Promise<Page> {
 }
 
 function futureWindowKey(daysAhead = 2, daypart = 'afternoon'): string {
-  const d = new Date(Date.now() + daysAhead * 86_400_000);
-  return `${d.toISOString().slice(0, 10)}:${daypart}`;
+  // 9 Sep 2026: a concrete 30-min slot (UTC instant) at a LOCAL hour the picker shows.
+  const dt = new Date();
+  dt.setHours(({ morning: 9, afternoon: 14, evening: 18 } as Record<string, number>)[daypart] ?? 14, 0, 0, 0);
+  dt.setDate(dt.getDate() + daysAhead);
+  return dt.toISOString().replace('.000Z', 'Z');
 }
 
 async function convBetween(a: string, b: string): Promise<string> {

@@ -312,9 +312,10 @@ test('UI matrix 4 — scheduler: tap cells + Save through the UI, partner overla
   { const either = mPage.locator('button[aria-label="More actions"]:visible, button[aria-label="Find a time to meet"]:visible').first(); await either.waitFor({ timeout: 30_000 }); if ((await either.getAttribute('aria-label')) === 'More actions') await either.click(); }
   await mPage.getByRole('button', { name: /Find a time to meet/i }).locator('visible=true').click();
   await expect(mPage.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 15_000 });
-  const cells = mPage.getByTestId('meeting-scheduler').locator('tbody button');
-  await cells.nth(4).click();  // day 2 afternoon
-  await cells.nth(7).click();  // day 3 morning
+  // 9 Sep 2026: concrete 30-min times on the selected day (past ones disabled).
+  const cells = mPage.getByTestId('slot-grid').locator('[data-slot]:not([disabled])');
+  await cells.nth(2).click();
+  await cells.nth(5).click();
   await mPage.getByRole('button', { name: /Save availability/i }).click();
   await expect(mPage.getByText(/Availability saved/i)).toBeVisible({ timeout: 15_000 });
   console.log('  ✓ tapped cells + saved through the real grid.');
@@ -342,6 +343,7 @@ test('UI matrix 4 — scheduler: tap cells + Save through the UI, partner overla
   await expect(mPage.getByRole('button', { name: /^Confirm / }).first())
     .toBeVisible({ timeout: 15_000 });
   await mPage.getByRole('button', { name: /^Confirm / }).first().click();
-  await expect(mPage.getByText(/Meeting confirmed:/i).first()).toBeVisible({ timeout: 15_000 });
+  await mPage.getByRole('button', { name: /Confirm meeting/i }).click();
+  await expect(mPage.getByText(/Meeting confirmed/i).first()).toBeVisible({ timeout: 15_000 });
   console.log('  ✓ overlap server-verified, rendered green, confirmed via the UI.');
 });

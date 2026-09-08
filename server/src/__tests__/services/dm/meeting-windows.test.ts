@@ -75,6 +75,10 @@ function armConv(availRows: Array<{ user_id: string; window_key: string }>, conv
   mockQuery.mockImplementation((sql: string) => {
     if (/FROM dm_conversations WHERE id/.test(sql)) return Promise.resolve({ rows: [conv] });
     if (/FROM meeting_availability/.test(sql)) return Promise.resolve({ rows: availRows });
+    if (/SELECT id, display_name, email, timezone FROM users/.test(sql)) return Promise.resolve({ rows: [
+      { id: 'u-a', display_name: 'A', email: null, timezone: 'Asia/Karachi' },
+      { id: 'u-b', display_name: 'B', email: null, timezone: 'Europe/Berlin' },
+    ] });
     return Promise.resolve({ rows: [{ id: 'n1', created_at: NOW }] });
   });
 }
@@ -153,6 +157,63 @@ describe('schedulingUpdated dot', () => {
     armConv([], { ...CONV, avail_updated_at_a: newer, scheduler_seen_at_a: null });
     const s = await getScheduling('conv-1', 'u-a');
     expect(s.schedulingUpdated).toBe(false);
+  });
+});
+
+// ── Concrete 30-minute slots (Stefan, 9 Sep 2026) ────────────────────────────
+describe('time slots (UTC instants)', () => {
+  const slotAt = (daysAhead: number, hh: number, mm: number) => {
+    const d = new Date(NOW.getTime() + daysAhead * 86_400_000);
+    d.setUTCHours(hh, mm, 0, 0);
+    return d.toISOString().replace('.000Z', 'Z');
+  };
+
+  it('accepts a 30-minute-aligned slot from now up to the horizon', () => {
+    expect(isValidWindowKey(slotAt(1, 13, 30), NOW)).toBe(true);
+    expect(isValidWindowKey(slotAt(1, 9, 0), NOW)).toBe(true);
+    expect(isValidWindowKey(slotAt(HORIZON_DAYS, 9, 0), NOW)).toBe(true);
+  });
+  it('rejects off-grid minutes, the past beyond one slot of grace, and beyond the horizon', () => {
+    expect(isValidWindowKey(slotAt(1, 13, 15), NOW)).toBe(false);
+    expect(isValidWindowKey(slotAt(-1, 13, 30), NOW)).toBe(false);
+    expect(isValidWindowKey(slotAt(HORIZON_DAYS + 2, 9, 0), NOW)).toBe(false);
+    expect(isValidWindowKey('2026-07-20T13:30:00', NOW)).toBe(false); // no Z
+  });
+  it("labels a slot in the reader's timezone, UTC when unknown or invalid", () => {
+    expect(windowLabel('2026-07-22T13:30:00Z', 'Europe/Berlin')).toBe('Wed 22 Jul, 15:30 CEST');
+    expect(windowLabel('2026-07-22T13:30:00Z', 'Asia/Karachi')).toMatch(/^Wed 22 Jul, 18:30 (PKT|GMT\+5)$/);
+    expect(windowLabel('2026-07-22T13:30:00Z')).toBe('Wed 22 Jul, 13:30 UTC');
+    expect(windowLabel('2026-07-22T13:30:00Z', 'Mars/Olympus')).toBe('Wed 22 Jul, 13:30 UTC');
+  });
+  it('confirming a slot uses the slot itself as the start time, with a custom length', async () => {
+    const d = new Date(); d.setUTCDate(d.getUTCDate() + 2); d.setUTCHours(13, 30, 0, 0);
+    const SLOT = d.toISOString().replace('.000Z', 'Z');
+    armConv([{ user_id: 'u-a', window_key: SLOT }, { user_id: 'u-b', window_key: SLOT }]);
+    mockSendMessage.mockResolvedValue({ message: { id: 'm1' }, conversationId: 'conv-1' });
+    await confirmWindow('conv-1', 'u-a', SLOT, { durationMin: 20, type: 'audio' });
+    const upd = mockQuery.mock.calls.find(c => /UPDATE dm_conversations\s+SET meeting_confirmed_window/.test(c[0] as string))!;
+    const params = upd[1] as unknown[];
+    expect((params[3] as Date).toISOString()).toBe(d.toISOString()); // startAt = the slot
+    expect(params[4]).toBe(20);                                       // custom minutes
+    expect(params[5]).toBe('audio');
+    // Shared thread line embeds the instant (each client localises it) + the length.
+    expect(mockSendMessage).toHaveBeenCalledWith('u-a', 'u-b', `📅 Meeting confirmed: ${SLOT} · 20 min audio call`);
+    // The partner's bell is in THEIR timezone (Berlin), not UTC.
+    const bell = mockQuery.mock.calls.find(c => /INSERT INTO notifications/.test(c[0] as string))!;
+    expect((bell[1] as unknown[])[2]).toMatch(/^\w{3} \d{1,2} \w{3}, \d{2}:\d{2} (CEST|CET|GMT\+[12]) · 20 min audio call$/);
+  });
+  it('a custom length as short as 5 minutes is allowed', async () => {
+    const d = new Date(); d.setUTCDate(d.getUTCDate() + 2); d.setUTCHours(9, 0, 0, 0);
+    const SLOT = d.toISOString().replace('.000Z', 'Z');
+    armConv([{ user_id: 'u-a', window_key: SLOT }, { user_id: 'u-b', window_key: SLOT }]);
+    mockSendMessage.mockResolvedValue({ message: { id: 'm1' }, conversationId: 'conv-1' });
+    await confirmWindow('conv-1', 'u-a', SLOT, { durationMin: 5, type: 'video' });
+    const upd = mockQuery.mock.calls.find(c => /UPDATE dm_conversations\s+SET meeting_confirmed_window/.test(c[0] as string))!;
+    expect((upd[1] as unknown[])[4]).toBe(5);
+  });
+  it('legacy day-part keys still validate and confirm (existing rows keep working)', () => {
+    expect(isValidWindowKey(key(2, 'evening'), NOW)).toBe(true);
+    expect(windowLabel('2026-07-22:evening')).toBe('Wed 22 Jul, evening');
   });
 });
 

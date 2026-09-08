@@ -1,12 +1,15 @@
 // ─── Meeting Scheduler ───────────────────────────────────────────────────────
 //
 // REASON v1 Phase 2 (19 Jul 2026) — "setup availability to be introduced".
-// Lives inside a 1:1 conversation. Each side taps the time windows that suit
-// them (next 7 days × morning/afternoon/evening); windows you BOTH picked
-// light up, and either side confirms one — that pins the meeting, drops a
-// message in the thread, and notifies the partner. No calendars, no OAuth.
+// Lives inside a 1:1 conversation. Each side taps the concrete 30-minute times
+// that suit them (next 7 days, 08:00–20:00 in THEIR OWN local time); a slot is
+// stored as a UTC instant, so two people in different timezones overlap on the
+// same moment. Times you BOTH picked light up green, and either side confirms
+// one — that pins the meeting (exact time + custom length + audio/video),
+// drops a message in the thread, and notifies the partner. No calendars, no
+// OAuth. 9 Sep 2026 (Stefan): replaced the vague morning/afternoon/evening grid.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, CalendarCheck, Video, Phone } from 'lucide-react';
@@ -29,14 +32,87 @@ interface Scheduling {
   callsUnlocked?: boolean;
 }
 
-// Sensible default start hour for each daypart when finalising an exact time.
-const DAYPART_DEFAULT_TIME: Record<string, string> = { morning: '09:00', afternoon: '14:00', evening: '18:00' };
+// ── Slots ────────────────────────────────────────────────────────────────────
+
+const SLOT_MINUTES = 30;
+const DAY_START_HOUR = 8;  // local
+const DAY_END_HOUR = 20;   // local, exclusive
+const DAYS_AHEAD = 7;
+const MIN_DURATION = 5;
+const MAX_DURATION = 240;
+const SLOT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/;
+const ISO_INSTANT_RE = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/g;
+
+function isSlotKey(key: string): boolean {
+  return SLOT_RE.test(key);
+}
+
+/** A local Date → the slot key the server stores (a UTC instant). */
+function slotKey(d: Date): string {
+  return d.toISOString().replace('.000Z', 'Z');
+}
 
 /** The viewer's own local rendering of an absolute instant. */
 function localWhen(startAtIso: string): string {
   return new Date(startAtIso).toLocaleString([], {
     weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
   });
+}
+
+function localTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function localDay(d: Date): string {
+  return d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+}
+
+/**
+ * A thread line like "📅 Meeting confirmed: 2026-09-10T13:30:00Z · 20 min video
+ * call" is one shared text for both people; render the instant in THIS
+ * reader's local time. Used by the thread bubble and the inbox preview.
+ */
+export function localizeMeetingText(text: string): string {
+  return text.replace(ISO_INSTANT_RE, (iso) => localWhen(iso));
+}
+
+/** Human label for any key: a slot in local time, or a legacy day-part. */
+function labelFor(windowKey: string): string {
+  if (isSlotKey(windowKey)) {
+    const d = new Date(windowKey);
+    return `${localDay(d)}, ${localTime(windowKey)}`;
+  }
+  const [date, part] = windowKey.split(':');
+  const d = new Date(`${date}T12:00:00`);
+  return `${localDay(d)}, ${part}`;
+}
+
+/** The next N local calendar days, each at local midnight. */
+function nextDays(n: number): Date[] {
+  const out: Date[] = [];
+  for (let i = 0; i < n; i++) {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() + i);
+    out.push(d);
+  }
+  return out;
+}
+
+/** Every 30-minute slot of one local day, 08:00–19:30, as UTC-instant keys. */
+function daySlots(day: Date): string[] {
+  const out: string[] = [];
+  for (let h = DAY_START_HOUR; h < DAY_END_HOUR; h++) {
+    for (let m = 0; m < 60; m += SLOT_MINUTES) {
+      out.push(slotKey(new Date(day.getFullYear(), day.getMonth(), day.getDate(), h, m)));
+    }
+  }
+  return out;
+}
+
+/** A slot is in the past once its own half hour has gone by. */
+function isPastSlot(key: string): boolean {
+  return new Date(key).getTime() < Date.now() - SLOT_MINUTES * 60_000;
 }
 
 // A meeting stays joinable until 30 min after its end (overruns/reconnects);
@@ -46,37 +122,6 @@ export function isMeetingOver(startAtIso: string | null | undefined, durationMin
   if (!startAtIso) return false;
   const end = new Date(startAtIso).getTime() + ((durationMin ?? 30) * 60_000) + MEETING_GRACE_MS;
   return Date.now() > end;
-}
-
-const DAYPARTS = [
-  { key: 'morning', label: 'Morning' },
-  { key: 'afternoon', label: 'Afternoon' },
-  { key: 'evening', label: 'Evening' },
-] as const;
-
-/** Local-date key: what the user sees is what gets stored. */
-function dateKey(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-function nextDays(n: number): Date[] {
-  const out: Date[] = [];
-  for (let i = 0; i < n; i++) {
-    const d = new Date();
-    d.setDate(d.getDate() + i);
-    out.push(d);
-  }
-  return out;
-}
-
-function labelFor(windowKey: string): string {
-  const [date, part] = windowKey.split(':');
-  const d = new Date(`${date}T12:00:00`);
-  const day = d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
-  return `${day}, ${part}`;
 }
 
 /**
@@ -142,6 +187,8 @@ export function ThreadMeetingBanner({ conversationId, onCallNow }: { conversatio
   );
 }
 
+const OVERLAP_PREVIEW = 8;
+
 export default function MeetingScheduler({ conversationId }: { conversationId: string }) {
   const { addToast } = useToastStore();
   const navigate = useNavigate();
@@ -149,11 +196,12 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
   const [staged, setStaged] = useState<Set<string> | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
-  // The daypart the user is finalising into an exact time, plus their picks.
+  // The overlap slot being confirmed, plus the meeting's length and kind.
   const [finalizing, setFinalizing] = useState<string | null>(null);
-  const [startTime, setStartTime] = useState('14:00');
-  const [durationMin, setDurationMin] = useState(30);
+  const [durationText, setDurationText] = useState('30');
   const [meetingKind, setMeetingKind] = useState<'audio' | 'video'>('video');
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [showAllOverlap, setShowAllOverlap] = useState(false);
 
   const { data, isLoading } = useQuery<Scheduling>({
     queryKey: ['meetingScheduling', conversationId],
@@ -164,24 +212,41 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
     meta: { entities: [E.dmConversation(conversationId)] },
   });
 
-  // Stage my saved selection once loaded (and re-sync after saves).
+  // Stage my saved selection once loaded (and re-sync after saves). Legacy
+  // day-part picks are not shown or re-saved — they age out.
   useEffect(() => {
-    if (data && staged === null) setStaged(new Set(data.mine));
+    if (data && staged === null) setStaged(new Set(data.mine.filter(isSlotKey)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
+
+  const days = useMemo(() => nextDays(DAYS_AHEAD), []);
+  const slotsByDay = useMemo(() => days.map(d => ({ day: d, key: slotKey(d), slots: daySlots(d) })), [days]);
+
+  const mine = staged ?? new Set((data?.mine ?? []).filter(isSlotKey));
+  const theirSet = useMemo(() => new Set((data?.theirs ?? []).filter(isSlotKey)), [data]);
+
+  // Open on the first day where you both can, else where they can, else the
+  // first day that still has a free slot — so what matters is visible at once.
+  useEffect(() => {
+    if (!data || selectedDay) return;
+    const both = slotsByDay.find(d => d.slots.some(k => mine.has(k) && theirSet.has(k)));
+    const theirs = slotsByDay.find(d => d.slots.some(k => theirSet.has(k)));
+    const open = slotsByDay.find(d => d.slots.some(k => !isPastSlot(k)));
+    setSelectedDay((both ?? theirs ?? open ?? slotsByDay[0]).key);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, selectedDay]);
 
   if (isLoading || !data) {
     return <div className="p-4 flex justify-center"><Spinner /></div>;
   }
 
-  const days = nextDays(7);
-  const mine = staged ?? new Set(data.mine);
-  const theirSet = new Set(data.theirs);
+  const savedMine = data.mine.filter(isSlotKey);
   const dirty = staged !== null &&
-    (staged.size !== data.mine.length || data.mine.some(w => !staged.has(w)));
+    (staged.size !== savedMine.length || savedMine.some(w => !staged.has(w)));
   // Overlap against the SAVED server state — you can only confirm what both
   // sides have actually saved, not an unsaved local tap.
-  const savedOverlap = data.overlap;
+  const savedOverlap = data.overlap.filter(isSlotKey).filter(k => !isPastSlot(k)).sort();
+  const current = slotsByDay.find(d => d.key === selectedDay) ?? slotsByDay[0];
 
   const toggle = (key: string) => {
     const next = new Set(mine);
@@ -206,24 +271,21 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
     }
   };
 
-  // Open the exact-time step for a green overlap window.
-  const openFinalize = (windowKey: string) => {
-    const part = windowKey.split(':')[1];
-    setStartTime(DAYPART_DEFAULT_TIME[part] ?? '14:00');
-    setDurationMin(30);
-    setFinalizing(windowKey);
+  const openFinalize = (key: string) => {
+    setDurationText('30');
+    setFinalizing(key);
   };
 
-  const confirm = async (windowKey: string) => {
-    if (confirming) return;
-    setConfirming(windowKey);
+  const durationMin = Number(durationText);
+  const durationOk = Number.isInteger(durationMin) && durationMin >= MIN_DURATION && durationMin <= MAX_DURATION;
+
+  const confirm = async (key: string) => {
+    if (confirming || !durationOk) return;
+    setConfirming(key);
     try {
-      // Combine the confirmed day with the chosen local time into an absolute
-      // instant (toISOString), so the server stores one instant and every
-      // client renders it in its own timezone.
-      const day = windowKey.split(':')[0];
-      const startAt = new Date(`${day}T${startTime}:00`).toISOString();
-      await api.post(`/dm/conversations/${conversationId}/scheduling/confirm`, { window: windowKey, startAt, durationMin, type: meetingKind });
+      // The slot IS the instant — the server stores it and every client
+      // renders it in its own timezone.
+      await api.post(`/dm/conversations/${conversationId}/scheduling/confirm`, { window: key, durationMin, type: meetingKind });
       setFinalizing(null);
       await queryClient.invalidateQueries({ queryKey: ['meetingScheduling', conversationId] });
       // The confirmation message lands in the thread — invalidate the REAL
@@ -258,6 +320,7 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
   };
 
   const confirmedOver = isMeetingOver(data.confirmed?.startAt, data.confirmed?.durationMin);
+  const overlapShown = showAllOverlap ? savedOverlap : savedOverlap.slice(0, OVERLAP_PREVIEW);
 
   return (
     <div className="border-b border-gray-200 bg-gray-50/60 px-3 py-3 space-y-3" data-testid="meeting-scheduler">
@@ -309,59 +372,83 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
         </div>
       )}
 
-      <div className="overflow-x-auto">
-        <table className="w-full border-separate" style={{ borderSpacing: '3px' }}>
-          <thead>
-            <tr>
-              <th className="text-left text-[11px] font-medium text-gray-400 px-1">Tap when you can</th>
-              {DAYPARTS.map(p => (
-                <th key={p.key} className="text-[11px] font-medium text-gray-500 pb-1">{p.label}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {days.map(d => {
-              const dk = dateKey(d);
-              return (
-                <tr key={dk}>
-                  <td className="text-xs text-gray-600 pr-2 whitespace-nowrap">
-                    {d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })}
-                  </td>
-                  {DAYPARTS.map(p => {
-                    const key = `${dk}:${p.key}`;
-                    const iPicked = mine.has(key);
-                    const theyPicked = theirSet.has(key);
-                    const both = iPicked && theyPicked;
-                    return (
-                      <td key={key} className="w-[30%]">
-                        <button
-                          onClick={() => toggle(key)}
-                          aria-label={`${dk} ${p.key}${both ? ' — you both can' : theyPicked ? ' — they can' : iPicked ? ' — you can' : ''}`}
-                          className={`w-full min-h-[44px] rounded-lg border text-[11px] font-medium transition-colors ${
-                            both
-                              ? 'bg-emerald-100 border-emerald-400 text-emerald-700'
-                              : iPicked
-                                ? 'bg-rsn-red-light border-rsn-red text-rsn-red'
-                                : theyPicked
-                                  ? 'bg-white border-gray-300 text-gray-500'
-                                  : 'bg-white border-gray-200 text-gray-300 hover:border-gray-300'
-                          }`}
-                        >
-                          {both ? 'Both can' : iPicked ? 'You' : theyPicked ? 'They can' : '—'}
-                        </button>
-                      </td>
-                    );
-                  })}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      <div className="space-y-2">
+        <p className="text-[11px] text-gray-500">
+          Tap the times you're free — <span className="font-medium text-gray-700">your local time</span>. Green = you both can.
+        </p>
+
+        {/* Day strip: the next 7 days; a dot shows where picks already are. */}
+        <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1" role="tablist" aria-label="Day">
+          {slotsByDay.map(({ day, key, slots }) => {
+            const both = slots.some(k => mine.has(k) && theirSet.has(k));
+            const iHave = slots.some(k => mine.has(k));
+            const theyHave = slots.some(k => theirSet.has(k));
+            const active = key === current.key;
+            return (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                data-day={key}
+                onClick={() => setSelectedDay(key)}
+                className={`flex min-h-[44px] min-w-[64px] shrink-0 flex-col items-center justify-center rounded-lg border px-2 text-xs font-medium transition-colors ${
+                  active ? 'border-[#1a1a2e] bg-[#1a1a2e] text-white' : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'
+                }`}
+              >
+                <span>{day.toLocaleDateString([], { weekday: 'short' })}</span>
+                <span className={`text-[11px] ${active ? 'text-gray-200' : 'text-gray-400'}`}>
+                  {day.toLocaleDateString([], { day: 'numeric', month: 'short' })}
+                </span>
+                {(both || iHave || theyHave) && (
+                  <span
+                    aria-hidden
+                    className={`mt-0.5 h-1.5 w-1.5 rounded-full ${both ? 'bg-emerald-400' : iHave ? 'bg-rsn-red' : 'bg-gray-400'}`}
+                  />
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* The selected day's times. */}
+        <div className="grid grid-cols-3 gap-1.5 min-[420px]:grid-cols-4 md:grid-cols-6" data-testid="slot-grid">
+          {current.slots.map(key => {
+            const past = isPastSlot(key);
+            const iPicked = mine.has(key);
+            const theyPicked = theirSet.has(key);
+            const both = iPicked && theyPicked;
+            const state = both ? 'Both can' : iPicked ? 'You' : theyPicked ? 'They can' : '';
+            return (
+              <button
+                key={key}
+                type="button"
+                data-slot={key}
+                disabled={past}
+                onClick={() => toggle(key)}
+                aria-pressed={iPicked}
+                aria-label={`${labelFor(key)}${both ? ' — you both can' : theyPicked ? ' — they can' : iPicked ? ' — you can' : ''}`}
+                className={`flex min-h-[44px] flex-col items-center justify-center rounded-lg border px-1 leading-tight transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                  both
+                    ? 'border-emerald-400 bg-emerald-100 text-emerald-700'
+                    : iPicked
+                      ? 'border-rsn-red bg-rsn-red-light text-rsn-red'
+                      : theyPicked
+                        ? 'border-gray-300 bg-white text-gray-600'
+                        : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'
+                }`}
+              >
+                <span className="text-xs font-semibold">{localTime(key)}</span>
+                {state && <span className="text-[10px]">{state}</span>}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <p className="text-[11px] text-gray-400">
-          Green = you both can. Save, then confirm a green time.
+          Save, then confirm a green time.
         </p>
         {dirty && (
           <Button size="sm" onClick={save} disabled={saving} className="min-h-[44px]">
@@ -371,78 +458,92 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
       </div>
 
       {savedOverlap.length > 0 && !data.confirmed && (
-        <div className="space-y-1.5">
-          {savedOverlap.map(w => (
-            finalizing === w ? (
-              <div key={w} className="rounded-lg border border-emerald-300 bg-emerald-50 p-3 space-y-2">
-                <p className="text-xs font-medium text-emerald-800">Pick a start time for {labelFor(w)}</p>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <label className="text-[11px] text-emerald-700">Start
-                    <input
-                      type="time"
-                      value={startTime}
-                      onChange={e => setStartTime(e.target.value)}
-                      className="ml-1 rounded border border-emerald-300 bg-white px-2 py-1 text-sm text-gray-800"
-                    />
-                  </label>
-                  <label className="text-[11px] text-emerald-700">For
-                    <select
-                      value={durationMin}
-                      onChange={e => setDurationMin(Number(e.target.value))}
-                      className="ml-1 rounded border border-emerald-300 bg-white px-2 py-1 text-sm text-gray-800"
+        <div className="space-y-1.5" data-testid="overlap-list">
+          <p className="text-[11px] font-medium text-emerald-700">You both can — pick one to confirm:</p>
+          {finalizing && (
+            <div className="rounded-lg border border-emerald-300 bg-emerald-50 p-3 space-y-2" data-testid="confirm-card">
+              <p className="text-sm font-semibold text-emerald-800">{localWhen(finalizing)}</p>
+              <p className="text-[11px] text-emerald-600">Your local time. They'll see it in theirs.</p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <label className="inline-flex items-center gap-1 text-[11px] text-emerald-700" htmlFor="meeting-minutes">
+                  Length
+                  <input
+                    id="meeting-minutes"
+                    type="number"
+                    inputMode="numeric"
+                    min={MIN_DURATION}
+                    max={MAX_DURATION}
+                    step={5}
+                    value={durationText}
+                    onChange={e => setDurationText(e.target.value)}
+                    aria-invalid={!durationOk}
+                    className={`ml-1 h-11 w-20 rounded border bg-white px-2 text-sm text-gray-800 ${durationOk ? 'border-emerald-300' : 'border-rsn-red'}`}
+                  />
+                  min
+                </label>
+                <div className="inline-flex overflow-hidden rounded-lg border border-emerald-300">
+                  {(['video', 'audio'] as const).map(k => (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => setMeetingKind(k)}
+                      aria-pressed={meetingKind === k}
+                      className={`inline-flex min-h-[44px] items-center gap-1 px-3 text-xs font-medium ${meetingKind === k ? 'bg-emerald-600 text-white' : 'bg-white text-emerald-700'}`}
                     >
-                      <option value={30}>30 min</option>
-                      <option value={45}>45 min</option>
-                      <option value={60}>60 min</option>
-                    </select>
-                  </label>
-                  <div className="inline-flex overflow-hidden rounded-lg border border-emerald-300">
-                    {(['video', 'audio'] as const).map(k => (
-                      <button
-                        key={k}
-                        type="button"
-                        onClick={() => setMeetingKind(k)}
-                        className={`inline-flex min-h-[44px] items-center gap-1 px-3 text-xs font-medium ${meetingKind === k ? 'bg-emerald-600 text-white' : 'bg-white text-emerald-700'}`}
-                      >
-                        {k === 'video' ? <Video className="h-3.5 w-3.5" /> : <Phone className="h-3.5 w-3.5" />}
-                        {k === 'video' ? 'Video' : 'Audio'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <p className="text-[11px] text-emerald-600">
-                  {(() => { try { return `That is ${localWhen(new Date(`${w.split(':')[0]}T${startTime}:00`).toISOString())} your time.`; } catch { return ''; } })()}
-                </p>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => confirm(w)}
-                    disabled={confirming !== null}
-                    className="flex-1 min-h-[44px] flex items-center justify-center gap-2 rounded-lg bg-emerald-600 text-sm font-medium text-white hover:bg-emerald-700 transition-colors disabled:opacity-50"
-                  >
-                    <Check className="h-4 w-4" />
-                    {confirming === w ? 'Confirming…' : 'Confirm meeting'}
-                  </button>
-                  <button
-                    onClick={() => setFinalizing(null)}
-                    disabled={confirming !== null}
-                    className="min-h-[44px] rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-600 hover:bg-gray-50"
-                  >
-                    Cancel
-                  </button>
+                      {k === 'video' ? <Video className="h-3.5 w-3.5" /> : <Phone className="h-3.5 w-3.5" />}
+                      {k === 'video' ? 'Video' : 'Audio'}
+                    </button>
+                  ))}
                 </div>
               </div>
-            ) : (
+              <p className="text-xs text-emerald-800" data-testid="confirm-summary">
+                {durationOk
+                  ? `${labelFor(finalizing)} · ${durationMin} min · ${meetingKind === 'audio' ? 'Audio' : 'Video'} call`
+                  : `Length must be ${MIN_DURATION}–${MAX_DURATION} minutes.`}
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => confirm(finalizing)}
+                  disabled={confirming !== null || !durationOk}
+                  className="flex-1 min-h-[44px] flex items-center justify-center gap-2 rounded-lg bg-emerald-600 text-sm font-medium text-white hover:bg-emerald-700 transition-colors disabled:opacity-50"
+                >
+                  <Check className="h-4 w-4" />
+                  {confirming === finalizing ? 'Confirming…' : 'Confirm meeting'}
+                </button>
+                <button
+                  onClick={() => setFinalizing(null)}
+                  disabled={confirming !== null}
+                  className="min-h-[44px] rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-600 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+          <div className="flex flex-wrap gap-1.5">
+            {overlapShown.filter(w => w !== finalizing).map(w => (
               <button
                 key={w}
+                type="button"
                 onClick={() => openFinalize(w)}
                 disabled={confirming !== null}
-                className="w-full min-h-[44px] flex items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 text-sm font-medium text-emerald-700 hover:bg-emerald-100 transition-colors"
+                aria-label={`Confirm ${labelFor(w)}`}
+                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-100 transition-colors"
               >
                 <Check className="h-4 w-4" />
-                {`Confirm ${labelFor(w)}`}
+                {labelFor(w)}
               </button>
-            )
-          ))}
+            ))}
+            {!showAllOverlap && savedOverlap.length > OVERLAP_PREVIEW && (
+              <button
+                type="button"
+                onClick={() => setShowAllOverlap(true)}
+                className="inline-flex min-h-[44px] items-center rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-600 hover:bg-gray-50"
+              >
+                +{savedOverlap.length - OVERLAP_PREVIEW} more
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>

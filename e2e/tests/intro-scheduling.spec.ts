@@ -28,10 +28,11 @@ async function apiAs(u: TestUser, method: string, path: string, body?: unknown) 
 }
 
 const dayKey = (offsetDays: number, part: string) => {
+  // 9 Sep 2026: a concrete 30-min slot (UTC instant) at a LOCAL hour the picker shows.
   const d = new Date();
+  d.setHours(({ morning: 9, afternoon: 14, evening: 18 } as Record<string, number>)[part] ?? 14, 0, 0, 0);
   d.setDate(d.getDate() + offsetDays);
-  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), dd = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${dd}:${part}`;
+  return d.toISOString().replace('.000Z', 'Z');
 };
 
 test.beforeAll(async () => {
@@ -120,7 +121,8 @@ test('intro lands in the thread, both set availability, overlap confirms — ful
   console.log('  ✓ headed: scheduler grid shows the green "Both can" overlap.');
 
   await page.getByRole('button', { name: /^Confirm / }).first().click();
-  await expect(page.getByText(/Meeting confirmed:/i).first()).toBeVisible({ timeout: 15_000 });
+  await page.getByRole('button', { name: /Confirm meeting/i }).click();
+  await expect(page.getByText(/Meeting confirmed/i).first()).toBeVisible({ timeout: 15_000 });
   await page.screenshot({ path: 'test-results/sch-confirmed.png' }).catch(() => {});
   console.log('  ✓ headed: founder confirmed the overlap — banner shown.');
 

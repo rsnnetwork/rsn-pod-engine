@@ -90,10 +90,11 @@ async function openAs(u: TestUser, path: string, viewport = { width: 390, height
 }
 
 const dayKey = (offsetDays: number, part: string) => {
+  // 9 Sep 2026: a concrete 30-min slot (UTC instant) at a LOCAL hour the picker shows.
   const d = new Date();
+  d.setHours(({ morning: 9, afternoon: 14, evening: 18 } as Record<string, number>)[part] ?? 14, 0, 0, 0);
   d.setDate(d.getDate() + offsetDays);
-  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), dd = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${dd}:${part}`;
+  return d.toISOString().replace('.000Z', 'Z');
 };
 
 /** boundingBox-fits-viewport, not just visible — the standing responsive
@@ -254,7 +255,8 @@ test('the whole truthful loop: match -> poke -> poke_accepted bell -> thread -> 
   await expect(fPage.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 10_000 });
   await expect(fPage.getByText('Both can').first()).toBeVisible({ timeout: 10_000 });
   await fPage.getByRole('button', { name: /^Confirm / }).first().click();
-  await expect(fPage.getByText(/Meeting confirmed:/i).first()).toBeVisible({ timeout: 15_000 });
+  await fPage.getByRole('button', { name: /Confirm meeting/i }).click();
+  await expect(fPage.getByText(/Meeting confirmed/i).first()).toBeVisible({ timeout: 15_000 });
   console.log('  ✓ (5) headed: founder confirmed the overlap in the real scheduler.');
 
   const conv = await pool.query(

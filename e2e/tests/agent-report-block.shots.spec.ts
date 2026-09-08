@@ -34,8 +34,11 @@ async function pageAs(u: TestUser, p: string, viewport = { width: 1280, height: 
   return page;
 }
 function futureWindowKey(d = 3, part = 'afternoon') {
-  const dd = new Date(Date.now() + d * 86_400_000);
-  return `${dd.toISOString().slice(0, 10)}:${part}`;
+  // 9 Sep 2026: a concrete 30-min slot (UTC instant) at a LOCAL hour the picker shows.
+  const dt = new Date();
+  dt.setHours(({ morning: 9, afternoon: 14, evening: 18 } as Record<string, number>)[part] ?? 14, 0, 0, 0);
+  dt.setDate(dt.getDate() + d);
+  return dt.toISOString().replace('.000Z', 'Z');
 }
 async function convBetween(x: string, y: string) {
   return (await pool.query<{ id: string }>(

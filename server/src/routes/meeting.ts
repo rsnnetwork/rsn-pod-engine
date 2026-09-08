@@ -90,14 +90,16 @@ const callRequestBodySchema = z.object({
 });
 
 const availabilityBodySchema = z.object({
-  windows: z.array(z.string().max(30)).max(21),
+  // 30-min slots over a week are far more than the old 7×3 day-parts.
+  windows: z.array(z.string().max(30)).max(200),
 });
 
 const confirmBodySchema = z.object({
   window: z.string().max(30),
-  // W6: optional exact instant (ISO) + duration; absent = legacy daypart-only.
+  // W6: optional exact instant (ISO) + duration; a concrete slot key already IS
+  // the instant. Duration is a custom number of minutes (Ali, 9 Sep): 5–240.
   startAt: z.string().datetime().optional(),
-  durationMin: z.number().int().min(15).max(240).optional(),
+  durationMin: z.number().int().min(5).max(240).optional(),
   // W-meet: audio or video call.
   type: z.enum(['audio', 'video']).optional(),
 });
