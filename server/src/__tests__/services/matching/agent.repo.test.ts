@@ -148,6 +148,9 @@ describe('already-asked people keep their place, badged', () => {
     expect(sql).toMatch(/"pokeSentByOwner"/);
     // Newest poke wins, so a re-ask does not report a stale state.
     expect(sql).toMatch(/ORDER BY pk\.created_at DESC/);
+    // 8 Sep 2026 (Ali): "already asked" is PER-AGENT — the poke lookup is scoped
+    // to this agent, so a person asked through another agent shows here as fresh.
+    expect(sql).toMatch(/pk\.agent_id = a\.id/);
   });
 
   it('hides a declined introduction — that one IS an answer', async () => {
@@ -186,6 +189,9 @@ describe('a rescore never evicts someone you already asked', () => {
     expect(sql).toMatch(/DELETE FROM agent_matches am/);
     expect(sql).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM user_pokes p/);
     expect(sql).toMatch(/p\.status <> 'declined'/);
+    // 8 Sep 2026 (Ali): retention is PER-AGENT — only a poke through THIS agent
+    // pins the row; a poke via another agent no longer keeps a stale card here.
+    expect(sql).toMatch(/p\.agent_id = a\.id/);
   });
 
   it('still clears everyone else, so a stale match cannot linger', async () => {

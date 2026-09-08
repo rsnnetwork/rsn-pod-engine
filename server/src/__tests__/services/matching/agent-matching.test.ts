@@ -98,11 +98,26 @@ describe('recomputeAgent', () => {
     const [sql, params] = mockQuery.mock.calls[0];
     expect(sql).toMatch(/user_pokes/);
     expect(sql).toMatch(/p\.status = 'declined'/);
-    expect(sql).not.toMatch(/p\.agent_id/);
     // Both directions of the pair, so a decline sticks whoever sent it.
     expect(sql).toMatch(/p\.sender_id = \$1 AND p\.recipient_id = u\.id/);
     expect(sql).toMatch(/p\.sender_id = u\.id AND p\.recipient_id = \$1/);
-    expect(params).toEqual(['u-owner']);
+    // 8 Sep 2026 (Ali): the override that keeps an ASKED person visible despite
+    // an encounter row is PER-AGENT — a poke via another agent must not keep
+    // them on this one. The candidate load now carries the agent id.
+    expect(sql).toMatch(/ip\.agent_id = \$2/);
+    expect(params).toEqual(['u-owner', 'a-1']);
+  });
+
+  // 8 Sep 2026 (Ali): stickiness is PER-AGENT. Someone asked through ANOTHER
+  // agent must not be pinned onto this one — the sticky lookup filters by agent.
+  it('only pins someone asked THROUGH this agent (sticky lookup is per-agent)', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [candidate({ id: 'u-chef', professionalRole: ['Chef'], jobTitle: 'Pastry Chef', expertiseText: 'pastry', whatICanHelpWith: 'baking' })] }) // candidates
+      .mockResolvedValueOnce({ rows: [] }); // sticky lookup (scripted so we can inspect it)
+    await recomputeAgent(AGENT);
+    const stickyCall = mockQuery.mock.calls[1];
+    expect(String(stickyCall[0])).toMatch(/p\.agent_id = \$2/);
+    expect(stickyCall[1]).toEqual(['u-owner', 'a-1']);
   });
 
   it('still excludes people already met and blocks, which are global facts', async () => {

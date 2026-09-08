@@ -25,14 +25,18 @@ import { scoreWants, MATCH_THRESHOLD, IntentProfile, displayRole } from './platf
  * agent kept saying he was one, because he no longer scored and the upsert
  * never touched his row.
  */
-async function stickyCandidateIds(ownerId: string, candidateIds: string[]): Promise<Set<string>> {
+async function stickyCandidateIds(ownerId: string, candidateIds: string[], agentId: string): Promise<Set<string>> {
   if (!candidateIds.length) return new Set();
   const r = await query<{ id: string }>(
+    // 8 Sep 2026 (Ali): stickiness is PER-AGENT. A person you asked through
+    // ANOTHER agent must not be pinned to this one; they belong to the agent you
+    // actually asked them through, and appear here only if they still score-match.
     `SELECT DISTINCT CASE WHEN p.sender_id = $1 THEN p.recipient_id ELSE p.sender_id END AS id
        FROM user_pokes p
       WHERE p.status <> 'declined'
+        AND p.agent_id = $2
         AND (p.sender_id = $1 OR p.recipient_id = $1)`,
-    [ownerId],
+    [ownerId, agentId],
   );
   const wanted = new Set(candidateIds);
   return new Set(r.rows.map((x) => x.id).filter((id) => wanted.has(id)));
@@ -68,7 +72,7 @@ const CANDIDATE_COLUMNS = `
  * where the introduction got to (see agent.repo listMatches), and are simply
  * not counted as still outstanding.
  */
-async function loadCandidatesForAgent(ownerId: string): Promise<IntentProfile[]> {
+async function loadCandidatesForAgent(ownerId: string, agentId: string): Promise<IntentProfile[]> {
   const r = await query<IntentProfile>(
     `SELECT ${CANDIDATE_COLUMNS}
        FROM users u
@@ -76,12 +80,12 @@ async function loadCandidatesForAgent(ownerId: string): Promise<IntentProfile[]>
         AND u.status = 'active'
         AND u.onboarding_completed = true
         -- "Already met" hides people you have genuinely met, at an event or
-        -- otherwise. It must NOT hide someone you reached through this
-        -- platform: accepting an introduction writes an encounter row (with
-        -- times_met = 0), so a person vanished from the agent that found them
-        -- the moment they said yes — the same disappearance as delete-on-ask,
-        -- through a different door. An introduction between the two keeps them
-        -- visible; they show under "Already asked", not as outstanding.
+        -- otherwise. It must NOT hide someone you reached through THIS agent:
+        -- accepting an introduction writes an encounter row (times_met = 0), so
+        -- a person vanished from the agent that found them the moment they said
+        -- yes. The override keeps them visible on the agent they were asked
+        -- through — per-agent (8 Sep 2026, Ali), so a person met after an ask on
+        -- another agent doesn't reappear here where you never asked them.
         AND (
           NOT EXISTS (
             SELECT 1 FROM encounter_history e
@@ -89,6 +93,7 @@ async function loadCandidatesForAgent(ownerId: string): Promise<IntentProfile[]>
           OR EXISTS (
             SELECT 1 FROM user_pokes ip
              WHERE ip.status <> 'declined'
+               AND ip.agent_id = $2
                AND ((ip.sender_id = $1 AND ip.recipient_id = u.id)
                  OR (ip.sender_id = u.id AND ip.recipient_id = $1))))
         AND NOT EXISTS (
@@ -100,7 +105,7 @@ async function loadCandidatesForAgent(ownerId: string): Promise<IntentProfile[]>
            WHERE p.status = 'declined'
              AND ((p.sender_id = $1 AND p.recipient_id = u.id)
                OR (p.sender_id = u.id AND p.recipient_id = $1)))`,
-    [ownerId],
+    [ownerId, agentId],
   );
   return r.rows;
 }
@@ -118,7 +123,7 @@ export async function recomputeAgent(agent: {
       await agentRepo.replaceMatches(agent.id, []);
       return 0;
     }
-    const candidates = await loadCandidatesForAgent(agent.userId);
+    const candidates = await loadCandidatesForAgent(agent.userId, agent.id);
     // W4 recall: score against the want text AND the structured tags (W3 stores
     // industries/stage/seniority there), so a manufacturing want counts even
     // when the label alone is a bare designation.
@@ -132,7 +137,7 @@ export async function recomputeAgent(agent: {
     // Kept rows (a live introduction) travel with a CURRENT reason, at their
     // real score, so the card never describes who someone used to be.
     const freshIds = new Set(fresh.map(x => x.c.id));
-    const sticky = await stickyCandidateIds(agent.userId, candidates.map(c => c.id));
+    const sticky = await stickyCandidateIds(agent.userId, candidates.map(c => c.id), agent.id);
     const kept = all.filter(x => sticky.has(x.c.id) && !freshIds.has(x.c.id));
 
     const scored = [...fresh, ...kept].map(x => ({

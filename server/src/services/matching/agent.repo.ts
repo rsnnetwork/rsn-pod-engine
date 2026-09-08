@@ -198,6 +198,11 @@ export async function replaceMatches(agentId: string, matches: AgentMatchInput[]
           SELECT 1 FROM user_pokes p, matching_agents a
            WHERE a.id = $1
              AND p.status <> 'declined'
+             -- 8 Sep 2026 (Ali): stickiness is PER-AGENT too. Only someone asked
+             -- THROUGH this agent stays pinned to it; a person asked via another
+             -- agent is kept here only if they still score-match (via the fresh
+             -- set below), so they don't linger as a stale card on this agent.
+             AND p.agent_id = a.id
              AND ((p.sender_id = a.user_id AND p.recipient_id = am.candidate_user_id)
                OR (p.sender_id = am.candidate_user_id AND p.recipient_id = a.user_id)))`,
     [agentId],
@@ -260,8 +265,13 @@ export async function listMatches(agentId: string, limit = 25): Promise<StoredAg
        LEFT JOIN LATERAL (
          SELECT pk.id, pk.status, pk.sender_id
            FROM user_pokes pk
-          WHERE (pk.sender_id = a.user_id AND pk.recipient_id = m.candidate_user_id)
-             OR (pk.sender_id = m.candidate_user_id AND pk.recipient_id = a.user_id)
+          -- 8 Sep 2026 (Ali): "already asked" is PER-AGENT. Only a request sent
+          -- THROUGH this agent marks its matches as asked — a poke from another
+          -- agent (or a profile) leaves this agent's match fresh, matching the
+          -- per-agent count in countExpr.
+          WHERE pk.agent_id = a.id
+            AND ((pk.sender_id = a.user_id AND pk.recipient_id = m.candidate_user_id)
+             OR (pk.sender_id = m.candidate_user_id AND pk.recipient_id = a.user_id))
           ORDER BY pk.created_at DESC
           LIMIT 1
        ) p ON TRUE
