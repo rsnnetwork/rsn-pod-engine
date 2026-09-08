@@ -186,7 +186,7 @@ Ali's paraphrase). Nothing to build until then.
   related word forms at score time, never-empty widening ("Close match") for agents and the
   browse list. Profiles have no experience field → years parsed from text; unstated = kept,
   demoted, flagged. Prod smoke `matching-constraints.spec.ts`.
-- **Item 3 — DONE** (this commit): migration 098 relaxes the CHECK to concrete 30-min UTC-instant
+- **Item 3 — DONE, prod-verified** (main 7690bb0 + 2f13f13; E2E fixes aba4bef): migration 098 relaxes the CHECK to concrete 30-min UTC-instant
   slot keys (legacy day-parts still readable); `isValidWindowKey`/`windowLabel`/`confirmWindow` handle
   slots (slot = the start instant; custom 5–240 min); bell label in the partner's own timezone, thread
   line carries the instant and each client localises it; one-step picker (day strip → local 08:00–20:00
