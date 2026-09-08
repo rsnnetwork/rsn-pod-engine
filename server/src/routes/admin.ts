@@ -7,6 +7,7 @@ import { requireRole } from '../middleware/rbac';
 import { query } from '../db';
 import { ApiResponse, UserRole } from '@rsn/shared';
 import * as joinRequestService from '../services/join-request/join-request.service';
+import * as reportService from '../services/report/report.service';
 import { fanoutAdminEntities, fanoutUserEntity } from '../realtime/fanout';
 
 const router = Router();
@@ -295,19 +296,44 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const status = (req.query.status as string) || 'open';
+      // 8 Sep 2026 (Ali): the moderation queue must show member reports too.
+      // Reports filed from the app land in `user_reports` (via /api/reports);
+      // legacy/admin reports live in `violations`. They were never joined, so
+      // member reports never reached this queue. UNION both into one shape with
+      // a `source` discriminator; user_reports also carries the conversation the
+      // report came from so an admin can open the chat behind it. Statuses are
+      // normalised to text so the two enums coexist ('actioned'/'reviewed' from
+      // violations, 'resolved' from user_reports; both share 'open'/'dismissed').
       const result = await query(
-        `SELECT v.id, v.reason, v.details, v.status, v.admin_notes AS "adminNotes",
-                v.created_at AS "createdAt", v.resolved_at AS "resolvedAt",
-                reporter.display_name AS "reporterName", reporter.email AS "reporterEmail",
-                reported.display_name AS "reportedName", reported.email AS "reportedEmail",
-                reported.id AS "reportedUserId",
-                resolver.display_name AS "resolverName"
-         FROM violations v
-         LEFT JOIN users reporter ON reporter.id = v.reporter_id
-         JOIN users reported ON reported.id = v.reported_user_id
-         LEFT JOIN users resolver ON resolver.id = v.resolved_by
-         WHERE ($1 = '' OR v.status = $1::violation_status)
-         ORDER BY v.created_at DESC
+        `SELECT * FROM (
+           SELECT 'violation' AS source, v.id, v.reason, v.details, v.status::text AS status,
+                  v.admin_notes AS "adminNotes",
+                  v.created_at AS "createdAt", v.resolved_at AS "resolvedAt",
+                  reporter.display_name AS "reporterName", reporter.email AS "reporterEmail",
+                  reported.display_name AS "reportedName", reported.email AS "reportedEmail",
+                  reported.id AS "reportedUserId",
+                  resolver.display_name AS "resolverName",
+                  NULL::uuid AS "conversationId"
+           FROM violations v
+           LEFT JOIN users reporter ON reporter.id = v.reporter_id
+           JOIN users reported ON reported.id = v.reported_user_id
+           LEFT JOIN users resolver ON resolver.id = v.resolved_by
+           UNION ALL
+           SELECT 'report' AS source, r.id, r.reason, r.description AS details, r.status::text AS status,
+                  r.resolution_notes AS "adminNotes",
+                  r.created_at AS "createdAt", r.resolved_at AS "resolvedAt",
+                  reporter.display_name AS "reporterName", reporter.email AS "reporterEmail",
+                  reported.display_name AS "reportedName", reported.email AS "reportedEmail",
+                  reported.id AS "reportedUserId",
+                  resolver.display_name AS "resolverName",
+                  r.conversation_id AS "conversationId"
+           FROM user_reports r
+           JOIN users reporter ON reporter.id = r.reporter_id
+           JOIN users reported ON reported.id = r.reported_id
+           LEFT JOIN users resolver ON resolver.id = r.resolved_by
+         ) q
+         WHERE ($1 = '' OR q.status = $1)
+         ORDER BY q."createdAt" DESC
          LIMIT 100`,
         [status]
       );
@@ -323,6 +349,10 @@ router.get(
 const resolveViolationSchema = z.object({
   action: z.enum(['dismiss', 'warn', 'suspend', 'ban']),
   adminNotes: z.string().max(2000).optional(),
+  // 8 Sep 2026: the queue now mixes legacy `violations` and member `user_reports`
+  // rows. The client sends which table this row came from so we resolve the right
+  // one; default 'violation' keeps older callers working.
+  source: z.enum(['violation', 'report']).optional(),
 });
 
 router.post(
@@ -332,36 +362,52 @@ router.post(
   validate(resolveViolationSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { action, adminNotes } = req.body;
-      const newStatus = action === 'dismiss' ? 'dismissed' : 'actioned';
+      const { action, adminNotes, source } = req.body;
 
-      await query(
-        `UPDATE violations SET status = $1, admin_notes = $2, resolved_by = $3, resolved_at = NOW(), updated_at = NOW()
-         WHERE id = $4`,
-        [newStatus, adminNotes || null, req.user!.userId, req.params.id]
-      );
+      // Find the reported user so a suspend/ban can act on them, from whichever
+      // table this row lives in.
+      let reportedUserId: string | null = null;
 
-      // If action is suspend or ban, update the user's status
-      if (action === 'suspend' || action === 'ban') {
+      if (source === 'report') {
+        // Member report (user_reports): dismiss = no action, anything else = resolved.
+        if (action === 'dismiss') {
+          await reportService.dismissReport(req.params.id, req.user!.userId, adminNotes);
+        } else {
+          await reportService.resolveReport(req.params.id, req.user!.userId, adminNotes);
+        }
+        const rep = await query<{ reported_id: string }>(
+          `SELECT reported_id FROM user_reports WHERE id = $1`, [req.params.id]
+        );
+        reportedUserId = rep.rows[0]?.reported_id ?? null;
+      } else {
+        const newStatus = action === 'dismiss' ? 'dismissed' : 'actioned';
+        await query(
+          `UPDATE violations SET status = $1, admin_notes = $2, resolved_by = $3, resolved_at = NOW(), updated_at = NOW()
+           WHERE id = $4`,
+          [newStatus, adminNotes || null, req.user!.userId, req.params.id]
+        );
         const violation = await query<{ reported_user_id: string }>(
           `SELECT reported_user_id FROM violations WHERE id = $1`, [req.params.id]
         );
-        if (violation.rows[0]) {
-          const userStatus = action === 'suspend' ? 'suspended' : 'banned';
-          await query(`UPDATE users SET status = $1, updated_at = NOW() WHERE id = $2`, [userStatus, violation.rows[0].reported_user_id]);
-          invalidateUserStatusCache(violation.rows[0].reported_user_id);
-          // Phase May-19 realtime — also flip the target user's UI so
-          // their session-state listeners react immediately.
-          fanoutUserEntity(violation.rows[0].reported_user_id).catch(() => {});
-          fanoutAdminEntities('users').catch(() => {});
-        }
+        reportedUserId = violation.rows[0]?.reported_user_id ?? null;
+      }
+
+      // Suspend/ban acts on the reported user regardless of which table it came from.
+      if ((action === 'suspend' || action === 'ban') && reportedUserId) {
+        const userStatus = action === 'suspend' ? 'suspended' : 'banned';
+        await query(`UPDATE users SET status = $1, updated_at = NOW() WHERE id = $2`, [userStatus, reportedUserId]);
+        invalidateUserStatusCache(reportedUserId);
+        // Phase May-19 realtime — also flip the target user's UI so
+        // their session-state listeners react immediately.
+        fanoutUserEntity(reportedUserId).catch(() => {});
+        fanoutAdminEntities('users').catch(() => {});
       }
 
       // Phase May-19 realtime — admin-violations list refresh for every
       // open moderation dashboard.
       fanoutAdminEntities('violations').catch(() => {});
 
-      const response: ApiResponse = { success: true, data: { message: `Violation ${newStatus}` } };
+      const response: ApiResponse = { success: true, data: { message: 'Report resolved' } };
       res.json(response);
     } catch (err) {
       next(err);

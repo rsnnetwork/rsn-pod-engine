@@ -18,6 +18,9 @@ const submitBodySchema = z.object({
   reportedId: z.string().uuid(),
   reason: z.enum(['spam', 'harassment', 'inappropriate_content', 'fake_profile', 'safety', 'other']),
   description: z.string().max(2000).optional(),
+  // 8 Sep 2026: when reported from a chat, carry the conversation so admins can
+  // review the messages behind the report.
+  conversationId: z.string().uuid().optional(),
 });
 
 const resolveBodySchema = z.object({
@@ -33,7 +36,7 @@ router.post(
     try {
       const result = await reportService.submitReport(
         req.user!.userId, req.body.reportedId,
-        req.body.reason, req.body.description,
+        req.body.reason, req.body.description, req.body.conversationId,
       );
       // Phase May-19 realtime — fanout so every admin moderation
       // queue shows the new report without a refresh.

@@ -40,20 +40,37 @@ interface Props {
    *  should never let a member reach that error in the first place. */
   reportedId: string;
   reportedDisplayName?: string | null;
+  /** When reporting from a chat, the conversation — admins can then review the
+   *  messages behind the report (8 Sep 2026, Ali). */
+  conversationId?: string;
+  /** Fired after the reporter also chooses to block, so the chat can update. */
+  onBlocked?: () => void;
 }
 
-export default function ReportUserModal({ open, onClose, reportedId, reportedDisplayName }: Props) {
+export default function ReportUserModal({ open, onClose, reportedId, reportedDisplayName, conversationId, onBlocked }: Props) {
   const [reason, setReason] = useState<ReportReason>('spam');
   const [description, setDescription] = useState('');
+  const [alsoBlock, setAlsoBlock] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
   const mutation = useMutation({
-    mutationFn: () => api.post('/reports', {
-      reportedId,
-      reason,
-      description: description.trim() || undefined,
-    }),
-    onSuccess: () => setSubmitted(true),
+    mutationFn: async () => {
+      await api.post('/reports', {
+        reportedId,
+        reason,
+        description: description.trim() || undefined,
+        conversationId,
+      });
+      // Reporting and blocking are separate actions server-side; when the
+      // reporter asks to block too, do it right after the report lands.
+      if (alsoBlock) {
+        await api.post(`/users/${reportedId}/block`, { reason: `Reported: ${reason}` });
+      }
+    },
+    onSuccess: () => {
+      setSubmitted(true);
+      if (alsoBlock) onBlocked?.();
+    },
   });
 
   // Fresh form state every time the modal is (re)opened.
@@ -61,6 +78,7 @@ export default function ReportUserModal({ open, onClose, reportedId, reportedDis
     if (open) {
       setReason('spam');
       setDescription('');
+      setAlsoBlock(false);
       setSubmitted(false);
       mutation.reset();
     }
@@ -71,7 +89,9 @@ export default function ReportUserModal({ open, onClose, reportedId, reportedDis
     <Modal open={open} onClose={onClose} title={submitted ? 'Report submitted' : `Report ${reportedDisplayName || 'this member'}`}>
       {submitted ? (
         <div className="text-center py-4">
-          <p className="text-sm text-gray-700">Thanks. Our team will review this.</p>
+          <p className="text-sm text-gray-700">
+            Thanks. Our team will review this.{alsoBlock ? ` You've also blocked ${reportedDisplayName || 'this person'}.` : ''}
+          </p>
           <Button className="mt-4 min-h-[44px]" onClick={onClose}>Done</Button>
         </div>
       ) : (
@@ -112,6 +132,19 @@ export default function ReportUserModal({ open, onClose, reportedId, reportedDis
               className={`${fieldClass} resize-none`}
             />
           </div>
+
+          <label className="flex items-start gap-2.5 cursor-pointer rounded-xl border border-gray-200 bg-gray-50 p-3">
+            <input
+              type="checkbox"
+              checked={alsoBlock}
+              onChange={(e) => setAlsoBlock(e.target.checked)}
+              className="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 text-rsn-red focus:ring-rsn-red"
+            />
+            <span className="text-sm text-gray-700">
+              Also block {reportedDisplayName || 'this person'}
+              <span className="block text-xs text-gray-400">They won't be able to message you, and you won't be matched again.</span>
+            </span>
+          </label>
 
           {mutation.isError && (
             <p className="text-sm text-red-500">

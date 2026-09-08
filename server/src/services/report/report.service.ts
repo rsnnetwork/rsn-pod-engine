@@ -51,6 +51,7 @@ export async function submitReport(
   reportedId: string,
   reason: ReportReason,
   description?: string,
+  conversationId?: string | null,
 ): Promise<UserReport> {
   if (reporterId === reportedId) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'You cannot report yourself');
@@ -66,6 +67,17 @@ export async function submitReport(
     throw new NotFoundError('User', reportedId);
   }
 
+  // Only accept a conversation the reporter is actually part of, so the context
+  // link can't be spoofed to a chat they don't belong to.
+  let convId: string | null = null;
+  if (conversationId) {
+    const conv = await query<{ id: string }>(
+      `SELECT id FROM dm_conversations WHERE id = $1 AND (user_a_id = $2 OR user_b_id = $2)`,
+      [conversationId, reporterId],
+    );
+    convId = conv.rows[0]?.id ?? null;
+  }
+
   const result = await query<{
     id: string; reporter_id: string; reported_id: string;
     reason: ReportReason; description: string | null;
@@ -73,11 +85,11 @@ export async function submitReport(
     resolved_at: Date | null; resolution_notes: string | null;
     created_at: Date;
   }>(
-    `INSERT INTO user_reports (id, reporter_id, reported_id, reason, description)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO user_reports (id, reporter_id, reported_id, reason, description, conversation_id)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id, reporter_id, reported_id, reason, description, status,
                resolved_by, resolved_at, resolution_notes, created_at`,
-    [uuid(), reporterId, reportedId, reason, description?.trim().slice(0, 2000) || null],
+    [uuid(), reporterId, reportedId, reason, description?.trim().slice(0, 2000) || null, convId],
   );
 
   const r = result.rows[0];

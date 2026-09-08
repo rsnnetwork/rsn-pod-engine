@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare, CalendarClock, Flag, MoreVertical, Video, Phone } from 'lucide-react';
+import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare, CalendarClock, Flag, MoreVertical, Video, Phone, Ban } from 'lucide-react';
 import MeetingScheduler, { ThreadMeetingBanner } from './MeetingScheduler';
 import Linkify from '@/components/ui/Linkify';
 import MeetingRequests, { FocusedMeetingRequest } from './MeetingRequests';
@@ -373,16 +373,44 @@ export default function MessagesPage() {
     }
   };
 
+  // Block the conversation partner (8 Sep 2026, Ali). Blocking stops future
+  // messages and matches (enforced server-side); we leave the thread afterwards.
+  const blockUser = async (userId: string, name: string | null) => {
+    if (!confirm(`Block ${name || 'this person'}? They won't be able to message you, and you won't be matched again. You can unblock them from their profile.`)) return;
+    try {
+      await api.post(`/users/${userId}/block`, {});
+      addToast(`You blocked ${name || 'this person'}.`, 'success');
+      qc.invalidateQueries({ queryKey: ['dm-conversations'] });
+      navigate('/messages');
+    } catch (e: any) {
+      addToast(e?.response?.data?.error?.message || 'Could not block this person.', 'error');
+    }
+  };
+
   // W-meet (8 Sep 2026) — a dot on the calendar icon when the partner changed
   // their availability since I last opened the scheduler. The dm-conversation
   // entity makes this live; the flag is server-computed so it survives refresh.
   const { data: scheduling } = useQuery({
     queryKey: ['meetingScheduling', activeId],
-    queryFn: () => api.get(`/dm/conversations/${activeId}/scheduling`).then(r => r.data.data as { schedulingUpdated?: boolean }),
+    queryFn: () => api.get(`/dm/conversations/${activeId}/scheduling`).then(r => r.data.data as {
+      schedulingUpdated?: boolean;
+      confirmed?: { type?: 'audio' | 'video' | null } | null;
+    }),
     enabled: !!activeId,
     meta: { entities: activeId ? [E.dmConversation(activeId)] : [] },
   });
   const availabilityDot = !!scheduling?.schedulingUpdated && !schedulerOpen;
+  const confirmedCallKind: 'audio' | 'video' = scheduling?.confirmed?.type === 'audio' ? 'audio' : 'video';
+
+  // A confirmed-meeting or "started a call" system line in the thread should be
+  // joinable right there, not only from the pinned card (Ali, 8 Sep 2026).
+  const joinKindForMessage = (content: string | null | undefined): 'audio' | 'video' | null => {
+    if (!content) return null;
+    if (content.includes('Meeting confirmed')) return confirmedCallKind;
+    const m = content.match(/Started an? (audio|video) call/i);
+    if (m) return m[1].toLowerCase() as 'audio' | 'video';
+    return null;
+  };
 
   // Opening the scheduler clears the dot (marks it seen server-side).
   const openScheduler = () => {
@@ -927,6 +955,16 @@ export default function MessagesPage() {
                   <Flag className="h-4 w-4" />
                 </button>
               )}
+              {headerContext.otherUserId !== myUserId && (
+                <button
+                  onClick={() => blockUser(headerContext.otherUserId, headerContext.otherDisplayName)}
+                  className="p-1.5 rounded-lg min-h-[44px] min-w-[44px] flex items-center justify-center hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
+                  title="Block this member"
+                  aria-label="Block this member"
+                >
+                  <Ban className="h-4 w-4" />
+                </button>
+              )}
               </div>
               {/* On a phone the three actions collapse into one menu, so the
                   name keeps the width it needs. */}
@@ -972,6 +1010,12 @@ export default function MessagesPage() {
                         <Flag className="h-4 w-4 text-gray-400" /> Report this member
                       </button>
                     )}
+                    {headerContext.otherUserId !== myUserId && (
+                      <button type="button" onClick={() => { setMoreOpen(false); blockUser(headerContext.otherUserId, headerContext.otherDisplayName); }}
+                        className="flex min-h-[44px] w-full items-center gap-2 px-4 py-3 text-left text-sm text-red-600 hover:bg-red-50">
+                        <Ban className="h-4 w-4" /> Block this member
+                      </button>
+                    )}
                     {activeConv && (
                       <button type="button"
                         onClick={() => {
@@ -994,6 +1038,8 @@ export default function MessagesPage() {
               onClose={() => setReportOpen(false)}
               reportedId={headerContext.otherUserId}
               reportedDisplayName={headerContext.otherDisplayName}
+              conversationId={activeConv?.conversationId}
+              onBlocked={() => { qc.invalidateQueries({ queryKey: ['dm-conversations'] }); navigate('/messages'); }}
             />
 
             {/* Confirmed meeting — always pinned so both people see it in the
@@ -1118,6 +1164,23 @@ export default function MessagesPage() {
                                       <Linkify text={m.content} className={fromMe ? 'break-all text-white underline hover:opacity-80' : undefined} />
                                     </div>
                                   )}
+                                  {/* A confirmed-meeting / call line joins the call right here
+                                      (Ali, 8 Sep 2026) — not only from the pinned card above. */}
+                                  {(() => {
+                                    const jk = joinKindForMessage(m.content);
+                                    if (!jk || !activeId) return null;
+                                    return (
+                                      <div className={m.attachmentUrl ? 'px-3.5 pb-2' : 'mt-1.5'}>
+                                        <button
+                                          type="button"
+                                          onClick={() => navigate(`/meet/${activeId}?kind=${jk}`)}
+                                          className="inline-flex min-h-[32px] items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-xs font-semibold text-white hover:bg-emerald-700"
+                                        >
+                                          {jk === 'audio' ? <Phone className="h-3.5 w-3.5" /> : <Video className="h-3.5 w-3.5" />} Join meeting
+                                        </button>
+                                      </div>
+                                    );
+                                  })()}
                                 </div>
                                 {/* Phase E — reaction trigger.
                                     Mobile: always at low opacity. Desktop: hover-revealed. */}
