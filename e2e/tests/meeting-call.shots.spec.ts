@@ -137,5 +137,11 @@ test('capture meeting + call UI', async () => {
   await expect(mob2.getByRole('button', { name: /More actions .*updated their availability/i })).toBeVisible({ timeout: 25_000 });
   await mob2.screenshot({ path: path.join(OUT, '06-mobile-availability-dot.png') });
 
+  // 8) Ended meeting → "Meeting ended · Call now" (age the meeting to the past).
+  await pool.query(`UPDATE dm_conversations SET meeting_start_at = NOW() - INTERVAL '3 hours', meeting_duration_min = 30 WHERE id = $1`, [convId]);
+  const ended = await pageAt(a, `/messages/${convId}`, { width: 1280, height: 900 });
+  await expect(ended.getByTestId('thread-meeting-banner').getByText(/Meeting ended/i)).toBeVisible({ timeout: 25_000 });
+  await ended.screenshot({ path: path.join(OUT, '08-meeting-ended-call-now.png') });
+
   console.log('shots written to', OUT);
 });
