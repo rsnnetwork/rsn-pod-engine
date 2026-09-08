@@ -225,16 +225,17 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
   const mine = staged ?? new Set((data?.mine ?? []).filter(isSlotKey));
   const theirSet = useMemo(() => new Set((data?.theirs ?? []).filter(isSlotKey)), [data]);
 
-  // Open on the first day where you both can, else where they can, else the
-  // first day that still has a free slot — so what matters is visible at once.
-  useEffect(() => {
-    if (!data || selectedDay) return;
-    const both = slotsByDay.find(d => d.slots.some(k => mine.has(k) && theirSet.has(k)));
+  // Until the member picks a day, open on the first day where you both can,
+  // else where they can, else the first day that still has a free slot — so
+  // what matters is visible at once. Derived (not an effect) so the strip
+  // never paints today first and then jumps.
+  const autoDay = useMemo(() => {
+    const savedMineSet = new Set((data?.mine ?? []).filter(isSlotKey));
+    const both = slotsByDay.find(d => d.slots.some(k => savedMineSet.has(k) && theirSet.has(k)));
     const theirs = slotsByDay.find(d => d.slots.some(k => theirSet.has(k)));
     const open = slotsByDay.find(d => d.slots.some(k => !isPastSlot(k)));
-    setSelectedDay((both ?? theirs ?? open ?? slotsByDay[0]).key);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, selectedDay]);
+    return (both ?? theirs ?? open ?? slotsByDay[0]).key;
+  }, [data, slotsByDay, theirSet]);
 
   if (isLoading || !data) {
     return <div className="p-4 flex justify-center"><Spinner /></div>;
@@ -246,7 +247,7 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
   // Overlap against the SAVED server state — you can only confirm what both
   // sides have actually saved, not an unsaved local tap.
   const savedOverlap = data.overlap.filter(isSlotKey).filter(k => !isPastSlot(k)).sort();
-  const current = slotsByDay.find(d => d.key === selectedDay) ?? slotsByDay[0];
+  const current = slotsByDay.find(d => d.key === (selectedDay ?? autoDay)) ?? slotsByDay[0];
 
   const toggle = (key: string) => {
     const next = new Set(mine);
