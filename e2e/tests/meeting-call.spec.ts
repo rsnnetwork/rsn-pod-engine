@@ -237,4 +237,19 @@ test.describe.serial('meeting + call', () => {
     await aPage.close();
     await bPage.close();
   });
+
+  test('5) a scheduled meeting opened early shows a countdown, with a join-now escape', async () => {
+    test.setTimeout(90_000);
+    const convId = await convBetween(a.id, b.id);
+    // Test 3 confirmed a meeting several days out on this conversation, so
+    // opening it now (scheduled=1) is well before the 5-minute early window.
+    const page = await openAs(a, `/meet/${convId}?kind=video&scheduled=1`);
+    await expect(page.getByText(/Your meeting starts in/i)).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByRole('button', { name: /Join now anyway/i })).toBeVisible();
+
+    // The escape hatch still lets them in.
+    await page.getByRole('button', { name: /Join now anyway/i }).click();
+    await expect(page.getByText(/^Video call$/)).toBeVisible({ timeout: 15_000 });
+    await page.close();
+  });
 });

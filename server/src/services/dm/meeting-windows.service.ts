@@ -376,7 +376,7 @@ export async function confirmWindow(
           threadUrl,
           googleCalendarUrl: googleUrl,
           icsContent: ics,
-          joinUrl: `${config.clientUrl}/meet/${conversationId}`,
+          joinUrl: `${config.clientUrl}/meet/${conversationId}?scheduled=1&kind=${meetingType ?? 'video'}`,
           kind: meetingType ?? 'video',
         }).catch(err => logger.warn({ err, uid }, 'meeting-confirmed email failed (non-fatal)'));
       }

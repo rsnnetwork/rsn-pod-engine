@@ -1179,7 +1179,7 @@ export default function MessagesPage() {
                                       ? 'Join meeting'
                                       : (fromMe ? 'Call again' : 'Call back');
                                     const onClick = act.scheduled
-                                      ? () => navigate(`/meet/${activeId}?kind=${act.kind}`)
+                                      ? () => navigate(`/meet/${activeId}?kind=${act.kind}&scheduled=1`)
                                       : () => startCall(act.kind);
                                     return (
                                       <div className={m.attachmentUrl ? 'px-3.5 pb-2' : 'mt-1.5'}>

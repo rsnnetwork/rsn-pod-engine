@@ -105,7 +105,7 @@ export function ThreadMeetingBanner({ conversationId }: { conversationId: string
           </div>
         </div>
         <button
-          onClick={() => navigate(`/meet/${conversationId}?kind=${c.type ?? 'video'}`)}
+          onClick={() => navigate(`/meet/${conversationId}?kind=${c.type ?? 'video'}&scheduled=1`)}
           className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700"
         >
           {c.type === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Join
@@ -231,7 +231,7 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 <button
-                  onClick={() => navigate(`/meet/${conversationId}?kind=${data.confirmed?.type ?? 'video'}`)}
+                  onClick={() => navigate(`/meet/${conversationId}?kind=${data.confirmed?.type ?? 'video'}&scheduled=1`)}
                   className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700"
                 >
                   {data.confirmed.type === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Join

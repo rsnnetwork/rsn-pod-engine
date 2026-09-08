@@ -9,9 +9,27 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { LiveKitRoom, RoomAudioRenderer, GridLayout, ParticipantTile, ControlBar, useTracks } from '@livekit/components-react';
 import '@livekit/components-styles';
 import { Track } from 'livekit-client';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, CalendarClock } from 'lucide-react';
 import api from '@/lib/api';
 import { PageLoader } from '@/components/ui/Spinner';
+
+// You can enter a scheduled meeting from 5 minutes before its start; earlier
+// than that, you land on a countdown (but can still force your way in).
+const EARLY_JOIN_MS = 5 * 60 * 1000;
+
+/** "2h 15m", "14m 30s", "less than a minute". */
+function untilLabel(ms: number): string {
+  if (ms <= 0) return 'now';
+  const totalMin = Math.floor(ms / 60000);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (totalMin > 0) {
+    const s = Math.floor((ms % 60000) / 1000);
+    return `${m}m ${String(s).padStart(2, '0')}s`;
+  }
+  return 'less than a minute';
+}
 
 function CallStage() {
   const tracks = useTracks(
@@ -34,9 +52,16 @@ export default function MeetPage() {
   const { conversationId } = useParams<{ conversationId: string }>();
   const [params] = useSearchParams();
   const kind = params.get('kind') === 'audio' ? 'audio' : 'video';
+  // Only a scheduled meeting is time-gated; an instant "Meet now" is never
+  // gated (it's happening right now).
+  const isScheduled = params.get('scheduled') === '1';
   const navigate = useNavigate();
   const [conn, setConn] = useState<{ token: string; url: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [startAt, setStartAt] = useState<Date | null>(null);
+  const [scheduleChecked, setScheduleChecked] = useState(!isScheduled);
+  const [now, setNow] = useState<number>(Date.now());
+  const [forceJoin, setForceJoin] = useState(false);
 
   const leave = () => navigate(`/messages/${conversationId}`);
 
@@ -53,6 +78,29 @@ export default function MeetPage() {
     return () => { cancelled = true; };
   }, [conversationId, kind]);
 
+  // For a scheduled meeting, learn its start time so we can gate early joins.
+  useEffect(() => {
+    if (!isScheduled) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await api.get(`/dm/conversations/${conversationId}/scheduling`);
+        const s = data?.data?.confirmed?.startAt;
+        if (!cancelled && s) setStartAt(new Date(s));
+      } catch { /* no schedule info → don't gate */ }
+      finally { if (!cancelled) setScheduleChecked(true); }
+    })();
+    return () => { cancelled = true; };
+  }, [conversationId, isScheduled]);
+
+  // Tick the countdown while we're waiting for a scheduled meeting to open.
+  const waiting = isScheduled && !forceJoin && !!startAt && now < startAt.getTime() - EARLY_JOIN_MS;
+  useEffect(() => {
+    if (!waiting) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [waiting]);
+
   if (error) {
     return (
       <div
@@ -67,7 +115,47 @@ export default function MeetPage() {
     );
   }
 
-  if (!conn) {
+  // A scheduled meeting opened early — show a countdown, but never trap the user:
+  // they can join now anyway, or go back.
+  if (waiting) {
+    const startMs = startAt!.getTime();
+    const remaining = startMs - now;
+    const localTime = startAt!.toLocaleString([], {
+      weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+    });
+    return (
+      <div
+        className="flex min-h-[100dvh] flex-col items-center justify-center gap-5 bg-[#0b0b12] px-6 text-center text-white"
+        style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}
+      >
+        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-white/10">
+          <CalendarClock className="h-7 w-7 text-white/80" />
+        </div>
+        <div className="space-y-1">
+          <p className="text-white/60 text-sm">Your meeting starts in</p>
+          <p className="text-3xl font-bold tabular-nums">{untilLabel(remaining)}</p>
+          <p className="text-white/50 text-sm">{localTime}</p>
+        </div>
+        <p className="max-w-xs text-xs text-white/40">
+          You can wait here — it opens automatically 5 minutes before — or join now if you're ready early.
+        </p>
+        <div className="flex flex-col items-center gap-3">
+          <button
+            onClick={() => setForceJoin(true)}
+            className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-emerald-600 px-5 text-sm font-semibold text-white hover:bg-emerald-700"
+          >
+            Join now anyway
+          </button>
+          <button onClick={leave} className="inline-flex min-h-[44px] items-center gap-2 text-sm text-white/70 hover:text-white">
+            <ArrowLeft className="h-4 w-4" /> Back to chat
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Don't flash into the room before we know a scheduled meeting's start time.
+  if (!conn || (isScheduled && !scheduleChecked)) {
     return <div className="min-h-[100dvh] bg-[#0b0b12]"><PageLoader /></div>;
   }
 
