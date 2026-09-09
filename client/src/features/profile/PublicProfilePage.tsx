@@ -351,7 +351,9 @@ export default function PublicProfilePage() {
               </span>
             </div>
             <p className="mb-4 text-xs text-gray-500">
-              Other members never see this. Your agents use it to find the right people for you.
+              {isOwnProfile
+                ? 'Other members never see this. Your agents use it to find the right people for you.'
+                : 'Other members never see this. Their agents use it to find the right people for them.'}
             </p>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-x-8">
               <MatchField icon={Users} label="Who I Want to Meet" value={user.whoIWantToMeet} />
