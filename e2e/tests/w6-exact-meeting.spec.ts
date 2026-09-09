@@ -110,11 +110,20 @@ test('confirming a meeting pins an exact local time + duration and offers a cale
   // the 24-hour field, becomes a selected chip on this day and saves.
   const keyDay = new Date(KEY);
   const EARLY = new Date(keyDay.getFullYear(), keyDay.getMonth(), keyDay.getDate(), 6, 30).toISOString().replace('.000Z', 'Z');
+  const early = page.locator(`[data-slot="${EARLY}"]`);
+  // The whole day is one scrollable timeline: 06:30 exists already but sits
+  // above the opening position (the 2 PM "Both can" slot) — out of the frame.
+  const inFrame = () => early.evaluate((el: HTMLElement) => {
+    const box = el.closest('[data-testid="slot-grid"]') as HTMLElement;
+    const top = el.offsetTop, bottom = top + el.offsetHeight;
+    return top >= box.scrollTop - 1 && bottom <= box.scrollTop + box.clientHeight + 1;
+  });
+  await expect(early).toHaveAttribute('aria-pressed', 'false');
+  expect(await inFrame(), '06:30 starts out of the frame').toBe(false);
   await page.locator('#custom-time').fill('06:30');
   await page.getByRole('button', { name: /^Add time$/ }).click();
-  const early = page.locator(`[data-slot="${EARLY}"]`);
-  await expect(early).toBeVisible();
   await expect(early).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(inFrame, { message: 'the typed time is scrolled into the frame' }).toBe(true);
   await expect(early).toContainText(new Date(EARLY).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
   await page.getByRole('button', { name: /Save availability/i }).click();
   await expect(page.getByText(/Availability saved/i)).toBeVisible({ timeout: 15_000 });

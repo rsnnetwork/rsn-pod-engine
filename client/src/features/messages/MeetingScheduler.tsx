@@ -9,7 +9,7 @@
 // drops a message in the thread, and notifies the partner. No calendars, no
 // OAuth. 9 Sep 2026 (Stefan): replaced the vague morning/afternoon/evening grid.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, CalendarCheck, Video, Phone } from 'lucide-react';
@@ -35,8 +35,7 @@ interface Scheduling {
 // ── Slots ────────────────────────────────────────────────────────────────────
 
 const SLOT_MINUTES = 30;
-const DAY_START_HOUR = 8;  // local
-const DAY_END_HOUR = 20;   // local, exclusive
+const WORK_START_HOUR = 8; // where the day's timeline opens by default (local)
 const DAYS_AHEAD = 7;
 const MIN_DURATION = 5;
 const MAX_DURATION = 240;
@@ -99,11 +98,12 @@ function nextDays(n: number): Date[] {
   return out;
 }
 
-/** The quick-tap slots of one local day, 08:00–19:30, as UTC-instant keys.
- *  Any other time of day is added through the custom time field (Ali, 9 Sep). */
+/** Every half hour of one local day, 00:00–23:30, as UTC-instant keys. The
+ *  whole day lives in one scrollable timeline (Ali, 9 Sep): a typed time is
+ *  just one of these, scrolled into view. */
 function daySlots(day: Date): string[] {
   const out: string[] = [];
-  for (let h = DAY_START_HOUR; h < DAY_END_HOUR; h++) {
+  for (let h = 0; h < 24; h++) {
     for (let m = 0; m < 60; m += SLOT_MINUTES) {
       out.push(slotKey(new Date(day.getFullYear(), day.getMonth(), day.getDate(), h, m)));
     }
@@ -223,6 +223,10 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [showAllOverlap, setShowAllOverlap] = useState(false);
   const [customTime, setCustomTime] = useState('');
+  // The day's timeline scrolls inside one frame; these bring a slot into view.
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [scrollTo, setScrollTo] = useState<string | null>(null);
+  const [flashKey, setFlashKey] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery<Scheduling>({
     queryKey: ['meetingScheduling', conversationId],
@@ -263,6 +267,47 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
     return (both ?? theirs ?? open ?? slotsByDay[0]).key;
   }, [data, slotsByDay, theirSet]);
 
+  const currentKey = slotsByDay.find(d => d.key === (selectedDay ?? autoDay))?.key ?? slotsByDay[0].key;
+
+  // Opening a day: scroll its timeline to what matters — a time you both
+  // can, else yours, else theirs, else the first time still ahead (from the
+  // working day on). Runs per day, not per tap, so toggling never jumps.
+  useEffect(() => {
+    const box = gridRef.current;
+    const day = slotsByDay.find(d => d.key === currentKey);
+    if (!box || !day || !data) return;
+    const savedMine = new Set(data.mine.filter(isSlotKey));
+    const theirs = new Set(data.theirs.filter(isSlotKey));
+    const target =
+      day.defaults.find(k => savedMine.has(k) && theirs.has(k)) ??
+      day.defaults.find(k => savedMine.has(k)) ??
+      day.defaults.find(k => theirs.has(k)) ??
+      day.defaults.find(k => !isPastSlot(k) && new Date(k).getHours() >= WORK_START_HOUR) ??
+      day.defaults.find(k => !isPastSlot(k)) ??
+      day.defaults[0];
+    const el = box.querySelector<HTMLElement>(`[data-slot="${target}"]`);
+    if (el) box.scrollTop = Math.max(0, el.offsetTop - 4);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentKey, !!data]);
+
+  // A typed time: bring it into view and flash it so the eye lands on it.
+  useEffect(() => {
+    if (!scrollTo) return;
+    const box = gridRef.current;
+    const el = box?.querySelector<HTMLElement>(`[data-slot="${scrollTo}"]`);
+    if (box && el) {
+      const top = el.offsetTop - 4;
+      const bottom = el.offsetTop + el.offsetHeight + 4;
+      if (top < box.scrollTop || bottom > box.scrollTop + box.clientHeight) {
+        box.scrollTop = Math.max(0, top - Math.round((box.clientHeight - el.offsetHeight) / 2));
+      }
+    }
+    setFlashKey(scrollTo);
+    setScrollTo(null);
+    const t = setTimeout(() => setFlashKey(null), 1600);
+    return () => clearTimeout(t);
+  }, [scrollTo]);
+
   if (isLoading || !data) {
     return <div className="p-4 flex justify-center"><Spinner /></div>;
   }
@@ -274,11 +319,7 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
   // sides have actually saved, not an unsaved local tap.
   const savedOverlap = data.overlap.filter(isSlotKey).filter(k => !isPastSlot(k)).sort();
   const current = slotsByDay.find(d => d.key === (selectedDay ?? autoDay)) ?? slotsByDay[0];
-  // The day's grid: the quick-tap times plus any custom time either of you
-  // added on this day, in time order (ISO keys sort chronologically).
-  const extras = [...new Set([...mine, ...theirSet])]
-    .filter(k => dayOfKey(k) === current.dayKey && !current.defaults.includes(k));
-  const slots = [...current.defaults, ...extras].sort();
+  const slots = current.defaults;
 
   const toggle = (key: string) => {
     const next = new Set(mine);
@@ -286,14 +327,16 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
     setStaged(next);
   };
 
-  // Any time of day (Ali, 9 Sep): type it, it becomes a selected chip on
-  // this day. Half-hour steps so two people can land on the same instant.
+  // Any time of day (Ali, 9 Sep): type it, it becomes a selected chip in its
+  // place on the timeline and scrolls into view. Half-hour steps so two
+  // people can land on the same instant.
   const addCustomTime = () => {
     const key = customSlot(current.day, customTime);
     if (!key) { addToast('Enter a time like 21:30.', 'error'); return; }
     if (isPastSlot(key)) { addToast('That time has already passed.', 'error'); return; }
     if (!mine.has(key)) setStaged(new Set([...mine, key]));
     setCustomTime('');
+    setScrollTo(key);
   };
 
   const save = async () => {
@@ -454,39 +497,48 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
           })}
         </div>
 
-        {/* The selected day's times. */}
-        <div className="grid grid-cols-3 gap-1.5 min-[420px]:grid-cols-4 md:grid-cols-6" data-testid="slot-grid">
-          {slots.map(key => {
-            const past = isPastSlot(key);
-            const iPicked = mine.has(key);
-            const theyPicked = theirSet.has(key);
-            const both = iPicked && theyPicked;
-            const state = both ? 'Both can' : iPicked ? 'You' : theyPicked ? 'They can' : '';
-            return (
-              <button
-                key={key}
-                type="button"
-                data-slot={key}
-                disabled={past}
-                onClick={() => toggle(key)}
-                aria-pressed={iPicked}
-                aria-label={`${labelFor(key)}${both ? ' — you both can' : theyPicked ? ' — they can' : iPicked ? ' — you can' : ''}`}
-                className={`flex min-h-[44px] flex-col items-center justify-center rounded-lg border px-1 leading-tight transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-                  both
-                    ? 'border-emerald-400 bg-emerald-100 text-emerald-700'
-                    : iPicked
-                      ? 'border-rsn-red bg-rsn-red-light text-rsn-red'
-                      : theyPicked
-                        ? 'border-gray-300 bg-white text-gray-600'
-                        : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'
-                }`}
-              >
-                <span className="text-xs font-semibold">{localTime(key)}</span>
-                {state && <span className="text-[10px]">{state}</span>}
-              </button>
-            );
-          })}
+        {/* The selected day's whole timeline, 00:00–23:30, in one scrollable
+            frame. A typed time is one of these chips, scrolled into view. */}
+        <div
+          ref={gridRef}
+          className="relative max-h-[300px] overflow-y-auto overscroll-contain rounded-lg border border-gray-100 bg-white/60 p-1.5"
+          data-testid="slot-grid"
+          aria-label={`Times on ${localDay(current.day)} — scroll for earlier or later`}
+        >
+          <div className="grid grid-cols-3 gap-1.5 min-[420px]:grid-cols-4 md:grid-cols-6">
+            {slots.map(key => {
+              const past = isPastSlot(key);
+              const iPicked = mine.has(key);
+              const theyPicked = theirSet.has(key);
+              const both = iPicked && theyPicked;
+              const state = both ? 'Both can' : iPicked ? 'You' : theyPicked ? 'They can' : '';
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  data-slot={key}
+                  disabled={past}
+                  onClick={() => toggle(key)}
+                  aria-pressed={iPicked}
+                  aria-label={`${labelFor(key)}${both ? ' — you both can' : theyPicked ? ' — they can' : iPicked ? ' — you can' : ''}`}
+                  className={`flex min-h-[44px] flex-col items-center justify-center rounded-lg border px-1 leading-tight transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                    both
+                      ? 'border-emerald-400 bg-emerald-100 text-emerald-700'
+                      : iPicked
+                        ? 'border-rsn-red bg-rsn-red-light text-rsn-red'
+                        : theyPicked
+                          ? 'border-gray-300 bg-white text-gray-600'
+                          : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'
+                  } ${flashKey === key ? 'ring-2 ring-rsn-red ring-offset-1' : ''}`}
+                >
+                  <span className="text-xs font-semibold">{localTime(key)}</span>
+                  {state && <span className="text-[10px]">{state}</span>}
+                </button>
+              );
+            })}
+          </div>
         </div>
+        <p className="text-[11px] text-gray-400">Scroll the times for earlier or later in the day.</p>
 
         {/* Any other time of day — early, late, whatever suits you (Ali, 9 Sep). */}
         <div className="flex flex-wrap items-center gap-2" data-testid="custom-time">
@@ -509,7 +561,7 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
           >
             Add time
           </button>
-          <span className="text-[11px] text-gray-400">Any hour of the day, in half-hour steps.</span>
+          <span className="text-[11px] text-gray-400">Type any time — it's selected and shown in the timeline above.</span>
         </div>
       </div>
 
