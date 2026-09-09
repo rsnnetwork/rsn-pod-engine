@@ -209,17 +209,25 @@ export function ThreadMeetingBanner({ conversationId, onCallNow }: { conversatio
 
 const OVERLAP_PREVIEW = 8;
 
+// Unsaved picks and the typed length survive the panel closing (it closes
+// on any outside click) — kept per conversation until saved or the page goes.
+const drafts = new Map<string, { staged: Set<string> | null; duration: string }>();
+
 export default function MeetingScheduler({ conversationId }: { conversationId: string }) {
   const { addToast } = useToastStore();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [staged, setStaged] = useState<Set<string> | null>(null);
+  const [staged, setStaged] = useState<Set<string> | null>(() => drafts.get(conversationId)?.staged ?? null);
   const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
-  // The overlap slot being confirmed, plus the meeting's length and kind.
+  // The overlap slot being confirmed. The length and kind are typed up front
+  // (Ali, 9 Sep: "what if the user only has 10 minutes") and used on confirm.
   const [finalizing, setFinalizing] = useState<string | null>(null);
-  const [durationText, setDurationText] = useState('30');
+  const [durationText, setDurationText] = useState(() => drafts.get(conversationId)?.duration ?? '30');
   const [meetingKind, setMeetingKind] = useState<'audio' | 'video'>('video');
+  const draftRef = useRef({ staged, duration: durationText });
+  draftRef.current = { staged, duration: durationText };
+  useEffect(() => () => { drafts.set(conversationId, draftRef.current); }, [conversationId]);
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [showAllOverlap, setShowAllOverlap] = useState(false);
   const [customTime, setCustomTime] = useState('');
@@ -348,6 +356,7 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
       });
       await queryClient.invalidateQueries({ queryKey: ['meetingScheduling', conversationId] });
       setStaged(null); // re-sync from server
+      drafts.delete(conversationId);
       addToast('Availability saved — they\'ll see when you both can.', 'success');
     } catch {
       addToast('Could not save availability — try again.', 'error');
@@ -357,7 +366,6 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
   };
 
   const openFinalize = (key: string) => {
-    setDurationText('30');
     setFinalizing(key);
   };
 
@@ -458,6 +466,24 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
       )}
 
       <div className="space-y-2">
+        {/* The meeting's length is typed up front — any number of minutes. */}
+        <div className="flex flex-wrap items-center gap-2" data-testid="meeting-length">
+          <label htmlFor="meeting-minutes" className="text-xs font-medium text-gray-700">Meeting length</label>
+          <input
+            id="meeting-minutes"
+            type="number"
+            inputMode="numeric"
+            min={MIN_DURATION}
+            max={MAX_DURATION}
+            step={5}
+            value={durationText}
+            onChange={e => setDurationText(e.target.value)}
+            aria-invalid={!durationOk}
+            className={`h-11 w-20 rounded-lg border bg-white px-2 text-sm text-gray-800 ${durationOk ? 'border-gray-200' : 'border-rsn-red'}`}
+          />
+          <span className="text-xs text-gray-600">min</span>
+          <span className="text-[11px] text-gray-400">{durationOk ? 'Type any length — 10, 15, 45…' : `Between ${MIN_DURATION} and ${MAX_DURATION} minutes.`}</span>
+        </div>
         <p className="text-[11px] text-gray-500">
           Tap the times you're free — <span className="font-medium text-gray-700">your local time</span>. Green = you both can.
         </p>
@@ -582,24 +608,8 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
           {finalizing && (
             <div className="rounded-lg border border-emerald-300 bg-emerald-50 p-3 space-y-2" data-testid="confirm-card">
               <p className="text-sm font-semibold text-emerald-800">{localWhen(finalizing)}</p>
-              <p className="text-[11px] text-emerald-600">Your local time. They'll see it in theirs.</p>
+              <p className="text-[11px] text-emerald-600">Your local time. They'll see it in theirs. Length is the number above.</p>
               <div className="flex items-center gap-2 flex-wrap">
-                <label className="inline-flex items-center gap-1 text-[11px] text-emerald-700" htmlFor="meeting-minutes">
-                  Length
-                  <input
-                    id="meeting-minutes"
-                    type="number"
-                    inputMode="numeric"
-                    min={MIN_DURATION}
-                    max={MAX_DURATION}
-                    step={5}
-                    value={durationText}
-                    onChange={e => setDurationText(e.target.value)}
-                    aria-invalid={!durationOk}
-                    className={`ml-1 h-11 w-20 rounded border bg-white px-2 text-sm text-gray-800 ${durationOk ? 'border-emerald-300' : 'border-rsn-red'}`}
-                  />
-                  min
-                </label>
                 <div className="inline-flex overflow-hidden rounded-lg border border-emerald-300">
                   {(['video', 'audio'] as const).map(k => (
                     <button

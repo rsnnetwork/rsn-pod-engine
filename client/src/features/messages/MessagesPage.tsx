@@ -553,6 +553,25 @@ export default function MessagesPage() {
     }
   };
 
+  // The scheduler closes on a click anywhere outside it, or Escape (Ali,
+  // 9 Sep) — like a menu. Its toggle is excluded so the click that closes
+  // it doesn't reopen it. Unsaved picks survive (the panel keeps a draft).
+  useEffect(() => {
+    if (!schedulerOpen) return;
+    const onPointer = (e: PointerEvent) => {
+      const t = e.target as Element | null;
+      if (t?.closest('[data-scheduler-panel],[data-scheduler-toggle]')) return;
+      setSchedulerOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setSchedulerOpen(false); };
+    document.addEventListener('pointerdown', onPointer, true);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onPointer, true);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [schedulerOpen]);
+
   // Feature 18 — derive an "effective active context" so the thread view and
   // composer can render uniformly whether we're in an existing thread or
   // composing a new one. composeTarget supplies the header info when we
@@ -1066,6 +1085,7 @@ export default function MessagesPage() {
               {activeConv && !callsUnlocked && (
                 <button
                   onClick={openScheduler}
+                  data-scheduler-toggle
                   className={`relative flex h-11 w-11 items-center justify-center rounded-lg transition-colors ${
                     schedulerOpen ? 'bg-rsn-red-light text-rsn-red' : 'hover:bg-gray-100 text-gray-400 hover:text-gray-600'
                   }`}
@@ -1152,6 +1172,7 @@ export default function MessagesPage() {
                     )}
                     {activeConv && !callsUnlocked && (
                       <button type="button" onClick={() => { setMoreOpen(false); openScheduler(); }}
+                        data-scheduler-toggle
                         className="flex min-h-[44px] w-full items-center gap-2 px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50">
                         <CalendarClock className="h-4 w-4 text-gray-400" /> Find a time to meet
                         {availabilityDot && <span className="ml-auto h-2 w-2 rounded-full bg-rsn-red" aria-hidden="true" />}
@@ -1233,7 +1254,9 @@ export default function MessagesPage() {
             {/* Availability grid — collapsible so the thread stays primary. Gone
                 once calls are unlocked (the first meeting has happened). */}
             {activeConv && !callsUnlocked && schedulerOpen && (
-              <MeetingScheduler conversationId={activeConv.conversationId} />
+              <div data-scheduler-panel>
+                <MeetingScheduler conversationId={activeConv.conversationId} />
+              </div>
             )}
 
             {/* Messages — clustered by sender + day. In compose-new mode there's

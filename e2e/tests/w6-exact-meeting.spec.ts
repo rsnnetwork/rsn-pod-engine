@@ -98,12 +98,23 @@ test('confirming a meeting pins an exact local time + duration and offers a cale
   if (await more.isVisible().catch(() => false)) {
     await more.click();
   }
+  const openScheduler = async () => {
+    if (await more.isVisible().catch(() => false)) await more.click();
+    await findTime.filter({ visible: true }).first().click();
+    await expect(page.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
+  };
   await findTime.filter({ visible: true }).first().click();
   await expect(page.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
 
+  // The length is typed up front, visible the moment the panel opens (Ali,
+  // 9 Sep: "what if the user only has 10 minutes").
+  const minutes = page.locator('#meeting-minutes');
+  await expect(minutes).toBeVisible();
+  await minutes.fill('10');
+
   // 9 Sep 2026: the overlap IS a concrete time. The grid shows it green on the
   // right day, the chip is labelled in local time, and confirming asks only
-  // for a custom length + audio/video — the exact time is shown before commit.
+  // for audio/video — the exact time and length are shown before commit.
   await expect(page.getByTestId('slot-grid').getByText('Both can').first()).toBeVisible({ timeout: 20_000 });
 
   // Any time of day (Ali, 9 Sep): a time outside the quick grid, typed into
@@ -138,12 +149,13 @@ test('confirming a meeting pins an exact local time + duration and offers a cale
   await expect(chip).toContainText(localLabel);
   await chip.click();
   await page.screenshot({ path: `shots/meeting/14-confirm-card-${engineLabel()}.png` }).catch(() => {});
-  await page.locator('#meeting-minutes').fill('20');
-  await expect(page.getByTestId('confirm-summary')).toContainText(`${localLabel} · 20 min · Video call`);
+  // The 10 typed at the top is what the confirm shows.
+  await expect(page.getByTestId('confirm-summary')).toContainText(`${localLabel} · 10 min · Video call`);
   // Out-of-range lengths are refused before the request is ever sent.
   await page.locator('#meeting-minutes').fill('3');
   await expect(page.getByRole('button', { name: /Confirm meeting/i })).toBeDisabled();
   await page.locator('#meeting-minutes').fill('20');
+  await expect(page.getByTestId('confirm-summary')).toContainText(`${localLabel} · 20 min · Video call`);
   await page.getByRole('button', { name: /Confirm meeting/i }).click();
 
   // The confirmed banner shows a local time + duration + a universal calendar file.
