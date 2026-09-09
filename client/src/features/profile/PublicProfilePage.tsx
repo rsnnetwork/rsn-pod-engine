@@ -8,7 +8,7 @@ import ReportUserModal from '@/components/ReportUserModal';
 import {
   ArrowLeft, MapPin, Globe, Sparkles, Target, Heart,
   HelpCircle, Users, User, Award, Compass, Link2, Languages, Linkedin,
-  Ban, ShieldOff, MessageSquare, Flag, Send,
+  Ban, ShieldOff, MessageSquare, Flag, Send, Lock,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
@@ -42,6 +42,10 @@ export default function PublicProfilePage() {
     enabled: !!userId,
     meta: { entities: userId ? [E.user(userId)] : [] },
   });
+  // The private card only exists in the payload for the owner and admins —
+  // the server decides, the client just renders what it was given.
+  const isAdminViewer = currentUser?.role === 'admin' || currentUser?.role === 'super_admin';
+  const showPrivate = !!user && (isOwnProfile || isAdminViewer) && 'whoIWantToMeet' in user;
 
   // Phase B (1 May 2026 spec) — fetch the block status so the profile renders
   // either Block or Unblock. Skipped on own profile (you can't block yourself).
@@ -323,48 +327,62 @@ export default function PublicProfilePage() {
             : <span data-testid="profile-about" className="text-sm italic text-gray-300">Not shared yet</span>}
         </Section>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 md:divide-x md:divide-gray-100">
-          {/* ─── Interests ─── */}
-          <Section icon={Sparkles} title="Interests">
-            {user.interests?.length > 0 ? (
-              <div className="flex flex-wrap gap-1.5">
-                {user.interests.map((t: string) => (
-                  <span key={t} className="rounded-full bg-gray-100 px-2.5 py-1 text-xs text-gray-600">{t}</span>
-                ))}
-              </div>
-            ) : EMPTY}
-          </Section>
-
-          {/* ─── Reasons to Connect ─── */}
-          <Section icon={Link2} title="Reasons to Connect">
-            {user.reasonsToConnect?.length > 0 ? (
-              <div className="flex flex-wrap gap-1.5">
-                {user.reasonsToConnect.map((r: string) => (
-                  <span key={r} className="rounded-full bg-gray-100 px-2.5 py-1 text-xs text-gray-600">{r}</span>
-                ))}
-              </div>
-            ) : EMPTY}
-          </Section>
-        </div>
-
-        {/* ─── Expertise ─── */}
+        {/* ─── Expertise + what they can help with — the offer side is public ─── */}
         <Section icon={Award} title="Expertise">
           {user.expertiseText
             ? <p className="whitespace-pre-line break-words text-sm leading-relaxed text-gray-700">{user.expertiseText}</p>
             : EMPTY}
         </Section>
+        <Section icon={HelpCircle} title="What I Can Help With">
+          {user.whatICanHelpWith
+            ? <p className="whitespace-pre-line break-words text-sm leading-relaxed text-gray-700">{user.whatICanHelpWith}</p>
+            : EMPTY}
+        </Section>
 
-        {/* ─── Matching Profile — always show all 5 ─── */}
-        <div className="border-t border-gray-100 px-5 py-5 sm:px-8">
-          <h3 className="mb-4 text-xs font-semibold uppercase tracking-wider text-gray-400">Matching Profile</h3>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-x-8">
-            <MatchField icon={Heart} label="What I Care About" value={user.whatICareAbout} />
-            <MatchField icon={HelpCircle} label="What I Can Help With" value={user.whatICanHelpWith} />
-            <MatchField icon={Users} label="Who I Want to Meet" value={user.whoIWantToMeet} />
-            <MatchField icon={Target} label="Why I Want to Meet" value={user.whyIWantToMeet} />
-            <MatchField icon={Compass} label="My Intent" value={user.myIntent} />
+        {/* ─── Private card (Stefan, 9 Sep 2026): why you're here, who you want
+            to meet, interests. The server only sends these for the owner and
+            admins, so this block cannot render for anyone else. ─── */}
+        {showPrivate && (
+          <div className="border-t border-gray-100 bg-amber-50/40 px-5 py-5 sm:px-8" data-testid="private-card">
+            <div className="mb-4 flex flex-wrap items-center gap-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500">Private card</h3>
+              <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-white px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                <Lock className="h-3 w-3" /> {isOwnProfile ? 'Only you and admins can see this' : 'Admin view — the member and admins only'}
+              </span>
+            </div>
+            <p className="mb-4 text-xs text-gray-500">
+              Other members never see this. Your agents use it to find the right people for you.
+            </p>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-x-8">
+              <MatchField icon={Users} label="Who I Want to Meet" value={user.whoIWantToMeet} />
+              <MatchField icon={Target} label="Why I Want to Meet" value={user.whyIWantToMeet} />
+              <MatchField icon={Compass} label="My Intent" value={user.myIntent} />
+              <MatchField icon={Heart} label="What I Care About" value={user.whatICareAbout} />
+            </div>
+            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-x-8">
+              <div>
+                <p className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-gray-400"><Sparkles className="h-3.5 w-3.5 text-gray-400" /> Interests</p>
+                {user.interests?.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {user.interests.map((t: string) => (
+                      <span key={t} className="rounded-full bg-gray-100 px-2.5 py-1 text-xs text-gray-600">{t}</span>
+                    ))}
+                  </div>
+                ) : EMPTY}
+              </div>
+              <div>
+                <p className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-gray-400"><Link2 className="h-3.5 w-3.5 text-gray-400" /> Reasons to Connect</p>
+                {user.reasonsToConnect?.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {user.reasonsToConnect.map((r: string) => (
+                      <span key={r} className="rounded-full bg-gray-100 px-2.5 py-1 text-xs text-gray-600">{r}</span>
+                    ))}
+                  </div>
+                ) : EMPTY}
+              </div>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {!isOwnProfile && (

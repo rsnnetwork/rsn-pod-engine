@@ -7,6 +7,7 @@ import { requireRole } from '../middleware/rbac';
 import { auditMiddleware } from '../middleware/audit';
 import * as sessionService from '../services/session/session.service';
 import * as podService from '../services/pod/pod.service';
+import { withoutEmail } from '../services/user/public-card';
 import { fanoutSessionEntities, fanoutUserEntity } from '../realtime/fanout';
 import { E } from '../realtime/entities';
 import { canViewSession } from '../services/session/session-access';
@@ -422,7 +423,10 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       // Access control: only participants, the host, pod members, or admins can view the list
-      if (!hasRoleAtLeast(req.user!.role, UserRole.ADMIN)) {
+      // Emails are for admins and the event's host / co-hosts only (9 Sep 2026);
+      // fellow participants and pod members get the public card.
+      let seesEmail = hasRoleAtLeast(req.user!.role, UserRole.ADMIN);
+      if (!seesEmail) {
         const session = await sessionService.getSessionById(req.params.id);
         const isHost = session.hostUserId === req.user!.userId;
         const isParticipant = await sessionService.isSessionParticipant(req.params.id, req.user!.userId);
@@ -432,9 +436,14 @@ router.get(
         if (!isHost && !isParticipant && !isPodMember) {
           throw new ForbiddenError('You must be a participant or pod member to view this list');
         }
+        const cohost = isHost ? null : await query(
+          `SELECT 1 FROM session_cohosts WHERE session_id = $1 AND user_id = $2 LIMIT 1`,
+          [req.params.id, req.user!.userId],
+        );
+        seesEmail = isHost || !!cohost?.rows.length;
       }
       const participants = await sessionService.getSessionParticipants(req.params.id);
-      const response: ApiResponse = { success: true, data: participants };
+      const response: ApiResponse = { success: true, data: seesEmail ? participants : withoutEmail(participants) };
       res.json(response);
     } catch (err) {
       next(err);

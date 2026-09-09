@@ -104,6 +104,53 @@ describe('Invite Service', () => {
       expect(invite).toEqual(mockInvite);
     });
 
+    // 9 Sep 2026: member lists no longer carry emails, so a pick from the
+    // "met before" list arrives as inviteeUserId and the server resolves it.
+    it('resolves inviteeUserId to that member\'s email before anything else', async () => {
+      // 0. Resolve the invitee's address
+      mockQuery.mockResolvedValueOnce({ rows: [{ email: 'guest@example.com' }], rowCount: 1 });
+      // 1. Rate limit: get user entitlements
+      mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 50 }], rowCount: 1 });
+      // 2. Rate limit: count invites in past 24h
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });
+      // 3. Self-invite check — SELECT email FROM users (caller)
+      mockQuery.mockResolvedValueOnce({ rows: [{ email: 'host@example.com' }], rowCount: 1 });
+      // 5. podService.getPodById
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'pod-123', name: 'Test', status: 'active' }], rowCount: 1 });
+      // 6. podService.getMemberRole
+      mockQuery.mockResolvedValueOnce({ rows: [{ role: 'director' }], rowCount: 1 });
+      // 7. Existing member check
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      // 8. Duplicate pending invite check
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      // 9. INSERT invite RETURNING
+      mockQuery.mockResolvedValueOnce({ rows: [mockInvite], rowCount: 1 });
+      // 10-12. email + notification lookups
+      mockQuery.mockResolvedValueOnce({ rows: [{ displayName: 'Host User' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [{ name: 'Test Pod' }], rowCount: 1 });
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+      const invite = await inviteService.createInvite('user-host', {
+        type: InviteType.POD,
+        podId: 'pod-123',
+        inviteeUserId: 'user-guest',
+      });
+
+      expect(invite).toEqual(mockInvite);
+      expect(mockQuery.mock.calls[0][0]).toMatch(/SELECT email FROM users WHERE id = \$1/);
+      expect(mockQuery.mock.calls[0][1]).toEqual(['user-guest']);
+      const insert = mockQuery.mock.calls.find((c: unknown[]) => /INSERT INTO invites/.test(c[0] as string));
+      expect(insert).toBeTruthy();
+      expect(insert![1]).toContain('guest@example.com');
+    });
+
+    it('rejects an inviteeUserId that is not a member', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      await expect(inviteService.createInvite('user-host', {
+        type: InviteType.POD, podId: 'pod-123', inviteeUserId: 'user-ghost',
+      })).rejects.toThrow(/not found/i);
+    });
+
     it('should reject self-invites', async () => {
       // 1. Rate limit: get user entitlements
       mockQuery.mockResolvedValueOnce({ rows: [{ max_invites_per_day: 50 }], rowCount: 1 });

@@ -19,6 +19,7 @@ const router = Router();
 const createInviteSchema = z.object({
   type: z.nativeEnum(InviteType),
   inviteeEmail: z.string().email().optional(),
+  inviteeUserId: z.string().uuid().optional(),
   podId: z.string().uuid().optional(),
   sessionId: z.string().uuid().optional(),
   circleId: z.string().uuid().optional(),

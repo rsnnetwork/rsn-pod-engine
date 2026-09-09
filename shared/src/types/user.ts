@@ -82,7 +82,14 @@ export interface User {
   updatedAt: Date;
 }
 
-export interface UserProfile {
+/**
+ * The PUBLIC card — what any other member may see about you: who you are and
+ * what you offer. Everything about why you're here (who you want to meet, why,
+ * intent, interests, reasons to connect) stays on `User`, which only you and
+ * admins receive (Stefan, 9 Sep 2026). Projected by the server; never widen
+ * this on the client.
+ */
+export interface PublicMember {
   id: string;
   displayName: string;
   firstName: string;
@@ -92,14 +99,12 @@ export interface UserProfile {
   company: string | null;
   jobTitle: string | null;
   industry: string | null;
-  interests: string[];
-  reasonsToConnect: string[];
+  location: string | null;
+  linkedinUrl: string | null;
+  languages: string[];
+  professionalRole: string[];
   expertiseText: string | null;
-  whatICareAbout: string | null;
   whatICanHelpWith: string | null;
-  whoIWantToMeet: string | null;
-  whyIWantToMeet: string | null;
-  myIntent: string | null;
 }
 
 export interface CreateUserInput {

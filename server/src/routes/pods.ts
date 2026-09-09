@@ -6,6 +6,7 @@ import { authenticate } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import { auditMiddleware } from '../middleware/audit';
 import * as podService from '../services/pod/pod.service';
+import { withoutEmail } from '../services/user/public-card';
 import { fanoutPodEntities, fanoutPodMembershipForUser } from '../realtime/fanout';
 import { emitEntities, getRealtimeIo } from '../realtime/emit';
 import { E } from '../realtime/entities';
@@ -132,6 +133,21 @@ router.get(
         res.status(400).json({ error: { message: 'sessionId required' } });
         return;
       }
+      // This list carries emails (the host invites by address), so it is for
+      // the event's host / co-hosts and admins only (9 Sep 2026).
+      if (!hasRoleAtLeast(req.user!.role, UserRole.ADMIN)) {
+        const host = await query<{ host_user_id: string }>(
+          `SELECT host_user_id FROM sessions WHERE id = $1`, [sessionId],
+        );
+        const isHost = host.rows[0]?.host_user_id === req.user!.userId;
+        const cohost = isHost ? null : await query(
+          `SELECT 1 FROM session_cohosts WHERE session_id = $1 AND user_id = $2 LIMIT 1`,
+          [sessionId, req.user!.userId],
+        );
+        if (!isHost && !cohost?.rows.length) {
+          throw new ForbiddenError('Only the event host can see who to invite');
+        }
+      }
       const members = await podService.getPodMembersForInvite(req.params.id, sessionId);
       res.json({ data: members });
     } catch (err) {
@@ -217,14 +233,17 @@ router.get(
   authenticate,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      if (!hasRoleAtLeast(req.user!.role, UserRole.ADMIN)) {
+      const isAdmin = hasRoleAtLeast(req.user!.role, UserRole.ADMIN);
+      if (!isAdmin) {
         const requesterRole = await podService.getMemberRole(req.params.id, req.user!.userId);
         if (!requesterRole) {
           throw new ForbiddenError('You must be a pod member to view the member list');
         }
       }
       const members = await podService.getPodMembers(req.params.id);
-      const response: ApiResponse = { success: true, data: members };
+      // Members see each other's public card, never emails or interests
+      // (Stefan, 9 Sep 2026). Admins keep the full row.
+      const response: ApiResponse = { success: true, data: isAdmin ? members : withoutEmail(members) };
       res.json(response);
     } catch (err) {
       next(err);

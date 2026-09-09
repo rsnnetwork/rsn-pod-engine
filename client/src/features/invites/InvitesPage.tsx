@@ -213,21 +213,24 @@ export default function InvitesPage() {
     onError: (err: any) => addToast(err?.response?.data?.error?.message || err?.message || 'Failed to create invite link', 'error'),
   });
 
+  // People picked from the "met before" list are invited by user id — the
+  // list no longer carries emails (9 Sep 2026); the server resolves them.
   const bulkInviteMutation = useMutation({
-    mutationFn: async (emails: string[]) => {
+    mutationFn: async (users: { id: string; displayName?: string }[]) => {
       if (needsTarget) { throw new Error('Please select a pod, event or circle first'); }
-      const results = [];
-      for (const email of emails) {
-        const payload: any = { type: inviteType, maxUses: 1, inviteeEmail: email };
+      const results: { name: string; ok: boolean; msg?: string }[] = [];
+      for (const u of users) {
+        const name = u.displayName || 'Member';
+        const payload: any = { type: inviteType, maxUses: 1, inviteeUserId: u.id };
         if (inviteType === 'pod') payload.podId = podId;
         if (inviteType === 'session') payload.sessionId = sessionId;
         if (inviteType === 'circle') payload.circleId = circleId;
         try {
           await api.post('/invites', payload);
-          results.push({ email, ok: true });
+          results.push({ name, ok: true });
         } catch (err: any) {
           const msg = err?.response?.data?.error?.message || 'Failed';
-          results.push({ email, ok: false, msg });
+          results.push({ name, ok: false, msg });
         }
       }
       return results;
@@ -237,7 +240,7 @@ export default function InvitesPage() {
       const failed = results.filter(r => !r.ok);
       const succeeded = results.filter(r => r.ok);
       if (succeeded.length > 0) addToast(`${succeeded.length} invite(s) sent!`, 'success');
-      failed.forEach(r => addToast(`${r.email}: ${r.msg}`, 'error'));
+      failed.forEach(r => addToast(`${r.name}: ${r.msg}`, 'error'));
       setSelectedUsers([]);
       setUserSearch('');
     },
@@ -526,7 +529,7 @@ export default function InvitesPage() {
                     <p className="text-xs text-gray-500">{selectedUsers.length} user(s) selected</p>
                     <Button
                       size="sm"
-                      onClick={() => bulkInviteMutation.mutate(selectedUsers.map(u => u.email))}
+                      onClick={() => bulkInviteMutation.mutate(selectedUsers)}
                       isLoading={bulkInviteMutation.isPending}
                       disabled={needsTarget}
                       className="w-full min-h-[44px]"

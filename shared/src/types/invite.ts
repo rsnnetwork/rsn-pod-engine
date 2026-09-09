@@ -37,6 +37,9 @@ export interface Invite {
 export interface CreateInviteInput {
   type: InviteType;
   inviteeEmail?: string;
+  /** Invite a member you picked from a list — the server resolves the
+   *  address, so member lists never need to carry emails (9 Sep 2026). */
+  inviteeUserId?: string;
   podId?: string;
   sessionId?: string;
   circleId?: string;

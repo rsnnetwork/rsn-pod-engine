@@ -6,6 +6,7 @@ import { authenticate } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import * as identityService from '../services/identity/identity.service';
 import { searchConnectedUsers } from '../services/invite/connected-users';
+import { toPublicMember } from '../services/user/public-card';
 import { searchMembers } from '../services/user/user-search.service';
 import * as blockService from '../services/block/block.service';
 import { getAvatarBlob } from '../services/onboarding/avatar.service';
@@ -157,11 +158,12 @@ router.get(
         return;
       }
       const rows = await searchConnectedUsers(req.user!.userId, q, limit);
-      // Map snake_case DB fields to camelCase for client consistency with /users/search
+      // Map snake_case DB fields to camelCase for client consistency with
+      // /users/search. No email for normal members (9 Sep 2026): invites
+      // from this list are sent by user id, not by address.
       const data = rows.map(u => ({
         id: u.id,
         displayName: u.display_name,
-        email: u.email,
         company: u.company,
         jobTitle: u.job_title,
         industry: u.industry,
@@ -242,32 +244,11 @@ router.get(
     try {
       const user = await identityService.getUserById(req.params.id);
 
-      // Non-admin users only see public profile
+      // Two cards (Stefan, 9 Sep 2026): the owner and admins get the full
+      // profile; anyone else gets the public card — who they are and what
+      // they offer, never why they're here.
       const isOwnerOrAdmin = req.user!.userId === user.id || hasRoleAtLeast(req.user!.role, UserRole.ADMIN);
-      const data = isOwnerOrAdmin
-        ? user
-        : {
-            id: user.id,
-            displayName: user.displayName,
-            firstName: user.firstName,
-            lastName: user.lastName,
-            avatarUrl: user.avatarUrl,
-            bio: user.bio,
-            company: user.company,
-            jobTitle: user.jobTitle,
-            industry: user.industry,
-            location: user.location,
-            linkedinUrl: user.linkedinUrl,
-            interests: user.interests,
-            reasonsToConnect: user.reasonsToConnect,
-            languages: user.languages,
-            expertiseText: user.expertiseText,
-            whatICareAbout: user.whatICareAbout,
-            whatICanHelpWith: user.whatICanHelpWith,
-            whoIWantToMeet: user.whoIWantToMeet,
-            whyIWantToMeet: user.whyIWantToMeet,
-            myIntent: user.myIntent,
-          };
+      const data = isOwnerOrAdmin ? user : toPublicMember(user);
 
       const response: ApiResponse = { success: true, data };
       res.json(response);

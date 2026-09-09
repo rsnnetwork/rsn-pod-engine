@@ -305,15 +305,18 @@ export default function PodDetailPage() {
     onError: (err: any) => addToast(getInviteErrorMessage(err), 'error'),
   });
 
+  // People picked from the "met before" list are invited by user id — the
+  // list no longer carries emails (9 Sep 2026); the server resolves them.
   const bulkPodInviteMutation = useMutation({
-    mutationFn: async (emails: string[]) => {
-      const results: { email: string; ok: boolean; msg?: string }[] = [];
-      for (const email of emails) {
+    mutationFn: async (users: { id: string; displayName?: string }[]) => {
+      const results: { name: string; ok: boolean; msg?: string }[] = [];
+      for (const u of users) {
+        const name = u.displayName || 'Member';
         try {
-          await api.post('/invites', { type: 'pod', podId, maxUses: 1, inviteeEmail: email, expiresInHours: 168 });
-          results.push({ email, ok: true });
+          await api.post('/invites', { type: 'pod', podId, maxUses: 1, inviteeUserId: u.id, expiresInHours: 168 });
+          results.push({ name, ok: true });
         } catch (err: any) {
-          results.push({ email, ok: false, msg: err?.response?.data?.error?.message || 'Failed' });
+          results.push({ name, ok: false, msg: err?.response?.data?.error?.message || 'Failed' });
         }
       }
       return results;
@@ -323,7 +326,7 @@ export default function PodDetailPage() {
       const succeeded = results.filter(r => r.ok);
       const failed    = results.filter(r => !r.ok);
       if (succeeded.length > 0) addToast(`${succeeded.length} invite(s) sent!`, 'success');
-      failed.forEach(r => addToast(`${r.email}: ${r.msg}`, 'error'));
+      failed.forEach(r => addToast(`${r.name}: ${r.msg}`, 'error'));
       setPodSelectedUsers([]);
       setPodUserSearch('');
     },
@@ -812,7 +815,7 @@ export default function PodDetailPage() {
                 <p className="text-xs text-gray-500">{podSelectedUsers.length} user(s) selected</p>
                 <Button
                   size="sm"
-                  onClick={() => bulkPodInviteMutation.mutate(podSelectedUsers.map(u => u.email))}
+                  onClick={() => bulkPodInviteMutation.mutate(podSelectedUsers)}
                   isLoading={bulkPodInviteMutation.isPending}
                   className="w-full"
                 >
@@ -1039,11 +1042,10 @@ export default function PodDetailPage() {
                     compact
                     user={{
                       id: m.userId || m.id,
-                      displayName: m.displayName || m.email || 'Member',
+                      displayName: m.displayName || 'Member',
                       avatarUrl: m.avatarUrl,
                       jobTitle: m.jobTitle,
                       company: m.company,
-                      interests: m.interests,
                     }}
                     badge={m.role === 'director' ? 'director' : m.role === 'host' ? 'host' : undefined}
                     badgeVariant={m.role === 'director' ? 'brand' : 'info'}

@@ -30,6 +30,14 @@ const INVITE_COLUMNS = `
 export async function createInvite(userId: string, input: CreateInviteInput, userRole?: string): Promise<Invite> {
   const code = generateCode();
 
+  // 9 Sep 2026: member lists no longer carry emails, so a pick from a list
+  // arrives as inviteeUserId — resolve the address here, before any check.
+  if (!input.inviteeEmail && input.inviteeUserId) {
+    const target = await query<{ email: string }>(`SELECT email FROM users WHERE id = $1`, [input.inviteeUserId]);
+    if (!target.rows[0]) throw new NotFoundError('User', input.inviteeUserId);
+    input = { ...input, inviteeEmail: target.rows[0].email };
+  }
+
   let expiresAt: Date | null = null;
   if (input.expiresInHours) {
     expiresAt = new Date(Date.now() + input.expiresInHours * 60 * 60 * 1000);

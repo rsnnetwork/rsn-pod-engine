@@ -1,7 +1,10 @@
 import Avatar from './Avatar';
 import Badge from './Badge';
-import { Briefcase, MapPin, Target, Users } from 'lucide-react';
+import { Briefcase, MapPin } from 'lucide-react';
 
+// Public card only (Stefan, 9 Sep 2026): who someone is and what they offer.
+// Why they're here (who they want to meet, intent, interests) is private to
+// them and admins and is never handed to this component.
 export interface ProfileCardData {
   id: string;
   displayName: string;
@@ -13,10 +16,7 @@ export interface ProfileCardData {
   jobTitle?: string | null;
   industry?: string | null;
   location?: string | null;
-  interests?: string[];
   expertiseText?: string | null;
-  whoIWantToMeet?: string | null;
-  myIntent?: string | null;
 }
 
 interface ProfileCardProps {
@@ -47,16 +47,6 @@ export default function ProfileCard({ user, compact = false, className = '', onC
             </p>
           )}
         </div>
-        {user.interests && user.interests.length > 0 && (
-          <div className="hidden sm:flex gap-1">
-            {user.interests.slice(0, 2).map(tag => (
-              <span key={tag} className="inline-block rounded-full bg-rsn-red-light text-rsn-red px-2 py-0.5 text-[10px] font-medium">{tag}</span>
-            ))}
-            {user.interests.length > 2 && (
-              <span className="text-[10px] text-gray-400">+{user.interests.length - 2}</span>
-            )}
-          </div>
-        )}
       </div>
     );
   }
@@ -91,34 +81,8 @@ export default function ProfileCard({ user, compact = false, className = '', onC
         <p className="text-sm text-gray-600 line-clamp-4 mb-2 leading-relaxed">{user.bio}</p>
       )}
 
-      {user.interests && user.interests.length > 0 && (
-        <div className="flex flex-wrap gap-1 mb-2">
-          {user.interests.slice(0, 5).map(tag => (
-            <span key={tag} className="inline-block rounded-full bg-rsn-red-light text-rsn-red px-2.5 py-0.5 text-[10px] font-medium">
-              {tag}
-            </span>
-          ))}
-          {user.interests.length > 5 && (
-            <span className="text-[10px] text-gray-400 self-center">+{user.interests.length - 5}</span>
-          )}
-        </div>
-      )}
-
-      {(user.whoIWantToMeet || user.myIntent) && (
-        <div className="border-t border-gray-100 pt-2 mt-2 space-y-1">
-          {user.whoIWantToMeet && (
-            <p className="text-xs text-gray-600 flex items-start gap-1">
-              <Users className="h-3 w-3 shrink-0 mt-0.5 text-gray-400" />
-              <span className="line-clamp-2">{user.whoIWantToMeet}</span>
-            </p>
-          )}
-          {user.myIntent && (
-            <p className="text-xs text-gray-600 flex items-start gap-1">
-              <Target className="h-3 w-3 shrink-0 mt-0.5 text-gray-400" />
-              <span className="line-clamp-2">{user.myIntent}</span>
-            </p>
-          )}
-        </div>
+      {user.expertiseText && (
+        <p className="border-t border-gray-100 pt-2 mt-2 text-xs text-gray-600 line-clamp-2">{user.expertiseText}</p>
       )}
     </div>
   );

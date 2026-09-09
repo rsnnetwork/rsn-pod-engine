@@ -340,16 +340,19 @@ export default function SessionDetailPage() {
     enabled: debouncedUserSearch.length >= 1 && isHost,
   });
 
+  // People picked from the "met before" list are invited by user id — the
+  // list no longer carries emails (9 Sep 2026); the server resolves them.
   const bulkInviteMutation = useMutation({
-    mutationFn: async (emails: string[]) => {
-      const results: { email: string; ok: boolean; msg?: string }[] = [];
-      for (const email of emails) {
+    mutationFn: async (users: { id: string; displayName?: string }[]) => {
+      const results: { name: string; ok: boolean; msg?: string }[] = [];
+      for (const u of users) {
+        const name = u.displayName || 'Member';
         try {
-          await api.post('/invites', { type: 'session', sessionId, maxUses: 1, inviteeEmail: email });
-          results.push({ email, ok: true });
+          await api.post('/invites', { type: 'session', sessionId, maxUses: 1, inviteeUserId: u.id });
+          results.push({ name, ok: true });
         } catch (err: any) {
           const msg = err?.response?.data?.error?.message || 'Failed to send invite';
-          results.push({ email, ok: false, msg });
+          results.push({ name, ok: false, msg });
         }
       }
       return results;
@@ -359,7 +362,7 @@ export default function SessionDetailPage() {
       const succeeded = results.filter(r => r.ok);
       const failed = results.filter(r => !r.ok);
       if (succeeded.length > 0) addToast(`${succeeded.length} invite(s) sent!`, 'success');
-      failed.forEach(r => addToast(`${r.email}: ${r.msg}`, 'error'));
+      failed.forEach(r => addToast(`${r.name}: ${r.msg}`, 'error'));
       setSelectedUsers([]);
       setUserSearch('');
     },
@@ -997,7 +1000,7 @@ export default function SessionDetailPage() {
                   <p className="text-xs text-gray-500">{selectedUsers.length} user(s) selected</p>
                   <Button
                     size="sm"
-                    onClick={() => bulkInviteMutation.mutate(selectedUsers.map(u => u.email))}
+                    onClick={() => bulkInviteMutation.mutate(selectedUsers)}
                     isLoading={bulkInviteMutation.isPending}
                     className="w-full"
                   >
