@@ -137,6 +137,19 @@ test('confirming a meeting pins an exact local time + duration and offers a cale
   await expect.poll(inFrame, { message: 'the typed time is scrolled into the frame' }).toBe(true);
   await page.screenshot({ path: `shots/meeting/15-timeline-typed-time-${engineLabel()}.png` }).catch(() => {});
   await expect(early).toContainText(new Date(EARLY).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+
+  // The panel closes on a click anywhere outside it (the composer here) and
+  // on Escape; reopening brings back the unsaved pick and the typed length.
+  await page.getByPlaceholder(/Type a message/i).click();
+  await expect(page.getByTestId('meeting-scheduler')).toHaveCount(0);
+  await openScheduler();
+  await expect(page.locator(`[data-slot="${EARLY}"]`)).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#meeting-minutes')).toHaveValue('10');
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('meeting-scheduler')).toHaveCount(0);
+  await openScheduler();
+  await expect(page.locator(`[data-slot="${EARLY}"]`)).toHaveAttribute('aria-pressed', 'true');
+
   await page.getByRole('button', { name: /Save availability/i }).click();
   await expect(page.getByText(/Availability saved/i)).toBeVisible({ timeout: 15_000 });
   const saved = await apiAs(a, 'GET', `/dm/conversations/${convId}/scheduling`);
