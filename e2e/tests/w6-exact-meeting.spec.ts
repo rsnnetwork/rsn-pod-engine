@@ -124,6 +124,7 @@ test('confirming a meeting pins an exact local time + duration and offers a cale
   await page.getByRole('button', { name: /^Add time$/ }).click();
   await expect(early).toHaveAttribute('aria-pressed', 'true');
   await expect.poll(inFrame, { message: 'the typed time is scrolled into the frame' }).toBe(true);
+  await page.screenshot({ path: `shots/meeting/15-timeline-typed-time-${engineLabel()}.png` }).catch(() => {});
   await expect(early).toContainText(new Date(EARLY).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
   await page.getByRole('button', { name: /Save availability/i }).click();
   await expect(page.getByText(/Availability saved/i)).toBeVisible({ timeout: 15_000 });
