@@ -99,7 +99,8 @@ function nextDays(n: number): Date[] {
   return out;
 }
 
-/** Every 30-minute slot of one local day, 08:00–19:30, as UTC-instant keys. */
+/** The quick-tap slots of one local day, 08:00–19:30, as UTC-instant keys.
+ *  Any other time of day is added through the custom time field (Ali, 9 Sep). */
 function daySlots(day: Date): string[] {
   const out: string[] = [];
   for (let h = DAY_START_HOUR; h < DAY_END_HOUR; h++) {
@@ -108,6 +109,25 @@ function daySlots(day: Date): string[] {
     }
   }
   return out;
+}
+
+/** Local calendar day of a Date / slot key: 'YYYY-MM-DD' in the viewer's zone. */
+function localDayKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function dayOfKey(iso: string): string {
+  return localDayKey(new Date(iso));
+}
+
+/** 'HH:MM' typed into the custom field → a half-hour slot on that local day, or null. */
+function customSlot(day: Date, hhmm: string): string | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  const rounded = Math.round(min / SLOT_MINUTES) * SLOT_MINUTES; // 60 rolls into the next hour
+  return slotKey(new Date(day.getFullYear(), day.getMonth(), day.getDate(), h, rounded));
 }
 
 /** A slot is in the past once its own half hour has gone by. */
@@ -202,6 +222,7 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
   const [meetingKind, setMeetingKind] = useState<'audio' | 'video'>('video');
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [showAllOverlap, setShowAllOverlap] = useState(false);
+  const [customTime, setCustomTime] = useState('');
 
   const { data, isLoading } = useQuery<Scheduling>({
     queryKey: ['meetingScheduling', conversationId],
@@ -220,7 +241,10 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
   }, [data]);
 
   const days = useMemo(() => nextDays(DAYS_AHEAD), []);
-  const slotsByDay = useMemo(() => days.map(d => ({ day: d, key: slotKey(d), slots: daySlots(d) })), [days]);
+  const slotsByDay = useMemo(
+    () => days.map(d => ({ day: d, key: slotKey(d), dayKey: localDayKey(d), defaults: daySlots(d) })),
+    [days],
+  );
 
   const mine = staged ?? new Set((data?.mine ?? []).filter(isSlotKey));
   const theirSet = useMemo(() => new Set((data?.theirs ?? []).filter(isSlotKey)), [data]);
@@ -228,12 +252,14 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
   // Until the member picks a day, open on the first day where you both can,
   // else where they can, else the first day that still has a free slot — so
   // what matters is visible at once. Derived (not an effect) so the strip
-  // never paints today first and then jumps.
+  // never paints today first and then jumps. Custom (off-grid) times count.
   const autoDay = useMemo(() => {
-    const savedMineSet = new Set((data?.mine ?? []).filter(isSlotKey));
-    const both = slotsByDay.find(d => d.slots.some(k => savedMineSet.has(k) && theirSet.has(k)));
-    const theirs = slotsByDay.find(d => d.slots.some(k => theirSet.has(k)));
-    const open = slotsByDay.find(d => d.slots.some(k => !isPastSlot(k)));
+    const savedMine = (data?.mine ?? []).filter(isSlotKey);
+    const bothDays = new Set(savedMine.filter(k => theirSet.has(k)).map(dayOfKey));
+    const theirDays = new Set([...theirSet].map(dayOfKey));
+    const both = slotsByDay.find(d => bothDays.has(d.dayKey));
+    const theirs = slotsByDay.find(d => theirDays.has(d.dayKey));
+    const open = slotsByDay.find(d => d.defaults.some(k => !isPastSlot(k)));
     return (both ?? theirs ?? open ?? slotsByDay[0]).key;
   }, [data, slotsByDay, theirSet]);
 
@@ -248,11 +274,26 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
   // sides have actually saved, not an unsaved local tap.
   const savedOverlap = data.overlap.filter(isSlotKey).filter(k => !isPastSlot(k)).sort();
   const current = slotsByDay.find(d => d.key === (selectedDay ?? autoDay)) ?? slotsByDay[0];
+  // The day's grid: the quick-tap times plus any custom time either of you
+  // added on this day, in time order (ISO keys sort chronologically).
+  const extras = [...new Set([...mine, ...theirSet])]
+    .filter(k => dayOfKey(k) === current.dayKey && !current.defaults.includes(k));
+  const slots = [...current.defaults, ...extras].sort();
 
   const toggle = (key: string) => {
     const next = new Set(mine);
     if (next.has(key)) next.delete(key); else next.add(key);
     setStaged(next);
+  };
+
+  // Any time of day (Ali, 9 Sep): type it, it becomes a selected chip on
+  // this day. Half-hour steps so two people can land on the same instant.
+  const addCustomTime = () => {
+    const key = customSlot(current.day, customTime);
+    if (!key) { addToast('Enter a time like 21:30.', 'error'); return; }
+    if (isPastSlot(key)) { addToast('That time has already passed.', 'error'); return; }
+    if (!mine.has(key)) setStaged(new Set([...mine, key]));
+    setCustomTime('');
   };
 
   const save = async () => {
@@ -380,10 +421,11 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
 
         {/* Day strip: the next 7 days; a dot shows where picks already are. */}
         <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1" role="tablist" aria-label="Day">
-          {slotsByDay.map(({ day, key, slots }) => {
-            const both = slots.some(k => mine.has(k) && theirSet.has(k));
-            const iHave = slots.some(k => mine.has(k));
-            const theyHave = slots.some(k => theirSet.has(k));
+          {slotsByDay.map(({ day, key, dayKey }) => {
+            const onDay = (k: string) => dayOfKey(k) === dayKey;
+            const both = [...mine].some(k => onDay(k) && theirSet.has(k));
+            const iHave = [...mine].some(onDay);
+            const theyHave = [...theirSet].some(onDay);
             const active = key === current.key;
             return (
               <button
@@ -414,7 +456,7 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
 
         {/* The selected day's times. */}
         <div className="grid grid-cols-3 gap-1.5 min-[420px]:grid-cols-4 md:grid-cols-6" data-testid="slot-grid">
-          {current.slots.map(key => {
+          {slots.map(key => {
             const past = isPastSlot(key);
             const iPicked = mine.has(key);
             const theyPicked = theirSet.has(key);
@@ -444,6 +486,30 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
               </button>
             );
           })}
+        </div>
+
+        {/* Any other time of day — early, late, whatever suits you (Ali, 9 Sep). */}
+        <div className="flex flex-wrap items-center gap-2" data-testid="custom-time">
+          <label htmlFor="custom-time" className="text-[11px] font-medium text-gray-600">Another time on {localDay(current.day)}</label>
+          <input
+            id="custom-time"
+            type="time"
+            step={SLOT_MINUTES * 60}
+            value={customTime}
+            onChange={e => setCustomTime(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCustomTime(); } }}
+            aria-label="Another time, 24-hour"
+            className="h-11 rounded-lg border border-gray-200 bg-white px-2 text-sm text-gray-800"
+          />
+          <button
+            type="button"
+            onClick={addCustomTime}
+            disabled={!customTime}
+            className="min-h-[44px] rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+          >
+            Add time
+          </button>
+          <span className="text-[11px] text-gray-400">Any hour of the day, in half-hour steps.</span>
         </div>
       </div>
 

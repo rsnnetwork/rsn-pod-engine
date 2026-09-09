@@ -105,6 +105,23 @@ test('confirming a meeting pins an exact local time + duration and offers a cale
   // right day, the chip is labelled in local time, and confirming asks only
   // for a custom length + audio/video — the exact time is shown before commit.
   await expect(page.getByTestId('slot-grid').getByText('Both can').first()).toBeVisible({ timeout: 20_000 });
+
+  // Any time of day (Ali, 9 Sep): a time outside the quick grid, typed into
+  // the 24-hour field, becomes a selected chip on this day and saves.
+  const keyDay = new Date(KEY);
+  const EARLY = new Date(keyDay.getFullYear(), keyDay.getMonth(), keyDay.getDate(), 6, 30).toISOString().replace('.000Z', 'Z');
+  await page.locator('#custom-time').fill('06:30');
+  await page.getByRole('button', { name: /^Add time$/ }).click();
+  const early = page.locator(`[data-slot="${EARLY}"]`);
+  await expect(early).toBeVisible();
+  await expect(early).toHaveAttribute('aria-pressed', 'true');
+  await expect(early).toContainText(new Date(EARLY).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+  await page.getByRole('button', { name: /Save availability/i }).click();
+  await expect(page.getByText(/Availability saved/i)).toBeVisible({ timeout: 15_000 });
+  const saved = await apiAs(a, 'GET', `/dm/conversations/${convId}/scheduling`);
+  expect(saved.json.data.mine).toContain(EARLY);
+  expect(saved.json.data.mine).toContain(KEY);
+
   const chip = page.getByRole('button', { name: /^Confirm / }).first();
   const localLabel = new Date(KEY).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   await page.screenshot({ path: `shots/meeting/13-scheduler-slots-${engineLabel()}.png` }).catch(() => {});
