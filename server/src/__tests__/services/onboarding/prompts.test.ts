@@ -1,4 +1,4 @@
-import { buildHostSystemPrompt, EXTRACTION_PROMPT, memberHasGoneQuiet } from '../../../services/onboarding/prompts';
+import { buildHostSystemPrompt, EXTRACTION_PROMPT, memberHasGoneQuiet, MAX_HOST_QUESTIONS } from '../../../services/onboarding/prompts';
 
 const EM_OR_EN_DASH = /[—–]/;
 
@@ -104,7 +104,7 @@ describe('onboarding prompts (v1.1)', () => {
       expect(low).toContain('as a statement, never as a question');
       expect(p).toContain('less about finding the next company, and more about what deserves to be next.');
       expect(p).toContain('the hire is the whole expansion');
-      expect(low).toContain('at most one short follow-up per opening');
+      expect(low).toContain('at most one short follow-up in the whole chat');
     });
 
     // 10 Sep 2026 (Ali's own chat): "idk yet" / "football" / "game" / "yes" /
@@ -119,19 +119,29 @@ describe('onboarding prompts (v1.1)', () => {
       expect(buildHostSystemPrompt(undefined, 'hard').toLowerCase()).toContain('answered in a word or two twice in a row');
     });
 
-    it('memberHasGoneQuiet: two short answers in a row after the second opening', () => {
+    it('memberHasGoneQuiet: two short answers in a row once a second question has been asked', () => {
       const h = (c: string) => ({ role: 'assistant' as const, content: c });
       const m = (c: string) => ({ role: 'user' as const, content: c });
       const opening = h('Do you mind sharing what brought you here?');
       // Only the opening asked: never quiet yet, even on a one-word answer.
       expect(memberHasGoneQuiet([opening, m('idk yet')])).toBe(false);
-      // Second opening asked, two short answers: quiet.
-      expect(memberHasGoneQuiet([opening, m('idk yet'), h('What has your attention?'), m('football'), h('What draws you?'), m('game')])).toBe(true);
+      // A second question asked, two short answers: quiet.
+      expect(memberHasGoneQuiet([opening, m('idk yet'), h('What has your attention?'), m('football')])).toBe(true);
       // A real answer in between resets it.
       expect(memberHasGoneQuiet([opening, m('idk yet'), h('What has your attention?'), m('I coach a youth team on weekends and want to find a sponsor'), h('Who?'), m('yes')])).toBe(false);
-      // Three words is still short; four is not.
-      expect(memberHasGoneQuiet([opening, m('not sure yet'), h('Q2?'), m('mostly the game'), h('Q3?'), m('yes')])).toBe(true);
-      expect(memberHasGoneQuiet([opening, m('not sure yet'), h('Q2?'), m('mostly the game I think'), h('Q3?'), m('yes')])).toBe(false);
+      // Four words is still short; five is not. Punctuation is not a word.
+      expect(memberHasGoneQuiet([opening, m('not sure yet'), h('Q2?'), m('its my hobby !')])).toBe(true);
+      expect(memberHasGoneQuiet([opening, m('not sure yet'), h('Q2?'), m('mostly the game I think')])).toBe(false);
+      // 11 Sep 2026, Ali's chat: "yeas" then "its my hobby !" must end it.
+      expect(memberHasGoneQuiet([opening, m('i need to see people in fish farming'), h('Q2?'), m('i want to learn, i am not yet'), h('Q3?'), m('yeas'), h('Q4?'), m('its my hobby !')])).toBe(true);
+    });
+
+    it('the budget is four questions: three openings and one follow-up', () => {
+      expect(MAX_HOST_QUESTIONS).toBe(4);
+      const low = buildHostSystemPrompt().toLowerCase();
+      expect(low).toContain('at most four questions in the whole chat');
+      expect(low).toContain('at most one follow-up in total');
+      expect(low).toContain('a garbled or unclear answer is not a reason for another question');
     });
 
     it('the closing names the kind of person we will look for, in their words', () => {
@@ -255,8 +265,8 @@ describe('onboarding prompts (v1.1)', () => {
       expect(p.toLowerCase()).toContain('at most three words');
       expect(p.toLowerCase()).toContain('at most 15 words');
       expect(p.toLowerCase()).toContain('never offer alternatives inside the question');
-      // 10 Sep 2026 (Claus): three openings plus at most three follow-ups.
-      expect(p.toLowerCase()).toContain('at most six questions in the whole chat');
+      // 11 Sep 2026: three openings plus one follow-up in total.
+      expect(p.toLowerCase()).toContain('at most four questions in the whole chat');
       expect(p.toLowerCase()).toContain('accept brief answers as final');
     });
 

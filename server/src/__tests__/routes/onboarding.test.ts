@@ -525,7 +525,7 @@ describe('POST /onboarding/chat question budget', () => {
       .send({ messages: host(3) });
     const args = (chatbot.converse as jest.Mock).mock.calls[0];
     expect(args[2]).toBe('none');
-    expect(args[5]).toEqual({ asked: 3, max: 6 });
+    expect(args[5]).toEqual({ asked: 3, max: 4 });
   });
 
   it('forces a hard wrap when the member has answered in a word or two twice in a row', async () => {
@@ -545,16 +545,16 @@ describe('POST /onboarding/chat question budget', () => {
     expect((chatbot.converse as jest.Mock).mock.calls[0][2]).toBe('hard');
   });
 
-  it('forces a hard wrap once six host questions have been asked', async () => {
+  it('forces a hard wrap once four host questions have been asked', async () => {
     (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
     (chatbot.converse as jest.Mock).mockResolvedValue({ reply: 'Thanks. <<READY>>', ready: true });
     await request(app)
       .post('/onboarding/chat')
       .set('Authorization', `Bearer ${makeToken('user-budget-2')}`)
-      .send({ messages: host(6) });
+      .send({ messages: host(4) });
     const args = (chatbot.converse as jest.Mock).mock.calls[0];
     expect(args[2]).toBe('hard');
-    expect(args[5]).toEqual({ asked: 6, max: 6 });
+    expect(args[5]).toEqual({ asked: 4, max: 4 });
   });
 });
 

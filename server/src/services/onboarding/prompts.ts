@@ -13,20 +13,28 @@ import { OnboardingMessage, OnboardingConfirmedProfile, OnboardingOpening } from
 /** Silent signal the host appends once it has everything and has summarised. */
 export const READY_TOKEN = '<<READY>>';
 
-/** Three openings plus at most one follow-up each. Enforced by POST /chat. */
-export const MAX_HOST_QUESTIONS = 6;
+/**
+ * Three openings plus ONE follow-up in the whole chat. Enforced by POST /chat.
+ * 11 Sep 2026 (Ali, twice): six was too many; with a small model every spare
+ * question became a clarifying poke ("what level?", "or both?").
+ */
+export const MAX_HOST_QUESTIONS = 4;
 
 /**
- * A member answering in a word or two is not teasing material (Ali, 10 Sep:
- * "idk yet" / "football" / "game" / "yes" / "idk" drew six questions in a row).
- * Once the second opening has been asked, two such answers in a row end the
- * questions: the route forces the wrap. `messages` is the whole transcript.
+ * A member answering in a few words is not teasing material (Ali, 10 Sep:
+ * "idk yet" / "football" / "game" / "yes" / "idk"; 11 Sep: "yeas" / "its my
+ * hobby !" / "thats it"). Once the opening and one more question have been
+ * asked, two such answers in a row end the questions: the route forces the
+ * wrap. Words are alphanumeric tokens, so "!" does not count as one.
+ * `messages` is the whole transcript.
  */
-export const THIN_ANSWER_WORDS = 3;
+export const THIN_ANSWER_WORDS = 4;
 export function memberHasGoneQuiet(messages: OnboardingMessage[]): boolean {
   const asked = messages.filter((m) => m.role === 'assistant').length;
-  if (asked < 3) return false;
-  const answers = messages.filter((m) => m.role === 'user').map((m) => m.content.trim().split(/\s+/).filter(Boolean).length);
+  if (asked < 2) return false;
+  const answers = messages
+    .filter((m) => m.role === 'user')
+    .map((m) => m.content.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length);
   const last = answers.slice(-2);
   return last.length === 2 && last.every((n) => n <= THIN_ANSWER_WORDS);
 }
@@ -139,12 +147,12 @@ The conversation is three open questions. The opening has already been asked (wh
 
 Each question is written for this one person: never a stock sentence, never a template with their detail bolted on the end. If the question would only make sense to this person, it is right. If it could be sent to anyone, rewrite it.
 
-Between openings, at most one short follow-up per opening, and only when their answer had substance but left something open. A one word or one line answer is final: never follow it up, never ask them to expand, narrow or explain it, never fish for facts with closed questions (are you playing, what level, which one). Move on to the next opening instead. If two answers in a row are that short, they do not want to talk right now: stop asking, summarise what you have, and say they can tell us more whenever they like. Never re-ask anything already answered or already known. If they mention a language, a competitor or a geography they would rather avoid, or someone they want to invite, take note; never ask for these.
+Between openings, at most one short follow-up in the whole chat, and only when their answer had substance but left something open. A one word or one line answer is final: never follow it up, never ask them to expand, narrow or explain it, never fish for facts with closed questions (are you playing, what level, which one). Move on to the next opening instead. If two answers in a row are that short, they do not want to talk right now: stop asking, summarise what you have, and say they can tell us more whenever they like. Never re-ask anything already answered or already known. If they mention a language, a competitor or a geography they would rather avoid, or someone they want to invite, take note; never ask for these.
 
 Be efficient without being cold. Never make the member feel interrogated:
 - Sound like a person who is interested, not a form. Let their last answer shape the next question, without quoting it.
 - Accept brief answers as final. "Both", "yes", one word: that is the answer. Never ask them to narrow it, rank it, or choose between options you invented. People are busy.
-- Ask at most six questions in the whole chat, counting the opening: three openings and at most three follow-ups.${progressLine}
+- Ask at most four questions in the whole chat, counting the opening: the three openings and at most one follow-up in total. A garbled or unclear answer is not a reason for another question; take what you can from it and move on.${progressLine}
 - Once the third opening has an answer, stop asking and summarise. Always err on the side of wrapping up sooner rather than later. If their answers already cover all three, go straight to the summary.
 - If the member clearly wants to keep talking, let them, but never prolong it yourself.
 - Never mention profiles, fields, data, or matching. Just talk.

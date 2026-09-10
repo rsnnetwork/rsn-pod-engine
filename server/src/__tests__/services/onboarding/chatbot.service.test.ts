@@ -158,6 +158,37 @@ describe('chatbot.service', () => {
     });
   });
 
+  // 11 Sep 2026 (Ali's chat): at the cap the model asked a seventh question. The
+  // server closes the chat itself when the model will not.
+  describe('hard wrap is enforced by the server', () => {
+    beforeEach(() => mockCreate.mockReset());
+
+    it('asks once more for the closing only when the model ignores the hard wrap, and uses it', async () => {
+      mockCreate
+        .mockResolvedValueOnce({ content: [{ type: 'text', text: 'Then who would actually help you get into it?' }] })
+        .mockResolvedValueOnce({ content: [{ type: 'text', text: "You're exploring fish farming. We'll look for people with hands-on experience in it. " + READY_TOKEN }] });
+      const turn = await converse(history, undefined, 'hard');
+      expect(mockCreate).toHaveBeenCalledTimes(2);
+      expect(mockCreate.mock.calls[1][0].system).toContain('CLOSING ONLY');
+      expect(turn.ready).toBe(true);
+      expect(turn.reply).toBe("You're exploring fish farming. We'll look for people with hands-on experience in it.");
+    });
+
+    it('closes for the model if it still will not: drops the trailing question and marks the turn ready', async () => {
+      mockCreate.mockResolvedValue({ content: [{ type: 'text', text: "You're exploring fish farming as a hobby. Who would actually help you get into it?" }] });
+      const turn = await converse(history, undefined, 'hard');
+      expect(turn.ready).toBe(true);
+      expect(turn.reply).toBe("You're exploring fish farming as a hobby.");
+    });
+
+    it('a hard wrap the model honours goes out untouched, one call', async () => {
+      mockCreate.mockResolvedValue({ content: [{ type: 'text', text: 'Here is what we heard. ' + READY_TOKEN }] });
+      const turn = await converse(history, undefined, 'hard');
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+      expect(turn).toEqual({ reply: 'Here is what we heard.', ready: true });
+    });
+  });
+
   describe('style guard', () => {
     beforeEach(() => mockCreate.mockReset());
 

@@ -129,6 +129,27 @@ export async function converse(
 ): Promise<{ reply: string; ready: boolean }> {
   const system = buildHostSystemPrompt(profile, wrapMode, extra, effectiveOpening, progress);
   const first = await askHost(system, messages);
+  // 11 Sep 2026 (Ali's chat): at the question cap the model asked a seventh
+  // question anyway. A hard wrap is the server's decision, not the model's:
+  // ask once more for the closing only; if it still will not close, close
+  // for it (drop a trailing question and mark the turn ready).
+  if (wrapMode === 'hard' && !first.ready) {
+    logger.warn({ draft: first.reply.slice(0, 160) }, 'onboarding host: ignored the hard wrap, asking for the closing only');
+    let closing = first;
+    try {
+      closing = await askHost(
+        system + `\n\nCLOSING ONLY. You have asked everything you may ask. Do not ask a question. Write the closing summary now in one or two warm sentences, naming the kind of person we will look for (if there is little, say we will go with what they gave us and they can tell us more whenever they like), then the token ${READY_TOKEN} on its own final line.`,
+        messages,
+      );
+    } catch (err) {
+      logger.warn({ err }, 'onboarding host: closing call failed, closing with the first draft');
+    }
+    if (closing.ready) return closing;
+    const sentences = closing.reply.split(/(?<=[.!?])\s+/).filter(Boolean);
+    while (sentences.length > 1 && /\?\s*$/.test(sentences[sentences.length - 1])) sentences.pop();
+    const reply = sentences.join(' ').trim() || 'Thank you, that is everything we need.';
+    return { reply, ready: true };
+  }
   const broken = styleViolations(first.reply, first.ready);
   if (broken.length === 0) return first;
 
