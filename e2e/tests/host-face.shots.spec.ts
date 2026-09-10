@@ -57,11 +57,12 @@ for (const [label, viewport] of [['phone390', { width: 390, height: 844 }], ['de
     await expect(page.locator('textarea[aria-label="Your answer"]')).toBeVisible({ timeout: 30_000 });
     const face = page.getByTestId('host-face').first();
     await expect(face).toBeVisible();
+    // The face springs in from 60%; wait for it to settle before measuring.
+    await expect.poll(async () => (await face.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(36);
     const box = await face.boundingBox();
-    expect(box!.width).toBeGreaterThanOrEqual(36);
     expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width);
-    // A face, not a dot: eyes, a nose and lips are drawn.
-    expect(await face.locator('svg ellipse').count()).toBe(2);
+    // A face, not a dot: two eyes (plus a gloss highlight), a nose and lips are drawn.
+    expect(await face.locator('svg ellipse').count()).toBeGreaterThanOrEqual(2);
     expect(await face.locator('svg path').count()).toBeGreaterThanOrEqual(3);
     await page.screenshot({ path: `shots/onboarding/host-face-${label}.png` }).catch(() => {});
     await face.screenshot({ path: `shots/onboarding/host-face-${label}-closeup.png` }).catch(() => {});
