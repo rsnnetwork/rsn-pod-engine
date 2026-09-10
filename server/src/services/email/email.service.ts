@@ -20,6 +20,31 @@ function getResendClient(): Resend {
   return resend;
 }
 
+// ─── Shared shell (11 Sep 2026, Ali: "a border and a beautiful UI, more engaging") ──
+// Every email opens on the dark brand band with the white logo and a red accent
+// strip, inside a bordered card, and closes on a link back to the app. The
+// words of each email are untouched; only the shell is shared.
+export function emailCardOpen(): string {
+  return [
+    `<div style="background:#ffffff;border-radius:16px;border:1px solid #dfe3ea;overflow:hidden;box-shadow:0 10px 30px rgba(26,26,46,0.08);">`,
+    `<div style="background:#1a1a2e;padding:28px 32px 22px 32px;text-align:center;">`,
+    `<img src="${config.clientUrl}/rsn-logo-white.png" alt="RSN" width="150" height="auto" style="display:block;margin:0 auto;" />`,
+    `<p style="color:#f3b6b2;font-size:12px;letter-spacing:2px;text-transform:uppercase;margin:14px 0 0 0;">Connect with Reason</p>`,
+    `</div>`,
+    `<div style="height:4px;background:#DE322E;font-size:0;line-height:0;">&nbsp;</div>`,
+    `<div style="padding:36px 32px 32px 32px;">`,
+  ].join("");
+}
+export function emailCardClose(): string {
+  return [
+    `</div>`,
+    `<div style="border-top:1px solid #f0f2f5;padding:16px 32px;text-align:center;">`,
+    `<a href="${config.clientUrl}" style="color:#DE322E;font-size:12px;font-weight:600;letter-spacing:0.5px;text-decoration:none;">app.rsn.network</a>`,
+    `</div>`,
+    `</div>`,
+  ].join("");
+}
+
 // Centralized email sender with deliverability best-practices headers
 async function sendEmail(opts: {
   to: string;
@@ -100,11 +125,9 @@ export async function sendMagicLinkEmail(
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
-          <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
+        ${emailCardOpen()}
           
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
             Click the button below to sign in to your account. This link expires in ${config.magicLinkExpiryMinutes} minutes.
@@ -112,7 +135,7 @@ export async function sendMagicLinkEmail(
           
           <div style="text-align:center;margin:32px 0;">
             <a href="${magicLinkUrl}" 
-               style="display:inline-block;background:#DE322E;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
+               style="display:inline-block;background:#DE322E;border:1px solid #c22a26;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
               Sign In
             </a>
           </div>
@@ -123,9 +146,8 @@ export async function sendMagicLinkEmail(
           <p style="color:#DE322E;font-size:12px;word-break:break-all;margin:8px 0 0 0;">
             ${magicLinkUrl}
           </p>
-        </div>
-        
-        <p style="color:#475569;font-size:12px;text-align:center;margin:24px 0 0 0;">
+        ${emailCardClose()}
+        <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
           If you didn't request this email, you can safely ignore it.
         </p>
       </div>
@@ -170,10 +192,9 @@ export async function sendSessionRecapEmail(
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
+        ${emailCardOpen()}
           <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Event Recap</p>
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">
@@ -205,13 +226,12 @@ export async function sendSessionRecapEmail(
 
           <div style="text-align:center;margin:32px 0;">
             <a href="${data.recapUrl}"
-               style="display:inline-block;background:#DE322E;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
+               style="display:inline-block;background:#DE322E;border:1px solid #c22a26;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
               View Full Recap
             </a>
           </div>
-        </div>
-
-        <p style="color:#475569;font-size:12px;text-align:center;margin:24px 0 0 0;">
+        ${emailCardClose()}
+        <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
           RSN — Connect with Reason
         </p>
       </div>
@@ -248,10 +268,9 @@ export async function sendDmNotificationEmail(
   const subject = `${data.senderName} sent you a message on RSN`;
   const html = `
     <!DOCTYPE html><html><head><meta charset="utf-8"></head>
-    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:#fff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
+        ${emailCardOpen()}
           <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">New message</p>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">Hey ${recipientDisplayName},</p>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
@@ -262,12 +281,12 @@ export async function sendDmNotificationEmail(
           </div>
           <div style="text-align:center;margin:24px 0;">
             <a href="${data.threadUrl}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 32px;border-radius:8px;">View Message</a>
-          </div>
-          <p style="color:#9ca3af;font-size:12px;text-align:center;margin:24px 0 0 0;">
+          ${emailCardClose()}
+        <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
             You're receiving this because someone messaged you on RSN.
             You can change your notification preferences in Settings.
           </p>
-        </div>
+        ${emailCardClose()}
       </div>
     </body></html>`;
 
@@ -314,10 +333,9 @@ export async function sendHostRecapEmail(
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
+        ${emailCardOpen()}
           <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Host Event Recap</p>
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">
@@ -362,13 +380,12 @@ export async function sendHostRecapEmail(
 
           <div style="text-align:center;margin:32px 0;">
             <a href="${data.recapUrl}"
-               style="display:inline-block;background:#DE322E;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
+               style="display:inline-block;background:#DE322E;border:1px solid #c22a26;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
               View Full Recap
             </a>
           </div>
-        </div>
-
-        <p style="color:#475569;font-size:12px;text-align:center;margin:24px 0 0 0;">
+        ${emailCardClose()}
+        <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
           RSN — Connect with Reason
         </p>
       </div>
@@ -443,11 +460,9 @@ export function buildInviteEmail(data: InviteEmailData): { subject: string; html
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
-          <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
+        ${emailCardOpen()}
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
             ${openingHtml}
@@ -459,7 +474,7 @@ export function buildInviteEmail(data: InviteEmailData): { subject: string; html
 
           <div style="text-align:center;margin:32px 0;">
             <a href="${data.inviteUrl}"
-               style="display:inline-block;background:#DE322E;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
+               style="display:inline-block;background:#DE322E;border:1px solid #c22a26;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
               Accept Invite
             </a>
           </div>
@@ -470,9 +485,8 @@ export function buildInviteEmail(data: InviteEmailData): { subject: string; html
           <p style="color:#DE322E;font-size:12px;word-break:break-all;margin:8px 0 0 0;">
             ${data.inviteUrl}
           </p>
-        </div>
-
-        <p style="color:#475569;font-size:12px;text-align:center;margin:24px 0 0 0;">
+        ${emailCardClose()}
+        <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
           RSN — Connect with Reason
         </p>
       </div>
@@ -558,11 +572,9 @@ export async function sendSessionRegistrationConfirmationEmail(
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
-          <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
+        ${emailCardOpen()}
           <h1 style="color:#1a1a2e;font-size:22px;font-weight:700;margin:0 0 16px 0;text-align:center;">You're registered${greetingName}!</h1>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;text-align:center;">
             You're all set for <strong>${data.sessionTitle}</strong>.
@@ -570,13 +582,13 @@ export async function sendSessionRegistrationConfirmationEmail(
           ${whenLine}
           <div style="text-align:center;margin:32px 0;">
             <a href="${data.sessionUrl}"
-               style="display:inline-block;background:#DE322E;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
+               style="display:inline-block;background:#DE322E;border:1px solid #c22a26;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
               View Event
             </a>
           </div>
           ${calendarNote}
-        </div>
-        <p style="color:#475569;font-size:12px;text-align:center;margin:24px 0 0 0;">
+        ${emailCardClose()}
+        <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
           RSN — Connect with Reason
         </p>
       </div>
@@ -624,11 +636,9 @@ export async function sendJoinRequestConfirmationEmail(
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
-          <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
+        ${emailCardOpen()}
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
             Hi ${fullName},
@@ -642,8 +652,8 @@ export async function sendJoinRequestConfirmationEmail(
           <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 0 0;">
             You'll hear from us within 1-3 business days.
           </p>
-        </div>
-        <p style="color:#475569;font-size:12px;text-align:center;margin:24px 0 0 0;">
+        ${emailCardClose()}
+        <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
           RSN — Fast, focused, and human.
         </p>
       </div>
@@ -675,11 +685,9 @@ export async function sendJoinRequestWelcomeEmail(
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
-          <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
+        ${emailCardOpen()}
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
             Hi ${fullName},
@@ -693,7 +701,7 @@ export async function sendJoinRequestWelcomeEmail(
 
           <div style="text-align:center;margin:32px 0;">
             <a href="${loginUrl}"
-               style="display:inline-block;background:#DE322E;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
+               style="display:inline-block;background:#DE322E;border:1px solid #c22a26;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
               Sign In to RSN
             </a>
           </div>
@@ -701,8 +709,8 @@ export async function sendJoinRequestWelcomeEmail(
           <p style="color:#6b7280;font-size:14px;line-height:1.6;margin:0;">
             Your first step: sign up for an event and meet five people in focused 8-minute conversations.
           </p>
-        </div>
-        <p style="color:#475569;font-size:12px;text-align:center;margin:24px 0 0 0;">
+        ${emailCardClose()}
+        <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
           RSN — Fast, focused, and human.
         </p>
       </div>
@@ -733,11 +741,9 @@ export async function sendJoinRequestDeclineEmail(
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
-          <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
+        ${emailCardOpen()}
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
             Hi ${fullName},
@@ -751,8 +757,8 @@ export async function sendJoinRequestDeclineEmail(
           <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 0 0;">
             If your circumstances change or you receive an invite from a current member, you're welcome to reapply.
           </p>
-        </div>
-        <p style="color:#475569;font-size:12px;text-align:center;margin:24px 0 0 0;">
+        ${emailCardClose()}
+        <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
           RSN — Fast, focused, and human.
         </p>
       </div>
@@ -793,11 +799,9 @@ export async function sendJoinRequestReminderEmail(
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
-          <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
+        ${emailCardOpen()}
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
             Hi ${fullName},
@@ -808,7 +812,7 @@ export async function sendJoinRequestReminderEmail(
 
           <div style="text-align:center;margin:32px 0;">
             <a href="${loginUrl}"
-               style="display:inline-block;background:#DE322E;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
+               style="display:inline-block;background:#DE322E;border:1px solid #c22a26;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
               Complete Your Signup
             </a>
           </div>
@@ -816,8 +820,8 @@ export async function sendJoinRequestReminderEmail(
           <p style="color:#6b7280;font-size:14px;line-height:1.6;margin:0;">
             Once you're in, join an event and meet five people in focused 8-minute conversations. No pitching. No selling. Just real talk.
           </p>
-        </div>
-        <p style="color:#475569;font-size:12px;text-align:center;margin:24px 0 0 0;">
+        ${emailCardClose()}
+        <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
           RSN — Fast, focused, and human.
         </p>
       </div>
@@ -849,17 +853,15 @@ export async function sendGenericEmail(
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
     </head>
-    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
-          <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
+        ${emailCardOpen()}
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
             Hi ${recipientName},
           </p>
           <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 0 0;white-space:pre-wrap;">${data.body}</p>
-        </div>
-        <p style="color:#475569;font-size:12px;text-align:center;margin:24px 0 0 0;">
+        ${emailCardClose()}
+        <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
           RSN — Fast, focused, and human.
         </p>
       </div>
@@ -911,11 +913,9 @@ export async function sendJoinRequestAdminReviewEmail(
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <meta name="referrer" content="no-referrer">
     </head>
-    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:560px;margin:0 auto;padding:40px 24px;">
-        <div style="background:#ffffff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
-          <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Connect with Reason</p>
+        ${emailCardOpen()}
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
             Hi ${escapeHtml(data.adminDisplayName)},
@@ -958,8 +958,8 @@ export async function sendJoinRequestAdminReviewEmail(
           <p style="color:#6b7280;font-size:13px;line-height:1.6;margin:0;">
             Prefer the dashboard? <a href="${escapeAttr(data.dashboardUrl)}" style="color:#DE322E;text-decoration:none;">Open it here</a>.
           </p>
-        </div>
-        <p style="color:#475569;font-size:12px;text-align:center;margin:24px 0 0 0;">
+        ${emailCardClose()}
+        <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
           RSN — Fast, focused, and human.
         </p>
       </div>
@@ -1011,10 +1011,9 @@ export async function sendPokeReceivedEmail(
     : '';
   const html = `
     <!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:#fff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
+        ${emailCardOpen()}
           <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">Meeting request</p>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">Hey ${recipientDisplayName},</p>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
@@ -1023,8 +1022,8 @@ export async function sendPokeReceivedEmail(
           ${introBlock}
           <div style="text-align:center;margin:24px 0;">
             <a href="${data.messagesUrl}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 32px;border-radius:8px;">View Request</a>
-          </div>
-          <p style="color:#9ca3af;font-size:12px;text-align:center;margin:24px 0 0 0;">
+          ${emailCardClose()}
+        <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
             You're receiving this because someone wants to meet you on RSN.
             You can change your notification preferences in Settings.
           </p>
@@ -1058,10 +1057,9 @@ export async function sendPokeAcceptedEmail(
   const subject = `${data.accepterName} accepted your meeting request`;
   const html = `
     <!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:#fff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
+        ${emailCardOpen()}
           <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">Meeting request accepted</p>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">Hey ${recipientDisplayName},</p>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
@@ -1069,8 +1067,8 @@ export async function sendPokeAcceptedEmail(
           </p>
           <div style="text-align:center;margin:24px 0;">
             <a href="${data.messagesUrl}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 32px;border-radius:8px;">Open Conversation</a>
-          </div>
-          <p style="color:#9ca3af;font-size:12px;text-align:center;margin:24px 0 0 0;">
+          ${emailCardClose()}
+        <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
             You're receiving this because your meeting request was accepted on RSN.
             You can change your notification preferences in Settings.
           </p>
@@ -1158,10 +1156,9 @@ export async function sendMeetingConfirmedEmail(
   const subject = `Meeting confirmed with ${data.partnerName}`;
   const html = `
     <!DOCTYPE html><html><head><meta charset="utf-8"></head>
-    <body style="margin:0;padding:0;background-color:#f8f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+    <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
-        <div style="background:#fff;border-radius:16px;padding:40px 32px;border:1px solid #e5e7eb;">
-          <div style="text-align:center;margin:0 0 12px 0;"><img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="160" height="auto" style="display:block;margin:0 auto;" /></div>
+        ${emailCardOpen()}
           <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">Meeting confirmed</p>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">Hey ${escapeHtml(recipientDisplayName)},</p>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
