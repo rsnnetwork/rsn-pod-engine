@@ -156,9 +156,10 @@ test('a new member talks through three open questions, confirms, and lands on Su
     }
   }
   await expect(confirmBtn).toBeVisible({ timeout: 30_000 });
-  // The whole chat stayed inside the budget: at most six host turns.
-  const hostTurns = await bubbles(page).evaluateAll((els) => els.filter((e) => !e.closest('[data-from="me"]')).length);
-  expect(hostTurns, 'host turns incl. the opening and the summary').toBeLessThanOrEqual(8);
+  // The whole chat stayed inside the budget: six host questions at most, plus
+  // the closing summary. Host bubbles sit on the left (self-start).
+  const hostTurns = await bubbles(page).evaluateAll((els) => els.filter((e) => e.classList.contains('self-start')).length);
+  expect(hostTurns, 'host turns incl. the opening and the summary').toBeLessThanOrEqual(7);
   await confirmBtn.click();
 
   // Land on Suggestions with an agent named.
