@@ -19,6 +19,8 @@ describe('locationTerms', () => {
   it('keeps a city after a location preposition', () => {
     expect(locationTerms('designers in London')).toEqual(['london']);
     expect(locationTerms('investors based in New York')).toEqual(['new york']);
+    // 10 Sep 2026: how the extractor now phrases an inferred want tied to a place.
+    expect(extractConstraints(['country manager in Nairobi', 'country manager']).location).toEqual(['nairobi']);
   });
   it('ignores non-places after "in"', () => {
     expect(locationTerms('experts in Manufacturing and Sales')).toEqual([]);

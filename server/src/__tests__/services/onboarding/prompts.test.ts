@@ -292,6 +292,18 @@ describe('onboarding prompts (v1.1)', () => {
         expect(p).toContain(f);
       }
     });
+    // 10 Sep 2026: Stefan's strict place rule (item 2) only fires on "in <Place>",
+    // and the extractor had written "with Nairobi experience". The place the
+    // member tied the need to goes into the phrase itself.
+    it('writes a place the member tied the need to into the want phrase, so it is a real requirement', () => {
+      expect(p).toContain('"country manager in nairobi"');
+      expect(p).toContain('so the place is a real requirement');
+    });
+    // Claus listed "time horizon" among what to read out of the conversation.
+    it('reads the time horizon in their words', () => {
+      expect(p).toContain('timehorizon:');
+      expect(p).toContain('"next year"');
+    });
   });
 });
 

@@ -137,7 +137,15 @@ export function planFirstAgents(source: FirstAgentSource, existingLabels: string
   if (wanted.length === 1) {
     // One kind of person: keep the member's sentence as the search (its nuance
     // like "react developers" already counts) and add any qualifier not in it.
-    bases = [{ label: title(wanted[0].label), wantText: withQualifiers(text, quals) }];
+    // 10 Sep 2026 (Claus: the wish becomes visible in their words): a short,
+    // specific phrase names the agent ("Country manager in Nairobi") instead of
+    // the taxonomy bucket ("Managers and leads"); a long sentence keeps the bucket.
+    // Only the WHO phrase names the agent; a "why" fallback sentence is a reason,
+    // not a kind of person, so it keeps the bucket.
+    const phrase = who ? text.split(',')[0].trim() : '';
+    const words = phrase.split(/\s+/).filter(Boolean).length;
+    const label = phrase && words <= 6 ? title(phrase) : title(wanted[0].label);
+    bases = [{ label, wantText: withQualifiers(text, quals) }];
   } else if (wanted.length > 1) {
     // Several kinds: one agent each, searching for that designation PLUS the
     // shared qualifiers (industries/stage/seniority) — never the other agents'

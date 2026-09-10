@@ -225,7 +225,10 @@ export async function saveIntentAndComplete(
   const interests = cleanArr(mergeP(intent.userInterests, enrSkills), 20);
   // Who they ARE — never who they asked to meet, and never wiped by silence (see ownRoles).
   const professionalRole = ownRoles(intent, profile);
-  const goals = cleanArr([intent.desiredOutcome], 5);
+  // 10 Sep 2026 (Claus: "problems"; Stefan: intent-first matching): what they
+  // need help with rides with the outcome on goals, which the matcher reads
+  // as a want source. No new column.
+  const goals = cleanArr([intent.desiredOutcome, ...(intent.needsHelpWith ?? [])], 5);
 
   // Confirmed known data (from the confirm-known card) wins over chat-extracted.
   const company = truncate(orNull(profile?.company) || orNull(intent.userCompany), 200);
@@ -245,7 +248,10 @@ export async function saveIntentAndComplete(
   const whyIWantToMeet = orNull(intent.reasonForMeeting);
   const myIntent = orNull(intent.desiredOutcome);
   const expertiseText = joinList(intent.userExpertise);
-  const whatICanHelpWith = joinList(mergeP(intent.userCanOffer, enrOffers));
+  // The problem they solve for others is offer-side: it joins what they can
+  // help with, which the matcher reads (and the public card shows).
+  const problem = (intent.problemTheySolve || '').trim();
+  const whatICanHelpWith = joinList(mergeP([...intent.userCanOffer, ...(problem ? [problem] : [])], enrOffers));
   const whatICareAbout = joinList(mergeP(intent.userInterests, enrSkills));
   const matchingNotes = truncate(orNull(intent.userProfileSummary), 1000);
   // C2: the only new users-column promotion — userLanguages -> users.languages

@@ -111,6 +111,50 @@ function updateUsersCall(calls: { sql: string; params: any[] }[]) {
   return calls.find((c) => /UPDATE users SET/i.test(c.sql) && /company = COALESCE/i.test(c.sql));
 }
 
+// ─── 10 Sep 2026 (Claus: "problems"; Stefan: intent-first matching) ──────────
+// The extractor reads what the member needs help with and the problem they
+// solve for others; both were stored and never scored. They now ride on the
+// columns matching already reads: goals (want side) and what_i_can_help_with
+// (offer side). No new column, no new query.
+describe('saveIntentAndComplete: problems and what they solve reach the matching columns', () => {
+  beforeEach(() => {
+    mockGetCachedEnrichment.mockResolvedValue(null);
+    mockNotifyMatchesOfNewUser.mockResolvedValue(0);
+  });
+
+  it('needsHelpWith joins desiredOutcome in goals', async () => {
+    const { client, calls } = makeFakeClient();
+    mockTransaction.mockImplementation(async (cb: any) => cb(client));
+    await saveIntentAndComplete('user-1', {
+      ...baseIntent, desiredOutcome: 'hire a country manager for Kenya', needsHelpWith: ['finding a trustworthy country manager for Nairobi'],
+    }, []);
+    const update = updateUsersCall(calls);
+    expect(update!.params).toEqual(expect.arrayContaining([
+      ['hire a country manager for Kenya', 'finding a trustworthy country manager for Nairobi'],
+    ]));
+  });
+
+  it('problemTheySolve joins userCanOffer in what_i_can_help_with', async () => {
+    const { client, calls } = makeFakeClient();
+    mockTransaction.mockImplementation(async (cb: any) => cb(client));
+    await saveIntentAndComplete('user-1', {
+      ...baseIntent, userCanOffer: ['logistics industry knowledge'], problemTheySolve: 'Scales logistics operations into new markets.',
+    }, []);
+    const update = updateUsersCall(calls);
+    expect(update!.params).toEqual(expect.arrayContaining([
+      'logistics industry knowledge, Scales logistics operations into new markets.',
+    ]));
+  });
+
+  it('an empty problemTheySolve adds nothing', async () => {
+    const { client, calls } = makeFakeClient();
+    mockTransaction.mockImplementation(async (cb: any) => cb(client));
+    await saveIntentAndComplete('user-1', { ...baseIntent, userCanOffer: ['pricing'], problemTheySolve: '' }, []);
+    const update = updateUsersCall(calls);
+    expect(update!.params).toEqual(expect.arrayContaining(['pricing']));
+  });
+});
+
 describe('saveIntentAndComplete: userLanguages -> users.languages promotion', () => {
   beforeEach(() => {
     mockGetCachedEnrichment.mockResolvedValue(null);

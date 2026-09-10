@@ -148,7 +148,8 @@ Rules:
 - Normalise everything to English.
 - reasonForMeeting: what brought them here, in their own words, one or two sentences.
 - desiredOutcome: what they said might come from being here, the value or future they described, in one short sentence; otherwise an empty string.
-- desiredPeople / desiredRoles: who the Member wants to meet, stated or inferred. Put short descriptions in desiredPeople (for example "early-stage investors", "B2B founders") and bare role words in desiredRoles (for example "investor", "founder"). Asking for funding, investment, customers, partners, or hires counts as wanting to meet those people.
+- desiredPeople / desiredRoles: who the Member wants to meet, stated or inferred. Put short descriptions in desiredPeople (for example "early-stage investors", "B2B founders") and bare role words in desiredRoles (for example "investor", "founder"). Asking for funding, investment, customers, partners, or hires counts as wanting to meet those people. When the Member tied the need to a place, write the place into the phrase as "in <Place>" (for example "country manager in Nairobi", not "with Nairobi experience") so the place is a real requirement.
+- timeHorizon: when this matters, in the Member's own words (for example "next year", "right now", "over the next few months"), otherwise an empty string.
 - userExpertise: what the Member knows well, as short phrases, read from what they have done and built.
 - userCanOffer: what the Member can help others with, as short phrases, stated or inferred from their experience.
 - userInterests: what the Member is curious about or cares about, as short phrases.

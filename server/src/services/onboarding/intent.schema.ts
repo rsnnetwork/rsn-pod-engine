@@ -62,6 +62,10 @@ export const IntentSchema = z.object({
   authorityLevel: z.string(),
   needsHelpWith: z.array(z.string()),
   meetingValueCriteria: z.string(),
+  // 10 Sep 2026 (Claus): "time horizon" is one of the things read out of the
+  // conversation. Empty when they never said when this matters; tolerant so an
+  // older extraction without the key still parses.
+  timeHorizon: z.string().catch(''),
   restrictions: z.object({
     noCompetitors: z.boolean(),
     competitorNote: z.string().nullable(),
@@ -97,7 +101,7 @@ export const INTENT_JSON_SCHEMA: Record<string, unknown> = {
     'avoidPreferences', 'privacyRecommendation', 'matchingTags', 'embeddingText',
     'confidenceScores', 'profileStrength',
     'userLanguages', 'problemTheySolve', 'authorityLevel', 'needsHelpWith',
-    'meetingValueCriteria', 'restrictions',
+    'meetingValueCriteria', 'timeHorizon', 'restrictions',
   ],
   properties: {
     desiredPeople: stringArray,
@@ -143,6 +147,7 @@ export const INTENT_JSON_SCHEMA: Record<string, unknown> = {
     authorityLevel: { type: 'string' },
     needsHelpWith: stringArray,
     meetingValueCriteria: { type: 'string' },
+    timeHorizon: { type: 'string' },
     restrictions: {
       type: 'object',
       additionalProperties: false,

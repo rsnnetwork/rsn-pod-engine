@@ -58,11 +58,23 @@ describe('createFirstAgents', () => {
     expect(agents).toHaveLength(1);
     const [userId] = mockCreate.mock.calls[0];
     expect(userId).toBe('u-1');
-    // One designation named: the label is that designation, and the want text
-    // is the member's own sentence, so "react" still counts when scoring.
+    // One designation named in a long sentence: the label is that designation,
+    // and the want text is the member's own sentence, so "react" still counts.
     expect(created()[0].label).toBe('Developers and engineers');
     expect(created()[0].wantText).toBe('react developers who can build my product');
     expect(created()[0].status).toBe('active');
+  });
+
+  // 10 Sep 2026 (Claus): what the conversation read is a short, specific phrase
+  // ("country manager in Nairobi"); the agent carries it as its name rather than
+  // the taxonomy bucket ("Managers and leads").
+  it('names a single agent by the member\'s short phrase, not the taxonomy bucket', async () => {
+    await createFirstAgents('u-1', {
+      whoText: 'country manager in Nairobi, country manager',
+      whyText: 'expanding into Kenya next year',
+    });
+    expect(created()[0].label).toBe('Country manager in Nairobi');
+    expect(created()[0].wantText).toBe('country manager in Nairobi, country manager');
   });
 
   it('splits several named designations into one agent each, like migration 087', async () => {
@@ -110,7 +122,8 @@ describe('createFirstAgents', () => {
       qualifiers: ['fintech', 'seed stage'],
     });
     const i = mockCreate.mock.calls[0][1] as { label: string; wantText: string };
-    expect(i.label).toBe('Developers and engineers');
+    // 10 Sep 2026: a short, specific phrase names the agent in the member's words.
+    expect(i.label).toBe('React developers in fintech');
     // 'fintech' is already in the sentence; only the genuinely-new qualifier appends.
     expect(i.wantText).toBe('react developers in fintech, seed stage');
   });

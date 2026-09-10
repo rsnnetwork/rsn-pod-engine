@@ -97,7 +97,7 @@ test('the host reacts before it asks, keeps it short, never uses a dash, and the
   const agents = confirm.json.data.firstAgents as Array<{ id: string; label: string }>;
   console.log(`FIRST AGENTS: ${agents.map(a => a.label).join(' | ') || '(none)'}`);
   expect(agents.length, 'the chat ended on at least one agent').toBeGreaterThan(0);
-  expect(agents.map(a => a.label).join(' ')).toMatch(/Developers|Investors/);
+  expect(agents.map(a => a.label).join(' ')).toMatch(/Developers|Investors/i);
 
   // 4 Sep 2026: ONE main agent searches at the end of the chat; the other
   // kinds of person named are paused drafts until the member resumes them.

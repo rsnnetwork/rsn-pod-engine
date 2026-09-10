@@ -822,7 +822,7 @@ export default function ChatbotOnboarding() {
         const drafts = firstAgents.filter((a) => a.id !== main.id);
         const draftNames = drafts.map((a) => a.label).join(drafts.length === 2 ? ' and ' : ', ');
         addToast(
-          `Welcome to Reason! Your ${main.label} agent is searching now.` +
+          `Welcome to Reason! Your "${main.label}" agent is searching now.` +
             (drafts.length
               ? ` We also drafted ${draftNames} for you, paused until you resume ${drafts.length === 1 ? 'it' : 'them'}.`
               : ''),
