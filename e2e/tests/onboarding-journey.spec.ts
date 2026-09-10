@@ -112,7 +112,8 @@ test('a member with a profile on file hears the universal opening, then an adapt
 
   // The second question adapts to the answer; it is not the default read out.
   const second = await say(page, "I recently sold my company and I'm trying to figure out what I want to build next.", 'second question');
-  expect(second.trim()).not.toBe("What's taking up your attention these days?");
+  // Second pass (10 Sep): no stock sentence, with or without a tail bolted on.
+  expect(second, 'adapted, not the stock line').not.toMatch(/what.s taking up your attention (these days|most right now)\??\s*$/i);
 });
 
 test('a new member talks through three open questions, confirms, and lands on Suggestions with an agent built from what they said', async () => {

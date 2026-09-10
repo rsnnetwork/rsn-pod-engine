@@ -68,32 +68,49 @@ describe('onboarding prompts (v1.1)', () => {
   // fixed (asked by the client/route, not generated); the second and third are
   // adaptive, with Claus's defaults named so the host has the shape.
   describe("Claus's arc: opening, adaptive exploration, adaptive value", () => {
-    it('names the three openings in order and says the first is already asked', () => {
+    it('names the three openings in order, by what they are for, and says the first is already asked', () => {
       const p = buildHostSystemPrompt();
       const i1 = p.indexOf('what brought them here');
-      const i2 = p.indexOf("What's taking up your attention these days?");
-      const i3 = p.indexOf('And if being here turned out to be genuinely valuable, what might come from it?');
+      const i2 = p.indexOf('what has their attention these days');
+      const i3 = p.indexOf('what would make being here worth it');
       expect(i1).toBeGreaterThan(-1);
       expect(i2).toBeGreaterThan(i1);
       expect(i3).toBeGreaterThan(i2);
       expect(p.toLowerCase()).toContain('the opening has already been asked');
     });
 
-    it('never asks the defaults mechanically: adapt from the answer, skip what it already covered', () => {
-      const p = buildHostSystemPrompt().toLowerCase();
-      expect(p).toContain('do not ask it mechanically');
-      expect(p).toContain('ask the thing their answer leaves open');
-      expect(p).toContain('never ask people to describe their profile');
-      expect(p).toContain('list who they want to meet');
-      expect(p).toContain('becomes visible on its own');
+    // 10 Sep 2026, second pass (Ali: "is the rigidness overcome?"). With the
+    // default sentences in the prompt, the small model read them out with a
+    // tail bolted on. The prompt now carries the INTENT of each opening and
+    // forbids a stock sentence, so the wording has to come from this person.
+    it('gives no stock sentence to copy: the wording must come from the member\'s own story', () => {
+      const p = buildHostSystemPrompt();
+      expect(p).not.toContain("What's taking up your attention these days?");
+      expect(p).not.toContain('And if being here turned out to be genuinely valuable, what might come from it?');
+      const low = p.toLowerCase();
+      expect(low).toContain('never a stock sentence');
+      expect(low).toContain('would only make sense to this person');
+      expect(low).toContain('ask the thing their answer leaves open');
+      expect(low).toContain('never ask people to describe their profile');
+      expect(low).toContain('list who they want to meet');
+      expect(low).toContain('becomes visible on its own');
     });
 
-    it('allows one reflection as a statement, with Claus\'s example, and one follow-up per opening at most', () => {
+    it('requires a reflection whenever the answer had substance, as a statement, with two examples of the kind', () => {
       const p = buildHostSystemPrompt();
-      expect(p.toLowerCase()).toContain('a reflection is different from reading back');
+      const low = p.toLowerCase();
+      expect(low).toContain('a reflection is different from reading back');
+      expect(low).toContain('whenever their answer had substance');
+      expect(low).toContain('as a statement, never as a question');
       expect(p).toContain('less about finding the next company, and more about what deserves to be next.');
-      expect(p.toLowerCase()).toContain('as a statement, never as a question');
-      expect(p.toLowerCase()).toContain('at most one short follow-up per opening');
+      expect(p).toContain('the hire is the whole expansion');
+      expect(low).toContain('at most one short follow-up per opening');
+    });
+
+    it('the closing names the kind of person we will look for, in their words', () => {
+      const low = buildHostSystemPrompt().toLowerCase();
+      expect(low).toContain('name the kind of person');
+      expect(low).toContain('never a generic promise');
     });
 
     it('reads like a spoken conversation', () => {
