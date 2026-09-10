@@ -73,6 +73,8 @@ const baseIntent: ExtractedIntent = {
   authorityLevel: '',
   needsHelpWith: [],
   meetingValueCriteria: '',
+
+  timeHorizon: '',
   restrictions: {
     noCompetitors: false,
     competitorNote: null,
