@@ -28,7 +28,10 @@ export function emailCardOpen(): string {
   return [
     `<div style="background:#ffffff;border-radius:16px;border:1px solid #dfe3ea;overflow:hidden;box-shadow:0 10px 30px rgba(26,26,46,0.08);">`,
     `<div style="background:#1a1a2e;padding:28px 32px 22px 32px;text-align:center;">`,
-    `<img src="${config.clientUrl}/rsn-logo-white.png" alt="RSN" width="150" height="auto" style="display:block;margin:0 auto;" />`,
+    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto;"><tr>`,
+    `<td style="vertical-align:middle;padding-right:10px;"><img src="${config.clientUrl}/rsn-sheep-white-email.png" alt="" width="44" height="auto" style="display:block;" /></td>`,
+    `<td style="vertical-align:middle;color:#ffffff;font-size:30px;font-weight:700;letter-spacing:1px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">RSN</td>`,
+    `</tr></table>`,
     `<p style="color:#f3b6b2;font-size:12px;letter-spacing:2px;text-transform:uppercase;margin:14px 0 0 0;">Connect with Reason</p>`,
     `</div>`,
     `<div style="height:4px;background:#DE322E;font-size:0;line-height:0;">&nbsp;</div>`,

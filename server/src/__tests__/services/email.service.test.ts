@@ -216,7 +216,7 @@ describe('the shared email shell', () => {
     const { html } = emailService.buildInviteEmail({
       inviterName: 'Stefan', inviteeName: 'Ali', type: 'platform', inviteUrl: 'http://localhost:5173/invite/ABC123',
     } as any);
-    expect(html).toContain('rsn-logo-white.png');
+    expect(html).toContain('rsn-sheep-white-email.png');           // the white sheep, next to the wordmark as text
     expect(html).toMatch(/background:#1a1a2e/);                 // the band
     expect(html).toMatch(/height:4px;background:#DE322E/);      // the accent strip
     expect(html).toMatch(/border:1px solid #dfe3ea/);           // the card border
