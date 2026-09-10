@@ -33,6 +33,20 @@ export const OPENINGS = {
   not_found: 'We could not identify your profile, so let us build it together.',
 } as const satisfies Record<OnboardingOpening, string>;
 
+/**
+ * The host's universal opening (Claus, 10 Sep 2026). Fixed, in his words, and
+ * asked of everyone: it is the first of three OPEN questions the profile is
+ * read out of. With a profile on file the lead acknowledges it; without one,
+ * the honest not_found line leads. Voice is "we"; no dashes.
+ */
+export const HOST_OPENING_QUESTION =
+  "We believe you're here for a reason. Do you mind sharing what brought you here?";
+export const HOST_OPENING_KNOWN_LEAD =
+  "We've already put together a first version of your profile. But before we get into that, we'd rather hear from you.";
+export function hostOpening(known: boolean): string {
+  return `${known ? HOST_OPENING_KNOWN_LEAD : OPENINGS.not_found} ${HOST_OPENING_QUESTION}`;
+}
+
 /** Lifecycle of a user's onboarding conversation. Mirrors the SQL enum in 069. */
 export type OnboardingStatus =
   | 'not_started'

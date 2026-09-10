@@ -470,31 +470,72 @@ describe('POST /onboarding/open', () => {
     expect(chatbot.converse).not.toHaveBeenCalled();
   });
 
-  it('asks the host for an opening turn: a single system cue, in opening mode, with the confirmed card', async () => {
+  // 10 Sep 2026 (Claus): the opening is universal and fixed, in Claus's words.
+  // No model call: the lead depends only on whether we have a profile for them.
+  it('with a profile on file, opens with Claus\'s lead and question, without calling the model', async () => {
     (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
-    (chatbot.converse as jest.Mock).mockResolvedValue({ reply: 'Recruiters, you said. For which kind of role?', ready: false });
+    (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
+      status: 'found', source: 'linkedin', error: null, startedAt: null, completedAt: null,
+    });
     const res = await request(app)
       .post('/onboarding/open')
       .set('Authorization', `Bearer ${makeToken('user-open-2')}`)
       .send({ profile: { company: 'Axorvian', reason: 'because i want to meet recruiters' } });
     expect(res.status).toBe(200);
-    expect(res.body.data).toEqual({ reply: 'Recruiters, you said. For which kind of role?' });
-    const [messages, profile, wrapMode] = (chatbot.converse as jest.Mock).mock.calls[0];
-    expect(messages).toHaveLength(1);
-    expect(messages[0].role).toBe('user');
-    expect(messages[0].content).toMatch(/system cue/);
-    expect(profile).toMatchObject({ company: 'Axorvian' });
-    expect(wrapMode).toBe('opening');
+    expect(res.body.data.reply).toBe(
+      "We've already put together a first version of your profile. But before we get into that, we'd rather hear from you. " +
+      "We believe you're here for a reason. Do you mind sharing what brought you here?",
+    );
+    expect(chatbot.converse).not.toHaveBeenCalled();
   });
 
-  it('maps a model failure to 503 so the client falls back to its static opening', async () => {
+  it('with nothing on file, says so honestly and asks the same question', async () => {
     (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
-    (chatbot.converse as jest.Mock).mockRejectedValue(new Error('boom'));
+    (enrichRepo.getEnrichmentState as jest.Mock).mockResolvedValue({
+      status: 'not_found', source: null, error: null, startedAt: null, completedAt: null,
+    });
+    (intentRepo.hasSubstantiveProfileData as jest.Mock).mockResolvedValue(false);
     const res = await request(app)
       .post('/onboarding/open')
       .set('Authorization', `Bearer ${makeToken('user-open-3')}`)
       .send({});
-    expect(res.status).toBe(503);
+    expect(res.status).toBe(200);
+    expect(res.body.data.reply).toBe(
+      "We could not identify your profile, so let us build it together. We believe you're here for a reason. Do you mind sharing what brought you here?",
+    );
+    expect(chatbot.converse).not.toHaveBeenCalled();
+  });
+});
+
+// ─── 10 Sep 2026 (Claus): the question budget is enforced server-side ────────
+describe('POST /onboarding/chat question budget', () => {
+  const host = (n: number) => Array.from({ length: n }, (_, i) => ([
+    { role: 'assistant', content: `Host question ${i + 1}?` },
+    { role: 'user', content: `Answer ${i + 1}` },
+  ])).flat();
+
+  it('tells the host how many questions it has asked so far', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+    (chatbot.converse as jest.Mock).mockResolvedValue({ reply: 'ok?', ready: false });
+    await request(app)
+      .post('/onboarding/chat')
+      .set('Authorization', `Bearer ${makeToken('user-budget-1')}`)
+      .send({ messages: host(3) });
+    const args = (chatbot.converse as jest.Mock).mock.calls[0];
+    expect(args[2]).toBe('none');
+    expect(args[5]).toEqual({ asked: 3, max: 6 });
+  });
+
+  it('forces a hard wrap once six host questions have been asked', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+    (chatbot.converse as jest.Mock).mockResolvedValue({ reply: 'Thanks. <<READY>>', ready: true });
+    await request(app)
+      .post('/onboarding/chat')
+      .set('Authorization', `Bearer ${makeToken('user-budget-2')}`)
+      .send({ messages: host(6) });
+    const args = (chatbot.converse as jest.Mock).mock.calls[0];
+    expect(args[2]).toBe('hard');
+    expect(args[5]).toEqual({ asked: 6, max: 6 });
   });
 });
 

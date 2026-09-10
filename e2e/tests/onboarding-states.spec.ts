@@ -40,8 +40,10 @@ type Opening = keyof typeof OPENINGS;
 // on the confirm card, so the chat opens on the bare question; not_found has no
 // card, so its single chat bubble carries the statement plus the question.
 // These are the questions the chat can open with (ChatbotOnboarding.tsx).
-const FIRST_QUESTION = 'What brings you to Reason?';
-const REASON_KNOWN_QUESTION = 'Who would be most valuable for you to meet?';
+// 10 Sep 2026 (Claus): the universal opening, mirrored from HOST_OPENING_QUESTION
+// / HOST_OPENING_KNOWN_LEAD in shared/src/types/onboarding.ts (drift detection).
+const FIRST_QUESTION = "We believe you're here for a reason. Do you mind sharing what brought you here?";
+const KNOWN_LEAD = "We've already put together a first version of your profile. But before we get into that, we'd rather hear from you.";
 
 let browser: Browser;
 let user: TestUser;
@@ -192,7 +194,7 @@ test('found states what we have on the card, then opens the chat on one question
   await expect(page.getByText(OPENINGS.found)).toBeVisible(); // stated once, here
   await page.getByRole('button', { name: /Yes, continue/i }).click();
 
-  await assertSingleOpeningBubble(page, FIRST_QUESTION);
+  await assertSingleOpeningBubble(page, `${KNOWN_LEAD} ${FIRST_QUESTION}`);
   console.log('  ✓ found: card states it once, chat opens on the bare question.');
 });
 
@@ -206,7 +208,7 @@ test('partial states what we have on the card, then opens the chat on one questi
   await expect(page.getByText(OPENINGS.partial)).toBeVisible(); // stated once, here
   await page.getByRole('button', { name: /Yes, continue/i }).click();
 
-  await assertSingleOpeningBubble(page, FIRST_QUESTION);
+  await assertSingleOpeningBubble(page, `${KNOWN_LEAD} ${FIRST_QUESTION}`);
   console.log('  ✓ partial: card states it once, chat opens on the bare question.');
 });
 
@@ -339,7 +341,7 @@ test('none with a LinkedIn on file does NOT settle: the client fires the enrich 
   await expect(page.getByText('Builds things.')).toBeVisible();
 
   await page.getByRole('button', { name: /Yes, continue/i }).click();
-  await assertSingleOpeningBubble(page, FIRST_QUESTION);
+  await assertSingleOpeningBubble(page, `${KNOWN_LEAD} ${FIRST_QUESTION}`);
   console.log('  ✓ none→searching→found: candidate on the card, chat opens on one question.');
 });
 
@@ -419,7 +421,7 @@ test('failed status with a LinkedIn on file retries once via the enrich trigger;
   await expect(page.getByText(/Is it right\?/i)).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText(OPENINGS.not_found)).toHaveCount(0);
   await page.getByRole('button', { name: /Yes, continue/i }).click();
-  await assertSingleOpeningBubble(page, FIRST_QUESTION);
+  await assertSingleOpeningBubble(page, `${KNOWN_LEAD} ${FIRST_QUESTION}`);
 
   // Retry-once: exactly one enrich call ever fired, no infinite loop.
   expect(enrichCalls).toBe(1);
@@ -616,6 +618,6 @@ test('asklink: a pasted bare slug canonicalizes into the enrich trigger and land
   await expect(page.getByText('Slug Co')).toBeVisible();
 
   await page.getByRole('button', { name: /Yes, continue/i }).click();
-  await assertSingleOpeningBubble(page, FIRST_QUESTION);
+  await assertSingleOpeningBubble(page, `${KNOWN_LEAD} ${FIRST_QUESTION}`);
   console.log('  ✓ asklink: none→searching→found landed the candidate card, chat opens on one question.');
 });

@@ -152,10 +152,13 @@ test("Ali's script, steps 1 to 8, on production", async () => {
   await expect(bubbles(ali).first()).toBeVisible({ timeout: 60_000 });
   const opening = ((await bubbles(ali).first().textContent()) || '').trim();
   console.log(`  step 2: HOST OPENING: ${opening}`);
+  // 10 Sep 2026 (Claus): the opening is universal and fixed, in his words,
+  // asked even when the card holds a reason. Never "who do you want to meet".
   expect(opening).not.toBe('Who would be most valuable for you to meet?');
-  expect(opening).not.toBe('What brings you to Reason?');
-  expect(opening).not.toMatch(/what brings you/i);
-  expect(opening).toMatch(/recruit|Axorvian|MLOps|geospatial/i);
+  expect(opening).toBe(
+    "We've already put together a first version of your profile. But before we get into that, we'd rather hear from you. " +
+    "We believe you're here for a reason. Do you mind sharing what brought you here?",
+  );
   await shot(ali, 'host-opening');
 
   // ── Step 3: finish the chat, confirm, toast, one active agent + drafts, resume one ──

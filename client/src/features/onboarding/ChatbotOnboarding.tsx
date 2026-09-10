@@ -17,6 +17,8 @@ import {
   type OnboardingStatusResponse,
   type OnboardingEnrichmentCandidate,
   OPENINGS,
+  HOST_OPENING_QUESTION,
+  hostOpening,
 } from '@rsn/shared';
 import OnboardingPage from './OnboardingPage';
 import HostPresence from './HostPresence';
@@ -33,8 +35,10 @@ import HostPresence from './HostPresence';
 // long, people will not read it. Every step should ask one clear question and
 // stop." These are the only two things we ever open with, and which one depends
 // solely on whether the member already gave a reason (join request).
-const FIRST_QUESTION = 'What brings you to Reason?';
-const REASON_KNOWN_QUESTION = 'Who would be most valuable for you to meet?';
+// 10 Sep 2026 (Claus): the opening is universal and fixed, shared with the
+// server (hostOpening / HOST_OPENING_QUESTION from @rsn/shared). The first of
+// three open questions the profile is read out of; never "who do you want to
+// meet".
 
 // How often the searching stage polls GET /onboarding/status, and the belt
 // timeout (server will have terminal-ed long before this) that forces the
@@ -502,13 +506,10 @@ export default function ChatbotOnboarding() {
   // or partial (we genuinely have SOME known profile data); not_found gets the
   // no-background variant so it never claims a review that never happened.
   function openingMessages(op: OnboardingOpening): OnboardingMessage[] {
-    const question = known?.reason ? REASON_KNOWN_QUESTION : FIRST_QUESTION;
-    // ONE bubble. found/partial already stated what we have on the confirm card
-    // the member just accepted, so restating it here is the duplication the
-    // 30-Jul test flagged; not_found has no card, so it carries the honest
-    // "we could not identify you" line itself, once, ahead of the question.
-    const content = op === 'not_found' ? `${OPENINGS.not_found} ${question}` : question;
-    return [{ role: 'assistant', content }];
+    // ONE bubble, Claus's universal opening. With a profile on file the lead
+    // acknowledges it; not_found carries the honest "we could not identify
+    // you" line itself, once, ahead of the question.
+    return [{ role: 'assistant', content: hostOpening(op === 'found' || op === 'partial') }];
   }
 
   // 4 Sep 2026 (Ali): the first line comes from the host, built from what the
@@ -702,7 +703,7 @@ export default function ChatbotOnboarding() {
     // `opening` is never settled here — the bare question claims nothing about
     // any lookup, which is exactly right when we have no settled state.
     setMessages([
-      { role: 'assistant', content: known?.reason ? REASON_KNOWN_QUESTION : FIRST_QUESTION },
+      { role: 'assistant', content: HOST_OPENING_QUESTION },
       ...resumeMessages,
     ]);
     setStage('chat');
@@ -1145,7 +1146,7 @@ export default function ChatbotOnboarding() {
           <HostPresence size={40} state={sending ? 'thinking' : 'idle'} />
           <div className="leading-tight">
             <div className="text-sm font-semibold text-[#1a1a2e]">Reason</div>
-            <div className="text-xs text-gray-400">onboarding · about 2 min</div>
+            <div className="text-xs text-gray-400">onboarding · a short chat</div>
           </div>
           {hasUserReply && !ready && (
             <button

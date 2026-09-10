@@ -194,6 +194,15 @@ describe('chatbot.service', () => {
       expect(reply).toBe('Interesting. What is the plan, or is it early days?');
     });
 
+    // 10 Sep 2026 (Claus): a one-line reflection plus the question fits in
+    // 30 words. This draft is 31 words: it must go out untouched.
+    it('a reflection as a statement plus one question passes the guard', () => {
+      const draft = 'Interesting. So perhaps this is less about finding the next company, and more about what deserves to be next. What has been pulling at your attention lately?';
+      expect(styleViolations(draft, false)).toEqual([]);
+      expect(styleViolations(draft + ' And is that new, or old?', false)).toContain('it asks more than one question');
+      expect(styleViolations(Array(36).fill('word').join(' ') + '?', false)).toContain('it is over 30 words');
+    });
+
     it('names each rule a draft breaks', () => {
       expect(styleViolations("Got it. So you're solving invoicing pain for freelancers. Who do you want to meet?", false)).toContain('it reads their answer back to them');
       expect(styleViolations('You have real wins there.', false)).toContain('it asks no question');

@@ -21,6 +21,7 @@ import {
   READY_TOKEN,
   serializeConversation,
   type HostKnownExtra,
+  type HostProgress,
 } from './prompts';
 
 let client: Anthropic | null = null;
@@ -70,7 +71,8 @@ export function styleViolations(text: string, ready: boolean): string[] {
   const questions = (body.match(/\?/g) || []).length;
   if (questions === 0) out.push('it asks no question');
   if (questions > 1) out.push('it asks more than one question');
-  if (wordCount > 28) out.push('it is over 25 words');
+  // 10 Sep 2026 (Claus): a one-line reflection plus the question needs ~30.
+  if (wordCount > 34) out.push('it is over 30 words');
   const question = body.split(/(?<=[.!])\s+/).find((s) => s.includes('?')) || '';
   if (/\bor\b/i.test(question)) out.push('the question offers alternatives joined by "or"');
   const afterReaction = body.replace(/^\s*[^.!?]{0,24}[.!]\s*/, '');
@@ -120,11 +122,12 @@ async function askHost(
 export async function converse(
   messages: OnboardingMessage[],
   profile?: OnboardingConfirmedProfile,
-  wrapMode: 'none' | 'soft' | 'hard' | 'opening' = 'none',
+  wrapMode: 'none' | 'soft' | 'hard' = 'none',
   extra?: HostKnownExtra,
-  effectiveOpening?: OnboardingOpening
+  effectiveOpening?: OnboardingOpening,
+  progress?: HostProgress,
 ): Promise<{ reply: string; ready: boolean }> {
-  const system = buildHostSystemPrompt(profile, wrapMode, extra, effectiveOpening);
+  const system = buildHostSystemPrompt(profile, wrapMode, extra, effectiveOpening, progress);
   const first = await askHost(system, messages);
   const broken = styleViolations(first.reply, first.ready);
   if (broken.length === 0) return first;
@@ -135,7 +138,7 @@ export async function converse(
   try {
     const rewriteSystem = system +
       '\n\nREWRITE. Your previous draft was:\n"' + first.reply.replace(/"/g, "'") + '"\nIt broke these rules: ' + broken.join('; ') +
-      '. Write the message again so it follows every style rule: no reading their answer back, at most three words of reaction, exactly one question of at most 15 words with no "or" in it, under 25 words in total' +
+      '. Write the message again so it follows every style rule: no reading their answer back, at most one reflection as a statement, exactly one question of at most 15 words with no "or" in it, under 30 words in total' +
       (first.ready ? `, and keep the token ${READY_TOKEN} on its own final line` : '') + '. Reply with the message only.';
     const second = await askHost(rewriteSystem, messages);
     const stillBroken = styleViolations(second.reply, second.ready);

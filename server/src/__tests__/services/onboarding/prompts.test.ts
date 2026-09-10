@@ -55,20 +55,66 @@ describe('onboarding prompts (v1.1)', () => {
     expect(p).toContain('go straight to the summary');
   });
 
-  it('includes the Round B optional dimensions (valuable to / invite)', () => {
+  // 10 Sep 2026 (Claus): nothing about the member is ASKED as a profile field.
+  // Language, competitors, geography and invites are noted if mentioned.
+  it('never asks the member to describe their profile; notes invites if mentioned', () => {
     const p = buildHostSystemPrompt().toLowerCase();
-    expect(p).toContain('valuable to');
+    expect(p).toContain('never ask people to describe their profile');
     expect(p).toContain('invite');
+    expect(p).toContain('never ask for these');
   });
 
-  // 4 Sep 2026: the chat used to open on a fixed line that ignored the card.
-  it('the opening turn reads the card back and asks what the reason leaves open, never the reason itself', () => {
-    const p = buildHostSystemPrompt(undefined, 'opening');
-    expect(p).toContain('OPENING TURN');
-    expect(p).toMatch(/never quote it or answer it/);
-    expect(p).toMatch(/never ask what brings them here/);
-    expect(p).toMatch(/never the ready token/);
-    expect(buildHostSystemPrompt(undefined, 'none')).not.toContain('OPENING TURN');
+  // 10 Sep 2026 (Claus): three OPEN questions. The opening is universal and
+  // fixed (asked by the client/route, not generated); the second and third are
+  // adaptive, with Claus's defaults named so the host has the shape.
+  describe("Claus's arc: opening, adaptive exploration, adaptive value", () => {
+    it('names the three openings in order and says the first is already asked', () => {
+      const p = buildHostSystemPrompt();
+      const i1 = p.indexOf('what brought them here');
+      const i2 = p.indexOf("What's taking up your attention these days?");
+      const i3 = p.indexOf('And if being here turned out to be genuinely valuable, what might come from it?');
+      expect(i1).toBeGreaterThan(-1);
+      expect(i2).toBeGreaterThan(i1);
+      expect(i3).toBeGreaterThan(i2);
+      expect(p.toLowerCase()).toContain('the opening has already been asked');
+    });
+
+    it('never asks the defaults mechanically: adapt from the answer, skip what it already covered', () => {
+      const p = buildHostSystemPrompt().toLowerCase();
+      expect(p).toContain('do not ask it mechanically');
+      expect(p).toContain('ask the thing their answer leaves open');
+      expect(p).toContain('never ask people to describe their profile');
+      expect(p).toContain('list who they want to meet');
+      expect(p).toContain('becomes visible on its own');
+    });
+
+    it('allows one reflection as a statement, with Claus\'s example, and one follow-up per opening at most', () => {
+      const p = buildHostSystemPrompt();
+      expect(p.toLowerCase()).toContain('a reflection is different from reading back');
+      expect(p).toContain('less about finding the next company, and more about what deserves to be next.');
+      expect(p.toLowerCase()).toContain('as a statement, never as a question');
+      expect(p.toLowerCase()).toContain('at most one short follow-up per opening');
+    });
+
+    it('reads like a spoken conversation', () => {
+      expect(buildHostSystemPrompt().toLowerCase()).toContain('spoken conversation');
+    });
+
+    it('carries the server-side progress count into the prompt', () => {
+      const p = buildHostSystemPrompt(undefined, 'none', undefined, undefined, { asked: 3, max: 6 });
+      expect(p).toContain('So far you have asked 3 of at most 6.');
+      expect(buildHostSystemPrompt()).not.toContain('So far you have asked');
+    });
+
+    it('a soft finish asks the value question once if it is still open, never what they offer', () => {
+      const soft = buildHostSystemPrompt(undefined, 'soft').toLowerCase();
+      expect(soft).toContain('what might come from being here');
+      expect(soft).not.toContain('what they can help others with');
+    });
+
+    it('there is no generated opening mode any more', () => {
+      expect(buildHostSystemPrompt()).not.toContain('OPENING TURN');
+    });
   });
 
   it('injects the right finish instruction per wrapMode', () => {
@@ -147,10 +193,10 @@ describe('onboarding prompts (v1.1)', () => {
       expect(p).toContain('interrogat');
     });
 
-    it('still collects who they want to meet and who they would be valuable to', () => {
+    it('who they want to meet and what they bring are read from the conversation, not asked', () => {
       const p = buildHostSystemPrompt().toLowerCase();
-      expect(p).toContain('valuable for them to meet');
-      expect(p).toContain('valuable to');
+      expect(p).toContain('what they want and what they bring becomes visible on its own');
+      expect(p).not.toContain('who would be valuable for them to meet');
     });
 
     // 7 Sep 2026 (Ali, from his own chat): every turn read his answer back to
@@ -165,7 +211,8 @@ describe('onboarding prompts (v1.1)', () => {
       expect(p.toLowerCase()).toContain('at most three words');
       expect(p.toLowerCase()).toContain('at most 15 words');
       expect(p.toLowerCase()).toContain('never offer alternatives inside the question');
-      expect(p.toLowerCase()).toContain('at most three questions in the whole chat');
+      // 10 Sep 2026 (Claus): three openings plus at most three follow-ups.
+      expect(p.toLowerCase()).toContain('at most six questions in the whole chat');
       expect(p.toLowerCase()).toContain('accept brief answers as final');
     });
 
@@ -191,18 +238,42 @@ describe('onboarding prompts (v1.1)', () => {
       expect(p).toContain('geography');
     });
 
-    it('keeps these light: folded into the existing guidance, no new mandatory station added', () => {
+    it('keeps these light: noted if mentioned, never a question of their own', () => {
       const p = buildHostSystemPrompt();
-      // The "in order of importance" list stays at 3 items: the new content is
-      // woven into those, not appended as a 4th mandatory station.
-      const section = p.split('in order of importance:')[1]?.split(/\n\n/)[0] || '';
-      const numberedItems = section.match(/^\s*\d+\.\s/gm) || [];
-      expect(numberedItems.length).toBeLessThanOrEqual(3);
+      // 10 Sep 2026 (Claus): the arc is exactly three numbered openings; the
+      // language / competitor / geography / invite line is "take note; never
+      // ask for these", not a fourth station.
+      const numberedItems = p.match(/^\s*\d+\.\s+(The opening|Exploration|Value)/gm) || [];
+      expect(numberedItems.length).toBe(3);
+      expect(p.toLowerCase()).toContain('take note; never ask for these');
     });
 
     it('contains no dashes (style rule)', () => {
       const p = buildHostSystemPrompt();
       expect(EM_OR_EN_DASH.test(p)).toBe(false);
+    });
+  });
+
+  // 10 Sep 2026 (Claus): the profile is READ out of three open answers. The
+  // extractor must infer wants and offers from them (never invent facts).
+  describe('extraction reads wants and offers out of open answers', () => {
+    const p = EXTRACTION_PROMPT.toLowerCase();
+    it('knows the member was never asked to classify themselves', () => {
+      expect(p).toContain('never asked to describe themselves or to list who they want to meet');
+      expect(p).toContain('what brought them here');
+      expect(p).toContain('what has their attention');
+      expect(p).toContain('what might come from being here');
+    });
+    it('infers wants and offers, never facts', () => {
+      expect(p).toContain('may be inferred');
+      expect(p).toContain('are never invented');
+      expect(p).toContain('figuring out what to build next');
+      expect(p).toContain('inferred means lower');
+    });
+    it('has a rule for every field matching consumes', () => {
+      for (const f of ['reasonformeeting:', 'desiredoutcome:', 'currentfocus:', 'userexpertise', 'usercanoffer', 'userinterests:', 'userprofilesummary:']) {
+        expect(p).toContain(f);
+      }
     });
   });
 });

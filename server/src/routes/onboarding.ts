@@ -22,8 +22,10 @@ import {
   OnboardingEnrichmentState,
   OnboardingOpening,
   UserRole,
+  hostOpening,
 } from '@rsn/shared';
 import * as chatbot from '../services/onboarding/chatbot.service';
+import { MAX_HOST_QUESTIONS } from '../services/onboarding/prompts';
 import * as intentRepo from '../services/onboarding/intent.repo';
 import { inferKnownProfile } from '../services/onboarding/known';
 import * as enrichment from '../services/onboarding/enrichment.service';
@@ -301,12 +303,12 @@ router.post(
 );
 
 // ─── POST /onboarding/open ───────────────────────────────────────────────────
-// 4 Sep 2026 (Ali): the host's FIRST line, generated from what the card already
-// holds, instead of a fixed question that ignored it. Same known block, same
-// honesty clause as /chat; the model is told the one message it receives is a
-// system cue, not the member. Falls back to 503 LLM_DISABLED like /chat so the
-// client can show its static opening instead.
-const OPENING_CUE = '(system cue: the member has just confirmed their card and is waiting for you to open the conversation)';
+// 10 Sep 2026 (Claus): the host's first line is the universal opening, in his
+// words, asked of everyone. No model call: the only thing that varies is the
+// lead, which depends on whether we actually have a profile for them (the same
+// effective opening GET /onboarding/status reports). Still 503 LLM_DISABLED
+// when the model is unavailable, so the form fallback engages before the
+// member has typed anything into a chat that cannot answer.
 const openSchema = z.object({ profile: profileSchema });
 router.post(
   '/open',
@@ -320,25 +322,12 @@ router.post(
         return;
       }
       const userId = req.user!.userId;
-      const profile = req.body.profile as OnboardingConfirmedProfile | undefined;
-      const [hostKnown, enrichmentState] = await Promise.all([
-        Promise.resolve(intentRepo.getKnownProfileForHost(userId)).catch(() => undefined),
-        enrichRepo
-          .getEnrichmentState(userId)
-          .catch(() => ({ status: 'failed' as const, source: null, error: null, startedAt: null, completedAt: null })),
-      ]);
+      const enrichmentState = await enrichRepo
+        .getEnrichmentState(userId)
+        .catch(() => ({ status: 'failed' as const, source: null, error: null, startedAt: null, completedAt: null }));
       const effectiveOpening = await resolveEffectiveOpening(userId, enrichmentState.status);
-      let turn;
-      try {
-        turn = await chatbot.converse(
-          [{ role: 'user', content: OPENING_CUE }], profile, 'opening', hostKnown, effectiveOpening,
-        );
-      } catch (err) {
-        logger.error({ err, userId }, 'onboarding open failed — sending LLM_DISABLED fallback');
-        sendLlmDisabled(res);
-        return;
-      }
-      const response: ApiResponse = { success: true, data: { reply: turn.reply } };
+      const reply = hostOpening(effectiveOpening === 'found' || effectiveOpening === 'partial');
+      const response: ApiResponse = { success: true, data: { reply } };
       res.json(response);
     } catch (err) {
       next(err);
@@ -371,8 +360,15 @@ router.post(
         })
         .catch((err) => logger.warn({ err, userId }, 'onboarding markInProgress failed'));
 
-      const wrapMode: 'none' | 'soft' | 'hard' =
+      // 10 Sep 2026 (Claus): three open questions plus at most one follow-up
+      // each. The budget is counted here from the transcript (every host turn,
+      // the fixed opening included), told to the host, and enforced: at the
+      // limit the turn becomes a hard wrap whatever the model would have done.
+      const asked = messages.filter((m) => m.role === 'assistant').length;
+      const progress = { asked, max: MAX_HOST_QUESTIONS };
+      let wrapMode: 'none' | 'soft' | 'hard' =
         req.body.hardFinish === true ? 'hard' : req.body.finish === true ? 'soft' : 'none';
+      if (wrapMode === 'none' && asked >= MAX_HOST_QUESTIONS) wrapMode = 'hard';
       // Everything we already know (LinkedIn enrichment + saved fields) so the host
       // can answer "who am I", never re-ask, and personalise. Also the enrichment
       // state itself, so the honesty clause in the system prompt can tell the host
@@ -396,7 +392,7 @@ router.post(
       // the reply, and the card fills reliably on every turn.
       let turn;
       try {
-        turn = await chatbot.converse(messages, profile, wrapMode, hostKnown, effectiveOpening);
+        turn = await chatbot.converse(messages, profile, wrapMode, hostKnown, effectiveOpening, progress);
       } catch (err) {
         // LLM down (exhausted credits, revoked key, outage) → 503 LLM_DISABLED so
         // the client falls back to the form. 2 Jul: prod credits ran out and this

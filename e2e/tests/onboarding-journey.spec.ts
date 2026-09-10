@@ -3,14 +3,16 @@ import { createTestUser, TestUser, pool } from '../helpers/auth';
 import { gotoRetry, cleanup, cleanupByPrefix, APP } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
 
-// THE WHOLE ONBOARDING, IN THE BROWSER, ON PRODUCTION (3 Sep 2026).
+// THE WHOLE ONBOARDING, IN THE BROWSER, ON PRODUCTION, WITH THE REAL MODEL.
 //
-// Every other onboarding spec either stubs the status or drives the API. This
-// one does what a new member does on a phone: lands on /onboarding, skips the
-// LinkedIn ask, types three answers into the real chat against the real
-// model, presses "I'm done", presses "Yes, use this", and must land on
-// Suggestions with a toast naming the agents that were just built (B2's
-// client half) and those agents rendered on the page.
+// 10 Sep 2026 (Claus): the host holds a short spoken-style conversation on
+// three OPEN questions. The opening is universal and fixed, in Claus's words;
+// the second and third are adaptive. The host never asks the member to
+// describe their profile or to list who they want to meet: the profile,
+// wishes and desires are READ out of the answers. This spec talks like Claus's
+// own example ("I recently sold my company and I'm trying to figure out what
+// to build next") and checks what a member would see, plus what came out the
+// other end: a completed member with a seeded agent built from INFERRED wants.
 //
 // Costs a few cents of Anthropic credit per run. A 503 anywhere means the
 // prepaid balance is empty again.
@@ -20,9 +22,25 @@ let member: TestUser;
 let known: TestUser; // a member whose card already holds a reason and a company
 const ctxs: BrowserContext[] = [];
 
+const OPENING_QUESTION = "We believe you're here for a reason. Do you mind sharing what brought you here?";
+const KNOWN_LEAD = "We've already put together a first version of your profile. But before we get into that, we'd rather hear from you.";
+const NOT_FOUND = 'We could not identify your profile, so let us build it together.';
+
 const bubbles = (page: Page) => page.locator('.whitespace-pre-wrap');
 
-async function say(page: Page, text: string) {
+/** What every host turn must look like under Claus's model. */
+function expectHostTurn(reply: string, label: string) {
+  const r = reply.trim();
+  const questions = (r.match(/\?/g) || []).length;
+  expect(questions, `${label}: exactly one question`).toBe(1);
+  expect(r.split(/\s+/).length, `${label}: short enough to read`).toBeLessThanOrEqual(45);
+  expect(r, `${label}: never asks them to list who they want to meet`).not.toMatch(/who (do|would) you (want|like) to meet/i);
+  expect(r, `${label}: never asks them to describe what they offer`).not.toMatch(/what can you (offer|help)/i);
+  expect(r, `${label}: never reads the answer back`).not.toMatch(/^(so you|you're |you are |you want |sounds like|it sounds like)/i);
+  expect(r, `${label}: no dashes`).not.toMatch(/[—–]/);
+}
+
+async function say(page: Page, text: string, label: string) {
   const before = await bubbles(page).count();
   const box = page.locator('textarea[aria-label="Your answer"]');
   await expect(box).toBeVisible({ timeout: 30_000 });
@@ -35,6 +53,8 @@ async function say(page: Page, text: string) {
     throw new Error('the host answered with the LLM-disabled fallback: Anthropic balance empty?');
   }
   console.log(`  MEMBER: ${text}\n  HOST:   ${reply.trim()}`);
+  const done = await page.getByRole('button', { name: /Yes, use this/i }).isVisible().catch(() => false);
+  if (!done) expectHostTurn(reply, label);
   return reply;
 }
 
@@ -57,15 +77,9 @@ test.afterAll(async () => {
   await cleanupByPrefix(pool, 'e2etest-journey');
 });
 
-// 4 Sep 2026 (Ali's own run): his card said "because i want to meet
-// recruiters" and the chat opened with "Who would be most valuable for you to
-// meet?". The host must read the card back and ask what the reason leaves
-// open, never the reason itself.
-test('a member whose card already holds a reason and a company is not asked the reason again', async () => {
+test('a member with a profile on file hears the universal opening, then an adaptive second question', async () => {
   test.setTimeout(300_000);
   known = await createTestUser('journeyknown', 'member', 'not_started');
-  // The reason the card shows is users.why_i_want_to_meet (copied from the
-  // join request at approval); the company is on file too.
   await pool.query(
     `UPDATE users SET onboarding_completed = false, company = 'Fjord Analytics', job_title = NULL, bio = NULL,
        industry = NULL, location = NULL, linkedin_url = NULL, why_i_want_to_meet = 'because i want to meet recruiters'
@@ -89,17 +103,19 @@ test('a member whose card already holds a reason and a company is not asked the 
   await expect(page.getByText('because i want to meet recruiters')).toBeVisible();
   await cont.click();
 
+  // Claus: the opening is universal, in his words, even when a reason is on file.
   await expect(bubbles(page).first()).toBeVisible({ timeout: 60_000 });
   const opening = ((await bubbles(page).first().textContent()) || '').trim();
-  console.log(`  HOST (reason known): ${opening}`);
-  expect(opening).not.toBe('Who would be most valuable for you to meet?');
-  expect(opening).not.toMatch(/what brings you/i);
-  // It read the card: the reason, the company, or both, in its own words.
-  expect(opening).toMatch(/recruit|Fjord/i);
-  expect((opening.match(/\?/g) || []).length).toBeLessThanOrEqual(1);
+  console.log(`  HOST (profile known): ${opening}`);
+  expect(opening).toBe(`${KNOWN_LEAD} ${OPENING_QUESTION}`);
+  await expect(bubbles(page)).toHaveCount(1);
+
+  // The second question adapts to the answer; it is not the default read out.
+  const second = await say(page, "I recently sold my company and I'm trying to figure out what I want to build next.", 'second question');
+  expect(second.trim()).not.toBe("What's taking up your attention these days?");
 });
 
-test('a new member chats, confirms, and lands on Suggestions with their agents named and rendered', async () => {
+test('a new member talks through three open questions, confirms, and lands on Suggestions with an agent built from what they said', async () => {
   test.setTimeout(600_000);
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
   await ctx.addInitScript((t: { a: string; r: string }) => {
@@ -120,17 +136,15 @@ test('a new member chats, confirms, and lands on Suggestions with their agents n
   await expect(bubbles(page).first()).toBeVisible({ timeout: 60_000 });
   const opening = ((await bubbles(page).first().textContent()) || '').trim();
   console.log(`  HOST:   ${opening}`);
-  // 4 Sep 2026: the opening is the host's own line now, not the fixed one.
-  expect(opening).not.toBe('What brings you to Reason?');
-  expect(opening).not.toBe('Who would be most valuable for you to meet?');
-  expect(opening.split(/\s+/).length).toBeLessThanOrEqual(60);
+  expect(opening).toBe(`${NOT_FOUND} ${OPENING_QUESTION}`);
 
-  await say(page, 'I run a small fintech startup in Copenhagen, eight people, invoicing for freelancers.');
-  await say(page, 'I want to meet senior React developers who have shipped consumer products, and maybe an angel investor who knows Nordic fintech.');
-  await say(page, 'I can help others with pricing and with landing their first hundred paying customers.');
+  // Claus's example member. Never told who they want to meet in so many words.
+  await say(page, "I recently sold my fintech company in Copenhagen and I'm trying to figure out what I want to build next.", 'turn 1');
+  await say(page, "Mostly the question of whether to start again or join an early team as an operator. I keep getting pulled into climate.", 'turn 2');
+  await say(page, "A couple of honest conversations with people who have done a second company, and maybe one person who would back it early.", 'turn 3');
 
-  // Wrap up. The first press is soft (the host may ask one last, skippable
-  // thing); press until the confirm box appears.
+  // Wrap up. The first press is soft (the host may ask the value question once
+  // if it is still open); press until the confirm box appears.
   const confirmBtn = page.getByRole('button', { name: /Yes, use this/i });
   for (let i = 0; i < 3 && !(await confirmBtn.isVisible().catch(() => false)); i++) {
     const done = page.getByRole('button', { name: /I'm done/i });
@@ -142,19 +156,27 @@ test('a new member chats, confirms, and lands on Suggestions with their agents n
     }
   }
   await expect(confirmBtn).toBeVisible({ timeout: 30_000 });
+  // The whole chat stayed inside the budget: at most six host turns.
+  const hostTurns = await bubbles(page).evaluateAll((els) => els.filter((e) => !e.closest('[data-from="me"]')).length);
+  expect(hostTurns, 'host turns incl. the opening and the summary').toBeLessThanOrEqual(8);
   await confirmBtn.click();
 
-  // B2's client half: land on Suggestions with the agents named.
+  // Land on Suggestions with an agent named.
   await expect(page).toHaveURL(/\/agents/, { timeout: 60_000 });
   const toast = page.getByText(/searching now/i).first();
   await expect(toast).toBeVisible({ timeout: 15_000 });
-  const toastText = (await toast.textContent()) || '';
-  console.log(`  TOAST:  ${toastText.trim()}`);
-  expect(toastText).toMatch(/Developers|Investors/);
-  // Two kinds of person named: one searches, the other is a draft, and the toast says so.
-  expect(toastText).toMatch(/drafted/i);
+  console.log(`  TOAST:  ${((await toast.textContent()) || '').trim()}`);
 
-  // And the agents are real: rows, the main one searched, all rendered.
+  // The profile was READ, not asked: wants and offers inferred from the answers.
+  const u = await pool.query(
+    `SELECT onboarding_status::text s, onboarding_completed c, who_i_want_to_meet w, why_i_want_to_meet y, what_i_can_help_with h
+       FROM users WHERE id = $1`, [member.id]);
+  expect(u.rows[0].s).toBe('completed');
+  expect(u.rows[0].c).toBe(true);
+  expect(u.rows[0].w, 'who they want to meet was inferred').toBeTruthy();
+  expect(u.rows[0].y, 'why they are here, in their words').toBeTruthy();
+  console.log(`  READ:   wants="${u.rows[0].w}" | why="${u.rows[0].y}" | offers="${u.rows[0].h}"`);
+
   const rows = await pool.query(`SELECT id, label, status, last_matched_at FROM matching_agents WHERE user_id = $1 ORDER BY created_at`, [member.id]);
   expect(rows.rows.length).toBeGreaterThan(0);
   expect(rows.rows.filter(r => r.status === 'active').length, 'exactly one main agent').toBe(1);
@@ -163,10 +185,6 @@ test('a new member chats, confirms, and lands on Suggestions with their agents n
     await expect(page.getByTestId(`agent-${a.id}`)).toBeVisible({ timeout: 30_000 });
   }
   console.log(`  AGENTS: ${rows.rows.map(r => `${r.label} [${r.status}]`).join(' | ')}`);
-
-  // The gate is open now: the member is completed and not sent back.
-  const u = await pool.query(`SELECT onboarding_status::text s, onboarding_completed c FROM users WHERE id = $1`, [member.id]);
-  expect(u.rows[0]).toEqual({ s: 'completed', c: true });
 
   const overflow = await page.evaluate(() =>
     document.documentElement.scrollWidth - document.documentElement.clientWidth);
