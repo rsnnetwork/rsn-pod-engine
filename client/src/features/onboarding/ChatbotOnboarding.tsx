@@ -512,22 +512,12 @@ export default function ChatbotOnboarding() {
     return [{ role: 'assistant', content: hostOpening(op === 'found' || op === 'partial') }];
   }
 
-  // 4 Sep 2026 (Ali): the first line comes from the host, built from what the
-  // card already holds, so a member whose reason is known is not asked it
-  // again. The static line above is the fallback when the model is unavailable.
+  // 10 Sep 2026 (Claus): the opening is universal and fixed, so there is
+  // nothing to fetch. It is seeded from the same settled opening state the
+  // card just showed, instantly, with no round trip.
   async function openWithHost(op: OnboardingOpening) {
-    setMessages([]);
-    setSending(true);
-    try {
-      const res = await api.post('/onboarding/open', { profile: confirmedProfile() });
-      const reply = String(res.data?.data?.reply || '').trim();
-      setMessages(reply ? [{ role: 'assistant', content: reply }] : openingMessages(op));
-    } catch {
-      setMessages(openingMessages(op));
-    } finally {
-      setSending(false);
-      requestAnimationFrame(() => inputRef.current?.focus());
-    }
+    setMessages(openingMessages(op));
+    requestAnimationFrame(() => inputRef.current?.focus());
   }
 
   // Land on the right stage for a resolved (non-searching) opening: found/partial
