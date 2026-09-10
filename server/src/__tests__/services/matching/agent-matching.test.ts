@@ -146,6 +146,27 @@ describe('recomputeAgent', () => {
     expect(n).toBe(1);
   });
 
+  // 11 Sep 2026 (Ali): a fish-farming agent showed three consultants as "Close
+  // match" because "hands" (from "hands-on") was the one word they shared. A
+  // word most profiles on the network carry cannot make a match; an agent
+  // nobody fits is honestly empty.
+  it('a word shared by most profiles does not make a close match; a rare one still does', async () => {
+    const crowd = Array.from({ length: 10 }, (_, i) => candidate({
+      id: `u-${i}`, professionalRole: ['Consultant'], jobTitle: 'Consultant',
+      expertiseText: 'widgetry strategy for boards', whatICanHelpWith: 'board advice',
+    }));
+    // One person with a genuinely rare term the want also carries.
+    crowd.push(candidate({ id: 'u-rare', professionalRole: ['Chef'], jobTitle: 'Chef', expertiseText: 'aquaponics and trout', whatICanHelpWith: 'cooking' }));
+    mockQuery.mockResolvedValueOnce({ rows: crowd }).mockResolvedValueOnce({ rows: [] });
+    const n = await recomputeAgent({ ...AGENT, wantText: 'people with widgetry experience in trout farming' });
+    const [, matches] = mockReplaceMatches.mock.calls[0];
+    const ids = matches.map((m: any) => m.candidateUserId);
+    expect(ids).toEqual(['u-rare']);           // "trout" is rare → close match
+    expect(matches[0].reason).toMatch(/trout/);
+    expect(matches[0].reason).not.toMatch(/widgetry/); // "widgetry" is on 10 of 11 profiles → ignored
+    expect(n).toBe(1);
+  });
+
   it('an agent with no want text stores nothing rather than matching everyone', async () => {
     const n = await recomputeAgent({ ...AGENT, wantText: '   ' });
     expect(n).toBe(0);

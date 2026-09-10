@@ -32,6 +32,14 @@ describe('filler words cannot introduce two strangers', () => {
     },
   );
 
+  // 11 Sep 2026 (Ali): "hands" from "hands-on" made three strangers close matches.
+  it('profile boilerplate words are not matchable terms either', () => {
+    expect(tokenizeTerms(['hands-on experience in fish farming'])).toEqual(['fish', 'farming']);
+    for (const word of ['hands', 'based', 'passionate', 'currently', 'expertise', 'professional', 'years']) {
+      expect(tokenizeTerms([word])).toEqual([]);
+    }
+  });
+
   it('does not match a CEO to a developer search on filler alone (the live report)', () => {
     const ceo = profile({
       id: 'u-ceo', displayName: 'Rachel L',

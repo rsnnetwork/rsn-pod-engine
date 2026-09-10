@@ -15,7 +15,7 @@
 import { query } from '../../db';
 import logger from '../../config/logger';
 import * as agentRepo from './agent.repo';
-import { scoreWants, MATCH_THRESHOLD, BROWSE_THRESHOLD, IntentProfile, displayRole } from './platform-match.service';
+import { scoreWants, genericOfferTerms, MATCH_THRESHOLD, BROWSE_THRESHOLD, IntentProfile, displayRole } from './platform-match.service';
 
 /** Below this many strong matches an agent widens to the closest people. */
 const WIDEN_BELOW = 3;
@@ -131,7 +131,9 @@ export async function recomputeAgent(agent: {
     // industries/stage/seniority there), so a manufacturing want counts even
     // when the label alone is a bare designation.
     const wants = [agent.wantText, ...(agent.matchingTags ?? [])];
-    const all = candidates.map(c => ({ c, fit: scoreWants(wants, c) }));
+    // A word most profiles share ("hands", "experienced") cannot make a match.
+    const generic = genericOfferTerms(candidates);
+    const all = candidates.map(c => ({ c, fit: scoreWants(wants, c, generic) }));
     const fresh = all
       .filter(x => x.fit.score >= MATCH_THRESHOLD)
       .sort((a, b) => b.fit.score - a.fit.score)

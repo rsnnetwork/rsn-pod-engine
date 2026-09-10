@@ -195,6 +195,10 @@ const STOP = new Set([
   'more', 'most', 'new', 'good', 'great', 'best', 'better', 'big', 'small',
   'also', 'just', 'very', 'really', 'much', 'many', 'well', 'own', 'next',
   'first', 'last', 'same', 'right', 'able', 'interested', 'interesting',
+  // 11 Sep 2026 (Ali): "hands" (from "hands-on") was the only word three
+  // profiles shared with a fish-farming agent, and it made them close matches.
+  'hands', 'hand', 'based', 'passionate', 'currently', 'focus', 'focused',
+  'expertise', 'professional', 'professionals', 'years', 'year',
 ]);
 
 /** Lowercased, de-duped word tokens (length >= 3, stopwords dropped). */

@@ -125,8 +125,27 @@ export function wantedDesignationsFrom(
  * Stefan's one-way rule, scored. Returns 0 when there is no fit; the reason is
  * human-readable and shown on the match card AND used as the introduction text.
  */
-export function scoreFit(me: IntentProfile, other: IntentProfile): { score: number; reason: string } {
-  return scoreWants(wantSources(me), other);
+export function scoreFit(me: IntentProfile, other: IntentProfile, generic?: Set<string>): { score: number; reason: string } {
+  return scoreWants(wantSources(me), other, generic);
+}
+
+/**
+ * Words that most profiles on the network share (11 Sep 2026, Ali: three
+ * consultants were "close matches" for a fish-farming agent because "hands",
+ * from "hands-on", was the one word they had in common). A term present in a
+ * quarter or more of the candidates says nothing about a fit, so the scorer
+ * ignores it. Needs a real sample (8+ candidates) before it judges anything.
+ */
+export function genericOfferTerms(candidates: IntentProfile[], minShare = 0.25, minCount = 8): Set<string> {
+  const generic = new Set<string>();
+  if (candidates.length < minCount) return generic;
+  const df = new Map<string, number>();
+  for (const c of candidates) {
+    for (const t of tokenizeTerms(offerSources(c))) df.set(t, (df.get(t) ?? 0) + 1);
+  }
+  const cutoff = Math.ceil(candidates.length * minShare);
+  for (const [t, n] of df) if (n >= cutoff) generic.add(t);
+  return generic;
 }
 
 /**
@@ -139,8 +158,9 @@ export function scoreFit(me: IntentProfile, other: IntentProfile): { score: numb
 export function scoreWants(
   wants: Array<string | null | undefined>,
   other: IntentProfile,
+  generic?: Set<string>,
 ): { score: number; reason: string } {
-  const f = analyzeWants(wants, other);
+  const f = analyzeWants(wants, other, generic);
   return { score: f.score, reason: f.score <= 0 ? '' : formatForSeeker(f) };
 }
 
@@ -224,6 +244,7 @@ function formatForRecipient(f: WantFit, senderName: string): string {
 function analyzeWants(
   wants: Array<string | null | undefined>,
   other: IntentProfile,
+  generic?: Set<string>,
 ): WantFit {
   const name = other.displayName || 'They';
 
@@ -240,7 +261,7 @@ function analyzeWants(
   // The CATEGORY is matched by meaning: synonyms applied at score time (not
   // only when an agent was created) and related word forms, so "manufacturer"
   // reaches "industrial fabrication" and "developers" reaches "development".
-  const wantTokens = tokenizeTerms([...wants, ...expandWantTags(wants)]);
+  const wantTokens = tokenizeTerms([...wants, ...expandWantTags(wants)]).filter(t => !generic?.has(t));
   const offerTokens = tokenizeTerms(offerSources(other));
   const overlap = termOverlapRelated(wantTokens, offerTokens);
 
@@ -369,7 +390,8 @@ export async function getPlatformMatches(
 
   const threshold = opts.browse ? BROWSE_THRESHOLD : MATCH_THRESHOLD;
   const candidates = await loadCandidates(userId);
-  const scoredAll = candidates.map(c => ({ c, fit: scoreFit(me, c) }));
+  const generic = genericOfferTerms(candidates);
+  const scoredAll = candidates.map(c => ({ c, fit: scoreFit(me, c, generic) }));
   let picked = scoredAll.filter(x => x.fit.score >= threshold);
   // Never empty (Stefan, 9 Sep 2026): fewer than 3 strong matches → also show
   // the closest people, labelled. Explicit constraints are enforced inside the
