@@ -509,9 +509,11 @@ describe('POST /onboarding/open', () => {
 
 // ─── 10 Sep 2026 (Claus): the question budget is enforced server-side ────────
 describe('POST /onboarding/chat question budget', () => {
+  // Real-length answers: two one-word answers in a row would end the chat on
+  // their own (memberHasGoneQuiet), which is a separate rule tested below.
   const host = (n: number) => Array.from({ length: n }, (_, i) => ([
     { role: 'assistant', content: `Host question ${i + 1}?` },
-    { role: 'user', content: `Answer ${i + 1}` },
+    { role: 'user', content: `Answer ${i + 1}, said in a full sentence with some detail in it` },
   ])).flat();
 
   it('tells the host how many questions it has asked so far', async () => {
@@ -524,6 +526,23 @@ describe('POST /onboarding/chat question budget', () => {
     const args = (chatbot.converse as jest.Mock).mock.calls[0];
     expect(args[2]).toBe('none');
     expect(args[5]).toEqual({ asked: 3, max: 6 });
+  });
+
+  it('forces a hard wrap when the member has answered in a word or two twice in a row', async () => {
+    (chatbot.isEnabled as jest.Mock).mockReturnValue(true);
+    (chatbot.converse as jest.Mock).mockResolvedValue({ reply: 'Thanks. <<READY>>', ready: true });
+    await request(app)
+      .post('/onboarding/chat')
+      .set('Authorization', `Bearer ${makeToken('user-budget-3')}`)
+      .send({ messages: [
+        { role: 'assistant', content: 'Do you mind sharing what brought you here?' },
+        { role: 'user', content: 'idk yet' },
+        { role: 'assistant', content: 'What has your attention these days?' },
+        { role: 'user', content: 'football' },
+        { role: 'assistant', content: 'What is it about football?' },
+        { role: 'user', content: 'game' },
+      ] });
+    expect((chatbot.converse as jest.Mock).mock.calls[0][2]).toBe('hard');
   });
 
   it('forces a hard wrap once six host questions have been asked', async () => {

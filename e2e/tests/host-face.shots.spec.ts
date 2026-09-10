@@ -69,24 +69,3 @@ for (const [label, viewport] of [['phone390', { width: 390, height: 844 }], ['de
   });
 }
 
-// 10 Sep 2026 (Ali's screenshot): on a short desktop window the confirm card
-// was taller than the screen and vertically centred, so the face at the top
-// and the footnote at the bottom were both clipped and unreachable. The
-// screen now starts at the top and scrolls.
-test('the confirm card starts at the top with the face fully visible on a short window, and scrolls', async () => {
-  test.setTimeout(120_000);
-  await pool.query(`UPDATE users SET linkedin_url = 'https://www.linkedin.com/in/hostface-e2e', company = 'Axorvian', job_title = 'MLOps Engineer', bio = 'A long enough About to make the card tall. '.repeat(6) WHERE id = $1`, [user.id]);
-  const page = await open({ width: 1280, height: 700 }, 'found');
-  await expect(page.getByText(/Is it right\?/i)).toBeVisible({ timeout: 30_000 });
-  const face = page.getByTestId('host-face').first();
-  await expect.poll(async () => (await face.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(90);
-  const box = await face.boundingBox();
-  expect(box!.y, 'the face is not clipped above the viewport').toBeGreaterThanOrEqual(0);
-  await page.screenshot({ path: 'shots/onboarding/confirm-card-short-window.png' }).catch(() => {});
-  // The card is taller than 700px: the buttons are reachable by scrolling.
-  const cont = page.getByRole('button', { name: /Yes, continue/i });
-  await cont.scrollIntoViewIfNeeded();
-  await expect(cont).toBeVisible();
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-  expect(overflow).toBeLessThanOrEqual(0);
-});

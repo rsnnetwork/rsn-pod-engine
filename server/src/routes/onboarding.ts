@@ -25,7 +25,7 @@ import {
   hostOpening,
 } from '@rsn/shared';
 import * as chatbot from '../services/onboarding/chatbot.service';
-import { MAX_HOST_QUESTIONS } from '../services/onboarding/prompts';
+import { MAX_HOST_QUESTIONS, memberHasGoneQuiet } from '../services/onboarding/prompts';
 import * as intentRepo from '../services/onboarding/intent.repo';
 import { inferKnownProfile } from '../services/onboarding/known';
 import * as enrichment from '../services/onboarding/enrichment.service';
@@ -369,6 +369,9 @@ router.post(
       let wrapMode: 'none' | 'soft' | 'hard' =
         req.body.hardFinish === true ? 'hard' : req.body.finish === true ? 'soft' : 'none';
       if (wrapMode === 'none' && asked >= MAX_HOST_QUESTIONS) wrapMode = 'hard';
+      // Two one-word answers in a row after the second opening: no more
+      // questions, whatever the model would have asked (Ali, 10 Sep).
+      if (wrapMode === 'none' && memberHasGoneQuiet(messages)) wrapMode = 'hard';
       // Everything we already know (LinkedIn enrichment + saved fields) so the host
       // can answer "who am I", never re-ask, and personalise. Also the enrichment
       // state itself, so the honesty clause in the system prompt can tell the host

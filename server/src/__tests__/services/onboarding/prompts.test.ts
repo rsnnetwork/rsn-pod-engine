@@ -1,4 +1,4 @@
-import { buildHostSystemPrompt, EXTRACTION_PROMPT } from '../../../services/onboarding/prompts';
+import { buildHostSystemPrompt, EXTRACTION_PROMPT, memberHasGoneQuiet } from '../../../services/onboarding/prompts';
 
 const EM_OR_EN_DASH = /[—–]/;
 
@@ -105,6 +105,33 @@ describe('onboarding prompts (v1.1)', () => {
       expect(p).toContain('less about finding the next company, and more about what deserves to be next.');
       expect(p).toContain('the hire is the whole expansion');
       expect(low).toContain('at most one short follow-up per opening');
+    });
+
+    // 10 Sep 2026 (Ali's own chat): "idk yet" / "football" / "game" / "yes" /
+    // "idk" drew six questions in a row, closed fact questions among them.
+    // A short answer is final; two in a row end the questions.
+    it('never follows up a one-line answer, never fishes with closed questions, stops after two short answers', () => {
+      const low = buildHostSystemPrompt().toLowerCase();
+      expect(low).toContain('a one word or one line answer is final: never follow it up');
+      expect(low).toContain('never fish for facts with closed questions');
+      expect(low).toContain('if two answers in a row are that short');
+      expect(low).toContain('stop asking, summarise what you have');
+      expect(buildHostSystemPrompt(undefined, 'hard').toLowerCase()).toContain('answered in a word or two twice in a row');
+    });
+
+    it('memberHasGoneQuiet: two short answers in a row after the second opening', () => {
+      const h = (c: string) => ({ role: 'assistant' as const, content: c });
+      const m = (c: string) => ({ role: 'user' as const, content: c });
+      const opening = h('Do you mind sharing what brought you here?');
+      // Only the opening asked: never quiet yet, even on a one-word answer.
+      expect(memberHasGoneQuiet([opening, m('idk yet')])).toBe(false);
+      // Second opening asked, two short answers: quiet.
+      expect(memberHasGoneQuiet([opening, m('idk yet'), h('What has your attention?'), m('football'), h('What draws you?'), m('game')])).toBe(true);
+      // A real answer in between resets it.
+      expect(memberHasGoneQuiet([opening, m('idk yet'), h('What has your attention?'), m('I coach a youth team on weekends and want to find a sponsor'), h('Who?'), m('yes')])).toBe(false);
+      // Three words is still short; four is not.
+      expect(memberHasGoneQuiet([opening, m('not sure yet'), h('Q2?'), m('mostly the game'), h('Q3?'), m('yes')])).toBe(true);
+      expect(memberHasGoneQuiet([opening, m('not sure yet'), h('Q2?'), m('mostly the game I think'), h('Q3?'), m('yes')])).toBe(false);
     });
 
     it('the closing names the kind of person we will look for, in their words', () => {

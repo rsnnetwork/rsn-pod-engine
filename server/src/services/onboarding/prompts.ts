@@ -16,6 +16,21 @@ export const READY_TOKEN = '<<READY>>';
 /** Three openings plus at most one follow-up each. Enforced by POST /chat. */
 export const MAX_HOST_QUESTIONS = 6;
 
+/**
+ * A member answering in a word or two is not teasing material (Ali, 10 Sep:
+ * "idk yet" / "football" / "game" / "yes" / "idk" drew six questions in a row).
+ * Once the second opening has been asked, two such answers in a row end the
+ * questions: the route forces the wrap. `messages` is the whole transcript.
+ */
+export const THIN_ANSWER_WORDS = 3;
+export function memberHasGoneQuiet(messages: OnboardingMessage[]): boolean {
+  const asked = messages.filter((m) => m.role === 'assistant').length;
+  if (asked < 3) return false;
+  const answers = messages.filter((m) => m.role === 'user').map((m) => m.content.trim().split(/\s+/).filter(Boolean).length);
+  const last = answers.slice(-2);
+  return last.length === 2 && last.every((n) => n <= THIN_ANSWER_WORDS);
+}
+
 // The opening question itself is fixed and shared (hostOpening in @rsn/shared):
 // the route returns it and the client seeds it, so no model call is spent on
 // it and the wording is always Claus's.
@@ -102,7 +117,7 @@ export function buildHostSystemPrompt(
 ): string {
   const wrap =
     wrapMode === 'hard'
-      ? '\nThe member has asked to finish. Do not ask anything else. Summarise what you already have in one or two short warm sentences, then emit the ready token immediately.\n'
+      ? '\nThe member has asked to finish, or has answered in a word or two twice in a row and does not want more questions. Do not ask anything else. Summarise what you already have in one or two short warm sentences, honestly (if there is little, say we will go with what they gave us and they can tell us more whenever they like), then emit the ready token immediately.\n'
       : wrapMode === 'soft'
         ? '\nThe member wants to finish. If the third opening (what might come from being here) has not been asked yet, ask it once, in one line, and make clear they can skip, for example by saying skip or by pressing done again. Do not summarise and do not emit the ready token yet. If it has already been answered, summarise now and emit the ready token.\n'
         : '';
@@ -124,7 +139,7 @@ The conversation is three open questions. The opening has already been asked (wh
 
 Each question is written for this one person: never a stock sentence, never a template with their detail bolted on the end. If the question would only make sense to this person, it is right. If it could be sent to anyone, rewrite it.
 
-Between openings, at most one short follow-up per opening, and only if their answer was a single line or you genuinely did not understand it. Never re-ask anything already answered or already known. If they mention a language, a competitor or a geography they would rather avoid, or someone they want to invite, take note; never ask for these.
+Between openings, at most one short follow-up per opening, and only when their answer had substance but left something open. A one word or one line answer is final: never follow it up, never ask them to expand, narrow or explain it, never fish for facts with closed questions (are you playing, what level, which one). Move on to the next opening instead. If two answers in a row are that short, they do not want to talk right now: stop asking, summarise what you have, and say they can tell us more whenever they like. Never re-ask anything already answered or already known. If they mention a language, a competitor or a geography they would rather avoid, or someone they want to invite, take note; never ask for these.
 
 Be efficient without being cold. Never make the member feel interrogated:
 - Sound like a person who is interested, not a form. Let their last answer shape the next question, without quoting it.
