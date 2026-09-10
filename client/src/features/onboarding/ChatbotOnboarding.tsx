@@ -879,14 +879,14 @@ export default function ChatbotOnboarding() {
     return (
       <div className={shellClass} style={{ height: '100dvh' }}>
         <div
-          className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-8"
+          className="flex flex-1 flex-col items-center overflow-y-auto px-4 py-8"
           style={{ paddingTop: 'max(env(safe-area-inset-top), 2rem)', paddingBottom: 'max(env(safe-area-inset-bottom), 2rem)' }}
         >
           <motion.div
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.45 }}
-            className="flex w-full max-w-md flex-col items-center gap-5 text-center"
+            className="my-auto flex w-full max-w-md flex-col items-center gap-5 text-center"
           >
             <HostPresence size={104} state="idle" />
             <div>
@@ -938,14 +938,14 @@ export default function ChatbotOnboarding() {
     return (
       <div className={shellClass} style={{ height: '100dvh' }}>
         <div
-          className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-8"
+          className="flex flex-1 flex-col items-center overflow-y-auto px-4 py-8"
           style={{ paddingTop: 'max(env(safe-area-inset-top), 2rem)', paddingBottom: 'max(env(safe-area-inset-bottom), 2rem)' }}
         >
           <motion.div
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.45 }}
-            className="flex w-full max-w-md flex-col items-center gap-5 text-center"
+            className="my-auto flex w-full max-w-md flex-col items-center gap-5 text-center"
           >
             <HostPresence size={104} state="thinking" />
             <div>
@@ -964,14 +964,14 @@ export default function ChatbotOnboarding() {
     return (
       <div className={shellClass} style={{ height: '100dvh' }}>
         <div
-          className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-8"
+          className="flex flex-1 flex-col items-center overflow-y-auto px-4 py-8"
           style={{ paddingTop: 'max(env(safe-area-inset-top), 2rem)', paddingBottom: 'max(env(safe-area-inset-bottom), 2rem)' }}
         >
           <motion.div
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.45 }}
-            className="flex w-full max-w-md flex-col items-center gap-5 text-center"
+            className="my-auto flex w-full max-w-md flex-col items-center gap-5 text-center"
           >
             <HostPresence size={96} state="idle" />
             <div>
@@ -1004,14 +1004,14 @@ export default function ChatbotOnboarding() {
     return (
       <div className={shellClass} style={{ height: '100dvh' }}>
         <div
-          className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-8"
+          className="flex flex-1 flex-col items-center overflow-y-auto px-4 py-8"
           style={{ paddingTop: 'max(env(safe-area-inset-top), 2rem)', paddingBottom: 'max(env(safe-area-inset-bottom), 2rem)' }}
         >
           <motion.div
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5 }}
-            className="flex w-full max-w-md sm:max-w-2xl flex-col items-center gap-5 text-center"
+            className="my-auto flex w-full max-w-md sm:max-w-2xl flex-col items-center gap-5 text-center"
           >
             <HostPresence size={104} state="idle" />
             <div className="flex flex-col items-center gap-1">
