@@ -35,7 +35,7 @@ const DEPENDENTS = [
   ['user_entitlements', 'user_id'], ['user_subscriptions', 'user_id'],
   ['notifications', 'user_id'], ['refresh_tokens', 'user_id'], ['audit_log', 'actor_id'],
   ['onboarding_stage_events', 'user_id'], ['user_intent_profiles', 'user_id'],
-  ['magic_links', 'email = $2', 'email'],
+  ['magic_links', 'lower(email) = $1', 'email'],
 ];
 
 // Things the account OWNS that other people may be inside. Never deleted here:
@@ -84,7 +84,7 @@ async function main() {
     if (id) {
       for (const [table, where, mode] of DEPENDENTS) {
         const clause = mode === true ? where : mode === 'email' ? where : `${where} = $1`;
-        const params = mode === 'email' ? [id, email] : [id];
+        const params = mode === 'email' ? [email] : [id];
         const n = await pool.query(`SELECT COUNT(*)::int n FROM ${table} WHERE ${clause}`, params).then(r => r.rows[0].n).catch(() => null);
         if (n === null) { console.log(`  ${table} (${where}): (table/column missing, skipped)`); continue; }
         if (n) console.log(`  ${table} (${where}): ${n} row(s)`);
@@ -101,9 +101,19 @@ async function main() {
     if (id) {
       for (const [table, where, mode] of DEPENDENTS) {
         const clause = mode === true ? where : mode === 'email' ? where : `${where} = $1`;
-        const params = mode === 'email' ? [id, email] : [id];
+        const params = mode === 'email' ? [email] : [id];
+        // 14 Sep 2026 (Shradha's reset): a failing probe inside the transaction
+        // aborted the whole run ("current transaction is aborted") and every
+        // reset rolled back. A probe runs under a savepoint so a missing table
+        // or column is skipped without poisoning the transaction.
+        await client.query('SAVEPOINT probe');
         const n = await client.query(`SELECT COUNT(*)::int n FROM ${table} WHERE ${clause}`, params).then(r => r.rows[0].n).catch(() => null);
-        if (n === null) { console.log(`  ${table} (${where}): (table/column missing, skipped)`); continue; }
+        if (n === null) {
+          await client.query('ROLLBACK TO SAVEPOINT probe');
+          console.log(`  ${table} (${where}): (table/column missing, skipped)`);
+          continue;
+        }
+        await client.query('RELEASE SAVEPOINT probe');
         if (n) {
           console.log(`  ${table} (${where}): ${n} row(s) → deleting`);
           await client.query(`DELETE FROM ${table} WHERE ${clause}`, params);
