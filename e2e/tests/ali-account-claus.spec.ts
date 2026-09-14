@@ -43,8 +43,11 @@ function expectHostTurn(reply: string, label: string) {
   expect(r, `${label}: never asks them to describe their profile`).not.toMatch(/describe (yourself|your profile)|tell me about yourself/i);
   expect(r, `${label}: never reads the answer back`).not.toMatch(/^(so you|you're |you are |you want |sounds like|it sounds like)/i);
   expect(r, `${label}: no dashes`).not.toMatch(/[—–]/);
+  // An "A or B?" choice put to the member ("already using it, or open to it?")
+  // is the thing Claus forbids; "someone who runs or builds for a factory" is
+  // ordinary phrasing. Only the comma-separated alternative form is flagged.
   const q = r.split(/(?<=[.!])\s+/).find((s) => s.includes('?')) || r;
-  expect(q, `${label}: no "A or B?" question`).not.toMatch(/\bor\b/i);
+  expect(q, `${label}: no "A, or B?" choice`).not.toMatch(/,\s*or\b[^?]*\?/i);
 }
 
 async function say(page: Page, text: string, label: string) {
