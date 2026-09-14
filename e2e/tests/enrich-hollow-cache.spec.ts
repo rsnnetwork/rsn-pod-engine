@@ -28,7 +28,8 @@ test.afterAll(async () => {
 async function seeded(name: string, enriched: unknown): Promise<TestUser> {
   const u = await createTestUser(name, 'member', 'not_started');
   users.push(u);
-  await pool.query(`UPDATE users SET linkedin_url = $2, onboarding_completed = false WHERE id = $1`, [u.id, URL]);
+  // A saved title or company wins over the page (rightly), so the fixture must hold none.
+  await pool.query(`UPDATE users SET linkedin_url = $2, onboarding_completed = false, job_title = NULL, company = NULL, bio = NULL, industry = NULL WHERE id = $1`, [u.id, URL]);
   await pool.query(
     `INSERT INTO user_intent_profiles (user_id, inferred_profile, enrichment_status, enrichment_source, enrichment_completed_at, updated_at)
        VALUES ($1, jsonb_build_object('enriched', $2::jsonb), 'found', 'scrapingdog', NOW(), NOW())
