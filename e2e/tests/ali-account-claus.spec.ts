@@ -132,9 +132,15 @@ test("Ali's account: live LinkedIn card, Claus's chat, agents, record", async ()
   // 4. The card.
   const cont = page.getByRole('button', { name: /Yes, continue/i });
   await expect(cont).toBeVisible({ timeout: 120_000 });
-  await expect.poll(async () =>
-    (await pool.query(`SELECT avatar_blob IS NOT NULL AS b FROM users WHERE id = $1`, [userId])).rows[0].b,
-    { timeout: 90_000, intervals: [3_000] }).toBe(true);
+  // A photo is stored only when the page offers a real one; Ali's own page
+  // hands a logged-out scraper LinkedIn's grey placeholder, which is no photo.
+  if (p.photoUrl) {
+    await expect.poll(async () =>
+      (await pool.query(`SELECT avatar_blob IS NOT NULL AS b FROM users WHERE id = $1`, [userId])).rows[0].b,
+      { timeout: 90_000, intervals: [3_000] }).toBe(true);
+  } else {
+    console.log('  no real photo on the page (placeholder only): the card offers Google photo / upload instead');
+  }
   await shot(page, 'card');
   const cardText = ((await page.locator('body').textContent()) || '').replace(/\s+/g, ' ');
   console.log(`  card: ${cardText.slice(cardText.indexOf('Name'), cardText.indexOf('Name') + 420)}`);
@@ -205,6 +211,6 @@ test("Ali's account: live LinkedIn card, Claus's chat, agents, record", async ()
   const ip = (await pool.query(`SELECT matching_intent mi, profile_strength ps FROM user_intent_profiles WHERE user_id = $1`, [userId])).rows[0];
   console.log(`  RECORD: status=${rec.s} | company=${rec.company} | role=${rec.job_title} (${rec.job_title_source}) | bio=${String(rec.bio || '').slice(0, 80)} | expertise=${rec.expertise_text}\n  WANTS: ${rec.who_i_want_to_meet}\n  WHY: ${rec.why_i_want_to_meet}\n  INTENT: strength=${ip.ps} role=${ip.mi.userRole} company=${ip.mi.userCompany} industry=${ip.mi.userIndustry} wants=${JSON.stringify(ip.mi.desiredPeople)} roles=${JSON.stringify(ip.mi.desiredRoles)}`);
   expect(rec.s).toBe('completed');
-  expect(rec.avatar_url).toBeTruthy();
+  if (p.photoUrl) expect(rec.avatar_url).toBeTruthy();
   expect(rec.who_i_want_to_meet, 'who he wants to meet was read out of the answers').toMatch(/manufactur|factor|supply/i);
 });
