@@ -399,7 +399,7 @@ describe('Identity Service', () => {
 
       it('HIGH confidence (>= found bar) → setEnrichmentState called with found + timestamps from enrichedAt', async () => {
         mockNewUserChain({
-          profile: { fullName: 'Preload Person' },
+          profile: { fullName: 'Preload Person', headline: 'Head of Ops at Preload', currentRole: 'Head of Ops', currentCompany: 'Preload' },
           confidence: 0.9,
           sources: [],
           foundLinkedinUrl: null,
@@ -425,7 +425,7 @@ describe('Identity Service', () => {
 
       it('LOW confidence (>= partial bar, below found bar) → setEnrichmentState called with partial', async () => {
         mockNewUserChain({
-          profile: { fullName: 'Preload Person' },
+          profile: { fullName: 'Preload Person', headline: 'Head of Ops at Preload', currentRole: 'Head of Ops', currentCompany: 'Preload' },
           confidence: 0.45,
           sources: [],
           foundLinkedinUrl: null,
@@ -446,7 +446,7 @@ describe('Identity Service', () => {
 
       it('legacy blob with no provider field (pre-fix cache / claude_web rollback path) → source falls back to null, not a guessed provider', async () => {
         mockNewUserChain({
-          profile: { fullName: 'Preload Person' },
+          profile: { fullName: 'Preload Person', headline: 'Head of Ops at Preload', currentRole: 'Head of Ops', currentCompany: 'Preload' },
           confidence: 0.9,
           sources: [],
           foundLinkedinUrl: null,
@@ -506,7 +506,7 @@ describe('Identity Service', () => {
       it('setEnrichmentState rejecting does NOT break login (best-effort, mirrors saveEnrichedCandidate error handling)', async () => {
         (enrichRepo.setEnrichmentState as jest.Mock).mockRejectedValueOnce(new Error('db down'));
         mockNewUserChain({
-          profile: { fullName: 'Preload Person' },
+          profile: { fullName: 'Preload Person', headline: 'Head of Ops at Preload', currentRole: 'Head of Ops', currentCompany: 'Preload' },
           confidence: 0.8,
           sources: [],
           foundLinkedinUrl: null,
@@ -551,7 +551,7 @@ describe('Identity Service', () => {
 
     it('HIGH confidence (>= found bar) → setEnrichmentState called with found + timestamps from enrichedAt', async () => {
       mockNewGoogleUserChain({
-        profile: { fullName: 'Google Preload' },
+        profile: { fullName: 'Google Preload', headline: 'Head of Ops at Preload', currentRole: 'Head of Ops', currentCompany: 'Preload' },
         confidence: 0.9,
         sources: [],
         foundLinkedinUrl: null,
@@ -584,7 +584,7 @@ describe('Identity Service', () => {
 
     it('LOW confidence (>= partial bar, below found bar) → setEnrichmentState called with partial', async () => {
       mockNewGoogleUserChain({
-        profile: { fullName: 'Google Preload' },
+        profile: { fullName: 'Google Preload', headline: 'Head of Ops at Preload', currentRole: 'Head of Ops', currentCompany: 'Preload' },
         confidence: 0.45,
         sources: [],
         foundLinkedinUrl: null,
@@ -648,7 +648,7 @@ describe('Identity Service', () => {
     it('setEnrichmentState rejecting does NOT break login (best-effort, mirrors saveEnrichedCandidate error handling)', async () => {
       (enrichRepo.setEnrichmentState as jest.Mock).mockRejectedValueOnce(new Error('db down'));
       mockNewGoogleUserChain({
-        profile: { fullName: 'Google Preload' },
+        profile: { fullName: 'Google Preload', headline: 'Head of Ops at Preload', currentRole: 'Head of Ops', currentCompany: 'Preload' },
         confidence: 0.8,
         sources: [],
         foundLinkedinUrl: null,

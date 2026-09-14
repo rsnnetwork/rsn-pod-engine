@@ -61,6 +61,31 @@ describe('scrapingdogProvider', () => {
     expect(outcome.result.sources).toEqual(['scrapingdog:jane-doe']);
   });
 
+  // 14 Sep 2026 (Shradha): LinkedIn's guest view masks entries it will not
+  // show ("******* *******") and leaves every position blank. A masked entry
+  // is not a past role, and never the current company either.
+  it('drops experience entries LinkedIn masked with asterisks', async () => {
+    const raw = {
+      fullName: 'Shradha Adhikari', headline: '', about: '', location: '',
+      experience: [
+        { position: '', company_name: '******* *******', starts_at: '', ends_at: '', duration: '' },
+        { position: '', company_name: 'Raw Speed Networking | RSN', starts_at: '', ends_at: '', duration: '' },
+        { position: '', company_name: 'misterraw', starts_at: '', ends_at: '', duration: '' },
+        { position: '*****', company_name: '', starts_at: '', ends_at: '', duration: '' },
+      ],
+    };
+    jest.spyOn(globalThis, 'fetch').mockResolvedValue(mockResponse(200, raw));
+
+    const outcome = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/shradhadhikari' });
+
+    expect(outcome.kind).toBe('partial');
+    if (outcome.kind !== 'partial') throw new Error('expected partial');
+    expect(outcome.result.profile?.currentCompany).toBe('Raw Speed Networking | RSN');
+    expect(outcome.result.profile?.currentRole).toBeNull();
+    expect(outcome.result.profile?.pastRoles).toEqual(['at misterraw']);
+    expect(outcome.missing).toEqual(['headline', 'currentRole']);
+  });
+
   it('returns partial with missing[] when headline/experience are absent', async () => {
     const raw = { fullName: 'Sam Lee', location: 'NYC', experience: [] };
     jest.spyOn(globalThis, 'fetch').mockResolvedValue(mockResponse(200, raw));
@@ -231,7 +256,8 @@ describe('scrapingdogProvider', () => {
     expect(outcome.result.profile?.fullName).toBe('Ali Hamza');
     expect(outcome.result.profile?.currentCompany).toBe('RankViz Pvt Limited');
     expect(outcome.result.profile?.photoUrl).toMatch(/^https:\/\/media\.licdn\.com\//);
-    expect(outcome.result.profile?.pastRoles).toHaveLength(2);
+    // 14 Sep 2026: the fixture's third entry is LinkedIn's masked "**** ***** ****"; it is not a past role.
+    expect(outcome.result.profile?.pastRoles).toEqual(['at webgrower']);
     expect(outcome.result.profile?.education).toHaveLength(2);
   });
 

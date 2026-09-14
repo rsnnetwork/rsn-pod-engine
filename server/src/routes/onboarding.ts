@@ -32,7 +32,7 @@ import * as enrichment from '../services/onboarding/enrichment.service';
 import * as enrichRepo from '../services/onboarding/enrichment.repo';
 import { runEnrichment, isFreshCacheHit } from '../services/onboarding/enrichment.orchestrator';
 import { tryGravatar } from '../services/onboarding/avatar.service';
-import { resolveEnrichProvider, statusFromConfidence } from '../services/onboarding/providers/registry';
+import { resolveEnrichProvider, statusFromResult } from '../services/onboarding/providers/registry';
 import { record as recordStageEvent, sanitizeErrorMessage } from '../services/onboarding/stage-events.repo';
 import logger from '../config/logger';
 import { createFirstAgents } from '../services/matching/first-agent.service';
@@ -250,7 +250,7 @@ router.post(
 
       const cached = await enrichRepo.getCachedEnrichment(userId).catch(() => null);
       if (isFreshCacheHit(cached, linkedinUrl)) {
-        const response: ApiResponse = { success: true, data: { status: statusFromConfidence(cached!.confidence) } };
+        const response: ApiResponse = { success: true, data: { status: statusFromResult(cached) } };
         res.json(response);
       } else {
         const response: ApiResponse = { success: true, data: { status: 'searching' } };

@@ -313,6 +313,24 @@ describe('runEnrichment', () => {
       expect(params.status).toBe('found');
     });
 
+    // 14 Sep 2026 (Shradha): the approval preload cached a ScrapingDog payload
+    // with no headline, no role and no About at confidence 0.7, and the cache
+    // hit then reported it as "found". A hollow profile reflects as partial,
+    // the same verdict the live path gives it.
+    it('a fresh cache hit with a hollow profile (no headline, no role) reflects as partial, not found', async () => {
+      mockGetCachedEnrichment.mockResolvedValue(foundResult({
+        confidence: 0.7, requestedLinkedinUrl: REQ_URL, profile: baseProfile({ headline: '', currentRole: '' }),
+      }));
+
+      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+
+      expect(mockScrapingdogEnrich).not.toHaveBeenCalled();
+      const [, params] = lastStateCall();
+      expect(params.status).toBe('partial');
+      expect(stageCall('enrich_partial')).toBeDefined();
+      expect(stageCall('enrich_found')).toBeUndefined();
+    });
+
     // 7 Sep 2026 (Ali): members approved before their first login arrive with
     // the approval-time cache, and this branch never captured the photo.
     it('a fresh cache hit captures the cached photo when the member has no avatar yet', async () => {

@@ -16,7 +16,7 @@ import { invalidateUserStatusCache } from '../../middleware/auth';
 import { sendMagicLinkEmail } from '../email/email.service';
 import { saveEnrichedCandidate, setEnrichmentState } from '../onboarding/enrichment.repo';
 import type { EnrichResult } from '../onboarding/enrichment.service';
-import { statusFromConfidence } from '../onboarding/providers/registry';
+import { statusFromResult } from '../onboarding/providers/registry';
 
 // ─── Registration Gate ──────────────────────────────────────────────────────
 // New users can only sign up if they have an approved join request OR a valid invite code.
@@ -498,7 +498,7 @@ export async function verifyMagicLink(token: string): Promise<AuthTokenPair> {
       );
       // Also seed the enrichment STATE machine (user_intent_profiles.enrichment_*)
       // from the same blob, using the SAME confidence→status mapping the
-      // orchestrator's 90-day cache-hit path uses (statusFromConfidence,
+      // orchestrator's 90-day cache-hit path uses (statusFromResult,
       // providers/registry.ts) — so GET /onboarding/status already returns
       // found/partial on this member's very first call instead of 'none' (the
       // ~3-5s "searching" flash the client used to show while its own trigger
@@ -506,7 +506,7 @@ export async function verifyMagicLink(token: string): Promise<AuthTokenPair> {
       // discipline as saveEnrichedCandidate above: a write failure must never
       // break login.
       await setEnrichmentState(user.id, {
-        status: statusFromConfidence(seed.enriched.confidence),
+        status: statusFromResult(seed.enriched),
         // The preload blob carries the RESOLVED provider that produced it
         // (join-request.service.ts stashes it at preload time). Blobs written
         // before that field existed — including ones from the legacy
@@ -699,7 +699,7 @@ export async function findOrCreateGoogleUser(
       // Same enrichment-state seeding as verifyMagicLink — see its comment
       // for the confidence→status mapping + source-value rationale.
       await setEnrichmentState(id, {
-        status: statusFromConfidence(seed.enriched.confidence),
+        status: statusFromResult(seed.enriched),
         source: seed.enriched.provider ?? null,
         startedAt: seed.enriched.enrichedAt,
         completedAt: seed.enriched.enrichedAt,

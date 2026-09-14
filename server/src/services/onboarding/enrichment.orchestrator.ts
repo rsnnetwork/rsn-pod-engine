@@ -44,7 +44,7 @@ import {
 } from './enrichment.service';
 
 import { getCachedEnrichment, getEnrichmentState, saveEnrichedCandidate, setEnrichmentState } from './enrichment.repo';
-import { resolveEnrichProvider, runProvider, statusFromConfidence, type EnrichProviderName } from './providers/registry';
+import { resolveEnrichProvider, runProvider, statusFromResult, type EnrichProviderName } from './providers/registry';
 import type { ProviderOutcome } from './providers/provider.types';
 import { captureAvatar, hasAvatar, tryGravatar } from './avatar.service';
 import { record as recordStageEvent, type StageEventStage, sanitizeErrorMessage } from './stage-events.repo';
@@ -258,7 +258,7 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
     // compare against", so a fresh cache still counts as a hit.
     const cached = await getCachedEnrichment(userId).catch(() => null);
     if (isFreshCacheHit(cached, linkedinUrl)) {
-      const status = statusFromConfidence(cached!.confidence);
+      const status = statusFromResult(cached);
       await writeState(userId, { status });
       logTerminal(userId, provider, status, startedAtMs, { cacheHit: true });
       // 7 Sep 2026 (Ali: "why is it not getting my image?"): members approved

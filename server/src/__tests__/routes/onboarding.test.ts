@@ -1198,7 +1198,7 @@ describe('POST /onboarding/enrich', () => {
 
   it('200s with the cached status on a fresh 90-day cache hit (still fires the orchestrator to keep state in sync)', async () => {
     (enrichRepo.getCachedEnrichment as jest.Mock).mockResolvedValue({
-      profile: { fullName: 'Jane Doe' },
+      profile: { fullName: 'Jane Doe', headline: 'VP Engineering at Acme', currentRole: 'VP Engineering', currentCompany: 'Acme' },
       confidence: 0.95,
       sources: [],
       foundLinkedinUrl: 'https://www.linkedin.com/in/jane-doe',

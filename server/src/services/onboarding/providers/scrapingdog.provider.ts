@@ -74,9 +74,9 @@ async function fetchOnce(slug: string): Promise<{ status: number; body?: any }> 
 
 /** Render one past-experience entry into the flat string RSN's existing pastRoles: string[] shape expects. */
 function formatPastRole(e: any): string {
-  const role = e.position ?? e.title ?? null;
-  const company = e.company_name ?? e.company ?? null;
-  const duration = e.duration ?? null;
+  const role = text(e.position ?? e.title);
+  const company = text(e.company_name ?? e.company);
+  const duration = text(e.duration);
   return [role, company ? `at ${company}` : null, duration ? `(${duration})` : null].filter(Boolean).join(' ');
 }
 
@@ -88,29 +88,44 @@ function formatPastRole(e: any): string {
  * `experience` that isn't an array, or that contains null entries, is
  * tolerated and mapped as best-effort rather than crashing.
  */
+// 14 Sep 2026 (Shradha): LinkedIn's guest view hides entries it will not show
+// as runs of asterisks ("******* *******") and leaves every position blank. A
+// masked entry is not a past role and never the current company; an entry
+// with neither a title nor a company says nothing at all.
+const MASKED = /^[\s*•·]+$/;
+const isMasked = (v: unknown): boolean => typeof v === 'string' && v.trim().length > 0 && MASKED.test(v);
+const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
+function usableExperience(e: any): boolean {
+  if (e == null || typeof e !== 'object') return false;
+  const role = text(e.position ?? e.title);
+  const company = text(e.company_name ?? e.company);
+  if (isMasked(role) || isMasked(company)) return false;
+  return !!(role || company);
+}
+
 function mapProfile(raw: any, requestedUrl: string): { profile: EnrichedProfile; missing: string[] } | null {
   const p = Array.isArray(raw) ? raw[0] : raw;
   if (!p || typeof p !== 'object') return null;
 
-  const exp: any[] = Array.isArray(p.experience) ? p.experience : [];
+  const rawExp: any[] = Array.isArray(p.experience) ? p.experience : [];
+  const exp: any[] = rawExp.filter(usableExperience);
   const current = exp[0] ?? {};
-  const fullName = p.fullName ?? [p.first_name, p.last_name].filter(Boolean).join(' ') ?? null;
-  const headline = p.headline ?? null;
+  const fullName = text(p.fullName) ?? text([p.first_name, p.last_name].filter(Boolean).join(' '));
+  const headline = text(p.headline);
 
-  const hasSignal = !!fullName || !!headline || exp.some((e: any) => e != null);
+  const hasSignal = !!fullName || !!headline || rawExp.some((e: any) => e != null);
   if (!hasSignal) return null;
 
   const profile: EnrichedProfile = {
     fullName,
     headline,
-    currentRole: current.position ?? current.title ?? null,
-    currentCompany: current.company_name ?? current.company ?? null,
-    industry: p.industry ?? null,
-    location: p.location ?? null,
-    summary: p.about ?? null,
+    currentRole: text(current.position ?? current.title),
+    currentCompany: text(current.company_name ?? current.company),
+    industry: text(p.industry),
+    location: text(p.location),
+    summary: text(p.about),
     pastRoles: exp
       .slice(1)
-      .filter((e: any) => e != null)
       .map(formatPastRole)
       .filter((s: string) => s.length > 0),
     education: p.education ?? [],

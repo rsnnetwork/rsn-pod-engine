@@ -111,6 +111,23 @@ const GAP_FIELDS = ['headline', 'currentRole', 'currentCompany', 'industry', 'lo
 const REQUIRED_FOR_FOUND = ['headline', 'currentRole', 'currentCompany'] as const;
 
 /**
+ * The status a CACHED result reflects (14 Sep 2026). Confidence alone said
+ * "found" for Shradha's hollow ScrapingDog payload (0.7: no headline, no
+ * role, no About) on every reflect path (the orchestrator's 90-day cache hit,
+ * the /enrich route, the login copy-forward), while the live path had called
+ * the very same payload partial. One mapping for all of them: confidence
+ * decides below the found line exactly as before, and a found is downgraded
+ * to partial when a required field is empty. It never upgrades.
+ */
+export function statusFromResult(result: EnrichResult | null | undefined): 'found' | 'partial' | 'not_found' {
+  const byConfidence = statusFromConfidence(result?.confidence ?? 0);
+  if (byConfidence !== 'found') return byConfidence;
+  const p = result?.profile;
+  if (!p) return 'partial';
+  return REQUIRED_FOR_FOUND.some((k) => !p[k]) ? 'partial' : 'found';
+}
+
+/**
  * 4 Sep 2026 (Ali's own test): the About we DID fetch said "a passionate
  * MLOps & Geospatial Engineer" while the card showed Role "Not set", because
  * the web step could not identify that thin profile. When the person's own
