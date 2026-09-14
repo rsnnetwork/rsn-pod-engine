@@ -193,6 +193,19 @@ describe('createFirstAgents', () => {
     ]);
   });
 
+  // 14 Sep 2026 (prod first-agent smoke): "angel investors" matched the
+  // investor pattern twice (angel, investors) and outranked the "react
+  // developers" asked for first. A mention is a phrase, not a regex hit.
+  it('two words for one kind of person in one phrase count once; the first thing asked for stays the main agent', async () => {
+    await createFirstAgents('u-1', {
+      whoText: 'React developers, angel investors with fintech expertise, developer, investor',
+      whyText: '',
+    });
+    expect(created().map(c => [c.label, c.status])).toEqual([
+      ['Developers and engineers', 'active'], ['Investors', 'paused'],
+    ]);
+  });
+
   it('searches the main agent immediately, so the member does not land on an empty page; drafts wait for resume', async () => {
     await createFirstAgents('u-1', { whoText: 'founders and investors', whyText: '' });
     expect(mockRecompute).toHaveBeenCalledTimes(1);

@@ -104,12 +104,17 @@ function withQualifiers(base: string, quals: string[]): string {
  */
 function wantedInOrderSaid(text: string): Array<{ key: string; label: string }> {
   const t = text.toLowerCase();
+  // 14 Sep 2026: a mention is a PHRASE that names the kind of person, not a
+  // regex hit. "angel investors" used to count twice (angel + investors) and
+  // outrank the "react developers" the member asked for first.
+  const phrases = t.split(/[,;]|\band\b/).map(p => p.trim()).filter(Boolean);
   return designationsWanted(text)
     .map(w => {
       const bucket = ROLE_TAXONOMY.find(b => b.key === w.key);
       const re = bucket ? (bucket.wants ?? bucket.is) : null;
-      const first = re ? re.exec(t) : null;
-      const mentions = re ? (t.match(new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g')) || []).length : 0;
+      const plain = re ? new RegExp(re.source, re.flags.replace('g', '')) : null;
+      const first = plain ? plain.exec(t) : null;
+      const mentions = plain ? phrases.filter(p => plain.test(p)).length : 0;
       return { ...w, at: first ? first.index : Number.MAX_SAFE_INTEGER, mentions };
     })
     .sort((a, b) => b.mentions - a.mentions || a.at - b.at)
