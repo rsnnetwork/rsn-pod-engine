@@ -312,6 +312,24 @@ describe('chatbot.service', () => {
       expect(result.userCompany).toBe('Acme');
     });
 
+    // 14 Sep 2026 (Ali): the LinkedIn result rides along as stated facts.
+    it('hands the known profile to the model after the conversation, and sends no block when nothing is known', async () => {
+      mockCreate.mockResolvedValue({ content: [{ type: 'text', text: JSON.stringify(validIntent) }] });
+      await extractIntent(history, { name: 'Bill Gates', role: 'Chair of the Gates Foundation', company: 'Gates Foundation', skills: ['Philanthropy', 'Software'], likelyWantsToMeet: ['climate founders'] });
+      const withKnown = mockCreate.mock.calls[0][0].messages[0].content as string;
+      expect(withKnown).toContain('Known profile (facts we already hold');
+      expect(withKnown).toContain('- Current role: Chair of the Gates Foundation');
+      expect(withKnown).toContain('- Skills: Philanthropy, Software');
+      expect(withKnown).toContain('Likely wants to meet (a hint, not stated): climate founders');
+      expect(withKnown.indexOf('Member: I want to meet founders')).toBeLessThan(withKnown.indexOf('Known profile (facts we already hold'));
+      expect(withKnown.indexOf('Known profile (facts we already hold')).toBeLessThan(withKnown.indexOf('Output contract'));
+
+      mockCreate.mockClear();
+      await extractIntent(history, { name: null, skills: [] });
+      const without = mockCreate.mock.calls[0][0].messages[0].content as string;
+      expect(without).not.toContain('Known profile (facts we already hold');
+    });
+
     it('throws on invalid JSON', async () => {
       mockCreate.mockResolvedValue({
         content: [{ type: 'text', text: 'not json at all' }],

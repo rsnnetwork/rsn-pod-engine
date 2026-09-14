@@ -166,7 +166,8 @@ export const EXTRACTION_PROMPT = `You are the extraction step for the Reason pla
 
 Rules:
 - The Member was never asked to describe themselves or to list who they want to meet. The host asked three open things: what brought them here, what has their attention these days, and what might come from being here. Read the profile out of those answers.
-- Facts about the Member (userCompany, userRole, userIndustry, userLocation, userCity, userLanguages, restrictions) are never invented: only what they actually said. If a fact was not mentioned, use an empty array, an empty string, or null (for userCompany, userIndustry, userLocation). Do not guess facts.
+- Facts about the Member (userCompany, userRole, userIndustry, userLocation, userCity, userLanguages, restrictions) are never invented: only what they actually said, or what the Known profile below states. If a fact was not mentioned anywhere, use an empty array, an empty string, or null (for userCompany, userIndustry, userLocation). Do not guess facts.
+- A "Known profile" block, when present after the conversation, holds facts we already hold about the Member, from their LinkedIn and their request. Treat them as stated by the Member: use them for userRole, userCompany, userIndustry, userLocation, userExpertise, userInterests, userProfileSummary, embeddingText and matchingTags, and count them when scoring userProfile confidence. The conversation adds to them, and where the two disagree the conversation wins. A headline that names no role gives no userRole. The block's "likely wants to meet" and "likely offers" are only hints: use them for desiredPeople or userCanOffer when the conversation gives nothing on that point, at low confidence.
 - Wants and offers may be INFERRED from what they said, and should be: desiredPeople, desiredRoles, desiredDesignations, userCanOffer, userValuableTo and matchingTags. "I sold my company and I am figuring out what to build next" implies meeting founders, operators and early stage investors, and offers founder experience. Make the inference explicit in those fields, and set confidenceScores honestly: inferred means lower than stated.
 - When the Member said little (a word or two per answer), still infer desiredPeople and desiredRoles from whatever they did say about their work or their reason, at low confidence: "blogs" at a company implies meeting content marketers, editors and bloggers; "my shop" implies meeting suppliers and other shop owners. Leave them empty only when nothing about their work or their reason came through at all.
 - Normalise everything to English.
@@ -212,4 +213,46 @@ export function serializeConversation(messages: OnboardingMessage[]): string {
   return messages
     .map((m) => `${m.role === 'assistant' ? 'Host' : 'Member'}: ${m.content}`)
     .join('\n');
+}
+
+// ─── Known profile for the extraction step (14 Sep 2026) ─────────────────────
+// Ali: "linkedIn whole data so profile is strong". The extractor used to read
+// the chat only; the facts we already hold ride along as a block it is told
+// to treat as stated. Rendered after the conversation. Empty when we hold
+// nothing, so a member we could not identify is extracted exactly as before.
+export interface ExtractionKnown {
+  name?: string | null;
+  headline?: string | null;
+  role?: string | null;
+  company?: string | null;
+  industry?: string | null;
+  location?: string | null;
+  about?: string | null;
+  skills?: string[];
+  pastRoles?: string[];
+  likelyWantsToMeet?: string[];
+  likelyOffers?: string[];
+  reason?: string | null;
+}
+export function serializeKnownForExtraction(k?: ExtractionKnown | null): string {
+  if (!k) return '';
+  const lines: string[] = [];
+  const add = (label: string, v?: string | string[] | null) => {
+    if (Array.isArray(v)) { if (v.length) lines.push(`- ${label}: ${v.join(', ')}`); }
+    else if (typeof v === 'string' && v.trim()) lines.push(`- ${label}: ${v.trim().slice(0, 600)}`);
+  };
+  add('Name', k.name);
+  add('Headline', k.headline);
+  add('Current role', k.role);
+  add('Company', k.company);
+  add('Industry', k.industry);
+  add('Location', k.location);
+  add('About, in their own words', k.about);
+  add('Skills', k.skills);
+  add('Past roles', k.pastRoles);
+  add('Likely wants to meet (a hint, not stated)', k.likelyWantsToMeet);
+  add('Likely offers (a hint, not stated)', k.likelyOffers);
+  add('Reason given on their request', k.reason);
+  if (!lines.length) return '';
+  return `\n\nKnown profile (facts we already hold about the Member, from their LinkedIn and their request):\n${lines.join('\n')}\n`;
 }

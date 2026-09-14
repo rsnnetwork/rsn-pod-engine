@@ -36,6 +36,19 @@ import { resolveEnrichProvider, statusFromResult } from '../services/onboarding/
 import { record as recordStageEvent, sanitizeErrorMessage } from '../services/onboarding/stage-events.repo';
 import logger from '../config/logger';
 import { createFirstAgents } from '../services/matching/first-agent.service';
+import { knownForIntent, strengthenIntent } from '../services/onboarding/intent-strengthen';
+
+// 14 Sep 2026 (Ali: "linkedIn whole data so profile is strong"): everything
+// we hold about the member, for the extraction step. The cached enrichment
+// first, the saved columns (a title, industry or bio the member owns) on top.
+// Never throws: a member we hold nothing about is extracted as before.
+async function knownForExtraction(userId: string) {
+  const [cached, host] = await Promise.all([
+    enrichRepo.getCachedEnrichment(userId).catch(() => null),
+    Promise.resolve(intentRepo.getKnownProfileForHost(userId)).catch(() => undefined),
+  ]);
+  return knownForIntent(cached?.profile ?? null, host ?? null);
+}
 import { fanoutUserEntity } from '../realtime/fanout';
 
 const router = Router();
@@ -431,7 +444,8 @@ router.post(
       }
       const userId = req.user!.userId;
       const messages = req.body.messages as OnboardingMessage[];
-      const intent = await chatbot.extractIntent(messages).catch((err) => {
+      const known = await knownForExtraction(userId);
+      const intent = await chatbot.extractIntent(messages, known).then((i) => strengthenIntent(i, known)).catch((err) => {
         logger.warn({ err, userId }, 'onboarding live extraction failed');
         recordStageEvent(userId, 'extract_failed', { source: 'profile', message: sanitizeErrorMessage(err) }).catch(() => {});
         return null;
@@ -475,7 +489,8 @@ router.post(
 
       let intent;
       try {
-        intent = await chatbot.extractIntent(messages);
+        const known = await knownForExtraction(userId);
+        intent = strengthenIntent(await chatbot.extractIntent(messages, known), known);
       } catch (err) {
         // Same LLM-down mapping as /chat — the client falls back to the form
         // instead of a dead confirm button. Save the transcript first so the

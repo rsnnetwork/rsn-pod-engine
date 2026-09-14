@@ -20,6 +20,8 @@ import {
   EXTRACTION_PROMPT,
   READY_TOKEN,
   serializeConversation,
+  serializeKnownForExtraction,
+  type ExtractionKnown,
   type HostKnownExtra,
   type HostProgress,
 } from './prompts';
@@ -244,7 +246,8 @@ function parseModelJson(raw: string): unknown {
 }
 
 export async function extractIntent(
-  messages: OnboardingMessage[]
+  messages: OnboardingMessage[],
+  known?: ExtractionKnown | null,
 ): Promise<ExtractedIntent> {
   const anthropic = getClient();
   const resp = await anthropic.messages.create({
@@ -253,7 +256,10 @@ export async function extractIntent(
     messages: [
       {
         role: 'user',
-        content: EXTRACTION_PROMPT + serializeConversation(messages) + EXTRACTION_OUTPUT_CONTRACT,
+        // 14 Sep 2026: the facts we already hold (LinkedIn + the request) ride
+        // along after the conversation, so a two-word chat still extracts a
+        // known person. Empty block when we hold nothing.
+        content: EXTRACTION_PROMPT + serializeConversation(messages) + serializeKnownForExtraction(known) + EXTRACTION_OUTPUT_CONTRACT,
       },
     ],
   });
