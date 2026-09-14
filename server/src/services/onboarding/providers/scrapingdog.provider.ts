@@ -202,12 +202,14 @@ function formatEducation(e: any): string | null {
  * `experience` that isn't an array, or that contains null entries, is
  * tolerated and mapped as best-effort rather than crashing.
  */
-export function mapProfile(raw: any, requestedUrl: string): { profile: EnrichedProfile; missing: string[] } | null {
+export function mapProfile(raw: any, requestedUrl: string): { profile: EnrichedProfile; missing: string[]; masked: number } | null {
   const p = Array.isArray(raw) ? raw[0] : raw;
   if (!p || typeof p !== 'object') return null;
 
   const rawExp: any[] = list(p.experience);
   const exp: any[] = rawExp.filter(usableExperience);
+  // Entries the guest view hid ("******* *******"): the cached copy may still hold them.
+  const masked = rawExp.filter((e) => e && typeof e === 'object' && (isMasked(e.position ?? e.title) || isMasked(e.company_name ?? e.company))).length;
   const current = exp[0] ?? {};
   const fullName = text(p.fullName) ?? text([p.first_name, p.last_name].filter(Boolean).join(' '));
   const headline = text(p.headline);
@@ -273,7 +275,7 @@ export function mapProfile(raw: any, requestedUrl: string): { profile: EnrichedP
     highlights,
   };
   const missing = (['headline', 'currentRole', 'currentCompany'] as const).filter((k) => !profile[k]);
-  return { profile, missing };
+  return { profile, missing, masked };
 }
 
 /**
@@ -384,9 +386,11 @@ export const scrapingdogProvider: EnrichmentProvider = {
     //    gap-filler when the live page came back thin (guest-view masking).
     //    Not after a rate limit that never cleared: the cached call would be
     //    rate-limited too, and the attempt budget has already been spent.
-    let cachedMapped: { profile: EnrichedProfile; missing: string[] } | null = null;
+    let cachedMapped: { profile: EnrichedProfile; missing: string[]; masked: number } | null = null;
     const liveFailedHard = live.kind === 'retry_exhausted';
-    if ((!liveMapped || isThin(liveMapped.profile)) && !liveFailedHard) {
+    // Thin, or with entries the guest view masked: the cached copy may hold
+    // the headline, the About or the older positions the live page hid.
+    if ((!liveMapped || isThin(liveMapped.profile) || liveMapped.masked > 0) && !liveFailedHard) {
       const cached = await scrape(slug);
       if (cached.kind === 'ok') {
         cachedMapped = mapProfile(cached.body, requestedUrl);

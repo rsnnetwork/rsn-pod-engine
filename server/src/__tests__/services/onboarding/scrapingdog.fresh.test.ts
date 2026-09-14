@@ -77,7 +77,22 @@ describe('mapProfile: the whole page', () => {
       '4K followers on LinkedIn',
     ]);
     expect(m.missing).toEqual(['headline', 'currentRole']);
+    // One entry the guest view hid.
+    expect(m.masked).toBe(1);
     expect(isThin(m.profile)).toBe(false);
+  });
+
+  it('a live page with masked entries but an About still reads the cached copy for the older positions', async () => {
+    const fetchMock = jest.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(mock(200, shradhaLive))
+      .mockResolvedValueOnce(mock(200, shradhaCached));
+    const out = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/shradhadhikari' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    if (out.kind !== 'partial') throw new Error('expected partial');
+    expect(out.result.profile?.currentCompany).toBe('Vokt');
+    expect(out.result.profile?.summary).toBe('Curious about data and business.');
+    expect(out.result.profile?.pastRoles).toEqual(['at Raw Speed Networking | RSN', 'at misterraw']);
+    jest.restoreAllMocks();
   });
 
   it('an education entry with a school reads as a line', () => {
