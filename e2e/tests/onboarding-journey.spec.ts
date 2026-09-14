@@ -19,7 +19,8 @@ import { primePreview } from '../helpers/preview-bypass';
 
 let browser: Browser;
 let member: TestUser;
-let known: TestUser; // a member whose card already holds a reason and a companylet thin: TestUser; // a member who answers in one word, twice (Shradha, 14 Sep)
+let known: TestUser; // a member whose card already holds a reason and a company
+let thin: TestUser; // a member who answers in one word, twice (Shradha, 14 Sep)
 
 const ctxs: BrowserContext[] = [];
 
