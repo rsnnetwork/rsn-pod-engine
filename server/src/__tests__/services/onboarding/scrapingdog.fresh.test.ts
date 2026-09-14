@@ -64,7 +64,7 @@ describe('mapProfile: the whole page', () => {
     expect(m.profile.pastRoles).toEqual([]);
     expect(m.profile.certifications).toEqual(['Python for Data Science, AI & Development (IBM, Jul 2025)', 'Business Development Foundations (LinkedIn, Mar 2025)']);
     expect(m.profile.volunteering).toEqual(['Researcher at Robin Hood Army']);
-    expect(m.profile.publications).toEqual(['On Nepali fintech']);
+    expect(m.profile.publications).toEqual(['On Nepali fintech (Blog)']);
     expect(m.profile.languages).toEqual(['English', 'Nepali']);
     // A masked college with only years is not an education line.
     expect(m.profile.educationText).toEqual([]);
@@ -72,7 +72,7 @@ describe('mapProfile: the whole page', () => {
     expect(m.profile.highlights).toEqual([
       'Certified: Python for Data Science, AI & Development (IBM, Jul 2025); Business Development Foundations (LinkedIn, Mar 2025)',
       'Volunteers as Researcher at Robin Hood Army',
-      'Published: On Nepali fintech',
+      'Published: On Nepali fintech (Blog)',
       'Speaks English, Nepali',
       '4K followers on LinkedIn',
     ]);
@@ -109,6 +109,35 @@ describe('mapProfile: the whole page', () => {
     expect(m.profile.currentCompany).toBe('Gates Foundation');
     expect(m.profile.pastRoles).toEqual(['Founder at Breakthrough Energy (11 years)', 'Co-founder at Microsoft (51 years)']);
     expect(m.missing).toEqual([]);
+  });
+
+  // Shradha's page (14 Sep): two recommendations with full text (the payload
+  // carries the collapsed copy, "Show more", the full copy, "Show less"), a
+  // publication with a summary, and the top card's company on a live scrape.
+  it('recommendations keep their expanded text, publications keep their summary, posts are titles, and the top card names the company', () => {
+    const m = mapProfile({
+      fullName: 'Shradha Adhikari', experience: [], description: { description1: 'Vokt', description1_link: 'https://www.linkedin.com/company/vokt' },
+      recommendations: [
+        { name: 'Stefan Avivson', link: 'https://uk.linkedin.com/in/avivson', summary: '“People who dare win more. Shradha is one of them.”' },
+        { name: 'Pravakar B.', link: 'https://np.linkedin.com/in/pravakarbogati', summary: '“I had the pleasure of working with Shradha where she headed… Show more “I had the pleasure of working with Shradha where she headed the National Office for Business Development at AIESEC Nepal.” Show less' },
+      ],
+      publications: [{ name: 'Business and Management in Asia', sub_title: 'Springer Nature', summary: 'Co-authored a book chapter on Invisible Enterprises.', date: '2026', link: '' }],
+      activities: [{ title: 'Why founders should write', link: '', image: '', activity: 'Shared by Shradha' }],
+      articles: [{ title: 'On Nepali fintech', link: '', author: 'Shradha', published_date: '2025' }],
+    }, 'u')!;
+    expect(m.profile.currentCompany).toBe('Vokt');
+    expect(m.profile.recommendations).toEqual([
+      'Stefan Avivson: “People who dare win more. Shradha is one of them.”',
+      'Pravakar B.: “I had the pleasure of working with Shradha where she headed the National Office for Business Development at AIESEC Nepal.”',
+    ]);
+    expect(m.profile.publications).toEqual(['Business and Management in Asia (Springer Nature): Co-authored a book chapter on Invisible Enterprises.']);
+    expect(m.profile.posts).toEqual(['Why founders should write', 'On Nepali fintech']);
+    expect(m.profile.highlights).toEqual([
+      'Published: Business and Management in Asia (Springer Nature): Co-authored a book chapter on Invisible Enterprises.',
+      'Recent posts: Why founders should write; On Nepali fintech',
+      'Recommended by Stefan Avivson: “People who dare win more. Shradha is one of them.”',
+      'Recommended by Pravakar B.: “I had the pleasure of working with Shradha where she headed the National Office for Business Development at AIESEC Nepal.”',
+    ]);
   });
 
   it('an education entry with a school reads as a line', () => {

@@ -182,6 +182,37 @@ function formatVolunteering(v: any): string | null {
   return [role, org ? `at ${org}` : null].filter(Boolean).join(' ');
 }
 
+/**
+ * LinkedIn's "show more" pattern reaches the payload as the collapsed text,
+ * then "Show more", then the full text, then "Show less". Keep the full text.
+ */
+function expandedText(v: unknown): string | null {
+  const raw = typeof v === 'string' ? v : '';
+  if (!raw.trim()) return null;
+  const i = raw.indexOf('Show more');
+  const chosen = i >= 0 ? raw.slice(i + 'Show more'.length) : raw;
+  return text(chosen.replace(/Show less\s*$/i, '').replace(/^[\s“"]+|[\s”"]+$/g, ''));
+}
+
+/** "Stefan Avivson: “People who dare win more. …”" */
+function formatRecommendation(r: any): string | null {
+  const who = text(r.name);
+  const what = expandedText(r.summary);
+  if (!what) return null;
+  const body = what.length > 400 ? what.slice(0, 397).trimEnd() + '…' : what;
+  return who ? `${who}: “${body}”` : `“${body}”`;
+}
+
+/** "Business and Management in Asia (Springer Nature): Co-authored a book chapter…" */
+function formatPublication(x: any): string | null {
+  const name = nameOf(x, 'name', 'title');
+  if (!name) return null;
+  const publisher = text(x.sub_title ?? x.publisher);
+  const summary = expandedText(x.summary);
+  const head = publisher ? `${name} (${publisher})` : name;
+  return summary ? `${head}: ${summary.length > 240 ? summary.slice(0, 237).trimEnd() + '…' : summary}` : head;
+}
+
 /** First non-empty name-like field of a generic section entry. */
 function nameOf(x: any, ...keys: string[]): string | null {
   if (x == null) return null;
@@ -231,7 +262,12 @@ export function mapProfile(raw: any, requestedUrl: string): { profile: EnrichedP
   const certifications = dedupe(list(p.certification ?? p.certifications).map(formatCertification));
   const volunteering = dedupe(list(p.volunteering ?? p.volunteer).map(formatVolunteering));
   const languages = dedupe(list(p.languages).map((l: any) => nameOf(l, 'name', 'language')));
-  const publications = dedupe(list(p.publications).map((x: any) => nameOf(x, 'name', 'title')));
+  const publications = dedupe(list(p.publications).map(formatPublication));
+  const recommendations = dedupe(list(p.recommendations).map(formatRecommendation)).slice(0, 3);
+  const posts = dedupe([...list(p.activities), ...list(p.articles)].map((x: any) => nameOf(x, 'title', 'activity', 'name'))).slice(0, 8);
+  // The top card's first line is the current company on a live scrape; a
+  // fallback when the experience list carries nothing usable.
+  const topCardCompany = text(p.description?.description1);
   const projects = dedupe(list(p.projects).map((x: any) => nameOf(x, 'name', 'title', 'project')));
   const awards = dedupe(list(p.awards ?? p.honors).map((x: any) => nameOf(x, 'name', 'title', 'award')));
   const courses = dedupe(list(p.courses).map((x: any) => nameOf(x, 'name', 'title', 'course')));
@@ -251,6 +287,8 @@ export function mapProfile(raw: any, requestedUrl: string): { profile: EnrichedP
   if (organizations.length) highlights.push(`Member of ${organizations.slice(0, 4).join('; ')}`);
   if (educationText.length) highlights.push(`Education: ${educationText.slice(0, 3).join('; ')}`);
   if (languages.length) highlights.push(`Speaks ${languages.join(', ')}`);
+  if (posts.length) highlights.push(`Recent posts: ${posts.slice(0, 3).join('; ')}`);
+  for (const r of recommendations) highlights.push(`Recommended by ${r}`);
   if (followers) highlights.push(`${followers} on LinkedIn`);
 
   const currentRole = text(current.position ?? current.title);
@@ -258,7 +296,7 @@ export function mapProfile(raw: any, requestedUrl: string): { profile: EnrichedP
     fullName,
     headline,
     currentRole,
-    currentCompany: companyOnly(text(current.company_name ?? current.company), currentRole),
+    currentCompany: companyOnly(text(current.company_name ?? current.company), currentRole) ?? topCardCompany,
     industry: text(p.industry),
     location: text(p.location),
     summary: text(p.about),
@@ -284,6 +322,8 @@ export function mapProfile(raw: any, requestedUrl: string): { profile: EnrichedP
     organizations,
     educationText,
     followers,
+    recommendations,
+    posts,
     highlights,
   };
   const missing = (['headline', 'currentRole', 'currentCompany'] as const).filter((k) => !profile[k]);
@@ -326,6 +366,8 @@ export function mergeLiveWithCached(live: EnrichedProfile, cached: EnrichedProfi
     courses: union(live.courses, cached.courses),
     organizations: union(live.organizations, cached.organizations),
     educationText: union(live.educationText, cached.educationText),
+    recommendations: union(live.recommendations, cached.recommendations).slice(0, 3),
+    posts: union(live.posts, cached.posts).slice(0, 8),
     highlights: union(live.highlights, cached.highlights),
   };
 }

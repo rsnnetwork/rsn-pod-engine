@@ -99,6 +99,10 @@ export interface EnrichedProfile {
   /** Education as readable lines ("BSc, CBS (2020 to 2022)"); `education` keeps the raw entries. */
   educationText?: string[];
   followers?: string | null;
+  /** Recommendations received, as "Name: “text”" (other people's words about the member). */
+  recommendations?: string[];
+  /** Recent posts and articles, by title (only profiles LinkedIn exposes them for). */
+  posts?: string[];
   /** The page's extra facts as lines a host can read out and the extractor can lean on. */
   highlights?: string[];
 }

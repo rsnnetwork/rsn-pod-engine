@@ -239,6 +239,9 @@ export interface ExtractionKnown {
   reason?: string | null;
   highlights?: string[];
   languages?: string[];
+  /** Other people's words about the member (recommendations received). */
+  recommendations?: string[];
+  posts?: string[];
 }
 export function serializeKnownForExtraction(k?: ExtractionKnown | null): string {
   if (!k) return '';
@@ -257,7 +260,9 @@ export function serializeKnownForExtraction(k?: ExtractionKnown | null): string 
   add('Skills', k.skills);
   add('Past roles', k.pastRoles);
   add('Languages', k.languages);
-  for (const line of k.highlights ?? []) add('Also on their LinkedIn', line);
+  for (const line of (k.highlights ?? []).filter((h) => !/^Recommended by |^Recent posts: /.test(h))) add('Also on their LinkedIn', line);
+  for (const line of k.posts ?? []) add('A recent post of theirs, by title', line);
+  for (const line of k.recommendations ?? []) add('A recommendation they received (someone else\'s words about them, useful for expertise and past roles, never for the current role unless it says so)', line);
   add('Likely wants to meet (a hint, not stated)', k.likelyWantsToMeet);
   add('Likely offers (a hint, not stated)', k.likelyOffers);
   add('Reason given on their request', k.reason);

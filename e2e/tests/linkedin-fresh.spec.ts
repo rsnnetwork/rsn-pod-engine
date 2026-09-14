@@ -57,4 +57,8 @@ test('the approval preload reads the live LinkedIn page: the recent company, and
   expect((p.volunteering || []).join(' '), 'volunteering carried').toMatch(/Robin Hood Army/i);
   expect((p.highlights || []).join(' '), 'highlights built').toMatch(/Certified/);
   expect(p.pastRoles.join(' '), 'a masked entry is never a past role').not.toMatch(/\*\*\*/);
+  expect((p.recommendations || []).length, 'recommendations carried with their text').toBeGreaterThanOrEqual(1);
+  expect((p.recommendations || []).join(' '), 'the expanded text, not the collapsed copy').not.toMatch(/Show more|Show less/);
+  expect((p.publications || []).join(' '), 'the publication carries its summary').toMatch(/Springer|book chapter/i);
+  console.log(`  recommendations=${JSON.stringify(p.recommendations)}\n  publications=${JSON.stringify(p.publications)}`);
 });

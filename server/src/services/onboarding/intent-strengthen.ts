@@ -34,6 +34,9 @@ export interface KnownForIntent {
   /** 14 Sep 2026: the rest of the LinkedIn page (certifications, volunteering, publications, education, followers) as lines. */
   highlights?: string[];
   languages?: string[];
+  /** Other people's words about the member, and their recent post titles. */
+  recommendations?: string[];
+  posts?: string[];
 }
 
 /** "Python for Data Science (IBM, Jul 2025)" → "Python for Data Science". */
@@ -72,13 +75,15 @@ export function knownForIntent(
     reason: s(saved?.whyHere),
     highlights: arr(enr?.highlights).slice(0, 8),
     languages: arr(enr?.languages).slice(0, 8),
+    recommendations: arr(enr?.recommendations).slice(0, 3),
+    posts: arr(enr?.posts).slice(0, 5),
   };
 }
 
 /** True when the block holds at least one fact worth telling the extractor. */
 export function hasKnownFacts(k: KnownForIntent | null | undefined): boolean {
   if (!k) return false;
-  return !!(k.headline || k.role || k.company || k.industry || k.location || k.about || k.skills?.length || k.pastRoles?.length || k.likelyWantsToMeet?.length || k.likelyOffers?.length || k.highlights?.length || k.languages?.length);
+  return !!(k.headline || k.role || k.company || k.industry || k.location || k.about || k.skills?.length || k.pastRoles?.length || k.likelyWantsToMeet?.length || k.likelyOffers?.length || k.highlights?.length || k.languages?.length || k.recommendations?.length || k.posts?.length);
 }
 
 /** The first one or two sentences of an About, for a summary the card can show. */
