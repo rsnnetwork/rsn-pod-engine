@@ -144,3 +144,27 @@ describe('what a member wants is not what they are', () => {
     expect(r.score).toBeGreaterThan(0);
   });
 });
+
+// 15 Sep 2026: an agent stores its synonym expansion as tags at creation, and
+// a rescore feeds those tags back in with the want text. Without saying which
+// part is the member's own words, "production" and "industrial" counted as
+// things Ali had asked for, and the two weak matches survived the new rule.
+describe('an agent\'s stored tags are expansion, not the member\'s own words', () => {
+  const wantText = 'manufacturers and suppliers, manufacturing';
+  const storedTags = ['manufacturing', 'manufacturer', 'manufacturers', 'production', 'factory', 'industrial', 'fabrication', 'industrial fabrication', 'machining', 'assembly', 'manufacturers and suppliers'];
+  const strategist = () => person({ professionalRole: [], jobTitle: 'Lead Strategist', jobTitleSource: 'stated', industry: 'Strategy',
+    whatICanHelpWith: 'positioning and strategy expertise, Podcast production or guest appearances' });
+
+  it('with the own text named, one stored-tag word alone is not a match', () => {
+    expect(scoreWants([wantText, ...storedTags], strategist(), undefined, [wantText]).score).toBe(0);
+  });
+
+  it('without it (the old call shape) the tags read as own words: the case the agent path no longer takes', () => {
+    expect(scoreWants([wantText, ...storedTags], strategist()).score).toBeGreaterThan(0);
+  });
+
+  it('a real manufacturer still matches through the own text', () => {
+    const r = scoreWants([wantText, ...storedTags], person({ professionalRole: [], jobTitle: 'CTO', industry: 'SaaS, Manufacturing' }), undefined, [wantText]);
+    expect(r.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+  });
+});

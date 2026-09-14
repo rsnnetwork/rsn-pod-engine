@@ -168,8 +168,9 @@ export function scoreWants(
   wants: Array<string | null | undefined>,
   other: IntentProfile,
   generic?: Set<string>,
+  own?: Array<string | null | undefined>,
 ): { score: number; reason: string } {
-  const f = analyzeWants(wants, other, generic);
+  const f = analyzeWants(wants, other, generic, own);
   return { score: f.score, reason: f.score <= 0 ? '' : formatForSeeker(f) };
 }
 
@@ -191,8 +192,9 @@ export function scoreWantsForRecipient(
   wants: Array<string | null | undefined>,
   recipient: IntentProfile,
   senderName: string,
+  own?: Array<string | null | undefined>,
 ): { score: number; reason: string } {
-  const f = analyzeWants(wants, recipient);
+  const f = analyzeWants(wants, recipient, undefined, own);
   return { score: f.score, reason: f.score <= 0 ? '' : formatForRecipient(f, senderName) };
 }
 
@@ -250,10 +252,18 @@ function formatForRecipient(f: WantFit, senderName: string): string {
   return withConstraintNotes(base, f);
 }
 
+/**
+ * `own`, when given, is the member's OWN want text; everything else in
+ * `wants` (an agent's stored tags, which hold the synonym expansion made at
+ * creation) counts as expansion. 15 Sep 2026: without this, a rescore fed the
+ * stored tags back as the member's words, and "production" and "industrial"
+ * counted as things Ali had asked for.
+ */
 function analyzeWants(
   wants: Array<string | null | undefined>,
   other: IntentProfile,
   generic?: Set<string>,
+  own?: Array<string | null | undefined>,
 ): WantFit {
   const name = other.displayName || 'They';
 
@@ -278,8 +288,8 @@ function analyzeWants(
   // needs company, a hit on the member's own words, a second synonym, or a
   // designation. The member's own words and multi-word synonym hits
   // ("industrial fabrication, machining") score exactly as before.
-  const ownTokens = tokenizeTerms(wants).filter(t => !generic?.has(t));
-  const expandedTokens = tokenizeTerms(expandWantTags(wants)).filter(t => !generic?.has(t) && !ownTokens.includes(t));
+  const ownTokens = tokenizeTerms(own ?? wants).filter(t => !generic?.has(t));
+  const expandedTokens = tokenizeTerms([...wants, ...expandWantTags(wants)]).filter(t => !generic?.has(t) && !ownTokens.includes(t));
   const wantTokens = [...ownTokens, ...expandedTokens];
   // 15 Sep 2026 (Raja's "manufacturing" agent found Ali Hamzaa, an AWS
   // engineer who wants to LEARN about manufacturing): the extractor writes

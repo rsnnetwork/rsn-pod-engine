@@ -133,7 +133,8 @@ export async function recomputeAgent(agent: {
     const wants = [agent.wantText, ...(agent.matchingTags ?? [])];
     // A word most profiles share ("hands", "experienced") cannot make a match.
     const generic = genericOfferTerms(candidates);
-    const all = candidates.map(c => ({ c, fit: scoreWants(wants, c, generic) }));
+    // The want text is the member's own words; the stored tags are expansion.
+    const all = candidates.map(c => ({ c, fit: scoreWants(wants, c, generic, [agent.wantText]) }));
     const fresh = all
       .filter(x => x.fit.score >= MATCH_THRESHOLD)
       .sort((a, b) => b.fit.score - a.fit.score)
@@ -208,7 +209,7 @@ export async function scoreNewcomerAgainstAgents(
     for (const a of agents) {
       if (a.userId === newUserId) continue;
       if (!a.wantText.trim()) continue;
-      const fit = scoreWants([a.wantText, ...(a.matchingTags ?? [])], profile);
+      const fit = scoreWants([a.wantText, ...(a.matchingTags ?? [])], profile, undefined, [a.wantText]);
       if (fit.score < MATCH_THRESHOLD) continue;
 
       // Respect the same exclusions a full rescore would apply.
