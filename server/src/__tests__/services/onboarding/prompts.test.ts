@@ -104,7 +104,7 @@ describe('onboarding prompts (v1.1)', () => {
       expect(low).toContain('as a statement, never as a question');
       expect(p).toContain('less about finding the next company, and more about what deserves to be next.');
       expect(p).toContain('the hire is the whole expansion');
-      expect(low).toContain('at most one short follow-up in the whole chat');
+      expect(low).toContain('at most one short follow-up after each opening');
     });
 
     // 10 Sep 2026 (Ali's own chat): "idk yet" / "football" / "game" / "yes" /
@@ -136,11 +136,11 @@ describe('onboarding prompts (v1.1)', () => {
       expect(memberHasGoneQuiet([opening, m('i need to see people in fish farming'), h('Q2?'), m('i want to learn, i am not yet'), h('Q3?'), m('yeas'), h('Q4?'), m('its my hobby !')])).toBe(true);
     });
 
-    it('the budget is four questions: three openings and one follow-up', () => {
-      expect(MAX_HOST_QUESTIONS).toBe(4);
+    it('the budget is six questions: three openings and one follow-up after each (Claus, 14 Sep)', () => {
+      expect(MAX_HOST_QUESTIONS).toBe(6);
       const low = buildHostSystemPrompt().toLowerCase();
-      expect(low).toContain('at most four questions in the whole chat');
-      expect(low).toContain('at most one follow-up in total');
+      expect(low).toContain('at most six questions in the whole chat');
+      expect(low).toContain('at most one follow-up after each');
       expect(low).toContain('a garbled or unclear answer is not a reason for another question');
     });
 
@@ -265,8 +265,8 @@ describe('onboarding prompts (v1.1)', () => {
       expect(p.toLowerCase()).toContain('at most three words');
       expect(p.toLowerCase()).toContain('at most 15 words');
       expect(p.toLowerCase()).toContain('never offer alternatives inside the question');
-      // 11 Sep 2026: three openings plus one follow-up in total.
-      expect(p.toLowerCase()).toContain('at most four questions in the whole chat');
+      // 14 Sep 2026 (Claus's shape): three openings plus one follow-up after each.
+      expect(p.toLowerCase()).toContain('at most six questions in the whole chat');
       expect(p.toLowerCase()).toContain('accept brief answers as final');
     });
 

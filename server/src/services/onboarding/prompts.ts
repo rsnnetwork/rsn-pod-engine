@@ -14,11 +14,15 @@ import { OnboardingMessage, OnboardingConfirmedProfile, OnboardingOpening } from
 export const READY_TOKEN = '<<READY>>';
 
 /**
- * Three openings plus ONE follow-up in the whole chat. Enforced by POST /chat.
- * 11 Sep 2026 (Ali, twice): six was too many; with a small model every spare
- * question became a clarifying poke ("what level?", "or both?").
+ * Claus's shape (10 Sep brief: "open question → listen → short reflection or
+ * follow up → next opening"): three openings plus at most one follow-up after
+ * each, six at most. Enforced by POST /chat. 11 Sep 2026 the cap went to four
+ * because a small model turned every spare question into a clarifying poke;
+ * 14 Sep 2026 (Ali: "do it according to whats claus shape is") it is back to
+ * six, now that the quiet rule, the one-line-answer-is-final rule and the
+ * server-forced closing stop the poking on their own.
  */
-export const MAX_HOST_QUESTIONS = 4;
+export const MAX_HOST_QUESTIONS = 6;
 
 /**
  * A member answering in a few words is not teasing material (Ali, 10 Sep:
@@ -147,12 +151,12 @@ The conversation is three open questions. The opening has already been asked (wh
 
 Each question is written for this one person: never a stock sentence, never a template with their detail bolted on the end. If the question would only make sense to this person, it is right. If it could be sent to anyone, rewrite it.
 
-Between openings, at most one short follow-up in the whole chat, and only when their answer had substance but left something open. A one word or one line answer is final: never follow it up, never ask them to expand, narrow or explain it, never fish for facts with closed questions (are you playing, what level, which one). Move on to the next opening instead. If two answers in a row are that short, they do not want to talk right now: stop asking, summarise what you have, and say they can tell us more whenever they like. Never re-ask anything already answered or already known. If they mention a language, a competitor or a geography they would rather avoid, or someone they want to invite, take note; never ask for these.
+Between openings, at most one short follow-up after each opening, and only when their answer had substance but left something open. A one word or one line answer is final: never follow it up, never ask them to expand, narrow or explain it, never fish for facts with closed questions (are you playing, what level, which one). Move on to the next opening instead. If two answers in a row are that short, they do not want to talk right now: stop asking, summarise what you have, and say they can tell us more whenever they like. Never re-ask anything already answered or already known. If they mention a language, a competitor or a geography they would rather avoid, or someone they want to invite, take note; never ask for these.
 
 Be efficient without being cold. Never make the member feel interrogated:
 - Sound like a person who is interested, not a form. Let their last answer shape the next question, without quoting it.
 - Accept brief answers as final. "Both", "yes", one word: that is the answer. Never ask them to narrow it, rank it, or choose between options you invented. People are busy.
-- Ask at most four questions in the whole chat, counting the opening: the three openings and at most one follow-up in total. A garbled or unclear answer is not a reason for another question; take what you can from it and move on.${progressLine}
+- Ask at most six questions in the whole chat, counting the opening: the three openings and at most one follow-up after each. A garbled or unclear answer is not a reason for another question; take what you can from it and move on.${progressLine}
 - Once the third opening has an answer, stop asking and summarise. Always err on the side of wrapping up sooner rather than later. If their answers already cover all three, go straight to the summary.
 - If the member clearly wants to keep talking, let them, but never prolong it yourself.
 - Never mention profiles, fields, data, or matching. Just talk.
@@ -233,6 +237,8 @@ export interface ExtractionKnown {
   likelyWantsToMeet?: string[];
   likelyOffers?: string[];
   reason?: string | null;
+  highlights?: string[];
+  languages?: string[];
 }
 export function serializeKnownForExtraction(k?: ExtractionKnown | null): string {
   if (!k) return '';
@@ -250,6 +256,8 @@ export function serializeKnownForExtraction(k?: ExtractionKnown | null): string 
   add('About, in their own words', k.about);
   add('Skills', k.skills);
   add('Past roles', k.pastRoles);
+  add('Languages', k.languages);
+  for (const line of k.highlights ?? []) add('Also on their LinkedIn', line);
   add('Likely wants to meet (a hint, not stated)', k.likelyWantsToMeet);
   add('Likely offers (a hint, not stated)', k.likelyOffers);
   add('Reason given on their request', k.reason);
