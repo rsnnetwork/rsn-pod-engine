@@ -63,3 +63,84 @@ describe('related meaning at score time', () => {
     expect(r.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
   });
 });
+
+// 15 Sep 2026 (Ali's first agent after re-onboarding, "Manufacturers and
+// suppliers"): two of its three matches were a podcast strategist, on the
+// word "production" in "podcast production", and a climate-tech investor, on
+// the interest "industrial disruptors". Both words came from the synonym
+// expansion of "manufacturing", not from Ali. One such word, alone, is not a
+// match; the real manufacturer (industry "SaaS, Manufacturing") still is.
+describe('one synonym word alone is not a match', () => {
+  const WANT = ['manufacturers and suppliers, manufacturing'];
+  const nobody = { professionalRole: [] as string[], jobTitle: null, jobTitleSource: null };
+
+  it('"podcast production" does not make a strategist a manufacturer', () => {
+    const r = scoreWants(WANT, person({ ...nobody, jobTitle: 'Lead Strategist', industry: 'Strategy',
+      whatICanHelpWith: 'positioning and strategy expertise, Podcast production or guest appearances, brand development' }));
+    expect(r.score).toBe(0);
+    expect(r.reason).toBe('');
+  });
+
+  it('an interest in "industrial disruptors" does not make an investor a manufacturer', () => {
+    const r = scoreWants(WANT, person({ ...nobody, jobTitle: 'Co-founder', industry: 'Climate Tech, Clean Tech and Renewables',
+      interests: ['industrial disruptors', 'renewable energy'] }));
+    expect(r.score).toBe(0);
+  });
+
+  it('the member\'s own word still matches on its own: industry "SaaS, Manufacturing"', () => {
+    const r = scoreWants(WANT, person({ ...nobody, jobTitle: 'CTO and innovator', industry: 'SaaS, Manufacturing' }));
+    expect(r.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+    expect(r.reason).toContain('manufactur');
+  });
+
+  it('two synonym words together still count: "industrial fabrication" and "machining"', () => {
+    const r = scoreWants(WANT, person({ ...nobody, company: 'Ridge Fabrication', industry: 'Industrial fabrication', bio: 'precision machining and assembly' }));
+    expect(r.score).toBeGreaterThanOrEqual(BROWSE_THRESHOLD);
+    expect(r.score).toBeGreaterThan(0);
+  });
+
+  it('a designation hit does not need any words at all', () => {
+    const r = scoreWants(['founders'], person({ professionalRole: ['Founder'], jobTitle: 'Founder', jobTitleSource: 'stated', bio: 'production of oat milk' }));
+    expect(r.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+  });
+});
+
+// 15 Sep 2026 (Raja's agent with the want text "manufacturing" found Ali
+// Hamzaa, an AWS engineer who came to LEARN about manufacturing). The
+// extractor had written his curiosity into interests and what_i_care_about,
+// and the scorer read those as what he is. A word a member is looking for is
+// not something they are; a real manufacturer with the industry on file still
+// matches, whatever they are looking for.
+describe('what a member wants is not what they are', () => {
+  it('an AWS engineer curious about manufacturing is not found by a "manufacturing" agent', () => {
+    const r = scoreWants(['manufacturing'], person({
+      professionalRole: [], jobTitle: null, jobTitleSource: null, company: 'NorthBay Solutions', industry: null,
+      expertiseText: 'AWS engagement security, prompt engineering', whatICanHelpWith: 'AWS security knowledge, AI and prompt engineering perspective',
+      whatICareAbout: 'manufacturing business, learning from practitioners, growing knowledge in manufacturing',
+      interests: ['manufacturing business', 'learning from practitioners', 'growing knowledge in manufacturing'],
+      whoIWantToMeet: 'people working in manufacturing, manufacturing business professionals, manufacturer, operations manager, production lead',
+      whyIWantToMeet: 'I want to meet people in the manufacturing business and learn from those already doing it.',
+      myIntent: 'Gain knowledge about manufacturing and grow in the space.',
+      goals: ['understanding the manufacturing business'],
+    }));
+    expect(r.score).toBe(0);
+  });
+
+  it('a manufacturer who also wants to meet manufacturers still matches, on the industry', () => {
+    const r = scoreWants(['manufacturing'], person({
+      professionalRole: ['Owner'], jobTitle: 'Owner', industry: 'Manufacturing',
+      interests: ['manufacturing'], whatICareAbout: 'manufacturing',
+      whoIWantToMeet: 'other manufacturers', whyIWantToMeet: 'to meet peers in manufacturing',
+    }));
+    expect(r.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+  });
+
+  it('an interest that is not also a want still counts as who they are', () => {
+    const r = scoreWants(['fintech'], person({
+      professionalRole: [], jobTitle: 'Analyst', jobTitleSource: 'stated', industry: null,
+      interests: ['fintech', 'payments'], whatICareAbout: 'fintech and payments',
+      whoIWantToMeet: 'investors', whyIWantToMeet: 'raising a round',
+    }));
+    expect(r.score).toBeGreaterThan(0);
+  });
+});

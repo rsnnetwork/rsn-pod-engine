@@ -83,14 +83,23 @@ function wantSources(p: IntentProfile): Array<string | null | undefined> {
 
 // What B is / offers. Stefan: "what B is or offers".
 function offerSources(p: IntentProfile): Array<string | null | undefined> {
+  return [...strongOfferSources(p), ...curiositySources(p)];
+}
+
+/** Who they are and what they can do: counts always. */
+function strongOfferSources(p: IntentProfile): Array<string | null | undefined> {
   return [
     flatten(p.professionalRole), p.jobTitle, p.company,
-    p.expertiseText, p.whatICanHelpWith, p.whatICareAbout,
-    flatten(p.interests),
+    p.expertiseText, p.whatICanHelpWith,
     // W4 recall: who they are also lives in these fields — an industry match
     // ("manufacturing") or a self-description in the bio should count.
     p.industry, p.bio, p.location,
   ];
+}
+
+/** What they are curious about: counts unless it repeats their own want (15 Sep 2026). */
+function curiositySources(p: IntentProfile): Array<string | null | undefined> {
+  return [p.whatICareAbout, flatten(p.interests)];
 }
 
 function flatten(v: unknown, sep = ' '): string | null {
@@ -261,9 +270,33 @@ function analyzeWants(
   // The CATEGORY is matched by meaning: synonyms applied at score time (not
   // only when an agent was created) and related word forms, so "manufacturer"
   // reaches "industrial fabrication" and "developers" reaches "development".
-  const wantTokens = tokenizeTerms([...wants, ...expandWantTags(wants)]).filter(t => !generic?.has(t));
-  const offerTokens = tokenizeTerms(offerSources(other));
+  // 15 Sep 2026 (Ali's "Manufacturers and suppliers" agent): the expansion
+  // brought in "production" and "industrial", and one of those words alone
+  // made a podcast strategist ("podcast production") and a climate investor
+  // (interest: "industrial disruptors") close matches. A word only a synonym
+  // brought in, hitting one word of a profile, is not a match on its own: it
+  // needs company, a hit on the member's own words, a second synonym, or a
+  // designation. The member's own words and multi-word synonym hits
+  // ("industrial fabrication, machining") score exactly as before.
+  const ownTokens = tokenizeTerms(wants).filter(t => !generic?.has(t));
+  const expandedTokens = tokenizeTerms(expandWantTags(wants)).filter(t => !generic?.has(t) && !ownTokens.includes(t));
+  const wantTokens = [...ownTokens, ...expandedTokens];
+  // 15 Sep 2026 (Raja's "manufacturing" agent found Ali Hamzaa, an AWS
+  // engineer who wants to LEARN about manufacturing): the extractor writes
+  // what a member is curious about into interests and what_i_care_about, and
+  // for a member whose curiosity is the very thing they came to find, those
+  // fields repeat their want. A word the member is looking for is not
+  // something they are. Curiosity fields count only where the word is not
+  // also in their own wants; the strong identity fields (title, roles,
+  // company, industry, expertise, what they can help with, bio) count always,
+  // so a manufacturer who also wants to meet manufacturers still matches.
+  const strongOffer = tokenizeTerms(strongOfferSources(other));
+  const curiosity = tokenizeTerms(curiositySources(other));
+  const theirWants = new Set(tokenizeTerms(wantSources(other)));
+  const offerTokens = [...new Set([...strongOffer, ...curiosity.filter(t => !theirWants.has(t))])];
   const overlap = termOverlapRelated(wantTokens, offerTokens);
+  const ownHits = ownTokens.filter(w => offerTokens.some(o => isRelatedTerm(w, o))).length;
+  const expandedHits = expandedTokens.filter(w => offerTokens.some(o => isRelatedTerm(w, o))).length;
 
   // Designation direction: I want founders + they are a founder. A person can
   // hold SEVERAL roles (professional_role is text[]), and they count as each
@@ -296,6 +329,9 @@ function analyzeWants(
   const matchedTitle = designationHit ? titleByDesignation.get(designationHit.key)! : null;
 
   let score = 0.7 * overlap + (designationHit ? 0.6 : 0);
+  if (!designationHit && ownHits === 0 && expandedHits === 1) {
+    return { score: 0, designationLabel: null, matchedTitle: null, sharedTerms: [], name, placeMatched: null, yearsUnknown: false };
+  }
   // A required experience the profile doesn't state: keep them, but below
   // anyone who does state it, and say so on the card.
   if (check.yearsUnknown) score *= 0.85;
