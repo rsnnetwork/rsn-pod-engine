@@ -156,6 +156,54 @@ async function roleFromOwnWords(profile: EnrichedProfile): Promise<string | null
   return role && role.length <= 120 ? role : null;
 }
 
+/**
+ * 14 Sep 2026 (Ali: "do our maximum effort to get the role from about,
+ * headlines, posts etc; for those it cannot, leave it empty and let the user
+ * edit"). LinkedIn hides the headline and every title from a logged-out
+ * scraper for ordinary members, and the About is a cut preview. What the
+ * page still carries, recommendations above all, often names the role in
+ * someone else's words ("she leads business development at Vokt"). One
+ * no-search call reads only those texts. A role read here is marked
+ * 'inferred' and shown on the card as a guess to fix; a past role at another
+ * company is never the current one; nothing found → null, and the Role row
+ * stays empty for the member to fill.
+ */
+async function roleFromPage(profile: EnrichedProfile): Promise<{ role: string; basis: 'stated' | 'implied' } | null> {
+  const lines: string[] = [];
+  if (profile.currentCompany) lines.push(`Current company: ${profile.currentCompany}`);
+  if (profile.summary) lines.push(`About (a cut preview): ${profile.summary}`);
+  for (const r of profile.recommendations ?? []) lines.push(`Recommendation they received: ${r}`);
+  for (const p of profile.publications ?? []) lines.push(`Publication: ${p}`);
+  for (const v of profile.volunteering ?? []) lines.push(`Volunteering: ${v}`);
+  if (profile.certifications?.length) lines.push(`Certifications: ${profile.certifications.join('; ')}`);
+  if (profile.educationText?.length) lines.push(`Education: ${profile.educationText.join('; ')}`);
+  for (const p of profile.posts ?? []) lines.push(`Recent post: ${p}`);
+  if (profile.pastRoles?.length) lines.push(`Earlier entries on the page: ${profile.pastRoles.join('; ')}`);
+  // Nothing beyond the company alone says anything about the role.
+  if (lines.filter((l) => !l.startsWith('Current company:')).length === 0) return null;
+  const resp = await getClient().messages.create({
+    model: config.onboardingChatModel,
+    max_tokens: 160,
+    messages: [{
+      role: 'user',
+      content:
+        'Below are facts from a person\'s LinkedIn page. Their headline and their own About did not state a job title. Work out their CURRENT role or title from these texts.\n' +
+        '- If a text STATES the current role (for example a recommendation saying "as Vokt\'s head of business development" or "she leads sales at Vokt"), return it in the shortest form that is still their title, with basis "stated".\n' +
+        '- If the texts only make one role clearly likely for the work they do NOW (their current company plus what recommendations, publications or certifications describe), return that single title with basis "implied".\n' +
+        '- A role at a DIFFERENT, earlier company is not the current role. Volunteering is not the job. A certification or a degree alone is not a title. When unsure, return null.\n' +
+        'Reply with ONLY JSON: {"currentRole": string | null, "basis": "stated" | "implied" | null}\n\n' +
+        lines.join('\n').slice(0, 4000),
+    }],
+  });
+  const raw = resp.content.map((b: any) => (b.type === 'text' ? b.text : '')).join('');
+  const m = raw.match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  const j = JSON.parse(m[0]) as { currentRole?: unknown; basis?: unknown };
+  const role = typeof j.currentRole === 'string' ? j.currentRole.trim() : '';
+  const basis = j.basis === 'stated' || j.basis === 'implied' ? j.basis : null;
+  return role && role.length <= 120 && basis ? { role, basis } : null;
+}
+
 async function fillGapsFromWeb(
   outcome: Extract<ProviderOutcome, { kind: 'partial' }>,
   input: RunProviderInput,
@@ -164,6 +212,7 @@ async function fillGapsFromWeb(
   if (!scraped || (scraped.headline && scraped.currentRole)) return outcome;
 
   const merged: EnrichedProfile = { ...scraped };
+  if (merged.currentRole && !merged.roleSource) merged.roleSource = 'stated';
   const filled: string[] = [];
   let sources = [...outcome.result.sources];
 
@@ -174,9 +223,19 @@ async function fillGapsFromWeb(
   if (!merged.currentRole) {
     try {
       const own = await roleFromOwnWords(merged);
-      if (own) { merged.currentRole = own; filled.push('currentRole (own words)'); }
+      if (own) { merged.currentRole = own; merged.roleSource = 'stated'; filled.push('currentRole (own words)'); }
     } catch (err) {
-      logger.warn({ err, linkedinUrl: input.linkedinUrl }, 'enrichment gap fill (own words) failed — trying the web');
+      logger.warn({ err, linkedinUrl: input.linkedinUrl }, 'enrichment gap fill (own words) failed — trying the rest of the page');
+    }
+  }
+
+  // Step 1b (14 Sep 2026): the rest of the page, in other people's words.
+  if (!merged.currentRole) {
+    try {
+      const page = await roleFromPage(merged);
+      if (page) { merged.currentRole = page.role; merged.roleSource = 'inferred'; filled.push(`currentRole (page, ${page.basis})`); }
+    } catch (err) {
+      logger.warn({ err, linkedinUrl: input.linkedinUrl }, 'enrichment gap fill (page) failed — trying the web');
     }
   }
 
@@ -194,6 +253,8 @@ async function fillGapsFromWeb(
         for (const k of GAP_FIELDS) {
           if (!merged[k] && web.profile[k]) { merged[k] = web.profile[k]; filled.push(k); }
         }
+        // A role the web read off their own public page is their own statement.
+        if (filled.includes('currentRole')) merged.roleSource = 'stated';
         if (!merged.skills.length && web.profile.skills.length) { merged.skills = web.profile.skills; filled.push('skills'); }
         // ScrapingDog truncates About with an ellipsis; a longer searched summary is the fuller text.
         if (web.profile.summary && (!merged.summary || (merged.summary.endsWith('…') && web.profile.summary.length > merged.summary.length))) {

@@ -152,6 +152,10 @@ export interface OnboardingEnrichmentCandidate {
   fullName?: string | null;
   headline?: string | null;
   currentRole?: string | null;
+  /** 14 Sep 2026: 'inferred' when the role was read out of the rest of the
+   *  page (a recommendation, a publication) rather than the member's own
+   *  headline or About; the card shows it as a guess to fix. */
+  roleSource?: 'stated' | 'inferred' | null;
   currentCompany?: string | null;
   industry?: string | null;
   location?: string | null;

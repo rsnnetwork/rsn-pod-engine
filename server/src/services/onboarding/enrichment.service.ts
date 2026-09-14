@@ -99,6 +99,14 @@ export interface EnrichedProfile {
   /** Education as readable lines ("BSc, CBS (2020 to 2022)"); `education` keeps the raw entries. */
   educationText?: string[];
   followers?: string | null;
+  /**
+   * 14 Sep 2026 (Ali: "maximum effort to get the role, and let the member
+   * edit it"): where currentRole came from. 'stated' = the page's headline,
+   * position or the member's own About; 'inferred' = read out of the rest of
+   * the page (a recommendation, a publication, certifications, posts), shown
+   * on the card as a guess to fix. Absent on older blobs (treated as stated).
+   */
+  roleSource?: 'stated' | 'inferred' | null;
   /** Recommendations received, as "Name: “text”" (other people's words about the member). */
   recommendations?: string[];
   /** Recent posts and articles, by title (only profiles LinkedIn exposes them for). */

@@ -104,6 +104,7 @@ function ConfirmRow({
   guessed,
   last,
   multiline,
+  emptyHint,
 }: {
   label: string;
   value: string;
@@ -113,6 +114,8 @@ function ConfirmRow({
   guessed?: boolean;
   last?: boolean;
   multiline?: boolean;
+  /** 14 Sep 2026: what an empty row says instead of "Not set" (the Role row: LinkedIn did not share it, add it). */
+  emptyHint?: string;
 }) {
   return (
     <div className={last ? 'py-2.5' : 'border-b border-gray-100 py-2.5'}>
@@ -143,14 +146,14 @@ function ConfirmRow({
         )
       ) : (
         <div className={`mt-0.5 text-[15px] text-[#1a1a2e] ${multiline ? 'whitespace-pre-line leading-relaxed' : ''}`}>
-          {value || <span className="text-gray-300">Not set</span>}
+          {value || <span className={emptyHint ? 'text-gray-400' : 'text-gray-300'}>{emptyHint || 'Not set'}</span>}
         </div>
       )}
     </div>
   );
 }
 
-const emptyDraft = { name: '', country: '', reason: '', company: '', role: '', linkedin: '', industry: '', location: '', about: '', wantsToMeet: [] as string[], offers: [] as string[] };
+const emptyDraft = { name: '', country: '', reason: '', company: '', role: '', roleGuessed: false, linkedin: '', industry: '', location: '', about: '', wantsToMeet: [] as string[], offers: [] as string[] };
 
 // Merge two string lists — primary first (prioritized), de-duplicated case-insensitively.
 // The member's chat answers rank above the LinkedIn-inferred prefill, and nothing is lost.
@@ -446,6 +449,7 @@ export default function ChatbotOnboarding() {
           reason: k.reason || '',
           company: k.company || '',
           role: k.role || '',
+          roleGuessed: false,
           linkedin: k.linkedin || '',
           industry: '',
           location: '',
@@ -537,6 +541,9 @@ export default function ChatbotOnboarding() {
           // industry, location, about and linkedin have none, so empty-only fill stays correct.
           company: resolveGuessable(d.company, known?.company, known?.companyGuessed, candidate.currentCompany),
           role: d.role || candidate.currentRole || candidate.headline || '',
+          // 14 Sep 2026: a role read out of the rest of the page (a
+          // recommendation, a publication) is a guess to fix, not a fact.
+          roleGuessed: !d.role && !!candidate.currentRole && candidate.roleSource === 'inferred',
           industry: d.industry || candidate.industry || '',
           location: d.location || candidate.location || '',
           about: d.about || candidate.summary || '',
@@ -1080,7 +1087,7 @@ export default function ChatbotOnboarding() {
                 <ConfirmRow label="Country" value={draft.country} editing={editing} placeholder="Where you are based" guessed={known?.countryGuessed} onChange={(v) => setDraft((d) => ({ ...d, country: v }))} />
                 <ConfirmRow label="Reason for joining" value={draft.reason} editing={editing} placeholder="Why you're here" onChange={(v) => setDraft((d) => ({ ...d, reason: v }))} />
                 <ConfirmRow label="Company" value={draft.company} editing={editing} placeholder="Where you work" guessed={known?.companyGuessed} onChange={(v) => setDraft((d) => ({ ...d, company: v }))} />
-                <ConfirmRow label="Role" value={draft.role} editing={editing} placeholder="Your role or title" onChange={(v) => setDraft((d) => ({ ...d, role: v }))} />
+                <ConfirmRow label="Role" value={draft.role} editing={editing} placeholder="Your role or title" guessed={draft.roleGuessed} emptyHint="Not on your LinkedIn page. Tap Edit to add it." onChange={(v) => setDraft((d) => ({ ...d, role: v, roleGuessed: false }))} />
                 <ConfirmRow label="LinkedIn" value={draft.linkedin} editing={editing} placeholder="Your LinkedIn URL" onChange={(v) => setDraft((d) => ({ ...d, linkedin: v }))} />
                 <ConfirmRow label="Industry" value={draft.industry} editing={editing} placeholder="Your industry" onChange={(v) => setDraft((d) => ({ ...d, industry: v }))} />
                 <div className="sm:col-span-2">

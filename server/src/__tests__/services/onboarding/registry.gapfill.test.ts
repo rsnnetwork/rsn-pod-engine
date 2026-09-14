@@ -76,6 +76,54 @@ describe('the person\'s own words come first; the web only when they name no rol
     expect(mockWeb).not.toHaveBeenCalled();
   });
 
+  // 14 Sep 2026 (Ali: maximum effort for the role; empty and editable when
+  // nothing states it). Shradha's page: no headline, an About cut before any
+  // role, but a recommendation in someone else's words. The role read there is
+  // marked inferred, the web is not bought, and a plain null leaves it empty.
+  it('when their own words name no role, the rest of the page is read: a recommendation gives an inferred role, no web call', async () => {
+    mockScrape.mockResolvedValue({
+      kind: 'partial',
+      result: result(profile({ summary: 'Businesses today have more tools than ever. The real challenge is…', currentCompany: 'Vokt',
+        recommendations: ['Stefan Avivson: “As Vokt\'s head of business development, Shradha moves things forward.”'] })),
+      photoUrl: null, missing: ['headline', 'currentRole'],
+    });
+    mockWeb.mockResolvedValue(webNothing);
+    mockCreate
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: JSON.stringify({ currentRole: null }) }] })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: JSON.stringify({ currentRole: 'Head of Business Development', basis: 'stated' }) }] });
+
+    const out = await runProvider('scrapingdog', { linkedinUrl: URL, fullName: 'Shradha Adhikari' });
+    expect(out.kind).toBe('partial');
+    if (out.kind === 'partial') {
+      expect(out.result.profile!.currentRole).toBe('Head of Business Development');
+      expect(out.result.profile!.roleSource).toBe('inferred');
+    }
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+    expect(mockCreate.mock.calls[1][0].messages[0].content).toContain('Recommendation they received: Stefan Avivson');
+    expect(mockCreate.mock.calls[1][0].tools).toBeUndefined();
+    expect(mockWeb).not.toHaveBeenCalled();
+  });
+
+  it('a role from their own About is marked stated; a page that names nothing leaves the role empty', async () => {
+    mockScrape.mockResolvedValue({ kind: 'partial', result: aliLike(), photoUrl: null, missing: ['headline', 'currentRole'] });
+    mockWeb.mockResolvedValue(webNothing);
+    ownWordsSay('MLOps & Geospatial Engineer');
+    let out = await runProvider('scrapingdog', { linkedinUrl: URL, fullName: 'Ali Hamza' });
+    if (out.kind === 'partial') expect(out.result.profile!.roleSource).toBe('stated');
+
+    mockCreate.mockReset();
+    mockCreate.mockResolvedValue({ content: [{ type: 'text', text: JSON.stringify({ currentRole: null, basis: null }) }] });
+    mockScrape.mockResolvedValue({
+      kind: 'partial', result: result(profile({ summary: null, currentCompany: 'Vokt', certifications: ['Sales: Practical Techniques (LinkedIn, Feb 2025)'] })),
+      photoUrl: null, missing: ['headline', 'currentRole'],
+    });
+    out = await runProvider('scrapingdog', { linkedinUrl: URL, fullName: 'Shradha Adhikari' });
+    if (out.kind === 'partial') {
+      expect(out.result.profile!.currentRole).toBeNull();
+      expect(out.result.profile!.roleSource).toBeUndefined();
+    }
+  });
+
   it('an About that names no role goes to the web, on the cheap model only, and takes what the web verified', async () => {
     mockScrape.mockResolvedValue({ kind: 'partial', result: result(profile({ summary: 'I love hiking and building things.' })), photoUrl: null, missing: ['headline', 'currentRole'] });
     mockWeb.mockResolvedValue(webNothing);

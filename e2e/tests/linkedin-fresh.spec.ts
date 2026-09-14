@@ -61,4 +61,8 @@ test('the approval preload reads the live LinkedIn page: the recent company, and
   expect((p.recommendations || []).join(' '), 'the expanded text, not the collapsed copy').not.toMatch(/Show more|Show less/);
   expect((p.publications || []).join(' '), 'the publication carries its summary').toMatch(/Springer|book chapter/i);
   console.log(`  recommendations=${JSON.stringify(p.recommendations)}\n  publications=${JSON.stringify(p.publications)}`);
+  // The role, when the page gives one, carries where it came from; when the
+  // page gives none, it stays empty for the member to fill.
+  console.log(`  role=${JSON.stringify(p.currentRole)} roleSource=${JSON.stringify(p.roleSource)}`);
+  if (p.currentRole) expect(['stated', 'inferred']).toContain(p.roleSource);
 });

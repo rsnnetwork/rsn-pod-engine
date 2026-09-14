@@ -1,6 +1,7 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, chromium } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
-import { cleanup, SERVER } from '../helpers/live-ui';
+import { cleanup, gotoRetry, APP, SERVER } from '../helpers/live-ui';
+import { primePreview } from '../helpers/preview-bypass';
 
 // 14 Sep 2026 (Shradha): a cached ScrapingDog payload with no headline, no
 // role and no About (confidence 0.7) was reflected as "found" by every path
@@ -65,4 +66,34 @@ test('a hollow cached profile is reported as partial, a full one as found', asyn
     (await pool.query(`SELECT enrichment_status::text s FROM user_intent_profiles WHERE user_id = $1`, [full.id])).rows[0]?.s,
     { timeout: 30_000 }).toBe('found');
   console.log(`  hollow → ${h.json.data.status} | full → ${f.json.data.status}`);
+});
+
+// 14 Sep 2026 (Ali: "for those it cannot get the role can be empty and user
+// can edit that"). A member whose page gave no role sees the Role row say so
+// and can add it; a role read out of the rest of the page is labelled a guess.
+test('the card says the role is not on the page and lets the member add it; an inferred role is labelled a guess', async () => {
+  test.setTimeout(180_000);
+  const noRole = await seeded('norole', blob({ headline: '', currentRole: '', currentCompany: 'Vokt', summary: 'Businesses today have more tools than ever…' }, 0.7));
+  const guessed = await seeded('guessedrole', blob({ headline: '', currentRole: 'Head of Business Development', roleSource: 'inferred', currentCompany: 'Vokt', summary: 'x' }, 0.7));
+  const browser = await chromium.launch({ headless: false });
+  try {
+    for (const [u, expectText] of [[noRole, 'Not on your LinkedIn page'], [guessed, 'a guess, fix if wrong']] as const) {
+      const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+      await ctx.addInitScript((t: { a: string; r: string }) => {
+        localStorage.setItem('rsn_access', t.a); localStorage.setItem('rsn_refresh', t.r);
+      }, { a: u.accessToken, r: u.refreshToken });
+      await primePreview(ctx);
+      const page = await ctx.newPage();
+      page.on('pageerror', () => {});
+      await gotoRetry(page, `${APP}/onboarding`);
+      await expect(page.getByRole('button', { name: /Yes, continue/i })).toBeVisible({ timeout: 90_000 });
+      const body = (await page.locator('body').textContent()) || '';
+      expect(body, expectText).toContain(expectText);
+      await page.screenshot({ path: `shots/card-role-${u === noRole ? 'empty' : 'guessed'}.png`, fullPage: true }).catch(() => {});
+      console.log(`  ${u === noRole ? 'no role' : 'inferred role'}: "${expectText}" shown`);
+      await ctx.close();
+    }
+  } finally {
+    await browser.close();
+  }
 });
