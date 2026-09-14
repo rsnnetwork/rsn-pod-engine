@@ -40,8 +40,27 @@ jest.mock('../../services/onboarding/enrichment.repo', () => ({
   __esModule: true,
 }));
 
+// 14 Sep 2026: the login copy-forward also captures the preload photo. The
+// avatar helpers and the stage-event writer are mocked so the ordered DB
+// chains below stay exactly as they are.
+jest.mock('../../services/onboarding/avatar.service', () => ({
+  captureAvatar: jest.fn(),
+  hasAvatar: jest.fn(),
+  tryGravatar: jest.fn(),
+  __esModule: true,
+}));
+jest.mock('../../services/onboarding/stage-events.repo', () => ({
+  record: jest.fn(),
+  __esModule: true,
+}));
+
 import * as identityService from '../../services/identity/identity.service';
 import * as enrichRepo from '../../services/onboarding/enrichment.repo';
+import * as avatar from '../../services/onboarding/avatar.service';
+import * as stageEvents from '../../services/onboarding/stage-events.repo';
+
+/** Let a fire-and-forget chain settle. */
+const flush = async () => { for (let i = 0; i < 4; i++) await new Promise((r) => setImmediate(r)); };
 
 const mockUser = {
   id: 'user-123',
@@ -74,6 +93,10 @@ describe('Identity Service', () => {
     mockQuery.mockReset();
     (enrichRepo.saveEnrichedCandidate as jest.Mock).mockReset().mockResolvedValue(undefined);
     (enrichRepo.setEnrichmentState as jest.Mock).mockReset().mockResolvedValue(undefined);
+    (avatar.hasAvatar as jest.Mock).mockReset().mockResolvedValue(false);
+    (avatar.captureAvatar as jest.Mock).mockReset().mockResolvedValue(true);
+    (avatar.tryGravatar as jest.Mock).mockReset().mockResolvedValue(false);
+    (stageEvents.record as jest.Mock).mockReset().mockResolvedValue(undefined);
   });
 
   describe('getUserById', () => {
@@ -463,6 +486,57 @@ describe('Identity Service', () => {
           startedAt: enrichedAt,
           completedAt: enrichedAt,
         });
+      });
+
+      // 14 Sep 2026 (full-flow prod smoke): the state is seeded found/partial
+      // here, so the client never fires the enrich trigger, and the cache
+      // branch that captured the photo never ran. The photo comes with login.
+      it('captures the preload photo at login, fire-and-forget, when the member has no photo yet', async () => {
+        mockNewUserChain({
+          profile: { fullName: 'Preload Person', headline: 'Head of Ops at Preload', currentRole: 'Head of Ops', currentCompany: 'Preload', photoUrl: 'https://media.licdn.com/dms/image/preload.jpg' },
+          confidence: 0.9, sources: [], foundLinkedinUrl: null, requestedLinkedinUrl: 'https://linkedin.com/in/preload', enrichedAt, provider: 'scrapingdog',
+        });
+        await identityService.verifyMagicLink('some-token');
+        await flush();
+        expect(avatar.captureAvatar).toHaveBeenCalledWith(mockUser.id, 'https://media.licdn.com/dms/image/preload.jpg');
+        expect(stageEvents.record).toHaveBeenCalledWith(mockUser.id, 'photo_captured', { source: 'login' }, expect.any(Number));
+        expect(avatar.tryGravatar).not.toHaveBeenCalled();
+      });
+
+      it('a preload without a photo tries Gravatar instead; a member with a photo already is left alone', async () => {
+        mockNewUserChain({
+          profile: { fullName: 'Preload Person', headline: 'x', currentRole: 'x', currentCompany: 'x', photoUrl: null },
+          confidence: 0.9, sources: [], foundLinkedinUrl: null, requestedLinkedinUrl: 'https://linkedin.com/in/preload', enrichedAt,
+        });
+        await identityService.verifyMagicLink('some-token');
+        await flush();
+        expect(avatar.captureAvatar).not.toHaveBeenCalled();
+        expect(avatar.tryGravatar).toHaveBeenCalledWith(mockUser.id);
+
+        (avatar.hasAvatar as jest.Mock).mockResolvedValue(true);
+        (avatar.captureAvatar as jest.Mock).mockClear();
+        (avatar.tryGravatar as jest.Mock).mockClear();
+        mockNewUserChain({
+          profile: { fullName: 'Preload Person', headline: 'x', currentRole: 'x', currentCompany: 'x', photoUrl: 'https://media.licdn.com/dms/image/preload.jpg' },
+          confidence: 0.9, sources: [], foundLinkedinUrl: null, requestedLinkedinUrl: 'https://linkedin.com/in/preload', enrichedAt,
+        });
+        await identityService.verifyMagicLink('some-token');
+        await flush();
+        expect(avatar.captureAvatar).not.toHaveBeenCalled();
+        expect(avatar.tryGravatar).not.toHaveBeenCalled();
+      });
+
+      it('a failed capture never breaks login and falls back to Gravatar', async () => {
+        (avatar.captureAvatar as jest.Mock).mockResolvedValue(false);
+        mockNewUserChain({
+          profile: { fullName: 'Preload Person', headline: 'x', currentRole: 'x', currentCompany: 'x', photoUrl: 'https://media.licdn.com/dms/image/preload.jpg' },
+          confidence: 0.9, sources: [], foundLinkedinUrl: null, requestedLinkedinUrl: 'https://linkedin.com/in/preload', enrichedAt,
+        });
+        const out = await identityService.verifyMagicLink('some-token');
+        expect(out).toBeTruthy();
+        await flush();
+        expect(stageEvents.record).toHaveBeenCalledWith(mockUser.id, 'photo_failed', { source: 'login' }, expect.any(Number));
+        expect(avatar.tryGravatar).toHaveBeenCalledWith(mockUser.id);
       });
 
       it('ZERO confidence → does NOT call setEnrichmentState or saveEnrichedCandidate (client trigger handles it, stays none)', async () => {

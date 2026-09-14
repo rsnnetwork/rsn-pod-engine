@@ -17,6 +17,32 @@ import { sendMagicLinkEmail } from '../email/email.service';
 import { saveEnrichedCandidate, setEnrichmentState } from '../onboarding/enrichment.repo';
 import type { EnrichResult } from '../onboarding/enrichment.service';
 import { statusFromResult } from '../onboarding/providers/registry';
+import { captureAvatar, hasAvatar, tryGravatar } from '../onboarding/avatar.service';
+import { record as recordStageEvent } from '../onboarding/stage-events.repo';
+
+/**
+ * 14 Sep 2026 (full-flow prod smoke, a real LinkedIn): a member approved
+ * before their first login arrives with the enrichment state already seeded
+ * found/partial below, so the client never fires the enrich trigger, and the
+ * orchestrator's cache branch (where the 7 Sep photo capture lives) never
+ * runs. The card said "No photo yet" for exactly the members who come
+ * through request-to-join, while the scrape had the photo all along. The
+ * photo is part of the copy-forward: captured here, fire-and-forget, never
+ * blocking login, and never twice for a member who already has one.
+ */
+function seedPreloadPhoto(userId: string, enriched: EnrichResult): void {
+  const photo = enriched.profile?.photoUrl ?? null;
+  const startedAt = Date.now();
+  hasAvatar(userId)
+    .then(async (has) => {
+      if (has) return;
+      if (!photo) { await tryGravatar(userId); return; }
+      const captured = await captureAvatar(userId, photo);
+      recordStageEvent(userId, captured ? 'photo_captured' : 'photo_failed', { source: 'login' }, Date.now() - startedAt).catch(() => {});
+      if (!captured) await tryGravatar(userId);
+    })
+    .catch((e) => logger.warn({ err: e, userId }, 'preload photo capture failed (non-fatal)'));
+}
 
 // ─── Registration Gate ──────────────────────────────────────────────────────
 // New users can only sign up if they have an approved join request OR a valid invite code.
@@ -521,6 +547,7 @@ export async function verifyMagicLink(token: string): Promise<AuthTokenPair> {
       }).catch((e) =>
         logger.warn({ err: e, userId: user!.id }, 'failed to copy preloaded enrichment state')
       );
+      seedPreloadPhoto(user.id, seed.enriched);
     }
     // Seed their stated reason for joining as an initial "why I want to meet" — the
     // onboarding chat refines/overrides it (kept if the chat doesn't restate one).
@@ -706,6 +733,7 @@ export async function findOrCreateGoogleUser(
       }).catch((e) =>
         logger.warn({ err: e, userId: id }, 'failed to copy preloaded enrichment state (google path)')
       );
+      seedPreloadPhoto(id, seed.enriched);
     }
     if (seed.reason) {
       await query('UPDATE users SET why_i_want_to_meet = $1 WHERE id = $2', [seed.reason, id]).catch(() => {});
