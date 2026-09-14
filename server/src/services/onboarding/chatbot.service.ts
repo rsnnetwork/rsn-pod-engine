@@ -66,6 +66,9 @@ export function styleViolations(text: string, ready: boolean): string[] {
   const out: string[] = [];
   if (ready) {
     if (wordCount > 40) out.push('the summary is over 30 words');
+    // 14 Sep 2026 (Shradha): a closing is a statement. A question sent with
+    // the token hid the composer and left the member unable to answer it.
+    if (asksQuestion(body)) out.push('the closing asks a question');
     return out;
   }
   const questions = (body.match(/\?/g) || []).length;
@@ -81,6 +84,36 @@ export function styleViolations(text: string, ready: boolean): string[] {
   }
   return out;
 }
+
+// ─── A closing is a statement (14 Sep 2026) ──────────────────────────────────
+// Shradha's chat: the route forced the wrap after two one-word answers, and
+// the model kept the token but sent a question with it ("What's the challenge
+// with the blogs at the moment?" + READY). ready=true hides the composer, so
+// she saw a question next to "Yes, use this" and "Edit" with no way to answer
+// it. A ready turn never carries a question, whichever path produced it.
+
+/** What the host says when it would not write a closing of its own. Claus's
+ *  own wording for a thin chat: go with what they gave us, more whenever they like. */
+export const DEFAULT_CLOSING = 'We will go with what you have told us so far, and you can tell us more whenever you like.';
+
+export function asksQuestion(text: string): boolean {
+  return text.replace(READY_TOKEN, '').includes('?');
+}
+
+/** The statement sentences of a draft; a draft with none becomes the default closing. */
+export function closingStatement(text: string): string {
+  const kept = text
+    .replace(READY_TOKEN, '')
+    .trim()
+    .split(/(?<=[.!?])\s+/)
+    .filter((s) => s.trim().length > 0 && !s.includes('?'));
+  return kept.join(' ').trim() || DEFAULT_CLOSING;
+}
+
+type Turn = { reply: string; ready: boolean };
+const isClosing = (t: Turn): boolean => t.ready && !asksQuestion(t.reply);
+/** A ready turn goes out as a statement, whatever the model wrote. */
+const asStatement = (t: Turn): Turn => (t.ready && asksQuestion(t.reply) ? { reply: closingStatement(t.reply), ready: true } : t);
 
 async function askHost(
   system: string,
@@ -132,8 +165,10 @@ export async function converse(
   // 11 Sep 2026 (Ali's chat): at the question cap the model asked a seventh
   // question anyway. A hard wrap is the server's decision, not the model's:
   // ask once more for the closing only; if it still will not close, close
-  // for it (drop a trailing question and mark the turn ready).
-  if (wrapMode === 'hard' && !first.ready) {
+  // for it (drop every question and mark the turn ready).
+  // 14 Sep 2026 (Shradha): "closed" means a statement. A draft that carries
+  // the token AND a question has not closed either.
+  if (wrapMode === 'hard' && !isClosing(first)) {
     logger.warn({ draft: first.reply.slice(0, 160) }, 'onboarding host: ignored the hard wrap, asking for the closing only');
     let closing = first;
     try {
@@ -144,31 +179,30 @@ export async function converse(
     } catch (err) {
       logger.warn({ err }, 'onboarding host: closing call failed, closing with the first draft');
     }
-    if (closing.ready) return closing;
-    const sentences = closing.reply.split(/(?<=[.!?])\s+/).filter(Boolean);
-    while (sentences.length > 1 && /\?\s*$/.test(sentences[sentences.length - 1])) sentences.pop();
-    const reply = sentences.join(' ').trim() || 'Thank you, that is everything we need.';
-    return { reply, ready: true };
+    if (isClosing(closing)) return closing;
+    return { reply: closingStatement(closing.reply), ready: true };
   }
   const broken = styleViolations(first.reply, first.ready);
   if (broken.length === 0) return first;
 
   // One corrective rewrite. If that is no better, the first draft still goes
-  // out: a slightly long message beats a stalled chat.
+  // out: a slightly long message beats a stalled chat. A closing that asks
+  // something is the one thing that never goes out as written.
   logger.warn({ broken, draft: first.reply.slice(0, 160) }, 'onboarding host: draft broke the style rules, asking for a rewrite');
   try {
     const rewriteSystem = system +
       '\n\nREWRITE. Your previous draft was:\n"' + first.reply.replace(/"/g, "'") + '"\nIt broke these rules: ' + broken.join('; ') +
-      '. Write the message again so it follows every style rule: no reading their answer back, at most one reflection as a statement, exactly one question of at most 15 words with no "or" in it, under 30 words in total' +
-      (first.ready ? `, and keep the token ${READY_TOKEN} on its own final line` : '') + '. Reply with the message only.';
+      (first.ready
+        ? `. Write the closing again: reflect what you understood in one or two warm sentences, under 30 words in total, with no question at all, then keep the token ${READY_TOKEN} on its own final line. Reply with the message only.`
+        : '. Write the message again so it follows every style rule: no reading their answer back, at most one reflection as a statement, exactly one question of at most 15 words with no "or" in it, under 30 words in total. Reply with the message only.');
     const second = await askHost(rewriteSystem, messages);
     const stillBroken = styleViolations(second.reply, second.ready);
-    if (stillBroken.length < broken.length) return second;
+    if (stillBroken.length < broken.length) return asStatement(second);
     logger.warn({ stillBroken }, 'onboarding host: rewrite was no better, sending the first draft');
   } catch (err) {
     logger.warn({ err }, 'onboarding host: rewrite call failed, sending the first draft');
   }
-  return first;
+  return asStatement(first);
 }
 
 /**

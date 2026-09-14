@@ -189,6 +189,63 @@ describe('chatbot.service', () => {
     });
   });
 
+  // 14 Sep 2026 (Shradha's chat): the member had answered "networking" and
+  // "blogs", the route forced the wrap, and the model kept the token but sent
+  // a question with it ("What's the challenge with the blogs at the moment?"
+  // + READY). ready=true hid the composer, so the member saw a question next
+  // to "Yes, use this" and "Edit" and no way to answer it. A closing is a
+  // statement: a ready turn never carries a question, on any path.
+  describe('a closing is a statement, never a question', () => {
+    beforeEach(() => mockCreate.mockReset());
+
+    it('a hard wrap answered with a question AND the token is not a closing: asks for the closing only, and uses it', async () => {
+      mockCreate
+        .mockResolvedValueOnce({ content: [{ type: 'text', text: "What's the challenge with the blogs at the moment? " + READY_TOKEN }] })
+        .mockResolvedValueOnce({ content: [{ type: 'text', text: 'You work on blogs at VOKT and came here to network. We will go with that. ' + READY_TOKEN }] });
+      const turn = await converse(history, undefined, 'hard');
+      expect(mockCreate).toHaveBeenCalledTimes(2);
+      expect(mockCreate.mock.calls[1][0].system).toContain('CLOSING ONLY');
+      expect(turn).toEqual({ reply: 'You work on blogs at VOKT and came here to network. We will go with that.', ready: true });
+    });
+
+    it('when the closing call still only asks, the question is dropped and a warm statement goes out, ready', async () => {
+      mockCreate.mockResolvedValue({ content: [{ type: 'text', text: "What's the challenge with the blogs at the moment? " + READY_TOKEN }] });
+      const turn = await converse(history, undefined, 'hard');
+      expect(turn.ready).toBe(true);
+      expect(turn.reply).not.toContain('?');
+      expect(turn.reply).toBe('We will go with what you have told us so far, and you can tell us more whenever you like.');
+    });
+
+    it('a hard wrap closing that mixes a summary with a question keeps only the summary', async () => {
+      mockCreate.mockResolvedValue({ content: [{ type: 'text', text: 'You are building blogs at VOKT. What is the hardest part of that? ' + READY_TOKEN }] });
+      const turn = await converse(history, undefined, 'hard');
+      expect(turn).toEqual({ reply: 'You are building blogs at VOKT.', ready: true });
+    });
+
+    it('outside a hard wrap, a summary that asks something is rewritten once and a clean rewrite is used', async () => {
+      mockCreate
+        .mockResolvedValueOnce({ content: [{ type: 'text', text: 'Here is what we heard. Does that sound right? ' + READY_TOKEN }] })
+        .mockResolvedValueOnce({ content: [{ type: 'text', text: 'Here is what we heard, and we will look for people who made the same jump. ' + READY_TOKEN }] });
+      const turn = await converse(history);
+      expect(mockCreate).toHaveBeenCalledTimes(2);
+      expect(mockCreate.mock.calls[1][0].system).toContain('REWRITE');
+      expect(mockCreate.mock.calls[1][0].system).toContain('no question');
+      expect(turn).toEqual({ reply: 'Here is what we heard, and we will look for people who made the same jump.', ready: true });
+    });
+
+    it('outside a hard wrap, when the rewrite still asks, the question is dropped and the turn stays ready', async () => {
+      mockCreate.mockResolvedValue({ content: [{ type: 'text', text: 'We will look for founders who made the same jump. Shall we go with that? ' + READY_TOKEN }] });
+      const turn = await converse(history);
+      expect(mockCreate).toHaveBeenCalledTimes(2);
+      expect(turn).toEqual({ reply: 'We will look for founders who made the same jump.', ready: true });
+    });
+
+    it('a ready draft that asks a question breaks the style rules by name', () => {
+      expect(styleViolations('Here is what we heard. Shall we go with that? ' + READY_TOKEN, true)).toContain('the closing asks a question');
+      expect(styleViolations('Here is what we heard, in one line. ' + READY_TOKEN, true)).toEqual([]);
+    });
+  });
+
   describe('style guard', () => {
     beforeEach(() => mockCreate.mockReset());
 

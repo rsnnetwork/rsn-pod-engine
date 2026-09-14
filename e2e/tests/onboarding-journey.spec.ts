@@ -19,7 +19,8 @@ import { primePreview } from '../helpers/preview-bypass';
 
 let browser: Browser;
 let member: TestUser;
-let known: TestUser; // a member whose card already holds a reason and a company
+let known: TestUser; // a member whose card already holds a reason and a companylet thin: TestUser; // a member who answers in one word, twice (Shradha, 14 Sep)
+
 const ctxs: BrowserContext[] = [];
 
 const OPENING_QUESTION = "We believe you're here for a reason. Do you mind sharing what brought you here?";
@@ -53,7 +54,11 @@ async function say(page: Page, text: string, label: string) {
     throw new Error('the host answered with the LLM-disabled fallback: Anthropic balance empty?');
   }
   console.log(`  MEMBER: ${text}\n  HOST:   ${reply.trim()}`);
-  const done = await page.getByRole('button', { name: /Yes, use this/i }).isVisible().catch(() => false);
+  // A closing (no question) arrives with the confirm card; give the card a
+  // moment to render before judging the turn as a question that asked nothing.
+  const confirm = page.getByRole('button', { name: /Yes, use this/i });
+  let done = await confirm.isVisible().catch(() => false);
+  if (!done && !reply.includes('?')) done = await confirm.waitFor({ state: 'visible', timeout: 5_000 }).then(() => true).catch(() => false);
   if (!done) expectHostTurn(reply, label);
   return reply;
 }
@@ -70,7 +75,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   for (const c of ctxs) await c.close().catch(() => {});
   try { await browser?.close(); } catch {}
-  const ids = [member?.id, known?.id].filter(Boolean);
+  const ids = [member?.id, known?.id, thin?.id].filter(Boolean);
   await pool.query(`DELETE FROM agent_matches WHERE agent_id IN (SELECT id FROM matching_agents WHERE user_id = ANY($1))`, [ids]).catch(() => {});
   await pool.query(`DELETE FROM matching_agents WHERE user_id = ANY($1)`, [ids]).catch(() => {});
   await cleanup(pool, { ids });
@@ -191,4 +196,71 @@ test('a new member talks through three open questions, confirms, and lands on Su
   const overflow = await page.evaluate(() =>
     document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow, 'no sideways scroll at 390px').toBeLessThanOrEqual(0);
+});
+
+// 14 Sep 2026 (Shradha's chat, seen by Ali): two one-word answers force the
+// wrap, and the closing turn came out as a QUESTION with the ready signal
+// ("What's the challenge with the blogs at the moment?"), so the member saw a
+// question next to "Yes, use this" and "Edit" with the composer gone. And the
+// chat ended with no agent at all. Now: the closing is a statement, the
+// confirm card is the only thing asked, and the thin chat still produces an
+// agent (inferred from what they work on, or their own words as a fallback).
+test('a member who answers in one word twice gets a closing statement, not a question, and still leaves with an agent', async () => {
+  test.setTimeout(600_000);
+  thin = await createTestUser('journeythin', 'member', 'not_started');
+  await pool.query(
+    `UPDATE users SET onboarding_completed = false, company = 'VOKT', job_title = NULL, bio = NULL,
+       industry = NULL, location = NULL, linkedin_url = NULL WHERE id = $1`, [thin.id]);
+
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  await ctx.addInitScript((t: { a: string; r: string }) => {
+    localStorage.setItem('rsn_access', t.a); localStorage.setItem('rsn_refresh', t.r);
+  }, { a: thin.accessToken, r: thin.refreshToken });
+  ctxs.push(ctx);
+  await primePreview(ctx);
+  const page = await ctx.newPage();
+  page.on('pageerror', () => {});
+  await gotoRetry(page, `${APP}/onboarding`);
+
+  await expect(page.locator('input[aria-label="Your LinkedIn URL"]')).toBeVisible({ timeout: 30_000 });
+  await page.getByRole('button', { name: /Skip for now/i }).click();
+  const cont = page.getByRole('button', { name: /Yes, continue/i });
+  await expect(cont).toBeVisible({ timeout: 60_000 });
+  await cont.click();
+  await expect(bubbles(page).first()).toBeVisible({ timeout: 60_000 });
+
+  await say(page, 'networking', 'turn 1');
+  const closing = await say(page, 'blogs', 'turn 2 (forces the wrap)');
+
+  // The closing is a statement: no question, and the confirm card is what is
+  // asked. The composer is gone, so a question here would be unanswerable.
+  const confirmBtn = page.getByRole('button', { name: /Yes, use this/i });
+  await expect(confirmBtn).toBeVisible({ timeout: 30_000 });
+  expect(closing, 'the closing asks nothing').not.toContain('?');
+  expect(closing.trim().length, 'the closing says something').toBeGreaterThan(0);
+  await expect(page.locator('textarea[aria-label="Your answer"]')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Edit/i })).toBeVisible();
+  const hostTurns = await bubbles(page).evaluateAll((els) => els.filter((e) => e.classList.contains('self-start')).length);
+  expect(hostTurns, 'opening, one question, the closing').toBe(3);
+
+  // Edit reopens the composer; a member can still answer or add more.
+  await page.getByRole('button', { name: /Edit/i }).click();
+  await expect(page.locator('textarea[aria-label="Your answer"]')).toBeVisible({ timeout: 10_000 });
+  await say(page, 'that is all', 'after edit (still wrapped)');
+  await expect(confirmBtn).toBeVisible({ timeout: 30_000 });
+  await confirmBtn.click();
+
+  await expect(page).toHaveURL(/\/agents/, { timeout: 60_000 });
+  const toast = page.getByText(/searching now/i).first();
+  await expect(toast).toBeVisible({ timeout: 15_000 });
+  console.log(`  TOAST:  ${((await toast.textContent()) || '').trim()}`);
+
+  const rows = await pool.query(`SELECT id, label, want_text, status, last_matched_at FROM matching_agents WHERE user_id = $1 ORDER BY created_at`, [thin.id]);
+  expect(rows.rows.length, 'a thin chat still leaves an agent').toBeGreaterThan(0);
+  expect(rows.rows.filter(r => r.status === 'active').length, 'exactly one main agent').toBe(1);
+  const main = rows.rows.find(r => r.status === 'active')!;
+  expect(main.want_text.trim().length).toBeGreaterThan(0);
+  expect(main.last_matched_at, `${main.label} has searched`).not.toBeNull();
+  await expect(page.getByTestId(`agent-${main.id}`)).toBeVisible({ timeout: 30_000 });
+  console.log(`  AGENTS: ${rows.rows.map(r => `${r.label} [${r.status}] "${r.want_text}"`).join(' | ')}`);
 });
