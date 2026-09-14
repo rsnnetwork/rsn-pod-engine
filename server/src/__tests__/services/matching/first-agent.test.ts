@@ -207,6 +207,26 @@ describe('createFirstAgents', () => {
     ]);
   });
 
+  // 14 Sep 2026 (Shradha: "networking", then "blogs", then no agent at all).
+  // The convention at the top of this file: a single "People I want to meet"
+  // agent when they named none. A reason that names nobody still becomes that
+  // one agent, in their own words, so the Suggestions page is never empty and
+  // there is something concrete to refine. Only for a member with nothing yet.
+  it('a reason that names nobody still becomes the single generic agent for a member with none', async () => {
+    await createFirstAgents('u-1', { whoText: '', whyText: 'Networking' });
+    expect(created()).toEqual([
+      { label: 'People I want to meet', wantText: 'Networking', matchingTags: [], status: 'active' },
+    ]);
+    expect(mockRecompute).toHaveBeenCalledTimes(1);
+  });
+
+  it('a bare reason adds no generic agent to a member who already holds agents', async () => {
+    mockList.mockResolvedValue([{ id: 'old', label: 'Founders', status: 'active' }]);
+    const agents = await createFirstAgents('u-1', { whoText: '', whyText: 'Networking' });
+    expect(agents).toEqual([]);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
   it('creates nothing when the member said nothing searchable', async () => {
     const agents = await createFirstAgents('u-1', { whoText: '   ', whyText: '' });
     expect(agents).toEqual([]);

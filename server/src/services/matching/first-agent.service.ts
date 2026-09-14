@@ -11,6 +11,10 @@
 // of an agent the member already has — a member routed back through
 // onboarding (migration 083) keeps what 087 gave them.
 //
+// 14 Sep 2026 (Shradha): "named none" includes a reason that names nobody
+// ("networking"). It becomes the generic agent in her own words, unless it is
+// a self-description, which would search for people like her.
+//
 // 4 Sep 2026 (Ali): four agents searching at once was more than a first visit
 // can read, and the spec only ever asked for a first agent. So ONE agent is
 // active, the first kind of person the member named, and the others are
@@ -75,6 +79,12 @@ function cleanList(xs?: string[]): string[] {
   return out;
 }
 
+/** "I am an entrepreneur and builder" describes the member, not who they want. */
+const SELF_DESCRIPTION = /^\s*(i am|i'm|i’m|we are|we're|we’re|as an?|my name is)\b/i;
+export function isSelfDescription(text: string): boolean {
+  return SELF_DESCRIPTION.test(text);
+}
+
 /** Append qualifier terms that are not already present in the base text. */
 function withQualifiers(base: string, quals: string[]): string {
   const low = base.toLowerCase();
@@ -123,12 +133,16 @@ export function planFirstAgents(source: FirstAgentSource, existingLabels: string
   let text = who;
   let wanted = who ? wantedInOrderSaid(who) : [];
   if (!who) {
-    // Nothing about WHO: fall back to why they came, but only when it names a
-    // kind of person. A why that is really a self-description ("I am an
-    // entrepreneur and builder") would make an agent hunt for people like the
-    // member — the blob mistake migration 087 undid. No agent beats a wrong one.
+    // Nothing about WHO: fall back to why they came. A why that is really a
+    // self-description ("I am an entrepreneur and builder") would make an
+    // agent hunt for people like the member — the blob mistake migration 087
+    // undid. No agent beats a wrong one.
+    // 14 Sep 2026 (Shradha: "networking", "blogs", no agent at all): a why
+    // that names nobody and describes nobody still becomes the single generic
+    // agent below, in the member's own words, for a member who holds none,
+    // so the Suggestions page is never empty and there is something to refine.
     wanted = why ? wantedInOrderSaid(why) : [];
-    if (!wanted.length) return [];
+    if (!wanted.length && (!why || isSelfDescription(why) || existingLabels.length > 0)) return [];
     text = why;
   }
 
