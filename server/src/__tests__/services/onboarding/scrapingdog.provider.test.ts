@@ -22,8 +22,16 @@ function mockResponse(status: number, body?: any): Response {
 }
 
 describe('scrapingdogProvider', () => {
+  // 14 Sep 2026: the provider now makes a second (cached-copy) call when the
+  // live page is thin or failed. A test that queues one response must never
+  // let that second call reach the real network: default every fetch to a
+  // 500 and let each test queue its own responses on top.
+  beforeEach(() => {
+    jest.spyOn(globalThis, 'fetch').mockResolvedValue(mockResponse(500));
+  });
   afterEach(() => {
     jest.useRealTimers();
+    jest.restoreAllMocks();
   });
 
   it('maps a 200 profile to EnrichResult with confidence 0.95 and echoes the requested URL', async () => {
