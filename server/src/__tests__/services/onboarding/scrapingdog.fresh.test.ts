@@ -147,6 +147,25 @@ describe('mapProfile: the whole page', () => {
   });
 });
 
+// 15 Sep 2026 (Ali's own page): the live scrape carried LinkedIn's grey
+// placeholder as the photo; the cached copy had the real one.
+describe('a placeholder is no photo', () => {
+  it('the placeholder maps to null, so the merge takes the cached real photo', async () => {
+    const live = mapProfile({ ...shradhaLive, profile_photo: 'https://static.licdn.com/aero-v1/sc/h/9c8pery4andzj6ohjkjp54ma2' }, 'u')!.profile;
+    expect(live.photoUrl).toBeNull();
+    const cached = mapProfile(shradhaLive, 'u')!.profile;
+    expect(mergeLiveWithCached(live, cached).photoUrl).toBe('https://media.licdn.com/dms/image/shradha.jpg');
+    const fetchMock = jest.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(mock(200, { ...shradhaLive, profile_photo: 'https://static.licdn.com/aero-v1/sc/h/9c8pery4andzj6ohjkjp54ma2' }))
+      .mockResolvedValueOnce(mock(200, shradhaLive));
+    const out = await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/shradhadhikari' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    if (out.kind !== 'partial') throw new Error('expected partial');
+    expect(out.photoUrl).toBe('https://media.licdn.com/dms/image/shradha.jpg');
+    jest.restoreAllMocks();
+  });
+});
+
 describe('mergeLiveWithCached', () => {
   it('the live page wins on the current company and About; the cached copy fills gaps and its old company becomes a past role', () => {
     const live = mapProfile({ ...shradhaLive, about: '' }, 'u')!.profile;

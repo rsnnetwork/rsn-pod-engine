@@ -168,3 +168,33 @@ describe('an agent\'s stored tags are expansion, not the member\'s own words', (
     expect(r.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
   });
 });
+
+// 15 Sep 2026 (Raja's "a react developer who can build my product" agent):
+// a sales consultant matched on "business development consultancy", a
+// change coach on "leadership development", a marketer on "sales development"
+// and on "react" inside "reactive tactics". A word inside another word is not
+// the same word, and "business development" is sales, not software.
+describe('developer means developer', () => {
+  const WANT = ['a react developer who can build my product'];
+  const nobody = { professionalRole: [] as string[], jobTitleSource: 'stated' };
+
+  it('"business development consultancy" is not a developer', () => {
+    const r = scoreWants(WANT, person({ ...nobody, jobTitle: 'sales consultant / sales strategist', whatICanHelpWith: 'practical sales consultancy, business development consultancy, frameworks' }));
+    expect(r.score).toBe(0);
+  });
+
+  it('"leadership development" and "sales development" are not developers either', () => {
+    expect(scoreWants(WANT, person({ ...nobody, jobTitle: 'Chief Adaptability Officer', expertiseText: 'agile coaching, scrum mastery, leadership development, enterprise transformation' })).score).toBe(0);
+    expect(scoreWants(WANT, person({ ...nobody, jobTitle: 'Founder', bio: 'hands-on delivery, bringing deep expertise in sales development, digital marketing' })).score).toBe(0);
+  });
+
+  it('"reactive tactics" is not react', () => {
+    expect(scoreWants(WANT, person({ ...nobody, jobTitle: 'Founder', bio: 'generalist hires instead of specialists, reactive tactics over repeatable systems' })).score).toBe(0);
+  });
+
+  it('a software development lead, a web developer and a reactjs engineer still are', () => {
+    expect(scoreWants(WANT, person({ ...nobody, jobTitle: 'software development lead' })).score).toBeGreaterThan(0);
+    expect(scoreWants(WANT, person({ ...nobody, jobTitle: 'web developer', expertiseText: 'product development' })).score).toBeGreaterThan(0);
+    expect(scoreWants(WANT, person({ ...nobody, jobTitle: 'engineer', expertiseText: 'reactjs, typescript' })).score).toBeGreaterThan(0);
+  });
+});

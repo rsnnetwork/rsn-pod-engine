@@ -102,6 +102,18 @@ function curiositySources(p: IntentProfile): Array<string | null | undefined> {
   return [p.whatICareAbout, flatten(p.interests)];
 }
 
+/**
+ * 15 Sep 2026: compounds whose second word means something else on its own.
+ * "business development" is sales, not software; fused so its "development"
+ * never reads as a developer. "software development", "product development"
+ * and "web development" are left alone: those are developers.
+ */
+const COMPOUND_SENSES = /\b(business|sales|biz|leadership|personal|professional|organi[sz]ational|talent|career|community|partnership|market|team|people|self)[\s-]+(development|developer|developers)\b/gi;
+export function fuseCompoundSenses(text: string | null | undefined): string | null | undefined {
+  if (!text) return text;
+  return text.replace(COMPOUND_SENSES, (_m, a: string, b: string) => `${a}${b}`.toLowerCase());
+}
+
 function flatten(v: unknown, sep = ' '): string | null {
   if (v == null) return null;
   if (Array.isArray(v)) return v.filter(Boolean).join(sep) || null;
@@ -300,8 +312,11 @@ function analyzeWants(
   // also in their own wants; the strong identity fields (title, roles,
   // company, industry, expertise, what they can help with, bio) count always,
   // so a manufacturer who also wants to meet manufacturers still matches.
-  const strongOffer = tokenizeTerms(strongOfferSources(other));
-  const curiosity = tokenizeTerms(curiositySources(other));
+  // "business development", "sales development", "leadership development"
+  // are one thing each, and none of them is a developer: fused into a single
+  // token before tokenizing, so the bare word never reaches the developer want.
+  const strongOffer = tokenizeTerms(strongOfferSources(other).map(fuseCompoundSenses));
+  const curiosity = tokenizeTerms(curiositySources(other).map(fuseCompoundSenses));
   const theirWants = new Set(tokenizeTerms(wantSources(other)));
   const offerTokens = [...new Set([...strongOffer, ...curiosity.filter(t => !theirWants.has(t))])];
   const overlap = termOverlapRelated(wantTokens, offerTokens);

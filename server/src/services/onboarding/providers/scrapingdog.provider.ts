@@ -213,6 +213,20 @@ function formatPublication(x: any): string | null {
   return summary ? `${head}: ${summary.length > 240 ? summary.slice(0, 237).trimEnd() + '…' : summary}` : head;
 }
 
+/**
+ * 15 Sep 2026 (Ali's own page, live): the scrape returned LinkedIn's grey
+ * placeholder (a static.licdn.com SVG) as the photo, the merge kept it over
+ * the real photo in the cached copy, and the login capture rightly refused
+ * it. A placeholder is no photo: real photos live on media.licdn.com.
+ */
+export function realPhoto(url: string | null): string | null {
+  if (!url) return null;
+  if (/static\.licdn\.com\//i.test(url)) return null;
+  if (/\/aero-v1\/sc\/h\//i.test(url)) return null;
+  if (/\.svg(\?|$)/i.test(url)) return null;
+  return url;
+}
+
 /** First non-empty name-like field of a generic section entry. */
 function nameOf(x: any, ...keys: string[]): string | null {
   if (x == null) return null;
@@ -306,7 +320,7 @@ export function mapProfile(raw: any, requestedUrl: string): { profile: EnrichedP
       .filter((s: string) => s.length > 0),
     education: list(p.education),
     skills,
-    photoUrl: text(p.profile_photo) ?? text(p.profile_pic_url),
+    photoUrl: realPhoto(text(p.profile_photo) ?? text(p.profile_pic_url)),
     likelyWantsToMeet: [],
     likelyOffers: [],
     conversationStarters: [],

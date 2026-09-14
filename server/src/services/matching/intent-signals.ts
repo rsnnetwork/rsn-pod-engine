@@ -237,10 +237,29 @@ export function termOverlap(aTokens: string[], bTokens: string[]): number {
  * top of the exact/substring rule. Only used by platform/agent matching; the
  * live-event matcher keeps `termOverlap`.
  */
+/**
+ * 15 Sep 2026 (Raja's react-developer agent matched "reactive tactics" and
+ * "sales development"): a word inside another word is not the same word.
+ * Related now means the same stem (developer / developers / development,
+ * programmer / programming, investor / investors / investment), the same
+ * word with a short ending (react / reactjs), or, for long words, the same
+ * first seven letters (manufacturer / manufacturing). "react" inside
+ * "reactive" no longer counts.
+ */
+const SUFFIXES = ['ments', 'ment', 'ists', 'ist', 'ings', 'ing', 'ers', 'er', 'ors', 'or', 'ies', 'es', 's'];
+export function stemTerm(w: string): string {
+  for (const s of SUFFIXES) {
+    if (w.length - s.length >= 4 && w.endsWith(s)) return s === 'ies' ? w.slice(0, -3) + 'y' : w.slice(0, -s.length);
+  }
+  return w;
+}
 export function isRelatedTerm(a: string, b: string): boolean {
-  return a === b
-    || (a.length >= 4 && b.includes(a))
-    || (b.length >= 4 && a.includes(b))
+  if (a === b) return true;
+  const sa = stemTerm(a);
+  const sb = stemTerm(b);
+  return sa === sb
+    || (a.length >= 4 && b.startsWith(a) && b.length - a.length <= 2)
+    || (b.length >= 4 && a.startsWith(b) && a.length - b.length <= 2)
     || (a.length >= 8 && b.length >= 8 && a.slice(0, 7) === b.slice(0, 7));
 }
 
