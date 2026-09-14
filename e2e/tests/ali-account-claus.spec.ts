@@ -38,7 +38,7 @@ function expectHostTurn(reply: string, label: string) {
   const questions = (r.match(/\?/g) || []).length;
   expect(questions, `${label}: exactly one question`).toBe(1);
   expect(r.split(/\s+/).length, `${label}: short enough to read`).toBeLessThanOrEqual(45);
-  expect(r, `${label}: never asks them to list who they want to meet`).not.toMatch(/who (do|would) you (want|like) to meet/i);
+  expect(r, `${label}: never asks them to list who they want to meet`).not.toMatch(/who (would|do) you (most )?(want|like|love|hope) to (meet|sit down with|talk to|talk with|speak (to|with)|connect with)/i);
   expect(r, `${label}: never asks them to describe what they offer`).not.toMatch(/what can you (offer|help)/i);
   expect(r, `${label}: never asks them to describe their profile`).not.toMatch(/describe (yourself|your profile)|tell me about yourself/i);
   expect(r, `${label}: never reads the answer back`).not.toMatch(/^(so you|you're |you are |you want |sounds like|it sounds like)/i);

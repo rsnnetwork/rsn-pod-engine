@@ -23,7 +23,7 @@ jest.mock('../../../config', () => ({
   },
 }));
 
-import { converse, extractIntent, isEnabled, styleViolations } from '../../../services/onboarding/chatbot.service';
+import { converse, extractIntent, isEnabled, styleViolations, dropReadBack } from '../../../services/onboarding/chatbot.service';
 import { READY_TOKEN } from '../../../services/onboarding/prompts';
 
 const history = [{ role: 'user' as const, content: 'I want to meet founders' }];
@@ -243,6 +243,35 @@ describe('chatbot.service', () => {
     it('a ready draft that asks a question breaks the style rules by name', () => {
       expect(styleViolations('Here is what we heard. Shall we go with that? ' + READY_TOKEN, true)).toContain('the closing asks a question');
       expect(styleViolations('Here is what we heard, in one line. ' + READY_TOKEN, true)).toEqual([]);
+    });
+  });
+
+  // 15 Sep 2026 (Ali's own chat, headed on prod): "You're looking to hear
+  // what actually keeps them up at night before you build anything. What's
+  // holding you back from those conversations right now?" went out after the
+  // rewrite was no better. The read-back sentence is dropped when a question
+  // remains; and "who would you most want to sit down with?" is the forbidden
+  // who-to-meet question in softer words, so it gets a rewrite.
+  describe('a read-back never opens an asking turn', () => {
+    beforeEach(() => mockCreate.mockReset());
+
+    it('drops the read-back sentence and keeps the question when the rewrite is no better', async () => {
+      mockCreate.mockResolvedValue({ content: [{ type: 'text', text: "You're looking to hear what actually keeps them up at night before you build anything. What's holding you back from those conversations right now?" }] });
+      const turn = await converse(history);
+      expect(mockCreate).toHaveBeenCalledTimes(2);
+      expect(turn).toEqual({ reply: "What's holding you back from those conversations right now?", ready: false });
+    });
+
+    it('a read-back with no question after it is left alone (a rewrite is still asked for)', () => {
+      expect(dropReadBack("You're looking to hear what keeps them up at night.")).toBe("You're looking to hear what keeps them up at night.");
+      expect(dropReadBack('Got it. What is the hardest part?')).toBe('Got it. What is the hardest part?');
+      expect(dropReadBack("Sounds like a big shift. What is pulling you there?")).toBe('What is pulling you there?');
+    });
+
+    it('asking who they want to meet, in any words, is a style violation', () => {
+      expect(styleViolations('Then finding someone who actually runs one changes everything. Who would you most want to sit down with?', false)).toContain('it asks them to say who they want to meet');
+      expect(styleViolations('Got it. Who do you want to meet?', false)).toContain('it asks them to say who they want to meet');
+      expect(styleViolations('Got it. What is the hardest part of that?', false)).not.toContain('it asks them to say who they want to meet');
     });
   });
 

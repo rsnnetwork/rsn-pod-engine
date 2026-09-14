@@ -84,7 +84,27 @@ export function styleViolations(text: string, ready: boolean): string[] {
   if (/^\s*(so you|you're |you are |you want |sounds like|it sounds like)/i.test(afterReaction)) {
     out.push('it reads their answer back to them');
   }
+  // 15 Sep 2026 (Ali's own chat): "Who would you most want to sit down with?"
+  // is the question Claus rules out, in softer words.
+  if (ASKS_WHO_TO_MEET.test(body)) out.push('it asks them to say who they want to meet');
   return out;
+}
+
+const READ_BACK = /^\s*(so you|you're |you are |you want |sounds like|it sounds like)/i;
+const ASKS_WHO_TO_MEET = /\bwho (would|do) you (most )?(want|like|love|hope) to (meet|sit down with|talk to|talk with|speak (to|with)|connect with|be introduced to)\b/i;
+
+/**
+ * 15 Sep 2026 (Ali's own chat, headed on prod): the guard flagged "You're
+ * looking to hear what actually keeps them up at night…", the rewrite was
+ * no better, and the read-back went out. When the draft still holds a
+ * question after its first sentence, the read-back sentence is simply
+ * dropped: the member gets the question without being quoted to.
+ */
+export function dropReadBack(text: string): string {
+  const sentences = text.trim().split(/(?<=[.!?])\s+/).filter(Boolean);
+  if (sentences.length < 2 || !READ_BACK.test(sentences[0])) return text;
+  const rest = sentences.slice(1);
+  return rest.some((s) => s.includes('?')) ? rest.join(' ').trim() : text;
 }
 
 // ─── A closing is a statement (14 Sep 2026) ──────────────────────────────────
@@ -114,8 +134,11 @@ export function closingStatement(text: string): string {
 
 type Turn = { reply: string; ready: boolean };
 const isClosing = (t: Turn): boolean => t.ready && !asksQuestion(t.reply);
-/** A ready turn goes out as a statement, whatever the model wrote. */
-const asStatement = (t: Turn): Turn => (t.ready && asksQuestion(t.reply) ? { reply: closingStatement(t.reply), ready: true } : t);
+/** A ready turn goes out as a statement, whatever the model wrote; an asking turn never opens by quoting them. */
+const asStatement = (t: Turn): Turn =>
+  t.ready && asksQuestion(t.reply)
+    ? { reply: closingStatement(t.reply), ready: true }
+    : t.ready ? t : { reply: dropReadBack(t.reply), ready: false };
 
 async function askHost(
   system: string,
@@ -185,7 +208,7 @@ export async function converse(
     return { reply: closingStatement(closing.reply), ready: true };
   }
   const broken = styleViolations(first.reply, first.ready);
-  if (broken.length === 0) return first;
+  if (broken.length === 0) return asStatement(first);
 
   // One corrective rewrite. If that is no better, the first draft still goes
   // out: a slightly long message beats a stalled chat. A closing that asks
