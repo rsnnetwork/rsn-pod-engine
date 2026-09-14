@@ -95,6 +95,22 @@ describe('mapProfile: the whole page', () => {
     jest.restoreAllMocks();
   });
 
+  // The live page (williamhgates, 14 Sep): "Co-chair\n        \n          Gates Foundation".
+  it('the live page repeats the position inside the company with whitespace noise; the company is what is left', () => {
+    const m = mapProfile({
+      fullName: 'Bill Gates', headline: 'Chair, Gates Foundation and Founder, Breakthrough Energy',
+      experience: [
+        { position: 'Co-chair', company_name: 'Co-chair\n        \n      \n        \n          Gates Foundation', duration: '26 years' },
+        { position: 'Founder', company_name: 'Founder\n          Breakthrough Energy', duration: '11 years' },
+        { position: 'Co-founder', company_name: 'Microsoft', duration: '51 years' },
+      ],
+    }, 'u')!;
+    expect(m.profile.currentRole).toBe('Co-chair');
+    expect(m.profile.currentCompany).toBe('Gates Foundation');
+    expect(m.profile.pastRoles).toEqual(['Founder at Breakthrough Energy (11 years)', 'Co-founder at Microsoft (51 years)']);
+    expect(m.missing).toEqual([]);
+  });
+
   it('an education entry with a school reads as a line', () => {
     const m = mapProfile({ fullName: 'X', education: [{ college_name: 'Copenhagen Business School', college_degree: 'BSc', college_degree_field: 'Economics', starts_at: '2020', ends_at: '2022' }] }, 'u')!;
     expect(m.profile.educationText).toEqual(['BSc in Economics, Copenhagen Business School (2020 to 2022)']);

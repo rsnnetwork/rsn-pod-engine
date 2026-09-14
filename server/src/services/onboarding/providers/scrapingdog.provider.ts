@@ -122,7 +122,18 @@ async function fetchOnce(linkId: string): Promise<{ status: number; body?: any }
 // a company says nothing at all.
 const MASKED = /^[\s*•·]+$/;
 const isMasked = (v: unknown): boolean => typeof v === 'string' && v.trim().length > 0 && MASKED.test(v);
-const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() && !isMasked(v) ? v.trim() : null);
+// The live page pads values with newlines and runs of spaces; one space is a value's only whitespace.
+const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() && !isMasked(v) ? v.replace(/\s+/g, ' ').trim() : null);
+/** The live page repeats the position inside the company ("Co-chair Gates Foundation"); the company is what is left. */
+function companyOnly(company: string | null, role: string | null): string | null {
+  if (!company || !role) return company;
+  const c = company.trim();
+  if (c.toLowerCase().startsWith(role.trim().toLowerCase())) {
+    const rest = c.slice(role.trim().length).replace(/^[\s,:·\-–—|]+/, '').trim();
+    return rest || c;
+  }
+  return c;
+}
 const list = (v: unknown): any[] => (Array.isArray(v) ? v.filter((x) => x != null) : []);
 const dedupe = (xs: Array<string | null>): string[] => {
   const seen = new Set<string>();
@@ -148,7 +159,7 @@ function usableExperience(e: any): boolean {
 /** Render one past-experience entry into the flat string RSN's existing pastRoles: string[] shape expects. */
 function formatPastRole(e: any): string {
   const role = text(e.position ?? e.title);
-  const company = text(e.company_name ?? e.company);
+  const company = companyOnly(text(e.company_name ?? e.company), role);
   const duration = text(e.duration);
   return [role, company ? `at ${company}` : null, duration ? `(${duration})` : null].filter(Boolean).join(' ');
 }
@@ -242,11 +253,12 @@ export function mapProfile(raw: any, requestedUrl: string): { profile: EnrichedP
   if (languages.length) highlights.push(`Speaks ${languages.join(', ')}`);
   if (followers) highlights.push(`${followers} on LinkedIn`);
 
+  const currentRole = text(current.position ?? current.title);
   const profile: EnrichedProfile = {
     fullName,
     headline,
-    currentRole: text(current.position ?? current.title),
-    currentCompany: text(current.company_name ?? current.company),
+    currentRole,
+    currentCompany: companyOnly(text(current.company_name ?? current.company), currentRole),
     industry: text(p.industry),
     location: text(p.location),
     summary: text(p.about),
