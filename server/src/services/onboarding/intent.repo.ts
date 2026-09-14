@@ -164,11 +164,15 @@ export async function getKnownProfileForHost(userId: string): Promise<{
     const arr = (v: unknown) => (Array.isArray(v) ? (v as string[]).filter((x) => typeof x === 'string' && x.trim().length > 0) : []);
     const wants = row.who_i_want_to_meet ? splitList(row.who_i_want_to_meet) : arr(enr.likelyWantsToMeet);
     const offers = row.what_i_can_help_with ? splitList(row.what_i_can_help_with) : arr(enr.likelyOffers);
-    const interests = Array.isArray(row.interests) && row.interests.length ? row.interests : arr(enr.skills);
+    // 14 Sep 2026: the rest of the LinkedIn page counts. Certifications are
+    // things they know; the page's other facts stand in for a missing About.
+    const certNames = arr(enr.certifications).map((c: string) => c.replace(/\s*\([^)]*\)\s*$/, '').trim());
+    const interests = Array.isArray(row.interests) && row.interests.length ? row.interests : [...arr(enr.skills), ...certNames];
+    const highlights = arr(enr.highlights);
     return {
       role: orNull(row.job_title) || orNull(enr.currentRole) || orNull(enr.headline),
       industry: orNull(row.industry) || orNull(enr.industry),
-      about: orNull(row.bio) || orNull(enr.summary),
+      about: orNull(row.bio) || orNull(enr.summary) || (highlights.length ? highlights.slice(0, 3).join('. ') : null),
       wantsToMeet: wants.slice(0, 8),
       offers: offers.slice(0, 8),
       interests: interests.slice(0, 12),

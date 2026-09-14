@@ -85,6 +85,22 @@ export interface EnrichedProfile {
   linkedinUrl: string | null;
   /** Profile photo URL (ScrapingDog path only; the Claude web-search path never has one). */
   photoUrl: string | null;
+  // 14 Sep 2026 (Ali: "get all info which is available on the LinkedIn
+  // page"): the rest of the page, mapped by the ScrapingDog provider. Optional
+  // so the Claude web-search path and older cached blobs keep their shape.
+  certifications?: string[];
+  volunteering?: string[];
+  languages?: string[];
+  publications?: string[];
+  projects?: string[];
+  awards?: string[];
+  courses?: string[];
+  organizations?: string[];
+  /** Education as readable lines ("BSc, CBS (2020 to 2022)"); `education` keeps the raw entries. */
+  educationText?: string[];
+  followers?: string | null;
+  /** The page's extra facts as lines a host can read out and the extractor can lean on. */
+  highlights?: string[];
 }
 export interface EnrichResult {
   profile: EnrichedProfile | null;

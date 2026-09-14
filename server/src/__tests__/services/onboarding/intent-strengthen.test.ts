@@ -98,3 +98,34 @@ describe('strengthenIntent', () => {
     expect(out.reasonForMeeting).toBe('to meet founders in climate');
   });
 });
+
+// 14 Sep 2026 (Ali: "get all info which is available on the LinkedIn page"):
+// certifications, volunteering, publications, languages and followers reach
+// the intent too. Shradha's page had no headline, no About and no positions,
+// but four certifications and a volunteering role.
+describe('the rest of the LinkedIn page', () => {
+  const shradha: EnrichedProfile = {
+    fullName: 'Shradha Adhikari', headline: null, currentRole: null, currentCompany: 'Vokt', industry: null, location: null,
+    summary: null, pastRoles: [], education: [], skills: [], likelyWantsToMeet: [], likelyOffers: [], conversationStarters: [],
+    questionsToVerify: [], linkedinUrl: 'https://www.linkedin.com/in/shradhadhikari', photoUrl: null,
+    certifications: ['Python for Data Science, AI & Development (IBM, Jul 2025)', 'Business Development Foundations (LinkedIn, Mar 2025)', 'Sales: Practical Techniques (LinkedIn, Feb 2025)'],
+    volunteering: ['Researcher at Robin Hood Army'], languages: ['English', 'Nepali'], publications: [], projects: [], awards: [], courses: [], organizations: [],
+    educationText: [], followers: '4K followers',
+    highlights: ['Certified: Python for Data Science, AI & Development (IBM, Jul 2025); Business Development Foundations (LinkedIn, Mar 2025); Sales: Practical Techniques (LinkedIn, Feb 2025)', 'Volunteers as Researcher at Robin Hood Army', 'Speaks English, Nepali', '4K followers on LinkedIn'],
+  };
+
+  it('certifications become expertise, the page lines stand in for a missing About, languages are carried', () => {
+    const k = knownForIntent(shradha);
+    expect(k.skills).toEqual(['Python for Data Science, AI & Development', 'Business Development Foundations', 'Sales: Practical Techniques']);
+    expect(k.highlights).toHaveLength(4);
+    expect(hasKnownFacts(k)).toBe(true);
+    const out = strengthenIntent({ ...thin(), userInterests: [], userCompany: '' }, k);
+    expect(out.userCompany).toBe('Vokt');
+    expect(out.userRole).toBe('');
+    expect(out.userExpertise).toEqual(['Python for Data Science, AI & Development', 'Business Development Foundations', 'Sales: Practical Techniques']);
+    expect(out.userProfileSummary).toBe('Certified: Python for Data Science, AI & Development (IBM, Jul 2025); Business Development Foundations (LinkedIn, Mar 2025); Sales: Practical Techniques (LinkedIn, Feb 2025). Volunteers as Researcher at Robin Hood Army');
+    expect(out.userLanguages).toEqual(['English', 'Nepali']);
+    expect(out.embeddingText).toContain('at Vokt');
+    expect(out.confidenceScores.userProfile).toBe(0.7);
+  });
+});

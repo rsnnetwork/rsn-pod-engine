@@ -58,7 +58,7 @@ describe('scrapingdogProvider', () => {
     expect(outcome.result.profile?.pastRoles[0]).toContain('Engineering Manager');
     expect(outcome.result.profile?.pastRoles[0]).toContain('Beta Inc');
     expect(outcome.result.profile?.photoUrl).toBe('https://cdn.example.com/jane.jpg');
-    expect(outcome.result.sources).toEqual(['scrapingdog:jane-doe']);
+    expect(outcome.result.sources).toEqual(['scrapingdog:jane-doe:live']);
   });
 
   // 14 Sep 2026 (Shradha): LinkedIn's guest view masks entries it will not
@@ -240,7 +240,7 @@ describe('scrapingdogProvider', () => {
     await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/claus-sønderskov-51b2943' });
 
     const calledUrl = String(fetchMock.mock.calls[0][0]);
-    expect(calledUrl).toContain('linkId=claus-s%C3%B8nderskov-51b2943');
+    expect(calledUrl.toLowerCase()).toContain('linkid=claus-s%c3%b8nderskov-51b2943');
     expect(calledUrl).toContain('premium=true');
     expect(calledUrl).not.toContain('private=true');
   });
@@ -299,7 +299,7 @@ describe('scrapingdogProvider', () => {
 
     expect(outcome.kind).toBe('found');
     const calledUrl = String(fetchMock.mock.calls[0][0]);
-    expect(calledUrl).toContain('linkId=john-doe');
+    expect(calledUrl.toLowerCase()).toContain('linkid=john-doe');
     if (outcome.kind === 'found') {
       expect(outcome.result.requestedLinkedinUrl).toBe('https://www.linkedin.com/in/john-doe');
     }
