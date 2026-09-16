@@ -72,7 +72,16 @@ test.beforeAll(async () => {
   browser = await chromium.launch({
     headless: false,
     channel: process.env.E2E_CHROME_CHANNEL || undefined,
-    args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required', '--ignore-gpu-blocklist'],
+    args: [
+      '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
+      '--autoplay-policy=no-user-gesture-required', '--ignore-gpu-blocklist',
+      // keep the headed window OFF-SCREEN so a human doesn't close it mid-run
+      // (2026-06-07: runs died with clean exitCode=0 = window closed by hand);
+      // throttling-disable flags keep off-screen rendering at full rate.
+      '--window-position=-2400,-2400',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+    ],
   });
 });
 
@@ -101,10 +110,24 @@ test('applying blur visibly changes the self-view pixels', async () => {
   await page.waitForTimeout(9000);
 
   // Wait until the self-view actually has frames.
-  let s0 = -1;
-  for (let i = 0; i < 15 && s0 <= 0; i++) { await page.waitForTimeout(1000); s0 = await selfSharpness(page); }
-  console.log(`  self-view sharpness BEFORE blur: ${s0.toFixed(2)} (attached=${await processorAttached(page)})`);
-  expect(s0, 'self-view must be showing frames before we test blur').toBeGreaterThan(0);
+  let first = -1;
+  for (let i = 0; i < 15 && first <= 0; i++) { await page.waitForTimeout(1000); first = await selfSharpness(page); }
+  expect(first, 'self-view must be showing frames before we test blur').toBeGreaterThan(0);
+  // The fake camera is an ANIMATED pattern — single-frame sharpness swings with
+  // content (a one-shot sample measured 1.70→2.41 across blur on prod). Average
+  // several samples so the metric reflects the effect, not the frame.
+  const avgSharpness = async (): Promise<number> => {
+    const vals: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const v = await selfSharpness(page);
+      if (v > 0) vals.push(v);
+      await page.waitForTimeout(500);
+    }
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : -1;
+  };
+  const s0 = await avgSharpness();
+  console.log(`  self-view sharpness BEFORE blur (avg of 5): ${s0.toFixed(2)} (attached=${await processorAttached(page)})`);
+  expect(s0).toBeGreaterThan(0);
 
   // Apply blur.
   const bgBtn = page.getByRole('button', { name: 'Background effects' });
@@ -115,8 +138,8 @@ test('applying blur visibly changes the self-view pixels', async () => {
   // Let the processor attach + run for several seconds (past warmup).
   await page.waitForTimeout(8000);
   const pref = await page.evaluate(() => localStorage.getItem('rsn_bg_preference'));
-  const s1 = await selfSharpness(page);
-  console.log(`  self-view sharpness AFTER blur:  ${s1.toFixed(2)}  pref=${pref}`);
+  const s1 = await avgSharpness();
+  console.log(`  self-view sharpness AFTER blur (avg of 5):  ${s1.toFixed(2)}  pref=${pref}`);
   await page.screenshot({ path: 'test-results/bg-visual-after.png' }).catch(() => {});
 
   // Blur must measurably reduce sharpness in the SELF-VIEW the user looks at.
