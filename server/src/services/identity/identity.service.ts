@@ -264,8 +264,12 @@ export async function sendMagicLink(email: string, requestedClientUrl?: string, 
   const existingUser = await getUserByEmail(normalizedEmail);
   let hasValidInvite = false;
 
-  // Invite codes are optional - validate only if provided
-  if (inviteCode) {
+  // Invite codes are optional, and only gate NEW users. An existing user who
+  // signs in again through their (now-used, single-use) invite link must not be
+  // re-blocked by the "invite already used" check — that locks returning users
+  // out of login entirely. Existing accounts skip invite validation here; the
+  // !existingUser gate below is the only registration check that applies to them.
+  if (inviteCode && !existingUser) {
     const invResult = await query<{ id: string; status: string; use_count: number; max_uses: number; expires_at: Date | null }>(
       `SELECT id, status, use_count, max_uses, expires_at FROM invites WHERE code = $1`,
       [inviteCode]
