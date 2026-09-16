@@ -2,7 +2,6 @@ import { useEffect, useRef } from 'react';
 import { Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { connectSocket, disconnectSocket, getSocket, reconnectSocket } from '@/lib/socket';
 import { useEntityChangedHandler } from '@/realtime/useEntityChangedHandler';
-import { useLegacyInvalidationBridge } from '@/realtime/useLegacyInvalidationBridge';
 import { useToastStore } from '@/stores/toastStore';
 
 // Backward-compat: old invite emails (pre-cbcef30) pointed users at
@@ -148,15 +147,10 @@ export default function App() {
   // meta.entities will be auto-invalidated when the server emits a
   // matching entity. Replaces NotificationBell's hard-coded query-key
   // list as queries migrate to the new pattern over Phases 3a–3g.
+  // Phase 5 — useLegacyInvalidationBridge deleted. useEntityChangedHandler
+  // now owns all realtime cache invalidation; every query declares
+  // meta.entities and the server emits entity:changed for every mutation.
   useEntityChangedHandler();
-
-  // Bug 32 (19 May Ali) — until the entity:changed migration is complete,
-  // the legacy bespoke events (pod:membership_updated, session:list_changed,
-  // notification:new) still need to invalidate caches everywhere — not
-  // just on pages that mount NotificationBell (which is layout-scoped).
-  // The bridge owns query-cache invalidation; the bell keeps only the
-  // local component-state listener for its own dropdown UI.
-  useLegacyInvalidationBridge();
 
   return (
     <Routes>

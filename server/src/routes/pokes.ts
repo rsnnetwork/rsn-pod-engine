@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
 import * as pokeService from '../services/poke/poke.service';
-import * as orchestrationService from '../services/orchestration/orchestration.service';
+import { fanoutUserEntity } from '../realtime/fanout';
 import { ApiResponse } from '@rsn/shared';
 
 const router = Router();
@@ -47,14 +47,10 @@ router.post(
       // so their "Poke pending" badge flips to "Connected" + a new
       // conversation thread appears. acceptPoke itself only mutates
       // the DB; pre-fix the sender saw nothing until they refreshed.
-      orchestrationService
-        .notifyUserChanged(result.poke.senderId, 'poke_accepted')
-        .catch(() => {});
+      fanoutUserEntity(result.poke.senderId).catch(() => {});
       // The accepter's own other tabs need the same ping so their
       // pending-pokes inbox decrements.
-      orchestrationService
-        .notifyUserChanged(req.user!.userId, 'poke_accepted')
-        .catch(() => {});
+      fanoutUserEntity(req.user!.userId).catch(() => {});
       const response: ApiResponse = { success: true, data: result };
       res.json(response);
     } catch (err) {
@@ -72,12 +68,8 @@ router.post(
       const result = await pokeService.declinePoke(req.params.id, req.user!.userId);
       // Phase May-19 realtime — same fanout shape as accept so the
       // sender's badge updates and the decliner's other tabs flip too.
-      orchestrationService
-        .notifyUserChanged(result.senderId, 'poke_declined')
-        .catch(() => {});
-      orchestrationService
-        .notifyUserChanged(req.user!.userId, 'poke_declined')
-        .catch(() => {});
+      fanoutUserEntity(result.senderId).catch(() => {});
+      fanoutUserEntity(req.user!.userId).catch(() => {});
       const response: ApiResponse = { success: true, data: result };
       res.json(response);
     } catch (err) {

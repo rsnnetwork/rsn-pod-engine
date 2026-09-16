@@ -6,7 +6,9 @@ import { authenticate } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import { auditMiddleware } from '../middleware/audit';
 import * as podService from '../services/pod/pod.service';
-import * as orchestrationService from '../services/orchestration/orchestration.service';
+import { fanoutPodEntities, fanoutPodMembershipForUser } from '../realtime/fanout';
+import { emitEntities, getRealtimeIo } from '../realtime/emit';
+import { E } from '../realtime/entities';
 import { canViewPod } from '../services/pods/pod-access';
 import { ApiResponse, UserRole, PodType, PodVisibility, PodMemberRole, OrchestrationMode, CommunicationMode, hasRoleAtLeast } from '@rsn/shared';
 import { ForbiddenError, NotFoundError } from '../middleware/errors';
@@ -175,7 +177,7 @@ router.put(
       // Bug 30 (19 May Ali) — every other pod mutation fans out; the
       // update route was missed. Renames, archive toggles, visibility
       // changes etc. now propagate to every active member instantly.
-      orchestrationService.notifyPodChanged(req.params.id, 'pod_updated').catch(() => {});
+      fanoutPodEntities(req.params.id).catch(() => {});
       const response: ApiResponse = { success: true, data: pod };
       res.json(response);
     } catch (err) {
@@ -192,12 +194,13 @@ router.delete(
   auditMiddleware('delete_pod', 'pod'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Bug 30 (19 May Ali) — fan out BEFORE the delete so notifyPodChanged
+      // Bug 30 (19 May Ali) — fan out BEFORE the delete so fanoutPodEntities
       // can still resolve the active member list. After deletion the
       // pod_members rows are gone (cascade) and the lookup would find no
-      // one to notify. notifyPodChanged is fire-and-forget, so this is
-      // safe to run before awaiting the deletePod call.
-      orchestrationService.notifyPodChanged(req.params.id, 'pod_deleted').catch(() => {});
+      // one to notify. fanoutPodEntities is fire-and-forget, so this is
+      // safe to run before awaiting the deletePod call. includeUserPods
+      // tags so every member's My Pods list invalidates too.
+      fanoutPodEntities(req.params.id, [], { includeUserPodsPerMember: true }).catch(() => {});
       await podService.deletePod(req.params.id, req.user!.userId, req.user!.role);
       const response: ApiResponse = { success: true, data: { message: 'Pod deleted' } };
       res.json(response);
@@ -325,8 +328,12 @@ router.post(
       }
       const member = await podService.addMember(req.params.id, req.body.userId, req.body.role || PodMemberRole.MEMBER);
       // Bug 19 (18 May Stefan) — broadcast so every current member's UI
-      // refetches the pod queries and sees the new row immediately.
-      orchestrationService.notifyPodChanged(req.params.id, 'member_added').catch(() => {});
+      // refetches the pod queries and sees the new row immediately. The
+      // added user's own My Pods list also needs the user-scoped invalidator.
+      fanoutPodEntities(req.params.id, [E.userPods(req.body.userId)]).catch(() => {});
+      // Cover the added user too (in case they're not in the active
+      // members SELECT yet on a slow replica) — direct user-room emit.
+      emitEntities(getRealtimeIo(), [req.body.userId], [E.pod(req.params.id), E.podMembers(req.params.id), E.userPods(req.body.userId)]).catch(() => {});
       const response: ApiResponse = { success: true, data: member };
       res.status(201).json(response);
     } catch (err) {
@@ -345,11 +352,11 @@ router.delete(
     try {
       await podService.removeMember(req.params.id, req.params.userId, req.user!.userId, req.user!.role);
       // Bug 19 — fan out before AND notify the removed user too so their
-      // own UI flips. notifyPodChanged only emits to current members
-      // (`status NOT IN ('removed', 'declined')`), so call the personal
+      // own UI flips. fanoutPodEntities only emits to current members
+      // (`status NOT IN ('removed', 'declined')`), so call the per-user
       // notifier first while the row is still present in the result set.
-      orchestrationService.notifyPodMembershipChanged(req.params.id, req.params.userId, 'removed').catch(() => {});
-      orchestrationService.notifyPodChanged(req.params.id, 'member_removed').catch(() => {});
+      fanoutPodMembershipForUser(req.params.id, req.params.userId).catch(() => {});
+      fanoutPodEntities(req.params.id, [E.userPods(req.params.userId)]).catch(() => {});
       const response: ApiResponse = { success: true, data: { message: 'Member removed' } };
       res.json(response);
     } catch (err) {
@@ -372,7 +379,7 @@ router.patch(
       }
       const member = await podService.updateMemberRole(req.params.id, req.params.userId, role, req.user!.userId, req.user!.role);
       // Bug 19 — broadcast role change to every pod member.
-      orchestrationService.notifyPodChanged(req.params.id, 'role_changed').catch(() => {});
+      fanoutPodEntities(req.params.id).catch(() => {});
       const response: ApiResponse = { success: true, data: member };
       res.json(response);
     } catch (err) {
@@ -391,8 +398,11 @@ router.post(
       const member = await podService.joinPod(req.params.id, req.user!.userId);
       // Bug 19 — broadcast: someone joined (could be direct join for
       // public pods, or pending for invite-only). Every member's UI
-      // sees the count update.
-      orchestrationService.notifyPodChanged(req.params.id, 'member_joined').catch(() => {});
+      // sees the count update, and the joiner's My Pods list flips.
+      fanoutPodEntities(req.params.id, [E.userPods(req.user!.userId)]).catch(() => {});
+      // The joiner might not be in the active-member SELECT yet if status
+      // is 'pending_approval' — emit direct to their user room too.
+      emitEntities(getRealtimeIo(), [req.user!.userId], [E.pod(req.params.id), E.podMembers(req.params.id), E.userPods(req.user!.userId)]).catch(() => {});
       const response: ApiResponse = { success: true, data: member };
       res.status(201).json(response);
     } catch (err) {
@@ -445,18 +455,16 @@ router.post(
       // Bug 3 (18 May Stefan) — Stefan approved a pending request but the
       // requester didn't see "Approved" until they refreshed, and the host's
       // pending count stayed stale too. Live broadcast on both directions:
-      //   - target user gets a personal `pod:membership_updated` event so
-      //     their UI flips from "Pending approval" to "Active member"
-      //   - server-side socket fan-out via the user room handles the
-      //     decrement of the host's pending count via the same path the
-      //     UI's React-Query subscribes to.
-      orchestrationService
-        .notifyPodMembershipChanged(req.params.id, req.params.userId, 'approved')
+      //   - target user's user room gets the pod + members + userPods
+      //     entity tags so their UI flips from "Pending approval" to
+      //     "Active member" via the global entity:changed handler;
+      //   - the all-members fanout decrements the host's pending count.
+      fanoutPodMembershipForUser(req.params.id, req.params.userId)
         .catch(() => { /* best-effort */ });
       // Bug 19 (18 May Stefan) — fan out to all pod members too so the
       // member list everyone sees updates immediately (new approved
       // member appears, pending count decrements).
-      orchestrationService.notifyPodChanged(req.params.id, 'member_approved').catch(() => {});
+      fanoutPodEntities(req.params.id).catch(() => {});
       const response: ApiResponse = { success: true, data: member };
       res.json(response);
     } catch (err) {
@@ -476,11 +484,10 @@ router.post(
       await podService.rejectMember(req.params.id, req.params.userId, req.user!.userId, req.user!.role);
       // Bug 3 (18 May Stefan) — same live broadcast on reject so the
       // requester learns the verdict without a refresh.
-      orchestrationService
-        .notifyPodMembershipChanged(req.params.id, req.params.userId, 'rejected')
+      fanoutPodMembershipForUser(req.params.id, req.params.userId)
         .catch(() => { /* best-effort */ });
       // Bug 19 — fan out: pending count decrements for every admin viewing.
-      orchestrationService.notifyPodChanged(req.params.id, 'member_rejected').catch(() => {});
+      fanoutPodEntities(req.params.id).catch(() => {});
       const response: ApiResponse = { success: true, data: { message: 'Request rejected' } };
       res.json(response);
     } catch (err) {
@@ -501,9 +508,10 @@ router.post(
       // pod page count + roster updates immediately. Also notify the
       // leaver's own room so their "My Pods" list flips. leavePod
       // already updates pod_members.status='left', so the leaver is
-      // excluded from notifyPodChanged's active-member fanout.
-      orchestrationService.notifyPodMembershipChanged(req.params.id, req.user!.userId, 'left').catch(() => {});
-      orchestrationService.notifyPodChanged(req.params.id, 'member_left').catch(() => {});
+      // excluded from fanoutPodEntities' active-member fanout — the
+      // fanoutPodMembershipForUser call covers them directly.
+      fanoutPodMembershipForUser(req.params.id, req.user!.userId).catch(() => {});
+      fanoutPodEntities(req.params.id).catch(() => {});
       const response: ApiResponse = { success: true, data: { message: 'Left pod successfully' } };
       res.json(response);
     } catch (err) {
@@ -523,7 +531,7 @@ router.post(
       const pod = await podService.reactivatePod(req.params.id, req.user!.userId);
       // Phase May-19 realtime — fan out so every member's UI flips
       // back from "archived" to "active" instantly.
-      orchestrationService.notifyPodChanged(req.params.id, 'pod_reactivated').catch(() => {});
+      fanoutPodEntities(req.params.id, [], { includeUserPodsPerMember: true }).catch(() => {});
       const response: ApiResponse = { success: true, data: pod };
       res.json(response);
     } catch (err) {
@@ -576,7 +584,7 @@ router.put(
       await podService.setJoinConfig(req.params.id, req.user!.userId, req.body.joinConfig, req.user!.role);
       // Phase May-19 realtime — fan out so the join-page rules text
       // updates for every member viewing the pod.
-      orchestrationService.notifyPodChanged(req.params.id, 'join_config_updated').catch(() => {});
+      fanoutPodEntities(req.params.id).catch(() => {});
       const response: ApiResponse = { success: true, data: { message: 'Join config updated' } };
       res.json(response);
     } catch (err) {
@@ -595,9 +603,10 @@ router.delete(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       // Phase May-19 realtime — fan out BEFORE the hard delete so
-      // notifyPodChanged's active-member lookup still finds rows. Mirrors
-      // the soft DELETE /pods/:id pattern above.
-      orchestrationService.notifyPodChanged(req.params.id, 'pod_hard_deleted').catch(() => {});
+      // fanoutPodEntities' active-member lookup still finds rows. Mirrors
+      // the soft DELETE /pods/:id pattern above; includeUserPodsPerMember
+      // so every member's My Pods list flips.
+      fanoutPodEntities(req.params.id, [], { includeUserPodsPerMember: true }).catch(() => {});
       await podService.hardDeletePod(req.params.id);
       const response: ApiResponse = { success: true, data: { message: 'Pod permanently deleted' } };
       return res.json(response);

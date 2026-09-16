@@ -8,6 +8,7 @@ import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { auditMiddleware } from '../middleware/audit';
 import * as orchestrationService from '../services/orchestration/orchestration.service';
+import { emitPermissionsUpdated } from '../realtime/fanout';
 import * as sessionService from '../services/session/session.service';
 import { ForbiddenError } from '../middleware/errors';
 import { UserRole } from '@rsn/shared';
@@ -207,7 +208,7 @@ router.post(
       // override (and the UI re-derives isHost). Reuse permissions:updated
       // — the existing client handler already calls fetchSessionStateSnapshot
       // on this event.
-      await orchestrationService.notifyPermissionsUpdated(sessionId, userId);
+      await emitPermissionsUpdated(sessionId, userId);
       res.json({
         success: true,
         data: { sessionId, userId, value: req.body.value },
@@ -259,8 +260,13 @@ router.post(
       }
 
       await sessionService.setActingAsHost(sessionId, targetUserId, req.body.value);
-      // Notify the affected user's sockets so their snapshot resyncs.
-      await orchestrationService.notifyPermissionsUpdated(sessionId, targetUserId);
+      // Phase 5 — notifyPermissionsUpdated was deleted; the replacement
+      // emitPermissionsUpdated lives in ../realtime/fanout and emits both
+      // the surviving permissions:updated socket event (load-bearing for
+      // Zustand snapshot rehydration in useSessionSocket) AND the
+      // entity-tag fanout for queries.
+      const { emitPermissionsUpdated } = await import('../realtime/fanout');
+      await emitPermissionsUpdated(sessionId, targetUserId);
       res.json({
         success: true,
         data: { sessionId, userId: targetUserId, value: req.body.value },
