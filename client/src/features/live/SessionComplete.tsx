@@ -77,6 +77,20 @@ function InterestBadge({ connection }: { connection: Connection }) {
       </div>
     );
   }
+  // Lifetime mutual (matched in an EARLIER event) but NOT mutual this event.
+  // Make this explicit so the Message button — which stays unlocked for any past
+  // mutual — isn't confusing on a row with no this-event "Mutual interest" badge.
+  if (connection.mutualMeetAgain) {
+    return (
+      <div
+        className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-slate-600 font-medium"
+        title="You mutually matched in a previous event — you can still message them"
+      >
+        <Handshake className="h-3 w-3 text-slate-400" />
+        <span>Mutual from a past event</span>
+      </div>
+    );
+  }
   if (connection.meetAgain && !connection.theirMeetAgain) {
     return (
       <div className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-600">
