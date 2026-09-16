@@ -61,6 +61,7 @@ test.beforeAll(async () => {
       '--disable-background-timer-throttling',
       '--disable-renderer-backgrounding',
       '--disable-backgrounding-occluded-windows',
+      '--window-position=-2400,-2400', // off-screen: humans kept closing popped-up windows mid-run
     ],
   });
 });

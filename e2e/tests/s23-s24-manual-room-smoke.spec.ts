@@ -123,6 +123,13 @@ test('S23 trio-leave banner + S24 manual room survives host reload and End Round
       if ((await readBreakoutSeconds(pages.get(u.id)!.page)) !== null) { inRoom = true; break; }
       await pages.get(u.id)!.page.waitForTimeout(1500);
     }
+    if (!inRoom) {
+      const info = await pages.get(u.id)!.page.evaluate(() => ({
+        url: location.pathname,
+        text: (document.body.innerText || '').slice(0, 260).replace(/\n+/g, ' | '),
+      })).catch(() => ({ url: 'EVAL-DEAD', text: '' }));
+      console.log(`  ${u.displayName} STUCK: ${JSON.stringify(info)}`);
+    }
     expect(inRoom, `${u.displayName} lands in the manual room`).toBe(true);
   }
   console.log('  ✓ manual 3-person room running');
