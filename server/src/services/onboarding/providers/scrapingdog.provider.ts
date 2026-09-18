@@ -55,10 +55,21 @@ const RATE_LIMITED = /too many requests|rate limit|try again|something went wron
 // approval-time preload and the user-side run. ScrapingDog answers a cached
 // profile in seconds, but a genuinely cold scrape can take 60-90s — the prior
 // 30s abort fired right before the real answer arrived. 100s gives a cold
-// scrape comfortable headroom without materially changing the worst-case
-// total wait (see the provider's own MAX_ATTEMPTS/RETRY_DELAY_MS 202-loop,
-// unchanged here).
+// scrape comfortable headroom; the scrape budgets below cap what one fetch
+// may actually take once the budget is nearly spent.
 const FETCH_TIMEOUT_MS = 100_000;
+// 18 Sep 2026 (Shradha): ScrapingDog answered 202 to six attempts in a row
+// while she sat on the wait page that promises "less than a minute": six
+// fetches of ~46s plus five 20s waits, 6m16s in all, and then nothing at all,
+// because the exhausted live scrape was treated as a rate limit and the
+// cached copy of her page was never read. A scrape now has a budget: no new
+// attempt starts once it is spent, a fetch is cut at the hard cap, and only a
+// rate limit that never cleared skips the cached copy. The live page keeps a
+// long first fetch (a cold scrape can take 60-90s); the cached copy answers
+// from ScrapingDog's own store in seconds, so its budget is short.
+interface ScrapeBudget { budgetMs: number; hardCapMs: number }
+const LIVE_BUDGET: ScrapeBudget = { budgetMs: 45_000, hardCapMs: 90_000 };
+const CACHED_BUDGET: ScrapeBudget = { budgetMs: 20_000, hardCapMs: 30_000 };
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -96,12 +107,12 @@ export function freshSlug(slug: string, seed: number = Date.now()): string {
   return out.join('');
 }
 
-async function fetchOnce(linkId: string): Promise<{ status: number; body?: any }> {
+async function fetchOnce(linkId: string, timeoutMs: number): Promise<{ status: number; body?: any }> {
   // premium=true is the working parameter — private=true returns a hard 400
   // ("Try again or use premium=true") per the live A2 discovery call. Bare
   // no-flag also worked, but ScrapingDog's own error text recommends premium.
   const url = `${BASE}?api_key=${config.scrapingdogApiKey}&type=profile&linkId=${encodeURIComponent(linkId)}&premium=true`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   // Parse the body regardless of status: ScrapingDog reports request/plan
   // problems (bad param, quota exhaustion) as a JSON `{success:false}` body,
   // which can arrive under a 200 OR a 400 — see the success:false check below.
@@ -395,11 +406,16 @@ type Scrape =
   | { kind: 'ok'; body: any }
   | Extract<ProviderOutcome, { kind: 'not_found' | 'retry_exhausted' | 'provider_error' }>;
 
-/** One attempt loop for one linkId: 202 → wait, rate limit → back off, plan error → provider_error. */
-async function scrape(linkId: string): Promise<Scrape> {
+/** One attempt loop for one linkId: 202 → wait, rate limit → back off, plan error → provider_error.
+ *  Every wait is taken only when the next attempt would still start inside the budget. */
+async function scrape(linkId: string, budget: ScrapeBudget): Promise<Scrape> {
+  const startedAt = Date.now();
+  const elapsed = () => Date.now() - startedAt;
+  const anotherAttemptFitsAfter = (delayMs: number) => elapsed() + delayMs < budget.budgetMs;
   try {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      const { status, body } = await fetchOnce(linkId);
+      const timeoutMs = Math.max(1_000, Math.min(FETCH_TIMEOUT_MS, budget.hardCapMs - elapsed()));
+      const { status, body } = await fetchOnce(linkId, timeoutMs);
 
       // A body-level `success:false` is ScrapingDog's own signal for a
       // request/plan-level problem (bad param, quota exhausted) — never
@@ -409,19 +425,21 @@ async function scrape(linkId: string): Promise<Scrape> {
       if (body && !Array.isArray(body) && typeof body === 'object' && body.success === false) {
         const message = typeof body.message === 'string' ? body.message : 'scrapingdog error';
         if (status === 429 || RATE_LIMITED.test(message)) {
-          if (attempt < MAX_ATTEMPTS) { await sleep(RATE_LIMIT_DELAY_MS * attempt); continue; }
-          return { kind: 'retry_exhausted' };
+          const delay = RATE_LIMIT_DELAY_MS * attempt;
+          if (attempt < MAX_ATTEMPTS && anotherAttemptFitsAfter(delay)) { await sleep(delay); continue; }
+          return { kind: 'retry_exhausted', rateLimited: true };
         }
         return { kind: 'provider_error', reason: redact(message) };
       }
       if (status === 429) {
-        if (attempt < MAX_ATTEMPTS) { await sleep(RATE_LIMIT_DELAY_MS * attempt); continue; }
-        return { kind: 'retry_exhausted' };
+        const delay = RATE_LIMIT_DELAY_MS * attempt;
+        if (attempt < MAX_ATTEMPTS && anotherAttemptFitsAfter(delay)) { await sleep(delay); continue; }
+        return { kind: 'retry_exhausted', rateLimited: true };
       }
       if (status === 200) return { kind: 'ok', body };
       if (status === 202) {
-        if (attempt < MAX_ATTEMPTS) await sleep(RETRY_DELAY_MS);
-        continue;
+        if (attempt < MAX_ATTEMPTS && anotherAttemptFitsAfter(RETRY_DELAY_MS)) { await sleep(RETRY_DELAY_MS); continue; }
+        return { kind: 'retry_exhausted' };
       }
       // Pure 404/410 (no success:false body) is the only case that still
       // means "this profile is genuinely unretrievable". Any other status —
@@ -445,7 +463,7 @@ export const scrapingdogProvider: EnrichmentProvider = {
     const requestedUrl = normalizeLinkedinUrl(linkedinUrl)!;
 
     // 1. The live page, through a linkId ScrapingDog has never cached.
-    const live = await scrape(freshSlug(slug));
+    const live = await scrape(freshSlug(slug), LIVE_BUDGET);
     let liveMapped = live.kind === 'ok' ? mapProfile(live.body, requestedUrl) : null;
     const sources: string[] = [];
     if (liveMapped) sources.push(`scrapingdog:${slug}:live`);
@@ -453,13 +471,14 @@ export const scrapingdogProvider: EnrichmentProvider = {
     // 2. The cached copy: the only answer when the live scrape failed, and a
     //    gap-filler when the live page came back thin (guest-view masking).
     //    Not after a rate limit that never cleared: the cached call would be
-    //    rate-limited too, and the attempt budget has already been spent.
+    //    rate-limited too. A live scrape that merely ran out of time (18 Sep
+    //    2026, Shradha's six minutes of 202s) still reads it.
     let cachedMapped: { profile: EnrichedProfile; missing: string[]; masked: number } | null = null;
-    const liveFailedHard = live.kind === 'retry_exhausted';
+    const liveFailedHard = live.kind === 'retry_exhausted' && live.rateLimited === true;
     // Thin, or with entries the guest view masked: the cached copy may hold
     // the headline, the About or the older positions the live page hid.
     if ((!liveMapped || isThin(liveMapped.profile) || liveMapped.masked > 0) && !liveFailedHard) {
-      const cached = await scrape(slug);
+      const cached = await scrape(slug, CACHED_BUDGET);
       if (cached.kind === 'ok') {
         cachedMapped = mapProfile(cached.body, requestedUrl);
         if (cachedMapped) sources.push(`scrapingdog:${slug}`);

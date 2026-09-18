@@ -287,6 +287,27 @@ describe('runEnrichment', () => {
     expect(params.error.length).toBeGreaterThan(0);
   });
 
+  // 18 Sep 2026 (Shradha): a member sat on "less than a minute" for six
+  // minutes because nothing above the provider bounded the wait. The job now
+  // has its own deadline: a provider that has not answered by then is marked
+  // failed, so the member's poll always resolves.
+  it('a provider that never answers is marked failed at the job deadline', async () => {
+    jest.useFakeTimers();
+    try {
+      mockScrapingdogEnrich.mockReturnValue(new Promise(() => {}));
+
+      const run = runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+      await jest.advanceTimersByTimeAsync(150_000);
+      await run;
+
+      const [, params] = lastStateCall();
+      expect(params.status).toBe('failed');
+      expect(params.error).toMatch(/deadline/);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('provider "none": marks not_found without calling any provider, no forced error text', async () => {
     mockConfig.enrichProvider = 'none';
 

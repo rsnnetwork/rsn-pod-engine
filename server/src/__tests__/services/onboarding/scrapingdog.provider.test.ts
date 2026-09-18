@@ -226,18 +226,20 @@ describe('scrapingdogProvider', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('a rate limit that never clears ends as retry_exhausted, still never not_found', async () => {
+  it('a rate limit that never clears ends as retry_exhausted (rate limited), never not_found, and skips the cached copy', async () => {
     jest.useFakeTimers();
     const fetchMock = jest.spyOn(globalThis, 'fetch')
       .mockResolvedValue(mockResponse(200, { success: false, message: 'Too many requests, please wait.' }));
 
     const promise = scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/burst-forever' });
-    // Backoff is 5s × attempt between the 6 attempts: 5+10+15+20+25 = 75s.
+    // Backoff is 5s × attempt: attempts land at 0s, 5s, 15s, 30s; the next
+    // would start at 50s, past the 45s live budget, so it never fires.
     for (const ms of [5_000, 10_000, 15_000, 20_000, 25_000]) await jest.advanceTimersByTimeAsync(ms);
 
     const outcome = await promise;
-    expect(outcome).toEqual({ kind: 'retry_exhausted' });
-    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(outcome).toEqual({ kind: 'retry_exhausted', rateLimited: true });
+    // The cached-copy call would be rate limited too: no fifth call.
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it('requests premium=true (not private=true) and URL-encodes a unicode slug', async () => {
@@ -269,21 +271,58 @@ describe('scrapingdogProvider', () => {
     expect(outcome.result.profile?.education).toHaveLength(2);
   });
 
-  it('retries on 202 up to maxAttempts then retry_exhausted', async () => {
+  // 18 Sep 2026 (Shradha): ScrapingDog answered 202 to every attempt for six
+  // minutes while she sat on the wait page that promises "less than a minute",
+  // and the cached copy of her page was never read because the exhausted live
+  // scrape was treated like a rate limit. A live scrape now has a 45s budget
+  // (no new attempt once it is spent) and a timed-out live scrape still reads
+  // the cached copy.
+  it('stops retrying 202s once the live budget is spent and still reads the cached copy', async () => {
+    jest.useFakeTimers();
+    const cachedBody = {
+      fullName: 'Shradha Adhikari', headline: '', about: '',
+      experience: [{ position: '', company_name: 'Raw Speed Networking | RSN' }],
+    };
+    const fetchMock = jest.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      // The live scrape goes through the scrambled-case linkId; the cached copy through the canonical slug.
+      return url.includes('linkId=shradhadhikari&') ? mockResponse(200, cachedBody) : mockResponse(202);
+    });
+
+    const promise = scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/shradhadhikari' });
+    // RETRY_DELAY_MS=20_000: live attempts at 0s, 20s and 40s; the fourth would start at 60s, past the budget.
+    for (let i = 0; i < 4; i++) await jest.advanceTimersByTimeAsync(20_000);
+
+    const outcome = await promise;
+    expect(outcome.kind).toBe('partial');
+    if (outcome.kind !== 'partial') throw new Error('expected partial');
+    expect(outcome.result.profile?.currentCompany).toBe('Raw Speed Networking | RSN');
+    expect(outcome.result.sources).toEqual(['scrapingdog:shradhadhikari']);
+    expect(fetchMock).toHaveBeenCalledTimes(4); // three live attempts + the cached copy
+  });
+
+  it('a 202 loop with no cached copy either ends as retry_exhausted after the budget, not after six attempts', async () => {
     jest.useFakeTimers();
     const fetchMock = jest.spyOn(globalThis, 'fetch').mockResolvedValue(mockResponse(202));
 
     const promise = scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/slow-index' });
-
-    // MAX_ATTEMPTS=6, RETRY_DELAY_MS=20_000 — the loop sleeps only BETWEEN attempts
-    // (no sleep after the final 202), so 5 advances cover all 6 fetch attempts.
-    for (let i = 0; i < 5; i++) {
-      await jest.advanceTimersByTimeAsync(20_000);
-    }
+    for (let i = 0; i < 4; i++) await jest.advanceTimersByTimeAsync(20_000);
 
     const outcome = await promise;
     expect(outcome).toEqual({ kind: 'retry_exhausted' });
-    expect(fetchMock).toHaveBeenCalledTimes(6);
+    // Three live attempts inside the 45s budget, then one cached-copy attempt (also 202, its own 20s budget allows one more).
+    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(5);
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('a single fetch never runs past the live hard cap', async () => {
+    const fetchMock = jest.spyOn(globalThis, 'fetch')
+      .mockResolvedValue(mockResponse(200, { fullName: 'Jane Doe', headline: 'CTO', experience: [{ position: 'CTO', company_name: 'X' }] }));
+
+    await scrapingdogProvider.enrich({ linkedinUrl: 'https://www.linkedin.com/in/jane-doe' });
+
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
   it('returns provider_error on network failure and 5xx', async () => {

@@ -40,11 +40,17 @@ import HostPresence from './HostPresence';
 // three open questions the profile is read out of; never "who do you want to
 // meet".
 
-// How often the searching stage polls GET /onboarding/status, and the belt
-// timeout (server will have terminal-ed long before this) that forces the
-// not_found path if polling never resolves.
+// How often the searching stage polls GET /onboarding/status; the point at
+// which the wait admits it is slow and offers a way on (18 Sep 2026, Shradha:
+// "4+ minutes, basically stuck" on a page that promises less than a minute);
+// and the belt that forces the not_found path if polling never resolves. Both
+// are measured from the moment the SERVER started the search when that is
+// earlier than this page load, so a refresh never restarts the wait. The
+// server's own job deadline (enrichment.orchestrator.ts) is shorter than the
+// belt and terminal-s first.
 const STATUS_POLL_MS = 2500;
-const SEARCH_BELT_TIMEOUT_MS = 3 * 60 * 1000;
+const SEARCH_SLOW_HINT_MS = 45 * 1000;
+const SEARCH_BELT_TIMEOUT_MS = 165 * 1000;
 
 type Stage = 'loading' | 'asklink' | 'searching' | 'resume' | 'confirm' | 'chat';
 
@@ -409,6 +415,8 @@ export default function ChatbotOnboarding() {
   // for whether the confirm card shows at all (see settleOpening below). The
   // server job owns retries; the client only ever reads this state.
   const [opening, setOpening] = useState<OnboardingOpening | null>(null);
+  // The wait has run past SEARCH_SLOW_HINT_MS: say so and offer a way on.
+  const [searchSlow, setSearchSlow] = useState(false);
   const enriched = opening === 'found' || opening === 'partial';
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -579,21 +587,31 @@ export default function ChatbotOnboarding() {
   // settles on its own (the belt below still bounds the wait either way).
   //
   // The background job owns every retry from here; the client never times
-  // out a request or swallows a 503 itself. A 3-minute belt forces the
-  // not_found path if polling somehow never resolves (server will have
-  // terminal-ed long before this fires).
+  // out a request or swallows a 503 itself. The belt forces the not_found
+  // path if polling somehow never resolves (the server's own job deadline
+  // terminal-s first). The wait is measured from the server's own start of
+  // the search when that is earlier than this page load (18 Sep 2026: a
+  // refresh used to restart the belt, so Shradha waited 4.5 minutes), and
+  // after SEARCH_SLOW_HINT_MS the page says it is slow and offers a way on.
   useEffect(() => {
     if (stage !== 'searching') return;
     let cancelled = false;
     let settled = false;
     let pollInFlight = false;
     let enrichFired = false;
-    const startedAtMs = Date.now();
+    const mountedAtMs = Date.now();
+    let serverStartedAtMs: number | null = null;
+    setSearchSlow(false);
 
     function finish(op: OnboardingOpening, candidate?: OnboardingEnrichmentCandidate) {
       if (cancelled || settled) return;
       settled = true;
       settleOpening(op, candidate);
+    }
+
+    function waitedMs(): number {
+      const anchor = serverStartedAtMs === null ? mountedAtMs : Math.min(mountedAtMs, serverStartedAtMs);
+      return Date.now() - anchor;
     }
 
     async function poll() {
@@ -603,6 +621,10 @@ export default function ChatbotOnboarding() {
         const res = await api.get('/onboarding/status');
         if (cancelled || settled) return;
         const data = res.data.data as OnboardingStatusResponse;
+        if (data.enrichment.status === 'searching' && data.enrichment.startedAt) {
+          const t = Date.parse(data.enrichment.startedAt);
+          if (Number.isFinite(t)) serverStartedAtMs = t;
+        }
 
         // status 'none' (no job has run YET) or a first-time 'failed' (the
         // last run hit a transient provider error) with a LinkedIn URL on
@@ -633,7 +655,10 @@ export default function ChatbotOnboarding() {
       } finally {
         pollInFlight = false;
       }
-      if (Date.now() - startedAtMs >= SEARCH_BELT_TIMEOUT_MS) {
+      if (cancelled || settled) return;
+      const waited = waitedMs();
+      if (waited >= SEARCH_SLOW_HINT_MS) setSearchSlow(true);
+      if (waited >= SEARCH_BELT_TIMEOUT_MS) {
         finish('not_found');
       }
     }
@@ -939,8 +964,12 @@ export default function ChatbotOnboarding() {
   }
 
   // Waiting on the background enrichment job (GET /onboarding/status polling,
-  // see the effect above). Calm, non-interactive — no dead ends, it always
-  // resolves on its own (found/partial/not_found), belt-timed at 3 minutes.
+  // see the effect above). Calm; it resolves on its own (found/partial/
+  // not_found) and is belt-timed. Once the wait runs long it says so and
+  // offers "Continue without it": the chat opens on the honest not_found
+  // line while the job carries on in the background, and whatever it still
+  // finds (photo, role, company) reaches the profile through the host's
+  // known-profile block and the final confirm, not through this card.
   if (stage === 'searching') {
     return (
       <div className={shellClass} style={{ height: '100dvh' }}>
@@ -961,6 +990,27 @@ export default function ChatbotOnboarding() {
               </h1>
               <p className="mt-2 text-sm text-gray-500">{OPENINGS.searching}</p>
             </div>
+            {searchSlow && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.35 }}
+                className="flex w-full flex-col items-center gap-3"
+                data-testid="onboarding-search-slow"
+              >
+                <p className="text-sm text-gray-500">
+                  This is taking longer than usual. You can continue now and we will add what we find to your profile as it arrives.
+                </p>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => settleOpening('not_found')}
+                  className="min-h-[44px] px-5"
+                >
+                  Continue without it
+                </Button>
+              </motion.div>
+            )}
           </motion.div>
         </div>
       </div>

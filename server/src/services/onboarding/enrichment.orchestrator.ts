@@ -50,10 +50,32 @@ import { captureAvatar, hasAvatar, tryGravatar } from './avatar.service';
 import { record as recordStageEvent, type StageEventStage, sanitizeErrorMessage } from './stage-events.repo';
 
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+/** 18 Sep 2026 (Shradha): a member sat on the wait page for six minutes
+ *  because nothing above the provider bounded the wait. The whole provider
+ *  call (live page, cached copy, gap fill) is bounded here: past this the
+ *  attempt is marked failed and the member's poll resolves. The provider's own
+ *  budgets (scrapingdog.provider.ts) finish well inside it in practice. */
+const PROVIDER_DEADLINE_MS = 150 * 1000;
 /** How fresh a persisted 'searching' state has to be to be trusted as "still
  *  actually running" rather than a crashed attempt that never reached a
- *  terminal state. See the module-level in-flight guard below for layer (i). */
-const SEARCHING_LOCK_MS = 5 * 60 * 1000;
+ *  terminal state. See the module-level in-flight guard below for layer (i).
+ *  Longer than the provider deadline: a live attempt always terminal-s first. */
+const SEARCHING_LOCK_MS = 3 * 60 * 1000;
+
+/** Race the provider against the job deadline. A late answer is logged and dropped. */
+function withDeadline(run: Promise<ProviderOutcome>, userId: string): Promise<ProviderOutcome> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<ProviderOutcome>((resolve) => {
+    timer = setTimeout(() => {
+      logger.warn({ userId, deadlineMs: PROVIDER_DEADLINE_MS }, 'enrichment: provider deadline reached');
+      run
+        .then((late) => logger.info({ userId, kind: late.kind }, 'enrichment: provider answered after the deadline (ignored)'))
+        .catch(() => {});
+      resolve({ kind: 'provider_error', reason: `provider deadline of ${Math.round(PROVIDER_DEADLINE_MS / 1000)}s reached` });
+    }, PROVIDER_DEADLINE_MS);
+  });
+  return Promise.race([run, deadline]).finally(() => clearTimeout(timer));
+}
 
 export interface RunEnrichmentInput {
   linkedinUrl: string | null;
@@ -307,11 +329,14 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
     logger.info({ userId, slug: linkedinSlug(resolvedLinkedinUrl), provider }, 'enrichment searching');
     recordStageEvent(userId, 'enrich_started', { provider }).catch(() => {});
 
-    // Step 4: call the provider.
-    const outcome = await runProvider(provider as Exclude<EnrichProviderName, 'none'>, {
-      linkedinUrl: resolvedLinkedinUrl,
-      fullName: input.fullName,
-    });
+    // Step 4: call the provider, bounded by the job deadline.
+    const outcome = await withDeadline(
+      runProvider(provider as Exclude<EnrichProviderName, 'none'>, {
+        linkedinUrl: resolvedLinkedinUrl,
+        fullName: input.fullName,
+      }),
+      userId,
+    );
 
     // Steps 5-6: found/partial.
     if (outcome.kind === 'found' || outcome.kind === 'partial') {

@@ -55,7 +55,7 @@ const ctxs: BrowserContext[] = [];
  *  currently returns — a plain closure over a `let` in the test lets a single
  *  test simulate a live transition (e.g. searching -> found) by mutating the
  *  variable between assertions, with no second route registration needed. */
-async function stubStatus(page: Page, getOpening: () => Opening): Promise<void> {
+async function stubStatus(page: Page, getOpening: () => Opening, startedAt: () => string | null = () => null): Promise<void> {
   await page.route(`${SERVER}/api/onboarding/status`, async (route) => {
     if (route.request().method() !== 'GET') {
       await route.continue();
@@ -69,7 +69,7 @@ async function stubStatus(page: Page, getOpening: () => Opening): Promise<void> 
         success: true,
         data: {
           status: 'not_started',
-          enrichment: { status: opening, error: null, startedAt: null, completedAt: null },
+          enrichment: { status: opening, error: null, startedAt: startedAt(), completedAt: null },
           opening,
         },
       },
@@ -620,4 +620,44 @@ test('asklink: a pasted bare slug canonicalizes into the enrich trigger and land
   await page.getByRole('button', { name: /Yes, continue/i }).click();
   await assertSingleOpeningBubble(page, `${KNOWN_LEAD} ${FIRST_QUESTION}`);
   console.log('  ✓ asklink: none→searching→found landed the candidate card, chat opens on one question.');
+});
+
+// 18 Sep 2026 (Shradha): "I was in this page for 4+ minutes, basically stuck."
+// The wait page now admits it is slow after 45s and offers a way on, and the
+// wait is measured from when the SERVER started the search, so a reload never
+// restarts it (her refresh restarted the old 3-minute belt).
+test('a slow search offers "Continue without it" after 45s, and it opens the chat on the honest line', async () => {
+  test.setTimeout(120_000);
+  const page = await openOnboarding();
+  await stubStatus(page, () => 'searching');
+  await gotoRetry(page, `${APP}/onboarding`);
+
+  await expect(page.getByText(OPENINGS.searching)).toBeVisible({ timeout: 20_000 });
+  const slow = page.getByTestId('onboarding-search-slow');
+  await expect(slow, 'nothing extra is shown while the wait is still short').toHaveCount(0);
+  await page.waitForTimeout(30_000);
+  await expect(slow, 'still calm at 30s').toHaveCount(0);
+  await expect(slow, 'the slow notice appears after 45s').toBeVisible({ timeout: 25_000 });
+  const cta = page.getByRole('button', { name: 'Continue without it' });
+  const box = await cta.boundingBox();
+  expect(box?.height ?? 0, 'the way-on control is a real tap target').toBeGreaterThanOrEqual(44);
+
+  await cta.click();
+  await expect(firstBubble(page)).toHaveText(`${OPENINGS.not_found} ${FIRST_QUESTION}`, { timeout: 20_000 });
+  await expect(page.locator('textarea[aria-label="Your answer"]')).toBeVisible();
+  await expect(page.getByText(OPENINGS.searching)).toHaveCount(0);
+  console.log('  ✓ slow search: notice at 45s, Continue opens the chat on the not_found line.');
+});
+
+test('the wait is measured from when the server started the search: a reload never restarts it', async () => {
+  test.setTimeout(60_000);
+  const page = await openOnboarding();
+  // The server has been searching for 170s already (a crashed or very slow
+  // attempt); this page load is a refresh mid-wait. The belt (165s) is past.
+  await stubStatus(page, () => 'searching', () => new Date(Date.now() - 170_000).toISOString());
+  await gotoRetry(page, `${APP}/onboarding`);
+
+  await expect(firstBubble(page)).toHaveText(`${OPENINGS.not_found} ${FIRST_QUESTION}`, { timeout: 20_000 });
+  await expect(page.getByText(OPENINGS.searching)).toHaveCount(0);
+  console.log('  ✓ server-anchored wait: a refresh after the belt lands in the chat at once.');
 });
