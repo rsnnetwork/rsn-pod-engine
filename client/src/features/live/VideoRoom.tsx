@@ -5,7 +5,7 @@ import { formatTime } from '@/lib/utils';
 import { Video, Clock, Mic, MicOff, VideoOff, Wifi, Loader2, ArrowLeft, Sparkles, Users } from 'lucide-react';
 import { useBgEngine } from '@/hooks/useBgEngine';
 import { BackgroundPanel } from './BackgroundPanel';
-import { BgCameraPublisher } from './BgCameraPublisher';
+import { BgCameraPublisher, turnCameraOn } from './BgCameraPublisher';
 import { BG_CAPTURE_RESOLUTION } from '@/lib/backgroundEffects';
 import { getSocket } from '@/lib/socket';
 import {
@@ -386,19 +386,27 @@ const VideoStage = memo(function VideoStage() {
 // (mic/cam/bg toggles) and doesn't depend on parent props. Memoization
 // stops the toolbar from re-rendering on every timer tick.
 const MediaControls = memo(function MediaControls() {
-  const { localParticipant } = useLocalParticipant();
-  const [micEnabled, setMicEnabled] = useState(true);
-  const [camEnabled, setCamEnabled] = useState(true);
+  // 18 Sep 2026 (Shradha, "icon shows it's turned off, but then I could see
+  // me on screen"): this toolbar read isCameraEnabled ONCE, when the local
+  // participant appeared, which in a breakout is before the engine track is
+  // republished into the new room, so the icon said OFF over a live self
+  // view until something else re-rendered it. Same fix the lobby got in May
+  // (Bug 11): the hook's reactive values are the source of truth, mirrored
+  // into local state only for the optimistic toggle.
+  const { localParticipant, isCameraEnabled: hookCamEnabled, isMicrophoneEnabled: hookMicEnabled } = useLocalParticipant();
+  const room = useRoomContext();
+  const [micEnabled, setMicEnabled] = useState(hookMicEnabled);
+  const [camEnabled, setCamEnabled] = useState(hookCamEnabled);
+  const [camBusy, setCamBusy] = useState(false);
   const [showBgPanel, setShowBgPanel] = useState(false);
   // Event-scoped BG engine — same instance as the lobby, so the background a
   // user chose in the main room is structurally already on this room's track.
   const bg = useBgEngine();
 
-  useEffect(() => {
-    if (localParticipant) {
-      setCamEnabled(localParticipant.isCameraEnabled);
-    }
-  }, [localParticipant]);
+  useEffect(() => { setMicEnabled(hookMicEnabled); }, [hookMicEnabled]);
+  useEffect(() => { setCamEnabled(hookCamEnabled); }, [hookCamEnabled]);
+  // Captured (camera light on) but not yet published into this room.
+  const camStarting = !camBusy && !camEnabled && bg.cameraCaptured;
 
   const toggleMic = useCallback(async () => {
     await localParticipant.setMicrophoneEnabled(!micEnabled);
@@ -406,25 +414,29 @@ const MediaControls = memo(function MediaControls() {
   }, [localParticipant, micEnabled]);
 
   const toggleCam = useCallback(async () => {
+    if (camBusy) return;
     const target = !camEnabled;
+    setCamBusy(true);
     try {
       if (!target) {
         await localParticipant.setCameraEnabled(false);
         setCamEnabled(false);
       } else {
-        // setCameraEnabled(true) unmutes the EVENT-SCOPED engine publication
-        // (lib/bgEngine) — never unpublish/stop it: that would kill the shared
-        // camera + background pipeline for the rest of the event. The SDK
-        // reacquires capture and restarts the processor on unmute by itself.
-        await localParticipant.setCameraEnabled(true);
+        // Unmutes the EVENT-SCOPED engine publication (lib/bgEngine), or
+        // publishes it when this room has none yet — never unpublish/stop it:
+        // that would kill the shared camera + background pipeline for the rest
+        // of the event. The SDK reacquires capture and restarts the processor
+        // on unmute by itself.
+        await turnCameraOn(room);
         setCamEnabled(true);
-        setTimeout(() => setCamEnabled(localParticipant.isCameraEnabled), 500);
       }
     } catch (err) {
       console.error('Camera toggle failed:', err);
       setCamEnabled(localParticipant.isCameraEnabled);
+    } finally {
+      setCamBusy(false);
     }
-  }, [localParticipant, camEnabled]);
+  }, [localParticipant, room, camEnabled, camBusy]);
 
   return (
     <div className="flex items-center gap-3 relative">
@@ -435,10 +447,11 @@ const MediaControls = memo(function MediaControls() {
         {micEnabled ? <Mic className="h-5 w-5" /> : <MicOff className="h-5 w-5" />}
       </button>
       <button onClick={toggleCam}
-        aria-label={camEnabled ? 'Camera on' : 'Camera off'}
-        title={camEnabled ? 'Click to turn camera off' : 'Click to turn camera on'}
-        className={`p-2 rounded-full transition-colors ${camEnabled ? 'bg-gray-200 hover:bg-gray-300 text-gray-700' : 'bg-red-100 text-red-500 hover:bg-red-200'}`}>
-        {camEnabled ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
+        disabled={camStarting}
+        aria-label={camStarting ? 'Starting camera' : camEnabled ? 'Camera on' : 'Camera off'}
+        title={camStarting ? 'Starting your camera' : camEnabled ? 'Click to turn camera off' : 'Click to turn camera on'}
+        className={`p-2 rounded-full transition-colors ${camStarting ? 'bg-gray-200 text-gray-500 cursor-wait' : camEnabled ? 'bg-gray-200 hover:bg-gray-300 text-gray-700' : 'bg-red-100 text-red-500 hover:bg-red-200'}`}>
+        {camStarting ? <Loader2 className="h-5 w-5 animate-spin" /> : camEnabled ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
       </button>
       {bg.supported && (
         <button

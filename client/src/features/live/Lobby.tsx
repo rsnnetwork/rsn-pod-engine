@@ -2,7 +2,7 @@ import { Users, Loader2, Video, VideoOff, Sparkles, ChevronDown, ChevronUp, Mic,
 import HostRoundDashboard from './HostRoundDashboard';
 import { useBgEngine } from '@/hooks/useBgEngine';
 import { BackgroundPanel } from './BackgroundPanel';
-import { BgCameraPublisher } from './BgCameraPublisher';
+import { BgCameraPublisher, turnCameraOn } from './BgCameraPublisher';
 import { BG_CAPTURE_RESOLUTION } from '@/lib/backgroundEffects';
 import { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
 import { useSessionStore, useInRoomParticipants } from '@/stores/sessionStore';
@@ -844,21 +844,30 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
     sessionStorage.setItem('rsn_mic', String(next));
   }, [localParticipant, micEnabled, hostMuteProcessing]);
 
+  // 18 Sep 2026 (Shradha, "camera not working"): captured (light on) but not
+  // yet published into this room reads as "Starting camera", never as off.
+  const lobbyRoom = useRoomContext();
+  const [camBusy, setCamBusy] = useState(false);
+  const camStarting = !camBusy && !camEnabled && bg.cameraCaptured;
+
   const toggleCam = useCallback(async () => {
+    if (camBusy) return;
     const target = !camEnabled;
+    setCamBusy(true);
     setCamEnabled(target); // Optimistic UI update
     try {
-      await localParticipant.setCameraEnabled(target);
+      // On: unmute the event-scoped engine publication, or publish it when this
+      // room has none yet (turnCameraOn) — never let the SDK open a second
+      // capture. Off: mute. Never stop the engine track: that would kill the
+      // camera + background pipeline for the REST OF THE EVENT.
+      if (target) await turnCameraOn(lobbyRoom);
+      else await localParticipant.setCameraEnabled(false);
     } catch (err) {
       console.error('Camera toggle failed:', err);
-      // Recovery WITHOUT stopping tracks — the camera publication is the
-      // event-scoped engine track (lib/bgEngine); stopping it would kill the
-      // camera + background pipeline for the REST OF THE EVENT. A plain retry
-      // covers the transient failures the old "stop everything" path targeted.
       if (target) {
         try {
           await new Promise(r => setTimeout(r, 300));
-          await localParticipant.setCameraEnabled(true);
+          await turnCameraOn(lobbyRoom);
         } catch (retryErr) {
           console.error('Camera retry also failed:', retryErr);
         }
@@ -869,8 +878,9 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
       const actual = localParticipant.isCameraEnabled;
       setCamEnabled(actual);
       sessionStorage.setItem('rsn_cam', String(actual));
+      setCamBusy(false);
     }, 500);
-  }, [localParticipant, camEnabled]);
+  }, [localParticipant, lobbyRoom, camEnabled, camBusy]);
 
   const handleMuteAll = useCallback(() => {
     if (!sessionId) return;
@@ -908,16 +918,19 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
       </button>
       <button
         onClick={toggleCam}
-        title={camEnabled ? 'Click to turn camera off' : 'Click to turn camera on'}
-        aria-label={camEnabled ? 'Camera on' : 'Camera off'}
+        disabled={camStarting}
+        title={camStarting ? 'Starting your camera' : camEnabled ? 'Click to turn camera off' : 'Click to turn camera on'}
+        aria-label={camStarting ? 'Starting camera' : camEnabled ? 'Camera on' : 'Camera off'}
         className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors backdrop-blur-sm ${
-          camEnabled
-            ? 'bg-black/40 text-white hover:bg-black/60'
-            : 'bg-red-500/80 text-[#1a1a2e] hover:bg-red-600/80'
+          camStarting
+            ? 'bg-black/40 text-gray-300 cursor-wait'
+            : camEnabled
+              ? 'bg-black/40 text-white hover:bg-black/60'
+              : 'bg-red-500/80 text-[#1a1a2e] hover:bg-red-600/80'
         }`}
       >
-        {camEnabled ? <Video className="h-3 w-3" /> : <VideoOff className="h-3 w-3" />}
-        <span className="hidden sm:inline">{camEnabled ? 'Cam On' : 'Cam Off'}</span>
+        {camStarting ? <Loader2 className="h-3 w-3 animate-spin" /> : camEnabled ? <Video className="h-3 w-3" /> : <VideoOff className="h-3 w-3" />}
+        <span className="hidden sm:inline">{camStarting ? 'Starting' : camEnabled ? 'Cam On' : 'Cam Off'}</span>
       </button>
       {/* Virtual background toggle */}
       <div className="relative">

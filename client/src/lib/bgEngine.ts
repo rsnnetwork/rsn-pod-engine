@@ -8,7 +8,7 @@
 //   â€¢ every apply after the first is a switchTo() (measured 244â€“409ms)
 // Serialization / latest-wins / watchdog semantics live in bgEngineCore (pure,
 // unit-tested); this shell binds them to livekit-client + track-processors.
-import { createLocalVideoTrack, LocalVideoTrack } from 'livekit-client';
+import { createLocalVideoTrack, LocalVideoTrack, TrackEvent } from 'livekit-client';
 import {
   BG_BLUR_RADIUS,
   BG_CAPTURE_RESOLUTION,
@@ -39,6 +39,11 @@ export interface BgEngineState {
   applying: boolean;
   current: BgPreference;
   degraded: boolean;
+  /** The event camera is captured (the browser's camera light is on) and not
+   *  muted. 18 Sep 2026 (Shradha): between capture and the room publish the
+   *  tile used to read "camera off" while the light was on; the rooms show
+   *  "Starting camera" while this is true and nothing is published yet. */
+  cameraCaptured: boolean;
 }
 
 function bgDebug(...args: unknown[]): void {
@@ -89,6 +94,7 @@ class BgEngine {
       applying: false,
       current: loadBgPreference() ?? { mode: 'disabled' },
       degraded: false,
+      cameraCaptured: false,
     };
     this.queue = createApplyQueue(
       {
@@ -179,6 +185,7 @@ class BgEngine {
             },
           });
           this.track = track;
+          this.watchCapture(track);
           if (applySaved) {
             const pref = loadBgPreference();
             if (pref && pref.mode !== 'disabled' && (await isBackgroundSupported())) {
@@ -197,6 +204,19 @@ class BgEngine {
   }
 
   getTrack(): LocalVideoTrack | null { return this.track; }
+
+  /** Mirror the track's mute lifecycle into `cameraCaptured` (a muted SDK
+   *  camera track has its capture stopped; unmute reacquires it). */
+  private watchCapture(track: LocalVideoTrack): void {
+    const refresh = () => {
+      const captured = this.track === track && !track.isMuted;
+      if (captured !== this.stateCache.cameraCaptured) this.patch({ cameraCaptured: captured });
+    };
+    track.on(TrackEvent.Muted, refresh);
+    track.on(TrackEvent.Unmuted, refresh);
+    track.on(TrackEvent.Ended, refresh);
+    refresh();
+  }
 
   // â”€â”€ applies â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -416,6 +436,7 @@ class BgEngine {
     try { this.track?.stop(); } catch { /* noop */ }
     this.track = null;
     this.trackPromise = null;
+    this.patch({ cameraCaptured: false });
     if (this.customUrl) { URL.revokeObjectURL(this.customUrl); this.customUrl = null; }
     this.listeners.clear();
   }
