@@ -63,7 +63,10 @@ const CAMERA_SHIM = (t: { a: string; r: string; sid: string }) => {
     const g = c.getContext('2d');
     let hue = 0;
     setInterval(() => { if (g) { hue = (hue + 7) % 360; g.fillStyle = `hsl(${hue} 60% 40%)`; g.fillRect(0, 0, 640, 480); g.fillStyle = '#fff'; g.fillRect(200, 140, 240, 200); } }, 100);
-    return (c as any).captureStream ? (c as any).captureStream(15) : new MediaStream();
+    // A build without WebRTC has no MediaStream at all; hand back an empty
+    // stand-in so the app's own error path runs instead of the harness throwing.
+    if ((c as any).captureStream) return (c as any).captureStream(15);
+    return typeof MediaStream !== 'undefined' ? new MediaStream() : ({ getVideoTracks: () => [], getTracks: () => [], getAudioTracks: () => [] } as unknown as MediaStream);
   };
   if (!(navigator as any).mediaDevices) {
     Object.defineProperty(navigator, 'mediaDevices', {
