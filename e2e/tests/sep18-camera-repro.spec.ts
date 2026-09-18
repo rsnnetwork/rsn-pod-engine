@@ -59,11 +59,20 @@ async function snapshot(page: Page, label: string): Promise<{ label: string | nu
 async function settle(page: Page, where: string) {
   const t0 = Date.now();
   let capturedAt: number | null = null;
+  let last = '';
+  // Settled means all three agree: the button reads ON, the self tile shows
+  // video, and exactly one camera track is live. Every state change on the
+  // way is logged, so a lying label is visible in the run output.
   await expect.poll(async () => {
-    if (capturedAt === null && (await liveCams(page)) >= 1) capturedAt = Date.now();
-    return camLabel(page);
-  }, { timeout: 60_000, message: `${where}: camera must publish and read ON` }).toBe('Camera on');
-  console.log(`  [${where}] captured after ${capturedAt === null ? '?' : capturedAt - t0}ms, ON after ${Date.now() - t0}ms`);
+    const label = await camBtn(page).getAttribute('aria-label', { timeout: 5_000 }).catch(() => null);
+    const live = await liveCams(page);
+    const self = await selfVideo(page).count();
+    if (capturedAt === null && live >= 1) capturedAt = Date.now();
+    const state = `button=${label} selfTileVideo=${self} liveCameraTracks=${live}`;
+    if (state !== last) { last = state; console.log(`  [${where} +${Date.now() - t0}ms] ${state}`); }
+    return label === 'Camera on' && self >= 1 && live >= 1;
+  }, { timeout: 60_000, intervals: [250, 500, 1000], message: `${where}: camera must publish, read ON and show the self video` }).toBe(true);
+  console.log(`  [${where}] captured after ${capturedAt === null ? '?' : capturedAt - t0}ms, settled after ${Date.now() - t0}ms`);
 }
 
 // One off → on cycle with outcome asserts on the member's own page.
@@ -196,7 +205,16 @@ test('Sep18: camera off/on is truthful in the main room and a breakout', async (
     console.log('  !! finding 4 reproduced at first paint: icon said OFF while the self tile showed video');
   }
   await cycle(camPage, obsPage, 'breakout no-bg', errors);
-  expect(first.label, 'breakout: the icon must agree with the tile from the first paint (finding 4)').toBe('Camera on');
+  // The icon must agree with reality from the first paint (finding 4): the
+  // camera is captured but not yet published, so it reads "Starting camera"
+  // (or "Camera on" once published), never "Camera off" over a live camera.
+  expect(['Starting camera', 'Camera on'], 'breakout first paint: never "Camera off" while the camera is live').toContain(first.label);
+  if (first.label === 'Starting camera') {
+    expect(first.selfVideos, 'starting: nothing published yet').toBe(0);
+    expect(first.live, 'starting: the camera is captured').toBeGreaterThanOrEqual(1);
+  } else {
+    expect(first.selfVideos, 'on: the self tile shows video').toBeGreaterThan(0);
+  }
 
   if (WITH_BG) {
     // ── BREAKOUT with blur (processor attached to the engine track) ────────

@@ -127,9 +127,12 @@ test('Sep18: the live Invite modal shares a real invite link an outsider can joi
   const used = (await pool.query('SELECT use_count FROM invites WHERE code=$1', [code])).rows[0];
   expect(Number(used.use_count)).toBe(1);
 
-  // Belt: the accept endpoint itself, called the way the page calls it, is idempotent for the same person.
-  const again = await apiRequest(outsider, 'POST', `/invites/${code}/accept`);
-  expect(again?.success).toBe(true);
+  // The same person opening the link again is told they are already in
+  // (409 SESSION_ALREADY_REGISTERED), which the invite page turns into
+  // "taking you to the event"; the link keeps its remaining uses for others.
+  await expect(apiRequest(outsider, 'POST', `/invites/${code}/accept`)).rejects.toThrow(/SESSION_ALREADY_REGISTERED/);
+  const after = (await pool.query('SELECT use_count FROM invites WHERE code=$1', [code])).rows[0];
+  expect(Number(after.use_count)).toBe(1);
 
   console.log('  ✓ Sep18 invite link: real /invite code, reused across opens, outsider joined with access.');
 });

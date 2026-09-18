@@ -724,10 +724,10 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
     const saved = sessionStorage.getItem('rsn_mic');
     return saved !== null ? saved === 'true' : isHost;
   });
-  const [camEnabled, setCamEnabled] = useState(() => {
-    const saved = sessionStorage.getItem('rsn_cam');
-    return saved !== null ? saved === 'true' : true;
-  });
+  // 18 Sep 2026: the button starts from what LiveKit reports (nothing
+  // published yet = off), not from the saved preference; the preference is
+  // applied by BgCameraPublisher, and "Starting camera" covers the gap.
+  const [camEnabled, setCamEnabled] = useState(hookCamEnabled);
   // Issue 10 — restore last bg choice for the UI highlight. The actual
   // processor is (re-)applied by a separate effect once the local camera
   // track is ready.
