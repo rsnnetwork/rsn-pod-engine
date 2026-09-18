@@ -547,4 +547,28 @@ describe('Invite Service', () => {
       expect(invite.type).toBe(InviteType.SESSION);
     });
   });
+
+  // 18 Sep 2026 (Shradha): the live-event invite modal reuses the event's open
+  // link instead of minting a code on every open, so the host's list must say
+  // whether a link is still usable.
+  describe('listSessionInvites', () => {
+    it('returns the use budget and expiry of every invite so an open link can be reused', async () => {
+      mockQuery.mockResolvedValueOnce({
+        rows: [{
+          id: 'inv-1', code: 'abc123', inviteeEmail: null, inviteeName: null, status: 'pending',
+          createdAt: '2026-09-18T10:00:00.000Z', maxUses: 500, useCount: 3, expiresAt: '2026-09-25T10:00:00.000Z',
+        }],
+        rowCount: 1,
+      });
+
+      const rows = await inviteService.listSessionInvites('session-123', 'pending');
+
+      const [sql, params] = mockQuery.mock.calls[0];
+      expect(sql).toContain('i.max_uses AS "maxUses"');
+      expect(sql).toContain('i.use_count AS "useCount"');
+      expect(sql).toContain('i.expires_at AS "expiresAt"');
+      expect(params).toEqual(['session-123', 'pending']);
+      expect(rows[0]).toMatchObject({ code: 'abc123', inviteeEmail: null, maxUses: 500, useCount: 3 });
+    });
+  });
 });

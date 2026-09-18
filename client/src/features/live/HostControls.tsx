@@ -4,7 +4,10 @@ import { useToastStore } from '@/stores/toastStore';
 import { Button } from '@/components/ui/Button';
 import { Play, Square, Loader2, Users, Radio, Shuffle, Check, X, Pause, SkipForward, UserMinus, RefreshCw, UserPlus, AlertTriangle, CheckCircle2, Clock, LayoutDashboard } from 'lucide-react';
 import { getSocket } from '@/lib/socket';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import api from '@/lib/api';
+import { E } from '@/realtime/entities';
 import EventPlanStrip from './EventPlanStrip';
 import { useActionLock } from '@/hooks/useActionLock';
 import { useEscapeKey } from '@/hooks/useEscapeKey';
@@ -50,6 +53,60 @@ export default function HostControls({ sessionId }: Props) {
   const [bulkDurationValue, setBulkDurationValue] = useState(300);
   // Phase 7C.1 — Host Control Center drawer toggle.
   const [showControlCenter, setShowControlCenter] = useState(false);
+
+  // 18 Sep 2026 (Shradha): the modal used to share a bare /sessions/:id URL
+  // under "Anyone with this link can join the event", and a member outside
+  // the event's private pod got "Access restricted" from it. The link is now
+  // a real event invite, the same shareable invite the event page generates
+  // (a code that registers whoever accepts it): one open link per event,
+  // reused while it has uses left, created the first time the modal opens.
+  const qc = useQueryClient();
+  const { data: session } = useQuery({
+    queryKey: ['session', sessionId],
+    queryFn: () => api.get(`/sessions/${sessionId}`).then(r => r.data.data),
+    enabled: !!sessionId,
+    meta: { entities: [E.session(sessionId)] },
+  });
+  const {
+    data: pendingInvites,
+    isLoading: invitesLoading,
+    isError: invitesError,
+  } = useQuery({
+    queryKey: ['session-pending-invites', sessionId],
+    queryFn: () => api.get(`/invites/session/${sessionId}?status=pending`).then(r => r.data.data ?? []),
+    enabled: showInviteModal,
+    meta: { entities: [E.sessionInvites(sessionId)] },
+  });
+  const openInviteLink = (pendingInvites as Array<{
+    code: string; inviteeEmail: string | null; maxUses?: number; useCount?: number; expiresAt?: string | null;
+  }> | undefined)?.find(i =>
+    !i.inviteeEmail
+    && (i.useCount ?? 0) < (i.maxUses ?? 1)
+    && (!i.expiresAt || new Date(i.expiresAt).getTime() > Date.now()),
+  );
+  const createInviteLink = useMutation({
+    mutationFn: () => api.post('/invites', {
+      type: 'session',
+      sessionId,
+      // A shareable link must cover the whole event (same cap the event page uses).
+      maxUses: session?.config?.maxParticipants ?? 500,
+      expiresInHours: 168,
+    }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['session-pending-invites', sessionId] }),
+  });
+  const inviteLinkCreateFired = useRef(false);
+  useEffect(() => {
+    if (!showInviteModal) { inviteLinkCreateFired.current = false; return; }
+    if (invitesLoading || invitesError || pendingInvites === undefined || openInviteLink) return;
+    if (inviteLinkCreateFired.current) return;
+    inviteLinkCreateFired.current = true;
+    createInviteLink.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once per modal open, keyed on the list settling
+  }, [showInviteModal, invitesLoading, invitesError, pendingInvites, openInviteLink]);
+  const createdCode: string | undefined = createInviteLink.data?.data?.data?.code;
+  const inviteCode = openInviteLink?.code ?? createdCode;
+  const inviteUrl = inviteCode ? `${window.location.origin}/invite/${inviteCode}` : '';
+  const inviteLinkFailed = invitesError || createInviteLink.isError;
 
   // Phase 8B.2 — Esc closes the Invite + Room modals.
   useEscapeKey(() => { setShowInviteModal(false); setInviteLinkCopied(false); }, showInviteModal);
@@ -528,24 +585,38 @@ export default function HostControls({ sessionId }: Props) {
                   <input
                     type="text"
                     readOnly
-                    value={`${window.location.origin}/sessions/${sessionId}`}
+                    value={inviteUrl}
+                    placeholder={inviteLinkFailed ? 'No link available' : 'Preparing your link…'}
+                    aria-label="Invite link"
+                    data-testid="live-invite-link"
                     onFocus={(e) => e.currentTarget.select()}
                     className="flex-1 min-w-0 rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-xs sm:text-sm font-mono text-gray-700 focus:outline-none focus:ring-1 focus:ring-emerald-400"
                   />
                   <Button
                     size="sm"
-                    variant={inviteLinkCopied ? 'secondary' : 'primary' as any}
+                    variant={inviteLinkCopied ? 'secondary' : 'primary'}
+                    disabled={!inviteUrl}
+                    isLoading={!inviteUrl && !inviteLinkFailed}
                     onClick={() => {
-                      navigator.clipboard.writeText(`${window.location.origin}/sessions/${sessionId}`);
+                      if (!inviteUrl) return;
+                      navigator.clipboard.writeText(inviteUrl);
                       setInviteLinkCopied(true);
                       setTimeout(() => setInviteLinkCopied(false), 2500);
                     }}
-                    className="shrink-0"
+                    className="shrink-0 min-h-[44px]"
                   >
                     {inviteLinkCopied ? <><Check className="h-3.5 w-3.5 mr-1" /> Copied</> : 'Copy link'}
                   </Button>
                 </div>
-                <p className="text-[11px] text-gray-500 mt-1.5">Anyone with this link can join the event.</p>
+                {inviteLinkFailed ? (
+                  <p className="text-[11px] text-red-600 mt-1.5">
+                    We could not prepare an invite link. Open the full event page below to invite people.
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-gray-500 mt-1.5">
+                    Anyone with this link can join the event. It stays valid for 7 days.
+                  </p>
+                )}
               </div>
               <div className="border-t border-gray-200 pt-4">
                 <p className="text-xs text-gray-600">

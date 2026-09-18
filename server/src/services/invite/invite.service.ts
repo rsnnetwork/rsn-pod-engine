@@ -835,20 +835,33 @@ export async function listReceivedInvites(userEmail: string, userId?: string): P
 
 // ─── List Session Invites (for host view) ────────────────────────────────────
 
+export interface SessionInviteRow {
+  id: string;
+  code: string;
+  inviteeEmail: string | null;
+  inviteeName: string | null;
+  status: string;
+  createdAt: string;
+  /** 18 Sep 2026: an open link (no invitee) is reusable while it has uses
+   *  left and has not expired; the live-event invite modal reads these to
+   *  reuse one instead of minting a new code on every open. */
+  maxUses: number;
+  useCount: number;
+  expiresAt: string | null;
+}
+
 export async function listSessionInvites(
   sessionId: string,
   status?: string
-): Promise<{ id: string; code: string; inviteeEmail: string | null; inviteeName: string | null; status: string; createdAt: string }[]> {
+): Promise<SessionInviteRow[]> {
   const statusFilter = status ? `AND i.status = $2` : '';
   const params = status ? [sessionId, status] : [sessionId];
 
-  const result = await query<{
-    id: string; code: string; inviteeEmail: string | null;
-    inviteeName: string | null; status: string; createdAt: string;
-  }>(
+  const result = await query<SessionInviteRow>(
     `SELECT i.id, i.code, i.invitee_email AS "inviteeEmail",
             u.display_name AS "inviteeName",
-            i.status, i.created_at AS "createdAt"
+            i.status, i.created_at AS "createdAt",
+            i.max_uses AS "maxUses", i.use_count AS "useCount", i.expires_at AS "expiresAt"
      FROM invites i
      LEFT JOIN users u ON u.email = i.invitee_email
      WHERE i.session_id = $1 AND i.type = 'session'
