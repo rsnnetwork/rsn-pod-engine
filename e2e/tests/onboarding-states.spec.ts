@@ -1,4 +1,4 @@
-import { test, expect, chromium, Browser, BrowserContext, Page } from '@playwright/test';
+import { test, expect, chromium, webkit, Browser, BrowserContext, Page } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
 import { gotoRetry, cleanup, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
@@ -146,7 +146,11 @@ test.beforeAll(async () => {
     "UPDATE users SET company = NULL, job_title = NULL, bio = NULL, industry = NULL, location = NULL, linkedin_url = NULL WHERE id = $1",
     [asklinkUser.id]
   );
-  browser = await chromium.launch({ headless: false });
+  // E2E_ENGINE=webkit runs the same stage machine on the Safari engine (iPhone
+  // profile viewport by default); anything else is Chromium.
+  browser = process.env.E2E_ENGINE === 'webkit'
+    ? await webkit.launch({ headless: false })
+    : await chromium.launch({ headless: false });
 });
 
 test.afterAll(async () => {

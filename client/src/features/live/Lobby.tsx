@@ -702,6 +702,11 @@ export function clearAppliedPrefMarkers(): void {
   appliedPrefsForSid.clear();
 }
 
+// 18 Sep 2026 (device sweep): the tile pills are 23px tall by design (Bug 51,
+// compact tiles on phones). The invisible hit box makes each a 44px tap
+// target without changing the look, the same way the settings toggles do.
+const TILE_CONTROL_HIT = "relative after:absolute after:inset-x-0 after:-inset-y-[11px] after:content-['']";
+
 function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?: string }) {
   // Bug 11 (13 May live test) — destructure the reactive isMicrophoneEnabled /
   // isCameraEnabled values from useLocalParticipant directly. Pre-fix the
@@ -903,7 +908,7 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
         onClick={toggleMic}
         title={micEnabled ? 'Click to mute' : 'Click to unmute'}
         aria-label={micEnabled ? 'Mic on' : 'Mic off'}
-        className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors backdrop-blur-sm ${
+        className={`${TILE_CONTROL_HIT} flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors backdrop-blur-sm ${
           micEnabled
             ? 'bg-black/40 text-white hover:bg-black/60'
             : 'bg-red-500/80 text-[#1a1a2e] hover:bg-red-600/80'
@@ -921,7 +926,7 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
         disabled={camStarting}
         title={camStarting ? 'Starting your camera' : camEnabled ? 'Click to turn camera off' : 'Click to turn camera on'}
         aria-label={camStarting ? 'Starting camera' : camEnabled ? 'Camera on' : 'Camera off'}
-        className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors backdrop-blur-sm ${
+        className={`${TILE_CONTROL_HIT} flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors backdrop-blur-sm ${
           camStarting
             ? 'bg-black/40 text-gray-300 cursor-wait'
             : camEnabled
@@ -941,7 +946,7 @@ function LobbyMediaControls({ isHost, sessionId }: { isHost: boolean; sessionId?
             setShowBgPanel(!showBgPanel);
           }}
           aria-label="Background effects"
-          className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors backdrop-blur-sm ${
+          className={`${TILE_CONTROL_HIT} flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors backdrop-blur-sm ${
             bg.current.mode !== 'disabled' ? 'bg-indigo-500/80 text-white' : 'bg-black/40 text-white hover:bg-black/60'
           }`}
           title="Background effects"

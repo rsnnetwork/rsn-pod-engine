@@ -440,17 +440,18 @@ const MediaControls = memo(function MediaControls() {
 
   return (
     <div className="flex items-center gap-3 relative">
+      {/* 36px buttons with an invisible 44px hit box (18 Sep 2026 device sweep). */}
       <button onClick={toggleMic}
         aria-label={micEnabled ? 'Mic on' : 'Mic off'}
         title={micEnabled ? 'Click to mute' : 'Click to unmute'}
-        className={`p-2 rounded-full transition-colors ${micEnabled ? 'bg-gray-200 hover:bg-gray-300 text-gray-700' : 'bg-red-100 text-red-500 hover:bg-red-200'}`}>
+        className={`relative after:absolute after:-inset-1 after:content-[''] p-2 rounded-full transition-colors ${micEnabled ? 'bg-gray-200 hover:bg-gray-300 text-gray-700' : 'bg-red-100 text-red-500 hover:bg-red-200'}`}>
         {micEnabled ? <Mic className="h-5 w-5" /> : <MicOff className="h-5 w-5" />}
       </button>
       <button onClick={toggleCam}
         disabled={camStarting}
         aria-label={camStarting ? 'Starting camera' : camEnabled ? 'Camera on' : 'Camera off'}
         title={camStarting ? 'Starting your camera' : camEnabled ? 'Click to turn camera off' : 'Click to turn camera on'}
-        className={`p-2 rounded-full transition-colors ${camStarting ? 'bg-gray-200 text-gray-500 cursor-wait' : camEnabled ? 'bg-gray-200 hover:bg-gray-300 text-gray-700' : 'bg-red-100 text-red-500 hover:bg-red-200'}`}>
+        className={`relative after:absolute after:-inset-1 after:content-[''] p-2 rounded-full transition-colors ${camStarting ? 'bg-gray-200 text-gray-500 cursor-wait' : camEnabled ? 'bg-gray-200 hover:bg-gray-300 text-gray-700' : 'bg-red-100 text-red-500 hover:bg-red-200'}`}>
         {camStarting ? <Loader2 className="h-5 w-5 animate-spin" /> : camEnabled ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
       </button>
       {bg.supported && (
