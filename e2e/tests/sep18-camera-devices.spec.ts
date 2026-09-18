@@ -56,31 +56,43 @@ const CAMERA_SHIM = (t: { a: string; r: string; sid: string }) => {
   localStorage.setItem('rsn_bg_debug', '1');
   sessionStorage.setItem(`rsn_checkin_${t.sid}`, '1');
   const w = window as any;
+  w.__camTracks = []; w.__gum = { calls: 0, synthetic: 0, errors: [] as string[] };
+  // A synthetic camera: a canvas that keeps drawing, captured as a stream.
+  const makeStream = () => {
+    const c = document.createElement('canvas'); c.width = 640; c.height = 480;
+    const g = c.getContext('2d');
+    let hue = 0;
+    setInterval(() => { if (g) { hue = (hue + 7) % 360; g.fillStyle = `hsl(${hue} 60% 40%)`; g.fillRect(0, 0, 640, 480); g.fillStyle = '#fff'; g.fillRect(200, 140, 240, 200); } }, 100);
+    return (c as any).captureStream ? (c as any).captureStream(15) : new MediaStream();
+  };
   if (!(navigator as any).mediaDevices) {
-    const makeStream = () => {
-      const c = document.createElement('canvas'); c.width = 640; c.height = 480;
-      const g = c.getContext('2d');
-      let hue = 0;
-      setInterval(() => { if (g) { hue = (hue + 7) % 360; g.fillStyle = `hsl(${hue} 60% 40%)`; g.fillRect(0, 0, 640, 480); g.fillStyle = '#fff'; g.fillRect(200, 140, 240, 200); } }, 100);
-      return (c as any).captureStream ? (c as any).captureStream(15) : new MediaStream();
-    };
     Object.defineProperty(navigator, 'mediaDevices', {
       configurable: true,
       value: {
-        getUserMedia: async () => makeStream(),
-        enumerateDevices: async () => [{ kind: 'videoinput', deviceId: 'synthetic', label: 'Synthetic camera', groupId: 'g' }],
+        getUserMedia: async () => { throw new Error('no device'); },
+        enumerateDevices: async () => [],
         getSupportedConstraints: () => ({}),
         addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => false,
       },
     });
   }
-  w.__camTracks = [];
-  const md = navigator.mediaDevices;
-  const orig = md.getUserMedia.bind(md);
+  const md = navigator.mediaDevices as any;
+  const origGum = typeof md.getUserMedia === 'function' ? md.getUserMedia.bind(md) : null;
+  const origEnum = typeof md.enumerateDevices === 'function' ? md.enumerateDevices.bind(md) : null;
+  // The real call first (Chromium's fake device); the synthetic camera when
+  // the engine has no device behind mediaDevices (Playwright WebKit).
   md.getUserMedia = async (c: MediaStreamConstraints) => {
-    const s = await orig(c);
+    w.__gum.calls++;
+    let s: MediaStream;
+    try { if (!origGum) throw new Error('no getUserMedia'); s = await origGum(c); }
+    catch (e) { w.__gum.errors.push(String(e)); w.__gum.synthetic++; s = makeStream(); }
     s.getVideoTracks().forEach((tr: MediaStreamTrack) => w.__camTracks.push(tr));
     return s;
+  };
+  md.enumerateDevices = async () => {
+    let list: MediaDeviceInfo[] = [];
+    try { if (origEnum) list = await origEnum(); } catch { /* none */ }
+    return list.some((d) => d.kind === 'videoinput') ? list : [...list, { kind: 'videoinput', deviceId: 'synthetic', label: 'Synthetic camera', groupId: 'g', toJSON() { return this; } } as MediaDeviceInfo];
   };
   w.__liveCams = () => w.__camTracks.filter((tr: MediaStreamTrack) => tr.readyState === 'live').length;
 };
@@ -116,12 +128,27 @@ function assertTruthful(s: { label: string | null; self: number; live: number },
 
 async function settle(page: Page, where: string) {
   const t0 = Date.now(); let last = '';
-  await expect.poll(async () => {
-    const s = await state(page);
-    const line = `button=${s.label} selfVideo=${s.self} liveCameras=${s.live}`;
-    if (line !== last) { last = line; console.log(`    [${where} +${Date.now() - t0}ms] ${line}`); assertTruthful(s, where); }
-    return s.label === 'Camera on' && s.self >= 1 && s.live >= 1;
-  }, { timeout: 75_000, intervals: [250, 500, 1000], message: `${where}: camera must publish, read ON and show the self video` }).toBe(true);
+  try {
+    await expect.poll(async () => {
+      const s = await state(page);
+      const line = `button=${s.label} selfVideo=${s.self} liveCameras=${s.live}`;
+      if (line !== last) { last = line; console.log(`    [${where} +${Date.now() - t0}ms] ${line}`); assertTruthful(s, where); }
+      return s.label === 'Camera on' && s.self >= 1 && s.live >= 1;
+    }, { timeout: 75_000, intervals: [250, 500, 1000], message: `${where}: camera must publish, read ON and show the self video` }).toBe(true);
+  } catch (e) {
+    // Say what the page was doing: camera calls, LiveKit state, visible text.
+    const diag = await page.evaluate(() => {
+      const w = window as any;
+      return {
+        mediaDevices: !!navigator.mediaDevices,
+        gum: w.__gum,
+        videos: document.querySelectorAll('video').length,
+        text: (document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 300),
+      };
+    }).catch((err) => ({ evalError: String(err) }));
+    console.log(`    [${where} DIAG] ${JSON.stringify(diag)}`);
+    throw e;
+  }
 }
 
 async function cycle(page: Page, obsPage: Page | null, who: TestUser, where: string) {
@@ -161,11 +188,14 @@ async function tapTargets(page: Page, where: string) {
   const mic = page.locator('button[aria-label="Mic on"], button[aria-label="Mic off"]').filter({ visible: true }).first();
   const before = await mic.getAttribute('aria-label');
   const box = (await mic.boundingBox())!;
-  await page.mouse.click(box.x + box.width / 2, box.y - 9);
-  await expect.poll(() => mic.getAttribute('aria-label'), { timeout: 10_000, message: `${where}: a tap just above the mic pill must still hit it (44px hit box)` }).not.toBe(before);
+  // A 44px target around a shorter button extends (44 - height) / 2 above it;
+  // tap 1px inside that extension, above the drawn edge.
+  const above = Math.max(1, Math.floor((44 - box.height) / 2) - 1);
+  await page.mouse.click(box.x + box.width / 2, box.y - above);
+  await expect.poll(() => mic.getAttribute('aria-label'), { timeout: 10_000, message: `${where}: a tap ${above}px above the ${Math.round(box.height)}px mic button must still hit it (44px hit box)` }).not.toBe(before);
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2); // restore
   await expect.poll(() => mic.getAttribute('aria-label'), { timeout: 10_000 }).toBe(before);
-  console.log(`    [${where} hit box] a tap 9px above the ${Math.round(box.height)}px mic pill toggled it`);
+  console.log(`    [${where} hit box] a tap ${above}px above the ${Math.round(box.height)}px mic button toggled it`);
 }
 
 async function eventFixture(tag: string) {
@@ -205,10 +235,31 @@ for (const p of PROFILES) {
     const camPage = await open(browser!, p.ctx, f.cam, f.sessionId);
     const obsPage = await open(chromiumB, { viewport: { width: 1100, height: 760 } }, f.obs, f.sessionId);
     const errors: string[] = [];
-    camPage.on('console', (m) => { if (m.type() === 'error' && /camera|publish/i.test(m.text())) errors.push(m.text()); });
+    camPage.on('console', (m) => {
+      const t = m.text();
+      if (t.startsWith('[bg')) { console.log('    ' + t.slice(0, 160)); return; }
+      if (m.type() === 'error' || m.type() === 'warning') console.log(`    [${p.name} console.${m.type()}] ${t.slice(0, 200)}`);
+      if (m.type() === 'error' && /camera|publish/i.test(t)) errors.push(t);
+    });
+    camPage.on('pageerror', (err) => console.log(`    [${p.name} pageerror] ${String(err).slice(0, 200)}`));
 
     await gotoRetry(camPage, `${APP}/session/${f.sessionId}/live`);
     await gotoRetry(obsPage, `${APP}/session/${f.sessionId}/live`);
+    // Playwright's WebKit build for Windows ships without WebRTC, so LiveKit
+    // cannot run on it ("LiveKit doesn't seem to be supported on this
+    // browser"). What CAN be checked there is the no-camera state: the page
+    // must say so and the button must read off with nothing captured. The
+    // Safari LiveKit path itself needs WebKit on macOS or Linux.
+    const webrtc = await camPage.evaluate(() => typeof (window as any).RTCPeerConnection !== 'undefined');
+    if (!webrtc) {
+      await expect(camPage.getByText(/Camera\/microphone access denied/i).first(), `${p.name}: without a camera the page says so`).toBeVisible({ timeout: 30_000 });
+      const s = await state(camPage);
+      console.log(`    [${p.name} no-webrtc build] button=${s.label} selfVideo=${s.self} liveCameras=${s.live}`);
+      expect(s.label === 'Camera off' || s.label === null, `${p.name}: no camera reads off`).toBe(true);
+      expect(s.live, `${p.name}: nothing captured`).toBe(0);
+      await tapTargets(camPage, `${p.name} main (no camera)`).catch(() => {});
+      test.skip(true, `${p.name}: this WebKit build has no WebRTC (Windows port); the Safari LiveKit path needs WebKit on macOS or Linux`);
+    }
     await settle(camPage, `${p.name} main`);
     await tapTargets(camPage, `${p.name} main`);
     await camPage.screenshot({ path: `test-results/sep18-dev-${p.name}-main.png` }).catch(() => {});
