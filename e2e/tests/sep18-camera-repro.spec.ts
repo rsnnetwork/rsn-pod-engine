@@ -3,6 +3,7 @@ import { io, Socket } from 'socket.io-client';
 import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers/auth';
 import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
 import { primePreview } from '../helpers/preview-bypass';
+import { gotoRetry } from '../helpers/live-ui';
 
 // HEADED prod reproduction — Shradha's 18 Sep 2026 review, findings 3 + 4:
 //   3. main room: "the camera function was not working" (Chrome showed the
@@ -34,9 +35,6 @@ function connect(u: TestUser): Promise<Socket> {
   });
 }
 const wait = (ms: number) => new Promise(r => setTimeout(r, ms));
-const gotoRetry = async (page: Page, url: string) => {
-  for (let i = 0; i < 3; i++) { try { await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 }); return; } catch (e) { if (i === 2) throw e; await wait(3000); } }
-};
 
 const camBtn = (page: Page) => page.locator('button[aria-label="Camera on"], button[aria-label="Camera off"], button[aria-label="Starting camera"]').first();
 const selfVideo = (page: Page) => page.locator('[data-self="true"] video');

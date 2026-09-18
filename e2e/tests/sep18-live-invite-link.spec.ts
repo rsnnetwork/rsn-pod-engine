@@ -3,6 +3,7 @@ import { io, Socket } from 'socket.io-client';
 import { createTestUser, cleanupTestData, TestUser, closePool, pool } from '../helpers/auth';
 import { createPod, createSession, endSession, apiRequest } from '../helpers/api';
 import { primePreview } from '../helpers/preview-bypass';
+import { gotoRetry } from '../helpers/live-ui';
 
 // HEADED prod verification — Shradha's 18 Sep 2026 review, finding 2:
 // "the event link says anyone can join, but it did not work." The live page's
@@ -27,9 +28,6 @@ function connect(u: TestUser): Promise<Socket> {
   });
 }
 const wait = (ms: number) => new Promise(r => setTimeout(r, ms));
-const gotoRetry = async (page: Page, url: string) => {
-  for (let i = 0; i < 3; i++) { try { await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 }); return; } catch (e) { if (i === 2) throw e; await wait(3000); } }
-};
 async function statusOf(u: TestUser, path: string): Promise<number> {
   const res = await fetch(`${API}/api${path}`, { headers: { Authorization: `Bearer ${u.accessToken}` } });
   return res.status;
