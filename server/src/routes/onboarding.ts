@@ -13,7 +13,12 @@ import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
-import { onboardingChatLimiter } from '../middleware/rateLimit';
+import { onboardingChatLimiter, onboardingAnswersLimiter, onboardingConfirmLimiter } from '../middleware/rateLimit';
+import * as answersRepo from '../services/onboarding/answers.repo';
+import { draftSchema, confirmSchema, tourSchema } from '../services/onboarding/answers.schema';
+import { createAgentsFromAnswers } from '../services/matching/first-agent.service';
+import { notifyMatchesOfNewUser } from '../services/matching/platform-match.service';
+import { fanoutUserEntity } from '../realtime/fanout';
 import { query } from '../db';
 import {
   ApiResponse,
@@ -49,7 +54,6 @@ async function knownForExtraction(userId: string) {
   ]);
   return knownForIntent(cached?.profile ?? null, host ?? null);
 }
-import { fanoutUserEntity } from '../realtime/fanout';
 
 const router = Router();
 
@@ -194,6 +198,111 @@ router.get(
       next(err);
     }
   }
+);
+
+// ─── The tick-box flow (Shradha's deck, 21 Sep 2026) ─────────────────────────
+//
+//   GET  /onboarding/state           → status, their own answers, name, photo
+//   PUT  /onboarding/answers         → merge a partial answer into the draft
+//   POST /onboarding/answers/confirm → write them for real and seed searches
+//   POST /onboarding/tour            → the wizard was finished or skipped
+//
+// Its own path, not the chat's /confirm, so the old client keeps working while
+// the two deploys land minutes apart.
+
+router.get(
+  '/state',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const state = await answersRepo.getState(req.user!.userId);
+      // A photo costs them nothing and needs no question: a public Gravatar for
+      // members who did not arrive through Google.
+      tryGravatar(req.user!.userId).catch(() => {});
+      const response: ApiResponse = { success: true, data: state };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.put(
+  '/answers',
+  authenticate,
+  onboardingAnswersLimiter,
+  validate(z.object({ body: draftSchema })),
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const userId = req.user!.userId;
+      await answersRepo.saveDraft(userId, req.body);
+      recordStageEvent(userId, 'answers_saved', { step: req.body.step ?? null });
+      // My own other tabs and devices are following this too.
+      await fanoutUserEntity(userId);
+      const response: ApiResponse = { success: true, data: { saved: true } };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.post(
+  '/answers/confirm',
+  authenticate,
+  onboardingConfirmLimiter,
+  validate(z.object({ body: confirmSchema })),
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const userId = req.user!.userId;
+      const result = await answersRepo.confirm(userId, req.body);
+
+      // Only on a real change: pressing the button twice must not seed a second
+      // set of searches or tell the network about them again.
+      let agents: Array<{ id: string; label: string }> = [];
+      if (result.firstCompletion || result.changed) {
+        const made = await createAgentsFromAnswers(userId, result.answers.lookingToMeet, result.answers.intent);
+        agents = made.map(a => ({ id: a.id, label: a.label }));
+        recordStageEvent(userId, 'confirmed', { version: 'tickbox_v1', kinds: result.answers.lookingToMeet });
+      }
+      if (result.firstCompletion) {
+        // Members whose standing searches this person answers hear about them.
+        notifyMatchesOfNewUser(userId).catch(err =>
+          logger.warn({ err, userId }, 'newcomer fan-out failed (non-fatal)'));
+      }
+
+      // The gate is held in the client's auth store, so it also calls
+      // checkSession() — but their other tabs only learn from this.
+      await fanoutUserEntity(userId);
+      const response: ApiResponse = {
+        success: true,
+        data: { agents, primaryAgentId: agents[0]?.id ?? null, changed: result.changed },
+      };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.post(
+  '/tour',
+  authenticate,
+  onboardingAnswersLimiter,
+  validate(z.object({ body: tourSchema })),
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const userId = req.user!.userId;
+      await answersRepo.markTourSeen(userId, req.body.outcome);
+      recordStageEvent(userId, req.body.outcome === 'completed' ? 'tour_completed' : 'tour_skipped',
+        { lastCard: req.body.lastCard ?? null });
+      await fanoutUserEntity(userId);
+      const response: ApiResponse = { success: true, data: { seen: true } };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  },
 );
 
 // ─── GET /onboarding/known ───────────────────────────────────────────────────

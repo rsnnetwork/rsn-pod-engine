@@ -25,8 +25,20 @@ import * as agentRepo from './agent.repo';
 import { recomputeAgent } from './agent-matching.service';
 import { designationsWanted, ROLE_TAXONOMY } from './intent-signals';
 import { expandWantTags } from './want-synonyms';
+import { MEET_SIGNALS, INTENT_SIGNALS } from './option-signals';
 import logger from '../../config/logger';
 import type { MatchingAgent } from './agent.repo';
+import type { MeetKey, IntentKey } from '@rsn/shared';
+
+/** One standing search to create. */
+export interface AgentPlan {
+  label: string;
+  wantText: string;
+  matchingTags: string[];
+  status: 'active' | 'paused';
+  /** Where it came from, so a reworded label never creates a duplicate. */
+  intent?: Record<string, unknown>;
+}
 
 export const GENERIC_LABEL = 'People I want to meet';
 
@@ -196,6 +208,41 @@ export function planFirstAgents(source: FirstAgentSource, existingLabels: string
 }
 
 /**
+ * The tick-box flow's version (21 Sep 2026). One standing search per kind the
+ * member ticked, in the order they matter: the kind their reason for being
+ * here points at leads, then the rest as they were ticked.
+ *
+ * All of them search. The 4 Sep "first active, rest paused" rule exists
+ * because an LLM guessed several wants out of one sentence and most were
+ * noise; here the member chose at most three, deliberately, from a fixed list.
+ * Pausing two of their three choices would just hide people they asked for.
+ */
+export function planAgentsFromAnswers(
+  meetKeys: MeetKey[],
+  intent: IntentKey,
+  heldLabels: string[],
+): AgentPlan[] {
+  const held = new Set(heldLabels.map(l => l.toLowerCase()));
+  const primary = INTENT_SIGNALS[intent]?.primaryMeetKey;
+  const ordered = primary && meetKeys.includes(primary)
+    ? [primary, ...meetKeys.filter(k => k !== primary)]
+    : meetKeys;
+
+  return ordered
+    .map(key => ({ key, sig: MEET_SIGNALS[key] }))
+    .filter(({ sig }) => sig && !held.has(sig.agentLabel.toLowerCase()))
+    .map(({ key, sig }) => ({
+      label: sig.agentLabel,
+      wantText: sig.wantText,
+      // Tags are per option, not the whole list on every search: sharing one
+      // list across agents is what made every search look the same.
+      matchingTags: expandWantTags([...sig.tags]),
+      status: 'active' as const,
+      intent: { source: 'tickbox_v1', meetKey: key },
+    }));
+}
+
+/**
  * Build the agents a member's onboarding answers describe, and search the main
  * one now; drafts are scored when the member resumes them (the status route
  * rescores on activation). Returns the agents created — possibly none, when the
@@ -211,7 +258,7 @@ export async function createFirstAgents(
 ): Promise<MatchingAgent[]> {
   try {
     const existing = await agentRepo.listAgents(userId, { includeArchived: true });
-    const plans = planFirstAgents(source, existing.map(a => a.label));
+    const plans: AgentPlan[] = planFirstAgents(source, existing.map(a => a.label));
 
     const made: MatchingAgent[] = [];
     for (const plan of plans) {
@@ -233,6 +280,38 @@ export async function createFirstAgents(
     return made;
   } catch (err) {
     logger.error({ err, userId }, 'could not create first agents');
+    return [];
+  }
+}
+
+/**
+ * The tick-box flow's seeding. Every kind they ticked becomes a search that is
+ * actually running, and each is scored straight away — inserting a row runs no
+ * search, which is exactly why the migration-seeded ones all read "0 potential
+ * matches" on 3 Aug.
+ *
+ * Never throws: a member must not lose the onboarding they just finished
+ * because a search could not be scored.
+ */
+export async function createAgentsFromAnswers(
+  userId: string,
+  meetKeys: MeetKey[],
+  intent: IntentKey,
+): Promise<MatchingAgent[]> {
+  try {
+    const existing = await agentRepo.listAgents(userId, { includeArchived: true });
+    const plans = planAgentsFromAnswers(meetKeys, intent, existing.map(a => a.label));
+    const made: MatchingAgent[] = [];
+    for (const plan of plans) {
+      const agent = await agentRepo.createAgent(userId, plan);
+      made.push(agent);
+      await recomputeAgent(agent).catch(err =>
+        logger.warn({ err, agentId: agent.id }, 'search will be scored on next open'));
+    }
+    if (made.length) logger.info({ userId, labels: made.map(a => a.label) }, 'searches created from tick-box answers');
+    return made;
+  } catch (err) {
+    logger.error({ err, userId }, 'could not create searches from answers');
     return [];
   }
 }

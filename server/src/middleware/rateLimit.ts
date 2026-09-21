@@ -167,6 +167,32 @@ export const inviteLimiter = rateLimit({
  * endpoints. Keyed per authenticated user (these routes require auth). 30
  * turns/min is generous for a 4–7 message flow while capping a runaway client.
  */
+/**
+ * Saving a draft as you move through the tick-box flow. Generous, because it
+ * is one save per step and a member may go back and forth; the global per-user
+ * limiter sits in front of this anyway.
+ */
+export const onboardingAnswersLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('onboarding-answers'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+/** Finishing onboarding. Rare by nature; the row lock makes it idempotent. */
+export const onboardingConfirmLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('onboarding-confirm'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
 export const onboardingChatLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   max: 30,

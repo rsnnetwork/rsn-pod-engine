@@ -129,14 +129,18 @@ export async function getAgent(agentId: string, userId: string): Promise<Matchin
 
 export async function createAgent(
   userId: string,
-  input: { label: string; wantText: string; matchingTags?: string[]; status?: AgentStatus },
+  input: { label: string; wantText: string; matchingTags?: string[]; status?: AgentStatus; intent?: Record<string, unknown> },
 ): Promise<MatchingAgent> {
   const r = await query<AgentRow>(
-    `INSERT INTO matching_agents (user_id, label, want_text, matching_tags, status)
-     VALUES ($1, $2, $3, $4, $5)
+    // `intent` records WHERE this search came from — for the tick-box flow,
+    // which option produced it. De-duping on the label alone breaks the moment
+    // a label is reworded, and labels are meant to be rewordable (21 Sep 2026).
+    `INSERT INTO matching_agents (user_id, label, want_text, matching_tags, status, intent)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb)
      RETURNING id, user_id, label, want_text, matching_tags, status,
                last_matched_at, created_at, updated_at, 0 AS match_count, 0 AS asked_count`,
-    [userId, input.label.trim(), input.wantText.trim(), input.matchingTags ?? [], input.status ?? 'active'],
+    [userId, input.label.trim(), input.wantText.trim(), input.matchingTags ?? [], input.status ?? 'active',
+     input.intent ? JSON.stringify(input.intent) : null],
   );
   return mapAgent(r.rows[0]);
 }
