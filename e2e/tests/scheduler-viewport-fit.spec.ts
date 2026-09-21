@@ -30,7 +30,9 @@ const VIEWPORTS = [
 
 let browser: Browser;
 let a: TestUser, b: TestUser;
+let c: TestUser, d: TestUser;
 let convId: string;
+let convCd: string;
 let KEY: string;
 let NEXT: string;
 const ctxs: BrowserContext[] = [];
@@ -71,14 +73,36 @@ function futureSlot(daysAhead: number, hour: number, minute = 0): string {
 const messageBox = (page: Page) => page.getByPlaceholder(/^(Type a message\.\.\.|Message…)$/);
 
 /** Opening the panel is not what is under test, so plain clicks are fine here. */
-async function openScheduler(page: Page): Promise<void> {
+async function openScheduler(page: Page, gridShows: 'Both can' | 'They can' = 'Both can'): Promise<void> {
   const findTime = page.getByRole('button', { name: /Find a time to meet/i });
   const more = page.getByRole('button', { name: 'More actions' });
   await findTime.or(more).first().waitFor({ state: 'visible', timeout: 30_000 });
   if (await more.isVisible().catch(() => false)) await more.click();
   await findTime.filter({ visible: true }).first().click();
   await expect(page.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByTestId('slot-grid').getByText('Both can').first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('slot-grid').getByText(gridShows).first()).toBeVisible({ timeout: 20_000 });
+}
+
+/** Connect two people (ask → accept) and return their conversation id. */
+async function connect(x: TestUser, y: TestUser): Promise<string> {
+  const sent = await apiAs(x, 'POST', '/pokes', { recipientId: y.id, message: 'Coffee?' });
+  expect(sent.status).toBe(201);
+  expect((await apiAs(y, 'POST', `/pokes/${sent.json.data.id}/accept`)).status).toBe(200);
+  const conv = await pool.query<{ id: string }>(
+    `SELECT id FROM dm_conversations WHERE (user_a_id=$1 AND user_b_id=$2) OR (user_a_id=$2 AND user_b_id=$1)`,
+    [x.id, y.id],
+  );
+  expect(conv.rows[0]?.id).toBeTruthy();
+  return conv.rows[0].id;
+}
+
+/** Scroll the panel the way a person would: wheel over it, outside the timeline. */
+async function wheelPanel(page: Page, dy: number): Promise<void> {
+  const label = await page.locator('label[for="meeting-minutes"]').boundingBox();
+  expect(label, 'the meeting length label anchors the wheel').not.toBeNull();
+  await page.mouse.move(label!.x + 4, Math.max(1, label!.y + 4));
+  await page.mouse.wheel(0, dy);
+  await page.waitForTimeout(400);
 }
 
 test.beforeAll(async () => {
@@ -88,28 +112,29 @@ test.beforeAll(async () => {
   await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Fit Bo', b.id]);
   console.log(`[scheduler-viewport-fit] engine=${engineLabel()} app=${APP}`);
 
-  // Connect the pair (ask → accept), then both save the same time: a green slot.
-  const sent = await apiAs(a, 'POST', '/pokes', { recipientId: b.id, message: 'Coffee?' });
-  expect(sent.status).toBe(201);
-  expect((await apiAs(b, 'POST', `/pokes/${sent.json.data.id}/accept`)).status).toBe(200);
-  const conv = await pool.query<{ id: string }>(
-    `SELECT id FROM dm_conversations WHERE (user_a_id=$1 AND user_b_id=$2) OR (user_a_id=$2 AND user_b_id=$1)`,
-    [a.id, b.id],
-  );
-  convId = conv.rows[0]?.id;
-  expect(convId).toBeTruthy();
+  // Pair A+B: both saved the same time, so a green slot is already on offer.
+  convId = await connect(a, b);
   KEY = futureSlot(3, 14);
   NEXT = futureSlot(3, 14, 30);
   expect((await apiAs(a, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
   expect((await apiAs(b, 'PUT', `/dm/conversations/${convId}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
 
+  // Pair C+D: only D has saved. C is the second saver, whose own Save press
+  // is what creates the green time.
+  c = await createTestUser('svfc');
+  d = await createTestUser('svfd');
+  await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Fit Cy', c.id]);
+  await pool.query(`UPDATE users SET display_name=$1 WHERE id=$2`, ['Fit Di', d.id]);
+  convCd = await connect(c, d);
+  expect((await apiAs(d, 'PUT', `/dm/conversations/${convCd}/scheduling/availability`, { windows: [KEY] })).status).toBe(200);
+
   browser = await launchBrowser();
 });
 
 test.afterAll(async () => {
-  for (const c of ctxs) { try { await c.close(); } catch { /* noop */ } }
+  for (const x of ctxs) { try { await x.close(); } catch { /* noop */ } }
   try { await browser?.close(); } catch { /* noop */ }
-  await cleanup(pool, { ids: [a.id, b.id] });
+  await cleanup(pool, { ids: [a.id, b.id, c.id, d.id] });
   await cleanupByPrefix(pool, 'e2etest-svf');
   await pool.end().catch(() => {});
 });
@@ -163,14 +188,7 @@ test('every scheduler action can be pressed without scrolling, at every window s
     //    fails there.)
     const slot = page.locator(`[data-slot="${NEXT}"]`);
     const inReach = await expectReachable(page, slot, 'probe').then(() => true, () => false);
-    if (!inReach) {
-      const label = await page.locator('label[for="meeting-minutes"]').boundingBox();
-      if (label) {
-        await page.mouse.move(label.x + 4, Math.max(1, label.y + 4));
-        await page.mouse.wheel(0, 220);
-        await page.waitForTimeout(400);
-      }
-    }
+    if (!inReach) await wheelPanel(page, 220);
     await press(slot, inReach ? 'a free time in the grid' : 'a free time in the grid (after one scroll of the panel)');
     // 5. Unsaved picks → Save is pinned in reach.
     await press(page.getByRole('button', { name: /Save availability/i }), '"Save availability" button');
@@ -210,4 +228,108 @@ test('on a laptop-height window, picking the green time and pressing Confirm cre
   expect(row.meeting_start_at?.toISOString().replace('.000Z', 'Z')).toBe(KEY);
   // And the person can still type afterwards.
   await expectReachable(page, messageBox(page), 'message box after confirming');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The panel is a scroller with another scroller (the timeline) inside it. Three
+// ways that can still leave someone stuck, each pinned here.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('nested scroll: on a small phone, scrolling from inside the timeline still moves the panel', async () => {
+  test.setTimeout(180_000);
+  // 375x548 is an iPhone SE with Safari's bars showing: the panel's frame is
+  // shorter than the 300px timeline, so the timeline can cover all of it.
+  const page = await openAs(a, `/messages/${convId}`, { width: 375, height: 548 });
+  await openScheduler(page);
+  const panel = page.getByTestId('meeting-scheduler');
+  const grid = page.getByTestId('slot-grid');
+
+  // Bring the timeline to the top of the panel's frame and put it at its own end.
+  await panel.evaluate((p: HTMLElement) => {
+    const g = p.querySelector('[data-testid="slot-grid"]') as HTMLElement;
+    p.scrollTop += g.getBoundingClientRect().top - p.getBoundingClientRect().top;
+    g.scrollTop = g.scrollHeight;
+  });
+  await page.waitForTimeout(800); // let any scroll latch from setup expire
+  const frame = (await panel.boundingBox())!;
+  const g = (await grid.boundingBox())!;
+  console.log(`  375x548  panel frame=${Math.round(frame.height)}px  timeline=${Math.round(g.height)}px`);
+  const before = await panel.evaluate((p: HTMLElement) => p.scrollTop);
+  const room = await panel.evaluate((p: HTMLElement) => p.scrollHeight - p.clientHeight - p.scrollTop);
+  expect(room, 'the panel has further to scroll').toBeGreaterThan(20);
+
+  // A person's finger or wheel is on the timeline. It is already at its end,
+  // so the gesture has to carry on into the panel, not die there.
+  const top = Math.max(frame.y, g.y);
+  const bottom = Math.min(frame.y + frame.height, g.y + g.height);
+  await page.mouse.move(g.x + g.width / 2, (top + bottom) / 2);
+  await page.mouse.wheel(0, 240);
+  await page.waitForTimeout(600);
+  const after = await panel.evaluate((p: HTMLElement) => p.scrollTop);
+  console.log(`  375x548  panel scrollTop ${Math.round(before)} -> ${Math.round(after)}`);
+  expect(after, 'a scroll that starts on the timeline (already at its end) must move the panel').toBeGreaterThan(before);
+});
+
+test('second saver: my Save creates the green time, and its chip is in reach without scrolling back', async () => {
+  test.setTimeout(180_000);
+  const page = await openAs(c, `/messages/${convCd}`, { width: 1024, height: 600 });
+  await openScheduler(page, 'They can');
+  await expect(page.getByTestId('overlap-list')).toHaveCount(0);
+  const panel = page.getByTestId('meeting-scheduler');
+
+  // Be where a person hunting for times is: scrolled down into the timeline.
+  // Without this the chips would land in view by luck and prove nothing.
+  await wheelPanel(page, 400);
+  const scrolled = await panel.evaluate((p: HTMLElement) => p.scrollTop);
+  console.log(`  1024x600  panel scrolled to ${Math.round(scrolled)} before Save`);
+  expect(scrolled, 'the panel is scrolled down into the timeline').toBeGreaterThan(40);
+
+  const slot = page.locator(`[data-slot="${KEY}"]`);
+  await tapReachable(page, slot, 'the time they can');
+  await tapReachable(page, page.getByRole('button', { name: /Save availability/i }), '"Save availability" button');
+  await expect(page.getByText(/Availability saved/i)).toBeVisible({ timeout: 15_000 });
+
+  // The next step now exists. It must be in front of me, not above the frame.
+  const chip = page.getByTestId('overlap-list').getByRole('button', { name: /^Confirm / }).first();
+  await expect(chip).toBeVisible({ timeout: 15_000 });
+  await page.waitForTimeout(300);
+  await expectReachable(page, chip, 'green time chip right after my Save');
+});
+
+test('pinned bar: a control focused by keyboard is never left hidden under the Save bar', async () => {
+  test.setTimeout(180_000);
+  const page = await openAs(a, `/messages/${convId}`, { width: 1366, height: 768 });
+  await openScheduler(page);
+  const next = page.locator(`[data-slot="${NEXT}"]`);
+  if (!(await expectReachable(page, next, 'probe').then(() => true, () => false))) await wheelPanel(page, 220);
+  await tapReachable(page, next, 'a free time in the grid');
+  const save = page.getByRole('button', { name: /Save availability/i });
+  await expectReachable(page, save, '"Save availability" button');
+
+  // The bar is pinned flush to the bottom of the panel's frame.
+  const geo = await page.getByTestId('meeting-scheduler').evaluate((p: HTMLElement) => {
+    const bar = p.querySelector('[data-pinned="true"]') as HTMLElement;
+    const pr = p.getBoundingClientRect(); const br = bar.getBoundingClientRect();
+    return { panelBottom: pr.bottom - parseFloat(getComputedStyle(p).borderBottomWidth), barBottom: br.bottom, barTop: br.top };
+  });
+  console.log(`  1366x768  pinned bar bottom=${geo.barBottom.toFixed(1)}  panel inner bottom=${geo.panelBottom.toFixed(1)}`);
+  expect(Math.abs(geo.barBottom - geo.panelBottom), 'the pinned bar sits flush on the panel frame').toBeLessThanOrEqual(1.5);
+
+  // Find a time whose box lies under the bar, move keyboard focus to it, and
+  // require the browser to have brought it out from under the bar.
+  const covered = await page.getByTestId('slot-grid').evaluate((g: HTMLElement, barTop: number) => {
+    const hit = [...g.querySelectorAll<HTMLElement>('[data-slot]:not([disabled])')]
+      .find(el => { const r = el.getBoundingClientRect(); return r.bottom > barTop + 2 && r.top < barTop + 40; });
+    return hit?.dataset.slot ?? null;
+  }, geo.barTop);
+  test.skip(!covered, 'no time lies under the pinned bar at this size');
+  const target = page.locator(`[data-slot="${covered}"]`);
+  await target.focus();
+  await page.waitForTimeout(300);
+  const after = await target.evaluate((el: HTMLElement) => {
+    const bar = document.querySelector('[data-pinned="true"]') as HTMLElement;
+    return { bottom: el.getBoundingClientRect().bottom, barTop: bar.getBoundingClientRect().top };
+  });
+  console.log(`  1366x768  focused time bottom=${after.bottom.toFixed(1)}  bar top=${after.barTop.toFixed(1)}`);
+  expect(after.bottom, 'the focused time is clear of the pinned Save bar').toBeLessThanOrEqual(after.barTop + 1);
 });

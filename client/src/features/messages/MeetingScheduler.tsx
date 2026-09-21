@@ -333,9 +333,24 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
     const bar = saveBarRef.current;
     const floor = bar && bar.dataset.pinned === 'true' ? bar.getBoundingClientRect().top : frame.bottom;
     const box = card.getBoundingClientRect();
-    if (box.bottom > floor) panel.scrollTop += box.bottom - floor + 8;
+    const room = floor - frame.top;
+    // A card taller than the frame is aligned to its BOTTOM: "Confirm meeting"
+    // is its last row, and that is the one that has to be in reach.
+    if (box.bottom > floor || box.height + 16 > room) panel.scrollTop += box.bottom - floor + 8;
     else if (box.top < frame.top) panel.scrollTop -= frame.top - box.top + 8;
   }, [finalizing]);
+
+  // The step that finishes the job mounts at the TOP of the panel: "You both
+  // can" when an overlap appears, then the confirmed meeting. For the second
+  // person to save, their own Save is what creates it — and they are usually
+  // scrolled down in the timeline at that moment, so it would mount out of
+  // sight. Bring the panel back to it. Panel only, never an ancestor.
+  const headline = !data ? 'none'
+    : data.confirmed ? 'confirmed'
+      : data.overlap.some(k => isSlotKey(k) && !isPastSlot(k)) ? 'overlap' : 'none';
+  useLayoutEffect(() => {
+    if (headline !== 'none' && panelRef.current) panelRef.current.scrollTop = 0;
+  }, [headline]);
 
   if (isLoading || !data) {
     return <div className="p-4 flex justify-center"><Spinner /></div>;
@@ -439,7 +454,9 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
   return (
     <div
       ref={panelRef}
-      className="min-h-0 overflow-y-auto overscroll-contain border-b border-gray-200 bg-gray-50/60 px-3 py-3 space-y-3"
+      className={`min-h-0 overflow-y-auto overscroll-contain border-b border-gray-200 bg-gray-50/60 px-3 py-3 space-y-3 ${
+        dirty ? 'scroll-pb-24' : ''
+      }`}
       data-testid="meeting-scheduler"
     >
       {data.confirmed && (
@@ -627,10 +644,15 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
         </div>
 
         {/* The selected day's whole timeline, 00:00–23:30, in one scrollable
-            frame. A typed time is one of these chips, scrolled into view. */}
+            frame. A typed time is one of these chips, scrolled into view.
+            No overscroll-contain here: on a small phone this timeline is
+            taller than the whole panel frame, so a lock would mean a drag that
+            starts on it never carries on into the panel, stranding the person
+            away from the confirm step. The panel's own lock still keeps the
+            gesture off the page behind it. */}
         <div
           ref={gridRef}
-          className="relative max-h-[300px] overflow-y-auto overscroll-contain rounded-lg border border-gray-100 bg-white/60 p-1.5"
+          className="relative max-h-[300px] overflow-y-auto rounded-lg border border-gray-100 bg-white/60 p-1.5"
           data-testid="slot-grid"
           aria-label={`Times on ${localDay(current.day)} — scroll for earlier or later`}
         >
@@ -695,12 +717,14 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
       </div>
 
       {/* While there are unsaved picks, Save stays pinned to the bottom of the
-          panel's frame, so it is in reach however far the timeline scrolls. */}
+          panel's frame, so it is in reach however far the timeline scrolls.
+          -bottom-3 offsets the panel's own py-3, so the bar sits flush on the
+          frame with no strip of content showing under it. */}
       <div
         ref={saveBarRef}
         data-pinned={dirty}
         className={`flex items-center justify-between gap-2 flex-wrap ${
-          dirty ? 'sticky bottom-0 z-10 -mx-3 !-mb-3 border-t border-gray-200 bg-gray-50 px-3 py-2' : ''
+          dirty ? 'sticky -bottom-3 z-10 -mx-3 !-mb-3 border-t border-gray-200 bg-gray-50 px-3 py-2' : ''
         }`}
       >
         <p className="text-[11px] text-gray-400">
