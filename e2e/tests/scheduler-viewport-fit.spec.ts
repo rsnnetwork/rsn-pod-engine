@@ -272,20 +272,31 @@ test('nested scroll: on a small phone, scrolling from inside the timeline still 
 
 test('second saver: my Save creates the green time, and its chip is in reach without scrolling back', async () => {
   test.setTimeout(180_000);
-  const page = await openAs(c, `/messages/${convCd}`, { width: 1024, height: 600 });
+  // A small phone: the panel's frame is far shorter than the timeline, so
+  // picking a time really does mean scrolling away from the top of the panel.
+  const page = await openAs(c, `/messages/${convCd}`, { width: 375, height: 548 });
   await openScheduler(page, 'They can');
   await expect(page.getByTestId('overlap-list')).toHaveCount(0);
   const panel = page.getByTestId('meeting-scheduler');
 
-  // Be where a person hunting for times is: scrolled down into the timeline.
-  // Without this the chips would land in view by luck and prove nothing.
-  await wheelPanel(page, 400);
-  const scrolled = await panel.evaluate((p: HTMLElement) => p.scrollTop);
-  console.log(`  1024x600  panel scrolled to ${Math.round(scrolled)} before Save`);
-  expect(scrolled, 'the panel is scrolled down into the timeline').toBeGreaterThan(40);
-
+  // Pick the time they offered, scrolling the panel to it the way a person
+  // would if it is not already in front of them.
   const slot = page.locator(`[data-slot="${KEY}"]`);
+  for (let i = 0; i < 6; i++) {
+    if (await expectReachable(page, slot, 'probe').then(() => true, () => false)) break;
+    await wheelPanel(page, 120);
+  }
   await tapReachable(page, slot, 'the time they can');
+
+  // Now be where this person really is when they press Save: down the panel,
+  // among the times, nowhere near its top. Set it outright so the state under
+  // test is the same on every engine.
+  const scrolled = await panel.evaluate((p: HTMLElement) => {
+    p.scrollTop = p.scrollHeight;
+    return p.scrollTop;
+  });
+  console.log(`  375x548  panel scrolled to ${Math.round(scrolled)} before Save`);
+  expect(scrolled, 'the panel is scrolled away from its top').toBeGreaterThan(40);
   await tapReachable(page, page.getByRole('button', { name: /Save availability/i }), '"Save availability" button');
   await expect(page.getByText(/Availability saved/i)).toBeVisible({ timeout: 15_000 });
 
