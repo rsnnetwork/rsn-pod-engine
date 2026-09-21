@@ -9,7 +9,7 @@
 // drops a message in the thread, and notifies the partner. No calendars, no
 // OAuth. 9 Sep 2026 (Stefan): replaced the vague morning/afternoon/evening grid.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, CalendarCheck, Video, Phone } from 'lucide-react';
@@ -235,6 +235,12 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
   const gridRef = useRef<HTMLDivElement>(null);
   const [scrollTo, setScrollTo] = useState<string | null>(null);
   const [flashKey, setFlashKey] = useState<string | null>(null);
+  // The panel scrolls inside the thread column (it cannot grow past it). The
+  // two things that finish the job must never sit out of sight: the confirm
+  // step and, while there are unsaved picks, Save.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const confirmCardRef = useRef<HTMLDivElement>(null);
+  const saveBarRef = useRef<HTMLDivElement>(null);
 
   const { data, isLoading } = useQuery<Scheduling>({
     queryKey: ['meetingScheduling', conversationId],
@@ -315,6 +321,21 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
     const t = setTimeout(() => setFlashKey(null), 1600);
     return () => clearTimeout(t);
   }, [scrollTo]);
+
+  // Picking a green time opens the confirm step. Bring the whole card — its
+  // "Confirm meeting" button above all — inside the panel's own frame, clear
+  // of the pinned Save bar. Scrolls the panel only, never an ancestor.
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    const card = confirmCardRef.current;
+    if (!finalizing || !panel || !card) return;
+    const frame = panel.getBoundingClientRect();
+    const bar = saveBarRef.current;
+    const floor = bar && bar.dataset.pinned === 'true' ? bar.getBoundingClientRect().top : frame.bottom;
+    const box = card.getBoundingClientRect();
+    if (box.bottom > floor) panel.scrollTop += box.bottom - floor + 8;
+    else if (box.top < frame.top) panel.scrollTop -= frame.top - box.top + 8;
+  }, [finalizing]);
 
   if (isLoading || !data) {
     return <div className="p-4 flex justify-center"><Spinner /></div>;
@@ -416,7 +437,11 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
   const overlapShown = showAllOverlap ? savedOverlap : savedOverlap.slice(0, OVERLAP_PREVIEW);
 
   return (
-    <div className="border-b border-gray-200 bg-gray-50/60 px-3 py-3 space-y-3" data-testid="meeting-scheduler">
+    <div
+      ref={panelRef}
+      className="min-h-0 overflow-y-auto overscroll-contain border-b border-gray-200 bg-gray-50/60 px-3 py-3 space-y-3"
+      data-testid="meeting-scheduler"
+    >
       {data.confirmed && (
         <div className={`rounded-lg border px-3 py-2.5 ${confirmedOver ? 'bg-gray-50 border-gray-200' : 'bg-emerald-50 border-emerald-200'}`}>
           <div className="flex items-center gap-2">
@@ -465,25 +490,103 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
         </div>
       )}
 
-      <div className="space-y-2">
-        {/* The meeting's length is typed up front — any number of minutes. */}
-        <div className="flex flex-wrap items-center gap-2" data-testid="meeting-length">
-          <label htmlFor="meeting-minutes" className="text-xs font-medium text-gray-700">Meeting length</label>
-          <input
-            id="meeting-minutes"
-            type="number"
-            inputMode="numeric"
-            min={MIN_DURATION}
-            max={MAX_DURATION}
-            step={5}
-            value={durationText}
-            onChange={e => setDurationText(e.target.value)}
-            aria-invalid={!durationOk}
-            className={`h-11 w-20 rounded-lg border bg-white px-2 text-sm text-gray-800 ${durationOk ? 'border-gray-200' : 'border-rsn-red'}`}
-          />
-          <span className="text-xs text-gray-600">min</span>
-          <span className="text-[11px] text-gray-400">{durationOk ? 'Type any length — 10, 15, 45…' : `Between ${MIN_DURATION} and ${MAX_DURATION} minutes.`}</span>
+      {/* The meeting's length is typed up front — any number of minutes. */}
+      <div className="flex flex-wrap items-center gap-2" data-testid="meeting-length">
+        <label htmlFor="meeting-minutes" className="text-xs font-medium text-gray-700">Meeting length</label>
+        <input
+          id="meeting-minutes"
+          type="number"
+          inputMode="numeric"
+          min={MIN_DURATION}
+          max={MAX_DURATION}
+          step={5}
+          value={durationText}
+          onChange={e => setDurationText(e.target.value)}
+          aria-invalid={!durationOk}
+          className={`h-11 w-20 rounded-lg border bg-white px-2 text-sm text-gray-800 ${durationOk ? 'border-gray-200' : 'border-rsn-red'}`}
+        />
+        <span className="text-xs text-gray-600">min</span>
+        <span className="text-[11px] text-gray-400">{durationOk ? 'Type any length — 10, 15, 45…' : `Between ${MIN_DURATION} and ${MAX_DURATION} minutes.`}</span>
+      </div>
+
+      {/* Once you both can, confirming is the next step, so it sits here at the
+          top of the panel, straight under the length it uses — not below the
+          whole timeline where a laptop-height window never showed it. */}
+      {savedOverlap.length > 0 && !data.confirmed && (
+        <div className="space-y-1.5" data-testid="overlap-list">
+          <p className="text-[11px] font-medium text-emerald-700">You both can — pick one to confirm:</p>
+          {finalizing && (
+            <div ref={confirmCardRef} className="rounded-lg border border-emerald-300 bg-emerald-50 p-3 space-y-2" data-testid="confirm-card">
+              <p className="text-sm font-semibold text-emerald-800">{localWhen(finalizing)}</p>
+              <p className="text-[11px] text-emerald-600">Your local time. They'll see it in theirs. Length is the number above.</p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="inline-flex overflow-hidden rounded-lg border border-emerald-300">
+                  {(['video', 'audio'] as const).map(k => (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => setMeetingKind(k)}
+                      aria-pressed={meetingKind === k}
+                      className={`inline-flex min-h-[44px] items-center gap-1 px-3 text-xs font-medium ${meetingKind === k ? 'bg-emerald-600 text-white' : 'bg-white text-emerald-700'}`}
+                    >
+                      {k === 'video' ? <Video className="h-3.5 w-3.5" /> : <Phone className="h-3.5 w-3.5" />}
+                      {k === 'video' ? 'Video' : 'Audio'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <p className="text-xs text-emerald-800" data-testid="confirm-summary">
+                {durationOk
+                  ? `${labelFor(finalizing)} · ${durationMin} min · ${meetingKind === 'audio' ? 'Audio' : 'Video'} call`
+                  : `Length must be ${MIN_DURATION}–${MAX_DURATION} minutes.`}
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => confirm(finalizing)}
+                  disabled={confirming !== null || !durationOk}
+                  className="flex-1 min-h-[44px] flex items-center justify-center gap-2 rounded-lg bg-emerald-600 text-sm font-medium text-white hover:bg-emerald-700 transition-colors disabled:opacity-50"
+                >
+                  <Check className="h-4 w-4" />
+                  {confirming === finalizing ? 'Confirming…' : 'Confirm meeting'}
+                </button>
+                <button
+                  onClick={() => setFinalizing(null)}
+                  disabled={confirming !== null}
+                  className="min-h-[44px] rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-600 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+          <div className="flex flex-wrap gap-1.5">
+            {overlapShown.filter(w => w !== finalizing).map(w => (
+              <button
+                key={w}
+                type="button"
+                onClick={() => openFinalize(w)}
+                disabled={confirming !== null}
+                aria-label={`Confirm ${labelFor(w)}`}
+                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-100 transition-colors"
+              >
+                <Check className="h-4 w-4" />
+                {labelFor(w)}
+              </button>
+            ))}
+            {!showAllOverlap && savedOverlap.length > OVERLAP_PREVIEW && (
+              <button
+                type="button"
+                onClick={() => setShowAllOverlap(true)}
+                className="inline-flex min-h-[44px] items-center rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-600 hover:bg-gray-50"
+              >
+                +{savedOverlap.length - OVERLAP_PREVIEW} more
+              </button>
+            )}
+          </div>
         </div>
+      )}
+
+      <div className="space-y-2">
         <p className="text-[11px] text-gray-500">
           Tap the times you're free — <span className="font-medium text-gray-700">your local time</span>. Green = you both can.
         </p>
@@ -591,7 +694,15 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
         </div>
       </div>
 
-      <div className="flex items-center justify-between gap-2 flex-wrap">
+      {/* While there are unsaved picks, Save stays pinned to the bottom of the
+          panel's frame, so it is in reach however far the timeline scrolls. */}
+      <div
+        ref={saveBarRef}
+        data-pinned={dirty}
+        className={`flex items-center justify-between gap-2 flex-wrap ${
+          dirty ? 'sticky bottom-0 z-10 -mx-3 !-mb-3 border-t border-gray-200 bg-gray-50 px-3 py-2' : ''
+        }`}
+      >
         <p className="text-[11px] text-gray-400">
           Save, then confirm a green time.
         </p>
@@ -601,80 +712,6 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
           </Button>
         )}
       </div>
-
-      {savedOverlap.length > 0 && !data.confirmed && (
-        <div className="space-y-1.5" data-testid="overlap-list">
-          <p className="text-[11px] font-medium text-emerald-700">You both can — pick one to confirm:</p>
-          {finalizing && (
-            <div className="rounded-lg border border-emerald-300 bg-emerald-50 p-3 space-y-2" data-testid="confirm-card">
-              <p className="text-sm font-semibold text-emerald-800">{localWhen(finalizing)}</p>
-              <p className="text-[11px] text-emerald-600">Your local time. They'll see it in theirs. Length is the number above.</p>
-              <div className="flex items-center gap-2 flex-wrap">
-                <div className="inline-flex overflow-hidden rounded-lg border border-emerald-300">
-                  {(['video', 'audio'] as const).map(k => (
-                    <button
-                      key={k}
-                      type="button"
-                      onClick={() => setMeetingKind(k)}
-                      aria-pressed={meetingKind === k}
-                      className={`inline-flex min-h-[44px] items-center gap-1 px-3 text-xs font-medium ${meetingKind === k ? 'bg-emerald-600 text-white' : 'bg-white text-emerald-700'}`}
-                    >
-                      {k === 'video' ? <Video className="h-3.5 w-3.5" /> : <Phone className="h-3.5 w-3.5" />}
-                      {k === 'video' ? 'Video' : 'Audio'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <p className="text-xs text-emerald-800" data-testid="confirm-summary">
-                {durationOk
-                  ? `${labelFor(finalizing)} · ${durationMin} min · ${meetingKind === 'audio' ? 'Audio' : 'Video'} call`
-                  : `Length must be ${MIN_DURATION}–${MAX_DURATION} minutes.`}
-              </p>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => confirm(finalizing)}
-                  disabled={confirming !== null || !durationOk}
-                  className="flex-1 min-h-[44px] flex items-center justify-center gap-2 rounded-lg bg-emerald-600 text-sm font-medium text-white hover:bg-emerald-700 transition-colors disabled:opacity-50"
-                >
-                  <Check className="h-4 w-4" />
-                  {confirming === finalizing ? 'Confirming…' : 'Confirm meeting'}
-                </button>
-                <button
-                  onClick={() => setFinalizing(null)}
-                  disabled={confirming !== null}
-                  className="min-h-[44px] rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-600 hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-          <div className="flex flex-wrap gap-1.5">
-            {overlapShown.filter(w => w !== finalizing).map(w => (
-              <button
-                key={w}
-                type="button"
-                onClick={() => openFinalize(w)}
-                disabled={confirming !== null}
-                aria-label={`Confirm ${labelFor(w)}`}
-                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-100 transition-colors"
-              >
-                <Check className="h-4 w-4" />
-                {labelFor(w)}
-              </button>
-            ))}
-            {!showAllOverlap && savedOverlap.length > OVERLAP_PREVIEW && (
-              <button
-                type="button"
-                onClick={() => setShowAllOverlap(true)}
-                className="inline-flex min-h-[44px] items-center rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-600 hover:bg-gray-50"
-              >
-                +{savedOverlap.length - OVERLAP_PREVIEW} more
-              </button>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

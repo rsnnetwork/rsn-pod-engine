@@ -1252,9 +1252,14 @@ export default function MessagesPage() {
             )}
 
             {/* Availability grid — collapsible so the thread stays primary. Gone
-                once calls are unlocked (the first meeting has happened). */}
+                once calls are unlocked (the first meeting has happened).
+                min-h-0: this column has a fixed height and clips its overflow,
+                so the panel must be allowed to shrink and scroll inside itself.
+                Without it the panel kept its full height and pushed "Confirm
+                meeting", Save and the message box past the clip edge on any
+                laptop-height window (Stefan + Shradha, 19 Sep 2026). */}
             {activeConv && !callsUnlocked && schedulerOpen && (
-              <div data-scheduler-panel>
+              <div data-scheduler-panel className="flex min-h-0 flex-col">
                 <MeetingScheduler conversationId={activeConv.conversationId} />
               </div>
             )}
