@@ -135,12 +135,17 @@ export async function createAgent(
     // `intent` records WHERE this search came from — for the tick-box flow,
     // which option produced it. De-duping on the label alone breaks the moment
     // a label is reworded, and labels are meant to be rewordable (21 Sep 2026).
+    //
+    // It is NOT NULL DEFAULT '{}'. An agent a member typed themselves has no
+    // origin to record, and binding null for it fails the constraint outright —
+    // which is how naming the column here took every hand-made agent down with
+    // a 500 on 21 Sep. An absent origin is the empty object, never null.
     `INSERT INTO matching_agents (user_id, label, want_text, matching_tags, status, intent)
-     VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+     VALUES ($1, $2, $3, $4, $5, COALESCE($6::jsonb, '{}'::jsonb))
      RETURNING id, user_id, label, want_text, matching_tags, status,
                last_matched_at, created_at, updated_at, 0 AS match_count, 0 AS asked_count`,
     [userId, input.label.trim(), input.wantText.trim(), input.matchingTags ?? [], input.status ?? 'active',
-     input.intent ? JSON.stringify(input.intent) : null],
+     JSON.stringify(input.intent ?? {})],
   );
   return mapAgent(r.rows[0]);
 }

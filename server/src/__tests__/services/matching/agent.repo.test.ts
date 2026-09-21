@@ -66,6 +66,30 @@ describe('createAgent', () => {
     expect(sql).toMatch(/INSERT INTO matching_agents/i);
     expect(params).toEqual(expect.arrayContaining(['u-1', 'Investors', 'seed investors']));
   });
+
+  // 21 Sep 2026: naming `intent` in the INSERT and binding null for an agent a
+  // member typed themselves took every hand-made agent down with a 500 —
+  // `intent` is NOT NULL DEFAULT '{}', and an explicit null beats the default.
+  // A mocked pool cannot enforce a constraint, so pin the bound value instead.
+  it('never binds null for intent — an agent with no recorded origin is {}', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [row()] });
+    await repo.createAgent('u-1', { label: 'Developers', wantText: 'react developers' });
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(params).not.toContain(null);
+    expect(params[5]).toBe('{}');
+    // And the column keeps its default even if some future caller does pass null.
+    expect(sql).toMatch(/COALESCE\(\$6::jsonb, '\{\}'::jsonb\)/);
+  });
+
+  it('records where a tick-box agent came from, as JSON', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [row()] });
+    await repo.createAgent('u-1', {
+      label: 'Investors', wantText: 'seed investors',
+      intent: { source: 'tickbox_v1', meetKey: 'investors' },
+    });
+    const [, params] = mockQuery.mock.calls[0];
+    expect(JSON.parse(params[5] as string)).toEqual({ source: 'tickbox_v1', meetKey: 'investors' });
+  });
 });
 
 describe('updateAgent', () => {
