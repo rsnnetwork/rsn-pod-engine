@@ -150,6 +150,9 @@ export interface BroadcastableDmMessage {
   attachmentUrl?: string | null;
   attachmentType?: string | null;
   attachmentMeta?: Record<string, any> | null;
+  /** 'system' → the client draws a neutral card, not this person's bubble. */
+  kind?: string;
+  systemMeta?: Record<string, any> | null;
 }
 
 /**
@@ -185,6 +188,10 @@ export async function broadcastDmMessage(
     attachmentUrl: message.attachmentUrl ?? null,
     attachmentType: message.attachmentType ?? null,
     attachmentMeta: message.attachmentMeta ?? null,
+    // Without these two a card that arrives live would be drawn as the
+    // triggering member's own bubble until the next refetch (21 Sep 2026).
+    kind: message.kind ?? 'user',
+    systemMeta: message.systemMeta ?? null,
   };
   io.to(userRoom(fromUserId)).emit('dm:message', payload);
   io.to(userRoom(toUserId)).emit('dm:message', payload);
