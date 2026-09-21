@@ -269,10 +269,11 @@ test('two people who answered the tick boxes can find each other', async () => {
 
   const agentId = res.json.data.primaryAgentId;
   expect(agentId).toBeTruthy();
-  const found = await pool.query<{ n: string }>(
-    `SELECT count(*)::text AS n FROM agent_matches WHERE agent_id = $1 AND matched_user_id = $2`,
+  const found = await pool.query<{ n: string; score: string | null }>(
+    `SELECT count(*)::text AS n, max(score)::text AS score
+     FROM agent_matches WHERE agent_id = $1 AND candidate_user_id = $2`,
     [agentId, target.id],
   );
-  console.log(`  ✓ the investor search found the investor: ${found.rows[0].n} match`);
+  console.log(`  ✓ the investor search found the investor: ${found.rows[0].n} match, score ${found.rows[0].score}`);
   expect(Number(found.rows[0].n)).toBeGreaterThan(0);
 });
