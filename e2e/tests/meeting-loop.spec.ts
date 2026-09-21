@@ -187,7 +187,7 @@ test('two people go from silence to a confirmed meeting, each step arriving on b
   await expect(cards(anaPage).filter({ hasText: confirmed })).toBeVisible({ timeout: 30_000 });
 
   const boCard = cards(boPage).filter({ hasText: confirmed });
-  await expect(boCard.getByRole('button', { name: /^Join$/ })).toBeVisible();
+  await expect(boCard.getByRole('button', { name: /Join meeting/i })).toBeVisible();
   await expect(boCard.getByRole('button', { name: /Add to calendar/i })).toBeVisible();
 
   const localIn = (tz: string) => new Date(SLOT).toLocaleString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' });

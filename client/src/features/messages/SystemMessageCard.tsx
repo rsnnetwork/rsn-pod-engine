@@ -10,6 +10,7 @@
 
 import { CalendarCheck, CalendarClock, Clock, Video, Phone } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { isMeetingOver } from './MeetingScheduler';
 
 export type DmMessageKind = 'user' | 'system';
 
@@ -36,14 +37,30 @@ interface Props {
   /** Hidden once a meeting is set: the proposal has been answered. */
   meetingConfirmed?: boolean;
   onAddToCalendar?: () => void;
+  /** Ring them instead, once the meeting's own time has passed. Only offered
+   *  when calls are unlocked — the first meeting is what unlocks them. */
+  onCallNow?: (kind: 'audio' | 'video') => void;
+  callsUnlocked?: boolean;
+  /** The thread's current meeting has ended. A card can also be over on its
+   *  own terms (an older meeting under a newer one); either makes it over. */
+  meetingOver?: boolean;
 }
 
 export default function SystemMessageCard({
   content, meta, liveSlots, onPickSlot, onOpenScheduler, meetingConfirmed, onAddToCalendar,
+  onCallNow, callsUnlocked, meetingOver,
 }: Props) {
   const navigate = useNavigate();
 
   if (meta?.type === 'meeting_confirmed') {
+    // The card outlives the meeting it announces. While the time is still
+    // ahead (plus the grace period) it is the way in; afterwards there is no
+    // room to join, so it offers the call instead — the same two states the
+    // pinned banner has had since 8 Sep 2026. The banner reads the thread's
+    // current meeting and the card carries its own; a card must never offer a
+    // way in while the banner above it says the meeting ended, so either one
+    // being over settles it.
+    const over = !!meetingOver || isMeetingOver(meta.startAt, meta.durationMin);
     return (
       <Shell tone="confirmed" icon={<CalendarCheck className="h-4 w-4 text-emerald-600" />}>
         <p className="text-sm font-semibold text-emerald-800">Meeting confirmed</p>
@@ -52,14 +69,25 @@ export default function SystemMessageCard({
           {meta.durationMin} minutes · {meta.meetingType === 'audio' ? 'Audio call' : 'Video call'} · your local time
         </p>
         <div className="mt-1.5 flex flex-wrap justify-center gap-2">
-          <button
-            type="button"
-            onClick={() => navigate(meta.joinPath)}
-            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700"
-          >
-            {meta.meetingType === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Join
-          </button>
-          {onAddToCalendar && (
+          {!over && (
+            <button
+              type="button"
+              onClick={() => navigate(meta.joinPath)}
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700"
+            >
+              {meta.meetingType === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Join meeting
+            </button>
+          )}
+          {over && callsUnlocked && onCallNow && (
+            <button
+              type="button"
+              onClick={() => onCallNow(meta.meetingType)}
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-sm font-medium text-white hover:bg-emerald-700"
+            >
+              {meta.meetingType === 'audio' ? <Phone className="h-4 w-4" /> : <Video className="h-4 w-4" />} Call now
+            </button>
+          )}
+          {onAddToCalendar && !over && (
             <button
               type="button"
               onClick={onAddToCalendar}

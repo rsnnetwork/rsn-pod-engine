@@ -1343,6 +1343,9 @@ export default function MessagesPage() {
                             onOpenScheduler={() => setSchedulerOpen(true)}
                             onPickSlot={() => setSchedulerOpen(true)}
                             onAddToCalendar={m.systemMeta?.type === 'meeting_confirmed' ? downloadMeetingIcs : undefined}
+                            onCallNow={startCall}
+                            callsUnlocked={callsUnlocked}
+                            meetingOver={confirmedMeetingOver}
                           />
                         </div>,
                       );
