@@ -20,14 +20,34 @@ export type SessionStatus =
 
 export type StatusPhase = 'pre' | 'live' | 'done' | 'cancelled';
 
+/**
+ * Who is reading. A member wants to know whether they can walk in; only the
+ * person running the event cares which phase it is in (21 Sep 2026, Shradha:
+ * "Users will never know what 'Transition' means. States must be named in
+ * plain words"). An event of hers sat on "Transition" for two days.
+ */
+export type StatusAudience = 'member' | 'host';
+
 const LABEL_MAP: Record<SessionStatus, string> = {
-  scheduled: 'Scheduled',
-  lobby_open: 'Lobby open',
-  round_active: 'Round active',
-  round_rating: 'Rating',
-  round_transition: 'Transition',
-  closing_lobby: 'Closing lobby',
-  completed: 'Completed',
+  scheduled: 'Upcoming',
+  lobby_open: 'Live now',
+  round_active: 'Live now',
+  round_rating: 'Live now',
+  round_transition: 'Live now',
+  closing_lobby: 'Wrapping up',
+  completed: 'Ended',
+  cancelled: 'Cancelled',
+};
+
+/** What the host sees instead: which part of the event is running. */
+const HOST_LABEL_MAP: Record<SessionStatus, string> = {
+  scheduled: 'Upcoming',
+  lobby_open: 'Main room open',
+  round_active: 'Round in progress',
+  round_rating: 'Rating the round',
+  round_transition: 'Between rounds',
+  closing_lobby: 'Wrapping up',
+  completed: 'Ended',
   cancelled: 'Cancelled',
 };
 
@@ -54,8 +74,21 @@ const PHASE_MAP: Record<SessionStatus, StatusPhase> = {
   cancelled: 'cancelled',
 };
 
-export function sessionStatusLabel(s: string | undefined | null): string {
-  return (s && LABEL_MAP[s as SessionStatus]) || 'Unknown';
+export function sessionStatusLabel(s: string | undefined | null, audience: StatusAudience = 'member'): string {
+  const map = audience === 'host' ? HOST_LABEL_MAP : LABEL_MAP;
+  return (s && map[s as SessionStatus]) || 'Unknown';
+}
+
+/**
+ * The extra line a host gets under the label: which round, when we know it.
+ * Members never see this — "Live now" is the whole truth they need.
+ */
+export function sessionStatusDetail(s: string | undefined | null, round?: number | null): string | null {
+  if (s === 'round_active' && round) return `Round ${round} in progress`;
+  if (s === 'round_rating' && round) return `Rating round ${round}`;
+  if (!s || !(s in HOST_LABEL_MAP)) return null;
+  const detail = HOST_LABEL_MAP[s as SessionStatus];
+  return detail === sessionStatusLabel(s) ? null : detail;
 }
 
 export function sessionStatusColor(s: string | undefined | null) {

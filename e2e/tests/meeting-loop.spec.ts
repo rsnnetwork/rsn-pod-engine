@@ -64,6 +64,41 @@ async function openScheduler(page: Page): Promise<void> {
 
 const cards = (page: Page) => page.getByTestId('system-message-card');
 
+/**
+ * The timeline shows ONE day at a time, and opens on the first day that has
+ * something worth seeing. A time three days out is simply not in the page
+ * until its day is picked — and which day that is depends on the reader's
+ * timezone, so it is different for Ana in Oslo and Bo in Karachi. Walk the day
+ * strip until the time appears, the way a person scanning the week would.
+ */
+async function selectDayFor(page: Page, slot: string): Promise<void> {
+  const target = page.locator(`[data-slot="${slot}"]`);
+  if (await target.count()) return;
+  const days = page.locator('[role="tablist"][aria-label="Day"] [data-day]');
+  const n = await days.count();
+  for (let i = 0; i < n; i++) {
+    await days.nth(i).click();
+    await page.waitForTimeout(150);
+    if (await target.count()) return;
+  }
+  throw new Error(`no day in the strip holds ${slot}`);
+}
+
+/** Bring a time into reach, scrolling the panel the way a person would. */
+async function reachSlot(page: Page, slot: string, label: string): Promise<void> {
+  await selectDayFor(page, slot);
+  const target = page.locator(`[data-slot="${slot}"]`);
+  for (let i = 0; i < 8; i++) {
+    if (await expectReachable(page, target, 'probe').then(() => true, () => false)) break;
+    const anchor = await page.locator('label[for="meeting-minutes"]').boundingBox();
+    if (!anchor) break;
+    await page.mouse.move(anchor.x + 4, Math.max(1, anchor.y + 4));
+    await page.mouse.wheel(0, 120);
+    await page.waitForTimeout(250);
+  }
+  await tapReachable(page, target, label);
+}
+
 test.beforeAll(async () => {
   ana = await createTestUser('mlana');
   bo = await createTestUser('mlbo');
@@ -105,7 +140,7 @@ test('two people go from silence to a confirmed meeting, each step arriving on b
 
   // ── 1. Ana shares her times. The thread says so, on BOTH screens.
   await openScheduler(anaPage);
-  await tapReachable(anaPage, anaPage.locator(`[data-slot="${SLOT}"]`), 'Ana: the time she can meet');
+  await reachSlot(anaPage, SLOT, 'Ana: the time she can meet');
   await tapReachable(anaPage, anaPage.getByRole('button', { name: /Save and send availability/i }), 'Ana: "Save and send availability"');
   await expect(anaPage.getByText(/Sent — they can see when you are free/i)).toBeVisible({ timeout: 20_000 });
 
@@ -119,16 +154,7 @@ test('two people go from silence to a confirmed meeting, each step arriving on b
 
   // ── 2. Bo picks the same time. Now they can both meet, and both are told.
   await openScheduler(boPage);
-  const boSlot = boPage.locator(`[data-slot="${SLOT}"]`);
-  for (let i = 0; i < 6; i++) {
-    if (await expectReachable(boPage, boSlot, 'probe').then(() => true, () => false)) break;
-    const label = await boPage.locator('label[for="meeting-minutes"]').boundingBox();
-    if (!label) break;
-    await boPage.mouse.move(label.x + 4, Math.max(1, label.y + 4));
-    await boPage.mouse.wheel(0, 120);
-    await boPage.waitForTimeout(350);
-  }
-  await tapReachable(boPage, boSlot, 'Bo: the same time');
+  await reachSlot(boPage, SLOT, 'Bo: the same time, from a different timezone');
   await tapReachable(boPage, boPage.getByRole('button', { name: /Save and send availability/i }), 'Bo: "Save and send availability"');
 
   const proposal = /You are both free/i;
@@ -144,7 +170,12 @@ test('two people go from silence to a confirmed meeting, each step arriving on b
   );
   expect(rows.rows[0].n).toBe('1');
 
-  // ── 3. Bo confirms from the card itself, on a phone.
+  // Sending ended the job: the panel is gone and the chat is back, with the
+  // card it just wrote in it. Nothing traps them any more.
+  await expect(boPage.getByTestId('meeting-scheduler')).toHaveCount(0);
+  await expect(anaPage.getByTestId('meeting-scheduler')).toHaveCount(0);
+
+  // ── 3. Bo confirms from the card in the chat, on a phone.
   await tapReachable(boPage, cards(boPage).filter({ hasText: proposal }).getByRole('button').first(), 'Bo: the proposed time');
   await expect(boPage.getByTestId('meeting-scheduler')).toBeVisible({ timeout: 20_000 });
   await tapReachable(boPage, boPage.getByTestId('overlap-list').getByRole('button', { name: /^Confirm / }).first(), 'Bo: green time chip');
@@ -179,17 +210,50 @@ test('two people go from silence to a confirmed meeting, each step arriving on b
 });
 
 test('confirming the same time twice books one meeting, not two', async () => {
-  const a = await apiAs(ana, 'POST', `/dm/conversations/${convId}/scheduling/confirm`, { window: SLOT, durationMin: 30, type: 'video' });
-  const b = await apiAs(bo, 'POST', `/dm/conversations/${convId}/scheduling/confirm`, { window: SLOT, durationMin: 30, type: 'video' });
-  console.log(`  second/third confirm: ${a.status} and ${b.status}`);
-  expect([200, 409]).toContain(a.status);
-  expect([200, 409]).toContain(b.status);
-  const cardsRow = await pool.query<{ n: string }>(
-    `SELECT count(*)::text AS n FROM direct_messages
-     WHERE conversation_id=$1 AND kind='system' AND system_meta->>'type'='meeting_confirmed'`,
-    [convId],
-  );
-  expect(cardsRow.rows[0].n).toBe('1');
+  // Its own pair, so this stands alone whatever the UI test did.
+  const x = await createTestUser('mlx');
+  const y = await createTestUser('mly');
+  try {
+    const sent = await apiAs(x, 'POST', '/pokes', { recipientId: y.id, message: 'Hi' });
+    expect((await apiAs(y, 'POST', `/pokes/${sent.json.data.id}/accept`)).status).toBe(200);
+    const conv = (await pool.query<{ id: string }>(
+      `SELECT id FROM dm_conversations WHERE (user_a_id=$1 AND user_b_id=$2) OR (user_a_id=$2 AND user_b_id=$1)`,
+      [x.id, y.id],
+    )).rows[0].id;
+    const slot = futureSlot(6, 10);
+    expect((await apiAs(x, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [slot] })).status).toBe(200);
+    expect((await apiAs(y, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [slot] })).status).toBe(200);
+
+    // Both press Confirm at the same instant, on the same time.
+    const [a, b] = await Promise.all([
+      apiAs(x, 'POST', `/dm/conversations/${conv}/scheduling/confirm`, { window: slot, durationMin: 30, type: 'video' }),
+      apiAs(y, 'POST', `/dm/conversations/${conv}/scheduling/confirm`, { window: slot, durationMin: 30, type: 'video' }),
+    ]);
+    console.log(`  simultaneous confirms: ${a.status} and ${b.status}`);
+    expect([200, 409]).toContain(a.status);
+    expect([200, 409]).toContain(b.status);
+
+    // One meeting, and one card announcing it.
+    const row = (await pool.query<{ n: string; start: Date | null }>(
+      `SELECT (SELECT count(*)::text FROM direct_messages m
+               WHERE m.conversation_id=c.id AND m.kind='system'
+                 AND m.system_meta->>'type'='meeting_confirmed') AS n,
+              c.meeting_start_at AS start
+       FROM dm_conversations c WHERE c.id=$1`, [conv],
+    )).rows[0];
+    expect(row.start?.toISOString().replace('.000Z', 'Z')).toBe(slot);
+    expect(row.n).toBe('1');
+
+    // A DIFFERENT time while that one stands is refused, with the time that is set.
+    const other = futureSlot(6, 11);
+    await apiAs(x, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [slot, other] });
+    await apiAs(y, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [slot, other] });
+    const clash = await apiAs(x, 'POST', `/dm/conversations/${conv}/scheduling/confirm`, { window: other, durationMin: 30, type: 'video' });
+    expect(clash.status).toBe(409);
+    expect(String(clash.json?.error?.message)).toMatch(/already set/i);
+  } finally {
+    await cleanup(pool, { ids: [x.id, y.id] });
+  }
 });
 
 test('a time that has since passed never blocks saving again', async () => {

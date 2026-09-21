@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
+import { sessionStatusLabel, sessionStatusColor } from '@/features/sessions/statusConfig';
 import Avatar from '@/components/ui/Avatar';
 import ProfileCard from '@/components/ui/ProfileCard';
 import { Button } from '@/components/ui/Button';
@@ -941,8 +942,12 @@ export default function PodDetailPage() {
                       {s.scheduledAt ? formatDateTime(s.scheduledAt) : 'No date set'}
                     </p>
                   </div>
-                  <Badge variant={s.status === 'scheduled' ? 'info' : s.status === 'active' ? 'success' : 'default'}>
-                    {s.status}
+                  {/* This showed the raw column value, so a member read
+                      "round_transition" here (21 Sep 2026). One helper names
+                      every state in plain words now. 'active' was never a
+                      real status, so the old colour test never matched. */}
+                  <Badge variant={sessionStatusColor(s.status)}>
+                    {sessionStatusLabel(s.status)}
                   </Badge>
                 </div>
               </Card>

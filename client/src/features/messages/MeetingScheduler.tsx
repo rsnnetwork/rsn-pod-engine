@@ -399,6 +399,12 @@ export default function MeetingScheduler({ conversationId, onClose }: { conversa
       setStaged(null); // re-sync from server
       drafts.delete(conversationId);
       addToast('Sent — they can see when you are free.', 'success');
+      // Sending is where this job ends, so hand the thread back (Shradha's
+      // deck: a terminal action, "right now it traps you"). The card that was
+      // just posted is in the chat behind the panel — leaving the panel open
+      // would cover the very thing it wrote, and on a phone the message list
+      // is squeezed to nothing while it is up.
+      onClose?.();
     } catch {
       addToast('Could not save your times — try again.', 'error');
     } finally {
