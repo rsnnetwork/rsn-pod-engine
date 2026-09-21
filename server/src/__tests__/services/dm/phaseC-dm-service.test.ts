@@ -12,7 +12,21 @@ import * as nodeFs from 'fs';
 import * as nodePath from 'path';
 
 function readServer(rel: string): string {
-  return nodeFs.readFileSync(nodePath.join(__dirname, '../../../', rel), 'utf8');
+  // Normalise line endings. These tests slice a function body by looking for
+  // the first "\n}\n" after its signature, which never matches in a CRLF
+  // working tree: the slice then ran to the end of the file and every pin
+  // below silently passed against unrelated code. It only failed in CI, where
+  // the checkout is LF. Read them the same way everywhere (21 Sep 2026).
+  return nodeFs.readFileSync(nodePath.join(__dirname, '../../../', rel), 'utf8').replace(/\r\n/g, '\n');
+}
+
+/** The text of one function, from its signature to its closing brace. */
+function fnBody(src: string, signature: string): string {
+  const start = src.indexOf(signature);
+  if (start === -1) throw new Error(`function not found in source: ${signature}`);
+  const end = src.indexOf('\n}\n', start);
+  if (end === -1) throw new Error(`no closing brace found for: ${signature}`);
+  return src.slice(start, end);
 }
 
 describe('Phase C — DM data model + service + REST', () => {
@@ -102,9 +116,7 @@ describe('Phase C — DM data model + service + REST', () => {
     });
 
     it('canMessage checks block FIRST then encounter', () => {
-      const fnStart = src.indexOf('export async function canMessage(');
-      const fnEnd = src.indexOf('\n}\n', fnStart);
-      const fn = src.slice(fnStart, fnEnd);
+      const fn = fnBody(src, 'export async function canMessage(');
       const blockIdx = fn.indexOf('blockService.areBlocked');
       const encounterIdx = fn.indexOf('encounter_history');
       expect(blockIdx).toBeGreaterThan(-1);
@@ -113,81 +125,70 @@ describe('Phase C — DM data model + service + REST', () => {
     });
 
     it('canMessage rejects self-DM with reason="self"', () => {
-      const fnStart = src.indexOf('export async function canMessage(');
-      const fnEnd = src.indexOf('\n}\n', fnStart);
-      const fn = src.slice(fnStart, fnEnd);
+      const fn = fnBody(src, 'export async function canMessage(');
       expect(fn).toMatch(/reason:\s*['"]self['"]/);
     });
 
     it('canMessage rejects with reason="blocked" or "no_encounter"', () => {
-      const fnStart = src.indexOf('export async function canMessage(');
-      const fnEnd = src.indexOf('\n}\n', fnStart);
-      const fn = src.slice(fnStart, fnEnd);
+      const fn = fnBody(src, 'export async function canMessage(');
       expect(fn).toMatch(/reason:\s*['"]blocked['"]/);
       expect(fn).toMatch(/reason:\s*['"]no_encounter['"]/);
     });
 
     it('sendMessage re-checks canMessage server-side (UI guard not trusted)', () => {
-      const fnStart = src.indexOf('export async function sendMessage(');
-      const fnEnd = src.indexOf('\n}\n', fnStart);
-      const fn = src.slice(fnStart, fnEnd);
+      const fn = fnBody(src, 'export async function sendMessage(');
       expect(fn).toMatch(/canMessage\(/);
     });
 
-    it('insertDirectMessage uses ON CONFLICT to upsert the conversation row', () => {
-      const fnStart = src.indexOf('async function insertDirectMessage(');
-      const fnEnd = src.indexOf('\n}\n', fnStart);
-      const fn = src.slice(fnStart, fnEnd);
+    // 21 Sep 2026: the SQL moved into insertDirectMessageOn, which takes the
+    // caller's client so confirming a meeting can write the conversation row
+    // and its chat card in ONE transaction. insertDirectMessage is now the
+    // wrapper that opens a transaction around it. There is still exactly one
+    // INSERT into direct_messages in the codebase, which is what these pin.
+    it('the canonical insert uses ON CONFLICT to upsert the conversation row', () => {
+      const fn = fnBody(src, 'export async function insertDirectMessageOn(');
       expect(fn).toMatch(/ON CONFLICT \(user_a_id, user_b_id\) DO UPDATE/);
     });
 
-    it('insertDirectMessage clears BOTH sides soft-delete so a new message re-shows the thread for whoever deleted it', () => {
+    it('there is exactly ONE INSERT into direct_messages in the service', () => {
+      expect(src.match(/INSERT INTO direct_messages/g) || []).toHaveLength(1);
+    });
+
+    it('the canonical insert clears BOTH sides soft-delete so a new message re-shows the thread for whoever deleted it', () => {
       // 7 Sep 2026 (Stefan's test): this cleared only the SENDER's column, so
       // a recipient who had trashed the thread never saw new messages resurface
       // it — the message was stored but silently invisible. A new message must
       // un-hide the conversation for BOTH participants, mirroring acceptPoke's
       // both-sides clear on the same table.
-      const fnStart = src.indexOf('async function insertDirectMessage(');
-      const fnEnd = src.indexOf('\n}\n', fnStart);
-      const fn = src.slice(fnStart, fnEnd);
+      const fn = fnBody(src, 'export async function insertDirectMessageOn(');
       expect(fn).toMatch(/user_a_deleted_at\s*=\s*NULL/);
       expect(fn).toMatch(/user_b_deleted_at\s*=\s*NULL/);
     });
 
     it('insertDirectMessage runs in a transaction (conversation upsert + message insert atomic)', () => {
-      const fnStart = src.indexOf('async function insertDirectMessage(');
-      const fnEnd = src.indexOf('\n}\n', fnStart);
-      const fn = src.slice(fnStart, fnEnd);
+      const fn = fnBody(src, 'async function insertDirectMessage(');
       expect(fn).toMatch(/return transaction\(/);
     });
 
     it('listConversations filters out user-side soft-deleted rows', () => {
-      const fnStart = src.indexOf('export async function listConversations(');
-      const fnEnd = src.indexOf('\n}\n', fnStart);
-      const fn = src.slice(fnStart, fnEnd);
+      const fn = fnBody(src, 'export async function listConversations(');
       expect(fn).toMatch(/user_a_deleted_at IS NULL/);
       expect(fn).toMatch(/user_b_deleted_at IS NULL/);
     });
 
     it('listConversations returns unreadCount per conversation (LATERAL subquery)', () => {
-      const fnStart = src.indexOf('export async function listConversations(');
-      const fnEnd = src.indexOf('\n}\n', fnStart);
-      const fn = src.slice(fnStart, fnEnd);
+      const fn = fnBody(src, 'export async function listConversations(');
       expect(fn).toMatch(/LATERAL/);
       expect(fn).toMatch(/from_user_id != \$1[\s\S]+?read_at IS NULL/);
     });
 
     it('markRead only marks messages from the OTHER user (never self-marks)', () => {
-      const fnStart = src.indexOf('export async function markRead(');
-      const fnEnd = src.indexOf('\n}\n', fnStart);
-      const fn = src.slice(fnStart, fnEnd);
+      const fn = fnBody(src, 'export async function markRead(');
       expect(fn).toMatch(/from_user_id != \$2/);
     });
 
     it('deleteConversation is per-user soft-delete (sets user_x_deleted_at)', () => {
-      const fnStart = src.indexOf('export async function deleteConversation(');
-      const fnEnd = src.indexOf('\n}\n', fnStart);
-      const fn = src.slice(fnStart, fnEnd);
+      const fn = fnBody(src, 'export async function deleteConversation(');
       expect(fn).toMatch(/user_a_deleted_at|user_b_deleted_at/);
       // It must NOT actually delete rows from dm_conversations
       expect(fn).not.toMatch(/DELETE FROM dm_conversations/);
