@@ -130,15 +130,23 @@ describe('Phase A — single source of truth for live participant state', () => 
       expect(fn).toMatch(/await\s+cleanupLiveKitRooms\(sessionId\)/);
     });
 
-    it('cleanupLiveKitRooms call appears before activeSessions.delete in the function', () => {
+    it('cleanupLiveKitRooms call appears before activeSessions.delete in the teardown', () => {
       const fnStart = src.indexOf('export async function completeSession');
       const fnEnd = src.indexOf('\nexport ', fnStart + 1);
       const fn = src.slice(fnStart, fnEnd);
-      const cleanupIdx = fn.indexOf('cleanupLiveKitRooms(sessionId)');
-      const deleteIdx = fn.indexOf('activeSessions.delete(sessionId)');
+      // The teardown is what this guards: rooms are closed before the event is
+      // forgotten. Measure from the try block, because the guards ahead of it
+      // may legitimately drop a stale in-memory entry for an event that is
+      // already over, where there is no teardown to order against and no rooms
+      // of ours to close (21 Sep 2026).
+      const teardown = fn.slice(fn.indexOf('\n  try {'));
+      const cleanupIdx = teardown.indexOf('cleanupLiveKitRooms(sessionId)');
+      const deleteIdx = teardown.indexOf('activeSessions.delete(sessionId)');
       expect(cleanupIdx).toBeGreaterThan(-1);
       expect(deleteIdx).toBeGreaterThan(-1);
       expect(cleanupIdx).toBeLessThan(deleteIdx);
+      // And nothing forgets the event before the teardown even begins.
+      expect(fn.slice(0, fn.indexOf('\n  try {'))).not.toMatch(/cleanupLiveKitRooms/);
     });
   });
 

@@ -1002,6 +1002,7 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
     return;
   }
 
+
   // S18 (live-test 2026-06-06, event b1) — flip the IN-MEMORY status to
   // COMPLETED synchronously, BEFORE the first await. The activeSessions
   // entry survives until the finally-delete (which waits on a 2–5 s
@@ -1014,6 +1015,30 @@ export async function completeSession(io: SocketServer, sessionId: string): Prom
   // updateSessionStatus independently refuses terminal-state exits at the
   // DB layer (same incident, second lock).
   if (activeSession) activeSession.status = SessionStatus.COMPLETED;
+
+  // 21 Sep 2026: the C2 guard above reads the IN-MEMORY entry, so it only
+  // protects a process that happens to be holding this event. Another
+  // instance, a restart, an entry dropped by the TTL sweeper, or the cleanup
+  // of an event that has sat abandoned for days would all sail past it and run
+  // the whole body again — overwriting ended_at, re-sweeping participants,
+  // re-finalising encounters, and emailing everyone a second recap, days late.
+  // The database is the one thing every caller shares, so the claim is staked
+  // there: exactly one caller takes the row and the rest stop here.
+  //
+  // This sits AFTER the synchronous in-memory flip above, never before it:
+  // S18 was an in-flight round-end reading a stale status across an await and
+  // re-broadcasting round_rating over a finished event.
+  const claimed = await query<{ id: string }>(
+    `UPDATE sessions SET status = 'completed', ended_at = NOW()
+      WHERE id = $1 AND status NOT IN ('completed', 'cancelled')
+      RETURNING id`,
+    [sessionId],
+  );
+  if (claimed.rows.length === 0) {
+    logger.info({ sessionId }, 'completeSession: this event is already over — nothing to do');
+    activeSessions.delete(sessionId);
+    return;
+  }
 
   try {
     // FIX 5D: Clear ALL timers (main + sync interval)
