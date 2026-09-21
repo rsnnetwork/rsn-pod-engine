@@ -156,10 +156,33 @@ test('every scheduler action can be pressed without scrolling, at every window s
     await press(page.getByTestId('confirm-card').getByRole('button', { name: /^Cancel$/ }), 'confirm step Cancel');
     // 3. The panel must not swallow the message box ("no way out").
     await reach(messageBox(page), 'message box while the panel is open');
-    // 4. Pick a time, then Save.
-    await press(page.locator(`[data-slot="${NEXT}"]`), 'a free time in the grid');
+    // 4. Pick a time. The timeline is content, not a finishing action: on a
+    //    short window a person may scroll the panel once to bring it up. Do it
+    //    the way a person would — wheel over the panel, outside the timeline's
+    //    own scroller. (The old panel could not scroll at all, so this still
+    //    fails there.)
+    const slot = page.locator(`[data-slot="${NEXT}"]`);
+    const inReach = await expectReachable(page, slot, 'probe').then(() => true, () => false);
+    if (!inReach) {
+      const label = await page.locator('label[for="meeting-minutes"]').boundingBox();
+      if (label) {
+        await page.mouse.move(label.x + 4, Math.max(1, label.y + 4));
+        await page.mouse.wheel(0, 220);
+        await page.waitForTimeout(400);
+      }
+    }
+    await press(slot, inReach ? 'a free time in the grid' : 'a free time in the grid (after one scroll of the panel)');
+    // 5. Unsaved picks → Save is pinned in reach.
     await press(page.getByRole('button', { name: /Save availability/i }), '"Save availability" button');
     await expect(page.getByText(/Availability saved/i)).toBeVisible({ timeout: 15_000 });
+
+    // 6. Nothing above may ever scroll the thread column itself: it clips its
+    //    overflow, so a scrolled column slides the header and the name away.
+    const columnScroll = await page.locator('[data-scheduler-panel]').evaluate(el => (el.parentElement as HTMLElement).scrollTop);
+    if (columnScroll !== 0) {
+      console.log(`  ${size}  MISSED  thread column scrolled by ${columnScroll}px`);
+      problems.push(`${size}: the thread column itself was scrolled by ${columnScroll}px (header pushed out of view)`);
+    }
 
     await page.screenshot({ path: `test-results/scheduler-fit-${size}-${engineLabel().replace(/[^a-z0-9]+/gi, '-')}.png` }).catch(() => {});
     await page.context().close().catch(() => {});
