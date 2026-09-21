@@ -231,7 +231,7 @@ router.put(
   '/answers',
   authenticate,
   onboardingAnswersLimiter,
-  validate(z.object({ body: draftSchema })),
+  validate(draftSchema),
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const userId = req.user!.userId;
@@ -251,7 +251,7 @@ router.post(
   '/answers/confirm',
   authenticate,
   onboardingConfirmLimiter,
-  validate(z.object({ body: confirmSchema })),
+  validate(confirmSchema),
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const userId = req.user!.userId;
@@ -289,7 +289,7 @@ router.post(
   '/tour',
   authenticate,
   onboardingAnswersLimiter,
-  validate(z.object({ body: tourSchema })),
+  validate(tourSchema),
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const userId = req.user!.userId;
