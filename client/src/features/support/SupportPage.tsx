@@ -5,7 +5,8 @@ import { Button } from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import Badge from '@/components/ui/Badge';
 import { useToastStore } from '@/stores/toastStore';
-import { HelpCircle, MessageSquare, Mail, ChevronRight, Clock, CheckCircle, Loader2 } from 'lucide-react';
+import { HelpCircle, MessageSquare, Mail, ChevronRight, Clock, CheckCircle, Loader2, Sparkles } from 'lucide-react';
+import HowRsnWorks from '@/features/onboarding/HowRsnWorks';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { E } from '@/realtime/entities';
@@ -32,6 +33,7 @@ export default function SupportPage() {
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
+  const [tourOpen, setTourOpen] = useState(false);
 
   const { data: myTickets } = useQuery({
     queryKey: ['my-support-tickets'],
@@ -66,6 +68,27 @@ export default function SupportPage() {
         <h1 className="text-2xl font-bold text-[#1a1a2e]">Support</h1>
         <p className="text-gray-500 text-sm mt-1">Get help and find answers</p>
       </div>
+
+      {/* The wizard, on demand. The deck asks for it to be "re-openable later
+          from Support", because it plays once at the end of onboarding and
+          people forget — or skip it and want it back. */}
+      <Card className="animate-fade-in-up">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-rsn-red" />
+            <div>
+              <h2 className="font-semibold text-[#1a1a2e]">How RSN works</h2>
+              <p className="text-sm text-gray-500">
+                A minute on suggestions, matches, meetings, circles and events.
+              </p>
+            </div>
+          </div>
+          <Button variant="secondary" onClick={() => setTourOpen(true)} className="min-h-[44px]">
+            Open the tour
+          </Button>
+        </div>
+      </Card>
+      <HowRsnWorks open={tourOpen} mode="replay" onFinish={() => setTourOpen(false)} />
 
       {/* FAQ Section */}
       <Card className="animate-fade-in-up">

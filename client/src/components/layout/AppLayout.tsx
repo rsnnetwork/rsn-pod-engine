@@ -13,6 +13,7 @@ import Avatar from '@/components/ui/Avatar';
 import Modal from '@/components/ui/Modal';
 import ToastContainer from '@/components/ui/Toast';
 import NotificationBell from '@/components/ui/NotificationBell';
+import OnboardingTour from '@/features/onboarding/OnboardingTour';
 import ChatQuickAccess from '@/components/ui/ChatQuickAccess';
 
 export default function AppLayout() {
@@ -285,6 +286,11 @@ export default function AppLayout() {
         <main className="flex-1 overflow-y-auto p-4 md:p-8 bg-white">
           <Outlet />
         </main>
+
+        {/* The wizard opens over whatever they landed on, once, for someone who
+            has just finished onboarding. It is owed by server state, so closing
+            the tab mid-tour brings it back and finishing it never repeats. */}
+        <OnboardingTour />
 
         {/* Mobile bottom nav — Messages added 7 Sep 2026 so DMs are reachable
             (and their unread count visible) without opening the hamburger. */}
