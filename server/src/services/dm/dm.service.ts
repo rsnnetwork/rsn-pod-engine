@@ -22,6 +22,7 @@
 //   - read_at is NULL until the recipient calls markRead.
 
 import { v4 as uuid } from 'uuid';
+import type { PoolClient } from 'pg';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import { AppError, NotFoundError } from '../../middleware/errors';
@@ -38,6 +39,15 @@ export interface DmConversation {
   createdAt: Date;
 }
 
+/** Who wrote this line: a member, or the product itself (21 Sep 2026). */
+export type DmMessageKind = 'user' | 'system';
+
+/** What a system card needs to draw itself, so the client never parses text. */
+export type DmSystemMeta =
+  | { type: 'availability_shared' }
+  | { type: 'meeting_proposal'; slots: string[] }
+  | { type: 'meeting_confirmed'; startAt: string; durationMin: number; meetingType: 'audio' | 'video'; joinPath: string };
+
 export interface DmMessage {
   id: string;
   conversationId: string;
@@ -45,6 +55,11 @@ export interface DmMessage {
   content: string;
   readAt: Date | null;
   createdAt: Date;
+  /** 'system' rows are drawn as a neutral card, the same for both people, not
+   *  as the triggering member's bubble. Absent on older cached clients, which
+   *  fall back to a normal bubble — so the content must still read well. */
+  kind?: DmMessageKind;
+  systemMeta?: DmSystemMeta | null;
   // Phase E: emoji reactions, aggregated per emoji type → list of reactor userIds.
   // Optional so callers that build a DmMessage from an INSERT result (which
   // can never have reactions yet) don't have to supply an empty record.
@@ -90,6 +105,8 @@ export interface ConversationSummary {
   lastMessage: string | null;
   lastMessageAt: Date | null;
   lastMessageFromMe: boolean;
+  /** 'system' → the inbox drops the "You: " prefix; the product wrote it. */
+  lastMessageKind: DmMessageKind;
   unreadCount: number;
 }
 
@@ -257,8 +274,32 @@ async function insertDirectMessage(
   toUserId: string,
   content: string | null,
   attachment: SendMessageAttachment | null,
+  opts: InsertMessageOpts = {},
 ): Promise<{ message: DmMessage; conversationId: string }> {
-  return transaction(async (client) => {
+  return transaction(client => insertDirectMessageOn(client, fromUserId, toUserId, content, attachment, opts));
+}
+
+export interface InsertMessageOpts {
+  kind?: DmMessageKind;
+  systemMeta?: DmSystemMeta | null;
+}
+
+/**
+ * The same insert, on a client the CALLER owns. Confirming a meeting writes the
+ * conversation row and its chat card in one transaction: either both land or
+ * neither does, so nobody can end up with a meeting nobody was told about.
+ * There is exactly one INSERT into direct_messages in this codebase, and it is
+ * here.
+ */
+export async function insertDirectMessageOn(
+  client: PoolClient,
+  fromUserId: string,
+  toUserId: string,
+  content: string | null,
+  attachment: SendMessageAttachment | null,
+  opts: InsertMessageOpts = {},
+): Promise<{ message: DmMessage; conversationId: string }> {
+  {
     const [orderedA, orderedB] = normalizePair(fromUserId, toUserId);
 
     // 7 Sep 2026 (Stefan's test): clear BOTH soft-delete columns, not just the
@@ -285,25 +326,28 @@ async function insertDirectMessage(
       content: string; read_at: Date | null; created_at: Date;
       attachment_url: string | null; attachment_type: string | null;
       attachment_meta: Record<string, any> | null;
+      kind: string | null; system_meta: DmSystemMeta | null;
     }>(
       `INSERT INTO direct_messages (
          id, conversation_id, from_user_id, content,
-         attachment_url, attachment_type, attachment_meta
+         attachment_url, attachment_type, attachment_meta, kind, system_meta
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING id, conversation_id, from_user_id, content, read_at, created_at,
-                 attachment_url, attachment_type, attachment_meta`,
+                 attachment_url, attachment_type, attachment_meta, kind, system_meta`,
       [
         uuid(), conversationId, fromUserId,
         hasText ? content : null,
         hasAttachment ? attachment!.url : null,
         hasAttachment ? attachment!.type : null,
         hasAttachment ? (attachment!.meta ?? null) : null,
+        opts.kind ?? 'user',
+        opts.systemMeta ? JSON.stringify(opts.systemMeta) : null,
       ],
     );
 
     const m = msgResult.rows[0];
-    logger.info({ fromUserId, toUserId, conversationId, messageId: m.id, attachment: hasAttachment }, 'DM sent');
+    logger.info({ fromUserId, toUserId, conversationId, messageId: m.id, attachment: hasAttachment, kind: opts.kind ?? 'user' }, 'DM sent');
 
     return {
       conversationId,
@@ -317,9 +361,11 @@ async function insertDirectMessage(
         attachmentUrl: m.attachment_url,
         attachmentType: m.attachment_type,
         attachmentMeta: m.attachment_meta,
+        kind: (m.kind ?? 'user') as DmMessageKind,
+        systemMeta: (m.system_meta ?? null) as DmSystemMeta | null,
       },
     };
-  });
+  }
 }
 
 /**
@@ -386,6 +432,7 @@ export async function listConversations(
     last_message_at: Date | null;
     last_message_from: string | null;
     last_attachment_type: string | null;
+    last_message_kind: string | null;
     unread_count: string;
   }>(
     // Feature 19 (13 May spec) — also surface the last message's attachment
@@ -408,11 +455,12 @@ export async function listConversations(
         c.last_message_at,
         last_msg.from_user_id AS last_message_from,
         last_msg.attachment_type AS last_attachment_type,
+        last_msg.kind AS last_message_kind,
         COALESCE(unread.cnt, '0')::text AS unread_count
      FROM dm_conversations c
      JOIN users u ON u.id = (CASE WHEN c.user_a_id = $1 THEN c.user_b_id ELSE c.user_a_id END)
      LEFT JOIN LATERAL (
-       SELECT content, from_user_id, attachment_type
+       SELECT content, from_user_id, attachment_type, kind
        FROM direct_messages
        WHERE conversation_id = c.id
        ORDER BY created_at DESC
@@ -455,7 +503,10 @@ export async function listConversations(
         otherBio: r.other_bio,
         lastMessage: previewText,
         lastMessageAt: r.last_message_at,
-        lastMessageFromMe: r.last_message_from === userId,
+        // A system card was not written BY anyone, so the inbox never says
+        // "You: you are both free…" — see the preview in MessagesPage.
+        lastMessageFromMe: r.last_message_kind !== 'system' && r.last_message_from === userId,
+        lastMessageKind: (r.last_message_kind ?? 'user') as DmMessageKind,
         unreadCount: parseInt(r.unread_count, 10),
       };
     }),
@@ -514,11 +565,14 @@ export async function listMessages(
     attachment_url: string | null;
     attachment_type: string | null;
     attachment_meta: Record<string, any> | null;
+    kind: string | null;
+    system_meta: DmSystemMeta | null;
   }>(
     `SELECT
         m.id, m.conversation_id, m.from_user_id,
         m.content, m.read_at, m.created_at,
         m.attachment_url, m.attachment_type, m.attachment_meta,
+        m.kind, m.system_meta,
         COALESCE(r.reactions, '{}'::jsonb) AS reactions
      FROM direct_messages m
      LEFT JOIN LATERAL (
@@ -548,6 +602,8 @@ export async function listMessages(
       attachmentUrl: r.attachment_url,
       attachmentType: r.attachment_type,
       attachmentMeta: r.attachment_meta,
+      kind: (r.kind ?? 'user') as DmMessageKind,
+      systemMeta: r.system_meta ?? null,
     })),
     total,
   };

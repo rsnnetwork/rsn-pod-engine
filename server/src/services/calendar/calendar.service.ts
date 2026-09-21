@@ -16,6 +16,12 @@ interface CalendarEventData {
   /** Invitees — emitting ATTENDEE lines makes Gmail/Outlook render this as a
    *  real invite with RSVP, not just an "add to calendar" file. */
   attendees?: Array<{ name?: string; email: string }>;
+  /** Stable identity for this meeting across every copy of the file (both
+   *  emails and the in-app download). A random UID per generation made each
+   *  copy a NEW event, so accepting the invite and then pressing "Add to
+   *  calendar" left two entries, and a later reschedule could never update
+   *  the first. Pass something derived from the meeting itself. */
+  uid?: string;
 }
 
 /**
@@ -25,7 +31,7 @@ export function generateIcsContent(data: CalendarEventData): string {
   const start = formatIcsDate(data.startTime);
   const end = formatIcsDate(new Date(data.startTime.getTime() + data.durationMinutes * 60 * 1000));
   const now = formatIcsDate(new Date());
-  const uid = `${uuid()}@rsn.network`;
+  const uid = `${data.uid ?? uuid()}@rsn.network`;
 
   const lines = [
     'BEGIN:VCALENDAR',

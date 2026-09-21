@@ -213,7 +213,7 @@ const OVERLAP_PREVIEW = 8;
 // on any outside click) — kept per conversation until saved or the page goes.
 const drafts = new Map<string, { staged: Set<string> | null; duration: string }>();
 
-export default function MeetingScheduler({ conversationId }: { conversationId: string }) {
+export default function MeetingScheduler({ conversationId, onClose }: { conversationId: string; onClose?: () => void }) {
   const { addToast } = useToastStore();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -391,11 +391,16 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
         windows: [...mine],
       });
       await queryClient.invalidateQueries({ queryKey: ['meetingScheduling', conversationId] });
+      // Saving now SENDS: the thread gets a line either way, so the partner is
+      // told instead of both sides waiting for the other to do something
+      // (19 Sep: "we both have saved our availability?" / "I have no clue!!!").
+      await queryClient.invalidateQueries({ queryKey: ['dm-messages', conversationId] });
+      await queryClient.invalidateQueries({ queryKey: ['dm-conversations'] });
       setStaged(null); // re-sync from server
       drafts.delete(conversationId);
-      addToast('Availability saved — they\'ll see when you both can.', 'success');
+      addToast('Sent — they can see when you are free.', 'success');
     } catch {
-      addToast('Could not save availability — try again.', 'error');
+      addToast('Could not save your times — try again.', 'error');
     } finally {
       setSaving(false);
     }
@@ -728,13 +733,30 @@ export default function MeetingScheduler({ conversationId }: { conversationId: s
         }`}
       >
         <p className="text-[11px] text-gray-400">
-          Save, then confirm a green time.
+          {dirty
+            ? 'Sending tells them when you are free.'
+            : savedOverlap.length > 0
+              ? 'Pick a green time at the top to confirm it.'
+              : 'Tap the times that suit you, then send.'}
         </p>
-        {dirty && (
-          <Button size="sm" onClick={save} disabled={saving} className="min-h-[44px]">
-            {saving ? 'Saving…' : 'Save availability'}
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {/* An explicit way out. Before this the only exits were a tap outside
+              or Escape, so the panel read as a trap (19 Sep). */}
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="min-h-[44px] rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-600 hover:bg-gray-50"
+            >
+              {dirty ? 'Close' : 'Done'}
+            </button>
+          )}
+          {dirty && (
+            <Button size="sm" onClick={save} disabled={saving} className="min-h-[44px]">
+              {saving ? 'Sending…' : 'Save and send availability'}
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   );

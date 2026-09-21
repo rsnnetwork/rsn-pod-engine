@@ -12,6 +12,7 @@ import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Send, Smile, SmilePlus, Trash2, MessageSquare, Image as ImageIcon, X, Mic, Square as StopSquare, CalendarClock, Flag, MoreVertical, Video, Phone, Ban } from 'lucide-react';
 import MeetingScheduler, { ThreadMeetingBanner, isMeetingOver, localizeMeetingText } from './MeetingScheduler';
+import SystemMessageCard, { type DmMessageKind, type DmSystemMeta } from './SystemMessageCard';
 import { CallRequestModal, CallWaitingCard, IncomingCallCard } from './CallRequest';
 import Linkify from '@/components/ui/Linkify';
 import MeetingRequests, { FocusedMeetingRequest } from './MeetingRequests';
@@ -47,6 +48,7 @@ interface ConversationSummary {
   lastMessage: string | null;
   lastMessageAt: string | null;
   lastMessageFromMe: boolean;
+  lastMessageKind?: DmMessageKind;
   unreadCount: number;
 }
 
@@ -57,6 +59,11 @@ interface DmMessage {
   content: string;
   readAt: string | null;
   createdAt: string;
+  /** A line the product wrote, not a person: drawn as one neutral card both
+   *  people see the same way. Absent on rows written before 21 Sep 2026, which
+   *  fall back to an ordinary bubble — their text still reads correctly. */
+  kind?: DmMessageKind;
+  systemMeta?: DmSystemMeta | null;
   // Phase E — server returns aggregated reactions per emoji type
   reactions?: Record<string, string[]>;
   // Feature 19 + 20 (13 May spec) — Cloudinary image / audio attachment.
@@ -140,8 +147,12 @@ function clusterMessages(messages: DmMessage[]): MessageCluster[] {
     const last = clusters[clusters.length - 1];
     const lastMsg = last?.messages[last.messages.length - 1];
     const gap = lastMsg ? new Date(msg.createdAt).getTime() - new Date(lastMsg.createdAt).getTime() : Infinity;
-    if (last && last.senderId === msg.fromUserId && gap < CLUSTER_GAP_MS) {
-      last.messages.push(msg);
+    // A system card is never folded into someone's run of messages: it belongs
+    // to the conversation, not to whoever's action triggered it.
+    const joins = last && last.senderId === msg.fromUserId && gap < CLUSTER_GAP_MS
+      && msg.kind !== 'system' && lastMsg?.kind !== 'system';
+    if (joins) {
+      last!.messages.push(msg);
     } else {
       clusters.push({ senderId: msg.fromUserId, messages: [msg] });
     }
@@ -512,6 +523,7 @@ export default function MessagesPage() {
     queryFn: () => api.get(`/dm/conversations/${activeId}/scheduling`).then(r => r.data.data as {
       schedulingUpdated?: boolean;
       callsUnlocked?: boolean;
+      overlap?: string[];
       confirmed?: { type?: 'audio' | 'video' | null; startAt?: string | null; durationMin?: number | null } | null;
     }),
     enabled: !!activeId,
@@ -526,6 +538,25 @@ export default function MessagesPage() {
   // A scheduled meeting whose window has ended behaves like an instant call
   // ("Call now") rather than "Join" (Ali, 8 Sep 2026).
   const confirmedMeetingOver = isMeetingOver(scheduling?.confirmed?.startAt, scheduling?.confirmed?.durationMin);
+
+  // The confirmed card in the thread offers the same universal .ics the
+  // scheduler's banner does (Stefan, 9 Sep: not a Google-only link).
+  const downloadMeetingIcs = async () => {
+    if (!activeId) return;
+    try {
+      const res = await api.get(`/dm/conversations/${activeId}/meeting.ics`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'text/calendar' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'rsn-meeting.ics';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      addToast('Could not build the calendar file — try again.', 'error');
+    }
+  };
 
   // A system line in the thread gets its own action button (Ali, 8 Sep 2026):
   //  - a SCHEDULED meeting ("Meeting confirmed …") → "Join meeting" (enter the room)
@@ -984,7 +1015,7 @@ export default function MessagesPage() {
                     </p>
                   )}
                   <p className={`text-xs truncate ${c.unreadCount > 0 && !c.lastMessageFromMe ? 'font-semibold text-[#1a1a2e]' : 'text-gray-500'}`}>
-                    {c.lastMessageFromMe ? 'You: ' : ''}{c.lastMessage ? localizeMeetingText(c.lastMessage) : <em className="text-gray-300">No messages yet</em>}
+                    {c.lastMessageFromMe && c.lastMessageKind !== 'system' ? 'You: ' : ''}{c.lastMessage ? localizeMeetingText(c.lastMessage) : <em className="text-gray-300">No messages yet</em>}
                   </p>
                 </div>
                 {c.unreadCount > 0 && !c.lastMessageFromMe && (
@@ -1260,7 +1291,7 @@ export default function MessagesPage() {
                 laptop-height window (Stefan + Shradha, 19 Sep 2026). */}
             {activeConv && !callsUnlocked && schedulerOpen && (
               <div data-scheduler-panel className="flex min-h-0 flex-col">
-                <MeetingScheduler conversationId={activeConv.conversationId} />
+                <MeetingScheduler conversationId={activeConv.conversationId} onClose={() => setSchedulerOpen(false)} />
               </div>
             )}
 
@@ -1296,6 +1327,27 @@ export default function MessagesPage() {
                           </span>
                         </div>,
                       );
+                    }
+
+                    // A card the product wrote: one neutral block, identical
+                    // for both people, outside the bubble machinery entirely.
+                    if (cluster.messages[0].kind === 'system') {
+                      const m = cluster.messages[0];
+                      elements.push(
+                        <div key={m.id} data-message-id={m.id}>
+                          <SystemMessageCard
+                            content={localizeMeetingText(m.content)}
+                            meta={m.systemMeta}
+                            liveSlots={(scheduling?.overlap ?? []).filter(k => new Date(k).getTime() > Date.now())}
+                            meetingConfirmed={!!scheduling?.confirmed}
+                            onOpenScheduler={() => setSchedulerOpen(true)}
+                            onPickSlot={() => setSchedulerOpen(true)}
+                            onAddToCalendar={m.systemMeta?.type === 'meeting_confirmed' ? downloadMeetingIcs : undefined}
+                          />
+                        </div>,
+                      );
+                      prevClusterDate = lastDate;
+                      return;
                     }
 
                     const fromMe = cluster.senderId === myUserId;

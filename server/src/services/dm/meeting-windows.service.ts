@@ -193,6 +193,100 @@ function buildScheduling(
   };
 }
 
+// ── System messages in the thread ────────────────────────────────────────────
+
+/** One proposal card per conversation per 10 minutes, however often they save. */
+const PROPOSAL_COOLDOWN_MS = 10 * 60 * 1000;
+
+/** A meeting stops standing 30 minutes after it should have ended. */
+export function isMeetingOver(startAt: Date | null, durationMin: number | null, now = new Date()): boolean {
+  if (!startAt) return false;
+  return now.getTime() > startAt.getTime() + (durationMin ?? 30) * 60_000 + 30 * 60_000;
+}
+
+/** One stable calendar identity per meeting, shared by every copy of the file. */
+export function meetingUid(conversationId: string, startAt: Date): string {
+  return `meeting-${conversationId}-${startAt.toISOString().replace(/[-:]/g, '').replace('.000Z', 'Z')}`;
+}
+
+/** Has this time already gone? A daypart key counts as past after its day. */
+export function isPastKey(key: string, now = new Date()): boolean {
+  if (isSlotKey(key)) return new Date(key).getTime() < now.getTime();
+  const m = WINDOW_RE.exec(key);
+  if (!m) return false;
+  const [, y, mo, d] = m;
+  return Date.UTC(Number(y), Number(mo) - 1, Number(d)) + 86_400_000 < now.getTime();
+}
+
+/** Times BOTH sides still have, sorted, past ones dropped. */
+function futureOverlap(rows: Array<{ user_id: string; window_key: string }>, userId: string): string[] {
+  const mine = new Set(rows.filter(r => r.user_id === userId).map(r => r.window_key));
+  return rows
+    .filter(r => r.user_id !== userId && mine.has(r.window_key) && !isPastKey(r.window_key))
+    .map(r => r.window_key)
+    .sort();
+}
+
+/** Someone who blocked you should never receive a meeting card from you. */
+async function assertNotBlocked(conv: ConversationRow, userId: string): Promise<void> {
+  const partnerId = conv.user_a_id === userId ? conv.user_b_id : conv.user_a_id;
+  const blockService = await import('../block/block.service');
+  if (await blockService.areBlocked(userId, partnerId)) {
+    throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'You can no longer arrange a meeting with this person');
+  }
+}
+
+/**
+ * Put a freshly written system card on both screens, and optionally ring the
+ * partner. Every step is separately best-effort: the row is already committed,
+ * and a socket or bell hiccup must never look like the action failed.
+ */
+async function announce(
+  conversationId: string,
+  userId: string,
+  partnerId: string,
+  posted: { sent: { message: unknown; conversationId: string } } | null,
+  bell: { type: string; title: string; body: string } | null,
+): Promise<void> {
+  if (posted) {
+    try {
+      const { io } = await import('../../index');
+      const { broadcastDmMessage } = await import('../orchestration/handlers/dm-handlers');
+      await broadcastDmMessage(io, userId, partnerId, posted.sent.conversationId, posted.sent.message as never, { notify: false });
+    } catch (err) {
+      logger.warn({ err, conversationId }, 'system card broadcast failed (card itself is stored)');
+    }
+  }
+  if (bell) {
+    try {
+      const inserted = await query<{ id: string; created_at: Date }>(
+        `INSERT INTO notifications (id, user_id, type, title, body, link)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5) RETURNING id, created_at`,
+        [partnerId, bell.type, bell.title, bell.body, `/messages/${conversationId}`],
+      );
+      const { io } = await import('../../index');
+      io.to(`user:${partnerId}`).emit('notification:new', {
+        id: inserted.rows[0].id, type: bell.type, title: bell.title, body: bell.body,
+        link: `/messages/${conversationId}`, isRead: false, createdAt: inserted.rows[0].created_at,
+      });
+    } catch (err) {
+      logger.warn({ err, conversationId }, 'meeting bell failed (non-fatal)');
+    }
+  }
+  // BOTH sides: my own other tabs need this as much as the partner does.
+  try {
+    const { io } = await import('../../index');
+    const { emitEntities } = await import('../../realtime/emit');
+    const { E } = await import('../../realtime/entities');
+    await emitEntities(io, [userId, partnerId], [
+      E.dmConversation(conversationId), E.userDms(userId), E.userDms(partnerId),
+    ]);
+    if (bell) await emitEntities(io, [partnerId], [E.userNotifications(partnerId)]);
+  } catch (err) {
+    logger.warn({ err, conversationId }, 'scheduling entity emit failed (non-fatal)');
+  }
+}
+
 // ── Public API ───────────────────────────────────────────────────────────────
 
 export async function getScheduling(conversationId: string, userId: string): Promise<ConversationScheduling> {
@@ -214,30 +308,66 @@ export async function setAvailability(
   windows: string[],
 ): Promise<ConversationScheduling> {
   const conv = await requireParticipant(conversationId, userId);
+  await assertNotBlocked(conv, userId);
   const unique = [...new Set(windows)];
   // 30-min slots over a week are many more than 7×3 day-parts.
   if (unique.length > 200) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Too many times selected (max 200)');
   }
+  // Times that have already passed are DROPPED, not rejected. The client
+  // re-sends every saved time on each save and cannot untick a past one, so
+  // rejecting the payload meant that once your earliest saved time went by,
+  // saving failed for good — "Could not save availability" with no way out.
+  // Come back the next day and the whole panel was dead (19 Sep, latent).
+  const kept: string[] = [];
   for (const w of unique) {
+    if (isPastKey(w)) continue;
     if (!isValidWindowKey(w)) {
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, `Invalid or out-of-range window: ${w}`);
     }
+    kept.push(w);
   }
 
   const iAmA = conv.user_a_id === userId;
+  const partnerId = iAmA ? conv.user_b_id : conv.user_a_id;
   const stampCol = iAmA ? 'avail_updated_at_a' : 'avail_updated_at_b';
+  const sharedCol = iAmA ? 'avail_shared_at_a' : 'avail_shared_at_b';
 
-  await transaction(async (client) => {
+  // One transaction, conversation row locked: two people pressing Save at the
+  // same moment must not both decide they were the one who created the overlap
+  // and post two proposal cards.
+  const posted = await transaction(async (client) => {
+    const locked = await client.query<{
+      avail_shared_at_a: Date | null; avail_shared_at_b: Date | null;
+      meeting_proposed_key: string | null; meeting_proposed_at: Date | null;
+      meeting_confirmed_window: string | null;
+    }>(
+      `SELECT avail_shared_at_a, avail_shared_at_b, meeting_proposed_key, meeting_proposed_at,
+              meeting_confirmed_window
+       FROM dm_conversations WHERE id = $1 FOR UPDATE`,
+      [conversationId],
+    );
+    const row = locked.rows[0];
+
+    const before = await client.query<{ user_id: string; window_key: string }>(
+      `SELECT user_id, window_key FROM meeting_availability WHERE conversation_id = $1`,
+      [conversationId],
+    );
+    const hadOverlap = futureOverlap(before.rows, userId).length > 0;
+    const iHadSlots = before.rows.some(r => r.user_id === userId && !isPastKey(r.window_key));
+
+    // Prune everyone's expired rows while we are here, so the table does not
+    // grow a tail of times nobody can pick any more.
     await client.query(
       `DELETE FROM meeting_availability WHERE conversation_id = $1 AND user_id = $2`,
       [conversationId, userId],
     );
-    for (const w of unique) {
+    if (kept.length) {
       await client.query(
         `INSERT INTO meeting_availability (conversation_id, user_id, window_key)
-         VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
-        [conversationId, userId, w],
+         SELECT $1, $2, k FROM unnest($3::text[]) AS k
+         ON CONFLICT DO NOTHING`,
+        [conversationId, userId, kept],
       );
     }
     // Stamp WHEN I changed my availability so the partner's dot can tell it's
@@ -246,20 +376,64 @@ export async function setAvailability(
       `UPDATE dm_conversations SET ${stampCol} = NOW() WHERE id = $1`,
       [conversationId],
     );
+
+    const after = await client.query<{ user_id: string; window_key: string }>(
+      `SELECT user_id, window_key FROM meeting_availability WHERE conversation_id = $1`,
+      [conversationId],
+    );
+    const overlapNow = futureOverlap(after.rows, userId);
+
+    // Nothing is said once a meeting is already set: the thread would be
+    // telling people to pick a time they have already agreed.
+    if (row?.meeting_confirmed_window) return null;
+
+    // The overlap just came into existence — that is the moment worth a card,
+    // and it is usually the SECOND person's own Save that creates it.
+    if (overlapNow.length > 0 && !hadOverlap) {
+      const key = overlapNow[0];
+      const cooled = !row?.meeting_proposed_at
+        || Date.now() - new Date(row.meeting_proposed_at).getTime() > PROPOSAL_COOLDOWN_MS;
+      if (row?.meeting_proposed_key !== key && cooled) {
+        await client.query(
+          `UPDATE dm_conversations SET meeting_proposed_key = $2, meeting_proposed_at = NOW() WHERE id = $1`,
+          [conversationId, key],
+        );
+        const shown = overlapNow.slice(0, 3);
+        const content = `You are both free: ${shown.map(k => windowLabel(k)).join(', ')}. Pick one to confirm.`;
+        const sent = await dmService.insertDirectMessageOn(
+          client, userId, partnerId, content, null,
+          { kind: 'system', systemMeta: { type: 'meeting_proposal', slots: shown } },
+        );
+        return { type: 'meeting_proposal' as const, sent };
+      }
+      return null;
+    }
+
+    // First time this side has shared anything: tell the other person there is
+    // something to match against, once per side, ever.
+    const alreadyShared = iAmA ? row?.avail_shared_at_a : row?.avail_shared_at_b;
+    if (kept.length > 0 && !iHadSlots && !alreadyShared && overlapNow.length === 0) {
+      await client.query(
+        `UPDATE dm_conversations SET ${sharedCol} = NOW() WHERE id = $1`,
+        [conversationId],
+      );
+      const me = await client.query<{ display_name: string | null }>(
+        `SELECT display_name FROM users WHERE id = $1`, [userId],
+      );
+      const name = me.rows[0]?.display_name || 'They';
+      const content = `${name} shared times they can meet. Add yours to find a match.`;
+      const sent = await dmService.insertDirectMessageOn(
+        client, userId, partnerId, content, null,
+        { kind: 'system', systemMeta: { type: 'availability_shared' } },
+      );
+      return { type: 'availability_shared' as const, sent };
+    }
+    return null;
   });
 
-  // Signal the partner so their calendar-icon dot lights up live (and the
-  // scheduler panel, if open, shows my new picks). The dm-conversation entity
-  // is what the client's scheduling query listens on.
-  const partnerId = iAmA ? conv.user_b_id : conv.user_a_id;
-  try {
-    const { io } = await import('../../index');
-    const { emitEntities } = await import('../../realtime/emit');
-    const { E } = await import('../../realtime/entities');
-    await emitEntities(io, [partnerId], [E.dmConversation(conversationId)]);
-  } catch (err) {
-    logger.warn({ err, conversationId }, 'availability-change signal failed (non-fatal)');
-  }
+  await announce(conversationId, userId, partnerId, posted, posted?.type === 'meeting_proposal'
+    ? { type: 'meeting_proposed', title: 'You can both meet', body: 'Pick a time to confirm your meeting.' }
+    : null);
 
   const conv2 = await requireParticipant(conversationId, userId);
   const rows = await query<{ user_id: string; window_key: string }>(
@@ -292,6 +466,7 @@ export async function confirmWindow(
   opts: { startAt?: string | null; durationMin?: number | null; type?: 'audio' | 'video' | null } = {},
 ): Promise<ConversationScheduling> {
   const conv = await requireParticipant(conversationId, userId);
+  await assertNotBlocked(conv, userId);
   if (!isValidWindowKey(windowKey)) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Invalid or out-of-range window');
   }
@@ -339,14 +514,6 @@ export async function confirmWindow(
     ? (opts.type === 'audio' ? 'audio' : 'video')
     : null;
 
-  await query(
-    `UPDATE dm_conversations
-     SET meeting_confirmed_window = $2, meeting_confirmed_by = $3, meeting_confirmed_at = NOW(),
-         meeting_start_at = $4, meeting_duration_min = $5, meeting_type = $6
-     WHERE id = $1`,
-    [conversationId, windowKey, userId, startAt, durationMin, meetingType],
-  );
-
   const partnerId = conv.user_a_id === userId ? conv.user_b_id : conv.user_a_id;
   const people = await query<{ id: string; display_name: string | null; email: string | null; timezone: string | null }>(
     `SELECT id, display_name, email, timezone FROM users WHERE id = ANY($1)`,
@@ -357,47 +524,68 @@ export async function confirmWindow(
   // Bell text is per-reader, so use the partner's own timezone when we know it.
   const label = windowLabel(windowKey, byId.get(partnerId)?.timezone) + lengthNote;
   // The thread line is one shared text: for a slot it carries the instant
-  // itself and each client renders it in its own local time.
+  // itself and each client renders it in its own local time. The wording is
+  // kept as it was, because cached clients and the inbox preview match on it.
   const threadLine = isSlotKey(windowKey)
     ? `📅 Meeting confirmed: ${windowKey}${lengthNote}`
     : `📅 Meeting confirmed: ${windowLabel(windowKey)}`;
+  const joinPath = `/meet/${conversationId}?scheduled=1&kind=${meetingType ?? 'video'}`;
 
-  // The confirmation lives in the thread itself. sendMessage only PERSISTS the
-  // message — the realtime fan-out (partner's open thread + both inboxes) comes
-  // from broadcastDmMessage, notify:false because the meeting_confirmed bell
-  // below is the notification. 7 Sep 2026: pre-fix this called sendMessage alone
-  // and the confirmation never reached the partner's screen without a refresh.
-  try {
-    const sent = await dmService.sendMessage(userId, partnerId, threadLine);
-    const { io } = await import('../../index');
-    const { broadcastDmMessage } = await import('../orchestration/handlers/dm-handlers');
-    await broadcastDmMessage(io, userId, partnerId, sent.conversationId, sent.message, { notify: false });
-  } catch (err) {
-    logger.warn({ err, conversationId }, 'Confirmation message failed (confirmation itself stored)');
-  }
-
-  try {
-    const inserted = await query<{ id: string; created_at: Date }>(
-      `INSERT INTO notifications (id, user_id, type, title, body, link)
-       VALUES (gen_random_uuid(), $1, 'meeting_confirmed', $2, $3, '/messages')
-       RETURNING id, created_at`,
-      [partnerId, 'Meeting time confirmed', label],
+  // One transaction: the meeting and the card that tells both people about it
+  // land together or not at all. The row is locked first, so a double press —
+  // or both people confirming at the same moment — cannot produce two meetings,
+  // two cards, two bells and four emails.
+  const outcome = await transaction(async (client) => {
+    const locked = await client.query<{
+      meeting_confirmed_window: string | null; meeting_start_at: Date | null; meeting_duration_min: number | null;
+    }>(
+      `SELECT meeting_confirmed_window, meeting_start_at, meeting_duration_min
+       FROM dm_conversations WHERE id = $1 FOR UPDATE`,
+      [conversationId],
     );
-    try {
-      const { io } = await import('../../index');
-      io.to(`user:${partnerId}`).emit('notification:new', {
-        id: inserted.rows[0].id,
-        type: 'meeting_confirmed',
-        title: 'Meeting time confirmed',
-        body: label,
-        link: '/messages',
-        isRead: false,
-        createdAt: inserted.rows[0].created_at,
-      });
-    } catch { /* socket push non-fatal */ }
-  } catch (err) {
-    logger.warn({ err, conversationId }, 'Meeting-confirmed notification failed (non-fatal)');
+    const cur = locked.rows[0];
+    if (cur?.meeting_confirmed_window) {
+      const over = isMeetingOver(cur.meeting_start_at, cur.meeting_duration_min);
+      // Pressing Confirm twice, or the partner's press landing first: this is
+      // the same meeting, so say yes and do nothing again.
+      if (cur.meeting_confirmed_window === windowKey && !over) return { already: true as const };
+      // A DIFFERENT time while one still stands is a real conflict — telling
+      // them beats silently moving a meeting the other person is counting on.
+      if (!over) {
+        throw new AppError(409, ErrorCodes.VALIDATION_ERROR,
+          `A meeting is already set for ${windowLabel(cur.meeting_confirmed_window, byId.get(userId)?.timezone)}`);
+      }
+    }
+
+    await client.query(
+      `UPDATE dm_conversations
+       SET meeting_confirmed_window = $2, meeting_confirmed_by = $3, meeting_confirmed_at = NOW(),
+           meeting_start_at = $4, meeting_duration_min = $5, meeting_type = $6,
+           meeting_proposed_key = NULL
+       WHERE id = $1`,
+      [conversationId, windowKey, userId, startAt, durationMin, meetingType],
+    );
+
+    const sent = await dmService.insertDirectMessageOn(
+      client, userId, partnerId, threadLine, null,
+      {
+        kind: 'system',
+        systemMeta: startAt && durationMin
+          ? { type: 'meeting_confirmed', startAt: startAt.toISOString(), durationMin, meetingType: meetingType ?? 'video', joinPath }
+          : null,
+      },
+    );
+    return { already: false as const, sent };
+  });
+
+  if (outcome.already) {
+    const same = await requireParticipant(conversationId, userId);
+    return buildScheduling(same, userId, rows.rows);
   }
+
+  await announce(conversationId, userId, partnerId, outcome, {
+    type: 'meeting_confirmed', title: 'Meeting time confirmed', body: label,
+  });
 
   // W6: email BOTH people a real calendar invite (.ics + Google link) when an
   // exact time was set. Best-effort — never let an email hiccup fail the confirm.
@@ -418,6 +606,11 @@ export async function confirmWindow(
           description: `A 1:1 meeting arranged on RSN with ${other?.display_name || 'your match'}.`,
           startTime: startAt,
           durationMinutes: durationMin,
+          location: `${config.clientUrl}${joinPath}`,
+          // Same meeting, same identity, every copy: both emails and the
+          // in-app download. Otherwise accepting the invite and then pressing
+          // "Add to calendar" leaves two entries in the same calendar.
+          uid: meetingUid(conversationId, startAt),
           organizerName: confirmer?.display_name || 'RSN',
           organizerEmail: confirmer?.email || undefined,
           attendees: people.rows.filter(p => p.email).map(p => ({ name: p.display_name || undefined, email: p.email! })),
