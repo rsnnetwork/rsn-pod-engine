@@ -68,6 +68,12 @@ export const ROLE_TAXONOMY: RoleBucket[] = [
     // the sentence must not lose that to a later, weaker match.
     wants: /\b(owner|proprietor|owner[-\s]operator)s?\b|\b(run|runs|running|own|owns|owning|lead|leads|leading)\s+(?:\w+[\s-]){0,5}?(business|businesses|company|companies|firm|firms|shop|shops|agency|agencies|practice|practices)\b/,
   },
+  // 21 Sep 2026: "Event organisers & community builders" is one of the six
+  // kinds a member can ask for, and nothing here caught it — it fell through
+  // to loose word overlap on "event" and "community", which on a networking
+  // platform is nearly everyone. Sits BEFORE manager so "community manager"
+  // reads as a community builder rather than a generic manager.
+  { key: 'community', label: 'event organisers and community builders', is: /\b(community (manager|builder|lead|organi[sz]er)|event (organi[sz]er|host|producer)|organi[sz]er|meetup (host|organi[sz]er))s?\b/ },
   { key: 'manager', label: 'managers and leads', is: /\b(manager|director|head of|team lead|vp|vice president)s?\b/ },
   { key: 'student', label: 'students', is: /\b(student|intern|undergrad|graduate)s?\b/ },
   {

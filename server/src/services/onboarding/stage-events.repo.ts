@@ -34,7 +34,14 @@ export type StageEventStage =
   | 'chat_started'
   | 'confirmed'
   | 'fallback_form'
-  | 'extract_failed';
+  | 'extract_failed'
+  // The tick-box flow (migration 100, 21 Sep 2026). A stage name that is not
+  // in the CHECK constraint fails silently, because recording is
+  // fire-and-forget — so these two lists move together.
+  | 'answers_saved'
+  | 'tour_shown'
+  | 'tour_completed'
+  | 'tour_skipped';
 
 export interface StageEvent {
   id: string;
