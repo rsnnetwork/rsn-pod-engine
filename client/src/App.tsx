@@ -57,7 +57,7 @@ import BillingPage from '@/features/billing/BillingPage';
 import SupportPage from '@/features/support/SupportPage';
 import NotFoundPage from '@/features/misc/NotFoundPage';
 import RequestToJoinPage from '@/features/auth/RequestToJoinPage';
-import ChatbotOnboarding from '@/features/onboarding/ChatbotOnboarding';
+import OnboardingFlow from '@/features/onboarding/OnboardingFlow';
 import ToastContainer from '@/components/ui/Toast';
 import IncomingCallBanner from '@/components/ui/IncomingCallBanner';
 
@@ -252,7 +252,7 @@ export default function App() {
       {/* 7 Sep 2026: the toast container lives in AppLayout, which this full-screen
           route never mounts, so nothing said during onboarding ("Photo added.",
           the Google photo outcome) was ever visible. */}
-      <Route path="/onboarding" element={<ProtectedRoute><><ChatbotOnboarding /><ToastContainer /></></ProtectedRoute>} />
+      <Route path="/onboarding" element={<ProtectedRoute><><OnboardingFlow /><ToastContainer /></></ProtectedRoute>} />
       <Route path="/meet/:conversationId" element={<ProtectedRoute><MeetPage /></ProtectedRoute>} />
       <Route path="/session/:sessionId/live" element={<ProtectedRoute><SessionGuard><LiveSessionPage /></SessionGuard></ProtectedRoute>} />
       <Route path="/session/:sessionId/host" element={<ProtectedRoute><HostDashboardPage /></ProtectedRoute>} />
