@@ -245,6 +245,10 @@ export interface StoredAgentMatch {
   pokeSentByOwner: boolean | null;
 }
 
+/** How many in-progress introductions a search will show. Far above what
+ *  anyone has in flight, so "who did I ask?" is always answerable. */
+const IN_PROGRESS_LIMIT = 100;
+
 /**
  * The people one agent found, best first — the agent detail screen.
  *
@@ -257,34 +261,50 @@ export interface StoredAgentMatch {
  */
 export async function listMatches(agentId: string, limit = 25): Promise<StoredAgentMatch[]> {
   const r = await query<StoredAgentMatch>(
-    `SELECT m.candidate_user_id AS "candidateUserId", m.score, m.reason,
-            u.display_name AS "displayName", u.avatar_url AS "avatarUrl",
-            u.professional_role AS "professionalRole", u.job_title AS "jobTitle",
-            u.company,
-            p.status AS "pokeStatus",
-            CASE WHEN p.id IS NULL THEN NULL ELSE p.sender_id = a.user_id END AS "pokeSentByOwner"
-       FROM agent_matches m
-       JOIN matching_agents a ON a.id = m.agent_id
-       JOIN users u ON u.id = m.candidate_user_id
-       LEFT JOIN LATERAL (
-         SELECT pk.id, pk.status, pk.sender_id
-           FROM user_pokes pk
-          -- 8 Sep 2026 (Ali): "already asked" is PER-AGENT. Only a request sent
-          -- THROUGH this agent marks its matches as asked — a poke from another
-          -- agent (or a profile) leaves this agent's match fresh, matching the
-          -- per-agent count in countExpr.
-          WHERE pk.agent_id = a.id
-            AND ((pk.sender_id = a.user_id AND pk.recipient_id = m.candidate_user_id)
-             OR (pk.sender_id = m.candidate_user_id AND pk.recipient_id = a.user_id))
-          ORDER BY pk.created_at DESC
-          LIMIT 1
-       ) p ON TRUE
-      WHERE m.agent_id = $1
-        AND u.status = 'active'
-        AND (p.status IS NULL OR p.status <> 'declined')
-      ORDER BY (p.id IS NOT NULL), m.score DESC
-      LIMIT $2`,
-    [agentId, limit],
+    // 21 Sep 2026 (Shradha's deck, P1: "no indication of whom you already
+    // asked"). Asked people sorted LAST and then one LIMIT was applied to the
+    // whole list, so on any search holding as many un-asked people as the page
+    // shows, everyone you HAD asked fell off the end — and after the refetch
+    // that follows pressing the button, the person you just asked vanished
+    // from the search that found them. Her screenshot has exactly 25 rows.
+    //
+    // The two groups are now counted separately, so the ones in progress can
+    // never be squeezed out by the ones still to ask.
+    `WITH scored AS (
+       SELECT m.candidate_user_id AS "candidateUserId", m.score, m.reason,
+              u.display_name AS "displayName", u.avatar_url AS "avatarUrl",
+              u.professional_role AS "professionalRole", u.job_title AS "jobTitle",
+              u.company,
+              p.status AS "pokeStatus",
+              CASE WHEN p.id IS NULL THEN NULL ELSE p.sender_id = a.user_id END AS "pokeSentByOwner",
+              (p.id IS NOT NULL) AS asked,
+              row_number() OVER (PARTITION BY (p.id IS NOT NULL) ORDER BY m.score DESC) AS rn
+         FROM agent_matches m
+         JOIN matching_agents a ON a.id = m.agent_id
+         JOIN users u ON u.id = m.candidate_user_id
+         LEFT JOIN LATERAL (
+           SELECT pk.id, pk.status, pk.sender_id
+             FROM user_pokes pk
+            -- 8 Sep 2026 (Ali): "already asked" is PER-AGENT. Only a request sent
+            -- THROUGH this agent marks its matches as asked — a poke from another
+            -- agent (or a profile) leaves this agent's match fresh, matching the
+            -- per-agent count in countExpr.
+            WHERE pk.agent_id = a.id
+              AND ((pk.sender_id = a.user_id AND pk.recipient_id = m.candidate_user_id)
+               OR (pk.sender_id = m.candidate_user_id AND pk.recipient_id = a.user_id))
+            ORDER BY pk.created_at DESC
+            LIMIT 1
+         ) p ON TRUE
+        WHERE m.agent_id = $1
+          AND u.status = 'active'
+          AND (p.status IS NULL OR p.status <> 'declined')
+     )
+     SELECT "candidateUserId", score, reason, "displayName", "avatarUrl",
+            "professionalRole", "jobTitle", company, "pokeStatus", "pokeSentByOwner"
+       FROM scored
+      WHERE (NOT asked AND rn <= $2) OR (asked AND rn <= $3)
+      ORDER BY asked, score DESC`,
+    [agentId, limit, IN_PROGRESS_LIMIT],
   );
   return r.rows.map(row => ({ ...row, score: Number(row.score) }));
 }
