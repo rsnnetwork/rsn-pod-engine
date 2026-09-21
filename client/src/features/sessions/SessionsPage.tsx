@@ -54,10 +54,26 @@ export default function SessionsPage() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <div className="flex items-center justify-between animate-fade-in">
+      <div className="flex items-center justify-between gap-3 animate-fade-in">
         <h1 className="text-2xl font-bold text-[#1a1a2e]">Events</h1>
-        {canCreateEvent && (
+        {canCreateEvent ? (
           <Button onClick={() => navigate('/sessions/new')} className="btn-glow"><Plus className="h-4 w-4 mr-2" /> New Event</Button>
+        ) : (
+          // 21 Sep 2026 (Shradha's deck, P3): "users cannot create events" was
+          // reported as a fault. It is the rule, but the rule was invisible —
+          // the button simply was not there and nothing said why, which reads
+          // as something broken. Say who can, and how to become one.
+          <p className="max-w-[16rem] text-right text-xs text-gray-500">
+            Events are run by pod directors and hosts.{' '}
+            <button
+              type="button"
+              onClick={() => navigate('/pods')}
+              className="font-medium text-rsn-red underline underline-offset-2"
+            >
+              Start a pod
+            </button>{' '}
+            to run your own.
+          </p>
         )}
       </div>
 
@@ -74,8 +90,18 @@ export default function SessionsPage() {
         <EmptyState
           icon={<Calendar className="h-8 w-8" />}
           title={filter === 'all' ? 'No events yet' : `No ${filter} events`}
-          description={canCreateEvent && filter === 'all' ? 'Schedule an event to start connecting.' : 'No events match this filter.'}
-          action={canCreateEvent && filter === 'all' ? <Button onClick={() => navigate('/sessions/new')}>Schedule Event</Button> : undefined}
+          description={
+            filter !== 'all'
+              ? 'No events match this filter.'
+              : canCreateEvent
+                ? 'Schedule an event to start connecting.'
+                : 'Events are run by pod directors and hosts. Join a pod to be invited to theirs, or start your own.'
+          }
+          action={filter === 'all'
+            ? canCreateEvent
+              ? <Button onClick={() => navigate('/sessions/new')}>Schedule Event</Button>
+              : <Button onClick={() => navigate('/pods')}>Browse pods</Button>
+            : undefined}
         />
       ) : (
         <div className="grid gap-4 animate-fade-in-up">
