@@ -53,8 +53,15 @@ describe('Phase U — LiveKit canPublishAudio revocation', () => {
     it('swallows "not found" / Twirp code 5 — participant not in room is non-fatal', () => {
       const fnIdx = src.indexOf('setParticipantCanPublishAudio');
       const block = src.slice(fnIdx, fnIdx + 3000);
-      expect(block).toMatch(/code\s*===\s*5/);
-      expect(block).toMatch(/not\s+found/i);
+      // 21 Sep 2026: the four ways LiveKit says "there is no such room" now live
+      // in one reader, isRoomGone, because three call sites had drifted apart
+      // and the one that had not kept up threw on every empty lobby. The
+      // behaviour this pin guards is covered for real, against a mocked SDK, in
+      // services/video/livekit-close.test.ts.
+      expect(block).toMatch(/isRoomGone\(err\)/);
+      const helper = src.slice(0, src.indexOf('export class LiveKitProvider'));
+      expect(helper).toMatch(/code\s*===\s*5/);
+      expect(helper).toMatch(/not\s+found/i);
     });
   });
 

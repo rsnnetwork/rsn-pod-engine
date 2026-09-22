@@ -13,6 +13,24 @@ import { IVideoProvider } from './video.interface';
 import config from '../../config';
 import logger from '../../config/logger';
 
+/**
+ * LiveKit deletes a room the moment the last person leaves it, so "there is no
+ * such room" is the ordinary resting state of every lobby between events — not
+ * a fault. It says so in four different ways depending on the call and the SDK
+ * version: Twirp NotFound is code 5 or the string 'not_found', HTTP 404, and
+ * the message is either "not found" or "requested room does not exist". Read
+ * all of them, in one place, because missing one turns an empty room into a
+ * thrown error: that is how a lobby whose room had gone answered every sweep
+ * with a 404 for four days, four log lines every fifteen seconds (21 Sep 2026).
+ */
+export function isRoomGone(err: unknown): boolean {
+  const e = err as { message?: unknown; code?: unknown; status?: unknown } | null;
+  if (!e) return false;
+  if (e.code === 5 || e.code === 'not_found' || e.status === 404) return true;
+  const msg = String(e.message ?? '').toLowerCase();
+  return msg.includes('not found') || msg.includes('does not exist');
+}
+
 export class LiveKitProvider implements IVideoProvider {
   private roomService: RoomServiceClient;
   private apiKey: string;
@@ -70,10 +88,8 @@ export class LiveKitProvider implements IVideoProvider {
       await this.roomService.deleteRoom(roomId);
       logger.info({ roomId }, 'LiveKit room closed');
     } catch (err: any) {
-      const msg = String(err?.message || '').toLowerCase();
-      const code = err?.code;
-      // Twirp NotFound (code 5) OR legacy string patterns — room already auto-deleted by LiveKit
-      if (code === 5 || msg.includes('not found') || msg.includes('does not exist')) {
+      // Room already auto-deleted by LiveKit, or deleted explicitly before.
+      if (isRoomGone(err)) {
         logger.debug({ roomId }, 'LiveKit room already deleted (auto-cleanup or explicit delete)');
         return;
       }
@@ -155,7 +171,10 @@ export class LiveKitProvider implements IVideoProvider {
         isConnected: p.state === 1, // ACTIVE state
       }));
     } catch (err: any) {
-      if (err?.message?.includes('not found')) {
+      // No room means nobody in it. The sweep asks about every lobby it still
+      // holds, including ones LiveKit has long since cleaned up.
+      if (isRoomGone(err)) {
+        logger.debug({ roomId }, 'LiveKit room already gone — reading it as empty');
         return [];
       }
       logger.error({ err, roomId }, 'Failed to list participants');
@@ -218,13 +237,11 @@ export class LiveKitProvider implements IVideoProvider {
       );
       logger.info({ roomId, userId, canPublishAudio }, 'Phase U — LiveKit participant publish permission updated');
     } catch (err: any) {
-      const msg = String(err?.message || '').toLowerCase();
-      const code = err?.code;
-      // Twirp NotFound (code 5) OR legacy string patterns — participant
-      // is not in this room (left, disconnected, or never joined). The
-      // mute persists in DB and will apply when they re-issue a token
-      // (issueJoinToken consults host_muted on each new token).
-      if (code === 5 || msg.includes('not found') || msg.includes('does not exist')) {
+      // The participant is not in this room (left, disconnected, or never
+      // joined), or the room itself has gone. The mute persists in DB and will
+      // apply when they re-issue a token (issueJoinToken consults host_muted
+      // on each new token).
+      if (isRoomGone(err)) {
         logger.debug({ roomId, userId }, 'Phase U — participant not in room, skipping live permission update');
         return;
       }
