@@ -17,7 +17,12 @@ export type DmMessageKind = 'user' | 'system';
 export type DmSystemMeta =
   | { type: 'availability_shared' }
   | { type: 'meeting_proposal'; slots: string[] }
-  | { type: 'meeting_confirmed'; startAt: string; durationMin: number; meetingType: 'audio' | 'video'; joinPath: string };
+  | {
+      type: 'meeting_confirmed'; startAt: string; durationMin: number;
+      meetingType: 'audio' | 'video'; joinPath: string;
+      /** Set when this replaced a time that was already agreed. */
+      movedFrom?: string;
+    };
 
 /** One instant, in the reader's own timezone. */
 export function localWhen(iso: string): string {
@@ -63,8 +68,15 @@ export default function SystemMessageCard({
     const over = !!meetingOver || isMeetingOver(meta.startAt, meta.durationMin);
     return (
       <Shell tone="confirmed" icon={<CalendarCheck className="h-4 w-4 text-emerald-600" />}>
-        <p className="text-sm font-semibold text-emerald-800">Meeting confirmed</p>
+        <p className="text-sm font-semibold text-emerald-800">
+          {meta.movedFrom ? 'Meeting moved' : 'Meeting confirmed'}
+        </p>
         <p className="text-sm text-emerald-900">{localWhen(meta.startAt)}</p>
+        {meta.movedFrom && (
+          <p className="text-[11px] text-emerald-700 line-through decoration-emerald-400">
+            {localWhen(meta.movedFrom)}
+          </p>
+        )}
         <p className="text-[11px] text-emerald-700">
           {meta.durationMin} minutes · {meta.meetingType === 'audio' ? 'Audio call' : 'Video call'} · your local time
         </p>

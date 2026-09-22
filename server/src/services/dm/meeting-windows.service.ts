@@ -544,17 +544,19 @@ export async function confirmWindow(
       [conversationId],
     );
     const cur = locked.rows[0];
+    let movedFrom: string | null = null;
     if (cur?.meeting_confirmed_window) {
       const over = isMeetingOver(cur.meeting_start_at, cur.meeting_duration_min);
       // Pressing Confirm twice, or the partner's press landing first: this is
       // the same meeting, so say yes and do nothing again.
       if (cur.meeting_confirmed_window === windowKey && !over) return { already: true as const };
-      // A DIFFERENT time while one still stands is a real conflict — telling
-      // them beats silently moving a meeting the other person is counting on.
-      if (!over) {
-        throw new AppError(409, ErrorCodes.VALIDATION_ERROR,
-          `A meeting is already set for ${windowLabel(cur.meeting_confirmed_window, byId.get(userId)?.timezone)}`);
-      }
+      // A DIFFERENT time while one still stands is a MOVE. Refusing it looked
+      // safer, but there is no way to cancel a meeting, so refusing left a pair
+      // who needed Thursday instead of Tuesday with no way out at all. The row
+      // lock already settles two simultaneous presses; what was missing was
+      // telling the person counting on the old time that it changed, which the
+      // card and the bell now do.
+      if (!over) movedFrom = cur.meeting_start_at ? cur.meeting_start_at.toISOString() : cur.meeting_confirmed_window;
     }
 
     await client.query(
@@ -571,11 +573,15 @@ export async function confirmWindow(
       {
         kind: 'system',
         systemMeta: startAt && durationMin
-          ? { type: 'meeting_confirmed', startAt: startAt.toISOString(), durationMin, meetingType: meetingType ?? 'video', joinPath }
+          ? {
+              type: 'meeting_confirmed', startAt: startAt.toISOString(), durationMin,
+              meetingType: meetingType ?? 'video', joinPath,
+              ...(movedFrom ? { movedFrom } : {}),
+            }
           : null,
       },
     );
-    return { already: false as const, sent };
+    return { already: false as const, sent, movedFrom };
   });
 
   if (outcome.already) {
@@ -584,7 +590,11 @@ export async function confirmWindow(
   }
 
   await announce(conversationId, userId, partnerId, outcome, {
-    type: 'meeting_confirmed', title: 'Meeting time confirmed', body: label,
+    type: 'meeting_confirmed',
+    // The partner had a time in their calendar. A move must not arrive wearing
+    // the same words as the original.
+    title: outcome.movedFrom ? 'Meeting time changed' : 'Meeting time confirmed',
+    body: label,
   });
 
   // W6: email BOTH people a real calendar invite (.ics + Google link) when an

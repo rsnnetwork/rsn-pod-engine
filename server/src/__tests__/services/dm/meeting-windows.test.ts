@@ -494,7 +494,11 @@ describe('confirmWindow', () => {
     expect(sqls.some(s => /UPDATE dm_conversations\s+SET meeting_confirmed_window/.test(s))).toBe(false);
   });
 
-  it('refuses a DIFFERENT time while a meeting still stands, and says which', async () => {
+  // Refusing a different time looked like the careful choice, and it was the
+  // wrong one: nothing cancels a meeting, so a pair who needed Thursday instead
+  // of Tuesday had no way out at all. Moving it is allowed; what matters is
+  // that the person counting on the old time is told (21 Sep 2026).
+  it('moves the meeting to a DIFFERENT time, and says it moved', async () => {
     const standing = futureKey(2, 'evening');
     const other = futureKey(3, 'morning');
     const start = new Date(Date.now() + 2 * 86_400_000);
@@ -502,8 +506,20 @@ describe('confirmWindow', () => {
       [{ user_id: 'u-a', window_key: other }, { user_id: 'u-b', window_key: other }],
       { ...CONV, meeting_confirmed_window: standing, meeting_start_at: start, meeting_duration_min: 30 },
     );
-    await expect(confirmWindow('conv-1', 'u-a', other)).rejects.toMatchObject({ statusCode: 409 });
-    expect(mockInsertOn).not.toHaveBeenCalled();
+    const newStart = new Date(Date.now() + 3 * 86_400_000);
+    await confirmWindow('conv-1', 'u-a', other, { startAt: newStart.toISOString(), durationMin: 30 });
+    // The write happens (the mocked row is static, so read it off the UPDATE).
+    const upd = mockQuery.mock.calls.find(c => /UPDATE dm_conversations\s+SET meeting_confirmed_window/.test(c[0] as string));
+    expect(upd).toBeTruthy();
+    expect((upd![1] as unknown[])[1]).toBe(other);
+    // One card, carrying the time it replaced so the card can say so.
+    expect(mockInsertOn).toHaveBeenCalledTimes(1);
+    expect(cardMeta()).toMatchObject({ type: 'meeting_confirmed', movedFrom: start.toISOString() });
+    // And the bell does not arrive wearing the original's words.
+    const bell = mockQuery.mock.calls.find(c => /INSERT INTO notifications/.test(c[0] as string));
+    expect(bell).toBeTruthy(); // the partner is told
+    expect((bell![1] as unknown[])[0]).toBe('u-b');
+    expect((bell![1] as unknown[])[2]).toBe('Meeting time changed');
   });
 
   it('lets them pick again once the earlier meeting is over', async () => {
