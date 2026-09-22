@@ -90,3 +90,12 @@ services:
       # Tier-1 A3: session-scoped timeout registry feature flag. Default on.
       # - key: SESSION_TIMEOUT_REGISTRY_ENABLED
       #   value: "true"
+
+      # Ends events nobody ever ended. Off unless set. "report" logs exactly
+      # which events it would end and writes nothing — run that first and read
+      # the log before setting "end". ABANDONED_EVENT_AFTER_HOURS defaults to 4,
+      # which is longer than any event RSN runs.
+      # - key: ABANDONED_EVENT_REAPER
+      #   value: "report"
+      # - key: ABANDONED_EVENT_AFTER_HOURS
+      #   value: "4"

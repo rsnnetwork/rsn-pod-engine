@@ -9,6 +9,7 @@
 
 import { Server as SocketServer, Socket } from 'socket.io';
 import logger from '../../config/logger';
+import config from '../../config';
 import { SessionStatus } from '@rsn/shared';
 
 // Phase 5 (19 May 2026) — realtime architecture migration complete. The
@@ -263,6 +264,71 @@ export function initOrchestration(socketServer: SocketServer): void {
       logger.warn({ err }, 'Orphan-lobby reaper tick failed');
     }
   }, ORPHAN_REAPER_INTERVAL_MS);
+
+  // ── Abandoned-event reaper (22 Sep 2026) ──
+  //
+  // Nothing ends an event that the host simply walks away from. Shradha's
+  // 17 Sep "test" sat in round_transition for four days, and a second one in
+  // lobby_open for fourteen hours; between them they were the "requested room
+  // does not exist" line the sweep wrote every fifteen seconds.
+  //
+  // WHICH COLUMN. Postgres cannot answer "is anyone in this event right now" —
+  // heartbeats live in memory and Redis and deliberately never stamp the DB.
+  // `updated_at` is no good either: a trigger bumps it on any write at all,
+  // including the orphan-lobby reaper's own. `active_state_updated_at` is
+  // written by lifecycle transitions and nothing else, so it is the one honest
+  // "this event last did something" mark.
+  //
+  // WHY IT IS SAFE. Four hours is longer than any event RSN runs, the event
+  // must ALSO have been scheduled that long ago, and ending goes through
+  // completeSession, whose DB claim only matches an event still running — so
+  // two instances reaping at once end it once between them.
+  const ABANDONED_REAPER_INTERVAL_MS = 10 * 60 * 1000;
+  if (config.abandonedEventReaper !== 'off') {
+    setInterval(async () => {
+      try {
+        const { query } = await import('../../db');
+        const hours = String(config.abandonedEventAfterHours);
+        const stale = await query<{ id: string; title: string | null; status: string; last_sign: Date }>(
+          `SELECT id, title, status,
+                  COALESCE(active_state_updated_at, started_at, scheduled_at) AS last_sign
+             FROM sessions
+            WHERE status IN ('lobby_open', 'round_active', 'round_rating', 'round_transition')
+              AND COALESCE(active_state_updated_at, started_at, scheduled_at) < NOW() - ($1 || ' hours')::interval
+              AND scheduled_at < NOW() - ($1 || ' hours')::interval
+            ORDER BY last_sign
+            LIMIT 20`,
+          [hours],
+        );
+        if (stale.rows.length === 0) return;
+        for (const row of stale.rows) {
+          logger.warn({
+            sessionId: row.id, title: row.title, status: row.status,
+            lastSignOfLife: row.last_sign, afterHours: hours,
+            mode: config.abandonedEventReaper,
+          }, config.abandonedEventReaper === 'end'
+            ? 'Abandoned-event reaper: ending an event nobody ended'
+            : 'Abandoned-event reaper: WOULD end this event (report mode, nothing written)');
+        }
+        if (config.abandonedEventReaper !== 'end') return;
+        const { completeSession } = await import('./handlers/round-lifecycle');
+        const results = await Promise.allSettled(
+          stale.rows.map(row => completeSession(io, row.id)),
+        );
+        for (let i = 0; i < results.length; i++) {
+          const r = results[i];
+          if (r.status === 'rejected') {
+            logger.warn({ err: r.reason, sessionId: stale.rows[i].id },
+              'Abandoned-event reaper: could not end that one (will retry next tick)');
+          }
+        }
+      } catch (err) {
+        logger.warn({ err }, 'Abandoned-event reaper tick failed');
+      }
+    }, ABANDONED_REAPER_INTERVAL_MS);
+    logger.info({ mode: config.abandonedEventReaper, afterHours: config.abandonedEventAfterHours },
+      'Abandoned-event reaper started');
+  }
 
   // ── Register socket handlers ──
 

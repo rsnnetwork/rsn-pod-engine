@@ -95,6 +95,20 @@ export const config = {
   // Phase 5 — emit versioned state:snapshot to clients. Dark by default.
   snapshotEmitEnabled: process.env.SNAPSHOT_EMIT_ENABLED === 'true',
 
+  // An event nobody ever ended sits live for ever: Shradha's 17 Sep "test" had
+  // been in round_transition for four days. Three settings rather than a
+  // boolean, because ending live events automatically is worth watching before
+  // it is trusted:
+  //   off    — nothing runs (default)
+  //   report — log exactly which events it WOULD end, and end none
+  //   end    — end them
+  abandonedEventReaper: (['off', 'report', 'end'] as const)
+    .find(m => m === process.env.ABANDONED_EVENT_REAPER) ?? 'off',
+  // How long an event may show no sign of life before it counts as abandoned.
+  // Four hours is longer than any event RSN runs, and on 22 Sep it selected
+  // exactly the two known-stuck events on production and nothing else.
+  abandonedEventAfterHours: Number(process.env.ABANDONED_EVENT_AFTER_HOURS ?? 4),
+
   // Computed
   isDev: (process.env.NODE_ENV || 'development') === 'development',
   isProd: process.env.NODE_ENV === 'production',
