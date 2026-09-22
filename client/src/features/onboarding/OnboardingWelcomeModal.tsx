@@ -5,7 +5,7 @@ import Modal from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { useAuthStore } from '@/stores/authStore';
 import api from '@/lib/api';
-import HostPresence from './HostPresence';
+import SheepAvatar from '@/components/brand/SheepAvatar';
 
 // Beautiful first-nudge popup that INVITES (never forces) a new member into the
 // host chat. It pops once per SESSION on the dashboard / profile until onboarding
@@ -79,14 +79,14 @@ export default function OnboardingWelcomeModal() {
   return (
     <Modal open={open} onClose={dismiss} className="max-w-md">
       <div className="flex flex-col items-center gap-6 pt-4 text-center">
-        <HostPresence size={96} state="idle" />
+        <SheepAvatar pose="wave" size={96} />
         <div>
           <h2 className="font-display text-2xl font-semibold leading-snug text-[#1a1a2e]">
             Welcome to Reason, {firstName}.
           </h2>
           <p className="mx-auto mt-2 max-w-xs text-sm leading-relaxed text-gray-500">
-            One short chat sets up your matching profile so we can connect you with the right people.
-            It takes about two minutes.
+            Five quick questions set up your matching profile so we can connect you with the right
+            people. It takes about a minute.
           </p>
         </div>
 
@@ -105,7 +105,7 @@ export default function OnboardingWelcomeModal() {
                 value={linkedin}
                 onChange={(e) => onLinkedinChange(e.target.value)}
                 placeholder="your-name"
-                className="min-h-[44px] w-full bg-transparent text-[15px] text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none"
+                className="min-h-[44px] w-full min-w-0 truncate bg-transparent text-[15px] text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none"
               />
             </div>
           </div>
@@ -117,7 +117,7 @@ export default function OnboardingWelcomeModal() {
             isLoading={starting}
             className="min-h-[54px] w-full justify-center text-base font-semibold"
           >
-            Start the chat <ArrowRight className="ml-2 h-5 w-5" />
+            Get started <ArrowRight className="ml-2 h-5 w-5" />
           </Button>
           <button
             type="button"
