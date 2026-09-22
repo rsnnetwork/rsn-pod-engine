@@ -54,7 +54,12 @@ test.afterAll(async () => {
   await pool.end().catch(() => {});
 });
 
-test('A) already asked is per-agent — asked on one agent, fresh on another', async () => {
+// 22 Sep 2026: this proved the opposite until today. "Already asked" was
+// per-agent, and it could not be told the truth — only ONE pending request may
+// exist between two people (migration 047), so the second agent called the same
+// person a fresh match and offered a button that answered 409. What the card
+// said and what the server would do had come apart.
+test('A) already asked is per PERSON — asked once, and every search says so', async () => {
   test.setTimeout(90_000);
   const owner = await createTestUser('arb-owner');
   const cand = await createTestUser('arb-cand');
@@ -85,21 +90,34 @@ test('A) already asked is per-agent — asked on one agent, fresh on another', a
   const d1 = await apiAs(owner, 'GET', `/agents/${a1.id}`);
   const m1 = (d1.json.data.matches as any[]).find(m => m.candidateUserId === cand.id);
   expect(m1, 'candidate present on agent one').toBeTruthy();
-  expect(m1.pokeStatus, 'already asked on the agent it was asked through').toBe('pending');
+  expect(m1.pokeStatus, 'already asked on the search it was asked through').toBe('pending');
 
-  // Agent two: the SAME candidate is a fresh match (no poke via this agent).
+  // Agent two: the SAME person, and they still read as asked. They are still
+  // ON the search — only the way they are counted changes.
   const d2 = await apiAs(owner, 'GET', `/agents/${a2.id}`);
   const m2 = (d2.json.data.matches as any[]).find(m => m.candidateUserId === cand.id);
-  expect(m2, 'candidate present on agent two').toBeTruthy();
-  expect(m2.pokeStatus, 'NOT already asked on an agent it was never asked through').toBeNull();
+  expect(m2, 'candidate still present on agent two').toBeTruthy();
+  expect(m2.pokeStatus, 'and the other search says asked too — you cannot ask twice').toBe('pending');
 
-  // Card counts agree: agent one counts them as asked, agent two as outstanding.
+  // Card counts agree on both: asked, not outstanding.
   const agents = (await apiAs(owner, 'GET', '/agents')).json.data as any[];
   const card1 = agents.find(a => a.id === a1.id);
   const card2 = agents.find(a => a.id === a2.id);
   expect(card1.askedCount).toBeGreaterThanOrEqual(1);
-  expect(card2.matchCount).toBeGreaterThanOrEqual(1);
-  expect(card2.askedCount).toBe(0);
+  expect(card2.askedCount, 'the other search counts them as asked too').toBeGreaterThanOrEqual(1);
+  // Both searches legitimately hold other people, so the headline number is not
+  // zero. What matters is that THIS person is not in it on either of them.
+  const outstandingOn = (d: any) => (d.json.data.matches as any[])
+    .filter(m => m.pokeStatus === null).map(m => m.candidateUserId);
+  expect(outstandingOn(d1), 'not outstanding on the search we asked through').not.toContain(cand.id);
+  expect(outstandingOn(d2), 'nor on the other one').not.toContain(cand.id);
+
+  // The point of all of it: the button the second search would have offered
+  // really is impossible, so showing it was a lie.
+  const again = await apiAs(owner, 'POST', `/agents/${a2.id}/interest`, { userId: cand.id });
+  expect(again.status, 'asking again through the other search is refused by the database').toBe(409);
+  expect(String(again.json?.error?.message)).not.toMatch(/poke/i);
+  console.log(`  ✓ asked once, both searches say so, and a second ask is ${again.status}`);
 
   await cleanup(pool, { ids: [owner.id, cand.id] });
 });

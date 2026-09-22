@@ -249,7 +249,11 @@ export default function NotificationBell() {
       if (!n.isRead) markRead(n.id);
       setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, pokeStatus: 'accepted', isRead: true } : x));
       qc.invalidateQueries({ queryKey: ['conversations'] });
-      qc.invalidateQueries({ queryKey: ['pending-pokes'] });
+      // 22 Sep 2026: this said ['pending-pokes'], a key nothing uses. Both the
+      // inbox band and the focused card read ['pokes-received'], so answering
+      // from the bell left the request sitting there as though nothing had
+      // happened until the next reload.
+      qc.invalidateQueries({ queryKey: ['pokes-received'] });
       setOpen(false);
       navigate(conversationId ? `/messages/${conversationId}` : '/messages');
     } catch (err: any) {
@@ -274,7 +278,7 @@ export default function NotificationBell() {
       await api.post(`/pokes/${pokeId}/decline`);
       if (!n.isRead) markRead(n.id);
       setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, pokeStatus: 'declined', isRead: true } : x));
-      qc.invalidateQueries({ queryKey: ['pending-pokes'] });
+      qc.invalidateQueries({ queryKey: ['pokes-received'] });
       addToast('Request declined', 'info');
     } catch (err: any) {
       addToast(err?.response?.data?.error?.message || 'Could not decline that request', 'error');

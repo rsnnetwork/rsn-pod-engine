@@ -16,6 +16,7 @@ import { useNavigate } from 'react-router-dom';
 import { Check, X } from 'lucide-react';
 import Avatar from '@/components/ui/Avatar';
 import ProfileLink from '@/components/ui/ProfileLink';
+import { Spinner } from '@/components/ui/Spinner';
 import { useToastStore } from '@/stores/toastStore';
 import { E } from '@/realtime/entities';
 import api from '@/lib/api';
@@ -75,10 +76,45 @@ export function FocusedMeetingRequest({ pokeId, myUserId }: { pokeId: string; my
   const { accept, decline, pending } = usePokeActions(myUserId);
   const req = (requests || []).find(r => r.id === pokeId);
 
+  // /pokes/received only carries PENDING requests, so one that has been
+  // answered — in another tab, or reached again from an old email — used to
+  // land on a line telling the member to go and find the conversation for
+  // themselves. Ask where this one stands and take them there (22 Sep 2026).
+  const { data: state, isLoading: stateLoading } = useQuery({
+    queryKey: ['poke-state', pokeId],
+    queryFn: () => api.get(`/pokes/${pokeId}`).then(r => r.data.data as {
+      status: 'pending' | 'accepted' | 'declined';
+      conversationId: string | null;
+      otherUserId: string;
+    }).catch(() => null),
+    enabled: !req,
+    meta: { entities: [E.userInvites(myUserId)] },
+  });
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (!req && state?.status === 'accepted' && state.conversationId) {
+      navigate(`/messages/${state.conversationId}`, { replace: true });
+    }
+  }, [req, state, navigate]);
+
   if (!req) {
+    if (stateLoading || (state?.status === 'accepted' && state.conversationId)) {
+      return <div className="flex-1 flex items-center justify-center"><Spinner /></div>;
+    }
     return (
-      <div className="flex-1 flex items-center justify-center px-6 text-center text-sm text-gray-500">
-        This meeting request is no longer pending. Pick a conversation on the left.
+      <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
+        <p className="text-sm text-gray-500">
+          {state?.status === 'declined'
+            ? 'You turned this meeting request down.'
+            : 'This meeting request has already been answered.'}
+        </p>
+        <button
+          type="button"
+          onClick={() => navigate('/messages', { replace: true })}
+          className="min-h-[44px] rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 hover:bg-gray-50"
+        >
+          Back to messages
+        </button>
       </div>
     );
   }

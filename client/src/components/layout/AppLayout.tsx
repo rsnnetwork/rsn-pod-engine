@@ -205,7 +205,11 @@ export default function AppLayout() {
           </div>
           <div className="flex items-center gap-1">
             <ChatQuickAccess />
-            <NotificationBell />
+            {/* 22 Sep 2026: exactly ONE bell is mounted. Both used to be, hidden
+                by CSS rather than unmounted, so the app polled /notifications
+                twice every 30s and every notification's Accept/Decline existed
+                twice in the DOM under the same test id. */}
+            {isDesktopNav && <NotificationBell />}
           </div>
         </div>
         {sidebarContent()}
@@ -231,7 +235,7 @@ export default function AppLayout() {
           </div>
           <div className="flex items-center gap-1">
             <ChatQuickAccess />
-            <NotificationBell />
+            {!isDesktopNav && <NotificationBell />}
             <div className="relative">
               <button
                 onClick={() => setMobileOpen(!mobileOpen)}

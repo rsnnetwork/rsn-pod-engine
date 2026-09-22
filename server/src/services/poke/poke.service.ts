@@ -527,6 +527,48 @@ export interface PokeWith {
   sentByMe: boolean;
 }
 
+/** Where a request stands, plus the thread if it turned into one. */
+export interface PokeState extends PokeWith {
+  otherUserId: string;
+  /** Set once accepted, so a link to an answered request can go somewhere. */
+  conversationId: string | null;
+}
+
+/**
+ * One request, for whoever is part of it. The screens that open on a request id
+ * read the PENDING list and pick it out, so an answered one — accepted in
+ * another tab, or reached again from an old email — showed a dead end telling
+ * the member to go and find the conversation themselves (22 Sep 2026). With
+ * this they can be sent to it.
+ *
+ * Refuses anyone who is not one of the two people, rather than 404, so it
+ * cannot be used to probe which request ids exist.
+ */
+export async function getPokeState(pokeId: string, userId: string): Promise<PokeState | null> {
+  const r = await query<{
+    id: string; status: PokeState['status']; sender_id: string; recipient_id: string;
+    conversation_id: string | null;
+  }>(
+    `SELECT p.id, p.status, p.sender_id, p.recipient_id,
+            (SELECT c.id FROM dm_conversations c
+              WHERE (c.user_a_id = p.sender_id AND c.user_b_id = p.recipient_id)
+                 OR (c.user_a_id = p.recipient_id AND c.user_b_id = p.sender_id)
+              LIMIT 1) AS conversation_id
+       FROM user_pokes p
+      WHERE p.id = $1 AND (p.sender_id = $2 OR p.recipient_id = $2)`,
+    [pokeId, userId],
+  );
+  const row = r.rows[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    status: row.status,
+    sentByMe: row.sender_id === userId,
+    otherUserId: row.sender_id === userId ? row.recipient_id : row.sender_id,
+    conversationId: row.status === 'accepted' ? row.conversation_id : null,
+  };
+}
+
 /**
  * Where a meeting request between these two stands, newest first — either
  * direction. The profile showed a dead "Message — meet first" button to

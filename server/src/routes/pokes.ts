@@ -9,6 +9,8 @@ import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
 import * as pokeService from '../services/poke/poke.service';
 import { fanoutUserEntity } from '../realtime/fanout';
+import { E } from '../realtime/entities';
+import { NotFoundError } from '../middleware/errors';
 import { ApiResponse } from '@rsn/shared';
 
 const router = Router();
@@ -47,10 +49,13 @@ router.post(
       // so their "Poke pending" badge flips to "Connected" + a new
       // conversation thread appears. acceptPoke itself only mutates
       // the DB; pre-fix the sender saw nothing until they refreshed.
-      fanoutUserEntity(result.poke.senderId).catch(() => {});
+      // 22 Sep 2026: this emitted only E.user(...), but both request queries
+      // declare meta.entities = [E.userInvites(...)], so neither side's list
+      // actually refetched — the answered request sat there until a reload.
+      fanoutUserEntity(result.poke.senderId, [E.userInvites(result.poke.senderId)]).catch(() => {});
       // The accepter's own other tabs need the same ping so their
-      // pending-pokes inbox decrements.
-      fanoutUserEntity(req.user!.userId).catch(() => {});
+      // pending-request inbox decrements.
+      fanoutUserEntity(req.user!.userId, [E.userInvites(req.user!.userId)]).catch(() => {});
       const response: ApiResponse = { success: true, data: result };
       res.json(response);
     } catch (err) {
@@ -68,8 +73,8 @@ router.post(
       const result = await pokeService.declinePoke(req.params.id, req.user!.userId);
       // Phase May-19 realtime — same fanout shape as accept so the
       // sender's badge updates and the decliner's other tabs flip too.
-      fanoutUserEntity(result.senderId).catch(() => {});
-      fanoutUserEntity(req.user!.userId).catch(() => {});
+      fanoutUserEntity(result.senderId, [E.userInvites(result.senderId)]).catch(() => {});
+      fanoutUserEntity(req.user!.userId, [E.userInvites(req.user!.userId)]).catch(() => {});
       const response: ApiResponse = { success: true, data: result };
       res.json(response);
     } catch (err) {
@@ -119,6 +124,28 @@ router.get(
     try {
       const hasPending = await pokeService.hasPendingPoke(req.user!.userId, req.params.userId);
       const response: ApiResponse = { success: true, data: { hasPending } };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// GET /pokes/:id — where ONE request stands, for either person in it.
+//
+// Registered LAST, after every literal path above, because '/:id' would
+// otherwise swallow '/received' and '/has-pending/:userId'. A member reaching
+// an already-answered request can be sent to the conversation instead of a
+// dead end (22 Sep 2026).
+router.get(
+  '/:id',
+  authenticate,
+  validate(z.object({ id: z.string().uuid('Not a request id') }), 'params'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const state = await pokeService.getPokeState(req.params.id, req.user!.userId);
+      if (!state) throw new NotFoundError('Meeting request', req.params.id);
+      const response: ApiResponse = { success: true, data: state };
       res.json(response);
     } catch (err) {
       next(err);

@@ -244,7 +244,11 @@ export default function PublicProfilePage() {
                         </>
                       ) : meetingRequest?.status === 'pending' ? (
                         <>
-                          <Button size="sm" onClick={() => navigate('/messages')} className="min-h-[44px] text-xs" data-testid="meet-state">
+                          {/* Carry the request id. Without it this landed on a
+                              bare inbox with nothing selected — and on a phone
+                              that is a list, so the request they came to answer
+                              was nowhere on screen (22 Sep 2026). */}
+                          <Button size="sm" onClick={() => navigate(`/messages?poke=${meetingRequest.id}`)} className="min-h-[44px] text-xs" data-testid="meet-state">
                             <MessageSquare className="mr-1.5 h-3.5 w-3.5" /> They asked to meet you — respond
                           </Button>
                           <span className="text-[11px] text-gray-400">Waiting on you in Messages</span>

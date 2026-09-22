@@ -393,17 +393,19 @@ test('an introduction from one agent does not hide the person from another', asy
   expect(afterDev.rows.length, 'stays on the agent that introduced them, badged').toBe(1);
   expect(afterInv.rows.length, 'and stays on the other one, still relevant there').toBe(1);
 
-  // "Already asked" is PER-AGENT (Ali, 7 Sep 2026), which reverses the rule
-  // this test was written to on 5 Aug. Asking through the developer search
-  // settles them on THAT search only; the investor search has not asked them
-  // anything and still holds them as someone to reach — which is what this
-  // test's own name says. `countExpr` in agent.repo.ts scopes the poke lookup
-  // by agent_id for exactly this reason.
+  // "Already asked" is PER PERSON (22 Sep 2026). Per-agent was tried between
+  // 7 Sep and now and could not be told the truth: only one pending request may
+  // exist per pair, so the investor search called them fresh and offered a
+  // button that answered 409.
+  //
+  // This test's name still holds, and is the point. They are not HIDDEN from
+  // the investor search — the rows above prove they are still on it, badged.
+  // They are simply not counted as someone still to reach, on either search.
   const devAfter = await countNow(owner, devAgent.id);
   const invAfter = await countNow(owner, invAgent.id);
-  expect(devAfter, 'asked through this one, so no longer outstanding here').toBe(devBefore - 1);
-  expect(invAfter, 'the other search never asked them — still outstanding there').toBe(invBefore);
-  console.log(`  ✓ kept on both agents; counts ${devBefore}→${devAfter} and ${invBefore}→${invAfter}.`);
+  expect(devAfter, 'asked, so no longer outstanding here').toBe(devBefore - 1);
+  expect(invAfter, 'nor on the other search, because you cannot ask them twice').toBe(invBefore - 1);
+  console.log(`  ✓ kept on both agents, outstanding on neither; ${devBefore}→${devAfter} and ${invBefore}→${invAfter}.`);
 
   await pool.query(`DELETE FROM user_pokes WHERE sender_id = $1 AND recipient_id = $2`, [owner.id, generalist.id]).catch(() => {});
   await cleanup(pool, { ids: [generalist.id] });
