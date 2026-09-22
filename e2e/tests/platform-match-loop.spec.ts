@@ -7,7 +7,9 @@ import { gotoRetry, cleanup, wait, APP, SERVER } from '../helpers/live-ui';
 // Stefan's flow end-to-end on prod:
 //   founder (wants investors) opens Matches → sees the investor with a readable
 //   reason → "I want to meet" → investor is notified, accepts → chat unlocked
-//   (conversation exists) → the pair stops being suggested.
+//   (conversation exists) → the pair stays on the page, badged Connected.
+//   (Until 22 Sep the pair DISAPPEARED here, which is how pressing the button
+//   came to look like it had done nothing.)
 //   A user nobody fits (the baker) gets the NO-MATCH screen with the three
 //   options: join the next RSN, invite people, browse people.
 //
@@ -78,7 +80,7 @@ test.afterAll(async () => {
   await cleanup(pool, { ids });
 });
 
-test('standing match loop: suggest → I want to meet → accept → chat unlocked → no longer suggested', async () => {
+test('standing match loop: suggest → I want to meet → accept → chat unlocked → still there, badged', async () => {
   test.setTimeout(240_000);
 
   // (1) The founder's standing match check finds the investor, with a reason.
@@ -145,8 +147,14 @@ test('standing match loop: suggest → I want to meet → accept → chat unlock
   expect(conv.rows.length, 'mutual yes must open a conversation').toBe(1);
   console.log('  ✓ investor accepted → conversation exists (chat unlocked).');
 
-  // (7) The pair is no longer suggested to the founder (encounter now exists).
+  // (7) The pair is still on the page, now reading Connected rather than
+  // offering a button (22 Sep 2026). Dropping them was how "I want to meet"
+  // came to look like it had done nothing: the person you had just acted on
+  // disappeared, and a reload gave back no sign of it at all. They are only
+  // hidden by a decline.
   const f2 = await apiAs(founder, 'GET', '/matches/platform');
-  expect(f2.json.data.matches.map((m: any) => m.userId)).not.toContain(investor.id);
-  console.log('  ✓ matched pair no longer suggested — the loop closes.');
+  const still = (f2.json.data.matches as any[]).find(m => m.userId === investor.id);
+  expect(still, 'the person they connected with is still on the page').toBeTruthy();
+  expect(still.pokeStatus, 'and the card can say they are connected').toBe('accepted');
+  console.log('  ✓ the pair stays, badged Connected — the loop closes without anyone vanishing.');
 });
