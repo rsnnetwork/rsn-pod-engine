@@ -191,8 +191,8 @@ test('every scheduler action can be pressed without scrolling, at every window s
     if (!inReach) await wheelPanel(page, 220);
     await press(slot, inReach ? 'a free time in the grid' : 'a free time in the grid (after one scroll of the panel)');
     // 5. Unsaved picks → Save is pinned in reach.
-    await press(page.getByRole('button', { name: /Save availability/i }), '"Save availability" button');
-    await expect(page.getByText(/Availability saved/i)).toBeVisible({ timeout: 15_000 });
+    await press(page.getByRole('button', { name: /Save and send availability/i }), '"Save availability" button');
+    await expect(page.getByText(/they can see when you are free/i)).toBeVisible({ timeout: 15_000 });
 
     // 6. Nothing above may ever scroll the thread column itself: it clips its
     //    overflow, so a scrolled column slides the header and the name away.
@@ -297,14 +297,18 @@ test('second saver: my Save creates the green time, and its chip is in reach wit
   });
   console.log(`  375x548  panel scrolled to ${Math.round(scrolled)} before Save`);
   expect(scrolled, 'the panel is scrolled away from its top').toBeGreaterThan(40);
-  await tapReachable(page, page.getByRole('button', { name: /Save availability/i }), '"Save availability" button');
-  await expect(page.getByText(/Availability saved/i)).toBeVisible({ timeout: 15_000 });
+  await tapReachable(page, page.getByRole('button', { name: /Save and send availability/i }), '"Save availability" button');
+  await expect(page.getByText(/they can see when you are free/i)).toBeVisible({ timeout: 15_000 });
 
-  // The next step now exists. It must be in front of me, not above the frame.
-  const chip = page.getByTestId('overlap-list').getByRole('button', { name: /^Confirm / }).first();
-  await expect(chip).toBeVisible({ timeout: 15_000 });
+  // Sending is where this job ends, so the panel hands the thread back (21 Sep).
+  // The guarantee is unchanged: the next step has to be in front of this person,
+  // not somewhere they would have to go looking for. It is now the card the send
+  // just wrote, with the times on it.
+  await expect(page.getByTestId('meeting-scheduler')).toHaveCount(0, { timeout: 15_000 });
+  const card = page.getByTestId('system-message-card').filter({ hasText: /You are both free/i });
+  await expect(card).toBeVisible({ timeout: 20_000 });
   await page.waitForTimeout(300);
-  await expectReachable(page, chip, 'green time chip right after my Save');
+  await expectReachable(page, card.getByRole('button').first(), 'a time to confirm, right after my send');
 });
 
 test('pinned bar: a control focused by keyboard is never left hidden under the Save bar', async () => {
@@ -314,7 +318,7 @@ test('pinned bar: a control focused by keyboard is never left hidden under the S
   const next = page.locator(`[data-slot="${NEXT}"]`);
   if (!(await expectReachable(page, next, 'probe').then(() => true, () => false))) await wheelPanel(page, 220);
   await tapReachable(page, next, 'a free time in the grid');
-  const save = page.getByRole('button', { name: /Save availability/i });
+  const save = page.getByRole('button', { name: /Save and send availability/i });
   await expectReachable(page, save, '"Save availability" button');
 
   // The bar is pinned flush to the bottom of the panel's frame.

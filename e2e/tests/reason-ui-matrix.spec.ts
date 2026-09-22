@@ -316,8 +316,8 @@ test('UI matrix 4 — scheduler: tap cells + Save through the UI, partner overla
   const cells = mPage.getByTestId('slot-grid').locator('[data-slot]:not([disabled])');
   await cells.nth(2).click();
   await cells.nth(5).click();
-  await mPage.getByRole('button', { name: /Save availability/i }).click();
-  await expect(mPage.getByText(/Availability saved/i)).toBeVisible({ timeout: 15_000 });
+  await mPage.getByRole('button', { name: /Save and send availability/i }).click();
+  await expect(mPage.getByText(/they can see when you are free/i)).toBeVisible({ timeout: 15_000 });
   console.log('  ✓ tapped cells + saved through the real grid.');
 
   // Partner matches one window via REST, then RELOAD for a deterministic

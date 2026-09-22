@@ -150,12 +150,15 @@ test('confirming a meeting pins an exact local time + duration and offers a cale
   await openScheduler();
   await expect(page.locator(`[data-slot="${EARLY}"]`)).toHaveAttribute('aria-pressed', 'true');
 
-  await page.getByRole('button', { name: /Save availability/i }).click();
-  await expect(page.getByText(/Availability saved/i)).toBeVisible({ timeout: 15_000 });
+  await page.getByRole('button', { name: /Save and send availability/i }).click();
+  await expect(page.getByText(/they can see when you are free/i)).toBeVisible({ timeout: 15_000 });
   const saved = await apiAs(a, 'GET', `/dm/conversations/${convId}/scheduling`);
   expect(saved.json.data.mine).toContain(EARLY);
   expect(saved.json.data.mine).toContain(KEY);
 
+  // Sending hands the thread back (21 Sep), so come back in to confirm a time.
+  await expect(page.getByTestId('meeting-scheduler')).toHaveCount(0, { timeout: 15_000 });
+  await openScheduler();
   const chip = page.getByRole('button', { name: /^Confirm / }).first();
   const localLabel = new Date(KEY).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   await page.screenshot({ path: `shots/meeting/13-scheduler-slots-${engineLabel()}.png` }).catch(() => {});

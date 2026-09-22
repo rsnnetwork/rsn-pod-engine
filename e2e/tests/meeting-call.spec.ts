@@ -192,8 +192,11 @@ test.describe.serial('meeting + call', () => {
     await expect(page.getByRole('button', { name: /Join meeting/i }).first()).toBeVisible({ timeout: 10_000 });
 
     // Universal calendar (Stefan, 9 Sep): "Add to calendar", never Google-only,
-    // and the .ics endpoint serves a real invite.
-    await expect(page.getByRole('button', { name: /Add to calendar/i })).toBeVisible({ timeout: 10_000 });
+    // and the .ics endpoint serves a real invite. Scoped to the card in the
+    // thread, which is where it stays: since 21 Sep the scheduler panel offers
+    // the same thing while it is open, and a page-wide match finds both.
+    const card = page.getByTestId('system-message-card').filter({ hasText: /Meeting confirmed/i });
+    await expect(card.getByRole('button', { name: /Add to calendar/i })).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText(/Google Calendar/i)).toHaveCount(0);
     const icsRes = await fetch(`${SERVER}/api/dm/conversations/${convId}/meeting.ics`, {
       headers: { Authorization: `Bearer ${a.accessToken}` },
