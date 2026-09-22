@@ -45,8 +45,8 @@ async function freshMember(suffix: string): Promise<TestUser> {
   return u;
 }
 
-async function openAs(u: TestUser, path = '/onboarding'): Promise<Page> {
-  const ctx = await browser.newContext({ viewport: PHONE });
+async function openAs(u: TestUser, path = '/onboarding', viewport = PHONE): Promise<Page> {
+  const ctx = await browser.newContext({ viewport });
   await ctx.addInitScript((t: { a: string; r: string }) => {
     localStorage.setItem('rsn_access', t.a);
     localStorage.setItem('rsn_refresh', t.r);
@@ -139,6 +139,56 @@ test('a new member answers five questions and lands somewhere with people in it'
   expect(agents.rows.length).toBe(2);
   expect(agents.rows.every(a => a.status === 'active')).toBe(true);
   console.log(`  ✓ searches: ${agents.rows.map(a => a.label).join(', ')}`);
+});
+
+// The deck's P0 was a Confirm button a member could not press. This flow is the
+// first thing anyone does, and the smallest Android in common use is 360px —
+// so walk the whole of it at that width, pressing every control by coordinates
+// and refusing anything clipped, covered or off the side.
+test('the whole flow can be worked through on a 360px phone', async () => {
+  test.setTimeout(240_000);
+  const me = await freshMember('tbsmall');
+  const page = await openAs(me, '/onboarding', { width: 360, height: 640 });
+
+  const noSidewaysScroll = async (where: string) => {
+    const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(over, `${where}: the page runs off the side by ${over}px`).toBeLessThanOrEqual(1);
+  };
+
+  await expect(page.getByText(/welcome to RSN/i)).toBeVisible({ timeout: 30_000 });
+  await noSidewaysScroll('welcome');
+  await tapReachable(page, page.getByRole('button', { name: /Let's go/i }), '"Let\'s go" at 360px');
+
+  const steps: [string, (string | RegExp)[]][] = [
+    ['why they are here', [/Find investors or funding/i]],
+    ['who they want to meet', [/Investors & VCs/i, /Advisors & mentors/i]],
+    ['what they can offer', [/Mentoring & advice/i]],
+    ['their industry', [/Software & AI/i]],
+    ['who they are', [/Founders & entrepreneurs/i]],
+  ];
+  for (const [what, labels] of steps) {
+    for (const l of labels) {
+      const t = tile(page, l);
+      const box = await t.boundingBox();
+      // A tick box is something a thumb has to hit.
+      expect(box!.height, `${what}: option is only ${Math.round(box!.height)}px tall`).toBeGreaterThanOrEqual(44);
+      await tapReachable(page, t, `${what}: option`);
+    }
+    await noSidewaysScroll(what);
+    await tapReachable(page, page.getByRole('button', { name: /Continue|See my profile/ }), `${what}: continue`);
+  }
+
+  // The button the deck said was clipped.
+  await expect(page.getByText(/Here's your profile/i)).toBeVisible({ timeout: 20_000 });
+  await noSidewaysScroll('confirm');
+  const confirm = page.getByRole('button', { name: /Looks right/i });
+  const cbox = await expectReachable(page, confirm, '"Looks right - continue" at 360px');
+  expect(cbox.height, 'the confirm button is a 44px target').toBeGreaterThanOrEqual(44);
+  await tapReachable(page, confirm, '"Looks right - continue" at 360px');
+
+  await page.waitForURL(/\/agents/, { timeout: 30_000 });
+  await noSidewaysScroll('suggestions');
+  console.log('  ✓ all five steps and the confirm button worked at 360px, no sideways scroll');
 });
 
 test('a refresh in the middle loses nothing', async () => {

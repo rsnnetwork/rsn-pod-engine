@@ -190,13 +190,17 @@ test('every scheduler action can be pressed without scrolling, at every window s
     const inReach = await expectReachable(page, slot, 'probe').then(() => true, () => false);
     if (!inReach) await wheelPanel(page, 220);
     await press(slot, inReach ? 'a free time in the grid' : 'a free time in the grid (after one scroll of the panel)');
+    // Hold the thread column itself: sending closes the panel (21 Sep), so
+    // after that there is no [data-scheduler-panel] left to reach it through.
+    const column = await page.locator('[data-scheduler-panel]')
+      .evaluateHandle(el => el.parentElement as HTMLElement);
     // 5. Unsaved picks → Save is pinned in reach.
     await press(page.getByRole('button', { name: /Save and send availability/i }), '"Save availability" button');
     await expect(page.getByText(/they can see when you are free/i)).toBeVisible({ timeout: 15_000 });
 
     // 6. Nothing above may ever scroll the thread column itself: it clips its
     //    overflow, so a scrolled column slides the header and the name away.
-    const columnScroll = await page.locator('[data-scheduler-panel]').evaluate(el => (el.parentElement as HTMLElement).scrollTop);
+    const columnScroll = await column.evaluate((el: HTMLElement) => el.scrollTop);
     if (columnScroll !== 0) {
       console.log(`  ${size}  MISSED  thread column scrolled by ${columnScroll}px`);
       problems.push(`${size}: the thread column itself was scrolled by ${columnScroll}px (header pushed out of view)`);
