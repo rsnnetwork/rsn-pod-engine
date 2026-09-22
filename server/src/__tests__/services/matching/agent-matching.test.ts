@@ -101,11 +101,14 @@ describe('recomputeAgent', () => {
     // Both directions of the pair, so a decline sticks whoever sent it.
     expect(sql).toMatch(/p\.sender_id = \$1 AND p\.recipient_id = u\.id/);
     expect(sql).toMatch(/p\.sender_id = u\.id AND p\.recipient_id = \$1/);
-    // 8 Sep 2026 (Ali): the override that keeps an ASKED person visible despite
-    // an encounter row is PER-AGENT — a poke via another agent must not keep
-    // them on this one. The candidate load now carries the agent id.
-    expect(sql).toMatch(/ip\.agent_id = \$2/);
-    expect(params).toEqual(['u-owner', 'a-1']);
+    // 22 Sep 2026: the override that keeps an ASKED person visible despite an
+    // encounter row is PER PERSON, like the state and counts that read it.
+    // Scoped to one search it contradicted them: someone whose request was
+    // accepted through search A is badged on search B by the read-time state,
+    // while this pool went on excluding them from B, so they could never
+    // appear there to be badged at all. The load no longer takes an agent id.
+    expect(sql).not.toMatch(/ip\.agent_id/);
+    expect(params).toEqual(['u-owner']);
   });
 
   // 8 Sep 2026 (Ali): stickiness is PER-AGENT. Someone asked through ANOTHER

@@ -150,7 +150,10 @@ export async function sendPoke(
     [a, b],
   );
   if (enc.rows.length > 0) {
-    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'You can already DM this user — no need to poke');
+    // What a member is told when the answer is "you two are already connected".
+    // The old wording said "poke", which is an internal word nobody outside the
+    // codebase uses (22 Sep 2026).
+    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'You can already message them.');
   }
 
   // Recipient existence check (avoid silent FK errors)
@@ -243,7 +246,10 @@ export async function sendPoke(
     };
   } catch (err: any) {
     if (err?.code === '23505') {
-      throw new AppError(409, ErrorCodes.VALIDATION_ERROR, 'You\'ve already poked this user — wait for them to respond');
+      // Since 22 Sep the card shows this person as already asked on every
+      // search, so a member should not be able to reach this at all. It stays
+      // for the race: two tabs, or a card drawn before the first ask landed.
+      throw new AppError(409, ErrorCodes.VALIDATION_ERROR, 'You have already asked to meet them — they have not answered yet.');
     }
     throw err;
   }

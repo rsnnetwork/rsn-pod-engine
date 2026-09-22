@@ -89,32 +89,18 @@ async function oldWay(limit) {
   return r.rows.map(x => x.id);
 }
 
-/** What it shows now: the two groups counted separately. */
+/**
+ * What it shows now — through the REAL repo, never a copy of its SQL.
+ *
+ * This used to hand-copy the query. That made it a test of a paste: when the
+ * poke lookup went per-person on 22 Sep the copy kept the old agent filter,
+ * kept asserting the old behaviour, and would have stayed green through the
+ * change. Import the thing being tested.
+ */
 async function newWay(limit) {
-  const r = await pool.query(
-    `WITH scored AS (
-       SELECT m.candidate_user_id AS id, m.score,
-              (p.id IS NOT NULL) AS asked,
-              row_number() OVER (PARTITION BY (p.id IS NOT NULL) ORDER BY m.score DESC) AS rn
-         FROM agent_matches m
-         JOIN matching_agents a ON a.id = m.agent_id
-         JOIN users u ON u.id = m.candidate_user_id
-         LEFT JOIN LATERAL (
-           SELECT pk.id, pk.status FROM user_pokes pk
-            WHERE pk.agent_id = a.id
-              AND ((pk.sender_id = a.user_id AND pk.recipient_id = m.candidate_user_id)
-               OR (pk.sender_id = m.candidate_user_id AND pk.recipient_id = a.user_id))
-            ORDER BY pk.created_at DESC LIMIT 1
-         ) p ON TRUE
-        WHERE m.agent_id = $1 AND u.status = 'active'
-          AND (p.status IS NULL OR p.status <> 'declined')
-     )
-     SELECT id FROM scored
-      WHERE (NOT asked AND rn <= $2) OR (asked AND rn <= 100)
-      ORDER BY asked, score DESC`,
-    [agentId, limit],
-  );
-  return r.rows.map(x => x.id);
+  const repo = await import('../server/dist/services/matching/agent.repo.js');
+  const rows = await repo.listMatches(agentId, limit);
+  return rows.map(x => x.candidateUserId);
 }
 
 let failed = false;

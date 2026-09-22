@@ -81,10 +81,13 @@ const countExpr = (agent: string, negate: boolean) => `
       AND ${negate ? 'NOT EXISTS' : 'EXISTS'} (
         SELECT 1 FROM user_pokes p
          WHERE p.status <> 'declined'
-           -- 7 Sep 2026 (Ali): "already asked" is PER-AGENT. A request sent
-           -- through another agent must NOT mark this agent's matches as asked;
-           -- a brand-new agent shows those people as fresh potential matches.
-           AND p.agent_id = ${agent}.id
+           -- 22 Sep 2026: "already asked" is PER PERSON, reversing the 7 Sep
+           -- rule. Per-agent could not be told the truth: only ONE pending
+           -- request may exist per pair (migration 047), so a second search
+           -- showing the same person as fresh offered a button that answered
+           -- 409. You have asked someone or you have not; which search found
+           -- them does not change that. Stickiness stays per-agent — a person
+           -- a search found keeps their place on it (replaceMatches below).
            AND ((p.sender_id = ${agent}.user_id AND p.recipient_id = m.candidate_user_id)
              OR (p.sender_id = m.candidate_user_id AND p.recipient_id = ${agent}.user_id))))`;
 
@@ -290,12 +293,11 @@ export async function listMatches(agentId: string, limit = 25): Promise<StoredAg
          LEFT JOIN LATERAL (
            SELECT pk.id, pk.status, pk.sender_id
              FROM user_pokes pk
-            -- 8 Sep 2026 (Ali): "already asked" is PER-AGENT. Only a request sent
-            -- THROUGH this agent marks its matches as asked — a poke from another
-            -- agent (or a profile) leaves this agent's match fresh, matching the
-            -- per-agent count in countExpr.
-            WHERE pk.agent_id = a.id
-              AND ((pk.sender_id = a.user_id AND pk.recipient_id = m.candidate_user_id)
+            -- 22 Sep 2026: PER PERSON, matching countExpr above. Asking through
+            -- one search settles that person everywhere, because the database
+            -- only allows one pending request per pair — a second search
+            -- calling them fresh was offering a button that could not work.
+            WHERE ((pk.sender_id = a.user_id AND pk.recipient_id = m.candidate_user_id)
                OR (pk.sender_id = m.candidate_user_id AND pk.recipient_id = a.user_id))
             ORDER BY pk.created_at DESC
             LIMIT 1

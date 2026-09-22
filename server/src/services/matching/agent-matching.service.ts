@@ -65,17 +65,21 @@ const CANDIDATE_COLUMNS = `
   u.industry, u.bio, u.location`;
 
 /**
- * Who this agent may surface. Global exclusions (already met, blocked either
- * way) plus a declined introduction — a decline is the one answer that means
- * "not this person", so it is honoured in both directions.
+ * Who this member may be shown at all. Global exclusions (already met, blocked
+ * either way) plus a declined introduction — a decline is the one answer that
+ * means "not this person", so it is honoured in both directions.
  *
- * Someone you have merely ASKED stays in the pool. Dropping them here (the
- * original decision D3) is what made a person disappear from the agent that
- * found them the moment you asked to meet them; they now stay put, badged with
- * where the introduction got to (see agent.repo listMatches), and are simply
- * not counted as still outstanding.
+ * Someone you have merely ASKED stays in the pool. Dropping them (the original
+ * decision D3) is what made a person disappear from the search that found them
+ * the moment you asked to meet them; they stay put, badged with where the
+ * introduction got to (see agent.repo listMatches), and are simply not counted
+ * as still outstanding.
+ *
+ * 22 Sep 2026: nothing here depends on WHICH search is asking any more. The
+ * pool is the same for all of a member's searches, and the per-search part —
+ * stickiness — is applied separately.
  */
-async function loadCandidatesForAgent(ownerId: string, agentId: string): Promise<IntentProfile[]> {
+async function loadCandidatesFor(ownerId: string): Promise<IntentProfile[]> {
   const r = await query<IntentProfile>(
     `SELECT ${CANDIDATE_COLUMNS}
        FROM users u
@@ -83,12 +87,15 @@ async function loadCandidatesForAgent(ownerId: string, agentId: string): Promise
         AND u.status = 'active'
         AND u.onboarding_completed = true
         -- "Already met" hides people you have genuinely met, at an event or
-        -- otherwise. It must NOT hide someone you reached through THIS agent:
-        -- accepting an introduction writes an encounter row (times_met = 0), so
-        -- a person vanished from the agent that found them the moment they said
-        -- yes. The override keeps them visible on the agent they were asked
-        -- through — per-agent (8 Sep 2026, Ali), so a person met after an ask on
-        -- another agent doesn't reappear here where you never asked them.
+        -- otherwise. It must NOT hide someone you reached: accepting an
+        -- introduction writes an encounter row (times_met = 0), so a person
+        -- vanished from the search that found them the moment they said yes.
+        --
+        -- 22 Sep 2026: the override is PER PERSON, like the state and counts
+        -- that read it. Scoping it to one search contradicted them — a person
+        -- whose request was accepted through search A is now badged on search B
+        -- by the read-time state, while this pool kept excluding them from B, so
+        -- they could never actually appear there to be badged at all.
         AND (
           NOT EXISTS (
             SELECT 1 FROM encounter_history e
@@ -96,7 +103,6 @@ async function loadCandidatesForAgent(ownerId: string, agentId: string): Promise
           OR EXISTS (
             SELECT 1 FROM user_pokes ip
              WHERE ip.status <> 'declined'
-               AND ip.agent_id = $2
                AND ((ip.sender_id = $1 AND ip.recipient_id = u.id)
                  OR (ip.sender_id = u.id AND ip.recipient_id = $1))))
         AND NOT EXISTS (
@@ -108,7 +114,7 @@ async function loadCandidatesForAgent(ownerId: string, agentId: string): Promise
            WHERE p.status = 'declined'
              AND ((p.sender_id = $1 AND p.recipient_id = u.id)
                OR (p.sender_id = u.id AND p.recipient_id = $1)))`,
-    [ownerId, agentId],
+    [ownerId],
   );
   return r.rows;
 }
@@ -126,7 +132,7 @@ export async function recomputeAgent(agent: {
       await agentRepo.replaceMatches(agent.id, []);
       return 0;
     }
-    const candidates = await loadCandidatesForAgent(agent.userId, agent.id);
+    const candidates = await loadCandidatesFor(agent.userId);
     // W4 recall: score against the want text AND the structured tags (W3 stores
     // industries/stage/seniority there), so a manufacturing want counts even
     // when the label alone is a bare designation.

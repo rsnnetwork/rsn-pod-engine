@@ -172,9 +172,11 @@ describe('already-asked people keep their place, badged', () => {
     expect(sql).toMatch(/"pokeSentByOwner"/);
     // Newest poke wins, so a re-ask does not report a stale state.
     expect(sql).toMatch(/ORDER BY pk\.created_at DESC/);
-    // 8 Sep 2026 (Ali): "already asked" is PER-AGENT — the poke lookup is scoped
-    // to this agent, so a person asked through another agent shows here as fresh.
-    expect(sql).toMatch(/pk\.agent_id = a\.id/);
+    // 22 Sep 2026: "already asked" is PER PERSON. Per-agent could not be told
+    // the truth — only one pending request may exist per pair (migration 047),
+    // so a second search calling the same person fresh handed them a button
+    // that answered 409. The lookup is no longer scoped to one search.
+    expect(sql).not.toMatch(/pk\.agent_id = a\.id/);
   });
 
   it('hides a declined introduction — that one IS an answer', async () => {
@@ -213,8 +215,11 @@ describe('a rescore never evicts someone you already asked', () => {
     expect(sql).toMatch(/DELETE FROM agent_matches am/);
     expect(sql).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM user_pokes p/);
     expect(sql).toMatch(/p\.status <> 'declined'/);
-    // 8 Sep 2026 (Ali): retention is PER-AGENT — only a poke through THIS agent
-    // pins the row; a poke via another agent no longer keeps a stale card here.
+    // STICKINESS stays per-agent, and is the only thing that still is (22 Sep
+    // 2026). State and counts became per-person because you cannot ask the same
+    // person twice; where a person SITS is a different question — someone found
+    // by the Developers search keeps their place on it, and does not get pinned
+    // onto every other search as well.
     expect(sql).toMatch(/p\.agent_id = a\.id/);
   });
 
@@ -248,9 +253,9 @@ describe('an agent card accounts for everyone inside it', () => {
     expect(sql).toMatch(/AND EXISTS \(\s*SELECT 1 FROM user_pokes p/);
     // A decline hides the person entirely, so it counts on neither side.
     expect((sql.match(/p\.status <> 'declined'/g) ?? []).length).toBe(2);
-    // 7 Sep 2026 — both sides are scoped to THIS agent's pokes, so "already
-    // asked" is per-agent (a new agent shows shared people as fresh matches).
-    expect((sql.match(/p\.agent_id = a\.id/g) ?? []).length).toBe(2);
+    // 22 Sep 2026 — neither side is scoped to one search's pokes any more, so
+    // "already asked" means the same thing on every search a person appears on.
+    expect((sql.match(/p\.agent_id = a\.id/g) ?? []).length).toBe(0);
   });
 
   it('carries both counts back from a status change too', async () => {
