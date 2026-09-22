@@ -50,7 +50,26 @@ async function openAs(u: TestUser, path = '/agents', viewport = { width: 390, he
   return page;
 }
 
-/** Look an agent up by name, failing loudly with what actually exists. */
+/**
+ * The searches later tests lean on, and the words that define each one. Kept
+ * here so a test that needs one can have it without depending on an earlier
+ * test having survived.
+ */
+const WANT_TEXT: Record<string, string> = {
+  Developers: 'react developers and engineers',
+  Investors: 'angel investors for a seed round',
+  Bakers: 'nobody at all xyzzy',
+};
+
+/**
+ * Look an agent up by name, creating it if it is not there.
+ *
+ * Playwright stops the worker after a failed test and starts a fresh one, which
+ * re-runs `beforeAll` — a new owner, with none of the agents the earlier tests
+ * made. Every later lookup then failed too, so one real fault came back as
+ * twelve and the real one was buried (21 Sep 2026). The tests that PROVE
+ * creation make their own agents and never come through here.
+ */
 async function agentByLabel(u: TestUser, label: string): Promise<any> {
   const r = await apiAs(u, 'GET', '/agents');
   const list = r.json?.data;
@@ -58,10 +77,20 @@ async function agentByLabel(u: TestUser, label: string): Promise<any> {
     throw new Error(`GET /agents did not return a list (status ${r.status}): ${JSON.stringify(r.json).slice(0, 300)}`);
   }
   const found = list.find((a: any) => a.label === label);
-  if (!found) {
-    throw new Error(`no agent named "${label}". Existing: ${list.map((a: any) => `${a.label}(${a.status})`).join(', ') || 'none'}`);
+  if (found) return found;
+
+  const wantText = WANT_TEXT[label];
+  if (!wantText) {
+    throw new Error(`no agent named "${label}" and no known want text for it. Existing: ${list.map((a: any) => `${a.label}(${a.status})`).join(', ') || 'none'}`);
   }
-  return found;
+  console.log(`  (re-creating the "${label}" search — the worker restarted)`);
+  const made = await apiAs(u, 'POST', '/agents', { label, wantText });
+  if (made.status !== 201) {
+    throw new Error(`could not re-create "${label}" (status ${made.status}): ${JSON.stringify(made.json).slice(0, 300)}`);
+  }
+  createdAgentIds.push(made.json.data.id);
+  await countFor(u, made.json.data.id);
+  return (await apiAs(u, 'GET', '/agents')).json.data.find((a: any) => a.label === label);
 }
 
 /** Poll the API until an agent's stored count settles (scoring is async). */
@@ -364,12 +393,16 @@ test('an introduction from one agent does not hide the person from another', asy
   expect(afterDev.rows.length, 'stays on the agent that introduced them, badged').toBe(1);
   expect(afterInv.rows.length, 'and stays on the other one, still relevant there').toBe(1);
 
-  // Asked once is asked: they stop being OUTSTANDING on both agents, so each
-  // count drops by exactly one. Everyone else on those agents is untouched.
+  // "Already asked" is PER-AGENT (Ali, 7 Sep 2026), which reverses the rule
+  // this test was written to on 5 Aug. Asking through the developer search
+  // settles them on THAT search only; the investor search has not asked them
+  // anything and still holds them as someone to reach — which is what this
+  // test's own name says. `countExpr` in agent.repo.ts scopes the poke lookup
+  // by agent_id for exactly this reason.
   const devAfter = await countNow(owner, devAgent.id);
   const invAfter = await countNow(owner, invAgent.id);
-  expect(devAfter, 'asked, so no longer outstanding here').toBe(devBefore - 1);
-  expect(invAfter, 'and not outstanding there either').toBe(invBefore - 1);
+  expect(devAfter, 'asked through this one, so no longer outstanding here').toBe(devBefore - 1);
+  expect(invAfter, 'the other search never asked them — still outstanding there').toBe(invBefore);
   console.log(`  ✓ kept on both agents; counts ${devBefore}→${devAfter} and ${invBefore}→${invAfter}.`);
 
   await pool.query(`DELETE FROM user_pokes WHERE sender_id = $1 AND recipient_id = $2`, [owner.id, generalist.id]).catch(() => {});
