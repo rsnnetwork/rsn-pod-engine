@@ -11,6 +11,7 @@
 import { CalendarCheck, CalendarClock, Clock, Video, Phone } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { isMeetingOver } from './MeetingScheduler';
+import SheepAvatar from '@/components/brand/SheepAvatar';
 
 export type DmMessageKind = 'user' | 'system';
 
@@ -67,7 +68,16 @@ export default function SystemMessageCard({
     // being over settles it.
     const over = !!meetingOver || isMeetingOver(meta.startAt, meta.durationMin);
     return (
-      <Shell tone="confirmed" icon={<CalendarCheck className="h-4 w-4 text-emerald-600" />}>
+      // The deck puts the sheep in message threads, matched pose, on exactly
+      // this moment: "MATCHED - match found; meeting confirmed in the chat."
+      // Once the meeting is behind them it is a record, not a celebration, so
+      // the calendar tick comes back.
+      <Shell
+        tone="confirmed"
+        icon={over
+          ? <CalendarCheck className="h-4 w-4 text-emerald-600" />
+          : <SheepAvatar pose="matched" size={44} />}
+      >
         <p className="text-sm font-semibold text-emerald-800">
           {meta.movedFrom ? 'Meeting moved' : 'Meeting confirmed'}
         </p>

@@ -209,19 +209,36 @@ describe('Email Service', () => {
 });
 
 // ─── 11 Sep 2026 (Ali): "the template must have a border and a beautiful UI,
-// more engaging". One shell for every email: a dark brand band with the white
-// logo, a red accent strip, a bordered card, the footer linking to the app.
+// more engaging". One shell for every email: the brand band, a red accent
+// strip, a bordered card, the footer linking to the app.
+//
+// 22 Sep 2026 (Shradha): the mark in that band was a WHITE sheep. The brand
+// mark is the black one, and it is unreadable on navy, so the band is light and
+// carries the same black lockup the app header uses.
 describe('the shared email shell', () => {
-  it('opens on the brand band with the white logo and a red strip, in a bordered card', () => {
+  it('opens on the brand band with the black sheep lockup and a red strip, in a bordered card', () => {
     const { html } = emailService.buildInviteEmail({
       inviterName: 'Stefan', inviteeName: 'Ali', type: 'platform', inviteUrl: 'http://localhost:5173/invite/ABC123',
     } as any);
-    expect(html).toContain('rsn-sheep-white-email.png');           // the white sheep, next to the wordmark as text
-    expect(html).toMatch(/background:#1a1a2e/);                 // the band
+    expect(html).toContain('/rsn-logo.png');                    // the black sheep + RSN lockup
+    expect(html).toMatch(/background:#f4f5f8/);                 // a light band, so the black mark reads
     expect(html).toMatch(/height:4px;background:#DE322E/);      // the accent strip
     expect(html).toMatch(/border:1px solid #dfe3ea/);           // the card border
     expect(html).toMatch(/Connect with Reason/);
     expect(html).toContain('href="http://localhost:5173"');     // footer link to the app
-    expect(html).not.toContain('rsn-logo.png"');                // the old dark logo on white is gone
+    // No white silhouette anywhere, and no navy band behind the mark.
+    expect(html).not.toContain('rsn-sheep-white-email.png');
+    expect(html).not.toMatch(/background:#1a1a2e;padding:28px/);
+  });
+
+  it('the white sheep is gone from every email, not just the one built here', () => {
+    // Fifteen emails share emailCardOpen(), but any of them could hard-code its
+    // own mark. Read the source rather than building all fifteen.
+    const src = require('fs').readFileSync(
+      require('path').join(__dirname, '../../services/email/email.service.ts'), 'utf8',
+    ) as string;
+    expect(src).not.toContain('rsn-sheep-white-email');
+    // And the band the mark sits on is declared once.
+    expect(src.match(/background:#f4f5f8;padding:28px/g) ?? []).toHaveLength(1);
   });
 });

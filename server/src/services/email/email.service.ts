@@ -21,18 +21,23 @@ function getResendClient(): Resend {
 }
 
 // ─── Shared shell (11 Sep 2026, Ali: "a border and a beautiful UI, more engaging") ──
-// Every email opens on the dark brand band with the white logo and a red accent
-// strip, inside a bordered card, and closes on a link back to the app. The
-// words of each email are untouched; only the shell is shared.
+// Every email opens on the brand band with the logo and a red accent strip,
+// inside a bordered card, and closes on a link back to the app. The words of
+// each email are untouched; only the shell is shared.
+//
+// 22 Sep 2026 (Shradha): "RSN logo is wrong - white sheep. The brand mark is
+// the BLACK sheep. Use the black sheep asset in all emails + app header." The
+// app header already carries the black lockup (rsn-logo.png); only the email
+// still wore a white silhouette. A black mark cannot be read on the navy band,
+// so the band is light and the lockup is the one the app already uses - one
+// image rather than an image plus a text wordmark, which also stops the two
+// drifting apart. The red strip and the bordered card are unchanged.
 export function emailCardOpen(): string {
   return [
     `<div style="background:#ffffff;border-radius:16px;border:1px solid #dfe3ea;overflow:hidden;box-shadow:0 10px 30px rgba(26,26,46,0.08);">`,
-    `<div style="background:#1a1a2e;padding:28px 32px 22px 32px;text-align:center;">`,
-    `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto;"><tr>`,
-    `<td style="vertical-align:middle;padding-right:10px;"><img src="${config.clientUrl}/rsn-sheep-white-email.png" alt="" width="44" height="auto" style="display:block;" /></td>`,
-    `<td style="vertical-align:middle;color:#ffffff;font-size:30px;font-weight:700;letter-spacing:1px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">RSN</td>`,
-    `</tr></table>`,
-    `<p style="color:#f3b6b2;font-size:12px;letter-spacing:2px;text-transform:uppercase;margin:14px 0 0 0;">Connect with Reason</p>`,
+    `<div style="background:#f4f5f8;padding:28px 32px 22px 32px;text-align:center;">`,
+    `<img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="132" height="auto" style="display:block;margin:0 auto;" />`,
+    `<p style="color:#6b7280;font-size:12px;letter-spacing:2px;text-transform:uppercase;margin:14px 0 0 0;">Connect with Reason</p>`,
     `</div>`,
     `<div style="height:4px;background:#DE322E;font-size:0;line-height:0;">&nbsp;</div>`,
     `<div style="padding:36px 32px 32px 32px;">`,
