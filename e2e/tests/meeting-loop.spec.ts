@@ -244,13 +244,29 @@ test('confirming the same time twice books one meeting, not two', async () => {
     expect(row.start?.toISOString().replace('.000Z', 'Z')).toBe(slot);
     expect(row.n).toBe('1');
 
-    // A DIFFERENT time while that one stands is refused, with the time that is set.
+    // A DIFFERENT time moves the meeting — refusing it left a pair with no way
+    // out, since nothing cancels one. Still ONE meeting, and the new card
+    // carries the time it replaced so the other person can see it changed.
     const other = futureSlot(6, 11);
     await apiAs(x, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [slot, other] });
     await apiAs(y, 'PUT', `/dm/conversations/${conv}/scheduling/availability`, { windows: [slot, other] });
-    const clash = await apiAs(x, 'POST', `/dm/conversations/${conv}/scheduling/confirm`, { window: other, durationMin: 30, type: 'video' });
-    expect(clash.status).toBe(409);
-    expect(String(clash.json?.error?.message)).toMatch(/already set/i);
+    const moved = await apiAs(x, 'POST', `/dm/conversations/${conv}/scheduling/confirm`, { window: other, durationMin: 30, type: 'video' });
+    expect(moved.status).toBe(200);
+    const after = (await pool.query<{ n: string; start: Date | null; moved_from: string | null }>(
+      `SELECT (SELECT count(*)::text FROM direct_messages m
+               WHERE m.conversation_id=c.id AND m.kind='system'
+                 AND m.system_meta->>'type'='meeting_confirmed') AS n,
+              c.meeting_start_at AS start,
+              (SELECT m.system_meta->>'movedFrom' FROM direct_messages m
+                WHERE m.conversation_id=c.id AND m.kind='system'
+                  AND m.system_meta->>'type'='meeting_confirmed'
+                ORDER BY m.created_at DESC LIMIT 1) AS moved_from
+         FROM dm_conversations c WHERE c.id=$1`, [conv],
+    )).rows[0];
+    expect(after.start?.toISOString().replace('.000Z', 'Z')).toBe(other);
+    expect(after.n).toBe('2');
+    expect(after.moved_from?.replace('.000Z', 'Z')).toBe(slot);
+    console.log(`  ✓ the meeting moved ${slot} → ${other}, and the card says where from`);
   } finally {
     await cleanup(pool, { ids: [x.id, y.id] });
   }
