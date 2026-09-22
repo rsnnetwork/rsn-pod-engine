@@ -7,7 +7,12 @@ import path from 'path';
 // Load server's .env (for DATABASE_URL)
 dotenvConfig({ path: path.resolve(__dirname, '../../server/.env') });
 
-const JWT_SECRET = process.env.JWT_SECRET || process.env.E2E_JWT_SECRET;
+// E2E_JWT_SECRET wins when it is set, because it is only ever set on purpose.
+// JWT_SECRET is not: the dotenv call above fills it in from the LOCAL
+// server/.env, which is a different key from production's. Reading that one
+// first signs every test token with the wrong secret and turns a whole run into
+// 401s that read like product faults — an hour lost to it on 21 Sep 2026.
+const JWT_SECRET = process.env.E2E_JWT_SECRET || process.env.JWT_SECRET;
 if (!JWT_SECRET) {
   throw new Error('JWT_SECRET env var required (set via Render env or E2E_JWT_SECRET)');
 }
