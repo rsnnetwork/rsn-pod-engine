@@ -406,11 +406,16 @@ router.get(
       }
 
       // 13 Aug 2026 (C3): a circle invite names the circle to a stranger.
+      //
+      // 22 Sep 2026: and went on naming it after it was archived. This route is
+      // optionalAuth, so anyone holding an old invite code could read the name
+      // and description of a circle that had been taken down — every other read
+      // of circles filters archived_at, this one did not.
       let circleName: string | undefined;
       let circleDescription: string | undefined;
       if (invite.circleId) {
         const circleResult = await query<{ name: string; description: string | null }>(
-          `SELECT name, description FROM circles WHERE id = $1`,
+          `SELECT name, description FROM circles WHERE id = $1 AND archived_at IS NULL`,
           [invite.circleId]
         );
         circleName = circleResult.rows[0]?.name;

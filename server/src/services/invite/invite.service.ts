@@ -244,7 +244,10 @@ export async function createInvite(userId: string, input: CreateInviteInput, use
       targetName = podResult.rows[0]?.name;
     }
     if (input.type === InviteType.CIRCLE && input.circleId) {
-      const circleResult = await query<{ name: string }>('SELECT name FROM circles WHERE id = $1', [input.circleId]);
+      // Archived circles are not invitable, so their name does not belong in an
+      // invite email either (22 Sep 2026).
+      const circleResult = await query<{ name: string }>(
+        'SELECT name FROM circles WHERE id = $1 AND archived_at IS NULL', [input.circleId]);
       targetName = circleResult.rows[0]?.name;
     }
     let calendarEvent: any = undefined;

@@ -17,6 +17,8 @@
 
 import express from 'express';
 import request from 'supertest';
+import * as fs from 'fs';
+import * as path from 'path';
 import * as jwt from 'jsonwebtoken';
 import { InviteType, InviteStatus } from '@rsn/shared';
 
@@ -249,5 +251,28 @@ describe('Invite accept flow — no auto-registration on view', () => {
       .set('Authorization', `Bearer ${token}`);
     expect(r3.status).toBe(200);
     expect(inviteService.acceptInvite).toHaveBeenCalledTimes(2);
+  });
+});
+
+// 22 Sep 2026: GET /invites/:code is optionalAuth, and its circle lookup was
+// the one read of circles in the codebase with no archived_at filter — so a
+// stranger holding an old code could still read the name and description of a
+// circle that had been taken down.
+describe(`an archived circle is not named to a stranger`, () => {
+  const read = (rel: string) => fs.readFileSync(path.join(__dirname, `../../`, rel), `utf8`);
+
+  const everyCircleReadIsFiltered = (rel: string) => {
+    const src = read(rel);
+    const reads = src.split(`FROM circles`).slice(1);
+    expect(reads.length).toBeGreaterThan(0);
+    for (const after of reads) expect(after.slice(0, 140)).toMatch(/archived_at IS NULL/);
+  };
+
+  it(`the public invite lookup filters archived circles`, () => {
+    everyCircleReadIsFiltered(`routes/invites.ts`);
+  });
+
+  it(`and so does the name put into an invite email`, () => {
+    everyCircleReadIsFiltered(`services/invite/invite.service.ts`);
   });
 });
