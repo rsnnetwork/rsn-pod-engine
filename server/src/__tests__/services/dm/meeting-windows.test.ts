@@ -522,6 +522,22 @@ describe('confirmWindow', () => {
     expect((bell![1] as unknown[])[2]).toBe('Meeting time changed');
   });
 
+  // The card renders movedFrom in the reader's own time, so it has to be an
+  // instant. A meeting agreed as a day part has no instant to show, and a key
+  // like "2026-09-24:evening" would land on a member's screen raw.
+  it('carries no movedFrom when the meeting it replaced had no exact time', async () => {
+    const standing = futureKey(2, 'evening');
+    const other = futureKey(3, 'morning');
+    armConv(
+      [{ user_id: 'u-a', window_key: other }, { user_id: 'u-b', window_key: other }],
+      { ...CONV, meeting_confirmed_window: standing, meeting_start_at: null, meeting_duration_min: null },
+    );
+    const newStart = new Date(Date.now() + 3 * 86_400_000);
+    await confirmWindow('conv-1', 'u-a', other, { startAt: newStart.toISOString(), durationMin: 30 });
+    expect(cardMeta()).toMatchObject({ type: 'meeting_confirmed' });
+    expect((cardMeta() as { movedFrom?: string }).movedFrom).toBeUndefined();
+  });
+
   it('lets them pick again once the earlier meeting is over', async () => {
     const stale = futureKey(1);
     const next = futureKey(3, 'morning');

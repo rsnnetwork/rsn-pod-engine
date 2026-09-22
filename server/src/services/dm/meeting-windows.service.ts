@@ -556,7 +556,9 @@ export async function confirmWindow(
       // lock already settles two simultaneous presses; what was missing was
       // telling the person counting on the old time that it changed, which the
       // card and the bell now do.
-      if (!over) movedFrom = cur.meeting_start_at ? cur.meeting_start_at.toISOString() : cur.meeting_confirmed_window;
+      // Only an exact instant: the card renders this in the reader's own time,
+      // and a day-part key ("2026-09-24:evening") would land on screen raw.
+      if (!over && cur.meeting_start_at) movedFrom = cur.meeting_start_at.toISOString();
     }
 
     await client.query(
