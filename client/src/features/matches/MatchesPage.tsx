@@ -29,6 +29,9 @@ interface PlatformMatch {
   company: string | null;
   reason: string;
   score: number;
+  /** Where a meeting request between the two stands; null when there is none. */
+  pokeStatus?: 'pending' | 'accepted' | null;
+  pokeSentByOwner?: boolean | null;
 }
 
 interface PlatformMatchesResult {
@@ -120,9 +123,19 @@ export default function MatchesPage() {
                     </p>
                   </div>
                 </Link>
-                {requested.has(m.userId) ? (
-                  <span className="flex items-center gap-1.5 text-sm text-emerald-600 font-medium min-h-[44px] sm:min-h-0">
-                    <Check className="h-4 w-4" /> Introduction requested
+                {/* Until 22 Sep the only sign anything had happened was local
+                    state on this page, and the refetch then dropped the person
+                    from the list entirely — press the button and they vanish.
+                    The server now keeps them and says where the request got to,
+                    so this survives a reload. */}
+                {requested.has(m.userId) || m.pokeStatus ? (
+                  <span className="flex items-center gap-1.5 text-sm text-emerald-600 font-medium min-h-[44px] sm:min-h-0" data-testid={`match-state-${m.userId}`}>
+                    <Check className="h-4 w-4" />
+                    {m.pokeStatus === 'accepted'
+                      ? 'Connected'
+                      : m.pokeStatus === 'pending' && m.pokeSentByOwner === false
+                        ? 'They asked to meet you'
+                        : 'Introduction requested'}
                   </span>
                 ) : (
                   <Button

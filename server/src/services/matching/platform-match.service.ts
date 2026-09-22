@@ -59,6 +59,10 @@ export interface PlatformMatch {
   company: string | null;
   reason: string;
   score: number;
+  /** Where a meeting request between the two stands; null when there is none. */
+  pokeStatus?: 'pending' | 'accepted' | null;
+  /** True when this member sent it, false when they received it. */
+  pokeSentByOwner?: boolean | null;
 }
 
 export interface PlatformMatchesResult {
@@ -401,24 +405,58 @@ async function loadProfile(userId: string): Promise<(IntentProfile & { onboardin
 }
 
 /**
- * Candidates someone can be matched with: active, onboarded, and NEW to them —
- * no prior encounter (met people can already DM), no poke in either direction
- * (pending = already suggested; declined = don't pester), no block.
+ * Candidates someone can be matched with: active, onboarded, not blocked, not
+ * already met, and not turned down. Someone they have ASKED stays, carrying
+ * where the request got to, so the card can say so instead of the person
+ * quietly disappearing (22 Sep 2026).
  */
-async function loadCandidates(userId: string): Promise<IntentProfile[]> {
-  const r = await query<IntentProfile>(
-    `SELECT ${PROFILE_COLUMNS}
+async function loadCandidates(userId: string): Promise<(IntentProfile & {
+  pokeStatus: 'pending' | 'accepted' | null;
+  pokeSentByOwner: boolean | null;
+})[]> {
+  const r = await query<IntentProfile & {
+    pokeStatus: 'pending' | 'accepted' | null; pokeSentByOwner: boolean | null;
+  }>(
+    `SELECT ${PROFILE_COLUMNS},
+            pk.status AS "pokeStatus",
+            (pk.sender_id = $1) AS "pokeSentByOwner"
      FROM users u
+     LEFT JOIN LATERAL (
+       SELECT p2.status, p2.sender_id
+         FROM user_pokes p2
+        WHERE p2.status <> 'declined'
+          AND ((p2.sender_id = $1 AND p2.recipient_id = u.id)
+            OR (p2.sender_id = u.id AND p2.recipient_id = $1))
+        ORDER BY p2.created_at DESC
+        LIMIT 1
+     ) pk ON TRUE
      WHERE u.id <> $1
        AND u.status = 'active'
        AND u.onboarding_completed = true
-       AND NOT EXISTS (
-         SELECT 1 FROM encounter_history e
-         WHERE e.user_a_id = LEAST($1, u.id) AND e.user_b_id = GREATEST($1, u.id))
+       -- "Already met" hides people you have genuinely met. Accepting a request
+       -- also writes an encounter row, so without the override below an
+       -- accepted person would disappear the moment they said yes — the same
+       -- trap the searches hit on 8 Sep.
+       AND (
+         NOT EXISTS (
+           SELECT 1 FROM encounter_history e
+           WHERE e.user_a_id = LEAST($1, u.id) AND e.user_b_id = GREATEST($1, u.id))
+         OR EXISTS (
+           SELECT 1 FROM user_pokes ip
+           WHERE ip.status <> 'declined'
+             AND ((ip.sender_id = $1 AND ip.recipient_id = u.id)
+               OR (ip.sender_id = u.id AND ip.recipient_id = $1))))
+       -- 22 Sep 2026: only a DECLINED request hides someone. This used to drop
+       -- anyone with a request in either direction at any status, so pressing
+       -- "I want to meet" made that person vanish off the page — the member
+       -- got no lasting sign that anything had happened, which is the whole of
+       -- Shradha's "nothing happened" complaint. Someone you asked stays,
+       -- badged, exactly as the searches have kept them since 8 Sep.
        AND NOT EXISTS (
          SELECT 1 FROM user_pokes p
-         WHERE (p.sender_id = $1 AND p.recipient_id = u.id)
-            OR (p.sender_id = u.id AND p.recipient_id = $1))
+         WHERE p.status = 'declined'
+           AND ((p.sender_id = $1 AND p.recipient_id = u.id)
+             OR (p.sender_id = u.id AND p.recipient_id = $1)))
        AND NOT EXISTS (
          SELECT 1 FROM user_blocks b
          WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
@@ -474,6 +512,10 @@ export async function getPlatformMatches(
       company: x.c.company,
       reason: x.fit.reason,
       score: Number(x.fit.score.toFixed(3)),
+      // Where a request between the two of you got to, so the card can show it
+      // rather than offering a button that would be refused.
+      pokeStatus: (x.c as { pokeStatus?: 'pending' | 'accepted' | null }).pokeStatus ?? null,
+      pokeSentByOwner: (x.c as { pokeSentByOwner?: boolean | null }).pokeSentByOwner ?? null,
     }));
 
   return { matches, profileIncomplete: false, nextEvent };
