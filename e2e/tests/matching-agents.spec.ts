@@ -20,13 +20,28 @@ let owner: TestUser, dev: TestUser, investor: TestUser, chef: TestUser;
 const ctxs: BrowserContext[] = [];
 const createdAgentIds: string[] = [];
 
+/**
+ * Every call in this file is charged to one test user, and the API allows 240
+ * a minute per user. A real member never comes near that; this spec does,
+ * because it polls for background scoring in a dozen places. A 429 here is the
+ * limiter working, not a fault — so wait out the window and carry on, rather
+ * than reporting the product broken (22 Sep 2026).
+ */
 async function apiAs(u: TestUser, method: string, path: string, body?: unknown) {
-  const res = await fetch(`${SERVER}/api${path}`, {
-    method,
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${u.accessToken}` },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  return { status: res.status, json: await res.json().catch(() => null) };
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(`${SERVER}/api${path}`, {
+      method,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${u.accessToken}` },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (res.status !== 429 || attempt >= 2) {
+      return { status: res.status, json: await res.json().catch(() => null) };
+    }
+    const retryAfter = Number(res.headers.get('retry-after')) || 0;
+    const waitMs = retryAfter > 0 ? (retryAfter + 1) * 1000 : 20_000;
+    console.log(`  (rate limited on ${method} ${path} — waiting ${Math.round(waitMs / 1000)}s)`);
+    await new Promise(r => setTimeout(r, waitMs));
+  }
 }
 
 async function setProfile(u: TestUser, cols: Record<string, string | string[]>) {
@@ -89,8 +104,11 @@ async function agentByLabel(u: TestUser, label: string): Promise<any> {
     throw new Error(`could not re-create "${label}" (status ${made.status}): ${JSON.stringify(made.json).slice(0, 300)}`);
   }
   createdAgentIds.push(made.json.data.id);
-  await countFor(u, made.json.data.id);
-  return (await apiAs(u, 'GET', '/agents')).json.data.find((a: any) => a.label === label);
+  // Deliberately does NOT wait for the count. Every GET /agents here is charged
+  // to one test user against a per-user limiter, and countFor polls up to 22
+  // times; adding that to a lookup used all through the file tipped the whole
+  // spec into 429s. Callers that need a settled count ask for one themselves.
+  return made.json.data;
 }
 
 /** Poll the API until an agent's stored count settles (scoring is async). */
@@ -102,7 +120,9 @@ async function countFor(u: TestUser, agentId: string, timeoutMs = 45_000): Promi
     const a = (r.json?.data ?? []).find((x: any) => x.id === agentId);
     last = a?.matchCount ?? -1;
     if (last > 0) return last;
-    await new Promise(res => setTimeout(res, 2000));
+    // 3s rather than 2s: one user makes every call in this file and the API
+    // limiter is per user, so the polls are most of the budget (22 Sep 2026).
+    await new Promise(res => setTimeout(res, 3000));
   }
   return last;
 }
