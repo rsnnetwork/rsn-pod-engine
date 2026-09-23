@@ -9,7 +9,7 @@
 // "yes". The server fetches the member's OWN scraped photo, so this cannot be
 // used to put an arbitrary image, or somebody else's face, on a profile.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Check } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
@@ -41,9 +41,21 @@ export default function LinkedinPhotoOffer({ onUsed, onDismiss }: Props) {
   const { data: photoUrl } = useLinkedinPhoto();
   const checkSession = useAuthStore(s => s.checkSession);
   const { addToast } = useToastStore();
-  // A LinkedIn image link can expire. A broken picture asking "is this you?"
-  // is worse than no question at all, so the card simply goes away.
-  const [broken, setBroken] = useState(false);
+  // The card appears only once the photo has actually loaded. Asking "is this
+  // you?" over an empty square is the one thing this card must never do —
+  // the first production run showed exactly that for the second it took the
+  // picture to arrive. A link that has expired or fails never shows the card.
+  const [ready, setReady] = useState<'pending' | 'ok' | 'bad'>('pending');
+  useEffect(() => {
+    if (!photoUrl) return;
+    setReady('pending');
+    const img = new Image();
+    img.referrerPolicy = 'no-referrer';
+    img.onload = () => setReady(img.naturalWidth > 0 ? 'ok' : 'bad');
+    img.onerror = () => setReady('bad');
+    img.src = photoUrl;
+    return () => { img.onload = null; img.onerror = null; };
+  }, [photoUrl]);
 
   const use = useMutation({
     mutationFn: () => api.post('/onboarding/linkedin-photo'),
@@ -57,7 +69,7 @@ export default function LinkedinPhotoOffer({ onUsed, onDismiss }: Props) {
     },
   });
 
-  if (!photoUrl || broken) return null;
+  if (!photoUrl || ready !== 'ok') return null;
 
   return (
     <div
@@ -69,7 +81,6 @@ export default function LinkedinPhotoOffer({ onUsed, onDismiss }: Props) {
         alt="The photo on your LinkedIn"
         width={64}
         height={64}
-        onError={() => setBroken(true)}
         className="h-16 w-16 shrink-0 rounded-full object-cover"
         referrerPolicy="no-referrer"
       />
