@@ -272,8 +272,9 @@ router.post(
           await joinRequestService.reviewJoinRequest(id, decision, req.user!.userId, notes);
           affected++;
         } catch (err: any) {
-          // Skip individual failures (e.g. already reviewed) but continue
-          if (err?.statusCode !== 404) throw err;
+          // Skip a request that is gone (404) or that someone already reviewed
+          // the other way (409); a same-decision repeat returns quietly.
+          if (err?.statusCode !== 404 && err?.statusCode !== 409) throw err;
         }
       }
 

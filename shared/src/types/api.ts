@@ -83,6 +83,7 @@ export const ErrorCodes = {
   INVITE_NOT_PERMITTED: 'INVITE_NOT_PERMITTED',
   ALREADY_REGISTERED: 'ALREADY_REGISTERED',
   REGISTRATION_BLOCKED: 'REGISTRATION_BLOCKED',
+  JOIN_REQUEST_ALREADY_REVIEWED: 'JOIN_REQUEST_ALREADY_REVIEWED',  // approve/decline of a request someone already reviewed the other way
   IDENTITY_MISMATCH: 'IDENTITY_MISMATCH',  // T1-1 — invite issued to a different email than the authenticated user
 
   // Match errors

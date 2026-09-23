@@ -5,7 +5,7 @@ import crypto from 'crypto';
 import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import config from '../../config';
-import { AppError } from '../../middleware/errors';
+import { AppError, ConflictError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
 import { sendJoinRequestConfirmationEmail, sendJoinRequestWelcomeEmail, sendJoinRequestDeclineEmail, sendJoinRequestReminderEmail } from '../email/email.service';
 import { applyMatchVerification, normalizeLinkedinUrl } from '../onboarding/enrichment.service';
@@ -215,26 +215,44 @@ export async function reviewJoinRequest(
   const resetReminders = decision === 'approved';
   // Approval and reopening a closed account with that email commit together,
   // so the welcome link below can never reach an account that is still closed.
-  const { row, account } = await transaction(async (client) => {
+  //
+  // Only a PENDING request is claimed (23 Sep 2026: a double click on Approve
+  // ran the whole approval twice, 300ms apart; the second welcome link killed
+  // the first). Row locking makes the claim atomic, so the loser of any race
+  // sees the request already reviewed and repeats nothing.
+  const { row, account, claimed } = await transaction(async (client) => {
     const result = await client.query(
       `UPDATE join_requests
        SET status = $1, reviewed_by = $2, reviewed_at = NOW(), review_notes = $3, updated_at = NOW(),
            reminder_count = CASE WHEN $5 THEN 0 ELSE reminder_count END,
            last_reminded_at = CASE WHEN $5 THEN NULL ELSE last_reminded_at END
-       WHERE id = $4
+       WHERE id = $4 AND status = 'pending'
        RETURNING *`,
       [decision, reviewedBy, reviewNotes || null, id, resetReminders]
     );
     if (result.rows.length === 0) {
-      throw new AppError(404, ErrorCodes.INVALID_INPUT, 'Join request not found');
+      const current = await client.query(`SELECT * FROM join_requests WHERE id = $1`, [id]);
+      if (current.rows.length === 0) {
+        throw new AppError(404, ErrorCodes.INVALID_INPUT, 'Join request not found');
+      }
+      if (current.rows[0].status !== decision) {
+        throw new ConflictError(ErrorCodes.JOIN_REQUEST_ALREADY_REVIEWED, `This request was already ${current.rows[0].status}.`);
+      }
+      return { row: current.rows[0], account: null, claimed: false };
     }
     const approvedAccount = decision === 'approved' ? await reopenClosedAccount(client, result.rows[0].email) : null;
-    return { row: result.rows[0], account: approvedAccount };
+    return { row: result.rows[0], account: approvedAccount, claimed: true };
   });
 
-  logger.info({ id, decision, reviewedBy }, 'Join request reviewed');
-
   const reviewed = mapRow(row);
+
+  // The same decision again (a double click, a retry): already done, nothing re-sent.
+  if (!claimed) {
+    logger.info({ id, decision, reviewedBy }, 'Join request already reviewed with this decision; nothing repeated');
+    return reviewed;
+  }
+
+  logger.info({ id, decision, reviewedBy }, 'Join request reviewed');
 
   if (account?.reopenedUserId) {
     announceReopened(account.reopenedUserId, { actorId: reviewedBy, joinRequestId: id, email: reviewed.email, via: 'dashboard' });

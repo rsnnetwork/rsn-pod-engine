@@ -162,6 +162,43 @@ describe('dashboard approval (reviewJoinRequest)', () => {
     expect(invalidateUserStatusCache).not.toHaveBeenCalled();
   });
 
+  // 23 Sep 2026: Ali double-clicked Approve. Both clicks ran the whole approval
+  // 300ms apart: two welcome emails, and the second one's link killed the
+  // first's ("already used"). The approval now claims only a PENDING request.
+  it('the approval only claims a request that is still pending', async () => {
+    accountIs('none');
+    await reviewJoinRequest('jr-1', 'approved', 'admin-1');
+    const claim = mockClientQuery.mock.calls.find((c) => /UPDATE join_requests/.test(String(c[0])));
+    expect(String(claim![0])).toMatch(/WHERE id = \$4 AND status = 'pending'/);
+  });
+
+  it('a second click on Approve sends nothing again: no email, no new link, no reopen', async () => {
+    mockClientQuery.mockImplementation((sql: string) => {
+      if (/UPDATE join_requests/.test(sql)) return Promise.resolve({ rows: [], rowCount: 0 }); // the first click already claimed it
+      if (/SELECT \* FROM join_requests WHERE id/.test(sql)) return Promise.resolve({ rows: [REQUEST], rowCount: 1 });
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    });
+    const reviewed = await reviewJoinRequest('jr-1', 'approved', 'admin-1');
+    await flush();
+
+    expect(reviewed.status).toBe('approved');
+    expect(sendJoinRequestWelcomeEmail).not.toHaveBeenCalled();
+    expect(log.some((l) => /INSERT INTO magic_links|UPDATE magic_links/.test(l))).toBe(false);
+    expect(log.some((l) => /INSERT INTO notifications/.test(l))).toBe(false);
+    expect(txSql().some((s) => REOPEN.test(s))).toBe(false);
+  });
+
+  it('approving a request another admin already declined is refused, and says so', async () => {
+    mockClientQuery.mockImplementation((sql: string) => {
+      if (/UPDATE join_requests/.test(sql)) return Promise.resolve({ rows: [], rowCount: 0 });
+      if (/SELECT \* FROM join_requests WHERE id/.test(sql)) return Promise.resolve({ rows: [{ ...REQUEST, status: 'declined' }], rowCount: 1 });
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    });
+    await expect(reviewJoinRequest('jr-1', 'approved', 'admin-1'))
+      .rejects.toMatchObject({ statusCode: 409, code: 'JOIN_REQUEST_ALREADY_REVIEWED', message: 'This request was already declined.' });
+    expect(sendJoinRequestWelcomeEmail).not.toHaveBeenCalled();
+  });
+
   it('a missing request is still a 404, and nothing is reopened', async () => {
     mockClientQuery.mockResolvedValue({ rows: [], rowCount: 0 });
     await expect(reviewJoinRequest('jr-x', 'approved', 'admin-1')).rejects.toMatchObject({ statusCode: 404 });

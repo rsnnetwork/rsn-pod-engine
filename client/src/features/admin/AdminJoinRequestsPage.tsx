@@ -106,7 +106,11 @@ export default function AdminJoinRequestsPage() {
       setReviewModal(null);
       setReviewNotes('');
     },
-    onError: () => addToast('Failed to review request', 'error'),
+    onError: (err: any) => {
+      // A request another admin already reviewed says so, instead of a generic failure.
+      queryClient.invalidateQueries({ queryKey: ['admin-join-requests'] });
+      addToast(err?.response?.data?.error?.message || 'Failed to review request', 'error');
+    },
   });
 
   const bulkMutation = useMutation({
@@ -247,10 +251,10 @@ export default function AdminJoinRequestsPage() {
           <div className="flex-1" />
           {statusFilter === 'pending' && (
             <>
-              <Button size="sm" variant="ghost" className="!text-emerald-300 !text-xs" onClick={() => { if (confirm(`Approve ${selected.size} request(s)?`)) bulkMutation.mutate({ action: 'approve' }); }}>
+              <Button size="sm" variant="ghost" className="!text-emerald-300 !text-xs" isLoading={bulkMutation.isPending && bulkMutation.variables?.action === 'approve'} disabled={bulkMutation.isPending} onClick={() => { if (confirm(`Approve ${selected.size} request(s)?`)) bulkMutation.mutate({ action: 'approve' }); }}>
                 Bulk Approve
               </Button>
-              <Button size="sm" variant="ghost" className="!text-red-300 !text-xs" onClick={() => { if (confirm(`Decline ${selected.size} request(s)?`)) bulkMutation.mutate({ action: 'decline' }); }}>
+              <Button size="sm" variant="ghost" className="!text-red-300 !text-xs" isLoading={bulkMutation.isPending && bulkMutation.variables?.action === 'decline'} disabled={bulkMutation.isPending} onClick={() => { if (confirm(`Decline ${selected.size} request(s)?`)) bulkMutation.mutate({ action: 'decline' }); }}>
                 Bulk Decline
               </Button>
             </>
@@ -290,6 +294,8 @@ export default function AdminJoinRequestsPage() {
           {requests.map((r) => {
             const tier = r.status === 'approved' && !r.hasActivated ? getActivationTier(r.daysSinceApproval) : null;
             const note = accountNote(r);
+            // Locked while this row is being reviewed, so a double click is one approval.
+            const reviewing = reviewMutation.isPending && reviewMutation.variables?.id === r.id;
             const isSelectable = (statusFilter === 'pending' && r.status === 'pending')
               || (statusFilter === 'approved' && r.status === 'approved' && !r.hasActivated);
 
@@ -389,6 +395,7 @@ export default function AdminJoinRequestsPage() {
                         <Button
                           size="sm"
                           onClick={() => reviewMutation.mutate({ id: r.id, decision: 'approved', reviewNotes: '' })}
+                          isLoading={reviewing}
                           className="!bg-emerald-600 hover:!bg-emerald-700"
                         >
                           <CheckCircle className="h-4 w-4 mr-1" /> Approve
@@ -396,6 +403,7 @@ export default function AdminJoinRequestsPage() {
                         <Button
                           size="sm"
                           variant="secondary"
+                          disabled={reviewing}
                           onClick={() => setReviewModal({ request: r, decision: 'declined' })}
                         >
                           <XCircle className="h-4 w-4 mr-1" /> Decline
