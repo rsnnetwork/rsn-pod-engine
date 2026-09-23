@@ -224,12 +224,12 @@ export default function AdminJoinRequestsPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex gap-3 animate-fade-in-up">
+      <div className="flex flex-wrap gap-2 sm:gap-3 animate-fade-in-up">
         {['pending', 'approved', 'declined', ''].map(s => (
           <button
             key={s}
             onClick={() => { setStatusFilter(s); setPage(1); setSelected(new Set()); }}
-            className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+            className={`min-h-[44px] px-4 py-2 rounded-full text-sm font-medium transition-all ${
               statusFilter === s
                 ? 'bg-rsn-red text-white'
                 : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
@@ -295,7 +295,7 @@ export default function AdminJoinRequestsPage() {
 
             return (
               <Card key={r.id} className={`!p-5 ${selected.has(r.id) ? 'ring-2 ring-rsn-red/30' : ''}`}>
-                <div className="flex items-start justify-between gap-4">
+                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
                   <div className="flex items-start gap-3 flex-1 min-w-0">
                     {isSelectable && (
                       <input
@@ -382,7 +382,8 @@ export default function AdminJoinRequestsPage() {
                     </div>
                   </div>
 
-                  <div className="flex flex-col items-end gap-2 shrink-0">
+                  {/* On a phone the actions sit under the request, never beside it squeezing it. */}
+                  <div className="flex flex-col items-start sm:items-end gap-2 sm:shrink-0">
                     {r.status === 'pending' && (
                       <div className="flex items-center gap-2">
                         <Button

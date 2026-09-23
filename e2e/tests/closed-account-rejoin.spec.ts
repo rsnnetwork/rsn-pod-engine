@@ -132,7 +132,7 @@ test("Shradha's path: deleted, told why, asks again, approved from the admin pag
 
   // 4. The login page says it too, when she asks for a link there.
   await page.goto(`${APP}/login`, { waitUntil: 'domcontentloaded' });
-  await page.getByLabel('Email address').fill(email);
+  await page.getByPlaceholder('you@example.com').fill(email);
   await page.getByRole('button', { name: /Send magic link/ }).click();
   await expect(page.getByText(CLOSED_TEXT)).toBeVisible({ timeout: 30_000 });
   await page.screenshot({ path: 'test-results/closed-2-login-says-why.png' });

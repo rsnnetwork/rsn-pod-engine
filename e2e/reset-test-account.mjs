@@ -33,7 +33,7 @@ const DEPENDENTS = [
   ['matches', 'participant_a_id'], ['matches', 'participant_b_id'], ['matches', 'participant_c_id'],
   ['circle_members', 'user_id'], ['pod_members', 'user_id'], ['session_participants', 'user_id'],
   ['user_entitlements', 'user_id'], ['user_subscriptions', 'user_id'],
-  ['notifications', 'user_id'], ['refresh_tokens', 'user_id'], ['audit_log', 'actor_id'],
+  ['notifications', 'user_id'], ['refresh_tokens', 'user_id'],
   ['onboarding_stage_events', 'user_id'], ['user_intent_profiles', 'user_id'],
   ['magic_links', 'lower(email) = $1', 'email'],
 ];
@@ -78,6 +78,10 @@ async function main() {
     // event); only the pointer to this account is cleared.
     const accepted = await pool.query(`SELECT COUNT(*)::int n FROM invites WHERE accepted_by_user_id = $1`, [id]);
     if (accepted.rows[0].n) console.log(`  invites it accepted: ${accepted.rows[0].n} (acceptor pointer will be cleared)`);
+    // audit_log is never deleted (CLAUDE.md 15). Its rows stay; only the actor
+    // pointer to this account is cleared, which the foreign key needs.
+    const acted = await pool.query(`SELECT COUNT(*)::int n FROM audit_log WHERE actor_id = $1`, [id]);
+    if (acted.rows[0].n) console.log(`  audit_log rows it made: ${acted.rows[0].n} (kept; actor pointer will be cleared)`);
   }
 
   if (!apply) {
@@ -98,6 +102,7 @@ async function main() {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const before = (await client.query(`SELECT COUNT(*)::int n FROM users`)).rows[0].n;
     if (id) {
       for (const [table, where, mode] of DEPENDENTS) {
         const clause = mode === true ? where : mode === 'email' ? where : `${where} = $1`;
@@ -120,8 +125,13 @@ async function main() {
         }
       }
       await client.query(`UPDATE invites SET accepted_by_user_id = NULL WHERE accepted_by_user_id = $1`, [id]);
+      await client.query(`UPDATE audit_log SET actor_id = NULL WHERE actor_id = $1`, [id]);
       const d = await client.query(`DELETE FROM users WHERE id = $1 RETURNING id`, [id]);
       console.log(`  users: deleted ${d.rowCount}`);
+      // Safety: exactly this one account, never more (CLAUDE.md 15).
+      const after = (await client.query(`SELECT COUNT(*)::int n FROM users`)).rows[0].n;
+      if (d.rowCount !== 1 || after !== before - 1) throw new Error(`users count drifted: ${before} -> ${after}`);
+      console.log(`  users count: ${before} -> ${after}`);
     }
     if (jr.rows.length) { const d = await client.query(`DELETE FROM join_requests WHERE lower(email) = $1`, [email]); console.log(`  join_requests: deleted ${d.rowCount}`); }
     if (inv.rows.length) { const d = await client.query(`DELETE FROM invites WHERE lower(invitee_email) = $1`, [email]); console.log(`  invites: deleted ${d.rowCount}`); }
