@@ -46,7 +46,7 @@ import {
 import { getCachedEnrichment, getEnrichmentState, saveEnrichedCandidate, setEnrichmentState } from './enrichment.repo';
 import { resolveEnrichProvider, runProvider, statusFromResult, type EnrichProviderName } from './providers/registry';
 import type { ProviderOutcome } from './providers/provider.types';
-import { captureAvatar, hasAvatar, tryGravatar } from './avatar.service';
+import { tryGravatar } from './avatar.service';
 import { record as recordStageEvent, type StageEventStage, sanitizeErrorMessage } from './stage-events.repo';
 
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
@@ -283,24 +283,11 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
       const status = statusFromResult(cached);
       await writeState(userId, { status });
       logTerminal(userId, provider, status, startedAtMs, { cacheHit: true });
-      // 7 Sep 2026 (Ali: "why is it not getting my image?"): members approved
-      // before their first login arrive here with the approval-time cache, and
-      // this branch never captured the photo the scrape had found. Same
-      // capture as the live path below, only while they have no photo yet.
-      const cachedPhoto = cached!.profile?.photoUrl ?? null;
-      // No LinkedIn photo in the cache: a public Gravatar for their email may exist.
-      if (!cachedPhoto) tryGravatar(userId).catch(() => {});
-      if (cachedPhoto && !(await hasAvatar(userId).catch(() => true))) {
-        const photoStartedAtMs = Date.now();
-        captureAvatar(userId, cachedPhoto)
-          .then((captured) => {
-            recordStageEvent(userId, captured ? 'photo_captured' : 'photo_failed', { source: 'cache' }, Date.now() - photoStartedAtMs).catch(() => {});
-            if (!captured) tryGravatar(userId).catch(() => {});
-          })
-          .catch((err) => {
-            logger.warn({ err, userId }, 'enrichment: captureAvatar (cached) rejected unexpectedly (non-fatal)');
-          });
-      }
+      // The LinkedIn photo is OFFERED to the member on the confirm step and
+      // never applied here (23 Sep 2026, Shradha's "they confirm it"; a match
+      // can be the wrong person). With no LinkedIn photo at all, a public
+      // Gravatar for their own email may exist.
+      if (!cached!.profile?.photoUrl) tryGravatar(userId).catch(() => {});
       return;
     }
 
@@ -356,33 +343,10 @@ async function runEnrichmentOnce(userId: string, input: RunEnrichmentInput): Pro
         logger.warn({ err, userId }, 'enrichment: saveEnrichedCandidate failed (non-fatal)'),
       );
       await writeState(userId, { status: kind, source: provider });
-      // A7: LinkedIn photo capture — fire-and-forget, deliberately NOT
-      // awaited. A photo failure must never affect (or delay) the
-      // enrichment outcome above, which has already been written. The
-      // .catch() here is a defensive backstop only — captureAvatar itself
-      // never throws (it returns false + logs on every failure path) — so
-      // this guards against a truly unexpected rejection escaping it,
-      // mirroring runEnrichment's own top-level never-throws guarantee.
-      // E1: photo_captured/photo_failed recorded from THIS call site (not
-      // inside avatar.service.ts, which stays photo-only) — duration_ms
-      // spans just the capture itself, not the enrichment attempt above.
-      if (outcome.photoUrl) {
-        const photoStartedAtMs = Date.now();
-        captureAvatar(userId, outcome.photoUrl)
-          .then((captured) => {
-            const stage = captured ? 'photo_captured' : 'photo_failed';
-            recordStageEvent(userId, stage, {}, Date.now() - photoStartedAtMs).catch(() => {});
-            if (!captured) tryGravatar(userId).catch(() => {});
-          })
-          .catch((err) => {
-            logger.warn({ err, userId }, 'enrichment: captureAvatar rejected unexpectedly (non-fatal)');
-            const reason = sanitizeErrorMessage(err instanceof Error ? err.message : 'unknown avatar capture error');
-            recordStageEvent(userId, 'photo_failed', { reason }, Date.now() - photoStartedAtMs).catch(() => {});
-          });
-      } else {
-        // The scrape had no photo at all: try a public Gravatar for their email.
-        tryGravatar(userId).catch(() => {});
-      }
+      // The LinkedIn photo is OFFERED on the confirm step, never applied here
+      // (23 Sep 2026 — see services/onboarding/linkedin-photo.ts). With none at
+      // all, a public Gravatar for their own email may exist.
+      if (!outcome.photoUrl) tryGravatar(userId).catch(() => {});
       logTerminal(userId, provider, kind, startedAtMs);
       return;
     }

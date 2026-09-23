@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { useAuthStore } from '@/stores/authStore';
+import LinkedinPhotoOffer, { useLinkedinPhoto } from '@/features/onboarding/LinkedinPhotoOffer';
 import { useToastStore } from '@/stores/toastStore';
 import { Button } from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
@@ -73,6 +74,10 @@ export default function ProfilePage() {
   // photo tap as the onboarding card, from the profile page, with the
   // outcome read back from the URL on return.
   const [googlePhotoBusy, setGooglePhotoBusy] = useState(false);
+  // 23 Sep 2026: the LinkedIn photo is a choice, never applied for them. Here
+  // it is one tap from the profile for anyone who skipped it at sign-up.
+  const { data: linkedinPhoto } = useLinkedinPhoto();
+  const [linkedinOpen, setLinkedinOpen] = useState(false);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const photo = params.get('photo');
@@ -282,7 +287,25 @@ export default function ProfilePage() {
                 </svg>
                 Use my Google photo
               </button>
+              {linkedinPhoto && !linkedinOpen && (
+                <button
+                  type="button"
+                  onClick={() => setLinkedinOpen(true)}
+                  className="inline-flex min-h-[44px] items-center gap-1.5 text-xs font-medium text-gray-600 hover:text-[#1a1a2e]"
+                  data-testid="use-linkedin-photo"
+                >
+                  Use my LinkedIn photo
+                </button>
+              )}
             </div>
+            {linkedinOpen && (
+              <div className="mt-3">
+                <LinkedinPhotoOffer
+                  onUsed={() => setLinkedinOpen(false)}
+                  onDismiss={() => setLinkedinOpen(false)}
+                />
+              </div>
+            )}
           </div>
         </div>
       </Card>

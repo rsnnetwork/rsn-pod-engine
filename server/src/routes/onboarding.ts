@@ -19,6 +19,9 @@ import { draftSchema, confirmSchema, tourSchema } from '../services/onboarding/a
 import { createAgentsFromAnswers } from '../services/matching/first-agent.service';
 import { notifyMatchesOfNewUser } from '../services/matching/platform-match.service';
 import { fanoutUserEntity } from '../realtime/fanout';
+import { findLinkedinPhoto, useLinkedinPhoto } from '../services/onboarding/linkedin-photo';
+import { AppError, NotFoundError } from '../middleware/errors';
+import { ErrorCodes } from '@rsn/shared';
 import { query } from '../db';
 import {
   ApiResponse,
@@ -298,6 +301,52 @@ router.post(
         { lastCard: req.body.lastCard ?? null });
       await fanoutUserEntity(userId);
       const response: ApiResponse = { success: true, data: { seen: true } };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ─── The LinkedIn photo: offered, never applied for them (23 Sep 2026) ───────
+// Shradha's deck: nothing reaches a profile unless the member confirms it. The
+// photo scraped from their LinkedIn is shown with "Is this you?" and used only
+// when they say so. The client never names a URL — the server resolves the
+// member's OWN scraped photo — so these cannot put an arbitrary image, or
+// someone else's face, on anybody's profile.
+
+// GET /onboarding/linkedin-photo — the photo we found for them, or null.
+router.get(
+  '/linkedin-photo',
+  authenticate,
+  onboardingAnswersLimiter,
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const photoUrl = await findLinkedinPhoto(req.user!.userId);
+      const response: ApiResponse = { success: true, data: { photoUrl } };
+      res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// POST /onboarding/linkedin-photo — "that's me": make it their photo.
+router.post(
+  '/linkedin-photo',
+  authenticate,
+  onboardingConfirmLimiter,
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const userId = req.user!.userId;
+      const outcome = await useLinkedinPhoto(userId);
+      if (outcome === 'none') throw new NotFoundError('LinkedIn photo', userId);
+      if (outcome === 'failed') {
+        throw new AppError(502, ErrorCodes.INTERNAL_ERROR, 'We could not fetch that photo just now. Please try again.');
+      }
+      // Their face changes everywhere it is drawn: header, cards, chat.
+      await fanoutUserEntity(userId);
+      const response: ApiResponse = { success: true, data: { used: true } };
       res.json(response);
     } catch (err) {
       next(err);

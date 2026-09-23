@@ -488,22 +488,27 @@ describe('Identity Service', () => {
         });
       });
 
-      // 14 Sep 2026 (full-flow prod smoke): the state is seeded found/partial
-      // here, so the client never fires the enrich trigger, and the cache
-      // branch that captured the photo never ran. The photo comes with login.
-      it('captures the preload photo at login, fire-and-forget, when the member has no photo yet', async () => {
+      // 23 Sep 2026: the LinkedIn photo is NEVER put on the account at sign-in.
+      // Shradha's deck — nothing reaches a profile unless the member confirms
+      // it — and a LinkedIn match can be the wrong person, as it was in
+      // Stefan's test. It is offered on the confirm step instead
+      // (services/onboarding/linkedin-photo.ts). Until 23 Sep this block pinned
+      // the opposite: that it was captured here, fire-and-forget.
+      it('does not put the LinkedIn photo on a new account — it is offered, not applied', async () => {
         mockNewUserChain({
           profile: { fullName: 'Preload Person', headline: 'Head of Ops at Preload', currentRole: 'Head of Ops', currentCompany: 'Preload', photoUrl: 'https://media.licdn.com/dms/image/preload.jpg' },
           confidence: 0.9, sources: [], foundLinkedinUrl: null, requestedLinkedinUrl: 'https://linkedin.com/in/preload', enrichedAt, provider: 'scrapingdog',
         });
         await identityService.verifyMagicLink('some-token');
         await flush();
-        expect(avatar.captureAvatar).toHaveBeenCalledWith(mockUser.id, 'https://media.licdn.com/dms/image/preload.jpg');
-        expect(stageEvents.record).toHaveBeenCalledWith(mockUser.id, 'photo_captured', { source: 'login' }, expect.any(Number));
+        expect(avatar.captureAvatar).not.toHaveBeenCalled();
+        expect(stageEvents.record).not.toHaveBeenCalledWith(mockUser.id, 'photo_captured', expect.anything(), expect.anything());
+        // Not Gravatar either: filling the slot would hide the offer, and take
+        // the choice away from them just the same.
         expect(avatar.tryGravatar).not.toHaveBeenCalled();
       });
 
-      it('a preload without a photo tries Gravatar instead; a member with a photo already is left alone', async () => {
+      it('with no LinkedIn photo at all, a public Gravatar for their own email is still tried', async () => {
         mockNewUserChain({
           profile: { fullName: 'Preload Person', headline: 'x', currentRole: 'x', currentCompany: 'x', photoUrl: null },
           confidence: 0.9, sources: [], foundLinkedinUrl: null, requestedLinkedinUrl: 'https://linkedin.com/in/preload', enrichedAt,
@@ -512,31 +517,18 @@ describe('Identity Service', () => {
         await flush();
         expect(avatar.captureAvatar).not.toHaveBeenCalled();
         expect(avatar.tryGravatar).toHaveBeenCalledWith(mockUser.id);
+      });
 
+      it('a member who already has a photo is left entirely alone', async () => {
         (avatar.hasAvatar as jest.Mock).mockResolvedValue(true);
-        (avatar.captureAvatar as jest.Mock).mockClear();
-        (avatar.tryGravatar as jest.Mock).mockClear();
         mockNewUserChain({
-          profile: { fullName: 'Preload Person', headline: 'x', currentRole: 'x', currentCompany: 'x', photoUrl: 'https://media.licdn.com/dms/image/preload.jpg' },
+          profile: { fullName: 'Preload Person', headline: 'x', currentRole: 'x', currentCompany: 'x', photoUrl: null },
           confidence: 0.9, sources: [], foundLinkedinUrl: null, requestedLinkedinUrl: 'https://linkedin.com/in/preload', enrichedAt,
         });
         await identityService.verifyMagicLink('some-token');
         await flush();
         expect(avatar.captureAvatar).not.toHaveBeenCalled();
         expect(avatar.tryGravatar).not.toHaveBeenCalled();
-      });
-
-      it('a failed capture never breaks login and falls back to Gravatar', async () => {
-        (avatar.captureAvatar as jest.Mock).mockResolvedValue(false);
-        mockNewUserChain({
-          profile: { fullName: 'Preload Person', headline: 'x', currentRole: 'x', currentCompany: 'x', photoUrl: 'https://media.licdn.com/dms/image/preload.jpg' },
-          confidence: 0.9, sources: [], foundLinkedinUrl: null, requestedLinkedinUrl: 'https://linkedin.com/in/preload', enrichedAt,
-        });
-        const out = await identityService.verifyMagicLink('some-token');
-        expect(out).toBeTruthy();
-        await flush();
-        expect(stageEvents.record).toHaveBeenCalledWith(mockUser.id, 'photo_failed', { source: 'login' }, expect.any(Number));
-        expect(avatar.tryGravatar).toHaveBeenCalledWith(mockUser.id);
       });
 
       it('ZERO confidence → does NOT call setEnrichmentState or saveEnrichedCandidate (client trigger handles it, stays none)', async () => {

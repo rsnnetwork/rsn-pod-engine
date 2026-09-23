@@ -70,7 +70,7 @@ import logger from '../../../config/logger';
 import { getCachedEnrichment, getEnrichmentState, saveEnrichedCandidate, setEnrichmentState } from '../../../services/onboarding/enrichment.repo';
 import { scrapingdogProvider } from '../../../services/onboarding/providers/scrapingdog.provider';
 import { enrichProfile, getClient, type EnrichResult, type EnrichedProfile } from '../../../services/onboarding/enrichment.service';
-import { captureAvatar, hasAvatar } from '../../../services/onboarding/avatar.service';
+import { captureAvatar, hasAvatar, tryGravatar } from '../../../services/onboarding/avatar.service';
 import { record as recordStageEvent } from '../../../services/onboarding/stage-events.repo';
 import { runEnrichment } from '../../../services/onboarding/enrichment.orchestrator';
 
@@ -82,6 +82,7 @@ const mockScrapingdogEnrich = scrapingdogProvider.enrich as jest.Mock;
 const mockEnrichProfile = enrichProfile as jest.Mock;
 const mockGetClient = getClient as jest.Mock;
 const mockCaptureAvatar = captureAvatar as jest.Mock;
+const mockTryGravatar = tryGravatar as jest.Mock;
 const mockHasAvatar = hasAvatar as jest.Mock;
 const mockRecordStageEvent = recordStageEvent as jest.Mock;
 
@@ -352,9 +353,11 @@ describe('runEnrichment', () => {
       expect(stageCall('enrich_found')).toBeUndefined();
     });
 
-    // 7 Sep 2026 (Ali): members approved before their first login arrive with
-    // the approval-time cache, and this branch never captured the photo.
-    it('a fresh cache hit captures the cached photo when the member has no avatar yet', async () => {
+    // 23 Sep 2026: the cached LinkedIn photo is OFFERED to the member on the
+    // confirm step and never applied here — Shradha's deck, "they confirm it",
+    // after a LinkedIn match was the wrong person in Stefan's test. Until 23 Sep
+    // this pinned the opposite (a 7 Sep fix that captured it automatically).
+    it('a fresh cache hit never puts the cached LinkedIn photo on the member', async () => {
       mockHasAvatar.mockResolvedValue(false);
       const cached = foundResult({ confidence: 0.95, requestedLinkedinUrl: REQ_URL });
       cached.profile = { ...cached.profile!, photoUrl: 'https://media.licdn.com/dms/image/jane.jpg' };
@@ -364,7 +367,9 @@ describe('runEnrichment', () => {
       await new Promise((r) => setTimeout(r, 0));
 
       expect(mockScrapingdogEnrich).not.toHaveBeenCalled();
-      expect(mockCaptureAvatar).toHaveBeenCalledWith('u1', 'https://media.licdn.com/dms/image/jane.jpg');
+      expect(mockCaptureAvatar).not.toHaveBeenCalled();
+      // Nor Gravatar: filling the slot would hide the offer all the same.
+      expect(mockTryGravatar).not.toHaveBeenCalled();
     });
 
     it('a member who already has a photo is not re-captured from the cache', async () => {
@@ -660,109 +665,53 @@ describe('runEnrichment', () => {
   // it's kicked from the found/partial branch but never awaited, and a
   // rejection must never change (or delay) the enrichment's own terminal
   // state. See avatar.service.test.ts for captureAvatar's own behavior.
-  describe('A7: photo capture wiring', () => {
-    it('found outcome with a photoUrl triggers captureAvatar(userId, photoUrl)', async () => {
+  // 23 Sep 2026: the orchestrator never applies a LinkedIn photo. It used to
+  // capture it straight onto the member (A7, with E1 telemetry); now the photo
+  // is offered on the confirm step and used only when the member says it is
+  // them. See services/onboarding/linkedin-photo.ts.
+  describe('the LinkedIn photo is offered, never applied here', () => {
+    for (const kind of ['found', 'partial'] as const) {
+      it(`a ${kind} scrape with a photo leaves the member's photo alone`, async () => {
+        mockScrapingdogEnrich.mockResolvedValue({
+          kind, result: foundResult({ confidence: kind === 'found' ? 0.95 : 0.7 }),
+          photoUrl: 'https://cdn.example.com/jane.jpg', missing: kind === 'partial' ? ['headline'] : undefined,
+        });
+
+        await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
+        await new Promise((r) => setImmediate(r));
+
+        expect(mockCaptureAvatar).not.toHaveBeenCalled();
+        expect(mockTryGravatar).not.toHaveBeenCalled();
+        expect(stageCall('photo_captured')).toBeUndefined();
+        expect(stageCall('photo_failed')).toBeUndefined();
+      });
+    }
+
+    it('the scrape is still saved, so the photo can be offered from it', async () => {
       mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: 'https://cdn.example.com/jane.jpg' });
 
       await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
 
-      expect(mockCaptureAvatar).toHaveBeenCalledWith('u1', 'https://cdn.example.com/jane.jpg');
+      expect(mockSaveEnrichedCandidate).toHaveBeenCalledTimes(1);
+      const [, params] = lastStateCall();
+      expect(params).toMatchObject({ status: 'found', source: 'scrapingdog' });
     });
 
-    it('partial outcome with a photoUrl also triggers captureAvatar', async () => {
-      mockScrapingdogEnrich.mockResolvedValue({
-        kind: 'partial', result: foundResult({ confidence: 0.7 }), photoUrl: 'https://cdn.example.com/jane.jpg', missing: ['headline'],
-      });
-
-      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
-
-      expect(mockCaptureAvatar).toHaveBeenCalledWith('u1', 'https://cdn.example.com/jane.jpg');
-    });
-
-    it('photoUrl null: skips captureAvatar entirely', async () => {
+    it('with no LinkedIn photo at all, a public Gravatar for their own email is still tried', async () => {
       mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: null });
 
       await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
 
       expect(mockCaptureAvatar).not.toHaveBeenCalled();
+      expect(mockTryGravatar).toHaveBeenCalledWith('u1');
     });
 
-    it('not_found/failed outcomes never call captureAvatar', async () => {
+    it('not_found/failed outcomes never touch the photo', async () => {
       mockScrapingdogEnrich.mockResolvedValue({ kind: 'not_found', reason: 'scrapingdog 404' });
 
       await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
 
       expect(mockCaptureAvatar).not.toHaveBeenCalled();
-    });
-
-    it('captureAvatar rejecting does not change the enrichment terminal state (fire-and-forget-safe)', async () => {
-      mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: 'https://cdn.example.com/jane.jpg' });
-      mockCaptureAvatar.mockRejectedValue(new Error('avatar capture blew up'));
-
-      await expect(runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' })).resolves.toBeUndefined();
-
-      const [, params] = lastStateCall();
-      expect(params).toMatchObject({ status: 'found', source: 'scrapingdog' });
-      expect(mockSaveEnrichedCandidate).toHaveBeenCalledTimes(1);
-    });
-
-    it('captureAvatar returning false (a handled download failure) does not change the enrichment terminal state', async () => {
-      mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: 'https://cdn.example.com/jane.jpg' });
-      mockCaptureAvatar.mockResolvedValue(false);
-
-      await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
-
-      const [, params] = lastStateCall();
-      expect(params).toMatchObject({ status: 'found', source: 'scrapingdog' });
-    });
-
-    // ─── E1: photo_captured / photo_failed stage-event telemetry ────────────
-    describe('E1: photo capture stage events', () => {
-      it('a successful capture records photo_captured with a duration_ms', async () => {
-        mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: 'https://cdn.example.com/jane.jpg' });
-        mockCaptureAvatar.mockResolvedValue(true);
-
-        await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
-        await new Promise((r) => setImmediate(r));
-
-        const call = stageCall('photo_captured');
-        expect(call).toBeDefined();
-        expect(call![0]).toBe('u1');
-        expect(typeof call![3]).toBe('number');
-      });
-
-      it('captureAvatar resolving false records photo_failed', async () => {
-        mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: 'https://cdn.example.com/jane.jpg' });
-        mockCaptureAvatar.mockResolvedValue(false);
-
-        await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
-        await new Promise((r) => setImmediate(r));
-
-        expect(stageCall('photo_failed')).toBeDefined();
-        expect(stageCall('photo_captured')).toBeUndefined();
-      });
-
-      it('captureAvatar rejecting records photo_failed with the error message as reason', async () => {
-        mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: 'https://cdn.example.com/jane.jpg' });
-        mockCaptureAvatar.mockRejectedValue(new Error('avatar capture blew up'));
-
-        await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
-        await new Promise((r) => setImmediate(r));
-
-        const call = stageCall('photo_failed');
-        expect(call).toBeDefined();
-        expect(call![2]).toMatchObject({ reason: 'avatar capture blew up' });
-      });
-
-      it('photoUrl null: no photo stage event at all', async () => {
-        mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: null });
-
-        await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
-        await new Promise((r) => setImmediate(r));
-
-        expect(stageCall('photo_captured')).toBeUndefined();
-        expect(stageCall('photo_failed')).toBeUndefined();
-      });
     });
   });
 
@@ -902,17 +851,8 @@ describe('runEnrichment', () => {
         expect(call![2].reason).toContain('[redacted]');
       });
 
-      it('photo_failed sanitizes error messages containing Bearer tokens', async () => {
-        mockScrapingdogEnrich.mockResolvedValue({ kind: 'found', result: foundResult(), photoUrl: 'https://cdn.example.com/jane.jpg' });
-        mockCaptureAvatar.mockRejectedValue(new Error('Download failed: Bearer secret-token'));
-
-        await runEnrichment('u1', { linkedinUrl: REQ_URL, fullName: 'Jane Doe' });
-        await new Promise((r) => setImmediate(r));
-
-        const call = stageCall('photo_failed');
-        expect(call![2].reason).not.toContain('Bearer');
-        expect(call![2].reason).toContain('[redacted]');
-      });
+      // (photo_failed is no longer raised by the orchestrator — it never
+      // captures a photo since 23 Sep — so its sanitising test went with it.)
 
       it('enrich_failed (provider_error) sanitizes the provider reason field', async () => {
         mockScrapingdogEnrich.mockResolvedValue({

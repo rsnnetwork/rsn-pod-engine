@@ -18,6 +18,8 @@ import {
 } from '@rsn/shared';
 import { Button } from '@/components/ui/Button';
 import OnboardingShell from './OnboardingShell';
+import LinkedinPhotoOffer from './LinkedinPhotoOffer';
+import { useAuthStore } from '@/stores/authStore';
 
 type Answers = Partial<OnboardingState['answers']>;
 
@@ -31,6 +33,10 @@ interface Props {
 }
 
 export default function ConfirmStep({ answers, onChange, onEditStep, onBack, onConfirm, submitting }: Props) {
+  // Only someone with no photo is asked. A member who signed in with Google
+  // already has one they chose, and is not nagged to swap it.
+  const hasPhoto = useAuthStore(s => !!s.user?.avatarUrl);
+  const [linkedinDismissed, setLinkedinDismissed] = useState(false);
   const [showOptional, setShowOptional] = useState(
     !!(answers.jobTitle || answers.company || answers.about),
   );
@@ -66,6 +72,10 @@ export default function ConfirmStep({ answers, onChange, onEditStep, onBack, onC
         </Button>
       }
     >
+      {!hasPhoto && !linkedinDismissed && (
+        <LinkedinPhotoOffer onDismiss={() => setLinkedinDismissed(true)} />
+      )}
+
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
         {rows.map((r, i) => (
           <div

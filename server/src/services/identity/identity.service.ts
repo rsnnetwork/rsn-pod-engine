@@ -17,31 +17,26 @@ import { sendMagicLinkEmail } from '../email/email.service';
 import { saveEnrichedCandidate, setEnrichmentState } from '../onboarding/enrichment.repo';
 import type { EnrichResult } from '../onboarding/enrichment.service';
 import { statusFromResult } from '../onboarding/providers/registry';
-import { captureAvatar, hasAvatar, tryGravatar } from '../onboarding/avatar.service';
-import { record as recordStageEvent } from '../onboarding/stage-events.repo';
+import { hasAvatar, tryGravatar } from '../onboarding/avatar.service';
 
 /**
- * 14 Sep 2026 (full-flow prod smoke, a real LinkedIn): a member approved
- * before their first login arrives with the enrichment state already seeded
- * found/partial below, so the client never fires the enrich trigger, and the
- * orchestrator's cache branch (where the 7 Sep photo capture lives) never
- * runs. The card said "No photo yet" for exactly the members who come
- * through request-to-join, while the scrape had the photo all along. The
- * photo is part of the copy-forward: captured here, fire-and-forget, never
- * blocking login, and never twice for a member who already has one.
+ * A photo for a member signing in for the first time — but never their
+ * LinkedIn one on their behalf.
+ *
+ * 14 Sep 2026 this captured the approval-time LinkedIn photo straight onto
+ * the account. 23 Sep 2026 it stopped: Shradha's deck says nothing reaches a
+ * profile unless the member confirms it, and a LinkedIn match can be the
+ * wrong person (it was, in Stefan's test). When a LinkedIn photo exists it is
+ * OFFERED on the confirm step instead (services/onboarding/linkedin-photo.ts),
+ * and nothing here takes that choice away — not even Gravatar, which would
+ * fill the slot and hide the offer. With no LinkedIn photo at all, a public
+ * Gravatar for their own email is still tried: that is a photo they chose.
  */
-function seedPreloadPhoto(userId: string, enriched: EnrichResult): void {
-  const photo = enriched.profile?.photoUrl ?? null;
-  const startedAt = Date.now();
+function seedPhotoFallback(userId: string, enriched: EnrichResult): void {
+  if (enriched.profile?.photoUrl) return;
   hasAvatar(userId)
-    .then(async (has) => {
-      if (has) return;
-      if (!photo) { await tryGravatar(userId); return; }
-      const captured = await captureAvatar(userId, photo);
-      recordStageEvent(userId, captured ? 'photo_captured' : 'photo_failed', { source: 'login' }, Date.now() - startedAt).catch(() => {});
-      if (!captured) await tryGravatar(userId);
-    })
-    .catch((e) => logger.warn({ err: e, userId }, 'preload photo capture failed (non-fatal)'));
+    .then(async (has) => { if (!has) await tryGravatar(userId); })
+    .catch((e) => logger.warn({ err: e, userId }, 'gravatar fallback at first sign-in failed (non-fatal)'));
 }
 
 // ─── Registration Gate ──────────────────────────────────────────────────────
@@ -547,7 +542,7 @@ export async function verifyMagicLink(token: string): Promise<AuthTokenPair> {
       }).catch((e) =>
         logger.warn({ err: e, userId: user!.id }, 'failed to copy preloaded enrichment state')
       );
-      seedPreloadPhoto(user.id, seed.enriched);
+      seedPhotoFallback(user.id, seed.enriched);
     }
     // Seed their stated reason for joining as an initial "why I want to meet" — the
     // onboarding chat refines/overrides it (kept if the chat doesn't restate one).
@@ -733,7 +728,7 @@ export async function findOrCreateGoogleUser(
       }).catch((e) =>
         logger.warn({ err: e, userId: id }, 'failed to copy preloaded enrichment state (google path)')
       );
-      seedPreloadPhoto(id, seed.enriched);
+      seedPhotoFallback(id, seed.enriched);
     }
     if (seed.reason) {
       await query('UPDATE users SET why_i_want_to_meet = $1 WHERE id = $2', [seed.reason, id]).catch(() => {});
