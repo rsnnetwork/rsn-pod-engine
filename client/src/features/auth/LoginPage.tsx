@@ -15,11 +15,15 @@ const ERROR_MESSAGES: Record<string, string> = {
   google_auth_failed: 'Google sign-in failed. Please try again.',
   INVALID_INVITE: 'The invite code is invalid or expired.',
   REGISTRATION_BLOCKED: 'You need an approved join request to sign up. Please request to join first.',
+  ACCOUNT_CLOSED: 'This account was closed. Ask to join again, and you can sign in as soon as you are approved.',
+  USER_SUSPENDED: 'This account is suspended. Please contact the RSN team if you think this is a mistake.',
 };
 
 export default function LoginPage() {
   const navigate = useNavigate();
   const { login, checkSession } = useAuthStore();
+  // Set when the server ended a session because the account itself was refused.
+  const signOutReason = useAuthStore((s) => s.signOutReason);
   const [params] = useSearchParams();
   const [sent, setSent] = useState(false);
   const [devLink, setDevLink] = useState<string | null>(null);
@@ -40,7 +44,9 @@ export default function LoginPage() {
 
   // Show error from OAuth redirect (e.g. ?error=INVITE_REQUIRED)
   const urlError = params.get('error');
-  const displayError = authError || (urlError ? (ERROR_MESSAGES[urlError] || urlError) : null);
+  const displayError = authError
+    || (urlError ? (ERROR_MESSAGES[urlError] || urlError) : null)
+    || (signOutReason ? ERROR_MESSAGES[signOutReason] ?? null : null);
 
   useEffect(() => {
     const completeAuthInCurrentTab = async () => {

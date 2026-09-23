@@ -14,6 +14,9 @@ interface AuthState {
   // state on a 401 handshake and refuses to honour subsequent connect()
   // calls until the natural reconnect timer fires.
   isSessionChecked: boolean;
+  /** Why the last session ended when the SERVER refused the account itself
+   *  (ACCOUNT_CLOSED, USER_SUSPENDED). The login page says it in words. */
+  signOutReason: string | null;
 
   login: (email: string, clientUrl?: string, inviteCode?: string) => Promise<any>;
   verify: (token: string) => Promise<void>;
@@ -25,6 +28,8 @@ interface AuthState {
   /** Adopt whatever tokens are in storage into memory WITHOUT writing them
    *  back (used by cross-tab sync). Returns false if none present. */
   adoptStoredTokens: () => boolean;
+  /** End a session the server will never honour again, and keep the reason. */
+  endBlockedSession: (reason: string) => void;
 }
 
 // ── Token storage (7 Sep 2026 — Stefan's test logout bug) ────────────────────
@@ -100,10 +105,28 @@ let authEpoch = 0;
 // from a TRANSIENT failure (endpoint unreachable / 5xx → keep the session).
 class RefreshError extends Error {
   definitive: boolean;
-  constructor(message: string, definitive: boolean) {
+  /** Set when the account itself was refused, not just the token. */
+  accountBlocked: string | null;
+  constructor(message: string, definitive: boolean, accountBlocked: string | null = null) {
     super(message);
     this.definitive = definitive;
+    this.accountBlocked = accountBlocked;
   }
+}
+
+// 23 Sep 2026 (Shradha): a closed account was signed in, refused on the very
+// next request, and bounced to /login after ~17s of spinner with no reason.
+// These codes mean the ACCOUNT cannot sign in, so retrying is pointless.
+const ACCOUNT_BLOCKED_CODES = new Set(['ACCOUNT_CLOSED', 'USER_SUSPENDED']);
+
+function blockedCodeOf(err: any): string | null {
+  const code = err?.response?.data?.error?.code;
+  return typeof code === 'string' && ACCOUNT_BLOCKED_CODES.has(code) ? code : null;
+}
+
+/** The account-level refusal carried by a failed refresh, if that is what it was. */
+export function accountBlockedReason(err: unknown): string | null {
+  return err instanceof RefreshError ? err.accountBlocked : null;
 }
 
 // ── Refresh mutex ──
@@ -161,7 +184,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
   const installTokens = (accessToken: string, refreshToken: string) => {
     writeStoredTokens({ access: accessToken, refresh: refreshToken });
     authEpoch += 1;
-    set({ accessToken, refreshToken, isAuthenticated: true });
+    set({ accessToken, refreshToken, isAuthenticated: true, signOutReason: null });
     scheduleProactiveRefresh(accessToken);
   };
 
@@ -172,6 +195,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
     isAuthenticated: !!initial,
     isLoading: true,
     isSessionChecked: false,
+    signOutReason: null,
 
     login: async (email: string, clientUrl?: string, inviteCode?: string) => {
       const { data } = await api.post('/auth/magic-link', { email, clientUrl, inviteCode });
@@ -221,6 +245,12 @@ export const useAuthStore = create<AuthState>((set, get) => {
           scheduleProactiveRefresh(get().accessToken!);
           return;
         } catch (err: any) {
+          const blocked = accountBlockedReason(err);
+          if (blocked) {
+            if (authEpoch === epochAtStart) get().endBlockedSession(blocked);
+            else set({ isLoading: false, isSessionChecked: true });
+            return;
+          }
           const status: number | undefined = err?.response?.status;
           if (status === 401) {
             // Token might be expired but refreshable — try refreshing before giving up.
@@ -230,6 +260,11 @@ export const useAuthStore = create<AuthState>((set, get) => {
               set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true });
               scheduleProactiveRefresh(get().accessToken!);
             } catch (refreshErr: any) {
+              const blockedNow = accountBlockedReason(refreshErr);
+              if (blockedNow && authEpoch === epochAtStart) {
+                get().endBlockedSession(blockedNow);
+                return;
+              }
               const definitive = refreshErr instanceof RefreshError ? refreshErr.definitive : true;
               // Only clear auth when the refresh token was DEFINITIVELY rejected
               // AND no newer session was installed while we were checking (the
@@ -281,6 +316,8 @@ export const useAuthStore = create<AuthState>((set, get) => {
             tokens = data.data;
           } catch (firstErr: any) {
             const status = firstErr?.response?.status;
+            const blocked = blockedCodeOf(firstErr);
+            if (blocked) throw new RefreshError('Account cannot sign in', true, blocked);
             if (status === 401) {
               // Another tab may have rotated the token between our read and the
               // call. Re-read storage and retry ONCE with whatever is newest.
@@ -320,6 +357,15 @@ export const useAuthStore = create<AuthState>((set, get) => {
 
     setTokens: (access: string, refresh: string) => {
       installTokens(access, refresh);
+    },
+
+    endBlockedSession: (reason: string) => {
+      clearRefreshTimer();
+      clearStoredTokens();
+      set({
+        user: null, accessToken: null, refreshToken: null, isAuthenticated: false,
+        isLoading: false, isSessionChecked: true, signOutReason: reason,
+      });
     },
   };
 });

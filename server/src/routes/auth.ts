@@ -5,7 +5,7 @@ import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
 import { authLimiter } from '../middleware/rateLimit';
 import * as identityService from '../services/identity/identity.service';
-import { ApiResponse } from '@rsn/shared';
+import { ApiResponse, ErrorCodes } from '@rsn/shared';
 import config from '../config';
 import logger from '../config/logger';
 import {
@@ -216,6 +216,10 @@ router.post('/google/photo-state', authenticate, (req: Request, res: Response) =
   res.json({ success: true, data: { url } } satisfies ApiResponse);
 });
 
+const GOOGLE_EXPLAINED_CODES = new Set<string>([
+  ErrorCodes.REGISTRATION_BLOCKED, ErrorCodes.INVALID_INVITE, ErrorCodes.ACCOUNT_CLOSED, ErrorCodes.USER_SUSPENDED,
+]);
+
 router.get(
   '/google/callback',
   async (req: Request, res: Response) => {
@@ -291,9 +295,11 @@ router.get(
       }
       res.redirect(`${config.clientUrl}/auth/verify?${params}`);
     } catch (err: any) {
-      logger.error({ err }, 'Google OAuth callback error');
-      const errorCode = err?.code === 'REGISTRATION_BLOCKED' ? 'REGISTRATION_BLOCKED' : 'google_auth_failed';
-      fail(errorCode);
+      // Codes the login page explains in words are expected refusals, not faults.
+      const explained = GOOGLE_EXPLAINED_CODES.has(err?.code);
+      if (explained) logger.warn({ code: err.code }, 'Google OAuth: sign-in refused');
+      else logger.error({ err }, 'Google OAuth callback error');
+      fail(explained ? err.code : 'google_auth_failed');
     }
   }
 );

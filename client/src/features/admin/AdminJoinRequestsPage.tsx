@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Shield, ChevronLeft, ChevronRight, CheckCircle, XCircle, Clock, ExternalLink, MessageSquare, StickyNote, Send, Bell, BellRing, UserCheck, UserX } from 'lucide-react';
+import { Shield, ChevronLeft, ChevronRight, CheckCircle, XCircle, Clock, ExternalLink, MessageSquare, StickyNote, Send, Bell, BellRing, UserCheck, UserX, AlertTriangle } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -27,6 +27,8 @@ interface JoinRequest {
   createdAt: string;
   hasActivated?: boolean;
   daysSinceApproval?: number;
+  /** Status of an existing account with this email (null when there is none). */
+  accountStatus?: 'active' | 'suspended' | 'banned' | 'deactivated' | null;
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -45,6 +47,19 @@ function canPoke(r: JoinRequest): boolean {
   if (!r.lastRemindedAt) return true;
   const hoursSince = (Date.now() - new Date(r.lastRemindedAt).getTime()) / (1000 * 60 * 60);
   return hoursSince >= 24;
+}
+
+/** What approving does to an account that already exists and is not active. */
+function accountNote(r: JoinRequest): { badge: string; note: string } | null {
+  switch (r.accountStatus) {
+    case 'deactivated':
+      return { badge: 'Closed account', note: r.status === 'pending' ? 'Approving reopens it.' : 'It was closed after this request.' };
+    case 'suspended':
+    case 'banned':
+      return { badge: r.accountStatus === 'banned' ? 'Banned account' : 'Suspended account', note: 'Approving does not lift this. They still cannot sign in.' };
+    default:
+      return null;
+  }
 }
 
 function formatTimeSince(dateStr: string): string {
@@ -274,6 +289,7 @@ export default function AdminJoinRequestsPage() {
           )}
           {requests.map((r) => {
             const tier = r.status === 'approved' && !r.hasActivated ? getActivationTier(r.daysSinceApproval) : null;
+            const note = accountNote(r);
             const isSelectable = (statusFilter === 'pending' && r.status === 'pending')
               || (statusFilter === 'approved' && r.status === 'approved' && !r.hasActivated);
 
@@ -297,7 +313,7 @@ export default function AdminJoinRequestsPage() {
                           {r.status}
                         </Badge>
                         {/* Activation status for approved requests */}
-                        {r.status === 'approved' && r.hasActivated && (
+                        {r.status === 'approved' && r.hasActivated && !note && (
                           <Badge variant="info">
                             <UserCheck className="h-3 w-3 mr-0.5" /> Signed Up
                           </Badge>
@@ -309,6 +325,12 @@ export default function AdminJoinRequestsPage() {
                         )}
                       </div>
                       <p className="text-xs text-gray-400 mb-2">{r.email}</p>
+                      {note && (
+                        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1 mb-2 inline-flex items-center gap-1.5" data-testid="jr-account-note">
+                          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                          <span><strong className="font-semibold">{note.badge}.</strong> {note.note}</span>
+                        </p>
+                      )}
                       <p className="text-sm text-gray-600 line-clamp-2 mb-2">{r.reason}</p>
                       <div className="flex items-center gap-4 text-xs text-gray-400 flex-wrap">
                         <a href={r.linkedinUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-blue-500 hover:text-blue-600">

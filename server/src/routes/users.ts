@@ -3,6 +3,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
+import { recordAudit } from '../middleware/audit';
 import { requireRole } from '../middleware/rbac';
 import * as identityService from '../services/identity/identity.service';
 import { searchConnectedUsers } from '../services/invite/connected-users';
@@ -344,6 +345,8 @@ router.put(
       }
 
       const user = await identityService.updateUserStatus(req.params.id, status);
+      // Who closed or suspended an account is on record (23 Sep 2026: nobody could tell).
+      await recordAudit({ actorId: req.user!.userId, action: 'user.status_changed', entityType: 'user', entityId: req.params.id, details: { status }, ipAddress: req.ip });
       // Phase May-19 realtime — admin-users list refresh + per-user
       // entity tag so a suspended/banned user's UI reacts immediately
       // (the auth-cache invalidation happens server-side already).
@@ -371,6 +374,7 @@ router.delete(
       fanoutAdminEntities('users').catch(() => {});
       fanoutUserEntity(req.params.id).catch(() => {});
       await identityService.deleteUser(req.params.id);
+      await recordAudit({ actorId: req.user!.userId, action: 'user.deleted', entityType: 'user', entityId: req.params.id, ipAddress: req.ip });
       const response: ApiResponse = { success: true, data: { message: 'User deleted' } };
       res.json(response);
     } catch (err) {

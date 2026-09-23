@@ -45,6 +45,7 @@ export const ErrorCodes = {
   USER_ALREADY_EXISTS: 'USER_ALREADY_EXISTS',
   USER_PROFILE_INCOMPLETE: 'USER_PROFILE_INCOMPLETE',
   USER_SUSPENDED: 'USER_SUSPENDED',
+  ACCOUNT_CLOSED: 'ACCOUNT_CLOSED',  // deleted/removed by an admin; approving a new join request reopens it
 
   // Pod errors
   POD_NOT_FOUND: 'POD_NOT_FOUND',

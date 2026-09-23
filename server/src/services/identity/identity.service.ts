@@ -18,6 +18,7 @@ import { saveEnrichedCandidate, setEnrichmentState } from '../onboarding/enrichm
 import type { EnrichResult } from '../onboarding/enrichment.service';
 import { statusFromResult } from '../onboarding/providers/registry';
 import { hasAvatar, tryGravatar } from '../onboarding/avatar.service';
+import { assertCanSignIn, signInRefusal } from './account-access';
 
 /**
  * A photo for a member signing in for the first time — but never their
@@ -292,8 +293,10 @@ function resolveClientBaseUrl(requestedClientUrl?: string): string {
 export async function sendMagicLink(email: string, requestedClientUrl?: string, inviteCode?: string): Promise<{ sent: boolean; devLink?: string }> {
   const normalizedEmail = email.toLowerCase().trim();
 
-  // Allow existing users to log in without gate check
+  // Allow existing users to log in without gate check — unless the account is
+  // closed or suspended, which is said plainly here rather than after a click.
   const existingUser = await getUserByEmail(normalizedEmail);
+  assertCanSignIn(existingUser);
   let hasValidInvite = false;
 
   // Invite codes are optional, and only gate NEW users. An existing user who
@@ -489,6 +492,9 @@ export async function verifyMagicLink(token: string): Promise<AuthTokenPair> {
   // send-time gate is the single source of truth; the link's existence is proof
   // registration was allowed.
   let user = await getUserByEmail(magicLink.email);
+  // No session for a closed or suspended account: the next request would
+  // refuse it anyway, and the member would be bounced with no reason.
+  assertCanSignIn(user);
   if (!user) {
     // Seed name + LinkedIn from the applicant's approved join request so onboarding
     // can use the fast high-confidence LinkedIn path (falls back to email prefix).
@@ -624,6 +630,11 @@ export async function refreshAccessToken(refreshToken: string): Promise<AuthToke
     );
 
     if (result.rows.length === 0 || result.rows[0].revoked_at) {
+      // Deleting an account revokes its tokens, so a member whose account was
+      // closed mid-session lands here. Tell them that, not "token revoked".
+      const owner = await getUserById(payload.sub).catch(() => null);
+      const refusal = signInRefusal(owner?.status);
+      if (refusal) throw new AppError(401, refusal.code, refusal.message);
       throw new UnauthorizedError('Refresh token revoked or not found');
     }
 
@@ -632,12 +643,14 @@ export async function refreshAccessToken(refreshToken: string): Promise<AuthToke
 
     // Get user, verify active, and generate new pair
     const user = await getUserById(payload.sub);
-    if (user.status !== 'active') {
-      throw new UnauthorizedError('Account is deactivated');
+    const refusal = signInRefusal(user.status);
+    if (refusal) {
+      // Still a 401, so the client ends the session; the code tells it why.
+      throw new AppError(401, refusal.code, refusal.message);
     }
     return generateTokenPair(user);
   } catch (err) {
-    if (err instanceof UnauthorizedError || err instanceof NotFoundError) {
+    if (err instanceof AppError) {
       throw err;
     }
     throw new UnauthorizedError('Invalid refresh token');
@@ -788,6 +801,7 @@ export async function findOrCreateGoogleUser(
     user = await getUserById(id);
     logger.info({ userId: id, email: normalizedEmail }, 'Google OAuth: new user created');
   } else {
+    assertCanSignIn(user);
     // Update avatar if provided and user doesn't have one
     if (profile.picture && !user.avatarUrl) {
       await query('UPDATE users SET avatar_url = $1 WHERE id = $2', [profile.picture, user.id]);

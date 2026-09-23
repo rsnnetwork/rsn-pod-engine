@@ -28,6 +28,8 @@ import {
   sendJoinRequestWelcomeEmail,
   sendJoinRequestDeclineEmail,
 } from '../email/email.service';
+import { reopenClosedAccount, announceReopened } from '../identity/account-access';
+import { fanoutAdminEntities } from '../../realtime/fanout';
 
 const TOKEN_PURPOSE = 'join_request_review';
 const TOKEN_BYTES = 32;
@@ -254,19 +256,27 @@ export async function confirmActionToken(rawToken: string): Promise<ConfirmResul
   // $1 is the enum decision, $4 the boolean — separate params so Postgres
   // doesn't have to deduce a single type for $1 across SET (enum) and
   // CASE comparisons (boolean), which throws 'inconsistent types deduced'.
-  const updated = await query<{
-    id: string;
-    full_name: string;
-    email: string;
-  }>(
-    `UPDATE join_requests
-        SET status = $1, reviewed_by = $2, reviewed_at = NOW(), updated_at = NOW(),
-            reminder_count = CASE WHEN $4 THEN 0 ELSE reminder_count END,
-            last_reminded_at = CASE WHEN $4 THEN NULL ELSE last_reminded_at END
-      WHERE id = $3 AND status = 'pending'
-    RETURNING id, full_name, email`,
-    [decision, row.target_user_id, row.target_id, resetReminders],
-  );
+  // Approval and reopening a closed account with that email commit together,
+  // exactly as on the dashboard (reviewJoinRequest).
+  const { updated, account } = await transaction(async (client) => {
+    const result = await client.query<{
+      id: string;
+      full_name: string;
+      email: string;
+    }>(
+      `UPDATE join_requests
+          SET status = $1, reviewed_by = $2, reviewed_at = NOW(), updated_at = NOW(),
+              reminder_count = CASE WHEN $4 THEN 0 ELSE reminder_count END,
+              last_reminded_at = CASE WHEN $4 THEN NULL ELSE last_reminded_at END
+        WHERE id = $3 AND status = 'pending'
+      RETURNING id, full_name, email`,
+      [decision, row.target_user_id, row.target_id, resetReminders],
+    );
+    const approvedAccount = decision === 'approved' && result.rows[0]
+      ? await reopenClosedAccount(client, result.rows[0].email)
+      : null;
+    return { updated: result, account: approvedAccount };
+  });
 
   // Mark token used regardless — prevents replay even if the request was
   // already reviewed by someone else simultaneously.
@@ -281,8 +291,19 @@ export async function confirmActionToken(rawToken: string): Promise<ConfirmResul
 
   const reviewed = updated.rows[0];
 
-  // Side effects (fire-and-forget) — match the existing dashboard path.
-  if (decision === 'approved') {
+  // Every open admin queue drops the request, as it does for a dashboard review.
+  fanoutAdminEntities('join-requests').catch(() => {});
+  if (account?.reopenedUserId) {
+    announceReopened(account.reopenedUserId, {
+      actorId: row.target_user_id, joinRequestId: reviewed.id, email: reviewed.email, via: 'email_action',
+    });
+  }
+
+  // Side effects (fire-and-forget) — match the existing dashboard path. A
+  // suspended or banned account gets no "you're in" email it cannot use.
+  if (account?.blockedStatus) {
+    logger.warn({ requestId: reviewed.id, status: account.blockedStatus }, 'Approved (email action) for a suspended/banned account; it stays blocked');
+  } else if (decision === 'approved') {
     generateApprovalLoginUrl(reviewed.email)
       .then((url) => sendJoinRequestWelcomeEmail(reviewed.email, reviewed.full_name, url))
       .catch((err) => logger.error({ err, email: reviewed.email }, 'Welcome email failed (email-action path)'));

@@ -2,7 +2,7 @@
 // Handles the "Request to Join" flow: submission, listing, approval, decline.
 
 import crypto from 'crypto';
-import { query } from '../../db';
+import { query, transaction } from '../../db';
 import logger from '../../config/logger';
 import config from '../../config';
 import { AppError } from '../../middleware/errors';
@@ -10,6 +10,7 @@ import { ErrorCodes } from '@rsn/shared';
 import { sendJoinRequestConfirmationEmail, sendJoinRequestWelcomeEmail, sendJoinRequestDeclineEmail, sendJoinRequestReminderEmail } from '../email/email.service';
 import { applyMatchVerification, normalizeLinkedinUrl } from '../onboarding/enrichment.service';
 import { resolveEnrichProvider, runProvider, resultFromOutcome } from '../onboarding/providers/registry';
+import { reopenClosedAccount, announceReopened } from '../identity/account-access';
 
 const APPROVAL_LINK_EXPIRY_DAYS = 7;
 
@@ -32,6 +33,8 @@ export interface JoinRequest {
   hasActivated?: boolean;
   /** Days since approval (only meaningful for approved requests). */
   daysSinceApproval?: number;
+  /** Status of an existing account with this email, so an admin can see a closed or suspended one before approving. */
+  accountStatus?: 'active' | 'suspended' | 'banned' | 'deactivated' | null;
 }
 
 interface CreateJoinRequestInput {
@@ -59,6 +62,7 @@ function mapRow(row: any): JoinRequest {
     updatedAt: row.updated_at,
     hasActivated: row.has_activated ?? undefined,
     daysSinceApproval: row.days_since_approval != null ? Number(row.days_since_approval) : undefined,
+    accountStatus: row.account_status !== undefined ? row.account_status : undefined,
   };
 }
 
@@ -175,6 +179,7 @@ export async function listJoinRequests(options: {
   const result = await query(
     `SELECT jr.*,
             (u.id IS NOT NULL) AS has_activated,
+            u.status AS account_status,
             CASE WHEN jr.status = 'approved' AND jr.reviewed_at IS NOT NULL
                  THEN FLOOR(EXTRACT(EPOCH FROM NOW() - jr.reviewed_at) / 86400)
                  ELSE NULL END AS days_since_approval
@@ -208,23 +213,39 @@ export async function reviewJoinRequest(
 ): Promise<JoinRequest> {
   // Reset reminder tracking when (re-)approving so auto-reminders start fresh
   const resetReminders = decision === 'approved';
-  const result = await query(
-    `UPDATE join_requests
-     SET status = $1, reviewed_by = $2, reviewed_at = NOW(), review_notes = $3, updated_at = NOW(),
-         reminder_count = CASE WHEN $5 THEN 0 ELSE reminder_count END,
-         last_reminded_at = CASE WHEN $5 THEN NULL ELSE last_reminded_at END
-     WHERE id = $4
-     RETURNING *`,
-    [decision, reviewedBy, reviewNotes || null, id, resetReminders]
-  );
-
-  if (result.rows.length === 0) {
-    throw new AppError(404, ErrorCodes.INVALID_INPUT, 'Join request not found');
-  }
+  // Approval and reopening a closed account with that email commit together,
+  // so the welcome link below can never reach an account that is still closed.
+  const { row, account } = await transaction(async (client) => {
+    const result = await client.query(
+      `UPDATE join_requests
+       SET status = $1, reviewed_by = $2, reviewed_at = NOW(), review_notes = $3, updated_at = NOW(),
+           reminder_count = CASE WHEN $5 THEN 0 ELSE reminder_count END,
+           last_reminded_at = CASE WHEN $5 THEN NULL ELSE last_reminded_at END
+       WHERE id = $4
+       RETURNING *`,
+      [decision, reviewedBy, reviewNotes || null, id, resetReminders]
+    );
+    if (result.rows.length === 0) {
+      throw new AppError(404, ErrorCodes.INVALID_INPUT, 'Join request not found');
+    }
+    const approvedAccount = decision === 'approved' ? await reopenClosedAccount(client, result.rows[0].email) : null;
+    return { row: result.rows[0], account: approvedAccount };
+  });
 
   logger.info({ id, decision, reviewedBy }, 'Join request reviewed');
 
-  const reviewed = mapRow(result.rows[0]);
+  const reviewed = mapRow(row);
+
+  if (account?.reopenedUserId) {
+    announceReopened(account.reopenedUserId, { actorId: reviewedBy, joinRequestId: id, email: reviewed.email, via: 'dashboard' });
+  }
+
+  // A suspended or banned account stays that way: no "you're in" email or
+  // notification that approval cannot honour. The admin sees why on the row.
+  if (account?.blockedStatus) {
+    logger.warn({ id, email: reviewed.email, status: account.blockedStatus }, 'Approved a join request for a suspended/banned account; it stays blocked');
+    return reviewed;
+  }
 
   // Send approval/decline email (non-blocking)
   if (decision === 'approved') {

@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { useAuthStore } from '@/stores/authStore';
+import { useAuthStore, accountBlockedReason } from '@/stores/authStore';
 import { API_BASE_URL } from '@/lib/runtimeEndpoints';
 
 const api = axios.create({
@@ -21,7 +21,9 @@ api.interceptors.request.use((cfg) => {
   return cfg;
 });
 
-// Auto-refresh on 401 — NEVER auto-logout, only the user can log out manually
+// Auto-refresh on 401 — NEVER auto-logout, only the user can log out manually.
+// The one exception: the server refused the ACCOUNT (closed or suspended), which
+// no retry can fix, so the session ends and the login page says why.
 api.interceptors.response.use(
   (res) => res,
   async (err) => {
@@ -39,6 +41,8 @@ api.interceptors.response.use(
         original.headers.Authorization = `Bearer ${newToken}`;
         return api(original);
       } catch (refreshErr) {
+        const blocked = accountBlockedReason(refreshErr);
+        if (blocked) useAuthStore.getState().endBlockedSession(blocked);
         // Refresh failed — do NOT auto-logout. Let the request fail
         // naturally. The user stays logged in and can retry or
         // manually log out when they choose to.

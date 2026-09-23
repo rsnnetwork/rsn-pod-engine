@@ -3,6 +3,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate, invalidateUserStatusCache } from '../middleware/auth';
+import { recordAudit } from '../middleware/audit';
 import { requireRole } from '../middleware/rbac';
 import { query } from '../db';
 import { ApiResponse, UserRole } from '@rsn/shared';
@@ -217,6 +218,12 @@ router.post(
         `UPDATE users SET status = $1, updated_at = NOW() WHERE id = ANY($2::uuid[]) RETURNING id`,
         [statusUpdate, userIds]
       );
+
+      // Who closed or suspended an account is on record (23 Sep 2026: nobody could tell).
+      await Promise.all(result.rows.map(row => recordAudit({
+        actorId: req.user!.userId, action: 'user.status_changed', entityType: 'user', entityId: row.id,
+        details: { status: statusUpdate, bulk: true }, ipAddress: req.ip,
+      })));
 
       // Invalidate auth cache for every affected user so status change takes
       // effect immediately (no 60s stale window on reactivation/deactivation).
