@@ -160,10 +160,12 @@ router.get(
             whoIWantToMeet: (user as any).whoIWantToMeet,
             whyIWantToMeet: (user as any).whyIWantToMeet,
             myIntent: (user as any).myIntent,
-            // The five Settings switches. The Settings page fills itself from this
-            // payload: without them every switch read its built-in default, and
-            // any Save wrote those defaults back over what the member had chosen
-            // (including un-hiding a profile they had hidden).
+            // The member's own five Settings preferences. The Settings page reads
+            // them live from GET /users/me; they ride the session too because it is
+            // the one boot snapshot of the signed-in member, and anything that reads
+            // it must get the stored values, not a built-in default (which is how a
+            // Save once wrote defaults over a member's choices and un-hid a profile
+            // they had hidden).
             notifyEmail: user.notifyEmail,
             notifyEventReminders: user.notifyEventReminders,
             notifyMatches: user.notifyMatches,

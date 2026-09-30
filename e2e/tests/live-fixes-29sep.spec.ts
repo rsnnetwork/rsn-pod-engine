@@ -222,3 +222,38 @@ test('a Settings view that never heard about the change still cannot un-hide a m
   // After saving, the page re-reads the server and shows the truth.
   await expect(visibility).toHaveAttribute('aria-checked', 'false', { timeout: 20_000 });
 });
+
+test('Save stays busy until the fresh values are back, so the next Save is judged against them', async () => {
+  test.setTimeout(240_000);
+  const member = await createTestUser('lf-vis-resave'); made.push(member.id);
+  expect((await api(member, 'PUT', '/users/me', { profileVisible: false })).status).toBe(200);
+  const page = await openAs(member, '/settings');
+  const visibility = page.getByRole('switch', { name: 'Show me in search and suggestions' });
+  await expect(visibility).toHaveAttribute('aria-checked', 'false', { timeout: 30_000 });
+  await page.waitForLoadState('load');
+
+  // Make the re-read after a Save slow, so the gap between "saved" and "fresh values
+  // back" is wide. Before the fix Save came back at once, while the page still held the
+  // old values, and a quick second Save was judged against them: "No changes to save"
+  // while the server said visible.
+  await page.route('**/api/users/me', async (route) => {
+    if (route.request().method() === 'GET') await new Promise((r) => setTimeout(r, 2500));
+    await route.continue();
+  });
+  const save = page.getByRole('button', { name: 'Save Settings' });
+  await visibility.click(); // un-hide
+  await save.click();
+  await expect(page.getByText('Settings saved')).toBeVisible();
+  // The save went through, but the new values have not come back yet: Save must stay busy.
+  await expect(save).toBeDisabled();
+  await expect(save).toBeEnabled({ timeout: 20_000 });
+
+  // Now the page holds the fresh values, so switching OFF again is a real change and is sent.
+  await expect(visibility).toHaveAttribute('aria-checked', 'true');
+  await visibility.click();
+  await save.click();
+  await expect.poll(
+    async () => (await pool.query(`SELECT profile_visible FROM users WHERE id = $1`, [member.id])).rows[0].profile_visible,
+    { timeout: 20_000 },
+  ).toBe(false);
+});

@@ -1,4 +1,4 @@
-import { useState, useEffect, useId, useRef } from 'react';
+import { useState, useEffect, useId } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { User } from '@rsn/shared';
 import Card from '@/components/ui/Card';
@@ -136,6 +136,20 @@ const pickPrefs = (u: Prefs): Prefs => ({
   inviteOptOutPublicEvents: u.inviteOptOutPublicEvents,
 });
 
+/** What the switches show, and the server values they were last brought up to date with. */
+type View = { prefs: Prefs; base: Prefs };
+
+/** Where the server's value moved since `from`, it wins; everywhere else the member's edit stands. */
+const followServer = (mine: Prefs, from: Prefs, to: Prefs): Prefs => {
+  let out: Prefs | null = null;
+  for (const key of PREF_KEYS) {
+    if (to[key] === from[key]) continue;
+    out = out ?? { ...mine };
+    out[key] = to[key];
+  }
+  return out ?? mine;
+};
+
 /**
  * The member's five saved switches.
  *
@@ -161,45 +175,46 @@ function useSettingsPrefs() {
     meta: { entities: userId ? [E.user(userId)] : [] },
   });
 
-  // What the switches show. When a saved value changes on the server that switch takes
-  // it (server truth wins); a switch the member changed but has not saved keeps their
-  // edit unless the server changed that same switch.
-  const [prefs, setPrefs] = useState<Prefs | null>(() => (saved ? pickPrefs(saved) : null));
-  const lastSaved = useRef<Prefs | null>(saved ? pickPrefs(saved) : null);
+  // What the switches show, kept in one piece with the server values they were last
+  // brought up to date with, so the two can never be read out of step. When a saved
+  // value changes on the server that switch takes it (server truth wins); a switch the
+  // member changed but has not saved keeps their edit unless the server changed that
+  // same switch.
+  const [view, setView] = useState<View | null>(() => (saved ? { prefs: pickPrefs(saved), base: pickPrefs(saved) } : null));
   useEffect(() => {
     if (!saved) return;
     const next = pickPrefs(saved);
-    const prev = lastSaved.current;
-    lastSaved.current = next;
-    setPrefs((cur) => {
-      if (!cur || !prev) return next;
-      let merged: Prefs | null = null;
-      for (const key of PREF_KEYS) {
-        if (next[key] === prev[key]) continue;
-        merged = merged ?? { ...cur };
-        merged[key] = next[key];
-      }
-      return merged ?? cur;
-    });
+    setView((cur) => (cur ? { prefs: followServer(cur.prefs, cur.base, next), base: next } : { prefs: next, base: next }));
   }, [saved]);
 
-  const toggle = (key: PrefKey) => setPrefs((cur) => (cur ? { ...cur, [key]: !cur[key] } : cur));
+  const toggle = (key: PrefKey) =>
+    setView((cur) => (cur ? { ...cur, prefs: { ...cur.prefs, [key]: !cur.prefs[key] } } : cur));
 
   const saveMutation = useMutation({
     mutationFn: (patch: Partial<Prefs>) => api.put('/users/me', patch),
     onSuccess: () => {
       addToast('Settings saved', 'success');
       checkSession();
-      qc.invalidateQueries({ queryKey });
+      // Returned, so the mutation stays pending (Save stays busy) until the fresh values
+      // are back. Without it Save came back at once, while the page still held the old
+      // values, and a quick second Save was judged against them: "No changes to save"
+      // for a member who had just switched something the other way.
+      return qc.invalidateQueries({ queryKey });
     },
     onError: () => addToast('Failed to save settings', 'error'),
   });
 
   const save = () => {
-    if (!saved || !prefs) return;
+    if (!view || saveMutation.isPending) return;
+    // Judged against what the server holds at this moment (read now, not at the last
+    // render). Where it has moved since this view last took its values, its value wins
+    // and is not an edit, so only what the member changed on top of it is sent.
+    const latest = qc.getQueryData<User>(queryKey);
+    const server = latest ? pickPrefs(latest) : view.base;
+    const mine = followServer(view.prefs, view.base, server);
     const patch: Partial<Prefs> = {};
     for (const key of PREF_KEYS) {
-      if (prefs[key] !== saved[key]) patch[key] = prefs[key];
+      if (mine[key] !== server[key]) patch[key] = mine[key];
     }
     if (Object.keys(patch).length === 0) {
       addToast('No changes to save', 'info');
@@ -209,8 +224,8 @@ function useSettingsPrefs() {
   };
 
   return {
-    prefs,
-    failed: !prefs && isError,
+    prefs: view ? view.prefs : null,
+    failed: !view && isError,
     toggle,
     save,
     saving: saveMutation.isPending,
@@ -218,9 +233,14 @@ function useSettingsPrefs() {
   };
 }
 
-/** Stands in for the switches until the saved values arrive (or could not be read). */
-function PrefsPlaceholder({ rows, failed, onRetry }: { rows: number; failed: boolean; onRetry: () => void }) {
+/**
+ * Stands in for the switches until the saved values arrive (or could not be read).
+ * Two cards share the same read, so only ONE of them announces it (`announce`): the
+ * other shows the same state quietly, with no live region and no second retry button.
+ */
+function PrefsPlaceholder({ rows, failed, announce, onRetry }: { rows: number; failed: boolean; announce: boolean; onRetry: () => void }) {
   if (failed) {
+    if (!announce) return <p className="py-3 text-sm text-gray-400">Available once your settings load.</p>;
     return (
       <div className="flex items-center justify-between gap-4 py-3" role="alert">
         <p className="text-sm text-gray-600">We couldn&apos;t load your settings.</p>
@@ -231,7 +251,7 @@ function PrefsPlaceholder({ rows, failed, onRetry }: { rows: number; failed: boo
   // The status text sits outside the divided list so it cannot add a line above row one.
   return (
     <div>
-      <span className="sr-only" role="status">Loading your settings</span>
+      {announce && <span className="sr-only" role="status">Loading your settings</span>}
       <div className="divide-y divide-gray-100" aria-hidden="true">
         {Array.from({ length: rows }, (_, i) => (
           <div key={i} className="flex items-center justify-between gap-4 py-3">
@@ -287,7 +307,7 @@ export default function SettingsPage() {
               />
             </>
           ) : (
-            <PrefsPlaceholder rows={3} failed={failed} onRetry={retry} />
+            <PrefsPlaceholder rows={3} failed={failed} announce onRetry={retry} />
           )}
         </div>
       </Card>
@@ -318,7 +338,7 @@ export default function SettingsPage() {
               />
             </>
           ) : (
-            <PrefsPlaceholder rows={2} failed={failed} onRetry={retry} />
+            <PrefsPlaceholder rows={2} failed={failed} announce={false} onRetry={retry} />
           )}
         </div>
       </Card>
