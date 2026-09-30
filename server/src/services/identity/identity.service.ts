@@ -19,6 +19,7 @@ import type { EnrichResult } from '../onboarding/enrichment.service';
 import { statusFromResult } from '../onboarding/providers/registry';
 import { hasAvatar, tryGravatar } from '../onboarding/avatar.service';
 import { assertCanSignIn, signInRefusal } from './account-access';
+import { resolveClientBaseUrl } from './client-origin';
 
 /**
  * A photo for a member signing in for the first time — but never their
@@ -274,22 +275,6 @@ export async function updateLastActive(userId: string): Promise<void> {
 
 // ─── Magic Link Authentication ──────────────────────────────────────────────
 
-function resolveClientBaseUrl(requestedClientUrl?: string): string {
-  if (!requestedClientUrl) return config.clientUrl.replace(/\/$/, '');
-
-  try {
-    const parsed = new URL(requestedClientUrl);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      return config.clientUrl.replace(/\/$/, '');
-    }
-
-    const basePath = parsed.pathname && parsed.pathname !== '/' ? parsed.pathname.replace(/\/$/, '') : '';
-    return `${parsed.origin}${basePath}`;
-  } catch {
-    return config.clientUrl.replace(/\/$/, '');
-  }
-}
-
 export async function sendMagicLink(email: string, requestedClientUrl?: string, inviteCode?: string): Promise<{ sent: boolean; devLink?: string }> {
   const normalizedEmail = email.toLowerCase().trim();
 
@@ -356,7 +341,10 @@ export async function sendMagicLink(email: string, requestedClientUrl?: string, 
   );
 
   // Build the magic link URL using request origin when available.
-  const clientBaseUrl = resolveClientBaseUrl(requestedClientUrl);
+  const clientBaseUrl = resolveClientBaseUrl(requestedClientUrl, {
+    clientUrl: config.clientUrl,
+    isDev: config.isDev,
+  });
   // Carry the invite code IN THE LINK (Stefan, 9 Jun): a new user invited to an
   // event clicks the magic link from their email — usually a different tab /
   // browser / phone where the login tab's sessionStorage `rsn_redirect` does NOT
