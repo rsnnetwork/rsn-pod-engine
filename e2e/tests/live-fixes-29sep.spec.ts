@@ -18,17 +18,52 @@ async function api(u: TestUser, method: string, path: string, body?: unknown) {
   return { status: res.status, body: await res.json().catch(() => null) as any };
 }
 
-async function openAs(u: TestUser, path: string): Promise<Page> {
+// Resolves, per page, once the server has accepted that page's live-update socket.
+const socketAccepted = new WeakMap<Page, Promise<void>>();
+
+// liveUpdates: false gives a view that never hears the server, like a laptop tab that
+// slept through a change (the socket is refused, so no entity event can reach it).
+async function openAs(u: TestUser, path: string, opts: { liveUpdates?: boolean } = {}): Promise<Page> {
   const ctx = await browser.newContext({ viewport: PHONE });
   await ctx.addInitScript((t: { a: string; r: string }) => {
     localStorage.setItem('rsn_access', t.a);
     localStorage.setItem('rsn_refresh', t.r);
     localStorage.setItem('rsn_tokens', JSON.stringify({ access: t.a, refresh: t.r }));
   }, { a: u.accessToken, r: u.refreshToken });
+  if (opts.liveUpdates === false) await ctx.routeWebSocket(/socket\.io/, (ws) => ws.close());
   ctxs.push(ctx);
   const page = await ctx.newPage();
+  // Registered before the page loads, so the connection cannot be missed.
+  socketAccepted.set(page, new Promise<void>((resolve) => {
+    page.on('websocket', (ws) => {
+      if (!/socket\.io/.test(ws.url())) return;
+      // Socket.IO packet "40" from the server: it accepted the token and the member's room.
+      ws.on('framereceived', (f) => { if (String(f.payload).startsWith('40')) resolve(); });
+    });
+  }));
   await gotoRetry(page, `${APP}${path}`);
   return page;
+}
+
+// Wait until the page can hear the server, so a change made next is not missed.
+// It also waits for the page's load event: WebKit answers a repeat GET made before
+// that from its own cache, so a refetch triggered by an event that early would bring
+// back the old value (seen locally: the event arrives, the refetch returns stale data).
+async function liveUpdatesReady(page: Page): Promise<void> {
+  const ready = socketAccepted.get(page);
+  if (!ready) throw new Error('liveUpdatesReady needs a page opened with openAs');
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      ready,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('the live-update socket was not accepted within 30s')), 30_000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+  await page.waitForLoadState('load');
 }
 
 test.beforeAll(async () => { browser = await launchBrowser(); });
@@ -96,10 +131,27 @@ test('a hidden member leaves search and suggestions, and comes back', async () =
   expect(await found()).toContain(hidden.id);
   expect(await suggested()).toContain(hidden.id);
 
+  // Settings is already open (say on a laptop) when the member hides on another screen.
+  const openPage = await openAs(hidden, '/settings');
+  const openSwitch = openPage.getByRole('switch', { name: 'Show me in search and suggestions' });
+  await expect(openSwitch).toHaveAttribute('aria-checked', 'true', { timeout: 30_000 });
+  await liveUpdatesReady(openPage);
+
   // The Settings switch saves through PUT /users/me { profileVisible }.
   expect((await api(hidden, 'PUT', '/users/me', { profileVisible: false })).status).toBe(200);
   expect(await found()).not.toContain(hidden.id);
   expect(await suggested()).not.toContain(hidden.id);
+
+  // The page that was already open follows the server without a reload (the user:<id>
+  // entity event), so saving an unrelated switch there cannot write the old value back.
+  await expect(openSwitch).toHaveAttribute('aria-checked', 'false', { timeout: 20_000 });
+  await openPage.getByRole('switch', { name: 'Email notifications', exact: true }).click();
+  await openPage.getByRole('button', { name: 'Save Settings' }).click();
+  await expect(openPage.getByText('Settings saved')).toBeVisible();
+  const stored = (await pool.query(`SELECT profile_visible, notify_email FROM users WHERE id = $1`, [hidden.id])).rows[0];
+  expect(stored.profile_visible, 'still hidden after saving another switch').toBe(false);
+  expect(stored.notify_email, 'the switch that was changed').toBe(false);
+  // This member is deleted at the end, so the changed preference needs no restoring.
 
   // Still reachable by link for someone who has it.
   const profile = await openAs(viewer, `/profile/${hidden.id}`);
@@ -115,6 +167,8 @@ test('a hidden member leaves search and suggestions, and comes back', async () =
   await expect(settings.getByText('People you already know can still see your profile and message you.')).toBeVisible();
   const toggle = settings.getByRole('switch', { name: 'Show me in search and suggestions' });
   await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  // Sizes mean nothing until the stylesheet has applied (WebKit paints the bare page first).
+  await settings.waitForLoadState('load');
   await toggle.scrollIntoViewIfNeeded();
   const box = await toggle.boundingBox();
   expect(box, 'the profile-visibility switch has a box on screen').not.toBeNull();
@@ -142,4 +196,29 @@ test('a hidden member leaves search and suggestions, and comes back', async () =
   const settingsAgain = await openAs(hidden, '/settings');
   await expect(settingsAgain.getByRole('switch', { name: 'Show me in search and suggestions' }))
     .toHaveAttribute('aria-checked', 'true', { timeout: 30_000 });
+});
+
+test('a Settings view that never heard about the change still cannot un-hide a member', async () => {
+  test.setTimeout(240_000);
+  const member = await createTestUser('lf-vis-stale'); made.push(member.id);
+  // This view gets no live updates, like a laptop tab that slept through the change.
+  const stale = await openAs(member, '/settings', { liveUpdates: false });
+  const visibility = stale.getByRole('switch', { name: 'Show me in search and suggestions' });
+  await expect(visibility).toHaveAttribute('aria-checked', 'true', { timeout: 30_000 });
+
+  // The member hides on another screen. This view cannot know, and still shows ON.
+  expect((await api(member, 'PUT', '/users/me', { profileVisible: false })).status).toBe(200);
+  await stale.waitForTimeout(1500); // a negative check: give an update time to (wrongly) arrive
+  await expect(visibility).toHaveAttribute('aria-checked', 'true');
+
+  // Saving an unrelated switch here must send only that switch, so the hiding survives.
+  await stale.getByRole('switch', { name: 'Email notifications', exact: true }).click();
+  await stale.getByRole('button', { name: 'Save Settings' }).click();
+  await expect(stale.getByText('Settings saved')).toBeVisible();
+  const stored = (await pool.query(`SELECT profile_visible, notify_email FROM users WHERE id = $1`, [member.id])).rows[0];
+  expect(stored.profile_visible, 'the stale view did not write the old visibility back').toBe(false);
+  expect(stored.notify_email, 'the switch that was changed').toBe(false);
+
+  // After saving, the page re-reads the server and shows the truth.
+  await expect(visibility).toHaveAttribute('aria-checked', 'false', { timeout: 20_000 });
 });

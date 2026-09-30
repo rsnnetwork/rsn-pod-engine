@@ -20,6 +20,7 @@ jest.mock('../../../index', () => ({ io: { to: () => ({ emit: () => {} }) }, __e
 
 import { searchMembers } from '../../../services/user/user-search.service';
 import { notifyMatchesOfNewUser } from '../../../services/matching/platform-match.service';
+import { listMatches, getAgent } from '../../../services/matching/agent.repo';
 
 const stripComments = (src: string) => src.replace(/^\s*\/\/.*$/gm, '').replace(/--[^\n`]*/g, '');
 const read = (rel: string) => stripComments(fs.readFileSync(path.join(__dirname, '../../../services', rel), 'utf8'));
@@ -73,19 +74,20 @@ describe('profile visibility is honoured', () => {
 
   // Agents rescore rarely (on create, on an edit, on resume), so the rows they
   // stored can outlive a member choosing to hide. The read side skips them too.
-  // "\b" matters: "cu.profile_visible" contains "u.profile_visible", and the
-  // count filter must not be able to satisfy the list pin (or the reverse).
-  it('an agent\'s stored results skip members who have since hidden', () => {
-    const repo = read('matching/agent.repo.ts');
-    const list = repo.slice(repo.indexOf('export async function listMatches'), repo.indexOf('export async function listActiveAgentsForMatching'));
-    expect(list).toMatch(/FROM agent_matches m/);
-    expect(list).toMatch(/\bu\.profile_visible = true/);
+  // These call the real repo functions and read the SQL they send, so they do not
+  // depend on where the text sits in the file. "\b" matters: "cu.profile_visible"
+  // contains "u.profile_visible", and neither filter may satisfy the other's check.
+  it('an agent\'s stored results skip members who have since hidden', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    await listMatches('agent-1');
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(String(mockQuery.mock.calls[0][0])).toMatch(/\bu\.profile_visible = true/);
   });
 
-  it('the match counts on the agent dashboard skip them too', () => {
-    const repo = read('matching/agent.repo.ts');
-    const countExpr = repo.slice(repo.indexOf('const countExpr'), repo.indexOf('const counts'));
-    expect(countExpr).toMatch(/JOIN users cu ON cu\.id = m\.candidate_user_id/);
-    expect(countExpr).toMatch(/\bcu\.profile_visible = true/);
+  it('the match counts on the agent dashboard skip them too', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    await getAgent('agent-1', 'u-owner');
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(String(mockQuery.mock.calls[0][0])).toMatch(/\bcu\.profile_visible = true/);
   });
 });

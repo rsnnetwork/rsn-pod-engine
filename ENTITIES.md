@@ -20,7 +20,7 @@ authors reference.
 | `pod:<podId>:members` | Member added/removed/role-changed/approved/rejected/left | `pod-members`, `pod-member-counts`, `pod-pending-members` |
 | `pod:<podId>:invites` | Pod invite created/accepted/declined/revoked | `pod-pending-invites` |
 | `pod:<podId>:sessions` | Session under this pod created/updated/deleted/status-changed | `pod-sessions`, `pod-session-count` |
-| `user:<userId>` | User profile mutates | `user` |
+| `user:<userId>` | User profile mutates | `user`, `user-settings` |
 | `user:<userId>:pods` | User's pod membership changes | `my-pods` (when scoped to a user) |
 | `user:<userId>:invites` | User's received-invites list changes | `my-invites`, `received-invites` |
 | `user:<userId>:sessions` | User's registered-session list changes | `my-sessions` |

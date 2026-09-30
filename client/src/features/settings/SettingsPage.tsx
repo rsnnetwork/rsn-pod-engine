@@ -1,7 +1,9 @@
-import { useState, useEffect } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useState, useEffect, useId, useRef } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { User } from '@rsn/shared';
 import Card from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
+import { Skeleton } from '@/components/ui/Spinner';
 import Badge from '@/components/ui/Badge';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
@@ -82,17 +84,20 @@ function MessageNotificationPrefsCard() {
 function Toggle({ enabled, onToggle, label, description }: {
   enabled: boolean; onToggle: () => void; label: string; description: string;
 }) {
+  const descriptionId = useId();
   return (
     <div className="flex items-center justify-between gap-4 py-3">
       <div className="min-w-0">
         <p className="text-sm font-medium text-gray-800">{label}</p>
-        <p className="text-xs text-gray-400">{description}</p>
+        <p id={descriptionId} className="text-xs text-gray-400">{description}</p>
       </div>
       <button
+        type="button"
         onClick={onToggle}
         role="switch"
         aria-checked={enabled}
         aria-label={label}
+        aria-describedby={descriptionId}
         className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors after:absolute after:inset-x-0 after:-inset-y-2.5 after:content-[''] ${enabled ? 'bg-rsn-red' : 'bg-gray-200'}`}
       >
         <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${enabled ? 'translate-x-6' : 'translate-x-1'}`} />
@@ -118,40 +123,133 @@ const plans = [
   },
 ];
 
-export default function SettingsPage() {
-  const { user, checkSession } = useAuthStore();
-  const { addToast } = useToastStore();
-  const [emailNotifs, setEmailNotifs] = useState(true);
-  const [eventReminders, setEventReminders] = useState(true);
-  const [matchNotifs, setMatchNotifs] = useState(true);
-  const [profileVisible, setProfileVisible] = useState(true);
-  const [inviteOptOut, setInviteOptOut] = useState(false);
+/** The five switches the Save button writes, in the order they are compared. */
+const PREF_KEYS = ['notifyEmail', 'notifyEventReminders', 'notifyMatches', 'profileVisible', 'inviteOptOutPublicEvents'] as const;
+type PrefKey = (typeof PREF_KEYS)[number];
+type Prefs = Pick<User, PrefKey>;
 
-  // Load preferences from user object
+const pickPrefs = (u: Prefs): Prefs => ({
+  notifyEmail: u.notifyEmail,
+  notifyEventReminders: u.notifyEventReminders,
+  notifyMatches: u.notifyMatches,
+  profileVisible: u.profileVisible,
+  inviteOptOutPublicEvents: u.inviteOptOutPublicEvents,
+});
+
+/**
+ * The member's five saved switches.
+ *
+ * They are read from the server (GET /users/me), not from the login session, and the
+ * query is tagged user:<id>, so a change made on another screen reaches this page
+ * live. A view that was left open while the member hid themselves elsewhere used to
+ * hold the old value and write it back the moment any other switch was saved, which
+ * quietly un-hid them. Two rules close that: the switches follow the server, and Save
+ * sends only the switches that differ from what the server holds, so a view that is
+ * out of date can never overwrite a value it did not change.
+ */
+function useSettingsPrefs() {
+  const qc = useQueryClient();
+  const { addToast } = useToastStore();
+  const checkSession = useAuthStore((s) => s.checkSession);
+  const userId: string | undefined = useAuthStore((s) => s.user?.id);
+  const queryKey = ['user-settings', userId];
+
+  const { data: saved, isError, refetch } = useQuery({
+    queryKey,
+    queryFn: () => api.get('/users/me').then((r) => r.data.data as User),
+    enabled: !!userId,
+    meta: { entities: userId ? [E.user(userId)] : [] },
+  });
+
+  // What the switches show. When a saved value changes on the server that switch takes
+  // it (server truth wins); a switch the member changed but has not saved keeps their
+  // edit unless the server changed that same switch.
+  const [prefs, setPrefs] = useState<Prefs | null>(() => (saved ? pickPrefs(saved) : null));
+  const lastSaved = useRef<Prefs | null>(saved ? pickPrefs(saved) : null);
   useEffect(() => {
-    if (user) {
-      setEmailNotifs(user.notifyEmail ?? true);
-      setEventReminders(user.notifyEventReminders ?? true);
-      setMatchNotifs(user.notifyMatches ?? true);
-      setProfileVisible(user.profileVisible ?? true);
-      setInviteOptOut((user as any).inviteOptOutPublicEvents ?? false);
-    }
-  }, [user]);
+    if (!saved) return;
+    const next = pickPrefs(saved);
+    const prev = lastSaved.current;
+    lastSaved.current = next;
+    setPrefs((cur) => {
+      if (!cur || !prev) return next;
+      let merged: Prefs | null = null;
+      for (const key of PREF_KEYS) {
+        if (next[key] === prev[key]) continue;
+        merged = merged ?? { ...cur };
+        merged[key] = next[key];
+      }
+      return merged ?? cur;
+    });
+  }, [saved]);
+
+  const toggle = (key: PrefKey) => setPrefs((cur) => (cur ? { ...cur, [key]: !cur[key] } : cur));
 
   const saveMutation = useMutation({
-    mutationFn: () => api.put('/users/me', {
-      notifyEmail: emailNotifs,
-      notifyEventReminders: eventReminders,
-      notifyMatches: matchNotifs,
-      profileVisible,
-      inviteOptOutPublicEvents: inviteOptOut,
-    }),
+    mutationFn: (patch: Partial<Prefs>) => api.put('/users/me', patch),
     onSuccess: () => {
       addToast('Settings saved', 'success');
       checkSession();
+      qc.invalidateQueries({ queryKey });
     },
     onError: () => addToast('Failed to save settings', 'error'),
   });
+
+  const save = () => {
+    if (!saved || !prefs) return;
+    const patch: Partial<Prefs> = {};
+    for (const key of PREF_KEYS) {
+      if (prefs[key] !== saved[key]) patch[key] = prefs[key];
+    }
+    if (Object.keys(patch).length === 0) {
+      addToast('No changes to save', 'info');
+      return;
+    }
+    saveMutation.mutate(patch);
+  };
+
+  return {
+    prefs,
+    failed: !prefs && isError,
+    toggle,
+    save,
+    saving: saveMutation.isPending,
+    retry: () => { void refetch(); },
+  };
+}
+
+/** Stands in for the switches until the saved values arrive (or could not be read). */
+function PrefsPlaceholder({ rows, failed, onRetry }: { rows: number; failed: boolean; onRetry: () => void }) {
+  if (failed) {
+    return (
+      <div className="flex items-center justify-between gap-4 py-3" role="alert">
+        <p className="text-sm text-gray-600">We couldn&apos;t load your settings.</p>
+        <Button variant="secondary" onClick={onRetry} className="flex-shrink-0 whitespace-nowrap">Try again</Button>
+      </div>
+    );
+  }
+  // The status text sits outside the divided list so it cannot add a line above row one.
+  return (
+    <div>
+      <span className="sr-only" role="status">Loading your settings</span>
+      <div className="divide-y divide-gray-100" aria-hidden="true">
+        {Array.from({ length: rows }, (_, i) => (
+          <div key={i} className="flex items-center justify-between gap-4 py-3">
+            <div className="min-w-0 flex-1 space-y-2">
+              <Skeleton className="h-4 w-40 max-w-full" />
+              <Skeleton className="h-3 w-56 max-w-full" />
+            </div>
+            <Skeleton className="h-6 w-11 flex-shrink-0 rounded-full" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export default function SettingsPage() {
+  const { user } = useAuthStore();
+  const { prefs, failed, toggle, save, saving, retry } = useSettingsPrefs();
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -167,24 +265,30 @@ export default function SettingsPage() {
           <h2 className="font-semibold text-[#1a1a2e]">Notifications</h2>
         </div>
         <div className="divide-y divide-gray-100">
-          <Toggle
-            enabled={emailNotifs}
-            onToggle={() => setEmailNotifs(!emailNotifs)}
-            label="Email notifications"
-            description="Receive important updates via email"
-          />
-          <Toggle
-            enabled={eventReminders}
-            onToggle={() => setEventReminders(!eventReminders)}
-            label="Event reminders"
-            description="Get notified before upcoming events"
-          />
-          <Toggle
-            enabled={matchNotifs}
-            onToggle={() => setMatchNotifs(!matchNotifs)}
-            label="Match notifications"
-            description="Get notified about mutual connections"
-          />
+          {prefs ? (
+            <>
+              <Toggle
+                enabled={prefs.notifyEmail}
+                onToggle={() => toggle('notifyEmail')}
+                label="Email notifications"
+                description="Receive important updates via email"
+              />
+              <Toggle
+                enabled={prefs.notifyEventReminders}
+                onToggle={() => toggle('notifyEventReminders')}
+                label="Event reminders"
+                description="Get notified before upcoming events"
+              />
+              <Toggle
+                enabled={prefs.notifyMatches}
+                onToggle={() => toggle('notifyMatches')}
+                label="Match notifications"
+                description="Get notified about mutual connections"
+              />
+            </>
+          ) : (
+            <PrefsPlaceholder rows={3} failed={failed} onRetry={retry} />
+          )}
         </div>
       </Card>
 
@@ -198,18 +302,24 @@ export default function SettingsPage() {
           <h2 className="font-semibold text-[#1a1a2e]">Privacy</h2>
         </div>
         <div className="divide-y divide-gray-100">
-          <Toggle
-            enabled={profileVisible}
-            onToggle={() => setProfileVisible(!profileVisible)}
-            label="Show me in search and suggestions"
-            description="People you already know can still see your profile and message you."
-          />
-          <Toggle
-            enabled={inviteOptOut}
-            onToggle={() => setInviteOptOut(!inviteOptOut)}
-            label="Opt out of public event invites"
-            description="Don't send me invites to public recurring events"
-          />
+          {prefs ? (
+            <>
+              <Toggle
+                enabled={prefs.profileVisible}
+                onToggle={() => toggle('profileVisible')}
+                label="Show me in search and suggestions"
+                description="People you already know can still see your profile and message you."
+              />
+              <Toggle
+                enabled={prefs.inviteOptOutPublicEvents}
+                onToggle={() => toggle('inviteOptOutPublicEvents')}
+                label="Opt out of public event invites"
+                description="Don't send me invites to public recurring events"
+              />
+            </>
+          ) : (
+            <PrefsPlaceholder rows={2} failed={failed} onRetry={retry} />
+          )}
         </div>
       </Card>
 
@@ -286,7 +396,7 @@ export default function SettingsPage() {
       </Card>
 
       <div className="flex justify-end">
-        <Button onClick={() => saveMutation.mutate()} isLoading={saveMutation.isPending}>Save Settings</Button>
+        <Button onClick={save} isLoading={saving} disabled={!prefs}>Save Settings</Button>
       </div>
     </div>
   );
