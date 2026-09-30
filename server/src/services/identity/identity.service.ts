@@ -340,7 +340,8 @@ export async function sendMagicLink(email: string, requestedClientUrl?: string, 
     [normalizedEmail, tokenHash, expiresAt]
   );
 
-  // Build the magic link URL using request origin when available.
+  // Build the magic link URL. It opens the asking page's origin only when that
+  // is one of our own sites (client-origin.ts); anything else gets the main app.
   const clientBaseUrl = resolveClientBaseUrl(requestedClientUrl, {
     clientUrl: config.clientUrl,
     isDev: config.isDev,
