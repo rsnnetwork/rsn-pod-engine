@@ -240,7 +240,7 @@ function useSettingsPrefs() {
  */
 function PrefsPlaceholder({ rows, failed, announce, onRetry }: { rows: number; failed: boolean; announce: boolean; onRetry: () => void }) {
   if (failed) {
-    if (!announce) return <p className="py-3 text-sm text-gray-400">Available once your settings load.</p>;
+    if (!announce) return <p className="py-3 text-sm text-gray-600">Available once your settings load.</p>;
     return (
       <div className="flex items-center justify-between gap-4 py-3" role="alert">
         <p className="text-sm text-gray-600">We couldn&apos;t load your settings.</p>
@@ -328,7 +328,7 @@ export default function SettingsPage() {
                 enabled={prefs.profileVisible}
                 onToggle={() => toggle('profileVisible')}
                 label="Show me in search and suggestions"
-                description="People you already know can still see your profile and message you."
+                description="When off, you won't appear in Find people or suggestions. Members with a link can still open your profile."
               />
               <Toggle
                 enabled={prefs.inviteOptOutPublicEvents}

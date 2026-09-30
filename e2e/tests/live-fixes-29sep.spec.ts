@@ -164,7 +164,7 @@ test('a hidden member leaves search and suggestions, and comes back', async () =
   const settings = await openAs(hidden, '/settings');
   const label = settings.getByText('Show me in search and suggestions');
   await expect(label).toBeVisible({ timeout: 30_000 });
-  await expect(settings.getByText('People you already know can still see your profile and message you.')).toBeVisible();
+  await expect(settings.getByText("When off, you won't appear in Find people or suggestions. Members with a link can still open your profile.")).toBeVisible();
   const toggle = settings.getByRole('switch', { name: 'Show me in search and suggestions' });
   await expect(toggle).toHaveAttribute('aria-checked', 'false');
   // Sizes mean nothing until the stylesheet has applied (WebKit paints the bare page first).

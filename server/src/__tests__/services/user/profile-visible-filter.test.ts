@@ -21,6 +21,7 @@ jest.mock('../../../index', () => ({ io: { to: () => ({ emit: () => {} }) }, __e
 import { searchMembers } from '../../../services/user/user-search.service';
 import { notifyMatchesOfNewUser } from '../../../services/matching/platform-match.service';
 import { listMatches, getAgent } from '../../../services/matching/agent.repo';
+import { recomputeAgent } from '../../../services/matching/agent-matching.service';
 
 const stripComments = (src: string) => src.replace(/^\s*\/\/.*$/gm, '').replace(/--[^\n`]*/g, '');
 const read = (rel: string) => stripComments(fs.readFileSync(path.join(__dirname, '../../../services', rel), 'utf8'));
@@ -34,13 +35,15 @@ describe('profile visibility is honoured', () => {
     expect(String(mockQuery.mock.calls[0][0])).toMatch(/u\.profile_visible = true/);
   });
 
-  it('both suggestion pools skip hidden members', () => {
+  it('the platform suggestion pool skips hidden members; the agent scoring pool does not', () => {
     const platform = read('matching/platform-match.service.ts');
     const loadCandidates = platform.slice(platform.indexOf('async function loadCandidates'), platform.indexOf('export async function getPlatformMatches'));
     expect(loadCandidates).toMatch(/u\.profile_visible = true/);
     const agents = read('matching/agent-matching.service.ts');
-    const pool = agents.slice(agents.indexOf('async function loadCandidatesFor'), agents.indexOf('async function loadCandidatesFor') + 2500);
-    expect(pool).toMatch(/u\.profile_visible = true/);
+    const pool = agents.slice(agents.indexOf('async function loadCandidatesFor'), agents.indexOf('export async function recomputeAgent'));
+    expect(pool).toMatch(/u\.onboarding_completed = true/); // anchor: the slice is the real pool query
+    // Stored results must survive a hidden period, so visibility is filtered when an agent is read, not when it is scored.
+    expect(pool).not.toMatch(/profile_visible/);
   });
 
   it('a hidden newcomer sends nobody a "someone new matches" bell', async () => {
@@ -89,5 +92,48 @@ describe('profile visibility is honoured', () => {
     await getAgent('agent-1', 'u-owner');
     expect(mockQuery).toHaveBeenCalledTimes(1);
     expect(String(mockQuery.mock.calls[0][0])).toMatch(/\bcu\.profile_visible = true/);
+  });
+
+  // An agent is filtered when it is READ, never when it is SCORED. A rescore replaces
+  // the stored rows (replaceMatches deletes whatever the fresh set lacks), so a member
+  // who was hidden at that moment was deleted from every search that rescored, and
+  // un-hiding did not bring them back until each owner edited their search.
+  // Seam: the real recomputeAgent, which runs loadCandidatesFor and then the real
+  // replaceMatches, against a small fake of the users table and of this one agent's
+  // stored rows. The fake applies the visibility condition only if the SQL it is sent
+  // contains it, so a filter put back into the scoring pool fails here.
+  it('rescoring an agent while a member is hidden keeps that member\'s stored row', async () => {
+    const developer = (id: string, displayName: string) => ({
+      id, displayName, avatarUrl: null, professionalRole: ['Developer'], jobTitle: 'Senior Engineer',
+      company: 'Acme', expertiseText: 'react typescript node', whatICanHelpWith: 'building web apps',
+      whatICareAbout: null, goals: null, interests: null, myIntent: null, whoIWantToMeet: null, whyIWantToMeet: null,
+    });
+    const users = [
+      { row: developer('u-visible', 'Dana'), visible: true },
+      { row: developer('u-hidden', 'Hamid'), visible: false },
+    ];
+    // Both were found by an earlier scoring, while both were visible.
+    const stored = new Set(['u-visible', 'u-hidden']);
+    mockQuery.mockImplementation((sql: string, params: unknown[] = []) => {
+      if (/FROM users u\s+WHERE u\.id <> \$1/.test(sql)) {
+        const skipsHidden = /\bu\.profile_visible = true/.test(sql);
+        return Promise.resolve({ rows: users.filter(u => u.visible || !skipsHidden).map(u => u.row) });
+      }
+      if (/^\s*DELETE FROM agent_matches am/.test(sql)) {
+        stored.clear(); // no live introductions in this scenario, so nothing is exempt from the delete
+        return Promise.resolve({ rows: [] });
+      }
+      if (/INSERT INTO agent_matches/.test(sql)) {
+        // After the agent id, each VALUES row is a (candidate, score, reason) triple.
+        for (let i = 1; i < params.length; i += 3) stored.add(String(params[i]));
+        return Promise.resolve({ rows: [] });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+
+    const shown = await recomputeAgent({ id: 'agent-1', userId: 'u-owner', wantText: 'react developers to build my product', label: 'Developers' });
+
+    expect(shown).toBe(2);
+    expect([...stored].sort()).toEqual(['u-hidden', 'u-visible']);
   });
 });

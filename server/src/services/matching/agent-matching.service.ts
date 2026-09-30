@@ -65,9 +65,9 @@ const CANDIDATE_COLUMNS = `
   u.industry, u.bio, u.location`;
 
 /**
- * Who this member may be shown at all. Global exclusions (already met, blocked
- * either way) plus a declined introduction — a decline is the one answer that
- * means "not this person", so it is honoured in both directions.
+ * Who this member's searches may find and store. Global exclusions (already
+ * met, blocked either way) plus a declined introduction — a decline is the one
+ * answer that means "not this person", so it is honoured in both directions.
  *
  * Someone you have merely ASKED stays in the pool. Dropping them (the original
  * decision D3) is what made a person disappear from the search that found them
@@ -78,6 +78,14 @@ const CANDIDATE_COLUMNS = `
  * 22 Sep 2026: nothing here depends on WHICH search is asking any more. The
  * pool is the same for all of a member's searches, and the per-search part —
  * stickiness — is applied separately.
+ *
+ * 29 Sep 2026: a member hiding their profile ("Show me in search and
+ * suggestions") is deliberately NOT applied here. A rescore replaces the stored
+ * rows (agent.repo replaceMatches), so filtering this pool would delete a hidden
+ * member from every search that rescored while they were hidden, and un-hiding
+ * would not bring them back until each owner edited that search. Stored results
+ * keep hidden members; listMatches and the match counts skip them, so un-hiding
+ * brings them back at once.
  */
 async function loadCandidatesFor(ownerId: string): Promise<IntentProfile[]> {
   const r = await query<IntentProfile>(
@@ -86,7 +94,6 @@ async function loadCandidatesFor(ownerId: string): Promise<IntentProfile[]> {
       WHERE u.id <> $1
         AND u.status = 'active'
         AND u.onboarding_completed = true
-        AND u.profile_visible = true
         -- "Already met" hides people you have genuinely met, at an event or
         -- otherwise. It must NOT hide someone you reached: accepting an
         -- introduction writes an encounter row (times_met = 0), so a person

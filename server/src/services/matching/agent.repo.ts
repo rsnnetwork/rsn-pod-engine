@@ -73,7 +73,9 @@ function mapAgent(r: AgentRow): MatchingAgent {
  * ignore deactivated members, which listMatches has always filtered — counting
  * them was how the dashboard and the agent screen came to disagree — and, since
  * 29 Sep 2026, members who have hidden their profile, which listMatches skips
- * the same way. Results are stored, so a member can hide after being found.
+ * the same way. Stored results keep hidden members (a rescore does not filter
+ * them out, see agent-matching loadCandidatesFor), so it is these reads that
+ * skip them: un-hiding brings them back at once.
  */
 const countExpr = (agent: string, negate: boolean) => `
   (SELECT COUNT(*)
@@ -198,7 +200,9 @@ export async function setStatus(
 /**
  * Swap in a freshly scored set for one agent. Always deletes first: an agent
  * whose matches all became stale must fall to zero rather than keep showing a
- * count nobody can explain.
+ * count nobody can explain. The fresh set includes members who are hidden right
+ * now (visibility is applied when reading, not when scoring), so hiding is never
+ * what drops someone here.
  */
 export async function replaceMatches(agentId: string, matches: AgentMatchInput[]): Promise<void> {
   // Anyone with a live introduction is STICKY: whatever reason drops them out
@@ -306,9 +310,10 @@ export async function listMatches(agentId: string, limit = 25): Promise<StoredAg
          ) p ON TRUE
         WHERE m.agent_id = $1
           AND u.status = 'active'
-          -- 29 Sep 2026: matches are stored, so someone can hide AFTER being
-          -- found. They drop out of the stored results at once, not only at the
-          -- next rescore (Settings: "Show me in search and suggestions").
+          -- 29 Sep 2026 (Settings: "Show me in search and suggestions"): stored
+          -- results keep members who are hidden, because a rescore while someone
+          -- is hidden must not delete them. Display and counts skip them
+          -- instead, so un-hiding brings them back at once, with no rescore.
           AND u.profile_visible = true
           AND (p.status IS NULL OR p.status <> 'declined')
      )
