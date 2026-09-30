@@ -70,4 +70,22 @@ describe('profile visibility is honoured', () => {
     const inserts = mockQuery.mock.calls.map(c => String(c[0])).filter(s => /INSERT INTO notifications/.test(s));
     expect(inserts).toHaveLength(0);
   });
+
+  // Agents rescore rarely (on create, on an edit, on resume), so the rows they
+  // stored can outlive a member choosing to hide. The read side skips them too.
+  // "\b" matters: "cu.profile_visible" contains "u.profile_visible", and the
+  // count filter must not be able to satisfy the list pin (or the reverse).
+  it('an agent\'s stored results skip members who have since hidden', () => {
+    const repo = read('matching/agent.repo.ts');
+    const list = repo.slice(repo.indexOf('export async function listMatches'), repo.indexOf('export async function listActiveAgentsForMatching'));
+    expect(list).toMatch(/FROM agent_matches m/);
+    expect(list).toMatch(/\bu\.profile_visible = true/);
+  });
+
+  it('the match counts on the agent dashboard skip them too', () => {
+    const repo = read('matching/agent.repo.ts');
+    const countExpr = repo.slice(repo.indexOf('const countExpr'), repo.indexOf('const counts'));
+    expect(countExpr).toMatch(/JOIN users cu ON cu\.id = m\.candidate_user_id/);
+    expect(countExpr).toMatch(/\bcu\.profile_visible = true/);
+  });
 });

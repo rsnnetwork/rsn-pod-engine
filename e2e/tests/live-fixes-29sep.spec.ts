@@ -105,13 +105,16 @@ test('a hidden member leaves search and suggestions, and comes back', async () =
   const profile = await openAs(viewer, `/profile/${hidden.id}`);
   await expect(profile.getByText(name)).toBeVisible({ timeout: 30_000 });
 
-  // Settings says what the switch now does, and the switch itself (not its label)
-  // is fully on a phone screen with a real tap target.
+  // Settings says what the switch now does, and a FRESH load shows it OFF (the saved
+  // choice reaches the page; the session used to omit it, so every load read ON and
+  // a Save quietly un-hid the member). The switch itself, not its label, is fully on
+  // a phone screen with a real tap target.
   const settings = await openAs(hidden, '/settings');
   const label = settings.getByText('Show me in search and suggestions');
   await expect(label).toBeVisible({ timeout: 30_000 });
   await expect(settings.getByText('People you already know can still see your profile and message you.')).toBeVisible();
-  const toggle = label.locator('xpath=ancestor::div[contains(@class, "justify-between")][1]').getByRole('button');
+  const toggle = settings.getByRole('switch', { name: 'Show me in search and suggestions' });
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
   await toggle.scrollIntoViewIfNeeded();
   const box = await toggle.boundingBox();
   expect(box, 'the profile-visibility switch has a box on screen').not.toBeNull();
@@ -134,4 +137,9 @@ test('a hidden member leaves search and suggestions, and comes back', async () =
   expect((await api(hidden, 'PUT', '/users/me', { profileVisible: true })).status).toBe(200);
   expect(await found()).toContain(hidden.id);
   expect(await suggested()).toContain(hidden.id);
+
+  // A fresh load of Settings now shows it ON again.
+  const settingsAgain = await openAs(hidden, '/settings');
+  await expect(settingsAgain.getByRole('switch', { name: 'Show me in search and suggestions' }))
+    .toHaveAttribute('aria-checked', 'true', { timeout: 30_000 });
 });

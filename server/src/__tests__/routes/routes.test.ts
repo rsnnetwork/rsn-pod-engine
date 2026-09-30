@@ -303,6 +303,51 @@ describe('Auth Routes', () => {
       expect(res.status).toBe(200);
       expect(res.body.data.user.lastOnboardedAt).toBeNull();
     });
+
+    // 29 Sep 2026: the Settings page fills its five switches from this payload.
+    // It carried none of them, so every switch read its built-in default (on, on,
+    // on, on, off) and any Save wrote those defaults back over what the member had
+    // chosen, which could quietly un-hide a hidden profile. The stored values
+    // below are the opposite of the defaults, so a fallback cannot pass for them.
+    const SETTINGS_DEFAULTS: Record<string, boolean> = {
+      profileVisible: true,
+      notifyEmail: true,
+      notifyEventReminders: true,
+      notifyMatches: true,
+      inviteOptOutPublicEvents: false,
+    };
+
+    it('carries the Settings of a hidden member who turned notifications off', async () => {
+      const stored = {
+        profileVisible: false,
+        notifyEmail: false,
+        notifyEventReminders: false,
+        notifyMatches: false,
+        inviteOptOutPublicEvents: true,
+      };
+      (identityService.getUserById as jest.Mock).mockResolvedValue({ ...mockUser, ...stored });
+
+      const res = await request(app)
+        .get('/auth/session')
+        .set('Authorization', `Bearer ${makeToken()}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.user).toMatchObject(stored);
+    });
+
+    // One field flipped at a time, so a preference read from the wrong column
+    // (say notifyEmail taken from notifyMatches) cannot hide behind equal values.
+    it.each(Object.keys(SETTINGS_DEFAULTS))('carries %s as stored, with the other four untouched', async (key) => {
+      const stored = { ...SETTINGS_DEFAULTS, [key]: !SETTINGS_DEFAULTS[key] };
+      (identityService.getUserById as jest.Mock).mockResolvedValue({ ...mockUser, ...stored });
+
+      const res = await request(app)
+        .get('/auth/session')
+        .set('Authorization', `Bearer ${makeToken()}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.user).toMatchObject(stored);
+    });
   });
 });
 

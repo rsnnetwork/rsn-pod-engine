@@ -71,12 +71,14 @@ function mapAgent(r: AgentRow): MatchingAgent {
  *
  * `negate` picks which side of the introduction test the count lands on. Both
  * ignore deactivated members, which listMatches has always filtered — counting
- * them was how the dashboard and the agent screen came to disagree.
+ * them was how the dashboard and the agent screen came to disagree — and, since
+ * 29 Sep 2026, members who have hidden their profile, which listMatches skips
+ * the same way. Results are stored, so a member can hide after being found.
  */
 const countExpr = (agent: string, negate: boolean) => `
   (SELECT COUNT(*)
      FROM agent_matches m
-     JOIN users cu ON cu.id = m.candidate_user_id AND cu.status = 'active'
+     JOIN users cu ON cu.id = m.candidate_user_id AND cu.status = 'active' AND cu.profile_visible = true
     WHERE m.agent_id = ${agent}.id
       AND ${negate ? 'NOT EXISTS' : 'EXISTS'} (
         SELECT 1 FROM user_pokes p
@@ -304,6 +306,10 @@ export async function listMatches(agentId: string, limit = 25): Promise<StoredAg
          ) p ON TRUE
         WHERE m.agent_id = $1
           AND u.status = 'active'
+          -- 29 Sep 2026: matches are stored, so someone can hide AFTER being
+          -- found. They drop out of the stored results at once, not only at the
+          -- next rescore (Settings: "Show me in search and suggestions").
+          AND u.profile_visible = true
           AND (p.status IS NULL OR p.status <> 'declined')
      )
      SELECT "candidateUserId", score, reason, "displayName", "avatarUrl",
