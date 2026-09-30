@@ -124,6 +124,7 @@ function normalizePair(a: string, b: string): [string, string] {
  * Send a poke. Auth rules:
  *   - Not self
  *   - Not blocked (either direction)
+ *   - No request from sender → recipient that the recipient already declined
  *   - No existing encounter (encounter unlocks DMs directly, no need to poke)
  *   - No pending poke from sender → recipient already
  */
@@ -141,6 +142,24 @@ export async function sendPoke(
   }
   if (await blockService.areBlocked(senderId, recipientId)) {
     throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'Cannot poke this user');
+  }
+
+  // 29 Sep 2026: a "no" stays a no. Before this the person who declined could
+  // be asked again from search or a profile as often as the sender liked, each
+  // time with a bell and an email. Only sender → recipient is checked: the
+  // person who said no can still ask later.
+  const declined = await query<{ id: string }>(
+    `SELECT id FROM user_pokes
+      WHERE sender_id = $1 AND recipient_id = $2 AND status = 'declined'
+      LIMIT 1`,
+    [senderId, recipientId],
+  );
+  if (declined.rows.length > 0) {
+    throw new AppError(
+      403,
+      ErrorCodes.AUTH_FORBIDDEN,
+      'They declined your earlier request, so you cannot send another one.',
+    );
   }
 
   // Encounter check: if they've already met, DMs are open — no need to poke.

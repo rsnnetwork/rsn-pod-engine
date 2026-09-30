@@ -253,6 +253,13 @@ export default function PublicProfilePage() {
                           </Button>
                           <span className="text-[11px] text-gray-400">Waiting on you in Messages</span>
                         </>
+                      ) : meetingRequest?.status === 'declined' && meetingRequest.sentByMe ? (
+                        <>
+                          <Button size="sm" variant="ghost" disabled className="min-h-[44px] text-xs" data-testid="meet-state">
+                            <Send className="mr-1.5 h-3.5 w-3.5" /> Request declined
+                          </Button>
+                          <span className="text-[11px] text-gray-400">They declined your earlier request</span>
+                        </>
                       ) : (
                         <>
                           <Button
@@ -266,7 +273,7 @@ export default function PublicProfilePage() {
                           </Button>
                           <span className="text-[11px] text-gray-400">
                             {meetingRequest?.status === 'declined'
-                              ? 'A previous request was declined'
+                              ? 'You declined their earlier request'
                               : 'Messaging unlocks once they accept'}
                           </span>
                         </>

@@ -70,7 +70,8 @@ describe('S22 — the reason is VISIBLE on the profile page (not tooltip-only)',
     expect(block).toMatch(/I want to meet/);
     expect(block).toMatch(/Messaging unlocks once they accept/);
     // A decline is surfaced, not silently swallowed.
-    expect(block).toMatch(/A previous request was declined/);
+    expect(block).toMatch(/They declined your earlier request/);
+    expect(block).toMatch(/You declined their earlier request/);
     // Reasons are visible spans, not tooltip-only — three of them.
     expect((block.match(/<span className="text-\[11px\] text-gray-400">/g) ?? []).length)
       .toBeGreaterThanOrEqual(2);
