@@ -39,6 +39,7 @@ test.afterAll(async () => {
 });
 
 test('a declined request is final for the sender; the decliner can still ask', async () => {
+  test.setTimeout(240_000);
   const a = await createTestUser('lf-decline-a'); made.push(a.id);
   const b = await createTestUser('lf-decline-b'); made.push(b.id);
 
@@ -55,8 +56,24 @@ test('a declined request is final for the sender; the decliner can still ask', a
   expect(await bells()).toBe(before);
 
   const page = await openAs(a, `/profile/${b.id}`);
-  await expect(page.getByTestId('meet-state')).toHaveText(/Request declined/);
-  await expect(page.getByTestId('meet-state')).toBeDisabled();
+  const declinedControl = page.getByTestId('meet-state');
+  await expect(declinedControl).toHaveText(/Request declined/, { timeout: 30_000 });
+  await expect(declinedControl).toBeDisabled();
+  // On the phone the disabled control must sit fully on screen, at a proper tap size.
+  await declinedControl.scrollIntoViewIfNeeded();
+  const box = await declinedControl.boundingBox();
+  expect(box, 'the declined control has a box on screen').not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(PHONE.width);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(PHONE.height);
+  expect(box!.height).toBeGreaterThanOrEqual(44);
+
+  // The person who said no sees the ordinary, enabled button, not the disabled one.
+  const theirPage = await openAs(b, `/profile/${a.id}`);
+  const askBack = theirPage.getByTestId('meet-state');
+  await expect(askBack).toHaveText(/I want to meet/, { timeout: 30_000 });
+  await expect(askBack).toBeEnabled();
 
   expect((await api(b, 'POST', `/matches/platform/${a.id}/interest`)).status).toBe(201);
 });
