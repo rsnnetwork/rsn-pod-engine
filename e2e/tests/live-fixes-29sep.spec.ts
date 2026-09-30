@@ -77,3 +77,61 @@ test('a declined request is final for the sender; the decliner can still ask', a
 
   expect((await api(b, 'POST', `/matches/platform/${a.id}/interest`)).status).toBe(201);
 });
+
+test('a hidden member leaves search and suggestions, and comes back', async () => {
+  test.setTimeout(240_000);
+  const run = Date.now().toString(36);
+  const viewer = await createTestUser('lf-vis-viewer'); made.push(viewer.id);
+  const hidden = await createTestUser('lf-vis-hidden'); made.push(hidden.id);
+  const name = `Zqv${run} Hidden`;
+  // Three made-up words, in no job category: the viewer wants them and the hidden
+  // member offers them, so the matcher suggests that member and nobody real.
+  const words = `zq${run} wx${run} vk${run}`;
+  await pool.query(`UPDATE users SET display_name = $1, expertise_text = $2 WHERE id = $3`, [name, words, hidden.id]);
+  await pool.query(`UPDATE users SET who_i_want_to_meet = $1 WHERE id = $2`, [words, viewer.id]);
+  const found = async () => ((await api(viewer, 'GET', `/users/find?q=Zqv${run}`)).body?.data ?? []).map((r: any) => r.userId);
+  const suggested = async () => ((await api(viewer, 'GET', '/matches/platform')).body?.data?.matches ?? []).map((m: any) => m.userId);
+
+  // Visible first, so "absent" below means something: both lists can show this member.
+  expect(await found()).toContain(hidden.id);
+  expect(await suggested()).toContain(hidden.id);
+
+  // The Settings switch saves through PUT /users/me { profileVisible }.
+  expect((await api(hidden, 'PUT', '/users/me', { profileVisible: false })).status).toBe(200);
+  expect(await found()).not.toContain(hidden.id);
+  expect(await suggested()).not.toContain(hidden.id);
+
+  // Still reachable by link for someone who has it.
+  const profile = await openAs(viewer, `/profile/${hidden.id}`);
+  await expect(profile.getByText(name)).toBeVisible({ timeout: 30_000 });
+
+  // Settings says what the switch now does, and the switch itself (not its label)
+  // is fully on a phone screen with a real tap target.
+  const settings = await openAs(hidden, '/settings');
+  const label = settings.getByText('Show me in search and suggestions');
+  await expect(label).toBeVisible({ timeout: 30_000 });
+  await expect(settings.getByText('People you already know can still see your profile and message you.')).toBeVisible();
+  const toggle = label.locator('xpath=ancestor::div[contains(@class, "justify-between")][1]').getByRole('button');
+  await toggle.scrollIntoViewIfNeeded();
+  const box = await toggle.boundingBox();
+  expect(box, 'the profile-visibility switch has a box on screen').not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(PHONE.width);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(PHONE.height);
+  // The visible switch is 44 x 24 and a ::after layer grows its touch area to 44 high.
+  // boundingBox() cannot see that layer, so read its size too and take the larger.
+  const tap = await toggle.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const after = getComputedStyle(el, '::after');
+    return { w: Math.max(r.width, parseFloat(after.width) || 0), h: Math.max(r.height, parseFloat(after.height) || 0) };
+  });
+  expect(tap.w, 'the switch keeps its full width on a phone').toBeGreaterThanOrEqual(44);
+  expect(tap.h, 'the touch area is at least 44px high').toBeGreaterThanOrEqual(44);
+  // Nothing (bottom bar, toast) covers it: a trial click checks that without pressing it.
+  await toggle.click({ trial: true });
+
+  expect((await api(hidden, 'PUT', '/users/me', { profileVisible: true })).status).toBe(200);
+  expect(await found()).toContain(hidden.id);
+  expect(await suggested()).toContain(hidden.id);
+});

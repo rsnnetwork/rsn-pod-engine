@@ -86,6 +86,7 @@ async function loadCandidatesFor(ownerId: string): Promise<IntentProfile[]> {
       WHERE u.id <> $1
         AND u.status = 'active'
         AND u.onboarding_completed = true
+        AND u.profile_visible = true
         -- "Already met" hides people you have genuinely met, at an event or
         -- otherwise. It must NOT hide someone you reached: accepting an
         -- introduction writes an encounter row (times_met = 0), so a person

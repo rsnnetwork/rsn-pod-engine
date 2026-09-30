@@ -433,6 +433,7 @@ async function loadCandidates(userId: string): Promise<(IntentProfile & {
      WHERE u.id <> $1
        AND u.status = 'active'
        AND u.onboarding_completed = true
+       AND u.profile_visible = true
        -- "Already met" hides people you have genuinely met. Accepting a request
        -- also writes an encounter row, so without the override below an
        -- accepted person would disappear the moment they said yes — the same
@@ -591,6 +592,14 @@ export async function notifyMatchesOfNewUser(newUserId: string): Promise<number>
   try {
     const newcomer = await loadProfile(newUserId);
     if (!newcomer || !newcomer.onboardingCompleted) return 0;
+
+    // 29 Sep 2026: a member who chose not to appear in suggestions must not be
+    // announced to others as "someone new matches" either.
+    const visibility = await query<{ profile_visible: boolean }>(
+      `SELECT profile_visible FROM users WHERE id = $1`,
+      [newUserId],
+    );
+    if (visibility.rows[0]?.profile_visible === false) return 0;
 
     const notifiedByAgent = await notifyAgentsOfNewUser(newUserId);
 

@@ -62,6 +62,7 @@ export async function searchMembers(
       WHERE u.id <> $1
         AND u.status = 'active'
         AND u.onboarding_completed = true
+        AND u.profile_visible = true
         AND (${tokenClauses})
         AND NOT EXISTS (
           SELECT 1 FROM user_blocks b

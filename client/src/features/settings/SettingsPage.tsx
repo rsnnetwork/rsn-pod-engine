@@ -83,14 +83,14 @@ function Toggle({ enabled, onToggle, label, description }: {
   enabled: boolean; onToggle: () => void; label: string; description: string;
 }) {
   return (
-    <div className="flex items-center justify-between py-3">
-      <div>
+    <div className="flex items-center justify-between gap-4 py-3">
+      <div className="min-w-0">
         <p className="text-sm font-medium text-gray-800">{label}</p>
         <p className="text-xs text-gray-400">{description}</p>
       </div>
       <button
         onClick={onToggle}
-        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors after:absolute after:inset-x-0 after:-inset-y-2.5 after:content-[''] ${enabled ? 'bg-rsn-red' : 'bg-gray-200'}`}
+        className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors after:absolute after:inset-x-0 after:-inset-y-2.5 after:content-[''] ${enabled ? 'bg-rsn-red' : 'bg-gray-200'}`}
       >
         <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${enabled ? 'translate-x-6' : 'translate-x-1'}`} />
       </button>
@@ -198,8 +198,8 @@ export default function SettingsPage() {
           <Toggle
             enabled={profileVisible}
             onToggle={() => setProfileVisible(!profileVisible)}
-            label="Profile visibility"
-            description="Allow other members to see your profile"
+            label="Show me in search and suggestions"
+            description="People you already know can still see your profile and message you."
           />
           <Toggle
             enabled={inviteOptOut}
