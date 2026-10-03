@@ -269,7 +269,7 @@ export default function MeetingRequests({ myUserId, focusPokeId }: { myUserId: s
                     {[r.senderJobTitle, r.senderCompany].filter(Boolean).join(' · ')}
                   </p>
                 )}
-                <p className="mt-1 line-clamp-4 whitespace-pre-line break-words text-xs text-gray-600">
+                <p className="mt-1 line-clamp-6 whitespace-pre-line break-words text-xs text-gray-600">
                   {r.message || 'They would like to meet you.'}
                 </p>
                 {formatLabel(r.preferredFormat) && (
