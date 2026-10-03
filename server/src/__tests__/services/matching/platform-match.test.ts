@@ -268,3 +268,40 @@ describe('notifyMatchesOfNewUser — the "new batch" trigger', () => {
     await expect(notifyMatchesOfNewUser('u-x')).resolves.toBe(0);
   });
 });
+
+describe('expressInterest with a personal note and format (milestone 1)', () => {
+  beforeEach(() => { mockQuery.mockReset(); mockSendPoke.mockReset(); mockSendPoke.mockResolvedValue({ id: 'p1' }); });
+
+  function armProfiles() {
+    mockQuery.mockImplementation((sql: string, params: unknown[]) => {
+      if (/WHERE u\.id = \$1/.test(sql)) {
+        return Promise.resolve({ rows: [(params as string[])[0] === 'u-founder' ? FOUNDER_SEEKING_INVESTORS : INVESTOR] });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+  }
+
+  it('leads with the member\'s own note and attaches REASON\'s reason, with the format', async () => {
+    armProfiles();
+    await expressInterest('u-founder', 'u-investor', undefined, { note: '  I would love your view on our seed round.  ', format: 'coffee' });
+    const [sender, recipient, message, agentId, format] = mockSendPoke.mock.calls[0];
+    expect([sender, recipient, agentId, format]).toEqual(['u-founder', 'u-investor', undefined, 'coffee']);
+    expect(message).toMatch(/^I would love your view on our seed round\.\n\nWhy REASON suggested this: Fatima is looking to meet .+ — you're an Angel Investor\.$/);
+    expect(String(message).length).toBeLessThanOrEqual(500);
+  });
+
+  it('a note with no reason to attach is sent as written', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    await expressInterest('u-founder', 'u-investor', undefined, { note: 'Hello there' });
+    expect(mockSendPoke.mock.calls[0][2]).toBe('Hello there');
+  });
+
+  it('without a note it still writes the introduction itself, and passes no format', async () => {
+    armProfiles();
+    await expressInterest('u-founder', 'u-investor');
+    const [, , message, agentId, format] = mockSendPoke.mock.calls[0];
+    expect(message).toMatch(/We think you two should meet\.$/);
+    expect(agentId).toBeUndefined();
+    expect(format).toBeUndefined();
+  });
+});

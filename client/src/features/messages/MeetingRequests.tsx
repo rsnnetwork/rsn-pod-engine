@@ -20,6 +20,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { useToastStore } from '@/stores/toastStore';
 import { E } from '@/realtime/entities';
 import api from '@/lib/api';
+import { MEETING_FORMATS } from '@rsn/shared';
 
 export interface PendingRequest {
   id: string;
@@ -30,7 +31,10 @@ export interface PendingRequest {
   senderAvatarUrl: string | null;
   senderJobTitle: string | null;
   senderCompany: string | null;
+  preferredFormat?: 'video_20' | 'coffee' | 'message_first' | null;
 }
+
+const formatLabel = (f: PendingRequest['preferredFormat']) => MEETING_FORMATS.find(m => m.key === f)?.label ?? null;
 
 /** Shared accept/decline for a pending request. */
 function usePokeActions(myUserId: string) {
@@ -137,7 +141,10 @@ export function FocusedMeetingRequest({ pokeId, myUserId }: { pokeId: string; my
           <p className="mt-0.5 text-sm text-gray-500">{[req.senderJobTitle, req.senderCompany].filter(Boolean).join(' · ')}</p>
         )}
         {req.message && (
-          <p className="mt-3 break-words text-sm text-gray-600">{req.message}</p>
+          <p className="mt-3 whitespace-pre-line break-words text-sm text-gray-600">{req.message}</p>
+        )}
+        {formatLabel(req.preferredFormat) && (
+          <p className="mt-1 text-xs text-gray-500">Prefers {formatLabel(req.preferredFormat)?.toLowerCase()}</p>
         )}
         <ProfileLink userId={req.senderId} className="mt-3 inline-block text-xs font-medium text-rsn-red underline">
           View full profile
@@ -262,9 +269,12 @@ export default function MeetingRequests({ myUserId, focusPokeId }: { myUserId: s
                     {[r.senderJobTitle, r.senderCompany].filter(Boolean).join(' · ')}
                   </p>
                 )}
-                <p className="mt-1 break-words text-xs text-gray-600">
+                <p className="mt-1 whitespace-pre-line break-words text-xs text-gray-600">
                   {r.message || 'They would like to meet you.'}
                 </p>
+                {formatLabel(r.preferredFormat) && (
+                  <p className="mt-0.5 text-[11px] text-gray-500">Prefers {formatLabel(r.preferredFormat)?.toLowerCase()}</p>
+                )}
               </div>
             </div>
             <div className="mt-3 flex gap-2">

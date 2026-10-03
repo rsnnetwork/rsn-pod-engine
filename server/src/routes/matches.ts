@@ -7,7 +7,9 @@
 // POST /matches/platform/:userId/interest → "I want to meet" (rides poke rails)
 
 import { Router, Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
 import { authenticate } from '../middleware/auth';
+import { validate } from '../middleware/validate';
 import * as platformMatchService from '../services/matching/platform-match.service';
 import { ApiResponse } from '@rsn/shared';
 
@@ -29,13 +31,25 @@ router.get(
   }
 );
 
+// Milestone 1 (29 Sep 2026): the Meet sheet adds a personal "why now" note and
+// a preferred format. Both optional: today's callers POST with no body at all.
+// 300 leaves room for REASON's reason inside the request's 500 characters.
+const interestBody = z.object({
+  note: z.string().trim().max(300).optional(),
+  format: z.enum(['video_20', 'coffee', 'message_first']).optional(),
+});
+
 // POST /matches/platform/:userId/interest — "I want to meet"
 router.post(
   '/platform/:userId/interest',
   authenticate,
+  validate(interestBody),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const poke = await platformMatchService.expressInterest(req.user!.userId, req.params.userId);
+      const poke = await platformMatchService.expressInterest(req.user!.userId, req.params.userId, undefined, {
+        note: req.body.note,
+        format: req.body.format,
+      });
       const response: ApiResponse = { success: true, data: poke };
       res.status(201).json(response);
     } catch (err) {

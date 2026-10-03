@@ -23,6 +23,7 @@ import { expandWantTags } from './want-synonyms';
 import { extractConstraints, checkConstraints } from './want-constraints';
 import * as pokeService from '../poke/poke.service';
 import { UserPoke } from '../poke/poke.service';
+import type { MeetingFormat } from '@rsn/shared';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -535,9 +536,12 @@ export async function expressInterest(
    *  Recorded on the poke so the exclusion it creates is scoped to that agent
    *  (Wave 2, decision D3) rather than hiding the person everywhere. */
   agentId?: string,
+  /** Milestone 1 (29 Sep 2026): the Meet sheet's "Why now?" note and preferred format. */
+  opts: { note?: string; format?: MeetingFormat } = {},
 ): Promise<UserPoke> {
   const [me, target] = await Promise.all([loadProfile(userId), loadProfile(targetUserId)]);
-  let message = 'We think you two should meet.';
+  const note = opts.note?.trim() || null;
+  let message = note ?? 'We think you two should meet.';
   if (me && target) {
     const senderName = me.displayName || 'This member';
     // Say WHY this introduction exists, strongest known cause first.
@@ -557,11 +561,16 @@ export async function expressInterest(
     );
     const toRecipient = agentWant ? { reason: '' } : scoreFit(target, me);
     const reason = fromSender.reason || toRecipient.reason;
-    message = reason
-      ? `${reason}. We think you two should meet.`
-      : `${senderName} thinks you fit what they're looking for. We think you two should meet.`;
+    if (note) {
+      // The v4 Meet sheet: the member's own words first, "with the reason attached".
+      message = reason ? `${note}\n\nWhy REASON suggested this: ${reason}.` : note;
+    } else {
+      message = reason
+        ? `${reason}. We think you two should meet.`
+        : `${senderName} thinks you fit what they're looking for. We think you two should meet.`;
+    }
   }
-  return pokeService.sendPoke(userId, targetUserId, message.slice(0, 500), agentId);
+  return pokeService.sendPoke(userId, targetUserId, message.slice(0, 500), agentId, opts.format);
 }
 
 /** The want-text of one agent, for wording the introduction it produced. */

@@ -583,7 +583,10 @@ describe('sendPoke — pokes-prefs bell gating (Settings "Pokes" bell toggle)', 
     expect(mockQuery.mock.calls.some(c => /INSERT INTO notifications/.test(c[0] as string))).toBe(false);
     expect(mockTo).not.toHaveBeenCalled();
     expect(mockEmit).not.toHaveBeenCalled();
-    expect(mockEmitEntities).not.toHaveBeenCalled();
+    // 29 Sep 2026: the bell toggle silences the notification, not the data.
+    // Screens still refresh; only the bell's own tag is withheld.
+    const tags = mockEmitEntities.mock.calls.flatMap(c => c[2] as string[]);
+    expect(tags).not.toContain(`user:${RECIPIENT}:notifications`);
     expect(result.status).toBe('pending');
     expect(mockSendPokeReceivedEmail).toHaveBeenCalled();
   });
@@ -790,5 +793,51 @@ describe('listReceivedPokes — the accept surface shows who is asking', () => {
     const [sql] = mockQuery.mock.calls[0];
     expect(String(sql)).toMatch(/u\.job_title/);
     expect(String(sql)).toMatch(/u\.company/);
+  });
+
+  it('carries the format the sender asked for, and null when they chose none', async () => {
+    const row = {
+      id: 'p1', sender_id: 'u-them', recipient_id: 'u-me', status: 'pending',
+      message: 'hi', responded_at: null, created_at: new Date(),
+      display_name: 'Dana Dev', avatar_url: null, job_title: null, company: null,
+    };
+    mockQuery.mockResolvedValue({ rows: [
+      { ...row, preferred_format: 'coffee' },
+      { ...row, id: 'p2', preferred_format: null },
+    ] });
+    const rows = await pokeService.listReceivedPokes('u-me');
+    expect(rows.map(r => r.preferredFormat)).toEqual(['coffee', null]);
+    expect(String(mockQuery.mock.calls[0][0])).toMatch(/p\.preferred_format/);
+  });
+});
+
+describe('sendPoke — both members\' screens refresh (29 Sep 2026)', () => {
+  it('tells the sender and the recipient, whatever the recipient\'s bell setting', async () => {
+    armSend('hi');
+    mockShouldSendBell.mockResolvedValue(false);
+
+    await pokeService.sendPoke(SENDER, RECIPIENT, 'hi');
+
+    expect(mockEmitEntities).toHaveBeenCalledWith(expect.anything(), [SENDER], [`user:${SENDER}`, `user:${SENDER}:invites`]);
+    expect(mockEmitEntities).toHaveBeenCalledWith(expect.anything(), [RECIPIENT], [`user:${RECIPIENT}`, `user:${RECIPIENT}:invites`]);
+    const tags = mockEmitEntities.mock.calls.flatMap(c => c[2] as string[]);
+    expect(tags).not.toContain(`user:${RECIPIENT}:notifications`);
+  });
+
+  it('with the bell on, the recipient\'s bell counter is told as well', async () => {
+    armSend('hi');
+
+    await pokeService.sendPoke(SENDER, RECIPIENT, 'hi');
+
+    expect(mockEmitEntities).toHaveBeenCalledWith(expect.anything(), [RECIPIENT], [`user:${RECIPIENT}:notifications`]);
+    expect(mockEmitEntities).toHaveBeenCalledWith(expect.anything(), [RECIPIENT], [`user:${RECIPIENT}`, `user:${RECIPIENT}:invites`]);
+  });
+
+  it('stores the preferred format and returns it', async () => {
+    armSend('hi');
+    const poke = await pokeService.sendPoke(SENDER, RECIPIENT, 'hi', undefined, 'coffee');
+    const insert = mockQuery.mock.calls.find(c => /INSERT INTO user_pokes/.test(String(c[0])))!;
+    expect(insert[1]).toEqual([expect.any(String), SENDER, RECIPIENT, 'hi', null, 'coffee']);
+    expect(poke).toHaveProperty('preferredFormat');
   });
 });

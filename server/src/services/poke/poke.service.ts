@@ -12,6 +12,7 @@ import logger from '../../config/logger';
 import config from '../../config';
 import { AppError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes } from '@rsn/shared';
+import type { MeetingFormat } from '@rsn/shared';
 import * as blockService from '../block/block.service';
 import * as emailService from '../email/email.service';
 import * as prefsService from '../notification-prefs/notification-prefs.service';
@@ -105,6 +106,7 @@ export interface UserPoke {
   message: string | null;
   respondedAt: Date | null;
   createdAt: Date;
+  preferredFormat: MeetingFormat | null;
 }
 
 export interface PokeWithSender extends UserPoke {
@@ -136,6 +138,8 @@ export async function sendPoke(
    *  (Wave 2). Stored so the exclusion it creates is scoped to that agent
    *  instead of hiding the person from every other reason to meet them. */
   agentId?: string,
+  /** Milestone 1: the format the sender would like (shown to the recipient). */
+  preferredFormat?: MeetingFormat,
 ): Promise<UserPoke> {
   if (senderId === recipientId) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'You cannot poke yourself');
@@ -194,11 +198,12 @@ export async function sendPoke(
       message: string | null;
       responded_at: Date | null;
       created_at: Date;
+      preferred_format: MeetingFormat | null;
     }>(
-      `INSERT INTO user_pokes (id, sender_id, recipient_id, message, status, agent_id)
-       VALUES ($1, $2, $3, $4, 'pending', $5)
-       RETURNING id, sender_id, recipient_id, status, message, responded_at, created_at`,
-      [pokeId, senderId, recipientId, trimmedMessage, agentId ?? null],
+      `INSERT INTO user_pokes (id, sender_id, recipient_id, message, status, agent_id, preferred_format)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6)
+       RETURNING id, sender_id, recipient_id, status, message, responded_at, created_at, preferred_format`,
+      [pokeId, senderId, recipientId, trimmedMessage, agentId ?? null, preferredFormat ?? null],
     );
     const r = result.rows[0];
     logger.info({ senderId, recipientId, pokeId: r.id }, 'Poke sent');
@@ -239,13 +244,14 @@ export async function sendPoke(
             isRead: false,
             createdAt: notifResult.rows[0].created_at,
           });
-          // Phase 2 dual-emit — notifications + invites for the recipient
-          // so their bell counter / received-invites surfaces refresh.
+          // The bell's own tag, so their bell counter refreshes. The screens
+          // (user + invites) are refreshed for both members below, whatever the
+          // bell setting is.
           const { emitEntities } = await import('../../realtime/emit');
           const { E } = await import('../../realtime/entities');
           emitEntities(
             io, [recipientId],
-            [E.userNotifications(recipientId), E.userInvites(recipientId)],
+            [E.userNotifications(recipientId)],
           ).catch(() => {});
         } catch { /* socket push is non-fatal */ }
       }
@@ -260,10 +266,20 @@ export async function sendPoke(
       logger.warn({ notifErr }, 'Poke notification insert failed (non-fatal)');
     }
 
+    // 29 Sep 2026: both members' screens refresh whatever the recipient's bell
+    // setting is. The bell toggle silences the notification, not the data.
+    try {
+      const { io } = await import('../../index');
+      const { emitEntities } = await import('../../realtime/emit');
+      const { E } = await import('../../realtime/entities');
+      emitEntities(io, [senderId], [E.user(senderId), E.userInvites(senderId)]).catch(() => {});
+      emitEntities(io, [recipientId], [E.user(recipientId), E.userInvites(recipientId)]).catch(() => {});
+    } catch { /* realtime is non-fatal */ }
+
     return {
       id: r.id, senderId: r.sender_id, recipientId: r.recipient_id,
       status: r.status, message: r.message, respondedAt: r.responded_at,
-      createdAt: r.created_at,
+      createdAt: r.created_at, preferredFormat: r.preferred_format ?? null,
     };
   } catch (err: any) {
     if (err?.code === '23505') {
@@ -307,8 +323,10 @@ export async function acceptPoke(
     const pokeResult = await client.query<{
       id: string; sender_id: string; recipient_id: string; status: string;
       message: string | null; responded_at: Date | null; created_at: Date;
+      preferred_format: MeetingFormat | null;
     }>(
-      `SELECT id, sender_id, recipient_id, status, message, responded_at, created_at
+      `SELECT id, sender_id, recipient_id, status, message, responded_at, created_at,
+              preferred_format
        FROM user_pokes WHERE id = $1 FOR UPDATE`,
       [pokeId],
     );
@@ -414,6 +432,7 @@ export async function acceptPoke(
         status: 'accepted' as const, message: p.message,
         respondedAt: updated.rows[0].responded_at,
         createdAt: p.created_at,
+        preferredFormat: p.preferred_format ?? null,
       },
       conversationId: convResult.rows[0].id,
       senderNotif: {
@@ -482,8 +501,10 @@ export async function declinePoke(pokeId: string, userId: string): Promise<UserP
   const pokeResult = await query<{
     id: string; sender_id: string; recipient_id: string; status: string;
     message: string | null; responded_at: Date | null; created_at: Date;
+    preferred_format: MeetingFormat | null;
   }>(
-    `SELECT id, sender_id, recipient_id, status, message, responded_at, created_at
+    `SELECT id, sender_id, recipient_id, status, message, responded_at, created_at,
+            preferred_format
      FROM user_pokes WHERE id = $1`,
     [pokeId],
   );
@@ -507,6 +528,7 @@ export async function declinePoke(pokeId: string, userId: string): Promise<UserP
     status: 'declined', message: p.message,
     respondedAt: updated.rows[0].responded_at,
     createdAt: p.created_at,
+    preferredFormat: p.preferred_format ?? null,
   };
 }
 
@@ -518,11 +540,12 @@ export async function listReceivedPokes(userId: string): Promise<PokeWithSender[
   const result = await query<{
     id: string; sender_id: string; recipient_id: string; status: 'pending' | 'accepted' | 'declined';
     message: string | null; responded_at: Date | null; created_at: Date;
+    preferred_format: MeetingFormat | null;
     display_name: string | null; avatar_url: string | null;
     job_title: string | null; company: string | null;
   }>(
     `SELECT p.id, p.sender_id, p.recipient_id, p.status, p.message,
-            p.responded_at, p.created_at,
+            p.responded_at, p.created_at, p.preferred_format,
             u.display_name, u.avatar_url, u.job_title, u.company
      FROM user_pokes p
      JOIN users u ON u.id = p.sender_id
@@ -533,7 +556,7 @@ export async function listReceivedPokes(userId: string): Promise<PokeWithSender[
   return result.rows.map(r => ({
     id: r.id, senderId: r.sender_id, recipientId: r.recipient_id,
     status: r.status, message: r.message, respondedAt: r.responded_at,
-    createdAt: r.created_at,
+    createdAt: r.created_at, preferredFormat: r.preferred_format ?? null,
     senderDisplayName: r.display_name,
     senderAvatarUrl: r.avatar_url,
     senderJobTitle: r.job_title,
