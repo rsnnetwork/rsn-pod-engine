@@ -1,22 +1,27 @@
 // ─── People (REASON milestone 1, 29 Sep 2026) ────────────────────────────────
 // PUT    /people/:userId/response  { response: 'saved' | 'passed' }
 // DELETE /people/:userId/response
-// (Task A3 adds POST /people/:userId/outcome; Task A5 adds the brief and
-//  /people/connections/recent.)
+// POST   /people/:userId/outcome   { worthContinuing, outcomes[] }
+// (Task A5 adds the brief and /people/connections/recent.)
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { ApiResponse } from '@rsn/shared';
+import { ApiResponse, OUTCOME_KEYS } from '@rsn/shared';
 import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { peopleWriteLimiter } from '../middleware/rateLimit';
 import { fanoutUserEntity } from '../realtime/fanout';
 import * as responses from '../services/people/person-response.service';
+import * as outcomes from '../services/people/meeting-outcome.service';
 
 const router = Router();
 
 const userParams = z.object({ userId: z.string().uuid('Not a member id') });
 const responseBody = z.object({ response: z.enum(['saved', 'passed']) });
+const outcomeBody = z.object({
+  worthContinuing: z.enum(['yes', 'maybe', 'no']),
+  outcomes: z.array(z.enum(OUTCOME_KEYS)).max(OUTCOME_KEYS.length).default([]),
+});
 
 // Every write here changes only the member's own view. fanoutUserEntity emits
 // user:<id>, which their For You, profile brief and side panels listen on.
@@ -48,6 +53,25 @@ router.delete(
       await responses.clearResponse(req.user!.userId, req.params.userId);
       void fanoutUserEntity(req.user!.userId);
       res.json({ success: true, data: { response: null } } as ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.post(
+  '/:userId/outcome',
+  authenticate,
+  peopleWriteLimiter,
+  validate(userParams, 'params'),
+  validate(outcomeBody),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await outcomes.recordOutcome(
+        req.user!.userId, req.params.userId, req.body.worthContinuing, req.body.outcomes,
+      );
+      void fanoutUserEntity(req.user!.userId);
+      res.status(201).json({ success: true, data } as ApiResponse);
     } catch (err) {
       next(err);
     }
