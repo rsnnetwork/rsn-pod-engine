@@ -42,3 +42,14 @@ export const labelFor = _labelFor;
 export const shortLabelFor = _shortLabelFor;
 export * from './types/post-event-message';
 export * from './identity/displayName';
+export * from './types/reason';
+// Real VALUES the client renders (For You, the Human Profile), so each needs
+// its own statically analysable named export, same as OPENINGS above.
+import {
+  MEETING_FORMATS as _MEETING_FORMATS, OUTCOME_KEYS as _OUTCOME_KEYS,
+  OUTCOME_LABELS as _OUTCOME_LABELS, primaryActionFor as _primaryActionFor,
+} from './types/reason';
+export const MEETING_FORMATS = _MEETING_FORMATS;
+export const OUTCOME_KEYS = _OUTCOME_KEYS;
+export const OUTCOME_LABELS = _OUTCOME_LABELS;
+export const primaryActionFor = _primaryActionFor;
