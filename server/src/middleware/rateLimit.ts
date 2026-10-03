@@ -211,3 +211,14 @@ export const onboardingChatLimiter = rateLimit({
     res.status(429).json(response);
   },
 });
+
+// REASON milestone 1 (29 Sep 2026): Save / Pass / "what happened" writes.
+export const peopleWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('people-write'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});

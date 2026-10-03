@@ -57,6 +57,7 @@ import notificationRoutes from './routes/notifications';
 import dmRoutes from './routes/dm';
 import pokeRoutes from './routes/pokes';
 import matchesRoutes from './routes/matches';
+import peopleRoutes from './routes/people';
 import agentRoutes from './routes/agents';
 import meetingRoutes from './routes/meeting';
 import circleRoutes from './routes/circles';
@@ -348,6 +349,7 @@ app.use('/api/dm', dmRoutes);
 app.use('/api/dm', meetingRoutes); // scheduling endpoints — path shapes disjoint from dmRoutes
 app.use('/api/pokes', pokeRoutes);
 app.use('/api/matches', matchesRoutes);
+app.use('/api/people', peopleRoutes);
 app.use('/api/agents', agentRoutes);
 app.use('/api/circles', circleRoutes);
 app.use('/api/reports', reportRoutes);
