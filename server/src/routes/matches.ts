@@ -38,11 +38,14 @@ const interestBody = z.object({
   note: z.string().trim().max(300).optional(),
   format: z.enum(['video_20', 'coffee', 'message_first']).optional(),
 });
+// A target that is not a UUID used to reach SQL and come back as a Postgres 500.
+const userParams = z.object({ userId: z.string().uuid('Not a member id') });
 
 // POST /matches/platform/:userId/interest — "I want to meet"
 router.post(
   '/platform/:userId/interest',
   authenticate,
+  validate(userParams, 'params'),
   validate(interestBody),
   async (req: Request, res: Response, next: NextFunction) => {
     try {

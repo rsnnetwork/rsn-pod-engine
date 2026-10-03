@@ -129,6 +129,7 @@ function armAccept(
     notifInsertImpl?: () => Promise<unknown>;
     senderNotifyEmail?: boolean;
     senderHasEmail?: boolean;
+    preferredFormat?: string | null;
   } = {},
 ) {
   const senderNotifyEmail = opts.senderNotifyEmail ?? true;
@@ -139,6 +140,7 @@ function armAccept(
         rows: [{
           id: 'poke-1', sender_id: SENDER, recipient_id: RECIPIENT,
           status: 'pending', message, responded_at: null, created_at: new Date('2026-07-20T00:00:00Z'),
+          preferred_format: opts.preferredFormat ?? null,
         }],
       });
     }
@@ -199,7 +201,7 @@ function armSend(
 ) {
   const recipientNotifyEmail = opts.recipientNotifyEmail ?? true;
   const recipientHasEmail = opts.recipientHasEmail ?? true;
-  mockQuery.mockImplementation((sql: string) => {
+  mockQuery.mockImplementation((sql: string, params: unknown[] = []) => {
     if (/FROM encounter_history/.test(sql)) {
       return Promise.resolve({ rows: [] });
     }
@@ -216,11 +218,17 @@ function armSend(
       return Promise.resolve({ rows: [{ id: RECIPIENT }] });
     }
     if (/INSERT INTO user_pokes/.test(sql)) {
+      // Answer the way the database does: only the columns named in RETURNING
+      // come back, and preferred_format is whatever the INSERT wrote ($6). A
+      // query that forgets to RETURN the format therefore shows up as null.
+      const returned = (/RETURNING\s+([\s\S]+)$/i.exec(sql)?.[1] ?? '').split(',').map(column => column.trim());
+      const row: Record<string, unknown> = {
+        id: 'poke-2', sender_id: SENDER, recipient_id: RECIPIENT, status: 'pending',
+        message, responded_at: null, created_at: new Date('2026-07-23T10:00:00Z'),
+        preferred_format: params[5],
+      };
       return Promise.resolve({
-        rows: [{
-          id: 'poke-2', sender_id: SENDER, recipient_id: RECIPIENT, status: 'pending',
-          message, responded_at: null, created_at: new Date('2026-07-23T10:00:00Z'),
-        }],
+        rows: [Object.fromEntries(Object.entries(row).filter(([column]) => returned.includes(column)))],
       });
     }
     if (/SELECT display_name FROM users WHERE id/.test(sql)) {
@@ -838,6 +846,81 @@ describe('sendPoke — both members\' screens refresh (29 Sep 2026)', () => {
     const poke = await pokeService.sendPoke(SENDER, RECIPIENT, 'hi', undefined, 'coffee');
     const insert = mockQuery.mock.calls.find(c => /INSERT INTO user_pokes/.test(String(c[0])))!;
     expect(insert[1]).toEqual([expect.any(String), SENDER, RECIPIENT, 'hi', null, 'coffee']);
-    expect(poke).toHaveProperty('preferredFormat');
+    // The value itself, not just the key: armSend answers like the database, so
+    // this fails if the INSERT stops writing the column or RETURNING stops naming it.
+    expect(poke.preferredFormat).toBe('coffee');
+  });
+
+  it('a request that asked for no format comes back with preferredFormat null', async () => {
+    armSend('hi');
+    const poke = await pokeService.sendPoke(SENDER, RECIPIENT, 'hi');
+    const insert = mockQuery.mock.calls.find(c => /INSERT INTO user_pokes/.test(String(c[0])))!;
+    expect((insert[1] as unknown[])[5]).toBeNull();
+    expect(poke.preferredFormat).toBeNull();
+  });
+});
+
+describe('acceptPoke and declinePoke — the request they return keeps its preferred format', () => {
+  const selectOfThePoke = () => mockQuery.mock.calls.find(c => /FROM user_pokes WHERE id/.test(String(c[0])))!;
+
+  it('acceptPoke reads the column and returns it', async () => {
+    armAccept('hi', { preferredFormat: 'message_first' });
+
+    const { poke } = await pokeService.acceptPoke('poke-1', RECIPIENT);
+
+    expect(poke.preferredFormat).toBe('message_first');
+    expect(String(selectOfThePoke()[0])).toMatch(/preferred_format/);
+  });
+
+  it('declinePoke reads the column and returns it', async () => {
+    mockQuery.mockImplementation((sql: string) => {
+      if (/FROM user_pokes WHERE id/.test(sql)) {
+        return Promise.resolve({
+          rows: [{
+            id: 'poke-1', sender_id: SENDER, recipient_id: RECIPIENT, status: 'pending', message: 'hi',
+            responded_at: null, created_at: new Date('2026-07-20T00:00:00Z'), preferred_format: 'video_20',
+          }],
+        });
+      }
+      if (/UPDATE user_pokes SET status/.test(sql)) return Promise.resolve({ rows: [{ responded_at: RESPONDED_AT }] });
+      return Promise.resolve({ rows: [] });
+    });
+
+    const result = await pokeService.declinePoke('poke-1', RECIPIENT);
+
+    expect(result.preferredFormat).toBe('video_20');
+    expect(String(selectOfThePoke()[0])).toMatch(/preferred_format/);
+  });
+});
+
+// 3 Oct 2026 (review): the request cards render line breaks (whitespace-pre-line),
+// so a message made mostly of newlines would build a card hundreds of lines tall.
+describe('sendPoke — a run of line breaks cannot build a very tall request', () => {
+  async function storedMessage(sent: string) {
+    mockQuery.mockClear(); // a test calls this more than once; each call reads only its own INSERT
+    armSend('x');
+    await pokeService.sendPoke(SENDER, RECIPIENT, sent);
+    const insert = mockQuery.mock.calls.find(c => /INSERT INTO user_pokes/.test(String(c[0])))!;
+    return (insert[1] as unknown[])[3];
+  }
+
+  it('folds a long run of line breaks to one blank line, so note, blank line, reason survives', async () => {
+    const sent = `I would love your view.${'\n'.repeat(300)}Why REASON suggested this: a fit.`;
+    expect(await storedMessage(sent)).toBe('I would love your view.\n\nWhy REASON suggested this: a fit.');
+  });
+
+  it('counts Windows line endings and lines holding only spaces as line breaks too', async () => {
+    expect(await storedMessage('a\r\n\r\n\r\n\r\nb')).toBe('a\n\nb');
+    expect(await storedMessage('a\n  \n\t\n \xa0 \nb')).toBe('a\n\nb');
+  });
+
+  it('leaves one line break, and one blank line, exactly as written', async () => {
+    expect(await storedMessage('a\nb')).toBe('a\nb');
+    expect(await storedMessage('a\n\nb')).toBe('a\n\nb');
+  });
+
+  it('spends the 500 characters on what is left after folding, and still caps at 500', async () => {
+    expect(await storedMessage(`a${'\n'.repeat(600)}b`)).toBe('a\n\nb');
+    expect(String(await storedMessage('x'.repeat(600)))).toHaveLength(500);
   });
 });

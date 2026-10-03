@@ -290,10 +290,29 @@ describe('expressInterest with a personal note and format (milestone 1)', () => 
     expect(String(message).length).toBeLessThanOrEqual(500);
   });
 
-  it('a note with no reason to attach is sent as written', async () => {
+  it('a note is still sent as written when the profiles cannot be loaded', async () => {
     mockQuery.mockResolvedValue({ rows: [] });
     await expressInterest('u-founder', 'u-investor', undefined, { note: 'Hello there' });
     expect(mockSendPoke.mock.calls[0][2]).toBe('Hello there');
+  });
+
+  it('profiles that give no reason to attach: the note is sent exactly as written', async () => {
+    // Both members load, but neither has said what they want, so there is nothing to attach.
+    mockQuery.mockImplementation((sql: string, params: unknown[]) => (
+      /WHERE u\.id = \$1/.test(sql)
+        ? Promise.resolve({ rows: [profile({ id: (params as string[])[0], displayName: 'Quinn' })] })
+        : Promise.resolve({ rows: [] })
+    ));
+    await expressInterest('u-a', 'u-b', undefined, { note: '  Hello there  ', format: 'video_20' });
+    const [, , message, , format] = mockSendPoke.mock.calls[0];
+    expect(message).toBe('Hello there');
+    expect(format).toBe('video_20');
+
+    // The premise: without a note this same pair gets the neutral sentence, which
+    // is only used when there is no reason, so the note above did hit that branch.
+    mockSendPoke.mockClear();
+    await expressInterest('u-a', 'u-b');
+    expect(mockSendPoke.mock.calls[0][2]).toBe("Quinn thinks you fit what they're looking for. We think you two should meet.");
   });
 
   it('without a note it still writes the introduction itself, and passes no format', async () => {

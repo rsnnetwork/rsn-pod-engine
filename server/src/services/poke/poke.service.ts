@@ -123,6 +123,24 @@ function normalizePair(a: string, b: string): [string, string] {
 }
 
 /**
+ * A request's message as it is stored: ends trimmed, Windows line endings made
+ * plain, any run of three or more line breaks (even with spaces between them)
+ * folded to one blank line, then capped at 500 characters. The request cards
+ * show line breaks (whitespace-pre-line), so without the fold a message made of
+ * newlines builds a card hundreds of lines tall. One blank line is kept so a
+ * note, a blank line and "Why REASON suggested this: ..." still read as two
+ * paragraphs. The cap comes last, so the 500 characters go to what is left.
+ * ([^\S\n] is any whitespace except a newline.)
+ */
+function cleanRequestMessage(message: string | undefined): string | null {
+  return message
+    ?.trim()
+    .replace(/\r\n/g, '\n')
+    .replace(/\n(?:[^\S\n]*\n){2,}/g, '\n\n')
+    .slice(0, 500) || null;
+}
+
+/**
  * Send a poke. Auth rules:
  *   - Not self
  *   - Not blocked (either direction)
@@ -189,7 +207,7 @@ export async function sendPoke(
     throw new NotFoundError('User', recipientId);
   }
 
-  const trimmedMessage = message?.trim().slice(0, 500) || null;
+  const trimmedMessage = cleanRequestMessage(message);
   const pokeId = uuid();
   try {
     const result = await query<{
