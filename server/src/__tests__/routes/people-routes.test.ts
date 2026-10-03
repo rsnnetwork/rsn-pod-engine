@@ -80,6 +80,7 @@ describe('POST /people/:userId/outcome', () => {
     const res = await request(app).post(`/people/${TARGET}/outcome`).set('Authorization', `Bearer ${token()}`)
       .send({ worthContinuing: 'yes', outcomes: ['advice'] });
     expect(res.status).toBe(201);
+    expect(res.body).toEqual({ success: true, data: { id: 'o1', worthContinuing: 'yes', outcomes: ['advice'], createdAt: '2026-09-30T10:00:00.000Z' } });
     expect(mockRecord).toHaveBeenCalledWith('u-viewer', TARGET, 'yes', ['advice']);
   });
   it('rejects answers outside the Foundation list', async () => {

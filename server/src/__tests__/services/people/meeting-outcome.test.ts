@@ -21,11 +21,17 @@ describe('recording what came of a meeting', () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ ok: true }] }).mockResolvedValueOnce({ rows: [{ id: 'o', created_at: new Date() }] });
     await recordOutcome('u-z', 'u-a', 'maybe', []);
     expect(mockQuery.mock.calls[0][1]).toEqual(['u-a', 'u-z']);
+    // Only the link check is ordered. The answer stays under the member who gave it: the actor
+    // has the HIGHER id here, so it must not be swapped to the lower one.
+    expect(mockQuery.mock.calls[1][1]).toEqual(['u-z', 'u-a', 'maybe', []]);
   });
 
   it('refuses strangers and yourself', async () => {
     mockQuery.mockResolvedValue({ rows: [{ ok: false }] });
     await expect(recordOutcome('u-a', 'u-b', 'no', [])).rejects.toMatchObject({ statusCode: 409 });
     await expect(recordOutcome('u-a', 'u-a', 'no', [])).rejects.toMatchObject({ statusCode: 400 });
+    // Neither refusal wrote anything. The stranger ran only the link check and yourself ran no query.
+    expect(mockQuery.mock.calls.some(c => /INSERT INTO meeting_outcomes/.test(String(c[0])))).toBe(false);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 });
