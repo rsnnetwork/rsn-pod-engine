@@ -213,7 +213,7 @@ RSN uses Redis (ioredis + Upstash) for three critical functions:
 
 - Migrations are append-only — never modify an existing migration file
 - New migration files: `NNN_descriptive_name.sql` (next number in sequence)
-- The migration runner (`server/src/db/migrate.ts`) wraps each migration file in its own transaction, so a file must NOT contain `BEGIN` or `COMMIT`: one that does commits the runner's transaction early
+- The migration runner (`server/src/db/migrate.ts`) already wraps each migration file in its own transaction, so a file must not contain a top-level transaction-control statement: `BEGIN` / `START TRANSACTION`, `COMMIT` / `END`, `ROLLBACK` / `ABORT`. One that does commits (or abandons) the runner's transaction early, before the runner has recorded the migration. PL/pgSQL is fine: a `DO $$ BEGIN … END $$` block or a function body has its own `BEGIN` and `END`, which are not transaction control. Older migrations that open with `BEGIN;` and close with `COMMIT;` are history: do not copy them
 - Every new table must have: `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`, `created_at TIMESTAMPTZ DEFAULT NOW()`, appropriate indexes
 - Every FK must have ON DELETE behavior specified (CASCADE, SET NULL, or RESTRICT — choose deliberately)
 - Every enum change must use the safe pattern: add new value, migrate data, then (optionally) remove old value
