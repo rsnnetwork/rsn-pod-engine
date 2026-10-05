@@ -20,13 +20,20 @@ const BENIGN_ERROR_PATTERNS: RegExp[] = [
   /NotReadableError:\s*Could not start video source/i,
 ];
 
+/** Preview builds (preview.rsn.network, Vercel branch aliases) report as "preview", not "production". */
+function sentryEnvironment(): string {
+  const host = typeof window === 'undefined' ? '' : window.location.hostname;
+  if (host.startsWith('preview.') || host.includes('-git-')) return 'preview';
+  return import.meta.env.MODE;
+}
+
 export function initSentry() {
   const dsn = import.meta.env.VITE_SENTRY_DSN;
   if (!dsn) return;
 
   Sentry.init({
     dsn,
-    environment: import.meta.env.MODE,
+    environment: sentryEnvironment(),
     tracesSampleRate: 0.2,
     replaysSessionSampleRate: 0,   // No session replays (saves quota)
     replaysOnErrorSampleRate: 0.5, // 50% of error sessions get replay

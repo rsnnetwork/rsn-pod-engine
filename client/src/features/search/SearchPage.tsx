@@ -10,7 +10,7 @@
 // messaging keep the gates they had before, on the profile page.
 
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { Search as SearchIcon } from 'lucide-react';
 import Card from '@/components/ui/Card';
@@ -41,7 +41,11 @@ function useSettled(value: string, ms = 250): string {
 }
 
 export default function SearchPage() {
-  const [q, setQ] = useState('');
+  const [searchParams] = useSearchParams();
+  const urlQuery = searchParams.get('q') ?? '';
+  const [q, setQ] = useState(urlQuery);
+  // The top search bar lands here with ?q=; follow it when a new search arrives.
+  useEffect(() => { setQ(urlQuery); }, [urlQuery]);
   const term = useSettled(q.trim());
   const [asked, setAsked] = useState<Set<string>>(new Set());
   const { addToast } = useToastStore();

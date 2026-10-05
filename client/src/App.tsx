@@ -13,11 +13,13 @@ function LiveRedirectCompat() {
   return <Navigate to={`/session/${sessionId}/live`} replace />;
 }
 import { useAuthStore } from '@/stores/authStore';
-import AppLayout from '@/components/layout/AppLayout';
+import ReasonShell from '@/features/reason/shell/ReasonShell';
+import ComingSoonPage from '@/features/reason/shell/ComingSoonPage';
+import ForYouPage from '@/features/reason/for-you/ForYouPage';
+import HumanProfilePage from '@/features/reason/human/HumanProfilePage';
 import ProtectedRoute from '@/components/layout/ProtectedRoute';
 import LoginPage from '@/features/auth/LoginPage';
 import VerifyPage from '@/features/auth/VerifyPage';
-import HomePage from '@/features/home/HomePage';
 import ProfilePage from '@/features/profile/ProfilePage';
 import PublicProfilePage from '@/features/profile/PublicProfilePage';
 import PodsPage from '@/features/pods/PodsPage';
@@ -204,8 +206,10 @@ export default function App() {
       <Route path="/admin/jr/:token" element={<AdminJoinRequestActionPage />} />
 
       {/* Protected with layout */}
-      <Route element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
-        <Route path="/" element={<HomePage />} />
+      <Route element={<ProtectedRoute><ReasonShell /></ProtectedRoute>}>
+        <Route path="/" element={<ForYouPage />} />
+        <Route path="/entities" element={<ComingSoonPage kind="entities" />} />
+        <Route path="/introductions" element={<ComingSoonPage kind="introductions" />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/profile/:userId" element={<PublicProfilePage />} />
         <Route path="/pods" element={<PodsPage />} />
@@ -249,10 +253,11 @@ export default function App() {
       </Route>
 
       {/* Protected without layout (full-screen) */}
-      {/* 7 Sep 2026: the toast container lives in AppLayout, which this full-screen
-          route never mounts, so nothing said during onboarding ("Photo added.",
-          the Google photo outcome) was ever visible. */}
+      {/* 7 Sep 2026: the toast container lives in the signed-in shell, which this
+          full-screen route never mounts, so nothing said during onboarding
+          ("Photo added.", the Google photo outcome) was ever visible. */}
       <Route path="/onboarding" element={<ProtectedRoute><><OnboardingFlow /><ToastContainer /></></ProtectedRoute>} />
+      <Route path="/people/:userId" element={<ProtectedRoute><><HumanProfilePage /><ToastContainer /></></ProtectedRoute>} />
       <Route path="/meet/:conversationId" element={<ProtectedRoute><MeetPage /></ProtectedRoute>} />
       <Route path="/session/:sessionId/live" element={<ProtectedRoute><SessionGuard><LiveSessionPage /></SessionGuard></ProtectedRoute>} />
       <Route path="/session/:sessionId/host" element={<ProtectedRoute><HostDashboardPage /></ProtectedRoute>} />
