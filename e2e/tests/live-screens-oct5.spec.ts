@@ -1146,24 +1146,36 @@ test('5. Circles: the page opens at once from the nav\'s list, not on a loader',
   let holding = false;
   let held = 0;
   let heldAnswerAt = 0;
+  // The nav's own request is counted from the moment the page starts loading (these two listeners
+  // are on before it opens): how many times it reached the route, and the status of each answer.
+  let navAsked = 0;
+  const navAnswers: number[] = [];
   await page.route('**/api/circles', async (route) => {
     if (holding) {
       held++;
       await wait(HOLD_MS);
+    } else if (route.request().method() === 'GET') {
+      navAsked++;
     }
     await route.continue();
   });
   page.on('response', (res) => {
-    if (holding && res.url().split('?')[0].endsWith('/api/circles')) heldAnswerAt = heldAnswerAt || Date.now();
+    if (res.request().method() !== 'GET' || !res.url().split('?')[0].endsWith('/api/circles')) return;
+    if (holding) heldAnswerAt = heldAnswerAt || Date.now();
+    else navAnswers.push(res.status());
   });
 
-  // The nav asks for the circles once, when the layout mounts: wait for that answer first.
-  const navAnswered = page.waitForResponse(
-    (res) => res.request().method() === 'GET' && res.url().split('?')[0].endsWith('/api/circles'),
-    { timeout: 30_000 },
-  );
+  // The nav asks for the circles once, when the layout mounts: wait for that answer first. The wait
+  // starts only now, after the page has loaded, so a slow load (or a checkpoint on the way in)
+  // cannot use it up, and an answer that came during the load is already counted. A
+  // page.waitForResponse made before the navigation ran its 30 s clock through the load, and timed
+  // out on iPhone 14 emulation. An answer taken from the cache (304) counts; an error does not,
+  // because the nav's list would not be there for the page to stand on.
   await gotoRetry(page, `${APP}/messages`);
-  await navAnswered;
+  const navState = () => navAnswers.some((s) => (s >= 200 && s < 300) || s === 304)
+    ? 'answered'
+    : `not answered (it reached the route ${navAsked} time(s), answers seen: ${navAnswers.join(', ') || 'none'})`;
+  await expect.poll(navState, { message: 'the nav\'s list of circles was answered', timeout: 60_000 }).toBe('answered');
   await settle(page);
 
   // Move inside the app to the circles page. (The nav links to it only once circles exist.)
@@ -1176,7 +1188,13 @@ test('5. Circles: the page opens at once from the nav\'s list, not on a loader',
   await expect(page.getByRole('heading', { name: 'Circles', exact: true }), 'the circles page is on screen at once').toBeVisible({ timeout: 2_000 });
   const shownAfter = Date.now() - movedAt;
   expect(heldAnswerAt, `the page's own request had not been answered when the heading showed (${shownAfter}ms)`).toBe(0);
-  expect(held, 'the page asked for its own list, and that request is still held').toBeGreaterThanOrEqual(1);
+  // The line above is the proof of "at once". When the page's own request reaches the route is
+  // another matter and depends on the engine (on iPhone 14 emulation the heading can be on screen
+  // first), so it is waited for, briefly. It is held for HOLD_MS, so it is still held when it shows.
+  await expect.poll(() => held, {
+    message: 'the page asked for its own list, and that request is still held',
+    timeout: 3_000,
+  }).toBeGreaterThanOrEqual(1);
 
   // The real answer still arrives and replaces the stand-in.
   await expect.poll(() => heldAnswerAt, { message: 'the held request is answered in the end', timeout: HOLD_MS + 10_000 }).toBeGreaterThan(0);
