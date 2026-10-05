@@ -1012,9 +1012,12 @@ export async function sendPokeReceivedEmail(
   data: PokeReceivedEmailData,
 ): Promise<void> {
   const subject = `${data.senderName} wants to meet you on RSN`;
+  // The message is a note, a blank line and "Why REASON suggested this: ...". HTML collapses
+  // a raw line break to a space, so the breaks become <br>, and only AFTER escaping: a <br>
+  // the sender typed is then shown as text instead of being run.
   const introBlock = data.introMessage
     ? `<div style="background:#f8f9fa;border-left:3px solid #DE322E;border-radius:6px;padding:12px 16px;margin:0 0 24px 0;">
-         <p style="color:#374151;font-size:14px;line-height:1.5;margin:0;">${escapeHtml(data.introMessage)}</p>
+         <p style="color:#374151;font-size:14px;line-height:1.5;margin:0;">${escapeHtml(data.introMessage).replace(/\r?\n/g, '<br>')}</p>
        </div>`
     : '';
   const html = `
