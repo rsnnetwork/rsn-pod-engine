@@ -852,6 +852,65 @@ test('3. The bell shows a note and "Why REASON suggested this:" on separate line
   expect(problems, `sizes with a problem:\n${problems.join('\n')}`).toEqual([]);
 });
 
+test('3. The bell clamps a long note to six lines and keeps its Accept and Decline reachable', async () => {
+  test.setTimeout(240_000);
+  // Twelve lines with one line break between each, the way a DM preview or a wall post can arrive.
+  // The bell keeps line breaks, so without a clamp every one of them would be a line of the entry.
+  const sender = await makeUser('bell-long-asker', { name: `C2 Long Bell Sender ${RUN}` });
+  const recipient = await makeUser('bell-long-asked');
+  const sent = await api<PokeJson>(sender, 'POST', `/matches/platform/${recipient.id}/interest`, { note: LONG_NOTE });
+  expect(sent.status, `interest: ${JSON.stringify(sent.body)}`).toBe(201);
+  const pokeId = dataOf(sent, 'interest').id;
+  const bell = (await pool.query<{ id: string; title: string; body: string | null }>(
+    `SELECT id, title, body FROM notifications WHERE user_id = $1 AND type = 'poke' AND link = $2`,
+    [recipient.id, `/messages?poke=${pokeId}`])).rows;
+  expect(bell, 'one bell row for this request').toHaveLength(1);
+  expect(bell[0].body, 'the bell body is the twelve lines, one line break between each').toBe(LONG_NOTE);
+
+  const sizes: Viewport[] = DEVICE ? [contextOptions().viewport ?? { width: 390, height: 844 }] : [{ width: 360, height: 780 }, { width: 1280, height: 800 }];
+  const problems: string[] = [];
+  const pageErrors: string[] = [];
+  const info = test.info();
+  const note = (type: string, description: string) => info.annotations.push({ type, description });
+  for (const vp of sizes) {
+    const size = `${vp.width}x${vp.height}`;
+    const page = await openAs(recipient, vp, pageErrors);
+    try {
+      await gotoRetry(page, `${APP}/`);
+      await settle(page);
+      await tap(page, page.locator('button[aria-label="Notifications"]:visible').first(), `${size} the bell`);
+      await expect(page.getByText(bell[0].title), `${size}: the request is in the bell`).toBeVisible({ timeout: 30_000 });
+      const body = page.locator('p', { hasText: FIRST_LINE });
+      await expect(body, `${size}: the bell body paragraph`).toHaveCount(1);
+      await settle(page);
+
+      const read = await body.evaluate(measureClamp);
+      note(`bell-clamp-${size}`, `line height ${read.lineHeight}px, shown ${Math.round(read.shown)}px of ${Math.round(read.natural)}px, clamp ${read.clamp}`);
+      expect(read.natural, `${size}: the note is twelve lines tall without the clamp`).toBeGreaterThanOrEqual(12 * read.lineHeight - 2);
+      expect(read.clamp, `${size}: computed -webkit-line-clamp of the bell body`).toBe('6');
+      expect(read.shown, `${size}: the bell shows at most six lines (${Math.round(read.shown)}px of ${Math.round(read.natural)}px)`).toBeLessThanOrEqual(6 * read.lineHeight + 2);
+      expect(read.shown, `${size}: the bell shows six lines, not fewer`).toBeGreaterThanOrEqual(6 * read.lineHeight - 2);
+
+      // The entry's own buttons stay where a finger can reach them, without scrolling the list.
+      const actions = page.getByTestId(`poke-actions-${bell[0].id}`);
+      const accept = await expectReachable(page, actions.getByRole('button', { name: /^Accept$/ }), `${size} the bell's Accept`);
+      const decline = await expectReachable(page, actions.getByRole('button', { name: /^Decline$/ }), `${size} the bell's Decline`);
+      const sw = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, inner: window.innerWidth }));
+      expect(sw.scroll, `${size}: sideways scroll`).toBeLessThanOrEqual(sw.inner);
+      await page.screenshot({ path: path.join(SHOTS, `${engineLabel().replace(/[^a-z0-9]+/gi, '-')}-${vp.width}-bell-long.png`) });
+      console.log(`  ✓ ${size}: the bell shows ${Math.round(read.shown / read.lineHeight)} of ${Math.round(read.natural / read.lineHeight)} lines (clamp ${read.clamp}); Accept ${Math.round(accept.width)}x${Math.round(accept.height)}px and Decline ${Math.round(decline.width)}x${Math.round(decline.height)}px are reachable.`);
+    } catch (e) {
+      problems.push(`${size}: ${firstLineOf(e)}`);
+      console.log(`  ✗ ${size}: ${firstLineOf(e)}`);
+      await page.screenshot({ path: path.join(SHOTS, `${engineLabel().replace(/[^a-z0-9]+/gi, '-')}-${vp.width}-bell-long-FAILED.png`) }).catch(() => undefined);
+    } finally {
+      await page.context().close().catch(() => undefined);
+    }
+  }
+  expect(pageErrors, 'no script errors on any page').toEqual([]);
+  expect(problems, `sizes with a problem:\n${problems.join('\n')}`).toEqual([]);
+});
+
 // ═════════════════════════════════════════════════════════════════════════════
 // 4. The Matches page updates live
 // ═════════════════════════════════════════════════════════════════════════════

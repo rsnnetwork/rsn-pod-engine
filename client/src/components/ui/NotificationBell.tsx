@@ -439,8 +439,12 @@ export default function NotificationBell() {
                           )}
                         </div>
                         {/* pre-line: a meeting request's note and "Why REASON suggested this:"
-                            arrive as two paragraphs, and were run together on one line (5 Oct 2026). */}
-                        {n.body && <p className="text-xs text-gray-400 mt-0.5 whitespace-pre-line break-words">{n.body}</p>}
+                            arrive as two paragraphs, and were run together on one line (5 Oct 2026).
+                            line-clamp-6: a body made of many single line breaks (a message preview, a
+                            wall post, a request's note) would otherwise make one entry thousands of
+                            pixels tall and push its own Accept and Decline out of reach. The whole text
+                            is one tap away, on the page the entry opens. */}
+                        {n.body && <p className="text-xs text-gray-400 mt-0.5 whitespace-pre-line break-words line-clamp-6">{n.body}</p>}
                         <p className="text-[10px] text-gray-300 mt-1">{formatTime(n.createdAt)}</p>
                       </div>
                     </div>
