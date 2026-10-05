@@ -44,15 +44,23 @@ export const OUTCOME_LABELS: Record<OutcomeKey, string> = {
   nothing_yet: 'Nothing yet',
 };
 
+// Only compiles while every RelationshipState has a case in primaryActionFor, because
+// the state reaching it is then `never`. A state this build does not know (a newer
+// server) still gets the Meet button, which is what the old default gave.
+function unlistedState(_state: never): PrimaryAction {
+  return 'meet';
+}
+
 /** What the main button on a person offers, given where the relationship stands. */
 export function primaryActionFor(state: RelationshipState): PrimaryAction {
   switch (state) {
+    case 'none': return 'meet';
     case 'requested': return 'requested';
     case 'incoming': return 'respond';
     case 'declined': return 'declined';
     case 'connected':
     case 'met': return 'continue';
-    default: return 'meet';
+    default: return unlistedState(state);
   }
 }
 
