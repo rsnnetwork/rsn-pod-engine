@@ -777,7 +777,8 @@ test('3. The bell shows a note and "Why REASON suggested this:" on separate line
     const page = await openAs(recipient, vp, pageErrors);
     try {
       await gotoRetry(page, `${APP}/`);
-      await page.locator('button[aria-label="Notifications"]:visible').first().click();
+      await settle(page);
+      await tap(page, page.locator('button[aria-label="Notifications"]:visible').first(), `${size} the bell`);
       await expect(page.getByText(bell[0].title), `${size}: the request is in the bell`).toBeVisible({ timeout: 30_000 });
       const body = page.locator('p', { hasText: REASON_LEAD });
       await expect(body, `${size}: the bell body paragraph`).toHaveCount(1);
