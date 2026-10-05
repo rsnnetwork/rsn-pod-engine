@@ -6,6 +6,7 @@ export default {
       fontFamily: {
         sans: ['"Sora"', 'system-ui', '-apple-system', 'sans-serif'],
         display: ['"Sora"', 'Inter', 'system-ui', 'sans-serif'],
+        reason: ['Inter', 'ui-sans-serif', '-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Arial', 'sans-serif'],
       },
       colors: {
         'rsn-red': {
@@ -29,6 +30,12 @@ export default {
           50: '#f8fafc', 100: '#f1f5f9', 200: '#e2e8f0', 300: '#cbd5e1',
           400: '#94a3b8', 500: '#64748b', 600: '#475569', 700: '#334155',
           800: '#1e293b', 900: '#0f172a', 950: '#020617',
+        },
+        // REASON milestone 1: Stefan's v4 prototype palette. The red is the
+        // existing brand red (#ef3f35 fails AA with white text).
+        reason: {
+          ink: '#11131a', muted: '#6d7380', line: '#e8e9ec', soft: '#f7f7f8', warm: '#fbfaf7',
+          red: '#DE322E', 'red-hover': '#C52B28', pink: '#fff1ef', green: '#18a86b', amber: '#c77a14',
         },
       },
       animation: {
