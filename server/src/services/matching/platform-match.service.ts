@@ -24,6 +24,7 @@ import { extractConstraints, checkConstraints } from './want-constraints';
 import * as pokeService from '../poke/poke.service';
 import { UserPoke } from '../poke/poke.service';
 import { clipAtWord } from '../people/text';
+import { REQUEST_MESSAGE_MAX } from '../poke/request-message';
 import type { MeetingFormat } from '@rsn/shared';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -577,17 +578,16 @@ export async function expressInterest(
   return pokeService.sendPoke(userId, targetUserId, message.slice(0, REQUEST_MESSAGE_MAX), agentId, opts.format);
 }
 
-/** What a request message may hold: the stored cap, which counts UTF-16 units. */
-const REQUEST_MESSAGE_MAX = 500;
 const REASON_LEAD = '\n\nWhy REASON suggested this: ';
 
 /**
- * The member's own words, then REASON's reason. When the two would not fit in a
- * request, the reason is what gives way: first its closing full stop, then the
- * reason itself, cut between words and ending in an ellipsis (which closes the
- * sentence, so no full stop follows it). The note is never cut, so a long note can
- * no longer take the end of the reason off mid-word, which is what slicing the
- * whole message at 500 did.
+ * The member's own words, then REASON's reason, within REQUEST_MESSAGE_MAX (the
+ * one cap the route accepts and the stored text is cut to). When the two would not
+ * fit, the reason is what gives way: first its closing full stop, then the reason
+ * itself, cut between words and ending in an ellipsis (which closes the sentence,
+ * so no full stop follows it). The note is never cut, so a long note can no longer
+ * take the end of the reason off mid-word, which is what slicing the whole message
+ * at the cap did.
  */
 function attachReason(note: string, reason: string): string {
   const lead = `${note}${REASON_LEAD}`;

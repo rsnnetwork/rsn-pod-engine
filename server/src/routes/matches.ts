@@ -33,7 +33,7 @@ router.get(
 
 // Milestone 1 (29 Sep 2026): the Meet sheet adds a personal "why now" note and
 // a preferred format. Both optional: today's callers POST with no body at all.
-// 300 leaves room for REASON's reason inside the request's 500 characters.
+// 300 leaves room for REASON's reason inside the request's REQUEST_MESSAGE_MAX characters.
 // The formats are the ones the app offers (MEETING_FORMATS), not a second list.
 // z.enum wants a non-empty tuple, which a list read from MEETING_FORMATS is.
 const FORMAT_KEYS = MEETING_FORMATS.map((f) => f.key) as [MeetingFormat, ...MeetingFormat[]];

@@ -24,6 +24,7 @@ jest.mock('../../services/poke/poke.service', () => ({
 jest.mock('../../realtime/fanout', () => ({ fanoutUserEntity: jest.fn().mockResolvedValue(undefined), __esModule: true }));
 
 import pokesRoutes from '../../routes/pokes';
+import { REQUEST_MESSAGE_MAX } from '../../services/poke/request-message';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 
 const app = express();
@@ -49,6 +50,19 @@ describe('POST /pokes', () => {
     const res = await request(app).post('/pokes').set(auth).send({ recipientId: TARGET.toUpperCase() });
     expect(res.status).toBe(201);
     expect(mockSendPoke).toHaveBeenCalledWith('u-a', TARGET, undefined);
+  });
+
+  it('takes a message of exactly the request cap, and refuses one character more', async () => {
+    // The cap is the one the service stores and the reason budget is measured against.
+    const atTheCap = 'x'.repeat(REQUEST_MESSAGE_MAX);
+    const taken = await request(app).post('/pokes').set(auth).send({ recipientId: TARGET, message: atTheCap });
+    expect(taken.status).toBe(201);
+    expect(mockSendPoke).toHaveBeenCalledWith('u-a', TARGET, atTheCap);
+
+    mockSendPoke.mockClear();
+    const refused = await request(app).post('/pokes').set(auth).send({ recipientId: TARGET, message: `${atTheCap}x` });
+    expect(refused.status).toBe(400);
+    expect(mockSendPoke).not.toHaveBeenCalled();
   });
 
   it('refuses an id that is not a member id, and a missing token, before anything is sent', async () => {

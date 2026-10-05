@@ -29,6 +29,7 @@ jest.mock('../../../index', () => ({
 }));
 
 import logger from '../../../config/logger';
+import { REQUEST_MESSAGE_MAX } from '../../../services/poke/request-message';
 import {
   scoreFit, wantedDesignations, getPlatformMatches, expressInterest,
   notifyMatchesOfNewUser, MATCH_THRESHOLD, BROWSE_THRESHOLD, IntentProfile,
@@ -219,7 +220,7 @@ describe('expressInterest — the introduction rides the poke rails', () => {
     expect(senderId).toBe('u-investor');
     expect(recipientId).toBe('u-founder');
     expect(message).toBe("Iqbal thinks you fit what they're looking for. We think you two should meet.");
-    expect(message.length).toBeLessThanOrEqual(500);
+    expect(message.length).toBeLessThanOrEqual(REQUEST_MESSAGE_MAX);
   });
 });
 
@@ -289,7 +290,7 @@ describe('expressInterest with a personal note and format (milestone 1)', () => 
     const [sender, recipient, message, agentId, format] = mockSendPoke.mock.calls[0];
     expect([sender, recipient, agentId, format]).toEqual(['u-founder', 'u-investor', undefined, 'coffee']);
     expect(message).toMatch(/^I would love your view on our seed round\.\n\nWhy REASON suggested this: Fatima is looking to meet .+ — you're an Angel Investor\.$/);
-    expect(String(message).length).toBeLessThanOrEqual(500);
+    expect(String(message).length).toBeLessThanOrEqual(REQUEST_MESSAGE_MAX);
   });
 
   it('a note is still sent as written when the profiles cannot be loaded', async () => {
@@ -447,11 +448,12 @@ describe('expressInterest never quotes the recipient\'s own want', () => {
 
 // ─── A long note cannot cut REASON's reason mid-word (5 Oct 2026) ────────────
 //
-// A request holds 500 characters: the member's note (up to 300), a blank line, and
-// "Why REASON suggested this: <reason>.". With a long note and a long reason the whole
-// was cut at 500, so the reason stopped in the middle of a word. The note is the
-// member's own words and stays whole; the reason is REASON's, so it is what gives way:
-// cut between words, ending in an ellipsis.
+// A request holds REQUEST_MESSAGE_MAX characters (500): the member's note (up to 300), a
+// blank line, and "Why REASON suggested this: <reason>.". With a long note and a long
+// reason the whole was cut at the cap, so the reason stopped in the middle of a word. The
+// note is the member's own words and stays whole; the reason is REASON's, so it is what
+// gives way: cut between words, ending in an ellipsis. Every number below is measured
+// against the one shared cap, the same one the route and the stored text use.
 describe('expressInterest: a long note cannot cut the reason mid-word', () => {
   beforeEach(() => { mockQuery.mockReset(); mockSendPoke.mockReset(); mockSendPoke.mockResolvedValue({ id: 'p1' }); });
 
@@ -487,16 +489,16 @@ describe('expressInterest: a long note cannot cut the reason mid-word', () => {
     return message.slice(`Hi${LEAD}`.length, -1); // without the closing full stop
   }
 
-  it('a 300-character note and a long reason: the note whole, the reason cut at a word, 500 or fewer', async () => {
+  it('a 300-character note and a long reason: the note whole, the reason cut at a word, within the cap', async () => {
     arm();
     const reason = await wholeReason();
     const note = noteOf(300);
     // The premise: with a note this long the whole reason cannot fit.
-    expect(note.length + LEAD.length + reason.length + 1).toBeGreaterThan(500);
+    expect(note.length + LEAD.length + reason.length + 1).toBeGreaterThan(REQUEST_MESSAGE_MAX);
 
     const message = await messageFor(note);
 
-    expect(message.length).toBeLessThanOrEqual(500);
+    expect(message.length).toBeLessThanOrEqual(REQUEST_MESSAGE_MAX);
     expect(message.startsWith(`${note}${LEAD}`)).toBe(true); // the note is whole
     expect(message.endsWith('…')).toBe(true);
     const shown = message.slice(`${note}${LEAD}`.length, -1);
@@ -505,27 +507,27 @@ describe('expressInterest: a long note cannot cut the reason mid-word', () => {
     expect(reason.charAt(shown.length)).toMatch(/[^\p{L}\p{N}]/u); // and stops between words
     // Not shortened more than it had to be: the next word would not have fitted.
     const nextWord = /^\s*\S+/.exec(reason.slice(shown.length))![0];
-    expect(message.length - 1 + nextWord.length + 1).toBeGreaterThan(500);
+    expect(message.length - 1 + nextWord.length + 1).toBeGreaterThan(REQUEST_MESSAGE_MAX);
   });
 
   it('the reason gives way a step at a time: whole, then without its full stop, then cut at a word', async () => {
     arm();
     const reason = await wholeReason();
-    const justFits = 500 - LEAD.length - reason.length - 1;
+    const justFits = REQUEST_MESSAGE_MAX - LEAD.length - reason.length - 1;
 
-    // Exactly 500: sent as it is.
+    // Exactly the cap: sent as it is.
     const whole = await messageFor(noteOf(justFits));
     expect(whole).toBe(`${noteOf(justFits)}${LEAD}${reason}.`);
-    expect(whole.length).toBe(500);
+    expect(whole.length).toBe(REQUEST_MESSAGE_MAX);
 
     // One character over: only the closing full stop goes, nothing of the reason is lost.
     const noStop = await messageFor(noteOf(justFits + 1));
     expect(noStop).toBe(`${noteOf(justFits + 1)}${LEAD}${reason}`);
-    expect(noStop.length).toBe(500);
+    expect(noStop.length).toBe(REQUEST_MESSAGE_MAX);
 
     // Two over: the reason has to be cut, between words, ending in an ellipsis.
     const cut = await messageFor(noteOf(justFits + 2));
-    expect(cut.length).toBeLessThanOrEqual(500);
+    expect(cut.length).toBeLessThanOrEqual(REQUEST_MESSAGE_MAX);
     expect(cut.endsWith('…')).toBe(true);
     expect(cut).not.toContain(reason);
   });
@@ -536,7 +538,7 @@ describe('expressInterest: a long note cannot cut the reason mid-word', () => {
     expect(await messageFor('I would value a short chat.')).toBe(`I would value a short chat.${LEAD}${reason}.`);
   });
 
-  it('counts UTF-16 units, as the stored cap does, so emoji in the reason cannot push it over 500', async () => {
+  it('counts UTF-16 units, as the stored cap does, so emoji in the reason cannot push it over the cap', async () => {
     // Each emoji is one character but two units. With a name made of them there is a note length
     // at which the reason fits its room counted in characters and does not fit counted in units.
     arm('🌸'.repeat(50));
@@ -546,19 +548,19 @@ describe('expressInterest: a long note cannot cut the reason mid-word', () => {
     expect(characters).toBeLessThanOrEqual(room); // the premise
     expect(reason.length).toBeGreaterThan(room);
 
-    const message = await messageFor(noteOf(500 - LEAD.length - room));
+    const message = await messageFor(noteOf(REQUEST_MESSAGE_MAX - LEAD.length - room));
 
-    expect(message.length).toBeLessThanOrEqual(500);
+    expect(message.length).toBeLessThanOrEqual(REQUEST_MESSAGE_MAX);
     expect(message.endsWith('…')).toBe(true);
     expect(new TextDecoder().decode(new TextEncoder().encode(message))).toBe(message); // no half emoji
   });
 
   it('a note too long to leave any room is sent alone, whole, with no reason', async () => {
     arm();
-    const note = noteOf(480);
+    const note = noteOf(REQUEST_MESSAGE_MAX - LEAD.length); // the note and the lead use up the whole cap
     const message = await messageFor(note);
     expect(message.startsWith(note)).toBe(true);
-    expect(message.length).toBeLessThanOrEqual(500);
+    expect(message.length).toBeLessThanOrEqual(REQUEST_MESSAGE_MAX);
     expect(message).not.toContain('REASON');
   });
 });

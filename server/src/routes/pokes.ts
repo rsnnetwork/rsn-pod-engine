@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { validate } from '../middleware/validate';
 import { authenticate } from '../middleware/auth';
 import * as pokeService from '../services/poke/poke.service';
+import { REQUEST_MESSAGE_MAX } from '../services/poke/request-message';
 import { fanoutUserEntity } from '../realtime/fanout';
 import { E } from '../realtime/entities';
 import { NotFoundError } from '../middleware/errors';
@@ -19,7 +20,7 @@ const sendBodySchema = z.object({
   // Lower-cased: Postgres reads an upper-case uuid as the same member, but sendPoke
   // compares ids as plain strings (yourself, blocked, already declined).
   recipientId: z.string().uuid().transform((s) => s.toLowerCase()),
-  message: z.string().max(500).optional(),
+  message: z.string().max(REQUEST_MESSAGE_MAX).optional(),
 });
 
 // POST /pokes — send a poke

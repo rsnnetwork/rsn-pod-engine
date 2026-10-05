@@ -95,6 +95,7 @@ jest.mock('../../../services/notification-prefs/notification-prefs.service', () 
 }));
 
 import * as pokeService from '../../../services/poke/poke.service';
+import { REQUEST_MESSAGE_MAX } from '../../../services/poke/request-message';
 import config from '../../../config';
 
 const SENDER = 'u-send';
@@ -919,8 +920,15 @@ describe('sendPoke — a run of line breaks cannot build a very tall request', (
     expect(await storedMessage('a\n\nb')).toBe('a\n\nb');
   });
 
-  it('spends the 500 characters on what is left after folding, and still caps at 500', async () => {
+  it('spends the whole cap on what is left after folding, and still caps there', async () => {
     expect(await storedMessage(`a${'\n'.repeat(600)}b`)).toBe('a\n\nb');
-    expect(String(await storedMessage('x'.repeat(600)))).toHaveLength(500);
+    expect(String(await storedMessage('x'.repeat(REQUEST_MESSAGE_MAX + 100)))).toHaveLength(REQUEST_MESSAGE_MAX);
+  });
+
+  it('stores a message of exactly the request cap whole, and cuts one character more', async () => {
+    // The route accepts, and the reason budget is measured against, this same cap.
+    const atTheCap = 'x'.repeat(REQUEST_MESSAGE_MAX);
+    expect(await storedMessage(atTheCap)).toBe(atTheCap);
+    expect(await storedMessage(`${atTheCap}x`)).toBe(atTheCap);
   });
 });
