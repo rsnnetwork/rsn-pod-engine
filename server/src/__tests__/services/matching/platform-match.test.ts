@@ -195,7 +195,7 @@ describe('getPlatformMatches', () => {
 describe('expressInterest — the introduction rides the poke rails', () => {
   beforeEach(() => { mockQuery.mockReset(); mockSendPoke.mockReset(); });
 
-  it('composes the introduction from the fit reason and sends it as the poke message', async () => {
+  it('sends the introduction as the poke message: no want stated by the sender, so the neutral sentence', async () => {
     mockQuery.mockImplementation((sql: string, params: unknown[]) => {
       if (/WHERE u\.id = \$1/.test(sql)) {
         const id = (params as string[])[0];
@@ -208,15 +208,16 @@ describe('expressInterest — the introduction rides the poke rails', () => {
     });
     mockSendPoke.mockResolvedValue({ id: 'poke-1', status: 'pending' });
 
-    // The INVESTOR expresses interest in the FOUNDER: the intro shown to the
-    // founder explains why the investor fits what the FOUNDER wanted.
+    // The INVESTOR expresses interest in the FOUNDER. This test used to expect
+    // "why the investor fits what the FOUNDER wanted", which is the recipient's
+    // own want, and the sender reads the message back (5 Oct 2026). The investor
+    // stated no want, so the message is now the neutral sentence.
     await expressInterest('u-investor', 'u-founder');
     expect(mockSendPoke).toHaveBeenCalledTimes(1);
     const [senderId, recipientId, message] = mockSendPoke.mock.calls[0] as string[];
     expect(senderId).toBe('u-investor');
     expect(recipientId).toBe('u-founder');
-    expect(message).toMatch(/investor/i);
-    expect(message).toMatch(/should meet/i);
+    expect(message).toBe("Iqbal thinks you fit what they're looking for. We think you two should meet.");
     expect(message.length).toBeLessThanOrEqual(500);
   });
 });
@@ -322,5 +323,123 @@ describe('expressInterest with a personal note and format (milestone 1)', () => 
     expect(message).toMatch(/We think you two should meet\.$/);
     expect(agentId).toBeUndefined();
     expect(format).toBeUndefined();
+  });
+});
+
+// ─── A meeting request never quotes the recipient's own want (5 Oct 2026) ────
+//
+// When the sender had no stated want that fitted the recipient, the request
+// fell back to text written from the RECIPIENT's own want ("You're looking to
+// meet investors — Iqbal is an Angel Investor"). The sender reads the stored
+// message twice: in the 201 response of the interest call and, once the
+// recipient accepts, as the first message of their conversation. So pressing
+// "I want to meet" told a member what another member privately wants to meet.
+// Stefan's approved point 1: another member's wants stay private. The message
+// may now carry only what the SENDER chose to share.
+describe('expressInterest never quotes the recipient\'s own want', () => {
+  beforeEach(() => { mockQuery.mockReset(); mockSendPoke.mockReset(); mockSendPoke.mockResolvedValue({ id: 'p1' }); });
+
+  // Serves the given profiles by id, and an agent's want text when it is asked for.
+  function armPair(profiles: IntentProfile[], agents: Record<string, string> = {}) {
+    mockQuery.mockImplementation((sql: string, params: unknown[]) => {
+      const id = (params as string[])[0];
+      if (/WHERE u\.id = \$1/.test(sql)) {
+        const found = profiles.find((p) => p.id === id);
+        return Promise.resolve({ rows: found ? [{ ...found, onboardingCompleted: true }] : [] });
+      }
+      if (/FROM matching_agents/.test(sql)) {
+        return Promise.resolve({ rows: id in agents ? [{ want_text: agents[id] }] : [] });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+  }
+
+  const NEUTRAL = "Iqbal thinks you fit what they're looking for. We think you two should meet.";
+  // The founder's own words ('investors and angels for my seed round'), and the
+  // three openings the old fallback wrote its sentence with.
+  const THE_RECIPIENTS_WANT = [
+    'investors', 'angels', 'seed round',
+    "You're looking to meet", "What you're looking for", 'Their profile matches',
+  ];
+  // Compares against an empty list, so a failure prints the message and the phrases found.
+  function expectNoneOf(text: string, phrases: string[]) {
+    const found = phrases.filter((phrase) => text.toLowerCase().includes(phrase.toLowerCase()));
+    expect({ message: text, found }).toEqual({ message: text, found: [] });
+  }
+
+  // The premise of every test below: the founder's own want DOES fit the
+  // investor, so the old fallback had a sentence to write and would have used it.
+  it('premise: the recipient\'s own want fits the sender, and that fit is worded with the founder\'s want', () => {
+    const fallback = scoreFit(FOUNDER_SEEKING_INVESTORS, INVESTOR);
+    expect(fallback.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+    expect(fallback.reason).toMatch(/^You're looking to meet investors/);
+  });
+
+  it('a sender who stated no want: the message is the neutral sentence, with nothing from the recipient\'s want', async () => {
+    armPair([FOUNDER_SEEKING_INVESTORS, INVESTOR]);
+
+    await expressInterest('u-investor', 'u-founder');
+
+    const message = mockSendPoke.mock.calls[0][2] as string;
+    expect(message).toBe(NEUTRAL);
+    expectNoneOf(message, THE_RECIPIENTS_WANT);
+  });
+
+  it('a sender whose own want does not fit the recipient: the same neutral sentence', async () => {
+    // Most senders HAVE a want; it just is not this person. That must not open
+    // the door to the recipient's want either.
+    const investorWantingChefs = { ...INVESTOR, whoIWantToMeet: 'pastry chefs and bakers' };
+    armPair([FOUNDER_SEEKING_INVESTORS, investorWantingChefs]);
+
+    await expressInterest('u-investor', 'u-founder');
+
+    const message = mockSendPoke.mock.calls[0][2] as string;
+    expect(message).toBe(NEUTRAL);
+    expectNoneOf(message, THE_RECIPIENTS_WANT);
+  });
+
+  it('the same pair with a note: the message is exactly the trimmed note', async () => {
+    armPair([FOUNDER_SEEKING_INVESTORS, INVESTOR]);
+
+    await expressInterest('u-investor', 'u-founder', undefined, { note: '  I would value a short chat.  ' });
+
+    const message = mockSendPoke.mock.calls[0][2] as string;
+    expect(message).toBe('I would value a short chat.');
+    expectNoneOf(message, [...THE_RECIPIENTS_WANT, 'Why REASON suggested this']);
+  });
+
+  it('the sender\'s own want that fits the recipient is still attached, word for word as before', async () => {
+    armPair([FOUNDER_SEEKING_INVESTORS, INVESTOR]);
+
+    await expressInterest('u-founder', 'u-investor');
+    expect(mockSendPoke.mock.calls[0][2])
+      .toBe("Fatima is looking to meet investors — you're an Angel Investor. We think you two should meet.");
+
+    mockSendPoke.mockClear();
+    await expressInterest('u-founder', 'u-investor', undefined, { note: 'Hello there' });
+    expect(mockSendPoke.mock.calls[0][2])
+      .toBe("Hello there\n\nWhy REASON suggested this: Fatima is looking to meet investors — you're an Angel Investor.");
+  });
+
+  it('an agent introduction says what the agent was looking for, never the recipient\'s own want', async () => {
+    armPair([FOUNDER_SEEKING_INVESTORS, INVESTOR], { 'agent-founders': 'founders' });
+
+    await expressInterest('u-investor', 'u-founder', 'agent-founders');
+
+    const [, , message, agentId] = mockSendPoke.mock.calls[0];
+    expect(message).toBe("Iqbal is looking to meet founders — you're a Founder. We think you two should meet.");
+    expect(agentId).toBe('agent-founders');
+    expectNoneOf(message, THE_RECIPIENTS_WANT);
+  });
+
+  it('an agent whose want does not fit the recipient: the neutral sentence, not the recipient\'s want', async () => {
+    armPair([FOUNDER_SEEKING_INVESTORS, INVESTOR], { 'agent-chefs': 'pastry chefs' });
+
+    await expressInterest('u-investor', 'u-founder', 'agent-chefs');
+
+    const [, , message, agentId] = mockSendPoke.mock.calls[0];
+    expect(message).toBe(NEUTRAL);
+    expect(agentId).toBe('agent-chefs');
+    expectNoneOf(message, THE_RECIPIENTS_WANT);
   });
 });

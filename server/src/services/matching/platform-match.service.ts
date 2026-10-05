@@ -149,7 +149,8 @@ export function wantedDesignationsFrom(
 
 /**
  * Stefan's one-way rule, scored. Returns 0 when there is no fit; the reason is
- * human-readable and shown on the match card AND used as the introduction text.
+ * human-readable and shown on the match card, to the member whose want it states.
+ * It never goes into a meeting request: the other member reads that.
  */
 export function scoreFit(me: IntentProfile, other: IntentProfile, generic?: Set<string>): { score: number; reason: string } {
   return scoreWants(wantSources(me), other, generic);
@@ -544,7 +545,8 @@ export async function expressInterest(
   let message = note ?? 'We think you two should meet.';
   if (me && target) {
     const senderName = me.displayName || 'This member';
-    // Say WHY this introduction exists, strongest known cause first.
+    // Say WHY this introduction exists, strongest known cause first, using only
+    // what the SENDER chose to share.
     //
     // 1. An agent sent it → that agent is the cause, and nothing else may
     //    stand in for it. Reading the recipient's own wants instead (what this
@@ -552,15 +554,16 @@ export async function expressInterest(
     //    rajaa was told "you're looking to meet founders" when what actually
     //    reached him was Ali's Developers agent.
     // 2. No agent, but the sender stated who they want → that is the cause.
-    // 3. Neither, but the recipient's own want fits the sender → the best
-    //    honest explanation of the fit that is left, and useful to them.
-    // 4. Nothing to say → a neutral sentence, never an invented reason.
+    // 3. Nothing to say → a neutral sentence, never an invented reason.
+    //
+    // Never the recipient's own want (a fallback to it was removed on 5 Oct
+    // 2026): the sender reads this text in the response and, after Accept, as the
+    // first message, so it showed them what the recipient privately wants to
+    // meet. Stefan's approved point 1.
     const agentWant = agentId ? await agentWantText(agentId) : null;
-    const fromSender = scoreWantsForRecipient(
+    const { reason } = scoreWantsForRecipient(
       agentWant ? [agentWant] : wantSources(me), target, senderName,
     );
-    const toRecipient = agentWant ? { reason: '' } : scoreFit(target, me);
-    const reason = fromSender.reason || toRecipient.reason;
     if (note) {
       // The v4 Meet sheet: the member's own words first, "with the reason attached".
       message = reason ? `${note}\n\nWhy REASON suggested this: ${reason}.` : note;
