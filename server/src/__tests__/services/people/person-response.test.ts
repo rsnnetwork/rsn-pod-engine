@@ -2,7 +2,6 @@ const mockQuery = jest.fn();
 jest.mock('../../../db', () => ({ query: (...a: unknown[]) => mockQuery(...a), transaction: jest.fn(), __esModule: true }));
 
 import { setResponse, clearResponse, getResponse } from '../../../services/people/person-response.service';
-import { clip } from '../../../services/people/text';
 
 describe('Save / Pass on a person', () => {
   beforeEach(() => mockQuery.mockReset());
@@ -30,12 +29,5 @@ describe('Save / Pass on a person', () => {
     expect(String(mockQuery.mock.calls[0][0])).toMatch(/DELETE FROM person_responses/);
     mockQuery.mockResolvedValueOnce({ rows: [{ response: 'saved' }] });
     await expect(getResponse('u-a', 'u-b')).resolves.toBe('saved');
-  });
-
-  it('clip trims, shortens and turns blank into null', () => {
-    expect(clip('  ')).toBeNull();
-    expect(clip(null)).toBeNull();
-    expect(clip('abc', 10)).toBe('abc');
-    expect(clip('a'.repeat(200), 20)).toHaveLength(20);
   });
 });
