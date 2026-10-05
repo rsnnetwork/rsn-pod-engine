@@ -44,12 +44,17 @@ export default function CirclesPage() {
   // last applies its own. AppLayout is always mounted, renders again on every navigation and
   // declares no entities, so a tag on the shared key was overwritten the moment this page
   // opened (the home page tile has its own key for the same reason).
-  // Circle membership belongs to the member, so their own entity refreshes this list. The
-  // circle routes emit no entity of their own yet: until they do, the list also refreshes from
-  // the invalidations below (the prefix ['circles'] reaches this key too) and on focus.
+  // What refreshes the list: the member's own entity (circle membership belongs to the member),
+  // the invalidations below after a join, leave or create (the prefix ['circles'] reaches this
+  // key too), and window focus. The circle routes emit no entity, so someone else joining or
+  // leaving a circle does not refresh it.
+  // The nav's list is the same endpoint with the same shape. It is read here, never written,
+  // to stand in while this key has no answer of its own, so the page opens on the list and not
+  // on a loader.
   const { data: circles, isLoading } = useQuery<CircleSummary[]>({
     queryKey: ['circles', 'list'],
     queryFn: () => api.get('/circles').then(r => r.data.data ?? []),
+    placeholderData: () => queryClient.getQueryData<CircleSummary[]>(['circles']),
     meta: { entities: user?.id ? [E.user(user.id)] : [] },
   });
 

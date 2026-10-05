@@ -1046,3 +1046,55 @@ test('5. Circles: the open list asks for its circles again when something tells 
   console.log(`  ✓ the open /circles page asked for its circles again (${calls.length - settled} call) once the server told user:<member>, with no reload and no focus change.`);
   expect(pageErrors, 'no script errors').toEqual([]);
 });
+
+test('5. Circles: the page opens at once from the nav\'s list, not on a loader', async () => {
+  test.setTimeout(180_000);
+  // AppLayout reads the circles for the nav under ['circles']. The page has a key of its own, so on
+  // its first visit it has nothing of its own yet: unless it is given the nav's copy to stand on, it
+  // shows a full-page loader until its own request returns. That request is held here for HOLD_MS,
+  // so that "at once" can be told from "after the request".
+  const member = await makeUser('circles-instant');
+  const pageErrors: string[] = [];
+  const page = await openAs(member, { width: 1280, height: 800 }, pageErrors, true);
+  const HOLD_MS = 4_000;
+  let holding = false;
+  let held = 0;
+  let heldAnswerAt = 0;
+  await page.route('**/api/circles', async (route) => {
+    if (holding) {
+      held++;
+      await wait(HOLD_MS);
+    }
+    await route.continue();
+  });
+  page.on('response', (res) => {
+    if (holding && res.url().split('?')[0].endsWith('/api/circles')) heldAnswerAt = heldAnswerAt || Date.now();
+  });
+
+  // The nav asks for the circles once, when the layout mounts: wait for that answer first.
+  const navAnswered = page.waitForResponse(
+    (res) => res.request().method() === 'GET' && res.url().split('?')[0].endsWith('/api/circles'),
+    { timeout: 30_000 },
+  );
+  await gotoRetry(page, `${APP}/messages`);
+  await navAnswered;
+  await settle(page);
+
+  // Move inside the app to the circles page. (The nav links to it only once circles exist.)
+  holding = true;
+  const movedAt = Date.now();
+  await page.evaluate(() => {
+    window.history.pushState({}, '', '/circles');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  });
+  await expect(page.getByRole('heading', { name: 'Circles', exact: true }), 'the circles page is on screen at once').toBeVisible({ timeout: 2_000 });
+  const shownAfter = Date.now() - movedAt;
+  expect(heldAnswerAt, `the page's own request had not been answered when the heading showed (${shownAfter}ms)`).toBe(0);
+  expect(held, 'the page asked for its own list, and that request is still held').toBeGreaterThanOrEqual(1);
+
+  // The real answer still arrives and replaces the stand-in.
+  await expect.poll(() => heldAnswerAt, { message: 'the held request is answered in the end', timeout: HOLD_MS + 10_000 }).toBeGreaterThan(0);
+  await expect(page.getByRole('heading', { name: 'Circles', exact: true })).toBeVisible();
+  console.log(`  ✓ the circles page was on screen ${shownAfter}ms after the move, while its own request was still held (${HOLD_MS / 1000}s); the answer arrived after.`);
+  expect(pageErrors, 'no script errors').toEqual([]);
+});
