@@ -10,7 +10,7 @@
 // Realtime: sendPoke fans out E.userInvites(recipient), so keying this query to
 // that entity makes a new request appear without a refresh.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Check, X } from 'lucide-react';
@@ -172,6 +172,74 @@ export function FocusedMeetingRequest({ pokeId, myUserId }: { pokeId: string; my
   );
 }
 
+// The number in the line-clamp-6 class below. Tailwind needs that class written out in
+// full, so the two are kept equal by hand.
+const MESSAGE_LINES = 6;
+
+/**
+ * A request's note inside its list row: six lines, and "Show more" under it ONLY
+ * while the text really is cut off (5 Oct 2026). The full-text card is not shown
+ * below 1024px, so on a phone this row is the only place a long note, with REASON's
+ * reason after it, can be read before the member accepts. A note that fits gets no
+ * button, so a short row is exactly as tall as it was.
+ *
+ * The text is measured, not guessed from its length: how many lines it takes
+ * depends on the width of the window and on the font, so it is measured again when
+ * the paragraph is resized and when the fonts finish loading. scrollHeight is the
+ * full height of the text whether or not the clamp is on, so the same test works
+ * for the collapsed and the expanded paragraph.
+ */
+function ClampedMessage({ text }: { text: string }) {
+  const id = useId();
+  const paragraphRef = useRef<HTMLParagraphElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [cutOff, setCutOff] = useState(false);
+
+  useLayoutEffect(() => {
+    const paragraph = paragraphRef.current;
+    if (!paragraph) return;
+    let stale = false;
+    const measure = () => {
+      if (stale) return;
+      const style = getComputedStyle(paragraph);
+      const parsed = parseFloat(style.lineHeight);
+      const lineHeight = Number.isFinite(parsed) ? parsed : parseFloat(style.fontSize) * 1.2;
+      setCutOff(paragraph.scrollHeight > lineHeight * MESSAGE_LINES + 1);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(paragraph);
+    void document.fonts?.ready.then(measure);
+    return () => {
+      stale = true;
+      observer.disconnect();
+    };
+  }, [text]);
+
+  return (
+    <>
+      <p
+        id={id}
+        ref={paragraphRef}
+        className={`mt-1 whitespace-pre-line break-words text-xs text-gray-600 ${expanded ? '' : 'line-clamp-6'}`}
+      >
+        {text}
+      </p>
+      {cutOff && (
+        <button
+          type="button"
+          onClick={() => setExpanded(open => !open)}
+          aria-expanded={expanded}
+          aria-controls={id}
+          className="-my-1.5 flex min-h-[44px] w-fit min-w-[44px] items-center text-xs font-medium text-rsn-red underline underline-offset-2 hover:text-rsn-red-hover"
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
+      )}
+    </>
+  );
+}
+
 export default function MeetingRequests({ myUserId, focusPokeId }: { myUserId: string; focusPokeId?: string | null }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -269,9 +337,7 @@ export default function MeetingRequests({ myUserId, focusPokeId }: { myUserId: s
                     {[r.senderJobTitle, r.senderCompany].filter(Boolean).join(' · ')}
                   </p>
                 )}
-                <p className="mt-1 line-clamp-6 whitespace-pre-line break-words text-xs text-gray-600">
-                  {r.message || 'They would like to meet you.'}
-                </p>
+                <ClampedMessage text={r.message || 'They would like to meet you.'} />
                 {formatLabel(r.preferredFormat) && (
                   <p className="mt-0.5 text-[11px] text-gray-500">Prefers {formatLabel(r.preferredFormat)?.toLowerCase()}</p>
                 )}
