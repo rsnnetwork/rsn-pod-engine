@@ -53,8 +53,8 @@ export default function MatchesPage() {
 
   // Until 5 Oct 2026 this query declared no entities, so it never refreshed from
   // realtime: a request sent from another tab, or answered by the other member, left
-  // the card as it was until a reload. sendPoke tells both members' user and invites
-  // entities; accept and decline tell the invites entity of both.
+  // the card as it was until a reload. Sending a request (sendPoke), accepting it and
+  // declining it each tell both members' user and invites entities.
   const { data, isLoading } = useQuery<PlatformMatchesResult>({
     queryKey: ['platformMatches', browse],
     queryFn: () => api.get(`/matches/platform${browse ? '?browse=1' : ''}`).then(r => r.data.data),
