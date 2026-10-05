@@ -20,6 +20,7 @@ import ShellTopbar from './ShellTopbar';
 import MobileNav from './MobileNav';
 import PeopleTabs, { PEOPLE_TABS } from './PeopleTabs';
 import AdminTabs from './AdminTabs';
+import { onAdmin } from './nav';
 
 export default function ReasonShell() {
   const { pathname } = useLocation();
@@ -33,7 +34,7 @@ export default function ReasonShell() {
   });
   const unreadCount = unread ?? 0;
   const inPeople = PEOPLE_TABS.some((t) => pathname === t.to || pathname.startsWith(`${t.to}/`));
-  const inAdmin = isAdmin(user?.role) && (pathname === '/admin' || pathname.startsWith('/admin/'));
+  const inAdmin = isAdmin(user?.role) && onAdmin(pathname);
   // The old layout's nudge, kept. For You says the same thing in its own card.
   const nudgeProfile = user?.onboardingCompleted === false && pathname !== '/';
 

@@ -28,3 +28,9 @@ export const SUB_NAV: NavItem[] = [
 export const NAV_BY_KEY = Object.fromEntries([...MAIN_NAV, ...SUB_NAV].map(i => [i.key, i])) as Record<NavKey, NavItem>;
 export const MOBILE_PRIMARY: NavKey[] = ['foryou', 'people', 'events', 'messages'];
 export const MOBILE_MORE: NavKey[] = ['entities', 'circles', 'pods', 'introductions', 'settings', 'support'];
+
+// Invite and Admin are not in either list: they live in the account menu (in More on a
+// phone), and that is what is marked current while a member is on one of them.
+export const onInvites = under('/invites');
+export const onAdmin = under('/admin');
+export const isAccountPage = (path: string) => onInvites(path) || onAdmin(path);

@@ -9,7 +9,7 @@ function SideLink({ item, active, badge }: { item: NavItem; active: boolean; bad
   return (
     <Link
       to={item.to}
-      aria-label={item.label}
+      aria-label={badge ? `${item.label}, ${badge} unread` : item.label}
       aria-current={active ? 'page' : undefined}
       title={item.label}
       className={cn(
@@ -31,7 +31,7 @@ function SideLink({ item, active, badge }: { item: NavItem; active: boolean; bad
 export default function ShellSidebar({ unreadCount }: { unreadCount: number }) {
   const { pathname } = useLocation();
   return (
-    <aside className="fixed inset-y-0 left-0 z-20 hidden w-[calc(82px+env(safe-area-inset-left))] flex-col border-r border-reason-line bg-white pb-3.5 pl-[calc(14px+env(safe-area-inset-left))] pr-3.5 pt-4 min-[721px]:flex min-[981px]:w-[calc(232px+env(safe-area-inset-left))]">
+    <aside className="fixed inset-y-0 left-0 z-20 hidden w-[calc(82px+env(safe-area-inset-left))] flex-col border-r border-reason-line bg-white pb-[calc(14px+env(safe-area-inset-bottom))] pl-[calc(14px+env(safe-area-inset-left))] pr-3.5 pt-4 min-[721px]:flex min-[981px]:w-[calc(232px+env(safe-area-inset-left))]">
       <div className="flex h-[52px] shrink-0 items-center justify-center pb-2 min-[981px]:justify-start">
         <Link to="/" aria-label="REASON home" className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl px-2">
           <ReasonMark variant="rail" />

@@ -17,7 +17,8 @@ describe('REASON shell (milestone 1)', () => {
   });
   it('the tablet rail keeps its icons (the prototype hid them) and names each one', () => {
     const side = read('features/reason/shell/ShellSidebar.tsx');
-    expect(side).toMatch(/aria-label=\{item\.label\}/);
+    // Named by its label. The Messages link adds its unread count to that name (pinned below).
+    expect(side).toMatch(/aria-label=\{[^}]*item\.label[^}]*\}/);
     expect(side).toMatch(/<span className="hidden min-\[981px\]:inline">\{item\.label\}<\/span>/);
     expect(side).not.toMatch(/<ReasonIcon[^>]*hidden/);
   });
@@ -69,6 +70,8 @@ describe('REASON shell: faults found by looking at it', () => {
   it('an iPhone on its side: the rail, the top bar and the page area keep clear of the notch', () => {
     expect(read('features/reason/shell/ShellSidebar.tsx')).toMatch(/w-\[calc\(82px\+env\(safe-area-inset-left\)\)\]/);
     expect(read('features/reason/shell/ShellSidebar.tsx')).toMatch(/pl-\[calc\(14px\+env\(safe-area-inset-left\)\)\]/);
+    // ...and its account button stays out of the home-indicator zone at the bottom.
+    expect(read('features/reason/shell/ShellSidebar.tsx')).toMatch(/pb-\[calc\(14px\+env\(safe-area-inset-bottom\)\)\]/);
     const shell = read('features/reason/shell/ReasonShell.tsx');
     expect(shell).toMatch(/min-\[721px\]:pl-\[calc\(82px\+env\(safe-area-inset-left\)\)\]/);
     expect(shell).toMatch(/pr-\[max\(13px,env\(safe-area-inset-right\)\)\]/);
@@ -92,6 +95,18 @@ describe('REASON shell: faults found by looking at it', () => {
     expect(main).toBeGreaterThan(nudge);
     // Nothing between the two <main> tags may be the nudge.
     expect(shell.slice(main, shell.indexOf('</main>'))).not.toMatch(/nudgeProfile|Complete your profile/);
+  });
+  it('Invite and Admin pages mark More (phone) and the account button (rail, sidebar) as current, and More says whether it is open', () => {
+    expect(read('features/reason/shell/nav.ts')).toMatch(/export const isAccountPage = \(path: string\) => onInvites\(path\) \|\| onAdmin\(path\)/);
+    const bar = read('features/reason/shell/MobileNav.tsx');
+    expect(bar).toMatch(/const moreActive = [^;]*isAccountPage\(pathname\)/);
+    expect(bar).toMatch(/aria-expanded=\{moreOpen\}/);
+    expect(bar).toMatch(/aria-current=\{moreActive \? 'true' : undefined\}/);
+    expect(read('features/reason/shell/ProfileMenu.tsx')).toMatch(/aria-current=\{isAccountPage\(pathname\) \? 'true' : undefined\}/);
+  });
+  it('the Messages link keeps its unread count in its accessible name, as the old sidebar did', () => {
+    expect(read('features/reason/shell/ShellSidebar.tsx')).toMatch(/aria-label=\{badge \? `\$\{item\.label\}, \$\{badge\} unread` : item\.label\}/);
+    expect(read('features/reason/shell/MobileNav.tsx')).toMatch(/`\$\{item\.label\}, \$\{unreadCount\} unread`/);
   });
   it('the current tab is brought into view inside the tab rows (not by moving the page), and again once the font has loaded', () => {
     const hook = read('features/reason/shell/useRevealActive.ts').replace(/^\s*\/\/.*$/gm, '');

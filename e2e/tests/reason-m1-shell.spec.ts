@@ -19,7 +19,9 @@
 //                      once sat inside <main> and pushed the composer off the screen)
 //   8  old pages       Circles, Events, Messages, Settings, Pods and Support render inside
 //                      the shell with no script errors
-//   9  account menu    Invite and Log out stay reachable (Admin only for admins)
+//   9  account menu    Invite and Log out stay reachable (Admin only for admins); the account
+//                      button and More are marked current on Invite
+//  10  unread count    the Messages link names its unread count (bar, rail and sidebar)
 //
 // Two throwaway members, no admin. Both are created in the database this run talks to and
 // removed by exact id in afterAll. The preview reads and writes PRODUCTION data, so nothing
@@ -244,7 +246,8 @@ async function expectChrome(page: Page, width: number, where: string): Promise<v
 
   const links = aside.getByRole('navigation', { name: 'Main' }).getByRole('link');
   await expect(links, `${where}: eight main entries`).toHaveCount(8);
-  expect(await links.evaluateAll((els) => els.map((e) => e.getAttribute('aria-label'))), `${where}: every entry is named`).toEqual(MAIN);
+  // An entry is named by its label; Messages adds its unread count when there is one ("Messages, 3 unread").
+  expect(await links.evaluateAll((els) => els.map((e) => (e.getAttribute('aria-label') ?? '').replace(/, \d+ unread$/, ''))), `${where}: every entry is named`).toEqual(MAIN);
   const words = (await links.evaluateAll((els) => els.map((e) => (e as HTMLElement).innerText.trim())));
   if (mode === 'rail') {
     expect(words, `${where}: the rail shows icons, not words`).toEqual(MAIN.map(() => ''));
@@ -362,8 +365,11 @@ test('2 phone bar and More sheet: five tabs, the rest in More, each entry naviga
       const more = bar.getByRole('button', { name: 'More' });
       const sheet = page.getByRole('dialog', { name: 'More' });
 
+      await expect(more, `${where}: More says it is closed`).toHaveAttribute('aria-expanded', 'false');
+      await expect(more, `${where}: More is not marked current on For You`).not.toHaveAttribute('aria-current', 'true');
       await more.click();
       await expect(sheet, `${where}: the More sheet opens`).toBeVisible();
+      await expect(more, `${where}: More says it is open`).toHaveAttribute('aria-expanded', 'true');
       for (const label of MORE) await expect(sheet.getByRole('link', { name: label, exact: true }), `${where}: More lists ${label}`).toBeVisible();
       await expect(sheet.getByRole('link', { name: 'Invite someone' }), `${where}: Invite is in More`).toBeVisible();
       await expect(sheet.getByRole('button', { name: 'Log out' }), `${where}: Log out is in More`).toBeVisible();
@@ -394,6 +400,7 @@ test('2 phone bar and More sheet: five tabs, the rest in More, each entry naviga
       // Closing: Escape, then the backdrop.
       await page.keyboard.press('Escape');
       await expect(sheet, `${where}: Escape closes the sheet`).toBeHidden();
+      await expect(more, `${where}: More says it is closed again`).toHaveAttribute('aria-expanded', 'false');
       await more.click();
       await expect(sheet).toBeVisible();
       await page.mouse.click(size.width / 2, 8);
@@ -416,8 +423,20 @@ test('2 phone bar and More sheet: five tabs, the rest in More, each entry naviga
         await expect(sheet, `${where}: the sheet closes after ${d.label}`).toBeHidden();
         await expect(d.see().first(), `${where}: ${d.label} renders inside the shell`).toBeVisible({ timeout: 20_000 });
         await expect(bar, `${where}: the bar is still there on ${d.label}`).toBeVisible();
+        await expect(bar.getByRole('button', { name: 'More' }), `${where}: More is marked current on ${d.label}`).toHaveAttribute('aria-current', 'true');
         await expectContained(page, `${where} ${d.label}`);
       }
+
+      // Invite is not a tab or a tile: it lives under the member's name in More, and More is the current entry there.
+      await bar.getByRole('button', { name: 'More' }).click();
+      await expect(sheet).toBeVisible();
+      await sheet.getByRole('link', { name: 'Invite someone' }).click();
+      await expect(page, `${where}: More > Invite someone`).toHaveURL(/\/invites$/);
+      await expect(bar.getByRole('button', { name: 'More' }), `${where}: More is marked current on Invite`).toHaveAttribute('aria-current', 'true');
+      await bar.getByRole('button', { name: 'More' }).click();
+      await expect(sheet.getByRole('link', { name: 'Invite someone' }), `${where}: Invite someone is marked in the sheet`).toHaveAttribute('aria-current', 'page');
+      await page.keyboard.press('Escape');
+      await expect(sheet).toBeHidden();
 
       // The tabs on the bar go where they say, and mark the current one.
       for (const tab of [{ name: 'People', url: /\/search$/ }, { name: 'Events', url: /\/sessions$/ }, { name: 'Messages', url: /\/messages$/ }, { name: 'For You', url: /\/$/ }]) {
@@ -719,7 +738,7 @@ test('8 old pages: Circles, Events, Messages, Settings, Pods and Support render 
 // 9. The account menu
 // ═════════════════════════════════════════════════════════════════════════════════════════════
 
-test('9 account menu: Invite and Log out stay reachable, Admin is not offered to a member', async () => {
+test('9 account menu: Invite and Log out stay reachable, Admin is not offered to a member, and the current page is marked', async () => {
   test.setTimeout(300_000);
   const wide = sizes([{ width: 768, height: 1024 }, { width: 1280, height: 800 }]).filter((s) => modeOf(s.width) !== 'phone');
   test.skip(wide.length === 0, 'the account menu lives in the sidebar, which a phone does not have (its Invite and Log out are in More)');
@@ -745,10 +764,17 @@ test('9 account menu: Invite and Log out stay reachable, Admin is not offered to
       await page.mouse.click(size.width - 40, size.height - 60);
       await expect(menu, `${where}: a tap outside closes the menu`).toBeHidden();
 
+      await expect(account, `${where}: the account button is not marked on Circles`).not.toHaveAttribute('aria-current', 'true');
       await account.click();
       await menu.getByRole('menuitem', { name: 'Invite someone' }).click();
       await expect(page, `${where}: Invite someone`).toHaveURL(/\/invites$/);
       await expect(menu, `${where}: the menu closes after a choice`).toBeHidden();
+      // Nothing in the lists is Invite, so the account button is the current entry, and so is the item in its menu.
+      await expect(account, `${where}: the account button is marked current on Invite`).toHaveAttribute('aria-current', 'true');
+      await account.click();
+      await expect(menu.getByRole('menuitem', { name: 'Invite someone' }), `${where}: Invite someone is marked in the menu`).toHaveAttribute('aria-current', 'page');
+      await page.keyboard.press('Escape');
+      await expect(menu).toBeHidden();
 
       await account.click();
       await menu.getByRole('menuitem', { name: 'Log out' }).click();
@@ -758,6 +784,32 @@ test('9 account menu: Invite and Log out stay reachable, Admin is not offered to
       await expect(sheet, `${where}: Cancel closes it`).toBeHidden();
       await expect(page, `${where}: still on the same page, still signed in`).toHaveURL(/\/invites$/);
       console.log(`  ✓ ${where}: menu opens, Escape and an outside tap close it, Invite navigates, Log out asks first and Cancel keeps the member signed in, no Admin entry for a member.`);
+      expect(errors, `${where}: script errors`).toEqual([]);
+    } finally {
+      await ctx.close().catch(() => undefined);
+    }
+  }
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// 10. The Messages link names its unread count
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+
+test('10 unread count: the Messages link says how many messages are waiting (bar, rail and sidebar)', async () => {
+  test.setTimeout(300_000);
+  const id = await thread();
+  // One unread message from the other throwaway member, written straight into the table.
+  await pool.query(`INSERT INTO direct_messages (conversation_id, from_user_id, content) VALUES ($1, $2, $3)`, [id, unfinished.id, 'Are you there?']);
+  for (const size of sizes([{ width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 1280, height: 800 }])) {
+    const where = `${size.width}px`;
+    const { page, ctx, errors } = await openAs(member, size);
+    try {
+      await visit(page, '/circles', size.width);
+      const root = modeOf(size.width) === 'phone' ? page.getByRole('navigation', { name: 'Main' }) : page.locator('aside');
+      const link = root.getByRole('link', { name: 'Messages, 1 unread', exact: true });
+      await expect(link, `${where}: the Messages link names its unread count`).toBeVisible({ timeout: 20_000 });
+      await expectTapSize([{ name: 'Messages link', loc: link }], where);
+      console.log(`  ✓ ${where}: the ${modeOf(size.width)} Messages link reads "Messages, 1 unread".`);
       expect(errors, `${where}: script errors`).toEqual([]);
     } finally {
       await ctx.close().catch(() => undefined);

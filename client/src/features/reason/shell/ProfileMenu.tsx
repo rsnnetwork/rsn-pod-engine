@@ -1,21 +1,29 @@
 // The sidebar's account block. Holds what the prototype has no slot for but
 // members must not lose: Invite, Admin (admins only) and Log out.
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import Avatar from '@/components/ui/Avatar';
 import { useAuthStore } from '@/stores/authStore';
-import { isAdmin } from '@/lib/utils';
+import { cn, isAdmin } from '@/lib/utils';
 import LogoutSheet from './LogoutSheet';
+import { isAccountPage, onAdmin, onInvites } from './nav';
 
-function MenuLink({ to, label, onDone }: { to: string; label: string; onDone: () => void }) {
+function MenuLink({ to, label, current, onDone }: { to: string; label: string; current: boolean; onDone: () => void }) {
   return (
-    <Link role="menuitem" to={to} onClick={onDone} className="flex min-h-[44px] items-center rounded-xl px-3 text-[14px] hover:bg-reason-soft">
+    <Link
+      role="menuitem"
+      to={to}
+      onClick={onDone}
+      aria-current={current ? 'page' : undefined}
+      className={cn('flex min-h-[44px] items-center rounded-xl px-3 text-[14px]', current ? 'bg-reason-pink font-bold text-reason-red' : 'hover:bg-reason-soft')}
+    >
       {label}
     </Link>
   );
 }
 
 export default function ProfileMenu() {
+  const { pathname } = useLocation();
   const user = useAuthStore((s) => s.user);
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState(false);
@@ -53,7 +61,11 @@ export default function ProfileMenu() {
         aria-expanded={open}
         aria-haspopup="menu"
         aria-label="Your account"
-        className="flex min-h-[44px] w-full items-center justify-center gap-2.5 rounded-xl px-2 text-left hover:bg-reason-soft min-[981px]:justify-start"
+        aria-current={isAccountPage(pathname) ? 'true' : undefined}
+        className={cn(
+          'flex min-h-[44px] w-full items-center justify-center gap-2.5 rounded-xl px-2 text-left min-[981px]:justify-start',
+          isAccountPage(pathname) ? 'bg-reason-pink shadow-[inset_3px_0_0_#DE322E]' : 'hover:bg-reason-soft',
+        )}
       >
         <Avatar src={user.avatarUrl} name={name} size="md" />
         <span className="hidden min-w-0 flex-1 min-[981px]:block">
@@ -63,9 +75,9 @@ export default function ProfileMenu() {
       </button>
       {open && (
         <div role="menu" className="absolute bottom-[calc(100%+6px)] left-0 z-30 w-[220px] rounded-2xl border border-reason-line bg-white p-1.5 shadow-[0_14px_40px_rgba(16,18,24,.12)]">
-          <MenuLink to="/profile" label="View profile" onDone={close} />
-          <MenuLink to="/invites" label="Invite someone" onDone={close} />
-          {isAdmin(user.role) && <MenuLink to="/admin" label="Admin" onDone={close} />}
+          <MenuLink to="/profile" label="View profile" current={pathname === '/profile'} onDone={close} />
+          <MenuLink to="/invites" label="Invite someone" current={onInvites(pathname)} onDone={close} />
+          {isAdmin(user.role) && <MenuLink to="/admin" label="Admin" current={onAdmin(pathname)} onDone={close} />}
           <button
             type="button"
             role="menuitem"
