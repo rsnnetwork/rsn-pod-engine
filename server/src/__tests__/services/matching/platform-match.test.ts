@@ -192,6 +192,127 @@ describe('getPlatformMatches', () => {
     expect(candidateSql).toMatch(/user_blocks/);
     expect(candidateSql).toMatch(/onboarding_completed = true/);
   });
+
+  // ── For You data (REASON milestone 1, Task A6) ─────────────────────────────
+
+  it('For You cards carry saved, strength, industry and the public offer; the payload carries the viewer\'s own want', async () => {
+    armQueries({
+      me: { ...FOUNDER_SEEKING_INVESTORS, onboardingCompleted: true },
+      candidates: [{ ...INVESTOR, industry: 'Venture capital', whatICanHelpWith: 'Seed cheques and intros', saved: true }],
+    });
+    const res = await getPlatformMatches('u-founder');
+    expect(res.youAreLookingFor).toBe('investors and angels for my seed round');
+    expect(res.matches[0]).toMatchObject({
+      industry: 'Venture capital', theyCanBring: 'Seed cheques and intros', saved: true, strength: 'strong',
+    });
+  });
+
+  it('people the member passed on are excluded, and the Save state is read in the same query', async () => {
+    armQueries({ me: { ...FOUNDER_SEEKING_INVESTORS, onboardingCompleted: true }, candidates: [] });
+    await getPlatformMatches('u-founder');
+    const candidateSql = mockQuery.mock.calls.map(c => c[0] as string).find(s => /u\.id <> \$1/.test(s))!;
+    expect(candidateSql).toMatch(/LEFT JOIN person_responses pr/);
+    expect(candidateSql).toMatch(/pr\.response IS NULL OR pr\.response <> 'passed'/);
+  });
+
+  it('the next event never reveals a private pod\'s event', async () => {
+    armQueries({ me: { ...FOUNDER_SEEKING_INVESTORS, onboardingCompleted: true }, candidates: [] });
+    await getPlatformMatches('u-founder');
+    const call = mockQuery.mock.calls.find(c => /FROM sessions/.test(String(c[0])))!;
+    expect(String(call[0])).toMatch(/visibility IN \('public', 'invite_only'\)/);
+    expect(String(call[0])).toMatch(/pod_members/);
+    expect(call[1]).toEqual(['u-founder']);
+  });
+
+  it('the Save state is the member\'s OWN response to the person, never the person\'s response to the member', async () => {
+    armQueries({ me: { ...FOUNDER_SEEKING_INVESTORS, onboardingCompleted: true }, candidates: [] });
+    await getPlatformMatches('u-founder');
+    const candidateSql = mockQuery.mock.calls.map(c => c[0] as string).find(s => /u\.id <> \$1/.test(s))!;
+    expect(candidateSql).toMatch(/\(pr\.response = 'saved'\) AS "saved"/);
+    // $1 is the member: pr.user_id = $1 means "the member's response about u". The mirror
+    // image (pr.target_user_id = $1) would hide people who passed on the member.
+    expect(candidateSql).toMatch(/LEFT JOIN person_responses pr ON pr\.user_id = \$1 AND pr\.target_user_id = u\.id/);
+  });
+
+  it('a strong match says strong and a Close match says close, in strict and browse mode alike', async () => {
+    const mild = profile({
+      id: 'u-mild', displayName: 'Maryam',
+      professionalRole: 'Marketing Consultant', expertiseText: 'growth and funding narratives',
+    });
+    armQueries({
+      me: { ...FOUNDER_SEEKING_INVESTORS, onboardingCompleted: true },
+      candidates: [mild, INVESTOR],
+    });
+    const strengths = (r: Awaited<ReturnType<typeof getPlatformMatches>>) => r.matches.map(m => [m.userId, m.strength]);
+    const expected = [['u-investor', 'strong'], ['u-mild', 'close']];
+    expect(strengths(await getPlatformMatches('u-founder'))).toEqual(expected);
+    expect(strengths(await getPlatformMatches('u-founder', { browse: true }))).toEqual(expected);
+  });
+
+  it('saved is true only when the member saved the person: no response row reads as not saved', async () => {
+    armQueries({
+      me: { ...FOUNDER_SEEKING_INVESTORS, onboardingCompleted: true },
+      candidates: [
+        { ...INVESTOR, id: 'u-saved', saved: true },
+        { ...INVESTOR, id: 'u-no-row', saved: null }, // the LEFT JOIN found no response
+      ],
+    });
+    const res = await getPlatformMatches('u-founder');
+    expect(Object.fromEntries(res.matches.map(m => [m.userId, m.saved]))).toEqual({ 'u-saved': true, 'u-no-row': false });
+  });
+
+  it('the public offer is what they can help with, else their expertise, cut to a card; no offer is null', async () => {
+    const longOffer = 'Introductions to seed funds across Europe and the Gulf. '.repeat(10);
+    armQueries({
+      me: { ...FOUNDER_SEEKING_INVESTORS, onboardingCompleted: true },
+      candidates: [
+        { ...INVESTOR, id: 'u-help', whatICanHelpWith: 'Seed cheques and intros', expertiseText: 'early stage SaaS investing' },
+        { ...INVESTOR, id: 'u-blank', whatICanHelpWith: '   ', expertiseText: 'early stage SaaS investing' },
+        { ...INVESTOR, id: 'u-none', whatICanHelpWith: null, expertiseText: null },
+        { ...INVESTOR, id: 'u-long', whatICanHelpWith: longOffer },
+      ],
+    });
+    const res = await getPlatformMatches('u-founder');
+    const offer = (id: string) => res.matches.find(m => m.userId === id)!.theyCanBring;
+    expect(offer('u-help')).toBe('Seed cheques and intros');
+    expect(offer('u-blank')).toBe('early stage SaaS investing'); // a blank answer falls through to expertise
+    expect(offer('u-none')).toBeNull();
+    expect(offer('u-long')).toHaveLength(160);
+    expect(offer('u-long')!.endsWith('…')).toBe(true);
+  });
+
+  it('no card carries another member\'s wants: only their public offer, role and industry', async () => {
+    armQueries({
+      me: { ...FOUNDER_SEEKING_INVESTORS, onboardingCompleted: true },
+      candidates: [{
+        ...INVESTOR, industry: 'Venture capital', whatICanHelpWith: 'Seed cheques and intros',
+        whoIWantToMeet: 'zzsecretwho', whyIWantToMeet: 'zzsecretwhy', myIntent: 'zzsecretintent',
+        whatICareAbout: 'zzsecretcare', goals: ['zzsecretgoal'], interests: ['zzsecretinterest'],
+      }],
+    });
+    const res = await getPlatformMatches('u-founder');
+    expect(res.matches).toHaveLength(1); // the premise: the person IS shown, with their secrets on the row
+    expect(JSON.stringify(res)).not.toMatch(/zzsecret/);
+  });
+
+  it('youAreLookingFor is the member\'s own want: what they want to meet, else their intent, else null', async () => {
+    const lookingFor = async (over: Partial<IntentProfile>) => {
+      armQueries({ me: { ...FOUNDER_SEEKING_INVESTORS, ...over, onboardingCompleted: true }, candidates: [] });
+      return (await getPlatformMatches('u-founder')).youAreLookingFor;
+    };
+    expect(await lookingFor({})).toBe('investors and angels for my seed round');
+    expect(await lookingFor({ whoIWantToMeet: '' })).toBe('raise funding for my SaaS startup'); // a blank answer falls through
+    expect(await lookingFor({ whoIWantToMeet: '   ' })).toBe('raise funding for my SaaS startup');
+    expect(await lookingFor({ whoIWantToMeet: null, myIntent: null })).toBeNull();
+    expect(await lookingFor({ whoIWantToMeet: 'investors '.repeat(40) })).toHaveLength(160);
+  });
+
+  it('a member with no finished profile has no want to show back', async () => {
+    armQueries({ me: { ...FOUNDER_SEEKING_INVESTORS, onboardingCompleted: false } });
+    expect(await getPlatformMatches('u-founder')).toMatchObject({ profileIncomplete: true, matches: [], youAreLookingFor: null });
+    armQueries({}); // no such member at all
+    expect(await getPlatformMatches('u-ghost')).toMatchObject({ profileIncomplete: true, matches: [], youAreLookingFor: null });
+  });
 });
 
 describe('expressInterest — the introduction rides the poke rails', () => {

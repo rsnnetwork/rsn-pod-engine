@@ -23,9 +23,9 @@ import { expandWantTags } from './want-synonyms';
 import { extractConstraints, checkConstraints } from './want-constraints';
 import * as pokeService from '../poke/poke.service';
 import { UserPoke } from '../poke/poke.service';
-import { clipAtWord } from '../people/text';
+import { clip, clipAtWord } from '../people/text';
 import { REQUEST_MESSAGE_MAX } from '../poke/request-message';
-import type { MeetingFormat } from '@rsn/shared';
+import type { MatchStrength, MeetingFormat } from '@rsn/shared';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -60,6 +60,13 @@ export interface PlatformMatch {
   avatarUrl: string | null;
   professionalRole: string | null;
   company: string | null;
+  industry: string | null;
+  /** Their own public offer (what they can help with). Never their wants. */
+  theyCanBring: string | null;
+  /** True when this member pressed Save on them ("maybe later"). */
+  saved: boolean;
+  /** strong clears MATCH_THRESHOLD; close is a near fit, shown labelled so a page is never empty. */
+  strength: MatchStrength;
   reason: string;
   score: number;
   /** Where a meeting request between the two stands; null when there is none. */
@@ -72,6 +79,8 @@ export interface PlatformMatchesResult {
   matches: PlatformMatch[];
   profileIncomplete: boolean;
   nextEvent: { id: string; title: string; scheduledAt: Date } | null;
+  /** The viewer's OWN want, shown back to them on each card. */
+  youAreLookingFor: string | null;
 }
 
 // A suggestion must clear this; a designation hit alone (0.6) qualifies, and
@@ -410,20 +419,23 @@ export async function loadProfile(userId: string): Promise<(IntentProfile & { on
 
 /**
  * Candidates someone can be matched with: active, onboarded, not blocked, not
- * already met, and not turned down. Someone they have ASKED stays, carrying
- * where the request got to, so the card can say so instead of the person
- * quietly disappearing (22 Sep 2026).
+ * already met, not turned down, and not passed on. Someone they have ASKED
+ * stays, carrying where the request got to, so the card can say so instead of
+ * the person quietly disappearing (22 Sep 2026). Someone they SAVED stays too,
+ * carrying that, so the card can show it (5 Oct 2026).
  */
 async function loadCandidates(userId: string): Promise<(IntentProfile & {
   pokeStatus: 'pending' | 'accepted' | null;
   pokeSentByOwner: boolean | null;
+  saved: boolean | null;
 })[]> {
   const r = await query<IntentProfile & {
-    pokeStatus: 'pending' | 'accepted' | null; pokeSentByOwner: boolean | null;
+    pokeStatus: 'pending' | 'accepted' | null; pokeSentByOwner: boolean | null; saved: boolean | null;
   }>(
     `SELECT ${PROFILE_COLUMNS},
             pk.status AS "pokeStatus",
-            (pk.sender_id = $1) AS "pokeSentByOwner"
+            (pk.sender_id = $1) AS "pokeSentByOwner",
+            (pr.response = 'saved') AS "saved"
      FROM users u
      LEFT JOIN LATERAL (
        SELECT p2.status, p2.sender_id
@@ -434,10 +446,16 @@ async function loadCandidates(userId: string): Promise<(IntentProfile & {
         ORDER BY p2.created_at DESC
         LIMIT 1
      ) pk ON TRUE
+     LEFT JOIN person_responses pr ON pr.user_id = $1 AND pr.target_user_id = u.id
      WHERE u.id <> $1
        AND u.status = 'active'
        AND u.onboarding_completed = true
        AND u.profile_visible = true
+       -- 5 Oct 2026: Pass means "not relevant" and hides the person from the
+       -- member's own suggestions until it is undone. Only the member's OWN
+       -- response counts (pr is joined on the member's id), so being passed on
+       -- by someone never hides that someone from you. Save keeps the person.
+       AND (pr.response IS NULL OR pr.response <> 'passed')
        -- "Already met" hides people you have genuinely met. Accepting a request
        -- also writes an encounter row, so without the override below an
        -- accepted person would disappear the moment they said yes — the same
@@ -480,16 +498,23 @@ export async function getPlatformMatches(
   const limit = Math.min(opts.limit ?? 10, 50);
   const me = await loadProfile(userId);
 
+  // 5 Oct 2026: the same visibility rule as the events list (listSessions): events of
+  // public and invite-only pods, plus any pod the member is an active member of. This
+  // used to take the next event of ANY pod, so a private pod's event was named to
+  // people outside it.
   const nextEventRes = await query<{ id: string; title: string; scheduledAt: Date }>(
-    `SELECT id, title, scheduled_at AS "scheduledAt"
-     FROM sessions
-     WHERE status = 'scheduled' AND scheduled_at > NOW()
-     ORDER BY scheduled_at ASC LIMIT 1`,
+    `SELECT s.id, s.title, s.scheduled_at AS "scheduledAt"
+       FROM sessions s
+      WHERE s.status = 'scheduled' AND s.scheduled_at > NOW()
+        AND (s.pod_id IN (SELECT id FROM pods WHERE visibility IN ('public', 'invite_only'))
+             OR s.pod_id IN (SELECT pod_id FROM pod_members WHERE user_id = $1 AND status = 'active'))
+      ORDER BY s.scheduled_at ASC LIMIT 1`,
+    [userId],
   );
   const nextEvent = nextEventRes.rows[0] ?? null;
 
   if (!me || !me.onboardingCompleted) {
-    return { matches: [], profileIncomplete: true, nextEvent };
+    return { matches: [], profileIncomplete: true, nextEvent, youAreLookingFor: null };
   }
 
   const threshold = opts.browse ? BROWSE_THRESHOLD : MATCH_THRESHOLD;
@@ -509,12 +534,19 @@ export async function getPlatformMatches(
   const matches = picked
     .sort((a, b) => b.fit.score - a.fit.score)
     .slice(0, limit)
-    .map(x => ({
+    .map((x): PlatformMatch => ({
       userId: x.c.id,
       displayName: x.c.displayName,
       avatarUrl: x.c.avatarUrl,
       professionalRole: displayRole(x.c),
       company: x.c.company,
+      industry: x.c.industry ?? null,
+      // Only what the person chose to offer. Their wants (who they want to meet, their
+      // intent, their goals) stay private: Stefan's approved point 1. A blank offer
+      // falls through to their expertise, and clip() turns blank text into null.
+      theyCanBring: clip(x.c.whatICanHelpWith) ?? clip(x.c.expertiseText),
+      saved: x.c.saved === true,
+      strength: x.fit.score >= MATCH_THRESHOLD ? 'strong' : 'close',
       reason: x.fit.reason,
       score: Number(x.fit.score.toFixed(3)),
       // Where a request between the two of you got to, so the card can show it
@@ -523,7 +555,14 @@ export async function getPlatformMatches(
       pokeSentByOwner: (x.c as { pokeSentByOwner?: boolean | null }).pokeSentByOwner ?? null,
     }));
 
-  return { matches, profileIncomplete: false, nextEvent };
+  // The member's OWN want, shown back to them on each card. A blank answer falls through
+  // to their intent, as it does for the offer above.
+  return {
+    matches,
+    profileIncomplete: false,
+    nextEvent,
+    youAreLookingFor: clip(me.whoIWantToMeet) ?? clip(me.myIntent),
+  };
 }
 
 /**
