@@ -17,17 +17,33 @@ describe('Save / Pass on a person', () => {
     expect(upserts[1][1]).toEqual(['u-a', 'u-b', 'passed']);
   });
 
-  it('refuses yourself and unknown people', async () => {
+  it('refuses yourself and unknown people, and writes nothing for either', async () => {
     await expect(setResponse('u-a', 'u-a', 'saved')).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockQuery).not.toHaveBeenCalled(); // refused before the database is touched
     mockQuery.mockResolvedValue({ rows: [] });
     await expect(setResponse('u-a', 'u-ghost', 'saved')).rejects.toMatchObject({ statusCode: 404 });
+    expect(mockQuery.mock.calls.some(c => /INSERT INTO person_responses/.test(String(c[0])))).toBe(false);
   });
 
-  it('clears and reads back', async () => {
+  it('clears the answer about one person only', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
     await clearResponse('u-a', 'u-b');
-    expect(String(mockQuery.mock.calls[0][0])).toMatch(/DELETE FROM person_responses/);
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(String(sql)).toMatch(/DELETE FROM person_responses/);
+    // Scoped to this member AND this person. Without the second condition an undo
+    // would wipe every Save and Pass the member has made.
+    expect(String(sql).replace(/\s+/g, ' ')).toMatch(/WHERE user_id = \$1 AND target_user_id = \$2/);
+    expect(params).toEqual(['u-a', 'u-b']);
+  });
+
+  it('reads back this member\'s answer about this person, or null when there is none', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ response: 'saved' }] });
     await expect(getResponse('u-a', 'u-b')).resolves.toBe('saved');
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(String(sql).replace(/\s+/g, ' ')).toMatch(/WHERE user_id = \$1 AND target_user_id = \$2/);
+    expect(params).toEqual(['u-a', 'u-b']);
+
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await expect(getResponse('u-a', 'u-c')).resolves.toBeNull();
   });
 });

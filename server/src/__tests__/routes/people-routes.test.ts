@@ -33,7 +33,8 @@ jest.mock('../../realtime/fanout', () => ({ fanoutUserEntity: (...a: unknown[]) 
 import { query } from '../../db';
 import peopleRoutes from '../../routes/people';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
-import { ConflictError } from '../../middleware/errors';
+import { peopleWriteLimiter } from '../../middleware/rateLimit';
+import { ConflictError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes, OUTCOME_KEYS } from '@rsn/shared';
 
 const app = express();
@@ -72,6 +73,20 @@ describe('PUT/DELETE /people/:userId/response', () => {
     expect(res.status).toBe(200);
     expect(mockClear).toHaveBeenCalledWith('u-viewer', TARGET);
     expect(mockFanout).toHaveBeenCalledWith('u-viewer');
+  });
+
+  it('answers 404 when the person does not exist, and tells no screens', async () => {
+    mockSet.mockRejectedValueOnce(new NotFoundError('User', TARGET));
+    const res = await request(app).put(`/people/${TARGET}/response`).set('Authorization', `Bearer ${token()}`).send({ response: 'saved' });
+    expect(res.status).toBe(404);
+    expect(mockFanout).not.toHaveBeenCalled();
+  });
+
+  it('a failed undo tells no screens either', async () => {
+    mockClear.mockRejectedValueOnce(new Error('db down'));
+    const res = await request(app).delete(`/people/${TARGET}/response`).set('Authorization', `Bearer ${token()}`);
+    expect(res.status).toBe(500);
+    expect(mockFanout).not.toHaveBeenCalled();
   });
 });
 
@@ -173,5 +188,52 @@ describe('member ids typed in capitals', () => {
     expect(res.status).toBe(400);
     expect(res.body.error.message).toBe('You cannot save or pass yourself');
     expect(dbQuery.mock.calls.some(c => /INSERT INTO person_responses/.test(String(c[0])))).toBe(false);
+    expect(mockFanout).not.toHaveBeenCalled();
+  });
+});
+
+describe('a refused request calls no service and tells no screens', () => {
+  const bearer = `Bearer ${token()}`;
+  const answer = { worthContinuing: 'yes', outcomes: [] };
+  const cases: Array<{ name: string; send: () => PromiseLike<{ status: number }>; status: number }> = [
+    { name: 'Save with an unknown response', status: 400, send: () => request(app).put(`/people/${TARGET}/response`).set('Authorization', bearer).send({ response: 'like' }) },
+    { name: 'Save with no response at all', status: 400, send: () => request(app).put(`/people/${TARGET}/response`).set('Authorization', bearer).send({}) },
+    { name: 'Save for an id that is not a member id', status: 400, send: () => request(app).put('/people/not-a-uuid/response').set('Authorization', bearer).send({ response: 'saved' }) },
+    { name: 'Save with no token', status: 401, send: () => request(app).put(`/people/${TARGET}/response`).send({ response: 'saved' }) },
+    { name: 'undo for an id that is not a member id', status: 400, send: () => request(app).delete('/people/not-a-uuid/response').set('Authorization', bearer) },
+    { name: 'undo with no token', status: 401, send: () => request(app).delete(`/people/${TARGET}/response`) },
+    { name: 'recording with an answer outside the list', status: 400, send: () => request(app).post(`/people/${TARGET}/outcome`).set('Authorization', bearer).send({ worthContinuing: 'definitely', outcomes: ['marriage'] }) },
+    { name: 'recording for an id that is not a member id', status: 400, send: () => request(app).post('/people/not-a-uuid/outcome').set('Authorization', bearer).send(answer) },
+    { name: 'recording with no token', status: 401, send: () => request(app).post(`/people/${TARGET}/outcome`).send(answer) },
+  ];
+
+  it.each(cases)('$name', async ({ send, status }) => {
+    const res = await send();
+    expect(res.status).toBe(status);
+    expect(mockSet).not.toHaveBeenCalled();
+    expect(mockClear).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalled();
+    expect(mockFanout).not.toHaveBeenCalled();
+  });
+});
+
+describe('the write routes are rate limited', () => {
+  type Layer = { route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: unknown }> } };
+  // What a route runs, in order, read from the router itself.
+  const handlersOf = (method: string, path: string) =>
+    (peopleRoutes as unknown as { stack: Layer[] }).stack
+      .filter((layer) => layer.route?.path === path && layer.route.methods[method])
+      .flatMap((layer) => layer.route!.stack.map((s) => s.handle));
+
+  it.each([
+    ['put', '/:userId/response'],
+    ['delete', '/:userId/response'],
+    ['post', '/:userId/outcome'],
+  ])('%s %s carries peopleWriteLimiter, ahead of its handler', (method, path) => {
+    const handlers = handlersOf(method, path);
+    expect(handlers.length).toBeGreaterThan(1); // the route exists
+    const at = handlers.indexOf(peopleWriteLimiter);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(at).toBeLessThan(handlers.length - 1);
   });
 });
