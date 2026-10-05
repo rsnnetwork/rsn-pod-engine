@@ -22,6 +22,12 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
+    // Dev only. The dev server serves the linked @rsn/shared package as it is,
+    // and it is CommonJS, so the browser finds none of its named exports and
+    // the page stays blank ("does not provide an export named ..."). Listing
+    // it here pre-bundles it to ESM. Production builds are unaffected: they
+    // go through commonjsOptions above.
+    include: ['@rsn/shared'],
     exclude: ['@livekit/track-processors'],
   },
   resolve: {
