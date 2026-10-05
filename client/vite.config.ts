@@ -27,6 +27,7 @@ export default defineConfig({
     // the page stays blank ("does not provide an export named ..."). Listing
     // it here pre-bundles it to ESM. Production builds are unaffected: they
     // go through commonjsOptions above.
+    // After rebuilding shared, run dev with --force: the cache ignores shared/dist.
     include: ['@rsn/shared'],
     exclude: ['@livekit/track-processors'],
   },
