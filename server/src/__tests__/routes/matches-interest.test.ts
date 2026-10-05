@@ -54,6 +54,13 @@ describe('POST /matches/platform/:userId/interest', () => {
     expect(mockInterest).not.toHaveBeenCalled();
   });
 
+  it('hands the service the member id in lower case, however it was typed', async () => {
+    // Postgres reads an upper-case uuid as the same member; the service compares plain strings.
+    const res = await request(app).post(`/matches/platform/${TARGET.toUpperCase()}/interest`).set(auth).send({ note: 'Hi' });
+    expect(res.status).toBe(201);
+    expect(mockInterest).toHaveBeenCalledWith('u-a', TARGET, undefined, { note: 'Hi', format: undefined });
+  });
+
   it('rejects an id that is not a member id before anything reaches the database', async () => {
     const res = await request(app).post('/matches/platform/not-a-uuid/interest').set(auth).send({ note: 'Hi' });
     expect(res.status).toBe(400);

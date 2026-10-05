@@ -30,6 +30,7 @@ jest.mock('../../services/people/meeting-outcome.service', () => ({ recordOutcom
 const mockFanout = jest.fn().mockResolvedValue(undefined);
 jest.mock('../../realtime/fanout', () => ({ fanoutUserEntity: (...a: unknown[]) => mockFanout(...a), __esModule: true }));
 
+import { query } from '../../db';
 import peopleRoutes from '../../routes/people';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 import { ConflictError } from '../../middleware/errors';
@@ -44,6 +45,7 @@ app.use(errorHandler);
 const token = (sub = 'u-viewer') =>
   jwt.sign({ sub, email: `${sub}@example.com`, role: 'member', sessionId: 's-1' }, JWT_SECRET, { expiresIn: '1h' });
 const TARGET = '5f0c3a3e-8d7b-4a57-9d0e-1f2a3b4c5d6e';
+const dbQuery = query as jest.Mock;
 
 describe('PUT/DELETE /people/:userId/response', () => {
   beforeEach(() => { mockSet.mockClear(); mockClear.mockClear(); mockFanout.mockClear(); });
@@ -125,5 +127,51 @@ describe('POST /people/:userId/outcome', () => {
     const anon = await request(app).post(`/people/${TARGET}/outcome`).send({ worthContinuing: 'yes', outcomes: [] });
     expect(anon.status).toBe(401);
     expect(mockRecord).not.toHaveBeenCalled();
+  });
+});
+
+// Postgres reads an upper-case uuid as the same member; the services compare plain
+// strings. The routes lower-case the id first, so what the services compare is what
+// the database means (5 Oct 2026).
+describe('member ids typed in capitals', () => {
+  const CAPS = TARGET.toUpperCase();
+  const OWN = '9b2d5c1e-3f4a-4b6c-8d7e-0a1b2c3d4e5f';
+  const auth = { Authorization: `Bearer ${token()}` };
+  beforeEach(() => { mockSet.mockClear(); mockClear.mockClear(); mockRecord.mockClear(); });
+  // Rows are what Postgres returns for any lookup; the one rule it adds is the
+  // table's CHECK (user_id <> target_user_id), which ignores letter case.
+  afterEach(() => { dbQuery.mockReset(); dbQuery.mockResolvedValue({ rows: [{ status: 'active' }] }); });
+
+  it('reach the service lower-cased on Save, Pass and undo', async () => {
+    const put = await request(app).put(`/people/${CAPS}/response`).set(auth).send({ response: 'passed' });
+    expect(put.status).toBe(200);
+    expect(mockSet).toHaveBeenCalledWith('u-viewer', TARGET, 'passed');
+    const del = await request(app).delete(`/people/${CAPS}/response`).set(auth);
+    expect(del.status).toBe(200);
+    expect(mockClear).toHaveBeenCalledWith('u-viewer', TARGET);
+  });
+
+  it('reach the service lower-cased when recording what happened, so the ordered pair cannot flip', async () => {
+    const res = await request(app).post(`/people/${CAPS}/outcome`).set(auth).send({ worthContinuing: 'yes', outcomes: [] });
+    expect(res.status).toBe(201);
+    expect(mockRecord).toHaveBeenCalledWith('u-viewer', TARGET, 'yes', []);
+  });
+
+  it('your own id in capitals is still you: a 400, not a database error', async () => {
+    // The real service, with a database stand-in that applies the CHECK the way Postgres does.
+    const people = jest.requireActual<typeof import('../../services/people/person-response.service')>(
+      '../../services/people/person-response.service',
+    );
+    mockSet.mockImplementationOnce((...a: Parameters<typeof people.setResponse>) => people.setResponse(...a));
+    dbQuery.mockImplementation((sql: string, params: string[] = []) => (
+      /INSERT INTO person_responses/.test(sql) && params[0].toLowerCase() === params[1].toLowerCase()
+        ? Promise.reject(Object.assign(new Error('new row violates check constraint'), { code: '23514' }))
+        : Promise.resolve({ rows: [{ id: params[0], status: 'active' }] })
+    ));
+    const res = await request(app).put(`/people/${OWN.toUpperCase()}/response`)
+      .set({ Authorization: `Bearer ${token(OWN)}` }).send({ response: 'saved' });
+    expect(res.status).toBe(400);
+    expect(res.body.error.message).toBe('You cannot save or pass yourself');
+    expect(dbQuery.mock.calls.some(c => /INSERT INTO person_responses/.test(String(c[0])))).toBe(false);
   });
 });

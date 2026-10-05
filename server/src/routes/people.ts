@@ -16,7 +16,9 @@ import * as outcomes from '../services/people/meeting-outcome.service';
 
 const router = Router();
 
-const userParams = z.object({ userId: z.string().uuid('Not a member id') });
+// Postgres reads an upper-case uuid as the same member, but the services compare
+// ids as plain strings (yourself, the ordered pair), so the id is lower-cased here.
+const userParams = z.object({ userId: z.string().uuid('Not a member id').transform((s) => s.toLowerCase()) });
 const responseBody = z.object({ response: z.enum(['saved', 'passed']) });
 const outcomeBody = z.object({
   worthContinuing: z.enum(['yes', 'maybe', 'no']),

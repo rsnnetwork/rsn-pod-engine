@@ -16,7 +16,9 @@ import { ApiResponse } from '@rsn/shared';
 const router = Router();
 
 const sendBodySchema = z.object({
-  recipientId: z.string().uuid(),
+  // Lower-cased: Postgres reads an upper-case uuid as the same member, but sendPoke
+  // compares ids as plain strings (yourself, blocked, already declined).
+  recipientId: z.string().uuid().transform((s) => s.toLowerCase()),
   message: z.string().max(500).optional(),
 });
 
