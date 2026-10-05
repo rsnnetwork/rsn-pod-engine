@@ -39,11 +39,16 @@ export default function CirclesPage() {
   const [newDesc, setNewDesc] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
 
-  // Circle membership belongs to the member, so their own entity refreshes this list,
-  // as it does on the home page. The circle routes emit no entity of their own yet:
-  // until they do, the list also refreshes from the invalidations below and on focus.
+  // This page has its own key under 'circles', not the bare ['circles'] that AppLayout reads
+  // for the nav. React Query keeps ONE set of options per key, and whichever observer rendered
+  // last applies its own. AppLayout is always mounted, renders again on every navigation and
+  // declares no entities, so a tag on the shared key was overwritten the moment this page
+  // opened (the home page tile has its own key for the same reason).
+  // Circle membership belongs to the member, so their own entity refreshes this list. The
+  // circle routes emit no entity of their own yet: until they do, the list also refreshes from
+  // the invalidations below (the prefix ['circles'] reaches this key too) and on focus.
   const { data: circles, isLoading } = useQuery<CircleSummary[]>({
-    queryKey: ['circles'],
+    queryKey: ['circles', 'list'],
     queryFn: () => api.get('/circles').then(r => r.data.data ?? []),
     meta: { entities: user?.id ? [E.user(user.id)] : [] },
   });

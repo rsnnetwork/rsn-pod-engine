@@ -905,3 +905,43 @@ test('4. Matches: an open page changes on its own when a request is sent from an
   await viewerPage.screenshot({ path: path.join(SHOTS, `${engineLabel().replace(/[^a-z0-9]+/gi, '-')}-matches-viewer.png`), fullPage: true });
   expect(pageErrors, 'no script errors').toEqual([]);
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 5. The circles list takes its tag
+// ═════════════════════════════════════════════════════════════════════════════
+
+test('5. Circles: the open list asks for its circles again when something tells the member\'s own entity', async () => {
+  test.setTimeout(180_000);
+  // React Query keeps one set of options per query key, and the last observer to render wins. The
+  // nav in AppLayout reads the circles too, declares no entities and renders on every navigation, so
+  // a tag on the page's query only works if the page has a key of its own. Anything that tells
+  // user:<member> will do as the event: a meeting request sent to them does.
+  const member = await makeUser('circles-member');
+  const sender = await makeUser('circles-sender');
+  const pageErrors: string[] = [];
+  const page = await openAs(member, { width: 1280, height: 800 }, pageErrors, true);
+  const calls: number[] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'GET' && /\/api\/circles(\?|$)/.test(r.url())) calls.push(Date.now());
+  });
+  await gotoRetry(page, `${APP}/circles`);
+  await expect(page.getByRole('heading', { name: 'Circles', exact: true }), 'the circles page has loaded').toBeVisible({ timeout: 30_000 });
+  await settle(page);
+  await wait(1_500); // a negative check: nothing on the page may ask for its circles by itself
+  const settled = calls.length;
+  expect(settled, 'the page and the nav asked for the circles when it opened').toBeGreaterThanOrEqual(1);
+
+  const log = await listen(member);
+  const heard = log.countOf(`user:${member.id}`);
+  const sentAt = Date.now();
+  const sent = await api<PokeJson>(sender, 'POST', '/pokes', { recipientId: member.id, message: `Circles check ${RUN}` });
+  expect(sent.status, `request: ${JSON.stringify(sent.body)}`).toBe(201);
+  await waitForTag(log, `user:${member.id}`, heard, 'member');
+
+  await expect.poll(() => calls.filter((t) => t >= sentAt).length, {
+    message: 'the open circles page asked for its circles again after user:<member> was told something',
+    timeout: 15_000,
+  }).toBeGreaterThanOrEqual(1);
+  console.log(`  ✓ the open /circles page asked for its circles again (${calls.length - settled} call) once the server told user:<member>, with no reload and no focus change.`);
+  expect(pageErrors, 'no script errors').toEqual([]);
+});
