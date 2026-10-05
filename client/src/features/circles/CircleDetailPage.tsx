@@ -51,8 +51,10 @@ export default function CircleDetailPage() {
   });
 
   // Whether the member is in this circle is their own entity's business, as on the list
-  // page. The circle routes emit no entity of their own yet: until they do, the circle
-  // also refreshes from the invalidations below and on focus.
+  // page. What refreshes the circle: that entity, the invalidations below (after a join or
+  // leave, and after a pod is attached or detached), and window focus. The circle routes
+  // emit no entity, so another member joining or leaving, or a pod attached from elsewhere,
+  // does not refresh it.
   const { data: circle, isLoading } = useQuery<CircleDetail>({
     queryKey: ['circle', circleId],
     queryFn: () => api.get(`/circles/${circleId}`).then(r => r.data.data),

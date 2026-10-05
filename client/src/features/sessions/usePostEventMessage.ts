@@ -47,8 +47,9 @@ export function usePostEventMessageStatus(sessionId: string) {
         .get(`/sessions/${sessionId}/post-event-message/status`)
         .then((r) => r.data.data),
     enabled: !!sessionId,
-    // The job is the event's. The worker that moves it along emits no entity, so
-    // while it is active the poll below is what carries its progress.
+    // The job is the event's. The worker that moves it along emits no entity, so its
+    // progress reaches this query only through the poll below, and only while the job is
+    // pending or processing.
     meta: { entities: sessionId ? [E.session(sessionId)] : [] },
     refetchInterval: (query) => {
       const status = query.state.data?.status;

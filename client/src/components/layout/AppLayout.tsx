@@ -41,7 +41,7 @@ export default function AppLayout() {
   // REASON P3a — ship ≠ launch: the Circles nav appears only once circles
   // exist (or for admins, who can create the first one). Deploying the code
   // activates nothing until the seed circles are created.
-  // realtime: skip — nav visibility only; circles are admin-created rarities and the list refetches on every /circles visit
+  // realtime: skip — nav visibility only; circles are admin-created rarities. It refreshes after a join, leave or create on the circles pages, and on window focus once it is a minute old.
   const { data: circlesForNav } = useQuery({
     queryKey: ['circles'],
     queryFn: () => api.get('/circles').then(r => r.data.data ?? []),
