@@ -438,7 +438,9 @@ export default function NotificationBell() {
                             <span className={`text-[10px] font-medium shrink-0 ${statusLabel.color}`}>{statusLabel.text}</span>
                           )}
                         </div>
-                        {n.body && <p className="text-xs text-gray-400 mt-0.5">{n.body}</p>}
+                        {/* pre-line: a meeting request's note and "Why REASON suggested this:"
+                            arrive as two paragraphs, and were run together on one line (5 Oct 2026). */}
+                        {n.body && <p className="text-xs text-gray-400 mt-0.5 whitespace-pre-line break-words">{n.body}</p>}
                         <p className="text-[10px] text-gray-300 mt-1">{formatTime(n.createdAt)}</p>
                       </div>
                     </div>
