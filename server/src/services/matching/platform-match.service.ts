@@ -561,7 +561,7 @@ export async function expressInterest(
     // 2026): the sender reads this text in the response and, after Accept, as the
     // first message, so it showed them what the recipient privately wants to
     // meet. Stefan's approved point 1.
-    const agentWant = agentId ? await agentWantText(agentId) : null;
+    const agentWant = agentId ? await agentWantText(agentId, userId) : null;
     const { reason } = scoreWantsForRecipient(
       agentWant ? [agentWant] : wantSources(me), target, senderName,
     );
@@ -605,15 +605,21 @@ function attachReason(note: string, reason: string): string {
   return note;
 }
 
-/** The want-text of one agent, for wording the introduction it produced. */
-async function agentWantText(agentId: string): Promise<string | null> {
+/**
+ * The want-text of one agent, for wording the introduction it produced. An
+ * agent's want is its owner's private search, so it is read for the owner only:
+ * an id that belongs to someone else finds nothing. Failing to read it never
+ * fails the request, which is simply worded without it, but it is logged.
+ */
+async function agentWantText(agentId: string, ownerId: string): Promise<string | null> {
   try {
     const r = await query<{ want_text: string | null }>(
-      `SELECT want_text FROM matching_agents WHERE id = $1`,
-      [agentId],
+      `SELECT want_text FROM matching_agents WHERE id = $1 AND user_id = $2`,
+      [agentId, ownerId],
     );
     return r.rows[0]?.want_text ?? null;
-  } catch {
+  } catch (err) {
+    logger.warn({ err, agentId }, 'Reading an agent\'s want failed (non-fatal), the request is worded without it');
     return null;
   }
 }

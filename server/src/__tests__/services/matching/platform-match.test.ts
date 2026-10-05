@@ -28,6 +28,7 @@ jest.mock('../../../index', () => ({
   __esModule: true,
 }));
 
+import logger from '../../../config/logger';
 import {
   scoreFit, wantedDesignations, getPlatformMatches, expressInterest,
   notifyMatchesOfNewUser, MATCH_THRESHOLD, BROWSE_THRESHOLD, IntentProfile,
@@ -559,5 +560,79 @@ describe('expressInterest: a long note cannot cut the reason mid-word', () => {
     expect(message.startsWith(note)).toBe(true);
     expect(message.length).toBeLessThanOrEqual(500);
     expect(message).not.toContain('REASON');
+  });
+});
+
+// ─── An agent's private want is read only for its owner (5 Oct 2026) ─────────
+//
+// An agent's want text is the owner's private search. expressInterest reads it to word
+// the introduction that agent produced. routes/agents.ts checks the agent is the
+// caller's before calling, so today only an owner arrives here, but the read itself
+// must not hand the text to anyone else, and a failing read must not be silent.
+describe('expressInterest reads an agent\'s want only for its owner', () => {
+  beforeEach(() => { mockQuery.mockReset(); mockSendPoke.mockReset(); mockSendPoke.mockResolvedValue({ id: 'p1' }); });
+
+  const AGENT = 'agent-founders';
+  const NEUTRAL = "Iqbal thinks you fit what they're looking for. We think you two should meet.";
+  const WORDED_BY_THE_AGENT = "Iqbal is looking to meet founders — you're a Founder. We think you two should meet.";
+
+  /**
+   * The two members, and one agent that belongs to `owner`. The agent row is returned the way
+   * Postgres would: for the owner named in the query, or, when the query names no owner, for
+   * anyone who knows the id.
+   */
+  function armAgent(owner: string) {
+    mockQuery.mockImplementation((sql: string, params: unknown[]) => {
+      const [first, second] = params as string[];
+      if (/WHERE u\.id = \$1/.test(sql)) {
+        const found = first === 'u-founder' ? FOUNDER_SEEKING_INVESTORS : INVESTOR;
+        return Promise.resolve({ rows: [{ ...found, onboardingCompleted: true }] });
+      }
+      if (/FROM matching_agents/.test(sql)) {
+        const asksForTheOwner = /user_id = \$2/.test(sql);
+        const visible = first === AGENT && (!asksForTheOwner || second === owner);
+        return Promise.resolve({ rows: visible ? [{ want_text: 'founders' }] : [] });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+  }
+
+  it('the owner\'s own agent still words the introduction', async () => {
+    armAgent('u-investor');
+    await expressInterest('u-investor', 'u-founder', AGENT);
+    expect(mockSendPoke.mock.calls[0][2]).toBe(WORDED_BY_THE_AGENT);
+  });
+
+  it('another member\'s agent id gives no want: the request is worded without it', async () => {
+    armAgent('u-someone-else');
+    await expressInterest('u-investor', 'u-founder', AGENT);
+    expect(mockSendPoke.mock.calls[0][2]).toBe(NEUTRAL);
+    expect(String(mockSendPoke.mock.calls[0][2])).not.toMatch(/founders/i);
+  });
+
+  it('asks the database for the agent AND its owner, who is the sender', async () => {
+    armAgent('u-investor');
+    await expressInterest('u-investor', 'u-founder', AGENT);
+    const read = mockQuery.mock.calls.find((c) => /FROM matching_agents/.test(String(c[0])))!;
+    expect(String(read[0])).toMatch(/WHERE id = \$1 AND user_id = \$2/);
+    expect(read[1]).toEqual([AGENT, 'u-investor']);
+  });
+
+  it('a failing read is logged, not hidden, and the request is still sent', async () => {
+    const failure = new Error('connection reset');
+    mockQuery.mockImplementation((sql: string, params: unknown[]) => {
+      if (/WHERE u\.id = \$1/.test(sql)) {
+        const found = (params as string[])[0] === 'u-founder' ? FOUNDER_SEEKING_INVESTORS : INVESTOR;
+        return Promise.resolve({ rows: [{ ...found, onboardingCompleted: true }] });
+      }
+      if (/FROM matching_agents/.test(sql)) return Promise.reject(failure);
+      return Promise.resolve({ rows: [] });
+    });
+
+    await expressInterest('u-investor', 'u-founder', AGENT);
+
+    expect(mockSendPoke).toHaveBeenCalledTimes(1);
+    expect(mockSendPoke.mock.calls[0][2]).toBe(NEUTRAL);
+    expect(logger.warn).toHaveBeenCalledWith(expect.objectContaining({ err: failure, agentId: AGENT }), expect.any(String));
   });
 });
