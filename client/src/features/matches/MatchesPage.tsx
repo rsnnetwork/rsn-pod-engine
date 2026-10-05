@@ -19,6 +19,8 @@ import Avatar from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
 import api from '@/lib/api';
+import { E } from '@/realtime/entities';
+import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 
 interface PlatformMatch {
@@ -47,10 +49,16 @@ export default function MatchesPage() {
   const { addToast } = useToastStore();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const myUserId = useAuthStore(s => s.user?.id);
 
+  // Until 5 Oct 2026 this query declared no entities, so it never refreshed from
+  // realtime: a request sent from another tab, or answered by the other member, left
+  // the card as it was until a reload. sendPoke tells both members' user and invites
+  // entities; accept and decline tell the invites entity of both.
   const { data, isLoading } = useQuery<PlatformMatchesResult>({
     queryKey: ['platformMatches', browse],
     queryFn: () => api.get(`/matches/platform${browse ? '?browse=1' : ''}`).then(r => r.data.data),
+    meta: { entities: myUserId ? [E.user(myUserId), E.userInvites(myUserId)] : [] },
   });
 
   const expressInterest = async (m: PlatformMatch) => {
