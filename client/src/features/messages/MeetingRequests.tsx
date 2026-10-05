@@ -81,7 +81,10 @@ interface PokeState {
  * whenever GET /pokes/:id came back before GET /pokes/received (5 Oct 2026).
  */
 function noticeFor(state: PokeState | null | undefined, listFailed: boolean): string | null {
-  if (state?.status === 'declined') return 'You turned this meeting request down.';
+  if (state?.status === 'declined') {
+    // Either person may open the link, and only one of them did the turning down.
+    return state.sentByMe ? 'They turned your meeting request down.' : 'You turned this meeting request down.';
+  }
   if (state?.status === 'accepted') return 'This meeting request has already been answered.';
   if (listFailed) return 'We could not load this meeting request. Try again in a moment.';
   if (state?.status === 'pending') {
@@ -98,7 +101,10 @@ function noticeFor(state: PokeState | null | undefined, listFailed: boolean): st
  * Decline right there, and can open the full profile before deciding.
  */
 export function FocusedMeetingRequest({ pokeId, myUserId }: { pokeId: string; myUserId: string }) {
-  const { data: requests, isLoading: listLoading, isError: listFailed } = useQuery({
+  // isPending, not isLoading, below: it stays true until there is an answer, including while the
+  // fetch is paused because the phone is offline. isLoading is false then, and the card would
+  // say the request is not available when nobody has been asked yet.
+  const { data: requests, isPending: listPending, isError: listFailed } = useQuery({
     queryKey: ['pokes-received'],
     queryFn: () => api.get('/pokes/received').then(r => r.data.data as PendingRequest[]),
     refetchInterval: 20_000,
@@ -111,7 +117,7 @@ export function FocusedMeetingRequest({ pokeId, myUserId }: { pokeId: string; my
   // answered — in another tab, or reached again from an old email — used to
   // land on a line telling the member to go and find the conversation for
   // themselves. Ask where this one stands and take them there (22 Sep 2026).
-  const { data: state, isLoading: stateLoading } = useQuery({
+  const { data: state, isPending: statePending } = useQuery({
     queryKey: ['poke-state', pokeId],
     queryFn: () => api.get(`/pokes/${pokeId}`).then(r => r.data.data as PokeState).catch(() => null),
     enabled: !req,
@@ -126,7 +132,7 @@ export function FocusedMeetingRequest({ pokeId, myUserId }: { pokeId: string; my
 
   if (!req) {
     const redirecting = state?.status === 'accepted' && !!state.conversationId;
-    const notice = listLoading || stateLoading || redirecting ? null : noticeFor(state, listFailed);
+    const notice = listPending || statePending || redirecting ? null : noticeFor(state, listFailed);
     if (notice === null) {
       return <div className="flex-1 flex items-center justify-center"><Spinner /></div>;
     }

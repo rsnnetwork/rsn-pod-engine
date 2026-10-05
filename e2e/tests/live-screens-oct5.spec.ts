@@ -572,9 +572,13 @@ test('1. Show more follows the width of the window: it is there when the note wr
 
 const ANSWERED = /already been answered/i;
 
+// Whether a sentence is on the page. In the pane a phone hides, it only has to be in the page.
+const appears = (locator: Locator, phone: boolean) => async (): Promise<boolean> =>
+  phone ? (await locator.count()) > 0 : locator.isVisible().catch(() => false);
+
 // Poll for the false sentence until `done` says the page has settled. A single check at the end
 // would miss the window in which it used to show.
-async function neverSaid(page: Page, done: () => Promise<boolean>): Promise<number> {
+async function neverSaid(page: Page, done: () => Promise<boolean>, waitingFor: string): Promise<number> {
   let samples = 0;
   const deadline = Date.now() + 40_000;
   while (Date.now() < deadline) {
@@ -585,7 +589,7 @@ async function neverSaid(page: Page, done: () => Promise<boolean>): Promise<numb
     if (await done()) return samples;
     await wait(100);
   }
-  throw new Error('the page never settled within 40s');
+  throw new Error(`the page never showed ${waitingFor} within 40s`);
 }
 
 test('2. A pending request is never called "already answered"; an answered one still says so or opens its chat', async () => {
@@ -653,7 +657,7 @@ test('2. A pending request is never called "already answered"; an answered one s
   // phone the request is read from its row in the list instead.
   const phone = (page.viewportSize()?.width ?? 0) < 1024;
   const shown = phone ? requestCard(page, pendingId) : page.getByTestId('focused-meeting-request');
-  const samples = await neverSaid(page, async () => shown.isVisible().catch(() => false));
+  const samples = await neverSaid(page, async () => shown.isVisible().catch(() => false), 'the request with its Accept and Decline buttons');
   await expect(shown.getByRole('button', { name: /^Accept$/ }), 'the Accept button is there once the list has loaded').toBeVisible();
   await expect(shown.getByRole('button', { name: /^Decline$/ })).toBeVisible();
   await expect(shown).toContainText('Pending request');
@@ -669,15 +673,13 @@ test('2. A pending request is never called "already answered"; an answered one s
   await page.unroute('**/api/pokes/received');
   await gotoRetry(page, `${APP}/messages?poke=${declinedId}`);
   const turnedDownNotice = page.getByText('You turned this meeting request down.');
-  await neverSaid(page, async () => phone
-    ? (await turnedDownNotice.count()) > 0
-    : turnedDownNotice.isVisible().catch(() => false));
+  await neverSaid(page, appears(turnedDownNotice, phone), '"You turned this meeting request down."');
   if (!phone) await expect(page.getByRole('button', { name: 'Back to messages' }), 'a way back from the dead end').toBeVisible();
   console.log(`  ✓ (b) a declined request: "You turned this meeting request down."${phone ? ' (in the pane a phone hides)' : ' and a way back'}.`);
 
   // (c) An accepted request opens its conversation.
   await gotoRetry(page, `${APP}/messages?poke=${acceptedId}`);
-  await neverSaid(page, async () => new RegExp(`/messages/${conversationId}$`).test(page.url()));
+  await neverSaid(page, async () => new RegExp(`/messages/${conversationId}$`).test(page.url()), 'the conversation of the accepted request');
   expect(page.url(), 'an accepted request lands in its conversation').toMatch(new RegExp(`/messages/${conversationId}$`));
   console.log('  ✓ (c) an accepted request opens /messages/<conversation>.');
 
@@ -686,23 +688,56 @@ test('2. A pending request is never called "already answered"; an answered one s
   const senderPage = await openAs(sender, wide, pageErrors);
   await gotoRetry(senderPage, `${APP}/messages?poke=${pendingId}`);
   const notAnswered = senderPage.getByText('They have not answered your meeting request yet.');
-  await neverSaid(senderPage, async () => phone
-    ? (await notAnswered.count()) > 0
-    : notAnswered.isVisible().catch(() => false));
+  await neverSaid(senderPage, appears(notAnswered, phone), '"They have not answered your meeting request yet."');
   console.log('  ✓ (d) the sender of a pending request: "They have not answered your meeting request yet."');
 
-  // (e) A request that is not theirs, or does not exist, is "not available". It is never called
+  // (e) The member whose request was TURNED DOWN opens it: they are not told that they turned it down.
+  const turnedDownPage = await openAs(turnedDown, wide, pageErrors);
+  await gotoRetry(turnedDownPage, `${APP}/messages?poke=${declinedId}`);
+  const theyTurnedDown = turnedDownPage.getByText('They turned your meeting request down.');
+  await neverSaid(turnedDownPage, appears(theyTurnedDown, phone), '"They turned your meeting request down."');
+  await expect(turnedDownPage.getByText('You turned this meeting request down.'), 'the sender is never told that they turned it down').toHaveCount(0);
+  console.log('  ✓ (e) the sender of a declined request: "They turned your meeting request down." and not "You turned this meeting request down."');
+
+  // (f) A request that is not theirs, or does not exist, is "not available". It is never called
   // answered, and it tells a stranger nothing about whether the request exists.
   const stranger = await makeUser('stranger');
   const strangerPage = await openAs(stranger, wide, pageErrors);
   const unavailable = strangerPage.getByText('This meeting request is not available.');
   for (const id of [pendingId, randomUUID()]) {
     await gotoRetry(strangerPage, `${APP}/messages?poke=${id}`);
-    await neverSaid(strangerPage, async () => phone
-      ? (await unavailable.count()) > 0
-      : unavailable.isVisible().catch(() => false));
+    await neverSaid(strangerPage, appears(unavailable, phone), '"This meeting request is not available."');
   }
-  console.log('  ✓ (e) a request that is not theirs, and one that does not exist: "This meeting request is not available."');
+  console.log('  ✓ (f) a request that is not theirs, and one that does not exist: "This meeting request is not available."');
+
+  // (g) A fetch that is PAUSED because the phone is offline has not answered yet, so the card is
+  // not "not available". React Query learns it is offline from the window's offline event, which is
+  // sent here in every engine; the page then moves inside the app to a request that is not in the
+  // list (a reload would need the network). Nothing may be asked of the server while it is paused,
+  // and when it is online again the question goes out and the answer, "not available", arrives.
+  const offlinePage = await openAs(reader, wide, pageErrors);
+  await gotoRetry(offlinePage, `${APP}/messages`);
+  await expect(requestCard(offlinePage, pendingId), 'the list of requests has loaded').toBeVisible({ timeout: 30_000 });
+  const ghostId = randomUUID();
+  let ghostCalls = 0;
+  offlinePage.on('request', (r) => { if (r.url().split('?')[0].endsWith(`/api/pokes/${ghostId}`)) ghostCalls++; });
+  const ghostNotice = offlinePage.getByText('This meeting request is not available.');
+  await offlinePage.evaluate(() => window.dispatchEvent(new Event('offline')));
+  await offlinePage.evaluate((id) => {
+    window.history.pushState({}, '', `/messages?poke=${id}`);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, ghostId);
+  expect(offlinePage.url(), 'the page moved to the request inside the app').toContain(`poke=${ghostId}`);
+  const heldUntil = Date.now() + 3_000;
+  while (Date.now() < heldUntil) {
+    expect(await ghostNotice.count(), 'while the fetch is paused the card does not say the request is not available').toBe(0);
+    await wait(150);
+  }
+  expect(ghostCalls, 'nothing was asked of the server while the page was offline').toBe(0);
+  await offlinePage.evaluate(() => window.dispatchEvent(new Event('online')));
+  await expect(ghostNotice, 'back online, the paused question goes out and the answer arrives').toHaveCount(1, { timeout: 15_000 });
+  expect(ghostCalls, 'the question went out once the page was online').toBeGreaterThanOrEqual(1);
+  console.log('  ✓ (g) offline: the card did not say "not available" for 3s and nothing was asked of the server; online again, the question went out and it said so.');
 
   // The pending one is untouched by all of this.
   const still = (await pool.query<{ status: string }>(`SELECT status FROM user_pokes WHERE id = $1`, [pendingId])).rows[0];
