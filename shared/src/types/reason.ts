@@ -6,7 +6,8 @@
 import type { PublicMember } from './user';
 
 // What a member can do with a person (Save = maybe later, Pass = not relevant).
-// The database CHECK, the route and the client all read this one list.
+// The routes and the client read this list. The CHECK in migration 101 is the same
+// list written out, and migration-101.test.ts fails if the two ever differ.
 export const PERSON_RESPONSES = ['saved', 'passed'] as const;
 export type PersonResponse = (typeof PERSON_RESPONSES)[number];
 
