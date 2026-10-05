@@ -1,5 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '@/lib/api';
+import { E } from '@/realtime/entities';
+import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import type {
   BroadcastEligibility,
@@ -22,6 +24,7 @@ const keys = {
 
 /** Check whether the current user can send post-event messages for this event. */
 export function useBroadcastEligibility(sessionId: string) {
+  const myUserId = useAuthStore((s) => s.user?.id);
   return useQuery<BroadcastEligibility>({
     queryKey: keys.eligibility(sessionId),
     queryFn: () =>
@@ -29,6 +32,9 @@ export function useBroadcastEligibility(sessionId: string) {
         .get(`/sessions/${sessionId}/post-event-message/eligibility`)
         .then((r) => r.data.data),
     enabled: !!sessionId,
+    // The answer comes from the member's own role and plan, and from whether they
+    // direct the event's pod.
+    meta: { entities: myUserId ? [E.user(myUserId), E.userPods(myUserId)] : [] },
   });
 }
 
@@ -41,6 +47,9 @@ export function usePostEventMessageStatus(sessionId: string) {
         .get(`/sessions/${sessionId}/post-event-message/status`)
         .then((r) => r.data.data),
     enabled: !!sessionId,
+    // The job is the event's. The worker that moves it along emits no entity, so
+    // while it is active the poll below is what carries its progress.
+    meta: { entities: sessionId ? [E.session(sessionId)] : [] },
     refetchInterval: (query) => {
       const status = query.state.data?.status;
       return status === 'pending' || status === 'processing' ? 5000 : false;
@@ -60,6 +69,8 @@ export function usePostEventMessagePreview(sessionId: string, enabled: boolean) 
         .get(`/sessions/${sessionId}/post-event-message/preview`)
         .then((r) => r.data.data),
     enabled: !!sessionId && enabled,
+    // Who would receive the message is decided by the event's participants.
+    meta: { entities: sessionId ? [E.session(sessionId), E.sessionParticipants(sessionId)] : [] },
   });
 }
 

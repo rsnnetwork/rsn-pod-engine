@@ -11,6 +11,8 @@
 //   • Any `useQuery(...)` whose object literal has no `meta` key
 //   • Any `useQuery(...)` whose `meta` has no `entities` key
 //   • Any `useQuery(...)` whose `meta.entities` is an empty literal `[]`
+//   • All of the above when the call carries type arguments, however deeply
+//     nested: `useQuery<Result>({`, `useQuery<Array<{ id: string }>>({`
 //
 // What it doesn't catch (intentionally — these are not realtime-relevant):
 //   • Search-style queries marked with `// realtime: skip` comment
@@ -57,16 +59,55 @@ function walk(dir, out = []) {
   return out;
 }
 
-// Match `useQuery(` followed by an object-literal opener. We scan forward to
-// find the matching `})` of that call — depth-balanced — so we can inspect
-// the full options object.
+function skipSpaces(src, from) {
+  let i = from;
+  while (i < src.length && /\s/.test(src[i])) i++;
+  return i;
+}
+
+// `from` is the index of the `<` that opens a call's type arguments. Returns the
+// index just past the `>` that closes them, or -1 when they do not close within a
+// sensible distance. Brackets are counted, so `Array<{ id: string }>` nests, and
+// the `>` of an arrow type (`() => void`) does not close anything.
+function skipTypeArguments(src, from) {
+  let depth = 0;
+  const limit = Math.min(src.length, from + 400);
+  for (let i = from; i < limit; i++) {
+    const ch = src[i];
+    if (ch === '<') depth++;
+    else if (ch === '>' && src[i - 1] !== '=') {
+      depth--;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return -1;
+}
+
+// Match `useQuery(` or `useQuery<Type>(` followed by an object-literal opener.
+// We scan forward to find the matching `})` of that call — depth-balanced — so
+// we can inspect the full options object.
+//
+// 5 Oct 2026: this used to read `useQuery<T>({` through a regex that could not
+// see past a nested `>` (`useQuery<Array<X>>({`), and checkFile() skipped any
+// file with no plain `useQuery(` at all. MatchesPage's only query was
+// `useQuery<PlatformMatchesResult>({`, so the page was never looked at and its
+// missing meta.entities shipped.
 function findUseQueryCalls(src) {
   const calls = [];
-  const re = /\buseQuery\s*(?:<[^>]*>)?\s*\(\s*\{/g;
+  const re = /\buseQuery\b/g;
   let m;
   while ((m = re.exec(src))) {
     const start = m.index;
-    const optsStart = src.indexOf('{', re.lastIndex - 1);
+    let at = skipSpaces(src, re.lastIndex);
+    if (src[at] === '<') {
+      const afterTypes = skipTypeArguments(src, at);
+      if (afterTypes < 0) continue;
+      at = skipSpaces(src, afterTypes);
+    }
+    if (src[at] !== '(') continue;
+    at = skipSpaces(src, at + 1);
+    if (src[at] !== '{') continue;
+    const optsStart = at;
     // Walk forward to find the matching closing brace, ignoring strings,
     // template literals, and nested braces.
     let depth = 0;
@@ -117,7 +158,9 @@ function lineColAt(src, pos) {
 
 function checkFile(file) {
   const src = fs.readFileSync(file, 'utf8');
-  if (!/\buseQuery\s*\(/.test(src)) return [];
+  // Only a cheap "does this file mention it at all" test. The word alone, not
+  // `useQuery(`: a file whose every call has type arguments never has that.
+  if (!/\buseQuery\b/.test(src)) return [];
 
   const violations = [];
   const calls = findUseQueryCalls(src);

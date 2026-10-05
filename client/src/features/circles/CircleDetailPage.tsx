@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/Button';
 import { PageLoader } from '@/components/ui/Spinner';
 import api from '@/lib/api';
 import { isAdmin } from '@/lib/utils';
+import { E } from '@/realtime/entities';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import CircleWall from './CircleWall';
@@ -49,10 +50,14 @@ export default function CircleDetailPage() {
     enabled: admin && attaching,
   });
 
+  // Whether the member is in this circle is their own entity's business, as on the list
+  // page. The circle routes emit no entity of their own yet: until they do, the circle
+  // also refreshes from the invalidations below and on focus.
   const { data: circle, isLoading } = useQuery<CircleDetail>({
     queryKey: ['circle', circleId],
     queryFn: () => api.get(`/circles/${circleId}`).then(r => r.data.data),
     enabled: !!circleId,
+    meta: { entities: user?.id ? [E.user(user.id)] : [] },
   });
 
   const joinLeave = async () => {

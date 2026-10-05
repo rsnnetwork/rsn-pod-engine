@@ -14,6 +14,7 @@ import { PageLoader } from '@/components/ui/Spinner';
 import EmptyState from '@/components/ui/EmptyState';
 import api from '@/lib/api';
 import { isAdmin } from '@/lib/utils';
+import { E } from '@/realtime/entities';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 
@@ -38,9 +39,13 @@ export default function CirclesPage() {
   const [newDesc, setNewDesc] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
 
+  // Circle membership belongs to the member, so their own entity refreshes this list,
+  // as it does on the home page. The circle routes emit no entity of their own yet:
+  // until they do, the list also refreshes from the invalidations below and on focus.
   const { data: circles, isLoading } = useQuery<CircleSummary[]>({
     queryKey: ['circles'],
     queryFn: () => api.get('/circles').then(r => r.data.data ?? []),
+    meta: { entities: user?.id ? [E.user(user.id)] : [] },
   });
 
   const joinLeave = async (c: CircleSummary) => {

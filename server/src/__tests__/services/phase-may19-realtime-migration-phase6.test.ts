@@ -25,7 +25,10 @@ describe('Phase 6 — realtime contract guard (scripts/check-realtime-entities.j
 
     it('detects useQuery calls and inspects their options object', () => {
       expect(src).toMatch(/findUseQueryCalls/);
-      expect(src).toMatch(/\\buseQuery\\s\*\(\?:<\[\^>\]\*>\)\?\\s\*\\\(\\s\*\\\{/);
+      // 5 Oct 2026: a call with type arguments, however nested, is read like one
+      // without. The behaviour is pinned by the functional cases below; this pins
+      // that the scan for the closing bracket exists at all.
+      expect(src).toMatch(/skipTypeArguments/);
     });
 
     it('treats missing meta as a violation', () => {
@@ -196,6 +199,170 @@ describe('Phase 6 — realtime contract guard (scripts/check-realtime-entities.j
           return useQuery({
             queryKey: ['matching-templates'],
             queryFn: () => Promise.resolve(null),
+          });
+        }
+      `);
+      const r = runGuard();
+      expect(r.code).toBe(0);
+    });
+
+    // ── 5 Oct 2026: a call with type arguments, useQuery<T>({ ───────────────
+    //
+    // MatchesPage's only query was useQuery<PlatformMatchesResult>({ with no
+    // meta. The guard skipped every file that had no plain `useQuery(` in it, so
+    // the page was never looked at and shipped a query that could not refresh
+    // from realtime. Each of these fixtures is the only query in its file, which
+    // is the case the old guard could not see.
+
+    it('rejects a useQuery<T>({ with no meta, in a file whose only call it is', () => {
+      writeFixture('bad-generic-only-call.tsx', `
+        import { useQuery } from '@tanstack/react-query';
+        interface PlatformMatchesResult { matches: string[] }
+        export function X(browse: boolean) {
+          const { data } = useQuery<PlatformMatchesResult>({
+            queryKey: ['platformMatches', browse],
+            queryFn: () => Promise.resolve({ matches: [] }),
+          });
+          return data;
+        }
+      `);
+      const r = runGuard();
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/missing meta\.entities/);
+      expect(r.stderr).toMatch(/bad-generic-only-call\.tsx:\d+:\d+/);
+      expect(r.stderr).toMatch(/queryKey starts with: 'platformMatches'/);
+    });
+
+    it('rejects a useQuery<T>({ whose meta.entities is empty', () => {
+      writeFixture('bad-generic-empty-entities.tsx', `
+        import { useQuery } from '@tanstack/react-query';
+        export function X() {
+          return useQuery<string[]>({
+            queryKey: ['some-key'],
+            queryFn: () => Promise.resolve([]),
+            meta: { entities: [] },
+          });
+        }
+      `);
+      const r = runGuard();
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/empty/);
+    });
+
+    it('rejects a call whose type arguments nest, however deeply, or hold an arrow type', () => {
+      writeFixture('bad-generic-nested.tsx', `
+        import { useQuery } from '@tanstack/react-query';
+        export function A() {
+          return useQuery<Array<{ id: string; name: string }>>({
+            queryKey: ['nested-a'],
+            queryFn: () => Promise.resolve([]),
+          });
+        }
+        export function B() {
+          return useQuery<Record<string, Array<Map<string, number>>>>({
+            queryKey: ['nested-b'],
+            queryFn: () => Promise.resolve({}),
+          });
+        }
+        export function C() {
+          return useQuery<{ run: () => void }>({
+            queryKey: ['nested-c'],
+            queryFn: () => Promise.resolve({ run: () => undefined }),
+          });
+        }
+      `);
+      const r = runGuard();
+      expect(r.code).toBe(1);
+      // Three calls, three violations: none of the shapes hid its call.
+      expect(r.stderr).toMatch(/3 useQuery call\(s\) missing realtime contract/);
+      expect(r.stderr).toMatch(/queryKey starts with: 'nested-a'/);
+      expect(r.stderr).toMatch(/queryKey starts with: 'nested-b'/);
+      expect(r.stderr).toMatch(/queryKey starts with: 'nested-c'/);
+    });
+
+    it('rejects a multi-line type argument list and a call with a space before the bracket', () => {
+      writeFixture('bad-generic-layout.tsx', `
+        import { useQuery } from '@tanstack/react-query';
+        export function A() {
+          return useQuery<
+            Array<string>
+          >({
+            queryKey: ['layout-a'],
+            queryFn: () => Promise.resolve([]),
+          });
+        }
+        export function B() {
+          return useQuery <string> ( {
+            queryKey: ['layout-b'],
+            queryFn: () => Promise.resolve(''),
+          });
+        }
+      `);
+      const r = runGuard();
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/2 useQuery call\(s\) missing realtime contract/);
+    });
+
+    it('accepts a useQuery<T>({ with valid meta.entities, nested or not', () => {
+      writeFixture('good-generic-with-entities.tsx', `
+        import { useQuery } from '@tanstack/react-query';
+        import { E } from '@/realtime/entities';
+        export function A() {
+          return useQuery<string[]>({
+            queryKey: ['good-a'],
+            queryFn: () => Promise.resolve([]),
+            meta: { entities: [E.pod('abc')] },
+          });
+        }
+        export function B() {
+          return useQuery<Array<{ id: string }>>({
+            queryKey: ['good-b'],
+            queryFn: () => Promise.resolve([]),
+            meta: { entities: [E.user('abc'), E.userInvites('abc')] },
+          });
+        }
+      `);
+      const r = runGuard();
+      expect(r.code).toBe(0);
+      expect(r.stdout).toMatch(/OK/);
+    });
+
+    it('accepts a useQuery<T>({ preceded by // realtime: skip, and a queryKey on the allowlist', () => {
+      writeFixture('good-generic-opt-outs.tsx', `
+        import { useQuery } from '@tanstack/react-query';
+        export function A() {
+          // realtime: skip — ephemeral search, results die on next keystroke
+          return useQuery<Array<{ id: string }>>({
+            queryKey: ['some-search'],
+            queryFn: () => Promise.resolve([]),
+          });
+        }
+        export function B() {
+          return useQuery<string[]>({
+            queryKey: ['matching-templates'],
+            queryFn: () => Promise.resolve([]),
+          });
+        }
+      `);
+      const r = runGuard();
+      expect(r.code).toBe(0);
+    });
+
+    it('does not mistake a type that names useQuery for a call', () => {
+      writeFixture('good-type-position.tsx', `
+        import { useQuery } from '@tanstack/react-query';
+        import { E } from '@/realtime/entities';
+        interface Rows { rows: string[] }
+        // Used only as a type: ReturnType<typeof useQuery<Rows>> is not a call.
+        export type RowsQuery = ReturnType<typeof useQuery<Rows>>;
+        export function X(q: RowsQuery) {
+          return q.data;
+        }
+        export function Y() {
+          return useQuery<Rows>({
+            queryKey: ['rows'],
+            queryFn: () => Promise.resolve({ rows: [] }),
+            meta: { entities: [E.adminAnalytics] },
           });
         }
       `);
