@@ -634,6 +634,22 @@ async function neverSaid(page: Page, done: () => Promise<boolean>, waitingFor: s
   throw new Error(`the page never showed ${waitingFor} within 40s`);
 }
 
+// Poll until `done` is true, failing the moment `forbidden` is on the page. A single check at the
+// end would miss a sentence that shows for a moment and goes again.
+async function neverShows(forbidden: Locator, sentence: string, done: () => Promise<boolean>, waitingFor: string): Promise<number> {
+  let samples = 0;
+  const deadline = Date.now() + 40_000;
+  while (Date.now() < deadline) {
+    samples++;
+    if (await forbidden.count() > 0) {
+      throw new Error(`the page said "${sentence}" (sample ${samples})`);
+    }
+    if (await done()) return samples;
+    await wait(100);
+  }
+  throw new Error(`the page never showed ${waitingFor} within 40s`);
+}
+
 test('2. A pending request is never called "already answered"; an answered one still says so or opens its chat', async () => {
   test.setTimeout(240_000);
   const sender = await makeUser('pending-asker');
@@ -780,6 +796,66 @@ test('2. A pending request is never called "already answered"; an answered one s
   await expect(ghostNotice, 'back online, the paused question goes out and the answer arrives').toHaveCount(1, { timeout: 15_000 });
   expect(ghostCalls, 'the question went out once the page was online').toBeGreaterThanOrEqual(1);
   console.log('  ✓ (g) offline: the card did not say "not available" for 3s and nothing was asked of the server; online again, the question went out and it said so.');
+
+  // (h) A network blip is not "not available". The first question about the request is cut off on
+  // its way; the page asks once more by itself and gets its answer. Until it does, nothing says the
+  // request is not available. (Every failure used to be read as "not available" and was never
+  // tried again.)
+  const blipPage = await openAs(reader, wide, pageErrors, true);
+  let cut = 1;
+  let asked = 0;
+  await blipPage.route(`**/api/pokes/${declinedId}`, async (route) => {
+    asked++;
+    if (cut > 0) {
+      cut--;
+      await route.abort('failed');
+      return;
+    }
+    await route.continue();
+  });
+  await gotoRetry(blipPage, `${APP}/messages?poke=${declinedId}`);
+  const blipSamples = await neverShows(
+    blipPage.getByText('This meeting request is not available.'),
+    'This meeting request is not available.',
+    appears(blipPage.getByText('You turned this meeting request down.'), phone),
+    '"You turned this meeting request down."',
+  );
+  expect(asked, 'the first question was cut off and the page asked again by itself').toBe(2);
+  console.log(`  ✓ (h) the first question about a declined request was cut off: the page asked again by itself, never said "not available" (${blipSamples} samples), and then read "You turned this meeting request down."`);
+
+  // (i) If the question keeps failing, the card says so in plain words and offers Try again, which
+  // asks once more. (Off a phone: below 1024px the pane with the button is hidden.)
+  const downPage = await openAs(reader, wide, pageErrors, true);
+  let down = true;
+  let downAsked = 0;
+  await downPage.route(`**/api/pokes/${declinedId}`, async (route) => {
+    downAsked++;
+    if (down) {
+      await route.abort('failed');
+      return;
+    }
+    await route.continue();
+  });
+  await gotoRetry(downPage, `${APP}/messages?poke=${declinedId}`);
+  await neverShows(
+    downPage.getByText('This meeting request is not available.'),
+    'This meeting request is not available.',
+    appears(downPage.getByText('We could not load this meeting request.'), phone),
+    '"We could not load this meeting request."',
+  );
+  const askedWhileDown = downAsked;
+  expect(askedWhileDown, 'the question was asked, and once more by itself').toBeGreaterThanOrEqual(2);
+  if (!phone) {
+    const tryAgain = downPage.getByRole('button', { name: 'Try again', exact: true });
+    const tryAgainBox = await expectReachable(downPage, tryAgain, 'Try again');
+    expect(tryAgainBox.height, `Try again is at least 44px tall (${Math.round(tryAgainBox.height)}px)`).toBeGreaterThanOrEqual(44);
+    await downPage.screenshot({ path: path.join(SHOTS, `${engineLabel().replace(/[^a-z0-9]+/gi, '-')}-try-again.png`) });
+    down = false;
+    await tap(downPage, tryAgain, 'tap Try again');
+    await expect(downPage.getByText('You turned this meeting request down.'), 'Try again asks once more and the answer arrives').toBeVisible({ timeout: 15_000 });
+    expect(downAsked, 'pressing Try again asked once more').toBeGreaterThan(askedWhileDown);
+  }
+  console.log(`  ✓ (i) a question that kept failing (${askedWhileDown} asked): "We could not load this meeting request."${phone ? ' (in the pane a phone hides)' : ' and a Try again button that asked once more and got the answer'}.`);
 
   // The pending one is untouched by all of this.
   const still = (await pool.query<{ status: string }>(`SELECT status FROM user_pokes WHERE id = $1`, [pendingId])).rows[0];

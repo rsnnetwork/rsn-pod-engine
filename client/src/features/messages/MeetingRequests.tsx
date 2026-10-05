@@ -12,6 +12,7 @@
 
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { isAxiosError } from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { Check, X } from 'lucide-react';
 import Avatar from '@/components/ui/Avatar';
@@ -73,25 +74,33 @@ interface PokeState {
   sentByMe: boolean;
 }
 
+/** What the card says when the request is not on the member's list, and whether it offers Try again. */
+interface Notice {
+  text: string;
+  retry?: boolean;
+}
+
 /**
  * What to say about a request that is not in the member's list of pending ones,
  * or null to keep waiting. "Already answered" is only true of a request that was
  * accepted or declined. One that is still pending is simply not in the list YET:
  * the list is still on its way, or a refresh is. The page used to call it answered
  * whenever GET /pokes/:id came back before GET /pokes/received (5 Oct 2026).
+ * `failed` is a question that got no answer at all (the network dropping, a 429, a
+ * 5xx): that says nothing about the request, so it is never "not available".
  */
-function noticeFor(state: PokeState | null | undefined, listFailed: boolean): string | null {
+function noticeFor(state: PokeState | null | undefined, failed: boolean): Notice | null {
   if (state?.status === 'declined') {
     // Either person may open the link, and only one of them did the turning down.
-    return state.sentByMe ? 'They turned your meeting request down.' : 'You turned this meeting request down.';
+    return { text: state.sentByMe ? 'They turned your meeting request down.' : 'You turned this meeting request down.' };
   }
-  if (state?.status === 'accepted') return 'This meeting request has already been answered.';
-  if (listFailed) return 'We could not load this meeting request. Try again in a moment.';
+  if (state?.status === 'accepted') return { text: 'This meeting request has already been answered.' };
+  if (failed) return { text: 'We could not load this meeting request.', retry: true };
   if (state?.status === 'pending') {
     // A member who SENT it will never find it among the ones they received.
-    return state.sentByMe ? 'They have not answered your meeting request yet.' : null;
+    return state.sentByMe ? { text: 'They have not answered your meeting request yet.' } : null;
   }
-  return 'This meeting request is not available.';
+  return { text: 'This meeting request is not available.' };
 }
 
 /**
@@ -104,7 +113,7 @@ export function FocusedMeetingRequest({ pokeId, myUserId }: { pokeId: string; my
   // isPending, not isLoading, below: it stays true until there is an answer, including while the
   // fetch is paused because the phone is offline. isLoading is false then, and the card would
   // say the request is not available when nobody has been asked yet.
-  const { data: requests, isPending: listPending, isError: listFailed } = useQuery({
+  const { data: requests, isPending: listPending, isError: listFailed, isFetching: listFetching, refetch: refetchList } = useQuery({
     queryKey: ['pokes-received'],
     queryFn: () => api.get('/pokes/received').then(r => r.data.data as PendingRequest[]),
     refetchInterval: 20_000,
@@ -117,9 +126,17 @@ export function FocusedMeetingRequest({ pokeId, myUserId }: { pokeId: string; my
   // answered — in another tab, or reached again from an old email — used to
   // land on a line telling the member to go and find the conversation for
   // themselves. Ask where this one stands and take them there (22 Sep 2026).
-  const { data: state, isPending: statePending } = useQuery({
+  const {
+    data: state, isPending: statePending, isError: stateFailed, isFetching: stateFetching, refetch: refetchState,
+  } = useQuery({
     queryKey: ['poke-state', pokeId],
-    queryFn: () => api.get(`/pokes/${pokeId}`).then(r => r.data.data as PokeState).catch(() => null),
+    queryFn: () => api.get(`/pokes/${pokeId}`).then(r => r.data.data as PokeState).catch((err: unknown) => {
+      // A 404 (not theirs, or not there) and a 403 are answers. Anything else, such as the
+      // network dropping, a 429 or a 5xx, is a question that got no answer: it throws, so React
+      // Query asks again, and if it keeps failing the card says so and offers Try again.
+      if (isAxiosError(err) && (err.response?.status === 403 || err.response?.status === 404)) return null;
+      throw err;
+    }),
     enabled: !req,
     meta: { entities: [E.userInvites(myUserId)] },
   });
@@ -132,20 +149,36 @@ export function FocusedMeetingRequest({ pokeId, myUserId }: { pokeId: string; my
 
   if (!req) {
     const redirecting = state?.status === 'accepted' && !!state.conversationId;
-    const notice = listPending || statePending || redirecting ? null : noticeFor(state, listFailed);
+    const notice = listPending || statePending || redirecting ? null : noticeFor(state, listFailed || stateFailed);
     if (notice === null) {
       return <div className="flex-1 flex items-center justify-center"><Spinner /></div>;
     }
+    const retrying = (listFailed && listFetching) || (stateFailed && stateFetching);
     return (
       <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
-        <p className="text-sm text-gray-500">{notice}</p>
-        <button
-          type="button"
-          onClick={() => navigate('/messages', { replace: true })}
-          className="min-h-[44px] rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 hover:bg-gray-50"
-        >
-          Back to messages
-        </button>
+        <p className="text-sm text-gray-500">{notice.text}</p>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {notice.retry && (
+            <button
+              type="button"
+              onClick={() => {
+                if (listFailed) void refetchList();
+                if (stateFailed) void refetchState();
+              }}
+              disabled={retrying}
+              className="min-h-[44px] rounded-lg bg-rsn-red px-4 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {retrying ? 'Trying again…' : 'Try again'}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => navigate('/messages', { replace: true })}
+            className="min-h-[44px] rounded-lg border border-gray-300 bg-white px-4 text-sm font-medium text-gray-700 hover:bg-gray-50"
+          >
+            Back to messages
+          </button>
+        </div>
       </div>
     );
   }
