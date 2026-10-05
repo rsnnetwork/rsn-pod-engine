@@ -152,7 +152,11 @@ async function waitForTag(log: EntityLog, tag: string, moreThan: number, label: 
 // application error, and the Messages page does use a resize observer.
 const BENIGN_PAGE_ERROR = /ResizeObserver loop (limit exceeded|completed with undelivered notifications)/i;
 
-const firstLineOf = (e: unknown): string => String((e as Error)?.message ?? e).split('\n')[0];
+// The first line of an error, and the "rows ..." lines of a stray-rows report that follow it.
+const firstLineOf = (e: unknown): string => {
+  const lines = String((e as Error)?.message ?? e).split('\n');
+  return [lines[0], ...lines.slice(1).filter((l) => l.startsWith('rows '))].join(' / ');
+};
 
 interface Viewport { width: number; height: number }
 
@@ -189,6 +193,15 @@ async function tap(page: Page, target: Locator, label: string): Promise<void> {
   const { cx, cy } = await expectReachable(page, target, label);
   if (DEVICE) await page.touchscreen.tap(cx, cy);
   else await page.mouse.click(cx, cy);
+}
+
+// The whole box of a control answers a tap, not only its centre (expectReachable presses the
+// centre alone). The control is brought into the window first: this is about what sits on top
+// of its box, not about whether the window is tall enough.
+async function expectWholeBoxTappable(target: Locator, label: string): Promise<void> {
+  await target.scrollIntoViewIfNeeded();
+  const stray = await target.evaluate(strayRows);
+  expect(stray, `${label}: part of its box would not reach it:\n${stray.join('\n')}`).toEqual([]);
 }
 
 const requestCard = (page: Page, pokeId: string) =>
@@ -238,6 +251,40 @@ function lastLineOnScreen(el: HTMLElement): string {
     return 'the last line is clipped or covered by ' + (hit ? hit.tagName.toLowerCase() : 'nothing');
   }
   return 'ok';
+}
+
+// Which rows of the control's box land on something other than the control? Every row of
+// pixels is pressed in three places (near the left edge, in the middle, near the right edge),
+// because a box can be 44px tall and still have its first and last pixels under the text
+// above and below it: the last line of the note, and a "Prefers ..." line, take a tap before a
+// later box with a transparent background does. One line per run of rows, none when all is well.
+function strayRows(el: HTMLElement): string[] {
+  const box = el.getBoundingClientRect();
+  if (box.top < 0 || box.bottom > window.innerHeight) {
+    return ['the box is not inside the window: top=' + Math.round(box.top) + ' bottom=' + Math.round(box.bottom) + ' of ' + window.innerHeight];
+  }
+  const xs = [box.left + 2, box.left + box.width / 2, box.right - 2];
+  const rows = Math.floor(box.height);
+  const stray: Array<{ row: number; by: string }> = [];
+  for (let row = 0; row < rows; row++) {
+    for (const x of xs) {
+      const hit = document.elementFromPoint(x, box.top + row + 0.5);
+      if (!hit || !(hit === el || el.contains(hit))) {
+        const by = hit ? hit.tagName.toLowerCase() + '.' + String(hit.className).split(' ').slice(0, 3).join('.') : 'nothing';
+        stray.push({ row, by });
+        break;
+      }
+    }
+  }
+  const runs: string[] = [];
+  let from = 0;
+  while (from < stray.length) {
+    let to = from;
+    while (to + 1 < stray.length && stray[to + 1].row === stray[to].row + 1 && stray[to + 1].by === stray[from].by) to++;
+    runs.push('rows ' + stray[from].row + '-' + stray[to].row + ' of ' + rows + ' land on ' + stray[from].by);
+    from = to + 1;
+  }
+  return runs;
 }
 
 interface BodyReading { whiteSpace: string; overflowWrap: string; lineHeight: number; tops: number[] }
@@ -296,6 +343,8 @@ const LONG_NOTE = NOTE_LINES.join('\n');
 const FIRST_LINE = NOTE_LINES[0];
 const LAST_LINE = NOTE_LINES[NOTE_LINES.length - 1];
 const SHORT_NOTE = 'Coffee on Thursday?';
+// What the list says under a note when the sender chose the format 'coffee'.
+const PREFERS = 'Prefers in person coffee';
 
 // One paragraph with no line breaks. It runs past six lines in a phone-wide request row and
 // fits in four or fewer in a wide one, so the clamp depends on the width alone.
@@ -324,21 +373,29 @@ const EITHER = /^Show (more|less)$/;
 test('1. Show more: a long request can be read in full on a phone; a short one has no button', async () => {
   test.setTimeout(420_000);
   const askerLong = await makeUser('long-asker');
+  const askerFormat = await makeUser('format-asker');
   const askerShort = await makeUser('short-asker');
   const reader = await makeUser('reader');
 
-  // The short request first, so the long one (the newest) is the first row on the page.
+  // The short request first and the long one without a format last, so that one (the newest)
+  // is the first row on the page. The long one WITH a format has a "Prefers ..." line under
+  // its note, which sits against the bottom of the button.
   const shortSent = await api<PokeJson>(askerShort, 'POST', `/matches/platform/${reader.id}/interest`, { note: SHORT_NOTE });
   expect(shortSent.status, `short interest: ${JSON.stringify(shortSent.body)}`).toBe(201);
   const shortId = dataOf(shortSent, 'short interest').id;
+  const formatSent = await api<PokeJson>(askerFormat, 'POST', `/matches/platform/${reader.id}/interest`, { note: LONG_NOTE, format: 'coffee' });
+  expect(formatSent.status, `long interest with a format: ${JSON.stringify(formatSent.body)}`).toBe(201);
+  const formatId = dataOf(formatSent, 'long interest with a format').id;
   const longSent = await api<PokeJson>(askerLong, 'POST', `/matches/platform/${reader.id}/interest`, { note: LONG_NOTE });
   expect(longSent.status, `long interest: ${JSON.stringify(longSent.body)}`).toBe(201);
   const longId = dataOf(longSent, 'long interest').id;
-  const stored = (await pool.query<{ id: string; status: string; message: string | null }>(
-    `SELECT id, status, message FROM user_pokes WHERE recipient_id = $1 ORDER BY created_at`, [reader.id])).rows;
-  expect(stored.map((r) => r.id), 'the reader has exactly these two pending requests, oldest first').toEqual([shortId, longId]);
+  const stored = (await pool.query<{ id: string; status: string; message: string | null; preferred_format: string | null }>(
+    `SELECT id, status, message, preferred_format FROM user_pokes WHERE recipient_id = $1 ORDER BY created_at`, [reader.id])).rows;
+  expect(stored.map((r) => r.id), 'the reader has exactly these three pending requests, oldest first').toEqual([shortId, formatId, longId]);
   expect(stored.every((r) => r.status === 'pending')).toBe(true);
-  expect(stored[1].message?.startsWith(LONG_NOTE), 'the twelve lines are stored with their single line breaks').toBe(true);
+  expect(stored[2].message?.startsWith(LONG_NOTE), 'the twelve lines are stored with their single line breaks').toBe(true);
+  expect(stored[1].preferred_format, 'the second long request carries a format').toBe('coffee');
+  expect(stored[2].preferred_format, 'the first row has none').toBeNull();
 
   const problems: string[] = [];
   const pageErrors: string[] = [];
@@ -416,11 +473,33 @@ test('1. Show more: a long request can be read in full on a phone; a short one h
       expect(again.clamp, `${size}: clamped again`).toBe('6');
       expect(again.shown, `${size}: six lines again`).toBeLessThanOrEqual(6 * again.lineHeight + 2);
 
+      // The whole 44px box answers a tap, not only its centre. The last line of the note sits
+      // against the top of the button and, on a row with a "Prefers ..." line, that line sits
+      // against its bottom: neither may take a tap meant for the button. Both kinds of row, both
+      // states (the text of the button changes, its box does not).
+      for (const [rowName, id] of [['without a Prefers line', longId], ['with a Prefers line', formatId]] as const) {
+        const row = requestCard(page, id);
+        const rowMore = row.getByRole('button', MORE);
+        const rowLess = row.getByRole('button', LESS);
+        await expect(row.getByText(PREFERS), `${size}: the row ${rowName}`).toHaveCount(id === formatId ? 1 : 0);
+        await expectWholeBoxTappable(rowMore, `${size} "Show more" on the row ${rowName}`);
+        if (id === formatId) {
+          const prefersBox = (await row.getByText(PREFERS).boundingBox())!;
+          const buttonBox = (await rowMore.boundingBox())!;
+          note(`prefers-${size}`, `the Prefers line starts ${Math.round(buttonBox.y + buttonBox.height - prefersBox.y)}px above the bottom edge of the button`);
+        }
+        await tap(page, rowMore, `${size} tap "Show more" on the row ${rowName}`);
+        await expect(rowLess, `${size}: "Show less" on the row ${rowName}`).toBeVisible();
+        await expectWholeBoxTappable(rowLess, `${size} "Show less" on the row ${rowName}`);
+        await tap(page, rowLess, `${size} tap "Show less" on the row ${rowName}`);
+        await expect(rowMore, `${size}: "Show more" is back on the row ${rowName}`).toBeVisible();
+      }
+
       const sw2 = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, inner: window.innerWidth }));
       expect(sw2.scroll, `${size}: sideways scroll (scrollWidth ${sw2.scroll} over innerWidth ${sw2.inner})`).toBeLessThanOrEqual(sw2.inner);
       await page.screenshot({ path: path.join(SHOTS, `${label}-${vp.width}-collapsed.png`), fullPage: true });
       note(`tap-${size}`, `Show more ${Math.round(moreBox.width)}x${Math.round(moreBox.height)}px, Accept ${Math.round(acceptBox.width)}x${Math.round(acceptBox.height)}px`);
-      console.log(`  ✓ ${size}: "Show more" ${Math.round(moreBox.width)}x${Math.round(moreBox.height)}px and reachable, six of twelve lines (${Math.round(closed.shown)}px of ${Math.round(closed.natural)}px); tap shows all twelve, "Show less" aria-expanded=true; tap again clamps; the short row has no button; no sideways scroll.`);
+      console.log(`  ✓ ${size}: "Show more" ${Math.round(moreBox.width)}x${Math.round(moreBox.height)}px and reachable, six of twelve lines (${Math.round(closed.shown)}px of ${Math.round(closed.natural)}px); tap shows all twelve, "Show less" aria-expanded=true; tap again clamps; the short row has no button; no sideways scroll; every pixel row of the box lands on the button, with and without a "Prefers" line, collapsed and expanded.`);
     } catch (e) {
       problems.push(`${size}: ${firstLineOf(e)}`);
       console.log(`  ✗ ${size}: ${firstLineOf(e)}`);
