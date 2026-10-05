@@ -16,6 +16,8 @@ export const usingPreview = () => !!SHARE;
 /** Prime a fresh context with the share cookie. Safe to call when unset. */
 export async function primePreview(ctx: BrowserContext): Promise<void> {
   if (!SHARE) return;
+  // Vercel's preview-only feedback toolbar (vercel.live) is not the app, and throws a page error in Windows WebKit (no navigator.storage).
+  await ctx.route('https://vercel.live/**', (route) => route.abort());
   const page: Page = await ctx.newPage();
   try {
     await page.goto(`${APP}/?_vercel_share=${SHARE}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
