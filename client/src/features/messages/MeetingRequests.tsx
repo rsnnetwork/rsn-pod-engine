@@ -64,6 +64,33 @@ function usePokeActions(myUserId: string) {
   return { accept, decline, pending: accept.isPending || decline.isPending };
 }
 
+/** Where one request stands, from GET /pokes/:id (either person in it may ask). */
+interface PokeState {
+  status: 'pending' | 'accepted' | 'declined';
+  conversationId: string | null;
+  otherUserId: string;
+  /** True when this member sent the request rather than received it. */
+  sentByMe: boolean;
+}
+
+/**
+ * What to say about a request that is not in the member's list of pending ones,
+ * or null to keep waiting. "Already answered" is only true of a request that was
+ * accepted or declined. One that is still pending is simply not in the list YET:
+ * the list is still on its way, or a refresh is. The page used to call it answered
+ * whenever GET /pokes/:id came back before GET /pokes/received (5 Oct 2026).
+ */
+function noticeFor(state: PokeState | null | undefined, listFailed: boolean): string | null {
+  if (state?.status === 'declined') return 'You turned this meeting request down.';
+  if (state?.status === 'accepted') return 'This meeting request has already been answered.';
+  if (listFailed) return 'We could not load this meeting request. Try again in a moment.';
+  if (state?.status === 'pending') {
+    // A member who SENT it will never find it among the ones they received.
+    return state.sentByMe ? 'They have not answered your meeting request yet.' : null;
+  }
+  return 'This meeting request is not available.';
+}
+
 /**
  * The big "who wants to meet you" panel shown in the right pane when the bell
  * link lands on /messages?poke=<id> (7 Sep 2026, Ali): the recipient sees the
@@ -71,7 +98,7 @@ function usePokeActions(myUserId: string) {
  * Decline right there, and can open the full profile before deciding.
  */
 export function FocusedMeetingRequest({ pokeId, myUserId }: { pokeId: string; myUserId: string }) {
-  const { data: requests } = useQuery({
+  const { data: requests, isLoading: listLoading, isError: listFailed } = useQuery({
     queryKey: ['pokes-received'],
     queryFn: () => api.get('/pokes/received').then(r => r.data.data as PendingRequest[]),
     refetchInterval: 20_000,
@@ -86,11 +113,7 @@ export function FocusedMeetingRequest({ pokeId, myUserId }: { pokeId: string; my
   // themselves. Ask where this one stands and take them there (22 Sep 2026).
   const { data: state, isLoading: stateLoading } = useQuery({
     queryKey: ['poke-state', pokeId],
-    queryFn: () => api.get(`/pokes/${pokeId}`).then(r => r.data.data as {
-      status: 'pending' | 'accepted' | 'declined';
-      conversationId: string | null;
-      otherUserId: string;
-    }).catch(() => null),
+    queryFn: () => api.get(`/pokes/${pokeId}`).then(r => r.data.data as PokeState).catch(() => null),
     enabled: !req,
     meta: { entities: [E.userInvites(myUserId)] },
   });
@@ -102,16 +125,14 @@ export function FocusedMeetingRequest({ pokeId, myUserId }: { pokeId: string; my
   }, [req, state, navigate]);
 
   if (!req) {
-    if (stateLoading || (state?.status === 'accepted' && state.conversationId)) {
+    const redirecting = state?.status === 'accepted' && !!state.conversationId;
+    const notice = listLoading || stateLoading || redirecting ? null : noticeFor(state, listFailed);
+    if (notice === null) {
       return <div className="flex-1 flex items-center justify-center"><Spinner /></div>;
     }
     return (
       <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
-        <p className="text-sm text-gray-500">
-          {state?.status === 'declined'
-            ? 'You turned this meeting request down.'
-            : 'This meeting request has already been answered.'}
-        </p>
+        <p className="text-sm text-gray-500">{notice}</p>
         <button
           type="button"
           onClick={() => navigate('/messages', { replace: true })}
