@@ -253,3 +253,45 @@ describe('accepting an introduction does not evict you from the agent', () => {
     expect(sql).toMatch(/NOT EXISTS \(\s*SELECT 1 FROM encounter_history e/);
   });
 });
+
+// 5 Oct 2026: an agent's reason is stored and shown to its owner. It names only words from the
+// other member's public card, never a private interest that one of the want's synonyms happened
+// to hit ("manufacturers" reaches "production" and "industrial"). Their interests still count
+// towards the score, so nobody loses a match.
+describe('an agent\'s reason names only words from the public card', () => {
+  const GENERIC = "Their profile matches what you're looking for";
+  const MANUFACTURERS = { id: 'a-2', userId: 'u-owner', wantText: 'manufacturers', label: 'Manufacturers' };
+  // Public card: a strategy consultant. Private: two interests that are synonyms of the want.
+  const consultant = candidate({
+    id: 'u-consultant', displayName: 'Sarah Chen', professionalRole: ['Strategy consultant'], jobTitle: 'Strategy consultant',
+    company: null, expertiseText: null, whatICanHelpWith: 'Go-to-market strategy',
+    interests: ['industrial design', 'production of short films'],
+  });
+
+  it('a rescore keeps the person at their score, with a reason that names no private word', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [consultant] });
+    expect(await recomputeAgent(MANUFACTURERS)).toBe(1);
+    const [, matches] = mockReplaceMatches.mock.calls[0];
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toMatchObject({ candidateUserId: 'u-consultant', reason: GENERIC });
+    expect(matches[0].score).toBeCloseTo(0.4667, 3);
+  });
+
+  it('a new member the agent was looking for is stored with the same wording', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [consultant] })   // the newcomer's profile
+      .mockResolvedValueOnce({ rows: [{ ok: true }] }) // not blocked, not met
+      .mockResolvedValueOnce({ rows: [] });            // the upsert
+    mockListActive.mockResolvedValueOnce([{ ...MANUFACTURERS, status: 'active' }]);
+    expect(await scoreNewcomerAgainstAgents('u-consultant')).toHaveLength(1);
+    const upsert = mockQuery.mock.calls.find(c => /INSERT INTO agent_matches/i.test(String(c[0])))!;
+    expect((upsert[1] as unknown[])[3]).toBe(GENERIC);
+  });
+
+  it('the same words on the public card are still named', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ ...consultant, interests: null, bio: 'We run an industrial fabrication shop with machining' }] });
+    await recomputeAgent(MANUFACTURERS);
+    const [, matches] = mockReplaceMatches.mock.calls[0];
+    expect(matches[0].reason).toMatch(/^What you're looking for matches their profile: .*fabrication/);
+  });
+});

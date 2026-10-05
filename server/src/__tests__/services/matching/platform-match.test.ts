@@ -31,7 +31,7 @@ jest.mock('../../../index', () => ({
 import logger from '../../../config/logger';
 import { REQUEST_MESSAGE_MAX } from '../../../services/poke/request-message';
 import {
-  scoreFit, wantedDesignations, getPlatformMatches, expressInterest,
+  scoreFit, scoreWants, scoreWantsForRecipient, wantedDesignations, getPlatformMatches, expressInterest,
   notifyMatchesOfNewUser, MATCH_THRESHOLD, BROWSE_THRESHOLD, IntentProfile,
 } from '../../../services/matching/platform-match.service';
 
@@ -757,5 +757,123 @@ describe('expressInterest reads an agent\'s want only for its owner', () => {
     expect(mockSendPoke).toHaveBeenCalledTimes(1);
     expect(mockSendPoke.mock.calls[0][2]).toBe(NEUTRAL);
     expect(logger.warn).toHaveBeenCalledWith(expect.objectContaining({ err: failure, agentId: AGENT }), expect.any(String));
+  });
+});
+
+// ─── What a reason prints comes from the public card (5 Oct 2026) ────────────────────────────────
+// A want is matched on its synonyms too: "manufacturers" reaches "production" and "industrial",
+// words the member never typed. The scorer counts a member's private interests as things they
+// offer, so a synonym that only an interest contained was printed in the reason, which spelled
+// the interest out to the member reading it (the reviewer's case). The words printed now come
+// from the public card only. The interests still count towards the score, so nobody loses a match.
+describe('a reason names only words from the other member\'s public card', () => {
+  beforeEach(() => { mockQuery.mockReset(); mockSendPoke.mockReset(); mockSendPoke.mockResolvedValue({ id: 'p1' }); });
+
+  const GENERIC = "Their profile matches what you're looking for";
+  const viewer = profile({ id: 'u-viewer', displayName: 'Ali', whoIWantToMeet: 'manufacturers' });
+  // Public card: a strategy consultant. Private: two interests that are synonyms of the want.
+  const consultant = profile({
+    id: 'u-consultant', displayName: 'Sarah Chen', professionalRole: ['Strategy consultant'], jobTitle: 'Strategy consultant',
+    industry: 'Consulting', whatICanHelpWith: 'Go-to-market strategy',
+    interests: ['industrial design', 'production of short films'],
+  });
+  // The same kind of words, but on the public card.
+  const fabricator = { ...consultant, bio: 'We run an industrial fabrication shop with machining', interests: null };
+  const privateWords = /production|industrial|short films/i;
+
+  describe('scoreFit', () => {
+    it('a fit that only the private interests make keeps its score and prints none of their words', () => {
+      const fit = scoreFit(viewer, consultant);
+      expect(fit.score).toBeCloseTo(0.4667, 3); // unchanged: the interests still decide who is suggested
+      expect(fit.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+      expect(fit.reason).toBe(GENERIC);
+      // Control: without the interests there is no fit at all, so they are what made it.
+      expect(scoreFit(viewer, { ...consultant, interests: null }).score).toBe(0);
+    });
+
+    it('what they say they care about is held to the same rule', () => {
+      const fit = scoreFit(viewer, { ...consultant, interests: null, whatICareAbout: 'industrial design and the production of short films' });
+      expect(fit.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+      expect(fit.reason).toBe(GENERIC);
+    });
+
+    it('a synonym that hits a public field still prints', () => {
+      const fit = scoreFit(viewer, fabricator);
+      expect(fit.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+      expect(fit.reason).toMatch(/^What you're looking for matches their profile: /);
+      for (const word of ['industrial', 'fabrication', 'machining']) expect(fit.reason).toContain(word);
+    });
+
+    it('with a public hit and a private one, only the public words print, and the private one still raises the score', () => {
+      const both = scoreFit(viewer, { ...fabricator, interests: ['production of short films'] });
+      const publicOnly = scoreFit(viewer, fabricator);
+      expect(both.reason).toContain('industrial');
+      expect(both.reason).not.toMatch(/production/i);
+      expect(both.score).toBeGreaterThan(publicOnly.score);
+    });
+
+    it('a role or title match is named as before: those are public', () => {
+      const fit = scoreFit(profile({ id: 'u-w', whoIWantToMeet: 'strategy consultants' }), { ...consultant, interests: ['sailing'] });
+      expect(fit.reason).toMatch(/Strategy consultant/i);
+    });
+  });
+
+  describe('the other ways the same analysis is worded', () => {
+    it('scoreWants (an agent\'s want) prints none of the private words and keeps the score', () => {
+      const fit = scoreWants(['manufacturers'], consultant, undefined, ['manufacturers']);
+      expect(fit.score).toBeCloseTo(0.4667, 3);
+      expect(fit.reason).toBe(GENERIC);
+      expect(scoreWants(['manufacturers'], fabricator, undefined, ['manufacturers']).reason).toContain('fabrication');
+    });
+
+    it('scoreWantsForRecipient (the introduction) prints none of the private words and keeps the score', () => {
+      const fit = scoreWantsForRecipient(['manufacturers'], consultant, 'Ali');
+      expect(fit.score).toBeCloseTo(0.4667, 3);
+      expect(fit.reason).toBe('Your profile matches what Ali is looking for');
+      expect(scoreWantsForRecipient(['manufacturers'], fabricator, 'Ali').reason)
+        .toMatch(/^What Ali is looking for matches your profile: .*fabrication/);
+    });
+  });
+
+  describe('every screen that shows a reason', () => {
+    it('For You: the card keeps its place and its strength, and its reason names no private word', async () => {
+      mockQuery.mockImplementation((sql: string) => {
+        if (/FROM sessions/.test(sql)) return Promise.resolve({ rows: [] });
+        if (/WHERE u\.id = \$1/.test(sql)) return Promise.resolve({ rows: [{ ...viewer, onboardingCompleted: true }] });
+        return Promise.resolve({ rows: [consultant] }); // the candidates
+      });
+      const { matches } = await getPlatformMatches('u-viewer');
+      expect(matches).toHaveLength(1);
+      expect(matches[0]).toMatchObject({ userId: 'u-consultant', strength: 'strong', reason: GENERIC });
+      expect(matches[0].score).toBeCloseTo(0.467, 3);
+    });
+
+    it('the "someone new matches" bell: the member is still told, and the body names no private word', async () => {
+      mockQuery.mockImplementation((sql: string) => {
+        if (/WHERE u\.id = \$1/.test(sql)) return Promise.resolve({ rows: [{ ...consultant, onboardingCompleted: true }] }); // the newcomer
+        if (/u\.id <> \$1 AND u\.status = 'active'/.test(sql)) return Promise.resolve({ rows: [viewer] }); // existing members
+        if (/SELECT id FROM notifications/.test(sql)) return Promise.resolve({ rows: [] });
+        if (/INSERT INTO notifications/.test(sql)) return Promise.resolve({ rows: [{ id: 'n1', created_at: new Date() }] });
+        return Promise.resolve({ rows: [] });
+      });
+      expect(await notifyMatchesOfNewUser('u-consultant')).toBe(1);
+      const insert = mockQuery.mock.calls.find(c => /INSERT INTO notifications/.test(c[0] as string))!;
+      expect((insert[1] as unknown[])[0]).toBe('u-viewer');
+      expect((insert[1] as unknown[])[2]).toBe(GENERIC);
+    });
+
+    it('the introduction text: the sender\'s own want is still attached, and nothing of the recipient\'s private interests', async () => {
+      mockQuery.mockImplementation((sql: string, params: unknown[]) => {
+        if (/WHERE u\.id = \$1/.test(sql)) {
+          const found = [viewer, consultant].find((p) => p.id === (params as string[])[0]);
+          return Promise.resolve({ rows: found ? [{ ...found, onboardingCompleted: true }] : [] });
+        }
+        return Promise.resolve({ rows: [] });
+      });
+      await expressInterest('u-viewer', 'u-consultant');
+      const message = mockSendPoke.mock.calls[0][2] as string;
+      expect(message).toBe('Your profile matches what Ali is looking for. We think you two should meet.');
+      expect(message).not.toMatch(privateWords);
+    });
   });
 });

@@ -161,7 +161,9 @@ export function wantedDesignationsFrom(
 /**
  * Stefan's one-way rule, scored. Returns 0 when there is no fit; the reason is
  * human-readable and shown on the match card, to the member whose want it states.
- * It never goes into a meeting request: the other member reads that.
+ * It never goes into a meeting request: the other member reads that. The reason
+ * names only what is on the other member's public card: their private interests
+ * can raise the score, and are never quoted.
  */
 export function scoreFit(me: IntentProfile, other: IntentProfile, generic?: Set<string>): { score: number; reason: string } {
   return scoreWants(wantSources(me), other, generic);
@@ -379,9 +381,16 @@ function analyzeWants(
   if (check.yearsUnknown) score *= 0.85;
   // Name the title that actually matched; fall back to their headline role.
   const role = matchedTitle || displayRole(other);
+  // 5 Oct 2026: the words the reason NAMES come from the public card only (the strong
+  // sources), never from the curiosity fields. Those are private to their owner, and the
+  // want is matched on its synonyms too ("manufacturers" reaches "production" and
+  // "industrial"), so naming a synonym that only an interest contained spelled that
+  // interest out to whoever read the reason. The interests still count towards the score
+  // above, so nobody loses a match; with no public word to name, the reason is the
+  // general sentence.
   const shared = designationHit
     ? []
-    : wantTokens.filter(w => offerTokens.some(o => isRelatedTerm(w, o))).slice(0, 3);
+    : wantTokens.filter(w => strongOffer.some(o => isRelatedTerm(w, o))).slice(0, 3);
 
   return {
     score: Math.min(1, score),
