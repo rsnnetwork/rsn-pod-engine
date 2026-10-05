@@ -21,3 +21,31 @@ export function clip(text: string | null | undefined, max = 160): string | null 
   if (characters.length <= limit) return t;
   return `${characters.slice(0, limit - 1).join('')}…`;
 }
+
+const isSpace = (character: string) => /\s/.test(character);
+
+/**
+ * Like clip, but a text that has to be cut is cut between words, so it never
+ * ends in half a word. It keeps as many whole words as fit, with the ellipsis,
+ * in at most `max` characters, and drops a dash, comma or colon left hanging
+ * before the ellipsis. A first word longer than `max` has no earlier break, so
+ * it is cut inside the word, as clip does. Blank, `max` and characters are
+ * handled as in clip.
+ */
+export function clipAtWord(text: string | null | undefined, max = 160): string | null {
+  const t = (text ?? '').trim();
+  if (!t) return null;
+  const limit = Math.floor(max);
+  if (!(limit >= 1)) return null;
+  const characters = Array.from(t);
+  if (characters.length <= limit) return t;
+
+  const kept = characters.slice(0, limit - 1);
+  let end = kept.length;
+  const cutsAWord = end > 0 && !isSpace(characters[end]) && !isSpace(kept[end - 1]);
+  if (cutsAWord) {
+    const lastSpace = kept.map(isSpace).lastIndexOf(true);
+    if (lastSpace > 0) end = lastSpace;
+  }
+  return `${kept.slice(0, end).join('').replace(/[\s,;:(–—-]+$/, '')}…`;
+}

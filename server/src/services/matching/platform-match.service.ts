@@ -23,6 +23,7 @@ import { expandWantTags } from './want-synonyms';
 import { extractConstraints, checkConstraints } from './want-constraints';
 import * as pokeService from '../poke/poke.service';
 import { UserPoke } from '../poke/poke.service';
+import { clipAtWord } from '../people/text';
 import type { MeetingFormat } from '@rsn/shared';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -566,14 +567,42 @@ export async function expressInterest(
     );
     if (note) {
       // The v4 Meet sheet: the member's own words first, "with the reason attached".
-      message = reason ? `${note}\n\nWhy REASON suggested this: ${reason}.` : note;
+      message = reason ? attachReason(note, reason) : note;
     } else {
       message = reason
         ? `${reason}. We think you two should meet.`
         : `${senderName} thinks you fit what they're looking for. We think you two should meet.`;
     }
   }
-  return pokeService.sendPoke(userId, targetUserId, message.slice(0, 500), agentId, opts.format);
+  return pokeService.sendPoke(userId, targetUserId, message.slice(0, REQUEST_MESSAGE_MAX), agentId, opts.format);
+}
+
+/** What a request message may hold: the stored cap, which counts UTF-16 units. */
+const REQUEST_MESSAGE_MAX = 500;
+const REASON_LEAD = '\n\nWhy REASON suggested this: ';
+
+/**
+ * The member's own words, then REASON's reason. When the two would not fit in a
+ * request, the reason is what gives way: first its closing full stop, then the
+ * reason itself, cut between words and ending in an ellipsis (which closes the
+ * sentence, so no full stop follows it). The note is never cut, so a long note can
+ * no longer take the end of the reason off mid-word, which is what slicing the
+ * whole message at 500 did.
+ */
+function attachReason(note: string, reason: string): string {
+  const lead = `${note}${REASON_LEAD}`;
+  const whole = `${lead}${reason}.`;
+  if (whole.length <= REQUEST_MESSAGE_MAX) return whole;
+  // The cap counts UTF-16 units and clipAtWord counts characters, so an emoji in the
+  // reason can leave the cut text a unit or two over: take the excess off the budget
+  // and cut again. No room left at all means the note goes alone.
+  let room = REQUEST_MESSAGE_MAX - lead.length;
+  for (let shortened = clipAtWord(reason, room); shortened; shortened = clipAtWord(reason, room)) {
+    const excess = lead.length + shortened.length - REQUEST_MESSAGE_MAX;
+    if (excess <= 0) return `${lead}${shortened}`;
+    room -= excess;
+  }
+  return note;
 }
 
 /** The want-text of one agent, for wording the introduction it produced. */
