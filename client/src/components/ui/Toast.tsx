@@ -30,8 +30,10 @@ export default function ToastContainer({ hostQuiet = false }: Props) {
   const visible = hostQuiet
     ? userFacing.filter(t => t.type === 'error' && !t.hostSilent)
     : userFacing;
+  // z-[210] sits above the REASON sheet overlay (z-[200]), so a toast raised
+  // from inside a sheet is not hidden behind its backdrop.
   return (
-    <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2 max-w-sm">
+    <div className="fixed top-4 right-4 z-[210] flex flex-col gap-2 max-w-sm">
       <AnimatePresence>
         {visible.map(t => {
           const Icon = icons[t.type];
