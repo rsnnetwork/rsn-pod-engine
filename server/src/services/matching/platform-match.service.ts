@@ -399,7 +399,7 @@ const PROFILE_COLUMNS = `
   u.why_i_want_to_meet AS "whyIWantToMeet",
   u.industry, u.bio, u.location`;
 
-async function loadProfile(userId: string): Promise<(IntentProfile & { onboardingCompleted: boolean }) | null> {
+export async function loadProfile(userId: string): Promise<(IntentProfile & { onboardingCompleted: boolean }) | null> {
   const r = await query<IntentProfile & { onboardingCompleted: boolean }>(
     `SELECT ${PROFILE_COLUMNS}, u.onboarding_completed AS "onboardingCompleted"
      FROM users u WHERE u.id = $1`,

@@ -1,8 +1,9 @@
 // ─── People (REASON milestone 1, 29 Sep 2026) ────────────────────────────────
+// GET    /people/connections/recent
+// GET    /people/:userId/brief
 // PUT    /people/:userId/response  { response: 'saved' | 'passed' }
 // DELETE /people/:userId/response
 // POST   /people/:userId/outcome   { worthContinuing, outcomes[] }
-// (Task A5 adds the brief and /people/connections/recent.)
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
@@ -13,6 +14,7 @@ import { peopleWriteLimiter } from '../middleware/rateLimit';
 import { fanoutUserEntity } from '../realtime/fanout';
 import * as responses from '../services/people/person-response.service';
 import * as outcomes from '../services/people/meeting-outcome.service';
+import * as brief from '../services/people/person-brief.service';
 
 const router = Router();
 
@@ -28,6 +30,32 @@ const outcomeBody = z.object({
 // validate() has already replaced req.body with the parsed value, but Express types it any.
 type ResponseBody = z.infer<typeof responseBody>;
 type OutcomeBody = z.infer<typeof outcomeBody>;
+
+// The two reads change nothing, so they emit nothing. /connections/recent comes
+// first so it is never taken for a member id.
+
+router.get('/connections/recent', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const data = await brief.listRecentConnections(req.user!.userId);
+    res.json({ success: true, data } as ApiResponse);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get(
+  '/:userId/brief',
+  authenticate,
+  validate(userParams, 'params'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await brief.getPersonBrief(req.user!.userId, req.params.userId);
+      res.json({ success: true, data } as ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 // Every write here changes only the member's own view. fanoutUserEntity emits
 // user:<id>, which their For You, profile brief and side panels listen on.

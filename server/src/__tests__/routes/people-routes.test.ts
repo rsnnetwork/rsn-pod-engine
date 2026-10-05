@@ -27,6 +27,13 @@ jest.mock('../../services/people/person-response.service', () => ({
 }));
 const mockRecord = jest.fn().mockResolvedValue({ id: 'o1', worthContinuing: 'yes', outcomes: ['advice'], createdAt: '2026-09-30T10:00:00.000Z' });
 jest.mock('../../services/people/meeting-outcome.service', () => ({ recordOutcome: (...a: unknown[]) => mockRecord(...a), __esModule: true }));
+const mockBrief = jest.fn().mockResolvedValue({ person: { id: 'x' } });
+const mockRecent = jest.fn().mockResolvedValue([]);
+jest.mock('../../services/people/person-brief.service', () => ({
+  getPersonBrief: (...a: unknown[]) => mockBrief(...a),
+  listRecentConnections: (...a: unknown[]) => mockRecent(...a),
+  __esModule: true,
+}));
 const mockFanout = jest.fn().mockResolvedValue(undefined);
 jest.mock('../../realtime/fanout', () => ({ fanoutUserEntity: (...a: unknown[]) => mockFanout(...a), __esModule: true }));
 
@@ -34,7 +41,7 @@ import { query } from '../../db';
 import peopleRoutes from '../../routes/people';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 import { peopleWriteLimiter } from '../../middleware/rateLimit';
-import { ConflictError, NotFoundError } from '../../middleware/errors';
+import { AppError, ConflictError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes, OUTCOME_KEYS, PERSON_RESPONSES, WORTH_CONTINUING } from '@rsn/shared';
 
 const app = express();
@@ -253,5 +260,78 @@ describe('the write routes are rate limited', () => {
     const at = handlers.indexOf(peopleWriteLimiter);
     expect(at).toBeGreaterThanOrEqual(0);
     expect(at).toBeLessThan(handlers.length - 1);
+  });
+});
+
+describe('GET brief and recent connections', () => {
+  it('serves the brief for a valid id only', async () => {
+    expect((await request(app).get(`/people/${TARGET}/brief`).set('Authorization', `Bearer ${token()}`)).status).toBe(200);
+    expect(mockBrief).toHaveBeenCalledWith('u-viewer', TARGET);
+    expect((await request(app).get('/people/nope/brief').set('Authorization', `Bearer ${token()}`)).status).toBe(400);
+  });
+  it('serves recent connections (a path that must not be swallowed by /:userId)', async () => {
+    const res = await request(app).get('/people/connections/recent').set('Authorization', `Bearer ${token()}`);
+    expect(res.status).toBe(200);
+    expect(mockRecent).toHaveBeenCalledWith('u-viewer');
+  });
+});
+
+// Beyond the brief: what a read must and must not do.
+describe('the two reads', () => {
+  const auth = { Authorization: `Bearer ${token()}` };
+  const CAPS = TARGET.toUpperCase();
+  type Layer = { route?: { path: string } };
+  // Every route path, in the order the router tries them.
+  const routePaths = () => (peopleRoutes as unknown as { stack: Layer[] }).stack
+    .flatMap((layer) => (layer.route ? [layer.route.path] : []));
+
+  it('return the service\'s answer under data, and tell no screens (a read changes nothing)', async () => {
+    mockBrief.mockResolvedValueOnce({ person: { id: TARGET, displayName: 'Sarah Chen' } });
+    const brief = await request(app).get(`/people/${TARGET}/brief`).set(auth);
+    expect(brief.body).toEqual({ success: true, data: { person: { id: TARGET, displayName: 'Sarah Chen' } } });
+    const list = [{ userId: TARGET, displayName: 'Sarah Chen', avatarUrl: null, connectedAt: '2026-09-20T10:00:00.000Z' }];
+    mockRecent.mockResolvedValueOnce(list);
+    const recent = await request(app).get('/people/connections/recent').set(auth);
+    expect(recent.body).toEqual({ success: true, data: list });
+    expect(mockFanout).not.toHaveBeenCalled();
+  });
+
+  it('reach the service with the id lower-cased, so the pair lookups cannot flip', async () => {
+    const res = await request(app).get(`/people/${CAPS}/brief`).set(auth);
+    expect(res.status).toBe(200);
+    expect(mockBrief).toHaveBeenCalledWith('u-viewer', TARGET);
+  });
+
+  it('refuse a missing token, and a bad id, without calling the service', async () => {
+    expect((await request(app).get(`/people/${TARGET}/brief`)).status).toBe(401);
+    expect((await request(app).get('/people/connections/recent')).status).toBe(401);
+    expect((await request(app).get('/people/not-a-uuid/brief').set(auth)).status).toBe(400);
+    expect(mockBrief).not.toHaveBeenCalled();
+    expect(mockRecent).not.toHaveBeenCalled();
+  });
+
+  it('answer 404 with no data when the person is not available (blocked, closed or unknown)', async () => {
+    mockBrief.mockRejectedValueOnce(new NotFoundError('User', TARGET));
+    const res = await request(app).get(`/people/${TARGET}/brief`).set(auth);
+    expect(mockBrief).toHaveBeenCalledWith('u-viewer', TARGET);
+    expect(res.status).toBe(404);
+    expect(res.body.success).toBe(false);
+    expect(res.body).not.toHaveProperty('data');
+  });
+
+  it('answer 400 for yourself, in the service\'s own words', async () => {
+    mockBrief.mockRejectedValueOnce(new AppError(400, ErrorCodes.VALIDATION_ERROR, 'This is your own profile'));
+    const res = await request(app).get(`/people/${TARGET}/brief`).set(auth);
+    expect(res.status).toBe(400);
+    expect(res.body.error.message).toBe('This is your own profile');
+  });
+
+  it('are registered in order: /connections/recent, then the brief, then the /:userId writes', () => {
+    const paths = routePaths();
+    const at = (path: string) => paths.indexOf(path);
+    expect(at('/connections/recent')).toBeGreaterThanOrEqual(0);
+    expect(at('/connections/recent')).toBeLessThan(at('/:userId/brief'));
+    expect(at('/:userId/brief')).toBeLessThan(at('/:userId/response'));
+    expect(at('/:userId/brief')).toBeLessThan(at('/:userId/outcome'));
   });
 });
