@@ -20,9 +20,9 @@ authors reference.
 | `pod:<podId>:members` | Member added/removed/role-changed/approved/rejected/left | `pod-members`, `pod-member-counts`, `pod-pending-members` |
 | `pod:<podId>:invites` | Pod invite created/accepted/declined/revoked | `pod-pending-invites` |
 | `pod:<podId>:sessions` | Session under this pod created/updated/deleted/status-changed | `pod-sessions`, `pod-session-count` |
-| `user:<userId>` | User profile mutates | `user`, `user-settings` |
+| `user:<userId>` | User profile mutates. Also, for REASON: the member saves or passes on a person, or undoes it (that member only); the member records what happened after a meeting (that member only); a meeting request is sent (both the sender's and the recipient's `user:<id>` and `user:<id>:invites`, whatever the recipient's bell setting) | `user`, `user-settings` |
 | `user:<userId>:pods` | User's pod membership changes | `my-pods` (when scoped to a user) |
-| `user:<userId>:invites` | User's received-invites list changes | `my-invites`, `received-invites` |
+| `user:<userId>:invites` | User's received-invites list changes. Also, for meeting requests: one is sent (both the sender's and the recipient's `user:<id>:invites`, whatever the recipient's bell setting), or one is accepted or declined (both members) | `my-invites`, `received-invites` |
 | `user:<userId>:sessions` | User's registered-session list changes | `my-sessions` |
 | `user:<userId>:blocks` | User block-list mutates | `blocked-users`, `user-block-status`, `can-message` |
 | `user:<userId>:dms` | User's DM conversation list changes | `dm-conversations`, `dm-groups`, `dm-unread-count` |
