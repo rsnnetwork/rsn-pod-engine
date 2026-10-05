@@ -9,6 +9,7 @@
 // added to `users` cannot leak by accident on some other screen.
 
 import type { PublicMember, User } from '@rsn/shared';
+import type { IntentProfile } from '../matching/platform-match.service';
 
 /** Keys of `User` that must never reach another member. */
 export const PRIVATE_MEMBER_KEYS: ReadonlySet<string> = new Set([
@@ -41,6 +42,42 @@ export function toPublicMember(u: Partial<User> & { id: string }): PublicMember 
     professionalRole: u.professionalRole ?? [],
     expertiseText: u.expertiseText ?? null,
     whatICanHelpWith: u.whatICanHelpWith ?? null,
+  };
+}
+
+/**
+ * What a matching scorer may read about ANOTHER member when the screen can be aimed at any
+ * member by id (the Human Profile brief): the public card's fields and nothing of why they
+ * are here. The scorer counts a member's interests and what they care about as things they
+ * offer, and words its reason from whatever matched, so a scorer given those fields spells
+ * them out to whoever is looking (5 Oct 2026). Lists such as For You score the whole profile
+ * on purpose, to choose whom to suggest, and never print a word from a private field.
+ *
+ * Every field is named here, so a field added to IntentProfile later is left out (or, when
+ * it is required, fails the build) until someone decides it belongs on the public card.
+ */
+export function toPublicIntentProfile(p: IntentProfile): IntentProfile {
+  return {
+    id: p.id,
+    displayName: p.displayName ?? null,
+    avatarUrl: p.avatarUrl ?? null,
+    professionalRole: p.professionalRole ?? null,
+    jobTitle: p.jobTitle ?? null,
+    // Provenance of the title, which decides which title the reason names. Not on the card, and says nothing about the member.
+    jobTitleSource: p.jobTitleSource ?? null,
+    company: p.company ?? null,
+    expertiseText: p.expertiseText ?? null,
+    whatICanHelpWith: p.whatICanHelpWith ?? null,
+    industry: p.industry ?? null,
+    bio: p.bio ?? null,
+    location: p.location ?? null,
+    // Private to the member (PRIVATE_MEMBER_KEYS): why they are here and what they want.
+    whatICareAbout: null,
+    goals: null,
+    interests: null,
+    myIntent: null,
+    whoIWantToMeet: null,
+    whyIWantToMeet: null,
   };
 }
 

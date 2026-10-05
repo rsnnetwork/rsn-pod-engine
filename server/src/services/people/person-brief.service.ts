@@ -14,7 +14,7 @@ import {
 import { AppError, NotFoundError } from '../../middleware/errors';
 import * as blockService from '../block/block.service';
 import { getUserById } from '../identity/identity.service';
-import { toPublicMember } from '../user/public-card';
+import { toPublicIntentProfile, toPublicMember } from '../user/public-card';
 import { loadProfile, scoreFit, MATCH_THRESHOLD, BROWSE_THRESHOLD } from '../matching/platform-match.service';
 import { getPokeWith } from '../poke/poke.service';
 import { getResponse } from './person-response.service';
@@ -123,7 +123,9 @@ export async function getPersonBrief(viewerId: string, targetId: string): Promis
     findPath(viewerId, targetId),
   ]);
 
-  const fit = me && them ? scoreFit(me, them) : null;
+  // The brief can be aimed at ANY member by id, so the fit is judged on the public card only:
+  // the scorer counts private interests as offers and words its reason from what matched.
+  const fit = me && them ? scoreFit(me, toPublicIntentProfile(them)) : null;
   const strength = !fit ? null : fit.score >= MATCH_THRESHOLD ? 'strong' : fit.score >= BROWSE_THRESHOLD ? 'close' : null;
 
   const e = enc.rows[0];
@@ -139,9 +141,9 @@ export async function getPersonBrief(viewerId: string, targetId: string): Promis
 
   const person = toPublicMember(target);
   const first = person.firstName || person.displayName.split(' ')[0] || 'them';
-  // `||`, not `??`: a blank answer is '', which must fall through.
-  const theyCanBring = clip(them?.whatICanHelpWith || them?.expertiseText);
-  const youAreLookingFor = clip(me?.whoIWantToMeet || me?.myIntent);
+  // clip turns a blank answer ('' or only spaces) into null, which is what falls through to the next field.
+  const theyCanBring = clip(them?.whatICanHelpWith) ?? clip(them?.expertiseText);
+  const youAreLookingFor = clip(me?.whoIWantToMeet) ?? clip(me?.myIntent);
   const upcomingEvents = events.rows.map(r => ({ id: r.id, title: r.title, scheduledAt: r.scheduled_at.toISOString() }));
 
   return {
@@ -168,7 +170,9 @@ export async function getPersonBrief(viewerId: string, targetId: string): Promis
 
 export async function listRecentConnections(userId: string): Promise<RecentConnection[]> {
   const r = await query<{ user_id: string; display_name: string; avatar_url: string | null; connected_at: Date }>(
-    `SELECT u.id AS user_id, u.display_name, u.avatar_url, p.responded_at AS connected_at
+    // One row per person: two members who each had a request accepted by the other have two
+    // accepted rows between them, and are listed once, at the time of the newest.
+    `SELECT u.id AS user_id, u.display_name, u.avatar_url, MAX(p.responded_at) AS connected_at
        FROM user_pokes p
        JOIN users u ON u.id = CASE WHEN p.sender_id = $1 THEN p.recipient_id ELSE p.sender_id END
       WHERE (p.sender_id = $1 OR p.recipient_id = $1)
@@ -177,7 +181,8 @@ export async function listRecentConnections(userId: string): Promise<RecentConne
         AND NOT EXISTS (SELECT 1 FROM user_blocks b
                          WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
                             OR (b.blocker_id = u.id AND b.blocked_id = $1))
-      ORDER BY p.responded_at DESC
+      GROUP BY u.id, u.display_name, u.avatar_url
+      ORDER BY connected_at DESC
       LIMIT 5`,
     [userId],
   );

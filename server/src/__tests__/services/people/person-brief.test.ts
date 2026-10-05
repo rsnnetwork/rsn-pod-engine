@@ -130,7 +130,7 @@ describe('listRecentConnections', () => {
     const sql = String(mockQuery.mock.calls[0][0]);
     expect(sql).toMatch(/status = 'accepted'/);
     expect(sql).toMatch(/user_blocks/);
-    expect(sql).toMatch(/ORDER BY p\.responded_at DESC/);
+    expect(sql).toMatch(/ORDER BY connected_at DESC/);
     expect(out).toEqual([{ userId: TARGET, displayName: 'Sarah Chen', avatarUrl: null, connectedAt: '2026-09-20T10:00:00.000Z' }]);
   });
 });
@@ -176,45 +176,86 @@ describe('getPersonBrief: a person you cannot open', () => {
   });
 });
 
-describe('getPersonBrief: the real scorer', () => {
+describe('getPersonBrief: the fit is judged on the public card only', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  // The scorer reads the OTHER member's whole profile, private fields included, to
-  // decide the fit. What it hands back is the "why" line shown on the person page,
-  // so it must carry only the viewer's own words and the other member's public
-  // name and title. The scorer here is the real one, not the stand-in above.
-  it('never puts the other member\'s private words in the brief, even when they are what matched', async () => {
-    const { scoreFit } = jest.requireActual<typeof import('../../../services/matching/platform-match.service')>(
-      '../../../services/matching/platform-match.service',
-    );
-    const privateWords = ['SECRETWANT', 'SECRETWHY', 'SECRETINTENT', 'SECRETGOAL', 'zebrafish', 'sarah@example.com'];
-    const viewer = {
-      id: VIEWER, displayName: 'Ali', whoIWantToMeet: 'sustainable packaging manufacturers', myIntent: null,
-      whyIWantToMeet: null, goals: null, professionalRole: null, jobTitle: null,
-    };
-    const sarah = {
-      id: TARGET, displayName: 'Sarah Chen', professionalRole: ['Founder'], jobTitle: 'Founder', company: 'Harbor Collective',
-      whatICanHelpWith: 'Introductions to European retailers', expertiseText: null,
-      // Private. Only her sustainable-packaging INTEREST can make her a fit for the want above.
-      whatICareAbout: 'sustainable packaging zebrafish', interests: ['sustainable packaging', 'zebrafish'],
-      whoIWantToMeet: 'SECRETWANT investors in biodegradable films', whyIWantToMeet: 'SECRETWHY',
-      myIntent: 'SECRETINTENT', goals: ['SECRETGOAL'],
-    };
+  // The scorer counts a member's private interests as things they offer, and words its reason from
+  // whatever matched. A want is matched on its synonyms too ("manufacturers" reaches "production" and
+  // "industrial"), so a reason could spell a private interest back to the person looking (the
+  // reviewer's case, 5 Oct 2026). The brief can be aimed at ANY member by id, so it scores their
+  // public card only. These tests use the real scorer, not the stand-in above.
+  const realScoreFit = () => jest.requireActual<typeof import('../../../services/matching/platform-match.service')>(
+    '../../../services/matching/platform-match.service',
+  ).scoreFit;
+
+  const viewer = {
+    id: VIEWER, displayName: 'Ali', whoIWantToMeet: 'manufacturers', myIntent: null,
+    whyIWantToMeet: null, goals: null, professionalRole: null, jobTitle: null,
+  };
+  // Public card: a strategy consultant. Private: two interests that happen to be synonyms of the want.
+  const consultant = {
+    id: TARGET, displayName: 'Sarah Chen', professionalRole: ['Strategy consultant'], jobTitle: 'Strategy consultant',
+    industry: 'Consulting', whatICanHelpWith: 'Go-to-market strategy', expertiseText: null,
+    whatICareAbout: 'industrial design and production of short films',
+    interests: ['industrial design', 'production of short films'],
+    whoIWantToMeet: 'SECRETWANT investors', whyIWantToMeet: 'SECRETWHY', myIntent: 'SECRETINTENT', goals: ['SECRETGOAL'],
+  };
+  const armWith = (them: object) => {
     arm();
-    mockScore.mockImplementation(scoreFit);
-    mockLoadProfile.mockImplementation((id: string) => Promise.resolve(id === VIEWER ? viewer : sarah));
+    mockScore.mockImplementation(realScoreFit());
+    mockLoadProfile.mockImplementation((id: string) => Promise.resolve(id === VIEWER ? viewer : them));
+  };
+
+  it('a fit that only the private interests make is no match at all, and none of their words reach the brief', async () => {
+    armWith(consultant);
+    // The row the user lookup returns carries the private interests too; the public card must drop them.
+    mockGetUser.mockResolvedValue({ ...target, industry: 'Consulting', jobTitle: 'Strategy consultant', interests: consultant.interests });
 
     const brief = await getPersonBrief(VIEWER, TARGET);
 
-    // The match is real, and it came through her private interest: without that interest there is none.
-    // So the words below are absent because the scorer keeps them out, not because nothing matched.
-    expect(brief.match).not.toBeNull();
-    expect(brief.match?.reason).toMatch(/sustainable|packag/i);
-    expect(scoreFit(viewer as never, { ...sarah, whatICareAbout: null, interests: [] } as never).score).toBe(0);
-    const everything = JSON.stringify(brief);
-    for (const word of privateWords) expect(everything).not.toContain(word);
-    // The viewer's own words are theirs to see.
-    expect(brief.youAreLookingFor).toBe('sustainable packaging manufacturers');
+    expect(brief.match).toBeNull();
+    const everything = JSON.stringify(brief).toLowerCase();
+    for (const word of ['production', 'industrial', 'short films', 'secretwant', 'secretwhy', 'secretintent', 'secretgoal', 'secret-', 'sarah@example.com']) {
+      expect(everything).not.toContain(word);
+    }
+    // Control: scored on the whole profile the same pair DOES fit, strongly. So the interests are
+    // exactly what the brief leaves out, and the checks above are not passing for want of a match.
+    expect(realScoreFit()(viewer as never, consultant as never).score).toBeGreaterThanOrEqual(0.45);
+  });
+
+  it('a synonym that hits a public field still matches, and is named', async () => {
+    armWith({ ...consultant, bio: 'We run an industrial fabrication shop with machining', interests: null, whatICareAbout: null });
+
+    const brief = await getPersonBrief(VIEWER, TARGET);
+
+    expect(brief.match?.strength).toBe('strong');
+    expect(brief.match?.reason).toMatch(/industrial/);
+    expect(brief.match?.reason).toMatch(/fabrication/);
+  });
+
+  it('with a public hit and a private one, only the public word is named', async () => {
+    armWith({ ...consultant, bio: 'We run an industrial fabrication shop with machining' });
+
+    const brief = await getPersonBrief(VIEWER, TARGET);
+
+    expect(brief.match?.reason).toMatch(/industrial/);
+    expect(brief.match?.reason).not.toMatch(/production/);
+  });
+
+  it('hands the scorer the viewer\'s own profile and, of the other member, only what is on the public card', async () => {
+    arm();
+    mockLoadProfile.mockImplementation((id: string) => Promise.resolve(id === VIEWER ? viewer : consultant));
+
+    await getPersonBrief(VIEWER, TARGET);
+
+    const [me, them] = mockScore.mock.calls[0];
+    expect(me).toBe(viewer); // the viewer's own want is what decides the fit
+    expect(them).toMatchObject({
+      id: TARGET, displayName: 'Sarah Chen', professionalRole: ['Strategy consultant'], jobTitle: 'Strategy consultant',
+      industry: 'Consulting', whatICanHelpWith: 'Go-to-market strategy',
+    });
+    for (const k of PRIVATE_MEMBER_KEYS) if (k in them) expect(them[k]).toBeNull();
+    expect(JSON.stringify(them)).not.toMatch(/SECRET|industrial design|short films/i);
   });
 });
 
@@ -308,6 +349,17 @@ describe('getPersonBrief: what the page is given', () => {
     expect(brief.theyCanBring).toBe('Retail partnerships.');
     expect(brief.youAreLookingFor).toBe('meet founders who sell to retailers');
     expect(brief.opener).toBe('Ask Sarah about retail partnerships. Then say what you are looking for: meet founders who sell to retailers.');
+  });
+
+  // `a || b` reads past '' but not past '   ': spaces are truthy, so the next field was never read.
+  it('treats an answer that is only spaces as blank too, and reads the next field instead', async () => {
+    arm();
+    mockLoadProfile.mockImplementation((id: string) => Promise.resolve(id === VIEWER
+      ? { id, whoIWantToMeet: '   ', myIntent: 'meet founders who sell to retailers' }
+      : { id, whatICanHelpWith: '  \n ', expertiseText: 'Retail partnerships.' }));
+    const brief = await getPersonBrief(VIEWER, TARGET);
+    expect(brief.theyCanBring).toBe('Retail partnerships.');
+    expect(brief.youAreLookingFor).toBe('meet founders who sell to retailers');
   });
 
   it('gives the request id only while a request is waiting on you, and the last-met date only for an event', async () => {
@@ -404,6 +456,36 @@ describe('getPersonBrief: the first-20-minutes line sets the member\'s words int
     const cut = Array.from(long).slice(0, 159).join('');
     const opener = await openerFrom(null, long);
     expect(opener).toBe(`Start with why REASON put you two together. Then say what you are looking for: f${cut.slice(1)}…`);
+  });
+});
+
+describe('listRecentConnections: one row per person', () => {
+  // Two members who each had a request accepted by the other (crossing requests) have two accepted
+  // rows between them. The list must show the person once, at the time of the newest of them.
+  it('groups the accepted requests by the other member, and keeps the newest time', async () => {
+    mockQuery.mockReset();
+    mockQuery.mockResolvedValue({ rows: [] });
+    await listRecentConnections(VIEWER);
+    const sql = String(mockQuery.mock.calls[0][0]).replace(/\s+/g, ' ');
+    expect(sql).toMatch(/MAX\(p\.responded_at\) AS connected_at/);
+    expect(sql).toMatch(/GROUP BY u\.id, u\.display_name, u\.avatar_url/);
+    // Filters apply to each request before they are grouped; the limit applies to people.
+    expect(sql.indexOf('WHERE')).toBeLessThan(sql.indexOf('GROUP BY'));
+    expect(sql.indexOf('GROUP BY')).toBeLessThan(sql.indexOf('ORDER BY connected_at DESC'));
+    expect(sql.indexOf('ORDER BY connected_at DESC')).toBeLessThan(sql.indexOf('LIMIT 5'));
+  });
+
+  it('passes the rows through one for one, newest first as the database sorted them', async () => {
+    const OTHER = 'c0000000-0000-4000-8000-000000000003';
+    mockQuery.mockReset();
+    mockQuery.mockResolvedValue({ rows: [
+      { user_id: TARGET, display_name: 'Sarah Chen', avatar_url: 'https://a/s.png', connected_at: new Date('2026-09-22T10:00:00Z') },
+      { user_id: OTHER, display_name: 'Omar Haq', avatar_url: null, connected_at: new Date('2026-09-20T10:00:00Z') },
+    ] });
+    expect(await listRecentConnections(VIEWER)).toEqual([
+      { userId: TARGET, displayName: 'Sarah Chen', avatarUrl: 'https://a/s.png', connectedAt: '2026-09-22T10:00:00.000Z' },
+      { userId: OTHER, displayName: 'Omar Haq', avatarUrl: null, connectedAt: '2026-09-20T10:00:00.000Z' },
+    ]);
   });
 });
 
