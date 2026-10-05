@@ -42,14 +42,18 @@ export default function ReasonShell() {
       <ShellSidebar unreadCount={unreadCount} />
       <div className="flex h-full min-w-0 flex-col min-[721px]:pl-[calc(82px+env(safe-area-inset-left))] min-[981px]:pl-[calc(232px+env(safe-area-inset-left))]">
         <ShellTopbar />
+        {/* Outside <main>, as AppLayout had it: Messages sizes itself to what <main> has
+            left, and anything else inside <main> pushes its composer off the screen. */}
+        {nudgeProfile && (
+          <div className="shrink-0 pl-[max(13px,env(safe-area-inset-left))] pr-[max(13px,env(safe-area-inset-right))] pt-4 min-[721px]:pl-[22px] min-[721px]:pr-[max(22px,env(safe-area-inset-right))] min-[721px]:pt-[22px]">
+            <div className="mx-auto flex w-full max-w-[1400px] flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#f3dcb8] bg-[#fff8ec] px-4 py-3 text-[13px]">
+              <span><strong>Complete your profile</strong> so REASON can suggest people with a reason to meet you.</span>
+              <Link to="/onboarding" className="flex min-h-[44px] items-center rounded-[11px] bg-reason-red px-4 font-bold text-white">Complete now</Link>
+            </div>
+          </div>
+        )}
         <main className="min-h-0 flex-1 overflow-y-auto pb-[calc(96px+env(safe-area-inset-bottom))] pl-[max(13px,env(safe-area-inset-left))] pr-[max(13px,env(safe-area-inset-right))] pt-4 min-[721px]:pb-10 min-[721px]:pl-[22px] min-[721px]:pr-[max(22px,env(safe-area-inset-right))] min-[721px]:pt-[22px]">
           <div className="mx-auto w-full max-w-[1400px]">
-            {nudgeProfile && (
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#f3dcb8] bg-[#fff8ec] px-4 py-3 text-[13px]">
-                <span><strong>Complete your profile</strong> so REASON can suggest people with a reason to meet you.</span>
-                <Link to="/onboarding" className="flex min-h-[44px] items-center rounded-[11px] bg-reason-red px-4 font-bold text-white">Complete now</Link>
-              </div>
-            )}
             {inPeople && <PeopleTabs />}
             {inAdmin && <AdminTabs />}
             <Outlet />

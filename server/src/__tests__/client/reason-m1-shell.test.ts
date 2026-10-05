@@ -82,6 +82,17 @@ describe('REASON shell: faults found by looking at it', () => {
     expect(read('features/reason/shell/ReasonShell.tsx')).toMatch(/\{inAdmin && <AdminTabs \/>\}/);
     expect(read('features/reason/shell/ReasonShell.tsx')).toMatch(/isAdmin\(user\?\.role\)/);
   });
+  it('the profile nudge sits between the top bar and the page area, outside <main> (Messages sizes itself to <main>, so anything else in it pushes the composer off screen)', () => {
+    const shell = read('features/reason/shell/ReasonShell.tsx');
+    const topbar = shell.indexOf('<ShellTopbar />');
+    const nudge = shell.indexOf('{nudgeProfile && (');
+    const main = shell.indexOf('<main ');
+    expect(topbar).toBeGreaterThan(-1);
+    expect(nudge).toBeGreaterThan(topbar);
+    expect(main).toBeGreaterThan(nudge);
+    // Nothing between the two <main> tags may be the nudge.
+    expect(shell.slice(main, shell.indexOf('</main>'))).not.toMatch(/nudgeProfile|Complete your profile/);
+  });
   it('the current tab is brought into view inside the tab rows (not by moving the page), and again once the font has loaded', () => {
     const hook = read('features/reason/shell/useRevealActive.ts').replace(/^\s*\/\/.*$/gm, '');
     expect(hook).toMatch(/\[aria-current="page"\]/);

@@ -14,13 +14,17 @@
 //   5  top search      opens Find people with the words already typed
 //   6  profile nudge   a member who has not finished onboarding is asked to, on any page but
 //                      For You; one who has finished is not
-//   7  old pages       Circles, Events, Messages, Settings, Pods and Support render inside
+//   7  Messages        beside the nudge the composer is fully visible without scrolling and the
+//                      page is no taller than its page area, at 360, 390 and 1280 (the nudge
+//                      once sat inside <main> and pushed the composer off the screen)
+//   8  old pages       Circles, Events, Messages, Settings, Pods and Support render inside
 //                      the shell with no script errors
-//   8  account menu    Invite and Log out stay reachable (Admin only for admins)
+//   9  account menu    Invite and Log out stay reachable (Admin only for admins)
 //
 // Two throwaway members, no admin. Both are created in the database this run talks to and
 // removed by exact id in afterAll. The preview reads and writes PRODUCTION data, so nothing
-// here sends a request to another member.
+// here sends a request to another member: the one conversation the Messages checks need is
+// written straight into the two throwaway members' own rows (and removed with them).
 //
 // Run it against the Vercel preview, one engine at a time (one spec per process: the pool is
 // shared):
@@ -39,6 +43,7 @@ import { createTestUser, TestUser, pool } from '../helpers/auth';
 import { gotoRetry, cleanup, wait, APP } from '../helpers/live-ui';
 import { launchBrowser, engineLabel, contextOptions } from '../helpers/engine';
 import { primePreview } from '../helpers/preview-bypass';
+import { expectReachable } from '../helpers/viewport-fit';
 
 const SHOTS = path.resolve(__dirname, '../../workspace/scratch/2026-10-05-reason-shell-preview-shots');
 
@@ -89,6 +94,25 @@ function sizes(wanted: Size[]): Size[] {
 const BENIGN_PAGE_ERROR = /ResizeObserver loop (limit exceeded|completed with undelivered notifications)/i;
 
 // ── Accounts and pages ───────────────────────────────────────────────────────────────────────
+
+// One conversation between the two throwaway members, written straight into their own rows, so a
+// real thread (with its real composer) can be opened. Nothing is sent and nobody is told. The
+// message is marked read; cleanup() removes both rows with the members.
+let threadId: string | undefined;
+async function thread(): Promise<string> {
+  if (threadId) return threadId;
+  const made1 = await pool.query<{ id: string }>(
+    `INSERT INTO dm_conversations (user_a_id, user_b_id, last_message_at)
+     VALUES (LEAST($1::uuid, $2::uuid), GREATEST($1::uuid, $2::uuid), NOW()) RETURNING id`,
+    [member.id, unfinished.id],
+  );
+  threadId = made1.rows[0].id;
+  await pool.query(
+    `INSERT INTO direct_messages (conversation_id, from_user_id, content, read_at) VALUES ($1, $2, $3, NOW())`,
+    [threadId, member.id, 'Hello from the shell spec.'],
+  );
+  return threadId;
+}
 
 async function makeMember(label: string, opts: { finishedOnboarding: boolean }): Promise<TestUser> {
   const u = await createTestUser(`m1shell-${label}`);
@@ -564,10 +588,105 @@ test('6 profile nudge: asked to finish on pages other than For You, and only if 
 });
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
-// 7. Old pages inside the shell
+// 7. Messages beside the nudge
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+//
+// The Messages page sizes itself to what <main> has left. The nudge once sat INSIDE <main>, so for
+// exactly the members who are shown it the page was taller than its page area: at 360x780 the
+// message box sat at y 770 to 812 under the bar (at 711), at 390x844 at 834 to 876 (bar 775), at
+// 1280x800 at 799 to 837 (window bottom 800). Members who had finished were fine, which is why
+// the other pages and the nudge test above could not see it. This test opens the same page as both
+// kinds of member, with the page area at the top (the page scrolls its newest message into view
+// as it opens, which would hide the fault).
+
+// <main> can only hold the page when the page's own 320px floor leaves room: below it (a phone as
+// short as an iPhone Safari window, with the nudge shown) the page is that floor tall by design.
+async function expectMessagesFit(page: Page, where: string): Promise<void> {
+  const m = await page.evaluate(() => {
+    const main = document.querySelector('main');
+    if (!main) return null;
+    const cs = getComputedStyle(main);
+    return {
+      overflow: main.scrollHeight - main.clientHeight,
+      room: main.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom),
+    };
+  });
+  expect(m, `${where}: the page area is on the page`).not.toBeNull();
+  if (m!.room >= 320) {
+    expect(m!.overflow, `${where}: the page is ${m!.overflow}px taller than its page area (something else sits inside <main>)`).toBeLessThanOrEqual(1);
+  }
+}
+
+test('7 Messages beside the nudge: the composer is fully visible without scrolling, for a member shown the nudge and one who is not', async () => {
+  test.setTimeout(600_000);
+  const id = await thread();
+  const viewers = [
+    { label: 'shown the nudge', user: unfinished, nudge: true },
+    { label: 'not shown the nudge', user: member, nudge: false },
+  ];
+  // Every problem is collected, so one failing run shows the inbox, the message box and Send at every size.
+  const problems: string[] = [];
+  const attempt = async (what: string, fn: () => Promise<void>) => {
+    try { await fn(); } catch (e) { const line = firstLine(e); problems.push(line.startsWith(what.split(',')[0]) ? line : `${what}: ${line}`); }
+  };
+  for (const size of sizes([{ width: 360, height: 780 }, { width: 390, height: 844 }, { width: 1280, height: 800 }])) {
+    for (const viewer of viewers) {
+      const where = `${size.width}x${size.height} member ${viewer.label}`;
+      const { page, ctx, errors } = await openAs(viewer.user, size);
+      try {
+        // The inbox: nothing may be taller than the page area.
+        await attempt(`${where}, inbox`, async () => {
+          await visit(page, '/messages', size.width);
+          await expect(page.getByRole('main').getByRole('heading', { name: 'Messages', level: 2 }), `${where}: the inbox`).toBeVisible({ timeout: 25_000 });
+          await expectMessagesFit(page, `${where} inbox`);
+        });
+
+        // The thread, with its real composer, page area at the top.
+        const composer = page.getByRole('main').locator('textarea');
+        let threadOpen = false;
+        await attempt(`${where}, thread`, async () => {
+          await visit(page, `/messages/${id}`, size.width);
+          await expect(composer, `${where}: the message box is on the page`).toBeVisible({ timeout: 30_000 });
+          threadOpen = true;
+          await wait(1500); // the page scrolls its newest message into view as it opens
+          await page.evaluate(() => { const main = document.querySelector('main'); if (main) main.scrollTop = 0; });
+          await wait(300);
+          const top = await page.evaluate(() => document.querySelector('main')?.scrollTop ?? -1);
+          expect(top, `${where}: the page area is at the top`).toBe(0);
+        });
+        if (threadOpen) {
+          // Where the nudge is: in the page for a member shown it, never inside <main>, and nowhere for the other.
+          await attempt(`${where}, nudge`, async () => {
+            if (viewer.nudge) {
+              await expect(page.getByText('Complete your profile'), `${where}: the nudge`).toBeVisible();
+              await expect(page.getByRole('main').getByText('Complete your profile'), `${where}: the nudge is outside <main>`).toHaveCount(0);
+            } else {
+              await expect(page.getByText('Complete your profile'), `${where}: no nudge`).toHaveCount(0);
+            }
+          });
+          // The message box and Send are fully inside the window and not under the bar.
+          await attempt(`${where}, message box`, () => expectReachable(page, composer, `${where} the message box`).then(() => undefined));
+          await attempt(`${where}, Send`, () => expectReachable(page, page.getByRole('button', { name: 'Send message' }), `${where} Send`).then(() => undefined));
+          await attempt(`${where}, thread fit`, () => expectMessagesFit(page, `${where} thread`));
+          await page.screenshot({ path: path.join(SHOTS, `${engineLabel().replace(/[^a-z0-9]+/gi, '-')}-${size.width}-thread-${viewer.nudge ? 'nudge' : 'plain'}.png`) });
+        }
+        expect(errors, `${where}: script errors`).toEqual([]);
+      } finally {
+        await ctx.close().catch(() => undefined);
+      }
+      if (!problems.some((x) => x.startsWith(where))) {
+        console.log(`  ✓ ${where}: the message box and Send are fully visible with the page area at the top, and the page fits its page area.`);
+      }
+    }
+  }
+  expect(problems, `Messages does not fit beside the nudge:\n${problems.join('\n')}`).toEqual([]);
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// 8. Old pages inside the shell
 // ═════════════════════════════════════════════════════════════════════════════════════════════
 
-test('7 old pages: Circles, Events, Messages, Settings, Pods and Support render inside the shell with no script errors', async () => {
+test('8 old pages: Circles, Events, Messages, Settings, Pods and Support render inside the shell with no script errors', async () => {
   test.setTimeout(600_000);
   const pages: Array<{ route: string; see: (p: Page) => Locator; name: string }> = [
     { route: '/circles', name: 'Circles', see: (p) => p.getByRole('main').getByRole('heading', { name: 'Circles', level: 1 }) },
@@ -597,10 +716,10 @@ test('7 old pages: Circles, Events, Messages, Settings, Pods and Support render 
 });
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
-// 8. The account menu
+// 9. The account menu
 // ═════════════════════════════════════════════════════════════════════════════════════════════
 
-test('8 account menu: Invite and Log out stay reachable, Admin is not offered to a member', async () => {
+test('9 account menu: Invite and Log out stay reachable, Admin is not offered to a member', async () => {
   test.setTimeout(300_000);
   const wide = sizes([{ width: 768, height: 1024 }, { width: 1280, height: 800 }]).filter((s) => modeOf(s.width) !== 'phone');
   test.skip(wide.length === 0, 'the account menu lives in the sidebar, which a phone does not have (its Invite and Log out are in More)');
