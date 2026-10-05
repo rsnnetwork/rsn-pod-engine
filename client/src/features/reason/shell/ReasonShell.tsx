@@ -20,7 +20,7 @@ import ShellTopbar from './ShellTopbar';
 import MobileNav from './MobileNav';
 import PeopleTabs, { PEOPLE_TABS } from './PeopleTabs';
 import AdminTabs from './AdminTabs';
-import { onAdmin } from './nav';
+import { NAV_BY_KEY, onAdmin } from './nav';
 
 export default function ReasonShell() {
   const { pathname } = useLocation();
@@ -35,8 +35,11 @@ export default function ReasonShell() {
   const unreadCount = unread ?? 0;
   const inPeople = PEOPLE_TABS.some((t) => pathname === t.to || pathname.startsWith(`${t.to}/`));
   const inAdmin = isAdmin(user?.role) && onAdmin(pathname);
-  // The old layout's nudge, kept. For You says the same thing in its own card.
-  const nudgeProfile = user?.onboardingCompleted === false && pathname !== '/';
+  // The old layout's nudge, kept. For You says the same thing in its own card. Messages
+  // does without it: that page sizes itself to what <main> has left, and a pinned nudge
+  // above it pushes the message box under the phone bar on a window about 640px tall.
+  const inMessages = NAV_BY_KEY.messages.match(pathname);
+  const nudgeProfile = user?.onboardingCompleted === false && pathname !== '/' && !inMessages;
 
   return (
     <div className="h-[100dvh] overflow-hidden bg-white font-reason text-reason-ink antialiased">

@@ -96,6 +96,13 @@ describe('REASON shell: faults found by looking at it', () => {
     // Nothing between the two <main> tags may be the nudge.
     expect(shell.slice(main, shell.indexOf('</main>'))).not.toMatch(/nudgeProfile|Complete your profile/);
   });
+  it('the nudge is left off Messages and everything under it (pinned above it, it pushes the message box under the phone bar on a window about 640px tall)', () => {
+    const shell = read('features/reason/shell/ReasonShell.tsx');
+    expect(shell).toMatch(/const inMessages = NAV_BY_KEY\.messages\.match\(pathname\)/);
+    expect(shell).toMatch(/const nudgeProfile = [^;]*onboardingCompleted === false[^;]*pathname !== '\/'[^;]*&& !inMessages;/);
+    // The Messages entry covers /messages and every route under it (a thread, a new message, ?poke=).
+    expect(read('features/reason/shell/nav.ts')).toMatch(/key: 'messages'[^}]*match: under\('\/messages'\)/);
+  });
   it('Invite and Admin pages mark More (phone) and the account button (rail, sidebar) as current, and More says whether it is open', () => {
     expect(read('features/reason/shell/nav.ts')).toMatch(/export const isAccountPage = \(path: string\) => onInvites\(path\) \|\| onAdmin\(path\)/);
     const bar = read('features/reason/shell/MobileNav.tsx');

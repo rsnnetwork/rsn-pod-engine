@@ -12,11 +12,13 @@
 //                      no words) and the full sidebar (labels) start and stop
 //   4  People          the four people pages sit under one row of four tabs
 //   5  top search      opens Find people with the words already typed
-//   6  profile nudge   a member who has not finished onboarding is asked to, on any page but
-//                      For You; one who has finished is not
-//   7  Messages        beside the nudge the composer is fully visible without scrolling and the
-//                      page is no taller than its page area, at 360, 390 and 1280 (the nudge
-//                      once sat inside <main> and pushed the composer off the screen)
+//   6  profile nudge   a member who has not finished onboarding is asked to, on every page but
+//                      For You and Messages; one who has finished is not asked anywhere
+//   7  Messages        no nudge there, and the message box is fully visible above the bar with the
+//                      page area at the top, in a thread from 360x548 to 1280x800 and when writing
+//                      a new message at 360x640 (a pinned nudge pushed it under the bar on phone
+//                      windows about 640px tall); on a short landscape phone the page area scrolls
+//                      and the box is fully inside the window once it is scrolled to its end
 //   8  old pages       Circles, Events, Messages, Settings, Pods and Support render inside
 //                      the shell with no script errors
 //   9  account menu    Invite and Log out stay reachable (Admin only for admins); the account
@@ -573,21 +575,34 @@ test('5 top search: Enter opens Find people with the words already typed, a seco
 // 6. "Complete your profile"
 // ═════════════════════════════════════════════════════════════════════════════════════════════
 
-test('6 profile nudge: asked to finish on pages other than For You, and only if not finished', async () => {
+test('6 profile nudge: asked to finish on every page but For You and Messages, and only if not finished', async () => {
   test.setTimeout(300_000);
   for (const size of sizes([{ width: 390, height: 844 }, { width: 1280, height: 800 }])) {
     const where = `${size.width}px`;
     const todo = await openAs(unfinished, size);
     try {
-      for (const route of ['/circles', '/sessions', '/messages']) {
+      const nudge = todo.page.getByText('Complete your profile');
+      for (const route of ['/circles', '/sessions', '/settings']) {
         await visit(todo.page, route, size.width);
-        const nudge = todo.page.getByText('Complete your profile');
         await expect(nudge, `${where} ${route}: the nudge`).toBeVisible();
         const go = todo.page.getByRole('link', { name: 'Complete now' });
         await expect(go, `${where} ${route}: the button goes to onboarding`).toHaveAttribute('href', '/onboarding');
         await expectTapSize([{ name: 'Complete now', loc: go }], `${where} ${route}`);
         await expectContained(todo.page, `${where} ${route}`);
       }
+      // Messages does without it: its page sizes itself to what the page area has left, and a pinned
+      // nudge above it pushed the message box under the bar on a window as short as 360x640.
+      await visit(todo.page, '/messages', size.width);
+      await expect(nudge, `${where} /messages: the nudge is shown on Messages`).toHaveCount(0);
+      await expectContained(todo.page, `${where} /messages`);
+      // And it follows the member from page to page without a reload: back on Events, gone again on Messages.
+      const entry = (name: string) => (modeOf(size.width) === 'phone' ? todo.page.getByRole('navigation', { name: 'Main' }) : todo.page.locator('aside')).getByRole('link', { name });
+      await entry('Events').click();
+      await expect(todo.page, `${where}: Events`).toHaveURL(/\/sessions$/);
+      await expect(nudge, `${where} /sessions after Messages: the nudge is back`).toBeVisible();
+      await entry('Messages').click();
+      await expect(todo.page, `${where}: Messages`).toHaveURL(/\/messages$/);
+      await expect(nudge, `${where} /messages again: the nudge is gone`).toHaveCount(0);
       await todo.page.screenshot({ path: path.join(SHOTS, `${engineLabel().replace(/[^a-z0-9]+/gi, '-')}-${size.width}-nudge.png`) });
       expect(todo.errors, `${where}: script errors`).toEqual([]);
     } finally {
@@ -602,24 +617,26 @@ test('6 profile nudge: asked to finish on pages other than For You, and only if 
     } finally {
       await done.ctx.close().catch(() => undefined);
     }
-    console.log(`  ✓ ${where}: the nudge shows on Circles, Events and Messages for an unfinished member, with a 44px button to /onboarding; a finished member sees none.`);
+    console.log(`  ✓ ${where}: the nudge shows on Circles, Events and Settings for a member who has not finished, with a 44px button to /onboarding, and not on Messages; a member who has finished sees none.`);
   }
 });
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
-// 7. Messages beside the nudge
+// 7. Messages: no nudge, and the message box fits
 // ═════════════════════════════════════════════════════════════════════════════════════════════
 //
-// The Messages page sizes itself to what <main> has left. The nudge once sat INSIDE <main>, so for
-// exactly the members who are shown it the page was taller than its page area: at 360x780 the
-// message box sat at y 770 to 812 under the bar (at 711), at 390x844 at 834 to 876 (bar 775), at
-// 1280x800 at 799 to 837 (window bottom 800). Members who had finished were fine, which is why
-// the other pages and the nudge test above could not see it. This test opens the same page as both
-// kinds of member, with the page area at the top (the page scrolls its newest message into view
-// as it opens, which would hide the fault).
+// The Messages page sizes itself to what <main> has left (never less than 320px), so anything above
+// it takes room from its message box. The profile nudge did, in two ways. Inside <main> it made the
+// page taller than its page area for exactly the members shown it: at 360x780 the message box sat at
+// y 770 to 812, under the bar at 711. Pinned above <main> it still left too little room on a window as
+// short as a common Android phone: at 360x640 the box sat 8px under the bar, at 360x548 31px off the
+// screen, at 844x390 101px below the window. So Messages and every route under it does without the
+// nudge (it stays on every other page but For You), and this test opens Messages as both kinds of
+// member with the page area at the top: the page scrolls its newest message into view as it opens,
+// which hides the fault.
 
-// <main> can only hold the page when the page's own 320px floor leaves room: below it (a phone as
-// short as an iPhone Safari window, with the nudge shown) the page is that floor tall by design.
+// <main> can only hold the page when the page's own 320px floor leaves room: below it (a phone on its
+// side) the page is that floor tall by design, and its area scrolls.
 async function expectMessagesFit(page: Page, where: string): Promise<void> {
   const m = await page.evaluate(() => {
     const main = document.querySelector('main');
@@ -636,69 +653,142 @@ async function expectMessagesFit(page: Page, where: string): Promise<void> {
   }
 }
 
-test('7 Messages beside the nudge: the composer is fully visible without scrolling, for a member shown the nudge and one who is not', async () => {
-  test.setTimeout(600_000);
-  const id = await thread();
-  const viewers = [
-    { label: 'shown the nudge', user: unfinished, nudge: true },
-    { label: 'not shown the nudge', user: member, nudge: false },
-  ];
-  // Every problem is collected, so one failing run shows the inbox, the message box and Send at every size.
+// Every pixel of the box above the phone bar (or inside the window where there is no bar), not just its
+// centre: a message box 8px under the bar still has a centre that can be pressed.
+async function expectAboveBar(page: Page, target: Locator, label: string): Promise<void> {
+  const box = await target.boundingBox();
+  expect(box, `${label}: not rendered`).not.toBeNull();
+  const bar = page.locator('nav[aria-label="Main"].fixed');
+  const barBox = (await bar.isVisible()) ? await bar.boundingBox() : null;
+  const limit = Math.round(barBox ? barBox.y : page.viewportSize()!.height);
+  const bottom = Math.round(box!.y + box!.height);
+  expect(bottom, `${label} ends at ${bottom}px, ${barBox ? `under the bottom bar (its top is at ${limit}px)` : `below the window (${limit}px)`}`).toBeLessThanOrEqual(limit);
+}
+
+// The page area back at the top, after the page has scrolled its newest message into view.
+async function backToTop(page: Page, where: string): Promise<void> {
+  await wait(1500);
+  await page.evaluate(() => { const main = document.querySelector('main'); if (main) main.scrollTop = 0; });
+  await wait(300);
+  expect(await page.evaluate(() => document.querySelector('main')?.scrollTop ?? -1), `${where}: the page area is at the top`).toBe(0);
+}
+
+test('7 Messages: no nudge, and the message box is fully visible above the bar with the page area at the top', async () => {
+  test.setTimeout(900_000);
+  // Every problem is collected, so one failing run shows every size and member at once.
   const problems: string[] = [];
   const attempt = async (what: string, fn: () => Promise<void>) => {
     try { await fn(); } catch (e) { const line = firstLine(e); problems.push(line.startsWith(what.split(',')[0]) ? line : `${what}: ${line}`); }
   };
-  for (const size of sizes([{ width: 360, height: 780 }, { width: 390, height: 844 }, { width: 1280, height: 800 }])) {
+  const noNudge = (page: Page, where: string) => expect(page.getByText('Complete your profile'), `${where}: the nudge is shown on Messages`).toHaveCount(0);
+  // The message box and Send: inside the window with nothing over their centre, and wholly above the bar.
+  const boxChecks = async (page: Page, composer: Locator, where: string) => {
+    const send = page.getByRole('button', { name: 'Send message' });
+    await attempt(`${where}, message box`, async () => {
+      await expectReachable(page, composer, `${where} the message box`);
+      await expectAboveBar(page, composer, `${where} the message box`);
+    });
+    await attempt(`${where}, Send`, async () => {
+      await expectReachable(page, send, `${where} Send`);
+      await expectAboveBar(page, send, `${where} Send`);
+    });
+  };
+  const done = (where: string, what: string) => {
+    if (!problems.some((x) => x.startsWith(where))) console.log(`  ✓ ${where}: ${what}`);
+  };
+
+  // a. Writing a new message, while the two members have no conversation yet (once they do, the page
+  //    sends them to it): a member who is shown the nudge elsewhere, on a 360x640 phone. Not at 548px
+  //    tall: there the page stacks the inbox list (empty-inbox text, 203px) above the new-message panel,
+  //    which is left 102px for its header and message box, so the box is clipped for every member,
+  //    nudge or not. That is the Messages page's own layout, and nothing to do with the nudge.
+  for (const size of sizes([{ width: 360, height: 640 }])) {
+    const where = `${size.width}x${size.height} member who has not finished onboarding, new message`;
+    const { page, ctx, errors } = await openAs(unfinished, size);
+    try {
+      const composer = page.getByRole('main').locator('textarea');
+      await attempt(`${where}, page`, async () => {
+        await visit(page, `/messages/new/${member.id}`, size.width);
+        await expect(composer, `${where}: the message box is on the page`).toBeVisible({ timeout: 30_000 });
+        await backToTop(page, where);
+        await noNudge(page, where);
+      });
+      await boxChecks(page, composer, where);
+      expect(errors, `${where}: script errors`).toEqual([]);
+    } finally {
+      await ctx.close().catch(() => undefined);
+    }
+    done(where, 'no nudge, and the message box is fully above the bar with the page area at the top.');
+  }
+
+  // b. A thread, as a member who has not finished onboarding and as one who has.
+  const id = await thread();
+  const viewers = [
+    { label: 'who has not finished onboarding', user: unfinished },
+    { label: 'who has finished', user: member },
+  ];
+  for (const size of sizes([{ width: 360, height: 548 }, { width: 360, height: 640 }, { width: 360, height: 780 }, { width: 390, height: 844 }, { width: 1280, height: 800 }])) {
     for (const viewer of viewers) {
       const where = `${size.width}x${size.height} member ${viewer.label}`;
       const { page, ctx, errors } = await openAs(viewer.user, size);
       try {
-        // The inbox: nothing may be taller than the page area.
+        // The inbox: nothing may be taller than the page area, and there is no nudge.
         await attempt(`${where}, inbox`, async () => {
           await visit(page, '/messages', size.width);
           await expect(page.getByRole('main').getByRole('heading', { name: 'Messages', level: 2 }), `${where}: the inbox`).toBeVisible({ timeout: 25_000 });
+          await noNudge(page, `${where} inbox`);
           await expectMessagesFit(page, `${where} inbox`);
         });
 
-        // The thread, with its real composer, page area at the top.
+        // The thread, with its real message box, page area at the top.
         const composer = page.getByRole('main').locator('textarea');
         let threadOpen = false;
         await attempt(`${where}, thread`, async () => {
           await visit(page, `/messages/${id}`, size.width);
           await expect(composer, `${where}: the message box is on the page`).toBeVisible({ timeout: 30_000 });
           threadOpen = true;
-          await wait(1500); // the page scrolls its newest message into view as it opens
-          await page.evaluate(() => { const main = document.querySelector('main'); if (main) main.scrollTop = 0; });
-          await wait(300);
-          const top = await page.evaluate(() => document.querySelector('main')?.scrollTop ?? -1);
-          expect(top, `${where}: the page area is at the top`).toBe(0);
+          await backToTop(page, where);
         });
         if (threadOpen) {
-          // Where the nudge is: in the page for a member shown it, never inside <main>, and nowhere for the other.
-          await attempt(`${where}, nudge`, async () => {
-            if (viewer.nudge) {
-              await expect(page.getByText('Complete your profile'), `${where}: the nudge`).toBeVisible();
-              await expect(page.getByRole('main').getByText('Complete your profile'), `${where}: the nudge is outside <main>`).toHaveCount(0);
-            } else {
-              await expect(page.getByText('Complete your profile'), `${where}: no nudge`).toHaveCount(0);
-            }
-          });
-          // The message box and Send are fully inside the window and not under the bar.
-          await attempt(`${where}, message box`, () => expectReachable(page, composer, `${where} the message box`).then(() => undefined));
-          await attempt(`${where}, Send`, () => expectReachable(page, page.getByRole('button', { name: 'Send message' }), `${where} Send`).then(() => undefined));
+          await attempt(`${where}, nudge`, () => noNudge(page, `${where} thread`));
+          await boxChecks(page, composer, where);
           await attempt(`${where}, thread fit`, () => expectMessagesFit(page, `${where} thread`));
-          await page.screenshot({ path: path.join(SHOTS, `${engineLabel().replace(/[^a-z0-9]+/gi, '-')}-${size.width}-thread-${viewer.nudge ? 'nudge' : 'plain'}.png`) });
+          await page.screenshot({ path: path.join(SHOTS, `${engineLabel().replace(/[^a-z0-9]+/gi, '-')}-${size.width}x${size.height}-thread-${viewer.user === unfinished ? 'unfinished' : 'finished'}.png`) });
         }
         expect(errors, `${where}: script errors`).toEqual([]);
       } finally {
         await ctx.close().catch(() => undefined);
       }
-      if (!problems.some((x) => x.startsWith(where))) {
-        console.log(`  ✓ ${where}: the message box and Send are fully visible with the page area at the top, and the page fits its page area.`);
-      }
+      done(where, 'no nudge, and the message box and Send are fully above the bar with the page area at the top, and the page fits its page area.');
     }
   }
-  expect(problems, `Messages does not fit beside the nudge:\n${problems.join('\n')}`).toEqual([]);
+
+  // c. A phone on its side (844x390). The window leaves the page less than its own 320px minimum, so
+  //    its area scrolls, as it does for a member who has finished. What matters is that the nudge takes
+  //    nothing more, and that with the area scrolled to its end the message box is fully inside the window.
+  if (!DEVICE) {
+    const size = { width: 844, height: 390 };
+    const where = `${size.width}x${size.height} member who has not finished onboarding, thread`;
+    const { page, ctx, errors } = await openAs(unfinished, size);
+    try {
+      const composer = page.getByRole('main').locator('textarea');
+      await attempt(`${where}, page`, async () => {
+        await visit(page, `/messages/${id}`, size.width);
+        await expect(composer, `${where}: the message box is on the page`).toBeVisible({ timeout: 30_000 });
+        await wait(1500);
+        await noNudge(page, where);
+        await page.evaluate(() => { const main = document.querySelector('main'); if (main) main.scrollTop = main.scrollHeight; });
+        await wait(300);
+      });
+      await boxChecks(page, composer, where);
+      expect(errors, `${where}: script errors`).toEqual([]);
+    } finally {
+      await ctx.close().catch(() => undefined);
+    }
+    done(where, 'no nudge, and with the page area scrolled to its end the message box and Send are fully inside the window.');
+  }
+
+  expect(problems, `Messages is wrong for a member who has not finished onboarding:\n${problems.join('\n')}`).toEqual([]);
 });
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
