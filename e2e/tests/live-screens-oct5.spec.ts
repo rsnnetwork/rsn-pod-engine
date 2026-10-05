@@ -204,6 +204,48 @@ async function expectWholeBoxTappable(target: Locator, label: string): Promise<v
   expect(stray, `${label}: part of its box would not reach it:\n${stray.join('\n')}`).toEqual([]);
 }
 
+// Put keyboard focus on the control so that its :focus-visible ring is showing. Focus from a
+// script alone does not always count as the keyboard's, so focus moves off and back with
+// Shift+Tab and Tab.
+async function focusByKeyboard(page: Page, target: Locator, label: string): Promise<void> {
+  await target.focus();
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Tab');
+  const showing = await target.evaluate((el) =>
+    el === document.activeElement && el.matches(':focus-visible') && getComputedStyle(el).boxShadow !== 'none');
+  expect(showing, `${label}: the control has keyboard focus and its ring is showing`).toBe(true);
+}
+
+// The box of the button must not overlap the note above it or the "Prefers ..." line below it,
+// and the ring it shows when focused from the keyboard must not be painted over either. The
+// default ring reaches 4px outside a box, so a box that only touches the text still gets its ring
+// over the text: the check is on the pictures. The note and the line must look exactly the same
+// with the button focused as without.
+async function expectFocusLeavesTextAlone(page: Page, row: Locator, button: Locator, hasPrefers: boolean, label: string): Promise<void> {
+  const note = row.locator('p', { hasText: FIRST_LINE });
+  const prefers = row.getByText(PREFERS);
+  await button.scrollIntoViewIfNeeded();
+  const buttonBox = (await button.boundingBox())!;
+  const noteBox = (await note.boundingBox())!;
+  expect(buttonBox.y, `${label}: the box starts below the note (box top ${buttonBox.y}, note bottom ${noteBox.y + noteBox.height})`)
+    .toBeGreaterThanOrEqual(noteBox.y + noteBox.height - 0.5);
+  if (hasPrefers) {
+    const prefersBox = (await prefers.boundingBox())!;
+    expect(prefersBox.y, `${label}: the "Prefers" line starts below the box (line top ${prefersBox.y}, box bottom ${buttonBox.y + buttonBox.height})`)
+      .toBeGreaterThanOrEqual(buttonBox.y + buttonBox.height - 0.5);
+  }
+  await focusByKeyboard(page, button, label);
+  const noteFocused = await note.screenshot({ animations: 'disabled' });
+  const prefersFocused = hasPrefers ? await prefers.screenshot({ animations: 'disabled' }) : null;
+  await button.evaluate((el) => el.blur());
+  const noteBlurred = await note.screenshot({ animations: 'disabled' });
+  const prefersBlurred = hasPrefers ? await prefers.screenshot({ animations: 'disabled' }) : null;
+  expect(noteFocused.equals(noteBlurred), `${label}: the focus ring was painted over the note`).toBe(true);
+  if (prefersFocused && prefersBlurred) {
+    expect(prefersFocused.equals(prefersBlurred), `${label}: the focus ring was painted over the "Prefers" line`).toBe(true);
+  }
+}
+
 const requestCard = (page: Page, pokeId: string) =>
   page.locator(`[data-testid="meeting-request"][data-poke-id="${pokeId}"]`);
 
@@ -438,9 +480,7 @@ test('1. Show more: a long request can be read in full on a phone; a short one h
       const acceptBox = await expectReachable(page, accept, `${size} Accept`);
       await expectReachable(page, longCard.getByRole('button', { name: /^Decline$/ }), `${size} Decline`);
       const msgBox = (await msg.boundingBox())!;
-      // (The button's own box may overlap the note's last few pixels: the tap area is 44px tall
-      // and the text inside it is centred, so what has to be under the note is its centre.)
-      expect(moreBox.cy, `${size}: "Show more" sits under the note`).toBeGreaterThan(msgBox.y + msgBox.height);
+      expect(moreBox.y, `${size}: "Show more" sits under the note, not over it`).toBeGreaterThanOrEqual(msgBox.y + msgBox.height - 0.5);
       expect(acceptBox.y, `${size}: Accept sits under "Show more"`).toBeGreaterThanOrEqual(moreBox.y + moreBox.height - 1);
 
       // The short request: no button at all, and nothing but Accept and Decline to press.
@@ -483,14 +523,16 @@ test('1. Show more: a long request can be read in full on a phone; a short one h
         const rowLess = row.getByRole('button', LESS);
         await expect(row.getByText(PREFERS), `${size}: the row ${rowName}`).toHaveCount(id === formatId ? 1 : 0);
         await expectWholeBoxTappable(rowMore, `${size} "Show more" on the row ${rowName}`);
+        await expectFocusLeavesTextAlone(page, row, rowMore, id === formatId, `${size} "Show more" on the row ${rowName}`);
         if (id === formatId) {
           const prefersBox = (await row.getByText(PREFERS).boundingBox())!;
           const buttonBox = (await rowMore.boundingBox())!;
-          note(`prefers-${size}`, `the Prefers line starts ${Math.round(buttonBox.y + buttonBox.height - prefersBox.y)}px above the bottom edge of the button`);
+          note(`prefers-${size}`, `the Prefers line starts ${Math.round(prefersBox.y - (buttonBox.y + buttonBox.height))}px below the bottom edge of the button`);
         }
         await tap(page, rowMore, `${size} tap "Show more" on the row ${rowName}`);
         await expect(rowLess, `${size}: "Show less" on the row ${rowName}`).toBeVisible();
         await expectWholeBoxTappable(rowLess, `${size} "Show less" on the row ${rowName}`);
+        await expectFocusLeavesTextAlone(page, row, rowLess, id === formatId, `${size} "Show less" on the row ${rowName}`);
         await tap(page, rowLess, `${size} tap "Show less" on the row ${rowName}`);
         await expect(rowMore, `${size}: "Show more" is back on the row ${rowName}`).toBeVisible();
       }
@@ -499,7 +541,7 @@ test('1. Show more: a long request can be read in full on a phone; a short one h
       expect(sw2.scroll, `${size}: sideways scroll (scrollWidth ${sw2.scroll} over innerWidth ${sw2.inner})`).toBeLessThanOrEqual(sw2.inner);
       await page.screenshot({ path: path.join(SHOTS, `${label}-${vp.width}-collapsed.png`), fullPage: true });
       note(`tap-${size}`, `Show more ${Math.round(moreBox.width)}x${Math.round(moreBox.height)}px, Accept ${Math.round(acceptBox.width)}x${Math.round(acceptBox.height)}px`);
-      console.log(`  ✓ ${size}: "Show more" ${Math.round(moreBox.width)}x${Math.round(moreBox.height)}px and reachable, six of twelve lines (${Math.round(closed.shown)}px of ${Math.round(closed.natural)}px); tap shows all twelve, "Show less" aria-expanded=true; tap again clamps; the short row has no button; no sideways scroll; every pixel row of the box lands on the button, with and without a "Prefers" line, collapsed and expanded.`);
+      console.log(`  ✓ ${size}: "Show more" ${Math.round(moreBox.width)}x${Math.round(moreBox.height)}px and reachable, six of twelve lines (${Math.round(closed.shown)}px of ${Math.round(closed.natural)}px); tap shows all twelve, "Show less" aria-expanded=true; tap again clamps; the short row has no button; no sideways scroll; every pixel row of the box lands on the button, and focused from the keyboard its box and its ring leave the note and the "Prefers" line as they were, with and without a "Prefers" line, collapsed and expanded.`);
     } catch (e) {
       problems.push(`${size}: ${firstLineOf(e)}`);
       console.log(`  ✗ ${size}: ${firstLineOf(e)}`);

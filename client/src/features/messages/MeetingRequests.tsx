@@ -216,11 +216,12 @@ const MESSAGE_LINES = 6;
  * full height of the text whether or not the clamp is on, so the same test works
  * for the collapsed and the expanded paragraph.
  *
- * The button is 44px tall and pulled 6px into the note above it and the "Prefers"
- * line below it (-my-1.5), so it adds no air. It is `relative` because a tap goes
- * to the text of a neighbouring paragraph before it goes to the transparent box of a
- * button that is not positioned: without it the top 6px of the box, and with a
- * "Prefers" line the bottom 4px, did not reach the button.
+ * The button is a full 44px box after the note and before the "Prefers" line, and it
+ * overlaps neither. A box pulled over that text (a negative margin, made tappable again
+ * with `relative`) put its focus ring over the last line of the note and the top of the
+ * "Prefers" line. The ring is drawn inside the box, because the default one reaches 4px
+ * outside it and a box that only touches the text would still have its ring over the
+ * text. The box is square so that every row of it is the button.
  */
 function ClampedMessage({ text }: { text: string }) {
   const id = useId();
@@ -264,7 +265,7 @@ function ClampedMessage({ text }: { text: string }) {
           onClick={() => setExpanded(open => !open)}
           aria-expanded={expanded}
           aria-controls={id}
-          className="relative -my-1.5 flex min-h-[44px] w-fit min-w-[44px] items-center text-xs font-medium text-rsn-red underline underline-offset-2 hover:text-rsn-red-hover"
+          className="flex min-h-[44px] w-fit min-w-[44px] items-center text-xs font-medium text-rsn-red underline underline-offset-2 hover:text-rsn-red-hover focus-visible:ring-inset focus-visible:ring-offset-0"
         >
           {expanded ? 'Show less' : 'Show more'}
         </button>
