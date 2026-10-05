@@ -245,4 +245,27 @@ describe('POST /agents/:id/interest', () => {
       .send({ userId: '11111111-1111-4111-8111-111111111111' });
     expect(res.status).toBe(400);
   });
+
+  // Postgres reads an upper-case uuid as the same member; the comparison above is on plain
+  // strings, so an upper-cased own id used to pass it and then break the poke table's CHECK.
+  it('refuses to introduce someone to themselves, however their id is typed', async () => {
+    const own = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    mockRepo.getAgent.mockResolvedValue(agent({ userId: own }));
+    const res = await request(app).post('/agents/a-1/interest')
+      .set('Authorization', `Bearer ${token()}`)
+      .send({ userId: own.toUpperCase() });
+    expect(res.status).toBe(400);
+    expect(mockExpressInterest).not.toHaveBeenCalled();
+  });
+
+  it('hands expressInterest the member id in lower case', async () => {
+    const target = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    mockRepo.getAgent.mockResolvedValue(agent());
+    mockExpressInterest.mockResolvedValue({ id: 'p-1', status: 'pending' });
+    const res = await request(app).post('/agents/a-1/interest')
+      .set('Authorization', `Bearer ${token()}`)
+      .send({ userId: target.toUpperCase() });
+    expect(res.status).toBe(201);
+    expect(mockExpressInterest).toHaveBeenCalledWith('u-1', target, 'a-1');
+  });
 });

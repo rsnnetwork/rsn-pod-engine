@@ -122,7 +122,9 @@ router.post('/:id/status', authenticate, validate(statusSchema), async (req: Req
 // POST /agents/:id/interest — "I want to meet" from inside an agent, so the
 // introduction carries the reason THIS agent was searching for, and the
 // exclusion it creates is scoped to this agent alone (decision D3).
-const interestSchema = z.object({ userId: z.string().uuid() });
+// Lower-cased: Postgres reads an upper-case uuid as the same member, but the
+// "yourself" check below and sendPoke compare ids as plain strings.
+const interestSchema = z.object({ userId: z.string().uuid().transform((s) => s.toLowerCase()) });
 router.post('/:id/interest', authenticate, validate(interestSchema), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const agent = await agentRepo.getAgent(req.params.id, req.user!.userId);
