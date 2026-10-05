@@ -1,16 +1,26 @@
 // e2e/tests/live-screens-oct5.spec.ts
 //
-// The 5 Oct 2026 clean-up of four live screens, proven on production right after the deploy.
+// The 5 Oct 2026 clean-up of the live screens (Messages, the bell, Matches, Circles), proven on
+// production right after the deploy. Eight tests; the number in each title is the screen's.
 //
-//   1. Messages   a long meeting request can be read in full on a phone: "Show more" appears
-//                 only when the note really is cut off, follows the width of the window, flips
-//                 to "Show less" with aria-expanded, and never appears on a short request
-//   2. Messages   /messages?poke=<id> never calls a request that is still pending "already
-//                 answered", even when the list of requests arrives after the request itself;
-//                 an answered request still says so, or opens its conversation
-//   3. The bell   keeps the line break between a member's note and "Why REASON suggested this:"
-//   4. Matches    the open page updates on its own when a request is sent from another tab and
-//                 when the other member answers it, with no reload
+//   1. Show more: a long request can be read in full on a phone; a short one has no button
+//        "Show more" is there only when the note really is cut off, flips to "Show less" with
+//        aria-expanded, can be pressed over every pixel row of its 44px box, and when it is focused
+//        from the keyboard neither its box nor its ring touches the note or the "Prefers" line
+//   1. Show more follows the width of the window: it is there when the note wraps past six lines
+//      and gone when it fits (skipped on a device viewport, which cannot be resized)
+//   2. A pending request is never called "already answered"; an answered one still says so or
+//      opens its chat
+//        also what the sender of a pending or a declined request reads, a request that is not
+//        theirs, a fetch that is paused offline, a network blip that is asked again by itself,
+//        and a question that keeps failing, with its Try again button
+//   3. The bell shows a note and "Why REASON suggested this:" on separate lines
+//   3. The bell clamps a long note to six lines and keeps its Accept and Decline reachable
+//   4. Matches: an open page changes on its own when a request is sent from another tab and when
+//      it is answered, with no reload
+//   5. Circles: the open list asks for its circles again when something tells the member's own
+//      entity
+//   5. Circles: the page opens at once from the nav's list, not on a loader
 //
 // Every check is on an outcome: what the screen shows, measured in the browser, next to the
 // row in the database (or the socket event that really arrived), never "the page looked right".
