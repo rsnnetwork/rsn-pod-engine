@@ -5,9 +5,16 @@
 
 import type { PublicMember } from './user';
 
-export type PersonResponse = 'saved' | 'passed';
+// What a member can do with a person (Save = maybe later, Pass = not relevant).
+// The database CHECK, the route and the client all read this one list.
+export const PERSON_RESPONSES = ['saved', 'passed'] as const;
+export type PersonResponse = (typeof PERSON_RESPONSES)[number];
+
+// "Was it worth continuing?", asked after two people have met.
+export const WORTH_CONTINUING = ['yes', 'maybe', 'no'] as const;
+export type WorthContinuing = (typeof WORTH_CONTINUING)[number];
+
 export type MeetingFormat = 'video_20' | 'coffee' | 'message_first';
-export type WorthContinuing = 'yes' | 'maybe' | 'no';
 export type MatchStrength = 'strong' | 'close';
 export type RelationshipState = 'none' | 'requested' | 'incoming' | 'declined' | 'connected' | 'met';
 export type PrimaryAction = 'meet' | 'requested' | 'respond' | 'declined' | 'continue';

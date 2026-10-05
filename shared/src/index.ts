@@ -47,9 +47,12 @@ export * from './types/reason';
 // its own statically analysable named export, same as OPENINGS above.
 import {
   MEETING_FORMATS as _MEETING_FORMATS, OUTCOME_KEYS as _OUTCOME_KEYS,
-  OUTCOME_LABELS as _OUTCOME_LABELS, primaryActionFor as _primaryActionFor,
+  OUTCOME_LABELS as _OUTCOME_LABELS, PERSON_RESPONSES as _PERSON_RESPONSES,
+  WORTH_CONTINUING as _WORTH_CONTINUING, primaryActionFor as _primaryActionFor,
 } from './types/reason';
 export const MEETING_FORMATS = _MEETING_FORMATS;
 export const OUTCOME_KEYS = _OUTCOME_KEYS;
 export const OUTCOME_LABELS = _OUTCOME_LABELS;
+export const PERSON_RESPONSES = _PERSON_RESPONSES;
+export const WORTH_CONTINUING = _WORTH_CONTINUING;
 export const primaryActionFor = _primaryActionFor;

@@ -11,7 +11,7 @@ import { z } from 'zod';
 import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import * as platformMatchService from '../services/matching/platform-match.service';
-import { ApiResponse } from '@rsn/shared';
+import { ApiResponse, MEETING_FORMATS, type MeetingFormat } from '@rsn/shared';
 
 const router = Router();
 
@@ -34,10 +34,14 @@ router.get(
 // Milestone 1 (29 Sep 2026): the Meet sheet adds a personal "why now" note and
 // a preferred format. Both optional: today's callers POST with no body at all.
 // 300 leaves room for REASON's reason inside the request's 500 characters.
+// The formats are the ones the app offers (MEETING_FORMATS), not a second list.
+// z.enum wants a non-empty tuple, which a list read from MEETING_FORMATS is.
+const FORMAT_KEYS = MEETING_FORMATS.map((f) => f.key) as [MeetingFormat, ...MeetingFormat[]];
 const interestBody = z.object({
-  note: z.string().trim().max(300).optional(),
-  format: z.enum(['video_20', 'coffee', 'message_first']).optional(),
+  note: z.string().trim().max(300, 'Keep the note to 300 characters or fewer.').optional(),
+  format: z.enum(FORMAT_KEYS, { message: 'Choose one of the offered formats.' }).optional(),
 });
+type InterestBody = z.infer<typeof interestBody>;
 // A target that is not a UUID used to reach SQL and come back as a Postgres 500.
 // Lower-cased because Postgres reads an upper-case uuid as the same member while
 // the service compares ids as plain strings (yourself, blocked, already asked).
@@ -51,9 +55,10 @@ router.post(
   validate(interestBody),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      const body: InterestBody = req.body;
       const poke = await platformMatchService.expressInterest(req.user!.userId, req.params.userId, undefined, {
-        note: req.body.note,
-        format: req.body.format,
+        note: body.note,
+        format: body.format,
       });
       const response: ApiResponse = { success: true, data: poke };
       res.status(201).json(response);

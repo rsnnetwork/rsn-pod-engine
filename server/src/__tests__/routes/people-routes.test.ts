@@ -35,7 +35,7 @@ import peopleRoutes from '../../routes/people';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 import { peopleWriteLimiter } from '../../middleware/rateLimit';
 import { ConflictError, NotFoundError } from '../../middleware/errors';
-import { ErrorCodes, OUTCOME_KEYS } from '@rsn/shared';
+import { ErrorCodes, OUTCOME_KEYS, PERSON_RESPONSES, WORTH_CONTINUING } from '@rsn/shared';
 
 const app = express();
 app.use(express.json());
@@ -189,6 +189,24 @@ describe('member ids typed in capitals', () => {
     expect(res.body.error.message).toBe('You cannot save or pass yourself');
     expect(dbQuery.mock.calls.some(c => /INSERT INTO person_responses/.test(String(c[0])))).toBe(false);
     expect(mockFanout).not.toHaveBeenCalled();
+  });
+});
+
+describe('the values a route takes are the shared lists', () => {
+  // A value added to the shared list is accepted here with no second edit.
+  const auth = { Authorization: `Bearer ${token()}` };
+  beforeEach(() => { mockSet.mockClear(); mockRecord.mockClear(); });
+
+  it.each([...PERSON_RESPONSES])('Save or Pass takes "%s"', async (response) => {
+    const res = await request(app).put(`/people/${TARGET}/response`).set(auth).send({ response });
+    expect(res.status).toBe(200);
+    expect(mockSet).toHaveBeenCalledWith('u-viewer', TARGET, response);
+  });
+
+  it.each([...WORTH_CONTINUING])('recording takes "%s"', async (worthContinuing) => {
+    const res = await request(app).post(`/people/${TARGET}/outcome`).set(auth).send({ worthContinuing, outcomes: [] });
+    expect(res.status).toBe(201);
+    expect(mockRecord).toHaveBeenCalledWith('u-viewer', TARGET, worthContinuing, []);
   });
 });
 

@@ -22,6 +22,7 @@ jest.mock('../../services/matching/platform-match.service', () => ({
   __esModule: true,
 }));
 
+import { MEETING_FORMATS } from '@rsn/shared';
 import matchesRoutes from '../../routes/matches';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
 
@@ -52,6 +53,26 @@ describe('POST /matches/platform/:userId/interest', () => {
     expect((await request(app).post(`/matches/platform/${TARGET}/interest`).set(auth).send({ format: 'dinner' })).status).toBe(400);
     expect((await request(app).post(`/matches/platform/${TARGET}/interest`).set(auth).send({ note: 'x'.repeat(301) })).status).toBe(400);
     expect(mockInterest).not.toHaveBeenCalled();
+  });
+
+  it('says in plain words what is wrong with the note or the format', async () => {
+    const longNote = await request(app).post(`/matches/platform/${TARGET}/interest`).set(auth).send({ note: 'x'.repeat(301) });
+    expect(longNote.status).toBe(400);
+    expect(longNote.body.error.details.note).toEqual(['Keep the note to 300 characters or fewer.']);
+    const badFormat = await request(app).post(`/matches/platform/${TARGET}/interest`).set(auth).send({ format: 'dinner' });
+    expect(badFormat.status).toBe(400);
+    expect(badFormat.body.error.details.format).toEqual(['Choose one of the offered formats.']);
+    expect(mockInterest).not.toHaveBeenCalled();
+  });
+
+  it('takes a note of exactly 300 characters, and every format the app offers', async () => {
+    // The formats come from MEETING_FORMATS, so a format added there is accepted here with no second edit.
+    for (const { key } of MEETING_FORMATS) {
+      mockInterest.mockClear();
+      const res = await request(app).post(`/matches/platform/${TARGET}/interest`).set(auth).send({ note: 'x'.repeat(300), format: key });
+      expect(res.status).toBe(201);
+      expect(mockInterest).toHaveBeenCalledWith('u-a', TARGET, undefined, { note: 'x'.repeat(300), format: key });
+    }
   });
 
   it('hands the service the member id in lower case, however it was typed', async () => {

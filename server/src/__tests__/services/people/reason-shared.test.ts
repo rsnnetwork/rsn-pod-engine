@@ -1,4 +1,6 @@
-import { primaryActionFor, OUTCOME_KEYS, OUTCOME_LABELS, MEETING_FORMATS } from '@rsn/shared';
+import {
+  primaryActionFor, OUTCOME_KEYS, OUTCOME_LABELS, MEETING_FORMATS, PERSON_RESPONSES, WORTH_CONTINUING,
+} from '@rsn/shared';
 
 describe('REASON shared vocabulary (milestone 1)', () => {
   it.each([
@@ -24,5 +26,10 @@ describe('REASON shared vocabulary (milestone 1)', () => {
     expect(MEETING_FORMATS.map(f => f.label)).toEqual([
       '20 minute video conversation', 'In person coffee', 'Message first',
     ]);
+  });
+
+  it('a member can Save or Pass, and rate a meeting yes, maybe or no', () => {
+    expect([...PERSON_RESPONSES]).toEqual(['saved', 'passed']);
+    expect([...WORTH_CONTINUING]).toEqual(['yes', 'maybe', 'no']);
   });
 });
