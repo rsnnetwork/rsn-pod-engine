@@ -2,12 +2,12 @@
 // The one person card used everywhere (Stefan's v4: "Human cards are the
 // universal person object"). Four columns only from 1420px, where they fit;
 // below that it stacks, so the reason and the buttons never clip.
-import type { MouseEvent } from 'react';
+import { useId, type MouseEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { primaryActionFor, type RelationshipState } from '@rsn/shared';
 import Avatar from '@/components/ui/Avatar';
 import { cn } from '@/lib/utils';
-import { visibleText } from '../person';
+import { personName, visibleText } from '../person';
 import { PRIMARY_LABEL } from './labels';
 
 export interface HumanCardPerson {
@@ -39,11 +39,14 @@ const BUSY = 'cursor-progress motion-safe:animate-pulse motion-reduce:opacity-60
 
 export default function HumanCard({ person, source, onMeet, onToggleSave, busy }: Props) {
   const navigate = useNavigate();
+  const headingId = useId();
   const profileUrl = `/people/${person.userId}?from=${encodeURIComponent(source)}`;
   const action = primaryActionFor(person.state);
   const inert = action === 'requested' || action === 'declined';
 
-  // Any of these can arrive empty or as spaces. A field with nothing to read is left out, not drawn blank.
+  // Any of these can arrive empty or as spaces. A field with nothing to read is left out, not drawn blank,
+  // and a blank name is worded here, so no page has to remember to.
+  const name = personName(person.displayName);
   const role = visibleText(person.role);
   const company = visibleText(person.company);
   const reason = visibleText(person.reason);
@@ -64,23 +67,26 @@ export default function HumanCard({ person, source, onMeet, onToggleSave, busy }
   return (
     <article
       data-person-id={person.userId}
+      aria-labelledby={headingId}
       aria-busy={busy || undefined}
       onClick={openProfile}
       className="grid cursor-pointer grid-cols-[70px_minmax(0,1fr)] items-start gap-2.5 overflow-hidden rounded-[15px] border border-reason-line bg-white p-[11px] transition hover:shadow-[0_10px_28px_rgba(16,18,24,.06)] min-[721px]:grid-cols-[90px_minmax(0,1fr)] min-[721px]:gap-3.5 min-[721px]:p-3 min-[1420px]:grid-cols-[110px_minmax(160px,210px)_minmax(0,1fr)_150px] min-[1420px]:items-center"
     >
-      <Link to={profileUrl} aria-label={`Open ${person.displayName}`} className="block">
-        {/* Avatar shows initials when there is no photo, or when the photo fails to load. */}
+      <Link to={profileUrl} aria-hidden="true" tabIndex={-1} className="block">
+        {/* The photo is a tap target only: the name link goes to the same page, so a keyboard and a screen
+            reader meet one link, not two. Avatar shows the initials when there is no photo and when the
+            photo fails to load, including one that fails at once. */}
         <Avatar
           src={person.avatarUrl}
-          name={person.displayName}
+          name={name}
           size="xl"
           className="h-[70px] w-[70px] rounded-xl min-[721px]:h-[88px] min-[721px]:w-[90px] min-[1420px]:h-[96px] min-[1420px]:w-[110px] min-[1420px]:rounded-[13px]"
         />
       </Link>
 
       <div className="min-w-0">
-        <h3 className="text-[16px] font-bold leading-tight [overflow-wrap:anywhere] min-[721px]:text-[17px]">
-          <Link to={profileUrl} className="hover:underline">{person.displayName}</Link>
+        <h3 id={headingId} className="text-[16px] font-bold leading-tight [overflow-wrap:anywhere] min-[721px]:text-[17px]">
+          <Link to={profileUrl} className="hover:underline">{name}</Link>
         </h3>
         {role && <p className="mt-0.5 text-[12px] text-[#677080] [overflow-wrap:anywhere] min-[721px]:text-[13px]">{role}</p>}
         {company && <p className="mt-1.5 text-[12px] font-bold [overflow-wrap:anywhere] min-[721px]:text-[13px]">{company}</p>}
@@ -120,16 +126,16 @@ export default function HumanCard({ person, source, onMeet, onToggleSave, busy }
           onClick={onPrimary}
           disabled={busy || inert}
           className={cn('min-h-[44px] rounded-[11px] px-3 text-[13px] font-bold transition',
-            inert ? 'bg-[#f5f6f7] text-[#6d7380]' : 'bg-reason-red text-white shadow-[0_7px_18px_rgba(222,50,46,.18)] enabled:hover:bg-reason-red-hover',
+            inert ? 'bg-[#f5f6f7] text-[#646a77]' : 'bg-reason-red text-white shadow-[0_7px_18px_rgba(222,50,46,.18)] enabled:hover:bg-reason-red-hover',
             busy && !inert && BUSY)}
         >
           {PRIMARY_LABEL[action]}
         </button>
+        {/* The label carries the state ("Save" / "Saved"), so there is no aria-pressed: a screen reader would say it twice. */}
         <button
           type="button"
           onClick={() => onToggleSave(person)}
           disabled={busy}
-          aria-pressed={person.saved}
           className={cn('min-h-[44px] rounded-[11px] bg-[#f5f6f7] px-3 text-[13px] font-bold text-[#2d3440]', busy && BUSY)}
         >
           {person.saved ? 'Saved' : 'Save'}

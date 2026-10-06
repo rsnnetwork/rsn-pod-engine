@@ -20,15 +20,33 @@ const UUID = '3f2b8a4e-1c9d-4e7a-b6f0-2a5c8d1e9f03';
 const refused = (status: number, error: { message?: unknown; details?: unknown } = {}) =>
   ({ isAxiosError: true, response: { status, data: { success: false, error } } });
 
-describe('errorMessage: no answer from the server', () => {
-  it('says the connection was lost for a network failure, a timeout and anything with no response', () => {
-    const networkError = Object.assign(new Error('Network Error'), { isAxiosError: true, code: 'ERR_NETWORK' });
-    const timeout = Object.assign(new Error('timeout of 60000ms exceeded'), { isAxiosError: true, code: 'ECONNABORTED' });
-    for (const err of [networkError, timeout, undefined, null, 'boom', {}, { response: undefined }]) {
+describe('errorMessage: a request that got no answer', () => {
+  // What axios throws when the request went out and nothing came back.
+  const networkError = Object.assign(new Error('Network Error'), { isAxiosError: true, code: 'ERR_NETWORK', request: {} });
+  const timeout = Object.assign(new Error('timeout of 60000ms exceeded'), { isAxiosError: true, code: 'ECONNABORTED', request: {} });
+
+  it('says the connection was lost for a network failure and for a timeout', () => {
+    for (const err of [networkError, timeout]) {
       expect(errorMessage(err, FALLBACK)).toBe(CONNECTION_LOST);
+      // Never the library's own words (CLAUDE.md section 6).
+      expect(errorMessage(err, FALLBACK)).not.toMatch(/Network Error|AxiosError|timeout/i);
     }
-    // Never the library's own words (CLAUDE.md section 6).
-    expect(errorMessage(networkError, FALLBACK)).not.toMatch(/Network Error|AxiosError|timeout/i);
+  });
+
+  it('knows such an error by any one of its marks: isAxiosError, a request, or a network code', () => {
+    expect(errorMessage({ isAxiosError: true }, FALLBACK)).toBe(CONNECTION_LOST);
+    expect(errorMessage({ isAxiosError: true, response: undefined }, FALLBACK)).toBe(CONNECTION_LOST);
+    expect(errorMessage({ request: {} }, FALLBACK)).toBe(CONNECTION_LOST);
+    for (const code of ['ERR_NETWORK', 'ECONNABORTED', 'ETIMEDOUT']) {
+      expect(errorMessage({ code }, FALLBACK)).toBe(CONNECTION_LOST);
+    }
+  });
+
+  it('gives the caller\'s fallback for anything else with no response: a bug in our code is not a lost connection', () => {
+    const bug = new TypeError("Cannot read properties of undefined (reading 'id')");
+    for (const err of [bug, 'boom', 42, undefined, null, {}, { response: undefined }, { code: 'ERR_SOMETHING_ELSE' }, { message: 'Network Error' }]) {
+      expect(errorMessage(err, FALLBACK)).toBe(FALLBACK);
+    }
   });
 });
 
@@ -253,6 +271,17 @@ describe('the data layer keeps the surface the pages import', () => {
   });
 });
 
+// WCAG relative luminance and contrast ratio, for the one pair in the card that the prototype left under AA.
+const luminance = (hex: string) => {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+const contrast = (a: string, b: string) => {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+};
+
 describe('the Human Card: faults found by looking at it', () => {
   const card = () => readReason('human/HumanCard.tsx');
 
@@ -284,5 +313,29 @@ describe('the Human Card: faults found by looking at it', () => {
   it('long unbroken text in any field wraps instead of being clipped by the card', () => {
     // name, role, company, tags, reason and both offer/want blocks
     expect(card().match(/\[overflow-wrap:anywhere\]/g)?.length).toBeGreaterThanOrEqual(7);
+  });
+  it('the inert label reads: at least 4.5:1 (AA) on its grey', () => {
+    const pair = card().match(/inert\s*\?\s*'bg-\[(#[0-9a-f]{6})\] text-\[(#[0-9a-f]{6})\]'/i);
+    expect(pair).not.toBeNull();
+    expect(contrast(pair![1], pair![2])).toBeGreaterThanOrEqual(4.5);
+  });
+  it('words the name inside the card, so a page that passes a blank one does not draw an empty heading', () => {
+    expect(card()).toMatch(/const name = personName\(person\.displayName\);/);
+    // Every place the name is drawn or used goes through it.
+    expect(card()).not.toMatch(/\{person\.displayName\}/);
+    expect(card()).not.toMatch(/name=\{person\.displayName\}/);
+  });
+  it('the photo is a pointer-only target, so the name is the one link a keyboard or a screen reader meets', () => {
+    expect(card()).toMatch(/<Link to=\{profileUrl\} aria-hidden="true" tabIndex=\{-1\} className="block">/);
+    expect(card()).not.toMatch(/aria-label=\{`Open /);
+  });
+  it('the Save button says its state in its label only, with no aria-pressed announcing it twice', () => {
+    expect(card()).not.toMatch(/aria-pressed=/);
+    expect(card()).toMatch(/\{person\.saved \? 'Saved' : 'Save'\}/);
+  });
+  it('the card is named by its heading, so a screen reader can tell one card from the next', () => {
+    expect(card()).toMatch(/const headingId = useId\(\);/);
+    expect(card()).toMatch(/aria-labelledby=\{headingId\}/);
+    expect(card()).toMatch(/<h3 id=\{headingId\}/);
   });
 });

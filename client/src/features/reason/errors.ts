@@ -16,7 +16,19 @@ const ID_LIKE = /(?:^|[^0-9a-z])(?=[0-9a-f-]*\d)[0-9a-f][0-9a-f-]{5,}(?![0-9a-z]
 const CODE_WORD = /\bpok(?:e|es|ed|ing)\b/i;
 
 interface FailedRequest {
+  isAxiosError?: unknown;
+  request?: unknown;
+  code?: unknown;
   response?: { status?: number; data?: { error?: { message?: unknown; details?: unknown } } };
+}
+
+// A request that went out and got no answer: axios marks that error (isAxiosError, a request, or one of
+// these codes) and leaves `response` off. Anything else without a response, such as a TypeError thrown
+// inside a mutation function, is a fault in our own code and says nothing about the member's connection.
+const NO_ANSWER_CODES = ['ERR_NETWORK', 'ECONNABORTED', 'ETIMEDOUT'];
+function gotNoAnswer(err: FailedRequest): boolean {
+  return err.isAxiosError === true || err.request != null
+    || (typeof err.code === 'string' && NO_ANSWER_CODES.includes(err.code));
 }
 
 /** The server's sentence, trimmed, if it is short, free of ids and in words a member would use. */
@@ -38,11 +50,15 @@ function firstDetail(details: unknown): string | undefined {
   return undefined;
 }
 
-/** One sentence for a failed request. `fallback` is what the caller says when the server's words are not fit to show. */
+/**
+ * One sentence for a failed request. `fallback` is what the caller says when the server's words are not fit to show.
+ * Its 404 sentence is about a person, so use it for calls about one person (Save, Pass, Meet, the outcome form, the
+ * profile). A call that can 404 for another reason needs its own words.
+ */
 export function errorMessage(err: unknown, fallback: string): string {
-  const response = (err as FailedRequest | null | undefined)?.response;
-  // No answer at all: the network dropped or the request timed out.
-  if (!response) return CONNECTION_LOST;
+  const failed = (typeof err === 'object' && err !== null ? err : {}) as FailedRequest;
+  const response = failed.response;
+  if (!response) return gotNoAnswer(failed) ? CONNECTION_LOST : fallback;
   const error = response.data?.error;
   switch (response.status) {
     case 429:
