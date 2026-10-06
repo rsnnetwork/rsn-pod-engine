@@ -22,6 +22,7 @@ export default function MeetSheet({ person, onClose }: Props) {
   const addToast = useToastStore((s) => s.addToast);
   const personId = person?.userId ?? null;
   const counterId = useId();
+  const errorLine = useRef<HTMLParagraphElement>(null);
   const [note, setNote] = useState(DEFAULT_NOTE);
   const [format, setFormat] = useState<MeetingFormat>(DEFAULT_FORMAT);
   const [error, setError] = useState<string | null>(null);
@@ -45,8 +46,19 @@ export default function MeetSheet({ person, onClose }: Props) {
   // opened it for someone else: it then says how it went in a toast and leaves the sheet alone.
   const shownFor = useRef(personId);
   useEffect(() => { shownFor.current = personId; }, [personId]);
+  // The error is the last thing in a body that scrolls: with the phone keyboard up it would land below the fold.
+  useEffect(() => { errorLine.current?.scrollIntoView({ block: 'nearest' }); }, [error]);
 
+  // The people a request is out for. A ref, not isPending: a double tap lands before React re-renders the
+  // button as disabled, and each tap would otherwise send its own request.
+  const inFlight = useRef(new Set<string>());
+
+  // networkMode 'always': by default a request made while the browser says it is offline is held until the
+  // network returns, so the sheet would read "Sending…" for as long as the member stays offline and the
+  // request would go out by itself, minutes later, after the sheet was closed. Attempted at once, it fails
+  // with no response and errorMessage says the connection was lost.
   const send = useMutation({
+    networkMode: 'always',
     mutationFn: (r: MeetRequest) => sendMeetRequest(r.userId, r.note, r.format),
     onSuccess: (_sent, r) => {
       addToast(`Meeting request sent to ${r.displayName}`, 'success');
@@ -56,25 +68,24 @@ export default function MeetSheet({ person, onClose }: Props) {
     onError: (err, r) => {
       const message = errorMessage(err, 'Could not send that request. Try again in a moment.');
       if (shownFor.current === r.userId) setError(message);
-      else addToast(message, 'error');
+      else addToast(`${r.displayName}: ${message}`, 'error');
     },
+    // On the mutation, not on a .mutate() call: those callbacks are dropped once a later press (for someone
+    // else) takes the observer over, which would leave the first person stuck.
+    onSettled: (_data, _error, r) => { inFlight.current.delete(r.userId); },
   });
+  // Only this person's request keeps the button waiting: another person's sheet is not held up by it.
+  const pending = send.isPending && send.variables?.userId === personId;
 
   // What the route counts: the length of the trimmed note.
   const length = note.trim().length;
   const over = length > MEET_NOTE_MAX;
   const invalid = length === 0 || over;
-  // A ref, not isPending: a double tap lands before React re-renders the
-  // button as disabled, and each tap would otherwise send its own request.
-  const inFlight = useRef(false);
   const submit = () => {
-    if (!person || inFlight.current || invalid) return;
-    inFlight.current = true;
+    if (!person || inFlight.current.has(person.userId) || invalid) return;
+    inFlight.current.add(person.userId);
     setError(null);
-    send.mutate(
-      { userId: person.userId, displayName: person.displayName, note: note.trim(), format },
-      { onSettled: () => { inFlight.current = false; } },
-    );
+    send.mutate({ userId: person.userId, displayName: person.displayName, note: note.trim(), format });
   };
 
   return (
@@ -85,8 +96,8 @@ export default function MeetSheet({ person, onClose }: Props) {
       footer={(
         <>
           <button type="button" onClick={onClose} className={CANCEL}>Cancel</button>
-          <button type="button" onClick={submit} disabled={send.isPending || invalid} className={SEND}>
-            {send.isPending ? 'Sending…' : 'Send request'}
+          <button type="button" onClick={submit} disabled={pending || invalid} className={SEND}>
+            {pending ? 'Sending…' : 'Send request'}
           </button>
         </>
       )}
@@ -103,6 +114,7 @@ export default function MeetSheet({ person, onClose }: Props) {
         />
       </label>
       <p id={counterId} className={cn('mt-1 text-[11px]', over ? 'text-reason-red' : 'text-reason-muted')}>{length} / {MEET_NOTE_MAX}</p>
+      {length === 0 && <p className="mt-1 text-[11px] text-reason-muted">Write a short note first.</p>}
       <label className="mt-3 grid gap-1.5 text-[12px] font-bold">
         Preferred format
         <select
@@ -113,7 +125,7 @@ export default function MeetSheet({ person, onClose }: Props) {
           {MEETING_FORMATS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
         </select>
       </label>
-      {error && <p role="alert" className="mt-3 text-[13px] text-reason-red">{error}</p>}
+      {error && <p ref={errorLine} role="alert" className="mt-3 text-[13px] text-reason-red">{error}</p>}
     </Sheet>
   );
 }

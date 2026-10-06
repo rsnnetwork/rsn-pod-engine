@@ -77,16 +77,53 @@ describe('REASON Meet sheet: the note and its cap', () => {
 describe('REASON sheets: one request per press', () => {
   // isPending only turns the button off a moment AFTER the press, so a double tap would send twice. For
   // the Meet sheet the server would answer the second with a 409; for outcomes it would store a second
-  // row (they are a history).
-  it('a ref is taken before the request starts, checked first, and given back when the request settles', () => {
+  // row (they are a history). The ref holds the people a request is out for, so one person's request does
+  // not hold up the sheet opened for another.
+  it('a ref is taken for the person before the request starts, checked first, and given back when the request settles', () => {
     for (const sheet of SHEETS) {
       const src = flat(sheet);
-      expect(src).toContain('const inFlight = useRef(false);');
-      expect(src).toMatch(/if \([^)]*inFlight\.current[^)]*\) return;/);
-      expect(src).toMatch(/inFlight\.current = true;[^}]*\.mutate\(/);
-      expect(src).toContain('onSettled: () => { inFlight.current = false; }');
+      expect(src).toContain('const inFlight = useRef(new Set<string>());');
+      expect(src).toMatch(/if \([^)]*inFlight\.current\.has\(person\.userId\)[^)]*\) return;/);
+      expect(src).toMatch(/inFlight\.current\.add\(person\.userId\);[^}]*\.mutate\(/);
+      // On the mutation itself, not on a .mutate() call: those callbacks are dropped when a later press
+      // (for someone else) takes the observer over, which would leave the first person stuck.
+      expect(src).toContain('onSettled: (_data, _error, r) => { inFlight.current.delete(r.userId); }');
       expect(src).not.toMatch(/if \([^)]*isPending[^)]*\) return;/);
     }
+  });
+});
+
+describe('REASON sheets: a member who is offline is told at once', () => {
+  // useMutation's default holds a request while the browser says it is offline: the sheet would read
+  // "Sending…" for as long as the member stays offline, and the request would go out by itself, minutes
+  // later, when the network came back (for Meet a real request, after the member had closed the sheet).
+  // Attempted at once it fails with no response, and errorMessage says the connection was lost.
+  it('the request is attempted at once: networkMode is always', () => {
+    for (const sheet of SHEETS) expect(flat(sheet)).toMatch(/useMutation\(\{ networkMode: 'always',/);
+  });
+});
+
+describe('REASON sheets: each control is wired to what it says', () => {
+  it('Send request: pressed runs submit, off while this person\'s request is out or the note is not sendable', () => {
+    const src = flat('MeetSheet');
+    expect(src).toContain('const pending = send.isPending && send.variables?.userId === personId;');
+    expect(src).toContain('if (!person || inFlight.current.has(person.userId) || invalid) return;');
+    expect(src).toContain('<button type="button" onClick={onClose} className={CANCEL}>Cancel</button>');
+    expect(src).toContain('<button type="button" onClick={submit} disabled={pending || invalid} className={SEND}>');
+    expect(src).toContain("{pending ? 'Sending…' : 'Send request'}");
+    expect(src).toContain('value={note}');
+    expect(src).toContain('value={format}');
+  });
+
+  it('Save outcome: pressed runs submit, off until an answer is chosen or while this person\'s save is out', () => {
+    const src = flat('OutcomeSheet');
+    expect(src).toContain('const pending = save.isPending && save.variables?.userId === personId;');
+    expect(src).toContain('if (!person || !worth || inFlight.current.has(person.userId)) return;');
+    expect(src).toContain('<button type="button" onClick={onClose} className={CANCEL}>Cancel</button>');
+    expect(src).toContain('<button type="button" onClick={submit} disabled={!worth || pending} className={SAVE}>');
+    expect(src).toContain("{pending ? 'Saving…' : 'Save outcome'}");
+    expect(src).toContain('aria-pressed={worth === w.key} onClick={() => choose(w.key)} className={chip(worth === w.key)}');
+    expect(src).toContain('aria-pressed={picked.includes(k)} onClick={() => toggle(k)} className={chip(picked.includes(k))}');
   });
 });
 
@@ -112,13 +149,13 @@ describe('REASON sheets: a failure keeps what the member entered', () => {
   it('the error is shown in a role=alert line, never closes the sheet, and clears on a retry', () => {
     for (const sheet of SHEETS) {
       const src = flat(sheet);
-      expect(src).toMatch(/onError: \(err, r\) => \{ const message = errorMessage\(err, '[^']+'\); if \(shownFor\.current === r\.userId\) setError\(message\); else addToast\(message, 'error'\); \}/);
-      expect(src).toContain('<p role="alert"');
+      expect(src).toMatch(/onError: \(err, r\) => \{ const message = errorMessage\(err, '[^']+'\); if \(shownFor\.current === r\.userId\) setError\(message\); else addToast\(`\$\{r\.displayName\}: \$\{message\}`, 'error'\); \}/);
+      expect(src).toContain('role="alert"');
       // onError says nothing about closing or resetting.
-      const onError = src.slice(src.indexOf('onError:'), src.indexOf('});', src.indexOf('onError:')));
+      const onError = src.slice(src.indexOf('onError:'), src.indexOf('onSettled:'));
       expect(onError).not.toMatch(/onClose|setNote|setFormat|setWorth|setPicked/);
       // A retry starts from a clean line.
-      expect(src).toContain('inFlight.current = true; setError(null);');
+      expect(src).toContain('inFlight.current.add(person.userId); setError(null);');
     }
   });
 
@@ -128,7 +165,37 @@ describe('REASON sheets: a failure keeps what the member entered', () => {
     expect(meet).toContain('onChange={(e) => { setFormat(e.target.value as MeetingFormat); setError(null); }}');
     const outcome = flat('OutcomeSheet');
     expect(outcome).toContain('const choose = (key: WorthContinuing) => { setWorth(key); setError(null); };');
-    expect(outcome).toMatch(/const toggle = \(key: OutcomeKey\) => \{[^}]*setError\(null\); \};/);
+    expect(outcome).toMatch(/const toggle = \(key: OutcomeKey\) => \{.*?setError\(null\); \};/);
+  });
+
+  // The error is the last thing in a body that scrolls. With the phone keyboard up the body is short, and
+  // the line would land below the fold, so the member would press Send and see nothing.
+  it('the error line is scrolled into view when it appears', () => {
+    for (const sheet of SHEETS) {
+      const src = flat(sheet);
+      expect(src).toContain('const errorLine = useRef<HTMLParagraphElement>(null);');
+      expect(src).toContain("useEffect(() => { errorLine.current?.scrollIntoView({ block: 'nearest' }); }, [error]);");
+      expect(src).toContain('{error && <p ref={errorLine} role="alert"');
+    }
+  });
+});
+
+describe('REASON sheets: a disabled button says why', () => {
+  // Inline, in the same muted small type as the counter: not a toast.
+  it('an empty note says "Write a short note first."', () => {
+    expect(flat('MeetSheet')).toContain('{length === 0 && <p className="mt-1 text-[11px] text-reason-muted">Write a short note first.</p>}');
+  });
+
+  it('no answer to "Worth continuing?" says "Choose an answer first."', () => {
+    expect(flat('OutcomeSheet')).toContain('{!worth && <p className="mt-1.5 text-[11px] text-reason-muted">Choose an answer first.</p>}');
+  });
+});
+
+describe('REASON outcome sheet: "Nothing yet" is exclusive', () => {
+  // Saved beside "Introduction" it would be contradictory data for the loop that learns from outcomes.
+  it('choosing it clears the other outcomes, and choosing any other clears it', () => {
+    const src = flat('OutcomeSheet');
+    expect(src).toContain("setPicked((p) => { if (p.includes(key)) return p.filter((x) => x !== key); return key === 'nothing_yet' ? [key] : [...p.filter((x) => x !== 'nothing_yet'), key]; });");
   });
 });
 
@@ -146,14 +213,14 @@ describe('REASON sheets: after a success', () => {
 describe('REASON sheets: a request that settles after the sheet has moved on', () => {
   // Without this, a request that failed after the member closed the sheet said so nowhere, and the first
   // person's late success closed a sheet opened for someone else. The sheet knows who it is open for now;
-  // a request settling for anyone else reports in a toast and leaves the sheet alone.
+  // a request settling for anyone else reports in a toast, naming who it was for, and leaves the sheet alone.
   it('the sheet remembers who it is open for, and only a request for that person touches the sheet', () => {
     for (const sheet of SHEETS) {
       const src = flat(sheet);
       expect(src).toContain('const shownFor = useRef(personId);');
       expect(src).toContain('useEffect(() => { shownFor.current = personId; }, [personId]);');
       expect(src).toContain('if (shownFor.current === r.userId) onClose();');
-      expect(src).toContain('if (shownFor.current === r.userId) setError(message); else addToast(message, \'error\');');
+      expect(src).toContain("if (shownFor.current === r.userId) setError(message); else addToast(`${r.displayName}: ${message}`, 'error');");
     }
   });
 });

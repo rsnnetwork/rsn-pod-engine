@@ -24,6 +24,7 @@ export default function OutcomeSheet({ person, onClose }: Props) {
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const personId = person?.userId ?? null;
+  const errorLine = useRef<HTMLParagraphElement>(null);
   const [worth, setWorth] = useState<WorthContinuing | null>(null);
   const [picked, setPicked] = useState<OutcomeKey[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -44,8 +45,17 @@ export default function OutcomeSheet({ person, onClose }: Props) {
   // someone else says how it went in a toast and leaves the sheet alone (see MeetSheet).
   const shownFor = useRef(personId);
   useEffect(() => { shownFor.current = personId; }, [personId]);
+  // The error is the last thing in a body that scrolls: with the phone keyboard up it would land below the fold.
+  useEffect(() => { errorLine.current?.scrollIntoView({ block: 'nearest' }); }, [error]);
 
+  // The people a save is out for. Outcomes are a history, so a double tap would store the answer twice. A ref,
+  // not isPending: the button is only disabled a moment after the press.
+  const inFlight = useRef(new Set<string>());
+
+  // networkMode 'always': offline, a held request would leave the sheet on "Saving…" and store the answer by
+  // itself, minutes later, when the network returned (see MeetSheet).
   const save = useMutation({
+    networkMode: 'always',
     mutationFn: (r: OutcomeRequest) => recordOutcomeRequest(r.userId, r.worth, r.outcomes),
     onSuccess: (_saved, r) => {
       addToast(`Saved what happened with ${r.displayName}`, 'success');
@@ -55,26 +65,29 @@ export default function OutcomeSheet({ person, onClose }: Props) {
     onError: (err, r) => {
       const message = errorMessage(err, 'Could not save that right now.');
       if (shownFor.current === r.userId) setError(message);
-      else addToast(message, 'error');
+      else addToast(`${r.displayName}: ${message}`, 'error');
     },
+    // On the mutation, not on a .mutate() call (see MeetSheet).
+    onSettled: (_data, _error, r) => { inFlight.current.delete(r.userId); },
   });
+  // Only this person's save keeps the button waiting.
+  const pending = save.isPending && save.variables?.userId === personId;
 
   const choose = (key: WorthContinuing) => { setWorth(key); setError(null); };
+  // "Nothing yet" says nothing came of it, so it cannot sit beside another outcome: choosing it clears the
+  // others, and choosing any other clears it.
   const toggle = (key: OutcomeKey) => {
-    setPicked((p) => (p.includes(key) ? p.filter((x) => x !== key) : [...p, key]));
+    setPicked((p) => {
+      if (p.includes(key)) return p.filter((x) => x !== key);
+      return key === 'nothing_yet' ? [key] : [...p.filter((x) => x !== 'nothing_yet'), key];
+    });
     setError(null);
   };
-  // Outcomes are a history, so a double tap would store the answer twice. A ref, not isPending: the
-  // button is only disabled a moment after the press.
-  const inFlight = useRef(false);
   const submit = () => {
-    if (!person || !worth || inFlight.current) return;
-    inFlight.current = true;
+    if (!person || !worth || inFlight.current.has(person.userId)) return;
+    inFlight.current.add(person.userId);
     setError(null);
-    save.mutate(
-      { userId: person.userId, displayName: person.displayName, worth, outcomes: picked },
-      { onSettled: () => { inFlight.current = false; } },
-    );
+    save.mutate({ userId: person.userId, displayName: person.displayName, worth, outcomes: picked });
   };
 
   return (
@@ -85,8 +98,8 @@ export default function OutcomeSheet({ person, onClose }: Props) {
       footer={(
         <>
           <button type="button" onClick={onClose} className={CANCEL}>Cancel</button>
-          <button type="button" onClick={submit} disabled={!worth || save.isPending} className={SAVE}>
-            {save.isPending ? 'Saving…' : 'Save outcome'}
+          <button type="button" onClick={submit} disabled={!worth || pending} className={SAVE}>
+            {pending ? 'Saving…' : 'Save outcome'}
           </button>
         </>
       )}
@@ -101,6 +114,7 @@ export default function OutcomeSheet({ person, onClose }: Props) {
             </button>
           ))}
         </div>
+        {!worth && <p className="mt-1.5 text-[11px] text-reason-muted">Choose an answer first.</p>}
       </fieldset>
       <fieldset className="mt-4">
         <legend className="text-[12px] font-bold">What came from the conversation?</legend>
@@ -112,7 +126,7 @@ export default function OutcomeSheet({ person, onClose }: Props) {
           ))}
         </div>
       </fieldset>
-      {error && <p role="alert" className="mt-3 text-[13px] text-reason-red">{error}</p>}
+      {error && <p ref={errorLine} role="alert" className="mt-3 text-[13px] text-reason-red">{error}</p>}
     </Sheet>
   );
 }
