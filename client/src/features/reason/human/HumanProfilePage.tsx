@@ -1,1 +1,200 @@
-export default function HumanProfilePage() { return null; }
+// client/src/features/reason/human/HumanProfilePage.tsx
+// Stefan's v4 "live relationship brief": full screen, its own header, and a
+// bar at the bottom that always offers one useful move.
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { primaryActionFor, type PersonBrief, type PersonResponse } from '@rsn/shared';
+import { useAuthStore } from '@/stores/authStore';
+import { useToastStore } from '@/stores/toastStore';
+import { E } from '@/realtime/entities';
+import { Skeleton } from '@/components/ui/Spinner';
+import { cn } from '@/lib/utils';
+import ReasonMark from '../brand/ReasonMark';
+import ReasonSheep from '../brand/ReasonSheep';
+import ProfileHero, { personFacts } from './ProfileHero';
+import ProfileDetails from './ProfileDetails';
+import MoveBar from './MoveBar';
+import MeetSheet from './MeetSheet';
+import OutcomeSheet from './OutcomeSheet';
+import { STATE_LABEL } from './labels';
+import { errorMessage, fetchBrief, reasonKeys, setPersonResponse } from '../api';
+
+// ?from= is part of the address, so anyone can write anything into it. Only the places the app itself
+// sends a member from are ever shown on the page.
+const KNOWN_SOURCES = ['For You', 'People', 'Messages', 'Introductions', 'Your path'] as const;
+
+// 404: blocked, closed or no such member. 400: not a member id. Both are answers about this person.
+// Anything else (no connection, 429, 5xx) says nothing about them, and Try again can help.
+const GONE_STATUSES = [404, 400];
+
+const statusOf = (err: unknown): number | undefined => (err as { response?: { status?: number } } | null)?.response?.status;
+const isGone = (err: unknown) => GONE_STATUSES.includes(statusOf(err) ?? 0);
+
+function isClientError(err: unknown): boolean {
+  const status = statusOf(err);
+  return status !== undefined && status >= 400 && status < 500;
+}
+
+// Side margins that also keep clear of the notch when a phone is on its side.
+const SIDES = 'pl-[max(12px,env(safe-area-inset-left))] pr-[max(12px,env(safe-area-inset-right))] md:pl-[max(22px,env(safe-area-inset-left))] md:pr-[max(22px,env(safe-area-inset-right))]';
+const MAIN = 'mx-auto w-full max-w-[1264px] md:max-w-[1284px]';
+const PRIMARY_BUTTON = 'min-h-[44px] rounded-[11px] bg-reason-red px-4 font-bold text-white enabled:hover:bg-reason-red-hover';
+const QUIET_BUTTON = 'min-h-[44px] rounded-[11px] border border-reason-line bg-white px-4 font-bold';
+
+// What each press does. Clearing is the same request for "remove from saved" and "undo pass", so the
+// move, not the response, decides the sentence.
+type Move = 'save' | 'unsave' | 'pass' | 'unpass';
+const MOVE_RESPONSE: Record<Move, PersonResponse | null> = { save: 'saved', unsave: null, pass: 'passed', unpass: null };
+
+function moveToast(move: Move, name: string): { message: string; type: 'success' | 'info' } {
+  switch (move) {
+    case 'save': return { message: `${name} saved`, type: 'success' };
+    case 'unsave': return { message: `${name} removed from saved`, type: 'success' };
+    case 'pass': return { message: `${name} will not be suggested in For You. You can undo this here.`, type: 'info' };
+    case 'unpass': return { message: `${name} can be suggested in For You again.`, type: 'info' };
+  }
+}
+
+function Loading() {
+  return (
+    <main className={cn(MAIN, SIDES, 'grid gap-3 py-4')} aria-busy="true">
+      <span className="sr-only" role="status">Loading this profile</span>
+      <Skeleton className="h-[40vh] rounded-[21px] border border-reason-line bg-white" />
+      <Skeleton className="h-40 rounded-[21px] border border-reason-line bg-white" />
+    </main>
+  );
+}
+
+function Notice({ title, text, children }: { title: string; text: string; children: ReactNode }) {
+  return (
+    <main className="mx-auto flex max-w-md flex-col items-center gap-3 px-6 py-16 text-center">
+      <ReasonSheep pose="thinking" className="h-24 w-24" />
+      <h1 className="text-[20px] font-bold">{title}</h1>
+      <p className="text-[14px] text-[#646a77]">{text}</p>
+      <div className="mt-2 flex flex-wrap justify-center gap-2.5">{children}</div>
+    </main>
+  );
+}
+
+// The profile itself, once the brief is in. Keyed by the person in the page, so Save, Pass and the two
+// sheets start fresh when one profile opens another (the "Your path" link).
+function Profile({ brief, userId, source }: { brief: PersonBrief; userId: string; source: string | null }) {
+  const navigate = useNavigate();
+  const addToast = useToastStore((s) => s.addToast);
+  const qc = useQueryClient();
+  const [meetOpen, setMeetOpen] = useState(false);
+  const [outcomeOpen, setOutcomeOpen] = useState(false);
+  const who = personFacts(brief.person);
+  const r = brief.relationship;
+
+  // A profile opened from another one (the "Your path" link) starts at its top, not where the last one was
+  // scrolled to. The app scrolls smoothly (index.css); this one jump must not.
+  useLayoutEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+  }, []);
+
+  const respond = useMutation({
+    mutationFn: (move: Move) => setPersonResponse(userId, MOVE_RESPONSE[move]),
+    onSuccess: (_result, move) => {
+      qc.invalidateQueries({ queryKey: reasonKeys.all });
+      const { message, type } = moveToast(move, who.first);
+      addToast(message, type);
+    },
+    onError: (err) => addToast(errorMessage(err, 'Could not update that right now.'), 'error'),
+  });
+  // The buttons are only disabled a moment after a press, so a quick second tap would repeat the request
+  // and its toast. One press at a time.
+  const pressing = useRef(false);
+  const press = (move: Move) => {
+    if (pressing.current) return;
+    pressing.current = true;
+    respond.mutate(move, { onSettled: () => { pressing.current = false; } });
+  };
+
+  const onPrimary = () => {
+    const action = primaryActionFor(r.state);
+    if (action === 'meet') setMeetOpen(true);
+    else if (action === 'continue') navigate(`/messages/new/${userId}`);
+    else if (action === 'respond') navigate(r.pokeId ? `/messages?poke=${r.pokeId}` : '/messages');
+  };
+
+  return (
+    <>
+      <main className={cn(MAIN, SIDES, 'pb-[calc(116px+env(safe-area-inset-bottom))] pt-3 md:pt-6')}>
+        <ProfileHero brief={brief} who={who} source={source} />
+        <ProfileDetails brief={brief} who={who} source={source} onRecordOutcome={() => setOutcomeOpen(true)} />
+      </main>
+      <MoveBar
+        brief={brief}
+        busy={respond.isPending}
+        onPrimary={onPrimary}
+        onToggleSave={() => press(r.saved ? 'unsave' : 'save')}
+        onTogglePass={() => press(r.passed ? 'unpass' : 'pass')}
+      />
+      <MeetSheet person={meetOpen ? { userId, displayName: who.name } : null} onClose={() => setMeetOpen(false)} />
+      <OutcomeSheet person={outcomeOpen ? { userId, displayName: who.name } : null} onClose={() => setOutcomeOpen(false)} />
+    </>
+  );
+}
+
+export default function HumanProfilePage() {
+  const { userId = '' } = useParams();
+  const [params] = useSearchParams();
+  const source = KNOWN_SOURCES.find((s) => s === params.get('from')) ?? null;
+  const location = useLocation();
+  const navigate = useNavigate();
+  const me = useAuthStore((s) => s.user?.id as string | undefined);
+
+  const { data: brief, error, isPending, isError, refetch } = useQuery({
+    queryKey: reasonKeys.brief(userId),
+    queryFn: () => fetchBrief(userId),
+    enabled: !!userId && !!me && userId !== me,
+    // A 4xx is an answer (blocked, closed, a bad id, slow down), so asking again changes nothing. A
+    // dropped connection or a 5xx gets one more try.
+    retry: (failures, err) => !isClientError(err) && failures < 1,
+    meta: { entities: me && userId ? [E.user(me), E.user(userId), E.userInvites(me), E.userDms(me)] : [] },
+  });
+
+  if (me && userId === me) return <Navigate to="/profile" replace />;
+
+  // The first screen of the app in this tab (a link opened from an email, say): going back would leave
+  // the app, so go to For You instead. `replace` keeps the browser's own Back button from returning here.
+  const back = () => {
+    if (location.key === 'default') navigate('/', { replace: true });
+    else navigate(-1);
+  };
+  // A refetch that fails (a dropped connection) leaves the profile on screen. Only "this person is
+  // gone" replaces one that is already showing.
+  const gone = isError && isGone(error);
+  const shown = gone ? undefined : brief;
+
+  return (
+    <div className="min-h-[100dvh] bg-[#f6f5f3] font-reason text-reason-ink antialiased">
+      <header className="sticky top-0 z-[5] flex h-[calc(60px+env(safe-area-inset-top))] items-center justify-between gap-3 border-b border-reason-line bg-white/95 pl-[max(11px,env(safe-area-inset-left))] pr-[max(11px,env(safe-area-inset-right))] pt-[env(safe-area-inset-top)] backdrop-blur-lg md:h-[calc(70px+env(safe-area-inset-top))] md:pl-[max(24px,env(safe-area-inset-left))] md:pr-[max(24px,env(safe-area-inset-right))]">
+        <div className="flex items-center gap-2.5">
+          <button type="button" onClick={back} className="min-h-[44px] rounded-full border border-reason-line bg-white px-3.5 text-[13px] font-extrabold">← Back</button>
+          <span className="hidden sm:inline"><ReasonMark variant="mobile" /></span>
+        </div>
+        {shown && (
+          <span className="rounded-full bg-[#f2f3f5] px-2.5 py-1.5 text-[10px] font-extrabold text-[#555d69]">{STATE_LABEL[shown.relationship.state]}</span>
+        )}
+      </header>
+
+      {shown ? (
+        <Profile key={userId} brief={shown} userId={userId} source={source} />
+      ) : isPending ? (
+        <Loading />
+      ) : gone ? (
+        <Notice title="This profile is not available." text="It may have been closed, or it is not open to you.">
+          <button type="button" onClick={back} className={PRIMARY_BUTTON}>Go back</button>
+        </Notice>
+      ) : (
+        <Notice title="We could not load this profile just now." text="Check your connection, then try again.">
+          <button type="button" onClick={() => void refetch()} className={PRIMARY_BUTTON}>Try again</button>
+          <button type="button" onClick={back} className={QUIET_BUTTON}>Go back</button>
+        </Notice>
+      )}
+    </div>
+  );
+}
