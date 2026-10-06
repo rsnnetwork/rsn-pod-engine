@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import api from '@/lib/api';
+import { clearCache, setCacheOwner } from '@/lib/queryClient';
 
 interface AuthState {
   user: any | null;
@@ -241,6 +242,8 @@ export const useAuthStore = create<AuthState>((set, get) => {
       for (let attempt = 0; ; attempt++) {
         try {
           const { data } = await api.get('/auth/session', { timeout: 15000 });
+          // Whose session this is, BEFORE a page can read it: a different member empties the query cache.
+          setCacheOwner(data.data.user.id);
           set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true });
           scheduleProactiveRefresh(get().accessToken!);
           return;
@@ -257,6 +260,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
             try {
               await get().refreshAccessToken();
               const { data } = await api.get('/auth/session', { timeout: 15000 });
+              setCacheOwner(data.data.user.id);
               set({ user: data.data.user, isAuthenticated: true, isLoading: false, isSessionChecked: true });
               scheduleProactiveRefresh(get().accessToken!);
             } catch (refreshErr: any) {
@@ -272,6 +276,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
               if (definitive && authEpoch === epochAtStart) {
                 clearStoredTokens();
                 clearRefreshTimer();
+                clearCache();
                 set({
                   isLoading: false, isAuthenticated: false, user: null,
                   accessToken: null, refreshToken: null, isSessionChecked: true,
@@ -352,6 +357,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
 
       clearRefreshTimer();
       clearStoredTokens();
+      clearCache();
       set({ user: null, accessToken: null, refreshToken: null, isAuthenticated: false, isLoading: false });
     },
 
@@ -362,6 +368,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
     endBlockedSession: (reason: string) => {
       clearRefreshTimer();
       clearStoredTokens();
+      clearCache();
       set({
         user: null, accessToken: null, refreshToken: null, isAuthenticated: false,
         isLoading: false, isSessionChecked: true, signOutReason: reason,
@@ -393,6 +400,7 @@ if (typeof window !== 'undefined') {
     // Another tab logged out (canonical key removed)
     if (event.key === TOKENS_KEY && !event.newValue && store.isAuthenticated) {
       clearRefreshTimer();
+      clearCache();
       useAuthStore.setState({
         user: null, accessToken: null, refreshToken: null,
         isAuthenticated: false, isLoading: false,
