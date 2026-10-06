@@ -11,7 +11,7 @@ import { z } from 'zod';
 import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import * as platformMatchService from '../services/matching/platform-match.service';
-import { ApiResponse, MEETING_FORMATS, type MeetingFormat } from '@rsn/shared';
+import { ApiResponse, MEET_NOTE_MAX, MEETING_FORMATS, type MeetingFormat } from '@rsn/shared';
 
 const router = Router();
 
@@ -33,12 +33,13 @@ router.get(
 
 // Milestone 1 (29 Sep 2026): the Meet sheet adds a personal "why now" note and
 // a preferred format. Both optional: today's callers POST with no body at all.
-// 300 leaves room for REASON's reason inside the request's REQUEST_MESSAGE_MAX characters.
+// The note's cap is MEET_NOTE_MAX, shared with the Meet sheet, which counts against the same number.
+// It leaves room for REASON's reason inside the request's REQUEST_MESSAGE_MAX characters.
 // The formats are the ones the app offers (MEETING_FORMATS), not a second list.
 // z.enum wants a non-empty tuple, which a list read from MEETING_FORMATS is.
 const FORMAT_KEYS = MEETING_FORMATS.map((f) => f.key) as [MeetingFormat, ...MeetingFormat[]];
 const interestBody = z.object({
-  note: z.string().trim().max(300, 'Keep the note to 300 characters or fewer.').optional(),
+  note: z.string().trim().max(MEET_NOTE_MAX, `Keep the note to ${MEET_NOTE_MAX} characters or fewer.`).optional(),
   format: z.enum(FORMAT_KEYS, { message: 'Choose one of the offered formats.' }).optional(),
 });
 type InterestBody = z.infer<typeof interestBody>;

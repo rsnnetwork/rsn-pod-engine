@@ -26,6 +26,11 @@ export const MEETING_FORMATS: ReadonlyArray<{ key: MeetingFormat; label: string 
   { key: 'message_first', label: 'Message first' },
 ];
 
+// The longest note a member may add to a Meet request. It stops short of the request's whole
+// message cap (REQUEST_MESSAGE_MAX on the server) so REASON's own reason still fits after it.
+// The route validates against it and the Meet sheet counts against it: one number, two readers.
+export const MEET_NOTE_MAX = 300;
+
 // Foundation S10, "What came from the conversation?"
 export const OUTCOME_KEYS = [
   'follow_up', 'introduction', 'potential_customer', 'potential_partnership',
