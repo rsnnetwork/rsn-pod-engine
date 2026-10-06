@@ -253,15 +253,6 @@ describe('the data layer keeps the surface the pages import', () => {
   });
 });
 
-describe('the sheet placeholders carry their final props and draw nothing yet', () => {
-  it.each(['MeetSheet', 'OutcomeSheet'])('%s', (name) => {
-    const src = readReason(`human/${name}.tsx`);
-    expect(src).toMatch(/\(_props: \{ person: \{ userId: string; displayName: string \} \| null; onClose: \(\) => void \}\)/);
-    expect(src).toMatch(/return null;/);
-    expect(src).not.toMatch(/TODO/);
-  });
-});
-
 describe('the Human Card: faults found by looking at it', () => {
   const card = () => readReason('human/HumanCard.tsx');
 
