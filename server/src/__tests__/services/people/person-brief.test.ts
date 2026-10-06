@@ -463,18 +463,27 @@ describe('getPersonBrief: the first-20-minutes line keeps the member\'s words as
     },
   );
 
-  // A trailing run of . ! ? is replaced by one full stop, in whatever mix it was typed.
+  // Whatever sentence-ending marks and spaces an answer ends in, in whatever mix and script it was typed,
+  // are replaced by one full stop.
   it.each([
     'Fundraising', 'Fundraising.', 'Fundraising!', 'Fundraising?', 'Fundraising?!', 'Fundraising!!!', 'Fundraising...', 'Fundraising ?!',
+    'Fundraising! ?', 'Fundraising . . .', 'Fundraising!?', 'Fundraising。', 'Fundraising！？',
   ])('ends the offer "%s" in exactly one full stop', async (offer) => {
     expect(await openerFrom(offer, null)).toBe('Start with what Sarah can bring: Fundraising.');
   });
 
-  it.each(['meet founders', 'meet founders.', 'meet founders?!', 'meet founders...'])('ends the want "%s" in exactly one full stop', async (want) => {
-    expect(await openerFrom('Fundraising', want)).toBe(
-      'Start with what Sarah can bring: Fundraising. Then say what you are looking for: meet founders.',
-    );
+  it.each(['市场营销', '市场营销。', '市场营销！', '市场营销？'])('ends the offer "%s" in one full stop, not a doubled one', async (offer) => {
+    expect(await openerFrom(offer, null)).toBe('Start with what Sarah can bring: 市场营销.');
   });
+
+  it.each(['meet founders', 'meet founders.', 'meet founders?!', 'meet founders...', 'meet founders! ?', 'meet founders . . .'])(
+    'ends the want "%s" in exactly one full stop',
+    async (want) => {
+      expect(await openerFrom('Fundraising', want)).toBe(
+        'Start with what Sarah can bring: Fundraising. Then say what you are looking for: meet founders.',
+      );
+    },
+  );
 
   it('keeps an answer of several sentences whole, and closes only its end', async () => {
     expect(await openerFrom('Building Harbor. Mentorship for first-time founders!', null)).toBe(
@@ -554,6 +563,36 @@ describe('getPersonBrief: the first-20-minutes line keeps the member\'s words as
     expect(await openerFrom(null, null, { score: 0.05, events: ['Harbor Mixer'] })).toBe(
       'Start with what each of you is working on right now. You will both be at Harbor Mixer.',
     );
+  });
+
+  // The host's title is shown exactly as written. It gets a full stop only when it does not already end its
+  // own sentence, so "Founders Night!" is never "Founders Night!." and "Coffee & Co." never ends in "..".
+  it.each([
+    ['Harbor Mixer', 'Harbor Mixer.'],
+    ['Founders Night!', 'Founders Night!'],
+    ['Coffee & Co.', 'Coffee & Co.'],
+    ['Who is next?', 'Who is next?'],
+    ['Back again…', 'Back again…'],
+    ['市场营销大会。', '市场营销大会。'],
+    ['Harbor Mixer (2026)', 'Harbor Mixer (2026).'],
+  ])('shows the event title "%s" as "%s"', async (title, shown) => {
+    expect(await openerFrom('Fundraising', null, { events: [title] })).toBe(
+      `Start with what Sarah can bring: Fundraising. You will both be at ${shown}`,
+    );
+  });
+
+  // Titles are only checked for length, so one can end in spaces, or be nothing else.
+  it('tidies spaces after the title in the sentence only, not in the title the page lists', async () => {
+    const brief = await briefFrom('Fundraising', null, { events: ['Harbor Mixer  '] });
+    expect(brief.opener).toBe('Start with what Sarah can bring: Fundraising. You will both be at Harbor Mixer.');
+    expect(brief.shared.upcomingEvents[0].title).toBe('Harbor Mixer  ');
+    expect(await openerFrom('Fundraising', null, { events: ['Founders Night! '] })).toBe(
+      'Start with what Sarah can bring: Fundraising. You will both be at Founders Night!',
+    );
+  });
+
+  it('says nothing of an event whose title is only spaces', async () => {
+    expect(await openerFrom('Fundraising', null, { events: ['   '] })).toBe('Start with what Sarah can bring: Fundraising.');
   });
 
   it('uses the first word of the display name when there is no first name, and "they" when there is no name at all', async () => {

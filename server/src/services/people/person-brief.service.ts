@@ -31,12 +31,18 @@ const usableAnswer = (text: string | null | undefined): string | null => {
 
 // A member's words are set after a colon exactly as they wrote them: their own first letter, capital or
 // not, reads naturally there ("european market entry", "Mentorship for founders", "I can help with
-// pricing"). Only the end changes: a run of . ! ? becomes one full stop. An answer clip had to cut
-// already ends in "…", which ends the clause, and a full stop after it would make a cut word look finished.
+// pricing"). Only the end changes: whatever sentence-ending marks and spaces it ends in, in any script
+// ("!", " ?", ". . .", "。"), become one full stop. An answer clip had to cut already ends in "…", which is
+// not a sentence-ending mark and ends the clause, and a full stop after it would make a cut word look finished.
 function asClause(answer: string): string {
-  const bare = answer.replace(/[.!?]+$/, '').trimEnd();
+  const bare = answer.replace(/[\s\p{Sentence_Terminal}]+$/u, '');
   return bare.endsWith('…') ? bare : `${bare}.`;
 }
+
+// A host's event title is shown exactly as written, so unlike an answer it keeps its own "!" or "?". It
+// gets a full stop only when it does not already end its sentence: "Founders Night!", "Coffee & Co." and
+// "Back again…" stay as they are.
+const endTitle = (title: string): string => (/[\p{Sentence_Terminal}…]$/u.test(title) ? title : `${title}.`);
 
 /**
  * "The first 20 minutes": fixed words around the two members' own answers (approved point 3).
@@ -51,7 +57,9 @@ function openerFor(o: {
   else if (o.hasMatch) parts.push('Start with why REASON put you two together.');
   else parts.push('Start with what each of you is working on right now.');
   if (o.youAreLookingFor) parts.push(`Then say what you are looking for: ${asClause(o.youAreLookingFor)}`);
-  if (o.sharedEvent) parts.push(`You will both be at ${o.sharedEvent}.`);
+  // Titles are only checked for length, so one can end in spaces, or be nothing else.
+  const event = o.sharedEvent?.trimEnd();
+  if (event) parts.push(`You will both be at ${endTitle(event)}`);
   return parts.join(' ');
 }
 

@@ -277,10 +277,6 @@ describe('the routes are rate limited', () => {
     expect(at).toBeGreaterThan(signedIn);
     expect(at).toBeLessThan(handlers.length - 1);
   });
-
-  it('keeps reads and writes in separate buckets', () => {
-    expect(peopleReadLimiter).not.toBe(peopleWriteLimiter);
-  });
 });
 
 describe('the read limiter', () => {
@@ -304,6 +300,17 @@ describe('the read limiter', () => {
     // Someone else is not held up, and neither are this member's own Save and Pass.
     expect((await request(app).get(`/people/${TARGET}/brief`).set({ Authorization: `Bearer ${token('u-other')}` })).status).toBe(200);
     expect((await request(app).put(`/people/${TARGET}/response`).set(heavy).send({ response: 'saved' })).status).toBe(200);
+  });
+
+  // The other way round: the two allowances are separate, so a member who has used up their Saves can still read.
+  it('is a separate allowance from the writes: using up the Saves leaves the reads open', async () => {
+    const saver = { Authorization: `Bearer ${token('u-saver')}` };
+    for (let i = 0; i < 60; i += 1) {
+      expect((await request(app).put(`/people/${TARGET}/response`).set(saver).send({ response: 'saved' })).status).toBe(200);
+    }
+    expect((await request(app).put(`/people/${TARGET}/response`).set(saver).send({ response: 'saved' })).status).toBe(429);
+    expect((await request(app).get(`/people/${TARGET}/brief`).set(saver)).status).toBe(200);
+    expect((await request(app).get('/people/connections/recent').set(saver)).status).toBe(200);
   });
 });
 
