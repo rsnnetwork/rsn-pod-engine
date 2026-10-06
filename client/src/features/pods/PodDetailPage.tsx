@@ -1038,7 +1038,9 @@ export default function PodDetailPage() {
           </div>
         )}
 
-        <div className="grid gap-2">
+        {/* grid-cols-1, not an auto track: an auto track grows to the longest truncated job title
+            in it, and the page then scrolls sideways on a phone. */}
+        <div className="grid grid-cols-1 gap-2">
           {(memberStatusFilter === null ? activeMembers : membersList.filter((m: any) => m.status === memberStatusFilter)).map((m: any) => (
             <Card key={m.userId || m.id} className="!p-3">
               <div className="flex items-center justify-between">

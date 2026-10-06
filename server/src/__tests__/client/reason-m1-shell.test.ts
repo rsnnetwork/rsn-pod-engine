@@ -208,4 +208,27 @@ describe('REASON shell and Messages: fixes before a client reviews it (P2)', () 
     // The placeholder defaulted to gray-400 (2.33:1 on the search field's #f4f5f7).
     expect(read('features/reason/shell/ShellTopbar.tsx')).toMatch(/bg-\[#f4f5f7\][^"]*\bplaceholder:text-\[#646a77\]/);
   });
+
+  // Old pages inside <main> scrolled sideways on a phone. Measured as main.scrollWidth - main.clientWidth at 360 and 390.
+  it('a list of cards that hold a truncated title or name is a one-column grid, not an auto track (an auto track grows to the longest truncated line, and the page scrolls sideways on a phone)', () => {
+    // Circle detail: events (a truncated title beside a date that never wraps) and members. +53px at a 360px window for a 33-character title.
+    const circle = read('features/circles/CircleDetailPage.tsx');
+    expect(circle).toMatch(/<div className="grid grid-cols-1 gap-2">\s*\{circle\.upcomingEvents\.map/);
+    expect(circle).toMatch(/<div className="grid grid-cols-1 gap-2">\s*\{circle\.members\.map/);
+    // Pod detail: the member list, whose ProfileCard truncates the job title (+360px at a 360px window for a long one).
+    expect(read('features/pods/PodDetailPage.tsx')).toMatch(/<div className="grid grid-cols-1 gap-2">\s*\{\(memberStatusFilter === null \? activeMembers/);
+    // Event page: the participant list (8px at 360 in WebKit).
+    expect(read('features/sessions/SessionDetailPage.tsx')).toMatch(/<div className="grid grid-cols-1 gap-2">\s*\{\/\* Host\/Director card/);
+  });
+  it('People you have met wraps the badges and the Message button under the name on a phone, and lets a long name break', () => {
+    // +43px at a 360px window: the avatar, the name, the badges and the button could not fit one line and held the card (and the page) wider.
+    expect(read('features/sessions/EncounterHistoryPage.tsx')).toMatch(
+      /<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">\s*<a href=\{`\/profile\/\$\{e\.otherUserId\}`\} className="[^"]*\[overflow-wrap:anywhere\]"/,
+    );
+  });
+  it('a long unbroken author name on the circle wall breaks instead of widening the page, on a post and on a comment', () => {
+    const wall = read('features/circles/CircleWall.tsx');
+    expect(wall).toMatch(/<p className="min-w-0 break-words text-sm font-semibold text-gray-900">\{p\.authorName \|\| 'Member'\}<\/p>/);
+    expect(wall).toMatch(/<p className="break-words text-xs font-semibold text-gray-700">\s*\{c\.authorName \|\| 'Member'\}/);
+  });
 });

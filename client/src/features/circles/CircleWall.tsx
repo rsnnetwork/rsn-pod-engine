@@ -303,7 +303,7 @@ function PostCard({ post: p, showPinBadge, linked, highlighted, circleId, isMemb
         <Avatar src={p.authorAvatarUrl || undefined} name={p.authorName || 'Member'} size="sm" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <p className="text-sm font-semibold text-gray-900">{p.authorName || 'Member'}</p>
+            <p className="min-w-0 break-words text-sm font-semibold text-gray-900">{p.authorName || 'Member'}</p>
             <p className="text-[11px] text-gray-400">{timeAgo(p.createdAt)}</p>
             {showPinBadge && p.pinnedAt && (
               <span className="flex items-center gap-1 text-[10px] font-semibold text-rsn-red bg-rsn-red-light px-1.5 py-0.5 rounded-full">
@@ -597,7 +597,7 @@ function PostComments({ postId, isMember, admin, userId, onChanged }: {
       <Avatar src={c.authorAvatarUrl || undefined} name={c.authorName || 'Member'} size="sm" />
       <div className="min-w-0 flex-1">
         <div className="bg-gray-50 rounded-lg px-2.5 py-1.5">
-          <p className="text-xs font-semibold text-gray-700">
+          <p className="break-words text-xs font-semibold text-gray-700">
             {c.authorName || 'Member'} <span className="font-normal text-gray-400">· {timeAgo(c.createdAt)}</span>
           </p>
           <p className="text-sm text-gray-800 whitespace-pre-wrap break-words">

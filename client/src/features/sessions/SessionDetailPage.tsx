@@ -741,7 +741,7 @@ export default function SessionDetailPage() {
             <p className="text-gray-400 text-sm text-center py-4">No participants yet. Be the first to register!</p>
           </Card>
         ) : (
-          <div className="grid gap-2">
+          <div className="grid grid-cols-1 gap-2">
             {/* Host/Director card — always visible at the top of the list, for
                 every viewer (member, admin, host themselves). The host is
                 NOT a participant in the matching sense (they organise, they

@@ -138,7 +138,9 @@ export default function CircleDetailPage() {
           <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5">
             <Calendar className="h-4 w-4 text-rsn-red" /> Upcoming events
           </h2>
-          <div className="grid gap-2">
+          {/* grid-cols-1, not an auto track: an auto track grows to the longest truncated title
+              in it, and the row (and with it the page) then scrolls sideways on a phone. */}
+          <div className="grid grid-cols-1 gap-2">
             {circle.upcomingEvents.map(e => (
               <Card key={e.id} className="card-hover !p-4">
                 <Link to={`/sessions/${e.id}`} className="flex items-center justify-between gap-2 min-h-[36px]">
@@ -237,7 +239,7 @@ export default function CircleDetailPage() {
         {circle.members.length === 0 ? (
           <Card><p className="text-sm text-gray-500 text-center py-2">Nobody here yet — be the first to join.</p></Card>
         ) : (
-          <div className="grid gap-2">
+          <div className="grid grid-cols-1 gap-2">
             {circle.members.map(m => (
               <Card key={m.userId} className="!p-3">
                 <Link to={`/profile/${m.userId}`} className="flex items-center gap-3 min-h-[44px] hover:opacity-80 transition-opacity">

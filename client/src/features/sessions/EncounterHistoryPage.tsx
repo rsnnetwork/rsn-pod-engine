@@ -67,8 +67,10 @@ export default function EncounterHistoryPage() {
         <div className="grid gap-3 animate-fade-in-up stagger-1">
           {(encounters || []).map((e: any, i: number) => (
             <Card key={e.id || i} className="card-hover">
-              <div className="flex items-center justify-between">
-                <a href={`/profile/${e.otherUserId}`} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+              {/* flex-wrap: the badges and the Message button drop under the name on a phone
+                  instead of holding the card, and the page, wider than the screen. */}
+              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                <a href={`/profile/${e.otherUserId}`} className="flex items-center gap-3 hover:opacity-80 transition-opacity [overflow-wrap:anywhere]">
                   <div className="relative">
                     <Avatar src={e.avatarUrl} name={e.displayName || e.otherUserName || e.email || 'User'} size="md" />
                     {e.mutual && (
