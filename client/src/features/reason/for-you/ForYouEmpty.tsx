@@ -12,7 +12,7 @@ export default function ForYouEmpty({ profileIncomplete, nextEvent }: Props) {
       <div className="flex items-start gap-3 rounded-2xl bg-reason-warm p-3.5">
         <ReasonSheep pose="thinking" className="h-[58px] w-[58px] shrink-0" />
         <div>
-          <h2 id="foryou-title" className="text-[16px] font-bold">Tell REASON a little more about you.</h2>
+          <h2 id="foryou-title" tabIndex={-1} className="text-[16px] font-bold outline-none">Tell REASON a little more about you.</h2>
           <p className="mt-1 text-[13px] text-reason-muted">Finish your profile and REASON can find people with a reason to meet you.</p>
           <Link to="/onboarding" className="mt-3 inline-flex min-h-[44px] items-center rounded-[11px] bg-reason-red px-4 text-[13px] font-bold text-white hover:bg-reason-red-hover">Finish my profile</Link>
         </div>
@@ -24,7 +24,7 @@ export default function ForYouEmpty({ profileIncomplete, nextEvent }: Props) {
       <div className="flex items-start gap-3 rounded-2xl bg-reason-warm p-3.5">
         <ReasonSheep pose="hopeful" className="h-[58px] w-[58px] shrink-0" />
         <div>
-          <h2 id="foryou-title" className="text-[16px] font-bold">No one new to suggest right now.</h2>
+          <h2 id="foryou-title" tabIndex={-1} className="text-[16px] font-bold outline-none">No one new to suggest right now.</h2>
           <p className="mt-1 text-[13px] text-reason-muted">New people join all the time. Here is what you can do meanwhile.</p>
         </div>
       </div>

@@ -1,8 +1,10 @@
 // server/src/__tests__/client/reason-m1-for-you.test.ts
-// The For You page (milestone 1, task B4), read as source like the shell test beside it. Each pin is a
-// requirement that is easy to lose in an edit and that no type check would notice.
+// The For You page (milestone 1, task B4), read as source like the shell test beside it, plus the one pure
+// helper it owns, executed. Each pin is a requirement that is easy to lose in an edit and that no type check
+// would notice.
 import * as fs from 'fs';
 import * as path from 'path';
+import { firstCharacter } from '../../../../client/src/features/reason/for-you/firstCharacter';
 
 // Working-tree files are CRLF on Windows; normalise so patterns match either way.
 const read = (rel: string) => fs.readFileSync(path.join(__dirname, '../../../../client/src', rel), 'utf8').replace(/\r\n/g, '\n');
@@ -12,7 +14,7 @@ const empty = () => read('features/reason/for-you/ForYouEmpty.tsx');
 // A comment may name what the code leaves out; only the code counts.
 const withoutComments = (src: string) => src.replace(/^\s*\/\/.*$/gm, '');
 
-// WCAG contrast, the same arithmetic the controller measured the colours with.
+// WCAG 2 contrast: the ratio of the two colours' relative luminance, each raised by 0.05.
 const luminance = (hex: string) => {
   const [r, g, b] = [1, 3, 5]
     .map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
@@ -37,13 +39,34 @@ describe('For You: what the page asks for, and when it says what', () => {
     const src = withoutComments(page());
     expect(src).toMatch(/const \{[^}]*\bisPending\b[^}]*\} = useQuery\(/);
     expect(src).not.toMatch(/\bisLoading\b/);
-    // The skeleton is decided first; the error and the empty state only ever see an answer.
-    const skeleton = src.indexOf('{isPending ?');
-    const failed = src.indexOf('isError ?');
+  });
+
+  it('a fetch waiting for the network, with nothing to show yet, is an error the member can read, not a skeleton for ever', () => {
+    const src = withoutComments(page());
+    // fetchStatus is how the query says "paused": the request exists and is waiting for the connection.
+    expect(src).toMatch(/const \{[^}]*\bfetchStatus\b[^}]*\} = useQuery\(/);
+    expect(src).toMatch(/const waitingForConnection = isPending && fetchStatus === 'paused';/);
+    expect(src).toMatch(/const cannotLoad = data === undefined && \(isError \|\| waitingForConnection\);/);
+    // The error branch is decided before the skeleton, and the empty state only ever sees an answer.
+    const failed = src.indexOf('{cannotLoad ?');
+    const skeleton = src.indexOf(') : isPending ?');
     const nobody = src.indexOf('<ForYouEmpty');
-    expect(skeleton).toBeGreaterThan(-1);
-    expect(failed).toBeGreaterThan(skeleton);
-    expect(nobody).toBeGreaterThan(failed);
+    expect(failed).toBeGreaterThan(-1);
+    expect(skeleton).toBeGreaterThan(failed);
+    expect(nobody).toBeGreaterThan(skeleton);
+  });
+
+  it('the error is only ever shown when there is no list: a failed refresh keeps the list that is on screen', () => {
+    const src = withoutComments(page());
+    expect(src).toMatch(/const cannotLoad = data === undefined && /);
+    // No branch asks isError on its own: that is how a good list used to be swapped for the error.
+    expect(src).not.toMatch(/isError \?|\{isError\b|&& isError\b/);
+  });
+
+  it('while it waits for the network the error says why, in the sentence errors.ts keeps for a lost connection', () => {
+    const src = withoutComments(page());
+    expect(src).toMatch(/const CONNECTION_LOST = errorMessage\(undefined, '[^']+'\);/);
+    expect(src).toMatch(/\{waitingForConnection && <p [^>]*>\{CONNECTION_LOST\}<\/p>\}/);
   });
 
   it('the rail never takes "not loaded yet" for "none": no fallback to an empty list, no isLoading, a skeleton until each answer arrives', () => {
@@ -53,6 +76,22 @@ describe('For You: what the page asks for, and when it says what', () => {
     expect(src).toMatch(/\bSkeleton\b/);
     // ...and a card that could not be answered says so, instead of claiming there is nothing.
     expect(src).toContain('We could not load this just now.');
+  });
+
+  it('each rail card is decided by what its own request has said: no answer yet is pending, a failed or paused request is failed, any answer is ready', () => {
+    const src = withoutComments(rail());
+    expect(src).toContain("const loadOf = (data: unknown, failed: boolean): Load => (data !== undefined ? 'ready' : failed ? 'failed' : 'pending');");
+    expect(src).toContain("const cannotAnswer = (q: { isError: boolean; fetchStatus: string }) => q.isError || q.fetchStatus === 'paused';");
+    expect(src).toContain('load={loadOf(nextEvent, failed)}');
+    expect(src).toContain('load={loadOf(pods.data, cannotAnswer(pods))}');
+    expect(src).toContain('load={loadOf(recent.data, cannotAnswer(recent))}');
+    // The rail's cards read their answer from the same objects the loads were decided from.
+    expect(src).toMatch(/pods\.data\?\.length === 0/);
+    expect(src).toMatch(/recent\.data\?\.length === 0/);
+  });
+
+  it('hands the rail only what the page does not know yet: undefined until For You answers, and whether it could not', () => {
+    expect(page()).toContain('<ForYouRail nextEvent={data?.nextEvent} failed={cannotLoad} />');
   });
 
   it('shows a shortlist of five at most, never the whole list the server sends', () => {
@@ -74,16 +113,66 @@ describe('For You: what the page asks for, and when it says what', () => {
 });
 
 describe('For You: Save and the cache', () => {
+  const saveCall = () => {
+    const src = withoutComments(page());
+    const start = src.indexOf('const save = useMutation({');
+    const end = src.indexOf('\n  });', start);
+    expect({ found: start > -1 && end > start }).toEqual({ found: true });
+    return src.slice(start, end);
+  };
+
   it('never writes the query cache by hand', () => {
     for (const src of [page(), rail(), empty()]) expect(withoutComments(src)).not.toMatch(/setQueryData|setQueriesData/);
   });
 
-  it('Save invalidates every REASON query, and waits for the fresh list so the card stays busy until it shows its new state', () => {
-    expect(page()).toMatch(/return qc\.invalidateQueries\(\{ queryKey: reasonKeys\.all \}\);/);
+  it('a Save made with no connection fails at once, with errorMessage\'s connection sentence, instead of waiting behind a card that looks busy', () => {
+    expect(saveCall()).toMatch(/networkMode: 'always',/);
+    expect(saveCall()).toMatch(/onError: \(err\) => addToast\(errorMessage\(err, '[^']+'\), 'error'\)/);
   });
 
-  it('a failed Save says why through errorMessage, never the server\'s raw text', () => {
-    expect(page()).toMatch(/onError: \(err\) => addToast\(errorMessage\(err, '[^']+'\), 'error'\)/);
+  it('every Save carries one key, and each card is busy for ITS OWN request: the page asks which people have a Save in flight', () => {
+    const src = withoutComments(page());
+    expect(src).toMatch(/^const SAVE_KEY = \['reason', 'save-person'\] as const;$/m);
+    expect(saveCall()).toMatch(/mutationKey: SAVE_KEY,/);
+    expect(src).toMatch(/useMutationState\(\{\s*filters: \{ mutationKey: SAVE_KEY, status: 'pending' \},/);
+    expect(src).toMatch(/\(m\.state\.variables as HumanCardPerson\)\.userId/);
+    expect(src).toContain('busy={saving.includes(p.userId)}');
+    // One useMutation only tracks its latest call, so the page must not read busy from it.
+    expect(src).not.toMatch(/save\.isPending|save\.variables/);
+  });
+
+  it('after a Save everything REASON has cached is marked stale, but only the For You list is fetched again and waited for', () => {
+    const src = withoutComments(page());
+    expect(saveCall()).toContain("await qc.invalidateQueries({ queryKey: reasonKeys.all, refetchType: 'none' });");
+    expect(saveCall()).toContain('await qc.invalidateQueries({ queryKey: reasonKeys.forYou });');
+    expect(src.match(/invalidateQueries\(/g)).toHaveLength(2);
+    // No invalidation of the whole REASON namespace may refetch: the rail's two requests are not the Save's to refresh.
+    for (const call of src.matchAll(/invalidateQueries\(\{ queryKey: reasonKeys\.all[^)]*\)/g)) expect(call[0]).toContain("refetchType: 'none'");
+  });
+});
+
+describe('For You: the keyboard', () => {
+  const headings = () => [page(), rail(), empty()].flatMap((src) => [...src.matchAll(/<h2 id="foryou-title"[^>]*>/g)].map((m) => m[0]));
+
+  it('"Try again" hands focus to the section heading once the answer is in, because the button disappears under the member', () => {
+    const src = withoutComments(page());
+    expect(src).toMatch(/const tryAgain = \(\) => \{ retrying\.current = true; void refetch\(\); \};/);
+    expect(src).toMatch(/<button type="button" onClick=\{tryAgain\} [^>]*min-h-\[44px\][^>]*>Try again<\/button>/);
+    const effect = src.slice(src.indexOf('useEffect(() => {'), src.indexOf('}, [isPending, isError]);'));
+    expect(effect).toContain('if (isPending || !retrying.current) return;');
+    expect(effect).toContain("section.current?.querySelector<HTMLElement>('#foryou-title')?.focus();");
+    expect(src).toMatch(/<section ref=\{section\} aria-labelledby="foryou-title"/);
+  });
+
+  it('every heading that can be focused is focusable (tabIndex -1) and draws no ring on a heading; the screen-reader-only loading one is not', () => {
+    const all = headings();
+    expect(all).toHaveLength(5); // loading, could not load, the list, and the two empty states
+    const loading = all.filter((h) => h.includes('sr-only'));
+    expect(loading).toHaveLength(1);
+    for (const h of all.filter((x) => !x.includes('sr-only'))) {
+      expect(h).toContain('tabIndex={-1}');
+      expect(h).toContain('outline-none');
+    }
   });
 });
 
@@ -96,11 +185,26 @@ describe('For You: the rail', () => {
     expect(src).toMatch(/E\.userPods\(userId\)/);
   });
 
-  it('a pod\'s initial is its first whole character (an emoji name is not cut in half), one member reads "1 member", and a blank introduction name reads as "Member"', () => {
+  it('a pod\'s initial is its first whole character, one member reads "1 member", and a blank introduction name reads as "Member"', () => {
     const src = withoutComments(rail());
-    expect(src).toMatch(/Array\.from\(p\.name\.trim\(\)\)\[0\]\?\.toUpperCase\(\)/);
+    expect(src).toMatch(/\{firstCharacter\(p\.name\)\}/);
     expect(src).toMatch(/p\.memberCount === 1 \? '1 member' : `\$\{p\.memberCount\} members`/);
     expect(src).toMatch(/personName\(r\.displayName\)/);
+  });
+
+  it('a row is read once: the pod\'s initial and the introduction\'s photo are decoration beside the name, so a screen reader skips them', () => {
+    const src = withoutComments(rail());
+    expect(src).toMatch(/<span aria-hidden="true" className="[^"]*">\{firstCharacter\(p\.name\)\}<\/span>/);
+    expect(src).toMatch(/<span aria-hidden="true"[^>]*><Avatar [^>]*\/><\/span>/);
+  });
+
+  it('every "View all" says what it opens (the visible words stay inside the name): people, events, pods, introductions', () => {
+    expect(page()).toMatch(/<Link to="\/matches" aria-label="View all people" [^>]*>View all<\/Link>/);
+    const src = withoutComments(rail());
+    expect(src).toMatch(/<Link to=\{to\} aria-label=\{`View all \$\{all\}`\} [^>]*>View all<\/Link>/);
+    for (const [title, to, all] of [['Your next event', '/sessions', 'events'], ['Your pods', '/pods', 'pods'], ['Recent introductions', '/messages', 'introductions']]) {
+      expect(src).toContain(`<RailCard title="${title}" to="${to}" all="${all}" `);
+    }
   });
 
   it('refreshes recent introductions when a request is answered (user and invite tags)', () => {
@@ -112,11 +216,9 @@ describe('For You: the rail', () => {
     expect(withoutComments(rail())).not.toMatch(/Suggested entities|<img\b/);
   });
 
-  it('the "Connected" pill is readable: the brief\'s green on mint is 4.18:1, the one used is 4.88:1', () => {
-    expect(contrast('#168657', '#e9f8f1')).toBeCloseTo(4.18, 1);
-    expect(contrast('#147a4f', '#e9f8f1')).toBeGreaterThanOrEqual(4.5);
+  it('the "Connected" pill is readable: its green on mint is 4.88:1', () => {
+    expect(contrast('#147a4f', '#e9f8f1')).toBeCloseTo(4.88, 1);
     expect(rail()).toMatch(/bg-\[#e9f8f1\][^"]*text-\[#147a4f\]/);
-    expect(rail()).not.toContain('#168657');
   });
 });
 
@@ -156,7 +258,6 @@ describe('For You: links, words and the buttons the end-to-end spec presses', ()
 
   it('keeps the words and the button the end-to-end spec relies on for a failed load', () => {
     expect(page()).toContain('We could not load your people just now.');
-    expect(page()).toMatch(/<button type="button" onClick=\{\(\) => refetch\(\)\}[^>]*min-h-\[44px\][^>]*>Try again<\/button>/);
     expect(page()).toContain('role="alert"');
     expect(page().match(/<button\b/g)).toHaveLength(1);
   });
@@ -167,6 +268,47 @@ describe('For You: links, words and the buttons the end-to-end spec presses', ()
       expect(empty()).toContain(text);
     }
     // A long event title in "Join <title>" wraps instead of running out of its box.
-    expect(empty()).toMatch(/const ACTION = '[^']*\[overflow-wrap:anywhere\]/);
+    const action = empty().match(/const ACTION = ([^;]+);/)?.[1];
+    expect(action).toContain('[overflow-wrap:anywhere]');
+  });
+});
+
+describe('firstCharacter: the character a person sees first in a name', () => {
+  // Written as escapes: a flag, a family joined by zero-width joiners, a hand with a skin tone.
+  const FLAG = '\u{1F1E9}\u{1F1EA}';
+  const FAMILY = '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}';
+  const THUMBS = '\u{1F44D}\u{1F3FD}';
+  const ROCKET = '\u{1F680}';
+
+  it('is the upper-case first letter of a plain name, with spaces ignored', () => {
+    expect(firstCharacter('zebra crossing')).toBe('Z');
+    expect(firstCharacter('  spaced out ')).toBe('S');
+    expect(firstCharacter('\u00e9cole')).toBe('\u00c9');
+  });
+
+  it('is nothing for nothing', () => {
+    expect(firstCharacter('')).toBe('');
+    expect(firstCharacter('   ')).toBe('');
+  });
+
+  it('keeps a whole emoji whole, whatever it is made of: a flag, a family, a skin tone, a plain one', () => {
+    expect(firstCharacter(`${FLAG} Berlin`)).toBe(FLAG);
+    expect(firstCharacter(`${FAMILY} Family office`)).toBe(FAMILY);
+    expect(firstCharacter(`${THUMBS} Thumbs up`)).toBe(THUMBS);
+    expect(firstCharacter(`${ROCKET} Rockets`)).toBe(ROCKET);
+  });
+
+  it('keeps a letter with its combining accent together (e then an accent is one letter)', () => {
+    expect(firstCharacter('e\u0301cole')).toBe('E\u0301');
+  });
+
+  it('where a browser has no segmenter it falls back to the first code point: a plain emoji and a letter are still whole, a flag is not', () => {
+    expect(firstCharacter('zebra', null)).toBe('Z');
+    expect(firstCharacter(`${ROCKET} Rockets`, null)).toBe(ROCKET);
+    expect(firstCharacter(`${FLAG} Berlin`, null)).toBe('\u{1F1E9}');
+  });
+
+  it('is what the rail draws: no charAt, no code-unit split', () => {
+    expect(withoutComments(rail())).not.toMatch(/charAt\(0\)|\[0\]\?\.toUpperCase/);
   });
 });
