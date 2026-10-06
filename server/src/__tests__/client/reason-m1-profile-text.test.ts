@@ -291,8 +291,9 @@ describe('the busy look', () => {
   it('is a progress cursor, a pulse, and a still dim for reduced motion', () => {
     expect(BUSY).toBe('cursor-progress motion-safe:animate-pulse motion-reduce:opacity-60');
   });
-  it('is the look the Human Card uses: its own copy of this string today, or this module once the card imports it', () => {
+  it('is the look the Human Card uses: it imports this module and keeps no copy of the string', () => {
     const card = fs.readFileSync(path.join(__dirname, '../../../../client/src/features/reason/human/HumanCard.tsx'), 'utf8');
-    expect(card.includes(BUSY) || /from '\.\/busy'/.test(card)).toBe(true);
+    expect(card).toMatch(/from '\.\/busy'/);
+    expect(card).not.toContain(BUSY);
   });
 });

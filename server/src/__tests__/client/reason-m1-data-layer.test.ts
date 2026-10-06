@@ -290,10 +290,11 @@ describe('the Human Card: faults found by looking at it', () => {
     expect(buttons).toBe(2);
     expect(card().match(/min-h-\[44px\]/g)?.length).toBe(buttons);
   });
-  it('a busy card looks busy, not only disabled: progress cursor, a pulse (still, but dimmed, for reduced motion) and aria-busy', () => {
-    expect(card()).toMatch(/cursor-progress/);
-    expect(card()).toMatch(/motion-safe:animate-pulse/);
-    expect(card()).toMatch(/motion-reduce:opacity-60/);
+  it('a busy card looks busy, not only inert: progress cursor, a pulse (still, but dimmed, for reduced motion) and aria-busy', () => {
+    // The look itself lives in busy.ts, shared with the profile's bar (see "the busy look is shared" below).
+    expect(readReason('human/busy.ts')).toMatch(/cursor-progress/);
+    expect(readReason('human/busy.ts')).toMatch(/motion-safe:animate-pulse/);
+    expect(readReason('human/busy.ts')).toMatch(/motion-reduce:opacity-60/);
     expect(card()).toMatch(/aria-busy=\{busy \|\| undefined\}/);
   });
   it('the inert "Request sent" / "Request declined" button is never dimmed, so it stays readable', () => {
@@ -337,5 +338,41 @@ describe('the Human Card: faults found by looking at it', () => {
     expect(card()).toMatch(/const headingId = useId\(\);/);
     expect(card()).toMatch(/aria-labelledby=\{headingId\}/);
     expect(card()).toMatch(/<h3 id=\{headingId\}/);
+  });
+});
+
+// The integration pass (Task P3). The profile's bar already worked this way (MoveBar.tsx); the card now matches it.
+describe('the Human Card: keyboard focus, the shared busy look, and a typed source', () => {
+  const card = () => readReason('human/HumanCard.tsx');
+  const count = (src: string, re: RegExp) => src.match(re)?.length ?? 0;
+
+  it('while a request is on its way the buttons say aria-disabled and ignore presses, but are never disabled (that drops the keyboard focus)', () => {
+    expect(count(card(), /aria-disabled=\{busy \|\| undefined\}/g)).toBe(2);
+    expect(card()).not.toMatch(/(?<![-\w])disabled=\{[^}]*busy/);
+    // Only the inert states of the main button are really disabled: nothing is there to press.
+    expect(count(card(), /(?<![-\w])disabled=\{/g)).toBe(1);
+    expect(card()).toMatch(/(?<![-\w])disabled=\{inert\}/);
+    // Both buttons go through the guard, so a press while busy does nothing.
+    expect(card()).toMatch(/const press = \(fn: \(\) => void\) => \(\) => \{ if \(!busy\) fn\(\); \};/);
+    expect(card()).toMatch(/onClick=\{press\(onPrimary\)\}/);
+    expect(card()).toMatch(/onClick=\{press\(\(\) => onToggleSave\(person\)\)\}/);
+    expect(card()).not.toMatch(/onClick=\{onPrimary\}/);
+    expect(card()).not.toMatch(/onClick=\{\(\) => onToggleSave\(person\)\}/);
+  });
+
+  it('the busy look is shared: the card imports it from busy.ts and keeps no copy of its own', () => {
+    expect(card()).toMatch(/import \{ BUSY \} from '\.\/busy';/);
+    expect(card()).not.toMatch(/const BUSY\b/);
+    expect(card()).not.toMatch(/cursor-progress|motion-safe:animate-pulse|motion-reduce:opacity-60/);
+    expect(readReason('human/MoveBar.tsx')).toMatch(/import \{ BUSY \} from '\.\/busy';/);
+  });
+
+  it('where the card was opened from is typed as the allow-list the profile accepts, so a misspelt source cannot compile', () => {
+    expect(card()).toMatch(/import type \{ KnownSource \} from '\.\/profile-text';/);
+    expect(card()).toMatch(/\n  source: KnownSource;/);
+    expect(card()).not.toMatch(/\n  source: string;/);
+    expect(readReason('human/profile-text.ts')).toMatch(/export type KnownSource = \(typeof KNOWN_SOURCES\)\[number\];/);
+    // The one page that draws cards says where it is.
+    expect(readReason('for-you/ForYouPage.tsx')).toMatch(/source="For You"/);
   });
 });

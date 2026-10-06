@@ -8,7 +8,9 @@ import { primaryActionFor, type RelationshipState } from '@rsn/shared';
 import Avatar from '@/components/ui/Avatar';
 import { cn } from '@/lib/utils';
 import { personName, visibleText } from '../person';
+import { BUSY } from './busy';
 import { PRIMARY_LABEL } from './labels';
+import type { KnownSource } from './profile-text';
 
 export interface HumanCardPerson {
   userId: string;
@@ -26,16 +28,12 @@ export interface HumanCardPerson {
 
 interface Props {
   person: HumanCardPerson;
-  source: string;
+  /** Where the card is drawn. The profile shows it as "You found them through ...", and only knows these places. */
+  source: KnownSource;
   onMeet: (p: HumanCardPerson) => void;
   onToggleSave: (p: HumanCardPerson) => void;
   busy?: boolean;
 }
-
-// A button that is disabled looks the same as one that is unavailable, so while a request is in flight
-// the buttons also show the progress cursor and pulse (dimmed and still, when the member asked for
-// reduced motion).
-const BUSY = 'cursor-progress motion-safe:animate-pulse motion-reduce:opacity-60';
 
 export default function HumanCard({ person, source, onMeet, onToggleSave, busy }: Props) {
   const navigate = useNavigate();
@@ -43,6 +41,10 @@ export default function HumanCard({ person, source, onMeet, onToggleSave, busy }
   const profileUrl = `/people/${person.userId}?from=${encodeURIComponent(source)}`;
   const action = primaryActionFor(person.state);
   const inert = action === 'requested' || action === 'declined';
+  // While a request is on its way the buttons say so (aria-disabled), show the busy look and ignore presses. They
+  // are not `disabled`: a disabled button drops the keyboard focus that is on it, and a Save made from the keyboard
+  // would leave the member on nothing. The look is shared with the profile's bar (busy.ts).
+  const press = (fn: () => void) => () => { if (!busy) fn(); };
 
   // Any of these can arrive empty or as spaces. A field with nothing to read is left out, not drawn blank,
   // and a blank name is worded here, so no page has to remember to.
@@ -123,8 +125,9 @@ export default function HumanCard({ person, source, onMeet, onToggleSave, busy }
       <div className="col-span-2 grid grid-cols-2 gap-2 min-[721px]:col-span-1 min-[721px]:col-start-2 min-[1420px]:col-start-4 min-[1420px]:grid-cols-1">
         <button
           type="button"
-          onClick={onPrimary}
-          disabled={busy || inert}
+          onClick={press(onPrimary)}
+          disabled={inert}
+          aria-disabled={busy || undefined}
           className={cn('min-h-[44px] rounded-[11px] px-3 text-[13px] font-bold transition',
             inert ? 'bg-[#f5f6f7] text-[#646a77]' : 'bg-reason-red text-white shadow-[0_7px_18px_rgba(222,50,46,.18)] enabled:hover:bg-reason-red-hover',
             busy && !inert && BUSY)}
@@ -134,8 +137,8 @@ export default function HumanCard({ person, source, onMeet, onToggleSave, busy }
         {/* The label carries the state ("Save" / "Saved"), so there is no aria-pressed: a screen reader would say it twice. */}
         <button
           type="button"
-          onClick={() => onToggleSave(person)}
-          disabled={busy}
+          onClick={press(() => onToggleSave(person))}
+          aria-disabled={busy || undefined}
           className={cn('min-h-[44px] rounded-[11px] bg-[#f5f6f7] px-3 text-[13px] font-bold text-[#2d3440]', busy && BUSY)}
         >
           {person.saved ? 'Saved' : 'Save'}
