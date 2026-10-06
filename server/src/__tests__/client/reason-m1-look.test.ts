@@ -1,6 +1,9 @@
 // server/src/__tests__/client/reason-m1-look.test.ts
 import * as fs from 'fs';
 import * as path from 'path';
+import * as ts from 'typescript';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 
 const root = path.join(__dirname, '../../../../client');
 // Working-tree files are CRLF on Windows; normalise so patterns match either way.
@@ -126,5 +129,142 @@ describe('REASON look: fixes before a client reviews it (P2)', () => {
     expect(s).toMatch(/const active = document\.activeElement as HTMLElement \| null;\s*const opener = \(!active \|\| active === document\.body\) && lastPressed\?\.isConnected \? lastPressed : active;/);
     // Focus goes back to it when the sheet closes.
     expect(s).toMatch(/opener\?\.focus\?\.\(\);/);
+  });
+});
+
+// ---- the integration pass (milestone 1, Task P3) ---------------------------------------------------------
+
+// WCAG relative luminance and contrast ratio.
+const luminance = (hex: string) => {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+const contrast = (a: string, b: string) => {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+};
+// The real Tailwind palette: a class name in the source becomes the colour the browser paints.
+const palette = require('tailwindcss/colors') as Record<string, Record<string, string>>;
+const hexOf = (cls: string): string => {
+  const m = cls.match(/^(?:bg|text|border)-([a-z]+)-(\d+)$/);
+  const hex = m ? palette[m[1]]?.[m[2]] : undefined;
+  if (!hex) throw new Error(`no palette colour for ${cls}`);
+  return hex;
+};
+
+describe('Toasts a member can read, hear and see under a notch (integration pass)', () => {
+  type Kind = 'success' | 'error' | 'info';
+  interface Item { id: string; type: Kind; message: string; hostSilent?: boolean; internal?: boolean }
+
+  // Toast.tsx itself, transpiled and drawn to markup. Only the store and the class joiner are stand-ins, so what
+  // is asserted below is what the component really renders for a given list of toasts.
+  function render(toasts: Item[], hostQuiet = false): string {
+    const source = fs.readFileSync(path.join(root, 'src/components/ui/Toast.tsx'), 'utf8');
+    const { outputText } = ts.transpileModule(source, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2019, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
+    });
+    const stand: Record<string, unknown> = {
+      '@/stores/toastStore': { useToastStore: () => ({ toasts, removeToast: () => undefined }) },
+      '@/lib/utils': { cn: (...parts: unknown[]) => parts.filter(Boolean).join(' ') },
+    };
+    const load = (id: string): unknown => (id in stand ? stand[id] : require(id));
+    const mod: { exports: { default?: unknown } } = { exports: {} };
+    new Function('module', 'exports', 'require', outputText)(mod, mod.exports, load);
+    return renderToStaticMarkup(createElement(mod.exports.default as never, { hostQuiet }));
+  }
+
+  const three: Item[] = [
+    { id: '1', type: 'success', message: 'Nadia saved' },
+    { id: '2', type: 'info', message: 'Nadia can be suggested in For You again.' },
+    { id: '3', type: 'error', message: 'Could not save that right now.' },
+  ];
+
+  it('success and info are announced politely, an error at once, and every toast is in exactly one region', () => {
+    const html = render(three);
+    // One region per politeness and no role on the cards themselves: a toast inside two live regions is read twice.
+    expect(html.match(/role="status"/g)?.length ?? 0).toBe(1);
+    expect(html.match(/role="alert"/g)?.length ?? 0).toBe(1);
+    expect(html).toContain('role="status" aria-live="polite" aria-atomic="false"');
+    expect(html).toContain('role="alert" aria-live="assertive" aria-atomic="false"');
+    const status = html.indexOf('role="status"');
+    const alert = html.indexOf('role="alert"');
+    expect(status).toBeGreaterThan(-1);
+    expect(status).toBeLessThan(alert);
+    const inStatus = html.slice(status, alert);
+    const inAlert = html.slice(alert);
+    for (const t of three) {
+      expect(html.split(t.message)).toHaveLength(2);
+      expect(t.type === 'error' ? inAlert : inStatus).toContain(t.message);
+      expect(t.type === 'error' ? inStatus : inAlert).not.toContain(t.message);
+    }
+  });
+
+  it('has both regions in the page before the first toast arrives, so a screen reader is already listening', () => {
+    const html = render([]);
+    expect(html).toContain('role="status"');
+    expect(html).toContain('role="alert"');
+    expect(html).not.toContain('<button');
+  });
+
+  it('still drops internal messages for everyone, and shows a host only the errors that are theirs to act on', () => {
+    const mixed: Item[] = [
+      ...three,
+      { id: '4', type: 'error', message: 'Not for the host', hostSilent: true },
+      { id: '5', type: 'info', message: 'Plan updated for round 2', internal: true },
+      { id: '6', type: 'error', message: 'Internal failure', internal: true },
+    ];
+    const everyone = render(mixed);
+    for (const m of [...three.map((t) => t.message), 'Not for the host']) expect(everyone).toContain(m);
+    for (const m of ['Plan updated for round 2', 'Internal failure']) expect(everyone).not.toContain(m);
+    const host = render(mixed, true);
+    expect(host).toContain('Could not save that right now.');
+    for (const m of ['Nadia saved', 'Nadia can be suggested in For You again.', 'Not for the host', 'Plan updated for round 2', 'Internal failure']) {
+      expect(host).not.toContain(m);
+    }
+  });
+
+  it('the words are dark ink on a solid pale ground, 4.5:1 or better, so they read on any page or backdrop behind the toast', () => {
+    const ink = read('tailwind.config.js').match(/ink: '(#[0-9a-f]{6})'/)![1];
+    for (const type of ['success', 'info', 'error'] as Kind[]) {
+      const html = render([{ id: '1', type, message: 'x' }]);
+      const card = html.match(/<div class="([^"]*)" style="opacity:0/)![1].split(' ');
+      expect({ type, ink: card.includes('text-reason-ink') }).toEqual({ type, ink: true });
+      // Solid: a tint such as bg-emerald-500/10 lets the page through, and the ratio then depends on the page.
+      expect({ type, tinted: card.some((c) => /^bg-[a-z]+-\d+\//.test(c)) }).toEqual({ type, tinted: false });
+      const ground = card.find((c) => /^bg-[a-z]+-\d+$/.test(c));
+      expect({ type, ground: !!ground }).toEqual({ type, ground: true });
+      expect(contrast(ink, hexOf(ground!))).toBeGreaterThanOrEqual(4.5);
+      // The colour meaning lives in the border and the icon, and the icon reads on the ground too.
+      expect({ type, border: card.some((c) => /^border-[a-z]+-\d+$/.test(c)) }).toEqual({ type, border: true });
+      const icon = html.match(/<svg[^>]*class="[^"]*\b(text-[a-z]+-\d+)\b/)![1];
+      expect(contrast(hexOf(icon), hexOf(ground!))).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it('sits below a notch and clear of the side insets, and on phones spans the window minus its margins', () => {
+    const html = render(three);
+    // Inline, so it wins over top-4 and right-4, which stay as the fallback for a browser that knows no env().
+    expect(html).toContain('top:max(16px, env(safe-area-inset-top))');
+    expect(html).toContain('right:max(16px, env(safe-area-inset-right))');
+    expect(html).toMatch(/class="fixed top-4 right-4 z-\[210\][^"]*\bleft-\[max\(16px,env\(safe-area-inset-left\)\)\] sm:left-auto sm:max-w-sm/);
+  });
+
+  it('keeps the hooks the older end-to-end specs use: a fixed top-right stack, with every message in a <p>', () => {
+    const html = render(three);
+    expect(html).toMatch(/^<div class="fixed top-4 right-4 z-\[210\]/);
+    for (const t of three) expect(html).toMatch(new RegExp(`<p class="[^"]*">${t.message.replace(/\./g, '\\.')}</p>`));
+    // A long unbroken word wraps inside the card instead of pushing it past the margin.
+    expect(html).toMatch(/<p class="[^"]*\bmin-w-0\b[^"]*\[overflow-wrap:anywhere\]/);
+  });
+
+  it('every toast has a dismiss button at least 44px square, with a name', () => {
+    const buttons = render(three).match(/<button[^>]*>/g) ?? [];
+    expect(buttons).toHaveLength(3);
+    for (const b of buttons) {
+      expect(b).toContain('aria-label="Dismiss notification"');
+      expect(b).toMatch(/\bh-11\b/);
+      expect(b).toMatch(/\bw-11\b/);
+    }
   });
 });
