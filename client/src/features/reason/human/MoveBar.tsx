@@ -2,11 +2,9 @@
 // The bar that stays at the bottom of the profile: one useful move, then Save and Pass.
 import { primaryActionFor, type PersonBrief } from '@rsn/shared';
 import { cn } from '@/lib/utils';
+import { BUSY } from './busy';
 import { NEXT_MOVE, PRIMARY_LABEL, STATE_LABEL } from './labels';
 
-// A disabled button also looks unavailable, so while a Save or Pass is on its way the buttons show
-// progress too (the same look as the Human Card's buttons).
-const BUSY = 'cursor-progress motion-safe:animate-pulse motion-reduce:opacity-60';
 const SIDE_BUTTON = 'grid min-h-[48px] min-w-[48px] place-items-center rounded-[11px] border border-reason-line bg-white text-[18px]';
 
 interface Props {
@@ -21,8 +19,14 @@ export default function MoveBar({ brief, busy, onPrimary, onToggleSave, onToggle
   const r = brief.relationship;
   const action = primaryActionFor(r.state);
   const inert = action === 'requested' || action === 'declined';
+  // While a press is on its way the buttons say so (aria-disabled), show the busy look and ignore presses.
+  // They are not `disabled`: a disabled button drops the keyboard focus that is on it. Save and Pass carry no
+  // pressed state either: their names already flip ("Save" / "Remove from saved"), and both would be read.
+  const press = (fn: () => void) => () => { if (!busy) fn(); };
   return (
-    <footer
+    <div
+      role="region"
+      aria-label="Your move"
       aria-busy={busy || undefined}
       className="fixed inset-x-0 bottom-0 z-[96] border-t border-reason-line bg-white/95 pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] backdrop-blur-lg"
     >
@@ -34,8 +38,9 @@ export default function MoveBar({ brief, busy, onPrimary, onToggleSave, onToggle
         <div className="grid w-full grid-cols-[1fr_48px_48px] gap-2 md:flex md:w-auto">
           <button
             type="button"
-            onClick={onPrimary}
-            disabled={inert || busy}
+            onClick={press(onPrimary)}
+            disabled={inert}
+            aria-disabled={busy || undefined}
             className={cn('min-h-[48px] rounded-[11px] px-5 text-[14px] font-bold',
               inert ? 'bg-[#f5f6f7] text-[#646a77]' : 'bg-reason-red text-white shadow-[0_7px_18px_rgba(222,50,46,.18)] enabled:hover:bg-reason-red-hover',
               busy && !inert && BUSY)}
@@ -44,9 +49,8 @@ export default function MoveBar({ brief, busy, onPrimary, onToggleSave, onToggle
           </button>
           <button
             type="button"
-            onClick={onToggleSave}
-            disabled={busy}
-            aria-pressed={r.saved}
+            onClick={press(onToggleSave)}
+            aria-disabled={busy || undefined}
             aria-label={r.saved ? 'Remove from saved' : 'Save'}
             className={cn(SIDE_BUTTON, busy && BUSY)}
           >
@@ -54,9 +58,8 @@ export default function MoveBar({ brief, busy, onPrimary, onToggleSave, onToggle
           </button>
           <button
             type="button"
-            onClick={onTogglePass}
-            disabled={busy}
-            aria-pressed={r.passed}
+            onClick={press(onTogglePass)}
+            aria-disabled={busy || undefined}
             aria-label={r.passed ? 'Undo pass' : 'Pass: not relevant right now'}
             className={cn(SIDE_BUTTON, busy && BUSY)}
           >
@@ -64,6 +67,6 @@ export default function MoveBar({ brief, busy, onPrimary, onToggleSave, onToggle
           </button>
         </div>
       </div>
-    </footer>
+    </div>
   );
 }

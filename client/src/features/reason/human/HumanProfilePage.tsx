@@ -1,10 +1,10 @@
 // client/src/features/reason/human/HumanProfilePage.tsx
 // Stefan's v4 "live relationship brief": full screen, its own header, and a
 // bar at the bottom that always offers one useful move.
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { primaryActionFor, type PersonBrief, type PersonResponse } from '@rsn/shared';
+import { primaryActionFor, type PersonBrief } from '@rsn/shared';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { E } from '@/realtime/entities';
@@ -12,49 +12,25 @@ import { Skeleton } from '@/components/ui/Spinner';
 import { cn } from '@/lib/utils';
 import ReasonMark from '../brand/ReasonMark';
 import ReasonSheep from '../brand/ReasonSheep';
-import ProfileHero, { personFacts } from './ProfileHero';
+import ProfileHero from './ProfileHero';
 import ProfileDetails from './ProfileDetails';
 import MoveBar from './MoveBar';
 import MeetSheet from './MeetSheet';
 import OutcomeSheet from './OutcomeSheet';
 import { STATE_LABEL } from './labels';
+import {
+  MOVE_RESPONSE, isMemberId, knownSource, moveToast, personFacts, shouldRetry, statusOf, viewFor, type KnownSource, type Move,
+} from './profile-text';
 import { errorMessage, fetchBrief, reasonKeys, setPersonResponse } from '../api';
 
-// ?from= is part of the address, so anyone can write anything into it. Only the places the app itself
-// sends a member from are ever shown on the page.
-const KNOWN_SOURCES = ['For You', 'People', 'Messages', 'Introductions', 'Your path'] as const;
-
-// 404: blocked, closed or no such member. 400: not a member id. Both are answers about this person.
-// Anything else (no connection, 429, 5xx) says nothing about them, and Try again can help.
-const GONE_STATUSES = [404, 400];
-
-const statusOf = (err: unknown): number | undefined => (err as { response?: { status?: number } } | null)?.response?.status;
-const isGone = (err: unknown) => GONE_STATUSES.includes(statusOf(err) ?? 0);
-
-function isClientError(err: unknown): boolean {
-  const status = statusOf(err);
-  return status !== undefined && status >= 400 && status < 500;
-}
+// The line under "could not load" when the failure itself has nothing more specific to say.
+const LOAD_HINT = 'Try again in a moment.';
 
 // Side margins that also keep clear of the notch when a phone is on its side.
 const SIDES = 'pl-[max(12px,env(safe-area-inset-left))] pr-[max(12px,env(safe-area-inset-right))] md:pl-[max(22px,env(safe-area-inset-left))] md:pr-[max(22px,env(safe-area-inset-right))]';
 const MAIN = 'mx-auto w-full max-w-[1264px] md:max-w-[1284px]';
 const PRIMARY_BUTTON = 'min-h-[44px] rounded-[11px] bg-reason-red px-4 font-bold text-white enabled:hover:bg-reason-red-hover';
 const QUIET_BUTTON = 'min-h-[44px] rounded-[11px] border border-reason-line bg-white px-4 font-bold';
-
-// What each press does. Clearing is the same request for "remove from saved" and "undo pass", so the
-// move, not the response, decides the sentence.
-type Move = 'save' | 'unsave' | 'pass' | 'unpass';
-const MOVE_RESPONSE: Record<Move, PersonResponse | null> = { save: 'saved', unsave: null, pass: 'passed', unpass: null };
-
-function moveToast(move: Move, name: string): { message: string; type: 'success' | 'info' } {
-  switch (move) {
-    case 'save': return { message: `${name} saved`, type: 'success' };
-    case 'unsave': return { message: `${name} removed from saved`, type: 'success' };
-    case 'pass': return { message: `${name} will not be suggested in For You. You can undo this here.`, type: 'info' };
-    case 'unpass': return { message: `${name} can be suggested in For You again.`, type: 'info' };
-  }
-}
 
 function Loading() {
   return (
@@ -66,10 +42,12 @@ function Loading() {
   );
 }
 
-function Notice({ title, text, children }: { title: string; text: string; children: ReactNode }) {
+// The sheep is only drawn when the server answered: with the connection gone the picture cannot load either,
+// and a broken-image box would sit where it should be.
+function Notice({ title, text, sheep = true, children }: { title: string; text: string; sheep?: boolean; children: ReactNode }) {
   return (
     <main className="mx-auto flex max-w-md flex-col items-center gap-3 px-6 py-16 text-center">
-      <ReasonSheep pose="thinking" className="h-24 w-24" />
+      {sheep && <ReasonSheep pose="thinking" className="h-24 w-24" />}
       <h1 className="text-[20px] font-bold">{title}</h1>
       <p className="text-[14px] text-[#646a77]">{text}</p>
       <div className="mt-2 flex flex-wrap justify-center gap-2.5">{children}</div>
@@ -79,7 +57,7 @@ function Notice({ title, text, children }: { title: string; text: string; childr
 
 // The profile itself, once the brief is in. Keyed by the person in the page, so Save, Pass and the two
 // sheets start fresh when one profile opens another (the "Your path" link).
-function Profile({ brief, userId, source }: { brief: PersonBrief; userId: string; source: string | null }) {
+function Profile({ brief, userId, source }: { brief: PersonBrief; userId: string; source: KnownSource | null }) {
   const navigate = useNavigate();
   const addToast = useToastStore((s) => s.addToast);
   const qc = useQueryClient();
@@ -87,6 +65,10 @@ function Profile({ brief, userId, source }: { brief: PersonBrief; userId: string
   const [outcomeOpen, setOutcomeOpen] = useState(false);
   const who = personFacts(brief.person);
   const r = brief.relationship;
+  // A sheet gets the same object until the person really changes. A fresh one on every render (a realtime
+  // refetch is one) would look like a new person to the sheet, and could reset a note being typed.
+  const meetPerson = useMemo(() => (meetOpen ? { userId, displayName: who.name } : null), [meetOpen, userId, who.name]);
+  const outcomePerson = useMemo(() => (outcomeOpen ? { userId, displayName: who.name } : null), [outcomeOpen, userId, who.name]);
 
   // A profile opened from another one (the "Your path" link) starts at its top, not where the last one was
   // scrolled to. The app scrolls smoothly (index.css); this one jump must not.
@@ -94,17 +76,25 @@ function Profile({ brief, userId, source }: { brief: PersonBrief; userId: string
     window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
   }, []);
 
+  // networkMode 'always': offline, a press fails at once and says so ("Connection lost..."). By default the
+  // library parks the request until the connection returns, and the press would never answer.
   const respond = useMutation({
+    networkMode: 'always',
     mutationFn: (move: Move) => setPersonResponse(userId, MOVE_RESPONSE[move]),
     onSuccess: (_result, move) => {
-      qc.invalidateQueries({ queryKey: reasonKeys.all });
       const { message, type } = moveToast(move, who.first);
       addToast(message, type);
+      // Returned, so the buttons stay busy until the fresh brief is in and the star has changed.
+      return qc.invalidateQueries({ queryKey: reasonKeys.all });
     },
-    onError: (err) => addToast(errorMessage(err, 'Could not update that right now.'), 'error'),
+    onError: (err) => {
+      addToast(errorMessage(err, 'Could not update that right now.'), 'error');
+      // A 404 means the person is gone: let the page find out, so it says so instead of leaving live buttons.
+      return statusOf(err) === 404 ? qc.invalidateQueries({ queryKey: reasonKeys.brief(userId) }) : undefined;
+    },
   });
-  // The buttons are only disabled a moment after a press, so a quick second tap would repeat the request
-  // and its toast. One press at a time.
+  // The buttons are only busy a moment after a press, so a quick second tap would repeat the request and its
+  // toast. One press at a time.
   const pressing = useRef(false);
   const press = (move: Move) => {
     if (pressing.current) return;
@@ -132,27 +122,31 @@ function Profile({ brief, userId, source }: { brief: PersonBrief; userId: string
         onToggleSave={() => press(r.saved ? 'unsave' : 'save')}
         onTogglePass={() => press(r.passed ? 'unpass' : 'pass')}
       />
-      <MeetSheet person={meetOpen ? { userId, displayName: who.name } : null} onClose={() => setMeetOpen(false)} />
-      <OutcomeSheet person={outcomeOpen ? { userId, displayName: who.name } : null} onClose={() => setOutcomeOpen(false)} />
+      <MeetSheet person={meetPerson} onClose={() => setMeetOpen(false)} />
+      <OutcomeSheet person={outcomePerson} onClose={() => setOutcomeOpen(false)} />
     </>
   );
 }
 
 export default function HumanProfilePage() {
-  const { userId = '' } = useParams();
+  const { userId: param = '' } = useParams();
+  // The server reads an id in any case as the same member; so does the page (one cache entry, and your own id
+  // in capitals still goes to your profile).
+  const userId = param.toLowerCase();
+  const validId = isMemberId(userId);
   const [params] = useSearchParams();
-  const source = KNOWN_SOURCES.find((s) => s === params.get('from')) ?? null;
+  const source = knownSource(params.get('from'));
   const location = useLocation();
   const navigate = useNavigate();
   const me = useAuthStore((s) => s.user?.id as string | undefined);
 
-  const { data: brief, error, isPending, isError, refetch } = useQuery({
+  const { data: brief, error, fetchStatus, isError, isPending, refetch } = useQuery({
     queryKey: reasonKeys.brief(userId),
     queryFn: () => fetchBrief(userId),
-    enabled: !!userId && !!me && userId !== me,
-    // A 4xx is an answer (blocked, closed, a bad id, slow down), so asking again changes nothing. A
-    // dropped connection or a 5xx gets one more try.
-    retry: (failures, err) => !isClientError(err) && failures < 1,
+    // An address that is no member id (a typo, a crafted link) is answered without asking the server.
+    enabled: validId && !!me && userId !== me,
+    // A 4xx is an answer, so asking again changes nothing; a lost connection or a 5xx gets one more try.
+    retry: shouldRetry,
     meta: { entities: me && userId ? [E.user(me), E.user(userId), E.userInvites(me), E.userDms(me)] : [] },
   });
 
@@ -164,10 +158,9 @@ export default function HumanProfilePage() {
     if (location.key === 'default') navigate('/', { replace: true });
     else navigate(-1);
   };
-  // A refetch that fails (a dropped connection) leaves the profile on screen. Only "this person is
-  // gone" replaces one that is already showing.
-  const gone = isError && isGone(error);
-  const shown = gone ? undefined : brief;
+  // Which screen: see viewFor. In short, a profile already on screen stays through a failed or held-back
+  // refetch, and only "this person is gone" replaces it.
+  const view = viewFor({ hasBrief: !!brief, validId, isPending, isError, error, fetchStatus });
 
   return (
     <div className="min-h-[100dvh] bg-[#f6f5f3] font-reason text-reason-ink antialiased">
@@ -176,21 +169,23 @@ export default function HumanProfilePage() {
           <button type="button" onClick={back} className="min-h-[44px] rounded-full border border-reason-line bg-white px-3.5 text-[13px] font-extrabold">← Back</button>
           <span className="hidden sm:inline"><ReasonMark variant="mobile" /></span>
         </div>
-        {shown && (
-          <span className="rounded-full bg-[#f2f3f5] px-2.5 py-1.5 text-[10px] font-extrabold text-[#555d69]">{STATE_LABEL[shown.relationship.state]}</span>
+        {view === 'profile' && brief && (
+          <span className="rounded-full bg-[#f2f3f5] px-2.5 py-1.5 text-[10px] font-extrabold text-[#555d69]">{STATE_LABEL[brief.relationship.state]}</span>
         )}
       </header>
 
-      {shown ? (
-        <Profile key={userId} brief={shown} userId={userId} source={source} />
-      ) : isPending ? (
+      {view === 'profile' && brief ? (
+        <Profile key={userId} brief={brief} userId={userId} source={source} />
+      ) : view === 'loading' ? (
         <Loading />
-      ) : gone ? (
+      ) : view === 'unavailable' ? (
         <Notice title="This profile is not available." text="It may have been closed, or it is not open to you.">
           <button type="button" onClick={back} className={PRIMARY_BUTTON}>Go back</button>
         </Notice>
       ) : (
-        <Notice title="We could not load this profile just now." text="Check your connection, then try again.">
+        // No error at all means the library is holding the request back because the browser is offline, and
+        // errorMessage then says the connection was lost. When it returns, the request goes out by itself.
+        <Notice title="We could not load this profile just now." text={errorMessage(error, LOAD_HINT)} sheep={statusOf(error) !== undefined}>
           <button type="button" onClick={() => void refetch()} className={PRIMARY_BUTTON}>Try again</button>
           <button type="button" onClick={back} className={QUIET_BUTTON}>Go back</button>
         </Notice>

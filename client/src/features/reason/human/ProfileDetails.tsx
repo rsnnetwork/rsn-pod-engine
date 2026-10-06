@@ -3,13 +3,10 @@
 // open with, and where the relationship stands.
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { OUTCOME_LABELS, type PersonBrief } from '@rsn/shared';
+import type { PersonBrief } from '@rsn/shared';
 import { cn } from '@/lib/utils';
 import { personName, visibleText } from '../person';
-import { STATE_LABEL } from './labels';
-import { SIGNAL, type PersonFacts } from './ProfileHero';
-
-const WORTH_LABEL = { yes: 'Worth continuing', maybe: 'Maybe worth continuing', no: 'Not worth continuing' } as const;
+import { memoryRows, metTitle, whyNowRows, type KnownSource, type PersonFacts, type Row } from './profile-text';
 
 // When the keyboard moves focus to a link or button in the page, the browser scrolls it into view. A control
 // half under the sticky header or the fixed bar counts as in view, so these margins keep it clear of both.
@@ -21,7 +18,7 @@ function Section({ kicker, title, children, className }: { kicker: string; title
   return (
     <section className={cn('min-w-0 rounded-[19px] border border-reason-line bg-white p-[17px] md:rounded-[24px] md:p-6', className)}>
       <p className="text-[11px] font-extrabold uppercase tracking-[0.11em]">{kicker}</p>
-      <h3 className="mt-3.5 text-[22px] font-bold tracking-[-0.035em] [overflow-wrap:anywhere] md:text-[24px]">{title}</h3>
+      <h2 className="mt-3.5 text-[22px] font-bold tracking-[-0.035em] [overflow-wrap:anywhere] md:text-[24px]">{title}</h2>
       <div className="mt-2.5">{children}</div>
     </section>
   );
@@ -36,7 +33,7 @@ function Panel({ label, text }: { label: string; text: string }) {
   );
 }
 
-function Timeline({ items }: { items: Array<{ title: string; text: string }> }) {
+function Timeline({ items }: { items: Row[] }) {
   return (
     <ul className="grid">
       {items.map((it, i) => (
@@ -52,14 +49,7 @@ function Timeline({ items }: { items: Array<{ title: string; text: string }> }) 
   );
 }
 
-// A meeting can be on record without a date (a one to one meeting from Messages), so "no meeting
-// recorded" is only said when there is none.
-function lastMetText(r: PersonBrief['relationship']): string {
-  if (r.lastMetAt) return `Last met ${new Date(r.lastMetAt).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })}.`;
-  return r.timesMet > 0 ? 'The date of your last meeting is not recorded.' : 'No meeting recorded yet.';
-}
-
-interface Props { brief: PersonBrief; who: PersonFacts; source: string | null; onRecordOutcome: () => void }
+interface Props { brief: PersonBrief; who: PersonFacts; source: KnownSource | null; onRecordOutcome: () => void }
 
 export default function ProfileDetails({ brief, who, source, onRecordOutcome }: Props) {
   const r = brief.relationship;
@@ -67,13 +57,7 @@ export default function ProfileDetails({ brief, who, source, onRecordOutcome }: 
   const { circles, pods, upcomingEvents } = brief.shared;
   const hasShared = circles.length + pods.length + upcomingEvents.length > 0;
   const bring = visibleText(brief.theyCanBring);
-  const last = r.outcomes[0];
-
-  const whyNow = [
-    ...(brief.match ? [{ title: SIGNAL[brief.match.strength], text: 'REASON believes this is currently relevant.' }] : []),
-    ...(source ? [{ title: source, text: 'This is the context where you encountered each other.' }] : []),
-    ...(upcomingEvents[0] ? [{ title: upcomingEvents[0].title, text: 'You will both be there.' }] : []),
-  ];
+  const whyNow = whyNowRows(brief, source);
 
   return (
     <section className="mt-[11px] grid grid-cols-[minmax(0,1fr)] gap-[11px] md:mt-[18px] min-[981px]:grid-cols-[minmax(0,1.15fr)_minmax(0,.85fr)] min-[981px]:gap-[18px]">
@@ -127,13 +111,8 @@ export default function ProfileDetails({ brief, who, source, onRecordOutcome }: 
         {whyNow.length > 0 ? <Timeline items={whyNow} /> : <p className={BODY}>Nothing time-bound yet.</p>}
       </Section>
 
-      <Section kicker="Relationship memory" title={r.timesMet > 0 ? `You have met ${r.timesMet} time${r.timesMet === 1 ? '' : 's'}.` : 'You have not met yet.'}>
-        <Timeline
-          items={[
-            { title: STATE_LABEL[r.state], text: lastMetText(r) },
-            ...(last ? [{ title: WORTH_LABEL[last.worthContinuing], text: last.outcomes.length ? last.outcomes.map((k) => OUTCOME_LABELS[k]).join(', ') : 'Nothing noted.' }] : []),
-          ]}
-        />
+      <Section kicker="Relationship memory" title={metTitle(r.timesMet)}>
+        <Timeline items={memoryRows(r)} />
         {(r.state === 'connected' || r.state === 'met') && (
           <button type="button" onClick={onRecordOutcome} className={cn('mt-3.5 min-h-[44px] rounded-[11px] bg-reason-red px-4 text-[13px] font-bold text-white enabled:hover:bg-reason-red-hover', KEEP_CLEAR)}>Record what happened</button>
         )}
