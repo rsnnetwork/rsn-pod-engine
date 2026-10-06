@@ -327,7 +327,7 @@ describe('getPersonBrief: what the page is given', () => {
         ? [{ id: 's9', title: 'Harbor Mixer', scheduled_at: new Date('2026-10-20T18:00:00Z') }] : [],
     }));
     expect((await getPersonBrief(VIEWER, TARGET)).opener).toBe(
-      'Ask Sarah about introductions to European retailers. Then say what you are looking for: founders in consumer. You will both be at Harbor Mixer.',
+      'Start with what Sarah can bring: Introductions to European retailers. Then say what you are looking for: founders in consumer. You will both be at Harbor Mixer.',
     );
   });
 
@@ -348,7 +348,7 @@ describe('getPersonBrief: what the page is given', () => {
     const brief = await getPersonBrief(VIEWER, TARGET);
     expect(brief.theyCanBring).toBe('Retail partnerships.');
     expect(brief.youAreLookingFor).toBe('meet founders who sell to retailers');
-    expect(brief.opener).toBe('Ask Sarah about retail partnerships. Then say what you are looking for: meet founders who sell to retailers.');
+    expect(brief.opener).toBe('Start with what Sarah can bring: Retail partnerships. Then say what you are looking for: meet founders who sell to retailers.');
   });
 
   // `a || b` reads past '' but not past '   ': spaces are truthy, so the next field was never read.
@@ -398,44 +398,186 @@ describe('getPersonBrief: what the page is given', () => {
   });
 });
 
-describe('getPersonBrief: the first-20-minutes line sets the member\'s words into a sentence', () => {
+describe('getPersonBrief: the first-20-minutes line keeps the member\'s words as they wrote them', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  const openerFrom = async (offer: string | null, want: string | null) => {
-    arm();
+  // `score` decides whether REASON has a reason for the pair (the brief's match), as elsewhere in this
+  // file. `events` are the upcoming events the two share, soonest first. `user` is what the member
+  // lookup returns about the other member.
+  const briefFrom = async (
+    offer: string | null, want: string | null,
+    o: { score?: number; events?: string[]; user?: object } = {},
+  ) => {
+    arm({ score: o.score });
     mockLoadProfile.mockImplementation((id: string) => Promise.resolve(id === VIEWER
       ? { id, whoIWantToMeet: want, myIntent: null }
       : { id, whatICanHelpWith: offer, expertiseText: null }));
-    return (await getPersonBrief(VIEWER, TARGET)).opener;
+    if (o.user) mockGetUser.mockResolvedValue({ ...target, ...o.user });
+    const events = o.events;
+    if (events) {
+      mockQuery.mockImplementation((sql: string) => Promise.resolve({
+        rows: /FROM session_participants x/.test(sql)
+          ? events.map((title, i) => ({ id: `s${i}`, title, scheduled_at: new Date(Date.UTC(2026, 9, 20 + i, 18)) }))
+          : [],
+      }));
+    }
+    return getPersonBrief(VIEWER, TARGET);
   };
+  const openerFrom = async (offer: string | null, want: string | null, o?: Parameters<typeof briefFrom>[2]) =>
+    (await briefFrom(offer, want, o)).opener;
 
-  // An answer that starts with an acronym, a brand or "I" must keep its capitals:
-  // "aWS", "uX" and "i'd" look like typing mistakes on a page a member reads.
+  // What a member types to get past a box. It has no letter or digit, and after a colon it reads as a mistake.
+  const NO_ANSWER = ['.', '…', '!!!', '?!', '- - -', '🙂', '   ', ' \n '];
+
+  // The words follow a colon, where their own first letter reads naturally, capital or not. Setting them
+  // into a sentence lower-cased a proper noun ("google Ads") and read a first-person answer badly.
   it.each([
-    ['AWS cloud architecture', 'Ask Sarah about AWS cloud architecture.'],
-    ['UX research for consumer apps', 'Ask Sarah about UX research for consumer apps.'],
-    ['B2B sales', 'Ask Sarah about B2B sales.'],
-    ['LinkedIn growth', 'Ask Sarah about LinkedIn growth.'],
-    ['SaaS pricing', 'Ask Sarah about SaaS pricing.'],
-    ["I'd help with hiring", "Ask Sarah about I'd help with hiring."],
-  ])('keeps "%s" as written', async (offer, expected) => {
-    expect(await openerFrom(offer, null)).toBe(expected);
+    'european market entry',
+    'European market entry',
+    'Google Ads and paid social',
+    'Mentorship for first-time founders',
+    'Building a marketplace for boat owners',
+    'AWS cloud architecture',
+    'UX research for consumer apps',
+    'B2B sales',
+    'LinkedIn growth',
+    'SaaS pricing',
+    '3 exits and a turnaround',
+    "Women's health founders",
+    'A technical co-founder',
+  ])('keeps the offer "%s" as typed', async (offer) => {
+    expect(await openerFrom(offer, null)).toBe(`Start with what Sarah can bring: ${offer}.`);
   });
 
-  it.each([
-    ['Introductions to European retailers', 'Ask Sarah about introductions to European retailers.'],
-    ['Fundraising', 'Ask Sarah about fundraising.'],
-    ['International expansion', 'Ask Sarah about international expansion.'],
-    ["Women's health founders", "Ask Sarah about women's health founders."],
-    ['A technical co-founder', 'Ask Sarah about a technical co-founder.'],
-  ])('still lower-cases a plain first word: "%s"', async (offer, expected) => {
-    expect(await openerFrom(offer, null)).toBe(expected);
+  it('sets a first-person offer after the colon as it was written', async () => {
+    expect(await openerFrom('I can help with pricing.', null)).toBe('Start with what Sarah can bring: I can help with pricing.');
+    expect(await openerFrom("I'd help with hiring", null)).toBe("Start with what Sarah can bring: I'd help with hiring.");
   });
 
-  it('keeps an acronym in what the viewer is looking for, too', async () => {
-    expect(await openerFrom(null, 'AI founders in healthcare')).toBe(
-      'Start with why REASON put you two together. Then say what you are looking for: AI founders in healthcare.',
+  it.each(['Founders in consumer goods', 'european retailers', 'AI founders in healthcare', 'I want to meet buyers'])(
+    'keeps the viewer\'s own words "%s" as typed in what they are looking for, too',
+    async (want) => {
+      expect(await openerFrom(null, want)).toBe(
+        `Start with why REASON put you two together. Then say what you are looking for: ${want}.`,
+      );
+    },
+  );
+
+  // A trailing run of . ! ? is replaced by one full stop, in whatever mix it was typed.
+  it.each([
+    'Fundraising', 'Fundraising.', 'Fundraising!', 'Fundraising?', 'Fundraising?!', 'Fundraising!!!', 'Fundraising...', 'Fundraising ?!',
+  ])('ends the offer "%s" in exactly one full stop', async (offer) => {
+    expect(await openerFrom(offer, null)).toBe('Start with what Sarah can bring: Fundraising.');
+  });
+
+  it.each(['meet founders', 'meet founders.', 'meet founders?!', 'meet founders...'])('ends the want "%s" in exactly one full stop', async (want) => {
+    expect(await openerFrom('Fundraising', want)).toBe(
+      'Start with what Sarah can bring: Fundraising. Then say what you are looking for: meet founders.',
     );
+  });
+
+  it('keeps an answer of several sentences whole, and closes only its end', async () => {
+    expect(await openerFrom('Building Harbor. Mentorship for first-time founders!', null)).toBe(
+      'Start with what Sarah can bring: Building Harbor. Mentorship for first-time founders.',
+    );
+  });
+
+  // An answer that is only punctuation, symbols or spaces is no answer at all.
+  it.each(NO_ANSWER)('an offer of %j is no offer: theyCanBring is null, and the line has no "can bring" clause', async (offer) => {
+    const brief = await briefFrom(offer, null);
+    expect(brief.theyCanBring).toBeNull();
+    expect(brief.opener).toBe('Start with why REASON put you two together.');
+    expect(brief.opener).not.toContain('can bring');
+  });
+
+  it.each(NO_ANSWER)('a want of %j is no want: youAreLookingFor is null, and the line has no "Then say" clause', async (want) => {
+    const brief = await briefFrom('Fundraising', want);
+    expect(brief.youAreLookingFor).toBeNull();
+    expect(brief.opener).toBe('Start with what Sarah can bring: Fundraising.');
+  });
+
+  // A letter or digit in any script is an answer: members write in their own language.
+  it.each(['市场营销', 'Ελληνικά', 'تسويق', 'Åäö', '2025'])('counts "%s" as an answer', async (offer) => {
+    const brief = await briefFrom(offer, null);
+    expect(brief.theyCanBring).toBe(offer);
+    expect(brief.opener).toBe(`Start with what Sarah can bring: ${offer}.`);
+  });
+
+  // A blank answer already reads on to the next field; an answer with nothing in it to read does the same.
+  it('reads past an answer that is only punctuation to the next field, as it does for a blank one', async () => {
+    arm();
+    mockLoadProfile.mockImplementation((id: string) => Promise.resolve(id === VIEWER
+      ? { id, whoIWantToMeet: '...', myIntent: 'meet founders who sell to retailers' }
+      : { id, whatICanHelpWith: '!!!', expertiseText: 'Retail partnerships.' }));
+    const brief = await getPersonBrief(VIEWER, TARGET);
+    expect(brief.theyCanBring).toBe('Retail partnerships.');
+    expect(brief.youAreLookingFor).toBe('meet founders who sell to retailers');
+  });
+
+  // The line is judged on what the page would show, which is the answer after it is cut to length.
+  it('counts an answer as empty when what is left after it is cut has no letter or digit', async () => {
+    const brief = await briefFrom(`${'-'.repeat(200)}x`, null);
+    expect(brief.theyCanBring).toBeNull();
+    expect(brief.opener).toBe('Start with why REASON put you two together.');
+  });
+
+  describe('with no usable offer, the first line depends on whether REASON has a reason for the pair', () => {
+    it.each([null, ...NO_ANSWER])('offer %j and a match: starts with why REASON put you two together', async (offer) => {
+      const brief = await briefFrom(offer, null);
+      expect(brief.match).not.toBeNull();
+      expect(brief.opener).toBe('Start with why REASON put you two together.');
+    });
+
+    it.each([null, ...NO_ANSWER])('offer %j and no match: starts with what each of you is working on right now', async (offer) => {
+      const brief = await briefFrom(offer, null, { score: 0.05 });
+      expect(brief.match).toBeNull();
+      expect(brief.opener).toBe('Start with what each of you is working on right now.');
+    });
+
+    it('is the same when a member has no profile to score at all', async () => {
+      arm();
+      mockLoadProfile.mockResolvedValue(null);
+      const brief = await getPersonBrief(VIEWER, TARGET);
+      expect(brief.match).toBeNull();
+      expect(brief.opener).toBe('Start with what each of you is working on right now.');
+    });
+  });
+
+  it('names the soonest shared event last, and only when the two share one', async () => {
+    expect(await openerFrom('Fundraising', 'meet founders', { events: ['Harbor Mixer', 'Founders Dinner'] })).toBe(
+      'Start with what Sarah can bring: Fundraising. Then say what you are looking for: meet founders. You will both be at Harbor Mixer.',
+    );
+    expect(await openerFrom('Fundraising', null, { events: [] })).toBe('Start with what Sarah can bring: Fundraising.');
+    expect(await openerFrom(null, null, { events: ['Harbor Mixer'] })).toBe(
+      'Start with why REASON put you two together. You will both be at Harbor Mixer.',
+    );
+    expect(await openerFrom(null, null, { score: 0.05, events: ['Harbor Mixer'] })).toBe(
+      'Start with what each of you is working on right now. You will both be at Harbor Mixer.',
+    );
+  });
+
+  it('uses the first word of the display name when there is no first name, and "they" when there is no name at all', async () => {
+    expect(await openerFrom('Fundraising', null, { user: { firstName: '', displayName: 'Sarah Chen' } })).toBe(
+      'Start with what Sarah can bring: Fundraising.',
+    );
+    expect(await openerFrom('Fundraising', null, { user: { firstName: '', displayName: '' } })).toBe(
+      'Start with what they can bring: Fundraising.',
+    );
+  });
+
+  // The line is made of fixed words and the members' own answers. With nothing usable offered, nothing
+  // of the other member's private fields stands in for it, whichever fixed line is written.
+  it.each([0.6, 0.05])('never fills a missing offer from the other member\'s own want or interests (score %p)', async (score) => {
+    arm({ score });
+    mockLoadProfile.mockImplementation((id: string) => Promise.resolve(id === VIEWER
+      ? { id, whoIWantToMeet: null, myIntent: null }
+      : {
+        id, whatICanHelpWith: '.', expertiseText: null, whoIWantToMeet: 'SECRET-WANT', myIntent: 'SECRET-INTENT',
+        whyIWantToMeet: 'SECRET-WHY', interests: ['SECRET-INTEREST'], whatICareAbout: 'SECRET-CARES',
+      }));
+    const brief = await getPersonBrief(VIEWER, TARGET);
+    expect(brief.theyCanBring).toBeNull();
+    expect(JSON.stringify(brief)).not.toMatch(/SECRET/);
   });
 
   // clip ends an answer it had to cut with "…". The line must not turn that into a finished
@@ -446,7 +588,7 @@ describe('getPersonBrief: the first-20-minutes line sets the member\'s words int
     expect(Array.from(long).length).toBeGreaterThan(160);
     const cut = Array.from(long).slice(0, 159).join('');
     const opener = await openerFrom(long, 'founders in consumer');
-    expect(opener).toBe(`Ask Sarah about i${cut.slice(1)}… Then say what you are looking for: founders in consumer.`);
+    expect(opener).toBe(`Start with what Sarah can bring: ${cut}… Then say what you are looking for: founders in consumer.`);
     expect(opener).not.toContain('….');
   });
 
@@ -455,7 +597,13 @@ describe('getPersonBrief: the first-20-minutes line sets the member\'s words int
       + 'what did not, and which hires made the difference, particularly in operations and finance';
     const cut = Array.from(long).slice(0, 159).join('');
     const opener = await openerFrom(null, long);
-    expect(opener).toBe(`Start with why REASON put you two together. Then say what you are looking for: f${cut.slice(1)}…`);
+    expect(opener).toBe(`Start with why REASON put you two together. Then say what you are looking for: ${cut}…`);
+  });
+
+  it('puts no full stop after an offer the member ended with an ellipsis of their own', async () => {
+    expect(await openerFrom('Introductions to European retailers…', null)).toBe(
+      'Start with what Sarah can bring: Introductions to European retailers…',
+    );
   });
 });
 

@@ -20,23 +20,38 @@ import { getPokeWith } from '../poke/poke.service';
 import { getResponse } from './person-response.service';
 import { clip } from './text';
 
-// A member's answer is set inside a sentence, so a plain first word drops its capital
-// ("Introductions to…" reads "introductions to…"). An acronym, a brand name or "I" keeps
-// it: "aWS", "uX" and "i'd" look like typing mistakes on a page a member reads.
-const lowerFirst = (s: string) => (/^(?:A(?=\s)|[A-Z][a-z]+(?![A-Za-z]))/.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s);
-const endSentence = (s: string) => s.replace(/[.!?]+$/, '');
-// clip ends an answer it had to cut with "…". That already ends the clause, and a full
-// stop after it would make a cut word look finished.
-const closeClause = (s: string) => (s.endsWith('…') ? s : `${s}.`);
+// An answer is worth showing when it has a letter or digit in it. A member who types ".", "…" or "!!!"
+// to get past a box has given no answer, and after a colon it reads as a mistake. It is judged on the
+// text the page would show (clip cuts a long answer short), and it counts as blank, so the reading goes
+// on to the member's next field.
+const usableAnswer = (text: string | null | undefined): string | null => {
+  const shown = clip(text);
+  return shown && /[\p{L}\p{N}]/u.test(shown) ? shown : null;
+};
 
-/** "The first 20 minutes": fixed wording from the two members' own answers (approved point 3). */
-function openerFor(first: string, theyCanBring: string | null, youAreLookingFor: string | null, sharedEvent: string | null): string {
+// A member's words are set after a colon exactly as they wrote them: their own first letter, capital or
+// not, reads naturally there ("european market entry", "Mentorship for founders", "I can help with
+// pricing"). Only the end changes: a run of . ! ? becomes one full stop. An answer clip had to cut
+// already ends in "…", which ends the clause, and a full stop after it would make a cut word look finished.
+function asClause(answer: string): string {
+  const bare = answer.replace(/[.!?]+$/, '').trimEnd();
+  return bare.endsWith('…') ? bare : `${bare}.`;
+}
+
+/**
+ * "The first 20 minutes": fixed words around the two members' own answers (approved point 3).
+ * With no usable offer the line says why REASON put the two together when it has a reason, and
+ * otherwise asks each of them what they are working on.
+ */
+function openerFor(o: {
+  first: string; theyCanBring: string | null; youAreLookingFor: string | null; hasMatch: boolean; sharedEvent: string | null;
+}): string {
   const parts: string[] = [];
-  parts.push(theyCanBring
-    ? `Ask ${first} about ${closeClause(lowerFirst(endSentence(theyCanBring)))}`
-    : `Start with why REASON put you two together.`);
-  if (youAreLookingFor) parts.push(`Then say what you are looking for: ${closeClause(lowerFirst(endSentence(youAreLookingFor)))}`);
-  if (sharedEvent) parts.push(`You will both be at ${sharedEvent}.`);
+  if (o.theyCanBring) parts.push(`Start with what ${o.first} can bring: ${asClause(o.theyCanBring)}`);
+  else if (o.hasMatch) parts.push('Start with why REASON put you two together.');
+  else parts.push('Start with what each of you is working on right now.');
+  if (o.youAreLookingFor) parts.push(`Then say what you are looking for: ${asClause(o.youAreLookingFor)}`);
+  if (o.sharedEvent) parts.push(`You will both be at ${o.sharedEvent}.`);
   return parts.join(' ');
 }
 
@@ -140,18 +155,23 @@ export async function getPersonBrief(viewerId: string, targetId: string): Promis
             : 'none';
 
   const person = toPublicMember(target);
-  const first = person.firstName || person.displayName.split(' ')[0] || 'them';
-  // clip turns a blank answer ('' or only spaces) into null, which is what falls through to the next field.
-  const theyCanBring = clip(them?.whatICanHelpWith) ?? clip(them?.expertiseText);
-  const youAreLookingFor = clip(me?.whoIWantToMeet) ?? clip(me?.myIntent);
+  // The opener says "what {first} can bring", so a member with no name at all is "they".
+  const first = person.firstName || person.displayName.split(' ')[0] || 'they';
+  // A blank answer ('' or only spaces) and one with nothing in it ('.', '…') are null, which is what falls
+  // through to the next field.
+  const theyCanBring = usableAnswer(them?.whatICanHelpWith) ?? usableAnswer(them?.expertiseText);
+  const youAreLookingFor = usableAnswer(me?.whoIWantToMeet) ?? usableAnswer(me?.myIntent);
   const upcomingEvents = events.rows.map(r => ({ id: r.id, title: r.title, scheduledAt: r.scheduled_at.toISOString() }));
+  const match: PersonBrief['match'] = fit && strength ? { reason: fit.reason, strength } : null;
 
   return {
     person,
-    match: fit && strength ? { reason: fit.reason, strength } : null,
+    match,
     theyCanBring,
     youAreLookingFor,
-    opener: openerFor(first, theyCanBring, youAreLookingFor, upcomingEvents[0]?.title ?? null),
+    opener: openerFor({
+      first, theyCanBring, youAreLookingFor, hasMatch: match !== null, sharedEvent: upcomingEvents[0]?.title ?? null,
+    }),
     relationship: {
       state,
       pokeId: poke?.status === 'pending' && !poke.sentByMe ? poke.id : null,
