@@ -124,6 +124,24 @@ describe('Human Profile: Save and Pass', () => {
     expect(bar()).toMatch(/import \{ BUSY \} from '\.\/busy';/);
     expect(bar()).not.toMatch(/const BUSY\b/);
   });
+  // The round-1 review asked for this pin and the rewrite of this file dropped it.
+  it('a failed Save or Pass says why through errorMessage, never the server\'s own words or an error object', () => {
+    expect(page()).toMatch(/onError: \(err\) => \{\s*addToast\(errorMessage\(err, '[^']+'\), 'error'\);/);
+    expect(page()).not.toMatch(/addToast\((err|error)\b|err\.message|err\.response/);
+  });
+});
+
+// Two more that the round-1 review asked for and the rewrite dropped. What the page prints when there is nothing
+// to show is pinned here; the rules that decide when there is nothing are executed in reason-m1-profile-text.test.ts.
+describe('Human Profile: a section with nothing to show says so, or leaves its badge out', () => {
+  it('"Why now" prints "Nothing time-bound yet." when its timeline would be empty, and the timeline only when it has a row', () => {
+    expect(details()).toMatch(/\{whyNow\.length > 0 \? <Timeline items=\{whyNow\} \/> : <p className=\{BODY\}>Nothing time-bound yet\.<\/p>\}/);
+    expect(count(details(), /Nothing time-bound yet\./g)).toBe(1);
+  });
+  it('the strength badge on the photo is drawn only when the brief has a match', () => {
+    expect(hero()).toMatch(/\{brief\.match && \(\s*<span[^>]*>[\s\S]*?\{SIGNAL\[brief\.match\.strength\]\}\s*<\/span>\s*\)\}/);
+    expect(count(hero(), /SIGNAL\[/g)).toBe(1);
+  });
 });
 
 describe('Human Profile: landmarks and headings', () => {
