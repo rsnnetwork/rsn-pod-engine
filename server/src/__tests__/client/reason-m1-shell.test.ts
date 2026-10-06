@@ -226,6 +226,16 @@ describe('REASON shell and Messages: fixes before a client reviews it (P2)', () 
       /<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">\s*<a href=\{`\/profile\/\$\{e\.otherUserId\}`\} className="[^"]*\[overflow-wrap:anywhere\]"/,
     );
   });
+  it('the top search says it searches people, and its accessible name matches: it opens Find people, and nothing else is searched yet', () => {
+    const top = read('features/reason/shell/ShellTopbar.tsx');
+    expect(top).toMatch(/aria-label="Search people"/);
+    expect(top).toMatch(/placeholder="Search people…"/);
+    // The old placeholder promised entities, circles, pods and events (and was cut off on a 360px phone); the old name was "Search REASON".
+    expect(top).not.toMatch(/entities, circles, pods or events/);
+    expect(top).not.toMatch(/Search REASON/);
+    // ...because the submit still goes to Find people only.
+    expect(top).toMatch(/navigate\(`\/search\?q=\$\{encodeURIComponent\(term\)\}`\)/);
+  });
   it('a long unbroken author name on the circle wall breaks instead of widening the page, on a post and on a comment', () => {
     const wall = read('features/circles/CircleWall.tsx');
     expect(wall).toMatch(/<p className="min-w-0 break-words text-sm font-semibold text-gray-900">\{p\.authorName \|\| 'Member'\}<\/p>/);

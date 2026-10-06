@@ -25,8 +25,8 @@ export default function ShellTopbar() {
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          aria-label="Search REASON"
-          placeholder="Search people, entities, circles, pods or events…"
+          aria-label="Search people"
+          placeholder="Search people…"
           className="h-11 w-full text-ellipsis rounded-xl border border-transparent bg-[#f4f5f7] pl-10 pr-3 text-[16px] outline-none transition placeholder:text-[#646a77] focus:border-[#cfd2d8] focus:bg-white focus:shadow-[0_0_0_4px_rgba(222,50,46,.06)] min-[721px]:text-[15px]"
         />
       </form>
