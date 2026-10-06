@@ -357,3 +357,16 @@ describe('The bell panel\'s text reads at 4.5:1 on white and on the unread tint 
     expect(bell()).not.toMatch(/\btext-(gray-(300|400)|emerald-500|amber-400)\b/);
   });
 });
+
+describe('Admin status pills wrap instead of scrolling <main> sideways at phone widths (integration pass)', () => {
+  // Five pills at px-4 are about 450px wide: more than a 360px phone leaves inside <main>, and their words cannot
+  // be split, so an unwrapped row pushed <main> 88px (Moderation) and 82px (Support) sideways at 360.
+  it('Moderation: the status row wraps', () => {
+    expect(read('src/features/admin/AdminModerationPage.tsx'))
+      .toMatch(/<div className="flex flex-wrap gap-2 animate-fade-in-up">\s*\{\(\['open', 'resolved', 'actioned', 'dismissed', ''\] as ViolationStatus\[\]\)\.map\(/);
+  });
+  it('Support: the status row wraps', () => {
+    expect(read('src/features/admin/AdminSupportPage.tsx'))
+      .toMatch(/<div className="flex flex-wrap gap-3 animate-fade-in-up">\s*\{STATUS_OPTIONS\.map\(/);
+  });
+});

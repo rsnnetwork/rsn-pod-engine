@@ -104,7 +104,7 @@ export default function AdminSupportPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex gap-3 animate-fade-in-up">
+      <div className="flex flex-wrap gap-3 animate-fade-in-up">
         {STATUS_OPTIONS.map(s => (
           <button
             key={s.value}

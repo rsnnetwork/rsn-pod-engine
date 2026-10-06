@@ -78,7 +78,7 @@ export default function AdminModerationPage() {
         <Shield className="h-8 w-8 text-rsn-red" />
       </div>
 
-      <div className="flex gap-2 animate-fade-in-up">
+      <div className="flex flex-wrap gap-2 animate-fade-in-up">
         {(['open', 'resolved', 'actioned', 'dismissed', ''] as ViolationStatus[]).map(s => (
           <button
             key={s}
