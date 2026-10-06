@@ -39,8 +39,9 @@ jest.mock('../../realtime/fanout', () => ({ fanoutUserEntity: (...a: unknown[]) 
 
 import { query } from '../../db';
 import peopleRoutes from '../../routes/people';
+import { authenticate } from '../../middleware/auth';
 import { errorHandler, notFoundHandler } from '../../middleware/errorHandler';
-import { peopleWriteLimiter } from '../../middleware/rateLimit';
+import { peopleReadLimiter, peopleWriteLimiter } from '../../middleware/rateLimit';
 import { AppError, ConflictError, NotFoundError } from '../../middleware/errors';
 import { ErrorCodes, OUTCOME_KEYS, PERSON_RESPONSES, WORTH_CONTINUING } from '@rsn/shared';
 
@@ -242,7 +243,7 @@ describe('a refused request calls no service and tells no screens', () => {
   });
 });
 
-describe('the write routes are rate limited', () => {
+describe('the routes are rate limited', () => {
   type Layer = { route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: unknown }> } };
   // What a route runs, in order, read from the router itself.
   const handlersOf = (method: string, path: string) =>
@@ -260,6 +261,49 @@ describe('the write routes are rate limited', () => {
     const at = handlers.indexOf(peopleWriteLimiter);
     expect(at).toBeGreaterThanOrEqual(0);
     expect(at).toBeLessThan(handlers.length - 1);
+  });
+
+  // The brief can be aimed at any member by id, so it is limited like the writes are: per member, and
+  // only once the member is known.
+  it.each([
+    ['get', '/connections/recent'],
+    ['get', '/:userId/brief'],
+  ])('%s %s carries peopleReadLimiter, after authenticate and ahead of its handler', (method, path) => {
+    const handlers = handlersOf(method, path);
+    expect(handlers.length).toBeGreaterThan(1); // the route exists
+    const at = handlers.indexOf(peopleReadLimiter);
+    const signedIn = handlers.indexOf(authenticate);
+    expect(signedIn).toBeGreaterThanOrEqual(0);
+    expect(at).toBeGreaterThan(signedIn);
+    expect(at).toBeLessThan(handlers.length - 1);
+  });
+
+  it('keeps reads and writes in separate buckets', () => {
+    expect(peopleReadLimiter).not.toBe(peopleWriteLimiter);
+  });
+});
+
+describe('the read limiter', () => {
+  it('refuses the 61st read in a minute with a friendly 429, for that member only, and leaves their writes alone', async () => {
+    const heavy = { Authorization: `Bearer ${token('u-heavy')}` };
+    // Sixty reads, the two routes sharing the one allowance.
+    for (let i = 0; i < 30; i += 1) {
+      expect((await request(app).get(`/people/${TARGET}/brief`).set(heavy)).status).toBe(200);
+      expect((await request(app).get('/people/connections/recent').set(heavy)).status).toBe(200);
+    }
+    mockBrief.mockClear();
+    mockRecent.mockClear();
+
+    const refused = await request(app).get(`/people/${TARGET}/brief`).set(heavy);
+    expect(refused.status).toBe(429);
+    expect(refused.body).toEqual({ success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } });
+    expect((await request(app).get('/people/connections/recent').set(heavy)).status).toBe(429);
+    expect(mockBrief).not.toHaveBeenCalled();
+    expect(mockRecent).not.toHaveBeenCalled();
+
+    // Someone else is not held up, and neither are this member's own Save and Pass.
+    expect((await request(app).get(`/people/${TARGET}/brief`).set({ Authorization: `Bearer ${token('u-other')}` })).status).toBe(200);
+    expect((await request(app).put(`/people/${TARGET}/response`).set(heavy).send({ response: 'saved' })).status).toBe(200);
   });
 });
 

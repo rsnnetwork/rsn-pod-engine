@@ -222,3 +222,16 @@ export const peopleWriteLimiter = rateLimit({
   store: buildStore('people-write'),
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
+
+// REASON milestone 1 (7 Oct 2026): opening a person's brief and listing recent connections. The brief can
+// be aimed at any member by id, so without a limit one member could read it for the whole member list as
+// fast as the server answers. Reads have their own bucket: reading never uses up a member's Saves.
+export const peopleReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('people-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});

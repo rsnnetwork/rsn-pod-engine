@@ -645,3 +645,66 @@ describe('listRecentConnections: whose connections', () => {
     expect(mockQuery.mock.calls[0][1]).toEqual([VIEWER]);
   });
 });
+
+// One profile open used to start all eleven reads together, so it could hold eleven of the pool's
+// connections (25 by default) while it waited. Now they run in groups.
+describe('getPersonBrief: one profile open takes at most four database connections at once', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  // The queries a brief runs, named by what they read, so a test can say which started when.
+  const QUERIES: Array<[string, RegExp]> = [
+    ['encounter', /FROM encounter_history WHERE/],
+    ['conversation', /FROM dm_conversations WHERE/],
+    ['outcomes', /FROM meeting_outcomes/],
+    ['circles', /FROM circle_members x/],
+    ['pods', /FROM pod_members x/],
+    ['events', /FROM session_participants x/],
+    ['path', /FROM encounter_history e1/],
+  ];
+
+  // Every read the brief makes goes through one of these stand-ins. Each is wrapped to count the reads
+  // that have started and not yet finished, which is the connections the pool has lent out, and to
+  // answer a moment later, as a real read does, so that reads which start together overlap.
+  const watchReads = () => {
+    const seen = { inFlight: 0, peak: 0, started: [] as string[] };
+    const watch = (mock: jest.Mock, nameOf: (args: unknown[]) => string) => {
+      const answer = mock.getMockImplementation()!;
+      mock.mockImplementation(async (...args: unknown[]) => {
+        seen.started.push(nameOf(args));
+        seen.inFlight += 1;
+        seen.peak = Math.max(seen.peak, seen.inFlight);
+        try {
+          await new Promise<void>(resolve => setImmediate(resolve));
+          return await answer(...args);
+        } finally {
+          seen.inFlight -= 1;
+        }
+      });
+    };
+    watch(mockBlocked, () => 'areBlocked');
+    watch(mockGetUser, () => 'getUserById');
+    watch(mockLoadProfile, args => (args[0] === VIEWER ? 'loadProfile viewer' : 'loadProfile person'));
+    watch(mockPokeWith, () => 'getPokeWith');
+    watch(mockGetResponse, () => 'getResponse');
+    watch(mockQuery, args => QUERIES.find(([, re]) => re.test(String(args[0])))?.[0] ?? 'unknown query');
+    return seen;
+  };
+
+  it('never has more than four reads in flight, and still makes all of them', async () => {
+    arm();
+    const seen = watchReads();
+    await getPersonBrief(VIEWER, TARGET);
+    // The block check and the member lookup, then the eleven reads: one dropped to stay under the limit shows here.
+    expect(seen.started).toHaveLength(13);
+    expect(seen.peak).toBeLessThanOrEqual(4);
+    expect(seen.peak).toBeGreaterThan(1); // in groups, not one after another
+  });
+
+  it('starts with the reads that decide the relationship state', async () => {
+    arm();
+    const seen = watchReads();
+    await getPersonBrief(VIEWER, TARGET);
+    const firstGroup = seen.started.filter(name => name !== 'areBlocked' && name !== 'getUserById').slice(0, 4);
+    expect(firstGroup).toEqual(expect.arrayContaining(['getPokeWith', 'encounter', 'conversation']));
+  });
+});

@@ -97,9 +97,12 @@ export async function getPersonBrief(viewerId: string, targetId: string): Promis
   if (target.status !== 'active') throw new NotFoundError('User', targetId);
 
   const [a, b] = viewerId < targetId ? [viewerId, targetId] : [targetId, viewerId];
-  const [me, them, poke, response, enc, conv, outcomeRows, circles, pods, events, path] = await Promise.all([
-    loadProfile(viewerId),
-    loadProfile(targetId),
+
+  // The eleven reads used to start together in one Promise.all, so a single profile open could hold eleven
+  // of the pool's connections (25 by default) and crowd everyone else out. They run in three groups of at
+  // most four: where the relationship stands, then the two profiles and what the viewer has recorded, then
+  // what the two share. A failure in the first group ends the brief before the rest are asked.
+  const [poke, response, enc, conv] = await Promise.all([
     getPokeWith(viewerId, targetId),
     getResponse(viewerId, targetId),
     query<{ times_met: number; last_met_at: Date; last_session_id: string | null }>(
@@ -108,10 +111,16 @@ export async function getPersonBrief(viewerId: string, targetId: string): Promis
     query<{ id: string; joined_a: Date | null; joined_b: Date | null }>(
       `SELECT id, meeting_joined_a_at AS joined_a, meeting_joined_b_at AS joined_b FROM dm_conversations WHERE user_a_id = $1 AND user_b_id = $2`,
       [a, b]),
+  ]);
+  const [me, them, outcomeRows] = await Promise.all([
+    loadProfile(viewerId),
+    loadProfile(targetId),
     query<{ worth_continuing: WorthContinuing; outcome_keys: OutcomeKey[]; created_at: Date }>(
       `SELECT worth_continuing, outcome_keys, created_at FROM meeting_outcomes
         WHERE user_id = $1 AND target_user_id = $2 ORDER BY created_at DESC LIMIT 5`,
       [viewerId, targetId]),
+  ]);
+  const [circles, pods, events, path] = await Promise.all([
     query<{ id: string; name: string }>(
       `SELECT c.id, c.name FROM circle_members x
          JOIN circle_members y ON y.circle_id = x.circle_id
