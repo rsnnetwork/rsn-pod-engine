@@ -268,3 +268,40 @@ describe('Toasts a member can read, hear and see under a notch (integration pass
     }
   });
 });
+
+describe('A sheep that cannot load draws nothing (integration pass)', () => {
+  const POSES = ['match', 'curious', 'hopeful', 'thinking'] as const;
+  const sheep = () => read('src/features/reason/brand/ReasonSheep.tsx');
+
+  // ReasonSheep.tsx itself, transpiled and drawn to markup. `failed` stands in for what the browser reports when the
+  // picture cannot load: a static render cannot fire the image's error event, so useState answers with that state.
+  function render(pose: string, failed: boolean): string {
+    const { outputText } = ts.transpileModule(sheep(), {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2019, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
+    });
+    const stand: Record<string, unknown> = {
+      react: { useState: () => [failed, () => undefined] },
+      '@/lib/utils': { cn: (...parts: unknown[]) => parts.filter(Boolean).join(' ') },
+    };
+    const load = (id: string): unknown => (id in stand ? stand[id] : require(id));
+    const mod: { exports: { default?: unknown } } = { exports: {} };
+    new Function('module', 'exports', 'require', outputText)(mod, mod.exports, load);
+    return renderToStaticMarkup(createElement(mod.exports.default as never, { pose, className: 'h-9 w-9' }));
+  }
+
+  it('draws the same decorative, lazy picture for a pose that loads', () => {
+    for (const pose of POSES) {
+      expect(render(pose, false)).toBe(`<img src="/sheep/v4/${pose}.png" alt="" aria-hidden="true" loading="lazy" class="object-contain h-9 w-9"/>`);
+    }
+  });
+
+  it('draws nothing at all once the picture has failed, so no broken-image box is left in an empty state or failure screen', () => {
+    for (const pose of POSES) expect(render(pose, true)).toBe('');
+  });
+
+  it('forgets a failure on its own: the error sets the state, and a different pose is a new picture with a new try', () => {
+    expect(sheep()).toMatch(/onError=\{\(\) => setFailed\(true\)\}/);
+    expect(sheep()).toMatch(/if \(failed\) return null;/);
+    expect(sheep()).toMatch(/<Picture key=\{pose\} pose=\{pose\} className=\{className\} \/>/);
+  });
+});
