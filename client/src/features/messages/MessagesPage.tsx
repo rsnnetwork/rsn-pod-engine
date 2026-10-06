@@ -961,8 +961,10 @@ export default function MessagesPage() {
 
   return (
     <div ref={fillRef} className="flex min-h-0 flex-col lg:flex-row gap-4" style={{ height: fillHeight ?? 'calc(100dvh - 100px)' }}>
-      {/* Conversation list (left, hidden on mobile when a thread is open) */}
-      <div className={`lg:w-80 lg:flex-shrink-0 bg-white rounded-xl border border-gray-200 overflow-hidden ${activeId ? 'hidden lg:flex' : 'flex'} flex-col`}>
+      {/* Conversation list (left, hidden on mobile when a thread is open or a new
+          message is being written: stacked above the compose panel it left the
+          message box under the bottom bar on a short phone) */}
+      <div className={`lg:w-80 lg:flex-shrink-0 bg-white rounded-xl border border-gray-200 overflow-hidden ${(activeId || isComposeMode) ? 'hidden lg:flex' : 'flex'} flex-col`}>
         <div className="px-4 py-3 border-b border-gray-200 flex items-center gap-2">
           <MessageSquare className="h-4 w-4 text-gray-500" />
           <h2 className="text-sm font-semibold text-[#1a1a2e]">Messages</h2>
@@ -1033,7 +1035,20 @@ export default function MessagesPage() {
       <div className={`flex-1 bg-white rounded-xl border border-gray-200 overflow-hidden ${(activeId || isComposeMode) ? 'flex' : 'hidden lg:flex'} flex-col`}>
         {!headerContext ? (
           composeToUserId ? (
-            <div className="flex-1 flex items-center justify-center px-6"><Spinner /></div>
+            <>
+              {/* The inbox list is hidden on a phone while composing, so the way back is
+                  here too: before the person has loaded, and if they never do. */}
+              <div className="px-4 py-3 border-b border-gray-200 lg:hidden">
+                <button
+                  onClick={() => navigate('/messages')}
+                  className="-ml-2 flex h-11 w-11 items-center justify-center rounded-lg hover:bg-gray-100"
+                  aria-label="Back to inbox"
+                >
+                  <ArrowLeft className="h-4 w-4 text-gray-500" />
+                </button>
+              </div>
+              <div className="flex-1 flex items-center justify-center px-6"><Spinner /></div>
+            </>
           ) : (focusPokeId && myUserId) ? (
             // Landed from the bell's "X asked to meet you" — show that person's
             // profile card with Accept / Decline right here (7 Sep 2026, Ali).

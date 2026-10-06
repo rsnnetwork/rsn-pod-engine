@@ -155,3 +155,20 @@ describe('REASON shell: faults found by looking at it', () => {
     expect(sentry).not.toMatch(/environment: import\.meta\.env\.MODE/);
   });
 });
+
+// Left open by the reviews of the shell and Messages, closed before a client looks at it (task P2).
+describe('REASON shell and Messages: fixes before a client reviews it (P2)', () => {
+  it('Messages hides the inbox list on a phone while a new message is written, as for an open thread (stacked above the compose panel it pushed the message box under the bottom bar)', () => {
+    const page = read('features/messages/MessagesPage.tsx');
+    // The list pane (lg:w-80) is hidden below lg whenever the thread pane is showing...
+    expect(page).toMatch(/lg:w-80 lg:flex-shrink-0[^`]*\$\{\(activeId \|\| isComposeMode\) \? 'hidden lg:flex' : 'flex'\}/);
+    // ...and the thread pane shows itself on exactly that condition, so the two can never both stack on a phone.
+    expect(page).toMatch(/flex-1 bg-white rounded-xl border border-gray-200 overflow-hidden \$\{\(activeId \|\| isComposeMode\) \? 'flex' : 'hidden lg:flex'\}/);
+  });
+  it('the compose panel keeps a Back to inbox while it waits for the person to load, since the list beside it is gone on a phone', () => {
+    const page = read('features/messages/MessagesPage.tsx');
+    expect(page).toMatch(/composeToUserId \? \(\s*<>[\s\S]*?lg:hidden[\s\S]*?navigate\('\/messages'\)[\s\S]*?aria-label="Back to inbox"[\s\S]*?<Spinner \/><\/div>\s*<\/>\s*\) : \(focusPokeId/);
+    // The thread header's own arrow is still there for a loaded thread or person.
+    expect(page).toMatch(/className="lg:hidden -ml-2 flex h-11 w-11[^"]*"\s*aria-label="Back to inbox"/);
+  });
+});
