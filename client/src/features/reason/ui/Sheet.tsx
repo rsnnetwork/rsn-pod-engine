@@ -14,6 +14,12 @@ const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([t
 // keyboard: two focus traps would otherwise keep pulling focus back to the
 // first control, so Tab could never get past it.
 const openPanels: HTMLElement[] = [];
+// The page's scroll lock belongs to the stack, not to one sheet: the first sheet to open
+// locks the page and remembers what it had, the last one to close gives that back. A sheet
+// that saved and restored it for itself broke when the first closed before the second: it
+// put the old value back under the sheet still open, and the second then put back the
+// 'hidden' it had seen, so the page stayed locked.
+let overflowBeforeLock = '';
 
 export default function Sheet({ open, onClose, title, children, footer }: Props) {
   const panel = useRef<HTMLDivElement>(null);
@@ -30,8 +36,10 @@ export default function Sheet({ open, onClose, title, children, footer }: Props)
     const dialog = panel.current;
     if (!open || !dialog) return;
     const opener = document.activeElement as HTMLElement | null;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    if (openPanels.length === 0) {
+      overflowBeforeLock = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+    }
     openPanels.push(dialog);
     const onKey = (e: KeyboardEvent) => {
       if (openPanels[openPanels.length - 1] !== dialog) return;
@@ -61,7 +69,7 @@ export default function Sheet({ open, onClose, title, children, footer }: Props)
     return () => {
       const at = openPanels.lastIndexOf(dialog);
       if (at !== -1) openPanels.splice(at, 1);
-      document.body.style.overflow = previousOverflow;
+      if (openPanels.length === 0) document.body.style.overflow = overflowBeforeLock;
       window.removeEventListener('keydown', onKey);
       opener?.focus?.();
     };

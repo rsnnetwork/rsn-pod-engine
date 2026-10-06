@@ -96,4 +96,14 @@ describe('REASON look: fixes before a client reviews it (P2)', () => {
     expect(head).toMatch(/<p className="[^"]*\btext-\[#646a77\][^"]*">\{eyebrow\}<\/p>/);
     expect(head).not.toMatch(/#7b8190/);
   });
+  it('the page scroll lock belongs to the stack of open sheets: the first to open takes it, the last to close gives it back (closing out of order used to leave the page locked)', () => {
+    const s = read('src/features/reason/ui/Sheet.tsx');
+    // No sheet keeps a copy of the page's value for itself: that copy is what the first sheet to close put
+    // back under the one still open, and what the second then replaced with the 'hidden' it had seen.
+    expect(s).not.toMatch(/previousOverflow/);
+    // Taken by the first sheet to open, before it joins the stack...
+    expect(s).toMatch(/if \(openPanels\.length === 0\) \{\s*overflowBeforeLock = document\.body\.style\.overflow;\s*document\.body\.style\.overflow = 'hidden';\s*\}\s*openPanels\.push\(dialog\);/);
+    // ...and given back only by the last one to close, after it has left the stack.
+    expect(s).toMatch(/openPanels\.splice\(at, 1\);\s*if \(openPanels\.length === 0\) document\.body\.style\.overflow = overflowBeforeLock;/);
+  });
 });
