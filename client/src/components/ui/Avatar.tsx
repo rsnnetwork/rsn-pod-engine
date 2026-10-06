@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { cn, getInitials } from '@/lib/utils';
 
 interface AvatarProps {
@@ -14,14 +14,19 @@ export default function Avatar({ src, name, size = 'md', className }: AvatarProp
   // 4 Sep 2026 (device audit): a member whose photo URL no longer resolves
   // showed the browser's broken-image glyph with the alt text beside it.
   // A failed load falls back to the initials, like a missing photo does.
-  const [broken, setBroken] = useState(false);
-  useEffect(() => { setBroken(false); }, [src]);
-  if (src && !broken) {
+  //
+  // What is remembered is WHICH photo failed, not that "a photo" failed. The first
+  // version reset a flag in an effect, and an effect runs after the first render, so
+  // an error that arrived before it (a photo that fails at once) was undone and the
+  // broken glyph stayed. Comparing with the current src needs no reset, and a new
+  // src is a new photo, tried again.
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  if (src && src !== failedSrc) {
     return (
       <img
         src={src}
         alt={name}
-        onError={() => setBroken(true)}
+        onError={() => setFailedSrc(src)}
         className={cn('rounded-full object-cover', sizes[size], className)}
       />
     );
