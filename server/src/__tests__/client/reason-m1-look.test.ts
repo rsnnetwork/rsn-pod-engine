@@ -153,26 +153,30 @@ const hexOf = (cls: string): string => {
   return hex;
 };
 
+// A client component file, transpiled and drawn to markup. What it imports through the app's own aliases is
+// replaced by `stand`; everything else (react, framer-motion, lucide-react) is the real thing, so the markup is what
+// the component really renders for the given props.
+function renderComponent(rel: string, stand: Record<string, unknown>, props: Record<string, unknown>): string {
+  const { outputText } = ts.transpileModule(fs.readFileSync(path.join(root, rel), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2019, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
+  });
+  const load = (id: string): unknown => (id in stand ? stand[id] : require(id));
+  const mod: { exports: { default?: unknown } } = { exports: {} };
+  new Function('module', 'exports', 'require', outputText)(mod, mod.exports, load);
+  return renderToStaticMarkup(createElement(mod.exports.default as never, props));
+}
+const joinClasses = { cn: (...parts: unknown[]) => parts.filter(Boolean).join(' ') };
+
 describe('Toasts a member can read, hear and see under a notch (integration pass)', () => {
   type Kind = 'success' | 'error' | 'info';
   interface Item { id: string; type: Kind; message: string; hostSilent?: boolean; internal?: boolean }
 
-  // Toast.tsx itself, transpiled and drawn to markup. Only the store and the class joiner are stand-ins, so what
-  // is asserted below is what the component really renders for a given list of toasts.
-  function render(toasts: Item[], hostQuiet = false): string {
-    const source = fs.readFileSync(path.join(root, 'src/components/ui/Toast.tsx'), 'utf8');
-    const { outputText } = ts.transpileModule(source, {
-      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2019, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
-    });
-    const stand: Record<string, unknown> = {
-      '@/stores/toastStore': { useToastStore: () => ({ toasts, removeToast: () => undefined }) },
-      '@/lib/utils': { cn: (...parts: unknown[]) => parts.filter(Boolean).join(' ') },
-    };
-    const load = (id: string): unknown => (id in stand ? stand[id] : require(id));
-    const mod: { exports: { default?: unknown } } = { exports: {} };
-    new Function('module', 'exports', 'require', outputText)(mod, mod.exports, load);
-    return renderToStaticMarkup(createElement(mod.exports.default as never, { hostQuiet }));
-  }
+  // The store is a stand-in that holds the given toasts, so the filtering asserted below is the component's own.
+  const render = (toasts: Item[], hostQuiet = false) => renderComponent(
+    'src/components/ui/Toast.tsx',
+    { '@/stores/toastStore': { useToastStore: () => ({ toasts, removeToast: () => undefined }) }, '@/lib/utils': joinClasses },
+    { hostQuiet },
+  );
 
   const three: Item[] = [
     { id: '1', type: 'success', message: 'Nadia saved' },
@@ -273,21 +277,13 @@ describe('A sheep that cannot load draws nothing (integration pass)', () => {
   const POSES = ['match', 'curious', 'hopeful', 'thinking'] as const;
   const sheep = () => read('src/features/reason/brand/ReasonSheep.tsx');
 
-  // ReasonSheep.tsx itself, transpiled and drawn to markup. `failed` stands in for what the browser reports when the
-  // picture cannot load: a static render cannot fire the image's error event, so useState answers with that state.
-  function render(pose: string, failed: boolean): string {
-    const { outputText } = ts.transpileModule(sheep(), {
-      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2019, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
-    });
-    const stand: Record<string, unknown> = {
-      react: { useState: () => [failed, () => undefined] },
-      '@/lib/utils': { cn: (...parts: unknown[]) => parts.filter(Boolean).join(' ') },
-    };
-    const load = (id: string): unknown => (id in stand ? stand[id] : require(id));
-    const mod: { exports: { default?: unknown } } = { exports: {} };
-    new Function('module', 'exports', 'require', outputText)(mod, mod.exports, load);
-    return renderToStaticMarkup(createElement(mod.exports.default as never, { pose, className: 'h-9 w-9' }));
-  }
+  // `failed` stands in for what the browser reports when the picture cannot load: a static render cannot fire the
+  // image's error event, so useState answers with that state.
+  const render = (pose: string, failed: boolean) => renderComponent(
+    'src/features/reason/brand/ReasonSheep.tsx',
+    { react: { useState: () => [failed, () => undefined] }, '@/lib/utils': joinClasses },
+    { pose, className: 'h-9 w-9' },
+  );
 
   it('draws the same decorative, lazy picture for a pose that loads', () => {
     for (const pose of POSES) {
