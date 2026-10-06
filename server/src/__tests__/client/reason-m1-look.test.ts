@@ -111,4 +111,20 @@ describe('REASON look: fixes before a client reviews it (P2)', () => {
     // ...and given back only by the last one to close, after it has left the stack.
     expect(s).toMatch(/openPanels\.splice\(at, 1\);\s*if \(openPanels\.length === 0\) document\.body\.style\.overflow = overflowBeforeLock;/);
   });
+  it('focus goes back to the control that opened a sheet even where a click does not focus it (WebKit): the control pressed last stands in for the opener when nothing has focus', () => {
+    const s = read('src/features/reason/ui/Sheet.tsx');
+    const component = s.indexOf('export default function Sheet');
+    // WebKit leaves <body> focused after a click or a tap on a button, so a sheet opened that way had no opener to give
+    // focus back to. One document-level capture listener, at module level, remembers the control pressed last...
+    const pressedAt = s.search(/^let lastPressed: HTMLElement \| null = null;$/m);
+    expect(pressedAt).toBeGreaterThan(-1);
+    expect(pressedAt).toBeLessThan(component);
+    expect(s).toMatch(/document\.addEventListener\('pointerdown', \(e\) => \{\s*lastPressed = e\.target instanceof Element \? e\.target\.closest<HTMLElement>\('button, a, \[tabindex\]'\) : null;\s*\}, \{ capture: true, passive: true \}\);/);
+    expect(s.indexOf("document.addEventListener('pointerdown'")).toBeLessThan(component);
+    // ...and it is the opener only when nothing has focus at open time (the body, or no element). A focused control, which
+    // is what a keyboard opener and any click in Chromium leave, wins; and a pressed control that has left the page is not used.
+    expect(s).toMatch(/const active = document\.activeElement as HTMLElement \| null;\s*const opener = \(!active \|\| active === document\.body\) && lastPressed\?\.isConnected \? lastPressed : active;/);
+    // Focus goes back to it when the sheet closes.
+    expect(s).toMatch(/opener\?\.focus\?\.\(\);/);
+  });
 });

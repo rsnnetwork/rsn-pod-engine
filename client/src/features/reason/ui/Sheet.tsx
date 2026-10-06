@@ -20,6 +20,14 @@ const openPanels: HTMLElement[] = [];
 // put the old value back under the sheet still open, and the second then put back the
 // 'hidden' it had seen, so the page stayed locked.
 let overflowBeforeLock = '';
+// WebKit does not focus a button or a link when it is clicked or tapped, so a sheet opened that way finds <body>
+// as the active element and focus has nowhere to go back to when it closes. The control pressed last stands in.
+let lastPressed: HTMLElement | null = null;
+if (typeof document !== 'undefined') {
+  document.addEventListener('pointerdown', (e) => {
+    lastPressed = e.target instanceof Element ? e.target.closest<HTMLElement>('button, a, [tabindex]') : null;
+  }, { capture: true, passive: true });
+}
 
 export default function Sheet({ open, onClose, title, children, footer }: Props) {
   const panel = useRef<HTMLDivElement>(null);
@@ -35,7 +43,10 @@ export default function Sheet({ open, onClose, title, children, footer }: Props)
   useEffect(() => {
     const dialog = panel.current;
     if (!open || !dialog) return;
-    const opener = document.activeElement as HTMLElement | null;
+    // Where focus goes back to when the sheet closes. A keyboard opener, and any click in Chromium, is the active
+    // element; when nothing has focus (WebKit after a click or a tap) the control pressed last is the opener.
+    const active = document.activeElement as HTMLElement | null;
+    const opener = (!active || active === document.body) && lastPressed?.isConnected ? lastPressed : active;
     if (openPanels.length === 0) {
       overflowBeforeLock = document.body.style.overflow;
       document.body.style.overflow = 'hidden';
