@@ -366,9 +366,9 @@ export default function NotificationBell() {
   /** Status label for resolved invites */
   const getInviteStatusLabel = (n: Notification) => {
     if (!INVITE_TYPES.includes(n.type) || !n.inviteStatus || n.inviteStatus === 'pending') return null;
-    if (n.inviteStatus === 'accepted') return { text: 'Accepted', color: 'text-emerald-500' };
-    if (n.inviteStatus === 'revoked') return { text: 'Declined', color: 'text-gray-400' };
-    if (n.inviteStatus === 'expired') return { text: 'Expired', color: 'text-amber-400' };
+    if (n.inviteStatus === 'accepted') return { text: 'Accepted', color: 'text-emerald-700' };
+    if (n.inviteStatus === 'revoked') return { text: 'Declined', color: 'text-gray-500' };
+    if (n.inviteStatus === 'expired') return { text: 'Expired', color: 'text-amber-700' };
     return null;
   };
 
@@ -408,10 +408,10 @@ export default function NotificationBell() {
           {/* List */}
           <div className="max-h-80 overflow-y-auto">
             {loading && notifications.length === 0 && (
-              <p className="text-sm text-gray-400 text-center py-6">Loading...</p>
+              <p className="text-sm text-gray-500 text-center py-6">Loading...</p>
             )}
             {!loading && notifications.length === 0 && (
-              <p className="text-sm text-gray-400 text-center py-6">No notifications yet</p>
+              <p className="text-sm text-gray-500 text-center py-6">No notifications yet</p>
             )}
             {notifications.map(n => {
               const showActions = canActOnInvite(n);
@@ -444,8 +444,8 @@ export default function NotificationBell() {
                             wall post, a request's note) would otherwise make one entry thousands of
                             pixels tall and push its own Accept and Decline out of reach. The whole text
                             is one tap away, on the page the entry opens. */}
-                        {n.body && <p className="text-xs text-gray-400 mt-0.5 whitespace-pre-line break-words line-clamp-6">{n.body}</p>}
-                        <p className="text-[10px] text-gray-300 mt-1">{formatTime(n.createdAt)}</p>
+                        {n.body && <p className="text-xs text-gray-600 mt-0.5 whitespace-pre-line break-words line-clamp-6">{n.body}</p>}
+                        <p className="text-[10px] text-gray-500 mt-1">{formatTime(n.createdAt)}</p>
                       </div>
                     </div>
                   </button>
@@ -493,7 +493,7 @@ export default function NotificationBell() {
                     </div>
                   )}
                   {n.type === 'poke' && n.pokeStatus && (
-                    <p className={`ml-4 mt-1 text-[10px] font-medium ${n.pokeStatus === 'accepted' ? 'text-emerald-500' : 'text-gray-400'}`}>
+                    <p className={`ml-4 mt-1 text-[10px] font-medium ${n.pokeStatus === 'accepted' ? 'text-emerald-700' : 'text-gray-500'}`}>
                       {n.pokeStatus === 'accepted' ? 'Accepted' : 'Declined'}
                     </p>
                   )}

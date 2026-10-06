@@ -305,3 +305,55 @@ describe('A sheep that cannot load draws nothing (integration pass)', () => {
     expect(sheep()).toMatch(/<Picture key=\{pose\} pose=\{pose\} className=\{className\} \/>/);
   });
 });
+
+describe('The bell panel\'s text reads at 4.5:1 on white and on the unread tint (integration pass)', () => {
+  const bell = () => read('src/components/ui/NotificationBell.tsx');
+  const classesOf = (re: RegExp) => {
+    const m = bell().match(re);
+    if (!m) throw new Error(`not found in NotificationBell.tsx: ${re}`);
+    return m[1];
+  };
+  const textColour = (classes: string) => {
+    const m = classes.match(/\btext-([a-z]+-\d+)\b/);
+    if (!m) throw new Error(`no text colour in "${classes}"`);
+    return hexOf(`text-${m[1]}`);
+  };
+  // An unread row is painted bg-blue-50/40 over the white panel.
+  const unreadTint = () => {
+    const m = bell().match(/!n\.isRead \? '(bg-[a-z]+-\d+)\/(\d+)'/);
+    if (!m) throw new Error('the unread tint is not where this test looks');
+    const alpha = Number(m[2]) / 100;
+    const fg = [1, 3, 5].map((i) => parseInt(hexOf(m[1]).slice(i, i + 2), 16));
+    return `#${fg.map((v) => Math.round(v * alpha + 255 * (1 - alpha)).toString(16).padStart(2, '0')).join('')}`;
+  };
+  const grounds = () => ['#ffffff', unreadTint()];
+
+  it('the message and its time are 4.5:1 or better on both grounds, and the message stays the darker of the two', () => {
+    const body = textColour(classesOf(/<p className="([^"]*)">\{n\.body\}<\/p>/));
+    const time = textColour(classesOf(/<p className="([^"]*)">\{formatTime\(n\.createdAt\)\}<\/p>/));
+    for (const ground of grounds()) {
+      expect(contrast(body, ground)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(time, ground)).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(luminance(body)).toBeLessThan(luminance(time));
+  });
+
+  it('the loading and empty lines, and every status label, read too', () => {
+    for (const line of ['Loading\\.\\.\\.', 'No notifications yet']) {
+      const colour = textColour(classesOf(new RegExp(`<p className="([^"]*)">${line}</p>`)));
+      expect(contrast(colour, '#ffffff')).toBeGreaterThanOrEqual(4.5);
+    }
+    const labels = [...bell().matchAll(/color: '(text-[a-z]+-\d+)'/g)].map((m) => m[1]);
+    // Accepted, Declined, Expired on an invite, and the two words under a meeting request.
+    const poke = classesOf(/n\.pokeStatus === 'accepted' \? '(text-[a-z]+-\d+)' : '(?:text-[a-z]+-\d+)'/);
+    const pokeDeclined = classesOf(/n\.pokeStatus === 'accepted' \? '(?:text-[a-z]+-\d+)' : '(text-[a-z]+-\d+)'/);
+    expect(labels).toHaveLength(3);
+    for (const cls of [...labels, poke, pokeDeclined]) {
+      for (const ground of grounds()) expect({ cls, ratio: contrast(textColour(cls), ground) >= 4.5 }).toEqual({ cls, ratio: true });
+    }
+  });
+
+  it('keeps none of the colours that failed: the pale greys, emerald-500 and amber-400 text', () => {
+    expect(bell()).not.toMatch(/\btext-(gray-(300|400)|emerald-500|amber-400)\b/);
+  });
+});
