@@ -101,6 +101,11 @@ describe('REASON look: fixes before a client reviews it (P2)', () => {
     // No sheet keeps a copy of the page's value for itself: that copy is what the first sheet to close put
     // back under the one still open, and what the second then replaced with the 'hidden' it had seen.
     expect(s).not.toMatch(/previousOverflow/);
+    // The saved value is module-level state, shared by every sheet. Declared inside the component it would be
+    // one per sheet again (the bug), and the assignments below would still look right.
+    const savedAt = s.search(/^let overflowBeforeLock = '';$/m);
+    expect(savedAt).toBeGreaterThan(-1);
+    expect(savedAt).toBeLessThan(s.indexOf('export default function Sheet'));
     // Taken by the first sheet to open, before it joins the stack...
     expect(s).toMatch(/if \(openPanels\.length === 0\) \{\s*overflowBeforeLock = document\.body\.style\.overflow;\s*document\.body\.style\.overflow = 'hidden';\s*\}\s*openPanels\.push\(dialog\);/);
     // ...and given back only by the last one to close, after it has left the stack.

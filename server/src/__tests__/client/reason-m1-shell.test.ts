@@ -179,8 +179,11 @@ describe('REASON shell and Messages: fixes before a client reviews it (P2)', () 
   it('the current item\'s label is the darker red on its pink (4.5:1), in every place the shell draws one', () => {
     let onPink = 0;
     const brandRedOnPink: string[] = [];
+    // Every string literal, in all three forms: 'single' (constants and cn() arguments), "double" (JSX attributes) and
+    // `template` (which can hold ${...} between the classes).
+    const STRING_LITERALS = /'[^'\n]*'|"[^"\n]*"|`[^`]*`/g;
     for (const file of SHELL_WITH_PINK) {
-      const literals = read(`features/reason/shell/${file}.tsx`).match(/'[^'\n]*\bbg-reason-pink\b[^'\n]*'/g) ?? [];
+      const literals = (read(`features/reason/shell/${file}.tsx`).match(STRING_LITERALS) ?? []).filter((l) => /\bbg-reason-pink\b/.test(l));
       for (const literal of literals) {
         if (/\btext-reason-red(?!-)/.test(literal)) brandRedOnPink.push(`${file}: ${literal}`);
         if (/\btext-reason-red-hover\b/.test(literal)) onPink++;
@@ -220,10 +223,14 @@ describe('REASON shell and Messages: fixes before a client reviews it (P2)', () 
     // Event page: the participant list (8px at 360 in WebKit).
     expect(read('features/sessions/SessionDetailPage.tsx')).toMatch(/<div className="grid grid-cols-1 gap-2">\s*\{\/\* Host\/Director card/);
   });
-  it('People you have met wraps the badges and the Message button under the name on a phone, and lets a long name break', () => {
+  it('People you have met wraps the badges and the Message button under the name on a phone only, and lets a long name break there; from 721px up it is the old one-line row', () => {
     // +43px at a 360px window: the avatar, the name, the badges and the button could not fit one line and held the card (and the page) wider.
+    // The phone range is the shell's own: its bar is min-[721px]:hidden, so max-[720px] is exactly where the bar shows.
+    expect(read('features/reason/shell/MobileNav.tsx')).toMatch(/min-\[721px\]:hidden/);
+    // Exactly these classes. An unscoped flex-wrap or gap moved the Message button to a second line at 768px, where the
+    // old row shrank the text instead.
     expect(read('features/sessions/EncounterHistoryPage.tsx')).toMatch(
-      /<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">\s*<a href=\{`\/profile\/\$\{e\.otherUserId\}`\} className="[^"]*\[overflow-wrap:anywhere\]"/,
+      /<div className="flex items-center justify-between max-\[720px\]:flex-wrap max-\[720px\]:gap-x-3 max-\[720px\]:gap-y-2">\s*<a href=\{`\/profile\/\$\{e\.otherUserId\}`\} className="flex items-center gap-3 hover:opacity-80 transition-opacity max-\[720px\]:\[overflow-wrap:anywhere\]"/,
     );
   });
   it('the top search says it searches people, and its accessible name matches: it opens Find people, and nothing else is searched yet', () => {
