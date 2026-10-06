@@ -41,15 +41,21 @@ export const reasonKeys = {
   recent: ['reason', 'recent-connections'] as const,
 };
 
+// A member id is one encoded segment of an address. A route parameter arrives decoded, so a crafted
+// "../people/connections/recent?" would otherwise be read as another route.
+const memberSegment = (userId: string) => encodeURIComponent(userId);
+
 export const fetchForYou = () => api.get('/matches/platform').then((r) => r.data.data as ForYouPayload);
-export const fetchBrief = (userId: string) => api.get(`/people/${userId}/brief`).then((r) => r.data.data as PersonBrief);
+export const fetchBrief = (userId: string) => api.get(`/people/${memberSegment(userId)}/brief`).then((r) => r.data.data as PersonBrief);
 export const fetchRecentConnections = () => api.get('/people/connections/recent').then((r) => r.data.data as RecentConnection[]);
 
 export const setPersonResponse = (userId: string, response: PersonResponse | null) =>
-  response ? api.put(`/people/${userId}/response`, { response }) : api.delete(`/people/${userId}/response`);
+  response
+    ? api.put(`/people/${memberSegment(userId)}/response`, { response })
+    : api.delete(`/people/${memberSegment(userId)}/response`);
 
 export const sendMeetRequest = (userId: string, note: string, format: MeetingFormat) =>
-  api.post(`/matches/platform/${userId}/interest`, { note, format });
+  api.post(`/matches/platform/${memberSegment(userId)}/interest`, { note, format });
 
 export const recordOutcomeRequest = (userId: string, worthContinuing: WorthContinuing, outcomes: OutcomeKey[]) =>
-  api.post(`/people/${userId}/outcome`, { worthContinuing, outcomes });
+  api.post(`/people/${memberSegment(userId)}/outcome`, { worthContinuing, outcomes });

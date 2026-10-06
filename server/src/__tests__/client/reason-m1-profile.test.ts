@@ -4,6 +4,8 @@
 // browser to run, and the look at the real page covers that side.
 import * as fs from 'fs';
 import * as path from 'path';
+import * as vm from 'vm';
+import * as ts from 'typescript';
 
 const dir = path.join(__dirname, '../../../../client/src/features/reason/human');
 // Working-tree files are CRLF on Windows; normalise so patterns match either way.
@@ -187,5 +189,80 @@ describe('Human Profile: small text and phones', () => {
     expect(count(bar(), /min-h-\[48px\]/g)).toBeGreaterThanOrEqual(2);
     expect(page()).toMatch(/pb-\[calc\(116px\+env\(safe-area-inset-bottom\)\)\]/);
     expect(page()).toMatch(/env\(safe-area-inset-top\)/);
+  });
+});
+
+// api.ts imports axios and the auth store, so a test cannot import it. It is run for real instead: the
+// file is transpiled and evaluated with a recording stand-in for the HTTP client, and the test reads the
+// addresses it asks for.
+interface RecordedCall { method: string; url: string; body?: unknown }
+interface ReasonApi {
+  fetchBrief: (userId: string) => Promise<unknown>;
+  setPersonResponse: (userId: string, response: 'saved' | 'passed' | null) => Promise<unknown>;
+  sendMeetRequest: (userId: string, note: string, format: 'video_20' | 'coffee' | 'message_first') => Promise<unknown>;
+  recordOutcomeRequest: (userId: string, worth: 'yes' | 'maybe' | 'no', outcomes: string[]) => Promise<unknown>;
+}
+
+function loadApi(): { api: ReasonApi; exported: string[]; calls: RecordedCall[] } {
+  const reasonDir = path.join(__dirname, '../../../../client/src/features/reason');
+  const calls: RecordedCall[] = [];
+  const answer = (method: string) => (url: string, body?: unknown) => {
+    calls.push({ method, url, body });
+    return Promise.resolve({ data: { data: null } });
+  };
+  const fakeClient = { get: answer('GET'), put: answer('PUT'), post: answer('POST'), delete: answer('DELETE') };
+  const source = fs.readFileSync(path.join(reasonDir, 'api.ts'), 'utf8');
+  const { outputText } = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2019, esModuleInterop: true },
+  });
+  const mod: { exports: Record<string, unknown> } = { exports: {} };
+  const load = (id: string): unknown => (id === '@/lib/api' ? { __esModule: true, default: fakeClient } : require(path.resolve(reasonDir, id)));
+  const run = vm.runInNewContext(`(function (module, exports, require) {${outputText}\n})`) as (m: unknown, e: unknown, r: unknown) => void;
+  run(mod, mod.exports, load);
+  return { api: mod.exports as unknown as ReasonApi, exported: Object.keys(mod.exports).sort(), calls };
+}
+
+describe('REASON api: a member id is data, never part of the path', () => {
+  // React Router hands a route parameter back decoded, so /people/..%2Fpeople%2Fconnections%2Frecent%3F
+  // reaches the page as this, and a path built from it by plain interpolation asks for another route.
+  const crafted = '../people/connections/recent?';
+  const encoded = '..%2Fpeople%2Fconnections%2Frecent%3F';
+  const uuid = '3f2b8a4e-1c9d-4e7a-b6f0-2a5c8d1e9f03';
+
+  it('puts an id into every address as one encoded segment', async () => {
+    const { api, calls } = loadApi();
+    await api.fetchBrief(crafted);
+    await api.setPersonResponse(crafted, 'saved');
+    await api.setPersonResponse(crafted, null);
+    await api.sendMeetRequest(crafted, 'Hello', 'coffee');
+    await api.recordOutcomeRequest(crafted, 'yes', ['advice']);
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+      `GET /people/${encoded}/brief`,
+      `PUT /people/${encoded}/response`,
+      `DELETE /people/${encoded}/response`,
+      `POST /matches/platform/${encoded}/interest`,
+      `POST /people/${encoded}/outcome`,
+    ]);
+  });
+
+  it('leaves an ordinary member id as it was, and sends the same bodies', async () => {
+    const { api, calls } = loadApi();
+    await api.fetchBrief(uuid);
+    await api.setPersonResponse(uuid, 'passed');
+    await api.sendMeetRequest(uuid, 'Hello', 'video_20');
+    await api.recordOutcomeRequest(uuid, 'maybe', ['advice', 'hiring']);
+    expect(calls).toEqual([
+      { method: 'GET', url: `/people/${uuid}/brief`, body: undefined },
+      { method: 'PUT', url: `/people/${uuid}/response`, body: { response: 'passed' } },
+      { method: 'POST', url: `/matches/platform/${uuid}/interest`, body: { note: 'Hello', format: 'video_20' } },
+      { method: 'POST', url: `/people/${uuid}/outcome`, body: { worthContinuing: 'maybe', outcomes: ['advice', 'hiring'] } },
+    ]);
+  });
+
+  it('still exports every name the pages import', () => {
+    expect(loadApi().exported).toEqual([
+      'errorMessage', 'fetchBrief', 'fetchForYou', 'fetchRecentConnections', 'personName', 'reasonKeys',
+      'recordOutcomeRequest', 'sendMeetRequest', 'setPersonResponse', 'stateFromPoke',
+    ]);
   });
 });
