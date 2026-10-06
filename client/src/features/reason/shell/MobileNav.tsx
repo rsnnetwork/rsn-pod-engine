@@ -10,7 +10,7 @@ import LogoutSheet from './LogoutSheet';
 
 const TAB = 'relative grid min-h-[56px] min-w-0 content-center justify-items-center gap-0.5 rounded-xl px-1 text-[10px] font-bold';
 const ACCOUNT_LINK = 'flex min-h-[44px] items-center rounded-xl px-1 text-[14px]';
-const ACCOUNT_LINK_HERE = 'bg-reason-pink font-bold text-reason-red';
+const ACCOUNT_LINK_HERE = 'bg-reason-pink font-bold text-reason-red-hover';
 
 export default function MobileNav({ unreadCount }: { unreadCount: number }) {
   const { pathname } = useLocation();
@@ -35,9 +35,10 @@ export default function MobileNav({ unreadCount }: { unreadCount: number }) {
               to={item.to}
               aria-label={key === 'messages' && unreadCount > 0 ? `${item.label}, ${unreadCount} unread` : undefined}
               aria-current={active ? 'page' : undefined}
-              className={cn(TAB, active ? 'bg-reason-pink text-reason-red' : 'text-[#697180]')}
+              className={cn(TAB, active ? 'bg-reason-pink text-reason-red-hover' : 'text-[#697180]')}
             >
-              <ReasonIcon name={key} />
+              {/* The label is the darker red (4.5:1 on the pink); the icon is not text and keeps the brand red. */}
+              <ReasonIcon name={key} className={active ? 'text-reason-red' : undefined} />
               <span>{item.label}</span>
               {key === 'messages' && unreadCount > 0 && (
                 <i className="absolute right-[18%] top-1 grid h-4 min-w-4 place-items-center rounded-full bg-reason-red px-1 text-[9px] not-italic text-white">
@@ -47,8 +48,8 @@ export default function MobileNav({ unreadCount }: { unreadCount: number }) {
             </Link>
           );
         })}
-        <button type="button" onClick={() => setMoreOpen(true)} aria-haspopup="dialog" aria-expanded={moreOpen} aria-current={moreActive ? 'true' : undefined} className={cn(TAB, moreActive ? 'bg-reason-pink text-reason-red' : 'text-[#697180]')}>
-          <ReasonIcon name="more" />
+        <button type="button" onClick={() => setMoreOpen(true)} aria-haspopup="dialog" aria-expanded={moreOpen} aria-current={moreActive ? 'true' : undefined} className={cn(TAB, moreActive ? 'bg-reason-pink text-reason-red-hover' : 'text-[#697180]')}>
+          <ReasonIcon name="more" className={moreActive ? 'text-reason-red' : undefined} />
           <span>More</span>
         </button>
       </nav>
@@ -64,9 +65,9 @@ export default function MobileNav({ unreadCount }: { unreadCount: number }) {
                 to={item.to}
                 onClick={done}
                 aria-current={active ? 'page' : undefined}
-                className={cn('flex min-h-[48px] items-center gap-2.5 rounded-[13px] border px-3 text-[14px] font-bold', active ? 'border-[#ffc9c4] bg-reason-pink text-reason-red' : 'border-reason-line text-[#323946]')}
+                className={cn('flex min-h-[48px] items-center gap-2.5 rounded-[13px] border px-3 text-[14px] font-bold', active ? 'border-[#ffc9c4] bg-reason-pink text-reason-red-hover' : 'border-reason-line text-[#323946]')}
               >
-                <ReasonIcon name={key} width={20} height={20} />
+                <ReasonIcon name={key} width={20} height={20} className={active ? 'text-reason-red' : undefined} />
                 <span className="truncate">{item.label}</span>
               </Link>
             );

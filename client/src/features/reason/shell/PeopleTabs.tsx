@@ -23,7 +23,7 @@ export default function PeopleTabs() {
           to={t.to}
           className={({ isActive }) => cn(
             'flex min-h-[44px] shrink-0 items-center rounded-full border px-3.5 text-[13px] font-bold',
-            isActive ? 'border-[#ffc9c4] bg-reason-pink text-reason-red' : 'border-reason-line text-[#4d5562] hover:bg-reason-soft',
+            isActive ? 'border-[#ffc9c4] bg-reason-pink text-reason-red-hover' : 'border-reason-line text-[#4d5562] hover:bg-reason-soft',
           )}
         >
           {t.label}

@@ -14,10 +14,11 @@ function SideLink({ item, active, badge }: { item: NavItem; active: boolean; bad
       title={item.label}
       className={cn(
         'relative flex min-h-[44px] items-center justify-center gap-3 rounded-xl px-2.5 text-[15px] transition-colors min-[981px]:justify-start',
-        active ? 'bg-reason-pink font-bold text-reason-red shadow-[inset_3px_0_0_#DE322E]' : 'text-[#515968] hover:bg-reason-soft hover:text-[#111]',
+        active ? 'bg-reason-pink font-bold text-reason-red-hover shadow-[inset_3px_0_0_#DE322E]' : 'text-[#515968] hover:bg-reason-soft hover:text-[#111]',
       )}
     >
-      <ReasonIcon name={item.key} className="shrink-0" />
+      {/* The label is the darker red (4.5:1 on the pink); the icon is not text and keeps the brand red. */}
+      <ReasonIcon name={item.key} className={cn('shrink-0', active && 'text-reason-red')} />
       <span className="hidden min-[981px]:inline">{item.label}</span>
       {!!badge && (
         <i className="absolute right-1 top-1 grid h-[21px] min-w-[21px] place-items-center rounded-full bg-reason-red px-1.5 text-[11px] font-extrabold not-italic text-white min-[981px]:static min-[981px]:ml-auto">

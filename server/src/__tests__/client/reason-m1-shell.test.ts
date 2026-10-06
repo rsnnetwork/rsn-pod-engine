@@ -171,4 +171,41 @@ describe('REASON shell and Messages: fixes before a client reviews it (P2)', () 
     // The thread header's own arrow is still there for a loaded thread or person.
     expect(page).toMatch(/className="lg:hidden -ml-2 flex h-11 w-11[^"]*"\s*aria-label="Back to inbox"/);
   });
+
+  // Measured with WCAG relative luminance: the brand red #DE322E on the pink #fff1ef is 4.15:1, the darker
+  // red #C52B28 is 5.09:1 (small text needs 4.5:1). The brand red stays on borders, the 3px marker, icons
+  // and white-on-red buttons, where it is not text on pink.
+  const SHELL_WITH_PINK = ['AdminTabs', 'MobileNav', 'PeopleTabs', 'ProfileMenu', 'ShellSidebar'];
+  it('the current item\'s label is the darker red on its pink (4.5:1), in every place the shell draws one', () => {
+    let onPink = 0;
+    const brandRedOnPink: string[] = [];
+    for (const file of SHELL_WITH_PINK) {
+      const literals = read(`features/reason/shell/${file}.tsx`).match(/'[^'\n]*\bbg-reason-pink\b[^'\n]*'/g) ?? [];
+      for (const literal of literals) {
+        if (/\btext-reason-red(?!-)/.test(literal)) brandRedOnPink.push(`${file}: ${literal}`);
+        if (/\btext-reason-red-hover\b/.test(literal)) onPink++;
+      }
+    }
+    expect(brandRedOnPink).toEqual([]);
+    // AdminTabs 1, MobileNav 4 (bar tab, More, More tile, account link), PeopleTabs 1, ProfileMenu 1, ShellSidebar 1.
+    expect(onPink).toBeGreaterThanOrEqual(8);
+  });
+  it('the icon of the current item keeps the brand red (it is not text), though its label is the darker red', () => {
+    expect(read('features/reason/shell/ShellSidebar.tsx')).toMatch(/<ReasonIcon name=\{item\.key\} className=\{cn\('shrink-0', active && 'text-reason-red'\)\} \/>/);
+    const nav = read('features/reason/shell/MobileNav.tsx');
+    expect(nav).toMatch(/<ReasonIcon name=\{key\} className=\{active \? 'text-reason-red' : undefined\} \/>/);
+    expect(nav).toMatch(/<ReasonIcon name="more" className=\{moreActive \? 'text-reason-red' : undefined\} \/>/);
+    expect(nav).toMatch(/<ReasonIcon name=\{key\} width=\{20\} height=\{20\} className=\{active \? 'text-reason-red' : undefined\} \/>/);
+    // ...and so does the 3px marker on the rail and the sidebar.
+    expect(read('features/reason/shell/ShellSidebar.tsx')).toMatch(/shadow-\[inset_3px_0_0_#DE322E\]/);
+  });
+  it('small grey text in the shell clears 4.5:1 on the surface it sits on: "View profile" (pink when current, soft under the pointer), Log out under the pointer, the search placeholder', () => {
+    const menu = read('features/reason/shell/ProfileMenu.tsx');
+    // #646a77 is 4.93:1 on the pink, 5.07:1 on the soft grey and 5.43:1 on white; the muted #6d7380 was 4.32 and 4.44 on the first two.
+    expect(menu).toMatch(/<span className="block text-\[11px\] text-\[#646a77\]">View profile<\/span>/);
+    // Log out is the brand red on white (4.56:1) and the darker red on the soft grey it gets under the pointer (4.26:1 before).
+    expect(menu).toMatch(/text-\[14px\] text-reason-red hover:bg-reason-soft hover:text-reason-red-hover/);
+    // The placeholder defaulted to gray-400 (2.33:1 on the search field's #f4f5f7).
+    expect(read('features/reason/shell/ShellTopbar.tsx')).toMatch(/bg-\[#f4f5f7\][^"]*\bplaceholder:text-\[#646a77\]/);
+  });
 });

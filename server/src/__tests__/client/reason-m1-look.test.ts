@@ -88,3 +88,12 @@ describe('REASON sheet, fix round 1 (milestone 1)', () => {
     expect(toast).toBeGreaterThan(overlay);
   });
 });
+
+// Left open by the reviews of the look and the shell, closed before a client looks at it (task P2).
+describe('REASON look: fixes before a client reviews it (P2)', () => {
+  it('the page eyebrow is #646a77, which clears 4.5:1 on every light surface the app uses (the old #7b8190 was 3.90:1 on white)', () => {
+    const head = read('src/features/reason/ui/PageHead.tsx');
+    expect(head).toMatch(/<p className="[^"]*\btext-\[#646a77\][^"]*">\{eyebrow\}<\/p>/);
+    expect(head).not.toMatch(/#7b8190/);
+  });
+});

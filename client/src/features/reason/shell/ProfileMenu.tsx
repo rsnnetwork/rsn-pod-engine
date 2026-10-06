@@ -15,7 +15,7 @@ function MenuLink({ to, label, current, onDone }: { to: string; label: string; c
       to={to}
       onClick={onDone}
       aria-current={current ? 'page' : undefined}
-      className={cn('flex min-h-[44px] items-center rounded-xl px-3 text-[14px]', current ? 'bg-reason-pink font-bold text-reason-red' : 'hover:bg-reason-soft')}
+      className={cn('flex min-h-[44px] items-center rounded-xl px-3 text-[14px]', current ? 'bg-reason-pink font-bold text-reason-red-hover' : 'hover:bg-reason-soft')}
     >
       {label}
     </Link>
@@ -70,7 +70,7 @@ export default function ProfileMenu() {
         <Avatar src={user.avatarUrl} name={name} size="md" />
         <span className="hidden min-w-0 flex-1 min-[981px]:block">
           <strong className="block truncate text-[13px]">{name}</strong>
-          <span className="block text-[11px] text-reason-muted">View profile</span>
+          <span className="block text-[11px] text-[#646a77]">View profile</span>
         </span>
       </button>
       {open && (
@@ -82,7 +82,7 @@ export default function ProfileMenu() {
             type="button"
             role="menuitem"
             onClick={() => { close(); setConfirm(true); }}
-            className="flex min-h-[44px] w-full items-center rounded-xl px-3 text-left text-[14px] text-reason-red hover:bg-reason-soft"
+            className="flex min-h-[44px] w-full items-center rounded-xl px-3 text-left text-[14px] text-reason-red hover:bg-reason-soft hover:text-reason-red-hover"
           >
             Log out
           </button>
