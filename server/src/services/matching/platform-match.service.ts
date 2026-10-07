@@ -20,7 +20,8 @@ import { query } from '../../db';
 import logger from '../../config/logger';
 import { normalizeDesignation, tokenizeTerms, termOverlapRelated, isRelatedTerm, designationsWanted } from './intent-signals';
 import { expandWantTags } from './want-synonyms';
-import { extractConstraints, checkConstraints } from './want-constraints';
+import { extractConstraints, checkConstraints, matchedPlace } from './want-constraints';
+import { regionLabel } from './want-regions';
 import * as pokeService from '../poke/poke.service';
 import { UserPoke } from '../poke/poke.service';
 import { clip, clipAtWord } from '../people/text';
@@ -237,7 +238,7 @@ interface WantFit {
   matchedTitle: string | null;
   sharedTerms: string[];
   name: string;
-  /** An explicit place in the want that this person satisfies ("united states"). */
+  /** The explicit place in the want that this person satisfies: a country ("united states"), a city or a region's key ("europe"). */
   placeMatched: string | null;
   /** The want asked for N+ years but this profile doesn't state its years. */
   yearsUnknown: boolean;
@@ -250,7 +251,8 @@ const titleCase = (s: string) => s.replace(/\b[a-z]/g, (c) => c.toUpperCase());
  *  about WHY someone is here (and about what we couldn't verify). */
 function withConstraintNotes(base: string, f: WantFit): string {
   const notes: string[] = [];
-  if (f.placeMatched) notes.push(`in ${titleCase(f.placeMatched)}`);
+  // A region says what the member wrote ("in DACH", "in the Nordics"), a country or city is title-cased as ever.
+  if (f.placeMatched) notes.push(`in ${regionLabel(f.placeMatched) ?? titleCase(f.placeMatched)}`);
   if (f.yearsUnknown) notes.push(`they don't state their years of experience`);
   return notes.length ? `${base} (${notes.join('; ')})` : base;
 }
@@ -398,7 +400,9 @@ function analyzeWants(
     matchedTitle: designationHit && role ? role : null,
     sharedTerms: shared,
     name,
-    placeMatched: check.locationOk ? (constraints.location?.[0] ?? null) : null,
+    // The place THIS person satisfies, not merely the first the want names: "Germany or the Nordics"
+    // says "the Nordics" for someone in Stockholm.
+    placeMatched: check.locationOk ? matchedPlace(constraints, other) : null,
     yearsUnknown: check.yearsUnknown,
   };
 }

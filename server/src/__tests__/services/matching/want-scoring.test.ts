@@ -9,7 +9,9 @@ jest.mock('../../../config/logger', () => ({
   __esModule: true,
 }));
 
-import { scoreWants, MATCH_THRESHOLD, BROWSE_THRESHOLD } from '../../../services/matching/platform-match.service';
+import {
+  scoreWants, scoreWantsForRecipient, MATCH_THRESHOLD, BROWSE_THRESHOLD,
+} from '../../../services/matching/platform-match.service';
 
 const person = (over: Record<string, unknown> = {}) => ({
   id: 'u', displayName: 'Pat', avatarUrl: null,
@@ -196,5 +198,139 @@ describe('developer means developer', () => {
     expect(scoreWants(WANT, person({ ...nobody, jobTitle: 'software development lead' })).score).toBeGreaterThan(0);
     expect(scoreWants(WANT, person({ ...nobody, jobTitle: 'web developer', expertiseText: 'product development' })).score).toBeGreaterThan(0);
     expect(scoreWants(WANT, person({ ...nobody, jobTitle: 'engineer', expertiseText: 'reactjs, typescript' })).score).toBeGreaterThan(0);
+  });
+});
+
+// 7 Oct 2026, found while seeding a local demo: a member whose "who I want to meet" was
+// "fintech founders, seed investors and payments partners in Europe" got NO suggestions,
+// although every candidate lived in a European city. The place was matched as a word in the
+// candidate's location, and nothing knew that Germany is in Europe. The same want without
+// "in Europe" gave six strong matches.
+describe('a region in the want finds the people who are there', () => {
+  const STACK = 'fintech founders, seed investors and payments partners';
+  const fintech = (name: string, location: string | null, over: Record<string, unknown> = {}) => person({
+    displayName: name, professionalRole: ['Founder'], jobTitle: 'Co-founder & CEO', jobTitleSource: 'stated',
+    company: `${name} Pay`, industry: 'Fintech', expertiseText: 'payments infrastructure and seed fundraising',
+    location, ...over,
+  });
+  const berlin = fintech('Anna', 'Berlin, Germany');
+  const amsterdam = fintech('Bram', 'Amsterdam, Netherlands');
+  const milan = fintech('Chiara', 'Milan, Italy');
+  const vienna = fintech('Vera', 'Vienna, Austria');
+  const zurich = fintech('Zoe', 'Zurich, Switzerland');
+  const paris = fintech('Paul', 'Paris, France');
+  const austin = fintech('Alex', 'Austin, Texas');
+
+  it('control: without the place, all of them are strong matches (so the place is the only thing that changed)', () => {
+    for (const c of [berlin, amsterdam, milan, vienna, zurich, paris, austin]) {
+      expect(scoreWants([STACK], c).score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+    }
+  });
+
+  it('"in Europe" finds Berlin, Amsterdam and Milan, and the reason names Europe', () => {
+    for (const c of [berlin, amsterdam, milan]) {
+      const r = scoreWants([`${STACK} in Europe`], c);
+      expect(r.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+      expect(r.reason).toMatch(/\(in Europe\)$/);
+    }
+  });
+
+  it('the place changes who is shown, never how strongly: the score is the same as without it', () => {
+    for (const c of [berlin, amsterdam, milan]) {
+      expect(scoreWants([`${STACK} in Europe`], c).score).toBeCloseTo(scoreWants([STACK], c).score, 5);
+    }
+  });
+
+  it('"in Europe" does not find Austin, Texas', () => {
+    expect(scoreWants([`${STACK} in Europe`], austin).score).toBe(0);
+    expect(scoreWants([`${STACK} in Europe`], fintech('Alex', 'Austin, United States')).score).toBe(0);
+  });
+
+  it('"in DACH" finds Vienna and Zurich, not Paris', () => {
+    for (const c of [vienna, zurich]) {
+      const r = scoreWants([`${STACK} in DACH`], c);
+      expect(r.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+      expect(r.reason).toMatch(/\(in DACH\)$/);
+    }
+    expect(scoreWants([`${STACK} in DACH`], paris).score).toBe(0);
+  });
+
+  it('says the region the member wrote, in the words the card uses for it', () => {
+    expect(scoreWants([`${STACK} in the Nordics`], fintech('Sven', 'Stockholm, Sweden')).reason).toMatch(/\(in the Nordics\)$/);
+    expect(scoreWants([`${STACK} in the EU`], berlin).reason).toMatch(/\(in the EU\)$/);
+    expect(scoreWants([`${STACK} in the Middle East`], fintech('Dana', 'Dubai, UAE')).reason).toMatch(/\(in the Middle East\)$/);
+    expect(scoreWants([`${STACK} in LatAm`], fintech('Luz', 'Bogota, Colombia')).reason).toMatch(/\(in Latin America\)$/);
+    expect(scoreWants([`${STACK} in UK and Ireland`], fintech('Ciara', 'Dublin, Ireland')).reason).toMatch(/\(in the UK and Ireland\)$/);
+  });
+
+  it('a want that names a country and a region says the one that fits this person', () => {
+    const want = [`${STACK} in Germany or the Nordics`];
+    expect(scoreWants(want, fintech('Sven', 'Stockholm, Sweden')).reason).toMatch(/\(in the Nordics\)$/);
+    expect(scoreWants(want, berlin).reason).toMatch(/\(in Germany\)$/);
+    expect(scoreWants(want, paris).score).toBe(0);
+  });
+
+  it('countries and cities print as they always did', () => {
+    expect(scoreWants([`${STACK} in Germany`], berlin).reason).toMatch(/\(in Germany\)$/);
+    expect(scoreWants([`${STACK} in the US`], fintech('Alex', 'Austin, United States')).reason).toMatch(/\(in United States\)$/);
+    expect(scoreWants([`${STACK} in London`], fintech('Liv', 'London, UK')).reason).toMatch(/\(in London\)$/);
+  });
+
+  it('an agent\'s stored tags beside the member\'s own words do not change the place', () => {
+    const own = [`${STACK} in Europe`];
+    const withTags = [...own, 'fintech', 'payments', 'seed funding'];
+    const r = scoreWants(withTags, berlin, undefined, own);
+    expect(r.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+    expect(r.reason).toMatch(/\(in Europe\)$/);
+    expect(scoreWants(withTags, austin, undefined, own).score).toBe(0);
+  });
+
+  describe('an unknown place filters nothing', () => {
+    it('"in Narnia": everyone still scores as they do without it, and the reason does not print it', () => {
+      for (const c of [berlin, amsterdam, milan, austin]) {
+        const r = scoreWants([`${STACK} in Narnia`], c);
+        expect(r.score).toBeCloseTo(scoreWants([STACK], c).score, 5);
+        expect(r.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+        expect(r.reason).not.toMatch(/Narnia|\(in /);
+      }
+    });
+
+    it('so do the capitalised words that are not places at all', () => {
+      const tails = ['in Fintech', 'from Stripe', 'in SaaS', 'near Series A rounds'];
+      const emptied = tails.filter((tail) => scoreWants([`${STACK} ${tail}`], austin).score < MATCH_THRESHOLD);
+      expect(emptied).toEqual([]);
+    });
+
+    it('a place the code does know is still strict, even beside one it does not', () => {
+      expect(scoreWants([`${STACK} in Narnia or Germany`], berlin).score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+      expect(scoreWants([`${STACK} in Narnia or Germany`], paris).score).toBe(0);
+    });
+  });
+
+  describe('what the reason may say', () => {
+    // The place in the note is the member's OWN word, never the candidate's location; the
+    // candidate's private fields never reach it, with a region as with anything else.
+    const private_ = fintech('Greta', 'Berlin, Germany', {
+      interests: ['sailing', 'private aviation'], whatICareAbout: 'collecting rare whisky',
+    });
+
+    it('names the region the member wrote, not where the person is, and none of their private interests', () => {
+      for (const want of [`${STACK} in Europe`, `${STACK} in DACH`, `${STACK} in the EU`]) {
+        const { reason } = scoreWants([want], private_);
+        expect(reason).toMatch(/\(in (Europe|DACH|the EU)\)$/);
+        expect(reason).not.toMatch(/sailing|aviation|whisky|Berlin|Germany|Greta Pay/i);
+      }
+    });
+
+    it('is the same sentence for the introduction the other member reads, with the sender\'s own place', () => {
+      const r = scoreWantsForRecipient([`${STACK} in Europe`], private_, 'Ali');
+      expect(r.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+      expect(r.reason).toMatch(/\(in Europe\)$/);
+      expect(r.reason).not.toMatch(/sailing|aviation|whisky/i);
+    });
+
+    it('an unknown place leaves nothing of it in the introduction either', () => {
+      expect(scoreWantsForRecipient([`${STACK} in Narnia`], private_, 'Ali').reason).not.toMatch(/Narnia|\(in /);
+    });
   });
 });

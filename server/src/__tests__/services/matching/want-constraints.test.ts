@@ -85,3 +85,216 @@ describe('profileYears', () => {
     expect(profileYears({ bio: 'Founder' })).toBeNull();
   });
 });
+
+// ─── A region in a want (7 Oct 2026) ─────────────────────────────────────────
+//
+// A member whose want said "fintech founders, seed investors and payments partners in
+// Europe" got no suggestions at all, although every candidate lived in a European city
+// ("Berlin, Germany", "Amsterdam, Netherlands", "Milan, Italy"): "Europe" was matched as
+// a word against the candidate's location, and nothing knew that Germany is in Europe.
+// The same want without "in Europe" gave six strong matches.
+
+const DEMO_WANT = 'fintech founders, seed investors and payments partners in Europe';
+const placesIn = (text: string) => locationTerms(text).sort();
+/** Does a person at this location satisfy the place this want names? */
+const satisfies = (want: string, location: string | null) =>
+  checkConstraints(extractConstraints([want]), { location }).locationOk;
+
+describe('a region in a want', () => {
+  it('is read as one place, named as the region', () => {
+    expect(placesIn(DEMO_WANT)).toEqual(['europe']);
+    expect(placesIn('European fintech founders')).toEqual(['europe']);
+    expect(placesIn('founders in the EU')).toEqual(['eu']);
+    expect(placesIn('founders in the European Union')).toEqual(['eu']);
+    expect(placesIn('founders in the DACH region')).toEqual(['dach']);
+    expect(placesIn('investors in Benelux')).toEqual(['benelux']);
+    expect(placesIn('investors in the Nordics')).toEqual(['nordics']);
+    expect(placesIn('investors in Scandinavia')).toEqual(['scandinavia']);
+    expect(placesIn('buyers in the Middle East')).toEqual(['middle east']);
+    expect(placesIn('buyers in MENA')).toEqual(['mena']);
+    expect(placesIn('buyers in the GCC')).toEqual(['gcc']);
+    expect(placesIn('founders in Africa')).toEqual(['africa']);
+    expect(placesIn('founders in Asia')).toEqual(['asia']);
+    expect(placesIn('founders in APAC')).toEqual(['apac']);
+    expect(placesIn('founders in Asia-Pacific')).toEqual(['apac']);
+    expect(placesIn('founders in Latin America')).toEqual(['latin america']);
+    expect(placesIn('founders in LatAm')).toEqual(['latin america']);
+    expect(placesIn('founders in North America')).toEqual(['north america']);
+    expect(placesIn('founders in EMEA')).toEqual(['emea']);
+    // "UK & Ireland" is one region, not the two countries it is made of.
+    expect(placesIn('investors in UK & Ireland')).toEqual(['uk and ireland']);
+    expect(placesIn('investors in the British Isles')).toEqual(['uk and ireland']);
+  });
+
+  it('is not also read as the country whose name it contains', () => {
+    // "America" in "Latin America" is not the United States, and "Africa" in "South Africa" is not Africa.
+    expect(placesIn('founders in Latin America')).not.toContain('united states');
+    expect(placesIn('founders in North America')).not.toContain('united states');
+    expect(placesIn('founders in South Africa')).toEqual(['south africa']);
+    expect(placesIn('founders in the United Arab Emirates')).toEqual(['united arab emirates']);
+  });
+
+  it('can sit beside a country or another region in the same want', () => {
+    expect(placesIn('investors in Germany or the Nordics')).toEqual(['germany', 'nordics']);
+    expect(placesIn('investors in the Nordics and Benelux')).toEqual(['benelux', 'nordics']);
+  });
+
+  it('is extracted as the place the want requires', () => {
+    expect(extractConstraints([DEMO_WANT])).toEqual({ location: ['europe'], minYears: null });
+  });
+});
+
+describe('a region is satisfied by a country inside it', () => {
+  it.each([
+    ['Europe', 'Berlin, Germany'], ['Europe', 'Amsterdam, Netherlands'], ['Europe', 'Milan, Italy'],
+    ['Europe', 'London, UK'], ['Europe', 'Dublin, Ireland'], ['Europe', 'Reykjavik, Iceland'],
+    ['Europe', 'Prague, Czech Republic'], ['Europe', 'Prague, Czechia'], ['Europe', 'Athens, Greece'],
+    ['Europe', 'Sarajevo, Bosnia & Herzegovina'], ['Europe', 'Istanbul, Türkiye'], ['Europe', 'Nicosia, Cyprus'],
+    ['Europe', 'Germany'], ['Europe', 'Remote, Europe'], ['Europe', 'Brussels, Belgium'],
+    ['DACH', 'Vienna, Austria'], ['DACH', 'Zurich, Switzerland'], ['DACH', 'Berlin, Germany'],
+    ['the EU', 'Berlin, Germany'], ['the EU', 'Lisbon, Portugal'], ['the EU', 'Valletta, Malta'],
+    ['Benelux', 'Luxembourg, Luxembourg'], ['Benelux', 'Rotterdam, Holland'], ['Benelux', 'Antwerp, Belgium'],
+    ['the Nordics', 'Helsinki, Finland'], ['the Nordics', 'Oslo, Norway'], ['the Nordics', 'Stockholm, Sweden'],
+    ['Scandinavia', 'Copenhagen, Denmark'], ['Scandinavia', 'Oslo, Norway'],
+    ['UK & Ireland', 'Dublin, Ireland'], ['UK & Ireland', 'Edinburgh, Scotland'], ['UK & Ireland', 'London, UK'],
+    ['the Baltics', 'Riga, Latvia'], ['the Baltics', 'Vilnius, Lithuania'],
+    ['the Middle East', 'Dubai, United Arab Emirates'], ['the Middle East', 'Tel Aviv, Israel'],
+    ['the Middle East', 'Riyadh, Saudi Arabia'], ['the Middle East', 'Cairo, Egypt'], ['the Middle East', 'Beirut, Lebanon'],
+    ['MENA', 'Casablanca, Morocco'], ['MENA', 'Doha, Qatar'], ['MENA', 'Tunis, Tunisia'],
+    ['the GCC', 'Kuwait City, Kuwait'], ['the GCC', 'Muscat, Oman'], ['the GCC', 'Abu Dhabi'],
+    ['Africa', 'Lagos, Nigeria'], ['Africa', 'Nairobi, Kenya'], ['Africa', 'Cape Town, South Africa'],
+    ['Africa', 'Accra, Ghana'], ['Africa', 'Cairo, Egypt'], ['Africa', 'Kinshasa, Democratic Republic of the Congo'],
+    ['Africa', "Abidjan, Côte d’Ivoire"], ['Africa', 'Niamey, Niger'],
+    ['Asia', 'Mumbai, India'], ['Asia', 'Tokyo, Japan'], ['Asia', 'Singapore'], ['Asia', 'Karachi, Pakistan'],
+    ['Asia', 'Seoul, South Korea'], ['Asia', 'Hong Kong SAR China'], ['Asia', 'Almaty, Kazakhstan'], ['Asia', 'Hanoi, Vietnam'],
+    ['APAC', 'Sydney, Australia'], ['APAC', 'Auckland, New Zealand'], ['APAC', 'Bangalore, India'],
+    ['APAC', 'Port Moresby, Papua New Guinea'], ['APAC', 'Suva, Fiji'],
+    ['Southeast Asia', 'Jakarta, Indonesia'], ['Southeast Asia', 'Bangkok, Thailand'], ['Southeast Asia', 'Singapore, Singapore'],
+    ['Latin America', 'Sao Paulo, Brazil'], ['Latin America', 'Mexico City, Mexico'], ['Latin America', 'Bogotá, Colombia'],
+    ['Latin America', 'Buenos Aires, Argentina'], ['Latin America', 'San José, Costa Rica'], ['Latin America', 'Havana, Cuba'],
+    ['North America', 'Austin, United States'], ['North America', 'Toronto, Canada'], ['North America', 'Detroit, USA'],
+    ['North America', 'Mexico City, Mexico'],
+    ['South America', 'Lima, Peru'], ['South America', 'Santiago, Chile'],
+    ['Central America', 'Panama City, Panama'], ['Central America', 'Guatemala City, Guatemala'],
+    ['EMEA', 'Munich, Germany'], ['EMEA', 'Dubai, UAE'], ['EMEA', 'Johannesburg, South Africa'],
+  ])('"%s" takes %s', (region, location) => {
+    expect(satisfies(`investors in ${region}`, location)).toBe(true);
+  });
+
+  it.each([
+    ['Europe', 'Austin, Texas'], ['Europe', 'Austin, United States'], ['Europe', 'Toronto, Canada'],
+    ['Europe', 'Dubai, United Arab Emirates'], ['Europe', 'Nairobi, Kenya'], ['Europe', 'Singapore'],
+    ['Europe', 'Sydney, Australia'], ['Europe', 'Atlanta, Georgia'], ['Europe', 'Paris, Texas'],
+    ['DACH', 'Paris, France'], ['DACH', 'Amsterdam, Netherlands'], ['DACH', 'London, UK'], ['DACH', 'Austin, Texas'],
+    ['the EU', 'London, UK'], ['the EU', 'Zurich, Switzerland'], ['the EU', 'Oslo, Norway'], ['the EU', 'Remote, Europe'],
+    ['Benelux', 'Paris, France'], ['Benelux', 'Berlin, Germany'],
+    ['the Nordics', 'London, UK'], ['the Nordics', 'Tallinn, Estonia'],
+    ['Scandinavia', 'Helsinki, Finland'], ['Scandinavia', 'Reykjavik, Iceland'],
+    ['UK & Ireland', 'Paris, France'], ['UK & Ireland', 'Berlin, Germany'],
+    ['the Baltics', 'Helsinki, Finland'],
+    ['the Middle East', 'Mumbai, India'], ['the Middle East', 'Nairobi, Kenya'], ['the Middle East', 'Paris, France'],
+    ['MENA', 'Lagos, Nigeria'], ['MENA', 'Ankara, Turkey'],
+    ['the GCC', 'Cairo, Egypt'], ['the GCC', 'Amman, Jordan'],
+    ['Africa', 'Lisbon, Portugal'], ['Africa', 'Mumbai, India'], ['Africa', 'Paris, France'],
+    ['Asia', 'Dubai, UAE'], ['Asia', 'Sydney, Australia'], ['Asia', 'London, UK'],
+    ['APAC', 'Dubai, UAE'], ['APAC', 'London, UK'],
+    ['Southeast Asia', 'Mumbai, India'], ['Southeast Asia', 'Tokyo, Japan'],
+    ['Latin America', 'Austin, United States'], ['Latin America', 'Toronto, Canada'], ['Latin America', 'Madrid, Spain'],
+    ['Latin America', 'Albuquerque, New Mexico'], ['Latin America', 'Kingston, Jamaica'],
+    ['North America', 'Sao Paulo, Brazil'], ['North America', 'London, UK'],
+    ['South America', 'Mexico City, Mexico'], ['Central America', 'Lima, Peru'],
+    ['EMEA', 'Austin, United States'], ['EMEA', 'Singapore'], ['EMEA', 'Sao Paulo, Brazil'],
+  ])('"%s" does not take %s', (region, location) => {
+    expect(satisfies(`investors in ${region}`, location)).toBe(false);
+  });
+
+  it('a person whose location is empty does not satisfy a region either', () => {
+    expect(satisfies('investors in Europe', null)).toBe(false);
+    expect(satisfies('investors in Europe', '')).toBe(false);
+  });
+
+  it('a region only matches whole words: no "eu" inside "Eugene" or "Neuchatel"', () => {
+    expect(satisfies('investors in the EU', 'Eugene, Oregon')).toBe(false);
+    expect(satisfies('investors in the EU', 'Neuchatel')).toBe(false);
+    // And a country name inside a longer name is not that country: "Guinea" in "Papua New Guinea"
+    // is not Africa, "New Mexico" is not Mexico.
+    expect(satisfies('investors in Africa', 'Port Moresby, Papua New Guinea')).toBe(false);
+    expect(satisfies('investors in Latin America', 'Albuquerque, New Mexico')).toBe(false);
+  });
+
+  it('a profile that names a region itself is read for the regions it sits inside', () => {
+    expect(satisfies('investors in Europe', 'Remote, EU')).toBe(true);
+    expect(satisfies('investors in Europe', 'Nordics')).toBe(true);
+    expect(satisfies('investors in the EU', 'Remote, Europe')).toBe(false);
+    expect(satisfies('investors in the EU', 'Remote, DACH')).toBe(false);
+  });
+
+  it('Northern Ireland is the UK, not Ireland: in the UK and Ireland, in Europe, and not in the EU', () => {
+    expect(satisfies('investors in the UK and Ireland', 'Belfast, Northern Ireland')).toBe(true);
+    expect(satisfies('investors in Europe', 'Belfast, Northern Ireland')).toBe(true);
+    expect(satisfies('investors in the EU', 'Belfast, Northern Ireland')).toBe(false);
+    expect(satisfies('investors in the EU', 'Dublin, Ireland')).toBe(true);
+  });
+
+  it('a want that names two places is satisfied by either', () => {
+    expect(satisfies('investors in Germany or the Nordics', 'Stockholm, Sweden')).toBe(true);
+    expect(satisfies('investors in Germany or the Nordics', 'Berlin, Germany')).toBe(true);
+    expect(satisfies('investors in Germany or the Nordics', 'Paris, France')).toBe(false);
+  });
+
+  it('a country, a city and the other year/place rules keep working beside regions', () => {
+    const c = extractConstraints(['founders in Europe with 10 years experience']);
+    expect(c).toEqual({ location: ['europe'], minYears: 10 });
+    expect(checkConstraints(c, { location: 'Berlin, Germany', bio: '12 years in payments' }))
+      .toEqual({ locationOk: true, yearsOk: true, yearsUnknown: false });
+    expect(checkConstraints(c, { location: 'Berlin, Germany', bio: '3 years in payments' })).toMatchObject({ yearsOk: false });
+    expect(checkConstraints(c, { location: 'Austin, Texas', bio: '12 years in payments' })).toMatchObject({ locationOk: false });
+  });
+});
+
+// "Narnia" is a place the code cannot resolve to anything. Reading it as a location every
+// candidate must match would empty the list, exactly as "in Europe" did, so it is not a
+// constraint at all. So with "in SaaS" or "from Google": capitalised words after a
+// preposition that are not places.
+describe('a place the code cannot resolve filters nothing', () => {
+  it('is not extracted as a constraint', () => {
+    expect(extractConstraints(['fintech founders in Narnia']).location).toBeNull();
+    expect(extractConstraints(['engineers from Google']).location).toBeNull();
+    expect(extractConstraints(['founders in SaaS']).location).toBeNull();
+    expect(extractConstraints(['investors in Fintech and Payments']).location).toBeNull();
+  });
+
+  it('leaves everyone satisfying it', () => {
+    for (const location of ['Berlin, Germany', 'Austin, Texas', 'Nairobi, Kenya', null]) {
+      expect(satisfies('fintech founders in Narnia', location)).toBeNull();
+    }
+  });
+
+  it('beside a place it does know, only the known one counts', () => {
+    expect(extractConstraints(['founders in Narnia or Germany']).location).toEqual(['germany']);
+    expect(satisfies('founders in Narnia or Germany', 'Munich, Germany')).toBe(true);
+    expect(satisfies('founders in Narnia or Germany', 'Paris, France')).toBe(false);
+  });
+
+  it('a city or state the code knows is still a hard requirement, and so is any country, however the old table missed it', () => {
+    expect(extractConstraints(['designers in London']).location).toEqual(['london']);
+    expect(extractConstraints(['designers in Nairobi']).location).toEqual(['nairobi']);
+    expect(extractConstraints(['investors based in New York']).location).toEqual(['new york']);
+    expect(extractConstraints(['manufacturers in Texas']).location).toEqual(['texas']);
+    expect(extractConstraints(['founders in British Columbia']).location).toEqual(['british columbia']);
+    expect(satisfies('founders in British Columbia', 'Vancouver, British Columbia')).toBe(true);
+    expect(satisfies('founders in British Columbia', 'London, UK')).toBe(false);
+    // "New Mexico" is a state, not Mexico; "New England" and "New South Wales" are not England or Wales.
+    expect(extractConstraints(['buyers in New Mexico']).location).toEqual(['new mexico']);
+    expect(satisfies('buyers in New Mexico', 'Albuquerque, New Mexico')).toBe(true);
+    expect(satisfies('buyers in New Mexico', 'Mexico City, Mexico')).toBe(false);
+    expect(extractConstraints(['founders in New England']).location).toBeNull();
+    expect(extractConstraints(['founders in New South Wales']).location).toBeNull();
+    expect(satisfies('manufacturers in Texas', 'Austin, Texas')).toBe(true);
+    expect(satisfies('manufacturers in Texas', 'Detroit, Michigan')).toBe(false);
+    expect(extractConstraints(['founders in Kazakhstan']).location).toEqual(['kazakhstan']);
+    expect(extractConstraints(['founders in Greece']).location).toEqual(['greece']);
+    expect(satisfies('founders in Kazakhstan', 'Almaty, Kazakhstan')).toBe(true);
+    expect(satisfies('founders in Kazakhstan', 'Berlin, Germany')).toBe(false);
+  });
+});
