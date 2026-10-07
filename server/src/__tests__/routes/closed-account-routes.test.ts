@@ -95,7 +95,8 @@ describe('a closed account at every sign-in door', () => {
 
   it('Google → back to the login page with ?error=ACCOUNT_CLOSED, not the generic failure', async () => {
     // A Google sign-in only finishes in the browser that started it (7 Oct 2026): start it, and come back with the cookie it set.
-    const started = await request(app).get('/auth/google');
+    // (On API_BASE_URL's host: a start that arrives on any other host is sent on to it first.)
+    const started = await request(app).get('/auth/google').set('Host', 'api.test');
     const state = new URL(started.headers.location).searchParams.get('state') ?? '';
     const cookie = String(started.headers['set-cookie'][0]).split(';')[0];
 

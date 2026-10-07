@@ -4,18 +4,26 @@
 // started the sign-in. An attacker could start a sign-in in their own browser, finish Google with THEIR
 // account, and send a victim the callback address (their code, their valid state): the victim's browser
 // ended up signed into the ATTACKER's account, and anything the victim then typed into it was the
-// attacker's to read. The mirror: an attacker's photo-link state finished by a victim.
+// attacker's to read. The same goes for a photo-link state that was started in someone else's browser.
+// (A photo-link START ADDRESS that an attacker minted for their own account and a victim then opens is a
+// different attack, and this does not close it: the victim's own browser starts that one, so it is bound.)
 //
-// Now the start puts a one-time value in a cookie on the API's own host (and its hash in the signed
-// state), and the callback goes on only when the browser's cookie is that value. A missing or invalid
-// state no longer signs anyone in either (Ali, 7 Oct 2026: it used to be "a plain sign-in").
+// Now the start puts a one-time value in a cookie on the API host (and its hash in the signed state), and the
+// callback goes on only when the browser's cookie is that value. A missing or invalid state no longer signs
+// anyone in either (Ali, 7 Oct 2026: it used to be "a plain sign-in").
 //
-// These go through express with the real router, the real state and the real cookie handling; only the
-// database, Google and the account lookup are stand-ins. `Browser` below is a cookie jar for the API
-// host, as far as this one cookie goes, so a start and a callback in one browser are one flow, and a
-// callback in another browser is not.
+// Production has TWO API hosts: the client starts on rsn-api-h04m.onrender.com, but Google is told to return to
+// API_BASE_URL (api.rsn.network), and a cookie set on the first is never sent to the second, which would have
+// refused every sign-in. So the start runs on the canonical host: a start anywhere else is sent on, once, to the
+// same start there, and sets nothing. `Browser` (google-browser.ts) keeps a cookie jar per host, with the rules a
+// real browser applies, so these tests can see which host holds the cookie and which host Google returns to.
+//
+// These go through express with the real router, the real state and the real cookie handling, mounted and
+// configured the way index.ts does (the router at /api/auth, the first proxy hop trusted, Helmet); only the
+// database, Google and the account lookup are stand-ins.
 
 import express from 'express';
+import helmet from 'helmet';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
@@ -24,8 +32,9 @@ jest.mock('../../config', () => {
   const cfg = {
     jwtSecret: 'test-secret-with-enough-length-0123456789', jwtAccessExpiry: '15m', jwtRefreshExpiry: '7d',
     magicLinkSecret: 's', magicLinkExpiryMinutes: 15,
-    // As in production: the main app is app.rsn.network, so the preview is a different allowed site.
-    clientUrl: 'https://app.rsn.network', apiBaseUrl: 'https://api.test',
+    // As in production: the main app is app.rsn.network (so the preview is a different allowed site), and Google is
+    // told to return to api.rsn.network.
+    clientUrl: 'https://app.rsn.network', apiBaseUrl: 'https://api.rsn.network',
     googleClientId: 'gid', googleClientSecret: 'gsecret',
     rateLimitWindowMs: 60000, rateLimitMaxRequests: 1000,
     env: 'test', isDev: false, isProd: false, isTest: true,
@@ -50,8 +59,9 @@ import authRoutes from '../../routes/auth';
 import config from '../../config';
 import logger from '../../config/logger';
 import { buildOauthState, mintPhotoLinkToken, GoogleOauthState } from '../../services/identity/google-photo-link';
-import { OAUTH_NONCE_COOKIE, newOauthNonce } from '../../services/identity/oauth-browser-binding';
+import { newOauthNonce } from '../../services/identity/oauth-browser-binding';
 import type { BindingRefusal } from '../../services/identity/oauth-browser-binding';
+import { Browser as BrowserJar, setCookieLines, parseSetCookie } from './google-browser';
 
 const MAIN = 'https://app.rsn.network';
 const PREVIEW = 'https://preview.rsn.network';
@@ -61,10 +71,22 @@ const VICTIM = 'b0000000-0000-4000-8000-000000000002';
 const SECRET = 'test-secret-with-enough-length-0123456789';
 const PURPOSE = 'google-oauth-state';
 const PICTURE = 'https://lh3.googleusercontent.com/a/photo';
+
+// The two hosts the API answers on in production. The client builds its start from CLIENT_API (runtimeEndpoints.ts);
+// Google is told to return to API_BASE_URL (CANONICAL), so that is the host that has to hold the cookie.
+const CANONICAL = 'api.rsn.network';
+const CLIENT_API = 'rsn-api-h04m.onrender.com';
+
+// The cookie that ties a sign-in to the browser, named here in full so a rename cannot go unnoticed.
+const COOKIE = 'rsn_oauth_nonce';
 const COOKIE_PATH = '/api/auth/google';
 
+// As index.ts builds the app: the first proxy hop is trusted, Helmet answers Referrer-Policy: no-referrer on every
+// response (so a redirect takes the Referer away from the request it leads to), and the router is at /api/auth.
 const app = express();
-app.use('/auth', authRoutes);
+app.set('trust proxy', 1);
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
+app.use('/api/auth', authRoutes);
 
 const realFetch = global.fetch;
 beforeEach(() => {
@@ -97,18 +119,9 @@ function forgetCalls() {
 
 // ── Reading what the server sets ─────────────────────────────────────────────
 
-// supertest types every header as a string, but Express sends one Set-Cookie header per cookie, so this one is a list.
-const setCookieLines = (res: request.Response): string[] => (res.headers['set-cookie'] ?? []) as unknown as string[];
-
-function parseSetCookie(line: string) {
-  const [pair, ...attributes] = line.split(';').map((part) => part.trim());
-  const eq = pair.indexOf('=');
-  return { name: pair.slice(0, eq), value: pair.slice(eq + 1), attributes };
-}
-
 /** The one Set-Cookie line about the nonce cookie in a response (fails if there is not exactly one). */
 function nonceCookie(res: request.Response) {
-  const lines = setCookieLines(res).filter((line) => line.startsWith(`${OAUTH_NONCE_COOKIE}=`));
+  const lines = setCookieLines(res).filter((line) => line.startsWith(`${COOKIE}=`));
   expect(lines).toHaveLength(1);
   return parseSetCookie(lines[0]);
 }
@@ -121,55 +134,56 @@ const verifyUrl = (base: string, inviteCode?: string) =>
 
 // ── A browser ────────────────────────────────────────────────────────────────
 
-class Browser {
-  /** What this browser holds in its rsn_oauth_nonce cookie for the API host. */
-  nonce: string | undefined;
+class Browser extends BrowserJar {
+  /** Where Google was told to send this browser back: the redirect_uri of its last start. */
+  returnAddress = `https://${CANONICAL}/api/auth/google/callback`;
 
-  /** What a browser does with the cookie a response sets (keeps it) or removes (Max-Age=0). */
-  private take<T extends request.Response>(res: T): T {
-    for (const line of setCookieLines(res)) {
-      const { name, value, attributes } = parseSetCookie(line);
-      if (name !== OAUTH_NONCE_COOKIE) continue;
-      this.nonce = attributes.includes('Max-Age=0') ? undefined : value;
+  constructor() {
+    super(app, [CANONICAL, CLIENT_API]);
+  }
+
+  /** The member presses a Google button. The client starts on its own API host (CLIENT_API) unless `host` says otherwise. */
+  async start(query: Record<string, string> = {}, options: { host?: string; referer?: string } = {}) {
+    const search = new URLSearchParams(query).toString();
+    const nav = await this.navigate(`https://${options.host ?? CLIENT_API}/api/auth/google${search ? `?${search}` : ''}`, { referer: options.referer });
+    const google = nav.leftFor;
+    if (!google || google.hostname !== 'accounts.google.com') {
+      throw new Error(`the start did not end at Google: ${nav.chain.map((hop) => `${hop.status} ${hop.url}`).join(' -> ')}`);
     }
-    return res;
+    this.returnAddress = google.searchParams.get('redirect_uri') as string;
+    return { ...nav, google, state: google.searchParams.get('state') ?? '', redirectUri: this.returnAddress };
   }
 
-  get cookieHeader(): string | undefined {
-    return this.nonce === undefined ? undefined : `${OAUTH_NONCE_COOKIE}=${this.nonce}`;
-  }
-
-  /** The member presses the Google button (or a photo link): the real start, then the browser keeps what it set. */
-  async start(query: Record<string, string> = {}, referer?: string) {
-    const req = request(app).get('/auth/google').query(query);
-    if (referer) req.set('Referer', referer);
-    if (this.cookieHeader) req.set('Cookie', this.cookieHeader);
-    const res = this.take(await req);
-    return { res, state: stateFrom(res.headers.location) };
-  }
-
-  /** Google sends the browser back to the callback, with whatever cookie this browser holds. */
+  /** Google sends the browser back to the address it was given, with a code and the state (and whatever else `extra` says). */
   async comesBack(state: string | undefined, extra: Record<string, string> = { code: 'c' }) {
-    const req = request(app).get('/auth/google/callback').query({ ...extra, ...(state === undefined ? {} : { state }) });
-    if (this.cookieHeader) req.set('Cookie', this.cookieHeader);
-    return this.take(await req);
+    const address = new URL(this.returnAddress);
+    for (const [key, value] of Object.entries({ ...extra, ...(state === undefined ? {} : { state }) })) address.searchParams.set(key, value);
+    return (await this.navigate(address.href)).res;
   }
 }
 
-/** A state the start would sign for this browser with claims the real start would not choose (a foreign site, an old shape). */
-function startedWith(browser: Browser, claims: GoogleOauthState): string {
-  const { nonce, nonceHash } = newOauthNonce();
-  browser.nonce = nonce;
-  return buildOauthState({ ...claims, nonceHash });
+/**
+ * A state the start would sign for this browser with claims the real start would not choose (a foreign site, an old
+ * shape). A real start gives the browser its real cookie, and the state carries that cookie's hash.
+ */
+async function startedWith(browser: Browser, claims: GoogleOauthState): Promise<string> {
+  await browser.start();
+  const nonce = browser.valueSentTo(COOKIE, browser.returnAddress) as string;
+  return buildOauthState({ ...claims, nonceHash: sha256Hex(nonce) });
 }
+
+/** The start, as a request that arrived on `host` (supertest sets the Host header, as a proxy forwards it). */
+const startOn = (host: string, query: Record<string, string | string[]> = {}) =>
+  request(app).get('/api/auth/google').set('Host', host).query(query);
 
 /** The callback with exactly the Cookie header given (none when undefined), whatever a jar would do. */
 function returnWith(state: string | string[] | undefined, cookie?: string, extra: Record<string, string> = { code: 'c' }) {
-  const req = request(app).get('/auth/google/callback').query({ ...extra, ...(state === undefined ? {} : { state }) });
+  const req = request(app).get('/api/auth/google/callback').set('Host', CANONICAL)
+    .query({ ...extra, ...(state === undefined ? {} : { state }) });
   return cookie === undefined ? req : req.set('Cookie', cookie);
 }
 
-const withNonce = (nonce: string) => `${OAUTH_NONCE_COOKIE}=${nonce}`;
+const withNonce = (nonce: string) => `${COOKIE}=${nonce}`;
 
 // ── What every refusal and every outcome must show ───────────────────────────
 
@@ -204,7 +218,7 @@ function expectRefused(res: request.Response, site: string, reason: BindingRefus
 
 describe('GET /auth/google: the start ties the sign-in to this browser', () => {
   it('sets rsn_oauth_nonce on the API\'s own host: HttpOnly, Secure, SameSite=Lax, Path=/api/auth/google, 30 minutes', async () => {
-    const res = await request(app).get('/auth/google');
+    const res = await startOn(CANONICAL);
     expect(res.status).toBe(302);
     expect(res.headers.location).toMatch(/^https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth\?/);
 
@@ -224,17 +238,17 @@ describe('GET /auth/google: the start ties the sign-in to this browser', () => {
     const dev = config as unknown as { isDev: boolean };
     try {
       dev.isDev = true;
-      const { attributes } = nonceCookie(await request(app).get('/auth/google'));
+      const { attributes } = nonceCookie(await startOn(CANONICAL));
       expect(attributes).not.toContain('Secure');
       expect(attributes).toEqual(expect.arrayContaining(['HttpOnly', 'SameSite=Lax', 'Path=/api/auth/google', 'Max-Age=1800']));
     } finally {
       dev.isDev = false;
     }
-    expect(nonceCookie(await request(app).get('/auth/google')).attributes).toContain('Secure');
+    expect(nonceCookie(await startOn(CANONICAL)).attributes).toContain('Secure');
   });
 
   it('puts the hash of the cookie\'s value in the signed state, and never the value itself', async () => {
-    const res = await request(app).get('/auth/google').query({ origin: PREVIEW, inviteCode: 'ABC123' });
+    const res = await startOn(CANONICAL, { origin: PREVIEW, inviteCode: 'ABC123' });
     const { value } = nonceCookie(res);
     const state = stateFrom(res.headers.location);
     expect(claimsOf(state).nonceHash).toBe(sha256Hex(value));
@@ -245,21 +259,21 @@ describe('GET /auth/google: the start ties the sign-in to this browser', () => {
   });
 
   it('is a new value, and a new state hash, for every start', async () => {
-    const starts = await Promise.all(Array.from({ length: 12 }, () => request(app).get('/auth/google')));
+    const starts = await Promise.all(Array.from({ length: 12 }, () => startOn(CANONICAL)));
     expect(new Set(starts.map((res) => nonceCookie(res).value)).size).toBe(12);
     expect(new Set(starts.map((res) => claimsOf(stateFrom(res.headers.location)).nonceHash)).size).toBe(12);
   });
 
   it('lives exactly as long as the state: both 30 minutes', async () => {
-    const res = await request(app).get('/auth/google');
+    const res = await startOn(CANONICAL);
     const claims = claimsOf(stateFrom(res.headers.location));
     expect((claims.exp ?? 0) - (claims.iat ?? 0)).toBe(30 * 60);
     expect(nonceCookie(res).attributes).toContain(`Max-Age=${30 * 60}`);
   });
 
   it('is set for an invite and for a photo link as for a plain sign-in', async () => {
-    const invite = await request(app).get('/auth/google').query({ inviteCode: 'ABC123' });
-    const photo = await request(app).get('/auth/google').query({ photo: mintPhotoLinkToken(MEMBER), redirect: '/profile' });
+    const invite = await startOn(CANONICAL, { inviteCode: 'ABC123' });
+    const photo = await startOn(CANONICAL, { photo: mintPhotoLinkToken(MEMBER), redirect: '/profile' });
     for (const res of [invite, photo]) {
       expect(claimsOf(stateFrom(res.headers.location)).nonceHash).toBe(sha256Hex(nonceCookie(res).value));
     }
@@ -270,12 +284,243 @@ describe('GET /auth/google: the start ties the sign-in to this browser', () => {
     const cfg = config as unknown as { googleClientId: string };
     try {
       cfg.googleClientId = '';
-      const res = await request(app).get('/auth/google');
+      const res = await startOn(CANONICAL);
       expect(res.status).toBe(501);
       expect(setCookieLines(res)).toEqual([]);
     } finally {
       cfg.googleClientId = 'gid';
     }
+  });
+
+  // A return by form_post is a cross-site POST, and a Lax cookie is not sent on one: the sign-in would be refused every time.
+  it('asks Google for a plain redirect with the code in the query: no response_mode, so the return is a GET a Lax cookie rides on', async () => {
+    const google = new URL((await startOn(CANONICAL)).headers.location);
+    expect(google.searchParams.has('response_mode')).toBe(false);
+    expect(google.searchParams.get('response_type')).toBe('code');
+    expect(google.search).not.toMatch(/form_post|response_mode/);
+  });
+});
+
+// ── The host the start runs on ───────────────────────────────────────────────
+
+describe('GET /auth/google: the start runs on the host Google will return to', () => {
+  const noLogs = () => [logger.warn, logger.error, logger.info, logger.debug].forEach((fn) => expect(fn).not.toHaveBeenCalled());
+
+  it('a start on the client\'s API host is sent on, once, to the same start on the canonical host, and sets nothing', async () => {
+    const res = await startOn(CLIENT_API, { origin: PREVIEW, inviteCode: 'ABC123' });
+    expect(res.status).toBe(302);
+    const to = new URL(res.headers.location);
+    expect(`${to.origin}${to.pathname}`).toBe(`https://${CANONICAL}/api/auth/google`);
+    expect(Object.fromEntries(to.searchParams)).toEqual({ origin: PREVIEW, inviteCode: 'ABC123', hop: '1' });
+    // No cookie, no state: nothing was minted on a host Google will not return to.
+    expect(setCookieLines(res)).toEqual([]);
+    expect(res.headers.location).not.toContain('state=');
+    // Not a refusal, and nothing worth a log line.
+    noLogs();
+  });
+
+  it.each([
+    ['the invite code', { inviteCode: 'ABC123' }],
+    ['the site it started on', { origin: PREVIEW }],
+    ['a photo link and its return path', { photo: 'a.photo.token', redirect: '/profile' }],
+    ['all of them at once', { origin: PREVIEW, inviteCode: 'ABC123', photo: 'a.photo.token', redirect: '/profile' }],
+    ['values that need encoding', { inviteCode: 'a b&c=d', redirect: '/profile?x=1&y=2' }],
+  ] as Array<[string, Record<string, string>]>)('keeps %s', async (_what, query) => {
+    const to = new URL((await startOn(CLIENT_API, query)).headers.location);
+    // With no site named and no Referer, the main app is what it would resolve to.
+    expect(Object.fromEntries(to.searchParams)).toEqual({ ...('origin' in query ? {} : { origin: MAIN }), ...query, hop: '1' });
+  });
+
+  // The browser does not necessarily send the same Referer on the second request, and Helmet's Referrer-Policy:
+  // no-referrer on the redirect takes it away: the site the first request resolved from its Referer rides in ?origin=.
+  it.each([
+    ['the preview', `${PREVIEW}/login`, PREVIEW],
+    ['the preview, as the bare origin a cross-site navigation sends', `${PREVIEW}/`, PREVIEW],
+    ['the main app', `${MAIN}/login`, MAIN],
+    ['a site that is not ours', 'https://evil.example/login', MAIN],
+    ['the API itself', `https://${CLIENT_API}/`, MAIN],
+  ])('with no ?origin=, a Referer of %s makes the second start carry the site it resolves to', async (_what, referer, expected) => {
+    const res = await startOn(CLIENT_API).set('Referer', referer);
+    expect(new URL(res.headers.location).searchParams.getAll('origin')).toEqual([expected]);
+  });
+
+  it('with neither a Referer nor an ?origin=, the second start is told the main app (what it would have resolved to anyway)', async () => {
+    expect(new URL((await startOn(CLIENT_API)).headers.location).searchParams.getAll('origin')).toEqual([MAIN]);
+  });
+
+  it('a named ?origin= is kept exactly as sent, even one that is not ours (it resolves to the main app on the second start, as before)', async () => {
+    const res = await startOn(CLIENT_API, { origin: 'https://evil.example' }).set('Referer', `${PREVIEW}/login`);
+    expect(new URL(res.headers.location).searchParams.getAll('origin')).toEqual(['https://evil.example']);
+  });
+
+  it('an empty, repeated or array-shaped ?origin= counts as none, and becomes the one site it resolves to, with nothing of the old value left', async () => {
+    const empty = await startOn(CLIENT_API, { origin: '' }).set('Referer', `${PREVIEW}/login`);
+    const repeated = await startOn(CLIENT_API, { origin: ['https://evil.example', PREVIEW] }).set('Referer', `${PREVIEW}/login`);
+    const bracketed = await request(app).get('/api/auth/google?origin[]=https%3A%2F%2Fevil.example&origin[x]=y').set('Host', CLIENT_API)
+      .set('Referer', `${PREVIEW}/login`);
+    for (const res of [empty, repeated, bracketed]) {
+      const to = new URL(res.headers.location);
+      expect(to.searchParams.getAll('origin')).toEqual([PREVIEW]);
+      // So the second start reads one string, not a list.
+      expect([...to.searchParams.keys()].filter((key) => key.startsWith('origin'))).toEqual(['origin']);
+    }
+  });
+
+  it('only ever sends the browser to the configured API origin, whatever the request says', async () => {
+    const hostile: Array<Record<string, string>> = [
+      { origin: 'https://evil.example' }, { redirect: '//evil.example' }, { redirect: 'https://evil.example/x' },
+      { inviteCode: '\r\nSet-Cookie: x=1' }, { 'x@evil.example': '1' }, { redirect: '/\\evil.example' },
+    ];
+    for (const query of hostile) {
+      const to = new URL((await startOn(CLIENT_API, query)).headers.location);
+      expect(to.origin).toBe(`https://${CANONICAL}`);
+      expect(to.pathname).toBe('/api/auth/google');
+      expect(to.username).toBe('');
+    }
+    // Nor does the spelling of the request's own path, or its host, change where it goes.
+    for (const host of ['evil.example', 'api.rsn.network.evil.example', `${CLIENT_API}:8443`, CLIENT_API.toUpperCase()]) {
+      const res = await request(app).get('/API/AUTH/GOOGLE/?inviteCode=X').set('Host', host);
+      const to = new URL(res.headers.location);
+      expect(`${to.origin}${to.pathname}`).toBe(`https://${CANONICAL}/api/auth/google`);
+    }
+  });
+
+  it('a request that already carries hop is never sent on again: it is a normal start, wherever it arrived', async () => {
+    for (const hop of ['1', '0', '', 'yes']) {
+      const res = await startOn(CLIENT_API, { hop, origin: PREVIEW });
+      expect(res.status).toBe(302);
+      expect(new URL(res.headers.location).hostname).toBe('accounts.google.com');
+    }
+  });
+
+  it('the address it sends on to carries the flag, so a proxy that makes every request look foreign still ends at Google, not in a loop', async () => {
+    const first = await startOn(CLIENT_API, { origin: PREVIEW });
+    const again = new URL(first.headers.location);
+    // The server still sees the foreign host on the second request (a proxy that rewrites Host).
+    const second = await request(app).get(`${again.pathname}${again.search}`).set('Host', CLIENT_API);
+    expect(new URL(second.headers.location).hostname).toBe('accounts.google.com');
+  });
+
+  it('a start on the canonical host is not sent on: it sets the cookie, and Google is told to return to the host that set it', async () => {
+    const res = await startOn(CANONICAL, { origin: PREVIEW });
+    expect(new URL(res.headers.location).hostname).toBe('accounts.google.com');
+    const redirectUri = new URL(new URL(res.headers.location).searchParams.get('redirect_uri') as string);
+    expect(redirectUri.host).toBe(CANONICAL);
+    expect(redirectUri.pathname).toBe('/api/auth/google/callback');
+    expect(nonceCookie(res).name).toBe(COOKIE);
+  });
+
+  it.each(['API.RSN.NETWORK', 'Api.Rsn.Network', `${CANONICAL}:443`, `${CANONICAL}:8080`])('and the host may be spelled %s', async (host) => {
+    const res = await startOn(host);
+    expect(new URL(res.headers.location).hostname).toBe('accounts.google.com');
+    expect(setCookieLines(res)).toHaveLength(1);
+  });
+
+  it('the hop is the very first thing the start does, even before the answer for a server with no Google sign-in', async () => {
+    const cfg = config as unknown as { googleClientId: string };
+    try {
+      cfg.googleClientId = '';
+      const foreign = await startOn(CLIENT_API);
+      expect(foreign.status).toBe(302);
+      expect(new URL(foreign.headers.location).host).toBe(CANONICAL);
+      expect((await startOn(CANONICAL)).status).toBe(501);
+    } finally {
+      cfg.googleClientId = 'gid';
+    }
+  });
+
+  // req.hostname is what Express makes of the request, with `trust proxy` 1 as index.ts sets it: X-Forwarded-Host when a
+  // proxy sends one (the first of a list), else the Host header (without its port). Behind Render the Host header is the
+  // name the browser asked for; the loop guard above keeps the hop safe if a proxy ever shows something else.
+  it('reads the host from X-Forwarded-Host when a proxy sends one (trust proxy 1), else from Host', async () => {
+    const forwardedAsForeign = await startOn(CANONICAL).set('X-Forwarded-Host', CLIENT_API);
+    expect(`${new URL(forwardedAsForeign.headers.location).origin}`).toBe(`https://${CANONICAL}`);
+    expect(new URL(forwardedAsForeign.headers.location).searchParams.get('hop')).toBe('1');
+
+    const forwardedAsCanonical = await startOn(CLIENT_API).set('X-Forwarded-Host', CANONICAL);
+    expect(new URL(forwardedAsCanonical.headers.location).hostname).toBe('accounts.google.com');
+
+    const firstOfAList = await startOn(CLIENT_API).set('X-Forwarded-Host', `${CANONICAL}, ${CLIENT_API}`);
+    expect(new URL(firstOfAList.headers.location).hostname).toBe('accounts.google.com');
+  });
+});
+
+// ── The whole sign-in, in a browser, on the two hosts ────────────────────────
+
+describe('a sign-in from the client, through both API hosts', () => {
+  it('starts on the client\'s API host, is sent on to the canonical host, gets its cookie THERE, and finishes where Google returns it', async () => {
+    const browser = new Browser();
+    const start = await browser.start({ origin: PREVIEW, inviteCode: 'ABC123' });
+
+    // What the browser did: the client's API host sent it on (no cookie), then the canonical host sent it to Google.
+    expect(start.chain.map((hop) => [new URL(hop.url).host, hop.status])).toEqual([[CLIENT_API, 302], [CANONICAL, 302]]);
+    expect(browser.holding(COOKIE).map((c) => c.host)).toEqual([CANONICAL]);
+    // Google returns it to the host that holds the cookie.
+    expect(new URL(start.redirectUri).host).toBe(CANONICAL);
+
+    googleKnowsTheMember();
+    const res = await browser.comesBack(start.state);
+    expect(res.headers.location).toBe(verifyUrl(PREVIEW, 'ABC123'));
+    expect(mockFindOrCreate).toHaveBeenCalledWith(expect.objectContaining({ email: 'a@b.co' }), 'ABC123');
+    expect(browser.holding(COOKIE)).toEqual([]);
+  });
+
+  it('an older sign-in page that names no site and relies on the Referer still comes back to the site it started on', async () => {
+    const browser = new Browser();
+    const start = await browser.start({}, { referer: `${PREVIEW}/login` });
+    // Helmet's no-referrer on the redirect took the Referer away from the second request; the site rode in ?origin= instead.
+    expect(start.chain.map((hop) => hop.referer)).toEqual([`${PREVIEW}/login`, undefined]);
+    expect(claimsOf(start.state).origin).toBe(PREVIEW);
+
+    googleKnowsTheMember();
+    expect((await browser.comesBack(start.state)).headers.location).toBe(verifyUrl(PREVIEW));
+  });
+
+  it('a start that Google would return to another host than the one that holds the cookie is refused: a cookie set by one host is never sent to another', async () => {
+    // The first version of this rule set its cookie on the client's API host, and Google returned to the other one.
+    const browser = new Browser();
+    const start = await browser.start({ origin: PREVIEW }, { host: CANONICAL });
+    expect(browser.holding(COOKIE).map((c) => c.host)).toEqual([CANONICAL]);
+
+    const other = new URL(start.redirectUri);
+    other.host = CLIENT_API;
+    other.search = new URLSearchParams({ code: 'c', state: start.state }).toString();
+    googleKnowsTheMember();
+    expect(browser.cookieHeaderFor(other)).toBeUndefined();
+    expectRefused((await browser.navigate(other.href)).res, PREVIEW, 'no cookie');
+  });
+
+  it('a photo link, whose address the server builds on the canonical host, is one request and works as it did', async () => {
+    const browser = new Browser();
+    const start = await browser.start({ origin: PREVIEW, photo: mintPhotoLinkToken(MEMBER), redirect: '/profile' }, { host: CANONICAL });
+    expect(start.chain.map((hop) => new URL(hop.url).host)).toEqual([CANONICAL]);
+    googleKnowsTheMember({ email: 'a@b.co', picture: PICTURE });
+    expect((await browser.comesBack(start.state)).headers.location).toBe(`${PREVIEW}/profile?photo=done`);
+    expect(mockCapture).toHaveBeenCalledWith(MEMBER, PICTURE);
+  });
+
+  describe('in development, where API_BASE_URL is localhost', () => {
+    it('a start on localhost is not sent on, and the cookie comes back on the same host', async () => {
+      const cfg = config as unknown as { isDev: boolean; apiBaseUrl: string };
+      try {
+        cfg.isDev = true;
+        cfg.apiBaseUrl = 'http://localhost:3001';
+        const browser = new BrowserJar(app, ['localhost:3001']);
+        const nav = await browser.navigate(`http://localhost:3001/api/auth/google?origin=${encodeURIComponent(PREVIEW)}`);
+        expect(nav.chain).toHaveLength(1);
+        expect(nav.leftFor?.hostname).toBe('accounts.google.com');
+        const redirectUri = new URL(nav.leftFor!.searchParams.get('redirect_uri') as string);
+        expect(redirectUri.host).toBe('localhost:3001');
+        expect(browser.holding(COOKIE).map((c) => c.host)).toEqual(['localhost']);
+
+        redirectUri.search = new URLSearchParams({ code: 'c', state: nav.leftFor!.searchParams.get('state') as string }).toString();
+        googleKnowsTheMember();
+        expect((await browser.navigate(redirectUri.href)).res.headers.location).toBe(verifyUrl(PREVIEW));
+      } finally {
+        cfg.isDev = false;
+        cfg.apiBaseUrl = 'https://api.rsn.network';
+      }
+    });
   });
 });
 
@@ -292,7 +537,8 @@ describe('GET /auth/google/callback: in the browser that started the sign-in', (
     expect(mockFindOrCreate).toHaveBeenCalledWith(expect.objectContaining({ email: 'a@b.co' }), 'ABC123');
     expect(global.fetch).toHaveBeenCalledTimes(2);
     expectCleared(res);
-    expect(browser.nonce).toBeUndefined();
+    // The browser really let go of it: the removal matched the cookie it holds.
+    expect(browser.holding(COOKIE)).toEqual([]);
     expect(refusalWarnings()).toEqual([]);
   });
 
@@ -332,7 +578,7 @@ describe('GET /auth/google/callback: in the browser that started the sign-in', (
     const second = await slow.start({ origin: PREVIEW });
     clock.mockReturnValue(now + 31 * 60 * 1000);
     forgetCalls();
-    expect(slow.nonce).toBeDefined();
+    expect(slow.holding(COOKIE)).toHaveLength(1);
     expectRefused(await slow.comesBack(second.state), MAIN, 'bad state');
   });
 });
@@ -367,95 +613,99 @@ describe('GET /auth/google/callback: in a browser that did not start the sign-in
     ];
   })();
 
-  type Case = [name: string, reason: BindingRefusal, site: string, arrange: () => { state: string | string[] | undefined; cookie: string | undefined }];
+  type Arranged = { state: string | string[] | undefined; cookie: string | undefined };
+  type Case = [name: string, reason: BindingRefusal, site: string, arrange: () => Promise<Arranged>];
 
-  const aState = (claims: GoogleOauthState = { origin: PREVIEW }) => {
+  /** A sign-in the browser really started (so it really holds the cookie), with the state's claims chosen here. */
+  const aState = async (claims: GoogleOauthState = { origin: PREVIEW }) => {
     const browser = new Browser();
-    const state = startedWith(browser, claims);
-    return { state, nonce: browser.nonce as string, hash: claimsOf(state).nonceHash as string };
+    const state = await startedWith(browser, claims);
+    const nonce = browser.valueSentTo(COOKIE, browser.returnAddress) as string;
+    return { state, nonce, hash: claimsOf(state).nonceHash as string };
   };
 
   const REFUSED: Case[] = [
     // The cookie is what is missing or wrong. The state verified, so the refusal goes back to the site it names.
-    ['there is no cookie at all', 'no cookie', PREVIEW, () => ({ state: aState().state, cookie: undefined })],
-    ['the cookie is empty', 'no cookie', PREVIEW, () => ({ state: aState().state, cookie: `${OAUTH_NONCE_COOKIE}=` })],
-    ['the browser sends other cookies only', 'no cookie', PREVIEW, () => ({ state: aState().state, cookie: 'theme=dark; sid=abc' })],
-    ['the right value sits in a cookie of a similar name', 'no cookie', PREVIEW, () => {
-      const s = aState();
-      return { state: s.state, cookie: `x_${OAUTH_NONCE_COOKIE}=${s.nonce}; ${OAUTH_NONCE_COOKIE}_2=${s.nonce}` };
+    ['there is no cookie at all', 'no cookie', PREVIEW, async () => ({ state: (await aState()).state, cookie: undefined })],
+    ['the cookie is empty', 'no cookie', PREVIEW, async () => ({ state: (await aState()).state, cookie: `${COOKIE}=` })],
+    ['the browser sends other cookies only', 'no cookie', PREVIEW, async () => ({ state: (await aState()).state, cookie: 'theme=dark; sid=abc' })],
+    ['the right value sits in a cookie of a similar name', 'no cookie', PREVIEW, async () => {
+      const s = await aState();
+      return { state: s.state, cookie: `x_${COOKIE}=${s.nonce}; ${COOKIE}_2=${s.nonce}` };
     }],
-    ['the cookie is some other nonce', 'cookie mismatch', PREVIEW, () => ({ state: aState().state, cookie: withNonce(newOauthNonce().nonce) })],
-    ['the cookie is the state\'s own hash (which anyone who reads the state can read)', 'cookie mismatch', PREVIEW, () => {
-      const s = aState();
+    ['the cookie is some other nonce', 'cookie mismatch', PREVIEW, async () => ({ state: (await aState()).state, cookie: withNonce(newOauthNonce().nonce) })],
+    ['the cookie is the state\'s own hash (which anyone who reads the state can read)', 'cookie mismatch', PREVIEW, async () => {
+      const s = await aState();
       return { state: s.state, cookie: withNonce(s.hash) };
     }],
-    ['the cookie is the right nonce with one character changed', 'cookie mismatch', PREVIEW, () => {
-      const s = aState();
+    ['the cookie is the right nonce with one character changed', 'cookie mismatch', PREVIEW, async () => {
+      const s = await aState();
       return { state: s.state, cookie: withNonce(`${s.nonce.slice(0, -1)}${s.nonce.endsWith('0') ? '1' : '0'}`) };
     }],
-    ['the cookie is the right nonce in capitals', 'cookie mismatch', PREVIEW, () => {
-      const s = aState();
+    ['the cookie is the right nonce in capitals', 'cookie mismatch', PREVIEW, async () => {
+      const s = await aState();
       return { state: s.state, cookie: withNonce(s.nonce.toUpperCase()) };
     }],
-    ['the cookie is the nonce of a later sign-in started in the same browser', 'cookie mismatch', PREVIEW, () => {
+    ['the cookie is the nonce of a later sign-in started in the same browser', 'cookie mismatch', PREVIEW, async () => {
       const browser = new Browser();
-      const stale = startedWith(browser, { origin: PREVIEW });
-      startedWith(browser, { origin: PREVIEW });
-      return { state: stale, cookie: browser.cookieHeader };
+      const stale = await startedWith(browser, { origin: PREVIEW });
+      await startedWith(browser, { origin: PREVIEW });
+      return { state: stale, cookie: browser.cookieHeaderFor(browser.returnAddress) };
     }],
 
     // The state is what is missing or wrong. A state that did not verify names no site, so it is the main app.
-    ['there is no state', 'no state', MAIN, () => ({ state: undefined, cookie: withNonce(forger.nonce) })],
-    ['the state is empty', 'no state', MAIN, () => ({ state: '', cookie: withNonce(forger.nonce) })],
-    ['the state is sent twice', 'bad state', MAIN, () => ({ state: [aState().state, aState().state], cookie: withNonce(forger.nonce) })],
-    ...FORGERIES.map(([name, state]): Case => [`the state is ${name}`, 'bad state', MAIN, () => ({ state, cookie: withNonce(forger.nonce) })]),
+    ['there is no state', 'no state', MAIN, async () => ({ state: undefined, cookie: withNonce(forger.nonce) })],
+    ['the state is empty', 'no state', MAIN, async () => ({ state: '', cookie: withNonce(forger.nonce) })],
+    ['the state is sent twice', 'bad state', MAIN, async () => ({ state: [(await aState()).state, (await aState()).state], cookie: withNonce(forger.nonce) })],
+    ...FORGERIES.map(([name, state]): Case => [`the state is ${name}`, 'bad state', MAIN, async () => ({ state, cookie: withNonce(forger.nonce) })]),
 
     // A state we signed that cannot be answered by any browser: it carries no usable nonce. It verified, so it names its site.
-    ['the state was signed before this rule, so it has no nonce (a sign-in in flight at the deploy)', 'bad state', PREVIEW, () => ({
+    ['the state was signed before this rule, so it has no nonce (a sign-in in flight at the deploy)', 'bad state', PREVIEW, async () => ({
       state: buildOauthState({ origin: PREVIEW, inviteCode: 'ABC123' }), cookie: withNonce(forger.nonce),
     })],
-    ['the state\'s nonce is empty', 'bad state', PREVIEW, () => ({
+    ['the state\'s nonce is empty', 'bad state', PREVIEW, async () => ({
       state: sign({ purpose: PURPOSE, origin: PREVIEW, nonceHash: '' }), cookie: withNonce(forger.nonce),
     })],
-    ['the state\'s nonce is not text', 'bad state', PREVIEW, () => ({
+    ['the state\'s nonce is not text', 'bad state', PREVIEW, async () => ({
       state: sign({ purpose: PURPOSE, origin: PREVIEW, nonceHash: 42 }), cookie: withNonce(forger.nonce),
     })],
-    ['the state\'s nonce is not a hash', 'cookie mismatch', PREVIEW, () => ({
+    ['the state\'s nonce is not a hash', 'cookie mismatch', PREVIEW, async () => ({
       state: sign({ purpose: PURPOSE, origin: PREVIEW, nonceHash: 'not-a-hash' }), cookie: withNonce(forger.nonce),
     })],
 
     // The site a refusal goes back to is never a site that is not ours, and a refused photo link is not a photo outcome.
-    ['the state names a site that is not ours, and the cookie is missing', 'no cookie', MAIN, () => {
+    ['the state names a site that is not ours, and the cookie is missing', 'no cookie', MAIN, async () => {
       const browser = new Browser();
-      return { state: startedWith(browser, { origin: 'https://evil.example' }), cookie: undefined };
+      return { state: await startedWith(browser, { origin: 'https://evil.example' }), cookie: undefined };
     }],
-    ['a photo link has no cookie', 'no cookie', PREVIEW, () => ({
-      state: aState({ photoLinkUserId: MEMBER, redirect: '/profile', origin: PREVIEW }).state, cookie: undefined,
+    ['a photo link has no cookie', 'no cookie', PREVIEW, async () => ({
+      state: (await aState({ photoLinkUserId: MEMBER, redirect: '/profile', origin: PREVIEW })).state, cookie: undefined,
     })],
-    ['a photo link has another sign-in\'s cookie', 'cookie mismatch', PREVIEW, () => ({
-      state: aState({ photoLinkUserId: MEMBER, redirect: '/profile', origin: PREVIEW }).state, cookie: withNonce(newOauthNonce().nonce),
+    ['a photo link has another sign-in\'s cookie', 'cookie mismatch', PREVIEW, async () => ({
+      state: (await aState({ photoLinkUserId: MEMBER, redirect: '/profile', origin: PREVIEW })).state, cookie: withNonce(newOauthNonce().nonce),
     })],
-    ['an invite code has no cookie', 'no cookie', PREVIEW, () => ({
-      state: aState({ inviteCode: 'ABC123', origin: PREVIEW }).state, cookie: undefined,
+    ['an invite code has no cookie', 'no cookie', PREVIEW, async () => ({
+      state: (await aState({ inviteCode: 'ABC123', origin: PREVIEW })).state, cookie: undefined,
     })],
   ];
 
   it.each(REFUSED)('refuses when %s, as "%s"', async (_name, reason, site, arrange) => {
-    const { state, cookie } = arrange();
+    const { state, cookie } = await arrange();
     // Google would accept the code and know the account: a callback that wrongly went on would sign someone in.
     googleKnowsTheMember({ email: 'attacker@example.com', name: 'Mallory', picture: PICTURE });
     expectRefused(await returnWith(state, cookie), site, reason);
   });
 
   it('reads the cookie from the Cookie header and from nowhere else', async () => {
-    const s = aState();
+    const s = await aState();
     googleKnowsTheMember();
     // The right value in the query string.
-    expectRefused(await returnWith(s.state, undefined, { code: 'c', [OAUTH_NONCE_COOKIE]: s.nonce }), PREVIEW, 'no cookie');
+    expectRefused(await returnWith(s.state, undefined, { code: 'c', [COOKIE]: s.nonce }), PREVIEW, 'no cookie');
     // The right value in some other header.
     forgetCalls();
     googleKnowsTheMember();
-    const viaHeader = await request(app).get('/auth/google/callback').query({ code: 'c', state: s.state }).set('X-Cookie', withNonce(s.nonce));
+    const viaHeader = await request(app).get('/api/auth/google/callback').set('Host', CANONICAL)
+      .query({ code: 'c', state: s.state }).set('X-Cookie', withNonce(s.nonce));
     expectRefused(viaHeader, PREVIEW, 'no cookie');
   });
 
@@ -475,12 +725,12 @@ describe('GET /auth/google/callback: in a browser that did not start the sign-in
       forgetCalls();
       const victim = new Browser();
       await victim.start({ origin: PREVIEW });
-      expect(victim.nonce).toBeDefined();
+      expect(victim.holding(COOKIE)).toHaveLength(1);
       googleKnowsTheMember({ email: 'attacker@example.com', name: 'Mallory' });
       const res = await victim.comesBack(state, { code: 'attackers-code' });
       expectRefused(res, PREVIEW, 'cookie mismatch');
       // Their own sign-in is spent with it: they are asked to start again, which is the price of the rule.
-      expect(victim.nonce).toBeUndefined();
+      expect(victim.holding(COOKIE)).toEqual([]);
     });
 
     it('while the attacker\'s own browser, with the same address, still finishes', async () => {
@@ -490,7 +740,11 @@ describe('GET /auth/google/callback: in a browser that did not start the sign-in
       expect((await attacker.comesBack(state, { code: 'attackers-code' })).headers.location).toBe(verifyUrl(PREVIEW));
     });
 
-    it('the mirror: a photo link the attacker started, finished by a victim, attaches nobody\'s photo', async () => {
+    // What this covers is the STATE: one that was started in someone else's browser. It does not cover a photo-link START
+    // ADDRESS that an attacker minted for their own account (the photo token is a bearer token in that address) and a victim
+    // then opens: the victim's own browser starts that flow, so it is bound, and the victim's Google picture would land on
+    // the attacker's account. Closing that needs the photo link tied to the signed-in member (a follow-up in the report).
+    it('a photo-link state started in the attacker\'s browser, finished in a victim\'s, attaches nobody\'s photo', async () => {
       const attacker = new Browser();
       const { state } = await attacker.start({ origin: PREVIEW, photo: mintPhotoLinkToken(ATTACKER_MEMBER), redirect: '/profile' });
       expect(claimsOf(state).photoLinkUserId).toBe(ATTACKER_MEMBER);
@@ -675,9 +929,9 @@ describe('GET /auth/google/callback: a refusal is logged as a reason, and never 
     const { state } = await attacker.start({ origin: PREVIEW, inviteCode: 'SECRETINVITE', photo: mintPhotoLinkToken(VICTIM), redirect: '/private-page' });
     const victim = new Browser();
     await victim.start({ origin: PREVIEW });
-    const victimNonce = victim.nonce as string;
+    const victimNonce = victim.valueSentTo(COOKIE, victim.returnAddress) as string;
     const nonceHash = claimsOf(state).nonceHash as string;
-    const attackersNonce = attacker.nonce as string;
+    const attackersNonce = attacker.valueSentTo(COOKIE, attacker.returnAddress) as string;
 
     await returnWith(state, withNonce(victimNonce));
     await returnWith(state);

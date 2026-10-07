@@ -13,7 +13,7 @@ import {
 } from '../services/identity/google-photo-link';
 import { clientOriginConfig, resolveClientBaseUrl } from '../services/identity/client-origin';
 import {
-  OAUTH_NONCE_COOKIE, newOauthNonce, oauthNonceCookieOptions, readCookie, browserBindingRefusal,
+  OAUTH_NONCE_COOKIE, newOauthNonce, oauthNonceCookieOptions, readCookie, browserBindingRefusal, canonicalStartLocation,
 } from '../services/identity/oauth-browser-binding';
 
 const router = Router();
@@ -195,6 +195,29 @@ function clearOauthNonceCookie(res: Response): void {
 router.get(
   '/google',
   (req: Request, res: Response) => {
+    // 7 Oct 2026: Google brings the member back to the site they started on (the app or the preview), not
+    // always to the main app. The page says so in ?origin=; a plain navigation from a page carries it in
+    // Referer (the sign-in page that predates ?origin= still works). Either way it is resolved against our
+    // exact allow-list (client-origin.ts: CLIENT_URL, the app, the preview, localhost in development only), so
+    // a site that is not ours becomes the main app, and only the RESOLVED origin is kept.
+    const namedOrigin = typeof req.query.origin === 'string' && req.query.origin ? req.query.origin : undefined;
+    const origin = resolveClientBaseUrl(namedOrigin ?? req.get('referer'), clientOriginConfig());
+
+    // 7 Oct 2026: the start has to run on the host Google will return to, because the cookie below belongs to the host
+    // that sets it (canonicalStartLocation says why, and which header names the host). Anywhere else it is sent on, once,
+    // before anything is minted or set. The site resolved above rides along when the request named none, because the
+    // second request may carry no Referer.
+    const onTheApiHost = canonicalStartLocation({
+      hostname: req.hostname,
+      originalUrl: req.originalUrl,
+      apiBaseUrl: config.apiBaseUrl,
+      carryOrigin: namedOrigin === undefined ? origin : undefined,
+    });
+    if (onTheApiHost) {
+      res.redirect(onTheApiHost);
+      return;
+    }
+
     if (!config.googleClientId) {
       res.status(501).json({ success: false, error: { message: 'Google login is not configured' } });
       return;
@@ -204,12 +227,6 @@ router.get(
     // 7 Sep 2026: "Use my Google photo" from the onboarding card. The signed
     // token names the member; the callback attaches the picture to them.
     const photoLinkUserId = readPhotoLinkToken(req.query.photo as string | undefined) ?? undefined;
-    // 7 Oct 2026: Google brings the member back to the site they started on (the app or the preview), not
-    // always to the main app. The page says so in ?origin=; a plain navigation from a page carries it in
-    // Referer (the sign-in page that predates ?origin= still works). Either way it is resolved against our
-    // exact allow-list (client-origin.ts: CLIENT_URL, the app, the preview, localhost in development only), so
-    // a site that is not ours becomes the main app, and only the RESOLVED origin is kept.
-    const startedOn = typeof req.query.origin === 'string' && req.query.origin ? req.query.origin : req.get('referer');
     // 7 Oct 2026: a sign-in only finishes in the browser that started it. A one-time nonce goes into a cookie on
     // this host (the start and the callback are both top-level navigations to it, so a Lax first-party cookie comes
     // back), and its hash goes into the signed state; the callback goes on only when the two agree. The last start
@@ -217,7 +234,7 @@ router.get(
     const { nonce, nonceHash } = newOauthNonce();
     const state = buildOauthState({
       inviteCode,
-      origin: resolveClientBaseUrl(startedOn, clientOriginConfig()),
+      origin,
       nonceHash,
       ...(photoLinkUserId ? { photoLinkUserId, redirect: safeRedirectPath(req.query.redirect as string | undefined) } : {}),
     });

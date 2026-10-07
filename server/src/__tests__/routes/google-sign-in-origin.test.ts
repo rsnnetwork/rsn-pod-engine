@@ -101,8 +101,12 @@ const stateOf = (location: string): Record<string, unknown> => {
   return Object.fromEntries(['inviteCode', 'origin', 'photoLinkUserId', 'redirect'].filter((key) => key in claims).map((key) => [key, claims[key]]));
 };
 
+// The start is answered on API_BASE_URL's host (the config above); a start that arrives on any other host is sent on to
+// it first (routes/google-sign-in-browser-binding.test.ts), so these requests arrive there.
+const API_HOST = 'api.test';
+
 function start(query: Record<string, string | string[]> = {}, referer?: string) {
-  const req = request(app).get('/auth/google').query(query);
+  const req = request(app).get('/auth/google').set('Host', API_HOST).query(query);
   return referer ? req.set('Referer', referer) : req;
 }
 

@@ -55,7 +55,8 @@ app.use(errorHandler);
 
 /** The state anyone gets by starting a Google sign-in: no account, no token, no sign-in needed. */
 async function aRealState(): Promise<string> {
-  const res = await request(app).get('/auth/google').query({ origin: 'https://preview.rsn.network', inviteCode: 'ABC123' });
+  // On API_BASE_URL's host: a start that arrives on any other host is sent on to it first, and mints nothing.
+  const res = await request(app).get('/auth/google').set('Host', 'api.test').query({ origin: 'https://preview.rsn.network', inviteCode: 'ABC123' });
   const state = new URL(res.headers.location).searchParams.get('state');
   expect(state).toBeTruthy();
   expect(jwt.verify(state!, SECRET)).toBeTruthy(); // it really is a token our secret signed

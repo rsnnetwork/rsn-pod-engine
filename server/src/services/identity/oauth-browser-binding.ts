@@ -5,8 +5,13 @@
 // one that left. So an attacker could start a sign-in in their own browser, finish Google with THEIR
 // account, and send a victim the callback address (their code, their valid state): the victim's browser
 // would end up signed into the ATTACKER's account, and whatever the victim then typed into it (private
-// answers, the things RSN exists to hold) would be the attacker's to read. The mirror is a photo-link
-// state started by someone else and finished by a victim.
+// answers, the things RSN exists to hold) would be the attacker's to read. The same goes for a photo-link
+// state started in someone else's browser and finished in a victim's.
+//
+// What this does NOT cover: a photo-link START ADDRESS that an attacker minted for their own account (the photo
+// token is a bearer token in that address) and a victim then opens. The victim's own browser starts that flow,
+// so it is bound, and the victim's Google picture would land on the attacker's account. Closing that needs the
+// photo link tied to the signed-in member, which is a separate change.
 //
 // The fix is a one-time secret that lives in the browser and nowhere else. The start puts a random
 // nonce in a cookie on the API's own host and the nonce's SHA-256 in the signed state; the callback goes
@@ -106,4 +111,53 @@ export function browserBindingRefusal(input: {
   if (!input.nonceHash) return 'bad state';
   if (!input.cookieNonce) return 'no cookie';
   return matchesHash(input.cookieNonce, input.nonceHash) ? null : 'cookie mismatch';
+}
+
+/** Where the Google sign-in start lives on the API (routes/auth.ts is mounted at /api/auth, as index.ts does). */
+export const GOOGLE_START_PATH = '/api/auth/google';
+
+/**
+ * Production has two API hosts, and the cookie above belongs to ONE of them. The client builds its start from
+ * rsn-api-h04m.onrender.com (client/src/lib/runtimeEndpoints.ts), but Google is told to return to
+ * `${API_BASE_URL}/api/auth/google/callback` (api.rsn.network), and a cookie with no Domain goes to the host that set it
+ * and to no other: set on the first host it never reaches the second, and every callback would be refused.
+ *
+ * So the start has to run on the host Google will return to. A start that arrives on any other host is answered with
+ * ONE redirect to the same start there, before anything is minted or set, and this returns that address (or null when
+ * there is nothing to do):
+ *  - The destination is always the configured API origin and the fixed start path. Only the query comes from the
+ *    request, and it is re-encoded, so a request cannot steer the browser anywhere else.
+ *  - The query is kept as it came (the site, the invite code, the photo link, the return path). The second request may
+ *    carry no Referer (Helmet's Referrer-Policy: no-referrer on the redirect takes it away), so when the request named
+ *    no site, `carryOrigin` (the site the first request resolved from its Referer) rides in `origin=` instead.
+ *  - `hop=1` marks the redirect, and a request that already carries it is never redirected again, so a proxy that makes
+ *    every request look foreign ends the start where it is instead of looping.
+ *
+ * `hostname` is req.hostname: with `trust proxy` as index.ts sets it, X-Forwarded-Host when a proxy sends one, else the
+ * Host header, port left off. An API_BASE_URL that is not a URL gives no hop: it must not take sign-in down with it.
+ */
+export function canonicalStartLocation(input: {
+  hostname: string | undefined;
+  originalUrl: string;
+  apiBaseUrl: string;
+  carryOrigin: string | undefined;
+}): string | null {
+  let canonical: URL;
+  try {
+    canonical = new URL(input.apiBaseUrl);
+  } catch {
+    return null;
+  }
+  if (input.hostname?.toLowerCase() === canonical.hostname) return null;
+
+  const at = input.originalUrl.indexOf('?');
+  const query = new URLSearchParams(at < 0 ? '' : input.originalUrl.slice(at + 1));
+  if (query.has('hop')) return null;
+  if (input.carryOrigin !== undefined) {
+    // Whatever shape the old value had (empty, repeated, a list, an object), the second request reads this one string.
+    for (const key of [...query.keys()]) if (key === 'origin' || key.startsWith('origin[')) query.delete(key);
+    query.set('origin', input.carryOrigin);
+  }
+  query.set('hop', '1');
+  return `${canonical.origin}${GOOGLE_START_PATH}?${query}`;
 }
