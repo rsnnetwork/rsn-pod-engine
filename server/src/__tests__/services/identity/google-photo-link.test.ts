@@ -46,11 +46,23 @@ describe('oauth state', () => {
     expect(parseOauthState(undefined)).toEqual({});
   });
 
-  // 7 Oct 2026: the site the sign-in started on rides in the state, with the invite code and the photo link.
+  // 7 Oct 2026: the site the sign-in started on rides in the state, with the invite code and the photo link,
+  // and the hash of the one-time value that ties the sign-in to the browser that started it.
+  const NONCE_HASH = 'f'.repeat(64);
   it('round-trips every field it carries', () => {
-    const all = { inviteCode: 'ABC123', photoLinkUserId: 'u-1', redirect: '/profile', origin: PREVIEW };
+    const all = { inviteCode: 'ABC123', photoLinkUserId: 'u-1', redirect: '/profile', origin: PREVIEW, nonceHash: NONCE_HASH };
     expect(parseOauthState(buildOauthState(all))).toEqual(all);
     expect(parseOauthState(buildOauthState({ inviteCode: 'ABC' })).origin).toBeUndefined();
+    expect(parseOauthState(buildOauthState({ inviteCode: 'ABC' })).nonceHash).toBeUndefined();
+  });
+
+  it('carries the nonce hash as a claim of the signed token, so only the start can write it', () => {
+    const claims = jwt.verify(buildOauthState({ origin: PREVIEW, nonceHash: NONCE_HASH }), SECRET) as jwt.JwtPayload;
+    expect(claims.nonceHash).toBe(NONCE_HASH);
+    // Edited after signing: not read at all (the signature no longer fits), so a forger cannot choose the hash.
+    const minted = buildOauthState({ origin: PREVIEW, nonceHash: NONCE_HASH });
+    const edited = `${minted.split('.')[0]}.${b64({ ...(jwt.decode(minted) as object), nonceHash: 'a'.repeat(64) })}.${minted.split('.')[2]}`;
+    expect(parseOauthState(edited)).toEqual({});
   });
 
   // 7 Oct 2026: the state used to be plain base64 JSON, so anyone could write one naming another member's
@@ -154,6 +166,9 @@ describe('oauth state', () => {
     expect(parseOauthState(odd)).toEqual({});
     for (const origin of [42, true, null, ['https://preview.rsn.network'], { href: 'https://preview.rsn.network' }]) {
       expect(parseOauthState(sign({ purpose: PURPOSE, origin })).origin).toBeUndefined();
+    }
+    for (const nonceHash of [42, true, null, [NONCE_HASH], { hash: NONCE_HASH }]) {
+      expect(parseOauthState(sign({ purpose: PURPOSE, nonceHash })).nonceHash).toBeUndefined();
     }
   });
 

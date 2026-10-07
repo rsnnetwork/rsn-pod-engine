@@ -94,11 +94,16 @@ describe('a closed account at every sign-in door', () => {
   });
 
   it('Google → back to the login page with ?error=ACCOUNT_CLOSED, not the generic failure', async () => {
+    // A Google sign-in only finishes in the browser that started it (7 Oct 2026): start it, and come back with the cookie it set.
+    const started = await request(app).get('/auth/google');
+    const state = new URL(started.headers.location).searchParams.get('state') ?? '';
+    const cookie = String(started.headers['set-cookie'][0]).split(';')[0];
+
     global.fetch = jest.fn()
       .mockResolvedValueOnce({ json: async () => ({ access_token: 'g-token' }) })
       .mockResolvedValueOnce({ json: async () => ({ email: 'shradha@vokt.ai', name: 'Shradha' }) }) as unknown as typeof fetch;
 
-    const res = await request(app).get('/auth/google/callback').query({ code: 'c', state: '' });
+    const res = await request(app).get('/auth/google/callback').set('Cookie', cookie).query({ code: 'c', state });
     expect(res.status).toBe(302);
     expect(res.headers.location).toBe('https://app.test/login?error=ACCOUNT_CLOSED');
     expect(sessionWritten()).toBe(false);

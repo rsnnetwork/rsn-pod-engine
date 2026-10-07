@@ -16,10 +16,10 @@ import logger from '../../config/logger';
 import { query } from '../../db';
 import { captureAvatar } from '../onboarding/avatar.service';
 import { record as recordStageEvent } from '../onboarding/stage-events.repo';
+import { OAUTH_STATE_LIFETIME_SECONDS } from './oauth-browser-binding';
 
 const PHOTO_LINK_TTL = '15m';
 const PHOTO_LINK_PURPOSE = 'google-photo';
-const OAUTH_STATE_TTL = '30m';
 const OAUTH_STATE_PURPOSE = 'google-oauth-state';
 
 export interface GoogleOauthState {
@@ -34,6 +34,12 @@ export interface GoogleOauthState {
    * it AGAIN before using it, because the redirect it feeds carries live tokens.
    */
   origin?: string;
+  /**
+   * SHA-256, as hex, of the one-time value the start put in the browser's rsn_oauth_nonce cookie (7 Oct 2026).
+   * The callback goes on only when the browser's cookie hashes to this, so a sign-in only finishes in the
+   * browser that started it (oauth-browser-binding.ts). A state without one can never finish.
+   */
+  nonceHash?: string;
 }
 
 /** A token the client carries into GET /auth/google?photo=..., minted for the signed-in member. */
@@ -67,9 +73,12 @@ export function safeRedirectPath(redirect: string | undefined): string {
  * The `purpose` claim keeps it apart from the other tokens that secret signs. GET /auth/google hands a
  * state to anyone who asks, so no reader of an access or refresh token may take one for the other
  * (middleware/auth.ts and the refresh both require what a state lacks).
+ *
+ * A signature proves the server wrote the state, not which browser carries it back. The `nonceHash` claim
+ * is what ties it to the browser that started the sign-in (oauth-browser-binding.ts).
  */
 export function buildOauthState(state: GoogleOauthState): string {
-  return jwt.sign({ ...state, purpose: OAUTH_STATE_PURPOSE }, config.jwtSecret, { expiresIn: OAUTH_STATE_TTL });
+  return jwt.sign({ ...state, purpose: OAUTH_STATE_PURPOSE }, config.jwtSecret, { expiresIn: OAUTH_STATE_LIFETIME_SECONDS });
 }
 
 /** Why a state was refused: one of four classes of reason, never anything the state held. */
@@ -83,8 +92,8 @@ function refusalOf(err: unknown): StateRefusal {
 
 /**
  * What a state we signed carries. Anything else (unsigned, edited, signed by another secret or algorithm,
- * expired, of another purpose, not a token at all) reads as no state: the member still signs in with their
- * own Google account, on the main app, with no invite code and no photo link.
+ * expired, of another purpose, not a token at all) reads as no state, and the callback then refuses it
+ * (a sign-in goes on only with a state that carries a nonce its browser can answer).
  *
  * A refusal is logged, as a warning naming the class of reason (expired, bad signature, wrong purpose,
  * malformed) and nothing else: never the token, which a forger writes and a member's own carries their id.
@@ -106,6 +115,7 @@ export function parseOauthState(raw: string | undefined): GoogleOauthState {
       photoLinkUserId: typeof decoded.photoLinkUserId === 'string' ? decoded.photoLinkUserId : undefined,
       redirect: typeof decoded.redirect === 'string' ? decoded.redirect : undefined,
       origin: typeof decoded.origin === 'string' ? decoded.origin : undefined,
+      nonceHash: typeof decoded.nonceHash === 'string' ? decoded.nonceHash : undefined,
     };
   } catch (err) {
     return refuse(refusalOf(err));
