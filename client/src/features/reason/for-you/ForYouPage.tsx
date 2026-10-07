@@ -16,13 +16,12 @@ import MeetSheet from '../human/MeetSheet';
 import ForYouRail from './ForYouRail';
 import ForYouEmpty from './ForYouEmpty';
 import { errorMessage, fetchForYou, personName, reasonKeys, setPersonResponse, stateFromPoke, type ForYouMatch } from '../api';
+import { CONNECTION_LOST } from '../errors';
 import { visibleText } from '../person';
 
 const SHORTLIST = 5;
 // Every Save carries this key, so the page can ask which people have a Save in flight.
 const SAVE_KEY = ['reason', 'save-person'] as const;
-// errors.ts says this when there was no answer at all. The same sentence explains a request that is waiting for the network.
-const CONNECTION_LOST = errorMessage(undefined, 'Could not load that right now. Try again in a moment.');
 
 function toCard(m: ForYouMatch, youAreLookingFor: string | null): HumanCardPerson {
   const industry = visibleText(m.industry);
@@ -60,7 +59,8 @@ export default function ForYouPage() {
     meta: { entities: userId ? [E.user(userId), E.userInvites(userId), E.userDms(userId), E.userPods(userId)] : [] },
   });
   // Offline with nothing to show yet: the request exists and waits for the connection. A skeleton would never
-  // tell the member why, so the error says it; the request resumes by itself when the connection returns.
+  // tell the member why, so the error says it; the request resumes by itself when the connection returns. The
+  // sentence under the heading follows fetchStatus alone, so it is there too when "Try again" is held back.
   const waitingForConnection = isPending && fetchStatus === 'paused';
   // The error replaces the page only when there is nothing else to show: a refresh that fails while a list
   // is on screen (a Save's, a window coming back to the front) leaves the list as it is.
@@ -109,7 +109,7 @@ export default function ForYouPage() {
             <div role="alert" className="flex flex-col items-start gap-3 py-4">
               <div>
                 <h2 id="foryou-title" tabIndex={-1} className="text-[15px] font-bold outline-none">We could not load your people just now.</h2>
-                {waitingForConnection && <p className="mt-1 text-[13px] text-reason-muted">{CONNECTION_LOST}</p>}
+                {fetchStatus === 'paused' && <p className="mt-1 text-[13px] text-reason-muted">{CONNECTION_LOST}</p>}
               </div>
               <button type="button" onClick={tryAgain} className="min-h-[44px] rounded-[11px] bg-reason-red px-4 text-[13px] font-bold text-white hover:bg-reason-red-hover">Try again</button>
             </div>

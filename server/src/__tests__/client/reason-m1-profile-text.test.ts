@@ -5,9 +5,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { PersonBrief } from '@rsn/shared';
+import { CONNECTION_LOST } from '../../../../client/src/features/reason/errors';
 import {
   KNOWN_SOURCES, MOVE_RESPONSE, SIGNAL, foundThrough, isClientError, isGone, isMemberId, knownSource, lastMetText,
-  memoryRows, metTitle, moveToast, personFacts, reasonText, shouldRetry, statusOf, viewFor, whyNowRows,
+  loadFailedText, memoryRows, metTitle, moveToast, personFacts, reasonText, shouldRetry, statusOf, viewFor, whyNowRows,
   type LoadState, type Move,
 } from '../../../../client/src/features/reason/human/profile-text';
 import { BUSY } from '../../../../client/src/features/reason/human/busy';
@@ -112,6 +113,41 @@ describe('which screen the page shows (viewFor)', () => {
   it('says "not available" for an id that is not a member id, without waiting for anything', () => {
     expect(viewFor(state({ validId: false }))).toBe('unavailable');
     expect(viewFor(state({ validId: false, hasBrief: true, isPending: false }))).toBe('unavailable');
+  });
+});
+
+describe('the line under "could not load" (loadFailedText)', () => {
+  const HINT = 'Try again in a moment.';
+  const text = (over: Partial<Pick<LoadState, 'error' | 'fetchStatus'>>) => loadFailedText({ error: null, fetchStatus: 'idle', ...over }, HINT);
+
+  it('says the connection was lost for a request the library is holding back because the browser is offline, which has no error at all', () => {
+    // The screen offline: a first load with nothing cached, the request PAUSED and no error. errorMessage can only say the
+    // caller's fallback for "no error", so the member used to read "Try again in a moment." with no word about the connection.
+    expect(text({ fetchStatus: 'paused' })).toBe(CONNECTION_LOST);
+    expect(text({ fetchStatus: 'paused', error: undefined })).toBe(CONNECTION_LOST);
+  });
+
+  it('says it too when a refetch is paused behind an earlier failure: the connection is what the request waits for now', () => {
+    for (const error of [answered(500), answered(429), noAnswer]) expect(text({ fetchStatus: 'paused', error })).toBe(CONNECTION_LOST);
+  });
+
+  it('words a failure that has settled through errorMessage: no answer at all is the connection sentence, a refusal or a fault of ours is not', () => {
+    expect(text({ error: noAnswer })).toBe(CONNECTION_LOST);
+    expect(text({ error: answered(500) })).toBe(HINT);
+    expect(text({ error: answered(429) })).toBe('Slow down a moment, then try again.');
+    expect(text({ error: new TypeError("Cannot read properties of undefined (reading 'id')") })).toBe(HINT);
+  });
+
+  it('a request that is on its way is worded by its last error, and with nothing to say it gives the hint', () => {
+    expect(text({ fetchStatus: 'fetching', error: answered(500) })).toBe(HINT);
+    expect(text({ fetchStatus: 'fetching' })).toBe(HINT);
+    expect(text({})).toBe(HINT);
+  });
+
+  it('is what the failed screen shows for a paused first load: viewFor sends that state to the failed screen, and the line is the connection sentence', () => {
+    const paused: LoadState = { hasBrief: false, validId: true, isPending: true, isError: false, error: null, fetchStatus: 'paused' };
+    expect(viewFor(paused)).toBe('failed');
+    expect(loadFailedText(paused, HINT)).toBe(CONNECTION_LOST);
   });
 });
 

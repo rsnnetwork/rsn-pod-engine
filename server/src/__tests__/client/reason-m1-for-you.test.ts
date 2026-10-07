@@ -4,6 +4,7 @@
 // would notice.
 import * as fs from 'fs';
 import * as path from 'path';
+import { CONNECTION_LOST, errorMessage } from '../../../../client/src/features/reason/errors';
 import { firstCharacter } from '../../../../client/src/features/reason/for-you/firstCharacter';
 
 // Working-tree files are CRLF on Windows; normalise so patterns match either way.
@@ -63,10 +64,21 @@ describe('For You: what the page asks for, and when it says what', () => {
     expect(src).not.toMatch(/isError \?|\{isError\b|&& isError\b/);
   });
 
-  it('while it waits for the network the error says why, in the sentence errors.ts keeps for a lost connection', () => {
+  it('while a request waits for the network the error says why, in errors.ts\'s one sentence for a lost connection, taken as it is', () => {
     const src = withoutComments(page());
-    expect(src).toMatch(/const CONNECTION_LOST = errorMessage\(undefined, '[^']+'\);/);
-    expect(src).toMatch(/\{waitingForConnection && <p [^>]*>\{CONNECTION_LOST\}<\/p>\}/);
+    expect(src).toMatch(/^import \{ CONNECTION_LOST \} from '\.\.\/errors';$/m);
+    expect(src).not.toMatch(/const CONNECTION_LOST\b/);
+    // Never made by asking errorMessage about "no error": a request the library holds back has none, errorMessage can only
+    // say the caller's fallback for that (it is no lost connection as far as it can tell), and offline the member read it.
+    expect(src).not.toMatch(/errorMessage\((undefined|null)\b/);
+    expect(src).toMatch(/\{fetchStatus === 'paused' && <p [^>]*>\{CONNECTION_LOST\}<\/p>\}/);
+  });
+
+  it('...and that sentence is what a real lost connection gets, while "no error" still gets the caller\'s fallback (executed)', () => {
+    const lost = Object.assign(new Error('Network Error'), { isAxiosError: true, code: 'ERR_NETWORK', request: {} });
+    expect(CONNECTION_LOST).toBe('Connection lost. Check your internet and try again.');
+    expect(errorMessage(lost, 'fallback')).toBe(CONNECTION_LOST);
+    expect(errorMessage(undefined, 'fallback')).toBe('fallback');
   });
 
   it('the rail never takes "not loaded yet" for "none": no fallback to an empty list, no isLoading, a skeleton until each answer arrives', () => {

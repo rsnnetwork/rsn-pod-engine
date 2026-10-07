@@ -57,8 +57,10 @@ describe('Human Profile: the network is down', () => {
     expect(page()).toMatch(/fetchStatus,/);
     expect(page()).not.toMatch(/\bisLoading\b/);
   });
-  it('the line under "could not load" comes from the failure itself, and none says "check your connection" whatever happened', () => {
-    expect(page()).toMatch(/errorMessage\(error, /);
+  it('the line under "could not load" is chosen by loadFailedText (the connection sentence for a request held back offline, the failure\'s own words otherwise), and none says "check your connection" whatever happened', () => {
+    expect(page()).toMatch(/text=\{loadFailedText\(\{ error, fetchStatus \}, LOAD_HINT\)\}/);
+    // The page no longer words the failure itself: asked about a request that is only paused (no error at all), errorMessage says the fallback.
+    expect(page()).not.toMatch(/text=\{errorMessage\(error, /);
     expect(page()).not.toMatch(/Check your connection, then try again/);
   });
   it('the notice draws the sheep only when the server answered, so a lost connection leaves no broken-image box', () => {
@@ -164,16 +166,16 @@ describe('Human Profile: landmarks and headings', () => {
 
 describe('Human Profile: the rules live in one module with no React, and the components only draw', () => {
   it('no component defines one of the rules', () => {
-    const defined = /\b(function|const) (personFacts|reasonText|foundThrough|whyNowRows|metTitle|lastMetText|memoryRows|moveToast|viewFor|knownSource|isMemberId|statusOf|isGone|isClientError|shouldRetry|KNOWN_SOURCES|SIGNAL|WORTH_LABEL|MOVE_RESPONSE)\b/;
+    const defined = /\b(function|const) (personFacts|reasonText|foundThrough|whyNowRows|metTitle|lastMetText|memoryRows|moveToast|viewFor|loadFailedText|knownSource|isMemberId|statusOf|isGone|isClientError|shouldRetry|KNOWN_SOURCES|SIGNAL|WORTH_LABEL|MOVE_RESPONSE)\b/;
     for (const src of components()) expect(src).not.toMatch(defined);
   });
   it('the page, the hero and the details take them from profile-text, and the details no longer reach into the hero', () => {
     for (const src of [page(), hero(), details()]) expect(src).toMatch(/from '\.\/profile-text';/);
     expect(details()).not.toMatch(/from '\.\/ProfileHero'/);
   });
-  it('imports only pure modules: shared types and values, person.ts and labels.ts', () => {
+  it('imports only pure modules: shared types and values, errors.ts, person.ts and labels.ts', () => {
     const sources = new Set([...rules().matchAll(/from '([^']+)'/g)].map((m) => m[1]));
-    expect([...sources].sort()).toEqual(['../person', './labels', '@rsn/shared']);
+    expect([...sources].sort()).toEqual(['../errors', '../person', './labels', '@rsn/shared']);
     expect(read('busy.ts')).not.toMatch(/\bimport\b/);
   });
 });

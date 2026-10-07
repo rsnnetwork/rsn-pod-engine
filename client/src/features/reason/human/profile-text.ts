@@ -2,6 +2,7 @@
 // What the Human Profile says, and the small rules behind it. Pure on purpose (no React, axios, store or
 // router), so a test can run it: server/src/__tests__/client/reason-m1-profile-text.test.ts.
 import { OUTCOME_LABELS, type MatchStrength, type PersonBrief, type PersonResponse } from '@rsn/shared';
+import { CONNECTION_LOST, errorMessage } from '../errors';
 import { personName, visibleText } from '../person';
 import { STATE_LABEL } from './labels';
 
@@ -66,6 +67,16 @@ export function viewFor(q: LoadState): View {
   if (q.hasBrief) return 'profile';
   if (q.isPending && q.fetchStatus !== 'paused') return 'loading';
   return 'failed';
+}
+
+/**
+ * The line under "We could not load this profile just now."
+ * A request the library has PAUSED (the browser is offline) has no error to word, and the connection is what it is
+ * waiting for: the line says so, in the one sentence errors.ts keeps for it. Any other failure is worded by
+ * errorMessage, with `hint` for one that has nothing more specific to say.
+ */
+export function loadFailedText(q: Pick<LoadState, 'error' | 'fetchStatus'>, hint: string): string {
+  return q.fetchStatus === 'paused' ? CONNECTION_LOST : errorMessage(q.error, hint);
 }
 
 // ---- the person ------------------------------------------------------------------------------

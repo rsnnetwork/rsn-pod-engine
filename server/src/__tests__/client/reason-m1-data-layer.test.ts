@@ -4,7 +4,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { primaryActionFor } from '@rsn/shared';
-import { errorMessage } from '../../../../client/src/features/reason/errors';
+import { CONNECTION_LOST as EXPORTED_CONNECTION_LOST, errorMessage } from '../../../../client/src/features/reason/errors';
 import { personName, stateFromPoke, visibleText } from '../../../../client/src/features/reason/person';
 import { NEXT_MOVE, PRIMARY_LABEL, STATE_LABEL } from '../../../../client/src/features/reason/human/labels';
 
@@ -40,6 +40,11 @@ describe('errorMessage: a request that got no answer', () => {
     for (const code of ['ERR_NETWORK', 'ECONNABORTED', 'ETIMEDOUT']) {
       expect(errorMessage({ code }, FALLBACK)).toBe(CONNECTION_LOST);
     }
+  });
+
+  it('exports that sentence, for a screen that is only WAITING for the connection: a request the library holds back offline has no error at all, and errorMessage cannot word "no error"', () => {
+    expect(EXPORTED_CONNECTION_LOST).toBe(CONNECTION_LOST);
+    expect(errorMessage(networkError, FALLBACK)).toBe(EXPORTED_CONNECTION_LOST);
   });
 
   it('gives the caller\'s fallback for anything else with no response: a bug in our code is not a lost connection', () => {

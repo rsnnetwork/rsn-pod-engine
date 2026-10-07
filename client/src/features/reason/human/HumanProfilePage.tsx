@@ -19,7 +19,7 @@ import MeetSheet from './MeetSheet';
 import OutcomeSheet from './OutcomeSheet';
 import { STATE_LABEL } from './labels';
 import {
-  MOVE_RESPONSE, isMemberId, knownSource, moveToast, personFacts, shouldRetry, statusOf, viewFor, type KnownSource, type Move,
+  MOVE_RESPONSE, isMemberId, knownSource, loadFailedText, moveToast, personFacts, shouldRetry, statusOf, viewFor, type KnownSource, type Move,
 } from './profile-text';
 import { errorMessage, fetchBrief, reasonKeys, setPersonResponse } from '../api';
 
@@ -183,9 +183,9 @@ export default function HumanProfilePage() {
           <button type="button" onClick={back} className={PRIMARY_BUTTON}>Go back</button>
         </Notice>
       ) : (
-        // No error at all means the library is holding the request back because the browser is offline, and
-        // errorMessage then says the connection was lost. When it returns, the request goes out by itself.
-        <Notice title="We could not load this profile just now." text={errorMessage(error, LOAD_HINT)} sheep={statusOf(error) !== undefined}>
+        // A request the library is holding back because the browser is offline has no error at all, and the line
+        // says the connection was lost (loadFailedText). When it returns, the request goes out by itself.
+        <Notice title="We could not load this profile just now." text={loadFailedText({ error, fetchStatus }, LOAD_HINT)} sheep={statusOf(error) !== undefined}>
           <button type="button" onClick={() => void refetch()} className={PRIMARY_BUTTON}>Try again</button>
           <button type="button" onClick={back} className={QUIET_BUTTON}>Go back</button>
         </Notice>

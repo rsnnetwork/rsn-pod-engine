@@ -4,7 +4,12 @@
 // The copy is keyed on the HTTP status. The server's own text is passed on only where it is a business
 // refusal written for members ("They declined your earlier request..."), and only when it is safe to show.
 
-const CONNECTION_LOST = 'Connection lost. Check your internet and try again.';
+/**
+ * The sentence for a request that got no answer. Exported for a screen that is only WAITING for the connection: the
+ * library holds a request back while the browser is offline, so there is no error to word, and errorMessage can only
+ * say the caller's fallback for "no error".
+ */
+export const CONNECTION_LOST = 'Connection lost. Check your internet and try again.';
 const SLOW_DOWN = 'Slow down a moment, then try again.';
 // The server's own 404 text carries the raw id ("User with id <uuid> not found"), so it is never shown.
 const PERSON_GONE = 'This person is no longer available.';
