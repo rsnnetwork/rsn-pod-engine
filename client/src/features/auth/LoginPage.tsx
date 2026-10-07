@@ -13,6 +13,8 @@ const API_URL = API_BASE_URL;
 
 const ERROR_MESSAGES: Record<string, string> = {
   google_auth_failed: 'Google sign-in failed. Please try again.',
+  // The server refused a Google return that did not come back to the browser that started it.
+  google_try_again: 'Google sign-in did not finish in this browser. Please try again.',
   INVALID_INVITE: 'The invite code is invalid or expired.',
   REGISTRATION_BLOCKED: 'You need an approved join request to sign up. Please request to join first.',
   ACCOUNT_CLOSED: 'This account was closed. Ask to join again, and you can sign in as soon as you are approved.',
