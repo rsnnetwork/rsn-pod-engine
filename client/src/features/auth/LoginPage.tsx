@@ -106,6 +106,9 @@ export default function LoginPage() {
     if (inviteCodeValue) {
       googleUrl.searchParams.set('inviteCode', inviteCodeValue);
     }
+    // Where Google should bring the member back to: the site they are on (the app or the preview), the
+    // same way the magic link names it. The server only honours its own sites, anything else lands on the app.
+    googleUrl.searchParams.set('origin', window.location.origin);
     window.location.href = googleUrl.toString();
   };
 
