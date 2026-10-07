@@ -154,6 +154,10 @@ describe('Human Profile: a section with nothing to show says so, or leaves its b
     expect(hero()).toMatch(/\{brief\.match && \(\s*<span[^>]*>[\s\S]*?\{SIGNAL\[brief\.match\.strength\]\}\s*<\/span>\s*\)\}/);
     expect(count(hero(), /SIGNAL\[/g)).toBe(1);
   });
+  it('the strength badge is font-extrabold: Inter is loaded up to 800, and font-black (900) is a weight the page never loads', () => {
+    expect(hero()).toMatch(/<span className="absolute left-\[18px\] top-\[18px\][^"]*\btext-\[11px\] font-extrabold\b[^"]*">/);
+    expect(hero()).not.toMatch(/font-black/);
+  });
 });
 
 describe('Human Profile: landmarks and headings', () => {

@@ -366,3 +366,57 @@ describe('Admin status pills wrap instead of scrolling <main> sideways at phone 
       .toMatch(/<div className="flex flex-wrap gap-3 animate-fade-in-up">\s*\{STATUS_OPTIONS\.map\(/);
   });
 });
+
+// ---- the last pass (milestone 1, fix wave F1) --------------------------------------------------------------------
+
+describe('Weights the page loads, and the waiting-call card above the phone bar (fix wave F1)', () => {
+  const walk = (dir: string): string[] => fs.readdirSync(path.join(root, dir), { withFileTypes: true })
+    .flatMap((e) => (e.isDirectory() ? walk(`${dir}/${e.name}`) : /\.tsx?$/.test(e.name) ? [`${dir}/${e.name}`] : []));
+  const WEIGHT: Record<string, number> = { thin: 100, extralight: 200, light: 300, normal: 400, medium: 500, semibold: 600, bold: 700, extrabold: 800, black: 900 };
+  const heaviestInter = () => {
+    const link = read('index.html').match(/family=Inter:wght@([\d;]+)/);
+    if (!link) throw new Error('the Inter link is not where this test looks');
+    return Math.max(...link[1].split(';').map(Number));
+  };
+
+  it('Inter is loaded up to 800, so nothing in REASON asks for a heavier weight (font-black is 900: the browser would draw 800 and call it 900)', () => {
+    const heaviest = heaviestInter();
+    expect(heaviest).toBe(800);
+    const files = walk('src/features/reason');
+    expect(files.length).toBeGreaterThan(20);
+    const tooHeavy: string[] = [];
+    for (const file of files) {
+      const src = read(file).replace(/^\s*\/\/.*$/gm, '');
+      for (const m of src.matchAll(/(?<![\w-])font-(thin|extralight|light|normal|medium|semibold|bold|extrabold|black)(?![\w-])|(?<![\w-])font-\[(\d{3})\]/g)) {
+        const weight = m[1] ? WEIGHT[m[1]] : Number(m[2]);
+        if (weight > heaviest) tooHeavy.push(`${file}: ${m[0]}`);
+      }
+    }
+    expect(tooHeavy).toEqual([]);
+  });
+
+  // Measured in Chromium with the home-indicator inset emulated (34px) and without: the card's bottom edge is 27px above
+  // the bar's top edge in both. The inset reaches the card through its margin: a fixed box with `bottom` set is placed
+  // by its margin edge, so `marginBottom: env(safe-area-inset-bottom)` lifts it by the inset, like the bar's own padding.
+  // Without that margin the card would sit 96px up on a bar that is 103px tall, and overlap it by 7px.
+  it('the waiting-call card stays above the phone bar with or without a home indicator: bottom-24 plus the inset as its margin, against the bar\'s height plus the same inset', () => {
+    const card = read('src/features/messages/CallRequest.tsx').match(/<div\s+className="(fixed [^"]*)"\s+style=\{\{([^}]*)\}\}\s+role="status"\s+data-testid="call-waiting"/);
+    expect(card).not.toBeNull();
+    const liftedByInset = /marginBottom: 'env\(safe-area-inset-bottom\)'/.test(card![2]);
+    const offset = Number(card![1].match(/(?<![\w-])bottom-(\d+)(?![\w-])/)?.[1]) * 4; // Tailwind: n * 0.25rem = n * 4px
+    expect(offset).toBe(96);
+
+    const nav = read('src/features/reason/shell/MobileNav.tsx');
+    const tab = Number(nav.match(/const TAB = '[^']*\bmin-h-\[(\d+)px\]/)?.[1]);
+    const above = Number(nav.match(/<nav[^>]*\bpt-(\d+(?:\.\d+)?)\b/)?.[1]) * 4;
+    const below = Number(nav.match(/<nav[^>]*\bpb-\[calc\((\d+)px\+env\(safe-area-inset-bottom\)\)\]/)?.[1]);
+    expect(nav).toMatch(/<nav[^>]*\bborder-t\b/);
+    for (const v of [tab, above, below]) expect(Number.isFinite(v)).toBe(true);
+
+    for (const inset of [0, 34, 47]) {
+      const barHeight = 1 + above + tab + below + inset;
+      const cardBottom = offset + (liftedByInset ? inset : 0);
+      expect({ inset, barHeight, cardBottom, clear: cardBottom - barHeight >= 8 }).toEqual({ inset, barHeight, cardBottom, clear: true });
+    }
+  });
+});
