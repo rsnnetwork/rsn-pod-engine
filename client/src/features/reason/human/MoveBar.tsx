@@ -20,8 +20,10 @@ export default function MoveBar({ brief, busy, onPrimary, onToggleSave, onToggle
   const action = primaryActionFor(r.state);
   const inert = action === 'requested' || action === 'declined';
   // While a press is on its way the buttons say so (aria-disabled), show the busy look and ignore presses.
-  // They are not `disabled`: a disabled button drops the keyboard focus that is on it. Save and Pass carry no
-  // pressed state either: their names already flip ("Save" / "Remove from saved"), and both would be read.
+  // They are not `disabled`: a disabled button drops the keyboard focus that is on it. The same goes for Request
+  // sent and Request declined: the Meet sheet gives focus back to the button that opened it, and by then that
+  // button has become one of them. Save and Pass carry no pressed state either: their names already flip
+  // ("Save" / "Remove from saved"), and both would be read.
   const press = (fn: () => void) => () => { if (!busy) fn(); };
   return (
     <div
@@ -39,10 +41,9 @@ export default function MoveBar({ brief, busy, onPrimary, onToggleSave, onToggle
           <button
             type="button"
             onClick={press(onPrimary)}
-            disabled={inert}
-            aria-disabled={busy || undefined}
+            aria-disabled={busy || inert || undefined}
             className={cn('min-h-[48px] rounded-[11px] px-5 text-[14px] font-bold',
-              inert ? 'bg-[#f5f6f7] text-[#646a77]' : 'bg-reason-red text-white shadow-[0_7px_18px_rgba(222,50,46,.18)] enabled:hover:bg-reason-red-hover',
+              inert ? 'bg-[#f5f6f7] text-[#646a77] cursor-default' : 'bg-reason-red text-white shadow-[0_7px_18px_rgba(222,50,46,.18)] enabled:hover:bg-reason-red-hover',
               busy && !inert && BUSY)}
           >
             {PRIMARY_LABEL[action]}

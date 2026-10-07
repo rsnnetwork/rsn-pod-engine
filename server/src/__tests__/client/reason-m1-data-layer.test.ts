@@ -321,7 +321,7 @@ describe('the Human Card: faults found by looking at it', () => {
     expect(card().match(/\[overflow-wrap:anywhere\]/g)?.length).toBeGreaterThanOrEqual(7);
   });
   it('the inert label reads: at least 4.5:1 (AA) on its grey', () => {
-    const pair = card().match(/inert\s*\?\s*'bg-\[(#[0-9a-f]{6})\] text-\[(#[0-9a-f]{6})\]'/i);
+    const pair = card().match(/inert\s*\?\s*'bg-\[(#[0-9a-f]{6})\] text-\[(#[0-9a-f]{6})\][^']*'/i);
     expect(pair).not.toBeNull();
     expect(contrast(pair![1], pair![2])).toBeGreaterThanOrEqual(4.5);
   });
@@ -352,17 +352,29 @@ describe('the Human Card: keyboard focus, the shared busy look, and a typed sour
   const count = (src: string, re: RegExp) => src.match(re)?.length ?? 0;
 
   it('while a request is on its way the buttons say aria-disabled and ignore presses, but are never disabled (that drops the keyboard focus)', () => {
-    expect(count(card(), /aria-disabled=\{busy \|\| undefined\}/g)).toBe(2);
+    // Save follows busy alone; the main button follows busy and the inert states (the next test).
+    expect(count(card(), /aria-disabled=\{busy \|\| undefined\}/g)).toBe(1);
     expect(card()).not.toMatch(/(?<![-\w])disabled=\{[^}]*busy/);
-    // Only the inert states of the main button are really disabled: nothing is there to press.
-    expect(count(card(), /(?<![-\w])disabled=\{/g)).toBe(1);
-    expect(card()).toMatch(/(?<![-\w])disabled=\{inert\}/);
+    // No button of the card is really disabled, not even in the inert states.
+    expect(count(card(), /(?<![-\w])disabled=\{/g)).toBe(0);
     // Both buttons go through the guard, so a press while busy does nothing.
     expect(card()).toMatch(/const press = \(fn: \(\) => void\) => \(\) => \{ if \(!busy\) fn\(\); \};/);
     expect(card()).toMatch(/onClick=\{press\(onPrimary\)\}/);
     expect(card()).toMatch(/onClick=\{press\(\(\) => onToggleSave\(person\)\)\}/);
     expect(card()).not.toMatch(/onClick=\{onPrimary\}/);
     expect(card()).not.toMatch(/onClick=\{\(\) => onToggleSave\(person\)\}/);
+  });
+
+  it('Request sent and Request declined are aria-disabled and stay focusable: the sheet that sent the request gives focus back to this very button, and a disabled button would drop it to the page', () => {
+    // The main button is aria-disabled while busy and in the two inert states, and nothing else is.
+    expect(card()).toMatch(/aria-disabled=\{busy \|\| inert \|\| undefined\}/);
+    expect(count(card(), /aria-disabled=/g)).toBe(2);
+    // A press does nothing in those states: onPrimary has no branch for them.
+    const onPrimary = card().slice(card().indexOf('const onPrimary = () => {'), card().indexOf('const openProfile'));
+    expect(onPrimary).toContain("action === 'meet'");
+    expect(onPrimary).not.toMatch(/requested|declined/);
+    // The inert look stays: the grey, never dimmed, and the arrow a disabled button has (a button is a pointer otherwise).
+    expect(card()).toMatch(/inert \? 'bg-\[#f5f6f7\] text-\[#646a77\] cursor-default'/);
   });
 
   it('the busy look is shared: the card imports it from busy.ts and keeps no copy of its own', () => {

@@ -115,12 +115,22 @@ describe('Human Profile: Save and Pass', () => {
     expect(bar()).not.toMatch(/aria-pressed/);
   });
   it('while busy the buttons say aria-disabled, show the busy look and ignore presses, but never become disabled (that drops the keyboard focus)', () => {
-    expect(count(bar(), /aria-disabled=\{busy \|\| undefined\}/g)).toBe(3);
+    // Save and Pass follow busy alone; the main button follows busy and the inert states (the next test).
+    expect(count(bar(), /aria-disabled=\{busy \|\| undefined\}/g)).toBe(2);
     expect(bar()).not.toMatch(/(?<![-\w])disabled=\{[^}]*busy/);
-    // Only the inert states of the main button are really disabled.
-    expect(count(bar(), /(?<![-\w])disabled=\{/g)).toBe(1);
-    expect(bar()).toMatch(/(?<![-\w])disabled=\{inert\}/);
+    expect(count(bar(), /(?<![-\w])disabled=\{/g)).toBe(0);
     expect(bar()).toMatch(/if \(!busy\) fn\(\);/);
+  });
+  it('Request sent and Request declined are aria-disabled and stay focusable: the Meet sheet gives focus back to the button that opened it, and a disabled button would drop it to the page', () => {
+    expect(bar()).toMatch(/aria-disabled=\{busy \|\| inert \|\| undefined\}/);
+    expect(count(bar(), /aria-disabled=/g)).toBe(3);
+    // The page's onPrimary has no branch for those two states: a press does nothing.
+    const from = page().indexOf('const onPrimary = () => {');
+    const onPrimary = page().slice(from, page().indexOf('return (', from));
+    expect(onPrimary).toContain("action === 'meet'");
+    expect(onPrimary).not.toMatch(/requested|declined/);
+    // The inert look stays: the grey, never dimmed, and the arrow a disabled button has (a button is a pointer otherwise).
+    expect(bar()).toMatch(/inert \? 'bg-\[#f5f6f7\] text-\[#646a77\] cursor-default'/);
   });
   it('uses the shared busy look, not a copy of it', () => {
     expect(bar()).toMatch(/import \{ BUSY \} from '\.\/busy';/);

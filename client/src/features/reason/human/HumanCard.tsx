@@ -43,7 +43,9 @@ export default function HumanCard({ person, source, onMeet, onToggleSave, busy }
   const inert = action === 'requested' || action === 'declined';
   // While a request is on its way the buttons say so (aria-disabled), show the busy look and ignore presses. They
   // are not `disabled`: a disabled button drops the keyboard focus that is on it, and a Save made from the keyboard
-  // would leave the member on nothing. The look is shared with the profile's bar (busy.ts).
+  // would leave the member on nothing. The same goes for Request sent and Request declined: the Meet sheet gives
+  // focus back to the button that opened it, and by then that button has become one of them. The busy look is shared
+  // with the profile's bar (busy.ts).
   const press = (fn: () => void) => () => { if (!busy) fn(); };
 
   // Any of these can arrive empty or as spaces. A field with nothing to read is left out, not drawn blank,
@@ -126,10 +128,9 @@ export default function HumanCard({ person, source, onMeet, onToggleSave, busy }
         <button
           type="button"
           onClick={press(onPrimary)}
-          disabled={inert}
-          aria-disabled={busy || undefined}
+          aria-disabled={busy || inert || undefined}
           className={cn('min-h-[44px] rounded-[11px] px-3 text-[13px] font-bold transition',
-            inert ? 'bg-[#f5f6f7] text-[#646a77]' : 'bg-reason-red text-white shadow-[0_7px_18px_rgba(222,50,46,.18)] enabled:hover:bg-reason-red-hover',
+            inert ? 'bg-[#f5f6f7] text-[#646a77] cursor-default' : 'bg-reason-red text-white shadow-[0_7px_18px_rgba(222,50,46,.18)] enabled:hover:bg-reason-red-hover',
             busy && !inert && BUSY)}
         >
           {PRIMARY_LABEL[action]}
