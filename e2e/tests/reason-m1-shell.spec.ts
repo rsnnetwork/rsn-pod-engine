@@ -280,7 +280,7 @@ async function expectChrome(page: Page, width: number, where: string): Promise<v
 // The top bar: home mark (phones), search, bell, profile. All 44px.
 async function expectTopbar(page: Page, width: number, where: string): Promise<void> {
   const targets = [
-    { name: 'search field', loc: page.getByRole('textbox', { name: 'Search REASON' }) },
+    { name: 'search field', loc: page.getByRole('search').getByRole('textbox', { name: 'Search people' }) },
     { name: 'notifications', loc: page.getByRole('button', { name: 'Notifications' }) },
     { name: 'your profile', loc: page.getByRole('link', { name: 'Your profile' }) },
   ];
@@ -546,11 +546,13 @@ test('5 top search: Enter opens Find people with the words already typed, a seco
     const { page, ctx, errors } = await openAs(member, size);
     try {
       await visit(page, '/circles', size.width);
-      const top = page.getByRole('textbox', { name: 'Search REASON' });
+      // Scoped by landmark: the top bar is the page's one search landmark, and /search has an input of its
+      // own that is also named "Search people", so a bare role lookup would match both.
+      const top = page.getByRole('search').getByRole('textbox', { name: 'Search people' });
       await top.fill('Zed Probe');
       await top.press('Enter');
       await expect(page, `${where}: the search goes to Find people`).toHaveURL(/\/search\?q=Zed%20Probe$/);
-      const box = page.getByRole('textbox', { name: 'Search people' });
+      const box = page.getByRole('main').getByRole('textbox', { name: 'Search people' });
       await expect(box, `${where}: Find people starts with the typed words`).toHaveValue('Zed Probe');
 
       await top.fill('Marta');
