@@ -251,8 +251,8 @@ export default function AdminUsersPage() {
           )}
           {users.map((u: any) => (
             <Card key={u.id} className={`!p-4 card-hover ${selected.has(u.id) ? 'ring-2 ring-rsn-red/30' : ''}`}>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-3">
                   {u.id !== user?.id && (
                     <input
                       type="checkbox"
@@ -261,15 +261,15 @@ export default function AdminUsersPage() {
                       className="h-4 w-4 rounded border-gray-300 text-rsn-red focus:ring-rsn-red shrink-0"
                     />
                   )}
-                  <a href={`/admin/users/${u.id}`} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
-                    <Avatar src={u.avatarUrl} name={u.displayName || u.email} size="sm" />
-                    <div>
+                  <a href={`/admin/users/${u.id}`} className="flex min-w-0 items-center gap-3 hover:opacity-80 transition-opacity">
+                    <Avatar src={u.avatarUrl} name={u.displayName || u.email} size="sm" className="shrink-0" />
+                    <div className="min-w-0 break-words">
                       <p className="text-sm font-medium text-gray-800">{u.displayName || 'No name'}</p>
                       <p className="text-xs text-gray-400">{u.email}</p>
                     </div>
                   </a>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <Badge variant={u.role === 'admin' || u.role === 'super_admin' ? 'brand' : u.role === 'host' ? 'info' : u.role === 'founding_member' ? 'success' : u.role === 'pro' ? 'warning' : 'default'}>
                     {u.role}
                   </Badge>
@@ -280,7 +280,7 @@ export default function AdminUsersPage() {
               </div>
               {/* Admin actions (don't show for self) */}
               {u.id !== user?.id && (
-                <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-100">
+                <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-gray-100">
                   {statusTab === 'active' && (
                     <>
                       {/* Role selector */}

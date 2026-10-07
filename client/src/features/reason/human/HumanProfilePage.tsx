@@ -42,12 +42,12 @@ function Loading() {
   );
 }
 
-// The sheep is only drawn when the server answered: with the connection gone the picture cannot load either,
-// and a broken-image box would sit where it should be.
-function Notice({ title, text, sheep = true, children }: { title: string; text: string; sheep?: boolean; children: ReactNode }) {
+// With the connection gone the sheep's picture cannot load either: ReasonSheep then draws nothing, so no
+// broken-image box sits where it should be, and the notice needs no guard of its own.
+function Notice({ title, text, children }: { title: string; text: string; children: ReactNode }) {
   return (
     <main className="mx-auto flex max-w-md flex-col items-center gap-3 px-6 py-16 text-center">
-      {sheep && <ReasonSheep pose="thinking" className="h-24 w-24" />}
+      <ReasonSheep pose="thinking" className="h-24 w-24" />
       <h1 className="text-[20px] font-bold">{title}</h1>
       <p className="text-[14px] text-[#646a77]">{text}</p>
       <div className="mt-2 flex flex-wrap justify-center gap-2.5">{children}</div>
@@ -185,7 +185,7 @@ export default function HumanProfilePage() {
       ) : (
         // A request the library is holding back because the browser is offline has no error at all, and the line
         // says the connection was lost (loadFailedText). When it returns, the request goes out by itself.
-        <Notice title="We could not load this profile just now." text={loadFailedText({ error, fetchStatus }, LOAD_HINT)} sheep={statusOf(error) !== undefined}>
+        <Notice title="We could not load this profile just now." text={loadFailedText({ error, fetchStatus }, LOAD_HINT)}>
           <button type="button" onClick={() => void refetch()} className={PRIMARY_BUTTON}>Try again</button>
           <button type="button" onClick={back} className={QUIET_BUTTON}>Go back</button>
         </Notice>

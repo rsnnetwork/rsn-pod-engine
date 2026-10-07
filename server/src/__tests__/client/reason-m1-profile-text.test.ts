@@ -54,6 +54,39 @@ describe('?from= and the member id', () => {
   });
 });
 
+// The profile shows where a member found someone only for the places in KNOWN_SOURCES, and quietly throws any other
+// ?from= away. A plain link that writes a source of its own (?from=Directory) would be a link whose context never shows.
+describe('every ?from= the app writes is one the profile accepts', () => {
+  /** The ?from= values written as literals in a source file: plain (?from=Messages) or encoded (?from=${encodeURIComponent('Your path')}). */
+  const fromLiterals = (src: string): string[] => {
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    return [...code.matchAll(/[?&]from=(?:\$\{encodeURIComponent\((['"`])([^'"`]*)\1\)\}|([^\s'"`&$#}){]+))/g)]
+      .map((m) => decodeURIComponent(m[2] ?? m[3]));
+  };
+  const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true })
+    .flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [path.join(dir, e.name)] : []));
+
+  it('the scan reads literals, plain and encoded, and skips what is not one', () => {
+    expect(fromLiterals('to={`/people/${id}?from=Introductions`}')).toEqual(['Introductions']);
+    expect(fromLiterals('<Link to="/people/x?from=Directory">')).toEqual(['Directory']);
+    expect(fromLiterals("to={`/people/${id}?from=${encodeURIComponent('Your path')}`}")).toEqual(['Your path']);
+    expect(fromLiterals('const url = `/people/${id}?from=${encodeURIComponent("For You")}&x=1`;')).toEqual(['For You']);
+    expect(fromLiterals('?from=Your%20path&b=1')).toEqual(['Your path']);
+    // A value that is a variable is typed (HumanCard's `source: KnownSource`), and a comment is not a link.
+    expect(fromLiterals('const u = `/people/${id}?from=${encodeURIComponent(source)}`;')).toEqual([]);
+    expect(fromLiterals('// ?from=Directory in a comment\n/* ?from=Elsewhere */')).toEqual([]);
+  });
+
+  it('every literal under features/reason is in KNOWN_SOURCES, so a plain link cannot write a source the profile rejects', () => {
+    const files = walk(path.join(__dirname, '../../../../client/src/features/reason'));
+    expect(files.length).toBeGreaterThan(20);
+    const written = files.flatMap((file) => fromLiterals(fs.readFileSync(file, 'utf8')).map((source) => ({ file: path.basename(file), source })));
+    // The scan is not blind: the rail's introductions link and the profile's "Your path" link are there.
+    expect(written.map((w) => w.source)).toEqual(expect.arrayContaining(['Introductions', 'Your path']));
+    for (const w of written) expect({ ...w, known: knownSource(w.source) !== null }).toEqual({ ...w, known: true });
+  });
+});
+
 describe('what a failed request says about the person', () => {
   it('reads the status of an answer and nothing from anything else', () => {
     expect(statusOf(answered(404))).toBe(404);

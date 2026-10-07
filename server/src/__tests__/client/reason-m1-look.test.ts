@@ -420,3 +420,17 @@ describe('Weights the page loads, and the waiting-call card above the phone bar 
     }
   });
 });
+
+describe('Admin users does not scroll <main> sideways at phone widths (fix wave F1)', () => {
+  // A 70-character name and a 60-character e-mail pushed <main> 449px sideways at 360 and 419px at 390: the badges and the
+  // action row could not wrap, and the name block could not shrink below its longest word.
+  it('Users: every flex item between the card and the name can shrink, the name breaks, the avatar keeps its size, and the badges and the action row wrap', () => {
+    const page = read('src/features/admin/AdminUsersPage.tsx');
+    // break-words does nothing for a flex item that cannot shrink: the row, the link and the block are all min-w-0.
+    expect(page).toMatch(/<div className="flex items-center justify-between gap-3">\s*<div className="flex min-w-0 items-center gap-3">/);
+    expect(page).toMatch(/<a href=\{`\/admin\/users\/\$\{u\.id\}`\} className="flex min-w-0 items-center gap-3 hover:opacity-80 transition-opacity">/);
+    expect(page).toMatch(/<Avatar [^>]*size="sm" className="shrink-0" \/>\s*<div className="min-w-0 break-words">/);
+    expect(page).toMatch(/<div className="flex flex-wrap items-center gap-2">\s*<Badge variant=\{u\.role ===/);
+    expect(page).toMatch(/<div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-gray-100">/);
+  });
+});
