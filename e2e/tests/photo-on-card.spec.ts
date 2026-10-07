@@ -46,6 +46,61 @@ async function apiAs(u: TestUser, method: string, path: string, body?: unknown) 
   return { status: res.status, json: await res.json().catch(() => null) };
 }
 
+/**
+ * What a browser does with a Google start. The API answers on two hosts: the client builds its start from the one in
+ * SERVER (the onrender host), and Google is told to return to the other (API_BASE_URL), so the start sends the browser
+ * on once before it reaches Google. Node's fetch keeps no cookies and follows no redirects here, so this follows them
+ * by hand until Google and remembers which host set which cookie. Nothing in it signs anyone in.
+ */
+async function startSignIn(address: string, headers: Record<string, string> = {}) {
+  const requests: string[] = [];
+  const cookies: Array<{ line: string; setBy: URL }> = [];
+  let url = new URL(address);
+  for (let step = 0; step < 4; step += 1) {
+    // Only the first request carries the Referer a page would send: the redirect says no-referrer.
+    const res = await fetch(url, { redirect: 'manual', headers: step === 0 ? headers : {} });
+    requests.push(url.href);
+    for (const line of res.headers.getSetCookie()) cookies.push({ line, setBy: url });
+    expect(res.status, `${url.href} answers with a redirect`).toBe(302);
+    const next = new URL(res.headers.get('location') || '', url);
+    if (next.hostname === 'accounts.google.com') return { google: next, requests, cookies };
+    url = next;
+  }
+  throw new Error(`the start did not reach Google: ${requests.join(' -> ')}`);
+}
+
+/**
+ * The cookie that ties a sign-in to the browser, as the host that set it said it. Exactly one request of the start
+ * sets it, and that request is to the host Google is told to return to: a cookie set anywhere else is never sent to
+ * the callback, and every sign-in would be refused. In production (https) it is __Host-rsn_oauth_nonce on Path=/, Secure,
+ * which a browser only accepts with no Domain, so no sibling site can set or shadow it; a plain-http API (development)
+ * keeps the plain name on its own path.
+ */
+function nonceCookieOf(start: Awaited<ReturnType<typeof startSignIn>>) {
+  const redirectUri = new URL(start.google.searchParams.get('redirect_uri') || '');
+  const set = start.cookies.filter(({ line }) => /^(__Host-)?rsn_oauth_nonce=/.test(line));
+  expect(set, 'exactly one request of the start sets the browser cookie').toHaveLength(1);
+  const [{ line, setBy }] = set;
+  expect(setBy.host, 'the cookie is set by the host Google is told to return to').toBe(redirectUri.host);
+
+  const [pair, ...attributes] = line.split(';').map((part) => part.trim());
+  const name = pair.slice(0, pair.indexOf('='));
+  const nonce = pair.slice(pair.indexOf('=') + 1);
+  const https = setBy.protocol === 'https:';
+  expect(name).toBe(https ? '__Host-rsn_oauth_nonce' : 'rsn_oauth_nonce');
+  expect(nonce).toMatch(/^[0-9a-f]{64}$/);
+  expect(attributes).toEqual(expect.arrayContaining(['HttpOnly', 'SameSite=Lax', 'Max-Age=1800', https ? 'Path=/' : 'Path=/api/auth/google']));
+  expect(attributes.includes('Secure'), 'Secure exactly when the host that set it is served over https').toBe(https);
+  expect(attributes.some((attribute) => /^Domain=/i.test(attribute)), 'the cookie belongs to its host alone').toBe(false);
+  return { redirectUri, name, nonce };
+}
+
+/** The callback, as Google would send the browser to it (the redirect_uri it was told), with a code Google will refuse. */
+const returnTo = (redirectUri: URL, state: string) =>
+  `${redirectUri.origin}${redirectUri.pathname}?code=not-a-real-code&state=${encodeURIComponent(state)}`;
+
+const clearsTheCookie = (res: Response) => res.headers.getSetCookie().some((line) => /^(__Host-)?rsn_oauth_nonce=;/.test(line) && /Max-Age=0/.test(line));
+
 async function openAs(u: TestUser, path: string): Promise<Page> {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
   await ctx.addInitScript((t: { a: string; r: string }) => {
@@ -80,52 +135,68 @@ test('the card offers a Google photo and an upload; the upload lands at once; th
   expect(state.status, JSON.stringify(state.json)).toBe(200);
   const link: string = state.json.data.url;
   expect(link).toMatch(/\/api\/auth\/google\?photo=.+&redirect=%2Fonboarding$/);
-  // The page says which site it is on (?origin=); the server keeps it only when it is one of ours.
-  const hop = await fetch(`${link}&origin=${encodeURIComponent(PREVIEW_SITE)}`, { redirect: 'manual' });
-  expect(hop.status).toBe(302);
-  const location = new URL(hop.headers.get('location') || '');
-  expect(location.hostname).toBe('accounts.google.com');
+  // The page says which site it is on (?origin=); the server keeps it only when it is one of ours. This link is built on
+  // the host Google returns to, so it is one request.
+  const photo = await startSignIn(`${link}&origin=${encodeURIComponent(PREVIEW_SITE)}`);
+  expect(photo.requests).toHaveLength(1);
+  expect(photo.google.hostname).toBe('accounts.google.com');
+  // Google is asked for a plain redirect with the code in the query: a form_post return would not carry a Lax cookie.
+  expect(photo.google.searchParams.has('response_mode')).toBe(false);
   // The state Google carries back is a token the server signed, read with the key the test tokens use.
-  const oauthState = readSignedToken(location.searchParams.get('state') || '');
+  const photoState = photo.google.searchParams.get('state') || '';
+  const oauthState = readSignedToken(photoState);
   expect(oauthState).toMatchObject({
     purpose: 'google-oauth-state', photoLinkUserId: member.id, redirect: '/onboarding', origin: PREVIEW_SITE,
   });
   console.log('  ✓ Google link is signed for this member, returns to /onboarding, and keeps the site it started on.');
 
-  // The start ties the sign-in to this browser: a cookie on the API's host, with the hash of its value in the state.
-  const nonceLine = hop.headers.getSetCookie().find((line) => line.startsWith('rsn_oauth_nonce=')) || '';
-  expect(nonceLine, 'the start sets the cookie that ties the sign-in to the browser').not.toBe('');
-  const [nonceCookie, ...nonceAttributes] = nonceLine.split(';').map((part) => part.trim());
-  const nonce = nonceCookie.slice('rsn_oauth_nonce='.length);
-  expect(nonce).toMatch(/^[0-9a-f]{64}$/);
-  expect(nonceAttributes).toEqual(expect.arrayContaining(['HttpOnly', 'SameSite=Lax', 'Path=/api/auth/google', 'Max-Age=1800']));
-  expect(nonceAttributes.includes('Secure'), 'Secure whenever the API is served over https').toBe(SERVER.startsWith('https://'));
-  expect(nonceAttributes.some((attribute) => /^Domain=/i.test(attribute)), 'the cookie belongs to the API host alone').toBe(false);
-  expect(oauthState.nonceHash).toBe(createHash('sha256').update(nonce).digest('hex'));
-  expect(JSON.stringify(oauthState)).not.toContain(nonce);
-  // With that cookie the callback goes on and asks Google about the code, which Google refuses: the photo link fails on
-  // the page it started from. The same address with no cookie (a browser that did not start it) is refused before
-  // Google is asked anything, and asked to start again. Either way the cookie is cleared.
-  const returnAddress = `${SERVER}/api/auth/google/callback?code=not-a-real-code&state=${encodeURIComponent(location.searchParams.get('state') || '')}`;
-  const sameBrowser = await fetch(returnAddress, { redirect: 'manual', headers: { Cookie: `rsn_oauth_nonce=${nonce}` } });
+  // The start ties the sign-in to this browser: a cookie on the host Google returns to, with the hash of its value in the state.
+  const bound = nonceCookieOf(photo);
+  expect(oauthState.nonceHash).toBe(createHash('sha256').update(bound.nonce).digest('hex'));
+  expect(JSON.stringify(oauthState)).not.toContain(bound.nonce);
+  // The callback is the address Google was told (its redirect_uri). With that cookie it goes on and asks Google about the
+  // code, which Google refuses: the photo link fails on the page it started from. The same address with no cookie, or with
+  // another sign-in's, is refused before Google is asked anything, and asked to start again. Either way the cookie is cleared.
+  const callbackAddress = returnTo(bound.redirectUri, photoState);
+  const sameBrowser = await fetch(callbackAddress, { redirect: 'manual', headers: { Cookie: `${bound.name}=${bound.nonce}` } });
   expect(sameBrowser.status).toBe(302);
   expect(sameBrowser.headers.get('location')).toBe(`${PREVIEW_SITE}/onboarding?photo=failed`);
-  expect(sameBrowser.headers.getSetCookie().some((line) => line.startsWith('rsn_oauth_nonce=;') && /Max-Age=0/.test(line))).toBe(true);
-  const otherBrowser = await fetch(returnAddress, { redirect: 'manual' });
+  expect(clearsTheCookie(sameBrowser)).toBe(true);
+  const otherBrowser = await fetch(callbackAddress, { redirect: 'manual' });
   expect(otherBrowser.status).toBe(302);
   expect(otherBrowser.headers.get('location')).toBe(`${PREVIEW_SITE}/login?error=google_try_again`);
-  expect(otherBrowser.headers.getSetCookie().some((line) => line.startsWith('rsn_oauth_nonce=;') && /Max-Age=0/.test(line))).toBe(true);
-  console.log('  ✓ the start sets the browser cookie; the callback goes on with it, and is refused without it.');
+  expect(clearsTheCookie(otherBrowser)).toBe(true);
+  const wrongCookie = await fetch(callbackAddress, { redirect: 'manual', headers: { Cookie: `${bound.name}=${'0'.repeat(64)}` } });
+  expect(wrongCookie.headers.get('location')).toBe(`${PREVIEW_SITE}/login?error=google_try_again`);
+  console.log('  ✓ the start sets the browser cookie on the host Google returns to; the callback goes on with it, and is refused without it or with another.');
+
+  // The sign-in the client really starts: from the API origin it knows (SERVER, the onrender host), which sends the browser on
+  // to the host Google returns to. The cookie must be set THERE, and Google must be told to return there: set on the first
+  // host it would never reach the callback, and every member would be refused.
+  const fromClient = await startSignIn(`${SERVER}/api/auth/google?origin=${encodeURIComponent(PREVIEW_SITE)}`);
+  const clientCookie = nonceCookieOf(fromClient);
+  const clientState = fromClient.google.searchParams.get('state') || '';
+  expect(readSignedToken(clientState)).toMatchObject({ purpose: 'google-oauth-state', origin: PREVIEW_SITE });
+  expect(fromClient.google.searchParams.has('response_mode')).toBe(false);
+  const clientCallback = returnTo(clientCookie.redirectUri, clientState);
+  const clientSame = await fetch(clientCallback, { redirect: 'manual', headers: { Cookie: `${clientCookie.name}=${clientCookie.nonce}` } });
+  expect(clientSame.headers.get('location'), 'the cookie reaches the callback, which asks Google about the (made-up) code').toBe(`${PREVIEW_SITE}/login?error=google_auth_failed`);
+  const clientOther = await fetch(clientCallback, { redirect: 'manual' });
+  expect(clientOther.headers.get('location')).toBe(`${PREVIEW_SITE}/login?error=google_try_again`);
+  // An older sign-in page that names no site and relies on the Referer still comes back to the site it started on.
+  const byReferer = await startSignIn(`${SERVER}/api/auth/google`, { Referer: `${PREVIEW_SITE}/login` });
+  expect(readSignedToken(byReferer.google.searchParams.get('state') || '').origin).toBe(PREVIEW_SITE);
+  console.log(`  ✓ a start from the client's API host is sent on once and ends on the host Google returns to (${fromClient.requests.map((r) => new URL(r).host).join(' -> ')}).`);
 
   // A forged or foreign token is ignored: the flow becomes a plain sign-in, not a photo link.
-  const forged = await fetch(`${SERVER}/api/auth/google?photo=not-a-token&redirect=/onboarding&origin=${encodeURIComponent(PREVIEW_SITE)}`, { redirect: 'manual' });
-  const forgedState = readSignedToken(new URL(forged.headers.get('location') || '').searchParams.get('state') || '');
+  const forged = await startSignIn(`${SERVER}/api/auth/google?photo=not-a-token&redirect=/onboarding&origin=${encodeURIComponent(PREVIEW_SITE)}`);
+  const forgedState = readSignedToken(forged.google.searchParams.get('state') || '');
   expect(forgedState.purpose).toBe('google-oauth-state');
   expect(forgedState.photoLinkUserId).toBeUndefined();
   expect(forgedState.origin).toBe(PREVIEW_SITE);
   // A site that is not ours is never kept, whatever the page says: the state names a real site of ours instead.
-  const foreign = await fetch(`${SERVER}/api/auth/google?origin=${encodeURIComponent('https://evil.example')}`, { redirect: 'manual' });
-  const foreignState = readSignedToken(new URL(foreign.headers.get('location') || '').searchParams.get('state') || '');
+  const foreign = await startSignIn(`${SERVER}/api/auth/google?origin=${encodeURIComponent('https://evil.example')}`);
+  const foreignState = readSignedToken(foreign.google.searchParams.get('state') || '');
   expect(foreignState.origin).not.toBe('https://evil.example');
   expect(String(foreignState.origin)).toMatch(/^https?:\/\//);
   // And a state nobody signed changes nothing on the way back. This one is the old format (base64 JSON naming this
@@ -134,7 +205,7 @@ test('the card offers a Google photo and an upload; the upload lands at once; th
   // (Before the state was signed this went to /onboarding?photo=failed; before the browser cookie, to a plain
   // sign-in that failed at Google as /login?error=google_auth_failed.)
   const unsigned = Buffer.from(JSON.stringify({ photoLinkUserId: member.id, redirect: '/onboarding' })).toString('base64url');
-  const back = await fetch(`${SERVER}/api/auth/google/callback?code=not-a-real-code&state=${unsigned}`, { redirect: 'manual' });
+  const back = await fetch(returnTo(bound.redirectUri, unsigned), { redirect: 'manual' });
   expect(back.status).toBe(302);
   const backTo = back.headers.get('location') || '';
   expect(backTo).toMatch(/\/login\?error=google_try_again$/);
