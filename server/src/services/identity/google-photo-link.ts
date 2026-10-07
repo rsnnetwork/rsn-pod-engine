@@ -19,6 +19,8 @@ import { record as recordStageEvent } from '../onboarding/stage-events.repo';
 
 const PHOTO_LINK_TTL = '15m';
 const PHOTO_LINK_PURPOSE = 'google-photo';
+const OAUTH_STATE_TTL = '30m';
+const OAUTH_STATE_PURPOSE = 'google-oauth-state';
 
 export interface GoogleOauthState {
   inviteCode?: string;
@@ -29,7 +31,7 @@ export interface GoogleOauthState {
   /**
    * The site the member started on (7 Oct 2026), so Google brings them back there and not always to the
    * main app. The start resolves it against the exact allow-list in client-origin.ts; the callback resolves
-   * it AGAIN before using it, because the state is plain base64 JSON that anyone holding the link can rewrite.
+   * it AGAIN before using it, because the redirect it feeds carries live tokens.
    */
   origin?: string;
 }
@@ -56,13 +58,30 @@ export function safeRedirectPath(redirect: string | undefined): string {
   return redirect.slice(0, 200);
 }
 
+/**
+ * The OAuth state, signed (7 Oct 2026). It used to be plain base64 JSON, and the callback trusted the
+ * member id in it, so anyone could write a state naming ANOTHER member's photo link, finish Google with
+ * their own account, and replace that member's photo. It is now a token signed with the server's secret
+ * (the same pattern as the photo-link token), so only the start can write one, and it expires.
+ *
+ * The `purpose` claim keeps it apart from the other tokens that secret signs. GET /auth/google hands a
+ * state to anyone who asks, so no reader of an access or refresh token may take one for the other
+ * (middleware/auth.ts and the refresh both require what a state lacks).
+ */
 export function buildOauthState(state: GoogleOauthState): string {
-  return Buffer.from(JSON.stringify(state)).toString('base64url');
+  return jwt.sign({ ...state, purpose: OAUTH_STATE_PURPOSE }, config.jwtSecret, { expiresIn: OAUTH_STATE_TTL });
 }
 
+/**
+ * What a state we signed carries. Anything else (unsigned, edited, signed by another secret or algorithm,
+ * expired, of another purpose, not a token at all) reads as no state: the member still signs in with their
+ * own Google account, on the main app, with no invite code and no photo link.
+ */
 export function parseOauthState(raw: string | undefined): GoogleOauthState {
+  if (!raw) return {};
   try {
-    const decoded = JSON.parse(Buffer.from(raw || '', 'base64url').toString()) as GoogleOauthState;
+    const decoded = jwt.verify(raw, config.jwtSecret, { algorithms: ['HS256'] });
+    if (typeof decoded === 'string' || decoded.purpose !== OAUTH_STATE_PURPOSE) return {};
     return {
       inviteCode: typeof decoded.inviteCode === 'string' ? decoded.inviteCode : undefined,
       photoLinkUserId: typeof decoded.photoLinkUserId === 'string' ? decoded.photoLinkUserId : undefined,

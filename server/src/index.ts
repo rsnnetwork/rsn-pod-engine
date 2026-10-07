@@ -34,6 +34,7 @@ import { runMigrations } from './db/migrate';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { apiLimiter } from './middleware/rateLimit';
 import { isUserActive } from './middleware/auth';
+import { isAccessToken } from './middleware/auth';
 
 // Services
 import { processAutoReminders } from './services/join-request/join-request.service';
@@ -119,6 +120,12 @@ io.use(async (socket, next) => {
 
   try {
     const payload = jwt.verify(token, config.jwtSecret) as { sub: string; email: string; role: string; displayName?: string };
+
+    // Only an access token opens a socket: the Google sign-in state, the photo link and the refresh
+    // token share the secret and are not one (isAccessToken).
+    if (!isAccessToken(payload)) {
+      return next(new Error('Invalid token'));
+    }
 
     // Block deactivated users from socket connections. Tier-1 A4: share the
     // 60-second cache with the HTTP auth middleware. Previously this ran a

@@ -248,9 +248,10 @@ router.get(
     const { code, state } = req.query as Record<string, string>;
     const oauthState = parseOauthState(state);
     const inviteCode = oauthState.inviteCode || '';
-    // The state is plain base64 JSON, visible and editable by whoever holds the link, and the success
-    // redirect carries live tokens in its query string. So the site it names is resolved AGAIN here: only
-    // one of our own sites is ever a destination, anything else (or nothing) is the main app.
+    // The state is signed (parseOauthState reads nothing from one that is not ours, so the member signs
+    // in as if there were none). Even so, the success redirect carries live tokens in its query string, so
+    // the site it names is resolved AGAIN here: only one of our own sites is ever a destination, anything
+    // else (or nothing) is the main app.
     const clientBase = resolveClientBaseUrl(oauthState.origin, ourSites());
     // Photo link: the member is already signed in; every exit goes back to
     // where they were, with the outcome in the query string.

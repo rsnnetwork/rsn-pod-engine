@@ -3,15 +3,20 @@
 // Ali signed in with Google on the preview and landed on the live app: the callback
 // redirected to the fixed CLIENT_URL. The site the member starts on now rides in the
 // OAuth state, resolved against the exact allow-list in client-origin.ts, and is
-// resolved AGAIN on the callback. The state is plain base64 JSON that whoever holds the
-// link can rewrite, and the success redirect carries live tokens in its query string,
-// so a tampered origin must send the member to the main app and never to another site.
+// resolved AGAIN on the callback, because the success redirect carries live tokens in
+// its query string: a site that is not ours must never be a destination.
+//
+// The state is a signed token (google-photo-link.ts), so it cannot be edited or written
+// by anyone else; a state that is not ours, in any way, is ignored and the member signs in
+// as if there were none. That second resolve stays as belt and braces: it is what holds
+// when a signed state names a site that is not ours.
 //
 // These go through express with the real router and the real allow-list; only the
 // database, Google and the account lookup are stand-ins.
 
 import express from 'express';
 import request from 'supertest';
+import jwt from 'jsonwebtoken';
 
 jest.mock('../../config', () => {
   const cfg = {
@@ -41,11 +46,15 @@ jest.mock('../../services/onboarding/stage-events.repo', () => ({ record: jest.f
 
 import authRoutes from '../../routes/auth';
 import config from '../../config';
-import { mintPhotoLinkToken } from '../../services/identity/google-photo-link';
+import { buildOauthState, mintPhotoLinkToken } from '../../services/identity/google-photo-link';
 
 const MAIN = 'https://app.rsn.network';
 const PREVIEW = 'https://preview.rsn.network';
 const MEMBER = '5f0c3a3e-8d7b-4a57-9d0e-1f2a3b4c5d6e';
+const VICTIM = 'b0000000-0000-4000-8000-000000000002';
+const SECRET = 'test-secret-with-enough-length-0123456789';
+const PURPOSE = 'google-oauth-state';
+const PICTURE = 'https://lh3.googleusercontent.com/a/photo';
 
 const app = express();
 app.use('/auth', authRoutes);
@@ -79,8 +88,13 @@ const NOT_OURS = [
 
 // ── The start ────────────────────────────────────────────────────────────────
 
-const stateOf = (location: string): Record<string, unknown> =>
-  JSON.parse(Buffer.from(new URL(location).searchParams.get('state') ?? '', 'base64url').toString());
+/** The state the start hands to Google: a token signed with our secret, read back the way the callback reads it. */
+const claimsOf = (location: string) => jwt.verify(new URL(location).searchParams.get('state') ?? '', SECRET) as jwt.JwtPayload;
+/** What the state carries for the sign-in (not the token's own purpose and times). */
+const stateOf = (location: string): Record<string, unknown> => {
+  const claims = claimsOf(location);
+  return Object.fromEntries(['inviteCode', 'origin', 'photoLinkUserId', 'redirect'].filter((key) => key in claims).map((key) => [key, claims[key]]));
+};
 
 function start(query: Record<string, string | string[]> = {}, referer?: string) {
   const req = request(app).get('/auth/google').query(query);
@@ -165,11 +179,20 @@ describe('GET /auth/google: where the member starts', () => {
     expect(url.searchParams.get('redirect_uri')).toBe('https://api.test/api/auth/google/callback');
     expect(url.searchParams.get('scope')).toBe('openid email profile');
   });
+
+  it('hands Google a signed token of its own purpose, which lives for 30 minutes', async () => {
+    const claims = claimsOf((await start({ origin: PREVIEW, inviteCode: 'ABC123' })).headers.location);
+    expect(claims.purpose).toBe(PURPOSE);
+    expect((claims.exp ?? 0) - (claims.iat ?? 0)).toBe(30 * 60);
+  });
 });
 
 // ── The callback ─────────────────────────────────────────────────────────────
 
-const stateWith = (state: object) => Buffer.from(JSON.stringify(state)).toString('base64url');
+/** A state as the server signs it (the real helper). */
+const stateWith = buildOauthState;
+/** Any claims signed like a state, to put a wrong type in one: the helper above only takes the right types. */
+const signedWith = (claims: Record<string, unknown>) => jwt.sign({ purpose: PURPOSE, ...claims }, SECRET, { expiresIn: '30m' });
 
 /** Google accepts the code and knows the member (the two calls the callback makes, in order). */
 function googleKnowsTheMember(profile: Record<string, unknown> = { email: 'a@b.co', name: 'A B' }) {
@@ -223,9 +246,9 @@ describe('GET /auth/google/callback: where the member comes back to', () => {
     expect((await callback(undefined)).headers.location).toBe(verifyUrl(MAIN));
   });
 
-  // The state is attacker-visible. The redirect carries live tokens, so a site that is not ours
-  // must never be a destination, whatever the state says and however it is dressed up.
-  it.each(NOT_OURS)('a tampered state naming %j sends the member, and the tokens, to the main app', async (origin) => {
+  // The state is signed, so these can only arise from a bug, or a leaked secret. The redirect carries
+  // live tokens, so a site that is not ours must still never be a destination, however the state is dressed up.
+  it.each(NOT_OURS)('a signed state naming %j, which is not ours, still sends the member and the tokens to the main app', async (origin) => {
     googleKnowsTheMember();
     const res = await callback(stateWith({ origin }));
     expect(res.status).toBe(302);
@@ -234,10 +257,10 @@ describe('GET /auth/google/callback: where the member comes back to', () => {
   });
 
   it.each([[42], [true], [null], [['https://preview.rsn.network']], [{ href: 'https://preview.rsn.network' }]])(
-    'a tampered state whose origin is %j (not a string) sends the member to the main app',
+    'a signed state whose origin is %j (not a string) sends the member to the main app',
     async (origin) => {
       googleKnowsTheMember();
-      expect((await callback(stateWith({ origin }))).headers.location).toBe(verifyUrl(MAIN));
+      expect((await callback(signedWith({ origin }))).headers.location).toBe(verifyUrl(MAIN));
     },
   );
 
@@ -285,7 +308,7 @@ describe('GET /auth/google/callback: where the member comes back to', () => {
       expect((await callback(stateWith({ origin: PREVIEW }))).headers.location).toBe(`${PREVIEW}/login?error=google_auth_failed`);
     });
 
-    it('a tampered origin goes to the login page of the main app, never elsewhere', async () => {
+    it('a signed state naming a site that is not ours goes to the login page of the main app, never elsewhere', async () => {
       googleRefusesTheCode();
       expect((await callback(stateWith({ origin: 'https://evil.example' }))).headers.location).toBe(`${MAIN}/login?error=google_auth_failed`);
       expect((await callback(stateWith({ origin: 'https://evil.example' }), null)).headers.location).toBe(`${MAIN}/login?error=google_auth_failed`);
@@ -304,11 +327,14 @@ describe('GET /auth/google/callback: where the member comes back to', () => {
   });
 
   describe('a photo link returns to the page it started from, on the site it started from', () => {
-    const photoState = (origin?: unknown) => stateWith({ photoLinkUserId: MEMBER, redirect: '/profile', ...(origin === undefined ? {} : { origin }) });
+    const photoState = (origin?: string) => stateWith({ photoLinkUserId: MEMBER, redirect: '/profile', ...(origin === undefined ? {} : { origin }) });
 
     it('done, none, failed and cancelled all come back to the preview', async () => {
-      googleKnowsTheMember({ email: 'a@b.co', picture: 'https://lh3.googleusercontent.com/a/photo' });
+      googleKnowsTheMember({ email: 'a@b.co', picture: PICTURE });
       expect((await callback(photoState(PREVIEW))).headers.location).toBe(`${PREVIEW}/profile?photo=done`);
+      // The photo goes to the member the signed state names, and to nobody else.
+      expect(mockCapture).toHaveBeenCalledTimes(1);
+      expect(mockCapture).toHaveBeenCalledWith(MEMBER, PICTURE);
       googleKnowsTheMember({ email: 'a@b.co' });
       expect((await callback(photoState(PREVIEW))).headers.location).toBe(`${PREVIEW}/profile?photo=none`);
       googleRefusesTheCode();
@@ -318,18 +344,93 @@ describe('GET /auth/google/callback: where the member comes back to', () => {
       expect(mockFindOrCreate).not.toHaveBeenCalled();
     });
 
-    it('a tampered origin comes back to the main app; a state with no origin as before', async () => {
-      googleKnowsTheMember({ email: 'a@b.co', picture: 'https://lh3.googleusercontent.com/a/photo' });
+    it('a signed origin that is not ours comes back to the main app; a state with no origin as before', async () => {
+      googleKnowsTheMember({ email: 'a@b.co', picture: PICTURE });
       expect((await callback(photoState('https://evil.example'))).headers.location).toBe(`${MAIN}/profile?photo=done`);
-      googleKnowsTheMember({ email: 'a@b.co', picture: 'https://lh3.googleusercontent.com/a/photo' });
+      googleKnowsTheMember({ email: 'a@b.co', picture: PICTURE });
       expect((await callback(photoState())).headers.location).toBe(`${MAIN}/profile?photo=done`);
       expect((await callback(photoState('https://evil.example'), null)).headers.location).toBe(`${MAIN}/profile?photo=cancelled`);
     });
 
     it('the return path stays a same-site path on our site, whatever the state says', async () => {
-      googleKnowsTheMember({ email: 'a@b.co', picture: 'https://lh3.googleusercontent.com/a/photo' });
+      googleKnowsTheMember({ email: 'a@b.co', picture: PICTURE });
       const res = await callback(stateWith({ photoLinkUserId: MEMBER, redirect: 'https://evil.example/x', origin: PREVIEW }));
       expect(res.headers.location).toBe(`${PREVIEW}/onboarding?photo=done`);
     });
+  });
+});
+
+// ── A state that is not ours ─────────────────────────────────────────────────
+
+// 7 Oct 2026: the state used to be plain base64 JSON and the callback trusted the member id in it, so
+// anyone could write one naming ANOTHER member's photo link, finish Google with their own account, and
+// replace that member's photo. Every one of these names a victim, an invite code and the preview. None may
+// be read: the person still signs in with their own Google account, exactly as with no state, and lands
+// on the main app with no invite code and no photo link.
+describe('GET /auth/google/callback: a state that is not ours is ignored', () => {
+  const CLAIMS = { inviteCode: 'FORGED', photoLinkUserId: VICTIM, redirect: '/profile', origin: PREVIEW };
+  const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const sign = (claims: object, secret = SECRET, options: jwt.SignOptions = { expiresIn: '30m' }) => jwt.sign(claims, secret, options);
+  const real = buildOauthState({ inviteCode: 'mine' });
+
+  const FORGERIES: Array<[string, string]> = [
+    ['the old format: plain base64 JSON', b64(CLAIMS)],
+    ['an unsigned token (alg none)', `${b64({ alg: 'none', typ: 'JWT' })}.${b64({ ...CLAIMS, purpose: PURPOSE })}.`],
+    ['a token signed with another secret', sign({ ...CLAIMS, purpose: PURPOSE }, 'another-secret-with-enough-length-0123456789')],
+    ['an expired token', sign({ ...CLAIMS, purpose: PURPOSE }, SECRET, { expiresIn: '-10s' })],
+    ['a token with the wrong purpose (a photo link)', sign({ ...CLAIMS, purpose: 'google-photo' })],
+    ['a token with no purpose (as an access token has none)', sign({ ...CLAIMS, sub: VICTIM, role: 'member', sessionId: 's-1' })],
+    ['a token whose payload was edited after it was signed', `${real.split('.')[0]}.${b64({ ...(jwt.decode(real) as object), ...CLAIMS })}.${real.split('.')[2]}`],
+    ['text that is not a token', 'not-a-token'],
+  ];
+
+  it.each(FORGERIES)('%s: the photo of the member it names is not touched, and nothing it says is followed', async (_name, state) => {
+    googleKnowsTheMember({ email: 'a@b.co', name: 'A B', picture: PICTURE });
+    const res = await callback(state);
+
+    // The person signs in with their own account, on the main app, with no invite code and no photo link.
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe(verifyUrl(MAIN));
+    expect(mockFindOrCreate).toHaveBeenCalledTimes(1);
+    expect(mockFindOrCreate).toHaveBeenCalledWith(expect.objectContaining({ email: 'a@b.co', picture: PICTURE }), undefined);
+    // And nobody's photo was set: applyGooglePhoto was never reached.
+    expect(mockCapture).not.toHaveBeenCalled();
+  });
+
+  it.each(FORGERIES)('%s: a failed sign-in goes back to the login page of the main app, not to the victim\'s page', async (_name, state) => {
+    googleRefusesTheCode();
+    const res = await callback(state);
+    expect(res.headers.location).toBe(`${MAIN}/login?error=google_auth_failed`);
+    expect(mockCapture).not.toHaveBeenCalled();
+  });
+
+  it('the attack as it was: an unsigned state naming another member cannot change that member\'s photo', async () => {
+    googleKnowsTheMember({ email: 'attacker@example.com', picture: 'https://lh3.googleusercontent.com/a/attacker' });
+    const res = await callback(b64({ photoLinkUserId: VICTIM, redirect: '/profile' }));
+
+    expect(res.headers.location).not.toMatch(/photo=/);
+    expect(mockCapture).not.toHaveBeenCalledWith(VICTIM, expect.anything());
+    expect(mockCapture).not.toHaveBeenCalled();
+  });
+
+  it('a state we signed is still honoured: the photo goes to the member it names, on the site it names', async () => {
+    googleKnowsTheMember({ email: 'a@b.co', picture: PICTURE });
+    const res = await callback(buildOauthState({ photoLinkUserId: MEMBER, redirect: '/profile', origin: PREVIEW }));
+    expect(res.headers.location).toBe(`${PREVIEW}/profile?photo=done`);
+    expect(mockCapture).toHaveBeenCalledWith(MEMBER, PICTURE);
+    expect(mockFindOrCreate).not.toHaveBeenCalled();
+
+    googleKnowsTheMember();
+    const invited = await callback(buildOauthState({ inviteCode: 'ABC123', origin: PREVIEW }));
+    expect(invited.headers.location).toBe(verifyUrl(PREVIEW, 'ABC123'));
+  });
+
+  it('a sign-in started before this change and finished after it lands on the main app without its invite code or photo link', async () => {
+    // What the start used to hand to Google: the same fields, unsigned.
+    const inFlight = b64({ inviteCode: 'ABC123', origin: PREVIEW });
+    googleKnowsTheMember();
+    const res = await callback(inFlight);
+    expect(res.headers.location).toBe(verifyUrl(MAIN));
+    expect(mockFindOrCreate).toHaveBeenCalledWith(expect.objectContaining({ email: 'a@b.co' }), undefined);
   });
 });

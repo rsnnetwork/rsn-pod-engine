@@ -61,6 +61,26 @@ export async function isUserActive(userId: string): Promise<boolean> {
 }
 
 /**
+ * Whether a token we signed is an ACCESS token, the only kind that signs a request in (7 Oct 2026).
+ *
+ * The secret also signs tokens that are not: the refresh token (`type: 'refresh'`), the photo link and the
+ * Google sign-in state (they have a `purpose`). GET /auth/google hands a state to anyone who asks, so a
+ * valid signature alone proves nothing about who is calling. An access token names its member (`sub`),
+ * has no `purpose`, and does not declare itself some other kind of token: its `type` is absent (as the
+ * server issues them) or 'access', so tagging access tokens one day cannot lock everyone out.
+ *
+ * Without this check a token with no `sub` was turned away only because the user lookup found nobody, and
+ * isUserActive says yes to everyone when the database errors.
+ */
+export function isAccessToken(payload: unknown): boolean {
+  if (typeof payload !== 'object' || payload === null) return false;
+  const claims = payload as Record<string, unknown>;
+  return typeof claims.sub === 'string' && claims.sub !== ''
+    && claims.purpose === undefined
+    && (claims.type === undefined || claims.type === 'access');
+}
+
+/**
  * Extracts and verifies JWT from Authorization header.
  * Sets req.user on success. Blocks deactivated users.
  */
@@ -74,6 +94,9 @@ export function authenticate(req: Request, _res: Response, next: NextFunction): 
 
       const token = authHeader.substring(7);
       const payload = jwt.verify(token, config.jwtSecret) as JwtPayload;
+      if (!isAccessToken(payload)) {
+        throw new UnauthorizedError('Invalid token');
+      }
 
       // Check user is still active (cached, <1ms for repeat calls)
       const active = await isUserActive(payload.sub);
@@ -125,12 +148,15 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction): 
     const token = authHeader.substring(7);
     const payload = jwt.verify(token, config.jwtSecret) as JwtPayload;
 
-    req.user = {
-      userId: payload.sub,
-      email: payload.email,
-      role: payload.role as UserRole,
-      sessionId: payload.sessionId,
-    };
+    // A token that is not an access token (isAccessToken) signs nobody in, however it was signed.
+    if (isAccessToken(payload)) {
+      req.user = {
+        userId: payload.sub,
+        email: payload.email,
+        role: payload.role as UserRole,
+        sessionId: payload.sessionId,
+      };
+    }
   } catch {
     // Token invalid — proceed without user
   }
