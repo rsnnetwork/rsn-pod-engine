@@ -14,9 +14,7 @@
 // here: they stay on CLIENT_URL.
 
 import config from '../../config';
-import { resolveClientBaseUrl } from '../identity/client-origin';
-
-const ourSites = () => ({ clientUrl: config.clientUrl, isDev: config.isDev });
+import { clientOriginConfig, resolveClientBaseUrl } from '../identity/client-origin';
 
 function originOf(url: string): string | null {
   try {
@@ -34,7 +32,7 @@ function originOf(url: string): string | null {
 export function signInOriginFor(requestOrigin: string | undefined): string | null {
   if (!requestOrigin) return null;
   // Anything that is not ours resolves to the main app, which is then null here too.
-  const site = originOf(resolveClientBaseUrl(requestOrigin, ourSites()));
+  const site = originOf(resolveClientBaseUrl(requestOrigin, clientOriginConfig()));
   return site && site !== originOf(config.clientUrl) ? site : null;
 }
 
@@ -44,5 +42,5 @@ export function signInOriginFor(requestOrigin: string | undefined): string | nul
  */
 export function applicantBaseUrl(request: { sign_in_origin?: string | null }): string {
   if (!request.sign_in_origin) return config.clientUrl;
-  return resolveClientBaseUrl(request.sign_in_origin, ourSites());
+  return resolveClientBaseUrl(request.sign_in_origin, clientOriginConfig());
 }

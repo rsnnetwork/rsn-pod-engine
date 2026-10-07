@@ -46,6 +46,7 @@ jest.mock('../../services/onboarding/stage-events.repo', () => ({ record: jest.f
 
 import authRoutes from '../../routes/auth';
 import config from '../../config';
+import logger from '../../config/logger';
 import { buildOauthState, mintPhotoLinkToken } from '../../services/identity/google-photo-link';
 
 const MAIN = 'https://app.rsn.network';
@@ -411,6 +412,9 @@ describe('GET /auth/google/callback: a state that is not ours is ignored', () =>
     expect(res.headers.location).not.toMatch(/photo=/);
     expect(mockCapture).not.toHaveBeenCalledWith(VICTIM, expect.anything());
     expect(mockCapture).not.toHaveBeenCalled();
+    // And the refusal is on the record: the reason only, not the state, so Render's logs show a probe.
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith({ reason: 'malformed' }, expect.any(String));
   });
 
   it('a state we signed is still honoured: the photo goes to the member it names, on the site it names', async () => {

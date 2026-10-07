@@ -9,6 +9,7 @@ jest.mock('../../../services/onboarding/avatar.service', () => ({ __esModule: tr
 jest.mock('../../../services/onboarding/stage-events.repo', () => ({ __esModule: true, record: jest.fn().mockResolvedValue(undefined) }));
 
 import jwt from 'jsonwebtoken';
+import logger from '../../../config/logger';
 import {
   mintPhotoLinkToken, readPhotoLinkToken, safeRedirectPath, buildOauthState, parseOauthState, applyGooglePhoto,
 } from '../../../services/identity/google-photo-link';
@@ -63,32 +64,68 @@ describe('oauth state', () => {
     expect(state.split('.')).toHaveLength(3);
   });
 
-  // Every one of these names a victim's photo link, an invite code and the preview. None may be read.
+  // Every one of these names a victim's photo link, an invite code and the preview. None may be read, and
+  // each is logged under the one class of reason that says why (the third column), never by its content.
   const CLAIMS = { inviteCode: 'FORGED', photoLinkUserId: VICTIM, redirect: '/profile', origin: PREVIEW };
   const real = buildOauthState({ inviteCode: 'mine' });
-  const FORGERIES: Array<[string, string]> = [
-    ['the old format: plain base64 JSON', b64(CLAIMS)],
-    ['an unsigned token (alg none)', `${b64({ alg: 'none', typ: 'JWT' })}.${b64({ ...CLAIMS, purpose: PURPOSE })}.`],
-    ['a token signed with another secret', sign({ ...CLAIMS, purpose: PURPOSE }, 'another-secret-with-enough-length-0123456789')],
-    ['a token signed with another algorithm', sign({ ...CLAIMS, purpose: PURPOSE }, SECRET, { algorithm: 'HS512', expiresIn: '30m' })],
-    ['an expired token', sign({ ...CLAIMS, purpose: PURPOSE }, SECRET, { expiresIn: '-10s' })],
-    ['a token with the wrong purpose (a photo link)', sign({ ...CLAIMS, purpose: 'google-photo' })],
-    ['a token with no purpose (as an access token has none)', sign({ ...CLAIMS, sub: VICTIM, role: 'member', sessionId: 's-1' })],
-    ['a token whose payload was edited after it was signed', `${real.split('.')[0]}.${b64({ ...(jwt.decode(real) as object), ...CLAIMS })}.${real.split('.')[2]}`],
-    ['a token with its signature cut off', real.slice(0, real.lastIndexOf('.'))],
-    ['a token with its last characters cut off', real.slice(0, -4)],
-    ['an empty string', ''],
-    ['text that is not a token', 'not-a-token'],
+  const FORGERIES: Array<[string, string, string]> = [
+    ['the old format: plain base64 JSON', b64(CLAIMS), 'malformed'],
+    ['an unsigned token (alg none)', `${b64({ alg: 'none', typ: 'JWT' })}.${b64({ ...CLAIMS, purpose: PURPOSE })}.`, 'bad signature'],
+    ['a token signed with another secret', sign({ ...CLAIMS, purpose: PURPOSE }, 'another-secret-with-enough-length-0123456789'), 'bad signature'],
+    ['a token signed with another algorithm', sign({ ...CLAIMS, purpose: PURPOSE }, SECRET, { algorithm: 'HS512', expiresIn: '30m' }), 'bad signature'],
+    ['an expired token', sign({ ...CLAIMS, purpose: PURPOSE }, SECRET, { expiresIn: '-10s' }), 'expired'],
+    ['a token with the wrong purpose (a photo link)', sign({ ...CLAIMS, purpose: 'google-photo' }), 'wrong purpose'],
+    ['a token with no purpose (as an access token has none)', sign({ ...CLAIMS, sub: VICTIM, role: 'member', sessionId: 's-1' }), 'wrong purpose'],
+    ['a token whose payload was edited after it was signed', `${real.split('.')[0]}.${b64({ ...(jwt.decode(real) as object), ...CLAIMS })}.${real.split('.')[2]}`, 'bad signature'],
+    ['a token with its signature cut off', real.slice(0, real.lastIndexOf('.')), 'malformed'],
+    ['a token with its last characters cut off', real.slice(0, -4), 'bad signature'],
+    ['text that is not a token', 'not-a-token', 'malformed'],
   ];
 
   it.each(FORGERIES)('ignores %s: nothing is read from it', (_name, state) => {
     expect(parseOauthState(state)).toEqual({});
   });
 
-  it('ignores a state that is not a string at all', () => {
+  it('ignores a state that is missing, or not a string at all', () => {
     expect(parseOauthState(undefined)).toEqual({});
+    expect(parseOauthState('')).toEqual({});
     expect(parseOauthState(['a', 'b'] as unknown as string)).toEqual({});
     expect(parseOauthState({ photoLinkUserId: VICTIM } as unknown as string)).toEqual({});
+  });
+
+  // 7 Oct 2026: a refused state used to be silent, so a forgery probe, or a regression that made every
+  // real state fail, would show nowhere. Each refusal is now one warning naming the class of reason.
+  describe('a refused state is logged, by why and never by what it held', () => {
+    const warn = () => logger.warn as jest.Mock;
+
+    it.each(FORGERIES.map(([name, state, reason]) => ({ name, state, reason })))('logs $name once, as "$reason"', ({ state, reason }) => {
+      parseOauthState(state);
+
+      expect(warn()).toHaveBeenCalledTimes(1);
+      const [fields, message] = warn().mock.calls[0];
+      expect(fields).toEqual({ reason });
+      expect(typeof message).toBe('string');
+      // Nothing of the token, or of what it claimed, reaches the log: not the token, not a piece of it,
+      // not the member it named, the invite code or the site.
+      const logged = JSON.stringify(warn().mock.calls);
+      for (const piece of [state, ...state.split('.'), VICTIM, 'FORGED', PREVIEW]) {
+        if (piece.length > 8) expect(logged).not.toContain(piece);
+      }
+    });
+
+    it('logs a state that is not a string as malformed, without printing it', () => {
+      parseOauthState(['not', 'a', 'string'] as unknown as string);
+      expect(warn()).toHaveBeenCalledTimes(1);
+      // The fields are the reason and nothing else, so the value itself cannot be in the log.
+      expect(warn().mock.calls[0][0]).toEqual({ reason: 'malformed' });
+    });
+
+    it('logs nothing for a state we signed, and nothing when there is no state at all', () => {
+      parseOauthState(buildOauthState({ inviteCode: 'ABC123', origin: PREVIEW }));
+      parseOauthState(undefined);
+      parseOauthState('');
+      expect(warn()).not.toHaveBeenCalled();
+    });
   });
 
   describe('lives for 30 minutes', () => {

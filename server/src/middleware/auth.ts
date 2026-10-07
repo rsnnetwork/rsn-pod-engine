@@ -80,6 +80,51 @@ export function isAccessToken(payload: unknown): boolean {
     && (claims.type === undefined || claims.type === 'access');
 }
 
+/** Who a socket handshake lets in, as the handshake records it on the socket. */
+export interface SocketMember {
+  userId: string;
+  email: string;
+  role: string;
+  displayName: string;
+}
+
+/**
+ * The socket handshake's check of a token: the member it lets in, or an Error whose message is exactly
+ * what the handshake sends ('Invalid token', or 'Account is deactivated'). It lives here, not written out
+ * inside index.ts, so that it is tested by what it does: a source pin passes an inverted condition.
+ *
+ * Only an access token opens a socket (isAccessToken); the Google sign-in state, the photo link and the
+ * refresh token share the secret and are refused, whether or not the user lookup fails open.
+ */
+export async function authenticateSocketToken(token: string): Promise<SocketMember> {
+  let payload: JwtPayload;
+  try {
+    payload = jwt.verify(token, config.jwtSecret) as JwtPayload;
+  } catch {
+    throw new Error('Invalid token');
+  }
+  if (!isAccessToken(payload)) {
+    throw new Error('Invalid token');
+  }
+
+  // Block deactivated users from socket connections. Tier-1 A4: share the
+  // 60-second cache with the HTTP auth middleware. Previously this ran a
+  // fresh DB SELECT on every handshake — during a lobby surge (200 users
+  // reconnecting after a deploy) the pool would saturate and legitimate
+  // sockets would see "Invalid token" errors that were actually timeouts.
+  const active = await isUserActive(payload.sub);
+  if (!active) {
+    throw new Error('Account is deactivated');
+  }
+
+  return {
+    userId: payload.sub,
+    email: payload.email,
+    role: payload.role,
+    displayName: payload.displayName || payload.email,
+  };
+}
+
 /**
  * Extracts and verifies JWT from Authorization header.
  * Sets req.user on success. Blocks deactivated users.

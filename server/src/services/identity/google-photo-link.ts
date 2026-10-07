@@ -72,24 +72,43 @@ export function buildOauthState(state: GoogleOauthState): string {
   return jwt.sign({ ...state, purpose: OAUTH_STATE_PURPOSE }, config.jwtSecret, { expiresIn: OAUTH_STATE_TTL });
 }
 
+/** Why a state was refused: one of four classes of reason, never anything the state held. */
+type StateRefusal = 'expired' | 'bad signature' | 'wrong purpose' | 'malformed';
+
+function refusalOf(err: unknown): StateRefusal {
+  if (err instanceof jwt.TokenExpiredError) return 'expired';
+  if (err instanceof jwt.JsonWebTokenError && /signature|algorithm/.test(err.message)) return 'bad signature';
+  return 'malformed';
+}
+
 /**
  * What a state we signed carries. Anything else (unsigned, edited, signed by another secret or algorithm,
  * expired, of another purpose, not a token at all) reads as no state: the member still signs in with their
  * own Google account, on the main app, with no invite code and no photo link.
+ *
+ * A refusal is logged, as a warning naming the class of reason (expired, bad signature, wrong purpose,
+ * malformed) and nothing else: never the token, which a forger writes and a member's own carries their id.
+ * So a probe, or a change that made every real state fail, shows in the logs. A missing state is not a
+ * refusal and logs nothing.
  */
 export function parseOauthState(raw: string | undefined): GoogleOauthState {
   if (!raw) return {};
+  const refuse = (reason: StateRefusal): GoogleOauthState => {
+    logger.warn({ reason }, 'Google sign-in state refused');
+    return {};
+  };
   try {
     const decoded = jwt.verify(raw, config.jwtSecret, { algorithms: ['HS256'] });
-    if (typeof decoded === 'string' || decoded.purpose !== OAUTH_STATE_PURPOSE) return {};
+    if (typeof decoded === 'string') return refuse('malformed');
+    if (decoded.purpose !== OAUTH_STATE_PURPOSE) return refuse('wrong purpose');
     return {
       inviteCode: typeof decoded.inviteCode === 'string' ? decoded.inviteCode : undefined,
       photoLinkUserId: typeof decoded.photoLinkUserId === 'string' ? decoded.photoLinkUserId : undefined,
       redirect: typeof decoded.redirect === 'string' ? decoded.redirect : undefined,
       origin: typeof decoded.origin === 'string' ? decoded.origin : undefined,
     };
-  } catch {
-    return {};
+  } catch (err) {
+    return refuse(refusalOf(err));
   }
 }
 

@@ -4,7 +4,8 @@
 // GET /api/auth/google hands one to anyone who asks, no sign-in needed. So a valid signature
 // proves nothing about who is calling, and every place that reads a token must refuse a state
 // as an access token or a refresh token. The places: authenticate and optionalAuth (pinned
-// by shape in middleware/auth.test.ts), the socket handshake, and the refresh.
+// by shape in middleware/auth.test.ts), the socket handshake (middleware/socket-auth.test.ts),
+// and the refresh.
 //
 // These use a REAL state, taken from the real start the way anyone could, through the real
 // router and the real identity service; only the database is a stand-in. Where the database
@@ -14,8 +15,6 @@
 import express from 'express';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
-import * as fs from 'fs';
-import * as path from 'path';
 
 const SECRET = 'test-secret-with-enough-length-0123456789';
 jest.mock('../../config', () => {
@@ -125,18 +124,5 @@ describe('a Google sign-in state is not a refresh token', () => {
   });
 });
 
-describe('the socket handshake', () => {
-  // The handshake lives in index.ts, which starts the server when loaded, so it is read, not run.
-  const src = fs.readFileSync(path.join(__dirname, '../../index.ts'), 'utf8');
-  const start = src.indexOf('io.use(async (socket, next)');
-  const handshake = src.slice(start, src.indexOf('});', start));
-
-  it('refuses a token that is not an access token, before it asks whether the member is active', () => {
-    expect(start).toBeGreaterThan(-1);
-    expect(src).toMatch(/import \{ isAccessToken \} from '\.\/middleware\/auth'/);
-    const refuses = handshake.indexOf('isAccessToken(payload)');
-    const asks = handshake.indexOf('isUserActive(payload.sub)');
-    expect(refuses).toBeGreaterThan(-1);
-    expect(asks).toBeGreaterThan(refuses);
-  });
-});
+// The socket handshake's check is a function now, tested by what it does in middleware/socket-auth.test.ts
+// (a real state is refused there too); index.ts is pinned to call it in services/tier1-a4-socket-auth-cache.test.ts.

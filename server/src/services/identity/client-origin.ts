@@ -17,9 +17,21 @@
 // sign-ins. Vercel *.vercel.app hosts are not allowed either: anyone can create
 // a Vercel project whose name ends in "-rsnnetwork", so no pattern there is ours.
 
+import config from '../../config';
+
 export interface ClientOriginConfig {
   clientUrl: string;
   isDev: boolean;
+}
+
+/**
+ * The settings the allow-list reads, taken from `config` at the moment of the call (never cached). One
+ * place says which settings feed it, for every door that resolves an origin: the magic link, Google
+ * sign-in, and the links an applicant receives. The functions below take the config as an argument and
+ * are unchanged; this is only what each caller passes.
+ */
+export function clientOriginConfig(): ClientOriginConfig {
+  return { clientUrl: config.clientUrl, isDev: config.isDev };
 }
 
 // Our sign-in sites besides CLIENT_URL, by exact origin (scheme, host and port).

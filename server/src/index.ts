@@ -24,7 +24,6 @@ import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
 import { Server as SocketServer } from 'socket.io';
-import jwt from 'jsonwebtoken';
 import config from './config';
 import logger from './config/logger';
 import { testConnection, closePool, pool } from './db';
@@ -33,8 +32,7 @@ import { runMigrations } from './db/migrate';
 // Middleware
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { apiLimiter } from './middleware/rateLimit';
-import { isUserActive } from './middleware/auth';
-import { isAccessToken } from './middleware/auth';
+import { authenticateSocketToken } from './middleware/auth';
 
 // Services
 import { processAutoReminders } from './services/join-request/join-request.service';
@@ -119,28 +117,14 @@ io.use(async (socket, next) => {
   }
 
   try {
-    const payload = jwt.verify(token, config.jwtSecret) as { sub: string; email: string; role: string; displayName?: string };
+    // The check (an access token only, and a member who is active) lives in middleware/auth.ts, where it
+    // is tested by what it does. Its messages are what this handshake sends.
+    const member = await authenticateSocketToken(token);
 
-    // Only an access token opens a socket: the Google sign-in state, the photo link and the refresh
-    // token share the secret and are not one (isAccessToken).
-    if (!isAccessToken(payload)) {
-      return next(new Error('Invalid token'));
-    }
-
-    // Block deactivated users from socket connections. Tier-1 A4: share the
-    // 60-second cache with the HTTP auth middleware. Previously this ran a
-    // fresh DB SELECT on every handshake — during a lobby surge (200 users
-    // reconnecting after a deploy) the pool would saturate and legitimate
-    // sockets would see "Invalid token" errors that were actually timeouts.
-    const active = await isUserActive(payload.sub);
-    if (!active) {
-      return next(new Error('Account is deactivated'));
-    }
-
-    socket.data.userId = payload.sub;
-    socket.data.email = payload.email;
-    socket.data.role = payload.role;
-    socket.data.displayName = payload.displayName || payload.email;
+    socket.data.userId = member.userId;
+    socket.data.email = member.email;
+    socket.data.role = member.role;
+    socket.data.displayName = member.displayName;
     next();
   } catch (err) {
     if (err instanceof Error && err.message === 'Account is deactivated') {

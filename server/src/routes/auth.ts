@@ -11,7 +11,7 @@ import logger from '../config/logger';
 import {
   mintPhotoLinkToken, readPhotoLinkToken, safeRedirectPath, buildOauthState, parseOauthState, applyGooglePhoto,
 } from '../services/identity/google-photo-link';
-import { resolveClientBaseUrl } from '../services/identity/client-origin';
+import { clientOriginConfig, resolveClientBaseUrl } from '../services/identity/client-origin';
 
 const router = Router();
 
@@ -184,10 +184,6 @@ router.get(
 
 // ─── Google OAuth ───────────────────────────────────────────────────────────
 
-// The sites a sign-in may come back to: the exact allow-list in client-origin.ts (CLIENT_URL, the app,
-// the preview, and localhost in development). Read per call, never cached.
-const ourSites = () => ({ clientUrl: config.clientUrl, isDev: config.isDev });
-
 router.get(
   '/google',
   (req: Request, res: Response) => {
@@ -203,11 +199,12 @@ router.get(
     // 7 Oct 2026: Google brings the member back to the site they started on (the app or the preview), not
     // always to the main app. The page says so in ?origin=; a plain navigation from a page carries it in
     // Referer (the sign-in page that predates ?origin= still works). Either way it is resolved against our
-    // exact allow-list, so a site that is not ours becomes the main app, and only the RESOLVED origin is kept.
+    // exact allow-list (client-origin.ts: CLIENT_URL, the app, the preview, localhost in development only), so
+    // a site that is not ours becomes the main app, and only the RESOLVED origin is kept.
     const startedOn = typeof req.query.origin === 'string' && req.query.origin ? req.query.origin : req.get('referer');
     const state = buildOauthState({
       inviteCode,
-      origin: resolveClientBaseUrl(startedOn, ourSites()),
+      origin: resolveClientBaseUrl(startedOn, clientOriginConfig()),
       ...(photoLinkUserId ? { photoLinkUserId, redirect: safeRedirectPath(req.query.redirect as string | undefined) } : {}),
     });
 
@@ -252,7 +249,7 @@ router.get(
     // in as if there were none). Even so, the success redirect carries live tokens in its query string, so
     // the site it names is resolved AGAIN here: only one of our own sites is ever a destination, anything
     // else (or nothing) is the main app.
-    const clientBase = resolveClientBaseUrl(oauthState.origin, ourSites());
+    const clientBase = resolveClientBaseUrl(oauthState.origin, clientOriginConfig());
     // Photo link: the member is already signed in; every exit goes back to
     // where they were, with the outcome in the query string.
     const photoReturn = oauthState.photoLinkUserId ? `${clientBase}${safeRedirectPath(oauthState.redirect)}` : null;
