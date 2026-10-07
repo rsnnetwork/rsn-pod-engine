@@ -11,6 +11,7 @@ import logger from '../config/logger';
 import {
   mintPhotoLinkToken, readPhotoLinkToken, safeRedirectPath, buildOauthState, parseOauthState, applyGooglePhoto,
 } from '../services/identity/google-photo-link';
+import { resolveClientBaseUrl } from '../services/identity/client-origin';
 
 const router = Router();
 
@@ -183,6 +184,10 @@ router.get(
 
 // ─── Google OAuth ───────────────────────────────────────────────────────────
 
+// The sites a sign-in may come back to: the exact allow-list in client-origin.ts (CLIENT_URL, the app,
+// the preview, and localhost in development). Read per call, never cached.
+const ourSites = () => ({ clientUrl: config.clientUrl, isDev: config.isDev });
+
 router.get(
   '/google',
   (req: Request, res: Response) => {
@@ -195,8 +200,14 @@ router.get(
     // 7 Sep 2026: "Use my Google photo" from the onboarding card. The signed
     // token names the member; the callback attaches the picture to them.
     const photoLinkUserId = readPhotoLinkToken(req.query.photo as string | undefined) ?? undefined;
+    // 7 Oct 2026: Google brings the member back to the site they started on (the app or the preview), not
+    // always to the main app. The page says so in ?origin=; a plain navigation from a page carries it in
+    // Referer (the sign-in page that predates ?origin= still works). Either way it is resolved against our
+    // exact allow-list, so a site that is not ours becomes the main app, and only the RESOLVED origin is kept.
+    const startedOn = typeof req.query.origin === 'string' && req.query.origin ? req.query.origin : req.get('referer');
     const state = buildOauthState({
       inviteCode,
+      origin: resolveClientBaseUrl(startedOn, ourSites()),
       ...(photoLinkUserId ? { photoLinkUserId, redirect: safeRedirectPath(req.query.redirect as string | undefined) } : {}),
     });
 
@@ -237,11 +248,15 @@ router.get(
     const { code, state } = req.query as Record<string, string>;
     const oauthState = parseOauthState(state);
     const inviteCode = oauthState.inviteCode || '';
+    // The state is plain base64 JSON, visible and editable by whoever holds the link, and the success
+    // redirect carries live tokens in its query string. So the site it names is resolved AGAIN here: only
+    // one of our own sites is ever a destination, anything else (or nothing) is the main app.
+    const clientBase = resolveClientBaseUrl(oauthState.origin, ourSites());
     // Photo link: the member is already signed in; every exit goes back to
     // where they were, with the outcome in the query string.
-    const photoReturn = oauthState.photoLinkUserId ? `${config.clientUrl}${safeRedirectPath(oauthState.redirect)}` : null;
+    const photoReturn = oauthState.photoLinkUserId ? `${clientBase}${safeRedirectPath(oauthState.redirect)}` : null;
     const fail = (errorCode: string) =>
-      res.redirect(photoReturn ? `${photoReturn}?photo=failed` : `${config.clientUrl}/login?error=${errorCode}`);
+      res.redirect(photoReturn ? `${photoReturn}?photo=failed` : `${clientBase}/login?error=${errorCode}`);
 
     if (!code) {
       if (photoReturn) { res.redirect(`${photoReturn}?photo=cancelled`); return; }
@@ -304,7 +319,7 @@ router.get(
       if (inviteCode) {
         params.set('inviteCode', inviteCode);
       }
-      res.redirect(`${config.clientUrl}/auth/verify?${params}`);
+      res.redirect(`${clientBase}/auth/verify?${params}`);
     } catch (err: any) {
       // Codes the login page explains in words are expected refusals, not faults.
       const explained = GOOGLE_EXPLAINED_CODES.has(err?.code);

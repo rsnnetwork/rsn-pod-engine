@@ -26,6 +26,12 @@ export interface GoogleOauthState {
   photoLinkUserId?: string;
   /** Client path to return to after a photo link (validated: same-site path only). */
   redirect?: string;
+  /**
+   * The site the member started on (7 Oct 2026), so Google brings them back there and not always to the
+   * main app. The start resolves it against the exact allow-list in client-origin.ts; the callback resolves
+   * it AGAIN before using it, because the state is plain base64 JSON that anyone holding the link can rewrite.
+   */
+  origin?: string;
 }
 
 /** A token the client carries into GET /auth/google?photo=..., minted for the signed-in member. */
@@ -61,6 +67,7 @@ export function parseOauthState(raw: string | undefined): GoogleOauthState {
       inviteCode: typeof decoded.inviteCode === 'string' ? decoded.inviteCode : undefined,
       photoLinkUserId: typeof decoded.photoLinkUserId === 'string' ? decoded.photoLinkUserId : undefined,
       redirect: typeof decoded.redirect === 'string' ? decoded.redirect : undefined,
+      origin: typeof decoded.origin === 'string' ? decoded.origin : undefined,
     };
   } catch {
     return {};

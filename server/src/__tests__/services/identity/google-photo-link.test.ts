@@ -35,6 +35,18 @@ describe('oauth state', () => {
     expect(parseOauthState(undefined)).toEqual({});
   });
 
+  // 7 Oct 2026: the site the sign-in started on rides in the state. The state is plain base64 JSON that
+  // whoever holds the link can rewrite, so the parser only says what type it is; the callback checks it.
+  it('carries the site the sign-in started on, and reads anything that is not a string as no site', () => {
+    const s = buildOauthState({ inviteCode: 'ABC', origin: 'https://preview.rsn.network' });
+    expect(parseOauthState(s)).toEqual({ inviteCode: 'ABC', origin: 'https://preview.rsn.network' });
+    const named = (origin: unknown) => Buffer.from(JSON.stringify({ origin })).toString('base64url');
+    for (const odd of [42, true, null, ['https://preview.rsn.network'], { href: 'https://preview.rsn.network' }]) {
+      expect(parseOauthState(named(odd)).origin).toBeUndefined();
+    }
+    expect(parseOauthState(buildOauthState({ inviteCode: 'ABC' })).origin).toBeUndefined();
+  });
+
   it('only a same-site path may be a return target', () => {
     expect(safeRedirectPath('/onboarding')).toBe('/onboarding');
     expect(safeRedirectPath('/profile')).toBe('/profile');
