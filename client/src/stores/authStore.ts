@@ -153,6 +153,23 @@ function getTokenExpiryMs(token: string): number | null {
   }
 }
 
+/** Whose session a token holds: the `sub` of its payload. Decoded, not verified (the server does that): it is only compared. */
+function tokenSubject(token: string): string | null {
+  try {
+    // A JWT payload is base64url, which atob cannot read when it holds a "-" or a "_".
+    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return typeof payload.sub === 'string' ? payload.sub : null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when the tokens now in storage are not `memberId`'s. Tokens that cannot be read count as someone else's: adopting them is harmless, ignoring them is not. */
+function storedTokensAreAnotherMembers(memberId: unknown): boolean {
+  const stored = readStoredTokens();
+  return !!stored && tokenSubject(stored.access) !== memberId;
+}
+
 function scheduleProactiveRefresh(accessToken: string) {
   if (refreshTimer) clearTimeout(refreshTimer);
   const expiresAt = getTokenExpiryMs(accessToken);
@@ -391,6 +408,22 @@ if (typeof window !== 'undefined') {
       (event.key === TOKENS_KEY || event.key === AUTH_PING) &&
       event.newValue &&
       !store.isAuthenticated
+    ) {
+      if (store.adoptStoredTokens()) {
+        store.checkSession();
+      }
+    }
+
+    // Another tab signed in as a DIFFERENT member while this one is signed in (7 Oct 2026). Its tokens are now the
+    // freshest in storage, and the next refresh here reads them: this tab would carry on under the first member's name
+    // and cached data but act as the other one (a Meet, Save or Pass written as the wrong member). So follow it: adopt
+    // the tokens and check the session, which names the cache's new owner and empties the cache. The same member (a
+    // token refresh in another tab) changes nothing. Only the tokens event decides: the completion ping carries none.
+    if (
+      event.key === TOKENS_KEY &&
+      event.newValue &&
+      store.isAuthenticated &&
+      storedTokensAreAnotherMembers(store.user?.id)
     ) {
       if (store.adoptStoredTokens()) {
         store.checkSession();
