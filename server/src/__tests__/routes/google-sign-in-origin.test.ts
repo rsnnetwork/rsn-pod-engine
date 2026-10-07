@@ -51,7 +51,7 @@ jest.mock('../../services/onboarding/stage-events.repo', () => ({ record: jest.f
 import authRoutes from '../../routes/auth';
 import config from '../../config';
 import { buildOauthState, mintPhotoLinkToken, GoogleOauthState } from '../../services/identity/google-photo-link';
-import { OAUTH_NONCE_COOKIE, newOauthNonce } from '../../services/identity/oauth-browser-binding';
+import { oauthNonceCookieName, newOauthNonce } from '../../services/identity/oauth-browser-binding';
 
 const MAIN = 'https://app.rsn.network';
 const PREVIEW = 'https://preview.rsn.network';
@@ -208,7 +208,7 @@ const cookieFor = new Map<string, string>();
 function stateWith(claims: GoogleOauthState): string {
   const { nonce, nonceHash } = newOauthNonce();
   const state = buildOauthState({ ...claims, nonceHash });
-  cookieFor.set(state, `${OAUTH_NONCE_COOKIE}=${nonce}`);
+  cookieFor.set(state, `${oauthNonceCookieName(config.isDev)}=${nonce}`);
   return state;
 }
 
@@ -216,7 +216,7 @@ function stateWith(claims: GoogleOauthState): string {
 function signedWith(claims: Record<string, unknown>): string {
   const { nonce, nonceHash } = newOauthNonce();
   const state = jwt.sign({ purpose: PURPOSE, nonceHash, ...claims }, SECRET, { expiresIn: '30m' });
-  cookieFor.set(state, `${OAUTH_NONCE_COOKIE}=${nonce}`);
+  cookieFor.set(state, `${oauthNonceCookieName(config.isDev)}=${nonce}`);
   return state;
 }
 

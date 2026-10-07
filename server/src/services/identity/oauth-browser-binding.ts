@@ -24,9 +24,20 @@
 
 import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 
-export const OAUTH_NONCE_COOKIE = 'rsn_oauth_nonce';
-/** Only the Google sign-in routes of the API (the start and the callback) are sent the cookie. */
-export const OAUTH_NONCE_COOKIE_PATH = '/api/auth/google';
+/**
+ * The nonce cookie's name. In production it is `__Host-rsn_oauth_nonce`: a browser keeps a cookie with that prefix only
+ * when it is Secure, has Path=/ and names no Domain, so no sibling site on rsn.network can set it from its own address
+ * or shadow it with a cookie of a longer path (which a browser sends first). That matters because any host under
+ * rsn.network can set a cookie for the whole domain, and a plain-named one would be read as ours: a sibling could start
+ * its own sign-in, toss that nonce into a victim's browser, and send the victim its callback address. In development the
+ * API is plain http, where Secure (and so the prefix) cannot apply, and the plain name stays.
+ */
+export const OAUTH_NONCE_COOKIE_PRODUCTION = '__Host-rsn_oauth_nonce';
+export const OAUTH_NONCE_COOKIE_DEVELOPMENT = 'rsn_oauth_nonce';
+export const oauthNonceCookieName = (isDev: boolean): string =>
+  (isDev ? OAUTH_NONCE_COOKIE_DEVELOPMENT : OAUTH_NONCE_COOKIE_PRODUCTION);
+/** Development only: the plain cookie goes to the Google sign-in routes of the API and nowhere else. */
+const OAUTH_NONCE_COOKIE_DEVELOPMENT_PATH = '/api/auth/google';
 /**
  * How long a state lives, and so how long the cookie that binds it to a browser lives: the same
  * 30 minutes, said once. A state outliving its cookie could only be refused; a cookie outliving its state
@@ -49,41 +60,44 @@ export function newOauthNonce(): OauthNonce {
 }
 
 /**
- * Attributes of the nonce cookie, for res.cookie. The start and the callback are both top-level
- * navigations to the API's host (from the app, then from accounts.google.com), so a SameSite=Lax
- * first-party cookie is sent on the callback. No Domain: only the API's own host ever sees it.
- * Secure everywhere but development, where the API is plain http on localhost.
+ * Attributes of the nonce cookie, for res.cookie. The start and the callback are both top-level navigations to the API's
+ * host (from the app, then from accounts.google.com), so a SameSite=Lax first-party cookie is sent on the callback. No
+ * Domain: only the API's own host ever sees it. In production it is Secure with Path=/, which is what the __Host- prefix
+ * demands; in development, where the API is plain http on localhost, neither Secure nor the prefix can apply, and the
+ * cookie keeps to the Google sign-in routes.
  */
 export function oauthNonceCookieOptions(isDev: boolean) {
   return {
     httpOnly: true,
     secure: !isDev,
     sameSite: 'lax' as const,
-    path: OAUTH_NONCE_COOKIE_PATH,
+    path: isDev ? OAUTH_NONCE_COOKIE_DEVELOPMENT_PATH : '/',
     maxAge: OAUTH_STATE_LIFETIME_SECONDS * 1000, // res.cookie takes milliseconds and writes Max-Age in seconds
   };
 }
 
 /**
- * One cookie out of a Cookie header. The server has no cookie parser and needs exactly one name, so this
- * reads that and nothing else: the name must match whole (not a longer or shorter name), the first of
- * two cookies of that name wins (browsers send the most specific path first), and a value that is not
- * valid percent-encoding is read as it is, which then matches nothing.
+ * Every cookie of one name out of a Cookie header, in the order sent. The server has no cookie parser and needs exactly
+ * one name, so this reads that and nothing else: the name must match whole (not a longer or shorter name), a value in
+ * quotes is unquoted, and a value that is not valid percent-encoding is read as it is, which then matches nothing.
+ * All of them are returned, not the first: a browser sends one cookie of a name per host and path, so two of the name
+ * mean somebody else's was set beside ours, and the decision refuses them rather than rely on which is read first.
  */
-export function readCookie(header: string | undefined, name: string): string | undefined {
-  if (!header) return undefined;
+export function readCookieValues(header: string | undefined, name: string): string[] {
+  if (!header) return [];
+  const values: string[] = [];
   for (const pair of header.split(';')) {
     const eq = pair.indexOf('=');
     if (eq < 0 || pair.slice(0, eq).trim() !== name) continue;
     const raw = pair.slice(eq + 1).trim();
     const value = raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw;
     try {
-      return decodeURIComponent(value);
+      values.push(decodeURIComponent(value));
     } catch {
-      return value;
+      values.push(value);
     }
   }
-  return undefined;
+  return values;
 }
 
 /** Equal hashes, compared in constant time. Anything that is not a SHA-256 in hex simply does not match. */
@@ -99,18 +113,21 @@ export type BindingRefusal = 'no state' | 'bad state' | 'no cookie' | 'cookie mi
 /**
  * Whether the browser that came back is the browser that left: null when it is, else the reason it is not.
  * `rawState` is what arrived; `nonceHash` is what the state carried once it verified (nothing for a state
- * that did not verify, or that was signed before this rule and has no nonce); `cookieNonce` is what the
- * browser sent back.
+ * that did not verify, or that was signed before this rule and has no nonce); `cookieNonces` is every value the
+ * browser sent for the cookie. Exactly one must be there and must be the nonce: two or more can only mean that
+ * somebody else set a cookie of the name beside ours, so they are refused, whatever they hold.
  */
 export function browserBindingRefusal(input: {
   rawState: string | undefined;
   nonceHash: string | undefined;
-  cookieNonce: string | undefined;
+  cookieNonces: readonly string[];
 }): BindingRefusal | null {
   if (!input.rawState) return 'no state';
   if (!input.nonceHash) return 'bad state';
-  if (!input.cookieNonce) return 'no cookie';
-  return matchesHash(input.cookieNonce, input.nonceHash) ? null : 'cookie mismatch';
+  if (input.cookieNonces.length > 1) return 'cookie mismatch';
+  const [cookieNonce] = input.cookieNonces;
+  if (!cookieNonce) return 'no cookie';
+  return matchesHash(cookieNonce, input.nonceHash) ? null : 'cookie mismatch';
 }
 
 /** Where the Google sign-in start lives on the API (routes/auth.ts is mounted at /api/auth, as index.ts does). */

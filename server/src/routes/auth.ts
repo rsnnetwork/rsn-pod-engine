@@ -13,7 +13,7 @@ import {
 } from '../services/identity/google-photo-link';
 import { clientOriginConfig, resolveClientBaseUrl } from '../services/identity/client-origin';
 import {
-  OAUTH_NONCE_COOKIE, newOauthNonce, oauthNonceCookieOptions, readCookie, browserBindingRefusal, canonicalStartLocation,
+  oauthNonceCookieName, newOauthNonce, oauthNonceCookieOptions, readCookieValues, browserBindingRefusal, canonicalStartLocation,
 } from '../services/identity/oauth-browser-binding';
 
 const router = Router();
@@ -189,7 +189,7 @@ router.get(
 
 /** Take the nonce cookie out of the browser: same name, path and flags it was set with, Max-Age=0. */
 function clearOauthNonceCookie(res: Response): void {
-  res.cookie(OAUTH_NONCE_COOKIE, '', { ...oauthNonceCookieOptions(config.isDev), maxAge: 0 });
+  res.cookie(oauthNonceCookieName(config.isDev), '', { ...oauthNonceCookieOptions(config.isDev), maxAge: 0 });
 }
 
 router.get(
@@ -238,7 +238,7 @@ router.get(
       nonceHash,
       ...(photoLinkUserId ? { photoLinkUserId, redirect: safeRedirectPath(req.query.redirect as string | undefined) } : {}),
     });
-    res.cookie(OAUTH_NONCE_COOKIE, nonce, oauthNonceCookieOptions(config.isDev));
+    res.cookie(oauthNonceCookieName(config.isDev), nonce, oauthNonceCookieOptions(config.isDev));
 
     const params = new URLSearchParams({
       client_id: config.googleClientId,
@@ -278,7 +278,7 @@ router.get(
     // 7 Oct 2026: a sign-in only finishes in the browser that started it, so this callback needs the cookie the
     // start put in that browser. Whatever happens next, that cookie has done its job: it is cleared on every
     // outcome (which also makes a callback address good once per browser).
-    const browserNonce = readCookie(req.headers.cookie, OAUTH_NONCE_COOKIE);
+    const browserNonces = readCookieValues(req.headers.cookie, oauthNonceCookieName(config.isDev));
     clearOauthNonceCookie(res);
 
     const oauthState = parseOauthState(state);
@@ -305,7 +305,7 @@ router.get(
     // verified AND the browser's cookie is the nonce the state carries. The refusal goes back to the site the state
     // names when it verified (resolved above), else the main app, and says why only as a reason: never the nonce,
     // the cookie or the state.
-    const refusal = browserBindingRefusal({ rawState: state, nonceHash: oauthState.nonceHash, cookieNonce: browserNonce });
+    const refusal = browserBindingRefusal({ rawState: state, nonceHash: oauthState.nonceHash, cookieNonces: browserNonces });
     if (refusal) {
       logger.warn({ reason: refusal }, 'Google sign-in refused: it did not start in this browser');
       res.redirect(`${clientBase}/login?error=google_try_again`);

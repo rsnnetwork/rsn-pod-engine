@@ -77,9 +77,14 @@ const PICTURE = 'https://lh3.googleusercontent.com/a/photo';
 const CANONICAL = 'api.rsn.network';
 const CLIENT_API = 'rsn-api-h04m.onrender.com';
 
-// The cookie that ties a sign-in to the browser, named here in full so a rename cannot go unnoticed.
-const COOKIE = 'rsn_oauth_nonce';
-const COOKIE_PATH = '/api/auth/google';
+// The cookie that ties a sign-in to the browser, named here in full so a rename cannot go unnoticed. In production it is a
+// __Host- cookie: a browser keeps one only when it is Secure, has Path=/ and names no Domain, so no sibling site on
+// rsn.network can set it or shadow it. In development the API is plain http, where Secure (and so the prefix) cannot
+// apply: the plain name stays, on its own path.
+const COOKIE = '__Host-rsn_oauth_nonce';
+const COOKIE_PATH = '/';
+const DEV_COOKIE = 'rsn_oauth_nonce';
+const DEV_COOKIE_PATH = '/api/auth/google';
 
 // As index.ts builds the app: the first proxy hop is trusted, Helmet answers Referrer-Policy: no-referrer on every
 // response (so a redirect takes the Referer away from the request it leads to), and the router is at /api/auth.
@@ -119,9 +124,9 @@ function forgetCalls() {
 
 // ── Reading what the server sets ─────────────────────────────────────────────
 
-/** The one Set-Cookie line about the nonce cookie in a response (fails if there is not exactly one). */
-function nonceCookie(res: request.Response) {
-  const lines = setCookieLines(res).filter((line) => line.startsWith(`${COOKIE}=`));
+/** The one Set-Cookie line about the nonce cookie of that name in a response (fails if there is not exactly one). */
+function nonceCookie(res: request.Response, name: string = COOKIE) {
+  const lines = setCookieLines(res).filter((line) => line.startsWith(`${name}=`));
   expect(lines).toHaveLength(1);
   return parseSetCookie(lines[0]);
 }
@@ -192,15 +197,19 @@ const REASONS: BindingRefusal[] = ['no state', 'bad state', 'no cookie', 'cookie
 const refusalWarnings = () =>
   (logger.warn as jest.Mock).mock.calls.map(([fields]) => fields).filter((fields) => REASONS.includes(fields?.reason));
 
-/** The cookie is removed: same name, same path, Max-Age=0, and nothing in it. */
-function expectCleared(res: request.Response) {
-  const { value, attributes } = nonceCookie(res);
+/**
+ * The cookie is removed: same name, same path, same flags it was set with (Secure only for the production cookie), Max-Age=0,
+ * and nothing in it. In development the name and path are the plain ones, which the caller says.
+ */
+function expectCleared(res: request.Response, name: string = COOKIE, path: string = COOKIE_PATH) {
+  const { value, attributes } = nonceCookie(res, name);
   expect(value).toBe('');
-  expect(attributes).toEqual(expect.arrayContaining(['Max-Age=0', `Path=${COOKIE_PATH}`, 'HttpOnly', 'SameSite=Lax']));
+  expect(attributes).toEqual(expect.arrayContaining(['Max-Age=0', `Path=${path}`, 'HttpOnly', 'SameSite=Lax']));
+  expect(attributes.includes('Secure')).toBe(name === COOKIE);
 }
 
 /** A refused callback: it goes back to the login page, asking to start again, and nothing at all went on. */
-function expectRefused(res: request.Response, site: string, reason: BindingRefusal) {
+function expectRefused(res: request.Response, site: string, reason: BindingRefusal, name: string = COOKIE, path: string = COOKIE_PATH) {
   expect(res.status).toBe(302);
   expect(res.headers.location).toBe(`${site}/login?error=google_try_again`);
   // No code exchange, no sign-in, no photo change.
@@ -209,7 +218,7 @@ function expectRefused(res: request.Response, site: string, reason: BindingRefus
   expect(mockCapture).not.toHaveBeenCalled();
   // And no tokens reach the address either.
   expect(res.headers.location).not.toMatch(/accessToken|refreshToken/);
-  expectCleared(res);
+  expectCleared(res, name, path);
   // One warning from the callback, naming the reason and nothing else.
   expect(refusalWarnings()).toEqual([{ reason }]);
 }
@@ -217,30 +226,41 @@ function expectRefused(res: request.Response, site: string, reason: BindingRefus
 // ── The start ────────────────────────────────────────────────────────────────
 
 describe('GET /auth/google: the start ties the sign-in to this browser', () => {
-  it('sets rsn_oauth_nonce on the API\'s own host: HttpOnly, Secure, SameSite=Lax, Path=/api/auth/google, 30 minutes', async () => {
+  it('sets __Host-rsn_oauth_nonce on the API\'s own host: HttpOnly, Secure, SameSite=Lax, Path=/, no Domain, 30 minutes', async () => {
     const res = await startOn(CANONICAL);
     expect(res.status).toBe(302);
     expect(res.headers.location).toMatch(/^https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth\?/);
 
     expect(setCookieLines(res)).toHaveLength(1);
     const { name, value, attributes } = nonceCookie(res);
-    expect(name).toBe('rsn_oauth_nonce');
+    expect(name).toBe('__Host-rsn_oauth_nonce');
     expect(value).toMatch(/^[0-9a-f]{64}$/);
-    expect(attributes).toEqual(expect.arrayContaining(['HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/api/auth/google', 'Max-Age=1800']));
-    // Nothing else: above all no Domain (so the cookie belongs to the API's host alone) and nothing that widens its reach.
+    expect(attributes).toEqual(expect.arrayContaining(['HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/', 'Max-Age=1800']));
+    // Nothing else: above all no Domain (a browser refuses a __Host- cookie that names one, and the cookie belongs to the
+    // API's host alone) and nothing that widens its reach.
     expect(attributes.map((a) => a.split('=')[0]).sort()).toEqual(['Expires', 'HttpOnly', 'Max-Age', 'Path', 'SameSite', 'Secure']);
     // Expires is Express's own companion to Max-Age, and says the same 30 minutes.
     const expires = Date.parse(attributes.find((a) => a.startsWith('Expires='))!.slice('Expires='.length));
     expect(Math.abs(expires - Date.now() - 30 * 60 * 1000)).toBeLessThan(10_000);
   });
 
-  it('is not Secure in development, where the API is plain http on localhost, and is otherwise the same', async () => {
+  it('is only ever the __Host- name in production: no plain-named twin is set beside it', async () => {
+    const lines = setCookieLines(await startOn(CANONICAL));
+    expect(lines).toHaveLength(1);
+    expect(lines[0].startsWith('__Host-rsn_oauth_nonce=')).toBe(true);
+  });
+
+  it('in development, where the API is plain http on localhost: the plain name, on its own path, not Secure (a __Host- cookie cannot be)', async () => {
     const dev = config as unknown as { isDev: boolean };
     try {
       dev.isDev = true;
-      const { attributes } = nonceCookie(await startOn(CANONICAL));
+      const res = await startOn(CANONICAL);
+      expect(setCookieLines(res)).toHaveLength(1);
+      const { name, attributes } = nonceCookie(res, DEV_COOKIE);
+      expect(name).toBe('rsn_oauth_nonce');
       expect(attributes).not.toContain('Secure');
-      expect(attributes).toEqual(expect.arrayContaining(['HttpOnly', 'SameSite=Lax', 'Path=/api/auth/google', 'Max-Age=1800']));
+      expect(attributes).toEqual(expect.arrayContaining(['HttpOnly', 'SameSite=Lax', `Path=${DEV_COOKIE_PATH}`, 'Max-Age=1800']));
+      expect(attributes.map((a) => a.split('=')[0]).sort()).toEqual(['Expires', 'HttpOnly', 'Max-Age', 'Path', 'SameSite']);
     } finally {
       dev.isDev = false;
     }
@@ -511,11 +531,39 @@ describe('a sign-in from the client, through both API hosts', () => {
         expect(nav.leftFor?.hostname).toBe('accounts.google.com');
         const redirectUri = new URL(nav.leftFor!.searchParams.get('redirect_uri') as string);
         expect(redirectUri.host).toBe('localhost:3001');
-        expect(browser.holding(COOKIE).map((c) => c.host)).toEqual(['localhost']);
+        // Plain http: the plain name, on its own path (a __Host- cookie could not be kept here at all).
+        expect(browser.holding(DEV_COOKIE).map((c) => [c.host, c.path])).toEqual([['localhost', DEV_COOKIE_PATH]]);
+        expect(browser.holding(COOKIE)).toEqual([]);
 
         redirectUri.search = new URLSearchParams({ code: 'c', state: nav.leftFor!.searchParams.get('state') as string }).toString();
         googleKnowsTheMember();
         expect((await browser.navigate(redirectUri.href)).res.headers.location).toBe(verifyUrl(PREVIEW));
+        // Cleared the way it was set: the browser let go of it.
+        expect(browser.holding(DEV_COOKIE)).toEqual([]);
+      } finally {
+        cfg.isDev = false;
+        cfg.apiBaseUrl = 'https://api.rsn.network';
+      }
+    });
+
+    it('a cookie sent twice is refused here too, and the plain name is the only one read', async () => {
+      const cfg = config as unknown as { isDev: boolean; apiBaseUrl: string };
+      try {
+        cfg.isDev = true;
+        cfg.apiBaseUrl = 'http://localhost:3001';
+        const browser = new BrowserJar(app, ['localhost:3001']);
+        const nav = await browser.navigate(`http://localhost:3001/api/auth/google?origin=${encodeURIComponent(PREVIEW)}`);
+        const state = nav.leftFor!.searchParams.get('state') as string;
+        const nonce = browser.valueSentTo(DEV_COOKIE, 'http://localhost:3001/api/auth/google/callback') as string;
+        const callbackWith = (cookie: string) => request(app).get('/api/auth/google/callback').set('Host', 'localhost:3001')
+          .query({ code: 'c', state }).set('Cookie', cookie);
+
+        googleKnowsTheMember();
+        expectRefused(await callbackWith(`${DEV_COOKIE}=${nonce}; ${DEV_COOKIE}=${nonce}`), PREVIEW, 'cookie mismatch', DEV_COOKIE, DEV_COOKIE_PATH);
+        forgetCalls();
+        googleKnowsTheMember();
+        // A __Host- cookie is nothing to the development server.
+        expectRefused(await callbackWith(`${COOKIE}=${nonce}`), PREVIEW, 'no cookie', DEV_COOKIE, DEV_COOKIE_PATH);
       } finally {
         cfg.isDev = false;
         cfg.apiBaseUrl = 'https://api.rsn.network';
@@ -547,6 +595,15 @@ describe('GET /auth/google/callback: in the browser that started the sign-in', (
     const { state } = await browser.start();
     googleKnowsTheMember();
     expect((await browser.comesBack(state)).headers.location).toBe(verifyUrl(MAIN));
+  });
+
+  it('is not put off by other cookies in the header: a plain-named one, a look-alike, whatever else the browser holds', async () => {
+    const browser = new Browser();
+    const { state } = await browser.start({ origin: PREVIEW });
+    const nonce = browser.valueSentTo(COOKIE, browser.returnAddress) as string;
+    googleKnowsTheMember();
+    const res = await returnWith(state, `theme=dark; rsn_oauth_nonce=tossed; x_${COOKIE}=1; ${COOKIE}=${nonce}; sid=abc`);
+    expect(res.headers.location).toBe(verifyUrl(PREVIEW));
   });
 
   it('links the photo to the member the state names, and goes back to the page it started from', async () => {
@@ -632,6 +689,32 @@ describe('GET /auth/google/callback: in a browser that did not start the sign-in
     ['the right value sits in a cookie of a similar name', 'no cookie', PREVIEW, async () => {
       const s = await aState();
       return { state: s.state, cookie: `x_${COOKIE}=${s.nonce}; ${COOKIE}_2=${s.nonce}` };
+    }],
+    ['the right value sits in the plain-named cookie, and the __Host- one is missing (the one a sibling site could set)', 'no cookie', PREVIEW, async () => {
+      const s = await aState();
+      return { state: s.state, cookie: `rsn_oauth_nonce=${s.nonce}` };
+    }],
+    // A browser sends one cookie of a name per host and path, so two of the name mean somebody else's was set beside ours.
+    // Which one a server reads first is not something to rely on: more than one is refused, the right value included.
+    ['the cookie is sent twice, both with the right value', 'cookie mismatch', PREVIEW, async () => {
+      const s = await aState();
+      return { state: s.state, cookie: `${COOKIE}=${s.nonce}; ${COOKIE}=${s.nonce}` };
+    }],
+    ['the cookie is sent twice, the right value first', 'cookie mismatch', PREVIEW, async () => {
+      const s = await aState();
+      return { state: s.state, cookie: `${COOKIE}=${s.nonce}; ${COOKIE}=${newOauthNonce().nonce}` };
+    }],
+    ['the cookie is sent twice, the right value second', 'cookie mismatch', PREVIEW, async () => {
+      const s = await aState();
+      return { state: s.state, cookie: `${COOKIE}=${newOauthNonce().nonce}; ${COOKIE}=${s.nonce}` };
+    }],
+    ['the cookie is sent twice, an empty one and the right one', 'cookie mismatch', PREVIEW, async () => {
+      const s = await aState();
+      return { state: s.state, cookie: `${COOKIE}=; ${COOKIE}=${s.nonce}` };
+    }],
+    ['the cookie is sent three times, with another cookie between', 'cookie mismatch', PREVIEW, async () => {
+      const s = await aState();
+      return { state: s.state, cookie: `${COOKIE}=${s.nonce}; a=1; ${COOKIE}=${s.nonce}; ${COOKIE}=${s.nonce}` };
     }],
     ['the cookie is some other nonce', 'cookie mismatch', PREVIEW, async () => ({ state: (await aState()).state, cookie: withNonce(newOauthNonce().nonce) })],
     ['the cookie is the state\'s own hash (which anyone who reads the state can read)', 'cookie mismatch', PREVIEW, async () => {
@@ -769,6 +852,56 @@ describe('GET /auth/google/callback: in a browser that did not start the sign-in
   });
 });
 
+// ── A sibling site cannot set or shadow the cookie ───────────────────────────
+
+// Any host under rsn.network can set a cookie for the whole domain: `name=value; Domain=rsn.network; Path=/api/auth/google/callback`
+// is stored, and is sent to api.rsn.network BEFORE a cookie of a shorter path, so a server that read the first cookie of a
+// plain name would read the sibling's. A sibling could then start its own sign-in, toss that nonce into a victim's browser,
+// and send the victim its callback address (its code, its valid state): login CSRF again, once everything is on one host.
+// The __Host- name closes it: a browser refuses such a cookie with a Domain or a Path other than /, and a plain-named
+// cookie is not the one the server reads.
+describe('a sibling site on rsn.network cannot set or shadow the cookie', () => {
+  const SIBLING = 'https://evil.rsn.network/';
+  const TOSSED_PLAIN = (nonce: string) => `rsn_oauth_nonce=${nonce}; Domain=rsn.network; Path=/api/auth/google/callback; Secure`;
+
+  it('a plain-named cookie tossed from a sibling is sent first, and counts for nothing: the member signs in as themselves', async () => {
+    const browser = new Browser();
+    browser.hear(SIBLING, TOSSED_PLAIN('tossed'));
+    const start = await browser.start({ origin: PREVIEW });
+    // It is held, and it goes to the callback ahead of the real cookie (longer path first)...
+    expect(browser.cookieHeaderFor(start.redirectUri)?.startsWith('rsn_oauth_nonce=tossed; ')).toBe(true);
+    // ...and the sign-in finishes anyway, because only the __Host- name is read.
+    googleKnowsTheMember();
+    expect((await browser.comesBack(start.state)).headers.location).toBe(verifyUrl(PREVIEW));
+  });
+
+  it('the attack: the nonce of the attacker\'s own sign-in, tossed into the victim\'s browser in every way a sibling can, signs the victim into nothing', async () => {
+    const attacker = new Browser();
+    const { state } = await attacker.start({ origin: PREVIEW });
+    const attackersNonce = attacker.valueSentTo(COOKIE, attacker.returnAddress) as string;
+
+    const victim = new Browser();
+    victim.hear(SIBLING, TOSSED_PLAIN(attackersNonce));
+    // Every way to set the __Host- cookie from another address, which a browser refuses or keeps for the sibling alone:
+    victim.hear(SIBLING, `${COOKIE}=${attackersNonce}; Domain=rsn.network; Path=/; Secure`); // a Domain
+    victim.hear(SIBLING, `${COOKIE}=${attackersNonce}; Domain=rsn.network; Path=/api/auth/google/callback; Secure`); // a longer path
+    victim.hear(SIBLING, `${COOKIE}=${attackersNonce}; Domain=rsn.network; Secure`); // a Domain, and no Path
+    victim.hear(SIBLING, `${COOKIE}=${attackersNonce}; Path=/`); // not Secure
+    victim.hear(SIBLING, `${COOKIE}=${attackersNonce}; Path=/; Secure`); // the one a browser keeps: for the sibling's host alone
+    expect(victim.holding(COOKIE)).toEqual([{ host: 'evil.rsn.network', hostOnly: true, path: '/', value: attackersNonce }]);
+    expect(victim.cookieHeaderFor(attacker.returnAddress)).toBe(`rsn_oauth_nonce=${attackersNonce}`);
+
+    googleKnowsTheMember({ email: 'attacker@example.com', name: 'Mallory' });
+    expectRefused(await victim.comesBack(state, { code: 'attackers-code' }), PREVIEW, 'no cookie');
+  });
+
+  it('the cookie the API really sets is one a browser keeps under those rules: for the API\'s host alone, on Path=/', async () => {
+    const browser = new Browser();
+    await browser.start({ origin: PREVIEW });
+    expect(browser.holding(COOKIE)).toEqual([{ host: CANONICAL, hostOnly: true, path: '/', value: expect.stringMatching(/^[0-9a-f]{64}$/) }]);
+  });
+});
+
 // ── The cookie is cleared on every outcome ───────────────────────────────────
 
 describe('GET /auth/google/callback: the cookie is cleared on every outcome', () => {
@@ -801,16 +934,18 @@ describe('GET /auth/google/callback: the cookie is cleared on every outcome', ()
     expectCleared(await run());
   });
 
-  it('with the same attributes it was set with, so the browser matches it to the cookie it holds, and in development without Secure', async () => {
+  it('with the name, path and flags it was set with, so the browser matches it to the cookie it holds; in development the plain ones, without Secure', async () => {
     const dev = config as unknown as { isDev: boolean };
-    expect(nonceCookie(await returnWith(undefined)).attributes).toEqual(
-      expect.arrayContaining(['Max-Age=0', 'Path=/api/auth/google', 'HttpOnly', 'Secure', 'SameSite=Lax']),
-    );
+    const production = await returnWith(undefined);
+    expect(nonceCookie(production).attributes).toEqual(expect.arrayContaining(['Max-Age=0', 'Path=/', 'HttpOnly', 'Secure', 'SameSite=Lax']));
+    expect(setCookieLines(production)).toHaveLength(1);
     try {
       dev.isDev = true;
-      const { attributes } = nonceCookie(await returnWith(undefined));
+      const development = await returnWith(undefined);
+      const { attributes } = nonceCookie(development, DEV_COOKIE);
       expect(attributes).toEqual(expect.arrayContaining(['Max-Age=0', 'Path=/api/auth/google', 'HttpOnly', 'SameSite=Lax']));
       expect(attributes).not.toContain('Secure');
+      expect(setCookieLines(development)).toHaveLength(1);
     } finally {
       dev.isDev = false;
     }
