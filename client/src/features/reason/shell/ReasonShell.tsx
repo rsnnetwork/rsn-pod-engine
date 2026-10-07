@@ -7,6 +7,7 @@
 // gives it, the Admin bulk bars stick to the top of <main> (a sticky top bar
 // outside it would hide them), and a page that is wider than the screen scrolls
 // inside <main> instead of dragging the whole window sideways.
+import { useLayoutEffect, useRef } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
@@ -24,6 +25,13 @@ import { NAV_BY_KEY, onAdmin } from './nav';
 
 export default function ReasonShell() {
   const { pathname } = useLocation();
+  const main = useRef<HTMLElement>(null);
+  // <main> is the scroll area, so it is what keeps its place when the page inside it changes: opening For You after
+  // scrolling Circles landed mid-list. A page opens at its top. Only the path decides (?tab= and ?q= are the same
+  // page), it is done before paint so no frame is drawn mid-list, and instantly (the app scrolls smoothly otherwise).
+  useLayoutEffect(() => {
+    main.current?.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+  }, [pathname]);
   const user = useAuthStore((s) => s.user);
   const userId = user?.id as string | undefined;
   const { data: unread } = useQuery({
@@ -56,7 +64,7 @@ export default function ReasonShell() {
             </div>
           </div>
         )}
-        <main className="min-h-0 flex-1 overflow-y-auto pb-[calc(96px+env(safe-area-inset-bottom))] pl-[max(13px,env(safe-area-inset-left))] pr-[max(13px,env(safe-area-inset-right))] pt-4 min-[721px]:pb-10 min-[721px]:pl-[22px] min-[721px]:pr-[max(22px,env(safe-area-inset-right))] min-[721px]:pt-[22px]">
+        <main ref={main} className="min-h-0 flex-1 overflow-y-auto pb-[calc(96px+env(safe-area-inset-bottom))] pl-[max(13px,env(safe-area-inset-left))] pr-[max(13px,env(safe-area-inset-right))] pt-4 min-[721px]:pb-10 min-[721px]:pl-[22px] min-[721px]:pr-[max(22px,env(safe-area-inset-right))] min-[721px]:pt-[22px]">
           <div className="mx-auto w-full max-w-[1400px]">
             {inPeople && <PeopleTabs />}
             {inAdmin && <AdminTabs />}

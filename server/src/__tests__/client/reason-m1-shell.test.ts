@@ -59,9 +59,19 @@ describe('REASON shell: faults found by looking at it', () => {
   it('the page area scrolls, not the window, as in the old layout', () => {
     const shell = read('features/reason/shell/ReasonShell.tsx');
     expect(shell).toMatch(/h-\[100dvh\]/);
-    expect(shell).toMatch(/<main className="min-h-0 flex-1 overflow-y-auto/);
+    expect(shell).toMatch(/<main ref=\{main\} className="min-h-0 flex-1 overflow-y-auto/);
     // A sticky top bar would hide the Admin bulk bars, which stick to the top of <main>.
     expect(read('features/reason/shell/ShellTopbar.tsx')).not.toMatch(/\bsticky\b/);
+  });
+  it('<main> is the scroll area, so it is what keeps its place between pages: it goes back to the top when the path changes, and only then (a ?tab= or ?q= change is the same page)', () => {
+    const shell = read('features/reason/shell/ReasonShell.tsx');
+    expect(shell).toMatch(/import \{ useLayoutEffect, useRef \} from 'react';/);
+    expect(shell).toMatch(/const main = useRef<HTMLElement>\(null\);/);
+    // Before paint (no frame is drawn mid-list), instant (the app scrolls smoothly), and keyed on the path alone.
+    expect(shell).toMatch(/useLayoutEffect\(\(\) => \{\s*main\.current\?\.scrollTo\(\{ top: 0, left: 0, behavior: 'instant' \}\);\s*\}, \[pathname\]\);/);
+    expect(shell).toMatch(/const \{ pathname \} = useLocation\(\);/);
+    // The whole location, or its search, would send a member back to the top on every tab or filter.
+    expect(shell).not.toMatch(/\}, \[[^\]]*\b(location|search|searchParams)\b[^\]]*\]\)/);
   });
   it('the rail scrolls on a short window, so the account block stays on screen', () => {
     const side = read('features/reason/shell/ShellSidebar.tsx');
