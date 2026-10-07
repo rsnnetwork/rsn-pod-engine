@@ -97,6 +97,10 @@ function sizes(wanted: Size[]): Size[] {
 // The browser's own notice that a resize observer needed another frame. Not an application error.
 const BENIGN_PAGE_ERROR = /ResizeObserver loop (limit exceeded|completed with undelivered notifications)/i;
 
+// The sidebar: the aside that holds the Main navigation. For You has an aside of its own ("Your context"), so a bare
+// `aside` is two elements on that page, and a locator that must be one element then fails.
+const sidebar = (page: Page): Locator => page.locator('aside:has(nav[aria-label="Main"])');
+
 // ── Accounts and pages ───────────────────────────────────────────────────────────────────────
 
 // One conversation between the two throwaway members, written straight into their own rows, so a
@@ -162,7 +166,7 @@ async function visit(page: Page, route: string, width: number): Promise<void> {
   }, undefined, { timeout: 30_000 }).catch(() => {
     throw new Error(`${width}px ${route}: the shell did not draw (is the member signed in? now at ${page.url()})`);
   });
-  const chrome = modeOf(width) === 'phone' ? page.getByRole('navigation', { name: 'Main' }) : page.locator('aside');
+  const chrome = modeOf(width) === 'phone' ? page.getByRole('navigation', { name: 'Main' }) : sidebar(page);
   await expect(chrome, `${width}px ${route}: the shell did not draw (is the member signed in? now at ${page.url()})`).toBeVisible({ timeout: 30_000 });
   await page.waitForLoadState('load');
   await page.evaluate(async () => { await document.fonts.ready; });
@@ -224,7 +228,7 @@ async function expectOfficialLogo(page: Page, where: string): Promise<void> {
 // The navigation that belongs to this width, and none of the other two.
 async function expectChrome(page: Page, width: number, where: string): Promise<void> {
   const mode = modeOf(width);
-  const aside = page.locator('aside');
+  const aside = sidebar(page);
   const nav = page.getByRole('navigation', { name: 'Main' }); // the visible one only
 
   if (mode === 'phone') {
@@ -328,7 +332,7 @@ test('1 every width: no sideways scroll, the right navigation, the official logo
             await expectOfficialLogo(page, where);
             const current = modeOf(size.width) === 'phone'
               ? page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'For You' })
-              : page.locator('aside').getByRole('link', { name: 'For You', exact: true });
+              : sidebar(page).getByRole('link', { name: 'For You', exact: true });
             await expect(current, `${where}: For You is the current page`).toHaveAttribute('aria-current', 'page');
           }
           if (route === '/circles') await page.screenshot({ path: path.join(SHOTS, `${label}-${size.width}-circles.png`) });
@@ -479,7 +483,7 @@ test('3 breakpoints: bar to 720px, named icons 721 to 980px, labels from 981px',
       await expectContained(page, where);
       const circles = modeOf(size.width) === 'phone'
         ? null
-        : page.locator('aside').getByRole('link', { name: 'Circles', exact: true });
+        : sidebar(page).getByRole('link', { name: 'Circles', exact: true });
       if (circles) await expect(circles, `${where}: Circles is the current page`).toHaveAttribute('aria-current', 'page');
       console.log(`  ✓ ${where}: ${modeOf(size.width) === 'phone' ? 'five-tab bar' : modeOf(size.width) === 'rail' ? 'rail with eight named icons and no words' : 'sidebar with labels'}.`);
       expect(errors, `${where}: script errors`).toEqual([]);
@@ -520,7 +524,7 @@ test('4 People: Find people, Your searches, Everyone who fits and People you hav
         // The main navigation marks People as current on every one of the four pages.
         const people = phone
           ? page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'People' })
-          : page.locator('aside').getByRole('link', { name: 'People', exact: true });
+          : sidebar(page).getByRole('link', { name: 'People', exact: true });
         await expect(people, `${where}: People is the current entry`).toHaveAttribute('aria-current', 'page');
         await expectContained(page, where);
       }
@@ -598,7 +602,7 @@ test('6 profile nudge: asked to finish on every page but For You and Messages, a
       await expect(nudge, `${where} /messages: the nudge is shown on Messages`).toHaveCount(0);
       await expectContained(todo.page, `${where} /messages`);
       // And it follows the member from page to page without a reload: back on Events, gone again on Messages.
-      const entry = (name: string) => (modeOf(size.width) === 'phone' ? todo.page.getByRole('navigation', { name: 'Main' }) : todo.page.locator('aside')).getByRole('link', { name });
+      const entry = (name: string) => (modeOf(size.width) === 'phone' ? todo.page.getByRole('navigation', { name: 'Main' }) : sidebar(todo.page)).getByRole('link', { name });
       await entry('Events').click();
       await expect(todo.page, `${where}: Events`).toHaveURL(/\/sessions$/);
       await expect(nudge, `${where} /sessions after Messages: the nudge is back`).toBeVisible();
@@ -840,36 +844,45 @@ test('9 account menu: Invite and Log out stay reachable, Admin is not offered to
     try {
       await visit(page, '/circles', size.width);
       const account = page.getByRole('button', { name: 'Your account' });
-      const menu = page.getByRole('menu');
+      // A plain disclosure, not an ARIA menu: a button that shows and hides two or three links and a button. It is
+      // open when the button says aria-expanded="true", and what it shows is the box that follows the button. The
+      // links and the button are found by what they are called.
+      const panel = account.locator('xpath=following-sibling::div[1]');
+      const entry = (name: string) => (name === 'Log out' ? panel.getByRole('button', { name, exact: true }) : panel.getByRole('link', { name, exact: true }));
+      const opened = (why: string) => expect(account, why).toHaveAttribute('aria-expanded', 'true');
+      const closed = (why: string) => expect(account, why).toHaveAttribute('aria-expanded', 'false');
 
+      await closed(`${where}: the account button starts closed`);
       await account.click();
-      await expect(menu, `${where}: the account menu opens`).toBeVisible();
-      expect((await menu.getByRole('menuitem').allInnerTexts()).map((t) => t.trim()), `${where}: the menu's entries`).toEqual(['View profile', 'Invite someone', 'Log out']);
-      await expectTapSize(['View profile', 'Invite someone', 'Log out'].map((name) => ({ name: `menu ${name}`, loc: menu.getByRole('menuitem', { name }) })), `${where} account menu`);
-      const inside = await menu.boundingBox();
+      await opened(`${where}: the account menu opens`);
+      await expect(panel, `${where}: and shows its box`).toBeVisible();
+      expect((await panel.locator('a, button').allInnerTexts()).map((t) => t.trim()), `${where}: the menu's entries`).toEqual(['View profile', 'Invite someone', 'Log out']);
+      await expectTapSize(['View profile', 'Invite someone', 'Log out'].map((name) => ({ name: `menu ${name}`, loc: entry(name) })), `${where} account menu`);
+      const inside = await panel.boundingBox();
       expect(inside && inside.x >= 0 && inside.y >= 0 && Math.round(inside.x + inside.width) <= size.width, `${where}: the menu is inside the window`).toBe(true);
 
       await page.keyboard.press('Escape');
-      await expect(menu, `${where}: Escape closes the menu`).toBeHidden();
+      await closed(`${where}: Escape closes the menu`);
+      await expect(panel, `${where}: and takes its box away`).toBeHidden();
       await account.click();
-      await expect(menu).toBeVisible();
+      await opened(`${where}: it opens again`);
       await page.mouse.click(size.width - 40, size.height - 60);
-      await expect(menu, `${where}: a tap outside closes the menu`).toBeHidden();
+      await closed(`${where}: a tap outside closes the menu`);
 
       await expect(account, `${where}: the account button is not marked on Circles`).not.toHaveAttribute('aria-current', 'true');
       await account.click();
-      await menu.getByRole('menuitem', { name: 'Invite someone' }).click();
+      await entry('Invite someone').click();
       await expect(page, `${where}: Invite someone`).toHaveURL(/\/invites$/);
-      await expect(menu, `${where}: the menu closes after a choice`).toBeHidden();
+      await closed(`${where}: the menu closes after a choice`);
       // Nothing in the lists is Invite, so the account button is the current entry, and so is the item in its menu.
       await expect(account, `${where}: the account button is marked current on Invite`).toHaveAttribute('aria-current', 'true');
       await account.click();
-      await expect(menu.getByRole('menuitem', { name: 'Invite someone' }), `${where}: Invite someone is marked in the menu`).toHaveAttribute('aria-current', 'page');
+      await expect(entry('Invite someone'), `${where}: Invite someone is marked in the menu`).toHaveAttribute('aria-current', 'page');
       await page.keyboard.press('Escape');
-      await expect(menu).toBeHidden();
+      await closed(`${where}: Escape closes it again`);
 
       await account.click();
-      await menu.getByRole('menuitem', { name: 'Log out' }).click();
+      await entry('Log out').click();
       const sheet = page.getByRole('dialog', { name: 'Log out?' });
       await expect(sheet, `${where}: Log out asks first`).toBeVisible();
       await sheet.getByRole('button', { name: 'Cancel' }).click();
@@ -897,7 +910,7 @@ test('10 unread count: the Messages link says how many messages are waiting (bar
     const { page, ctx, errors } = await openAs(member, size);
     try {
       await visit(page, '/circles', size.width);
-      const root = modeOf(size.width) === 'phone' ? page.getByRole('navigation', { name: 'Main' }) : page.locator('aside');
+      const root = modeOf(size.width) === 'phone' ? page.getByRole('navigation', { name: 'Main' }) : sidebar(page);
       const link = root.getByRole('link', { name: 'Messages, 1 unread', exact: true });
       await expect(link, `${where}: the Messages link names its unread count`).toBeVisible({ timeout: 20_000 });
       await expectTapSize([{ name: 'Messages link', loc: link }], where);

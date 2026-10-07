@@ -9,7 +9,8 @@
 //                         photo, the "What happened?" sheet and, on a phone, the More sheet. No sideways
 //                         scroll, nothing sticking out of a card or the page, every button at least 44px tall
 //                         and not under a fixed bar, no private want anywhere in the page
-//   Save                  persists across a reload, and so does un-saving; each press raises its toast
+//   Save                  persists across a reload, and so does un-saving; each press raises its toast, and a
+//                         double press is one request and one toast
 //   Pass                  on the profile hides the person from For You (also after a reload); Undo pass
 //                         brings them back
 //   Meet                  a double press on Send request is ONE request on the wire and ONE stored row, the
@@ -24,7 +25,8 @@
 //                         from a card goes back to where it came from; a made-up ?from= is never printed
 //   Failures              For You and a profile forced to 500 show their error and Try again, and Try again
 //                         recovers; with no connection a Save fails at once, and nothing loaded shows the
-//                         error state (never "no one to suggest") and fills in when the connection returns
+//                         error state with the connection sentence (never "no one to suggest") and fills in
+//                         when the connection returns
 //   More (phone)          the sheet lists the rest and each entry opens
 //   Rail (wide)           the context rail beside For You, and where it starts (981px)
 //
@@ -47,7 +49,7 @@
 // E2E_HEADED=0 runs it headless. E2E_JWT_SECRET must be the signing key of the API the preview talks to, or
 // every page below is a sign-in screen. Locally: only through the wrapper (bash /c/dev/_m1-local/run-spec.sh).
 
-import { test, expect, Browser, BrowserContext, Locator, Page, Request } from '@playwright/test';
+import { test, expect, devices, Browser, BrowserContext, Locator, Page, Request } from '@playwright/test';
 import fs from 'fs';
 import path from 'path';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
@@ -59,10 +61,18 @@ import { expectReachable } from '../helpers/viewport-fit';
 // ── What this run is ─────────────────────────────────────────────────────────────────────────
 
 const DEVICE = process.env.E2E_DEVICE;
+// helpers/engine.ts falls back to a plain 1100x800 desktop for a device name it does not know, so a typo would run
+// the phone tests on a desktop window and still come back green.
+if (DEVICE && !(DEVICE in devices)) {
+  throw new Error(`E2E_DEVICE "${DEVICE}" is not one of Playwright's devices (for example 'iPhone 14')`);
+}
 const SHOTS = process.env.E2E_SHOTS_DIR ? path.resolve(process.env.E2E_SHOTS_DIR) : '';
-// A local address is the scratch database: small, so the made-up words can be "generic" (see the header).
+// The scratch database is small, so the made-up words can be "generic" to the matcher (see the header), and it
+// takes filler members. Both the app AND the database must be local: an app on a local address with the default
+// environment still talks to production, and fourteen throwaway members have no business there.
 const LOCAL = /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(?:\/|$)/.test(APP);
-const FILLERS = LOCAL ? 14 : 0;
+const LOCAL_DB = /^postgres(?:ql)?:\/\/(?:[^@/]*@)?(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?:\/|$)/.test(process.env.DATABASE_URL ?? '');
+const FILLERS = LOCAL && LOCAL_DB ? 14 : 0;
 // First answers can be slow on a preview (a sleeping API wakes in up to a minute): the first wait of a page
 // is this long.
 const SLOW = 75_000;
@@ -89,12 +99,16 @@ const run = Date.now().toString(36);
 // two runs, or one of them and a real word, can never be joined.
 const LETTERS = 'bcdfhjklmnpqvwxz';
 const madeUpWord = () => Array.from({ length: 6 }, () => LETTERS[Math.floor(Math.random() * LETTERS.length)]).join('');
-const WORDS: string[] = (() => {
+const DRAWN: string[] = (() => {
   const set = new Set<string>();
-  while (set.size < 3) set.add(madeUpWord());
+  while (set.size < 5) set.add(madeUpWord());
   return [...set];
 })();
+const WORDS = DRAWN.slice(0, 3);
 const THE_WORDS = WORDS.join(' ');
+// Gil's own public offer, made up as well. A real sentence (introductions to investors, say) would put Gil on a
+// real member's For You for as long as a run on production lasts.
+const OFFER = DRAWN.slice(3).join(' ');
 // What every test member privately wants to meet: it must never reach another member's page.
 const SECRET = `secret-want-${run}`;
 // 65 characters, one 35 letter word that has no place to break, and no photo: the worst name a card or a
@@ -102,7 +116,6 @@ const SECRET = `secret-want-${run}`;
 const LONG_NAME = `Wolfeschlegelsteinhausenbergerdorff Maximilian-Alexander ${run}`;
 const NAME = { giver: `Gil Giver ${run}`, secretive: `Sofia Secret ${run}`, met: `Mia Met ${run}`, blocked: `Bea Blocked ${run}` };
 const BLOCKED_DATA = { company: `Blocked Co ${run}`, bio: `blocked-bio-${run}`, offer: `blocked-offer-${run}` };
-const OFFER = 'Introductions to seed investors';
 
 let browser: Browser | undefined;
 const ctxs: BrowserContext[] = [];
@@ -311,9 +324,34 @@ async function settle(page: Page): Promise<void> {
   while (Date.now() < until && (t.open.size > 0 || Date.now() - t.last < 500)) await page.waitForTimeout(100);
 }
 
+// Where a page is after a hop: still starting (until the session check is answered the app shows only a full-screen
+// loader, and against a sleeping API that can take most of a minute), on screen (<main> is there; every page the
+// spec visits has one), or sent away because the session was refused or the member is not onboarded.
+async function stageOf(page: Page, route: string): Promise<string> {
+  return page.evaluate((want) => {
+    const path = location.pathname;
+    if (path.startsWith('/welcome') || path.startsWith('/login')) return 'signed out';
+    if (path.startsWith('/onboarding') && !want.startsWith('/onboarding')) return 'onboarding';
+    return document.querySelector('main') ? 'ready' : 'starting';
+  }, route.split('?')[0]).catch(() => 'starting'); // a redirect can end the page being asked mid-question
+}
+
+/**
+ * Opens a route and waits until the app has started on it: the first load of a run, or of a filtered run, can be the
+ * one that wakes a sleeping API, so this waits as long as that takes (SLOW), not the 15 seconds that settle() gives
+ * the network. A page that was sent away says so at once: a refused session means the wrong E2E_JWT_SECRET.
+ */
 async function visit(page: Page, route: string): Promise<void> {
   await settle(page);
   await gotoRetry(page, `${APP}${route}`);
+  await expect.poll(() => stageOf(page, route), {
+    message: `${route}: the app did not finish starting (against a sleeping API the session check can take most of a minute)`,
+    timeout: SLOW,
+    intervals: [200, 400, 800, 1_000],
+  }).not.toBe('starting');
+  const stage = await stageOf(page, route);
+  if (stage === 'signed out') throw new Error(`${route}: the session was refused and the app sent the viewer to ${page.url()}. Is E2E_JWT_SECRET the signing key of the API this page talks to?`);
+  if (stage === 'onboarding') throw new Error(`${route}: the viewer was sent to onboarding (${page.url()}), so the test member does not count as onboarded`);
   await settle(page);
 }
 
@@ -344,7 +382,7 @@ async function expectPeople(page: Page, want: TestUser[], why: string): Promise<
   const strangers = (await shownIds(page)).filter((id) => !made.includes(id));
   expect(strangers, `${why}: For You shows ${strangers.length} member(s) that are not this run's throwaway people (${strangers.join(', ')}). Nothing was pressed.`).toEqual([]);
   await expect.poll(() => shownIds(page), {
-    message: `${why}: For You must list exactly ${want.length} test people (made-up words ${THE_WORDS}${LOCAL ? `; ${FILLERS} fillers keep them under the matcher's 25% rule` : ''})`,
+    message: `${why}: For You must list exactly ${want.length} test people (made-up words ${THE_WORDS}${FILLERS ? `; ${FILLERS} fillers keep them under the matcher's 25% rule` : ''})`,
     timeout: 20_000,
   }).toEqual(want.map((u) => u.id).sort());
 }
@@ -366,6 +404,22 @@ const expectToast = (page: Page, text: string): Promise<void> =>
  * least 44px tall. A toast sits over the top right corner for a few seconds, so it is let go first.
  * `instant`: the app scrolls smoothly, and a box measured mid-scroll is nowhere.
  */
+// A control is pressed, or checked, where it IS: a box that is still moving cannot be. A picture that fails to load
+// takes its space away a moment later and everything under it moves up (the offline notice's "Try again" jumped
+// 108px in mobile WebKit), and expectReachable reads the box and then asks what is at that point in two steps.
+// So this waits until two readings 120 ms apart agree, for at most 3 seconds, and the check that follows says
+// what is wrong if it still cannot be pressed.
+async function holdsStill(page: Page, target: Locator): Promise<void> {
+  let before = await target.boundingBox();
+  const until = Date.now() + 3_000;
+  while (Date.now() < until) {
+    await page.waitForTimeout(120);
+    const now = await target.boundingBox();
+    if (before && now && before.x === now.x && before.y === now.y && before.width === now.width && before.height === now.height) return;
+    before = now;
+  }
+}
+
 async function tap(page: Page, target: Locator, label: string, opts: { centre?: boolean; presses?: 1 | 2 } = {}): Promise<void> {
   // Whatever the test says, nothing is pressed on a profile that is not a throwaway member's.
   const profile = new URL(page.url()).pathname.match(/^\/people\/([^/]+)\/?$/);
@@ -375,10 +429,18 @@ async function tap(page: Page, target: Locator, label: string, opts: { centre?: 
   // one press at a time, and never forced. Playwright counts aria-disabled="true" as not enabled.
   await expect(target, `${label}: is still busy or disabled`).toBeEnabled({ timeout: 10_000 });
   if (opts.centre !== false) await target.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior }));
+  await holdsStill(page, target);
   const box = await expectReachable(page, target, label);
   expect(box.height, `${label} is ${Math.round(box.height)}px tall, under 44px`).toBeGreaterThanOrEqual(44);
-  if (opts.presses === 2) await page.mouse.dblclick(box.cx, box.cy);
-  else await page.mouse.click(box.cx, box.cy);
+  if (opts.presses === 2) {
+    // Both presses run in ONE task, so the page cannot draw anything between them. That is what a double tap that lands
+    // before the first press has been drawn is, and what the guards are for (a ref in the sheets and in For You's
+    // Save). A mouse double click would let the first press's re-render (disabled, aria-disabled) win and the
+    // browser swallow the second press, and the count of requests would read 1 whether or not a guard exists.
+    await target.evaluate((el) => { (el as HTMLElement).click(); (el as HTMLElement).click(); });
+  } else {
+    await page.mouse.click(box.cx, box.cy);
+  }
 }
 
 // Opening a sheet locks the page's scroll; closing it must give the scroll back (a sheet that left the lock
@@ -400,8 +462,28 @@ async function expectScrollable(page: Page, where: string): Promise<void> {
 
 async function inReach(page: Page, target: Locator, label: string, opts: { centre?: boolean } = {}): Promise<void> {
   if (opts.centre !== false) await target.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior }));
+  await holdsStill(page, target);
   const box = await expectReachable(page, target, label);
   expect(box.height, `${label} is ${Math.round(box.height)}px tall, under 44px`).toBeGreaterThanOrEqual(44);
+}
+
+// A text link (a card's name) is not a finger target: the photo and the whole card open the profile too. It is only
+// held to being on screen and on top. A link that wraps has one box per line, and the middle of the box around all
+// of them can be empty space (beside a short last line), so this looks at the middle of its FIRST line.
+async function linkOnTop(page: Page, link: Locator, label: string): Promise<void> {
+  await expect(link, `${label}: not in the page`).toHaveCount(1);
+  await link.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior }));
+  await holdsStill(page, link);
+  const seen = await link.evaluate((el) => {
+    const line = el.getClientRects()[0];
+    if (!line) return 'it is not drawn';
+    const x = line.left + line.width / 2;
+    const y = line.top + line.height / 2;
+    if (line.left < -0.5 || line.right > window.innerWidth + 0.5 || y < 0 || y > window.innerHeight) return `its first line is off the window (${Math.round(line.left)} to ${Math.round(line.right)} across, ${Math.round(y)} down)`;
+    const top = document.elementFromPoint(x, y);
+    return top && el.contains(top) ? 'on top' : `covered by ${top ? top.tagName.toLowerCase() : 'nothing'}`;
+  });
+  expect(seen, `${label}: the link must be on screen and on top`).toBe('on top');
 }
 
 // ── Geometry ─────────────────────────────────────────────────────────────────────────────────
@@ -570,9 +652,10 @@ function countRequests(page: Page, method: string, url: RegExp): { count: () => 
  */
 async function windowComesBack(page: Page, refetches: RegExp, label: string): Promise<void> {
   await page.waitForTimeout(5_500);
-  const asked = page.waitForRequest((r) => r.method() === 'GET' && refetches.test(r.url()), { timeout: 15_000 });
+  // Turned into a yes or no on the spot, so it can never be left rejecting unhandled if the evaluate below throws.
+  const asked = page.waitForRequest((r) => r.method() === 'GET' && refetches.test(r.url()), { timeout: 15_000 }).then(() => true, () => false);
   await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
-  await asked.catch(() => { throw new Error(`${label}: the page did not refetch when the window came back (${refetches}); the typed-text check would prove nothing`); });
+  if (!(await asked)) throw new Error(`${label}: the page did not refetch when the window came back (${refetches}); the typed-text check would prove nothing`);
   await settle(page);
 }
 
@@ -604,8 +687,15 @@ test('console filter: only the "access control checks" line of a cancelled reque
 
 test.describe('REASON milestone 1', () => {
   test.beforeAll(async () => {
-    console.log(`[reason-m1] engine=${engineLabel()} app=${APP} words=${THE_WORDS}${LOCAL ? ` (local: ${FILLERS} filler members)` : ''}`);
-    await seed();
+    console.log(`[reason-m1] engine=${engineLabel()} app=${APP} words=${THE_WORDS} fillers=${FILLERS}${FILLERS ? ' (scratch database)' : ''}`);
+    try {
+      await seed();
+    } finally {
+      // Printed even when seeding fails half way. The e2etest- sweepers no longer match these addresses, so if this
+      // run is killed before afterAll, these ids are what to remove, by exact id (cleanup(pool, { ids }) in
+      // helpers/live-ui.ts clears the rows that do not cascade, then the members).
+      console.log(`[reason-m1] throwaway member ids (if this run is killed, remove exactly these): ${made.join(',')}`);
+    }
     browser = await launchBrowser();
   });
 
@@ -636,7 +726,7 @@ test.describe('REASON milestone 1', () => {
 
         await test.step('For You', async () => {
           await visit(page, '/');
-          await expect(page.getByRole('heading', { level: 1 }), `${where}: the page's title`).toHaveText('Welcome, Vera.');
+          await expect(page.getByRole('heading', { level: 1 }), `${where}: the page's title`).toHaveText('Welcome, Vera.', { timeout: SLOW });
           await expectPeople(page, [giver, longName, secretive], where);
           expect(await page.locator('[data-person-id]').count(), `${where}: at most five cards`).toBeLessThanOrEqual(5);
           await expectNoSecret(page, `${where} For You`);
@@ -661,8 +751,11 @@ test.describe('REASON milestone 1', () => {
           const lb = (await lc.boundingBox())!;
           expect(lb.x >= 0 && lb.x + lb.width <= width + 1, `${where}: the long-name card's right edge ${Math.round(lb.x + lb.width)} is inside the window`).toBeTruthy();
           await expectNothingSticksOut(lc, `${where} long-name card`);
-          for (const [person, whose] of [[giver, 'Gil'], [longName, 'the long-name member'], [secretive, 'Sofia']] as Array<[TestUser, string]>) {
+          for (const [person, whose, name] of [[giver, 'Gil', NAME.giver], [longName, 'the long-name member', LONG_NAME], [secretive, 'Sofia', NAME.secretive]] as Array<[TestUser, string, string]>) {
             const c = card(page, person.id);
+            // The name link is how a card is opened by keyboard and by screen reader (the photo's link is hidden from
+            // both): on screen and on top, whatever its length.
+            await linkOnTop(page, c.getByRole('link', { name, exact: true }), `${where} ${whose}'s name link`);
             await inReach(page, c.getByRole('button', { name: /^(Meet|Request sent|Continue)$/ }), `${where} the main button on ${whose}'s card`);
             await inReach(page, c.getByRole('button', { name: /^(Save|Saved)$/ }), `${where} Save on ${whose}'s card`);
           }
@@ -786,11 +879,16 @@ test.describe('REASON milestone 1', () => {
       const saved = g.getByRole('button', { name: 'Saved', exact: true });
       await expect(save, 'a card nobody saved offers Save').toBeVisible();
 
-      await tap(page, save, 'Save (Gil)');
+      // Two presses in one task, before the card has been drawn busy: For You's Save keeps a ref of the people a Save
+      // is out for, so ONE request goes out and ONE toast is raised.
+      const puts = countRequests(page, 'PUT', new RegExp(`/api/people/${giver.id}/response$`));
+      await tap(page, save, 'Save (Gil)', { presses: 2 });
       await expectToast(page, `${NAME.giver} saved`);
       // Exactly one toast, and it is where tap() looks for toasts, so it can tell when none is left to cover a button.
       await expect(toasts(page), 'one press, one toast (and the helper looks where the toasts are)').toHaveCount(1);
       await expect(saved, 'the card says Saved').toBeVisible();
+      await settle(page);
+      expect(puts.count(), 'a double press on Save is ONE request on the wire').toBe(1);
       expect(await responseOf(viewer, giver), 'the Save is stored').toBe('saved');
       for (const other of [longName, secretive]) {
         await expect(card(page, other.id).getByRole('button', { name: 'Save', exact: true }), 'only that card changed').toBeVisible();
@@ -884,7 +982,8 @@ test.describe('REASON milestone 1', () => {
       await expect(sheet, 'the sheet closes once the request is sent').toBeHidden();
       await expectScrollable(page, 'after the request is sent');
       await expectToast(page, `Meeting request sent to ${NAME.secretive}`);
-      await expect(s.getByRole('button', { name: 'Request sent', exact: true }), 'the card says Request sent').toBeDisabled();
+      // Inert, not `disabled`: aria-disabled keeps the keyboard focus that the sheet gives back to this button.
+      await expect(s.getByRole('button', { name: 'Request sent', exact: true }), 'the card says Request sent').toHaveAttribute('aria-disabled', 'true');
       await expectNoSecret(page, 'For You after the request is sent');
       await settle(page);
       expect(posts.count(), 'a double press is ONE request on the wire').toBe(1);
@@ -897,11 +996,11 @@ test.describe('REASON milestone 1', () => {
 
       await reload(page);
       await expectPeople(page, [giver, longName, secretive], 'Meet, after a reload');
-      await expect(s.getByRole('button', { name: 'Request sent', exact: true }), 'the request is remembered').toBeDisabled();
+      await expect(s.getByRole('button', { name: 'Request sent', exact: true }), 'the request is remembered').toHaveAttribute('aria-disabled', 'true');
       await s.getByRole('link', { name: NAME.secretive, exact: true }).click();
       await expectProfileOf(page, secretive, NAME.secretive);
       await expect(primaryButton(page), 'the profile says the request is out').toHaveAccessibleName('Request sent');
-      await expect(primaryButton(page)).toBeDisabled();
+      await expect(primaryButton(page), 'and offers nothing to press').toHaveAttribute('aria-disabled', 'true');
       await expect(page.getByText('Meeting requested', { exact: true }).first(), 'the profile names the state').toBeVisible();
       await expectNoSecret(page, 'the profile of the member who was asked');
       await expectQuiet(o, 'Meet');
@@ -1027,11 +1126,13 @@ test.describe('REASON milestone 1', () => {
       const { page } = o;
       const briefUrl = new RegExp(`/api/people/${ours(blocked.id)}/brief$`);
       o.quiet.allow(/status of 404/, briefUrl);
-      const reply = page.waitForResponse((r) => briefUrl.test(r.url()), { timeout: SLOW });
+      // A null instead of a rejection, so it cannot be left unhandled if the visit below throws.
+      const reply = page.waitForResponse((r) => briefUrl.test(r.url()), { timeout: SLOW }).catch(() => null);
       await visit(page, `/people/${blocked.id}`);
       const res = await reply;
-      expect(res.status(), 'the server answers 404 for a member who blocked the viewer').toBe(404);
-      const body = await res.text();
+      expect(res, 'the page asked the server for the blocked member\'s profile').not.toBeNull();
+      expect(res!.status(), 'the server answers 404 for a member who blocked the viewer').toBe(404);
+      const body = await res!.text();
       const theirs = [NAME.blocked, ...Object.values(BLOCKED_DATA), SECRET, THE_WORDS];
       for (const s of theirs) expect(body, `the answer carries none of their data (${s})`).not.toContain(s);
 
@@ -1197,16 +1298,12 @@ test.describe('REASON milestone 1', () => {
     console.log('  ✓ Offline: a Save fails at once with the connection sentence and the list stays; a profile and For You with nothing loaded show their error state (never "not available" or "no one to suggest") and fill in by themselves.');
   });
 
-  // KNOWN SCREEN DEFECT, found by this spec on 7 Oct 2026. With no connection and nothing
-  // loaded, For You and the profile say a generic sentence ("Could not load that right now. Try again in a
-  // moment." / "Try again in a moment.") where the code, its commit message and the milestone notes say the
-  // connection sentence. ForYouPage builds CONNECTION_LOST with errorMessage(undefined, ...), which since
-  // c1db1cf1 returns the fallback for anything that is not an axios error with no answer, and the profile
-  // passes a null error the same way. The two tests below assert the INTENDED behaviour, one for each page, so
-  // each turns red on its own the day its page is fixed. test.fail() keeps the run usable while the screen is
-  // wrong: when a page is fixed, delete the test.fail() line of its test.
-  test(`${engineLabel()} phone: KNOWN DEFECT: offline with nothing loaded, For You says the connection sentence`, async () => {
-    test.fail(true, 'defect: For You says "Could not load that right now. Try again in a moment.", not "Connection lost. Check your internet and try again."');
+  // What a screen says when it is only WAITING for the connection and has nothing to show: the connection sentence,
+  // not a generic one. One test per page (this one and the profile's below), so that the page that stops saying it
+  // is the one named by the failure. The first version of both said a generic line ("Could not load that right
+  // now. Try again in a moment." / "Try again in a moment."): a request the library holds back while the browser is
+  // offline has no error to word, and errorMessage can only answer such a call with the caller's fallback.
+  test(`${engineLabel()} phone: offline with nothing loaded, For You says the connection sentence`, async () => {
     test.setTimeout(240_000);
     await using(viewer, PHONE, async (o) => {
       const { page } = o;
@@ -1215,12 +1312,16 @@ test.describe('REASON milestone 1', () => {
       await o.ctx.setOffline(true);
       await tap(page, page.getByRole('link', { name: 'For You', exact: true }), 'For You, offline', { centre: false });
       await expect(page.getByRole('heading', { name: 'We could not load your people just now.' })).toBeVisible({ timeout: 15_000 });
-      await expect(page.getByRole('main').getByRole('alert'), 'For You says the connection was lost').toContainText(CONNECTION_SENTENCE, { timeout: 3_000 });
+      const alert = page.getByRole('main').getByRole('alert');
+      await expect(alert, 'For You says the connection was lost').toContainText(CONNECTION_SENTENCE, { timeout: 5_000 });
+      await expect(alert, 'and not a generic line').not.toContainText('Could not load that right now');
+      await o.ctx.setOffline(false);
+      await expectPeople(page, [giver, longName, secretive], 'For You fills in when the connection returns');
+      await expect(page.getByText(CONNECTION_SENTENCE), 'the sentence goes with the error').toHaveCount(0);
     });
   });
 
-  test(`${engineLabel()} phone: KNOWN DEFECT: offline with nothing loaded, the profile says the connection sentence`, async () => {
-    test.fail(true, 'defect: the profile says "Try again in a moment.", not "Connection lost. Check your internet and try again."');
+  test(`${engineLabel()} phone: offline with nothing loaded, the profile says the connection sentence`, async () => {
     test.setTimeout(240_000);
     await using(viewer, PHONE, async (o) => {
       const { page } = o;
@@ -1230,7 +1331,11 @@ test.describe('REASON milestone 1', () => {
       await o.ctx.setOffline(true);
       await card(page, giver.id).getByRole('link', { name: NAME.giver, exact: true }).click();
       await expect(page.getByRole('heading', { level: 1, name: 'We could not load this profile just now.' })).toBeVisible({ timeout: 15_000 });
-      await expect(page.getByRole('main'), 'the profile says the connection was lost').toContainText(CONNECTION_SENTENCE, { timeout: 3_000 });
+      await expect(page.getByRole('main'), 'the profile says the connection was lost').toContainText(CONNECTION_SENTENCE, { timeout: 5_000 });
+      await expect(page.getByRole('main'), 'and not a generic line').not.toContainText('Try again in a moment.');
+      await o.ctx.setOffline(false);
+      await expectProfileOf(page, giver, NAME.giver);
+      await expect(page.getByText(CONNECTION_SENTENCE), 'the sentence goes with the error').toHaveCount(0);
     });
   });
 
