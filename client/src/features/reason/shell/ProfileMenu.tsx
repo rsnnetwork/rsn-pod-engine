@@ -11,7 +11,6 @@ import { isAccountPage, onAdmin, onInvites } from './nav';
 function MenuLink({ to, label, current, onDone }: { to: string; label: string; current: boolean; onDone: () => void }) {
   return (
     <Link
-      role="menuitem"
       to={to}
       onClick={onDone}
       aria-current={current ? 'page' : undefined}
@@ -30,7 +29,8 @@ export default function ProfileMenu() {
   const box = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
 
-  // A menu closes when you press Escape or tap anywhere outside it.
+  // A plain disclosure: a button that shows and hides links and a button. It is not a menu in the ARIA sense (that
+  // role promises arrow keys, and nothing here has them), so no menu roles. It closes on Escape or a tap outside it.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -59,7 +59,6 @@ export default function ProfileMenu() {
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        aria-haspopup="menu"
         aria-label="Your account"
         aria-current={isAccountPage(pathname) ? 'true' : undefined}
         className={cn(
@@ -74,13 +73,12 @@ export default function ProfileMenu() {
         </span>
       </button>
       {open && (
-        <div role="menu" className="absolute bottom-[calc(100%+6px)] left-0 z-30 w-[220px] rounded-2xl border border-reason-line bg-white p-1.5 shadow-[0_14px_40px_rgba(16,18,24,.12)]">
+        <div className="absolute bottom-[calc(100%+6px)] left-0 z-30 w-[220px] rounded-2xl border border-reason-line bg-white p-1.5 shadow-[0_14px_40px_rgba(16,18,24,.12)]">
           <MenuLink to="/profile" label="View profile" current={pathname === '/profile'} onDone={close} />
           <MenuLink to="/invites" label="Invite someone" current={onInvites(pathname)} onDone={close} />
           {isAdmin(user.role) && <MenuLink to="/admin" label="Admin" current={onAdmin(pathname)} onDone={close} />}
           <button
             type="button"
-            role="menuitem"
             onClick={() => { close(); setConfirm(true); }}
             className="flex min-h-[44px] w-full items-center rounded-xl px-3 text-left text-[14px] text-reason-red hover:bg-reason-soft hover:text-reason-red-hover"
           >

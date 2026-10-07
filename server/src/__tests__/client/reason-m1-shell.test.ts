@@ -139,6 +139,14 @@ describe('REASON shell: faults found by looking at it', () => {
     expect(menu).toMatch(/e\.key !== 'Escape'/);
     expect(menu).toMatch(/addEventListener\('pointerdown'/);
   });
+  it('the account menu is a plain disclosure of links and a button: aria-expanded on its trigger, and no menu roles (they promise arrow-key support that nothing here has)', () => {
+    const menu = read('features/reason/shell/ProfileMenu.tsx');
+    expect(menu).toMatch(/aria-expanded=\{open\}/);
+    expect(menu).not.toMatch(/role="menu"|role="menuitem"|aria-haspopup/);
+    // What is inside is real links and a real button, so Tab and Enter already do everything a member expects.
+    expect(menu).toMatch(/<Link\b/);
+    expect(menu).toMatch(/<button\s+type="button"\s+onClick=\{\(\) => \{ close\(\); setConfirm\(true\); \}\}/);
+  });
   it('the current page is announced the way it is drawn (the rail and the phone bar)', () => {
     expect(read('features/reason/shell/ShellSidebar.tsx')).toMatch(/aria-current=\{active \? 'page' : undefined\}/);
     expect(read('features/reason/shell/MobileNav.tsx')).toMatch(/aria-current=\{active \? 'page' : undefined\}/);
