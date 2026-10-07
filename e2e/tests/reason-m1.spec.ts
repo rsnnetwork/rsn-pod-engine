@@ -225,6 +225,38 @@ function isCancelledNoise(text: string, locationUrl: string, cancelled: Readonly
   return [named, locationUrl].some((url) => !!url && cancelled.has(url));
 }
 
+// The hosts the TEST blocks, not the app: primePreview (helpers/preview-bypass.ts) aborts everything from vercel.live
+// on a preview, because Vercel's feedback toolbar is not the app (and throws a page error in Windows WebKit). If that
+// helper ever blocks another host, it belongs here too.
+const TEST_BLOCKED_HOSTS: readonly string[] = ['vercel.live'];
+// How an aborted or blocked request ends: Chromium says net::ERR_FAILED (a route's abort), ERR_ABORTED or
+// ERR_BLOCKED_BY_CLIENT; WebKit says "Blocked by Web Inspector" (and logs only an info line, not an error).
+const ABORTED_OR_BLOCKED = /ERR_FAILED|ERR_ABORTED|BLOCKED_BY_CLIENT|blocked|abort|cancel/i;
+
+/** A request to a host the test blocks, which ended aborted or blocked: the test's own doing. Nothing else is. */
+function isBlockedByTheTest(url: string, errorText: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return false;
+  }
+  return TEST_BLOCKED_HOSTS.some((h) => host === h || host.endsWith(`.${h}`)) && ABORTED_OR_BLOCKED.test(errorText);
+}
+
+/**
+ * Chromium logs "Failed to load resource: net::ERR_FAILED" for a script, picture or fetch that was aborted, and on a
+ * preview the test aborts the Vercel toolbar's own files, so that line is the test's doing and not the page's. It is
+ * let through only for the address of a request the test blocked (see isBlockedByTheTest), and only when the reason
+ * the line gives is an abort or a block (not, say, a 500). The same words for the app, for any other host, or about
+ * a request that was not blocked are a real error, and so is every other message: a message alone never excuses
+ * anything.
+ */
+function isBlockedNoise(text: string, locationUrl: string, blocked: ReadonlyMap<string, string>): boolean {
+  const reason = text.match(/^Failed to load resource: ([\s\S]*)$/)?.[1];
+  return reason !== undefined && ABORTED_OR_BLOCKED.test(reason) && !!locationUrl && blocked.has(locationUrl);
+}
+
 // What each watched page has in flight, so that "the network is quiet" can be told at any moment: Playwright's
 // own waitForLoadState('networkidle') answers once per navigation, and returns at once for every click after it.
 const traffic = new WeakMap<Page, { open: Set<Request>; last: number }>();
@@ -234,6 +266,7 @@ class Quiet {
   private logged: Array<{ kind: 'page' | 'console'; text: string; url: string }> = [];
   private allowed: Array<{ text: RegExp; url: RegExp }> = [];
   private cancelled = new Map<string, string>();
+  private blocked = new Map<string, string>();
 
   attach(page: Page): void {
     const t = { open: new Set<Request>(), last: Date.now() };
@@ -253,6 +286,7 @@ class Quiet {
       t.last = Date.now();
       const why = r.failure()?.errorText ?? '';
       if (/cancel|abort/i.test(why)) this.cancelled.set(r.url(), why);
+      if (isBlockedByTheTest(r.url(), why)) this.blocked.set(r.url(), why);
     });
   }
 
@@ -264,7 +298,9 @@ class Quiet {
   problems(): string[] {
     return this.logged
       .filter((l) => l.kind === 'page'
-        || !(isCancelledNoise(l.text, l.url, this.cancelled) || this.allowed.some((a) => a.text.test(l.text) && a.url.test(l.url))))
+        || !(isCancelledNoise(l.text, l.url, this.cancelled)
+          || isBlockedNoise(l.text, l.url, this.blocked)
+          || this.allowed.some((a) => a.text.test(l.text) && a.url.test(l.url))))
       .map((l) => `${l.kind === 'page' ? 'script error' : 'console error'}: ${l.text}${l.url ? ` (${l.url})` : ''}`);
   }
 }
@@ -681,6 +717,37 @@ test('console filter: only the "access control checks" line of a cancelled reque
   expect(isCancelledNoise(line('https://api.example.test/api/people/x/brief'), '', cancelled), 'the same words for a request that was not cancelled').toBe(false);
   expect(isCancelledNoise('Failed to load resource: the server responded with a status of 500 (Internal Server Error)', 'https://api.example.test/api/matches/platform', cancelled), 'a 500 on the cancelled address').toBe(false);
   expect(isCancelledNoise(line('https://api.example.test/api/matches/platform'), '', new Map()), 'nothing was cancelled').toBe(false);
+});
+
+test('console filter: a failed resource is let through only for a request the test blocked itself, never on its words', () => {
+  const toolbar = 'https://vercel.live/_next-live/feedback/feedback.js';
+  const api = 'https://rsn-api-h04m.onrender.com/api/matches/platform';
+  const failed = 'Failed to load resource: net::ERR_FAILED';
+
+  // Which requests count as blocked by the test: a host it blocks, and an abort or a block.
+  for (const how of ['net::ERR_FAILED', 'net::ERR_ABORTED', 'net::ERR_BLOCKED_BY_CLIENT', 'Blocked by Web Inspector']) {
+    expect(isBlockedByTheTest(toolbar, how), `the toolbar's script, ended ${how}`).toBe(true);
+  }
+  expect(isBlockedByTheTest('https://vercel.live/api/ping', 'net::ERR_FAILED'), 'a fetch to the toolbar').toBe(true);
+  expect(isBlockedByTheTest('https://feedback.vercel.live/x.js', 'net::ERR_FAILED'), 'a subdomain of the blocked host').toBe(true);
+  expect(isBlockedByTheTest(api, 'net::ERR_FAILED'), 'the app\'s API failing the same way').toBe(false);
+  expect(isBlockedByTheTest('https://rsn-client-git-reason-m1-rsnnetwork.vercel.app/assets/index.js', 'net::ERR_FAILED'), 'the preview itself (a vercel.app host)').toBe(false);
+  expect(isBlockedByTheTest('https://vercel.live.example.test/x.js', 'net::ERR_FAILED'), 'a look-alike host').toBe(false);
+  expect(isBlockedByTheTest('http://127.0.0.1:5173/sheep/v4/match.png', 'net::ERR_FAILED'), 'the app\'s own pictures').toBe(false);
+  expect(isBlockedByTheTest(toolbar, 'net::ERR_NAME_NOT_RESOLVED'), 'the blocked host failing for a reason the test did not cause').toBe(false);
+  expect(isBlockedByTheTest('not an address', 'net::ERR_FAILED'), 'no address at all').toBe(false);
+
+  // Which console lines are excused: the resource line, for an address in the blocked set, and nothing else.
+  const blocked = new Map([[toolbar, 'net::ERR_FAILED']]);
+  expect(isBlockedNoise(failed, toolbar, blocked), 'the line the preview run showed').toBe(true);
+  expect(isBlockedNoise('Failed to load resource: the server responded with a status of 500 (Internal Server Error)', toolbar, blocked), 'a blocked address answering 500 is not an abort').toBe(false);
+  expect(isBlockedNoise('Failed to load resource: net::ERR_BLOCKED_BY_CLIENT', toolbar, blocked), 'a block by the browser').toBe(true);
+  expect(isBlockedNoise(failed, api, blocked), 'the same words for the app').toBe(false);
+  expect(isBlockedNoise(failed, 'https://vercel.live/other.js', blocked), 'the same words for an address that was not blocked').toBe(false);
+  expect(isBlockedNoise('Uncaught TypeError: x is undefined', toolbar, blocked), 'another message about the blocked address').toBe(false);
+  expect(isBlockedNoise('Refused to load the script because it violates the Content Security Policy', toolbar, blocked), 'a policy refusal is not a failed load').toBe(false);
+  expect(isBlockedNoise(failed, '', blocked), 'no address on the line').toBe(false);
+  expect(isBlockedNoise(failed, toolbar, new Map()), 'nothing was blocked').toBe(false);
 });
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
