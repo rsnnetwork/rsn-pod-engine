@@ -153,6 +153,23 @@ describe('For You: Save and the cache', () => {
     expect(src).not.toMatch(/save\.isPending|save\.variables/);
   });
 
+  // The card's busy flag (and useMutationState behind it) is drawn a render AFTER the first press, so a near-instant double
+  // click reached the handler twice: two PUTs and two "saved" toasts. There is no DOM in this suite to double-click, so the
+  // wiring is pinned as source, as the sheets pin their own guard; the double click itself was made in Chromium (task report).
+  it('a second press on a card whose Save is still out is ignored at once: a ref holds the people a request is out for, taken before the request starts and given back when it settles', () => {
+    const src = withoutComments(page());
+    expect(src).toContain('const inFlight = useRef(new Set<string>());');
+    expect(src).toMatch(/const toggleSave = \(p: HumanCardPerson\) => \{\s*if \(inFlight\.current\.has\(p\.userId\)\) return;\s*inFlight\.current\.add\(p\.userId\);\s*save\.mutate\(p\);\s*\};/);
+    expect(src).toContain('onToggleSave={toggleSave}');
+    expect(src).not.toMatch(/onToggleSave=\{\(\w+\) => save\.mutate/);
+    // Given back on the mutation itself, not on a .mutate() call: those callbacks are dropped once a later press (for
+    // another card) takes the observer over, which would leave the first card stuck for good.
+    expect(saveCall()).toContain('onSettled: (_data, _error, p) => { inFlight.current.delete(p.userId); }');
+    expect(src).not.toMatch(/\.mutate\([^)]*,\s*\{/);
+    // The one way to start a Save is the guarded handler.
+    expect(src.match(/save\.mutate\(/g)).toHaveLength(1);
+  });
+
   it('after a Save everything REASON has cached is marked stale, but only the For You list is fetched again and waited for', () => {
     const src = withoutComments(page());
     expect(saveCall()).toContain("await qc.invalidateQueries({ queryKey: reasonKeys.all, refetchType: 'none' });");

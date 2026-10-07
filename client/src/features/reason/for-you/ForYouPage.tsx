@@ -49,6 +49,9 @@ export default function ForYouPage() {
   const [meeting, setMeeting] = useState<HumanCardPerson | null>(null);
   const section = useRef<HTMLElement>(null);
   const retrying = useRef(false);
+  // The people a Save is out for. A ref, not the card's busy flag: that is drawn a render after the first press, so a
+  // near-instant double click reached the handler twice and sent two requests (and said "saved" twice).
+  const inFlight = useRef(new Set<string>());
 
   // "Still loading" is isPending: a fetch that is paused (the member is offline) is not loading and has
   // no data either, and must not read as "no one to suggest".
@@ -95,7 +98,15 @@ export default function ForYouPage() {
       // Returned, so the card stays busy until the list is in.
       return statusOf(err) === 404 ? qc.invalidateQueries({ queryKey: reasonKeys.forYou }) : undefined;
     },
+    // Given back on the mutation itself, not on a .mutate() call: those callbacks are dropped once a later press (for
+    // another card) takes the observer over, which would leave the first card stuck for good.
+    onSettled: (_data, _error, p) => { inFlight.current.delete(p.userId); },
   });
+  const toggleSave = (p: HumanCardPerson) => {
+    if (inFlight.current.has(p.userId)) return;
+    inFlight.current.add(p.userId);
+    save.mutate(p);
+  };
   // One useMutation only tracks its latest call, so each card's busy comes from every Save in flight instead.
   const saving = useMutationState({
     filters: { mutationKey: SAVE_KEY, status: 'pending' },
@@ -150,7 +161,7 @@ export default function ForYouPage() {
                     source="For You"
                     busy={saving.includes(p.userId)}
                     onMeet={setMeeting}
-                    onToggleSave={(x) => save.mutate(x)}
+                    onToggleSave={toggleSave}
                   />
                 ))}
               </div>
