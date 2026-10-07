@@ -1,5 +1,5 @@
 import { test, expect, chromium, Browser, BrowserContext, Page } from '@playwright/test';
-import { createTestUser, TestUser, pool } from '../helpers/auth';
+import { createTestUser, TestUser, pool, readSignedToken } from '../helpers/auth';
 import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
 
@@ -15,10 +15,19 @@ import { primePreview } from '../helpers/preview-bypass';
 // consent screen carrying THIS member's id, and the return trip is handled
 // (a "no photo" outcome shows the right message). The Google screen itself
 // is not automated; Ali confirms that tap on his phone.
+//
+// What Google carries through its consent screen (the OAuth "state") is a token
+// the server signs (7 Oct 2026; it used to be base64 JSON anyone could write, and
+// the callback trusted the member id in it). The spec reads it with the key the
+// test tokens use, so it also proves the state is signed, and it checks that a
+// state nobody signed is ignored on the way back.
 
 let browser: Browser;
 let member: TestUser;
 const ctxs: BrowserContext[] = [];
+
+// A site of ours that is always allowed (client-origin.ts), whichever site the main app is.
+const PREVIEW_SITE = 'https://preview.rsn.network';
 
 // A 2x2 PNG, enough for an upload.
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEklEQVR4nGP4z8DwHwyBFAAyxQX/RiL7dwAAAABJRU5ErkJggg==', 'base64');
@@ -65,17 +74,38 @@ test('the card offers a Google photo and an upload; the upload lands at once; th
   expect(state.status, JSON.stringify(state.json)).toBe(200);
   const link: string = state.json.data.url;
   expect(link).toMatch(/\/api\/auth\/google\?photo=.+&redirect=%2Fonboarding$/);
-  const hop = await fetch(link, { redirect: 'manual' });
+  // The page says which site it is on (?origin=); the server keeps it only when it is one of ours.
+  const hop = await fetch(`${link}&origin=${encodeURIComponent(PREVIEW_SITE)}`, { redirect: 'manual' });
   expect(hop.status).toBe(302);
   const location = new URL(hop.headers.get('location') || '');
   expect(location.hostname).toBe('accounts.google.com');
-  const oauthState = JSON.parse(Buffer.from(location.searchParams.get('state') || '', 'base64url').toString());
-  expect(oauthState).toMatchObject({ photoLinkUserId: member.id, redirect: '/onboarding' });
-  console.log('  ✓ Google link is signed for this member and returns to /onboarding.');
+  // The state Google carries back is a token the server signed, read with the key the test tokens use.
+  const oauthState = readSignedToken(location.searchParams.get('state') || '');
+  expect(oauthState).toMatchObject({
+    purpose: 'google-oauth-state', photoLinkUserId: member.id, redirect: '/onboarding', origin: PREVIEW_SITE,
+  });
+  console.log('  ✓ Google link is signed for this member, returns to /onboarding, and keeps the site it started on.');
   // A forged or foreign token is ignored: the flow becomes a plain sign-in, not a photo link.
-  const forged = await fetch(`${SERVER}/api/auth/google?photo=not-a-token&redirect=/onboarding`, { redirect: 'manual' });
-  const forgedState = JSON.parse(Buffer.from(new URL(forged.headers.get('location') || '').searchParams.get('state') || '', 'base64url').toString());
+  const forged = await fetch(`${SERVER}/api/auth/google?photo=not-a-token&redirect=/onboarding&origin=${encodeURIComponent(PREVIEW_SITE)}`, { redirect: 'manual' });
+  const forgedState = readSignedToken(new URL(forged.headers.get('location') || '').searchParams.get('state') || '');
+  expect(forgedState.purpose).toBe('google-oauth-state');
   expect(forgedState.photoLinkUserId).toBeUndefined();
+  expect(forgedState.origin).toBe(PREVIEW_SITE);
+  // A site that is not ours is never kept, whatever the page says: the state names a real site of ours instead.
+  const foreign = await fetch(`${SERVER}/api/auth/google?origin=${encodeURIComponent('https://evil.example')}`, { redirect: 'manual' });
+  const foreignState = readSignedToken(new URL(foreign.headers.get('location') || '').searchParams.get('state') || '');
+  expect(foreignState.origin).not.toBe('https://evil.example');
+  expect(String(foreignState.origin)).toMatch(/^https?:\/\//);
+  // And a state nobody signed is ignored on the way back. This one is the old format (base64 JSON naming this
+  // member's photo link); with a code Google will refuse, the callback fails to the login page like any plain
+  // sign-in, and no photo outcome is reached. (Before the state was signed this went to /onboarding?photo=failed.)
+  const unsigned = Buffer.from(JSON.stringify({ photoLinkUserId: member.id, redirect: '/onboarding' })).toString('base64url');
+  const back = await fetch(`${SERVER}/api/auth/google/callback?code=not-a-real-code&state=${unsigned}`, { redirect: 'manual' });
+  expect(back.status).toBe(302);
+  const backTo = back.headers.get('location') || '';
+  expect(backTo).toMatch(/\/login\?error=google_auth_failed$/);
+  expect(backTo).not.toMatch(/photo=/);
+  console.log('  ✓ a foreign site is never kept, and a state nobody signed changes nothing.');
 
   // The card, with no photo yet.
   const page = await openAs(member, '/onboarding');

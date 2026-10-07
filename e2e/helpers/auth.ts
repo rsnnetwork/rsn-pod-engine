@@ -28,6 +28,16 @@ export interface TestUser {
 }
 
 /**
+ * The claims of a token the SERVER signed, read with the same key the test tokens above are signed with.
+ * It throws when the signature does not verify or the token has expired, so a spec that reads a token
+ * through it also proves the token is genuinely signed (jwt.decode would read a forgery just as well).
+ * Used for the Google sign-in state, which is a signed token (7 Oct 2026), not base64 JSON.
+ */
+export function readSignedToken(token: string): jwt.JwtPayload {
+  return jwt.verify(token, JWT_SECRET!) as jwt.JwtPayload;
+}
+
+/**
  * Create a test user directly in DB and return JWT tokens.
  * Marks the user with email prefix `e2etest-` so we can clean up later.
  *
