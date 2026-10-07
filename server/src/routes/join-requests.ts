@@ -40,7 +40,9 @@ router.post(
   validate(createRequestSchema),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const request = await joinRequestService.createJoinRequest(req.body);
+      // The Origin header (sent by browsers on a cross-site fetch) says which site the form was filled in
+      // on, so the emails to this applicant open there. The service keeps it only if it is one of ours.
+      const request = await joinRequestService.createJoinRequest(req.body, req.get('origin'));
 
       // Phase May-19 realtime — broadcast to every admin so the
       // join-requests queue shows the new applicant without a refresh.

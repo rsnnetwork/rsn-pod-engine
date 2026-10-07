@@ -30,6 +30,7 @@ import {
 } from '../email/email.service';
 import { reopenClosedAccount, announceReopened } from '../identity/account-access';
 import { fanoutAdminEntities } from '../../realtime/fanout';
+import { applicantBaseUrl } from './applicant-links';
 
 const TOKEN_PURPOSE = 'join_request_review';
 const TOKEN_BYTES = 32;
@@ -263,13 +264,14 @@ export async function confirmActionToken(rawToken: string): Promise<ConfirmResul
       id: string;
       full_name: string;
       email: string;
+      sign_in_origin: string | null;
     }>(
       `UPDATE join_requests
           SET status = $1, reviewed_by = $2, reviewed_at = NOW(), updated_at = NOW(),
               reminder_count = CASE WHEN $4 THEN 0 ELSE reminder_count END,
               last_reminded_at = CASE WHEN $4 THEN NULL ELSE last_reminded_at END
         WHERE id = $3 AND status = 'pending'
-      RETURNING id, full_name, email`,
+      RETURNING id, full_name, email, sign_in_origin`,
       [decision, row.target_user_id, row.target_id, resetReminders],
     );
     const approvedAccount = decision === 'approved' && result.rows[0]
@@ -304,7 +306,8 @@ export async function confirmActionToken(rawToken: string): Promise<ConfirmResul
   if (account?.blockedStatus) {
     logger.warn({ requestId: reviewed.id, status: account.blockedStatus }, 'Approved (email action) for a suspended/banned account; it stays blocked');
   } else if (decision === 'approved') {
-    generateApprovalLoginUrl(reviewed.email)
+    // The applicant's link opens on the site they asked from (the preview, or the app).
+    generateApprovalLoginUrl(reviewed.email, applicantBaseUrl(reviewed))
       .then((url) => sendJoinRequestWelcomeEmail(reviewed.email, reviewed.full_name, url))
       .catch((err) => logger.error({ err, email: reviewed.email }, 'Welcome email failed (email-action path)'));
 
@@ -350,7 +353,7 @@ async function reportAlreadyProcessed(requestId: string): Promise<ConfirmResult>
   };
 }
 
-async function generateApprovalLoginUrl(email: string): Promise<string> {
+async function generateApprovalLoginUrl(email: string, baseUrl: string): Promise<string> {
   const normalizedEmail = email.toLowerCase().trim();
   const token = generateRawToken();
   const tokenHash = hashToken(token);
@@ -365,5 +368,5 @@ async function generateApprovalLoginUrl(email: string): Promise<string> {
     `INSERT INTO magic_links (email, token_hash, expires_at, purpose) VALUES ($1, $2, $3, 'login')`,
     [normalizedEmail, tokenHash, expiresAt],
   );
-  return `${config.clientUrl}/auth/verify?token=${token}`;
+  return `${baseUrl}/auth/verify?token=${token}`;
 }

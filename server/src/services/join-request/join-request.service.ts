@@ -11,6 +11,7 @@ import { sendJoinRequestConfirmationEmail, sendJoinRequestWelcomeEmail, sendJoin
 import { applyMatchVerification, normalizeLinkedinUrl } from '../onboarding/enrichment.service';
 import { resolveEnrichProvider, runProvider, resultFromOutcome } from '../onboarding/providers/registry';
 import { reopenClosedAccount, announceReopened } from '../identity/account-access';
+import { applicantBaseUrl, signInOriginFor } from './applicant-links';
 
 const APPROVAL_LINK_EXPIRY_DAYS = 7;
 
@@ -66,7 +67,12 @@ function mapRow(row: any): JoinRequest {
   };
 }
 
-export async function createJoinRequest(input: CreateJoinRequestInput): Promise<JoinRequest> {
+/**
+ * `requestOrigin` is the Origin header of the request (the page the form was sent from). It is
+ * remembered only when it is one of our own sites other than the main app (applicant-links.ts), so
+ * that the emails sent to this applicant open there; the live app stores nothing.
+ */
+export async function createJoinRequest(input: CreateJoinRequestInput, requestOrigin?: string): Promise<JoinRequest> {
   // Check for duplicate pending request
   const existing = await query(
     `SELECT id FROM join_requests WHERE email = $1 AND status = 'pending'`,
@@ -77,10 +83,10 @@ export async function createJoinRequest(input: CreateJoinRequestInput): Promise<
   }
 
   const result = await query<{ id: string; [k: string]: unknown }>(
-    `INSERT INTO join_requests (full_name, email, linkedin_url, reason)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO join_requests (full_name, email, linkedin_url, reason, sign_in_origin)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING *`,
-    [input.fullName, input.email, input.linkedinUrl, input.reason]
+    [input.fullName, input.email, input.linkedinUrl, input.reason, signInOriginFor(requestOrigin)]
   );
 
   logger.info({ email: input.email }, 'New join request submitted');
@@ -267,10 +273,12 @@ export async function reviewJoinRequest(
 
   // Send approval/decline email (non-blocking)
   if (decision === 'approved') {
-    // Generate a 7-day magic link so approved users get one-click access
-    const approvalLoginUrl = await generateApprovalMagicLink(reviewed.email).catch(err => {
+    // Generate a 7-day magic link so approved users get one-click access. It, and the login page it
+    // falls back to, open on the site the applicant asked from (the preview, or the app).
+    const applicantUrl = applicantBaseUrl(row);
+    const approvalLoginUrl = await generateApprovalMagicLink(reviewed.email, applicantUrl).catch(err => {
       logger.warn({ err, email: reviewed.email }, 'Failed to generate approval magic link — falling back to login URL');
-      return `${config.clientUrl}/login`;
+      return `${applicantUrl}/login`;
     });
     sendJoinRequestWelcomeEmail(reviewed.email, reviewed.fullName, approvalLoginUrl).catch(err =>
       logger.error({ err, email: reviewed.email }, 'Failed to send welcome email')
@@ -384,8 +392,8 @@ export async function pokeJoinRequest(id: string): Promise<JoinRequest> {
 
   const poked = mapRow(updated.rows[0]);
 
-  // Send reminder email (non-blocking)
-  const loginUrl = `${config.clientUrl}/login`;
+  // Send reminder email (non-blocking). It opens the site the applicant asked from.
+  const loginUrl = `${applicantBaseUrl(updated.rows[0])}/login`;
   sendJoinRequestReminderEmail(poked.email, poked.fullName, loginUrl, poked.reminderCount).catch(err =>
     logger.error({ err, email: poked.email }, 'Failed to send reminder email')
   );
@@ -493,9 +501,10 @@ export async function processAutoReminders(): Promise<{ reminded: number; expire
 
 /**
  * Generate a magic link with 7-day expiry for approved join requests.
- * Uses the same magic_links table as the normal auth flow.
+ * Uses the same magic_links table as the normal auth flow. `baseUrl` is the site the link
+ * opens on (applicantBaseUrl): only the host in the link depends on it, never what is stored.
  */
-async function generateApprovalMagicLink(email: string): Promise<string> {
+async function generateApprovalMagicLink(email: string, baseUrl: string): Promise<string> {
   const normalizedEmail = email.toLowerCase().trim();
   const token = crypto.randomBytes(32).toString('hex');
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
@@ -516,7 +525,7 @@ async function generateApprovalMagicLink(email: string): Promise<string> {
     [normalizedEmail, tokenHash, expiresAt]
   );
 
-  const magicLinkUrl = `${config.clientUrl}/auth/verify?token=${token}`;
+  const magicLinkUrl = `${baseUrl}/auth/verify?token=${token}`;
   logger.info({ email: normalizedEmail }, 'Approval magic link generated (7-day expiry)');
   return magicLinkUrl;
 }
