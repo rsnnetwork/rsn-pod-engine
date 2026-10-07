@@ -139,7 +139,7 @@ describe('For You: Save and the cache', () => {
 
   it('a Save made with no connection fails at once, with errorMessage\'s connection sentence, instead of waiting behind a card that looks busy', () => {
     expect(saveCall()).toMatch(/networkMode: 'always',/);
-    expect(saveCall()).toMatch(/onError: \(err\) => addToast\(errorMessage\(err, '[^']+'\), 'error'\)/);
+    expect(saveCall()).toMatch(/onError: \(err\) => \{\s*addToast\(errorMessage\(err, '[^']+'\), 'error'\);/);
   });
 
   it('every Save carries one key, and each card is busy for ITS OWN request: the page asks which people have a Save in flight', () => {
@@ -157,9 +157,22 @@ describe('For You: Save and the cache', () => {
     const src = withoutComments(page());
     expect(saveCall()).toContain("await qc.invalidateQueries({ queryKey: reasonKeys.all, refetchType: 'none' });");
     expect(saveCall()).toContain('await qc.invalidateQueries({ queryKey: reasonKeys.forYou });');
-    expect(src.match(/invalidateQueries\(/g)).toHaveLength(2);
+    // Two on success, and the one a 404 makes (the next test).
+    const onSuccess = saveCall().slice(saveCall().indexOf('onSuccess:'), saveCall().indexOf('onError:'));
+    expect(onSuccess.match(/invalidateQueries\(/g)).toHaveLength(2);
+    expect(src.match(/invalidateQueries\(/g)).toHaveLength(3);
     // No invalidation of the whole REASON namespace may refetch: the rail's two requests are not the Save's to refresh.
     for (const call of src.matchAll(/invalidateQueries\(\{ queryKey: reasonKeys\.all[^)]*\)/g)) expect(call[0]).toContain("refetchType: 'none'");
+  });
+
+  it('a Save that answers 404 (the person is gone) fetches the For You list again, so their card goes instead of staying with live buttons; the refetch is returned, so the card stays busy until it is in', () => {
+    const src = withoutComments(page());
+    expect(src).toMatch(/^import \{ statusOf \} from '\.\.\/human\/profile-text';$/m);
+    const onError = saveCall().slice(saveCall().indexOf('onError:'));
+    expect(onError).toContain("return statusOf(err) === 404 ? qc.invalidateQueries({ queryKey: reasonKeys.forYou }) : undefined;");
+    // The toast still says why (errorMessage's 404 sentence), and comes first.
+    expect(onError.indexOf('addToast(')).toBeGreaterThan(-1);
+    expect(onError.indexOf('addToast(')).toBeLessThan(onError.indexOf('statusOf(err)'));
   });
 });
 

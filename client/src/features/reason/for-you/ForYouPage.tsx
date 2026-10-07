@@ -13,6 +13,7 @@ import PageHead from '../ui/PageHead';
 import ReasonSheep from '../brand/ReasonSheep';
 import HumanCard, { type HumanCardPerson } from '../human/HumanCard';
 import MeetSheet from '../human/MeetSheet';
+import { statusOf } from '../human/profile-text';
 import ForYouRail from './ForYouRail';
 import ForYouEmpty from './ForYouEmpty';
 import { errorMessage, fetchForYou, personName, reasonKeys, setPersonResponse, stateFromPoke, type ForYouMatch } from '../api';
@@ -88,7 +89,12 @@ export default function ForYouPage() {
       // ...but only the list in front of the member is fetched again, and waited for: the card stays busy until it shows its new state.
       await qc.invalidateQueries({ queryKey: reasonKeys.forYou });
     },
-    onError: (err) => addToast(errorMessage(err, 'Could not save that right now. Try again in a moment.'), 'error'),
+    onError: (err) => {
+      addToast(errorMessage(err, 'Could not save that right now. Try again in a moment.'), 'error');
+      // A 404 means the person is gone: fetch the list again, so their card goes instead of staying with live buttons.
+      // Returned, so the card stays busy until the list is in.
+      return statusOf(err) === 404 ? qc.invalidateQueries({ queryKey: reasonKeys.forYou }) : undefined;
+    },
   });
   // One useMutation only tracks its latest call, so each card's busy comes from every Save in flight instead.
   const saving = useMutationState({
