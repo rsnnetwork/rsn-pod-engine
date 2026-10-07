@@ -177,21 +177,48 @@ const firstLine = (e: unknown): string => String((e as Error)?.message ?? e).spl
 
 // ── Checks ───────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * A window has a size once its document has loaded. Right after a navigation WebKit's device emulation can answer
+ * window.innerWidth with 0 for a moment (reason-m1.spec.ts met it as "scrollWidth 390 over 0"), and anything measured
+ * against that is nonsense. A question that depends on the window's size is asked again, for up to 5 seconds, until
+ * the answer comes from a window with a width and a height above 0 and a finished document (the question works that
+ * out itself and says so in `sized`, so the size and the measurement are from the same instant). What is measured
+ * then is judged as strictly as ever. The same helper is in reason-m1.spec.ts: a spec cannot import another spec.
+ */
+async function untilSized<T extends { sized: boolean }>(ask: () => Promise<T>): Promise<T | null> {
+  const until = Date.now() + 5_000;
+  for (;;) {
+    let answer: T | null = null;
+    try {
+      answer = await ask();
+    } catch (e) {
+      // A page between two documents has nothing to answer for a moment: ask again. Anything else is the real error.
+      if (!/Execution context was destroyed|Cannot find context with specified id/i.test(String((e as Error)?.message ?? e))) throw e;
+    }
+    if (answer?.sized) return answer;
+    if (Date.now() >= until) return answer;
+    await wait(100);
+  }
+}
+
 // The window must not scroll at all (the page area, <main>, is what scrolls), and neither may the
 // page area scroll sideways, which is what a too-wide screen would push on instead. On a phone,
 // once the page area is scrolled to its end, nothing of the page may sit under the bottom bar.
 async function expectContained(page: Page, where: string): Promise<void> {
-  const m = await page.evaluate(() => {
+  const m = await untilSized(() => page.evaluate(() => {
+    const sized = document.readyState === 'complete' && window.innerWidth > 0 && window.innerHeight > 0;
     const main = document.querySelector('main');
     const bar = document.querySelector('nav[aria-label="Main"].fixed') as HTMLElement | null;
     const wrapper = main?.firstElementChild as HTMLElement | null;
     let clearance: number | null = null;
-    if (main && bar && wrapper && getComputedStyle(bar).display !== 'none') {
+    if (sized && main && bar && wrapper && getComputedStyle(bar).display !== 'none') {
       main.scrollTop = main.scrollHeight;
       clearance = Math.round(bar.getBoundingClientRect().top - wrapper.getBoundingClientRect().bottom);
       main.scrollTop = 0;
     }
     return {
+      sized,
+      window: `${window.innerWidth}x${window.innerHeight}, document ${document.readyState}`,
       docW: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth),
       docH: document.documentElement.scrollHeight,
       innerW: window.innerWidth,
@@ -199,11 +226,12 @@ async function expectContained(page: Page, where: string): Promise<void> {
       mainOver: main ? main.scrollWidth - main.clientWidth : 0,
       clearance,
     };
-  });
-  expect(m.docW, `${where}: the window scrolls sideways (scrollWidth ${m.docW} over ${m.innerW})`).toBeLessThanOrEqual(m.innerW);
-  expect(m.docH, `${where}: the window scrolls up and down (height ${m.docH} over ${m.innerH}); only the page area should`).toBeLessThanOrEqual(m.innerH + 1);
-  expect(m.mainOver, `${where}: the page area scrolls sideways by ${m.mainOver}px`).toBeLessThanOrEqual(1);
-  if (m.clearance !== null) expect(m.clearance, `${where}: the end of the page sits ${-m.clearance}px under the bottom bar`).toBeGreaterThanOrEqual(0);
+  }));
+  expect(m?.sized, `${where}: there is no window to measure (${m ? m.window : 'the page was between two documents'})`).toBe(true);
+  expect(m!.docW, `${where}: the window scrolls sideways (scrollWidth ${m!.docW} over ${m!.innerW})`).toBeLessThanOrEqual(m!.innerW);
+  expect(m!.docH, `${where}: the window scrolls up and down (height ${m!.docH} over ${m!.innerH}); only the page area should`).toBeLessThanOrEqual(m!.innerH + 1);
+  expect(m!.mainOver, `${where}: the page area scrolls sideways by ${m!.mainOver}px`).toBeLessThanOrEqual(1);
+  if (m!.clearance !== null) expect(m!.clearance, `${where}: the end of the page sits ${-m!.clearance}px under the bottom bar`).toBeGreaterThanOrEqual(0);
 }
 
 // Every target at least 44px each way, measured the way a finger meets it.
@@ -388,16 +416,18 @@ test('2 phone bar and More sheet: five tabs, the rest in More, each entry naviga
       ], `${where} More sheet`);
 
       // It sits fully inside the window, and above the bar (not under it).
-      const hit = await page.evaluate(() => {
+      const hit = await untilSized(() => page.evaluate(() => {
+        const sized = document.readyState === 'complete' && window.innerWidth > 0 && window.innerHeight > 0;
         const d = document.querySelector('[role="dialog"][aria-label="More"]') as HTMLElement | null;
         const bar = document.querySelector('nav[aria-label="Main"].fixed') as HTMLElement | null;
-        if (!d || !bar) return null;
+        if (!d || !bar) return { sized, found: false, top: 0, bottom: 0, vh: 0, barUnderSheet: false };
         const r = d.getBoundingClientRect();
         const b = bar.getBoundingClientRect();
         const overBar = document.elementFromPoint(window.innerWidth / 2, b.top + b.height / 2);
-        return { top: r.top, bottom: r.bottom, vh: window.innerHeight, barUnderSheet: !!overBar && !bar.contains(overBar) };
-      });
-      expect(hit, `${where}: the sheet and the bar are both in the page`).not.toBeNull();
+        return { sized, found: true, top: r.top, bottom: r.bottom, vh: window.innerHeight, barUnderSheet: !!overBar && !bar.contains(overBar) };
+      }));
+      expect(hit?.sized, `${where}: there is no window to measure`).toBe(true);
+      expect(hit!.found, `${where}: the sheet and the bar are both in the page`).toBe(true);
       expect(hit!.top, `${where}: the sheet starts inside the window`).toBeGreaterThanOrEqual(0);
       expect(Math.round(hit!.bottom), `${where}: the sheet ends inside the window`).toBeLessThanOrEqual(hit!.vh + 1);
       expect(hit!.barUnderSheet, `${where}: the bar paints over the open sheet`).toBe(true);

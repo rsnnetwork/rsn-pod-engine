@@ -479,6 +479,33 @@ async function tap(page: Page, target: Locator, label: string, opts: { centre?: 
   }
 }
 
+/**
+ * A window has a size once its document has loaded. Right after a navigation WebKit's device emulation can answer
+ * window.innerWidth with 0 for a moment (one run measured "scrollWidth 390 over 0"), and anything measured against
+ * that is nonsense: a width of 0 makes every box "wider than the window", and a height of 0 makes "the images in
+ * view" an empty list that passes for nothing. So a question that depends on the window's size is asked again, for
+ * up to 5 seconds, until the answer comes from a window with a width and a height above 0 and a finished document
+ * (the question works that out itself and says so in `sized`, so the size and the measurement are from the same
+ * instant). What is measured then is judged as strictly as ever; a window that never gets a size is reported as
+ * that, not measured.
+ */
+async function untilSized<T extends { sized: boolean }>(ask: () => Promise<T>): Promise<T | null> {
+  const until = Date.now() + 5_000;
+  for (;;) {
+    let answer: T | null = null;
+    try {
+      answer = await ask();
+    } catch (e) {
+      // A page between two documents has nothing to answer for a moment: ask again. Anything else (an element
+      // that is not there, a page that was closed) is the test's real error and is not hidden here.
+      if (!/Execution context was destroyed|Cannot find context with specified id/i.test(String((e as Error)?.message ?? e))) throw e;
+    }
+    if (answer?.sized) return answer;
+    if (Date.now() >= until) return answer;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
 // Opening a sheet locks the page's scroll; closing it must give the scroll back (a sheet that left the lock
 // on, or two that closed in the wrong order, left a member with a page that would not scroll). The lock must
 // be off and stay off, and where the window itself scrolls (the profile) a turn of the wheel must move it.
@@ -489,10 +516,15 @@ async function expectScrollable(page: Page, where: string): Promise<void> {
   expect(await locked(), `${where}: the page locked again after the sheet closed`).toBe(false);
   // Mobile WebKit has no mouse wheel, so a device is checked by the lock alone. The wheel turns towards
   // whichever end has room: a button centred near the end of a page leaves none below.
-  const at = await page.evaluate(() => ({ y: window.scrollY, room: document.documentElement.scrollHeight - window.innerHeight }));
-  if (!DEVICE && at.room > 160) {
-    await page.mouse.wheel(0, at.y + 120 <= at.room ? 120 : -120);
-    await expect.poll(() => page.evaluate(() => window.scrollY), { message: `${where}: a turn of the wheel does not scroll the page` }).not.toBe(at.y);
+  const at = await untilSized(() => page.evaluate(() => ({
+    sized: document.readyState === 'complete' && window.innerWidth > 0 && window.innerHeight > 0,
+    y: window.scrollY,
+    room: document.documentElement.scrollHeight - window.innerHeight,
+  })));
+  expect(at?.sized, `${where}: there is no window to scroll`).toBe(true);
+  if (!DEVICE && at!.room > 160) {
+    await page.mouse.wheel(0, at!.y + 120 <= at!.room ? 120 : -120);
+    await expect.poll(() => page.evaluate(() => window.scrollY), { message: `${where}: a turn of the wheel does not scroll the page` }).not.toBe(at!.y);
   }
 }
 
@@ -510,16 +542,20 @@ async function linkOnTop(page: Page, link: Locator, label: string): Promise<void
   await expect(link, `${label}: not in the page`).toHaveCount(1);
   await link.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior }));
   await holdsStill(page, link);
-  const seen = await link.evaluate((el) => {
+  const seen = await untilSized(() => link.evaluate((el) => {
+    const sized = document.readyState === 'complete' && window.innerWidth > 0 && window.innerHeight > 0;
     const line = el.getClientRects()[0];
-    if (!line) return 'it is not drawn';
+    if (!line) return { sized, what: 'it is not drawn' };
     const x = line.left + line.width / 2;
     const y = line.top + line.height / 2;
-    if (line.left < -0.5 || line.right > window.innerWidth + 0.5 || y < 0 || y > window.innerHeight) return `its first line is off the window (${Math.round(line.left)} to ${Math.round(line.right)} across, ${Math.round(y)} down)`;
+    if (line.left < -0.5 || line.right > window.innerWidth + 0.5 || y < 0 || y > window.innerHeight) {
+      return { sized, what: `its first line is off the window (${Math.round(line.left)} to ${Math.round(line.right)} across, ${Math.round(y)} down, in a ${window.innerWidth}x${window.innerHeight} window)` };
+    }
     const top = document.elementFromPoint(x, y);
-    return top && el.contains(top) ? 'on top' : `covered by ${top ? top.tagName.toLowerCase() : 'nothing'}`;
-  });
-  expect(seen, `${label}: the link must be on screen and on top`).toBe('on top');
+    return { sized, what: top && el.contains(top) ? 'on top' : `covered by ${top ? top.tagName.toLowerCase() : 'nothing'}` };
+  }));
+  expect(seen?.sized, `${label}: there is no window to look at`).toBe(true);
+  expect(seen!.what, `${label}: the link must be on screen and on top`).toBe('on top');
 }
 
 // ── Geometry ─────────────────────────────────────────────────────────────────────────────────
@@ -527,44 +563,54 @@ async function linkOnTop(page: Page, link: Locator, label: string): Promise<void
 // Neither the window nor the page area (<main>: on For You it is what scrolls) may scroll sideways, and
 // nothing in the page may reach past the window's edge.
 async function expectNoSideways(page: Page, where: string): Promise<void> {
-  const m = await page.evaluate(() => {
+  const m = await untilSized(() => page.evaluate(() => {
+    const sized = document.readyState === 'complete' && window.innerWidth > 0 && window.innerHeight > 0;
     const main = document.querySelector('main');
     const out: string[] = [];
-    for (const el of Array.from(document.querySelectorAll<HTMLElement>('main *'))) {
-      const r = el.getBoundingClientRect();
-      if (r.width <= 1 || r.height <= 1) continue; // screen-reader-only text and empty boxes
-      if (r.right > window.innerWidth + 1 || r.left < -1) {
-        out.push(`${el.tagName.toLowerCase()} "${(el.innerText || '').replace(/\s+/g, ' ').slice(0, 24)}" ${Math.round(r.left)} to ${Math.round(r.right)}`);
+    if (sized) {
+      for (const el of Array.from(document.querySelectorAll<HTMLElement>('main *'))) {
+        const r = el.getBoundingClientRect();
+        if (r.width <= 1 || r.height <= 1) continue; // screen-reader-only text and empty boxes
+        if (r.right > window.innerWidth + 1 || r.left < -1) {
+          out.push(`${el.tagName.toLowerCase()} "${(el.innerText || '').replace(/\s+/g, ' ').slice(0, 24)}" ${Math.round(r.left)} to ${Math.round(r.right)}`);
+        }
       }
     }
     return {
+      sized,
+      window: `${window.innerWidth}x${window.innerHeight}, document ${document.readyState}`,
       docW: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth),
       innerW: window.innerWidth,
       mainOver: main ? main.scrollWidth - main.clientWidth : 0,
       out: out.slice(0, 4),
     };
-  });
-  expect(m.docW - m.innerW, `${where}: the window scrolls sideways (scrollWidth ${m.docW} over ${m.innerW})`).toBeLessThanOrEqual(0);
-  expect(m.mainOver, `${where}: the page area scrolls sideways by ${m.mainOver}px`).toBeLessThanOrEqual(1);
-  expect(m.out, `${where}: something reaches past the edge of the window`).toEqual([]);
+  }));
+  expect(m?.sized, `${where}: there is no window to measure (${m ? m.window : 'the page was between two documents'})`).toBe(true);
+  expect(m!.docW - m!.innerW, `${where}: the window scrolls sideways (scrollWidth ${m!.docW} over ${m!.innerW})`).toBeLessThanOrEqual(0);
+  expect(m!.mainOver, `${where}: the page area scrolls sideways by ${m!.mainOver}px`).toBeLessThanOrEqual(1);
+  expect(m!.out, `${where}: something reaches past the edge of the window`).toEqual([]);
 }
 
 // Nothing inside the box sticks out of it, sideways, and no text is wider than its own box. A card hides
 // what overflows it, so a long name that does not wrap is cut off, not scrolled to.
 async function expectNothingSticksOut(target: Locator, label: string): Promise<void> {
-  const bad = await target.evaluate((root) => {
+  const seen = await untilSized(() => target.evaluate((root) => {
+    const sized = document.readyState === 'complete' && window.innerWidth > 0 && window.innerHeight > 0;
     const box = root.getBoundingClientRect();
     const out: string[] = [];
-    for (const el of Array.from(root.querySelectorAll<HTMLElement>('*'))) {
-      const r = el.getBoundingClientRect();
-      if (r.width <= 1 || r.height <= 1) continue;
-      const what = `${el.tagName.toLowerCase()} "${(el.innerText || '').replace(/\s+/g, ' ').slice(0, 24)}"`;
-      if (r.right > box.right + 1 || r.left < box.left - 1) out.push(`${what} sticks out (${Math.round(r.left)} to ${Math.round(r.right)} in ${Math.round(box.left)} to ${Math.round(box.right)})`);
-      else if (el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 1) out.push(`${what} is wider than its box (${el.scrollWidth} over ${el.clientWidth})`);
+    if (sized) {
+      for (const el of Array.from(root.querySelectorAll<HTMLElement>('*'))) {
+        const r = el.getBoundingClientRect();
+        if (r.width <= 1 || r.height <= 1) continue;
+        const what = `${el.tagName.toLowerCase()} "${(el.innerText || '').replace(/\s+/g, ' ').slice(0, 24)}"`;
+        if (r.right > box.right + 1 || r.left < box.left - 1) out.push(`${what} sticks out (${Math.round(r.left)} to ${Math.round(r.right)} in ${Math.round(box.left)} to ${Math.round(box.right)})`);
+        else if (el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 1) out.push(`${what} is wider than its box (${el.scrollWidth} over ${el.clientWidth})`);
+      }
     }
-    return out.slice(0, 4);
-  });
-  expect(bad, `${label}: things that do not fit`).toEqual([]);
+    return { sized, window: `${window.innerWidth}x${window.innerHeight}, document ${document.readyState}`, bad: out.slice(0, 4) };
+  }));
+  expect(seen?.sized, `${label}: there is no window to measure in (${seen ? seen.window : 'the page was between two documents'})`).toBe(true);
+  expect(seen!.bad, `${label}: things that do not fit`).toEqual([]);
 }
 
 async function expectInsideWindow(page: Page, target: Locator, label: string): Promise<void> {
@@ -584,8 +630,10 @@ async function expectSheetFits(page: Page, sheet: Locator, where: string): Promi
   await expect.poll(async () => {
     const m = await sheet.evaluate((el) => {
       const r = el.getBoundingClientRect();
-      return { x: r.x, y: r.y, w: r.width, h: r.height, vw: window.innerWidth, vh: window.innerHeight, wide: window.matchMedia('(min-width: 768px)').matches };
+      return { x: r.x, y: r.y, w: r.width, h: r.height, vw: window.innerWidth, vh: window.innerHeight, wide: window.matchMedia('(min-width: 768px)').matches, state: document.readyState };
     });
+    // A window that has no size yet (see untilSized) is not a layout to judge: read again.
+    if (m.vw <= 0 || m.vh <= 0 || m.state !== 'complete') return [`the window has no size yet (${m.vw}x${m.vh}, document ${m.state})`];
     const bad: string[] = [];
     if (m.x < -0.5) bad.push(`starts ${Math.round(-m.x)}px left of the window`);
     if (m.y < -0.5) bad.push(`starts ${Math.round(-m.y)}px above the window`);
@@ -602,13 +650,17 @@ async function expectSheetFits(page: Page, sheet: Locator, where: string): Promi
   }, { message: `${where}: the sheet does not fit`, timeout: 5_000 }).toEqual([]);
 }
 
-// The images in view are the real ones: a missing sheep or logo is a broken-image box.
+// The images in view are the real ones: a missing sheep or logo is a broken-image box. "In view" is measured against
+// the window's height, so a window with no size yet would have NO image in view and pass for nothing: until it has
+// one, the answer is a note about that, not an empty list.
 async function expectImagesLoaded(page: Page, where: string): Promise<void> {
-  await expect.poll(() => page.evaluate(() =>
-    Array.from(document.images)
+  await expect.poll(() => page.evaluate(() => {
+    if (document.readyState !== 'complete' || window.innerWidth <= 0 || window.innerHeight <= 0) return [`(the window has no size yet: ${window.innerWidth}x${window.innerHeight}, document ${document.readyState})`];
+    return Array.from(document.images)
       .filter((img) => { const r = img.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < window.innerHeight; })
       .filter((img) => !(img.complete && img.naturalWidth > 0))
-      .map((img) => img.getAttribute('src'))), { message: `${where}: images in view that did not load`, timeout: 10_000 }).toEqual([]);
+      .map((img) => img.getAttribute('src'));
+  }), { message: `${where}: images in view that did not load`, timeout: 10_000 }).toEqual([]);
 }
 
 // The navigation that belongs to this width: the bottom bar up to 720px, otherwise the rail (icons) or the
@@ -664,13 +716,14 @@ const scrollWindowTo = (page: Page, where: 'top' | 'bottom'): Promise<void> =>
 
 // With the page scrolled to its end, the last section ends above the fixed move bar.
 async function expectClearOfMoveBar(page: Page, where: string): Promise<void> {
-  const m = await page.evaluate(() => {
+  const m = await untilSized(() => page.evaluate(() => {
+    const sized = document.readyState === 'complete' && window.innerWidth > 0 && window.innerHeight > 0;
     const bar = document.querySelector('[role="region"][aria-label="Your move"]');
     const last = document.querySelector('main')?.lastElementChild;
-    if (!bar || !last) return null;
-    return { barTop: bar.getBoundingClientRect().top, lastBottom: last.getBoundingClientRect().bottom };
-  });
-  expect(m, `${where}: the move bar and the page are both there`).not.toBeNull();
+    return { sized, found: Boolean(bar && last), barTop: bar ? bar.getBoundingClientRect().top : 0, lastBottom: last ? last.getBoundingClientRect().bottom : 0 };
+  }));
+  expect(m?.sized, `${where}: there is no window to measure`).toBe(true);
+  expect(m!.found, `${where}: the move bar and the page are both there`).toBe(true);
   expect(Math.round(m!.lastBottom), `${where}: the end of the page is under the move bar (bar at ${Math.round(m!.barTop)})`).toBeLessThanOrEqual(Math.round(m!.barTop));
 }
 
