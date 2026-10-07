@@ -4,18 +4,24 @@ import { createTestUser, TestUser, pool, readSignedToken } from '../helpers/auth
 import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
 
-// THE PHOTO ON THE ONBOARDING CARD (7 Sep 2026, Ali: "if the person did not
-// log in with Google, this prompt can get the Google photo, and the other
-// options are fine too").
+// THE PHOTO CARD (7 Sep 2026, Ali: "if the person did not log in with Google,
+// this prompt can get the Google photo, and the other options are fine too").
 //
-// A member with no LinkedIn and no Gravatar reaches the card with no photo.
-// The card offers "Use my Google photo" (one tap through Google's consent,
-// then straight back) and "Add a photo". This drives what can be driven
-// without a Google account: the upload lands as the avatar at once, the
-// Google button asks the server for a signed link that points at Google's
-// consent screen carrying THIS member's id, and the return trip is handled
-// (a "no photo" outcome shows the right message). The Google screen itself
-// is not automated; Ali confirms that tap on his phone.
+// A member with no LinkedIn and no Gravatar has no photo. The card offers
+// "Use my Google photo" (one tap through Google's consent, then straight back)
+// and a way to add one from a file. This drives what can be driven without a
+// Google account: the upload lands as the avatar at once, the Google button
+// asks the server for a signed link that points at Google's consent screen
+// carrying THIS member's id, and the return trip is handled (a "no photo"
+// outcome shows the right message). The Google screen itself is not
+// automated; Ali confirms that tap on his phone.
+//
+// 7 Oct 2026: the card moved. It lived on the onboarding chat, which the
+// five-question flow replaced on 22 Sep (309885ce), and that flow offers only
+// the photo found on the member's LinkedIn ("Is this you?", 23 Sep), which a
+// member without a LinkedIn never sees. Both actions are now on the profile
+// page, in the card at its top, as "Use my Google photo" and "Change photo",
+// so this reaches them there as a member who has finished onboarding.
 //
 // What Google carries through its consent screen (the OAuth "state") is a token
 // the server signs (7 Oct 2026; it used to be base64 JSON anyone could write, and
@@ -115,8 +121,9 @@ async function openAs(u: TestUser, path: string): Promise<Page> {
 }
 
 test.beforeAll(async () => {
-  member = await createTestUser('photocard', 'member', 'not_started');
-  await pool.query(`UPDATE users SET onboarding_completed = false, linkedin_url = NULL, avatar_url = NULL, avatar_blob = NULL, company = 'Fjord Analytics' WHERE id = $1`, [member.id]);
+  // Someone who has finished onboarding (the profile page is closed to anyone who has not) and has no photo.
+  member = await createTestUser('photocard');
+  await pool.query(`UPDATE users SET linkedin_url = NULL, avatar_url = NULL, avatar_blob = NULL WHERE id = $1`, [member.id]);
   browser = await chromium.launch({ headless: false });
 });
 
@@ -212,31 +219,32 @@ test('the card offers a Google photo and an upload; the upload lands at once; th
   expect(backTo).not.toMatch(/photo=/);
   console.log('  ✓ a foreign site is never kept, and a state nobody signed changes nothing.');
 
-  // The card, with no photo yet.
-  const page = await openAs(member, '/onboarding');
-  await expect(page.locator('input[aria-label="Your LinkedIn URL"]')).toBeVisible({ timeout: 30_000 });
-  await page.getByRole('button', { name: /Skip for now/i }).click();
-  await expect(page.getByRole('button', { name: /Yes, continue/i })).toBeVisible({ timeout: 60_000 });
-  const card = page.getByTestId('card-photo');
-  await expect(card).toBeVisible();
-  await expect(card.getByText('No photo yet')).toBeVisible();
-  await expect(card.getByTestId('use-google-photo')).toBeVisible();
-  for (const name of ['Use my Google photo', 'Add a photo']) {
-    const box = await card.getByText(name).boundingBox();
-    expect(box!.height, `${name} is a 44px target`).toBeGreaterThanOrEqual(40);
+  // The card, with no photo yet: the profile page's top card, opened as a member who has finished onboarding.
+  const page = await openAs(member, '/profile');
+  const google = page.getByTestId('use-google-photo');
+  const change = page.getByRole('button', { name: 'Change photo' });
+  await expect(google).toBeVisible({ timeout: 30_000 });
+  await expect(change).toBeVisible();
+  // No photo yet: the card shows the member's initials, not a picture, and none is stored.
+  await expect(page.locator('img[src^="data:"]')).toHaveCount(0);
+  const before = await pool.query(`SELECT avatar_url FROM users WHERE id = $1`, [member.id]);
+  expect(before.rows[0].avatar_url).toBeNull();
+  for (const [name, button] of [['Use my Google photo', google], ['Change photo', change]] as const) {
+    const box = await button.boundingBox();
+    expect(box!.height, `${name} is a 44px target`).toBeGreaterThanOrEqual(44);
   }
 
-  // Add a photo from a file: it is the avatar at once, on the card and in the account.
-  await card.locator('input[type="file"]').setInputFiles({ name: 'me.png', mimeType: 'image/png', buffer: PNG });
-  // The success toast lasts 2.5s; the durable outcomes below are what matter.
-  await expect(card.locator('img')).toHaveAttribute('src', /^data:image\/png/, { timeout: 20_000 });
-  await expect(card.getByText('Looks good')).toBeVisible();
+  // Change photo, from a file: it is the avatar at once, in the card and in the account.
+  await page.locator('input[type="file"]').setInputFiles({ name: 'me.png', mimeType: 'image/png', buffer: PNG });
+  // The success toast is brief; the durable outcomes below are what matter. (The small avatar in the
+  // page header is hidden on a phone, so look for the picture that is on screen.)
+  await expect(page.locator('img[src^="data:image/png"]:visible').first()).toBeVisible({ timeout: 20_000 });
   const row = await pool.query(`SELECT avatar_url FROM users WHERE id = $1`, [member.id]);
   expect(String(row.rows[0].avatar_url)).toMatch(/^data:image\/png;base64,/);
   console.log('  ✓ uploaded photo is the avatar immediately.');
 
   // Coming back from Google with no photo says so, and the URL is cleaned.
-  await gotoRetry(page, `${APP}/onboarding?photo=none`);
+  await gotoRetry(page, `${APP}/profile?photo=none`);
   await expect(page.getByText(/That Google account has no photo/)).toBeVisible({ timeout: 30_000 });
   await expect(page).not.toHaveURL(/photo=/);
   console.log('  ✓ the return trip from Google is handled.');
@@ -244,10 +252,9 @@ test('the card offers a Google photo and an upload; the upload lands at once; th
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow, 'no sideways scroll at 390px').toBeLessThanOrEqual(0);
 
-  // The same tap lives on the profile page for members who finished onboarding long ago.
-  await pool.query(`UPDATE users SET onboarding_status = 'completed', onboarding_completed = true WHERE id = $1`, [member.id]);
+  // Google's "cancelled" outcome is handled too, and the link the profile's own tap asks for comes back to the profile.
   await gotoRetry(page, `${APP}/profile?photo=cancelled`);
-  await expect(page.getByTestId('use-google-photo')).toBeVisible({ timeout: 30_000 });
+  await expect(google).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText(/No problem, nothing changed/)).toBeVisible({ timeout: 30_000 });
   await expect(page).not.toHaveURL(/photo=/);
   const profileState = await apiAs(member, 'POST', '/auth/google/photo-state', { redirect: '/profile' });
