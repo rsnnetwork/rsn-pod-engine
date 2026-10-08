@@ -139,16 +139,19 @@ function compile(names: PlaceName[], normalise: (s: string) => string): Scanners
 }
 
 /**
- * Places whose name contains a country's name (or adjective) and which are not that country:
- * "New Mexico" is not Mexico, "British Columbia" is not British and "Northern Ireland" is not
- * Ireland. The first three are places of their own in a want; the last two are only set aside, so
- * that "New England" is not England and "New South Wales" is not Wales. In a person's location
- * the three places are states of want-cities.ts (Northern Ireland is the United Kingdom there).
+ * Names read anywhere in a want, before the shorter names inside them. "New Mexico" is not Mexico,
+ * "British Columbia" is not British and "Northern Ireland" is not Ireland: three places of their own.
+ * "The Bay Area" however written ("San Francisco Bay Area", "SF Bay Area") is one region, not San
+ * Francisco. Two more are only set aside, so that "New England" is not England and "New South Wales"
+ * is not Wales. In a person's location the places are the entries of want-cities.ts.
  */
 export const LOOK_ALIKES: readonly PlaceName[] = [
   { name: 'new mexico', kind: 'place', canon: 'new mexico' },
   { name: 'british columbia', kind: 'place', canon: 'british columbia' },
   { name: 'northern ireland', kind: 'place', canon: 'northern ireland' },
+  { name: 'san francisco bay area', kind: 'place', canon: 'bay area' },
+  { name: 'sf bay area', kind: 'place', canon: 'bay area' },
+  { name: 'bay area', kind: 'place', canon: 'bay area' },
   { name: 'new england', kind: 'decoy', canon: '' },
   { name: 'new south wales', kind: 'decoy', canon: '' },
 ];
@@ -261,9 +264,17 @@ export function locationTerms(written: string | null | undefined): string[] {
   const out = new Set<string>(countries);
   if (mentionsUS(text)) out.add('united states');
   // Letters, not only A-Z: "in Düsseldorf", "in Zürich" and "in Österreich" are the launch audience's wants.
-  const prepRe = /\b(in|based in|located in|from|within|near)\s+(?:the\s+)?(\p{Lu}[\p{L}.]+(?:\s+\p{Lu}[\p{L}.]+)?)/gu;
+  // A word that ends in a full stop after four letters ends the sentence ("from Berlin. Raise a seed round"),
+  // so the next capital letter starts a new one; "St. Louis" and "U.K." are shorter and stay one name.
+  const prepRe = /\b(in|based in|located in|from|within|near)\s+(?:the\s+)?(\p{Lu}[\p{L}.]+(?:(?<!\p{L}{4}\.)\s+\p{Lu}[\p{L}.]+)?)/gu;
   let m: RegExpExecArray | null;
   while ((m = prepRe.exec(rest)) !== null) {
+    const after = rest.slice(prepRe.lastIndex);
+    // "Jordan Smith's network", "Austin Russell's": a possessive is a person or an organisation, not a place.
+    if (/^['’]s\b/.test(after)) continue;
+    // After "from", a capital letter that goes on is the rest of a name: "Palo Alto Networks", "Zurich Insurance"
+    // (unless the capture ended the sentence: "from Berlin. Investors welcome").
+    if (m[1] === 'from' && !/\p{L}{4}\.$/u.test(m[2]) && /^[ \t]+\p{Lu}/u.test(after)) continue;
     // Compare without dots so "U.K." and "U.S." resolve to their country, not
     // to a phantom city called "u.k". Folded, so "Köln" is the "koln" the table knows.
     const key = fold(m[2].replace(/\./g, ''));

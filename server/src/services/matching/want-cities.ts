@@ -37,7 +37,29 @@ export interface Place {
   country: string | null;
   /** A state or province names the country more firmly than a city does ("Paris, Texas"). */
   level: PlaceLevel;
+  /** A person's location can be this place, but a want never names it (see LOCATION_ONLY). */
+  locationOnly: boolean;
 }
+
+// ── Places a person lives in and a want never names ────────────────────────────
+//
+// A place in a want is a hard filter, and a capitalised word after "in" or "from" is often not a
+// place. The entries below are a place like any other in a person's location (they resolve, and
+// they satisfy their country, their state and the Bay Area), but a want never reads them as one,
+// so "bankers from Santander" or "engineers from Redmond" filter nothing instead of everyone
+// outside that town. THE RULE: a name is listed when, after "in" or "from", it more often means
+//   - a UNIVERSITY the town is known by ("from Princeton", "from Oxford", "from Berkeley"), or
+//   - a COMPANY or a bank known by the town's name ("from Redmond", "from Cupertino", "from
+//     Mountain View", "from Menlo Park", "from Palo Alto Networks", "from Santander"), or
+//   - an INDUSTRY or an area with no borders that the name stands for ("from Silicon Valley").
+// The launch audience's cities and the big cities of the world are not listed: "founders in Zurich"
+// is a place, and listing a real place costs a want that no longer filters by it.
+const LOCATION_ONLY: Readonly<Record<string, readonly string[]>> = {
+  university: ['princeton', 'cambridge', 'oxford', 'new haven', 'ann arbor', 'chapel hill', 'berkeley', 'santa clara'],
+  company: ['santander', 'redmond', 'cupertino', 'mountain view', 'menlo park', 'palo alto'],
+  metonym: ['silicon valley'],
+};
+const LOCATION_ONLY_NAMES: ReadonlySet<string> = new Set(Object.values(LOCATION_ONLY).flat());
 
 // The towns of Northern Ireland. A want "in Northern Ireland" is satisfied by a location that names
 // the province or one of them (see SUBREGIONS); in a person's location they are the United Kingdom.
@@ -226,7 +248,7 @@ const CITIES: Readonly<Record<string, readonly string[]>> = {
   'new zealand': ['auckland', 'wellington', 'christchurch'],
   // ── North America ──────────────────────────────────────────────────────────
   'united states': [
-    'san francisco|bay area', 'los angeles', 'chicago', 'boston', 'seattle', 'austin', 'denver', 'atlanta', 'miami',
+    'san francisco', 'los angeles', 'chicago', 'boston', 'seattle', 'austin', 'denver', 'atlanta', 'miami',
     'houston', 'dallas', 'san diego', 'san jose', 'portland', 'philadelphia', 'washington dc|washington d c|district of columbia',
     'detroit', 'omaha', 'jersey city', 'brooklyn', 'manhattan', 'las vegas', 'phoenix', 'san antonio', 'minneapolis',
     'st louis|saint louis', 'pittsburgh', 'cleveland', 'columbus', 'cincinnati', 'indianapolis', 'nashville',
@@ -236,6 +258,7 @@ const CITIES: Readonly<Record<string, readonly string[]>> = {
     'hartford', 'albany', 'buffalo', 'louisville', 'memphis', 'oklahoma city', 'tulsa', 'albuquerque', 'tucson',
     'el paso', 'fort worth', 'jacksonville', 'des moines', 'boise', 'anchorage', 'ann arbor', 'chapel hill',
     'princeton', 'new haven', 'stamford', 'newark', 'scottsdale', 'plano', 'bellevue', 'redmond', 'silicon valley',
+    'berkeley', 'fremont',
   ],
   canada: [
     'toronto', 'vancouver', 'montreal', 'ottawa', 'calgary', 'edmonton', 'winnipeg', 'halifax', 'kitchener',
@@ -285,17 +308,16 @@ const CANADIAN_PROVINCES: readonly string[] = [
 ];
 
 /** Places a want can name that do not say where a person is: another country has the name too. */
-const SHARED_NAMES: readonly Place[] = [
-  { canon: 'cambridge', names: ['cambridge'], country: null, level: 'city' },
+const SHARED_NAMES: ReadonlyArray<readonly [string, PlaceLevel]> = [
+  ['cambridge', 'city'], // England, Massachusetts and Ontario
   // The US state, and the country: "Atlanta, Georgia" is the US because of Atlanta, "Tbilisi, Georgia" is not.
-  { canon: 'georgia', names: ['georgia'], country: null, level: 'state' },
-  // The capital of Puerto Rico, and a province of Argentina.
-  { canon: 'san juan', names: ['san juan'], country: null, level: 'city' },
+  ['georgia', 'state'],
+  ['san juan', 'city'], // The capital of Puerto Rico, and a province of Argentina.
 ];
 
-const place = (entry: string, country: string, level: PlaceLevel): Place => {
+const place = (entry: string, country: string | null, level: PlaceLevel): Place => {
   const names = entry.split('|');
-  return { canon: names[0], names, country, level };
+  return { canon: names[0], names, country, level, locationOnly: LOCATION_ONLY_NAMES.has(names[0]) };
 };
 
 export const PLACES: readonly Place[] = [
@@ -304,7 +326,14 @@ export const PLACES: readonly Place[] = [
   ...CANADIAN_PROVINCES.map((entry) => place(entry, 'canada', 'state')),
   // Its own place in a want, the United Kingdom in a location (and never Ireland).
   place('northern ireland', 'united kingdom', 'state'),
-  ...SHARED_NAMES,
+  // The cities around San Francisco Bay: a place a want names, a region of the cities below (SUBREGIONS).
+  place('bay area', 'united states', 'city'),
+  ...SHARED_NAMES.map(([name, level]) => place(name, null, level)),
+];
+
+const BAY_AREA_CITIES: readonly string[] = [
+  'san francisco', 'oakland', 'san jose', 'palo alto', 'mountain view', 'menlo park', 'cupertino', 'sunnyvale',
+  'santa clara', 'redwood city', 'san mateo', 'berkeley', 'fremont', 'silicon valley',
 ];
 
 /**
@@ -313,12 +342,13 @@ export const PLACES: readonly Place[] = [
  */
 export const SUBREGIONS: ReadonlyMap<string, readonly string[]> = new Map([
   ['northern ireland', NORTHERN_IRELAND_TOWNS.map((entry) => entry.split('|')[0])],
+  ['bay area', BAY_AREA_CITIES],
 ]);
 
-/** The canonical names of every place above: what a want's place is, once it is read. */
-export const KNOWN_PLACES: ReadonlySet<string> = new Set(PLACES.map((p) => p.canon));
+/** The places a want can name, by canonical name. A location-only place is not one of them. */
+export const KNOWN_PLACES: ReadonlySet<string> = new Set(PLACES.filter((p) => !p.locationOnly).map((p) => p.canon));
 
-/** Every spelling of every place, to the place. */
+/** Every spelling of every place a want can name, to the place. */
 export const PLACE_BY_NAME: ReadonlyMap<string, Place> = new Map(
-  PLACES.flatMap((p) => p.names.map((name) => [name, p] as const)),
+  PLACES.filter((p) => !p.locationOnly).flatMap((p) => p.names.map((name) => [name, p] as const)),
 );

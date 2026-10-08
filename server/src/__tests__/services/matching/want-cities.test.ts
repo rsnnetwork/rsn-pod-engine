@@ -4,7 +4,7 @@
 // place when the matcher knows the city. The table is hand-kept data: a typo in it would put a
 // person in the wrong country or take a place away from a want, so its shape is pinned here.
 
-import { PLACES, KNOWN_PLACES, PLACE_BY_NAME } from '../../../services/matching/want-cities';
+import { PLACES, KNOWN_PLACES, PLACE_BY_NAME, SUBREGIONS } from '../../../services/matching/want-cities';
 import {
   COUNTRY_ALIASES, LOOK_ALIKES, extractConstraints, fold, locationCountries,
 } from '../../../services/matching/want-constraints';
@@ -12,6 +12,61 @@ import { REGIONS, COUNTRY_NAMES, ENDONYMS } from '../../../services/matching/wan
 
 const knownCountries = new Set([...Object.keys(COUNTRY_ALIASES), ...Object.keys(COUNTRY_NAMES)]);
 const countryOf = (name: string) => PLACE_BY_NAME.get(name)?.country;
+
+// Some entries are also a university, a company or a bank ("from Princeton", "from Redmond", "from
+// Santander"), more often than the place a person lives. They still resolve a person's location, but a
+// want never names them (a place in a want is a hard filter). The rule is in want-cities.ts; this pins
+// the list, so adding to it is a decision someone makes on purpose.
+describe('places that are also organisations (location only)', () => {
+  const only = PLACES.filter((p) => p.locationOnly).map((p) => p.canon).sort();
+
+  it('are the universities, companies and metonyms the rule names, and no more', () => {
+    expect(only).toEqual([
+      'ann arbor', 'berkeley', 'cambridge', 'chapel hill', 'cupertino', 'menlo park', 'mountain view', 'new haven',
+      'oxford', 'palo alto', 'princeton', 'redmond', 'santa clara', 'santander', 'silicon valley',
+    ]);
+  });
+
+  it('are in the table, so a person there resolves, and out of what a want can name', () => {
+    for (const name of only) {
+      expect([name, KNOWN_PLACES.has(name), PLACE_BY_NAME.has(name)]).toEqual([name, false, false]);
+    }
+    expect(locationCountries('Palo Alto, CA')).toEqual(['united states']);
+    expect(locationCountries('Redmond')).toEqual(['united states']);
+    expect(locationCountries('Oxford')).toEqual(['united kingdom']);
+    expect(locationCountries('Santander')).toEqual(['spain']);
+    expect(locationCountries('Cambridge')).toEqual([]);
+  });
+
+  it('leave the launch audience\'s cities and the big cities nameable', () => {
+    const missing = [
+      'dusseldorf', 'cologne', 'munich', 'vienna', 'zurich', 'geneva', 'basel', 'bern', 'frankfurt', 'hamburg', 'berlin',
+      'london', 'paris', 'new york', 'san francisco', 'boulder', 'sunnyvale', 'bellevue', 'barcelona', 'madrid',
+      'amsterdam', 'toronto', 'bilbao', 'washington dc',
+    ].filter((name) => !KNOWN_PLACES.has(name));
+    expect(missing).toEqual([]);
+  });
+});
+
+describe('places that contain others', () => {
+  it('list only places the table has, under a place the table has', () => {
+    const canons = new Set(PLACES.map((p) => p.canon));
+    expect(SUBREGIONS.size).toBeGreaterThan(0);
+    for (const [place, members] of SUBREGIONS) {
+      expect([place, canons.has(place)]).toEqual([place, true]);
+      expect([place, members.filter((m) => !canons.has(m))]).toEqual([place, []]);
+    }
+  });
+
+  it('give the Bay Area the cities around San Francisco Bay', () => {
+    const bay = SUBREGIONS.get('bay area') ?? [];
+    for (const city of ['san francisco', 'oakland', 'san jose', 'palo alto', 'mountain view', 'menlo park', 'cupertino', 'sunnyvale', 'santa clara', 'redwood city', 'san mateo', 'berkeley', 'fremont', 'silicon valley']) {
+      expect([city, bay.includes(city)]).toEqual([city, true]);
+    }
+    expect(bay).not.toContain('los angeles');
+    expect(bay).not.toContain('sacramento');
+  });
+});
 
 // A look-alike place ("New Mexico", "British Columbia", "Northern Ireland") is read in a want before the
 // country whose name it contains. If it were missing from the table it would be read and then dropped
@@ -86,7 +141,9 @@ describe('the cities, states and provinces the matcher knows', () => {
       if (p.country !== null && !knownCountries.has(p.country)) problems.push(`${p.canon}: ${p.country} is not a country the tables know`);
     }
     expect(problems).toEqual([]);
-    expect(KNOWN_PLACES.size).toBe(PLACES.length);
+    // Every place is known to a want, except the ones that are also organisations.
+    expect(KNOWN_PLACES.size).toBe(PLACES.filter((p) => !p.locationOnly).length);
+    expect(new Set(PLACES.map((p) => p.canon)).size).toBe(PLACES.length);
   });
 
   it('never uses a name a country or region already has', () => {
@@ -126,10 +183,13 @@ describe('the cities, states and provinces the matcher knows', () => {
   });
 
   it('gives a name that is several countries\' no country of its own', () => {
-    for (const ambiguous of ['cambridge', 'georgia']) {
-      expect(PLACE_BY_NAME.has(ambiguous)).toBe(true);
-      expect(countryOf(ambiguous)).toBeNull();
+    for (const ambiguous of ['cambridge', 'georgia', 'san juan']) {
+      const place = PLACES.find((p) => p.canon === ambiguous);
+      expect([ambiguous, place?.country]).toEqual([ambiguous, null]);
     }
+    // Georgia and San Juan can be named in a want; Cambridge is also a university and cannot.
+    expect(PLACE_BY_NAME.has('georgia')).toBe(true);
+    expect(PLACE_BY_NAME.has('san juan')).toBe(true);
   });
 
   it('writes one canonical name for the spellings of a city, so a want and a profile agree', () => {

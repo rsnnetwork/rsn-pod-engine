@@ -192,6 +192,7 @@ const PLACE_DISPLAY: ReadonlyMap<string, string> = new Map([
   ["cote d'ivoire", "Cote d'Ivoire"],
   ['washington dc', 'Washington DC'],
   ['prince edward', 'Prince Edward Island'], // the key is the two words a want captures
+  ['bay area', 'the Bay Area'], // a region of cities, said as the member says it
 ]);
 
 const LOWERCASE_INSIDE_A_NAME = new Set(['and', 'of', 'the']);

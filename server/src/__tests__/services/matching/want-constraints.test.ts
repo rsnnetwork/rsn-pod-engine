@@ -197,6 +197,89 @@ describe('a region name that is also an ordinary word', () => {
   });
 });
 
+// A town that is also a university, a company or a bank ("from Princeton", "from Redmond", "from Santander") is
+// more often that than the place a person lives, and a place in a want is a hard filter. Those entries still
+// resolve a person's location, but a want never names them (want-cities.ts LOCATION_ONLY has the rule).
+describe('a name that is an organisation more often than a place', () => {
+  it('is not a place in a want', () => {
+    for (const want of [
+      'bankers from Santander', 'engineers from Palo Alto Networks', 'people from Silicon Valley Bank',
+      'alumni from Santa Clara University', 'founders from Princeton', 'engineers from Redmond',
+      'researchers in Oxford', 'coaches in Cambridge', 'founders in Palo Alto', 'investors in Silicon Valley',
+      'designers from Cupertino', 'engineers from Mountain View', 'PMs from Menlo Park', 'scholars from New Haven',
+      'founders in Ann Arbor', 'researchers in Chapel Hill', 'students from Berkeley',
+    ]) expect([want, extractConstraints([want]).location]).toEqual([want, null]);
+  });
+
+  it('but the big cities and the launch audience\'s cities are still places', () => {
+    for (const [want, place] of [
+      ['founders in Zurich', 'zurich'], ['investors in Düsseldorf', 'dusseldorf'], ['angels in Frankfurt', 'frankfurt'],
+      ['founders in Berlin', 'berlin'], ['founders in London', 'london'], ['founders in Austin', 'austin'],
+      ['founders in Boulder', 'boulder'], ['founders in Sunnyvale', 'sunnyvale'], ['founders in Bellevue', 'bellevue'],
+    ]) expect([want, extractConstraints([want]).location]).toEqual([want, [place]]);
+  });
+
+  it('after "from", a name that goes on with another capitalised word is not a place', () => {
+    for (const want of [
+      'engineers from Zurich Insurance', 'bankers from Barcelona Capital', 'alumni from Boston Consulting Group',
+      'people from London Business School', 'staff from Berlin Brandenburg Airport', 'analysts from Frankfurt Trust',
+    ]) expect([want, extractConstraints([want]).location]).toEqual([want, null]);
+    // a capital letter that starts the next sentence, or follows a comma, does not continue the name
+    expect(extractConstraints(['founders from Berlin. Investors welcome']).location).toEqual(['berlin']);
+    expect(extractConstraints(['founders from Berlin, Germany']).location).toEqual(expect.arrayContaining(['berlin', 'germany']));
+    expect(extractConstraints(['founders from Berlin']).location).toEqual(['berlin']);
+  });
+
+  it('a possessive is a person or an organisation, not a place', () => {
+    for (const want of [
+      "people in Jordan Smith's network", "people in Austin Russell's network", 'people in Chad Smith’s band',
+      "founders in Paris Hilton's circle", "startups in Austin's scene",
+    ]) expect([want, extractConstraints([want]).location]).toEqual([want, null]);
+    // the same words without the possessive are the places
+    expect(extractConstraints(['people in Jordan']).location).toEqual(['jordan']);
+    expect(extractConstraints(['people in Austin']).location).toEqual(['austin']);
+  });
+});
+
+// "The Bay Area" is a region of the cities around San Francisco Bay: a want that names it takes a person in
+// any of them. It used to be another spelling of San Francisco, so Palo Alto, Oakland and San Jose failed it
+// and the card said "(in San Francisco)".
+describe('"the Bay Area"', () => {
+  it('is one place however it is written', () => {
+    for (const want of [
+      'investors in the Bay Area', 'investors in the San Francisco Bay Area', 'investors in the SF Bay Area',
+      'Bay Area founders', 'founders based in the Bay Area',
+    ]) expect([want, extractConstraints([want]).location]).toEqual([want, ['bay area']]);
+  });
+
+  it('takes a person in any of the cities around the Bay', () => {
+    for (const location of [
+      'San Francisco', 'Oakland, CA', 'San Jose, California', 'Palo Alto, CA', 'Mountain View', 'Menlo Park, CA', 'Cupertino',
+      'Sunnyvale, California', 'Santa Clara', 'Redwood City', 'San Mateo', 'Berkeley', 'Fremont, California', 'Silicon Valley',
+      'San Francisco Bay Area', 'Bay Area', 'Greater San Francisco Bay Area',
+    ]) expect([location, satisfies('investors in the Bay Area', location)]).toEqual([location, true]);
+  });
+
+  it('does not take a person elsewhere', () => {
+    for (const location of ['Los Angeles', 'Sacramento, CA', 'San Diego', 'Austin, Texas', 'New York', 'Seattle, WA', 'London, UK', '']) {
+      expect([location, satisfies('investors in the Bay Area', location)]).toEqual([location, false]);
+    }
+  });
+
+  it('keeps San Francisco itself a place: the Bay Area counts as San Francisco, as LinkedIn writes it, and not the other way', () => {
+    expect(satisfies('founders in San Francisco', 'San Francisco Bay Area')).toBe(true);
+    expect(satisfies('founders in San Francisco', 'San Francisco, CA')).toBe(true);
+    expect(satisfies('founders in San Francisco', 'Oakland, CA')).toBe(false);
+    expect(satisfies('founders in San Francisco', 'Palo Alto')).toBe(false);
+  });
+
+  it('resolves to the United States', () => {
+    expect(extractConstraints(['founders in the US']).location).toEqual(['united states']);
+    expect(satisfies('founders in the US', 'Bay Area')).toBe(true);
+    expect(satisfies('founders in North America', 'Silicon Valley')).toBe(true);
+  });
+});
+
 // "eu" is the Portuguese for "I" and the first word of every "EU regulation experts" want, so like
 // GCC and MENA it is a place only after a location preposition ("in the EU", "from the EU", "based in
 // the EU"). "E.U.", "the European Union" and "EU-based" cannot be anything else and are read anywhere.

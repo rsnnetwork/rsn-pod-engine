@@ -285,6 +285,18 @@ describe('a region in the want finds the people who are there', () => {
     expect(scoreWants([`${STACK} in London`], fintech('Liv', 'London, UK')).reason).toMatch(/\(in London\)$/);
   });
 
+  it('"in the Bay Area" finds the people around the Bay and says so, not "San Francisco"', () => {
+    for (const [name, location] of [['Pia', 'Palo Alto, CA'], ['Olga', 'Oakland, CA'], ['Sam', 'San Jose, California'], ['Fay', 'San Francisco']]) {
+      const r = scoreWants([`${STACK} in the Bay Area`], fintech(name, location));
+      expect([name, r.score >= MATCH_THRESHOLD]).toEqual([name, true]);
+      expect(r.reason).toMatch(/\(in the Bay Area\)$/);
+    }
+    expect(scoreWants([`${STACK} in the Bay Area`], fintech('Alex', 'Austin, Texas')).score).toBe(0);
+    // a bank or a university is not a place
+    expect(scoreWants([`${STACK} from Santander`], fintech('Alex', 'Austin, Texas')).score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+    expect(scoreWants([`${STACK} from Princeton`], fintech('Alex', 'Austin, Texas')).score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+  });
+
   it('"in Northern Ireland" finds Belfast and says Northern Ireland, and does not find London', () => {
     const belfast = scoreWants([`${STACK} in Northern Ireland`], fintech('Niamh', 'Belfast, Northern Ireland'));
     expect(belfast.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
