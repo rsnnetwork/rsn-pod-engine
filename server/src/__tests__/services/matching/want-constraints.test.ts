@@ -1358,3 +1358,32 @@ describe('a region that continues a list, or follows a modifier', () => {
     expect(satisfies('seed investors in asia and europe', 'Austin, Texas')).toBe(false);
   });
 });
+
+// I1, two more shapes found while testing: "and/or" joins a list too, and "the rest of the EU" has an article after the
+// modifier ("the rest of Europe" was read, "the rest of the EU" was not).
+describe('a list joined by "and/or", and "the rest of the" before a region', () => {
+  const read = (...fields: string[]) => [...(extractConstraints(fields).location ?? [])].sort();
+
+  it.each([
+    ['investors in the UK and/or continental Europe', ['europe', 'united kingdom']],
+    ['Gründer in Köln und/oder Düsseldorf', ['cologne', 'dusseldorf']],
+    ['seed investors in asia and/or europe', ['asia', 'europe']],
+    ['investors in London and/or Paris', ['london', 'paris']],
+    ['investors in Germany and the rest of the EU', ['eu', 'germany']],
+    ['investors in the rest of the Nordics', ['nordics']],
+    ['investors in Berlin or the rest of the DACH region', ['berlin', 'dach']],
+    ['investors in the UK, Ireland and the rest of the Nordics', ['ireland', 'nordics', 'united kingdom']],
+    ['investors in the wider Nordics', ['nordics']],
+    ['investors in the western EU', ['eu']],
+  ])('reads every place in "%s"', (want, expected) => {
+    expect([want, read(want)]).toEqual([want, expected]);
+    expect([want, read(want, NEXT_FIELD)]).toEqual([want, expected]);
+    expect([want, read(NEXT_FIELD, want, 'Eine Runde aufsetzen')]).toEqual([want, expected]);
+  });
+
+  it('still reads nothing without a preposition or a place before it', () => {
+    for (const want of ['the rest of the EU is my market', 'selling to the rest of the Nordics', 'investors who know the western EU']) {
+      expect([want, extractConstraints([want]).location]).toEqual([want, null]);
+    }
+  });
+});

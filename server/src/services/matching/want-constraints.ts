@@ -258,8 +258,9 @@ const REGION_MODIFIERS = [
 ];
 const REGION_NAME_ALTERNATION = [...new Set(REGIONS.flatMap((r) => r.names))].sort((a, b) => b.length - a.length).map(escapeRe).join('|');
 const MODIFIER_ALTERNATION = REGION_MODIFIERS.map((word) => escapeRe(word).replace(/ /g, String.raw`[ \t]+`)).join('|');
+// "the rest of the EU" goes with its article: both "the" before the modifier and the one after it are one "the".
 const MODIFIED_REGION = new RegExp(
-  String.raw`(?<![\p{L}\p{N}-])(?:${MODIFIER_ALTERNATION})[ \t]+(?=(?:${REGION_NAME_ALTERNATION})(?![\p{L}\p{N}]))`, 'giu',
+  String.raw`(?<![\p{L}\p{N}-])(?:the[ \t]+)?(?:${MODIFIER_ALTERNATION})[ \t]+(?=(?:the[ \t]+)?(?:${REGION_NAME_ALTERNATION})(?![\p{L}\p{N}]))`, 'giu',
 );
 
 // In a want: the alias table, the regions after a preposition, and the look-alikes, read as the member wrote
@@ -389,7 +390,7 @@ const PLACE_AFTER_A_PREPOSITION = new RegExp(
 // with a lowercase letter, the name of a region or of a country the alias table does not hold, in any case
 // (LIST_NAMED: "asia and europe", "germany and the nordics"). Not the ordinary words (eu, dach, gcc ...), which a
 // capital letter makes a region and nothing else does.
-const LIST_JOINER = new RegExp(String.raw`(\s*[,&/]\s*(?:(?:and|or|und|oder)\s+)?|\s+(?:and|or|und|oder)\s+)${ARTICLE}`, 'uy');
+const LIST_JOINER = new RegExp(String.raw`(\s*[,&/]\s*(?:(?:and|or|und|oder)\s+)?|\s+(?:and/or|und/oder|and|or|und|oder)\s+)${ARTICLE}`, 'uy');
 const LIST_PLACE = new RegExp(`(${PLACE_ITEM})`, 'uy');
 const ORDINARY_REGION_WORDS: ReadonlySet<string> = new Set(REGIONS.flatMap((r) => r.ordinaryWords ?? []));
 const LIST_NAMED = new RegExp(
