@@ -261,12 +261,20 @@ const placeNamed = (word: string): string | undefined =>
 
 // One or two capitalised words after a location preposition. Letters, not only A-Z: "in Düsseldorf",
 // "in Zürich" and "in Österreich" are the launch audience's wants. A hyphen followed by a capital letter
-// goes on with the name ("Guinea-Bissau", "Clermont-Ferrand"); "-based" and the like do not. A word that
-// ends in a full stop after four letters ends the sentence ("from Berlin. Raise a seed round"), so the
-// next capital letter starts a new one; "St. Louis" and "U.K." are shorter and stay one name.
+// goes on with the name ("Guinea-Bissau", "Clermont-Ferrand"); "-based" and the like do not.
+//
+// A name never runs across the end of a sentence or of a line. The matcher joins the want fields with ". "
+// (extractConstraints), so a place that ends one field is followed by a full stop and the next field's first
+// word, capitalised: "Founders in the EU. Raise a seed round" must not be read as the name "EU Raise". So a full
+// stop followed by white space ends the name, whatever the length of the word before it ("EU.", "DC.", "Rio.").
+// The exception is the abbreviation a name can start with, which is written with a full stop and goes on:
+// "St. Louis", "Ste. Genevieve", "Mt. Pleasant", "Ft. Lauderdale", "Pt. Pleasant". A word with full stops inside
+// ("U.K.", "D.C.") is one word and ends the name like any other. The second word follows after spaces or tabs
+// only, never a line break.
 const NAME_WORD = String.raw`\p{Lu}[\p{L}.]+(?:-\p{Lu}[\p{L}.]+)*`;
+const NAME_GOES_ON = String.raw`(?:(?<!\.)|(?<=\b(?:St|Ste|Mt|Ft|Pt)\.))[ \t]+`;
 const PLACE_AFTER_A_PREPOSITION = new RegExp(
-  String.raw`\b(in|based in|located in|from|within|near)\s+(?:the\s+)?(${NAME_WORD}(?:(?<!\p{L}{4}\.)\s+${NAME_WORD})?)`, 'gu',
+  String.raw`\b(in|based in|located in|from|within|near)\s+(?:the\s+)?(${NAME_WORD}(?:${NAME_GOES_ON}${NAME_WORD})?)`, 'gu',
 );
 
 /**
@@ -295,8 +303,8 @@ export function locationTerms(written: string | null | undefined): string[] {
     // "Jordan Smith's network", "Austin Russell's": a possessive is a person or an organisation, not a place.
     if (/^['’]s\b/.test(after)) continue;
     // After "from", a capital letter that goes on is the rest of a name: "Palo Alto Networks", "Zurich Insurance"
-    // (unless the capture ended the sentence: "from Berlin. Investors welcome").
-    if (m[1] === 'from' && !/\p{L}{4}\.$/u.test(m[2]) && /^[ \t]+\p{Lu}/u.test(after)) continue;
+    // (unless the capture ended the sentence: "from Berlin. Investors welcome", "from the EU. Raise a seed round").
+    if (m[1] === 'from' && !m[2].endsWith('.') && /^[ \t]+\p{Lu}/u.test(after)) continue;
     // Compare without dots so "U.K." and "U.S." resolve to their country, not
     // to a phantom city called "u.k". Folded, so "Köln" is the "koln" the table knows.
     const key = fold(m[2].replace(/\./g, ''));

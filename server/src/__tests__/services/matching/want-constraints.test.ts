@@ -699,3 +699,75 @@ describe('a place the code cannot resolve filters nothing', () => {
     expect(satisfies('founders in Kazakhstan', 'Berlin, Germany')).toBe(false);
   });
 });
+
+// ─── The want fields are joined (8 Oct 2026, S4-b fix round 1) ────────────────
+//
+// The matcher reads the member's want as ONE text: the fields (who I want to meet, my intent, why, goals) are
+// joined with ". " (platform-match.service.ts wantSources, want-constraints.ts extractConstraints). A place that
+// ends one field is therefore followed by a full stop and the first word of the next field, capitalised, and a
+// name captured after a preposition must stop at that full stop. Every test below hands the matcher two fields.
+const NEXT_FIELD = 'Raise a seed round for my payments startup';
+const endOfField = (field: string) => extractConstraints([field, NEXT_FIELD]).location;
+
+describe('a place that ends a want field, with another field after it', () => {
+  it.each([
+    ['Fintech founders and seed investors in the EU', 'eu'],
+    ['Founders from the EU', 'eu'],
+    ['Founders based in the EU', 'eu'],
+    ['Founders within the EU', 'eu'],
+    ['Founders near the EU', 'eu'],
+    ['Founders in EU', 'eu'],
+    ['Founders in the E.U.', 'eu'],
+    ['Founders in DACH', 'dach'],
+    ['Buyers in MENA', 'mena'],
+    ['Founders in the GCC', 'gcc'],
+    ['Founders in the Nordics', 'nordics'],
+    ['Founders in Europe', 'europe'],
+    ['Founders from Washington DC', 'washington dc'],
+    ['Founders from Washington D.C.', 'washington dc'],
+    ['Founders from La Paz', 'la paz'],
+    ['Founders from Novi Sad', 'novi sad'],
+    ['Founders in Rio', 'rio'],
+    ['Founders in NYC', 'new york'],
+    ['Founders in Berlin', 'berlin'],
+    ['Founders from Berlin', 'berlin'],
+    ['Founders in the U.K.', 'united kingdom'],
+    ['Founders from the US', 'united states'],
+  ])('reads "%s" as %s', (field, place) => {
+    expect([field, endOfField(field)]).toEqual([field, [place]]);
+  });
+
+  it('is not joined to the first word of the next field as one two-word name', () => {
+    expect(locationTerms('Founders in the EU. Raise a seed round')).toEqual(['eu']);
+    expect(locationTerms('Founders in the GCC. Raise a seed round')).toEqual(['gcc']);
+    expect(locationTerms('Founders from Washington DC. Raise a seed round')).toEqual(['washington dc']);
+    expect(locationTerms('Founders in Rio. Raise a seed round')).toEqual(['rio']);
+  });
+
+  it('keeps every place when several fields end with one: the first no longer swallows the second', () => {
+    const both = extractConstraints(['Founders in the EU', 'Angels in Zurich']).location;
+    expect(both).toHaveLength(2);
+    expect(both).toEqual(expect.arrayContaining(['eu', 'zurich']));
+    const three = extractConstraints(['Founders in the EU', 'Angels in Zurich', 'Bankers from La Paz', NEXT_FIELD]).location;
+    expect(three).toHaveLength(3);
+    expect(three).toEqual(expect.arrayContaining(['eu', 'zurich', 'la paz']));
+  });
+
+  it('still takes "St." as the start of a name, not the end of a sentence', () => {
+    expect(endOfField('Partners in St. Lucia')).toEqual(['saint lucia']);
+    expect(endOfField('Founders in St. Louis')).toEqual(['st louis']);
+    expect(endOfField('Founders from St. Louis')).toEqual(['st louis']);
+  });
+
+  it('ends a name at the end of a line too: a place never runs onto the next line', () => {
+    expect(extractConstraints(['Founders in the EU\nSeed investors']).location).toEqual(['eu']);
+    expect(extractConstraints(['Founders from Berlin\nMunich investors']).location).toEqual(['berlin']);
+    expect(extractConstraints(['Founders in Berlin\nSeed investors']).location).toEqual(['berlin']);
+  });
+
+  it('still needs the place to be a place: a name that is not one, at a field end, filters nothing', () => {
+    expect(endOfField('Founders in Narnia')).toBeNull();
+    expect(endOfField('Engineers from Google')).toBeNull();
+    expect(endOfField('Founders in SaaS')).toBeNull();
+  });
+});

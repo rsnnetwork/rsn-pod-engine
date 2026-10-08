@@ -395,6 +395,41 @@ describe('a region in the want finds the people who are there', () => {
     });
   });
 
+  // The scorer is handed the want fields as an array and joins them with ". " (extractConstraints), so a
+  // place that ends one field meets the first word of the next. S4-b fix round 1: "in the EU" at the end of
+  // a field was read together with that word ("EU. Raise"), the place vanished, and everyone scored.
+  describe('a place that ends one want field, with another field after it', () => {
+    const FIELDS = ['Fintech founders and seed investors in the EU', 'Raise a seed round for my payments startup'];
+
+    it('finds the people in the EU and says so on the card', () => {
+      for (const c of [berlin, amsterdam, milan, vienna, paris]) {
+        const r = scoreWants(FIELDS, c);
+        expect([c.displayName, r.score >= MATCH_THRESHOLD]).toEqual([c.displayName, true]);
+        expect(r.reason).toMatch(/\(in the EU\)$/);
+      }
+    });
+
+    it('does not find the person in Austin: the place still filters', () => {
+      expect(scoreWants(FIELDS, austin).score).toBe(0);
+      expect(scoreWants(FIELDS, fintech('Alex', 'Austin, United States')).score).toBe(0);
+    });
+
+    it('is the same with the place in the middle field of three, and for the introduction the other member reads', () => {
+      const three = ['Looking for fintech founders', 'Fintech founders and seed investors in the EU', 'Raise a seed round for my payments startup'];
+      expect(scoreWants(three, berlin).reason).toMatch(/\(in the EU\)$/);
+      expect(scoreWants(three, austin).score).toBe(0);
+      expect(scoreWantsForRecipient(FIELDS, berlin, 'Ali').reason).toMatch(/\(in the EU\)$/);
+      expect(scoreWantsForRecipient(FIELDS, austin, 'Ali').score).toBe(0);
+    });
+
+    it('keeps both places when two fields each end with one', () => {
+      const fields = ['Fintech founders in the EU', 'Seed investors in Zurich', 'Raise a seed round'];
+      expect(scoreWants(fields, berlin).reason).toMatch(/\(in the EU\)$/);
+      expect(scoreWants(fields, zurich).score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+      expect(scoreWants(fields, austin).score).toBe(0);
+    });
+  });
+
   describe('what the reason may say', () => {
     // The place in the note is the member's OWN word, never the candidate's location; the
     // candidate's private fields never reach it, with a region as with anything else.
