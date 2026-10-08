@@ -522,3 +522,41 @@ describe('a state, a province or the Bay Area takes only the towns that are in i
     expect(satisfies('founders in Northern Ireland', 'Belfast, Maine')).toBe(false);
   });
 });
+
+// ─── The fields are joined (8 Oct 2026, S4-b fix round 1) ─────────────────────────────────────────────────────────
+//
+// The matcher reads a want as its fields joined with ". " (extractConstraints), so a place a member wrote may be the
+// whole want, the first field, the middle one or the last. Whichever it is, the people it takes are the same.
+describe('a want reads the same alone and among other fields', () => {
+  const MORE = 'Raise a seed round for my payments startup';
+  const among = (want: string, location: string | null) =>
+    checkConstraints(extractConstraints([MORE, want, 'Eine Runde aufsetzen']), { location }).locationOk;
+  const first = (want: string, location: string | null) => checkConstraints(extractConstraints([want, MORE]), { location }).locationOk;
+
+  it.each([
+    // item 2: a state takes only its own towns
+    ['founders in California', 'San Jose, Costa Rica', false], ['founders in California', 'San Jose, CA', true],
+    ['founders in Nova Scotia', 'Halifax, West Yorkshire', false], ['founders in Nova Scotia', 'Halifax, NS', true],
+    ['founders in Oregon', 'Portland, ME', false], ['founders in Oregon', 'Portland, OR', true], ['founders in Maine', 'Portland, ME', true],
+    ['founders in New York', 'Manhattan, KS', false], ['founders in Texas', 'San Antonio, Chile', false],
+    ['founders in Massachusetts', 'Boston, Lincolnshire', false], ['founders in British Columbia', 'Vancouver, WA', false],
+    // item 3: another country's region code, and two cities in two countries
+    ['investors in DACH', 'Neuchâtel, NE', true], ['investors in Europe', 'Utrecht, UT', true], ['investors in North America', 'Utrecht, UT', false],
+    ['investors in Europe', 'Berlin / San Francisco, CA', true], ['investors in the US', 'Berlin / San Francisco, CA', true],
+    ['investors in Austria', 'Vienna, VA', false], ['investors in Virginia', 'Vienna, VA', true],
+    // item 4: Greater Manchester is Manchester
+    ['investors in Manchester', 'Greater Manchester, England, United Kingdom', true], ['investors in Manchester', 'Manchester, NH', false],
+    // item 5: the Bay Area written alone is San Francisco
+    ['founders in San Francisco', 'SF Bay Area', true], ['founders in San Francisco', 'Oakland, Bay Area', false],
+    ['founders in the Bay Area', 'Tampa Bay Area', false], ['founders in the Bay Area', 'Oakland, CA', true],
+    // lists and regions
+    ['Gründer in Köln oder Düsseldorf', 'Düsseldorf, Germany', true], ['Gründer in Köln oder Düsseldorf', 'Essen, Germany', false],
+    ['investors in Berlin, Munich and Hamburg', 'Hamburg', true], ['founders in Asia and Africa', 'Lagos, Nigeria', true],
+    ['founders in the EU', 'Austin, Texas', false], ['founders in the EU', 'Wien, Österreich', true],
+    ['founders in Austin, Texas', 'Houston, Texas', false], ['founders in Austin, Texas', 'Austin, TX', true],
+  ])('"%s" and a person at "%s" is %s', (want, location, expected) => {
+    expect(satisfies(want, location)).toBe(expected);
+    expect(among(want, location)).toBe(expected);
+    expect(first(want, location)).toBe(expected);
+  });
+});
