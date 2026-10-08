@@ -24,11 +24,11 @@ export interface TourCard {
   visual: JSX.Element;
 }
 
-/** The deck's copy, verbatim. */
+/** The deck's copy, verbatim, except card 1: it names the screen and the button the REASON preview shows (For You, Meet). */
 export const TOUR_CARDS: TourCard[] = [
   {
-    title: 'Suggestions',
-    body: "We suggest people who match your intent. Tap 'I want to meet' to ask.",
+    title: 'For You',
+    body: "We suggest people who match your intent. Tap 'Meet' to ask.",
     visual: <SuggestionsMock />,
   },
   {
@@ -222,7 +222,7 @@ function SuggestionsMock() {
         <p className="text-xs font-semibold text-[#1a1a2e]">Amara Okafor</p>
         <p className="text-[10px] text-gray-500">Founder · Northwind</p>
         <div className="mt-2 rounded-md bg-rsn-red py-1.5 text-center text-[10px] font-medium text-white">
-          I want to meet
+          Meet
         </div>
       </div>
       <div className="mt-2 rounded-lg border border-gray-200 bg-white p-2.5 opacity-60">

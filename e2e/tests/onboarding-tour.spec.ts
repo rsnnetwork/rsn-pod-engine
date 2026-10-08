@@ -82,7 +82,7 @@ test('it explains the product once, then never again', async () => {
 
   await expect(tour(page)).toBeVisible({ timeout: 30_000 });
   // All four cards, in the deck's words, each reachable on a phone.
-  for (const [i, title] of ['Suggestions', 'Matches', 'Meetings', 'Circles & events'].entries()) {
+  for (const [i, title] of ['For You', 'Matches', 'Meetings', 'Circles & events'].entries()) {
     await expect(tour(page).getByRole('heading', { name: title })).toBeVisible();
     if (i < 3) await tapReachable(page, page.getByRole('button', { name: /^Next$/ }), `Next from ${title}`);
   }
@@ -163,7 +163,7 @@ test('it can be opened again from Support, without changing how it was left', as
   await expect(page.getByRole('heading', { name: /How RSN works/i })).toBeVisible({ timeout: 30_000 });
   await tapReachable(page, page.getByRole('button', { name: /Open the tour/i }), '"Open the tour"');
   await expect(tour(page)).toBeVisible();
-  await expect(tour(page).getByRole('heading', { name: 'Suggestions' })).toBeVisible();
+  await expect(tour(page).getByRole('heading', { name: 'For You' })).toBeVisible();
 
   // Escape is a way out of anything that covers the screen.
   await page.keyboard.press('Escape');

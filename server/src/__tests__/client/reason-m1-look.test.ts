@@ -2,7 +2,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as ts from 'typescript';
-import { createElement } from 'react';
+import { createElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 const root = path.join(__dirname, '../../../../client');
@@ -153,17 +153,20 @@ const hexOf = (cls: string): string => {
   return hex;
 };
 
-// A client component file, transpiled and drawn to markup. What it imports through the app's own aliases is
-// replaced by `stand`; everything else (react, framer-motion, lucide-react) is the real thing, so the markup is what
-// the component really renders for the given props.
-function renderComponent(rel: string, stand: Record<string, unknown>, props: Record<string, unknown>): string {
+// A client source file, transpiled and run. What it imports through the app's own aliases is replaced by `stand`;
+// everything else (react, framer-motion, lucide-react) is the real thing.
+function loadModule(rel: string, stand: Record<string, unknown>): Record<string, unknown> {
   const { outputText } = ts.transpileModule(fs.readFileSync(path.join(root, rel), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2019, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true },
   });
   const load = (id: string): unknown => (id in stand ? stand[id] : require(id));
-  const mod: { exports: { default?: unknown } } = { exports: {} };
+  const mod: { exports: Record<string, unknown> } = { exports: {} };
   new Function('module', 'exports', 'require', outputText)(mod, mod.exports, load);
-  return renderToStaticMarkup(createElement(mod.exports.default as never, props));
+  return mod.exports;
+}
+// A client component file, drawn to markup: what the component really renders for the given props.
+function renderComponent(rel: string, stand: Record<string, unknown>, props: Record<string, unknown>): string {
+  return renderToStaticMarkup(createElement(loadModule(rel, stand).default as never, props));
 }
 const joinClasses = { cn: (...parts: unknown[]) => parts.filter(Boolean).join(' ') };
 
@@ -513,5 +516,50 @@ describe('Admin users does not scroll <main> sideways at phone widths (fix wave 
     expect(page).toMatch(/<Avatar [^>]*size="sm" className="shrink-0" \/>\s*<div className="min-w-0 break-words">/);
     expect(page).toMatch(/<div className="flex flex-wrap items-center gap-2">\s*<Badge variant=\{u\.role ===/);
     expect(page).toMatch(/<div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-gray-100">/);
+  });
+});
+
+describe('The tour\'s first card names what the preview shows (polish pass)', () => {
+  // HowRsnWorks.tsx, run: the cards are read from its own export, and each card's picture is drawn to markup.
+  const cards = () => {
+    const tour = loadModule('src/features/onboarding/HowRsnWorks.tsx', {
+      '@/components/ui/Button': { Button: () => null },
+      '@/components/brand/SheepAvatar': { default: () => null },
+    });
+    return (tour.TOUR_CARDS as Array<{ title: string; body: string; visual: ReactElement }>).map((card) => ({
+      title: card.title,
+      body: card.body,
+      // The words in the picture, one text node each.
+      words: renderToStaticMarkup(card.visual).replace(/<[^>]*>/g, '\n').split('\n').map((s) => s.trim()).filter(Boolean),
+    }));
+  };
+
+  it('card 1 is "For You" and tells the member to tap Meet, and its picture shows a Meet button', () => {
+    const [first] = cards();
+    expect(first.title).toBe('For You');
+    expect(first.body).toBe("We suggest people who match your intent. Tap 'Meet' to ask.");
+    expect(first.words).toEqual(['Amara Okafor', 'Founder · Northwind', 'Meet', 'Tomas Lind', 'Investor · Baltic Seed']);
+  });
+
+  it('there are still four cards, and the other three are the client\'s deck copy, word for word', () => {
+    const all = cards();
+    expect(all).toHaveLength(4);
+    expect(all.slice(1)).toEqual([
+      {
+        title: 'Matches',
+        body: "When they want to meet you too, it's a match - you'll see it here and in chat.",
+        words: ['Amara Okafor', 'Matched', 'Tomas Lind', 'Asked, waiting', 'Priya Raman', 'Wants to meet you'],
+      },
+      {
+        title: 'Meetings',
+        body: 'Share your availability, pick a green slot - we create the meeting with a link.',
+        words: ['9:00', '9:30', '10:00', '10:30', '11:00', 'Both can', '11:30', 'Meeting confirmed · Join'],
+      },
+      {
+        title: 'Circles & events',
+        body: 'Join circles of people who share your intent, and networking events.',
+        words: ['Founders', 'Join', 'AI Developers', 'Join', 'Thursday networking'],
+      },
+    ]);
   });
 });
