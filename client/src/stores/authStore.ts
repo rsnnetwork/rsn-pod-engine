@@ -146,7 +146,8 @@ let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 /** Decode the JWT payload (no verification — that's server-side) to read exp. */
 function getTokenExpiryMs(token: string): number | null {
   try {
-    const payload = JSON.parse(atob(token.split('.')[1]));
+    // A JWT payload is base64url, which atob cannot read when it holds a "-" or a "_".
+    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
     return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
   } catch {
     return null;
