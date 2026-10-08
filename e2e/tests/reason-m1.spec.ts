@@ -57,6 +57,7 @@ import { gotoRetry, cleanup, APP } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
 import { launchBrowser, engineLabel, contextOptions } from '../helpers/engine';
 import { expectReachable } from '../helpers/viewport-fit';
+import { inNewWindows, untilSized } from '../helpers/window-size';
 
 // ── What this run is ─────────────────────────────────────────────────────────────────────────
 
@@ -334,14 +335,15 @@ async function openAs(user: TestUser, size: Size): Promise<Opened> {
 /** A fresh tab of the same signed-in browser: its history starts empty, as a link opened from an email does. */
 const newTab = (o: Opened): Promise<Page> => newPageIn(o.ctx, o.quiet);
 
-async function using(user: TestUser, size: Size, fn: (o: Opened) => Promise<void>): Promise<void> {
-  const o = await openAs(user, size);
-  try {
-    await fn(o);
-  } finally {
-    await o.ctx.close().catch(() => undefined);
-  }
-}
+/**
+ * One test body in a signed-in window. Playwright's WebKit with a phone's descriptor sometimes gives a window with no size
+ * (helpers/window-size.ts), and nothing can be measured in it, so a body that fails while its window has no size is run
+ * again in a new window (three at most) and the run says so; a failure in a window that has a size is never run again.
+ * That is why every test keeps its state inside its `using` body, and why the viewer is put back as it was at the start of
+ * a test before a body runs again.
+ */
+const using = (user: TestUser, size: Size, fn: (o: Opened) => Promise<void>): Promise<void> =>
+  inNewWindows({ open: () => openAs(user, size), body: fn, beforeRerun: resetViewer });
 
 /**
  * Waits for the network to go quiet: nothing in flight, and nothing started for half a second, at ANY moment
@@ -479,31 +481,18 @@ async function tap(page: Page, target: Locator, label: string, opts: { centre?: 
   }
 }
 
-/**
- * A window has a size once its document has loaded. Right after a navigation WebKit's device emulation can answer
- * window.innerWidth with 0 for a moment (one run measured "scrollWidth 390 over 0"), and anything measured against
- * that is nonsense: a width of 0 makes every box "wider than the window", and a height of 0 makes "the images in
- * view" an empty list that passes for nothing. So a question that depends on the window's size is asked again, for
- * up to 5 seconds, until the answer comes from a window with a width and a height above 0 and a finished document
- * (the question works that out itself and says so in `sized`, so the size and the measurement are from the same
- * instant). What is measured then is judged as strictly as ever; a window that never gets a size is reported as
- * that, not measured.
- */
-async function untilSized<T extends { sized: boolean }>(ask: () => Promise<T>): Promise<T | null> {
-  const until = Date.now() + 5_000;
-  for (;;) {
-    let answer: T | null = null;
-    try {
-      answer = await ask();
-    } catch (e) {
-      // A page between two documents has nothing to answer for a moment: ask again. Anything else (an element
-      // that is not there, a page that was closed) is the test's real error and is not hidden here.
-      if (!/Execution context was destroyed|Cannot find context with specified id/i.test(String((e as Error)?.message ?? e))) throw e;
-    }
-    if (answer?.sized) return answer;
-    if (Date.now() >= until) return answer;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
+// Every check that reads the window's size asks through untilSized (helpers/window-size.ts). The question says in `sized`,
+// in the same instant as it measures, whether the window had a width, a height and a finished document, and a window that
+// never gets them is reported as that, not measured: a width of 0 makes every box "wider than the window", and a height of 0
+// makes "the images in view" an empty list that passes for nothing.
+
+/** The window has a size (see untilSized), or the test stops here and says so. Nothing is measured. */
+async function expectWindowSized(page: Page, where: string): Promise<void> {
+  const w = await untilSized(page, () => page.evaluate(() => ({
+    sized: document.readyState === 'complete' && window.innerWidth > 0 && window.innerHeight > 0,
+    window: `${window.innerWidth}x${window.innerHeight}, document ${document.readyState}`,
+  })));
+  expect(w?.sized, `${where}: there is no window to measure (${w ? w.window : 'the page was between two documents'})`).toBe(true);
 }
 
 // Opening a sheet locks the page's scroll; closing it must give the scroll back (a sheet that left the lock
@@ -516,7 +505,7 @@ async function expectScrollable(page: Page, where: string): Promise<void> {
   expect(await locked(), `${where}: the page locked again after the sheet closed`).toBe(false);
   // Mobile WebKit has no mouse wheel, so a device is checked by the lock alone. The wheel turns towards
   // whichever end has room: a button centred near the end of a page leaves none below.
-  const at = await untilSized(() => page.evaluate(() => ({
+  const at = await untilSized(page, () => page.evaluate(() => ({
     sized: document.readyState === 'complete' && window.innerWidth > 0 && window.innerHeight > 0,
     y: window.scrollY,
     room: document.documentElement.scrollHeight - window.innerHeight,
@@ -542,7 +531,7 @@ async function linkOnTop(page: Page, link: Locator, label: string): Promise<void
   await expect(link, `${label}: not in the page`).toHaveCount(1);
   await link.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior }));
   await holdsStill(page, link);
-  const seen = await untilSized(() => link.evaluate((el) => {
+  const seen = await untilSized(page, () => link.evaluate((el) => {
     const sized = document.readyState === 'complete' && window.innerWidth > 0 && window.innerHeight > 0;
     const line = el.getClientRects()[0];
     if (!line) return { sized, what: 'it is not drawn' };
@@ -563,7 +552,7 @@ async function linkOnTop(page: Page, link: Locator, label: string): Promise<void
 // Neither the window nor the page area (<main>: on For You it is what scrolls) may scroll sideways, and
 // nothing in the page may reach past the window's edge.
 async function expectNoSideways(page: Page, where: string): Promise<void> {
-  const m = await untilSized(() => page.evaluate(() => {
+  const m = await untilSized(page, () => page.evaluate(() => {
     const sized = document.readyState === 'complete' && window.innerWidth > 0 && window.innerHeight > 0;
     const main = document.querySelector('main');
     const out: string[] = [];
@@ -594,7 +583,7 @@ async function expectNoSideways(page: Page, where: string): Promise<void> {
 // Nothing inside the box sticks out of it, sideways, and no text is wider than its own box. A card hides
 // what overflows it, so a long name that does not wrap is cut off, not scrolled to.
 async function expectNothingSticksOut(target: Locator, label: string): Promise<void> {
-  const seen = await untilSized(() => target.evaluate((root) => {
+  const seen = await untilSized(target.page(), () => target.evaluate((root) => {
     const sized = document.readyState === 'complete' && window.innerWidth > 0 && window.innerHeight > 0;
     const box = root.getBoundingClientRect();
     const out: string[] = [];
@@ -627,6 +616,7 @@ async function expectInsideWindow(page: Page, target: Locator, label: string): P
 // and where a scrollbar takes room (Windows WebKit) a window of 768 to 775px changes from one layout to the
 // other a frame later. A sheet that never settles into the right layout still fails.
 async function expectSheetFits(page: Page, sheet: Locator, where: string): Promise<void> {
+  await expectWindowSized(page, `${where}: the sheet`);
   await expect.poll(async () => {
     const m = await sheet.evaluate((el) => {
       const r = el.getBoundingClientRect();
@@ -654,6 +644,7 @@ async function expectSheetFits(page: Page, sheet: Locator, where: string): Promi
 // the window's height, so a window with no size yet would have NO image in view and pass for nothing: until it has
 // one, the answer is a note about that, not an empty list.
 async function expectImagesLoaded(page: Page, where: string): Promise<void> {
+  await expectWindowSized(page, `${where}: the images`);
   await expect.poll(() => page.evaluate(() => {
     if (document.readyState !== 'complete' || window.innerWidth <= 0 || window.innerHeight <= 0) return [`(the window has no size yet: ${window.innerWidth}x${window.innerHeight}, document ${document.readyState})`];
     return Array.from(document.images)
@@ -716,7 +707,7 @@ const scrollWindowTo = (page: Page, where: 'top' | 'bottom'): Promise<void> =>
 
 // With the page scrolled to its end, the last section ends above the fixed move bar.
 async function expectClearOfMoveBar(page: Page, where: string): Promise<void> {
-  const m = await untilSized(() => page.evaluate(() => {
+  const m = await untilSized(page, () => page.evaluate(() => {
     const sized = document.readyState === 'complete' && window.innerWidth > 0 && window.innerHeight > 0;
     const bar = document.querySelector('[role="region"][aria-label="Your move"]');
     const last = document.querySelector('main')?.lastElementChild;

@@ -48,6 +48,7 @@ import { gotoRetry, cleanup, wait, APP } from '../helpers/live-ui';
 import { launchBrowser, engineLabel, contextOptions } from '../helpers/engine';
 import { primePreview } from '../helpers/preview-bypass';
 import { expectReachable } from '../helpers/viewport-fit';
+import { inNewWindows, untilSized } from '../helpers/window-size';
 
 const SHOTS = path.resolve(__dirname, '../../workspace/scratch/2026-10-05-reason-shell-preview-shots');
 
@@ -152,6 +153,16 @@ async function openAs(u: TestUser, size: Size): Promise<Opened> {
   return { page, ctx, errors };
 }
 
+/**
+ * One part of a test in a signed-in window. Playwright's WebKit with a phone's descriptor sometimes gives a window with no
+ * size (helpers/window-size.ts), and nothing can be measured in it, so a part that fails while its window has no size is
+ * run again in a new window (three at most) and the run says so; a failure in a window that has a size is never run again.
+ * `problems` is for a test that collects its failures as lines instead of throwing them: the lines of a window that is
+ * replaced are taken out of it.
+ */
+const using = (user: TestUser, size: Size, body: (o: Opened) => Promise<void>, problems?: string[]): Promise<void> =>
+  inNewWindows({ open: () => openAs(user, size), body, problems });
+
 // Opens a page and waits until the shell has drawn: the Main bar on a phone, the sidebar otherwise.
 // The shell's own styles must be on first: a development server injects them a moment after the
 // first paint, and until then the sidebar and the phone bar are both on screen, so a role query
@@ -177,35 +188,15 @@ const firstLine = (e: unknown): string => String((e as Error)?.message ?? e).spl
 
 // ── Checks ───────────────────────────────────────────────────────────────────────────────────
 
-/**
- * A window has a size once its document has loaded. Right after a navigation WebKit's device emulation can answer
- * window.innerWidth with 0 for a moment (reason-m1.spec.ts met it as "scrollWidth 390 over 0"), and anything measured
- * against that is nonsense. A question that depends on the window's size is asked again, for up to 5 seconds, until
- * the answer comes from a window with a width and a height above 0 and a finished document (the question works that
- * out itself and says so in `sized`, so the size and the measurement are from the same instant). What is measured
- * then is judged as strictly as ever. The same helper is in reason-m1.spec.ts: a spec cannot import another spec.
- */
-async function untilSized<T extends { sized: boolean }>(ask: () => Promise<T>): Promise<T | null> {
-  const until = Date.now() + 5_000;
-  for (;;) {
-    let answer: T | null = null;
-    try {
-      answer = await ask();
-    } catch (e) {
-      // A page between two documents has nothing to answer for a moment: ask again. Anything else is the real error.
-      if (!/Execution context was destroyed|Cannot find context with specified id/i.test(String((e as Error)?.message ?? e))) throw e;
-    }
-    if (answer?.sized) return answer;
-    if (Date.now() >= until) return answer;
-    await wait(100);
-  }
-}
+// Every check that reads the window's size asks through untilSized (helpers/window-size.ts). The question says in `sized`,
+// in the same instant as it measures, whether the window had a width, a height and a finished document, and a window that
+// never gets them is reported as that, not measured.
 
 // The window must not scroll at all (the page area, <main>, is what scrolls), and neither may the
 // page area scroll sideways, which is what a too-wide screen would push on instead. On a phone,
 // once the page area is scrolled to its end, nothing of the page may sit under the bottom bar.
 async function expectContained(page: Page, where: string): Promise<void> {
-  const m = await untilSized(() => page.evaluate(() => {
+  const m = await untilSized(page, () => page.evaluate(() => {
     const sized = document.readyState === 'complete' && window.innerWidth > 0 && window.innerHeight > 0;
     const main = document.querySelector('main');
     const bar = document.querySelector('nav[aria-label="Main"].fixed') as HTMLElement | null;
@@ -249,8 +240,11 @@ async function expectTapSize(targets: Array<{ name: string; loc: Locator }>, whe
 async function expectOfficialLogo(page: Page, where: string): Promise<void> {
   const logo = page.locator('img[src="/rsn-sheep.png"]:visible').first();
   await expect(logo, `${where}: the official sheep logo is not on screen`).toBeVisible();
-  const loaded = await logo.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0);
-  expect(loaded, `${where}: /rsn-sheep.png did not load`).toBe(true);
+  // On screen is not loaded: the picture can still be arriving (it was not, once, at 721px on the preview), so it is waited for.
+  await expect.poll(() => logo.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0), {
+    message: `${where}: /rsn-sheep.png did not load`,
+    timeout: 10_000,
+  }).toBe(true);
 }
 
 // The navigation that belongs to this width, and none of the other two.
@@ -347,8 +341,7 @@ test('1 every width: no sideways scroll, the right navigation, the official logo
   const label = engineLabel().replace(/[^a-z0-9]+/gi, '-');
 
   for (const size of sizes(WIDTHS)) {
-    const { page, ctx, errors } = await openAs(member, size);
-    try {
+    await using(member, size, async ({ page, errors }) => {
       for (const route of routes) {
         const where = `${size.width}x${size.height} ${route}`;
         try {
@@ -374,9 +367,7 @@ test('1 every width: no sideways scroll, the right navigation, the official logo
         console.log(`  ✓ ${size.width}x${size.height} (${modeOf(size.width)}): ${routes.length} pages, no sideways scroll, ${modeOf(size.width)} navigation, logo, targets 44px.`);
       }
       expect(errors, `${size.width}px: script errors`).toEqual([]);
-    } finally {
-      await ctx.close().catch(() => undefined);
-    }
+    }, problems);
   }
   expect(problems, `problems:\n${problems.join('\n')}`).toEqual([]);
 });
@@ -392,8 +383,7 @@ test('2 phone bar and More sheet: five tabs, the rest in More, each entry naviga
 
   for (const size of phones) {
     const where = `${size.width}x${size.height}`;
-    const { page, ctx, errors } = await openAs(member, size);
-    try {
+    await using(member, size, async ({ page, errors }) => {
       await visit(page, '/', size.width);
       const bar = page.getByRole('navigation', { name: 'Main' });
       const more = bar.getByRole('button', { name: 'More' });
@@ -416,7 +406,7 @@ test('2 phone bar and More sheet: five tabs, the rest in More, each entry naviga
       ], `${where} More sheet`);
 
       // It sits fully inside the window, and above the bar (not under it).
-      const hit = await untilSized(() => page.evaluate(() => {
+      const hit = await untilSized(page, () => page.evaluate(() => {
         const sized = document.readyState === 'complete' && window.innerWidth > 0 && window.innerHeight > 0;
         const d = document.querySelector('[role="dialog"][aria-label="More"]') as HTMLElement | null;
         const bar = document.querySelector('nav[aria-label="Main"].fixed') as HTMLElement | null;
@@ -482,9 +472,7 @@ test('2 phone bar and More sheet: five tabs, the rest in More, each entry naviga
       }
       console.log(`  ✓ ${where}: five tabs, More holds the rest, every entry navigates and closes the sheet, the bar stays under dialogs.`);
       expect(errors, `${where}: script errors`).toEqual([]);
-    } finally {
-      await ctx.close().catch(() => undefined);
-    }
+    });
   }
 });
 
@@ -504,8 +492,7 @@ test('3 breakpoints: bar to 720px, named icons 721 to 980px, labels from 981px',
   ];
   for (const size of sizes(edges)) {
     const where = `${size.width}x${size.height} (${modeOf(size.width)})`;
-    const { page, ctx, errors } = await openAs(member, size);
-    try {
+    await using(member, size, async ({ page, errors }) => {
       await visit(page, '/circles', size.width);
       await expectChrome(page, size.width, where);
       await expectTopbar(page, size.width, where);
@@ -517,9 +504,7 @@ test('3 breakpoints: bar to 720px, named icons 721 to 980px, labels from 981px',
       if (circles) await expect(circles, `${where}: Circles is the current page`).toHaveAttribute('aria-current', 'page');
       console.log(`  ✓ ${where}: ${modeOf(size.width) === 'phone' ? 'five-tab bar' : modeOf(size.width) === 'rail' ? 'rail with eight named icons and no words' : 'sidebar with labels'}.`);
       expect(errors, `${where}: script errors`).toEqual([]);
-    } finally {
-      await ctx.close().catch(() => undefined);
-    }
+    });
   }
 });
 
@@ -530,9 +515,8 @@ test('3 breakpoints: bar to 720px, named icons 721 to 980px, labels from 981px',
 test('4 People: Find people, Your searches, Everyone who fits and People you have met sit under four tabs', async () => {
   test.setTimeout(600_000);
   for (const size of sizes([{ width: 360, height: 780 }, { width: 390, height: 844 }, { width: 1280, height: 800 }])) {
-    const { page, ctx, errors } = await openAs(member, size);
     const phone = modeOf(size.width) === 'phone';
-    try {
+    await using(member, size, async ({ page, errors }) => {
       for (const tab of PEOPLE_TABS) {
         const where = `${size.width}px ${tab.to}`;
         await visit(page, tab.to, size.width);
@@ -563,9 +547,7 @@ test('4 People: Find people, Your searches, Everyone who fits and People you hav
       await expect(page.getByRole('navigation', { name: 'People' }), `${size.width}px: People tabs on Circles`).toHaveCount(0);
       console.log(`  ✓ ${size.width}px: four people pages, four tabs, the right one marked, the last reachable.`);
       expect(errors, `${size.width}px: script errors`).toEqual([]);
-    } finally {
-      await ctx.close().catch(() => undefined);
-    }
+    });
   }
 });
 
@@ -577,8 +559,7 @@ test('5 top search: Enter opens Find people with the words already typed, a seco
   test.setTimeout(300_000);
   for (const size of sizes([{ width: 390, height: 844 }, { width: 1280, height: 800 }])) {
     const where = `${size.width}px`;
-    const { page, ctx, errors } = await openAs(member, size);
-    try {
+    await using(member, size, async ({ page, errors }) => {
       await visit(page, '/circles', size.width);
       // Scoped by landmark: the top bar is the page's one search landmark, and /search has an input of its
       // own that is also named "Search people", so a bare role lookup would match both.
@@ -601,9 +582,7 @@ test('5 top search: Enter opens Find people with the words already typed, a seco
       expect(page.url(), `${where}: an empty search goes nowhere`).toBe(before);
       console.log(`  ✓ ${where}: Enter on the top search opens Find people with the words in; a new search replaces them; blank does nothing.`);
       expect(errors, `${where}: script errors`).toEqual([]);
-    } finally {
-      await ctx.close().catch(() => undefined);
-    }
+    });
   }
 });
 
@@ -615,8 +594,7 @@ test('6 profile nudge: asked to finish on every page but For You and Messages, a
   test.setTimeout(300_000);
   for (const size of sizes([{ width: 390, height: 844 }, { width: 1280, height: 800 }])) {
     const where = `${size.width}px`;
-    const todo = await openAs(unfinished, size);
-    try {
+    await using(unfinished, size, async (todo) => {
       const nudge = todo.page.getByText('Complete your profile');
       for (const route of ['/circles', '/sessions', '/settings']) {
         await visit(todo.page, route, size.width);
@@ -641,18 +619,13 @@ test('6 profile nudge: asked to finish on every page but For You and Messages, a
       await expect(nudge, `${where} /messages again: the nudge is gone`).toHaveCount(0);
       await todo.page.screenshot({ path: path.join(SHOTS, `${engineLabel().replace(/[^a-z0-9]+/gi, '-')}-${size.width}-nudge.png`) });
       expect(todo.errors, `${where}: script errors`).toEqual([]);
-    } finally {
-      await todo.ctx.close().catch(() => undefined);
-    }
+    });
 
-    const done = await openAs(member, size);
-    try {
+    await using(member, size, async (done) => {
       await visit(done.page, '/circles', size.width);
       await expect(done.page.getByText('Complete your profile'), `${where}: a member who finished is not nudged`).toHaveCount(0);
       expect(done.errors, `${where}: script errors`).toEqual([]);
-    } finally {
-      await done.ctx.close().catch(() => undefined);
-    }
+    });
     console.log(`  ✓ ${where}: the nudge shows on Circles, Events and Settings for a member who has not finished, with a 44px button to /onboarding, and not on Messages; a member who has finished sees none.`);
   }
 });
@@ -740,8 +713,7 @@ test('7 Messages: no nudge, and the message box is fully visible above the bar w
   //    nudge or not. That is the Messages page's own layout, and nothing to do with the nudge.
   for (const size of sizes([{ width: 360, height: 640 }])) {
     const where = `${size.width}x${size.height} member who has not finished onboarding, new message`;
-    const { page, ctx, errors } = await openAs(unfinished, size);
-    try {
+    await using(unfinished, size, async ({ page, errors }) => {
       const composer = page.getByRole('main').locator('textarea');
       await attempt(`${where}, page`, async () => {
         await visit(page, `/messages/new/${member.id}`, size.width);
@@ -751,9 +723,7 @@ test('7 Messages: no nudge, and the message box is fully visible above the bar w
       });
       await boxChecks(page, composer, where);
       expect(errors, `${where}: script errors`).toEqual([]);
-    } finally {
-      await ctx.close().catch(() => undefined);
-    }
+    }, problems);
     done(where, 'no nudge, and the message box is fully above the bar with the page area at the top.');
   }
 
@@ -766,8 +736,7 @@ test('7 Messages: no nudge, and the message box is fully visible above the bar w
   for (const size of sizes([{ width: 360, height: 548 }, { width: 360, height: 640 }, { width: 360, height: 780 }, { width: 390, height: 844 }, { width: 1280, height: 800 }])) {
     for (const viewer of viewers) {
       const where = `${size.width}x${size.height} member ${viewer.label}`;
-      const { page, ctx, errors } = await openAs(viewer.user, size);
-      try {
+      await using(viewer.user, size, async ({ page, errors }) => {
         // The inbox: nothing may be taller than the page area, and there is no nudge.
         await attempt(`${where}, inbox`, async () => {
           await visit(page, '/messages', size.width);
@@ -792,9 +761,7 @@ test('7 Messages: no nudge, and the message box is fully visible above the bar w
           await page.screenshot({ path: path.join(SHOTS, `${engineLabel().replace(/[^a-z0-9]+/gi, '-')}-${size.width}x${size.height}-thread-${viewer.user === unfinished ? 'unfinished' : 'finished'}.png`) });
         }
         expect(errors, `${where}: script errors`).toEqual([]);
-      } finally {
-        await ctx.close().catch(() => undefined);
-      }
+      }, problems);
       done(where, 'no nudge, and the message box and Send are fully above the bar with the page area at the top, and the page fits its page area.');
     }
   }
@@ -805,8 +772,7 @@ test('7 Messages: no nudge, and the message box is fully visible above the bar w
   if (!DEVICE) {
     const size = { width: 844, height: 390 };
     const where = `${size.width}x${size.height} member who has not finished onboarding, thread`;
-    const { page, ctx, errors } = await openAs(unfinished, size);
-    try {
+    await using(unfinished, size, async ({ page, errors }) => {
       const composer = page.getByRole('main').locator('textarea');
       await attempt(`${where}, page`, async () => {
         await visit(page, `/messages/${id}`, size.width);
@@ -818,9 +784,7 @@ test('7 Messages: no nudge, and the message box is fully visible above the bar w
       });
       await boxChecks(page, composer, where);
       expect(errors, `${where}: script errors`).toEqual([]);
-    } finally {
-      await ctx.close().catch(() => undefined);
-    }
+    }, problems);
     done(where, 'no nudge, and with the page area scrolled to its end the message box and Send are fully inside the window.');
   }
 
@@ -842,8 +806,7 @@ test('8 old pages: Circles, Events, Messages, Settings, Pods and Support render 
     { route: '/support', name: 'Support', see: (p) => p.getByRole('main').getByRole('heading', { name: 'Support', level: 1 }) },
   ];
   for (const size of sizes([{ width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 1280, height: 800 }])) {
-    const { page, ctx, errors } = await openAs(member, size);
-    try {
+    await using(member, size, async ({ page, errors }) => {
       for (const p of pages) {
         const where = `${size.width}px ${p.name}`;
         await visit(page, p.route, size.width);
@@ -854,9 +817,7 @@ test('8 old pages: Circles, Events, Messages, Settings, Pods and Support render 
         console.log(`  ✓ ${where}: renders inside the shell.`);
       }
       expect(errors, `${size.width}px: script errors`).toEqual([]);
-    } finally {
-      await ctx.close().catch(() => undefined);
-    }
+    });
   }
 });
 
@@ -870,8 +831,7 @@ test('9 account menu: Invite and Log out stay reachable, Admin is not offered to
   test.skip(wide.length === 0, 'the account menu lives in the sidebar, which a phone does not have (its Invite and Log out are in More)');
   for (const size of wide) {
     const where = `${size.width}px`;
-    const { page, ctx, errors } = await openAs(member, size);
-    try {
+    await using(member, size, async ({ page, errors }) => {
       await visit(page, '/circles', size.width);
       const account = page.getByRole('button', { name: 'Your account' });
       // A plain disclosure, not an ARIA menu: a button that shows and hides two or three links and a button. It is
@@ -920,9 +880,7 @@ test('9 account menu: Invite and Log out stay reachable, Admin is not offered to
       await expect(page, `${where}: still on the same page, still signed in`).toHaveURL(/\/invites$/);
       console.log(`  ✓ ${where}: menu opens, Escape and an outside tap close it, Invite navigates, Log out asks first and Cancel keeps the member signed in, no Admin entry for a member.`);
       expect(errors, `${where}: script errors`).toEqual([]);
-    } finally {
-      await ctx.close().catch(() => undefined);
-    }
+    });
   }
 });
 
@@ -937,8 +895,7 @@ test('10 unread count: the Messages link says how many messages are waiting (bar
   await pool.query(`INSERT INTO direct_messages (conversation_id, from_user_id, content) VALUES ($1, $2, $3)`, [id, unfinished.id, 'Are you there?']);
   for (const size of sizes([{ width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 1280, height: 800 }])) {
     const where = `${size.width}px`;
-    const { page, ctx, errors } = await openAs(member, size);
-    try {
+    await using(member, size, async ({ page, errors }) => {
       await visit(page, '/circles', size.width);
       const root = modeOf(size.width) === 'phone' ? page.getByRole('navigation', { name: 'Main' }) : sidebar(page);
       const link = root.getByRole('link', { name: 'Messages, 1 unread', exact: true });
@@ -946,8 +903,6 @@ test('10 unread count: the Messages link says how many messages are waiting (bar
       await expectTapSize([{ name: 'Messages link', loc: link }], where);
       console.log(`  ✓ ${where}: the ${modeOf(size.width)} Messages link reads "Messages, 1 unread".`);
       expect(errors, `${where}: script errors`).toEqual([]);
-    } finally {
-      await ctx.close().catch(() => undefined);
-    }
+    });
   }
 });
