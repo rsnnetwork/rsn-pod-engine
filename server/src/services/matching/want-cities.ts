@@ -481,6 +481,14 @@ const ALSO_HOLDS: Readonly<Record<string, readonly string[]>> = {
   washington: ['washington dc'],
 };
 
+// A county written "Greater X" is how a person in the metropolitan area writes the city X ("Greater Manchester",
+// like LinkedIn's "Greater Leeds Area"), and as an entry of its own it sets the word "X" aside. A want that names
+// the city takes it: "in Manchester" takes "Greater Manchester, England".
+const GREATER_COUNTIES: ReadonlyArray<readonly [string, readonly string[]]> = Object.values(REGIONS_AFTER_A_CITY)
+  .flatMap((entries) => canonicals(entries))
+  .filter((county) => county.startsWith('greater '))
+  .map((county): [string, readonly string[]] => [county.slice('greater '.length), [county]]);
+
 /**
  * Places that contain others a person may name instead: a want "in Northern Ireland" is satisfied
  * by a location that names the province or any town in it, by the town's canonical name. The same
@@ -489,6 +497,7 @@ const ALSO_HOLDS: Readonly<Record<string, readonly string[]>> = {
 export const SUBREGIONS: ReadonlyMap<string, readonly string[]> = new Map<string, readonly string[]>([
   ['northern ireland', canonicals(NORTHERN_IRELAND_TOWNS)],
   ['bay area', BAY_AREA_CITIES],
+  ...GREATER_COUNTIES,
   ...Object.entries({ ...US_CITIES_BY_STATE, ...CANADIAN_CITIES_BY_PROVINCE })
     .map(([place, cities]): [string, readonly string[]] => [place, [...canonicals(cities), ...(ALSO_HOLDS[place] ?? [])]]),
 ]);

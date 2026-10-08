@@ -254,6 +254,27 @@ describe('a county or an Australian state written after a city', () => {
       expect([want, extractConstraints([want]).location]).toEqual([want, null]);
     }
   });
+
+  // "Greater Manchester" is a county the table knows, and as an entry of its own it set the word "Manchester"
+  // aside: a want "in Manchester" no longer took the people who write the metropolitan area ("Greater Leeds
+  // Area" was always Leeds). A county written "Greater X" is the city X for a want that names the city.
+  it('"Greater Manchester" is Manchester for a want that names the city', () => {
+    for (const location of [
+      'Greater Manchester', 'Greater Manchester, England, United Kingdom', 'Greater Manchester Area',
+      'Manchester, Greater Manchester', 'Bolton, Greater Manchester',
+    ]) expect([location, satisfies('investors in Manchester', location)]).toEqual([location, true]);
+    expect(matchedPlace(extractConstraints(['investors in Manchester']), { location: 'Greater Manchester, England, United Kingdom' }))
+      .toBe('manchester');
+    expect(satisfies('investors in the UK', 'Greater Manchester')).toBe(true);
+    expect(satisfies('investors in England', 'Greater Manchester')).toBe(true);
+  });
+
+  it('but only the one in the United Kingdom, and not the rest of the north', () => {
+    expect(satisfies('investors in Manchester', 'Manchester, NH')).toBe(false);
+    expect(satisfies('investors in Manchester', 'Leeds, West Yorkshire')).toBe(false);
+    expect(satisfies('investors in Manchester', 'Liverpool, Merseyside')).toBe(false);
+    expect(satisfies('investors in Leeds', 'Greater Manchester')).toBe(false);
+  });
 });
 
 describe('Jersey City and New Jersey are the United States, never the island', () => {
