@@ -320,6 +320,46 @@ describe('a region is satisfied by a country inside it', () => {
   });
 });
 
+// A country want used to be satisfied by any location containing the letters of its name, and a city
+// by any word of the location: "in Oman" took Bucharest, Romania, and the card said "(in Oman)".
+// A country is now satisfied only by a country the location names (placesNamedIn), a city, state or
+// province only by that name as a whole word or words.
+describe('a place is matched as a whole place, never as letters inside another name', () => {
+  it.each([
+    ['Mexico', 'Albuquerque, New Mexico'], ['Ireland', 'Belfast, Northern Ireland'], ['Niger', 'Lagos, Nigeria'],
+    ['Oman', 'Bucharest, Romania'], ['Mali', 'Malibu, California'], ['Iran', 'Tirana, Albania'],
+    ['Sudan', 'Juba, South Sudan'], ['Guinea', 'Port Moresby, Papua New Guinea'], ['Kansas', 'Little Rock, Arkansas'],
+    ['Rio', 'Toronto, Ontario'],
+    // The same pattern elsewhere in the tables.
+    ['Guinea', 'Malabo, Equatorial Guinea'], ['India', 'Indianapolis, Indiana'], ['Oman', 'Romania'],
+  ])('"in %s" does not take %s', (place, location) => {
+    expect(satisfies(`founders in ${place}`, location)).toBe(false);
+  });
+
+  it.each([
+    ['Mexico', 'Mexico City, Mexico'], ['Mexico', 'Mexico'], ['Ireland', 'Dublin, Ireland'], ['Niger', 'Niamey, Niger'],
+    ['Nigeria', 'Lagos, Nigeria'], ['Oman', 'Muscat, Oman'], ['Mali', 'Bamako, Mali'], ['Iran', 'Tehran, Iran'],
+    ['Sudan', 'Khartoum, Sudan'], ['South Sudan', 'Juba, South Sudan'], ['Guinea', 'Conakry, Guinea'],
+    ['Kansas', 'Wichita, Kansas'], ['Arkansas', 'Little Rock, Arkansas'], ['Rio', 'Rio, Brazil'],
+    ['Ontario', 'Toronto, Ontario'], ['London', 'Greater London Area'], ['New York', 'New York, NY'],
+    ['New Mexico', 'Santa Fe, New Mexico'], ['Texas', 'Austin, Texas'], ['York', 'York, England'],
+  ])('"in %s" still takes %s', (place, location) => {
+    expect(satisfies(`founders in ${place}`, location)).toBe(true);
+  });
+
+  it('a city is not found inside a longer place that contains its word', () => {
+    expect(satisfies('founders in York', 'New York, NY')).toBe(false);
+    expect(satisfies('founders in Washington DC', 'Seattle, Washington')).toBe(false);
+    expect(satisfies('founders in Washington', 'Seattle, Washington')).toBe(true);
+    expect(satisfies('founders in Washington DC', 'Washington, DC')).toBe(true);
+  });
+
+  it('a city written with accents or punctuation is still that city', () => {
+    expect(satisfies('founders in Sao Paulo', 'São Paulo, Brazil')).toBe(true);
+    expect(satisfies('founders in Bogota', 'Bogotá, Colombia')).toBe(true);
+  });
+});
+
 describe('a country that is in no region', () => {
   it('can be named in a want, and is satisfied by a person who lives there', () => {
     expect(extractConstraints(['founders in Jamaica or Canada']).location).toEqual(['canada', 'jamaica']);
@@ -356,6 +396,13 @@ describe('a two-word capture that is not a place', () => {
     expect(extractConstraints(['founders located in London England']).location).toEqual(['united kingdom', 'london']);
     expect(satisfies('investors in Berlin Mitte', 'Berlin, Germany')).toBe(true);
     expect(satisfies('investors in Berlin Mitte', 'Hamburg, Germany')).toBe(false);
+  });
+
+  it('does not cut a two-word place the code knows down to its first word', () => {
+    expect(extractConstraints(['founders in Washington DC']).location).toEqual(['washington dc']);
+    expect(extractConstraints(['founders in New York']).location).toEqual(['new york']);
+    expect(extractConstraints(['founders in Tel Aviv']).location).toEqual(['tel aviv']);
+    expect(extractConstraints(['founders in North Carolina']).location).toEqual(['north carolina']);
   });
 
   it('does not after "from", where a company or a school is as likely as a place', () => {

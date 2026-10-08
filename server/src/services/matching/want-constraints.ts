@@ -81,10 +81,11 @@ const EXTRA_COUNTRIES = new Set(Object.keys(COUNTRY_NAMES));
 
 // ── Finding places in a text ──────────────────────────────────────────────────
 //
-// Country names, region names and a few look-alikes are looked for together, LONGEST FIRST,
-// and each one found is blanked out before the shorter ones are tried. That is what keeps
-// "Latin America" from also being "America" (the United States), "South Africa" from also
-// being Africa, "Papua New Guinea" from also being Guinea, and "New Mexico" from being Mexico.
+// Country names, region names, the cities, states and provinces the matcher knows, and a few
+// look-alikes are looked for together as whole words, LONGEST FIRST, and each one found is
+// blanked out before the shorter ones are tried. That is what keeps "Latin America" from also
+// being "America" (the United States), "South Africa" from also being Africa, "Papua New Guinea"
+// from also being Guinea, "New Mexico" from being Mexico and "New York" from also being York.
 
 type NameKind = 'country' | 'region' | 'place' | 'decoy';
 interface PlaceName { name: string; kind: NameKind; canon: string }
@@ -135,8 +136,13 @@ const WANT_SCAN = compile(
   [...countryNames, ...regionNames.filter((n) => !READ_ONLY_AFTER_A_PREPOSITION.has(n.name)), ...LOOK_ALIKES],
   (s) => s.toLowerCase(),
 );
-// In a person's location: every country there is a name for, accents and punctuation ignored.
-const PROFILE_SCAN = compile([...countryNames, ...extraCountryNames, ...regionNames, ...LOOK_ALIKES], fold);
+// In a person's location: every country there is a name for, and every city, state and province
+// the matcher knows (which include the two look-alike places), accents and punctuation ignored.
+const knownPlaceNames: PlaceName[] = [...KNOWN_PLACES].map((name) => ({ name, kind: 'place' as const, canon: name }));
+const PROFILE_SCAN = compile(
+  [...countryNames, ...extraCountryNames, ...regionNames, ...LOOK_ALIKES.filter((n) => n.kind === 'decoy'), ...knownPlaceNames],
+  fold,
+);
 
 function scan(
   text: string, scanners: Scanner[],
@@ -212,7 +218,7 @@ export function locationTerms(text: string | null | undefined): string[] {
     // "in Berlin Mitte", "in Austin Texas": two capitalised words that are not a place together but
     // start with one. After "from" the pair is as often a company or a school ("from Boston Consulting
     // Group"), so there only a place that stands alone counts.
-    if (!canon && words.length > 1 && m[1] !== 'from') canon = placeNamed(words[0]);
+    if (!canon && !KNOWN_PLACES.has(key) && words.length > 1 && m[1] !== 'from') canon = placeNamed(words[0]);
     out.add(canon ?? key); // known country or region; anything else is a city or an unknown place
   }
   for (const p of places) out.add(p);
@@ -267,17 +273,6 @@ export interface ProfileLike {
   company?: string | null;
 }
 
-/** Canonical place terms for a profile, from its location field (+ company text). */
-export function profileLocationTerms(p: ProfileLike): string[] {
-  const out = new Set<string>(locationTerms(p.location));
-  // A location field like "Austin, TX" carries no alias; keep its own words too
-  // so a want for "in Austin" still matches.
-  for (const w of (p.location || '').toLowerCase().split(/[^a-z]+/)) {
-    if (w.length >= 3) out.add(w);
-  }
-  return [...out];
-}
-
 /** Years of experience a profile states anywhere in its text, or null. */
 export function profileYears(p: ProfileLike): number | null {
   return parseYears([p.bio, p.expertiseText, p.whatICanHelpWith, p.whatICareAbout, p.jobTitle].filter(Boolean).join('. '));
@@ -292,18 +287,18 @@ export interface ConstraintCheck {
   yearsUnknown: boolean;
 }
 
-interface NamedPlaces { countries: Set<string>; regions: Set<string> }
+interface NamedPlaces { countries: Set<string>; regions: Set<string>; places: Set<string> }
 const NAMED_PLACES = new Map<string, NamedPlaces>();
 
-/** The countries and regions a person's location names, accents and punctuation ignored. */
+/** The countries, regions and cities, states and provinces a person's location names, accents and punctuation ignored. */
 function placesNamedIn(location: string): NamedPlaces {
   const known = NAMED_PLACES.get(location);
   if (known) return known;
-  const { countries, regions } = scan(fold(location), PROFILE_SCAN);
+  const { countries, regions, places } = scan(fold(location), PROFILE_SCAN);
   if (mentionsUS(location)) countries.add('united states');
   // Locations repeat across the people a want is scored against; the cache is bounded.
   if (NAMED_PLACES.size >= 5000) NAMED_PLACES.clear();
-  const named = { countries, regions };
+  const named = { countries, regions, places };
   NAMED_PLACES.set(location, named);
   return named;
 }
@@ -327,30 +322,23 @@ function inRegion(key: string, named: NamedPlaces): boolean {
 }
 
 /**
- * The first place the want requires that this person satisfies, or null. A country or a city is
- * a word of their location, as before; a region is a country inside it (never a substring: "eu"
- * is not in "Eugene").
+ * Does a location, as placesNamedIn reads it, satisfy one place the want names? A region is a
+ * country inside it, a country is a country the location names (so "Czech Republic" is czechia),
+ * and a city, state or province is that name as a whole word or words. Never letters inside another
+ * name: "Oman" is not in "Romania", "Mali" is not in "Malibu", "Rio" is not in "Ontario" and "eu"
+ * is not in "Eugene".
  */
+function placeSatisfied(req: string, named: NamedPlaces): boolean {
+  if (regionByKey(req)) return inRegion(req, named);
+  if (ALIAS_COUNTRIES.has(req) || EXTRA_COUNTRIES.has(req)) return named.countries.has(req);
+  return named.places.has(req);
+}
+
+/** The first place the want requires that this person satisfies, or null. */
 function satisfiedPlace(c: WantConstraints, p: ProfileLike): string | null {
   if (!c.location) return null;
-  const text = (p.location || '').toLowerCase();
-  let have: Set<string> | null = null;
-  let named: NamedPlaces | null = null;
-  for (const req of c.location) {
-    if (regionByKey(req)) {
-      named ??= placesNamedIn(p.location || '');
-      if (inRegion(req, named)) return req;
-      continue;
-    }
-    have ??= new Set(profileLocationTerms(p));
-    if (have.has(req) || text.includes(req)) return req;
-    // A country the older alias table does not know, written another way ("Czech Republic" for czechia).
-    if (EXTRA_COUNTRIES.has(req)) {
-      named ??= placesNamedIn(p.location || '');
-      if (named.countries.has(req)) return req;
-    }
-  }
-  return null;
+  const named = placesNamedIn(p.location || '');
+  return c.location.find((req) => placeSatisfied(req, named)) ?? null;
 }
 
 /**

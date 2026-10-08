@@ -285,6 +285,17 @@ describe('a region in the want finds the people who are there', () => {
     expect(scoreWants([`${STACK} in London`], fintech('Liv', 'London, UK')).reason).toMatch(/\(in London\)$/);
   });
 
+  it('never says a place the person is not in: "in Oman" does not find Bucharest and the card does not claim it', () => {
+    for (const [place, location] of [
+      ['Oman', 'Bucharest, Romania'], ['Mexico', 'Albuquerque, New Mexico'], ['Ireland', 'Belfast, Northern Ireland'],
+      ['Niger', 'Lagos, Nigeria'], ['Kansas', 'Little Rock, Arkansas'], ['Sudan', 'Juba, South Sudan'],
+    ]) {
+      const r = scoreWants([`${STACK} in ${place}`], fintech('Radu', location));
+      expect([place, r.score, r.reason]).toEqual([place, 0, '']);
+    }
+    expect(scoreWants([`${STACK} in Oman`], fintech('Salim', 'Muscat, Oman')).reason).toMatch(/\(in Oman\)$/);
+  });
+
   // The words "and", "of" and "the" stay lowercase inside a name, and the few names title case gets
   // wrong print as people write them (the code writes plain ASCII in a reason, so no accents).
   describe('a place prints the way it is written', () => {
