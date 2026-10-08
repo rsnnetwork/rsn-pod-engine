@@ -122,7 +122,10 @@ describe('the call sites: main.tsx and the auth store', () => {
 
   it('nothing else in the app builds a client of its own (a second cache would escape the clearing)', () => {
     const files: string[] = [];
+    // The realtime guard's test makes and removes client/src/__test_realtime_guard__ while the suites run side by side. It
+    // is not the app, and a file listed from it can be gone by the time it is read (an ENOENT that failed this test now and then).
     const walk = (dir: string) => fs.readdirSync(dir, { withFileTypes: true }).forEach((e) => {
+      if (e.name.startsWith('__test_')) return;
       const full = path.join(dir, e.name);
       if (e.isDirectory()) walk(full); else if (/\.tsx?$/.test(e.name)) files.push(full);
     });
