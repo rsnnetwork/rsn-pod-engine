@@ -80,7 +80,9 @@ const MIDDLE_EAST = [
   'qatar', 'saudi arabia', 'syria', 'turkey', 'united arab emirates', 'yemen',
 ];
 const GCC = ['bahrain', 'kuwait', 'oman', 'qatar', 'saudi arabia', 'united arab emirates'];
-// The Middle East and North Africa as the World Bank draws it: Turkey is not in it.
+// The Middle East and North Africa after the World Bank's grouping, without Turkey. The World Bank's
+// own MENA also counts Djibouti and Malta; they are left out here (Djibouti is listed with Africa and
+// Malta with Europe), so a person there is found by those regions and not by MENA.
 const MENA = [
   'algeria', 'bahrain', 'egypt', 'iran', 'iraq', 'israel', 'jordan', 'kuwait', 'lebanon', 'libya',
   'morocco', 'oman', 'palestine', 'qatar', 'saudi arabia', 'syria', 'tunisia', 'united arab emirates',

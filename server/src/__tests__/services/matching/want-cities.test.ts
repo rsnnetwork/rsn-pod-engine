@@ -5,11 +5,35 @@
 // person in the wrong country or take a place away from a want, so its shape is pinned here.
 
 import { PLACES, KNOWN_PLACES, PLACE_BY_NAME } from '../../../services/matching/want-cities';
-import { COUNTRY_ALIASES, fold, locationCountries } from '../../../services/matching/want-constraints';
+import {
+  COUNTRY_ALIASES, LOOK_ALIKES, extractConstraints, fold, locationCountries,
+} from '../../../services/matching/want-constraints';
 import { REGIONS, COUNTRY_NAMES, ENDONYMS } from '../../../services/matching/want-regions';
 
 const knownCountries = new Set([...Object.keys(COUNTRY_ALIASES), ...Object.keys(COUNTRY_NAMES)]);
 const countryOf = (name: string) => PLACE_BY_NAME.get(name)?.country;
+
+// A look-alike place ("New Mexico", "British Columbia", "Northern Ireland") is read in a want before the
+// country whose name it contains. If it were missing from the table it would be read and then dropped
+// as a place the code does not know, silently, so the want would filter nothing.
+describe('the look-alike places', () => {
+  const alike = LOOK_ALIKES.filter((n) => n.kind === 'place');
+
+  it('are all places the table knows', () => {
+    expect(alike.length).toBeGreaterThan(0);
+    expect(alike.filter((n) => !KNOWN_PLACES.has(n.canon))).toEqual([]);
+  });
+
+  it('are each a place a want can name', () => {
+    for (const n of alike) expect([n.name, extractConstraints([`founders in ${n.name}`]).location]).toEqual([n.name, [n.canon]]);
+  });
+
+  it('are set apart from the countries they contain, and the decoys are no place at all', () => {
+    expect(extractConstraints(['founders in New England']).location).toBeNull();
+    expect(extractConstraints(['founders in New South Wales']).location).toBeNull();
+    expect(LOOK_ALIKES.filter((n) => n.kind === 'decoy').map((n) => n.name).sort()).toEqual(['new england', 'new south wales']);
+  });
+});
 
 describe('fold: a name as the matcher reads it', () => {
   it.each([

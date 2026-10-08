@@ -112,8 +112,8 @@ const EXTRA_COUNTRIES = new Set(Object.keys(COUNTRY_NAMES));
 
 // A state or a province names the country more firmly than a city does, and a country written out
 // names it most firmly of all (see placesNamedIn).
-type NameKind = 'country' | 'region' | 'place' | 'decoy' | 'state' | 'city';
-interface PlaceName { name: string; kind: NameKind; canon: string; country?: string }
+export type NameKind = 'country' | 'region' | 'place' | 'decoy' | 'state' | 'city';
+export interface PlaceName { name: string; kind: NameKind; canon: string; country?: string }
 interface Scanner extends PlaceName { re: RegExp; length: number }
 
 /**
@@ -145,7 +145,7 @@ function compile(names: PlaceName[], normalise: (s: string) => string): Scanners
  * that "New England" is not England and "New South Wales" is not Wales. In a person's location
  * the three places are states of want-cities.ts (Northern Ireland is the United Kingdom there).
  */
-const LOOK_ALIKES: PlaceName[] = [
+export const LOOK_ALIKES: readonly PlaceName[] = [
   { name: 'new mexico', kind: 'place', canon: 'new mexico' },
   { name: 'british columbia', kind: 'place', canon: 'british columbia' },
   { name: 'northern ireland', kind: 'place', canon: 'northern ireland' },
