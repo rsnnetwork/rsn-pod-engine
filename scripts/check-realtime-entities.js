@@ -29,7 +29,13 @@
 const fs = require('fs');
 const path = require('path');
 
-const CLIENT_SRC = path.resolve(__dirname, '..', 'client', 'src');
+// The folder to scan: the client's own source, unless one is named, as the first argument or in
+// REALTIME_GUARD_ROOT (the argument wins). The tests name a throwaway folder in the OS temp
+// directory, so that no test has to write inside client/src while other suites read it.
+//   node scripts/check-realtime-entities.js [folder]
+const DEFAULT_ROOT = path.resolve(__dirname, '..', 'client', 'src');
+const NAMED_ROOT = process.argv[2] || process.env.REALTIME_GUARD_ROOT || '';
+const SCAN_ROOT = NAMED_ROOT ? path.resolve(NAMED_ROOT) : DEFAULT_ROOT;
 
 // Keys that legitimately do not need realtime invalidation. These match the
 // FIRST element of the queryKey array (the prefix). Keep this list minimal —
@@ -213,11 +219,16 @@ function checkFile(file) {
 }
 
 function main() {
-  if (!fs.existsSync(CLIENT_SRC)) {
-    console.error(`[realtime-check] expected client source at ${CLIENT_SRC} — exiting clean`);
+  if (!fs.existsSync(SCAN_ROOT)) {
+    // A folder named on purpose that is not there is a mistake, and a scan of nothing must not pass.
+    if (NAMED_ROOT) {
+      console.error(`[realtime-check] the folder to scan does not exist: ${SCAN_ROOT}`);
+      process.exit(2);
+    }
+    console.error(`[realtime-check] expected client source at ${SCAN_ROOT} — exiting clean`);
     process.exit(0);
   }
-  const files = walk(CLIENT_SRC);
+  const files = walk(SCAN_ROOT);
   const allViolations = [];
   for (const f of files) {
     try {

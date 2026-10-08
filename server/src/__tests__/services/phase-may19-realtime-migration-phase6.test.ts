@@ -5,6 +5,7 @@
 // guard itself can't quietly regress.
 
 import * as nodeFs from 'fs';
+import * as nodeOs from 'os';
 import * as nodePath from 'path';
 import { spawnSync } from 'child_process';
 
@@ -15,12 +16,32 @@ function repoRoot(): string {
   return nodePath.resolve(__dirname, '../../../../');
 }
 
+// `args` is what follows the script on the command line. REALTIME_GUARD_ROOT is cleared
+// unless a case sets it, so the caller's own environment cannot change what a case scans.
+function runGuardWith(args: string[], env: Record<string, string> = {}): { code: number; stdout: string; stderr: string } {
+  const result = spawnSync(
+    process.execPath,
+    [nodePath.join(repoRoot(), 'scripts', 'check-realtime-entities.js'), ...args],
+    { cwd: repoRoot(), encoding: 'utf8', env: { ...process.env, REALTIME_GUARD_ROOT: '', ...env } },
+  );
+  return {
+    code: result.status ?? -1,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+  };
+}
+
 describe('Phase 6 — realtime contract guard (scripts/check-realtime-entities.js)', () => {
   describe('script source — covers every required behaviour', () => {
     const src = readRepo('scripts/check-realtime-entities.js');
 
     it('exists and scans client/src by default', () => {
-      expect(src).toMatch(/CLIENT_SRC\s*=\s*path\.resolve\([^)]*'client',\s*'src'\)/);
+      expect(src).toMatch(/DEFAULT_ROOT\s*=\s*path\.resolve\([^)]*'client',\s*'src'\)/);
+    });
+
+    it('scans the folder it is given instead, from its first argument or REALTIME_GUARD_ROOT', () => {
+      expect(src).toMatch(/process\.argv\[2\]/);
+      expect(src).toMatch(/process\.env\.REALTIME_GUARD_ROOT/);
     });
 
     it('detects useQuery calls and inspects their options object', () => {
@@ -87,45 +108,36 @@ describe('Phase 6 — realtime contract guard (scripts/check-realtime-entities.j
   });
 
   describe('functional — guard correctly catches violations on synthetic input', () => {
-    // We invoke the script against a temp directory with hand-crafted
-    // fixtures. The script's CLIENT_SRC constant points at the real
-    // client/, so we drop fixtures into client/src/__test_realtime_guard__/
-    // and assert the script either accepts or rejects them. The fixtures
-    // are deleted in afterAll so they don't pollute the real codebase.
+    // We invoke the script against a folder of hand-crafted fixtures, which it
+    // takes as its first argument. The folder is made in the OS temp directory
+    // for this run and removed after it. It used to be client/src/__test_realtime_guard__/,
+    // and the suites that read client/src (onboarding-gate, phase-l, the query cache
+    // test) sometimes listed a fixture a moment before it was removed: ENOENT, a red
+    // suite that passed again on the next run. No test writes inside the repo now.
 
-    const fixtureDir = nodePath.join(repoRoot(), 'client', 'src', '__test_realtime_guard__');
+    let fixtureDir: string;
+
+    beforeAll(() => {
+      fixtureDir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'realtime-guard-'));
+    });
 
     function writeFixture(name: string, contents: string) {
-      if (!nodeFs.existsSync(fixtureDir)) nodeFs.mkdirSync(fixtureDir, { recursive: true });
       nodeFs.writeFileSync(nodePath.join(fixtureDir, name), contents);
     }
 
-    function runGuard(): { code: number; stdout: string; stderr: string } {
-      const result = spawnSync(
-        process.execPath,
-        [nodePath.join(repoRoot(), 'scripts', 'check-realtime-entities.js')],
-        { cwd: repoRoot(), encoding: 'utf8' },
-      );
-      return {
-        code: result.status ?? -1,
-        stdout: result.stdout ?? '',
-        stderr: result.stderr ?? '',
-      };
+    function runGuard() {
+      return runGuardWith([fixtureDir]);
     }
 
     afterAll(() => {
-      if (nodeFs.existsSync(fixtureDir)) {
-        nodeFs.rmSync(fixtureDir, { recursive: true, force: true });
-      }
+      nodeFs.rmSync(fixtureDir, { recursive: true, force: true });
     });
 
     afterEach(() => {
       // Clear all fixtures between cases so each test runs against ONLY its
       // own input.
-      if (nodeFs.existsSync(fixtureDir)) {
-        for (const f of nodeFs.readdirSync(fixtureDir)) {
-          nodeFs.unlinkSync(nodePath.join(fixtureDir, f));
-        }
+      for (const f of nodeFs.readdirSync(fixtureDir)) {
+        nodeFs.unlinkSync(nodePath.join(fixtureDir, f));
       }
     });
 
@@ -369,5 +381,95 @@ describe('Phase 6 — realtime contract guard (scripts/check-realtime-entities.j
       const r = runGuard();
       expect(r.code).toBe(0);
     });
+  });
+
+  describe('functional — which folder it scans (8 Oct 2026)', () => {
+    const BAD = `
+      import { useQuery } from '@tanstack/react-query';
+      export function X() {
+        return useQuery({ queryKey: ['no-meta'], queryFn: () => Promise.resolve(null) });
+      }
+    `;
+    const GOOD = `
+      import { useQuery } from '@tanstack/react-query';
+      import { E } from '@/realtime/entities';
+      export function X() {
+        return useQuery({ queryKey: ['has-meta'], queryFn: () => Promise.resolve(null), meta: { entities: [E.pod('abc')] } });
+      }
+    `;
+    let badDir: string;
+    let goodDir: string;
+
+    beforeAll(() => {
+      badDir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'realtime-guard-bad-'));
+      goodDir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'realtime-guard-good-'));
+      nodeFs.writeFileSync(nodePath.join(badDir, 'bad.tsx'), BAD);
+      nodeFs.writeFileSync(nodePath.join(goodDir, 'good.tsx'), GOOD);
+    });
+
+    afterAll(() => {
+      nodeFs.rmSync(badDir, { recursive: true, force: true });
+      nodeFs.rmSync(goodDir, { recursive: true, force: true });
+    });
+
+    it('scans the folder named as its first argument, and only that folder', () => {
+      expect(runGuardWith([badDir]).code).toBe(1);
+      const clean = runGuardWith([goodDir]);
+      expect(clean.code).toBe(0);
+      expect(clean.stdout).toMatch(/scanned 1 files/);
+    });
+
+    it('scans the folder named in REALTIME_GUARD_ROOT when no argument is given', () => {
+      expect(runGuardWith([], { REALTIME_GUARD_ROOT: badDir }).code).toBe(1);
+      const clean = runGuardWith([], { REALTIME_GUARD_ROOT: goodDir });
+      expect(clean.code).toBe(0);
+      expect(clean.stdout).toMatch(/scanned 1 files/);
+    });
+
+    it('lets the argument win over REALTIME_GUARD_ROOT', () => {
+      expect(runGuardWith([goodDir], { REALTIME_GUARD_ROOT: badDir }).code).toBe(0);
+      expect(runGuardWith([badDir], { REALTIME_GUARD_ROOT: goodDir }).code).toBe(1);
+    });
+
+    it('fails on a folder that is named but is not there, instead of passing a scan of nothing', () => {
+      const missing = nodePath.join(goodDir, 'no-such-folder');
+      const r = runGuardWith([missing]);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toMatch(/does not exist/);
+      expect(runGuardWith([], { REALTIME_GUARD_ROOT: missing }).code).toBe(2);
+    });
+
+    it('scans client/src when nothing names a folder, and finds it clean (what npm run lint:realtime runs)', () => {
+      const r = runGuardWith([]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toMatch(/OK — scanned \d{2,} files/);
+    });
+  });
+});
+
+describe('no test writes inside the repo (8 Oct 2026)', () => {
+  // A test that wrote fixtures into client/src made the suites that read that folder see
+  // files appear and vanish mid-read. Anything a test writes goes under the OS temp folder.
+  const TESTS = nodePath.resolve(__dirname, '..');
+  const IMPORTS_FS = /from\s+['"](?:node:)?fs(?:\/promises)?['"]|require\(['"](?:node:)?fs(?:\/promises)?['"]\)/;
+  const WRITES = /\b(?:writeFile|appendFile|mkdir|mkdtemp|rm|rmdir|unlink|rename|copyFile|truncate|createWriteStream)(?:Sync)?\(/;
+
+  function testFiles(dir: string): string[] {
+    return nodeFs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = nodePath.join(dir, entry.name);
+      if (entry.isDirectory()) return testFiles(full);
+      return entry.name.endsWith('.ts') ? [full] : [];
+    });
+  }
+
+  it('every test that writes a file names the OS temp folder', () => {
+    const writers = testFiles(TESTS)
+      .map((file) => ({ file, source: nodeFs.readFileSync(file, 'utf8') }))
+      .filter(({ source }) => IMPORTS_FS.test(source) && WRITES.test(source));
+    expect(writers.map((w) => nodePath.basename(w.file))).toContain(nodePath.basename(__filename)); // the scan can see a writer
+    const outsideTemp = writers
+      .filter(({ source }) => !/\btmpdir\(\)/.test(source))
+      .map(({ file }) => nodePath.relative(TESTS, file));
+    expect(outsideTemp).toEqual([]);
   });
 });
