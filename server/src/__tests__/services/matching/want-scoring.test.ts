@@ -285,6 +285,26 @@ describe('a region in the want finds the people who are there', () => {
     expect(scoreWants([`${STACK} in London`], fintech('Liv', 'London, UK')).reason).toMatch(/\(in London\)$/);
   });
 
+  // The words "and", "of" and "the" stay lowercase inside a name, and the few names title case gets
+  // wrong print as people write them (the code writes plain ASCII in a reason, so no accents).
+  describe('a place prints the way it is written', () => {
+    const printed = (place: string, location: string) =>
+      /\(in ([^)]+)\)$/.exec(scoreWants([`${STACK} in ${place}`], fintech('Pat', location)).reason)?.[1] ?? null;
+
+    it.each([
+      ['Bosnia', 'Sarajevo, Bosnia & Herzegovina', 'Bosnia and Herzegovina'],
+      ['Congo', 'Brazzaville, Republic of the Congo', 'Republic of the Congo'],
+      ['DR Congo', 'Kinshasa, Democratic Republic of the Congo', 'DR Congo'],
+      ['Ivory Coast', 'Abidjan, Côte d’Ivoire', "Cote d'Ivoire"],
+      ['Sao Tome', 'São Tomé & Príncipe', 'Sao Tome and Principe'],
+      ['Prince Edward Island', 'Charlottetown, Prince Edward Island', 'Prince Edward Island'],
+      ['United Arab Emirates', 'Dubai, UAE', 'United Arab Emirates'],
+      ['New York', 'New York, NY', 'New York'],
+    ])('"in %s" for a person in "%s" prints (in %s)', (place, location, shown) => {
+      expect(printed(place, location)).toBe(shown);
+    });
+  });
+
   it('an agent\'s stored tags beside the member\'s own words do not change the place', () => {
     const own = [`${STACK} in Europe`];
     const withTags = [...own, 'fintech', 'payments', 'seed funding'];

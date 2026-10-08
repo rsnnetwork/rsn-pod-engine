@@ -21,7 +21,7 @@ import logger from '../../config/logger';
 import { normalizeDesignation, tokenizeTerms, termOverlapRelated, isRelatedTerm, designationsWanted } from './intent-signals';
 import { expandWantTags } from './want-synonyms';
 import { extractConstraints, checkConstraints, matchedPlace } from './want-constraints';
-import { regionLabel } from './want-regions';
+import { placeLabel } from './want-regions';
 import * as pokeService from '../poke/poke.service';
 import { UserPoke } from '../poke/poke.service';
 import { clip, clipAtWord } from '../people/text';
@@ -245,14 +245,13 @@ interface WantFit {
 }
 
 const article = (w: string) => (/^[aeiou]/i.test(w) ? 'an' : 'a');
-const titleCase = (s: string) => s.replace(/\b[a-z]/g, (c) => c.toUpperCase());
 
 /** Append what the explicit constraints contributed, so the card is honest
  *  about WHY someone is here (and about what we couldn't verify). */
 function withConstraintNotes(base: string, f: WantFit): string {
   const notes: string[] = [];
-  // A region says what the member wrote ("in DACH", "in the Nordics"), a country or city is title-cased as ever.
-  if (f.placeMatched) notes.push(`in ${regionLabel(f.placeMatched) ?? titleCase(f.placeMatched)}`);
+  // A region says what the member wrote ("in DACH", "in the Nordics"), a country or city is capitalised properly.
+  if (f.placeMatched) notes.push(`in ${placeLabel(f.placeMatched)}`);
   if (f.yearsUnknown) notes.push(`they don't state their years of experience`);
   return notes.length ? `${base} (${notes.join('; ')})` : base;
 }

@@ -168,6 +168,27 @@ export const regionByKey = (key: string): Region | undefined => BY_KEY.get(key);
 /** The words a card prints after "in" for this region, or null when it is not a region. */
 export const regionLabel = (key: string): string | null => BY_KEY.get(key)?.label ?? null;
 
+// The few names that capitalising each word gets wrong. A reason is plain ASCII (the code prints no
+// accents anywhere else), so Côte d'Ivoire is "Cote d'Ivoire", as it is keyed.
+const PLACE_DISPLAY: ReadonlyMap<string, string> = new Map([
+  ['dr congo', 'DR Congo'],
+  ["cote d'ivoire", "Cote d'Ivoire"],
+  ['washington dc', 'Washington DC'],
+  ['prince edward', 'Prince Edward Island'], // the key is the two words a want captures
+]);
+
+const LOWERCASE_INSIDE_A_NAME = new Set(['and', 'of', 'the']);
+
+/**
+ * The words a card prints after "in" for a place key: a region as the member wrote it ("the
+ * Nordics"), anything else with each word capitalised except "and", "of" and "the" inside the
+ * name ("Bosnia and Herzegovina", "Republic of the Congo").
+ */
+export function placeLabel(key: string): string {
+  return regionLabel(key) ?? PLACE_DISPLAY.get(key)
+    ?? key.replace(/\b[a-z]+/g, (word, at: number) => (at > 0 && LOWERCASE_INSIDE_A_NAME.has(word) ? word : word[0].toUpperCase() + word.slice(1)));
+}
+
 /** True when every country of `inner` is also in `outer`: someone who says "the Nordics" is in Europe. */
 export function regionCovers(outer: string, inner: string): boolean {
   const big = COUNTRY_SETS.get(outer);

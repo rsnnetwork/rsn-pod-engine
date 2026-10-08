@@ -5,7 +5,7 @@
 // in it would silently take people out of a region or put them in the wrong one.
 
 import {
-  REGIONS, COUNTRY_NAMES, KNOWN_PLACES, regionByKey, regionLabel,
+  REGIONS, COUNTRY_NAMES, KNOWN_PLACES, regionByKey, regionLabel, placeLabel,
 } from '../../../services/matching/want-regions';
 import { locationCountries } from '../../../services/matching/want-constraints';
 
@@ -140,6 +140,27 @@ describe('the region table', () => {
     expect(regionLabel('latin america')).toBe('Latin America');
     expect(regionLabel('germany')).toBeNull();
     expect(regionLabel('narnia')).toBeNull();
+  });
+});
+
+describe('the name a card prints after "in"', () => {
+  it.each([
+    ['bosnia and herzegovina', 'Bosnia and Herzegovina'], ['republic of the congo', 'Republic of the Congo'],
+    ["cote d'ivoire", "Cote d'Ivoire"], ['dr congo', 'DR Congo'], ['sao tome and principe', 'Sao Tome and Principe'],
+    ['united states', 'United States'], ['united kingdom', 'United Kingdom'], ['united arab emirates', 'United Arab Emirates'],
+    ['guinea-bissau', 'Guinea-Bissau'], ['timor-leste', 'Timor-Leste'], ['north macedonia', 'North Macedonia'],
+    ['new york', 'New York'], ['washington dc', 'Washington DC'], ['prince edward', 'Prince Edward Island'],
+    ['st gallen', 'St Gallen'], ['germany', 'Germany'],
+    // A region says what the member wrote.
+    ['europe', 'Europe'], ['dach', 'DACH'], ['nordics', 'the Nordics'], ['eu', 'the EU'],
+  ])('%s prints as %s', (key, shown) => {
+    expect(placeLabel(key)).toBe(shown);
+  });
+
+  it('keeps "and", "of" and "the" lowercase inside every country name the tables know', () => {
+    const names = new Set([...REGIONS.flatMap((r) => [...r.countries]), ...Object.keys(COUNTRY_NAMES)]);
+    const wrong = [...names].map(placeLabel).filter((shown) => / (And|Of|The) /.test(shown) || !/^[A-Z]/.test(shown));
+    expect(wrong).toEqual([]);
   });
 });
 
