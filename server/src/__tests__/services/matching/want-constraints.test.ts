@@ -1054,3 +1054,23 @@ describe('a region name is a place only after a location preposition', () => {
     expect(satisfies('founders in Asia and Africa', 'Austin, Texas')).toBe(false);
   });
 });
+
+// A rule that looks at the text before a name must look at a few words, not at everything before it: read with
+// the whole text, a long want full of region names or "Bay Area" took seconds (S4-b fix round 1).
+describe('a long text', () => {
+  const took = (fn: () => void) => { const t0 = Date.now(); fn(); return Date.now() - t0; };
+
+  it('is read in time proportional to its length', () => {
+    for (const text of [
+      'in the Nordics '.repeat(7000), 'Tampa Bay Area '.repeat(7000), 'founders in ' + 'Berlin, '.repeat(12000),
+      'founders in ' + 'Berlin and '.repeat(9000), 'Bay Area '.repeat(11000),
+    ]) expect(took(() => extractConstraints([text]))).toBeLessThan(1500);
+  });
+
+  it('is read in time proportional to its length when it is a person\'s location', () => {
+    const wants = extractConstraints(['founders in Europe', 'founders in the Bay Area']);
+    for (const location of ['Bay Area '.repeat(11000), 'San Francisco, '.repeat(7000) + 'CA', 'Tampa Bay Area, '.repeat(6000)]) {
+      expect(took(() => checkConstraints(wants, { location }))).toBeLessThan(1500);
+    }
+  });
+});

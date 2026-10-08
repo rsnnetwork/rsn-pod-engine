@@ -125,10 +125,16 @@ const EXTRA_COUNTRIES = new Set(Object.keys(COUNTRY_NAMES));
 export type NameKind = 'country' | 'region' | 'place' | 'decoy' | 'state' | 'city';
 export interface PlaceName {
   name: string; kind: NameKind; canon: string; country?: string;
-  /** The name is read only where this says so, given the text before it, the text after it and the name as written. */
+  /**
+   * The name is read only where this says so, given the text just before it, the text just after it (a few words
+   * of each, CHARS_AROUND_A_NAME characters at most) and the name as written.
+   */
   where?: (before: string, after: string, written: string) => boolean;
 }
 interface Scanner extends PlaceName { re: RegExp; length: number; first: string }
+
+/** How much of the text on each side of a name a `where` rule is shown: a text can be long, and a rule needs a few words. */
+const CHARS_AROUND_A_NAME = 64;
 
 /**
  * Every name to look for, longest first, and for each first word the positions in that order of the
@@ -169,8 +175,12 @@ const WORDS_BEFORE_THE_BAY_AREA: ReadonlySet<string> = new Set([
  * stricter reader, because a place in a want is a hard filter.
  */
 function followsAPlaceWord(before: string, alsoSmall: readonly string[] = []): boolean {
-  const word = /([\p{L}\p{N}]+)[ \t]+$/u.exec(before)?.[1]?.toLowerCase();
-  return !!word && !WORDS_BEFORE_THE_BAY_AREA.has(word) && !alsoSmall.includes(word);
+  const found = /([\p{L}\p{N}]+)[ \t]+$/u.exec(before);
+  if (!found) return false;
+  // a word as long as all the text we were shown may be the tail of a longer one, and is not a small word
+  if (found.index === 0 && before.length >= CHARS_AROUND_A_NAME) return true;
+  const word = found[1].toLowerCase();
+  return !WORDS_BEFORE_THE_BAY_AREA.has(word) && !alsoSmall.includes(word);
 }
 
 /**
@@ -285,7 +295,10 @@ function scan(text: string, scanners: Scanners): Found {
     const s = scanners.all[at];
     found.rest = found.rest.replace(s.re, (hit: string, lead: string, offset: number, whole: string) => {
       const written = hit.slice(lead.length);
-      if (s.where && !s.where(whole.slice(0, offset + lead.length), whole.slice(offset + hit.length), written)) return hit;
+      const start = offset + lead.length;
+      const end = offset + hit.length;
+      const around = [whole.slice(Math.max(0, start - CHARS_AROUND_A_NAME), start), whole.slice(end, end + CHARS_AROUND_A_NAME)] as const;
+      if (s.where && !s.where(around[0], around[1], written)) return hit;
       if (s.kind === 'decoy') return lead + ' '.repeat(written.length);
       if (s.kind === 'country') found.countries.add(s.canon);
       else if (s.kind === 'region') found.regions.add(s.canon);
