@@ -43,10 +43,10 @@ describe('the region table', () => {
     expect(problems).toEqual([]);
   });
 
-  it('marks the region names that are also ordinary words, and only those, as read after a preposition only', () => {
-    const marked = REGIONS.flatMap((r) => (r.afterPreposition ?? []).map((name) => ({ key: r.key, name })));
+  it('marks the region names that are also ordinary words, and only those, as needing a capital and no capitalised word after them', () => {
+    const marked = REGIONS.flatMap((r) => (r.ordinaryWords ?? []).map((name) => ({ key: r.key, name })));
     expect(marked.map((m) => m.name).sort()).toEqual(['dach', 'eu', 'gcc', 'mena', 'nordic']);
-    // Each is a name of its own region, so it is still read there, after a preposition.
+    // Each is a name of its own region, so it is still read there, after a preposition and with a capital letter.
     expect(marked.filter((m) => !regionByKey(m.key)!.names.includes(m.name))).toEqual([]);
   });
 

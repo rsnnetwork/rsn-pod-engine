@@ -430,6 +430,42 @@ describe('a region in the want finds the people who are there', () => {
     });
   });
 
+  // A region named in passing describes the work, not where the person must be (final review of release 6): in
+  // production none of these limited the list, and read anywhere each limited it to the people located there.
+  describe('a region mentioned in passing is not a place', () => {
+    const lagos = fintech('Tunde', 'Lagos, Nigeria');
+
+    it('leaves the person in Texas in the list, with no place on the card', () => {
+      for (const wants of [
+        [`${STACK} building for Asia and Africa`],
+        [STACK, 'Founders building for Asia and Africa'],
+        [`${STACK}, Middle East expansion partners`],
+        [STACK, 'Scandinavian design founders welcome'],
+        [`${STACK}, European fintech`],
+        [STACK, 'EU-based teams preferred'],
+      ]) {
+        for (const c of [austin, berlin, lagos]) {
+          const r = scoreWants(wants, c);
+          expect([wants, c.displayName, r.score >= MATCH_THRESHOLD]).toEqual([wants, c.displayName, true]);
+          expect(r.reason).not.toMatch(/\(in /);
+        }
+      }
+    });
+
+    it('does not hide the place the member did name: "in Europe" still filters, whatever else the fields say', () => {
+      const wants = [`${STACK} in Europe`, 'Building for Asia and Africa'];
+      expect(scoreWants(wants, berlin).reason).toMatch(/\(in Europe\)$/);
+      expect(scoreWants(wants, austin).score).toBe(0);
+      expect(scoreWants(wants, lagos).score).toBe(0);
+    });
+
+    it('is read after a preposition, in the fields as they are joined', () => {
+      const wants = [`${STACK} across Africa`, 'Seed round'];
+      expect(scoreWants(wants, lagos).reason).toMatch(/\(in Africa\)$/);
+      expect(scoreWants(wants, berlin).score).toBe(0);
+    });
+  });
+
   // "Fintech-Gründer in Köln oder Düsseldorf": one preposition, two cities. Only the first was read, so the
   // founder in Düsseldorf was filtered out and the member's For You was empty (final review of release 6).
   describe('a list of places after one preposition', () => {

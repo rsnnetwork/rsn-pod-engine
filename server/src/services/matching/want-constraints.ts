@@ -116,7 +116,11 @@ const EXTRA_COUNTRIES = new Set(Object.keys(COUNTRY_NAMES));
 // A state or a province names the country more firmly than a city does, and a country written out
 // names it most firmly of all (see placesNamedIn).
 export type NameKind = 'country' | 'region' | 'place' | 'decoy' | 'state' | 'city';
-export interface PlaceName { name: string; kind: NameKind; canon: string; country?: string }
+export interface PlaceName {
+  name: string; kind: NameKind; canon: string; country?: string;
+  /** The name is read only where this says so, given the text before it, the text after it and the name as written. */
+  where?: (before: string, after: string, written: string) => boolean;
+}
 interface Scanner extends PlaceName { re: RegExp; length: number; first: string }
 
 /**
@@ -171,12 +175,34 @@ const extraCountryNames: PlaceName[] = [
 const regionNames: PlaceName[] = REGIONS
   .flatMap((r) => r.names.map((name) => ({ name, kind: 'region' as const, canon: r.key })));
 
-// In a want: the alias table and the regions, read as the member wrote them. A want's other
-// countries are only places after "in", "from"… (see locationTerms), and so are the region names
-// that are also ordinary words ("GCC", "Mena", "Nordic", "Dach": Region.afterPreposition).
-const READ_ONLY_AFTER_A_PREPOSITION = new Set(REGIONS.flatMap((r) => r.afterPreposition ?? []));
+// The words that make a name a place a person is in or comes from. "based in" and "located in" end in "in".
+const LOCATION_PREPOSITIONS = String.raw`based in|located in|in|from|within|across|throughout|near`;
+const AFTER_A_LOCATION_PREPOSITION = new RegExp(String.raw`\b(?:${LOCATION_PREPOSITIONS})\s+(?:the\s+)?$`, 'i');
+
+// A region name in a want is a place only after a location preposition ("investors in Europe", "founders across
+// the Nordics"). Anywhere else it describes the work, not where the person must be: "founders building for Asia
+// and Africa", "Middle East expansion partners", "Scandinavian design founders", "EU-based founders". The names
+// that are also ordinary words ("GCC", "Mena", "Nordic", "Dach", "EU": Region.ordinaryWords) need a capital letter
+// as well, and no capitalised word after them ("in Nordic Semiconductor" is a company, "in the GCC" a region).
+const wantRegionNames: PlaceName[] = REGIONS.flatMap((r) => r.names.map((name) => {
+  const ordinary = (r.ordinaryWords ?? []).includes(name);
+  return {
+    name, kind: 'region' as const, canon: r.key,
+    where: (before: string, after: string, written: string) => AFTER_A_LOCATION_PREPOSITION.test(before)
+      && (!ordinary || (/^\p{Lu}/u.test(written) && !/^[ \t]+\p{Lu}/u.test(after))),
+  };
+}));
+
+// A region name with "America" in it that is not read as the region (no preposition before it) is set aside, not
+// left to be read as the United States: "Latin American fintech founders" has no place in it.
+const AMERICA_IS_NOT_THE_US: PlaceName[] = wantRegionNames
+  .filter((n) => /\bamerican?\b/.test(n.name))
+  .map((n) => ({ name: n.name, kind: 'decoy' as const, canon: '' }));
+
+// In a want: the alias table, the regions after a preposition, and the look-alikes, read as the member wrote
+// them. A want's other countries are only places after "in", "from"… (see locationTerms).
 const WANT_SCAN = compile(
-  [...countryNames, ...regionNames.filter((n) => !READ_ONLY_AFTER_A_PREPOSITION.has(n.name)), ...LOOK_ALIKES],
+  [...countryNames, ...wantRegionNames, ...AMERICA_IS_NOT_THE_US, ...LOOK_ALIKES],
   (s) => s.toLowerCase(),
 );
 // In a person's location: every country there is a name for, and every city, state and province
@@ -212,7 +238,8 @@ interface Found {
 
 /**
  * What scan() leaves in place of a name it has read, so that a name is read once ("Latin America" is not
- * also "America") and a place already read can still begin a list: "in Deutschland und Österreich".
+ * also "America") and a place already read can still begin a list: "in Deutschland und Österreich". A decoy
+ * is set aside with spaces instead: it is no place, so it begins no list.
  */
 const READ = '\uE000';
 
@@ -225,7 +252,10 @@ function scan(text: string, scanners: Scanners): Found {
   for (const word of new Set(text.toLowerCase().match(WORD) ?? [])) candidates.push(...(scanners.byFirstWord.get(word) ?? []));
   for (const at of candidates.sort((a, b) => a - b)) {
     const s = scanners.all[at];
-    found.rest = found.rest.replace(s.re, (hit: string, lead: string) => {
+    found.rest = found.rest.replace(s.re, (hit: string, lead: string, offset: number, whole: string) => {
+      const written = hit.slice(lead.length);
+      if (s.where && !s.where(whole.slice(0, offset + lead.length), whole.slice(offset + hit.length), written)) return hit;
+      if (s.kind === 'decoy') return lead + ' '.repeat(written.length);
       if (s.kind === 'country') found.countries.add(s.canon);
       else if (s.kind === 'region') found.regions.add(s.canon);
       else if (s.kind === 'place') found.places.add(s.canon);
@@ -282,7 +312,7 @@ const NAME_GOES_ON = String.raw`(?:(?<!\.)|(?<=\b(?:St|Ste|Mt|Ft|Pt)\.))[ \t]+`;
 // A place the scan has already read counts as a name here: it can begin a list, and it needs nothing more.
 const PLACE_ITEM = String.raw`(?:${READ}+|${NAME_WORD}(?:${NAME_GOES_ON}${NAME_WORD})?)`;
 const PLACE_AFTER_A_PREPOSITION = new RegExp(
-  String.raw`\b(in|based in|located in|from|within|near)\s+(?:the\s+)?(${PLACE_ITEM})`, 'gu',
+  String.raw`\b(${LOCATION_PREPOSITIONS})\s+(?:the\s+)?(${PLACE_ITEM})`, 'gu',
 );
 // A list goes on after a place: "Köln oder Düsseldorf", "Berlin, Munich and Hamburg", "Deutschland und der Schweiz".
 // What joins the items is a comma, "&", "/" or "and", "or", "und", "oder" (after a comma too), and an article may

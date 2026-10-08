@@ -40,10 +40,12 @@ export interface Region {
   /**
    * The names above that are also ordinary words ("GCC" is a compiler, "Mena" a first name, "Nordic"
    * a semiconductor company, "Dach" the German for roof, "EU" the first word of "EU regulation
-   * experts" and the Portuguese for "I"). A want reads them as this region only after a location
-   * preposition ("in the GCC"), like Jordan and Chad; a person's location always does.
+   * experts" and the Portuguese for "I"). A want reads every region name as the region only after a
+   * location preposition ("in Europe"); these also need a capital letter and no capitalised word after
+   * them ("in the GCC" is the region, "in GCC Steering" a company), like Jordan and Chad. A person's
+   * location always reads them.
    */
-  afterPreposition?: readonly string[];
+  ordinaryWords?: readonly string[];
   /** The countries in it, by canonical name. */
   countries: readonly string[];
 }
@@ -136,15 +138,15 @@ const NORTH_AMERICA = ['united states', 'canada', 'mexico'];
 export const REGIONS: readonly Region[] = [
   { key: 'europe', label: 'Europe', names: ['europe', 'european'], countries: EUROPE },
   {
-    key: 'eu', label: 'the EU', names: ['eu', 'e.u.', 'european union', 'eu-based'],
-    afterPreposition: ['eu'], countries: EUROPE,
+    key: 'eu', label: 'the EU', names: ['eu', 'e.u.', 'european union'],
+    ordinaryWords: ['eu'], countries: EUROPE,
   },
   { key: 'emea', label: 'EMEA', names: ['emea'], countries: [...new Set([...EUROPE, ...MIDDLE_EAST, ...AFRICA])] },
-  { key: 'dach', label: 'DACH', names: ['dach'], afterPreposition: ['dach'], countries: DACH },
+  { key: 'dach', label: 'DACH', names: ['dach'], ordinaryWords: ['dach'], countries: DACH },
   { key: 'benelux', label: 'Benelux', names: ['benelux'], countries: BENELUX },
   {
     key: 'nordics', label: 'the Nordics', names: ['nordics', 'nordic', 'nordic countries'],
-    afterPreposition: ['nordic'], countries: NORDICS,
+    ordinaryWords: ['nordic'], countries: NORDICS,
   },
   { key: 'scandinavia', label: 'Scandinavia', names: ['scandinavia', 'scandinavian'], countries: SCANDINAVIA },
   { key: 'baltics', label: 'the Baltics', names: ['baltics', 'baltic states', 'baltic countries'], countries: BALTICS },
@@ -154,11 +156,11 @@ export const REGIONS: readonly Region[] = [
   },
   { key: 'middle east', label: 'the Middle East', names: ['middle east', 'middle-east'], countries: MIDDLE_EAST },
   {
-    key: 'mena', label: 'MENA', countries: MENA, afterPreposition: ['mena'],
+    key: 'mena', label: 'MENA', countries: MENA, ordinaryWords: ['mena'],
     names: ['mena', 'middle east and north africa', 'middle east & north africa'],
   },
   {
-    key: 'gcc', label: 'the GCC', countries: GCC, afterPreposition: ['gcc'],
+    key: 'gcc', label: 'the GCC', countries: GCC, ordinaryWords: ['gcc'],
     names: ['gcc', 'gulf states', 'gulf countries', 'gulf cooperation council'],
   },
   { key: 'africa', label: 'Africa', names: ['africa'], countries: AFRICA },

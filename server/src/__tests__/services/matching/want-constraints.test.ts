@@ -103,7 +103,6 @@ const satisfies = (want: string, location: string | null) =>
 describe('a region in a want', () => {
   it('is read as one place, named as the region', () => {
     expect(placesIn(DEMO_WANT)).toEqual(['europe']);
-    expect(placesIn('European fintech founders')).toEqual(['europe']);
     expect(placesIn('founders in the EU')).toEqual(['eu']);
     expect(placesIn('founders in the European Union')).toEqual(['eu']);
     expect(placesIn('founders in the DACH region')).toEqual(['dach']);
@@ -147,8 +146,9 @@ describe('a region in a want', () => {
 // "gcc", "mena", the singular "nordic" and "dach" are also a compiler, a first name, a semiconductor
 // company and the German word for roof. Each match is a hard place filter (everyone outside the region
 // scores 0, and the never-empty fallback never widens place), so they are read as a place only after a
-// location preposition, the rule the module already uses for Jordan and Chad. The names nothing else
-// is called (Europe, Latin America, ...) are still read anywhere.
+// location preposition, the rule the module already uses for Jordan and Chad. Every other region name
+// needs the preposition too (see "a region name is a place only after a location preposition"); these
+// five also need a capital letter, and no capitalised word after them ("in Nordic Semiconductor").
 describe('a region name that is also an ordinary word', () => {
   it('is not a place when the want merely contains it', () => {
     // locationTerms lists candidates ("from Acme" is one); extractConstraints keeps the ones that are places.
@@ -187,13 +187,14 @@ describe('a region name that is also an ordinary word', () => {
     expect(satisfies('partners in the Nordics', 'Helsinki, Finland')).toBe(true);
   });
 
-  it('leaves the names nothing else is called readable anywhere in the want', () => {
-    expect(placesIn('Latin America fintech founders')).toEqual(['latin america']);
-    expect(placesIn('European fintech founders')).toEqual(['europe']);
-    expect(placesIn('Benelux founders')).toEqual(['benelux']);
-    expect(placesIn('APAC founders')).toEqual(['apac']);
-    expect(placesIn('Scandinavia-based founders')).toEqual(['scandinavia']);
-    expect(placesIn('the Nordics are my market')).toEqual(['nordics']);
+  it('needs a capital letter and no capitalised word after it, which the other region names do not', () => {
+    for (const want of ['experts in gcc internals', 'people in dach', 'suppliers in GCC Steering', 'founders in mena']) {
+      expect([want, extractConstraints([want]).location]).toEqual([want, null]);
+    }
+    expect(placesIn('experts in GCC internals')).toEqual(['gcc']);
+    // the others are read in lowercase, and before a capitalised word
+    expect(placesIn('investors in europe')).toEqual(['europe']);
+    expect(placesIn('investors in Europe Series A')).toEqual(['europe']);
   });
 });
 
@@ -282,7 +283,8 @@ describe('"the Bay Area"', () => {
 
 // "eu" is the Portuguese for "I" and the first word of every "EU regulation experts" want, so like
 // GCC and MENA it is a place only after a location preposition ("in the EU", "from the EU", "based in
-// the EU"). "E.U.", "the European Union" and "EU-based" cannot be anything else and are read anywhere.
+// the EU"). "E.U." and "the European Union" are the same after one, and like every region name they
+// are not a place anywhere else: "EU-based founders" has no place in it.
 describe('"EU" in a want', () => {
   it('is not a place when the want merely contains it', () => {
     for (const want of [
@@ -299,11 +301,13 @@ describe('"EU" in a want', () => {
     ]) expect([want, extractConstraints([want]).location]).toEqual([want, ['eu']]);
   });
 
-  it('is read in the forms nothing else is called, anywhere', () => {
-    expect(extractConstraints(['EU-based founders']).location).toEqual(['eu']);
+  it('is read as "E.U." and "the European Union" after a preposition, and nowhere else', () => {
     expect(extractConstraints(['founders in the European Union']).location).toEqual(['eu']);
-    expect(extractConstraints(['E.U. founders']).location).toEqual(['eu']);
-    expect(extractConstraints(['European Union regulators']).location).toEqual(['eu']);
+    expect(extractConstraints(['founders from the European Union']).location).toEqual(['eu']);
+    expect(extractConstraints(['founders in the E.U.']).location).toEqual(['eu']);
+    for (const want of ['EU-based founders', 'E.U. founders', 'European Union regulators', 'founders for the European Union']) {
+      expect([want, extractConstraints([want]).location]).toEqual([want, null]);
+    }
   });
 
   it('still takes the people in Europe when it is a place', () => {
@@ -414,7 +418,7 @@ describe('a region is satisfied by a country inside it', () => {
   it('"the EU", "the European Union" and "Europe" are one region, and the card says the one the member wrote', () => {
     expect(extractConstraints(['founders in the EU']).location).toEqual(['eu']);
     expect(extractConstraints(['founders in the European Union']).location).toEqual(['eu']);
-    expect(extractConstraints(['European founders']).location).toEqual(['europe']);
+    expect(extractConstraints(['founders in European cities']).location).toEqual(['europe']);
     for (const location of ['Berlin, Germany', 'London, UK', 'Zurich, Switzerland', 'Oslo, Norway', 'Kyiv, Ukraine']) {
       expect(satisfies('founders in the EU', location)).toBe(satisfies('founders in Europe', location));
     }
@@ -857,6 +861,9 @@ describe('a list of places after one preposition', () => {
     expect(placesIn_('investors in Narnia and Berlin')).toEqual([]);
     expect(placesIn_('investors in Narnia, Berlin and Munich')).toEqual([]);
     expect(placesIn_('investors in Fintech and Berlin')).toEqual([]);
+    // a name set apart from the countries inside it ("New England" is not England) is not a place either
+    expect(placesIn_('investors in New England and Berlin')).toEqual([]);
+    expect(placesIn_('investors in Nordic Semiconductor and Berlin')).toEqual([]);
   });
 
   it('drops an item the code does not know and goes on with the next', () => {
@@ -890,5 +897,78 @@ describe('a list of places after one preposition', () => {
   it('reads a region in a list, and a possessive is still a person or an organisation', () => {
     expect(placesIn_('founders in Berlin and the Nordics')).toEqual(['berlin', 'nordics']);
     expect(placesIn_("founders in Berlin and Munich's best startups")).toEqual(['berlin']);
+  });
+});
+
+// ─── A region name is a place only after a location preposition (8 Oct 2026, final review) ──
+//
+// "Founders building for Asia and Africa", "Middle East expansion partners" and "Scandinavian design founders" name
+// a region in passing: it describes the work, not where the person must be, and none of them limited the list in
+// production. Read anywhere, each limited it to the people located there. A region, written as a noun or as an
+// adjective, is a place only after in, from, based in, located in, within, across, throughout or near.
+describe('a region name is a place only after a location preposition', () => {
+  const read = (want: string) => [...(extractConstraints([want]).location ?? [])].sort();
+
+  it.each([
+    ['investors in Europe', 'europe'],
+    ['founders across the Nordics', 'nordics'],
+    ['founders based in DACH', 'dach'],
+    ['founders from Latin America', 'latin america'],
+    ['partners located in the Middle East', 'middle east'],
+    ['buyers within the GCC', 'gcc'],
+    ['sellers throughout Africa', 'africa'],
+    ['suppliers near the Baltics', 'baltics'],
+    ['founders in Southeast Asia', 'southeast asia'],
+    ['founders in Scandinavia', 'scandinavia'],
+    ['founders in APAC', 'apac'],
+    ['founders in EMEA', 'emea'],
+    ['startups in North America', 'north america'],
+    ['investors in the UK and Ireland', 'uk and ireland'],
+    ['investors in the Middle East and North Africa', 'mena'],
+    ['investors in European cities', 'europe'],
+    ['founders in Latin American markets', 'latin america'],
+    ['founders in Nordic countries', 'nordics'],
+    ['experts in EU markets', 'eu'],
+    ['investors in europe', 'europe'],
+    ['founders in the nordics', 'nordics'],
+    ['founders In Europe', 'europe'],
+  ])('reads "%s" as %s, alone and beside another field', (want, region) => {
+    expect([want, read(want)]).toEqual([want, [region]]);
+    expect([want, [...(extractConstraints([want, NEXT_FIELD]).location ?? [])]]).toEqual([want, [region]]);
+    expect([want, [...(extractConstraints([NEXT_FIELD, want]).location ?? [])]]).toEqual([want, [region]]);
+  });
+
+  it.each([
+    'European founders', 'Middle East expansion partners', 'founders building for Asia and Africa', 'Scandinavian design founders',
+    'EU-based founders', 'Latin American fintech founders', 'Latin America fintech founders', 'Nordic design studios',
+    'APAC expansion experts', 'Benelux founders', 'Scandinavia-based founders', 'the Nordics are my market',
+    'expanding into Europe', 'selling to MENA', 'a founder who sold to GCC governments', 'African diaspora founders in tech',
+    'North American founders', 'DACH sales leaders', 'growth partners for EMEA', 'Baltic states startups',
+    'European Union regulators', 'Gulf states procurement experts',
+  ])('does not read a place in "%s", alone or beside another field', (want) => {
+    expect([want, extractConstraints([want]).location]).toEqual([want, null]);
+    expect([want, extractConstraints([want, NEXT_FIELD]).location]).toEqual([want, null]);
+    expect([want, extractConstraints([NEXT_FIELD, want]).location]).toEqual([want, null]);
+  });
+
+  it('does not let a preposition at the end of one field reach the region that starts the next', () => {
+    expect(extractConstraints(['Founders based in', 'Europe is my target market']).location).toBeNull();
+    expect(extractConstraints(['Founders in', 'Asia and Africa interest me']).location).toBeNull();
+  });
+
+  it('reads the regions of a list that follows the preposition, and only those', () => {
+    expect(read('founders in Asia and Africa')).toEqual(['africa', 'asia']);
+    expect(read('partners based in Europe, the Middle East and Africa')).toEqual(['africa', 'europe', 'middle east']);
+    expect(read('investors in Germany or the Nordics')).toEqual(['germany', 'nordics']);
+    expect(read('investors in the Nordics and Benelux')).toEqual(['benelux', 'nordics']);
+    expect(read('founders in Europe building for Asia and Africa')).toEqual(['europe']);
+  });
+
+  it('keeps a person in the region found, and a person outside it out', () => {
+    expect(satisfies('founders building for Asia and Africa', 'Austin, Texas')).toBeNull();
+    expect(satisfies('Middle East expansion partners', 'Austin, Texas')).toBeNull();
+    expect(satisfies('Scandinavian design founders', 'Austin, Texas')).toBeNull();
+    expect(satisfies('founders in Asia and Africa', 'Lagos, Nigeria')).toBe(true);
+    expect(satisfies('founders in Asia and Africa', 'Austin, Texas')).toBe(false);
   });
 });
