@@ -1,5 +1,5 @@
 // Foundation S10 and the v4 prototype's outcome modal: was it worth continuing, and what came of it.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { OUTCOME_KEYS, OUTCOME_LABELS, type OutcomeKey, type WorthContinuing } from '@rsn/shared';
 import { cn } from '@/lib/utils';
@@ -24,6 +24,7 @@ export default function OutcomeSheet({ person, onClose }: Props) {
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const personId = person?.userId ?? null;
+  const hintId = useId();
   const errorLine = useRef<HTMLParagraphElement>(null);
   const [worth, setWorth] = useState<WorthContinuing | null>(null);
   const [picked, setPicked] = useState<OutcomeKey[]>([]);
@@ -72,6 +73,9 @@ export default function OutcomeSheet({ person, onClose }: Props) {
   });
   // Only this person's save keeps the button waiting.
   const pending = save.isPending && save.variables?.userId === personId;
+  // The hint under "Worth continuing?". While it shows it is also the Save button's description: the button is in the
+  // footer and the hint in the body, so a screen reader that lands on the dimmed button would otherwise hear no reason.
+  const hintShown = !worth;
 
   const choose = (key: WorthContinuing) => { setWorth(key); setError(null); };
   // "Nothing yet" says nothing came of it, so it cannot sit beside another outcome: choosing it clears the
@@ -98,7 +102,7 @@ export default function OutcomeSheet({ person, onClose }: Props) {
       footer={(
         <>
           <button type="button" onClick={onClose} className={CANCEL}>Cancel</button>
-          <button type="button" onClick={submit} disabled={!worth || pending} className={SAVE}>
+          <button type="button" onClick={submit} disabled={!worth || pending} aria-describedby={hintShown ? hintId : undefined} className={SAVE}>
             {pending ? 'Saving…' : 'Save outcome'}
           </button>
         </>
@@ -114,7 +118,7 @@ export default function OutcomeSheet({ person, onClose }: Props) {
             </button>
           ))}
         </div>
-        {!worth && <p className="mt-1.5 text-[11px] text-reason-muted">Choose an answer first.</p>}
+        {hintShown && <p id={hintId} className="mt-1.5 text-[11px] text-reason-muted">Choose an answer first.</p>}
       </fieldset>
       <fieldset className="mt-4">
         <legend className="text-[12px] font-bold">What came from the conversation?</legend>

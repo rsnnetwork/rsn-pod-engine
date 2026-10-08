@@ -22,6 +22,7 @@ export default function MeetSheet({ person, onClose }: Props) {
   const addToast = useToastStore((s) => s.addToast);
   const personId = person?.userId ?? null;
   const counterId = useId();
+  const hintId = useId();
   const errorLine = useRef<HTMLParagraphElement>(null);
   const [note, setNote] = useState(DEFAULT_NOTE);
   const [format, setFormat] = useState<MeetingFormat>(DEFAULT_FORMAT);
@@ -81,6 +82,9 @@ export default function MeetSheet({ person, onClose }: Props) {
   const length = note.trim().length;
   const over = length > MEET_NOTE_MAX;
   const invalid = length === 0 || over;
+  // The hint under the counter. While it shows it is also the Send button's description: the button is in the footer
+  // and the hint in the body, so a screen reader that lands on the dimmed button would otherwise hear no reason.
+  const hintShown = length === 0;
   const submit = () => {
     if (!person || inFlight.current.has(person.userId) || invalid) return;
     inFlight.current.add(person.userId);
@@ -96,7 +100,7 @@ export default function MeetSheet({ person, onClose }: Props) {
       footer={(
         <>
           <button type="button" onClick={onClose} className={CANCEL}>Cancel</button>
-          <button type="button" onClick={submit} disabled={pending || invalid} className={SEND}>
+          <button type="button" onClick={submit} disabled={pending || invalid} aria-describedby={hintShown ? hintId : undefined} className={SEND}>
             {pending ? 'Sending…' : 'Send request'}
           </button>
         </>
@@ -114,7 +118,7 @@ export default function MeetSheet({ person, onClose }: Props) {
         />
       </label>
       <p id={counterId} className={cn('mt-1 text-[11px]', over ? 'text-reason-red' : 'text-reason-muted')}>{length} / {MEET_NOTE_MAX}</p>
-      {length === 0 && <p className="mt-1 text-[11px] text-reason-muted">Write a short note first.</p>}
+      {hintShown && <p id={hintId} className="mt-1 text-[11px] text-reason-muted">Write a short note first.</p>}
       <label className="mt-3 grid gap-1.5 text-[12px] font-bold">
         Preferred format
         <select

@@ -109,7 +109,7 @@ describe('REASON sheets: each control is wired to what it says', () => {
     expect(src).toContain('const pending = send.isPending && send.variables?.userId === personId;');
     expect(src).toContain('if (!person || inFlight.current.has(person.userId) || invalid) return;');
     expect(src).toContain('<button type="button" onClick={onClose} className={CANCEL}>Cancel</button>');
-    expect(src).toContain('<button type="button" onClick={submit} disabled={pending || invalid} className={SEND}>');
+    expect(src).toContain('<button type="button" onClick={submit} disabled={pending || invalid} aria-describedby={hintShown ? hintId : undefined} className={SEND}>');
     expect(src).toContain("{pending ? 'Sending…' : 'Send request'}");
     expect(src).toContain('value={note}');
     expect(src).toContain('value={format}');
@@ -120,7 +120,7 @@ describe('REASON sheets: each control is wired to what it says', () => {
     expect(src).toContain('const pending = save.isPending && save.variables?.userId === personId;');
     expect(src).toContain('if (!person || !worth || inFlight.current.has(person.userId)) return;');
     expect(src).toContain('<button type="button" onClick={onClose} className={CANCEL}>Cancel</button>');
-    expect(src).toContain('<button type="button" onClick={submit} disabled={!worth || pending} className={SAVE}>');
+    expect(src).toContain('<button type="button" onClick={submit} disabled={!worth || pending} aria-describedby={hintShown ? hintId : undefined} className={SAVE}>');
     expect(src).toContain("{pending ? 'Saving…' : 'Save outcome'}");
     expect(src).toContain('aria-pressed={worth === w.key} onClick={() => choose(w.key)} className={chip(worth === w.key)}');
     expect(src).toContain('aria-pressed={picked.includes(k)} onClick={() => toggle(k)} className={chip(picked.includes(k))}');
@@ -183,11 +183,36 @@ describe('REASON sheets: a failure keeps what the member entered', () => {
 describe('REASON sheets: a disabled button says why', () => {
   // Inline, in the same muted small type as the counter: not a toast.
   it('an empty note says "Write a short note first."', () => {
-    expect(flat('MeetSheet')).toContain('{length === 0 && <p className="mt-1 text-[11px] text-reason-muted">Write a short note first.</p>}');
+    expect(flat('MeetSheet')).toContain('{hintShown && <p id={hintId} className="mt-1 text-[11px] text-reason-muted">Write a short note first.</p>}');
   });
 
   it('no answer to "Worth continuing?" says "Choose an answer first."', () => {
-    expect(flat('OutcomeSheet')).toContain('{!worth && <p className="mt-1.5 text-[11px] text-reason-muted">Choose an answer first.</p>}');
+    expect(flat('OutcomeSheet')).toContain('{hintShown && <p id={hintId} className="mt-1.5 text-[11px] text-reason-muted">Choose an answer first.</p>}');
+  });
+
+  // The hint sits in the sheet's body and the button in its footer, so a screen reader that lands on the dimmed button
+  // heard only "unavailable". aria-describedby makes the hint its description, for as long as the hint is there.
+  it('each hint is the description of its button, through an id from useId, while the hint shows and not after', () => {
+    for (const [sheet, hintShownIf, button] of [['MeetSheet', 'length === 0', 'SEND'], ['OutcomeSheet', '!worth', 'SAVE']]) {
+      const src = flat(sheet);
+      expect(src).toMatch(/import \{[^}]*\buseId\b[^}]*\} from 'react'/);
+      expect(src).toContain('const hintId = useId();');
+      // One condition decides whether the hint is drawn and whether the button points at it, so the pointer cannot outlive the hint.
+      expect(src).toContain(`const hintShown = ${hintShownIf};`);
+      expect(src.match(/\bhintShown\b/g)).toHaveLength(3);
+      expect(src.match(/\bid=\{hintId\}/g)).toHaveLength(1);
+      expect(src.match(/\baria-describedby=\{hintShown \? hintId : undefined\}/g)).toHaveLength(1);
+      // The pointer is on the button that is disabled for that reason, and nowhere else.
+      expect(src).toMatch(new RegExp(`<button type="button" onClick=\\{submit\\} disabled=\\{[^}]*\\} aria-describedby=\\{hintShown \\? hintId : undefined\\} className=\\{${button}\\}>`));
+    }
+  });
+
+  it('the Meet sheet\'s two ids are two ids: the counter still describes the note, and the hint is not the counter', () => {
+    const src = flat('MeetSheet');
+    expect(src).toContain('const counterId = useId();');
+    expect(src).toContain('aria-describedby={counterId}');
+    expect(src).toContain('<p id={counterId} className={cn(');
+    expect(src).not.toMatch(/id=\{hintId\} className=\{cn\(/);
   });
 });
 
