@@ -206,9 +206,15 @@ interface Found {
   cityCountries: Set<string>;
   /** True when a place was found that several countries have ("Cambridge"), so it names no country. */
   sharedName: boolean;
-  /** The text with everything found blanked out. */
+  /** The text with everything found replaced by READ characters. */
   rest: string;
 }
+
+/**
+ * What scan() leaves in place of a name it has read, so that a name is read once ("Latin America" is not
+ * also "America") and a place already read can still begin a list: "in Deutschland und Österreich".
+ */
+const READ = '\uE000';
 
 function scan(text: string, scanners: Scanners): Found {
   const found: Found = {
@@ -228,7 +234,7 @@ function scan(text: string, scanners: Scanners): Found {
         if (s.country) (s.kind === 'state' ? found.stateCountries : found.cityCountries).add(s.country);
         else found.sharedName = true;
       }
-      return lead + ' '.repeat(hit.length - lead.length);
+      return lead + READ.repeat(hit.length - lead.length);
     });
   }
   return found;
@@ -273,8 +279,16 @@ const placeNamed = (word: string): string | undefined =>
 // only, never a line break.
 const NAME_WORD = String.raw`\p{Lu}[\p{L}.]+(?:-\p{Lu}[\p{L}.]+)*`;
 const NAME_GOES_ON = String.raw`(?:(?<!\.)|(?<=\b(?:St|Ste|Mt|Ft|Pt)\.))[ \t]+`;
+// A place the scan has already read counts as a name here: it can begin a list, and it needs nothing more.
+const PLACE_ITEM = String.raw`(?:${READ}+|${NAME_WORD}(?:${NAME_GOES_ON}${NAME_WORD})?)`;
 const PLACE_AFTER_A_PREPOSITION = new RegExp(
-  String.raw`\b(in|based in|located in|from|within|near)\s+(?:the\s+)?(${NAME_WORD}(?:${NAME_GOES_ON}${NAME_WORD})?)`, 'gu',
+  String.raw`\b(in|based in|located in|from|within|near)\s+(?:the\s+)?(${PLACE_ITEM})`, 'gu',
+);
+// A list goes on after a place: "Köln oder Düsseldorf", "Berlin, Munich and Hamburg", "Deutschland und der Schweiz".
+// What joins the items is a comma, "&", "/" or "and", "or", "und", "oder" (after a comma too), and an article may
+// come before an item.
+const ANOTHER_PLACE = new RegExp(
+  String.raw`(?:\s*[,&/]\s*(?:(?:and|or|und|oder)\s+)?|\s+(?:and|or|und|oder)\s+)(?:(?:the|der|die|den|dem)\s+)?(${PLACE_ITEM})`, 'uy',
 );
 
 /** The words that only finish the name of a place: "New York City", "Prince Edward Island", "Kansas State". */
@@ -286,11 +300,63 @@ function finishesAPlace(after: string): boolean {
   return !!next && (PLACE_TYPE_WORDS.has(next) || (next.length === 2 && REGION_CODES.has(next.toLowerCase())));
 }
 
+/** "Jordan Smith's network", "Austin Russell's": a possessive is a person or an organisation, not a place. */
+const isPossessive = (after: string): boolean => /^['’]s\b/.test(after);
+
+/**
+ * Read the name captured after a preposition into `out`, as a place or as a candidate that
+ * extractConstraints will throw away. True when the name is a place the code knows, so that a list
+ * ("Köln oder Düsseldorf") may go on after it.
+ */
+function readName(preposition: string, name: string, after: string, out: Set<string>): boolean {
+  if (isPossessive(after)) return false;
+  // Compare without dots so "U.K." and "U.S." resolve to their country, not
+  // to a phantom city called "u.k". Folded, so "Köln" is the "koln" the table knows.
+  const key = fold(name.replace(/\./g, ''));
+  const words = key.split(' ');
+  // After "from", a capital letter that goes on is the rest of a name: "Palo Alto Networks", "Zurich Insurance"
+  // (unless the capture ended the sentence: "from Berlin. Investors welcome", "from the EU. Raise a seed round",
+  // or it is a place the code knows and the word only finishes it: "from New York City", "from Los Angeles CA").
+  if (preposition === 'from' && !name.endsWith('.') && /^[ \t]+\p{Lu}/u.test(after) && !(nameOf(key) && finishesAPlace(after))) return false;
+  // "The Bahamas" starts with a word that is no place, and is one.
+  if (!key || (NOT_PLACES.has(words[0]) && !nameOf(key))) return false;
+  if (key === 'us' || key === 'usa') { out.add('united states'); return true; }
+  let canon = nameOf(key);
+  // A short capitalised word is rarely a place ("in IT", "from AI"), unless it is a name the code knows ("in the EU").
+  if (key.length < 3 && !canon) return false;
+  // "in Berlin Mitte", "in Austin Texas": two capitalised words that are not a place together but
+  // start with one. After "from" the pair is as often a company or a school ("from Boston Consulting
+  // Group"), so there only a place that stands alone counts, or one name joined by a hyphen ("from Berlin-Mitte").
+  if (!canon && words.length > 1 && (preposition !== 'from' || !/[ \t]/.test(name))) canon = placeNamed(words[0]);
+  out.add(canon ?? key); // known country or region; anything else is a city or an unknown place
+  return canon !== undefined;
+}
+
+/**
+ * Read the places a list goes on with after its first, from `start`, and return where the list ends. An item is
+ * taken as the whole name it is and nothing else: not by its first word, as the first place after a preposition
+ * is ("in Berlin and Jordan Smith" is not Jordan), and an item the code does not know is dropped.
+ */
+function readTheRestOfTheList(rest: string, start: number, out: Set<string>): number {
+  let end = start;
+  for (;;) {
+    ANOTHER_PLACE.lastIndex = end;
+    const next = ANOTHER_PLACE.exec(rest);
+    if (!next) return end;
+    end = ANOTHER_PLACE.lastIndex;
+    if (next[1].startsWith(READ) || isPossessive(rest.slice(end))) continue;
+    const key = fold(next[1].replace(/\./g, ''));
+    const canon = key === 'us' || key === 'usa' ? 'united states' : nameOf(key);
+    if (canon) out.add(canon);
+  }
+}
+
 /**
  * Canonical place terms mentioned in free text: country aliases and region
  * names (whole-word), plus capitalised words after "in / based in / located
- * in / from / within / near" so cities work ("in London" → "london"). "US" is
- * only a country when written in capitals or after a location preposition —
+ * in / from / within / near" so cities work ("in London" → "london"), and the
+ * places a list goes on with after the first ("in Köln oder Düsseldorf"). "US"
+ * is only a country when written in capitals or after a location preposition —
  * lowercase "us" is a pronoun ("help us").
  *
  * Not everything after a preposition is a place ("in SaaS", "from Google"), so
@@ -308,28 +374,8 @@ export function locationTerms(written: string | null | undefined): string[] {
   prepRe.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = prepRe.exec(rest)) !== null) {
-    const after = rest.slice(prepRe.lastIndex);
-    // "Jordan Smith's network", "Austin Russell's": a possessive is a person or an organisation, not a place.
-    if (/^['’]s\b/.test(after)) continue;
-    // Compare without dots so "U.K." and "U.S." resolve to their country, not
-    // to a phantom city called "u.k". Folded, so "Köln" is the "koln" the table knows.
-    const key = fold(m[2].replace(/\./g, ''));
-    const words = key.split(' ');
-    // After "from", a capital letter that goes on is the rest of a name: "Palo Alto Networks", "Zurich Insurance"
-    // (unless the capture ended the sentence: "from Berlin. Investors welcome", "from the EU. Raise a seed round",
-    // or it is a place the code knows and the word only finishes it: "from New York City", "from Los Angeles CA").
-    if (m[1] === 'from' && !m[2].endsWith('.') && /^[ \t]+\p{Lu}/u.test(after) && !(nameOf(key) && finishesAPlace(after))) continue;
-    // "The Bahamas" starts with a word that is no place, and is one.
-    if (!key || (NOT_PLACES.has(words[0]) && !nameOf(key))) continue;
-    if (key === 'us' || key === 'usa') { out.add('united states'); continue; }
-    let canon = nameOf(key);
-    // A short capitalised word is rarely a place ("in IT", "from AI"), unless it is a name the code knows ("in the EU").
-    if (key.length < 3 && !canon) continue;
-    // "in Berlin Mitte", "in Austin Texas": two capitalised words that are not a place together but
-    // start with one. After "from" the pair is as often a company or a school ("from Boston Consulting
-    // Group"), so there only a place that stands alone counts, or one name joined by a hyphen ("from Berlin-Mitte").
-    if (!canon && words.length > 1 && (m[1] !== 'from' || !/[ \t]/.test(m[2]))) canon = placeNamed(words[0]);
-    out.add(canon ?? key); // known country or region; anything else is a city or an unknown place
+    const known = m[2].startsWith(READ) || readName(m[1], m[2], rest.slice(prepRe.lastIndex), out);
+    if (known) prepRe.lastIndex = readTheRestOfTheList(rest, prepRe.lastIndex, out);
   }
   for (const p of places) out.add(p);
   for (const r of regions) out.add(r);

@@ -430,6 +430,48 @@ describe('a region in the want finds the people who are there', () => {
     });
   });
 
+  // "Fintech-Gründer in Köln oder Düsseldorf": one preposition, two cities. Only the first was read, so the
+  // founder in Düsseldorf was filtered out and the member's For You was empty (final review of release 6).
+  describe('a list of places after one preposition', () => {
+    const founderAt = (name: string, location: string) => fintech(name, location, { expertiseText: 'Fintech Gründer, Zahlungsverkehr' });
+    const dieter = founderAt('Dieter', 'Düsseldorf, Germany');
+    const kai = founderAt('Kai', 'Köln, Germany');
+    const elke = founderAt('Elke', 'Essen, Germany');
+    const FIELDS = ['Fintech-Gründer in Köln oder Düsseldorf', 'Raise a seed round for my payments startup'];
+
+    it('control: without the place, the founders in Düsseldorf and Essen are both matches', () => {
+      for (const c of [dieter, kai, elke]) {
+        expect(scoreWants(['Fintech-Gründer', 'Raise a seed round for my payments startup'], c).score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+      }
+    });
+
+    it('takes the founder in Düsseldorf and the one in Köln, and not the one in Essen', () => {
+      for (const wants of [['Fintech-Gründer in Köln oder Düsseldorf'], FIELDS, [FIELDS[1], FIELDS[0]]]) {
+        expect(scoreWants(wants, dieter).score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+        expect(scoreWants(wants, dieter).reason).toMatch(/\(in Dusseldorf\)$/);
+        expect(scoreWants(wants, kai).score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+        expect(scoreWants(wants, kai).reason).toMatch(/\(in Cologne\)$/);
+        expect(scoreWants(wants, elke).score).toBe(0);
+        expect(scoreWants(wants, austin).score).toBe(0);
+      }
+    });
+
+    it('says the same to the member who is found', () => {
+      expect(scoreWantsForRecipient(FIELDS, dieter, 'Ali').reason).toMatch(/\(in Dusseldorf\)$/);
+      expect(scoreWantsForRecipient(FIELDS, elke, 'Ali').score).toBe(0);
+    });
+
+    it('works in English with three cities, and the last one is as good as the first', () => {
+      const wants = [`${STACK} in Berlin, Munich and Hamburg`, 'Raise a seed round'];
+      for (const [name, location, shown] of [['Anna', 'Berlin, Germany', 'Berlin'], ['Max', 'München, Germany', 'Munich'], ['Hanna', 'Hamburg', 'Hamburg']]) {
+        const r = scoreWants(wants, fintech(name, location));
+        expect([name, r.score >= MATCH_THRESHOLD]).toEqual([name, true]);
+        expect(r.reason).toMatch(new RegExp(`\\(in ${shown}\\)$`));
+      }
+      expect(scoreWants(wants, fintech('Frieda', 'Frankfurt, Germany')).score).toBe(0);
+    });
+  });
+
   describe('what the reason may say', () => {
     // The place in the note is the member's OWN word, never the candidate's location; the
     // candidate's private fields never reach it, with a region as with anything else.

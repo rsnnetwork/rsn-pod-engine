@@ -810,3 +810,85 @@ describe('after "from", a place the code knows is taken whole', () => {
     expect(extractConstraints(['Investors in Palo Alto or in Austin']).location).toEqual(['austin']);
   });
 });
+
+// ─── A list of places after one preposition (8 Oct 2026, final review) ────────
+//
+// "Gründer in Köln oder Düsseldorf", "investors in Berlin, Munich and Hamburg": one preposition, several places.
+// Only the first was read, so a member who named two cities was shown the people of the first one only, and the
+// member whose second city was the one that matched saw an empty list. Places in a want are alternatives: a person
+// in any of them satisfies it, so reading the whole list can only add people.
+describe('a list of places after one preposition', () => {
+  const placesIn_ = (...fields: string[]) => [...(extractConstraints(fields).location ?? [])].sort();
+
+  it.each([
+    ['Gründer in Köln oder Düsseldorf', ['cologne', 'dusseldorf']],
+    ['Investoren in Düsseldorf und Köln', ['cologne', 'dusseldorf']],
+    ['Startups in Zürich oder Wien', ['vienna', 'zurich']],
+    ['founders in Düsseldorf, Cologne or Essen', ['cologne', 'dusseldorf', 'essen']],
+    ['investors in Berlin, Munich and Hamburg', ['berlin', 'hamburg', 'munich']],
+    ['investors in Berlin, Munich, and Hamburg', ['berlin', 'hamburg', 'munich']],
+    ['investors in Berlin / Munich / Hamburg', ['berlin', 'hamburg', 'munich']],
+    ['investors in Berlin & Munich', ['berlin', 'munich']],
+    ['investors from Berlin or Munich', ['berlin', 'munich']],
+    ['investors based in Berlin and Munich', ['berlin', 'munich']],
+    ['investors in Austin or Boston', ['austin', 'boston']],
+    ['Investoren in Deutschland und Österreich', ['austria', 'germany']],
+    ['Investoren in Deutschland, Österreich und der Schweiz', ['austria', 'germany', 'switzerland']],
+    ['investors in Berlin and the Netherlands', ['berlin', 'netherlands']],
+  ])('reads every place in "%s"', (want, expected) => {
+    expect([want, placesIn_(want)]).toEqual([want, expected]);
+    // the matcher joins the fields: the list is the same with another field after it and before it
+    expect([want, placesIn_(want, NEXT_FIELD)]).toEqual([want, expected]);
+    expect([want, placesIn_(NEXT_FIELD, want)]).toEqual([want, expected]);
+  });
+
+  it('is satisfied by a person in any of the places, and by nobody else', () => {
+    const want = 'Gründer in Köln oder Düsseldorf';
+    expect(satisfies(want, 'Düsseldorf, Germany')).toBe(true);
+    expect(satisfies(want, 'Köln, Germany')).toBe(true);
+    expect(satisfies(want, 'Cologne')).toBe(true);
+    expect(satisfies(want, 'Essen, Germany')).toBe(false);
+    expect(satisfies(want, 'Austin, Texas')).toBe(false);
+    expect(satisfies('investors in Berlin, Munich and Hamburg', 'Hamburg, Germany')).toBe(true);
+    expect(satisfies('investors in Berlin, Munich and Hamburg', 'Frankfurt, Germany')).toBe(false);
+  });
+
+  it('is read only when the first place is one the code knows', () => {
+    expect(placesIn_('investors in Narnia and Berlin')).toEqual([]);
+    expect(placesIn_('investors in Narnia, Berlin and Munich')).toEqual([]);
+    expect(placesIn_('investors in Fintech and Berlin')).toEqual([]);
+  });
+
+  it('drops an item the code does not know and goes on with the next', () => {
+    expect(placesIn_('investors in Berlin and Google')).toEqual(['berlin']);
+    expect(placesIn_('investors in Berlin, Google and Munich')).toEqual(['berlin', 'munich']);
+    expect(placesIn_('investors in Berlin and Series A startups')).toEqual(['berlin']);
+  });
+
+  it('takes an item only as a whole name: the first word of a pair is not tried, as it is after the preposition', () => {
+    expect(placesIn_('investors in Berlin and Jordan Smith')).toEqual(['berlin']);
+    expect(placesIn_('investors in Berlin and Austin Russell')).toEqual(['berlin']);
+    expect(placesIn_('investors in Berlin or Boston Consulting Group')).toEqual(['berlin']);
+    // after the preposition itself the first word is still tried
+    expect(placesIn_('investors in Austin Russell')).toEqual(['austin']);
+    expect(placesIn_('investors in Berlin Mitte and Munich')).toEqual(['berlin', 'munich']);
+  });
+
+  it('does not run on past the places: a lowercase word ends the list, and so does a full stop', () => {
+    expect(placesIn_('investors in Berlin and venture funds')).toEqual(['berlin']);
+    expect(placesIn_('Founders in Berlin', 'Munich investors welcome')).toEqual(['berlin']);
+    expect(placesIn_('Founders in Berlin.', 'Munich investors welcome')).toEqual(['berlin']);
+    expect(placesIn_('Founders in Berlin,', 'Munich investors welcome')).toEqual(['berlin']);
+    expect(placesIn_('Founders in Berlin and', 'Munich investors welcome')).toEqual(['berlin']);
+  });
+
+  it('keeps reading places after a second preposition: each list is its own', () => {
+    expect(placesIn_('founders in Berlin and Munich and investors in Paris or Lyon')).toEqual(['berlin', 'lyon', 'munich', 'paris']);
+    expect(placesIn_('founders from Berlin or Munich, investors in Paris')).toEqual(['berlin', 'munich', 'paris']);
+  });
+
+  it('reads a region in a list, and a possessive is still a person or an organisation', () => {
+    expect(placesIn_('founders in Berlin and the Nordics')).toEqual(['berlin', 'nordics']);
+    expect(placesIn_("founders in Berlin and Munich's best startups")).toEqual(['berlin']);
+  });
+});
