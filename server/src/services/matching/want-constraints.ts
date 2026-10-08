@@ -389,9 +389,9 @@ const isPossessive = (after: string): boolean => /^['’]s\b/.test(after);
 const FROM_LIKE = /^(?:from|aus|bei)$/i;
 
 /**
- * Read the name captured after a preposition into `out`, as a place or as a candidate that
- * extractConstraints will throw away. Returns the place when the name is one the code knows, so that a
- * list ("Köln oder Düsseldorf") may go on after it.
+ * Read the name captured after a preposition. Returns the place when the name is one the code knows, so that a
+ * list ("Köln oder Düsseldorf") may go on after it and the caller can set it down. A name the code does not know
+ * goes into `out` as a candidate that extractConstraints will throw away.
  */
 function readName(preposition: string, name: string, after: string, out: Set<string>): string | undefined {
   if (isPossessive(after)) return undefined;
@@ -406,7 +406,7 @@ function readName(preposition: string, name: string, after: string, out: Set<str
   if (fromLike && !name.endsWith('.') && /^[ \t]+\p{Lu}/u.test(after) && !(nameOf(key) && finishesAPlace(after))) return undefined;
   // "The Bahamas" starts with a word that is no place, and is one.
   if (!key || (NOT_PLACES.has(words[0]) && !nameOf(key))) return undefined;
-  if (key === 'us' || key === 'usa') { out.add('united states'); return 'united states'; }
+  if (key === 'us' || key === 'usa') return 'united states';
   let canon = nameOf(key);
   // A short capitalised word is rarely a place ("in IT", "from AI"), unless it is a name the code knows ("in the EU").
   if (key.length < 3 && !canon) return undefined;
@@ -414,36 +414,44 @@ function readName(preposition: string, name: string, after: string, out: Set<str
   // start with one. After "from" the pair is as often a company or a school ("from Boston Consulting
   // Group"), so there only a place that stands alone counts, or one name joined by a hyphen ("from Berlin-Mitte").
   if (!canon && words.length > 1 && (!fromLike || !/[ \t]/.test(name))) canon = placeNamed(words[0]);
-  out.add(canon ?? key); // known country or region; anything else is a city or an unknown place
+  if (!canon) out.add(key); // a city or a place the code does not know
   return canon;
 }
 
 /**
- * Is `canon`, after a comma, the state or country the city before it is in, rather than a second place?
- * "Austin, Texas", "Albany, New York" and "Zürich, Schweiz" say which city; "Paris, Texas" and "London, Ontario" say
- * it is not the one in France or England. But "Boston, New York" is two places, as is any list joined by "and",
- * "or" or a slash. A want that names the state as well as the city asks for the whole state, and the member who
- * writes "Austin, Texas" does not.
+ * What the item after a city and a comma says about the city. It may only say where the city is, and then the city
+ * stays and the item is no second place: "Austin, Texas", "Albany, New York", "Zürich, Schweiz", "Austin, TX" and
+ * "Berlin, DE" (Germany's own code). It may name a state or province the city is NOT in, and then the member means
+ * the one there, never the foreign city: "Paris, Texas", "Vienna, Virginia", "Dublin, OH", "Portland, ME" are Texas,
+ * Virginia, Ohio and Maine. Or it is no qualifier and a second place: "Boston, New York", "Austin, Ohio". Returns
+ * the place the city becomes (itself, or the state), or undefined.
  */
-function qualifiesTheCity(previous: string | undefined, canon: string, separator: string): boolean {
-  if (!previous || !/^\s*,\s*$/.test(separator)) return false;
-  const city = PLACE_BY_CANON.get(previous);
-  if (city?.level !== 'city') return false;
-  const region = PLACE_BY_CANON.get(canon);
-  if (!region) return city.country === canon; // a country ("Zürich, Schweiz"): the one the city is in
-  if (region.level !== 'state') return false;
-  return !!SUBREGIONS.get(canon)?.includes(previous) || (!!city.country && !!region.country && city.country !== region.country);
+function qualifiedCity(city: string, key: string, canon: string | undefined, written: string): string | undefined {
+  const here = PLACE_BY_CANON.get(city);
+  if (here?.level !== 'city') return undefined;
+  if (canon) {
+    const there = PLACE_BY_CANON.get(canon);
+    if (!there) return here.country === canon ? city : undefined; // a country ("Zürich, Schweiz"): the city's own
+    if (there.level !== 'state') return undefined;
+    if (SUBREGIONS.get(canon)?.includes(city)) return city;
+    return here.country && there.country && here.country !== there.country ? canon : undefined;
+  }
+  // a two-letter code in capitals: a state's or province's, unless it is the country's own or its regions' ("Berlin, DE")
+  const code = key.length === 2 && written === written.toUpperCase() ? REGION_CODES.get(key) : undefined;
+  if (!code) return undefined;
+  if (CODES_OF_COUNTRIES.get(key) === here.country || (here.country && OWN_REGION_CODES[here.country]?.includes(key))) return city;
+  return STATE_OF_CITY.get(city) === code.place ? city : code.place;
 }
 
 /**
- * Read the places a list goes on with after its first (`first`, when the code knows it), from `start`, and return
- * where the list ends. An item is taken as the whole name it is and nothing else: not by its first word, as the
- * first place after a preposition is ("in Berlin and Jordan Smith" is not Jordan), and an item the code does not
- * know is dropped. A state or country that only says which city is not an item (see qualifiesTheCity).
+ * Read the places a list goes on with after the first, from `start`, set them down in `places` (which holds the
+ * first, when the code knows it) and return where the list ends. An item is taken as the whole name it is and
+ * nothing else: not by its first word, as the first place after a preposition is ("in Berlin and Jordan Smith" is
+ * not Jordan), and an item the code does not know is dropped. The state or country after a city and a comma may
+ * only qualify the city, or turn it into the state (see qualifiedCity).
  */
-function readTheRestOfTheList(rest: string, start: number, out: Set<string>, first?: string): number {
+function readTheRestOfTheList(rest: string, start: number, places: string[]): number {
   let end = start;
-  let previous = first;
   for (;;) {
     ANOTHER_PLACE.lastIndex = end;
     const next = ANOTHER_PLACE.exec(rest);
@@ -451,11 +459,13 @@ function readTheRestOfTheList(rest: string, start: number, out: Set<string>, fir
     end = ANOTHER_PLACE.lastIndex;
     const [, separator, item] = next;
     if (item.startsWith(READ) || isPossessive(rest.slice(end))) continue;
-    const key = fold(item.replace(/\./g, ''));
+    const written = item.replace(/\./g, '');
+    const key = fold(written);
     const canon = key === 'us' || key === 'usa' ? 'united states' : nameOf(key);
-    if (!canon || qualifiesTheCity(previous, canon, separator)) continue;
-    out.add(canon);
-    previous = canon;
+    const city = places[places.length - 1];
+    const qualified = city !== undefined && /^\s*,\s*$/.test(separator) ? qualifiedCity(city, key, canon, written) : undefined;
+    if (qualified !== undefined) places[places.length - 1] = qualified;
+    else if (canon) places.push(canon);
   }
 }
 
@@ -485,7 +495,10 @@ export function locationTerms(written: string | null | undefined): string[] {
   while ((m = prepRe.exec(rest)) !== null) {
     const alreadyRead = m[2].startsWith(READ);
     const first = alreadyRead ? undefined : readName(m[1], m[2], rest.slice(prepRe.lastIndex), out);
-    if (alreadyRead || first) prepRe.lastIndex = readTheRestOfTheList(rest, prepRe.lastIndex, out, first);
+    if (!alreadyRead && !first) continue;
+    const listed = first ? [first] : [];
+    prepRe.lastIndex = readTheRestOfTheList(rest, prepRe.lastIndex, listed);
+    for (const place of listed) out.add(place);
   }
   for (const p of places) out.add(p);
   for (const r of regions) out.add(r);
@@ -553,7 +566,12 @@ export interface ConstraintCheck {
   yearsUnknown: boolean;
 }
 
-interface NamedPlaces { countries: Set<string>; regions: Set<string>; places: Set<string> }
+/**
+ * What a person's location names. `namesakes` are the towns in `places` that the table puts in another state than the
+ * one the location's code gives: "Kansas City, KS" has the town Kansas City, which a want for Kansas City takes, but it
+ * is not the one in Missouri, so "in Missouri" does not take it.
+ */
+interface NamedPlaces { countries: Set<string>; regions: Set<string>; places: Set<string>; namesakes: Set<string> }
 const NAMED_PLACES = new Map<string, NamedPlaces>();
 
 /** The US state or Canadian province a location's last part names by its code, and whether that decides the country. */
@@ -582,16 +600,23 @@ function codedRegionIn(location: string, found: Found): CodedRegion | null {
 }
 
 /**
- * Take out of `places` the towns a code shows to be namesakes of the town the person is in: those the table
- * puts in another state or province ("Portland, ME" is Maine's, not Oregon's Portland), and, when the code
- * settled the country, those of another country ("Vienna, VA" is not Vienna, Austria).
+ * Sort out the towns a code shows to be namesakes of the town the person is in. A town the table puts in another
+ * state of the same country is the same name in this state ("Portland, ME", "Kansas City, KS"): it stays a place the
+ * person is in, for a want that names the town, and is set down as a namesake, so that it does not count for the state
+ * the table gives it. A town of another country is not the person's ("Vienna, VA" is not Vienna, Austria; Vancouver,
+ * Washington is not Vancouver, British Columbia): it goes.
  */
-function dropNamesakes(places: Set<string>, coded: CodedRegion): void {
+function settleNamesakes(places: Set<string>, namesakes: Set<string>, coded: CodedRegion): void {
   for (const town of places) {
     const state = STATE_OF_CITY.get(town);
     const country = PLACE_BY_CANON.get(town)?.country;
-    const elsewhere = state ? state !== coded.region.place : coded.settles && !!country && country !== coded.region.country;
-    if (elsewhere) places.delete(town);
+    if (state) {
+      if (state === coded.region.place) continue;
+      if (PLACE_BY_CANON.get(state)?.country === coded.region.country) namesakes.add(town);
+      else places.delete(town);
+    } else if (coded.settles && country && country !== coded.region.country) {
+      places.delete(town);
+    }
   }
 }
 
@@ -606,20 +631,21 @@ function placesNamedIn(location: string): NamedPlaces {
   // Canadian province's code last in the location does what its name would, but only beside a town the
   // table knows ("Vienna, VA", "Portland, ME"); a code on its own is none of these ("Omaha, NE" is not Niger).
   let countries: Set<string>;
+  const namesakes = new Set<string>();
   if (found.countries.size) {
     countries = found.countries;
   } else {
     const coded = codedRegionIn(location, found);
     if (coded) {
       found.places.add(coded.region.place);
-      dropNamesakes(found.places, coded);
+      settleNamesakes(found.places, namesakes, coded);
     }
     countries = coded?.settles ? new Set([coded.region.country])
       : found.stateCountries.size ? found.stateCountries : found.cityCountries;
   }
   // Locations repeat across the people a want is scored against; the cache is bounded.
   if (NAMED_PLACES.size >= 5000) NAMED_PLACES.clear();
-  const named = { countries, regions: found.regions, places: found.places };
+  const named = { countries, regions: found.regions, places: found.places, namesakes };
   NAMED_PLACES.set(location, named);
   return named;
 }
@@ -658,8 +684,9 @@ function placeSatisfied(req: string, named: NamedPlaces): boolean {
     if (req === city && named.places.has(area) && !SUBREGIONS.get(area)?.some((town) => named.places.has(town))) return true;
   }
   // A state, a province or the Bay Area takes the towns in it, but only the ones that are in the country the
-  // person is in: "Halifax, West Yorkshire" is not in Nova Scotia, nor "San Jose, Costa Rica" in California.
-  return !!SUBREGIONS.get(req)?.some((town) => named.places.has(town) && inACountryOfTheirs(town, named));
+  // person is in: "Halifax, West Yorkshire" is not in Nova Scotia, nor "San Jose, Costa Rica" in California. And
+  // not the namesakes: "Portland, ME" is not in Oregon.
+  return !!SUBREGIONS.get(req)?.some((town) => named.places.has(town) && !named.namesakes.has(town) && inACountryOfTheirs(town, named));
 }
 
 /** Is this town, as the table has it, in a country the person's location names? A town that several countries have is. */

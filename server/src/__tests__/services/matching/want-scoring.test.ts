@@ -519,6 +519,21 @@ describe('a region in the want finds the people who are there', () => {
       expect(scoreWants(fields, austin).score).toBe(0);
     });
 
+    // I2: "Dublin, OH" is the state's; the want named Dublin, Ireland and the person who wrote "Dublin, OH" was shut out.
+    it('finds the person who wrote the same town and state, and not the town of the same name abroad', () => {
+      const wants = [`${STACK} in Dublin, OH`, 'Raise a seed round'];
+      const ohio = scoreWants(wants, fintech('Ola', 'Dublin, OH'));
+      expect(ohio.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+      expect(ohio.reason).toMatch(/\(in Ohio\)$/);
+      expect(scoreWants(wants, fintech('Cian', 'Dublin, Ireland')).score).toBe(0);
+      const vienna_ = scoreWants([`${STACK} in Vienna, Virginia`, 'Raise a seed round'], fintech('Val', 'Vienna, VA'));
+      expect(vienna_.reason).toMatch(/\(in Virginia\)$/);
+      expect(scoreWants([`${STACK} in Vienna, Virginia`], vienna).score).toBe(0);
+      const kc = [`${STACK} in Kansas City`, 'Raise a seed round'];
+      expect(scoreWants(kc, fintech('Kay', 'Kansas City, KS')).score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+      expect(scoreWants(kc, fintech('Moe', 'Kansas City, MO')).score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+    });
+
     it('"Austin, Texas" is Austin: the state after the city does not take the rest of Texas', () => {
       const wants = [`${STACK} in Austin, Texas`, 'Raise a seed round'];
       expect(scoreWants(wants, fintech('Alex', 'Austin, TX')).reason).toMatch(/\(in Austin\)$/);

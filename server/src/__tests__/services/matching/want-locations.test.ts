@@ -492,9 +492,14 @@ describe('a state, a province or the Bay Area takes only the towns that are in i
     expect(matchedPlace(extractConstraints(['founders in California']), { location: 'San Jose, CA' })).toBe('california');
   });
 
+  // S4-b fix round 2: a town of the same name in another STATE of the same country is still that name for a want that
+  // names the town and no state ("Kansas City" takes the one in Missouri and the one in Kansas); it is not in the state
+  // the table puts the town in. A town of another COUNTRY is not (Vienna, Virginia is not Vienna, Austria).
   it('a town of the same name as another is that other town only where the code says so', () => {
     expect(satisfies('founders in Portland', 'Portland, OR')).toBe(true);
-    expect(satisfies('founders in Portland', 'Portland, ME')).toBe(false);
+    expect(satisfies('founders in Portland', 'Portland, ME')).toBe(true);
+    expect(satisfies('founders in Kansas City', 'Kansas City, KS')).toBe(true);
+    expect(satisfies('founders in Kansas City', 'Kansas City, MO')).toBe(true);
     expect(satisfies('founders in Vienna', 'Vienna, Austria')).toBe(true);
     expect(satisfies('founders in Vienna', 'Vienna, VA')).toBe(false);
     expect(satisfies('founders in London', 'London, ON')).toBe(false);
