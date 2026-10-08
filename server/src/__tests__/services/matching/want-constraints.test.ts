@@ -928,6 +928,44 @@ describe('a list of places after one preposition', () => {
     expect([want, placesIn_(NEXT_FIELD, want)]).toEqual([want, expected]);
   });
 
+  // "Austin, Texas" is the way a city is written, not two places: the state after the city and a comma says which
+  // city, and reading it as a second place would take everyone in Texas.
+  it('does not take the state or country that follows a city and a comma for a second place', () => {
+    for (const [want, place] of [
+      ['founders in Austin, Texas', 'austin'], ['founders in San Francisco, California', 'san francisco'],
+      ['founders in Toronto, Ontario', 'toronto'], ['founders in Albany, New York', 'albany'],
+      ['founders in Seattle, Washington', 'seattle'], ['founders from Dallas, Texas', 'dallas'],
+      ['founders in Paris, Texas', 'paris'], ['founders in London, Ontario', 'london'],
+      ['founders in Birmingham, Alabama', 'birmingham'], ['founders in Zürich, Schweiz', 'zurich'],
+      ['Gründer in Wien, Österreich', 'vienna'], ['founders based in Basel, Switzerland', 'basel'],
+    ]) {
+      expect([want, placesIn_(want)].flat()).toContain(place);
+      // the person in the same state, in another city, is not asked for
+      expect([want, placesIn_(want).filter((p) => p !== place && !['switzerland'].includes(p))]).toEqual([want, []]);
+      expect([want, placesIn_(want, NEXT_FIELD).filter((p) => p !== place && !['switzerland'].includes(p))]).toEqual([want, []]);
+      expect([want, placesIn_(NEXT_FIELD, want).filter((p) => p !== place && !['switzerland'].includes(p))]).toEqual([want, []]);
+    }
+    expect(satisfies('founders in Austin, Texas', 'Austin, TX')).toBe(true);
+    expect(satisfies('founders in Austin, Texas', 'Houston, Texas')).toBe(false);
+    expect(satisfies('founders in Toronto, Ontario', 'Ottawa, Ontario')).toBe(false);
+    expect(satisfies('founders in Zürich, Schweiz', 'Basel, Schweiz')).toBe(false);
+  });
+
+  it('keeps a list of places a list, a state or a city that is not the first one\'s included', () => {
+    expect(placesIn_('founders in Boston, New York and Chicago')).toEqual(['boston', 'chicago', 'new york']);
+    expect(placesIn_('founders in San Francisco, New York and London')).toEqual(['london', 'new york', 'san francisco']);
+    expect(placesIn_('investors in New York, Boston')).toEqual(['boston', 'new york']);
+    expect(placesIn_('investors in Texas, Ohio and Oregon')).toEqual(['ohio', 'oregon', 'texas']);
+    expect(placesIn_('investors in California, Texas')).toEqual(['california', 'texas']);
+    expect(placesIn_('founders in Austin, Ohio')).toEqual(['austin', 'ohio']);
+    expect(placesIn_('founders in Austin and Texas')).toEqual(['austin', 'texas']);
+    expect(placesIn_('founders in Austin / Texas')).toEqual(['austin', 'texas']);
+    // a qualified city is one item of a longer list
+    expect(placesIn_('founders in Dallas, Texas and Houston')).toEqual(['dallas', 'houston']);
+    expect(placesIn_('founders in Austin, Texas or Boston, Massachusetts')).toEqual(['austin', 'boston']);
+    expect(placesIn_('founders in Austin, Texas, Dallas')).toEqual(['austin', 'dallas']);
+  });
+
   it('is satisfied by a person in any of the places, and by nobody else', () => {
     const want = 'Gründer in Köln oder Düsseldorf';
     expect(satisfies(want, 'Düsseldorf, Germany')).toBe(true);

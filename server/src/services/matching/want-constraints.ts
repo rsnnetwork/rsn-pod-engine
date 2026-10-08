@@ -362,7 +362,7 @@ const PLACE_AFTER_A_PREPOSITION = new RegExp(
 // What joins the items is a comma, "&", "/" or "and", "or", "und", "oder" (after a comma too), and an article may
 // come before an item.
 const ANOTHER_PLACE = new RegExp(
-  String.raw`(?:\s*[,&/]\s*(?:(?:and|or|und|oder)\s+)?|\s+(?:and|or|und|oder)\s+)(?:(?:the|der|die|den|dem)\s+)?(${PLACE_ITEM})`, 'uy',
+  String.raw`(\s*[,&/]\s*(?:(?:and|or|und|oder)\s+)?|\s+(?:and|or|und|oder)\s+)(?:(?:the|der|die|den|dem)\s+)?(${PLACE_ITEM})`, 'uy',
 );
 
 /** The words that only finish the name of a place: "New York City", "Prince Edward Island", "Kansas State". */
@@ -379,11 +379,11 @@ const isPossessive = (after: string): boolean => /^['’]s\b/.test(after);
 
 /**
  * Read the name captured after a preposition into `out`, as a place or as a candidate that
- * extractConstraints will throw away. True when the name is a place the code knows, so that a list
- * ("Köln oder Düsseldorf") may go on after it.
+ * extractConstraints will throw away. Returns the place when the name is one the code knows, so that a
+ * list ("Köln oder Düsseldorf") may go on after it.
  */
-function readName(preposition: string, name: string, after: string, out: Set<string>): boolean {
-  if (isPossessive(after)) return false;
+function readName(preposition: string, name: string, after: string, out: Set<string>): string | undefined {
+  if (isPossessive(after)) return undefined;
   // Compare without dots so "U.K." and "U.S." resolve to their country, not
   // to a phantom city called "u.k". Folded, so "Köln" is the "koln" the table knows.
   const key = fold(name.replace(/\./g, ''));
@@ -391,37 +391,59 @@ function readName(preposition: string, name: string, after: string, out: Set<str
   // After "from", a capital letter that goes on is the rest of a name: "Palo Alto Networks", "Zurich Insurance"
   // (unless the capture ended the sentence: "from Berlin. Investors welcome", "from the EU. Raise a seed round",
   // or it is a place the code knows and the word only finishes it: "from New York City", "from Los Angeles CA").
-  if (preposition === 'from' && !name.endsWith('.') && /^[ \t]+\p{Lu}/u.test(after) && !(nameOf(key) && finishesAPlace(after))) return false;
+  if (preposition === 'from' && !name.endsWith('.') && /^[ \t]+\p{Lu}/u.test(after) && !(nameOf(key) && finishesAPlace(after))) return undefined;
   // "The Bahamas" starts with a word that is no place, and is one.
-  if (!key || (NOT_PLACES.has(words[0]) && !nameOf(key))) return false;
-  if (key === 'us' || key === 'usa') { out.add('united states'); return true; }
+  if (!key || (NOT_PLACES.has(words[0]) && !nameOf(key))) return undefined;
+  if (key === 'us' || key === 'usa') { out.add('united states'); return 'united states'; }
   let canon = nameOf(key);
   // A short capitalised word is rarely a place ("in IT", "from AI"), unless it is a name the code knows ("in the EU").
-  if (key.length < 3 && !canon) return false;
+  if (key.length < 3 && !canon) return undefined;
   // "in Berlin Mitte", "in Austin Texas": two capitalised words that are not a place together but
   // start with one. After "from" the pair is as often a company or a school ("from Boston Consulting
   // Group"), so there only a place that stands alone counts, or one name joined by a hyphen ("from Berlin-Mitte").
   if (!canon && words.length > 1 && (preposition !== 'from' || !/[ \t]/.test(name))) canon = placeNamed(words[0]);
   out.add(canon ?? key); // known country or region; anything else is a city or an unknown place
-  return canon !== undefined;
+  return canon;
 }
 
 /**
- * Read the places a list goes on with after its first, from `start`, and return where the list ends. An item is
- * taken as the whole name it is and nothing else: not by its first word, as the first place after a preposition
- * is ("in Berlin and Jordan Smith" is not Jordan), and an item the code does not know is dropped.
+ * Is `canon`, after a comma, the state or country the city before it is in, rather than a second place?
+ * "Austin, Texas", "Albany, New York" and "Zürich, Schweiz" say which city; "Paris, Texas" and "London, Ontario" say
+ * it is not the one in France or England. But "Boston, New York" is two places, as is any list joined by "and",
+ * "or" or a slash. A want that names the state as well as the city asks for the whole state, and the member who
+ * writes "Austin, Texas" does not.
  */
-function readTheRestOfTheList(rest: string, start: number, out: Set<string>): number {
+function qualifiesTheCity(previous: string | undefined, canon: string, separator: string): boolean {
+  if (!previous || !/^\s*,\s*$/.test(separator)) return false;
+  const city = PLACE_BY_CANON.get(previous);
+  if (city?.level !== 'city') return false;
+  const region = PLACE_BY_CANON.get(canon);
+  if (!region) return city.country === canon; // a country ("Zürich, Schweiz"): the one the city is in
+  if (region.level !== 'state') return false;
+  return !!SUBREGIONS.get(canon)?.includes(previous) || (!!city.country && !!region.country && city.country !== region.country);
+}
+
+/**
+ * Read the places a list goes on with after its first (`first`, when the code knows it), from `start`, and return
+ * where the list ends. An item is taken as the whole name it is and nothing else: not by its first word, as the
+ * first place after a preposition is ("in Berlin and Jordan Smith" is not Jordan), and an item the code does not
+ * know is dropped. A state or country that only says which city is not an item (see qualifiesTheCity).
+ */
+function readTheRestOfTheList(rest: string, start: number, out: Set<string>, first?: string): number {
   let end = start;
+  let previous = first;
   for (;;) {
     ANOTHER_PLACE.lastIndex = end;
     const next = ANOTHER_PLACE.exec(rest);
     if (!next) return end;
     end = ANOTHER_PLACE.lastIndex;
-    if (next[1].startsWith(READ) || isPossessive(rest.slice(end))) continue;
-    const key = fold(next[1].replace(/\./g, ''));
+    const [, separator, item] = next;
+    if (item.startsWith(READ) || isPossessive(rest.slice(end))) continue;
+    const key = fold(item.replace(/\./g, ''));
     const canon = key === 'us' || key === 'usa' ? 'united states' : nameOf(key);
-    if (canon) out.add(canon);
+    if (!canon || qualifiesTheCity(previous, canon, separator)) continue;
+    out.add(canon);
+    previous = canon;
   }
 }
 
@@ -448,8 +470,9 @@ export function locationTerms(written: string | null | undefined): string[] {
   prepRe.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = prepRe.exec(rest)) !== null) {
-    const known = m[2].startsWith(READ) || readName(m[1], m[2], rest.slice(prepRe.lastIndex), out);
-    if (known) prepRe.lastIndex = readTheRestOfTheList(rest, prepRe.lastIndex, out);
+    const alreadyRead = m[2].startsWith(READ);
+    const first = alreadyRead ? undefined : readName(m[1], m[2], rest.slice(prepRe.lastIndex), out);
+    if (alreadyRead || first) prepRe.lastIndex = readTheRestOfTheList(rest, prepRe.lastIndex, out, first);
   }
   for (const p of places) out.add(p);
   for (const r of regions) out.add(r);

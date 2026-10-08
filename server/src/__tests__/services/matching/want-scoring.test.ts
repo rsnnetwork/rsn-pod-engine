@@ -497,6 +497,17 @@ describe('a region in the want finds the people who are there', () => {
       expect(scoreWantsForRecipient(FIELDS, elke, 'Ali').score).toBe(0);
     });
 
+    it('"Austin, Texas" is Austin: the state after the city does not take the rest of Texas', () => {
+      const wants = [`${STACK} in Austin, Texas`, 'Raise a seed round'];
+      expect(scoreWants(wants, fintech('Alex', 'Austin, TX')).reason).toMatch(/\(in Austin\)$/);
+      expect(scoreWants(wants, fintech('Hal', 'Houston, Texas')).score).toBe(0);
+      expect(scoreWants(wants, fintech('Dee', 'Dallas')).score).toBe(0);
+      // and a list of cities with a state in the middle is still a list
+      const list = [`${STACK} in Austin, Texas and Boston`, 'Raise a seed round'];
+      expect(scoreWants(list, fintech('Bo', 'Boston, MA')).score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+      expect(scoreWants(list, fintech('Hal', 'Houston, Texas')).score).toBe(0);
+    });
+
     it('works in English with three cities, and the last one is as good as the first', () => {
       const wants = [`${STACK} in Berlin, Munich and Hamburg`, 'Raise a seed round'];
       for (const [name, location, shown] of [['Anna', 'Berlin, Germany', 'Berlin'], ['Max', 'München, Germany', 'Munich'], ['Hanna', 'Hamburg', 'Hamburg']]) {
