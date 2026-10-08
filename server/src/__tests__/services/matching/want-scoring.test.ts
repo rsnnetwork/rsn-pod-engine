@@ -534,6 +534,34 @@ describe('a region in the want finds the people who are there', () => {
       expect(scoreWants(kc, fintech('Moe', 'Kansas City, MO')).score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
     });
 
+    // I1: the second place of a list, in lowercase or after a modifier, was dropped and the first alone became the
+    // strict filter: "... in the UK or continental Europe" shut out every European candidate.
+    it('keeps every place of "in the UK or continental Europe": the people in Europe are not shut out', () => {
+      const wants = ['Fintech founders and seed investors in the UK or continental Europe', 'Raise a seed round for my payments startup'];
+      for (const [c, shown] of [
+        [fintech('Liv', 'London, UK'), 'United Kingdom'], [berlin, 'Europe'], [vienna, 'Europe'], [milan, 'Europe'],
+        [fintech('Ina', 'Reykjavik, Iceland'), 'Europe'],
+      ] as const) {
+        const r = scoreWants(wants, c);
+        expect([c.displayName, r.score >= MATCH_THRESHOLD]).toEqual([c.displayName, true]);
+        expect(r.reason).toMatch(new RegExp(`\\(in ${shown}\\)$`));
+      }
+      expect(scoreWants(wants, austin).score).toBe(0);
+      expect(scoreWants(wants, fintech('Tunde', 'Lagos, Nigeria')).score).toBe(0);
+    });
+
+    it('keeps both places of a lowercase list and of a list with a modifier', () => {
+      for (const want of [
+        `${STACK} in asia and europe`, `${STACK} in germany and western europe`, `${STACK} in London or mainland Europe`,
+        `${STACK} in latam and europe`, `${STACK} in the US and europe`,
+      ]) {
+        expect([want, scoreWants([want, 'Raise a seed round'], berlin).score >= MATCH_THRESHOLD]).toEqual([want, true]);
+      }
+      expect(scoreWants([`${STACK} in asia and europe`, 'Raise a seed round'], fintech('Dev', 'Mumbai, India')).reason).toMatch(/\(in Asia\)$/);
+      expect(scoreWants([`${STACK} in the US and europe`, 'Raise a seed round'], austin).reason).toMatch(/\(in United States\)$/);
+      expect(scoreWants([`${STACK} in Western Europe and the UK`, 'Raise a seed round'], berlin).reason).toMatch(/\(in Europe\)$/);
+    });
+
     it('"Austin, Texas" is Austin: the state after the city does not take the rest of Texas', () => {
       const wants = [`${STACK} in Austin, Texas`, 'Raise a seed round'];
       expect(scoreWants(wants, fintech('Alex', 'Austin, TX')).reason).toMatch(/\(in Austin\)$/);

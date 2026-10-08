@@ -1259,3 +1259,102 @@ describe('a city qualified by a state or province it is not in', () => {
   });
 });
 
+
+// I1: "Fintech founders and seed investors in the UK or continental Europe" read the UK only. The region is the second
+// place of a list, in lowercase or after a modifier, and was dropped; the other place alone became the strict filter
+// (12 of 12 European candidates scored 0). A region that continues a list after a place already read is read, and a
+// modifier ("continental", "Western", "the rest of") between the preposition or the joiner and the region is no
+// obstacle. Every test hands the matcher the want among other fields.
+describe('a region that continues a list, or follows a modifier', () => {
+  const read = (...fields: string[]) => [...(extractConstraints(fields).location ?? [])].sort();
+
+  it.each([
+    ['Fintech founders and seed investors in the UK or continental Europe', ['europe', 'united kingdom']],
+    ['Seed investors in London or mainland Europe', ['europe', 'london']],
+    ['seed investors in asia and europe', ['asia', 'europe']],
+    ['Seed investors in latam and europe', ['europe', 'latin america']],
+    ['Seed investors in the US and europe', ['europe', 'united states']],
+    ['Seed investors in Germany and Western Europe', ['europe', 'germany']],
+    ['Seed investors in DACH and wider Europe', ['dach', 'europe']],
+    ['Fintech founders in Berlin or Western Europe', ['berlin', 'europe']],
+    ['Fintech founders in Western Europe and the UK', ['europe', 'united kingdom']],
+    ['founders in germany and the nordics', ['germany', 'nordics']],
+    ['investors in europe or the middle east', ['europe', 'middle east']],
+    // more of the same shapes
+    ['investors in the Nordics, Benelux and eastern Europe', ['benelux', 'europe', 'nordics']],
+    ['investors in Berlin, Munich and the rest of Europe', ['berlin', 'europe', 'munich']],
+    ['founders in asia, europe and africa', ['africa', 'asia', 'europe']],
+    ['founders in Germany or Austria or the rest of Europe', ['austria', 'europe', 'germany']],
+    ['founders in London und mainland Europe', ['europe', 'london']],
+    ['founders in Zürich or Wien or Europe', ['europe', 'vienna', 'zurich']],
+    ['founders in the UK, Ireland and the Nordics', ['ireland', 'nordics', 'united kingdom']],
+    ['seed investors in asia & europe', ['asia', 'europe']],
+    ['seed investors in asia / europe', ['asia', 'europe']],
+    ['seed investors based in europe and north america', ['europe', 'north america']],
+    ['founders in Paris and sub-Saharan Africa', ['africa', 'paris']],
+    ['founders in Asia and Central Asia', ['asia']],
+  ])('reads every place in "%s"', (want, expected) => {
+    expect([want, read(want)]).toEqual([want, expected]);
+    // the matcher joins the fields: the same with another field after it, before it, and on both sides
+    expect([want, read(want, NEXT_FIELD)]).toEqual([want, expected]);
+    expect([want, read(NEXT_FIELD, want)]).toEqual([want, expected]);
+    expect([want, read(NEXT_FIELD, want, 'Eine Runde aufsetzen')]).toEqual([want, expected]);
+  });
+
+  it('reads a region after a modifier alone: "Western Europe" is Europe', () => {
+    for (const [want, place] of [
+      ['investors in Western Europe', 'europe'], ['investors in Eastern Europe', 'europe'], ['investors in continental Europe', 'europe'],
+      ['investors in the rest of Europe', 'europe'], ['investors in southern Europe', 'europe'], ['investors in Central Asia', 'asia'],
+      ['investors in sub-Saharan Africa', 'africa'], ['investors in other European countries', 'europe'],
+      ['investors based in northern Europe', 'europe'], ['investors from wider Europe', 'europe'],
+      ['investors across mainland Europe', 'europe'], ['investors in Greater Europe', 'europe'],
+      ['investors within Western Europe', 'europe'], ['investors near the rest of Europe', 'europe'],
+      ['investors in Sub Saharan Africa', 'africa'], ['investors in Southern Africa', 'africa'],
+    ]) {
+      expect([want, read(want)]).toEqual([want, [place]]);
+      expect([want, read(want, NEXT_FIELD)]).toEqual([want, [place]]);
+      expect([want, read(NEXT_FIELD, want)]).toEqual([want, [place]]);
+    }
+  });
+
+  it('still needs a location preposition, or a place already read: a modifier does not make a mention a place', () => {
+    for (const want of [
+      'Western Europe expansion partners', 'continental European founders', 'founders building for Western Europe',
+      'the rest of Europe is my market', 'investors who know mainland Europe', 'investors in fintech and europe',
+      'investors in tech or western europe', 'founders in sales, wider Europe', 'Central Asia specialists',
+      'selling to southern Europe',
+    ]) {
+      expect([want, extractConstraints([want]).location]).toEqual([want, null]);
+      expect([want, extractConstraints([want, NEXT_FIELD]).location]).toEqual([want, null]);
+      expect([want, extractConstraints([NEXT_FIELD, want]).location]).toEqual([want, null]);
+    }
+  });
+
+  it('does not take a name that merely starts with a modifier for the region', () => {
+    expect(read('investors in Central America')).toEqual(['central america']);
+    expect(read('investors in Northern Ireland')).toEqual(['northern ireland']);
+    expect(read('investors in South Africa')).toEqual(['south africa']);
+    expect(read('investors in Greater Manchester')).toEqual([]);
+    expect(read('investors in Middle East')).toEqual(['middle east']);
+  });
+
+  it('does not take an ordinary word for a region: only a capital letter and no capitalised word after it', () => {
+    expect(read('investors in Germany and eu regulators')).toEqual(['germany']);
+    expect(read('investors in Germany and dach roofers')).toEqual(['germany']);
+    expect(read('investors in Germany and gcc compilers')).toEqual(['germany']);
+    expect(read('investors in Germany and DACH')).toEqual(['dach', 'germany']);
+  });
+
+  it('is satisfied by the people in any of the places, and by nobody else', () => {
+    const want = 'Fintech founders and seed investors in the UK or continental Europe';
+    for (const location of ['London, UK', 'Berlin, Germany', 'Wien, Österreich', 'Reykjavik, Iceland']) {
+      expect([location, satisfies(want, location)]).toEqual([location, true]);
+    }
+    for (const location of ['Austin, Texas', 'Lagos, Nigeria', 'Dubai, UAE']) {
+      expect([location, satisfies(want, location)]).toEqual([location, false]);
+    }
+    expect(satisfies('seed investors in asia and europe', 'Berlin, Germany')).toBe(true);
+    expect(satisfies('seed investors in asia and europe', 'Mumbai, India')).toBe(true);
+    expect(satisfies('seed investors in asia and europe', 'Austin, Texas')).toBe(false);
+  });
+});

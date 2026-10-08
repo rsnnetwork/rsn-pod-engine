@@ -18,8 +18,13 @@
 // resolve, and filters nothing: reading it as a location every candidate must
 // match empties the list, which is what "in Europe" did. A region name is a
 // place only after a location preposition ("investors in Europe"; "European
-// founders" and "building for Asia and Africa" name none), and one preposition
-// may govern a list ("Gründer in Köln oder Düsseldorf").
+// founders" and "building for Asia and Africa" name none), a word that narrows
+// it ("Western", "continental", "the rest of") does not change which, and one
+// preposition may govern a list, whose items may be regions in any case
+// ("Gründer in Köln oder Düsseldorf", "in the UK or continental Europe", "in asia
+// and europe"). A city qualified by a state it is not in ("Paris, Texas", "Dublin,
+// OH") is that state's; "in der Schweiz" and a capital "In" are read like "in the"
+// and "in".
 //
 // A person's location is read the other way (8 Oct 2026): it resolves to the
 // countries it names, through a country name ("Deutschland", "Österreich") or,
@@ -203,8 +208,15 @@ export const LOOK_ALIKES: readonly PlaceName[] = [
   { name: 'new south wales', kind: 'decoy', canon: '' },
   { name: 'port of spain', kind: 'decoy', canon: '' },
 ];
+// "America" and "American" are the United States, but not the end of "Latin America", "North American" and the like:
+// a want that says "Latin American fintech founders" has no place in it (and "in Berlin and north america" is Berlin
+// and the region, which the list reader finds in the text because nothing set it aside).
+const PART_OF_A_REGION_NAME = /\b(?:latin|north|south|central)[ \t]+$/i;
 const countryNames: PlaceName[] = Object.entries(COUNTRY_ALIASES)
-  .flatMap(([canon, aliases]) => aliases.map((name) => ({ name, kind: 'country' as const, canon })));
+  .flatMap(([canon, aliases]) => aliases.map((name) => ({
+    name, kind: 'country' as const, canon,
+    ...(name === 'america' || name === 'american' ? { where: (before: string) => !PART_OF_A_REGION_NAME.test(before) } : {}),
+  })));
 const extraCountryNames: PlaceName[] = [
   ...Object.entries(COUNTRY_NAMES)
     .flatMap(([canon, others]) => [canon, ...others].map((name) => ({ name, kind: 'country' as const, canon }))),
@@ -236,18 +248,23 @@ const wantRegionNames: PlaceName[] = REGIONS.flatMap((r) => r.names.map((name) =
   };
 }));
 
-// A region name with "America" in it that is not read as the region (no preposition before it) is set aside, not
-// left to be read as the United States: "Latin American fintech founders" has no place in it.
-const AMERICA_IS_NOT_THE_US: PlaceName[] = wantRegionNames
-  .filter((n) => /\bamerican?\b/.test(n.name))
-  .map((n) => ({ name: n.name, kind: 'decoy' as const, canon: '' }));
+// A word that narrows a region ("Western Europe", "continental Europe", "the rest of Europe", "sub-Saharan Africa")
+// does not change where the person must be: it is Europe, or Africa. It is taken out of the text before the want is
+// read, so that the region is read after a preposition, or as an item of a list, as if it stood alone. A modifier
+// before anything that is not a region ("Greater Manchester", "Northern Ireland", "Central America") is left.
+const REGION_MODIFIERS = [
+  'western', 'eastern', 'northern', 'southern', 'central', 'continental', 'mainland', 'wider', 'greater', 'other',
+  'rest of', 'all over', 'sub-saharan', 'sub saharan',
+];
+const REGION_NAME_ALTERNATION = [...new Set(REGIONS.flatMap((r) => r.names))].sort((a, b) => b.length - a.length).map(escapeRe).join('|');
+const MODIFIER_ALTERNATION = REGION_MODIFIERS.map((word) => escapeRe(word).replace(/ /g, String.raw`[ \t]+`)).join('|');
+const MODIFIED_REGION = new RegExp(
+  String.raw`(?<![\p{L}\p{N}-])(?:${MODIFIER_ALTERNATION})[ \t]+(?=(?:${REGION_NAME_ALTERNATION})(?![\p{L}\p{N}]))`, 'giu',
+);
 
 // In a want: the alias table, the regions after a preposition, and the look-alikes, read as the member wrote
 // them. A want's other countries are only places after "in", "from"… (see locationTerms).
-const WANT_SCAN = compile(
-  [...countryNames, ...wantRegionNames, ...AMERICA_IS_NOT_THE_US, ...LOOK_ALIKES],
-  (s) => s.toLowerCase(),
-);
+const WANT_SCAN = compile([...countryNames, ...wantRegionNames, ...LOOK_ALIKES], (s) => s.toLowerCase());
 // In a person's location: every country there is a name for, and every city, state and province
 // the matcher knows, each with the country it is in (the two look-alike places are states here),
 // accents and punctuation ignored.
@@ -368,9 +385,16 @@ const PLACE_AFTER_A_PREPOSITION = new RegExp(
 );
 // A list goes on after a place: "Köln oder Düsseldorf", "Berlin, Munich and Hamburg", "Deutschland und der Schweiz".
 // What joins the items is a comma, "&", "/" or "and", "or", "und", "oder" (after a comma too), and an article may
-// come before an item.
-const ANOTHER_PLACE = new RegExp(
-  String.raw`(\s*[,&/]\s*(?:(?:and|or|und|oder)\s+)?|\s+(?:and|or|und|oder)\s+)(?:(?:the|der|die|das|dem|den)\s+)?(${PLACE_ITEM})`, 'uy',
+// come before an item. The item is a place the scan has read or a capitalised name (LIST_PLACE), or, when it starts
+// with a lowercase letter, the name of a region or of a country the alias table does not hold, in any case
+// (LIST_NAMED: "asia and europe", "germany and the nordics"). Not the ordinary words (eu, dach, gcc ...), which a
+// capital letter makes a region and nothing else does.
+const LIST_JOINER = new RegExp(String.raw`(\s*[,&/]\s*(?:(?:and|or|und|oder)\s+)?|\s+(?:and|or|und|oder)\s+)${ARTICLE}`, 'uy');
+const LIST_PLACE = new RegExp(`(${PLACE_ITEM})`, 'uy');
+const ORDINARY_REGION_WORDS: ReadonlySet<string> = new Set(REGIONS.flatMap((r) => r.ordinaryWords ?? []));
+const LIST_NAMED = new RegExp(
+  `(${[...new Set([...regionNames, ...extraCountryNames].map((n) => n.name).filter((name) => !ORDINARY_REGION_WORDS.has(name)))]
+    .sort((a, b) => b.length - a.length).map(escapeRe).join('|')})(?![\\p{L}\\p{N}])`, 'iuy',
 );
 
 /** The words that only finish the name of a place: "New York City", "Prince Edward Island", "Kansas State". */
@@ -453,17 +477,21 @@ function qualifiedCity(city: string, key: string, canon: string | undefined, wri
 function readTheRestOfTheList(rest: string, start: number, places: string[]): number {
   let end = start;
   for (;;) {
-    ANOTHER_PLACE.lastIndex = end;
-    const next = ANOTHER_PLACE.exec(rest);
+    LIST_JOINER.lastIndex = end;
+    const joiner = LIST_JOINER.exec(rest);
+    if (!joiner) return end;
+    const at = LIST_JOINER.lastIndex;
+    const sticky = /\p{Ll}/u.test(rest.charAt(at)) ? LIST_NAMED : LIST_PLACE;
+    sticky.lastIndex = at;
+    const next = sticky.exec(rest);
     if (!next) return end;
-    end = ANOTHER_PLACE.lastIndex;
-    const [, separator, item] = next;
-    if (item.startsWith(READ) || isPossessive(rest.slice(end))) continue;
-    const written = item.replace(/\./g, '');
+    end = sticky.lastIndex;
+    if (next[1].startsWith(READ) || isPossessive(rest.slice(end))) continue;
+    const written = next[1].replace(/\./g, '');
     const key = fold(written);
     const canon = key === 'us' || key === 'usa' ? 'united states' : nameOf(key);
     const city = places[places.length - 1];
-    const qualified = city !== undefined && /^\s*,\s*$/.test(separator) ? qualifiedCity(city, key, canon, written) : undefined;
+    const qualified = city !== undefined && /^\s*,\s*$/.test(joiner[1]) ? qualifiedCity(city, key, canon, written) : undefined;
     if (qualified !== undefined) places[places.length - 1] = qualified;
     else if (canon) places.push(canon);
   }
@@ -484,8 +512,9 @@ function readTheRestOfTheList(rest: string, start: number, places: string[]): nu
  */
 export function locationTerms(written: string | null | undefined): string[] {
   if (!written) return [];
-  // "ü" typed as "u" plus a combining diaeresis (a want pasted from a Mac or a PDF) is the same letter.
-  const text = written.normalize('NFC');
+  // "ü" typed as "u" plus a combining diaeresis (a want pasted from a Mac or a PDF) is the same letter. "Western
+  // Europe" is read as Europe (see REGION_MODIFIERS).
+  const text = written.normalize('NFC').replace(MODIFIED_REGION, '');
   const { countries, regions, places, rest } = scan(text, WANT_SCAN);
   const out = new Set<string>(countries);
   if (mentionsUS(text)) out.add('united states');
