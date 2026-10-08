@@ -162,10 +162,10 @@ export async function sendPoke(
   preferredFormat?: MeetingFormat,
 ): Promise<UserPoke> {
   if (senderId === recipientId) {
-    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'You cannot poke yourself');
+    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, "You can't send a meeting request to yourself.");
   }
   if (await blockService.areBlocked(senderId, recipientId)) {
-    throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'Cannot poke this user');
+    throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, "You can't send a meeting request to this person.");
   }
 
   // Encounter check: if they've already met, DMs are open — no need to poke.
@@ -351,14 +351,14 @@ export async function acceptPoke(
       [pokeId],
     );
     if (pokeResult.rows.length === 0) {
-      throw new NotFoundError('Poke', pokeId);
+      throw new NotFoundError('Poke', undefined, "We couldn't find that meeting request.");
     }
     const p = pokeResult.rows[0];
     if (p.recipient_id !== userId) {
-      throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'Only the recipient can accept a poke');
+      throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'Only the person this meeting request was sent to can accept it.');
     }
     if (p.status !== 'pending') {
-      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, `Poke already ${p.status}`);
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, `This meeting request has already been ${p.status}.`);
     }
 
     // Mark accepted.
@@ -528,13 +528,13 @@ export async function declinePoke(pokeId: string, userId: string): Promise<UserP
      FROM user_pokes WHERE id = $1`,
     [pokeId],
   );
-  if (pokeResult.rows.length === 0) throw new NotFoundError('Poke', pokeId);
+  if (pokeResult.rows.length === 0) throw new NotFoundError('Poke', undefined, "We couldn't find that meeting request.");
   const p = pokeResult.rows[0];
   if (p.recipient_id !== userId) {
-    throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'Only the recipient can decline a poke');
+    throw new AppError(403, ErrorCodes.AUTH_FORBIDDEN, 'Only the person this meeting request was sent to can decline it.');
   }
   if (p.status !== 'pending') {
-    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, `Poke already ${p.status}`);
+    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, `This meeting request has already been ${p.status}.`);
   }
 
   const updated = await query<{ responded_at: Date }>(
