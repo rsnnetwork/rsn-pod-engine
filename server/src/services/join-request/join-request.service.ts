@@ -365,7 +365,7 @@ export async function pokeJoinRequest(id: string): Promise<JoinRequest> {
   const jr = mapRow(reqResult.rows[0]);
 
   if (jr.status !== 'approved') {
-    throw new AppError(400, ErrorCodes.INVALID_INPUT, 'Can only poke approved requests');
+    throw new AppError(400, ErrorCodes.INVALID_INPUT, 'Only approved join requests can be sent a reminder');
   }
 
   // Check if already activated (user exists)
@@ -378,7 +378,12 @@ export async function pokeJoinRequest(id: string): Promise<JoinRequest> {
   if (jr.lastRemindedAt) {
     const hoursSinceLast = (Date.now() - new Date(jr.lastRemindedAt).getTime()) / (1000 * 60 * 60);
     if (hoursSinceLast < 24) {
-      throw new AppError(429, ErrorCodes.INVALID_INPUT, `Please wait ${Math.ceil(24 - hoursSinceLast)} more hours before poking again`);
+      const hoursLeft = Math.ceil(24 - hoursSinceLast);
+      throw new AppError(
+        429,
+        ErrorCodes.INVALID_INPUT,
+        `Please wait ${hoursLeft} more ${hoursLeft === 1 ? 'hour' : 'hours'} before sending another reminder`,
+      );
     }
   }
 

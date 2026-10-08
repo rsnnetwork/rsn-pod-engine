@@ -353,4 +353,29 @@ describe('reminders to an approved applicant', () => {
     await expect(pokeJoinRequest('jr-1')).rejects.toMatchObject({ statusCode: 429 });
     expect(sendJoinRequestReminderEmail).not.toHaveBeenCalled();
   });
+
+  // The admin's page shows these messages as they come (AdminJoinRequestsPage: "Send signup reminder email",
+  // "Reminder sent!"), so they say "reminder", not the internal word for it.
+  const refusal = () => pokeJoinRequest('jr-1').then(
+    () => { throw new Error('expected the reminder to be refused'); },
+    (e: unknown) => e as Error,
+  );
+
+  it.each([
+    [2, 'Please wait 22 more hours before sending another reminder'],
+    [23.5, 'Please wait 1 more hour before sending another reminder'],
+  ])('tells the admin in words how long the pause has left (reminded %s hours ago)', async (hoursAgo, message) => {
+    approvedAndNotSignedUp(waiting(PREVIEW, { last_reminded_at: new Date(Date.now() - hoursAgo * 60 * 60 * 1000), reminder_count: 1 }));
+    const err = await refusal();
+    expect(err).toMatchObject({ statusCode: 429, message });
+    expect(err.message).not.toMatch(/poke/i);
+  });
+
+  it('tells the admin that only an approved request can be sent a reminder, in words', async () => {
+    approvedAndNotSignedUp({ ...waiting(PREVIEW), status: 'pending' });
+    const err = await refusal();
+    expect(err).toMatchObject({ statusCode: 400, message: 'Only approved join requests can be sent a reminder' });
+    expect(err.message).not.toMatch(/poke/i);
+    expect(sendJoinRequestReminderEmail).not.toHaveBeenCalled();
+  });
 });
