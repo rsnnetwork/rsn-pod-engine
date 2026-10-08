@@ -285,6 +285,18 @@ describe('a region in the want finds the people who are there', () => {
     expect(scoreWants([`${STACK} in London`], fintech('Liv', 'London, UK')).reason).toMatch(/\(in London\)$/);
   });
 
+  it('"in Northern Ireland" finds Belfast and says Northern Ireland, and does not find London', () => {
+    const belfast = scoreWants([`${STACK} in Northern Ireland`], fintech('Niamh', 'Belfast, Northern Ireland'));
+    expect(belfast.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+    expect(belfast.reason).toMatch(/\(in Northern Ireland\)$/);
+    expect(scoreWants([`${STACK} in Northern Ireland`], fintech('Niamh', 'Derry')).reason).toMatch(/\(in Northern Ireland\)$/);
+    expect(scoreWants([`${STACK} in Northern Ireland`], fintech('Liv', 'London, UK')).score).toBe(0);
+    expect(scoreWants([`${STACK} in Northern Ireland`], fintech('Cian', 'Dublin, Ireland')).score).toBe(0);
+    // and in the UK or Europe, Belfast counts as the UK
+    expect(scoreWants([`${STACK} in the UK`], fintech('Niamh', 'Belfast')).reason).toMatch(/\(in United Kingdom\)$/);
+    expect(scoreWants([`${STACK} in Europe`], fintech('Niamh', 'Belfast')).reason).toMatch(/\(in Europe\)$/);
+  });
+
   it('never says a place the person is not in: "in Oman" does not find Bucharest and the card does not claim it', () => {
     for (const [place, location] of [
       ['Oman', 'Bucharest, Romania'], ['Mexico', 'Albuquerque, New Mexico'], ['Ireland', 'Belfast, Northern Ireland'],

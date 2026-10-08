@@ -27,7 +27,7 @@
 import {
   COUNTRY_NAMES, ENDONYMS, REGIONS, regionByKey, regionCovers,
 } from './want-regions';
-import { KNOWN_PLACES, PLACES, PLACE_BY_NAME } from './want-cities';
+import { KNOWN_PLACES, PLACES, PLACE_BY_NAME, SUBREGIONS } from './want-cities';
 
 export interface WantConstraints {
   /**
@@ -41,7 +41,7 @@ export interface WantConstraints {
 
 export const COUNTRY_ALIASES: Record<string, string[]> = {
   'united states': ['usa', 'u.s.a.', 'u.s.', 'united states', 'united states of america', 'america', 'american'],
-  'united kingdom': ['uk', 'u.k.', 'united kingdom', 'britain', 'great britain', 'england', 'british', 'scotland', 'wales', 'northern ireland'],
+  'united kingdom': ['uk', 'u.k.', 'united kingdom', 'britain', 'great britain', 'england', 'british', 'scotland', 'wales'],
   'germany': ['germany', 'deutschland', 'german'],
   'india': ['india', 'indian'],
   'canada': ['canada', 'canadian'],
@@ -140,13 +140,15 @@ function compile(names: PlaceName[], normalise: (s: string) => string): Scanners
 
 /**
  * Places whose name contains a country's name (or adjective) and which are not that country:
- * "New Mexico" is not Mexico and "British Columbia" is not British. The first two are places of
- * their own; the last two are only set aside, so that "New England" is not England and "New
- * South Wales" is not Wales.
+ * "New Mexico" is not Mexico, "British Columbia" is not British and "Northern Ireland" is not
+ * Ireland. The first three are places of their own in a want; the last two are only set aside, so
+ * that "New England" is not England and "New South Wales" is not Wales. In a person's location
+ * the three places are states of want-cities.ts (Northern Ireland is the United Kingdom there).
  */
 const LOOK_ALIKES: PlaceName[] = [
   { name: 'new mexico', kind: 'place', canon: 'new mexico' },
   { name: 'british columbia', kind: 'place', canon: 'british columbia' },
+  { name: 'northern ireland', kind: 'place', canon: 'northern ireland' },
   { name: 'new england', kind: 'decoy', canon: '' },
   { name: 'new south wales', kind: 'decoy', canon: '' },
 ];
@@ -383,14 +385,14 @@ function inRegion(key: string, named: NamedPlaces): boolean {
 /**
  * Does a location, as placesNamedIn reads it, satisfy one place the want names? A region is a
  * country inside it, a country is a country the location names (so "Czech Republic" is czechia),
- * and a city, state or province is that name as a whole word or words. Never letters inside another
- * name: "Oman" is not in "Romania", "Mali" is not in "Malibu", "Rio" is not in "Ontario" and "eu"
- * is not in "Eugene".
+ * and a city, state or province is that name as a whole word or words, or a town inside it
+ * ("in Northern Ireland" takes Belfast). Never letters inside another name: "Oman" is not in
+ * "Romania", "Mali" is not in "Malibu", "Rio" is not in "Ontario" and "eu" is not in "Eugene".
  */
 function placeSatisfied(req: string, named: NamedPlaces): boolean {
   if (regionByKey(req)) return inRegion(req, named);
   if (ALIAS_COUNTRIES.has(req) || EXTRA_COUNTRIES.has(req)) return named.countries.has(req);
-  return named.places.has(req);
+  return named.places.has(req) || !!SUBREGIONS.get(req)?.some((town) => named.places.has(town));
 }
 
 /** The first place the want requires that this person satisfies, or null. */

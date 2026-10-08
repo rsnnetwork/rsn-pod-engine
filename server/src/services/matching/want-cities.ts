@@ -38,6 +38,13 @@ export interface Place {
   level: PlaceLevel;
 }
 
+// The towns of Northern Ireland. A want "in Northern Ireland" is satisfied by a location that names
+// the province or one of them (see SUBREGIONS); in a person's location they are the United Kingdom.
+const NORTHERN_IRELAND_TOWNS: readonly string[] = [
+  'belfast', 'derry|londonderry', 'lisburn', 'newry', 'armagh', 'omagh', 'enniskillen', 'coleraine', 'ballymena',
+  'newtownabbey', 'craigavon', 'carrickfergus', 'portadown', 'larne', 'strabane',
+];
+
 const CITIES: Readonly<Record<string, readonly string[]>> = {
   // ── Germany, Austria, Switzerland ──────────────────────────────────────────
   germany: [
@@ -69,11 +76,10 @@ const CITIES: Readonly<Record<string, readonly string[]>> = {
   // ── The rest of Western and Northern Europe ────────────────────────────────
   'united kingdom': [
     'london', 'birmingham', 'manchester', 'glasgow', 'liverpool', 'bristol', 'sheffield', 'leeds', 'edinburgh',
-    'leicester', 'cardiff', 'belfast', 'nottingham', 'newcastle', 'southampton', 'portsmouth', 'brighton',
+    'leicester', 'cardiff', 'nottingham', 'newcastle', 'southampton', 'portsmouth', 'brighton',
     'aberdeen', 'dundee', 'swansea', 'york', 'exeter', 'norwich', 'coventry', 'plymouth', 'oxford', 'milton keynes',
     'northwich', 'inverness', 'wolverhampton', 'sunderland', 'salford', 'stockport', 'warrington', 'cheltenham',
-    'derry|londonderry', 'lisburn', 'newry', 'armagh', 'omagh', 'enniskillen', 'coleraine', 'ballymena',
-    'newtownabbey', 'craigavon', 'carrickfergus', 'portadown', 'larne', 'strabane',
+    ...NORTHERN_IRELAND_TOWNS,
   ],
   ireland: ['dublin', 'cork', 'galway', 'limerick', 'waterford', 'kilkenny', 'drogheda', 'sligo'],
   france: [
@@ -295,8 +301,18 @@ export const PLACES: readonly Place[] = [
   ...Object.entries(CITIES).flatMap(([country, entries]) => entries.map((entry) => place(entry, country, 'city'))),
   ...US_STATES.map((entry) => place(entry, 'united states', 'state')),
   ...CANADIAN_PROVINCES.map((entry) => place(entry, 'canada', 'state')),
+  // Its own place in a want, the United Kingdom in a location (and never Ireland).
+  place('northern ireland', 'united kingdom', 'state'),
   ...SHARED_NAMES,
 ];
+
+/**
+ * Places that contain others a person may name instead: a want "in Northern Ireland" is satisfied
+ * by a location that names the province or any town in it, by the town's canonical name.
+ */
+export const SUBREGIONS: ReadonlyMap<string, readonly string[]> = new Map([
+  ['northern ireland', NORTHERN_IRELAND_TOWNS.map((entry) => entry.split('|')[0])],
+]);
 
 /** The canonical names of every place above: what a want's place is, once it is read. */
 export const KNOWN_PLACES: ReadonlySet<string> = new Set(PLACES.map((p) => p.canon));

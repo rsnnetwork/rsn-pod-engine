@@ -56,7 +56,7 @@ describe('the cities, states and provinces the matcher knows', () => {
       for (const n of p.names) {
         if (fold(n) !== n) problems.push(`${p.canon}: spelling "${n}" is not in folded form (${fold(n)})`);
         const owner = seen.get(n);
-        if (owner && owner !== p.canon) problems.push(`"${n}" belongs to both ${owner} and ${p.canon}`);
+        if (owner !== undefined) problems.push(`"${n}" belongs to both ${owner} and ${p.canon}`);
         seen.set(n, p.canon);
       }
       if (p.country !== null && !knownCountries.has(p.country)) problems.push(`${p.canon}: ${p.country} is not a country the tables know`);

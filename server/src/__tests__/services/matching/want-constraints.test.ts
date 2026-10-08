@@ -361,6 +361,46 @@ describe('a place is matched as a whole place, never as letters inside another n
   });
 });
 
+// In a want, Northern Ireland is its own place: "in Northern Ireland" is not Ireland and it is not the
+// whole of the United Kingdom (London satisfied it, and the card said "(in United Kingdom)"). In a
+// person's location it is still the United Kingdom, so a UK or Europe want takes Belfast.
+describe('Northern Ireland', () => {
+  it('is its own place in a want', () => {
+    expect(extractConstraints(['founders in Northern Ireland']).location).toEqual(['northern ireland']);
+    expect(extractConstraints(['Northern Ireland founders']).location).toEqual(['northern ireland']);
+    expect(extractConstraints(['founders based in Northern Ireland or Scotland']).location)
+      .toEqual(expect.arrayContaining(['northern ireland', 'united kingdom']));
+  });
+
+  it('is satisfied by a location that names Northern Ireland or a city there', () => {
+    for (const location of ['Belfast', 'Belfast, Northern Ireland', 'Derry', 'Londonderry, UK', 'Lisburn, UK', 'Newry',
+      'Northern Ireland', 'Armagh, Northern Ireland, United Kingdom']) {
+      expect([location, satisfies('founders in Northern Ireland', location)]).toEqual([location, true]);
+    }
+  });
+
+  it('is not satisfied by the rest of the United Kingdom, or by Ireland', () => {
+    for (const location of ['London, UK', 'Edinburgh, Scotland', 'Cardiff, Wales', 'Dublin, Ireland', 'Cork', 'Manchester, England', 'United Kingdom', '']) {
+      expect([location, satisfies('founders in Northern Ireland', location)]).toEqual([location, false]);
+    }
+  });
+
+  it('is not Ireland: "in Ireland" does not take Belfast, and "in Northern Ireland" does not take Dublin', () => {
+    expect(satisfies('founders in Ireland', 'Belfast, Northern Ireland')).toBe(false);
+    expect(satisfies('founders in Ireland', 'Belfast')).toBe(false);
+    expect(satisfies('founders in Ireland', 'Dublin, Ireland')).toBe(true);
+  });
+
+  it('is still the United Kingdom in a person\'s location', () => {
+    for (const location of ['Belfast', 'Belfast, Northern Ireland', 'Northern Ireland', 'Derry']) {
+      expect([location, satisfies('founders in the UK', location)]).toEqual([location, true]);
+      expect([location, satisfies('founders in Europe', location)]).toEqual([location, true]);
+      expect([location, satisfies('founders in the UK and Ireland', location)]).toEqual([location, true]);
+      expect([location, satisfies('founders in Germany', location)]).toEqual([location, false]);
+    }
+  });
+});
+
 describe('a country that is in no region', () => {
   it('can be named in a want, and is satisfied by a person who lives there', () => {
     expect(extractConstraints(['founders in Jamaica or Canada']).location).toEqual(['canada', 'jamaica']);
