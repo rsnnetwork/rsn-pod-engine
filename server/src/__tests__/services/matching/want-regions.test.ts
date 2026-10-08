@@ -87,12 +87,23 @@ describe('the region table', () => {
     expect(locationCountries('Atlanta, Georgia')).toEqual([]);
   });
 
+  it('reads "the EU" and "the European Union" as Europe: one region, the wider list', () => {
+    // The 27 member states since 2020 are all in it, and so are the UK, Switzerland and Norway.
+    const memberStates = [
+      'austria', 'belgium', 'bulgaria', 'croatia', 'cyprus', 'czechia', 'denmark', 'estonia', 'finland',
+      'france', 'germany', 'greece', 'hungary', 'ireland', 'italy', 'latvia', 'lithuania', 'luxembourg',
+      'malta', 'netherlands', 'poland', 'portugal', 'romania', 'slovakia', 'slovenia', 'spain', 'sweden',
+    ];
+    expect(memberStates).toHaveLength(27);
+    expect(memberStates.filter((c) => !countriesOf('eu').includes(c))).toEqual([]);
+    for (const outside of ['united kingdom', 'switzerland', 'norway']) expect(countriesOf('eu')).toContain(outside);
+    expect([...countriesOf('eu')].sort()).toEqual([...countriesOf('europe')].sort());
+    // Each keeps its own name and label, so the card says the one the member wrote.
+    expect(regionByKey('eu')!.names).toEqual(expect.arrayContaining(['eu', 'european union']));
+    expect(regionByKey('europe')!.names).not.toContain('eu');
+  });
+
   it('puts the countries where the lists it was built from put them', () => {
-    // The European Union: 27 member states since 2020.
-    expect(countriesOf('eu')).toHaveLength(27);
-    expect(countriesOf('eu')).not.toContain('united kingdom');
-    expect(countriesOf('eu')).not.toContain('switzerland');
-    expect(countriesOf('eu')).not.toContain('norway');
     // Africa: the 54 states of the African Union / UN.
     expect(countriesOf('africa')).toHaveLength(54);
     expect(countriesOf('dach').sort()).toEqual(['austria', 'germany', 'switzerland']);

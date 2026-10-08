@@ -263,6 +263,15 @@ describe('a region in the want finds the people who are there', () => {
     expect(scoreWants([`${STACK} in UK and Ireland`], fintech('Ciara', 'Dublin, Ireland')).reason).toMatch(/\(in the UK and Ireland\)$/);
   });
 
+  it('"in the EU" is Europe: the UK, Switzerland and Norway are found, and the card says the EU', () => {
+    for (const c of [fintech('Liv', 'London, UK'), fintech('Zoe', 'Zurich, Switzerland'), fintech('Nils', 'Oslo, Norway')]) {
+      const r = scoreWants([`${STACK} in the EU`], c);
+      expect(r.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+      expect(r.reason).toMatch(/\(in the EU\)$/);
+    }
+    expect(scoreWants([`${STACK} in the EU`], austin).score).toBe(0);
+  });
+
   it('a want that names a country and a region says the one that fits this person', () => {
     const want = [`${STACK} in Germany or the Nordics`];
     expect(scoreWants(want, fintech('Sven', 'Stockholm, Sweden')).reason).toMatch(/\(in the Nordics\)$/);

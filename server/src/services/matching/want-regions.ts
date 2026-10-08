@@ -22,9 +22,11 @@
 // asked, and Georgia is also a US state.
 //
 // Strictness is the rule for a place in a want (Stefan, 9 Sep 2026): a region is satisfied
-// only by a country that is in it. "EU" is therefore not "Europe" (the UK, Switzerland and
-// Norway are in Europe and not in the EU), and "Scandinavia" is not "the Nordics" (Finland and
-// Iceland are Nordic, not Scandinavian).
+// only by a country that is in it, and "Scandinavia" is not "the Nordics" (Finland and Iceland
+// are Nordic, not Scandinavian). "The EU" and "the European Union" are the exception: the brief
+// lists "Europe / EU / European Union" as one region, and a member who writes "the EU" means the
+// European market (8 Oct 2026), so they are read as Europe, the wider list, and the card still
+// says the one the member wrote.
 
 export interface Region {
   /** What the region is called inside a constraint: lowercase, one per region. */
@@ -46,6 +48,7 @@ const NORDICS = [...SCANDINAVIA, 'finland', 'iceland'];
 const BALTICS = ['estonia', 'latvia', 'lithuania'];
 const UK_AND_IRELAND = ['united kingdom', 'ireland'];
 
+// The 27 member states. Europe below is built from them, and "the EU" is read as Europe.
 const EU = [
   'austria', 'belgium', 'bulgaria', 'croatia', 'cyprus', 'czechia', 'denmark', 'estonia', 'finland',
   'france', 'germany', 'greece', 'hungary', 'ireland', 'italy', 'latvia', 'lithuania', 'luxembourg',
@@ -55,7 +58,7 @@ const EU = [
 // UN Europe (Eastern, Northern, Southern and Western Europe) plus the two transcontinental
 // countries a European business would count: Cyprus (an EU member, which the UN files under
 // Western Asia) and Turkey (which has the European side of Istanbul). The Caucasus states and
-// Kazakhstan are left out.
+// Kazakhstan are left out. Both "Europe" and "the EU" are satisfied by any country in this list.
 const EUROPE = [
   ...EU,
   'albania', 'andorra', 'belarus', 'bosnia and herzegovina', 'iceland', 'kosovo', 'liechtenstein',
@@ -121,7 +124,7 @@ const NORTH_AMERICA = ['united states', 'canada', 'mexico'];
 
 export const REGIONS: readonly Region[] = [
   { key: 'europe', label: 'Europe', names: ['europe', 'european'], countries: EUROPE },
-  { key: 'eu', label: 'the EU', names: ['eu', 'e.u.', 'european union'], countries: EU },
+  { key: 'eu', label: 'the EU', names: ['eu', 'e.u.', 'european union'], countries: EUROPE },
   { key: 'emea', label: 'EMEA', names: ['emea'], countries: [...new Set([...EUROPE, ...MIDDLE_EAST, ...AFRICA])] },
   { key: 'dach', label: 'DACH', names: ['dach'], countries: DACH },
   { key: 'benelux', label: 'Benelux', names: ['benelux'], countries: BENELUX },

@@ -153,6 +153,10 @@ describe('a region is satisfied by a country inside it', () => {
     ['Europe', 'Germany'], ['Europe', 'Remote, Europe'], ['Europe', 'Brussels, Belgium'],
     ['DACH', 'Vienna, Austria'], ['DACH', 'Zurich, Switzerland'], ['DACH', 'Berlin, Germany'],
     ['the EU', 'Berlin, Germany'], ['the EU', 'Lisbon, Portugal'], ['the EU', 'Valletta, Malta'],
+    // "the EU" and "Europe" are one region (the brief lists "Europe / EU / European Union" together,
+    // and the old alias read eu as europe): the wider list, so the UK, Switzerland and Norway are in it.
+    ['the EU', 'London, UK'], ['the EU', 'Zurich, Switzerland'], ['the EU', 'Oslo, Norway'],
+    ['the EU', 'Remote, Europe'], ['the EU', 'Belfast, Northern Ireland'], ['Europe', 'Remote, EU'],
     ['Benelux', 'Luxembourg, Luxembourg'], ['Benelux', 'Rotterdam, Holland'], ['Benelux', 'Antwerp, Belgium'],
     ['the Nordics', 'Helsinki, Finland'], ['the Nordics', 'Oslo, Norway'], ['the Nordics', 'Stockholm, Sweden'],
     ['Scandinavia', 'Copenhagen, Denmark'], ['Scandinavia', 'Oslo, Norway'],
@@ -186,7 +190,7 @@ describe('a region is satisfied by a country inside it', () => {
     ['Europe', 'Dubai, United Arab Emirates'], ['Europe', 'Nairobi, Kenya'], ['Europe', 'Singapore'],
     ['Europe', 'Sydney, Australia'], ['Europe', 'Atlanta, Georgia'], ['Europe', 'Paris, Texas'],
     ['DACH', 'Paris, France'], ['DACH', 'Amsterdam, Netherlands'], ['DACH', 'London, UK'], ['DACH', 'Austin, Texas'],
-    ['the EU', 'London, UK'], ['the EU', 'Zurich, Switzerland'], ['the EU', 'Oslo, Norway'], ['the EU', 'Remote, Europe'],
+    ['the EU', 'Austin, Texas'], ['the EU', 'Dubai, United Arab Emirates'], ['the EU', 'Nairobi, Kenya'],
     ['Benelux', 'Paris, France'], ['Benelux', 'Berlin, Germany'],
     ['the Nordics', 'London, UK'], ['the Nordics', 'Tallinn, Estonia'],
     ['Scandinavia', 'Helsinki, Finland'], ['Scandinavia', 'Reykjavik, Iceland'],
@@ -225,15 +229,26 @@ describe('a region is satisfied by a country inside it', () => {
   it('a profile that names a region itself is read for the regions it sits inside', () => {
     expect(satisfies('investors in Europe', 'Remote, EU')).toBe(true);
     expect(satisfies('investors in Europe', 'Nordics')).toBe(true);
-    expect(satisfies('investors in the EU', 'Remote, Europe')).toBe(false);
-    expect(satisfies('investors in the EU', 'Remote, DACH')).toBe(false);
+    expect(satisfies('investors in the EU', 'Remote, Europe')).toBe(true);
+    expect(satisfies('investors in the EU', 'Remote, DACH')).toBe(true);
+    expect(satisfies('investors in the DACH region', 'Remote, EU')).toBe(false);
+    expect(satisfies('investors in Latin America', 'Remote, EU')).toBe(false);
   });
 
-  it('Northern Ireland is the UK, not Ireland: in the UK and Ireland, in Europe, and not in the EU', () => {
+  it('Northern Ireland is the UK, not Ireland: in the UK and Ireland and in Europe, and so in the EU', () => {
     expect(satisfies('investors in the UK and Ireland', 'Belfast, Northern Ireland')).toBe(true);
     expect(satisfies('investors in Europe', 'Belfast, Northern Ireland')).toBe(true);
-    expect(satisfies('investors in the EU', 'Belfast, Northern Ireland')).toBe(false);
+    expect(satisfies('investors in the EU', 'Belfast, Northern Ireland')).toBe(true);
     expect(satisfies('investors in the EU', 'Dublin, Ireland')).toBe(true);
+  });
+
+  it('"the EU", "the European Union" and "Europe" are one region, and the card says the one the member wrote', () => {
+    expect(extractConstraints(['founders in the EU']).location).toEqual(['eu']);
+    expect(extractConstraints(['founders in the European Union']).location).toEqual(['eu']);
+    expect(extractConstraints(['European founders']).location).toEqual(['europe']);
+    for (const location of ['Berlin, Germany', 'London, UK', 'Zurich, Switzerland', 'Oslo, Norway', 'Kyiv, Ukraine']) {
+      expect(satisfies('founders in the EU', location)).toBe(satisfies('founders in Europe', location));
+    }
   });
 
   it('a want that names two places is satisfied by either', () => {
