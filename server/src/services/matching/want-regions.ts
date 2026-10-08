@@ -279,67 +279,45 @@ export const COUNTRY_NAMES: Readonly<Record<string, readonly string[]>> = {
 /** The countries of COUNTRY_NAMES that no region lists. */
 export const COUNTRIES_IN_NO_REGION: readonly string[] = Object.keys(COUNTRY_NAMES_IN_NO_REGION);
 
-// ── Cities, states and provinces the matcher knows are places ──────────────────
+// ── Countries by the names they are written with at home ──────────────────────
 //
-// A want's "in X" is only a place when we can tell X is one: "in Narnia", "from Google" and
-// "in SaaS" are capitalised words after a preposition too, and reading each as a location every
-// candidate must match would empty the list. Countries and regions are known from the tables
-// above; these are the cities, US states and Canadian provinces, in the one or two words the
-// extractor captures after a preposition, that members commonly name. One that is not here is
-// treated like any other unknown place: it filters nothing. Add one by adding it here.
-export const KNOWN_PLACES: ReadonlySet<string> = new Set(
-  [
-    // Britain and Ireland
-    'london', 'manchester', 'birmingham', 'edinburgh', 'glasgow', 'bristol', 'leeds', 'liverpool',
-    'cambridge', 'oxford', 'belfast', 'cardiff', 'dublin', 'cork',
-    // Germany, Austria, Switzerland
-    'berlin', 'munich', 'munchen', 'hamburg', 'frankfurt', 'cologne', 'koln', 'dusseldorf', 'duesseldorf',
-    'stuttgart', 'leipzig', 'dresden', 'hannover', 'nuremberg', 'bonn', 'essen', 'dortmund', 'bremen',
-    'vienna', 'salzburg', 'graz', 'zurich', 'geneva', 'basel', 'bern', 'lausanne',
-    // The rest of Europe
-    'paris', 'lyon', 'marseille', 'toulouse', 'amsterdam', 'rotterdam', 'utrecht', 'eindhoven',
-    'brussels', 'antwerp', 'madrid', 'barcelona', 'valencia', 'seville', 'lisbon', 'porto', 'rome',
-    'milan', 'turin', 'naples', 'florence', 'bologna', 'athens', 'copenhagen', 'stockholm', 'gothenburg',
-    'malmo', 'oslo', 'bergen', 'helsinki', 'reykjavik', 'warsaw', 'krakow', 'prague', 'budapest',
-    'bucharest', 'sofia', 'belgrade', 'zagreb', 'ljubljana', 'bratislava', 'vilnius', 'riga', 'tallinn',
-    'kyiv', 'kiev', 'istanbul', 'ankara', 'moscow',
-    // More of the launch markets: Germany, Austria, Switzerland, the Benelux, the UK, the Nordics,
-    // southern Europe (a name with an umlaut cannot be captured after a preposition, so those are absent)
-    'aachen', 'augsburg', 'bielefeld', 'bochum', 'braunschweig', 'chemnitz', 'darmstadt', 'duisburg',
-    'erfurt', 'freiburg', 'heidelberg', 'karlsruhe', 'kassel', 'kiel', 'krefeld', 'leverkusen',
-    'magdeburg', 'mainz', 'mannheim', 'neuss', 'potsdam', 'regensburg', 'rostock', 'ulm', 'wiesbaden',
-    'wuppertal', 'linz', 'innsbruck', 'klagenfurt', 'lucerne', 'winterthur', 'lugano', 'zug', 'st gallen',
-    'groningen', 'tilburg', 'breda', 'nijmegen', 'haarlem', 'delft', 'leiden', 'maastricht', 'almere',
-    'ghent', 'leuven', 'sheffield', 'nottingham', 'newcastle', 'leicester', 'southampton', 'brighton',
-    'aberdeen', 'dundee', 'swansea', 'york', 'exeter', 'norwich', 'coventry', 'plymouth', 'aarhus',
-    'odense', 'aalborg', 'uppsala', 'trondheim', 'stavanger', 'tampere', 'turku', 'genoa', 'venice',
-    'verona', 'padua', 'palermo', 'bari', 'malaga', 'bilbao', 'zaragoza', 'granada', 'coimbra',
-    'thessaloniki',
-    // The Middle East and Africa
-    'riyadh', 'jeddah', 'doha', 'manama', 'muscat', 'cairo', 'tel aviv', 'jerusalem', 'amman', 'beirut',
-    'tehran', 'baghdad', 'nairobi', 'lagos', 'abuja', 'accra', 'johannesburg', 'cape town', 'durban',
-    'casablanca', 'tunis', 'algiers', 'addis ababa', 'kigali', 'kampala', 'dakar', 'abidjan', 'kinshasa',
-    // Asia and Oceania
-    'tokyo', 'osaka', 'seoul', 'beijing', 'shanghai', 'shenzhen', 'guangzhou', 'taipei', 'bangkok',
-    'jakarta', 'manila', 'kuala lumpur', 'hanoi', 'mumbai', 'delhi', 'new delhi', 'bangalore', 'bengaluru',
-    'hyderabad', 'chennai', 'pune', 'kolkata', 'karachi', 'lahore', 'islamabad', 'rawalpindi', 'dhaka',
-    'colombo', 'kathmandu', 'sydney', 'melbourne', 'brisbane', 'perth', 'auckland', 'wellington',
-    // The Americas
-    'new york', 'san francisco', 'los angeles', 'chicago', 'boston', 'seattle', 'austin', 'denver',
-    'atlanta', 'miami', 'houston', 'dallas', 'washington', 'washington dc', 'san diego', 'san jose',
-    'portland', 'philadelphia', 'toronto', 'vancouver', 'montreal', 'ottawa', 'calgary', 'guadalajara',
-    'bogota', 'medellin', 'lima', 'santiago', 'buenos aires', 'sao paulo', 'rio', 'brasilia', 'quito',
-    'caracas', 'montevideo', 'havana', 'san juan',
-    // US states
-    'alabama', 'alaska', 'arizona', 'arkansas', 'california', 'colorado', 'connecticut', 'delaware',
-    'florida', 'georgia', 'hawaii', 'idaho', 'illinois', 'indiana', 'iowa', 'kansas', 'kentucky',
-    'louisiana', 'maine', 'maryland', 'massachusetts', 'michigan', 'minnesota', 'mississippi',
-    'missouri', 'montana', 'nebraska', 'nevada', 'new hampshire', 'new jersey', 'new mexico',
-    'north carolina', 'north dakota', 'ohio', 'oklahoma', 'oregon', 'pennsylvania', 'rhode island',
-    'south carolina', 'south dakota', 'tennessee', 'texas', 'utah', 'vermont', 'virginia',
-    'west virginia', 'wisconsin', 'wyoming',
-    // Canadian provinces ("Prince Edward Island" is captured as its first two words)
-    'ontario', 'quebec', 'british columbia', 'alberta', 'manitoba', 'saskatchewan', 'nova scotia',
-    'new brunswick', 'newfoundland', 'prince edward',
-  ],
-);
+// canonical name -> the names a person at home writes, and the names a German speaker writes the
+// neighbours with. The launch audience is Düsseldorf and the DACH countries, so its locations say
+// "Deutschland", "Österreich" and "Schweiz" ("Wien, Österreich", "Zürich, Schweiz"). Like the rows
+// above, these are matched in a person's location, and in a want after a preposition ("Gründer in
+// Österreich"), never scanned for anywhere in a want's text. Accents are folded when they are read.
+export const ENDONYMS: Readonly<Record<string, readonly string[]>> = {
+  austria: ['österreich'],
+  switzerland: ['schweiz', 'suisse', 'svizzera', 'svizra'],
+  france: ['frankreich'],
+  italy: ['italia', 'italien'],
+  spain: ['españa', 'spanien'],
+  netherlands: ['nederland', 'niederlande'],
+  belgium: ['belgië', 'belgique', 'belgien'],
+  luxembourg: ['luxemburg', 'lëtzebuerg'],
+  poland: ['polska', 'polen'],
+  czechia: ['česko', 'tschechien'],
+  slovakia: ['slovensko', 'slowakei'],
+  hungary: ['magyarország', 'ungarn'],
+  romania: ['românia', 'rumänien'],
+  bulgaria: ['bulgarien'],
+  croatia: ['hrvatska', 'kroatien'],
+  slovenia: ['slovenija', 'slowenien'],
+  serbia: ['srbija', 'serbien'],
+  greece: ['hellas', 'griechenland'],
+  cyprus: ['zypern'],
+  turkey: ['türkei'],
+  russia: ['russland'],
+  sweden: ['sverige', 'schweden'],
+  norway: ['norge', 'norwegen'],
+  denmark: ['danmark', 'dänemark'],
+  finland: ['suomi', 'finnland'],
+  estonia: ['eesti', 'estland'],
+  latvia: ['latvija', 'lettland'],
+  lithuania: ['lietuva', 'litauen'],
+  ireland: ['éire', 'irland'],
+  'united kingdom': ['großbritannien', 'vereinigtes königreich'],
+  'united states': ['vereinigte staaten'],
+  brazil: ['brasil'],
+  egypt: ['ägypten'],
+};

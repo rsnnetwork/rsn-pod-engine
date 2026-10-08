@@ -13,14 +13,21 @@
 // A place in a want is one of three things (7 Oct 2026): a COUNTRY (the alias
 // table below, and the names in want-regions.ts), a REGION ("Europe", "DACH":
 // satisfied by a country inside it, want-regions.ts), or a CITY, US state or
-// Canadian province the matcher knows. Anything else after "in", "from"…
-// ("Narnia", "SaaS", "Google") is not a place the code can resolve, and filters
-// nothing: reading it as a location every candidate must match empties the
-// list, which is what "in Europe" did.
+// Canadian province the matcher knows (want-cities.ts). Anything else after
+// "in", "from"… ("Narnia", "SaaS", "Google") is not a place the code can
+// resolve, and filters nothing: reading it as a location every candidate must
+// match empties the list, which is what "in Europe" did.
+//
+// A person's location is read the other way (8 Oct 2026): it resolves to the
+// countries it names, through a country name ("Deutschland", "Österreich") or,
+// when it names none, through a state or province and then a city it knows
+// ("Greater Düsseldorf Area"). A two-letter code ("NE", "TH") is never read: a
+// city beside it says the country.
 
 import {
-  COUNTRY_NAMES, KNOWN_PLACES, REGIONS, regionByKey, regionCovers,
+  COUNTRY_NAMES, ENDONYMS, REGIONS, regionByKey, regionCovers,
 } from './want-regions';
+import { KNOWN_PLACES, PLACES, PLACE_BY_NAME } from './want-cities';
 
 export interface WantConstraints {
   /**
@@ -32,7 +39,7 @@ export interface WantConstraints {
   minYears: number | null;
 }
 
-const COUNTRY_ALIASES: Record<string, string[]> = {
+export const COUNTRY_ALIASES: Record<string, string[]> = {
   'united states': ['usa', 'u.s.a.', 'u.s.', 'united states', 'united states of america', 'america', 'american'],
   'united kingdom': ['uk', 'u.k.', 'united kingdom', 'britain', 'great britain', 'england', 'british', 'scotland', 'wales', 'northern ireland'],
   'germany': ['germany', 'deutschland', 'german'],
@@ -69,10 +76,26 @@ const COUNTRY_ALIASES: Record<string, string[]> = {
   'new zealand': ['new zealand'],
 };
 
-// Dot-free lookup for phrases captured after a preposition ("U.K." → "uk").
+/** The letters Unicode does not take apart, and what they are read as ("Malmö" is "malmo", "Øre" is "ore"). */
+const TRANSLITERATED: Readonly<Record<string, string>> = {
+  'ß': 'ss', 'æ': 'ae', 'œ': 'oe', 'ø': 'o', 'ł': 'l', 'đ': 'd', 'ð': 'd', 'þ': 'th', 'ı': 'i', 'ħ': 'h',
+};
+
+/**
+ * A name or a person's location as the matcher reads it: lowercase, without accents, "&" as
+ * "and", punctuation as spaces. "Côte d’Ivoire" and "Bosnia & Herzegovina", the way Intl writes
+ * them into a profile, become "cote d'ivoire" and "bosnia and herzegovina"; "Düsseldorf" and
+ * "Zürich" become "dusseldorf" and "zurich".
+ */
+export const fold = (s: string): string => s
+  .normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
+  .replace(/[ßæœøłđðþıħ]/g, (c) => TRANSLITERATED[c])
+  .replace(/[’‘`´]/g, "'").replace(/&/g, ' and ').replace(/[^a-z0-9']+/g, ' ').trim();
+
+// Dot-free lookup for phrases captured after a preposition ("U.K." → "uk", "Türkiye" → "turkiye").
 const ALIAS_NODOT = new Map<string, string>();
 for (const [canon, aliases] of Object.entries(COUNTRY_ALIASES)) {
-  for (const alias of aliases) ALIAS_NODOT.set(alias.replace(/\./g, ''), canon);
+  for (const alias of aliases) ALIAS_NODOT.set(fold(alias.replace(/\./g, '')), canon);
 }
 
 const ALIAS_COUNTRIES = new Set(Object.keys(COUNTRY_ALIASES));
@@ -87,27 +110,33 @@ const EXTRA_COUNTRIES = new Set(Object.keys(COUNTRY_NAMES));
 // being "America" (the United States), "South Africa" from also being Africa, "Papua New Guinea"
 // from also being Guinea, "New Mexico" from being Mexico and "New York" from also being York.
 
-type NameKind = 'country' | 'region' | 'place' | 'decoy';
-interface PlaceName { name: string; kind: NameKind; canon: string }
-interface Scanner { re: RegExp; kind: NameKind; canon: string; length: number }
-
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// A state or a province names the country more firmly than a city does, and a country written out
+// names it most firmly of all (see placesNamedIn).
+type NameKind = 'country' | 'region' | 'place' | 'decoy' | 'state' | 'city';
+interface PlaceName { name: string; kind: NameKind; canon: string; country?: string }
+interface Scanner extends PlaceName { re: RegExp; length: number }
 
 /**
- * A person's location as the matcher reads it: lowercase, without accents, "&" as "and",
- * punctuation as spaces. "Côte d’Ivoire" and "Bosnia & Herzegovina", the way Intl writes them
- * into a profile, become "cote d'ivoire" and "bosnia and herzegovina".
+ * Every name to look for, longest first, and for each first word the positions in that order of the
+ * names that start with it. A text only contains a name if it contains the name's first word, so a
+ * text is checked against the few names that start with one of its words, not against all of them.
  */
-const fold = (s: string) => s
-  .normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
-  .replace(/[’‘`´]/g, "'").replace(/&/g, ' and ').replace(/[^a-z0-9']+/g, ' ').trim();
+interface Scanners { all: Scanner[]; byFirstWord: Map<string, number[]> }
 
-const compile = (names: PlaceName[], normalise: (s: string) => string): Scanner[] => names
-  .map((n) => {
-    const s = normalise(n.name);
-    return { kind: n.kind, canon: n.canon, length: s.length, re: new RegExp(`(^|[^a-z0-9])${escapeRe(s)}(?=$|[^a-z0-9])`, 'gi') };
-  })
-  .sort((a, b) => b.length - a.length);
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const WORD = /[a-z0-9]+/g;
+
+function compile(names: PlaceName[], normalise: (s: string) => string): Scanners {
+  const all = names
+    .map((n) => {
+      const s = normalise(n.name);
+      return { ...n, length: s.length, first: s.match(WORD)?.[0] ?? '', re: new RegExp(`(^|[^a-z0-9])${escapeRe(s)}(?=$|[^a-z0-9])`, 'gi') };
+    })
+    .sort((a, b) => b.length - a.length);
+  const byFirstWord = new Map<string, number[]>();
+  all.forEach(({ first }, at) => byFirstWord.set(first, [...(byFirstWord.get(first) ?? []), at]));
+  return { all, byFirstWord };
+}
 
 /**
  * Places whose name contains a country's name (or adjective) and which are not that country:
@@ -123,8 +152,12 @@ const LOOK_ALIKES: PlaceName[] = [
 ];
 const countryNames: PlaceName[] = Object.entries(COUNTRY_ALIASES)
   .flatMap(([canon, aliases]) => aliases.map((name) => ({ name, kind: 'country' as const, canon })));
-const extraCountryNames: PlaceName[] = Object.entries(COUNTRY_NAMES)
-  .flatMap(([canon, others]) => [canon, ...others].map((name) => ({ name, kind: 'country' as const, canon })));
+const extraCountryNames: PlaceName[] = [
+  ...Object.entries(COUNTRY_NAMES)
+    .flatMap(([canon, others]) => [canon, ...others].map((name) => ({ name, kind: 'country' as const, canon }))),
+  ...Object.entries(ENDONYMS)
+    .flatMap(([canon, others]) => others.map((name) => ({ name, kind: 'country' as const, canon }))),
+];
 const regionNames: PlaceName[] = REGIONS
   .flatMap((r) => r.names.map((name) => ({ name, kind: 'region' as const, canon: r.key })));
 
@@ -137,29 +170,49 @@ const WANT_SCAN = compile(
   (s) => s.toLowerCase(),
 );
 // In a person's location: every country there is a name for, and every city, state and province
-// the matcher knows (which include the two look-alike places), accents and punctuation ignored.
-const knownPlaceNames: PlaceName[] = [...KNOWN_PLACES].map((name) => ({ name, kind: 'place' as const, canon: name }));
+// the matcher knows, each with the country it is in (the two look-alike places are states here),
+// accents and punctuation ignored.
+const placeNames: PlaceName[] = PLACES.flatMap((p) => p.names.map((name) => ({
+  name, kind: p.level, canon: p.canon, ...(p.country ? { country: p.country } : {}),
+})));
 const PROFILE_SCAN = compile(
-  [...countryNames, ...extraCountryNames, ...regionNames, ...LOOK_ALIKES.filter((n) => n.kind === 'decoy'), ...knownPlaceNames],
+  [...countryNames, ...extraCountryNames, ...regionNames, ...LOOK_ALIKES.filter((n) => n.kind === 'decoy'), ...placeNames],
   fold,
 );
 
-function scan(
-  text: string, scanners: Scanner[],
-): { countries: Set<string>; regions: Set<string>; places: Set<string>; rest: string } {
-  const countries = new Set<string>();
-  const regions = new Set<string>();
-  const places = new Set<string>();
-  let rest = text;
-  for (const s of scanners) {
-    rest = rest.replace(s.re, (found: string, lead: string) => {
-      if (s.kind === 'country') countries.add(s.canon);
-      else if (s.kind === 'region') regions.add(s.canon);
-      else if (s.kind === 'place') places.add(s.canon);
-      return lead + ' '.repeat(found.length - lead.length);
+interface Found {
+  /** Countries a name says outright ("Germany", "Deutschland"). */
+  countries: Set<string>;
+  regions: Set<string>;
+  /** Cities, states and provinces, by canonical name. */
+  places: Set<string>;
+  /** The countries the states and provinces found are in, and the cities: not names of countries. */
+  stateCountries: Set<string>;
+  cityCountries: Set<string>;
+  /** The text with everything found blanked out. */
+  rest: string;
+}
+
+function scan(text: string, scanners: Scanners): Found {
+  const found: Found = {
+    countries: new Set(), regions: new Set(), places: new Set(), stateCountries: new Set(), cityCountries: new Set(), rest: text,
+  };
+  const candidates: number[] = [];
+  for (const word of new Set(text.toLowerCase().match(WORD) ?? [])) candidates.push(...(scanners.byFirstWord.get(word) ?? []));
+  for (const at of candidates.sort((a, b) => a - b)) {
+    const s = scanners.all[at];
+    found.rest = found.rest.replace(s.re, (hit: string, lead: string) => {
+      if (s.kind === 'country') found.countries.add(s.canon);
+      else if (s.kind === 'region') found.regions.add(s.canon);
+      else if (s.kind === 'place') found.places.add(s.canon);
+      else if (s.kind === 'state' || s.kind === 'city') {
+        found.places.add(s.canon);
+        if (s.country) (s.kind === 'state' ? found.stateCountries : found.cityCountries).add(s.country);
+      }
+      return lead + ' '.repeat(hit.length - lead.length);
     });
   }
-  return { countries, regions, places, rest };
+  return found;
 }
 
 /** "US" is a country only in capitals or after a preposition: lowercase "us" is a pronoun ("help us"). */
@@ -179,13 +232,13 @@ const REGION_BY_NAME = new Map<string, string>(
   regionNames.map((n) => [fold(n.name.replace(/\./g, '')), n.canon] as [string, string]),
 );
 
-/** The country or region a phrase captured after a preposition is the name of, or undefined. */
+/** The country, region or city a phrase captured after a preposition is the name of (by any spelling), or undefined. */
 const nameOf = (key: string): string | undefined =>
-  ALIAS_NODOT.get(key) ?? EXTRA_BY_NAME.get(key) ?? REGION_BY_NAME.get(key);
+  ALIAS_NODOT.get(key) ?? EXTRA_BY_NAME.get(key) ?? REGION_BY_NAME.get(key) ?? PLACE_BY_NAME.get(key)?.canon;
 
 /** The country or city a single word is the name of, or undefined. Never a region. */
 const placeNamed = (word: string): string | undefined =>
-  ALIAS_NODOT.get(word) ?? EXTRA_BY_NAME.get(word) ?? (KNOWN_PLACES.has(word) ? word : undefined);
+  ALIAS_NODOT.get(word) ?? EXTRA_BY_NAME.get(word) ?? PLACE_BY_NAME.get(word)?.canon;
 
 /**
  * Canonical place terms mentioned in free text: country aliases and region
@@ -203,12 +256,13 @@ export function locationTerms(text: string | null | undefined): string[] {
   const { countries, regions, places, rest } = scan(text, WANT_SCAN);
   const out = new Set<string>(countries);
   if (mentionsUS(text)) out.add('united states');
-  const prepRe = /\b(in|based in|located in|from|within|near)\s+(?:the\s+)?([A-Z][A-Za-z.]+(?:\s+[A-Z][A-Za-z.]+)?)/g;
+  // Letters, not only A-Z: "in Düsseldorf", "in Zürich" and "in Österreich" are the launch audience's wants.
+  const prepRe = /\b(in|based in|located in|from|within|near)\s+(?:the\s+)?(\p{Lu}[\p{L}.]+(?:\s+\p{Lu}[\p{L}.]+)?)/gu;
   let m: RegExpExecArray | null;
   while ((m = prepRe.exec(rest)) !== null) {
     // Compare without dots so "U.K." and "U.S." resolve to their country, not
-    // to a phantom city called "u.k".
-    const key = m[2].toLowerCase().replace(/\./g, '').trim();
+    // to a phantom city called "u.k". Folded, so "Köln" is the "koln" the table knows.
+    const key = fold(m[2].replace(/\./g, ''));
     const words = key.split(' ');
     // "The Bahamas" starts with a word that is no place, and is one.
     if (!key || (NOT_PLACES.has(words[0]) && !nameOf(key))) continue;
@@ -218,7 +272,7 @@ export function locationTerms(text: string | null | undefined): string[] {
     // "in Berlin Mitte", "in Austin Texas": two capitalised words that are not a place together but
     // start with one. After "from" the pair is as often a company or a school ("from Boston Consulting
     // Group"), so there only a place that stands alone counts.
-    if (!canon && !KNOWN_PLACES.has(key) && words.length > 1 && m[1] !== 'from') canon = placeNamed(words[0]);
+    if (!canon && words.length > 1 && m[1] !== 'from') canon = placeNamed(words[0]);
     out.add(canon ?? key); // known country or region; anything else is a city or an unknown place
   }
   for (const p of places) out.add(p);
@@ -294,11 +348,16 @@ const NAMED_PLACES = new Map<string, NamedPlaces>();
 function placesNamedIn(location: string): NamedPlaces {
   const known = NAMED_PLACES.get(location);
   if (known) return known;
-  const { countries, regions, places } = scan(fold(location), PROFILE_SCAN);
-  if (mentionsUS(location)) countries.add('united states');
+  const found = scan(fold(location), PROFILE_SCAN);
+  if (mentionsUS(location)) found.countries.add('united states');
+  // A country written out says where the person is. Without one a state or province does ("Paris,
+  // Texas" is the US), and without that a city ("Greater Düsseldorf Area" is Germany). A two-letter
+  // code is none of these: "Omaha, NE" is Omaha's country, not Niger's.
+  const countries = found.countries.size ? found.countries
+    : found.stateCountries.size ? found.stateCountries : found.cityCountries;
   // Locations repeat across the people a want is scored against; the cache is bounded.
   if (NAMED_PLACES.size >= 5000) NAMED_PLACES.clear();
-  const named = { countries, regions, places };
+  const named = { countries, regions: found.regions, places: found.places };
   NAMED_PLACES.set(location, named);
   return named;
 }

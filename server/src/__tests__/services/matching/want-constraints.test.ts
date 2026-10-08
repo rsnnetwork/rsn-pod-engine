@@ -270,9 +270,10 @@ describe('a region is satisfied by a country inside it', () => {
     expect(satisfies('investors in Europe', '')).toBe(false);
   });
 
-  it('a region only matches whole words: no "eu" inside "Eugene" or "Neuchatel"', () => {
+  it('a region only matches whole words: no "eu" inside "Eugene", "Euclid" or "Eureka"', () => {
     expect(satisfies('investors in the EU', 'Eugene, Oregon')).toBe(false);
-    expect(satisfies('investors in the EU', 'Neuchatel')).toBe(false);
+    expect(satisfies('investors in the EU', 'Euclid, Ohio')).toBe(false);
+    expect(satisfies('investors in the EU', 'Eureka')).toBe(false);
     // And a country name inside a longer name is not that country: "Guinea" in "Papua New Guinea"
     // is not Africa, "New Mexico" is not Mexico.
     expect(satisfies('investors in Africa', 'Port Moresby, Papua New Guinea')).toBe(false);

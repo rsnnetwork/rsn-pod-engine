@@ -5,9 +5,9 @@
 // in it would silently take people out of a region or put them in the wrong one.
 
 import {
-  REGIONS, COUNTRY_NAMES, COUNTRIES_IN_NO_REGION, KNOWN_PLACES, regionByKey, regionLabel, placeLabel,
+  REGIONS, COUNTRY_NAMES, COUNTRIES_IN_NO_REGION, ENDONYMS, regionByKey, regionLabel, placeLabel,
 } from '../../../services/matching/want-regions';
-import { locationCountries } from '../../../services/matching/want-constraints';
+import { COUNTRY_ALIASES, locationCountries } from '../../../services/matching/want-constraints';
 
 const countriesOf = (key: string): string[] => [...regionByKey(key)!.countries];
 const inside = (small: string, big: string) => countriesOf(small).every((c) => countriesOf(big).includes(c));
@@ -86,15 +86,16 @@ describe('the region table', () => {
     expect(locationCountries('Malabo, Equatorial Guinea')).toEqual(['equatorial guinea']);
     expect(locationCountries('Bissau, Guinea-Bissau')).toEqual(['guinea-bissau']);
     expect(locationCountries('Juba, South Sudan')).toEqual(['south sudan']);
-    expect(locationCountries('Albuquerque, New Mexico')).toEqual([]);
-    expect(locationCountries('Vancouver, British Columbia')).toEqual([]); // not "British", so not the UK
-    expect(locationCountries('Boston, New England')).toEqual([]); // not England
-    expect(locationCountries('Sydney, New South Wales')).toEqual([]); // not Wales
+    expect(locationCountries('Albuquerque, New Mexico')).toEqual(['united states']); // a state: the US, not Mexico
+    expect(locationCountries('Vancouver, British Columbia')).toEqual(['canada']); // not "British", so not the UK
+    expect(locationCountries('Boston, New England')).toEqual(['united states']); // not England
+    expect(locationCountries('Sydney, New South Wales')).toEqual(['australia']); // not Wales
     expect(locationCountries('Belfast, Northern Ireland')).toEqual(['united kingdom']); // not Ireland
     expect(locationCountries('Lagos, Nigeria')).toEqual(['nigeria']);
     expect(locationCountries('Santo Domingo, Dominican Republic')).toEqual(['dominican republic']);
-    // Georgia is the state as often as the country, so it is left out rather than guessed.
-    expect(locationCountries('Atlanta, Georgia')).toEqual([]);
+    // Georgia is the state as often as the country, so it is no country on its own: Atlanta says the US.
+    expect(locationCountries('Atlanta, Georgia')).toEqual(['united states']);
+    expect(locationCountries('Georgia')).toEqual([]);
   });
 
   it('reads "the EU" and "the European Union" as Europe: one region, the wider list', () => {
@@ -174,6 +175,16 @@ describe('the name a card prints after "in"', () => {
   });
 });
 
+describe('the names a country is written with at home', () => {
+  it('belong to countries the tables know, and resolve back to them', () => {
+    const known = new Set([...Object.keys(COUNTRY_ALIASES), ...Object.keys(COUNTRY_NAMES)]);
+    expect(Object.keys(ENDONYMS).filter((canon) => !known.has(canon))).toEqual([]);
+    const lost = Object.entries(ENDONYMS)
+      .flatMap(([canon, names]) => names.filter((n) => !locationCountries(n).includes(canon)).map((n) => `${n} -> ${canon}`));
+    expect(lost).toEqual([]);
+  });
+});
+
 describe('the country names the app itself writes into a location', () => {
   // The onboarding card stored a member's country as Intl.DisplayNames wrote it, so those exact
   // spellings are what sits in real profiles ("Türkiye", "Czechia", "Bosnia & Herzegovina",
@@ -233,26 +244,5 @@ describe('every sovereign state resolves from the name Intl gives it', () => {
   it('does not take Dominica for the Dominican Republic or Grenada for a Spanish city', () => {
     expect(locationCountries('Roseau, Dominica')).toEqual(['dominica']);
     expect(locationCountries('Santo Domingo, Dominican Republic')).toEqual(['dominican republic']);
-  });
-});
-
-describe('the cities, states and provinces the matcher knows are places', () => {
-  it('knows the ones members name, in the one or two words the extractor captures', () => {
-    const missing = [
-      'london', 'new york', 'berlin', 'nairobi', 'san francisco', 'tel aviv', 'cape town', 'mumbai',
-      'texas', 'california', 'north carolina', 'ontario', 'british columbia', 'prince edward',
-      'mannheim', 'karlsruhe', 'aarhus',
-    ].filter((c) => !KNOWN_PLACES.has(c));
-    expect(missing).toEqual([]);
-  });
-
-  it('is lowercase ASCII, at most two words, and never a name a country or region already has', () => {
-    const problems: string[] = [];
-    for (const c of KNOWN_PLACES) {
-      if (!/^[a-z]+( [a-z]+)?$/.test(c)) problems.push(`${c}: not lowercase ASCII, one or two words`);
-      if (locationCountries(c).length) problems.push(`${c}: is (or contains) a country`);
-      if (REGIONS.some((r) => r.names.includes(c))) problems.push(`${c}: is a region`);
-    }
-    expect(problems).toEqual([]);
   });
 });
