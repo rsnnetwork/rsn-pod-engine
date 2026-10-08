@@ -59,8 +59,9 @@ export default function ForYouPage() {
     queryKey: reasonKeys.forYou,
     queryFn: fetchForYou,
     enabled: !!userId,
-    // The next event follows pod membership, so a pod change refreshes this page too.
-    meta: { entities: userId ? [E.user(userId), E.userInvites(userId), E.userDms(userId), E.userPods(userId)] : [] },
+    // The next event follows pod membership and the events themselves, so a pod change, and an event created, changed,
+    // cancelled or deleted (the server announces those as user:<id>:sessions), refresh this page too.
+    meta: { entities: userId ? [E.user(userId), E.userInvites(userId), E.userDms(userId), E.userPods(userId), E.userSessions(userId)] : [] },
   });
   // Offline with nothing to show yet: the request exists and waits for the connection. A skeleton would never
   // tell the member why, so the error says it; the request resumes by itself when the connection returns. The

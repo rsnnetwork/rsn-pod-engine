@@ -55,7 +55,8 @@ export default function ForYouRail({ nextEvent, failed }: Props) {
     queryKey: ['reason', 'rail-pods'],
     queryFn: () => api.get('/pods?status=active').then((r) => r.data.data as RailPod[]),
     enabled: !!userId,
-    meta: { entities: userId ? [E.userPods(userId)] : [] },
+    // A pod's list carries its session count, so an event change refreshes it as well as a pod change.
+    meta: { entities: userId ? [E.userPods(userId), E.userSessions(userId)] : [] },
   });
   const recent = useQuery({
     queryKey: reasonKeys.recent,

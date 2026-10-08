@@ -28,11 +28,11 @@ const contrast = (a: string, b: string) => {
 };
 
 describe('For You: what the page asks for, and when it says what', () => {
-  it('its query carries the four tags a card or the next event depends on, pods included (the next event follows pod membership)', () => {
+  it('its query carries the five tags a card or the next event depends on: pods (the next event follows pod membership) and sessions (it follows the events themselves, which the server announces as user:<id>:sessions)', () => {
     const entities = page().match(/meta: \{ entities: userId \? \[([^\]]*)\] : \[\] \}/);
     expect(entities).not.toBeNull();
     const tags = [...entities![1].matchAll(/E\.(\w+)\(userId\)/g)].map((m) => m[1]);
-    expect([...tags].sort()).toEqual(['user', 'userDms', 'userInvites', 'userPods']);
+    expect([...tags].sort()).toEqual(['user', 'userDms', 'userInvites', 'userPods', 'userSessions']);
     expect(page()).toMatch(/queryKey: reasonKeys\.forYou,\s*queryFn: fetchForYou,/);
   });
 
@@ -249,6 +249,12 @@ describe('For You: the rail', () => {
     }
   });
 
+  it('refreshes the pods card when an event is created, changed, cancelled or deleted (user sessions, which carry the pod\'s session count) as well as when a pod changes', () => {
+    const own = rail().match(/queryKey: \['reason', 'rail-pods'\][\s\S]*?meta: \{ entities: userId \? \[([^\]]*)\] : \[\] \}/);
+    expect(own).not.toBeNull();
+    expect([...own![1].matchAll(/E\.(\w+)\(userId\)/g)].map((m) => m[1]).sort()).toEqual(['userPods', 'userSessions']);
+  });
+
   it('refreshes recent introductions when a request is answered (user and invite tags)', () => {
     expect(rail()).toMatch(/queryKey: reasonKeys\.recent,[\s\S]*?E\.user\(userId\), E\.userInvites\(userId\)/);
   });
@@ -289,10 +295,11 @@ describe('For You: links, words and the buttons the end-to-end spec presses', ()
     }
   });
 
-  it('says "event", never "session", in anything a member reads (the URL /sessions is fine)', () => {
+  it('says "event", never "session", in anything a member reads (the URL /sessions is fine, and so is the name of the realtime tag for events, which no member reads)', () => {
     for (const src of [page(), rail(), empty()]) {
       const words = withoutComments(src)
         .replace(/^import\b[^;]*;$/gm, '')
+        .replace(/\bE\.userSessions\(userId\)/g, '')
         .replace(/(['"`])\/[^'"`]*\1/g, '');
       expect(words).not.toMatch(/session/i);
     }
