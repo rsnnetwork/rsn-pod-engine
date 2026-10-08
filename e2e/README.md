@@ -29,6 +29,21 @@ Users created via `helpers/auth.ts:createTestUser()` — directly in DB with ema
 - Pods owned by those users
 - audit_log, refresh_tokens, notifications, encounter_history, invites tied to those users
 
+### When a run is killed
+
+A run that is killed never reaches its clean-up, and its throwaway members stay live where real members can
+see them. `sweep-throwaways.mjs` finds the members whose address is exactly `%@rsn-e2e.invalid` or
+`delivered+%@resend.dev` and removes them with the same `cleanup()` the specs use. It takes the database from
+`DATABASE_URL` only (it never reads `server/.env`) and changes nothing unless told to:
+
+```bash
+DATABASE_URL=<address> node sweep-throwaways.mjs                       # dry run: lists them
+DATABASE_URL=<address> node sweep-throwaways.mjs --apply --expect <n>  # deletes them, if exactly <n> are found
+```
+
+The delete is one transaction: it commits only if the users table drops by exactly `<n>`, and rolls back
+otherwise (a throwaway that owns a pod, for example, is refused by the database and nothing is deleted).
+
 ## What's tested
 
 - **manual-rooms.spec.ts** — ghost room disappears after match completes, bulk create works
