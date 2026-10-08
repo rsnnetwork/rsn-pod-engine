@@ -350,6 +350,84 @@ const CANADIAN_PROVINCES: readonly string[] = [
   'northwest territories',
 ];
 
+// ── Regions written after a city ───────────────────────────────────────────────
+//
+// A county or a state that members write after a city ("Halifax, West Yorkshire", "Newcastle, New
+// South Wales"). Like a US state they decide the country over a city of the same name elsewhere
+// (Halifax in Canada), but a want never names them: "founders in Kent" would take only the people
+// who write Kent, not the ones in Canterbury. Only names that are no other country's town or county
+// are listed (not Kent, Essex, Norfolk, Durham or Cheshire, which are towns in the United States too).
+const REGIONS_AFTER_A_CITY: Readonly<Record<string, readonly string[]>> = {
+  australia: ['new south wales|nsw'],
+  'united kingdom': [
+    'yorkshire', 'west yorkshire', 'south yorkshire', 'north yorkshire', 'east yorkshire', 'greater manchester',
+    'merseyside', 'tyne and wear', 'west midlands', 'lancashire', 'derbyshire', 'nottinghamshire', 'leicestershire',
+    'lincolnshire', 'cambridgeshire', 'oxfordshire', 'hertfordshire', 'buckinghamshire', 'bedfordshire',
+    'northamptonshire', 'warwickshire', 'worcestershire', 'herefordshire', 'shropshire', 'staffordshire',
+    'gloucestershire', 'wiltshire', 'cumbria', 'east sussex', 'west sussex',
+  ],
+};
+
+// ── Two-letter codes ───────────────────────────────────────────────────────────
+//
+// A US state's or a Canadian province's code, last in a location after a comma, says that a city of
+// another country named beside it is a namesake: "Vienna, VA" is Virginia, not Austria. It is read
+// only then (a code with no city beside it says nothing, so "Omaha, NE" is never Niger), and not when
+// the code is that country's own: "Berlin, DE" (Germany's ISO code, Delaware's code), "Toronto, CA".
+
+/** A US state's or a Canadian province's code, to the place it names. */
+export interface RegionCode { place: string; country: 'united states' | 'canada' }
+
+const US_STATE_CODES: ReadonlyArray<readonly [string, string]> = [
+  ['al', 'alabama'], ['ak', 'alaska'], ['az', 'arizona'], ['ar', 'arkansas'], ['ca', 'california'], ['co', 'colorado'],
+  ['ct', 'connecticut'], ['de', 'delaware'], ['fl', 'florida'], ['ga', 'georgia'], ['hi', 'hawaii'], ['id', 'idaho'],
+  ['il', 'illinois'], ['in', 'indiana'], ['ia', 'iowa'], ['ks', 'kansas'], ['ky', 'kentucky'], ['la', 'louisiana'],
+  ['me', 'maine'], ['md', 'maryland'], ['ma', 'massachusetts'], ['mi', 'michigan'], ['mn', 'minnesota'],
+  ['ms', 'mississippi'], ['mo', 'missouri'], ['mt', 'montana'], ['ne', 'nebraska'], ['nv', 'nevada'],
+  ['nh', 'new hampshire'], ['nj', 'new jersey'], ['nm', 'new mexico'], ['ny', 'new york'], ['nc', 'north carolina'],
+  ['nd', 'north dakota'], ['oh', 'ohio'], ['ok', 'oklahoma'], ['or', 'oregon'], ['pa', 'pennsylvania'],
+  ['ri', 'rhode island'], ['sc', 'south carolina'], ['sd', 'south dakota'], ['tn', 'tennessee'], ['tx', 'texas'],
+  ['ut', 'utah'], ['vt', 'vermont'], ['va', 'virginia'], ['wa', 'washington'], ['wv', 'west virginia'],
+  ['wi', 'wisconsin'], ['wy', 'wyoming'], ['dc', 'washington dc'],
+];
+
+const CANADIAN_PROVINCE_CODES: ReadonlyArray<readonly [string, string]> = [
+  ['ab', 'alberta'], ['bc', 'british columbia'], ['mb', 'manitoba'], ['nb', 'new brunswick'], ['nl', 'newfoundland'],
+  ['ns', 'nova scotia'], ['nt', 'northwest territories'], ['nu', 'nunavut'], ['on', 'ontario'], ['pe', 'prince edward'],
+  ['qc', 'quebec'], ['sk', 'saskatchewan'], ['yt', 'yukon'],
+];
+
+export const REGION_CODES: ReadonlyMap<string, RegionCode> = new Map<string, RegionCode>([
+  ...US_STATE_CODES.map(([code, place]): [string, RegionCode] => [code, { place, country: 'united states' }]),
+  ...CANADIAN_PROVINCE_CODES.map(([code, place]): [string, RegionCode] => [code, { place, country: 'canada' }]),
+]);
+
+/**
+ * The codes above that are also a country's ISO 3166 code ("DE" is Delaware and Germany, "NL" Newfoundland
+ * and Labrador and the Netherlands). Beside a city of that country the code is the country's.
+ */
+export const CODES_OF_COUNTRIES: ReadonlyMap<string, string> = new Map([
+  ['al', 'albania'], ['ar', 'argentina'], ['az', 'azerbaijan'], ['ca', 'canada'], ['co', 'colombia'], ['de', 'germany'],
+  ['ga', 'gabon'], ['id', 'indonesia'], ['il', 'israel'], ['in', 'india'], ['la', 'laos'], ['ma', 'morocco'],
+  ['md', 'moldova'], ['me', 'montenegro'], ['mn', 'mongolia'], ['mo', 'macao'], ['mt', 'malta'], ['ne', 'niger'],
+  ['nl', 'netherlands'], ['pa', 'panama'], ['pe', 'peru'], ['sc', 'seychelles'], ['sd', 'sudan'], ['sk', 'slovakia'],
+  ['tn', 'tunisia'], ['va', 'vatican city'],
+]);
+
+/**
+ * Codes a country writes for its own regions after a city, that are also a US state's or a Canadian
+ * province's: "Perth, WA" is Western Australia, "Monterrey, NL" is Nuevo Leon, "Milano, MI" is the
+ * province of Milan. Listed for the countries whose cities the table has and that write their regions
+ * this way (Australia, Brazil, India, Italy, Mexico), and only the codes that collide.
+ */
+export const OWN_REGION_CODES: Readonly<Record<string, readonly string[]>> = {
+  australia: ['nt', 'wa'],
+  brazil: ['pe', 'sc'],
+  india: ['tn'],
+  italy: ['ca', 'ct', 'me', 'mi', 'mo', 'pa', 'pe', 'tn'],
+  mexico: ['bc', 'nl'],
+};
+
 /** Places a want can name that do not say where a person is: another country has the name too. */
 const SHARED_NAMES: ReadonlyArray<readonly [string, PlaceLevel]> = [
   ['cambridge', 'city'], // England, Massachusetts and Ontario
@@ -371,6 +449,8 @@ export const PLACES: readonly Place[] = [
   place('northern ireland', 'united kingdom', 'state'),
   // The cities around San Francisco Bay: a place a want names, a region of the cities below (SUBREGIONS).
   place('bay area', 'united states', 'city'),
+  ...Object.entries(REGIONS_AFTER_A_CITY)
+    .flatMap(([country, entries]) => entries.map((entry) => ({ ...place(entry, country, 'state'), locationOnly: true }))),
   ...SHARED_NAMES.map(([name, level]) => place(name, null, level)),
 ];
 

@@ -4,7 +4,9 @@
 // place when the matcher knows the city. The table is hand-kept data: a typo in it would put a
 // person in the wrong country or take a place away from a want, so its shape is pinned here.
 
-import { PLACES, KNOWN_PLACES, PLACE_BY_NAME, SUBREGIONS } from '../../../services/matching/want-cities';
+import {
+  CODES_OF_COUNTRIES, KNOWN_PLACES, OWN_REGION_CODES, PLACES, PLACE_BY_NAME, REGION_CODES, SUBREGIONS,
+} from '../../../services/matching/want-cities';
 import {
   COUNTRY_ALIASES, LOOK_ALIKES, extractConstraints, fold, locationCountries,
 } from '../../../services/matching/want-constraints';
@@ -18,13 +20,30 @@ const countryOf = (name: string) => PLACE_BY_NAME.get(name)?.country;
 // want never names them (a place in a want is a hard filter). The rule is in want-cities.ts; this pins
 // the list, so adding to it is a decision someone makes on purpose.
 describe('places that are also organisations (location only)', () => {
-  const only = PLACES.filter((p) => p.locationOnly).map((p) => p.canon).sort();
+  // The counties and the Australian state that members write after a city are location only for another
+  // reason (a want does not name a county), and are pinned apart below.
+  const regionsAfterACity = [
+    'east sussex', 'east yorkshire', 'greater manchester', 'merseyside', 'new south wales', 'north yorkshire',
+    'south yorkshire', 'tyne and wear', 'west midlands', 'west sussex', 'west yorkshire', 'yorkshire',
+  ];
+  const onlyAll = PLACES.filter((p) => p.locationOnly).map((p) => p.canon).sort();
+  const only = onlyAll.filter((name) => !name.endsWith('shire') && name !== 'cumbria' && !regionsAfterACity.includes(name));
 
   it('are the universities, companies and metonyms the rule names, and no more', () => {
     expect(only).toEqual([
       'ann arbor', 'berkeley', 'cambridge', 'chapel hill', 'cupertino', 'menlo park', 'mountain view', 'new haven',
       'oxford', 'palo alto', 'princeton', 'redmond', 'santa clara', 'santander', 'silicon valley',
     ]);
+  });
+
+  it('are, besides those, only the counties and the Australian state written after a city', () => {
+    const rest = onlyAll.filter((name) => !only.includes(name));
+    expect(rest.filter((name) => !regionsAfterACity.includes(name) && !name.endsWith('shire') && name !== 'cumbria')).toEqual([]);
+    expect(rest).toEqual(expect.arrayContaining(['west yorkshire', 'new south wales', 'lancashire', 'oxfordshire', 'cumbria']));
+    // none of them is a town or a county of the United States or Canada as well
+    for (const name of ['kent', 'essex', 'norfolk', 'suffolk', 'durham', 'cheshire', 'devon', 'cornwall', 'surrey']) {
+      expect([name, PLACES.some((p) => p.canon === name)]).toEqual([name, false]);
+    }
   });
 
   it('are in the table, so a person there resolves, and out of what a want can name', () => {
@@ -45,6 +64,50 @@ describe('places that are also organisations (location only)', () => {
       'amsterdam', 'toronto', 'bilbao', 'washington dc',
     ].filter((name) => !KNOWN_PLACES.has(name));
     expect(missing).toEqual([]);
+  });
+});
+
+describe('the two-letter codes of US states and Canadian provinces', () => {
+  const canons = new Set(PLACES.map((p) => p.canon));
+
+  it('name a place the table has, in the right country', () => {
+    expect(REGION_CODES.size).toBe(51 + 13); // 50 states and DC, 10 provinces and 3 territories
+    for (const [code, region] of REGION_CODES) {
+      expect([code, /^[a-z]{2}$/.test(code)]).toEqual([code, true]);
+      expect([code, canons.has(region.place)]).toEqual([code, true]);
+      const country = PLACES.find((p) => p.canon === region.place)?.country;
+      // Georgia is the one place with no country of its own, and the state is meant by GA
+      expect([code, country === null ? region.country : country]).toEqual([code, region.country]);
+    }
+    expect(REGION_CODES.get('va')).toEqual({ place: 'virginia', country: 'united states' });
+    expect(REGION_CODES.get('on')).toEqual({ place: 'ontario', country: 'canada' });
+    expect(REGION_CODES.get('dc')).toEqual({ place: 'washington dc', country: 'united states' });
+  });
+
+  it('keep, for each code that is also a country\'s, exactly the codes of the two kinds', () => {
+    for (const [code, country] of CODES_OF_COUNTRIES) {
+      expect([code, REGION_CODES.has(code)]).toEqual([code, true]);
+      expect([code, knownCountries.has(country)]).toEqual([code, true]);
+    }
+    // no other region code is a country's ISO code in the tables (a check by the names Intl gives). ICU still
+    // answers the retired code NH, the New Hebrides, with Vanuatu: that is not a country's code today.
+    const retired = new Set(['nh']);
+    const display = new Intl.DisplayNames(['en'], { type: 'region' });
+    if (display.of('DE') === 'Germany') {
+      const missed = [...REGION_CODES.keys()].filter((code) => {
+        const name = display.of(code.toUpperCase());
+        return !retired.has(code) && name !== undefined && name !== code.toUpperCase() && !CODES_OF_COUNTRIES.has(code)
+          && locationCountries(name).length > 0;
+      });
+      expect(missed).toEqual([]);
+    }
+  });
+
+  it('list a country\'s own region codes only for codes that collide, and for countries the table has', () => {
+    for (const [country, codes] of Object.entries(OWN_REGION_CODES)) {
+      expect([country, knownCountries.has(country)]).toEqual([country, true]);
+      expect([country, codes.filter((code) => !REGION_CODES.has(code))]).toEqual([country, []]);
+    }
   });
 });
 

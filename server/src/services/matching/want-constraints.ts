@@ -27,7 +27,10 @@
 import {
   COUNTRY_NAMES, ENDONYMS, REGIONS, regionByKey, regionCovers,
 } from './want-regions';
-import { KNOWN_PLACES, PLACES, PLACE_BY_NAME, SUBREGIONS } from './want-cities';
+import {
+  CODES_OF_COUNTRIES, KNOWN_PLACES, OWN_REGION_CODES, PLACES, PLACE_BY_NAME, REGION_CODES, SUBREGIONS,
+} from './want-cities';
+import type { RegionCode } from './want-cities';
 
 export interface WantConstraints {
   /**
@@ -180,8 +183,13 @@ const WANT_SCAN = compile(
 const placeNames: PlaceName[] = PLACES.flatMap((p) => p.names.map((name) => ({
   name, kind: p.level, canon: p.canon, ...(p.country ? { country: p.country } : {}),
 })));
+// A decoy that is a place in a location is read as the place ("New South Wales" is an Australian state there).
+const placeSpellings: ReadonlySet<string> = new Set(PLACES.flatMap((p) => p.names));
 const PROFILE_SCAN = compile(
-  [...countryNames, ...extraCountryNames, ...regionNames, ...LOOK_ALIKES.filter((n) => n.kind === 'decoy'), ...placeNames],
+  [
+    ...countryNames, ...extraCountryNames, ...regionNames,
+    ...LOOK_ALIKES.filter((n) => n.kind === 'decoy' && !placeSpellings.has(n.name)), ...placeNames,
+  ],
   fold,
 );
 
@@ -194,13 +202,16 @@ interface Found {
   /** The countries the states and provinces found are in, and the cities: not names of countries. */
   stateCountries: Set<string>;
   cityCountries: Set<string>;
+  /** True when a place was found that several countries have ("Cambridge"), so it names no country. */
+  sharedName: boolean;
   /** The text with everything found blanked out. */
   rest: string;
 }
 
 function scan(text: string, scanners: Scanners): Found {
   const found: Found = {
-    countries: new Set(), regions: new Set(), places: new Set(), stateCountries: new Set(), cityCountries: new Set(), rest: text,
+    countries: new Set(), regions: new Set(), places: new Set(), stateCountries: new Set(), cityCountries: new Set(),
+    sharedName: false, rest: text,
   };
   const candidates: number[] = [];
   for (const word of new Set(text.toLowerCase().match(WORD) ?? [])) candidates.push(...(scanners.byFirstWord.get(word) ?? []));
@@ -213,6 +224,7 @@ function scan(text: string, scanners: Scanners): Found {
       else if (s.kind === 'state' || s.kind === 'city') {
         found.places.add(s.canon);
         if (s.country) (s.kind === 'state' ? found.stateCountries : found.cityCountries).add(s.country);
+        else found.sharedName = true;
       }
       return lead + ' '.repeat(hit.length - lead.length);
     });
@@ -368,6 +380,23 @@ export interface ConstraintCheck {
 interface NamedPlaces { countries: Set<string>; regions: Set<string>; places: Set<string> }
 const NAMED_PLACES = new Map<string, NamedPlaces>();
 
+/**
+ * The US state or Canadian province whose two-letter code is the last part of a location after a
+ * comma ("Vienna, VA"), when it settles a namesake: a city or a state of another country, or a name
+ * several countries have ("Cambridge, MA"), is beside it. Not when the code is that country's own:
+ * "Berlin, DE" (Germany's code), "Toronto, CA", "Perth, WA" (Western Australia) keep their city.
+ */
+function regionCodeThatSettles(location: string, found: Found): RegionCode | null {
+  const parts = location.split(',');
+  if (parts.length < 2) return null;
+  const code = /^([A-Za-z]{2})\.?$/.exec(parts[parts.length - 1].trim())?.[1].toLowerCase();
+  const region = code ? REGION_CODES.get(code) : undefined;
+  if (!code || !region) return null;
+  const beside = [...found.cityCountries, ...found.stateCountries];
+  if (beside.some((k) => CODES_OF_COUNTRIES.get(code) === k || OWN_REGION_CODES[k]?.includes(code))) return null;
+  return found.sharedName || beside.some((k) => k !== region.country) ? region : null;
+}
+
 /** The countries, regions and cities, states and provinces a person's location names, accents and punctuation ignored. */
 function placesNamedIn(location: string): NamedPlaces {
   const known = NAMED_PLACES.get(location);
@@ -375,10 +404,16 @@ function placesNamedIn(location: string): NamedPlaces {
   const found = scan(fold(location), PROFILE_SCAN);
   if (mentionsUS(location)) found.countries.add('united states');
   // A country written out says where the person is. Without one a state or province does ("Paris,
-  // Texas" is the US), and without that a city ("Greater Düsseldorf Area" is Germany). A two-letter
-  // code is none of these: "Omaha, NE" is Omaha's country, not Niger's.
-  const countries = found.countries.size ? found.countries
-    : found.stateCountries.size ? found.stateCountries : found.cityCountries;
+  // Texas" is the US), and without that a city ("Greater Düsseldorf Area" is Germany). A US state's or
+  // Canadian province's code last in the location does what its name would, but only when it settles
+  // a namesake ("Vienna, VA"); a code on its own is none of these ("Omaha, NE" is not Niger).
+  let countries: Set<string>;
+  const coded = found.countries.size ? null : regionCodeThatSettles(location, found);
+  if (found.countries.size) countries = found.countries;
+  else if (coded) {
+    found.places.add(coded.place);
+    countries = new Set([coded.country]);
+  } else countries = found.stateCountries.size ? found.stateCountries : found.cityCountries;
   // Locations repeat across the people a want is scored against; the cache is bounded.
   if (NAMED_PLACES.size >= 5000) NAMED_PLACES.clear();
   const named = { countries, regions: found.regions, places: found.places };

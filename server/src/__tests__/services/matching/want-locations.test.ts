@@ -83,6 +83,114 @@ describe('a two-letter code is never a country', () => {
   });
 });
 
+// A US state or Canadian province code last in a location ("Vienna, VA") says that a city of another country
+// named beside it is a namesake: Vienna, Virginia is not Austria. The code is read only then, and only
+// when it is not that country's own ("Berlin, DE", "Toronto, CA", "Perth, WA" keep their city), and a code
+// with no city beside it still says nothing.
+describe('a US or Canadian town named after a foreign city', () => {
+  it.each([
+    ['Vienna, VA', 'united states'], ['Naples, FL', 'united states'], ['St. Petersburg, FL', 'united states'],
+    ['Dublin, CA', 'united states'], ['Dublin, OH', 'united states'], ['Alexandria, VA', 'united states'],
+    ['Athens, GA', 'united states'], ['Birmingham, AL', 'united states'], ['Manchester, NH', 'united states'],
+    ['Oxford, MS', 'united states'], ['Paris, TX', 'united states'], ['Bergen County, NJ', 'united states'],
+    ['Cairo, IL', 'united states'], ['Vancouver, WA', 'united states'], ['Berlin, NH', 'united states'],
+    ['London, ON', 'canada'], ['Perth, ON', 'canada'], ['Manchester, NB', 'canada'], ['Dublin, ON', 'canada'],
+    ['Cambridge, MA', 'united states'], ['Cambridge, ON', 'canada'], ['Dublin, Ohio', 'united states'],
+  ])('%s is in %s', (location, country) => {
+    expect(countriesOf(location)).toEqual([country]);
+  });
+
+  it('reads the code in any case, and with a full stop', () => {
+    expect(countriesOf('dublin, ca')).toEqual(['united states']);
+    expect(countriesOf('Vienna, Va.')).toEqual(['united states']);
+    expect(countriesOf('Vienna ,VA')).toEqual(['united states']);
+  });
+
+  it('keeps the city when the code is that country\'s own, or the city is the code\'s', () => {
+    for (const [location, country] of [
+      ['Berlin, DE', 'germany'], ['Toronto, CA', 'canada'], ['Barcelona, ES', 'spain'], ['Bangkok, TH', 'thailand'],
+      ['Mumbai, IN', 'india'], ['Tel Aviv, IL', 'israel'], ['Amsterdam, NL', 'netherlands'], ['Lima, PE', 'peru'],
+      ['Casablanca, MA', 'morocco'], ['Valletta, MT', 'malta'], ['Tunis, TN', 'tunisia'], ['Medellin, CO', 'colombia'],
+      ['Buenos Aires, AR', 'argentina'], ['Bandung, ID', 'indonesia'], ['Panama City, PA', 'panama'],
+      ['Podgorica, ME', 'montenegro'], ['Chisinau, MD', 'moldova'], ['Khartoum, SD', 'sudan'], ['Bratislava, SK', 'slovakia'],
+      ['Vancouver, BC', 'canada'], ['Portland, OR', 'united states'], ['Austin, TX', 'united states'],
+      ['Atlanta, GA', 'united states'], ['San Jose, CA', 'united states'], ['Halifax, NS', 'canada'],
+    ]) expect([location, countriesOf(location)]).toEqual([location, [country]]);
+  });
+
+  it('keeps the city when the code is one a country writes for its own regions', () => {
+    for (const [location, country] of [
+      ['Perth, WA', 'australia'], ['Darwin, NT', 'australia'], ['Chennai, TN', 'india'], ['Coimbatore, TN', 'india'],
+      ['Monterrey, NL', 'mexico'], ['Tijuana, BC', 'mexico'], ['Recife, PE', 'brazil'], ['Florianopolis, SC', 'brazil'],
+      ['Milano, MI', 'italy'], ['Catania, CT', 'italy'], ['Palermo, PA', 'italy'], ['Modena, MO', 'italy'],
+      ['Trento, TN', 'italy'], ['Messina, ME', 'italy'], ['Cagliari, CA', 'italy'],
+    ]) expect([location, countriesOf(location)]).toEqual([location, [country]]);
+  });
+
+  it('reads a state or province spelled out, or a country written out, as before', () => {
+    expect(countriesOf('Newcastle, New South Wales')).toEqual(['australia']);
+    expect(countriesOf('Newcastle, NSW')).toEqual(['australia']);
+    expect(countriesOf('Sydney, New South Wales')).toEqual(['australia']);
+    expect(countriesOf('Vienna, Virginia')).toEqual(['united states']);
+    expect(countriesOf('Vienna, VA, USA')).toEqual(['united states']);
+    expect(countriesOf('Vienna, Austria')).toEqual(['austria']);
+    expect(countriesOf('Cambridge, UK')).toEqual(['united kingdom']);
+  });
+
+  it('puts the person in the state the code names, so a want for the state takes them', () => {
+    expect(satisfies('founders in Virginia', 'Vienna, VA')).toBe(true);
+    expect(satisfies('founders in Georgia', 'Athens, GA')).toBe(true);
+    expect(satisfies('founders in California', 'Dublin, CA')).toBe(true);
+    expect(satisfies('founders in Ontario', 'London, ON')).toBe(true);
+    expect(satisfies('founders in Massachusetts', 'Cambridge, MA')).toBe(true);
+    expect(satisfies('founders in Austria', 'Vienna, VA')).toBe(false);
+  });
+
+  it('puts them in North America and not in the country they are named after', () => {
+    expect(satisfies('investors in North America', 'Dublin, CA')).toBe(true);
+    expect(satisfies('investors in Europe', 'Dublin, CA')).toBe(false);
+    expect(satisfies('investors in Europe', 'Vienna, VA')).toBe(false);
+    expect(satisfies('investors in the EU', 'Naples, FL')).toBe(false);
+    expect(satisfies('investors in Europe', 'Athens, GA')).toBe(false);
+    expect(satisfies('investors in the UK', 'Birmingham, AL')).toBe(false);
+    expect(satisfies('investors in the UK', 'Manchester, NH')).toBe(false);
+    expect(satisfies('investors in North America', 'London, ON')).toBe(true);
+    expect(satisfies('investors in Europe', 'London, ON')).toBe(false);
+    // and the foreign city keeps its own
+    expect(satisfies('investors in Europe', 'Berlin, DE')).toBe(true);
+    expect(satisfies('investors in Asia', 'Perth, WA')).toBe(false);
+    expect(satisfies('investors in APAC', 'Perth, WA')).toBe(true);
+  });
+
+  it('is read only from the last part after a comma, and says nothing without a city', () => {
+    expect(countriesOf('Vienna VA')).toEqual(['austria']); // no comma: not a trailing code
+    expect(countriesOf('Vienna, VA, Remote')).toEqual(['austria']);
+    for (const code of ['VA', 'FL', 'ON', 'MI', 'TX', 'NE', 'IN', 'CA', 'DE']) {
+      expect([code, countriesOf(`Somewhere, ${code}`)]).toEqual([code, []]);
+    }
+  });
+});
+
+describe('a county or an Australian state written after a city', () => {
+  it('decides the country over a city of the same name elsewhere', () => {
+    expect(countriesOf('Halifax, West Yorkshire')).toEqual(['united kingdom']);
+    expect(countriesOf('Leeds, Yorkshire')).toEqual(['united kingdom']);
+    expect(countriesOf('Manchester, Greater Manchester')).toEqual(['united kingdom']);
+    expect(countriesOf('Oxford, Oxfordshire')).toEqual(['united kingdom']);
+    expect(countriesOf('Newcastle, Tyne and Wear')).toEqual(['united kingdom']);
+    expect(countriesOf('Birmingham, West Midlands')).toEqual(['united kingdom']);
+    expect(countriesOf('Perth, Western Australia')).toEqual(['australia']);
+    expect(countriesOf('Halifax')).toEqual(['canada']);
+    expect(countriesOf('Halifax, Nova Scotia')).toEqual(['canada']);
+  });
+
+  it('is not a place a want can name', () => {
+    for (const want of ['founders in West Yorkshire', 'founders in Oxfordshire', 'founders in New South Wales', 'founders in Greater Manchester']) {
+      expect([want, extractConstraints([want]).location]).toEqual([want, null]);
+    }
+  });
+});
+
 describe('Jersey City and New Jersey are the United States, never the island', () => {
   it('resolves them to the US and nothing else', () => {
     expect(countriesOf('Jersey City')).toEqual(['united states']);
