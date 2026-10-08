@@ -314,6 +314,19 @@ describe('a region in the want finds the people who are there', () => {
     expect(scoreWants(withTags, austin, undefined, own).score).toBe(0);
   });
 
+  it('a want that merely contains GCC, Nordic or Mena is not a place: the person in Texas is still found', () => {
+    const compiler = (over: Record<string, unknown> = {}) => person({
+      professionalRole: ['Engineer'], jobTitle: 'Compiler engineer', company: 'Acme',
+      expertiseText: 'compilers, GCC and LLVM', location: 'Austin, Texas', ...over,
+    });
+    const gcc = scoreWants(['compiler engineers who know GCC and LLVM'], compiler());
+    expect(gcc.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+    expect(gcc.reason).not.toMatch(/\(in /);
+    const nordic = scoreWants(['engineers from Nordic Semiconductor'], compiler({ expertiseText: 'Nordic Semiconductor firmware' }));
+    expect(nordic.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+    expect(nordic.reason).not.toMatch(/\(in /);
+  });
+
   describe('an unknown place filters nothing', () => {
     it('"in Narnia": everyone still scores as they do without it, and the reason does not print it', () => {
       for (const c of [berlin, amsterdam, milan, austin]) {

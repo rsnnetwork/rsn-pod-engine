@@ -35,6 +35,12 @@ export interface Region {
   label: string;
   /** Every way a want or a location writes it, lowercase. Includes the key. */
   names: readonly string[];
+  /**
+   * The names above that are also ordinary words ("GCC" is a compiler, "Mena" a first name, "Nordic"
+   * a semiconductor company, "Dach" the German for roof). A want reads them as this region only after
+   * a location preposition ("in the GCC"), like Jordan and Chad; a person's location always does.
+   */
+  afterPreposition?: readonly string[];
   /** The countries in it, by canonical name. */
   countries: readonly string[];
 }
@@ -126,9 +132,12 @@ export const REGIONS: readonly Region[] = [
   { key: 'europe', label: 'Europe', names: ['europe', 'european'], countries: EUROPE },
   { key: 'eu', label: 'the EU', names: ['eu', 'e.u.', 'european union'], countries: EUROPE },
   { key: 'emea', label: 'EMEA', names: ['emea'], countries: [...new Set([...EUROPE, ...MIDDLE_EAST, ...AFRICA])] },
-  { key: 'dach', label: 'DACH', names: ['dach'], countries: DACH },
+  { key: 'dach', label: 'DACH', names: ['dach'], afterPreposition: ['dach'], countries: DACH },
   { key: 'benelux', label: 'Benelux', names: ['benelux'], countries: BENELUX },
-  { key: 'nordics', label: 'the Nordics', names: ['nordics', 'nordic', 'nordic countries'], countries: NORDICS },
+  {
+    key: 'nordics', label: 'the Nordics', names: ['nordics', 'nordic', 'nordic countries'],
+    afterPreposition: ['nordic'], countries: NORDICS,
+  },
   { key: 'scandinavia', label: 'Scandinavia', names: ['scandinavia', 'scandinavian'], countries: SCANDINAVIA },
   { key: 'baltics', label: 'the Baltics', names: ['baltics', 'baltic states', 'baltic countries'], countries: BALTICS },
   {
@@ -137,11 +146,11 @@ export const REGIONS: readonly Region[] = [
   },
   { key: 'middle east', label: 'the Middle East', names: ['middle east', 'middle-east'], countries: MIDDLE_EAST },
   {
-    key: 'mena', label: 'MENA', countries: MENA,
+    key: 'mena', label: 'MENA', countries: MENA, afterPreposition: ['mena'],
     names: ['mena', 'middle east and north africa', 'middle east & north africa'],
   },
   {
-    key: 'gcc', label: 'the GCC', countries: GCC,
+    key: 'gcc', label: 'the GCC', countries: GCC, afterPreposition: ['gcc'],
     names: ['gcc', 'gulf states', 'gulf countries', 'gulf cooperation council'],
   },
   { key: 'africa', label: 'Africa', names: ['africa'], countries: AFRICA },

@@ -128,8 +128,13 @@ const regionNames: PlaceName[] = REGIONS
   .flatMap((r) => r.names.map((name) => ({ name, kind: 'region' as const, canon: r.key })));
 
 // In a want: the alias table and the regions, read as the member wrote them. A want's other
-// countries are only places after "in", "from"… (see locationTerms).
-const WANT_SCAN = compile([...countryNames, ...regionNames, ...LOOK_ALIKES], (s) => s.toLowerCase());
+// countries are only places after "in", "from"… (see locationTerms), and so are the region names
+// that are also ordinary words ("GCC", "Mena", "Nordic", "Dach": Region.afterPreposition).
+const READ_ONLY_AFTER_A_PREPOSITION = new Set(REGIONS.flatMap((r) => r.afterPreposition ?? []));
+const WANT_SCAN = compile(
+  [...countryNames, ...regionNames.filter((n) => !READ_ONLY_AFTER_A_PREPOSITION.has(n.name)), ...LOOK_ALIKES],
+  (s) => s.toLowerCase(),
+);
 // In a person's location: every country there is a name for, accents and punctuation ignored.
 const PROFILE_SCAN = compile([...countryNames, ...extraCountryNames, ...regionNames, ...LOOK_ALIKES], fold);
 
@@ -163,6 +168,11 @@ const EXTRA_BY_NAME = new Map<string, string>(
   extraCountryNames.map((n) => [fold(n.name), n.canon] as [string, string]),
 );
 
+/** The regions by the name they are written with, for a phrase captured after a preposition ("GCC" → "gcc"). */
+const REGION_BY_NAME = new Map<string, string>(
+  regionNames.map((n) => [fold(n.name.replace(/\./g, '')), n.canon] as [string, string]),
+);
+
 /**
  * Canonical place terms mentioned in free text: country aliases and region
  * names (whole-word), plus capitalised words after "in / based in / located
@@ -189,8 +199,8 @@ export function locationTerms(text: string | null | undefined): string[] {
     if (!key || NOT_PLACES.has(first)) continue;
     if (key === 'us' || key === 'usa') { out.add('united states'); continue; }
     if (key.length < 3) continue;
-    const canon = ALIAS_NODOT.get(key) ?? EXTRA_BY_NAME.get(key);
-    out.add(canon ?? key); // known alias → country; anything else is a city or an unknown place
+    const canon = ALIAS_NODOT.get(key) ?? EXTRA_BY_NAME.get(key) ?? REGION_BY_NAME.get(key);
+    out.add(canon ?? key); // known alias → country or region; anything else is a city or an unknown place
   }
   for (const p of places) out.add(p);
   for (const r of regions) out.add(r);

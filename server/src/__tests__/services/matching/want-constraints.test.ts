@@ -144,6 +144,59 @@ describe('a region in a want', () => {
   });
 });
 
+// "gcc", "mena", the singular "nordic" and "dach" are also a compiler, a first name, a semiconductor
+// company and the German word for roof. Each match is a hard place filter (everyone outside the region
+// scores 0, and the never-empty fallback never widens place), so they are read as a place only after a
+// location preposition, the rule the module already uses for Jordan and Chad. The names nothing else
+// is called (Europe, Latin America, ...) are still read anywhere.
+describe('a region name that is also an ordinary word', () => {
+  it('is not a place when the want merely contains it', () => {
+    // locationTerms lists candidates ("from Acme" is one); extractConstraints keeps the ones that are places.
+    expect(placesIn('compiler engineers who know GCC and LLVM')).toEqual([]);
+    expect(placesIn('Entwickler, die unter einem Dach arbeiten')).toEqual([]);
+    expect(placesIn('GCC and MENA are on my mind')).toEqual([]);
+    expect(placesIn('Nordic design studios')).toEqual([]);
+    for (const want of [
+      'compiler engineers who know GCC and LLVM', 'engineers from Nordic Semiconductor',
+      'meet Mena from Acme', 'Entwickler, die unter einem Dach arbeiten',
+      'GCC and MENA are on my mind', 'Nordic design studios',
+    ]) expect(extractConstraints([want]).location).toBeNull();
+  });
+
+  it('is still a place after a location preposition', () => {
+    expect(placesIn('founders in the GCC')).toEqual(['gcc']);
+    expect(placesIn('investors in MENA')).toEqual(['mena']);
+    expect(placesIn('people in DACH')).toEqual(['dach']);
+    expect(placesIn('partners in the Nordics')).toEqual(['nordics']);
+    expect(placesIn('founders in the DACH region')).toEqual(['dach']);
+    expect(placesIn('investors from DACH')).toEqual(['dach']);
+    expect(placesIn('founders based in the GCC')).toEqual(['gcc']);
+    expect(placesIn('buyers located in MENA')).toEqual(['mena']);
+    expect(placesIn('founders in Nordic countries')).toEqual(['nordics']);
+    expect(placesIn('founders within the Nordic region')).toEqual(['nordics']);
+    expect(placesIn('suppliers near DACH')).toEqual(['dach']);
+    expect(extractConstraints(['people in DACH']).location).toEqual(['dach']);
+  });
+
+  it('keeps working as a place once read: the people there are found, the others are not', () => {
+    expect(satisfies('people in DACH', 'Vienna, Austria')).toBe(true);
+    expect(satisfies('people in DACH', 'Paris, France')).toBe(false);
+    expect(satisfies('founders in the GCC', 'Doha, Qatar')).toBe(true);
+    expect(satisfies('founders in the GCC', 'Cairo, Egypt')).toBe(false);
+    expect(satisfies('investors in MENA', 'Cairo, Egypt')).toBe(true);
+    expect(satisfies('partners in the Nordics', 'Helsinki, Finland')).toBe(true);
+  });
+
+  it('leaves the names nothing else is called readable anywhere in the want', () => {
+    expect(placesIn('Latin America fintech founders')).toEqual(['latin america']);
+    expect(placesIn('European fintech founders')).toEqual(['europe']);
+    expect(placesIn('Benelux founders')).toEqual(['benelux']);
+    expect(placesIn('APAC founders')).toEqual(['apac']);
+    expect(placesIn('Scandinavia-based founders')).toEqual(['scandinavia']);
+    expect(placesIn('the Nordics are my market')).toEqual(['nordics']);
+  });
+});
+
 describe('a region is satisfied by a country inside it', () => {
   it.each([
     ['Europe', 'Berlin, Germany'], ['Europe', 'Amsterdam, Netherlands'], ['Europe', 'Milan, Italy'],
