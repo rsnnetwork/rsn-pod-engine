@@ -277,6 +277,15 @@ const PLACE_AFTER_A_PREPOSITION = new RegExp(
   String.raw`\b(in|based in|located in|from|within|near)\s+(?:the\s+)?(${NAME_WORD}(?:${NAME_GOES_ON}${NAME_WORD})?)`, 'gu',
 );
 
+/** The words that only finish the name of a place: "New York City", "Prince Edward Island", "Kansas State". */
+const PLACE_TYPE_WORDS: ReadonlySet<string> = new Set(['City', 'County', 'State', 'Province', 'Region', 'Territory', 'Island', 'Islands', 'Area']);
+
+/** Is the capitalised word at the start of `after` one that finishes a place's name: a type of place, or a state's or province's code ("Los Angeles CA")? */
+function finishesAPlace(after: string): boolean {
+  const next = /^[ \t]+(\p{Lu}\p{L}*)/u.exec(after)?.[1];
+  return !!next && (PLACE_TYPE_WORDS.has(next) || (next.length === 2 && REGION_CODES.has(next.toLowerCase())));
+}
+
 /**
  * Canonical place terms mentioned in free text: country aliases and region
  * names (whole-word), plus capitalised words after "in / based in / located
@@ -302,13 +311,14 @@ export function locationTerms(written: string | null | undefined): string[] {
     const after = rest.slice(prepRe.lastIndex);
     // "Jordan Smith's network", "Austin Russell's": a possessive is a person or an organisation, not a place.
     if (/^['’]s\b/.test(after)) continue;
-    // After "from", a capital letter that goes on is the rest of a name: "Palo Alto Networks", "Zurich Insurance"
-    // (unless the capture ended the sentence: "from Berlin. Investors welcome", "from the EU. Raise a seed round").
-    if (m[1] === 'from' && !m[2].endsWith('.') && /^[ \t]+\p{Lu}/u.test(after)) continue;
     // Compare without dots so "U.K." and "U.S." resolve to their country, not
     // to a phantom city called "u.k". Folded, so "Köln" is the "koln" the table knows.
     const key = fold(m[2].replace(/\./g, ''));
     const words = key.split(' ');
+    // After "from", a capital letter that goes on is the rest of a name: "Palo Alto Networks", "Zurich Insurance"
+    // (unless the capture ended the sentence: "from Berlin. Investors welcome", "from the EU. Raise a seed round",
+    // or it is a place the code knows and the word only finishes it: "from New York City", "from Los Angeles CA").
+    if (m[1] === 'from' && !m[2].endsWith('.') && /^[ \t]+\p{Lu}/u.test(after) && !(nameOf(key) && finishesAPlace(after))) continue;
     // "The Bahamas" starts with a word that is no place, and is one.
     if (!key || (NOT_PLACES.has(words[0]) && !nameOf(key))) continue;
     if (key === 'us' || key === 'usa') { out.add('united states'); continue; }
@@ -317,8 +327,8 @@ export function locationTerms(written: string | null | undefined): string[] {
     if (key.length < 3 && !canon) continue;
     // "in Berlin Mitte", "in Austin Texas": two capitalised words that are not a place together but
     // start with one. After "from" the pair is as often a company or a school ("from Boston Consulting
-    // Group"), so there only a place that stands alone counts.
-    if (!canon && words.length > 1 && m[1] !== 'from') canon = placeNamed(words[0]);
+    // Group"), so there only a place that stands alone counts, or one name joined by a hyphen ("from Berlin-Mitte").
+    if (!canon && words.length > 1 && (m[1] !== 'from' || !/[ \t]/.test(m[2]))) canon = placeNamed(words[0]);
     out.add(canon ?? key); // known country or region; anything else is a city or an unknown place
   }
   for (const p of places) out.add(p);

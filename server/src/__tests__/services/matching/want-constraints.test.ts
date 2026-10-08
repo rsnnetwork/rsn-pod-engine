@@ -771,3 +771,42 @@ describe('a place that ends a want field, with another field after it', () => {
     expect(endOfField('Founders in SaaS')).toBeNull();
   });
 });
+
+// After "from" a capitalised word that goes on is as often the rest of a company or a school as the rest of a
+// place ("from Palo Alto Networks"), so the name was refused. But a place the code knows whole is a place, and
+// the word after it may only finish it: "from New York City", "from Prince Edward Island", "from Los Angeles CA".
+describe('after "from", a place the code knows is taken whole', () => {
+  it.each([
+    ['Founders from New York City', 'new york'],
+    ['Founders from New York State', 'new york'],
+    ['Founders from Prince Edward Island', 'prince edward'],
+    ['Founders from Los Angeles CA', 'los angeles'],
+    ['Founders from San Francisco CA', 'san francisco'],
+    ['Founders from Berlin-Mitte', 'berlin'],
+  ])('reads "%s" as %s, alone and with a field before or after it', (field, place) => {
+    expect([field, extractConstraints([field]).location]).toEqual([field, [place]]);
+    expect([field, endOfField(field)]).toEqual([field, [place]]);
+    expect([field, extractConstraints([NEXT_FIELD, field]).location]).toEqual([field, [place]]);
+  });
+
+  it('does not turn a company or a school that starts with a place into that place', () => {
+    for (const field of [
+      'Engineers from Palo Alto Networks', 'People from Silicon Valley Bank', 'Journalists from New York Times',
+      'Staff from Los Angeles Times', 'People from Hong Kong University', 'Alumni from New York University',
+      'Analysts from Frankfurt Trust', 'Bankers from Zurich Insurance', 'Alumni from Boston Consulting Group',
+    ]) expect([field, endOfField(field)]).toEqual([field, null]);
+  });
+
+  it('a hyphenated name after "from" falls back to its first word only when that is a place', () => {
+    expect(extractConstraints(['Founders from Berlin-Mitte']).location).toEqual(['berlin']);
+    expect(extractConstraints(['Founders from Coca-Cola']).location).toBeNull();
+    expect(extractConstraints(['Founders from Rolls-Royce']).location).toBeNull();
+  });
+
+  it('keeps a place that a university or a company is named for out of a want, as before', () => {
+    // Oxford and Palo Alto are people's locations but are never named in a want (want-cities.ts LOCATION_ONLY):
+    // the place beside them still counts.
+    expect(extractConstraints(['Founders in Oxford', 'Investors in London']).location).toEqual(['london']);
+    expect(extractConstraints(['Investors in Palo Alto or in Austin']).location).toEqual(['austin']);
+  });
+});
