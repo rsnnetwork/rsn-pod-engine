@@ -460,6 +460,24 @@ describe('The bell\'s Accept buttons read at 4.5:1, resting and hovered (polish 
   });
 });
 
+describe('Every button in the bell panel is a 44px touch target (pre-review adjustment)', () => {
+  // The panel is everything from the portal on; the bell button that opens it comes before and is h-11 w-11.
+  const panelButtons = () => {
+    const src = read('src/components/ui/NotificationBell.tsx');
+    return [...src.slice(src.indexOf('createPortal(')).matchAll(/<button\b[\s\S]*?className=(?:"([^"]*)"|\{`([^`]*)`\})/g)]
+      .map((m) => ({ label: (m[1] ?? m[2]).replace(/\s+/g, ' ').slice(0, 60), classes: (m[1] ?? m[2]).split(/\s+/) }));
+  };
+
+  it('finds the six: Mark all read, the row, and Accept and Decline on an invite and on a meeting request', () => {
+    expect(panelButtons()).toHaveLength(6);
+  });
+
+  it('each of them is min-h-[44px], so a thumb can hit it, and the bell button itself is 44px square', () => {
+    expect(panelButtons().filter(({ classes }) => !classes.includes('min-h-[44px]')).map(({ label }) => label)).toEqual([]);
+    expect(read('src/components/ui/NotificationBell.tsx')).toMatch(/<button ref=\{btnRef\}[^>]*className="[^"]*\bh-11 w-11\b/);
+  });
+});
+
 describe('Admin status pills wrap instead of scrolling <main> sideways at phone widths (integration pass)', () => {
   // Five pills at px-4 are about 450px wide: more than a 360px phone leaves inside <main>, and their words cannot
   // be split, so an unwrapped row pushed <main> 88px (Moderation) and 82px (Support) sideways at 360.

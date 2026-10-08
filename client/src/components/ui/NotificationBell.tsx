@@ -395,11 +395,11 @@ export default function NotificationBell() {
               top: dropPos.top,
               left: dropPos.left,
             } : undefined}>
-          {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-            <h3 className="text-sm font-semibold text-gray-700">Notifications</h3>
+          {/* Header: 44px tall with or without the button (the title carries the padding; the button is the 44px touch target and its side padding is pulled back out, so the words stay where they were) */}
+          <div className="flex items-center justify-between px-4 border-b border-gray-100">
+            <h3 className="py-3 text-sm font-semibold text-gray-700">Notifications</h3>
             {unreadCount > 0 && (
-              <button onClick={markAllRead} className="text-xs text-rsn-red hover:underline flex items-center gap-1">
+              <button onClick={markAllRead} className="text-xs text-rsn-red hover:underline flex items-center gap-1 min-h-[44px] px-2 -mr-2">
                 <Check className="h-3 w-3" /> Mark all read
               </button>
             )}
@@ -427,7 +427,7 @@ export default function NotificationBell() {
                   {/* Clickable title area */}
                   <button
                     onClick={() => handleClick(n)}
-                    className={`w-full text-left ${isClickable ? 'hover:opacity-80 cursor-pointer' : 'cursor-default'}`}
+                    className={`min-h-[44px] w-full text-left ${isClickable ? 'hover:opacity-80 cursor-pointer' : 'cursor-default'}`}
                   >
                     <div className="flex items-start gap-2">
                       {!n.isRead && <div className="mt-1.5 w-2 h-2 rounded-full bg-rsn-red shrink-0" />}
@@ -456,7 +456,7 @@ export default function NotificationBell() {
                       <button
                         onClick={() => handleAcceptInvite(n)}
                         disabled={isActing}
-                        className="flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-full bg-reason-green-fill text-white hover:bg-reason-green-fill-hover disabled:opacity-50 transition-colors"
+                        className="flex min-h-[44px] items-center gap-1 px-4 text-xs font-medium rounded-full bg-reason-green-fill text-white hover:bg-reason-green-fill-hover disabled:opacity-50 transition-colors"
                       >
                         {isActing ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle className="h-3 w-3" />}
                         Accept
@@ -464,7 +464,7 @@ export default function NotificationBell() {
                       <button
                         onClick={() => handleDeclineInvite(n)}
                         disabled={isActing}
-                        className="flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 disabled:opacity-50 transition-colors"
+                        className="flex min-h-[44px] items-center gap-1 px-4 text-xs font-medium rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 disabled:opacity-50 transition-colors"
                       >
                         <X className="h-3 w-3" />
                         Decline
