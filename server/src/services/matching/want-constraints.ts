@@ -29,7 +29,7 @@ import {
 } from './want-regions';
 import {
   CODES_OF_COUNTRIES, KNOWN_PLACES, OWN_REGION_CODES, PLACES, PLACE_BY_CANON, PLACE_BY_NAME, REGION_CODES, STATE_OF_CITY,
-  SUBREGIONS,
+  SUBREGIONS, WRITTEN_FOR,
 } from './want-cities';
 import type { RegionCode } from './want-cities';
 
@@ -147,10 +147,32 @@ function compile(names: PlaceName[], normalise: (s: string) => string): Scanners
 }
 
 /**
+ * The small words that can come before "Bay Area" and leave it the Bay Area: "the Bay Area", "in Bay Area", "SF Bay
+ * Area", "East Bay Area". "Greater" is not among them: "Greater Bay Area" is the one in southern China as often.
+ */
+const WORDS_BEFORE_THE_BAY_AREA: ReadonlySet<string> = new Set([
+  'the', 'in', 'from', 'within', 'across', 'throughout', 'near', 'around', 'at', 'of', 'and', 'or', 'to', 'for', 'with', 'by',
+  'sf', 'east', 'west', 'north', 'south',
+]);
+
+/**
+ * Does another word come right before the name, with only blanks between ("Tampa Bay Area", "Cardiff Bay
+ * area")? A full stop, a comma or a slash before it ("SF/Bay Area", ". Bay Area") is no word, and the small
+ * words above are not another place. Anything else could be a place whose bay it is: Tampa, Monterey, Cardiff.
+ * A person's location also accepts "Greater" ("Greater Bay Area"): it is what they wrote, and a want is the
+ * stricter reader, because a place in a want is a hard filter.
+ */
+function followsAPlaceWord(before: string, alsoSmall: readonly string[] = []): boolean {
+  const word = /([\p{L}\p{N}]+)[ \t]+$/u.exec(before)?.[1]?.toLowerCase();
+  return !!word && !WORDS_BEFORE_THE_BAY_AREA.has(word) && !alsoSmall.includes(word);
+}
+
+/**
  * Names read anywhere in a want, before the shorter names inside them. "New Mexico" is not Mexico,
  * "British Columbia" is not British and "Northern Ireland" is not Ireland: three places of their own.
  * "The Bay Area" however written ("San Francisco Bay Area", "SF Bay Area") is one region, not San
- * Francisco. Three more are only set aside, so that "New England" is not England, "New South Wales"
+ * Francisco; "Bay Area" alone is, unless another place word comes right before it ("Tampa Bay Area" is
+ * Tampa's). Three more are only set aside, so that "New England" is not England, "New South Wales"
  * is not Wales and "Port of Spain" is not Spain. In a person's location the places are the entries
  * of want-cities.ts.
  */
@@ -160,7 +182,7 @@ export const LOOK_ALIKES: readonly PlaceName[] = [
   { name: 'northern ireland', kind: 'place', canon: 'northern ireland' },
   { name: 'san francisco bay area', kind: 'place', canon: 'bay area' },
   { name: 'sf bay area', kind: 'place', canon: 'bay area' },
-  { name: 'bay area', kind: 'place', canon: 'bay area' },
+  { name: 'bay area', kind: 'place', canon: 'bay area', where: (before) => !followsAPlaceWord(before) },
   { name: 'new england', kind: 'decoy', canon: '' },
   { name: 'new south wales', kind: 'decoy', canon: '' },
   { name: 'port of spain', kind: 'decoy', canon: '' },
@@ -211,6 +233,8 @@ const WANT_SCAN = compile(
 // accents and punctuation ignored.
 const placeNames: PlaceName[] = PLACES.flatMap((p) => p.names.map((name) => ({
   name, kind: p.level, canon: p.canon, ...(p.country ? { country: p.country } : {}),
+  // "Tampa Bay Area" is Tampa's, the same as in a want
+  ...(p.canon === 'bay area' ? { where: (before: string) => !followsAPlaceWord(before, ['greater']) } : {}),
 })));
 // A decoy that is a place in a location is read as the place ("New South Wales" is an Australian state there).
 const placeSpellings: ReadonlySet<string> = new Set(PLACES.flatMap((p) => p.names));
@@ -574,6 +598,10 @@ function placeSatisfied(req: string, named: NamedPlaces): boolean {
   if (regionByKey(req)) return inRegion(req, named);
   if (ALIAS_COUNTRIES.has(req) || EXTRA_COUNTRIES.has(req)) return named.countries.has(req);
   if (named.places.has(req)) return true;
+  // "Bay Area" or "SF Bay Area" with no town around the Bay named is how LinkedIn writes San Francisco.
+  for (const [area, city] of WRITTEN_FOR) {
+    if (req === city && named.places.has(area) && !SUBREGIONS.get(area)?.some((town) => named.places.has(town))) return true;
+  }
   // A state, a province or the Bay Area takes the towns in it, but only the ones that are in the country the
   // person is in: "Halifax, West Yorkshire" is not in Nova Scotia, nor "San Jose, Costa Rica" in California.
   return !!SUBREGIONS.get(req)?.some((town) => named.places.has(town) && inACountryOfTheirs(town, named));

@@ -502,6 +502,13 @@ export const SUBREGIONS: ReadonlyMap<string, readonly string[]> = new Map<string
     .map(([place, cities]): [string, readonly string[]] => [place, [...canonicals(cities), ...(ALSO_HOLDS[place] ?? [])]]),
 ]);
 
+/**
+ * A place a person writes in place of a city when they name no town of it: LinkedIn writes "San Francisco Bay
+ * Area", and a location that says only "Bay Area" or "SF Bay Area" is San Francisco for a want that names the
+ * city. A person who names another town around the Bay ("Oakland, Bay Area") is in that town.
+ */
+export const WRITTEN_FOR: ReadonlyMap<string, string> = new Map([['bay area', 'san francisco']]);
+
 /** The state or province the table puts each US and Canadian city in, by the city's canonical name. */
 export const STATE_OF_CITY: ReadonlyMap<string, string> = new Map(
   Object.entries({ ...US_CITIES_BY_STATE, ...CANADIAN_CITIES_BY_PROVINCE })

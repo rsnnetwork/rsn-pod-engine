@@ -279,6 +279,84 @@ describe('"the Bay Area"', () => {
     expect(satisfies('founders in the US', 'Bay Area')).toBe(true);
     expect(satisfies('founders in North America', 'Silicon Valley')).toBe(true);
   });
+
+  // S4-b fix round 1: "Bay Area" was read anywhere in a want, so "Tampa Bay Area founders" became a strict San
+  // Francisco filter. A bay is a place of its own (Tampa Bay, Monterey Bay, Cardiff Bay, Chesapeake Bay), and
+  // the Bay Area alone is San Francisco's only where no other place word comes right before it.
+  describe('"Bay Area" in a want', () => {
+    const read = (...fields: string[]) => extractConstraints(fields).location;
+
+    it('is the San Francisco Bay Area when nothing but a small word comes before it', () => {
+      for (const want of [
+        'the Bay Area investors', 'Bay Area founders', 'SF Bay Area founders', 'San Francisco Bay Area investors',
+        'investors in the Bay Area', 'investors in Bay Area', 'founders from the Bay Area', 'founders near the Bay Area',
+        'founders around the Bay Area', 'SF/Bay Area founders', 'San Francisco & Bay Area founders', 'Silicon Valley, Bay Area investors',
+        'founders in the bay area', 'angels, the Bay Area', 'East Bay Area founders', 'South Bay Area startups',
+      ]) {
+        expect([want, read(want)]).toEqual([want, ['bay area']]);
+        expect([want, read(want, NEXT_FIELD)]).toEqual([want, ['bay area']]);
+        expect([want, read(NEXT_FIELD, want)]).toEqual([want, ['bay area']]);
+      }
+    });
+
+    it('is not when another place word comes right before it: Tampa Bay, Monterey Bay, Cardiff Bay', () => {
+      for (const want of [
+        'Tampa Bay Area founders', 'Monterey Bay Area founders', 'Cardiff Bay area startups', 'Chesapeake Bay Area investors',
+        'Botany Bay Area founders', 'Galway Bay Area startups',
+      ]) {
+        expect([want, read(want)]).toEqual([want, null]);
+        expect([want, read(want, NEXT_FIELD)]).toEqual([want, null]);
+        expect([want, read(NEXT_FIELD, want)]).toEqual([want, null]);
+      }
+      // after "in" the city before "Bay" is the place, as it always was
+      expect(read('founders in the Tampa Bay Area')).toEqual(['tampa']);
+      expect(read('startups in Cardiff Bay Area')).toEqual(['cardiff']);
+    });
+
+    it('is the Bay Area again after a full stop: the place word before it belongs to the last field', () => {
+      expect(read('Founders in Tampa', 'Bay Area startups welcome')).toEqual(['tampa', 'bay area']);
+      expect(read('Founders in Austin', 'Bay Area startups welcome')).toEqual(['austin', 'bay area']);
+    });
+  });
+
+  // The Bay Area alone is how LinkedIn writes San Francisco ("San Francisco Bay Area"), and a person who writes
+  // "Bay Area" or "SF Bay Area" without a city is in San Francisco for a want that names the city. A person who
+  // names another city around the Bay is in that city, and not in San Francisco.
+  describe('a person who writes the Bay Area alone', () => {
+    it.each(['Bay Area', 'SF Bay Area', 'The Bay Area', 'San Francisco Bay Area', 'Greater San Francisco Bay Area', 'Bay Area, CA', 'Bay Area, United States'])(
+      '"%s" satisfies "in San Francisco" and "in the Bay Area"', (location) => {
+        expect([location, satisfies('founders in San Francisco', location)]).toEqual([location, true]);
+        expect([location, satisfies('founders in the Bay Area', location)]).toEqual([location, true]);
+        expect([location, satisfies('founders in California', location)]).toEqual([location, true]);
+      },
+    );
+
+    it('says San Francisco on the card for a want that names the city', () => {
+      expect(matchedPlace(extractConstraints(['founders in San Francisco']), { location: 'SF Bay Area' })).toBe('san francisco');
+      expect(matchedPlace(extractConstraints(['founders in the Bay Area']), { location: 'SF Bay Area' })).toBe('bay area');
+    });
+
+    it('is not San Francisco when the person names another city around the Bay', () => {
+      for (const location of ['Oakland, Bay Area', 'Palo Alto, Bay Area', 'San Jose, SF Bay Area', 'Berkeley, CA', 'Fremont, California']) {
+        expect([location, satisfies('founders in San Francisco', location)]).toEqual([location, false]);
+        expect([location, satisfies('founders in the Bay Area', location)]).toEqual([location, true]);
+      }
+    });
+
+    it('is in the Bay Area when they write a direction before it, and not when they write another place', () => {
+      expect(satisfies('founders in the Bay Area', 'East Bay Area, California')).toBe(true);
+      expect(satisfies('founders in the Bay Area', 'South Bay Area')).toBe(true);
+      expect(satisfies('founders in the Bay Area', 'Tampa Bay Area')).toBe(false);
+      expect(satisfies('founders in the Bay Area', 'Monterey Bay Area, CA')).toBe(false);
+      expect(satisfies('founders in Florida', 'Tampa Bay Area')).toBe(true);
+    });
+
+    it('is not San Francisco outside the Bay Area', () => {
+      for (const location of ['Los Angeles', 'Austin, Texas', 'Tampa Bay Area', 'Monterey Bay Area']) {
+        expect([location, satisfies('founders in San Francisco', location)]).toEqual([location, false]);
+      }
+    });
+  });
 });
 
 // "eu" is the Portuguese for "I" and the first word of every "EU regulation experts" want, so like
