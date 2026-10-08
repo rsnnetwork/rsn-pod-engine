@@ -497,6 +497,28 @@ describe('a region in the want finds the people who are there', () => {
       expect(scoreWantsForRecipient(FIELDS, elke, 'Ali').score).toBe(0);
     });
 
+    // S4-b fix round 2 (I3, the DACH launch): "in der Schweiz oder in Österreich" read Austria only, and a field that
+    // starts with "In Düsseldorf and in the Nordics" read the Nordics only.
+    it('reads a German article after the first preposition, and a capital In at the start of a field', () => {
+      const zuerich = founderAt('Zoe', 'Zürich, Schweiz');
+      const wien = founderAt('Willi', 'Wien, Österreich');
+      for (const wants of [
+        ['Fintech-Gründer in der Schweiz oder in Österreich'],
+        ['Fintech-Gründer in der Schweiz oder in Österreich', 'Raise a seed round for my payments startup'],
+        ['Raise a seed round for my payments startup', 'Fintech-Gründer in der Schweiz oder in Österreich'],
+      ]) {
+        expect(scoreWants(wants, zuerich).score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+        expect(scoreWants(wants, zuerich).reason).toMatch(/\(in Switzerland\)$/);
+        expect(scoreWants(wants, wien).reason).toMatch(/\(in Austria\)$/);
+        expect(scoreWants(wants, dieter).score).toBe(0);
+        expect(scoreWants(wants, austin).score).toBe(0);
+      }
+      const fields = ['In Düsseldorf and in the Nordics', `${STACK}`];
+      expect(scoreWants(fields, dieter).reason).toMatch(/\(in Dusseldorf\)$/);
+      expect(scoreWants(fields, fintech('Sven', 'Stockholm, Sweden')).reason).toMatch(/\(in the Nordics\)$/);
+      expect(scoreWants(fields, austin).score).toBe(0);
+    });
+
     it('"Austin, Texas" is Austin: the state after the city does not take the rest of Texas', () => {
       const wants = [`${STACK} in Austin, Texas`, 'Raise a seed round'];
       expect(scoreWants(wants, fintech('Alex', 'Austin, TX')).reason).toMatch(/\(in Austin\)$/);

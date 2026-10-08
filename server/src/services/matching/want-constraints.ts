@@ -214,9 +214,13 @@ const extraCountryNames: PlaceName[] = [
 const regionNames: PlaceName[] = REGIONS
   .flatMap((r) => r.names.map((name) => ({ name, kind: 'region' as const, canon: r.key })));
 
-// The words that make a name a place a person is in or comes from. "based in" and "located in" end in "in".
-const LOCATION_PREPOSITIONS = String.raw`based in|located in|in|from|within|across|throughout|near`;
-const AFTER_A_LOCATION_PREPOSITION = new RegExp(String.raw`\b(?:${LOCATION_PREPOSITIONS})\s+(?:the\s+)?$`, 'i');
+// The words that make a name a place a person is in or comes from. "based in" and "located in" end in "in". The
+// German "aus" and "bei" are the same words for the DACH members. An article may stand between the preposition and
+// the name: "in the Nordics", "in der Schweiz", "aus den USA".
+const LOCATION_PREPOSITION_WORDS = ['based in', 'located in', 'in', 'from', 'within', 'across', 'throughout', 'near', 'aus', 'bei'];
+const LOCATION_PREPOSITIONS = LOCATION_PREPOSITION_WORDS.join('|');
+const ARTICLE = String.raw`(?:(?:the|der|die|das|dem|den)\s+)?`;
+const AFTER_A_LOCATION_PREPOSITION = new RegExp(String.raw`\b(?:${LOCATION_PREPOSITIONS})\s+${ARTICLE}$`, 'i');
 
 // A region name in a want is a place only after a location preposition ("investors in Europe", "founders across
 // the Nordics"). Anywhere else it describes the work, not where the person must be: "founders building for Asia
@@ -355,14 +359,18 @@ const NAME_WORD = String.raw`\p{Lu}[\p{L}.]+(?:-\p{Lu}[\p{L}.]+)*`;
 const NAME_GOES_ON = String.raw`(?:(?<!\.)|(?<=\b(?:St|Ste|Mt|Ft|Pt)\.))[ \t]+`;
 // A place the scan has already read counts as a name here: it can begin a list, and it needs nothing more.
 const PLACE_ITEM = String.raw`(?:${READ}+|${NAME_WORD}(?:${NAME_GOES_ON}${NAME_WORD})?)`;
+// A preposition is read with a capital letter too: a field that starts "In Düsseldorf" or "From Berlin" says the
+// same as "in Düsseldorf" (so does "Based In" in a title). "in" becomes [iI]n, "based in" [bB]ased [iI]n.
+const eitherCase = (phrase: string): string => phrase.replace(/\b([a-z])/g, (_, letter: string) => `[${letter}${letter.toUpperCase()}]`);
+const LOCATION_PREPOSITIONS_EITHER_CASE = LOCATION_PREPOSITION_WORDS.map(eitherCase).join('|');
 const PLACE_AFTER_A_PREPOSITION = new RegExp(
-  String.raw`\b(${LOCATION_PREPOSITIONS})\s+(?:the\s+)?(${PLACE_ITEM})`, 'gu',
+  String.raw`\b(${LOCATION_PREPOSITIONS_EITHER_CASE})\s+${ARTICLE}(${PLACE_ITEM})`, 'gu',
 );
 // A list goes on after a place: "Köln oder Düsseldorf", "Berlin, Munich and Hamburg", "Deutschland und der Schweiz".
 // What joins the items is a comma, "&", "/" or "and", "or", "und", "oder" (after a comma too), and an article may
 // come before an item.
 const ANOTHER_PLACE = new RegExp(
-  String.raw`(\s*[,&/]\s*(?:(?:and|or|und|oder)\s+)?|\s+(?:and|or|und|oder)\s+)(?:(?:the|der|die|den|dem)\s+)?(${PLACE_ITEM})`, 'uy',
+  String.raw`(\s*[,&/]\s*(?:(?:and|or|und|oder)\s+)?|\s+(?:and|or|und|oder)\s+)(?:(?:the|der|die|das|dem|den)\s+)?(${PLACE_ITEM})`, 'uy',
 );
 
 /** The words that only finish the name of a place: "New York City", "Prince Edward Island", "Kansas State". */
@@ -377,6 +385,9 @@ function finishesAPlace(after: string): boolean {
 /** "Jordan Smith's network", "Austin Russell's": a possessive is a person or an organisation, not a place. */
 const isPossessive = (after: string): boolean => /^['’]s\b/.test(after);
 
+/** "from" and the German "aus" and "bei" say where someone comes from or works: a name that goes on may be a company. */
+const FROM_LIKE = /^(?:from|aus|bei)$/i;
+
 /**
  * Read the name captured after a preposition into `out`, as a place or as a candidate that
  * extractConstraints will throw away. Returns the place when the name is one the code knows, so that a
@@ -388,10 +399,11 @@ function readName(preposition: string, name: string, after: string, out: Set<str
   // to a phantom city called "u.k". Folded, so "Köln" is the "koln" the table knows.
   const key = fold(name.replace(/\./g, ''));
   const words = key.split(' ');
+  const fromLike = FROM_LIKE.test(preposition);
   // After "from", a capital letter that goes on is the rest of a name: "Palo Alto Networks", "Zurich Insurance"
   // (unless the capture ended the sentence: "from Berlin. Investors welcome", "from the EU. Raise a seed round",
   // or it is a place the code knows and the word only finishes it: "from New York City", "from Los Angeles CA").
-  if (preposition === 'from' && !name.endsWith('.') && /^[ \t]+\p{Lu}/u.test(after) && !(nameOf(key) && finishesAPlace(after))) return undefined;
+  if (fromLike && !name.endsWith('.') && /^[ \t]+\p{Lu}/u.test(after) && !(nameOf(key) && finishesAPlace(after))) return undefined;
   // "The Bahamas" starts with a word that is no place, and is one.
   if (!key || (NOT_PLACES.has(words[0]) && !nameOf(key))) return undefined;
   if (key === 'us' || key === 'usa') { out.add('united states'); return 'united states'; }
@@ -401,7 +413,7 @@ function readName(preposition: string, name: string, after: string, out: Set<str
   // "in Berlin Mitte", "in Austin Texas": two capitalised words that are not a place together but
   // start with one. After "from" the pair is as often a company or a school ("from Boston Consulting
   // Group"), so there only a place that stands alone counts, or one name joined by a hyphen ("from Berlin-Mitte").
-  if (!canon && words.length > 1 && (preposition !== 'from' || !/[ \t]/.test(name))) canon = placeNamed(words[0]);
+  if (!canon && words.length > 1 && (!fromLike || !/[ \t]/.test(name))) canon = placeNamed(words[0]);
   out.add(canon ?? key); // known country or region; anything else is a city or an unknown place
   return canon;
 }
@@ -449,11 +461,12 @@ function readTheRestOfTheList(rest: string, start: number, out: Set<string>, fir
 
 /**
  * Canonical place terms mentioned in free text: country aliases and region
- * names (whole-word), plus capitalised words after "in / based in / located
- * in / from / within / near" so cities work ("in London" → "london"), and the
- * places a list goes on with after the first ("in Köln oder Düsseldorf"). "US"
- * is only a country when written in capitals or after a location preposition —
- * lowercase "us" is a pronoun ("help us").
+ * names (whole-word, the regions after a preposition), plus capitalised words
+ * after "in / based in / located in / from / within / across / throughout /
+ * near" (and the German "aus" and "bei") so cities work ("in London" →
+ * "london"), and the places a list goes on with after the first ("in Köln oder
+ * Düsseldorf"). "US" is only a country when written in capitals or after a
+ * location preposition — lowercase "us" is a pronoun ("help us").
  *
  * Not everything after a preposition is a place ("in SaaS", "from Google"), so
  * this returns the candidates; extractConstraints keeps only those the code

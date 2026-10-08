@@ -1119,3 +1119,59 @@ describe('a long text', () => {
     }
   });
 });
+
+// ─── S4-b fix round 2 (9 Oct 2026) ────────────────────────────────────────────────────────────────────────────────
+//
+// I3 (the DACH launch): a German article after the first preposition ("in der Schweiz"), and a capital "In" or "From"
+// at the start of a field, were not read, and beside a place that was read they narrowed the filter to it.
+describe('a German article after the first preposition, and a capital preposition', () => {
+  const read = (...fields: string[]) => [...(extractConstraints(fields).location ?? [])].sort();
+
+  it.each([
+    ['Gründer in der Schweiz oder in Österreich', ['austria', 'switzerland']],
+    ['Gründer in der Schweiz', ['switzerland']],
+    ['Gründer in der Schweiz und in Deutschland', ['germany', 'switzerland']],
+    ['Investoren in der DACH-Region', ['dach']],
+    ['Investoren in der Schweiz, Österreich und Deutschland', ['austria', 'germany', 'switzerland']],
+    ['Investoren in den USA', ['united states']],
+    ['Gründer aus der Schweiz', ['switzerland']],
+    ['Gründer aus Österreich', ['austria']],
+    ['Gründer aus Düsseldorf oder aus Köln', ['cologne', 'dusseldorf']],
+    ['Investoren bei München', ['munich']],
+    ['In Düsseldorf and in the Nordics', ['dusseldorf', 'nordics']],
+    ['In Düsseldorf', ['dusseldorf']],
+    ['From Berlin', ['berlin']],
+    ['From Berlin or from Munich', ['berlin', 'munich']],
+    ['Based in Zürich', ['zurich']],
+    ['Located In Munich', ['munich']],
+    ['In the Nordics', ['nordics']],
+    ['In der Schweiz oder in Österreich', ['austria', 'switzerland']],
+    ['Founders In Europe', ['europe']],
+    ['Aus Österreich', ['austria']],
+  ])('reads every place in "%s"', (want, expected) => {
+    expect([want, read(want)]).toEqual([want, expected]);
+    expect([want, read(want, NEXT_FIELD)]).toEqual([want, expected]);
+    expect([want, read(NEXT_FIELD, want)]).toEqual([want, expected]);
+    expect([want, read(NEXT_FIELD, want, 'Eine Runde aufsetzen')]).toEqual([want, expected]);
+  });
+
+  it('is satisfied by the people in any of the places', () => {
+    const want = 'Gründer in der Schweiz oder in Österreich';
+    expect(satisfies(want, 'Zürich, Schweiz')).toBe(true);
+    expect(satisfies(want, 'Wien, Österreich')).toBe(true);
+    expect(satisfies(want, 'Düsseldorf')).toBe(false);
+    expect(satisfies('In Düsseldorf and in the Nordics', 'Düsseldorf')).toBe(true);
+    expect(satisfies('In Düsseldorf and in the Nordics', 'Helsinki, Finland')).toBe(true);
+    expect(satisfies('In Düsseldorf and in the Nordics', 'Austin, Texas')).toBe(false);
+  });
+
+  it('keeps what it did not read: an article before a word that is no place, and the prepositions as words', () => {
+    expect(read('Gründer in der Welt')).toEqual([]);
+    expect(read('Mitarbeiter bei Google')).toEqual([]);
+    expect(read('Gründer aus Leidenschaft')).toEqual([]);
+    expect(read('Inhaber, Haus und Hof, Ausbildung')).toEqual([]);
+    expect(read('Investoren aus Zürich Versicherung')).toEqual([]);
+    expect(read('Building tools In Fintech')).toEqual([]);
+    expect(read('From Zero to One')).toEqual([]);
+  });
+});
