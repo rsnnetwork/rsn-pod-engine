@@ -39,8 +39,9 @@ export interface Region {
   names: readonly string[];
   /**
    * The names above that are also ordinary words ("GCC" is a compiler, "Mena" a first name, "Nordic"
-   * a semiconductor company, "Dach" the German for roof). A want reads them as this region only after
-   * a location preposition ("in the GCC"), like Jordan and Chad; a person's location always does.
+   * a semiconductor company, "Dach" the German for roof, "EU" the first word of "EU regulation
+   * experts" and the Portuguese for "I"). A want reads them as this region only after a location
+   * preposition ("in the GCC"), like Jordan and Chad; a person's location always does.
    */
   afterPreposition?: readonly string[];
   /** The countries in it, by canonical name. */
@@ -134,7 +135,10 @@ const NORTH_AMERICA = ['united states', 'canada', 'mexico'];
 
 export const REGIONS: readonly Region[] = [
   { key: 'europe', label: 'Europe', names: ['europe', 'european'], countries: EUROPE },
-  { key: 'eu', label: 'the EU', names: ['eu', 'e.u.', 'european union'], countries: EUROPE },
+  {
+    key: 'eu', label: 'the EU', names: ['eu', 'e.u.', 'european union', 'eu-based'],
+    afterPreposition: ['eu'], countries: EUROPE,
+  },
   { key: 'emea', label: 'EMEA', names: ['emea'], countries: [...new Set([...EUROPE, ...MIDDLE_EAST, ...AFRICA])] },
   { key: 'dach', label: 'DACH', names: ['dach'], afterPreposition: ['dach'], countries: DACH },
   { key: 'benelux', label: 'Benelux', names: ['benelux'], countries: BENELUX },

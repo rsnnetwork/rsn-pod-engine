@@ -350,6 +350,17 @@ describe('a region in the want finds the people who are there', () => {
     expect(nordic.reason).not.toMatch(/\(in /);
   });
 
+  it('"EU regulation experts" is not a place: the person in Texas who knows EU regulation is still found', () => {
+    const counsel = person({
+      professionalRole: ['Counsel'], jobTitle: 'Regulatory counsel', expertiseText: 'EU regulation and compliance', location: 'Austin, Texas',
+    });
+    const r = scoreWants(['EU regulation compliance experts'], counsel);
+    expect(r.score).toBeGreaterThan(0);
+    expect(r.reason).not.toMatch(/\(in /);
+    // and as a place it still filters: "in the EU" does not take Austin
+    expect(scoreWants(['regulation compliance experts in the EU'], counsel).score).toBe(0);
+  });
+
   describe('an unknown place filters nothing', () => {
     it('"in Narnia": everyone still scores as they do without it, and the reason does not print it', () => {
       for (const c of [berlin, amsterdam, milan, austin]) {

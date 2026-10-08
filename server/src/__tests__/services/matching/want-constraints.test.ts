@@ -197,6 +197,38 @@ describe('a region name that is also an ordinary word', () => {
   });
 });
 
+// "eu" is the Portuguese for "I" and the first word of every "EU regulation experts" want, so like
+// GCC and MENA it is a place only after a location preposition ("in the EU", "from the EU", "based in
+// the EU"). "E.U.", "the European Union" and "EU-based" cannot be anything else and are read anywhere.
+describe('"EU" in a want', () => {
+  it('is not a place when the want merely contains it', () => {
+    for (const want of [
+      'EU regulation experts', 'Eu quero conhecer investidores', 'GDPR and EU grants specialists',
+      'consultants for EU funding', 'EU data protection counsel',
+    ]) expect([want, extractConstraints([want]).location]).toEqual([want, null]);
+    expect(placesIn('EU regulation experts')).toEqual([]);
+  });
+
+  it('is a place after a location preposition', () => {
+    for (const want of [
+      'founders in the EU', 'investors from the EU', 'founders based in the EU', 'buyers located in the EU',
+      'suppliers within the EU', 'partners near the EU', 'founders in EU', 'experts in EU markets',
+    ]) expect([want, extractConstraints([want]).location]).toEqual([want, ['eu']]);
+  });
+
+  it('is read in the forms nothing else is called, anywhere', () => {
+    expect(extractConstraints(['EU-based founders']).location).toEqual(['eu']);
+    expect(extractConstraints(['founders in the European Union']).location).toEqual(['eu']);
+    expect(extractConstraints(['E.U. founders']).location).toEqual(['eu']);
+    expect(extractConstraints(['European Union regulators']).location).toEqual(['eu']);
+  });
+
+  it('still takes the people in Europe when it is a place', () => {
+    expect(satisfies('founders based in the EU', 'Berlin, Germany')).toBe(true);
+    expect(satisfies('founders based in the EU', 'Austin, Texas')).toBe(false);
+  });
+});
+
 describe('a region is satisfied by a country inside it', () => {
   it.each([
     ['Europe', 'Berlin, Germany'], ['Europe', 'Amsterdam, Netherlands'], ['Europe', 'Milan, Italy'],

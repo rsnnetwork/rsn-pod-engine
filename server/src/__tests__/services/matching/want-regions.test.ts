@@ -45,7 +45,7 @@ describe('the region table', () => {
 
   it('marks the region names that are also ordinary words, and only those, as read after a preposition only', () => {
     const marked = REGIONS.flatMap((r) => (r.afterPreposition ?? []).map((name) => ({ key: r.key, name })));
-    expect(marked.map((m) => m.name).sort()).toEqual(['dach', 'gcc', 'mena', 'nordic']);
+    expect(marked.map((m) => m.name).sort()).toEqual(['dach', 'eu', 'gcc', 'mena', 'nordic']);
     // Each is a name of its own region, so it is still read there, after a preposition.
     expect(marked.filter((m) => !regionByKey(m.key)!.names.includes(m.name))).toEqual([]);
   });

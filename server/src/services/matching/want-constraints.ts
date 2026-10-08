@@ -269,8 +269,9 @@ export function locationTerms(text: string | null | undefined): string[] {
     // "The Bahamas" starts with a word that is no place, and is one.
     if (!key || (NOT_PLACES.has(words[0]) && !nameOf(key))) continue;
     if (key === 'us' || key === 'usa') { out.add('united states'); continue; }
-    if (key.length < 3) continue;
     let canon = nameOf(key);
+    // A short capitalised word is rarely a place ("in IT", "from AI"), unless it is a name the code knows ("in the EU").
+    if (key.length < 3 && !canon) continue;
     // "in Berlin Mitte", "in Austin Texas": two capitalised words that are not a place together but
     // start with one. After "from" the pair is as often a company or a school ("from Boston Consulting
     // Group"), so there only a place that stands alone counts.
