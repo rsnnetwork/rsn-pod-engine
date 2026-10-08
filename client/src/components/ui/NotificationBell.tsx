@@ -387,8 +387,13 @@ export default function NotificationBell() {
         <div className="fixed inset-0 z-[9998]" onClick={() => setOpen(false)}>
           {/* Backdrop overlay for mobile */}
           <div className="absolute inset-0 bg-black/20 sm:bg-transparent" />
-          {/* Notification panel — stopPropagation prevents backdrop close on panel click */}
+          {/* Notification panel — stopPropagation prevents backdrop close on panel click.
+              A flex column, so that when the panel is capped at 80vh it is the list that gives way and the header
+              keeps its height: a phone in landscape is ~390px tall, and 80vh of that is shorter than the header
+              and the list together, which used to cut off the bottom of the list. pb: on a phone the panel is a
+              sheet on the bottom edge of the screen, where the home indicator is. */}
           <div className="absolute z-[9999] sm:rounded-xl rounded-t-2xl bg-white shadow-xl border border-gray-200 overflow-hidden
+            flex flex-col pb-[env(safe-area-inset-bottom)] sm:pb-0
             inset-x-0 bottom-0 sm:inset-auto sm:w-80 max-h-[80vh]"
             onClick={(e) => e.stopPropagation()}
             style={dropPos && typeof window !== 'undefined' && window.innerWidth >= 640 ? {
@@ -396,7 +401,7 @@ export default function NotificationBell() {
               left: dropPos.left,
             } : undefined}>
           {/* Header: 44px tall with or without the button (the title carries the padding; the button is the 44px touch target and its side padding is pulled back out, so the words stay where they were) */}
-          <div className="flex items-center justify-between px-4 border-b border-gray-100">
+          <div className="flex shrink-0 items-center justify-between px-4 border-b border-gray-100">
             <h3 className="py-3 text-sm font-semibold text-gray-700">Notifications</h3>
             {unreadCount > 0 && (
               <button onClick={markAllRead} className="text-xs text-rsn-red hover:underline flex items-center gap-1 min-h-[44px] px-2 -mr-2">
@@ -405,8 +410,8 @@ export default function NotificationBell() {
             )}
           </div>
 
-          {/* List */}
-          <div className="max-h-80 overflow-y-auto">
+          {/* List: up to 20rem, and smaller when the panel is capped, scrolling inside what is left */}
+          <div className="min-h-0 flex-1 overflow-y-auto max-h-80">
             {loading && notifications.length === 0 && (
               <p className="text-sm text-gray-500 text-center py-6">Loading...</p>
             )}
