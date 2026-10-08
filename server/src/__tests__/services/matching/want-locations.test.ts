@@ -218,6 +218,29 @@ describe('a city is the same city however it is written', () => {
   });
 });
 
+// A want pasted from a Mac, a PDF or a word processor often carries "ü" as "u" plus a combining
+// diaeresis (NFD). The letters are the same to a reader, so the place must be the same to the matcher.
+describe('a want typed with combining accents (NFD) reads like one typed with whole letters', () => {
+  it.each([
+    ['investors in Zürich', ['zurich']], ['founders in München', ['munich']], ['Gründer in Österreich', ['austria']],
+    ['investors in Düsseldorf', ['dusseldorf']], ['partners in Köln', ['cologne']], ['angels in Malmö', ['malmo']],
+    ['founders in Türkiye', ['turkey']], ['founders based in Bogotá', ['bogota']], ['buyers from São Paulo', ['sao paulo']],
+    ['Investoren in der Nähe von Wien', null],
+  ])('%s', (want, expected) => {
+    const decomposed = want.normalize('NFD');
+    // The test is only meaningful if the string really is decomposed.
+    if (/[^\u0000-\u007f]/.test(want)) expect(decomposed).not.toBe(want.normalize('NFC'));
+    expect(extractConstraints([decomposed]).location).toEqual(extractConstraints([want.normalize('NFC')]).location);
+    if (expected) expect(extractConstraints([decomposed]).location).toEqual(expected);
+  });
+
+  it('and a decomposed location was already read the same way', () => {
+    expect(countriesOf('Zürich, Schweiz')).toEqual(['switzerland']);
+    expect(countriesOf('Düsseldorf')).toEqual(['germany']);
+    expect(satisfies('investors in Düsseldorf', 'Düsseldorf')).toBe(true);
+  });
+});
+
 describe('cities the matcher did not know before', () => {
   it.each([
     ['Bangkok', 'thailand'], ['Utrecht', 'netherlands'], ['Leeds', 'united kingdom'], ['Islamabad', 'pakistan'],

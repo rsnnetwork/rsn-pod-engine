@@ -253,8 +253,10 @@ const placeNamed = (word: string): string | undefined =>
  * this returns the candidates; extractConstraints keeps only those the code
  * can resolve.
  */
-export function locationTerms(text: string | null | undefined): string[] {
-  if (!text) return [];
+export function locationTerms(written: string | null | undefined): string[] {
+  if (!written) return [];
+  // "ü" typed as "u" plus a combining diaeresis (a want pasted from a Mac or a PDF) is the same letter.
+  const text = written.normalize('NFC');
   const { countries, regions, places, rest } = scan(text, WANT_SCAN);
   const out = new Set<string>(countries);
   if (mentionsUS(text)) out.add('united states');
