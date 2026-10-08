@@ -60,7 +60,10 @@ export default function ForYouPage() {
     queryFn: fetchForYou,
     enabled: !!userId,
     // The next event follows pod membership and the events themselves, so a pod change, and an event created, changed,
-    // cancelled or deleted (the server announces those as user:<id>:sessions), refresh this page too.
+    // cancelled or deleted, refresh this page too. The production API announces an event change as user:<id>:sessions
+    // (and user:<id>:pods) from release 6 on; before that the sessions tag came only from a member's own doing (registering
+    // for an event, leaving one, answering an invite), so a change someone else made is not seen here until the page
+    // refreshes for another reason.
     meta: { entities: userId ? [E.user(userId), E.userInvites(userId), E.userDms(userId), E.userPods(userId), E.userSessions(userId)] : [] },
   });
   // Offline with nothing to show yet: the request exists and waits for the connection. A skeleton would never

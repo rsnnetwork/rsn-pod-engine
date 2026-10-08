@@ -28,7 +28,7 @@ const contrast = (a: string, b: string) => {
 };
 
 describe('For You: what the page asks for, and when it says what', () => {
-  it('its query carries the five tags a card or the next event depends on: pods (the next event follows pod membership) and sessions (it follows the events themselves, which the server announces as user:<id>:sessions)', () => {
+  it('its query carries the five tags a card or the next event depends on: pods (the next event follows pod membership) and sessions (it follows the events themselves, which the production API announces as user:<id>:sessions from release 6 on)', () => {
     const entities = page().match(/meta: \{ entities: userId \? \[([^\]]*)\] : \[\] \}/);
     expect(entities).not.toBeNull();
     const tags = [...entities![1].matchAll(/E\.(\w+)\(userId\)/g)].map((m) => m[1]);
@@ -249,10 +249,13 @@ describe('For You: the rail', () => {
     }
   });
 
-  it('refreshes the pods card when an event is created, changed, cancelled or deleted (user sessions, which carry the pod\'s session count) as well as when a pod changes', () => {
+  it('refreshes the pods card when the member\'s pods change, and when an event is created, changed, cancelled or deleted, together with the next-event card (the card draws each pod\'s name and member count, not a session count)', () => {
     const own = rail().match(/queryKey: \['reason', 'rail-pods'\][\s\S]*?meta: \{ entities: userId \? \[([^\]]*)\] : \[\] \}/);
     expect(own).not.toBeNull();
     expect([...own![1].matchAll(/E\.(\w+)\(userId\)/g)].map((m) => m[1]).sort()).toEqual(['userPods', 'userSessions']);
+    // What the card's comment says it draws: a member count, and nothing about sessions.
+    expect(withoutComments(rail())).toMatch(/memberCount/);
+    expect(withoutComments(rail())).not.toMatch(/sessionCount|session_count/);
   });
 
   it('refreshes recent introductions when a request is answered (user and invite tags)', () => {

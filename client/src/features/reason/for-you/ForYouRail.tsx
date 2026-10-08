@@ -55,7 +55,11 @@ export default function ForYouRail({ nextEvent, failed }: Props) {
     queryKey: ['reason', 'rail-pods'],
     queryFn: () => api.get('/pods?status=active').then((r) => r.data.data as RailPod[]),
     enabled: !!userId,
-    // A pod's list carries its session count, so an event change refreshes it as well as a pod change.
+    // The card draws each pod's name and member count, not a session count. Listening for the member's sessions as well
+    // as their pods is for two things. Registering for an event in a public pod joins the member to that pod, and that
+    // route announces the sessions tag and no pods tag, so this is what shows the new pod at once. And an event change
+    // refreshes the card together with the next-event card above it: from release 6 on, the production API announces
+    // user:<id>:sessions and user:<id>:pods on an event change.
     meta: { entities: userId ? [E.userPods(userId), E.userSessions(userId)] : [] },
   });
   const recent = useQuery({

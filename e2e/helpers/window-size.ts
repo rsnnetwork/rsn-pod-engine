@@ -5,10 +5,11 @@ import { contextOptions, engineLabel } from './engine';
 //
 // Playwright's WebKit with a phone's descriptor (headed, on Windows) now and then gives a window that is 0 wide and 0 high,
 // for a moment or for the rest of its life, from its first moment or a second after the page has loaded. A probe that only
-// opened the sign-in page found 2 windows in 84 like that, and never in Chromium or desktop WebKit; a page cannot set its own
-// innerWidth, so it is the emulation and not the page. Nothing can be looked at in such a window: every box is "off the
-// window" and a hit test finds nothing. Applying the viewport again (the same size, or one pixel off and back), bringToFront
-// and a reload all left such a window at 0x0, while a new page in the same context and a new context were fine.
+// opened the sign-in page found 2 windows in 84 like that, and never in Chromium; desktop WebKit has done it once too, in a
+// 430px window. A page cannot set its own innerWidth, so it is the emulation and not the page. Nothing can be looked at in
+// such a window: every box is "off the window" and a hit test finds nothing. Applying the viewport again (the same size, or
+// one pixel off and back), bringToFront and a reload all left such a window at 0x0, while a new page in the same context and
+// a new context were fine.
 //
 // So a window with no size is dealt with in two steps (a failure in a window that HAS a size is never run again):
 //   1. untilSized: a measurement waits for the window to have a size, applies the context's own viewport once if it still
