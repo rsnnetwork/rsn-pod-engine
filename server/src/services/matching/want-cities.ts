@@ -3,10 +3,11 @@
 // A place in a want is only a place when the matcher can tell it is one ("in Narnia" and "from
 // Google" are capitalised words after a preposition too), and a person's location resolves to a
 // country through a city it names ("Greater Düsseldorf Area", "Bangkok, TH", "Utrecht"). This table
-// is both: every city, state and province here is a place a want can name, and says which country
-// it is in. It is hand-kept data. A city that is not here is treated like any other unknown place:
-// a want that names it filters nothing, and a location that names only it resolves to no country.
-// Add one by adding it to its country below.
+// is both: every city, state and province here is a place a want can name (in the one or two words
+// a want captures after a preposition), and says which country it is in. It is hand-kept data. A
+// city that is not here is treated like any other unknown place: a want that names it filters
+// nothing, and a location that names only it resolves to no country. Add one by adding it to its
+// country below.
 //
 // WHERE THE LIST COMES FROM
 //   The cities members name, plus the largest cities of each European country (the launch audience

@@ -114,7 +114,7 @@ const EXTRA_COUNTRIES = new Set(Object.keys(COUNTRY_NAMES));
 // names it most firmly of all (see placesNamedIn).
 export type NameKind = 'country' | 'region' | 'place' | 'decoy' | 'state' | 'city';
 export interface PlaceName { name: string; kind: NameKind; canon: string; country?: string }
-interface Scanner extends PlaceName { re: RegExp; length: number }
+interface Scanner extends PlaceName { re: RegExp; length: number; first: string }
 
 /**
  * Every name to look for, longest first, and for each first word the positions in that order of the
