@@ -42,8 +42,9 @@ function Loading() {
   );
 }
 
-// With the connection gone the sheep's picture cannot load either: ReasonSheep then draws nothing, so no
-// broken-image box sits where it should be, and the notice needs no guard of its own.
+// With the connection gone the sheep's picture cannot load either: ReasonSheep then keeps an empty box of the
+// same size, so no broken-image box sits where it should be, nothing below it moves, and the notice needs no
+// guard of its own.
 function Notice({ title, text, children }: { title: string; text: string; children: ReactNode }) {
   return (
     <main className="mx-auto flex max-w-md flex-col items-center gap-3 px-6 py-16 text-center">

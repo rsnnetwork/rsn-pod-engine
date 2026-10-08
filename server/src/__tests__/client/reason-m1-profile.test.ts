@@ -63,13 +63,13 @@ describe('Human Profile: the network is down', () => {
     expect(page()).not.toMatch(/text=\{errorMessage\(error, /);
     expect(page()).not.toMatch(/Check your connection, then try again/);
   });
-  it('the notice always draws the sheep, and leaves the broken-image box to ReasonSheep, which draws nothing once its picture has failed to load', () => {
+  it('the notice always draws the sheep, and leaves the broken-image box to ReasonSheep, which keeps an empty box of the same size once its picture has failed to load', () => {
     expect(page()).toMatch(/function Notice\(\{ title, text, children \}/);
     expect(page()).toMatch(/<ReasonSheep pose="thinking" className="h-24 w-24" \/>/);
     // No guard of its own: no `sheep` prop, no `sheep &&`, nothing keyed on whether the server answered.
     expect(page()).not.toMatch(/\bsheep(?:\s*=|\s*&&|\s*\?)/);
     // ...which is only right while ReasonSheep keeps its side of it (executed in reason-m1-look.test.ts).
-    expect(read('../brand/ReasonSheep.tsx')).toMatch(/if \(failed\) return null;/);
+    expect(read('../brand/ReasonSheep.tsx')).toMatch(/if \(failed\) return <span aria-hidden="true" className=\{cn\('block max-w-full', className\)\} \/>;/);
   });
   it('"not available" and "could not load" are each said once, and Try again refetches', () => {
     expect(count(page(), /This profile is not available\./g)).toBe(1);

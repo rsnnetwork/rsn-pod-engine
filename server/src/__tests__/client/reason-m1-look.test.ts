@@ -273,9 +273,14 @@ describe('Toasts a member can read, hear and see under a notch (integration pass
   });
 });
 
-describe('A sheep that cannot load draws nothing (integration pass)', () => {
+describe('A sheep that cannot load keeps its place, empty (integration pass, polish pass)', () => {
   const POSES = ['match', 'curious', 'hopeful', 'thinking'] as const;
   const sheep = () => read('src/features/reason/brand/ReasonSheep.tsx');
+  // The realtime guard's test makes and removes a scratch folder (__test_realtime_guard__) under src while the suites run
+  // side by side. It is not source, and a file listed from it can be gone by the time it is read.
+  const sourcesUnder = (dir: string): string[] => fs.readdirSync(path.join(root, dir), { withFileTypes: true })
+    .filter((e) => !e.name.startsWith('__test_'))
+    .flatMap((e) => (e.isDirectory() ? sourcesUnder(`${dir}/${e.name}`) : /\.tsx$/.test(e.name) ? [`${dir}/${e.name}`] : []));
 
   // `failed` stands in for what the browser reports when the picture cannot load: a static render cannot fire the
   // image's error event, so useState answers with that state.
@@ -291,14 +296,43 @@ describe('A sheep that cannot load draws nothing (integration pass)', () => {
     }
   });
 
-  it('draws nothing at all once the picture has failed, so no broken-image box is left in an empty state or failure screen', () => {
-    for (const pose of POSES) expect(render(pose, true)).toBe('');
+  // A picture that is taken out of the page takes its box with it: the offline notice's "Try again" jumped 108px (the
+  // sheep's 96px and the 12px gap under it) a few milliseconds after the notice appeared. The failed picture is
+  // replaced by an empty box that the same classes size, so nothing below it moves.
+  it('swaps a picture that has failed for an empty, hidden box that the same classes size: no broken-image box, and nothing around it moves', () => {
+    for (const pose of POSES) {
+      const html = render(pose, true);
+      // A block with the caller's h-9 w-9, as the picture is (the page's base styles make an <img> a block with max-width 100%).
+      expect(html).toBe('<span aria-hidden="true" class="block max-w-full h-9 w-9"></span>');
+      expect(html).not.toContain('<img');
+    }
   });
 
   it('forgets a failure on its own: the error sets the state, and a different pose is a new picture with a new try', () => {
     expect(sheep()).toMatch(/onError=\{\(\) => setFailed\(true\)\}/);
-    expect(sheep()).toMatch(/if \(failed\) return null;/);
+    expect(sheep()).toMatch(/if \(failed\) return <span aria-hidden="true" className=\{cn\('block max-w-full', className\)\} \/>;/);
+    expect(sheep()).not.toMatch(/return null/);
     expect(sheep()).toMatch(/<Picture key=\{pose\} pose=\{pose\} className=\{className\} \/>/);
+  });
+
+  // The empty box is as big as the picture was only because the picture's size comes from the call site's classes. A call
+  // site that left it to the picture's own size would lose its place the moment the picture failed.
+  it('every call site gives the sheep both a width and a height of its own, and wherever it changes one at a wider window it changes the other', () => {
+    const sites = sourcesUnder('src').flatMap((file) => [...read(file).matchAll(/<ReasonSheep\b([^>]*)>/g)]
+      .map((m) => ({ file: file.split('/').pop()!, classes: m[1].match(/\bclassName="([^"]*)"/)?.[1].split(/\s+/) })));
+    // The page head, the two For You empty states, the profile's hero and its notice, the For You list and the coming-soon note:
+    // a count that drops to nothing would make the loop below pass for nothing.
+    expect(sites.length).toBeGreaterThanOrEqual(7);
+    for (const { file, classes } of sites) {
+      expect({ file, hasClasses: !!classes }).toEqual({ file, hasClasses: true });
+      const sizes = new Map<string, Set<string>>();
+      for (const c of classes!) {
+        const m = c.match(/^((?:min-\[\d+px\]:)*)([hw])-/);
+        if (m) sizes.set(m[1], (sizes.get(m[1]) ?? new Set()).add(m[2]));
+      }
+      expect({ file, base: [...(sizes.get('') ?? [])].sort() }).toEqual({ file, base: ['h', 'w'] });
+      for (const [variant, axes] of sizes) expect({ file, variant, axes: [...axes].sort() }).toEqual({ file, variant, axes: ['h', 'w'] });
+    }
   });
 });
 

@@ -5,10 +5,13 @@ export type ReasonSheepPose = 'match' | 'curious' | 'hopeful' | 'thinking';
 
 // The sheep is drawn in empty states and failure screens, which is where the picture is most likely to be missing
 // too (offline, or a file that did not load). A picture that fails leaves the browser's broken-image box, so on error
-// this draws nothing. It is keyed by pose below: a different pose is a new picture, with a try of its own.
+// it is swapped for an empty box that the same classes size: nothing is drawn, and nothing around it moves (taken out
+// of the page instead, it made the offline notice's "Try again" jump 108px). It is keyed by pose below: a different
+// pose is a new picture, with a try of its own.
 function Picture({ pose, className }: { pose: ReasonSheepPose; className?: string }) {
   const [failed, setFailed] = useState(false);
-  if (failed) return null;
+  // `block max-w-full` is what the page's base styles give an <img>, so the box lays out as the picture did.
+  if (failed) return <span aria-hidden="true" className={cn('block max-w-full', className)} />;
   return <img src={`/sheep/v4/${pose}.png`} alt="" aria-hidden="true" loading="lazy" onError={() => setFailed(true)} className={cn('object-contain', className)} />;
 }
 
