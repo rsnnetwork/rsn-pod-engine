@@ -8,7 +8,9 @@ import { auditMiddleware } from '../middleware/audit';
 import * as sessionService from '../services/session/session.service';
 import * as podService from '../services/pod/pod.service';
 import { withoutEmail } from '../services/user/public-card';
-import { fanoutSessionEntities, fanoutUserEntity } from '../realtime/fanout';
+import {
+  fanoutSessionEntities, fanoutSessionListEntities, fanoutUserEntity, resolveSessionListAudience,
+} from '../realtime/fanout';
 import { E } from '../realtime/entities';
 import { canViewSession } from '../services/session/session-access';
 import { buildSessionStateSnapshot } from '../services/session/session-state-snapshot.service';
@@ -107,6 +109,9 @@ router.post(
       // list refetches and sees the new session immediately (no refresh
       // needed). Phase 5 — entity tags carry it via fanoutSessionEntities.
       fanoutSessionEntities(session.podId ?? null, session.id).catch(() => {});
+      // 8 Oct 2026 — and the member's own lists (Home, Sessions, the For You
+      // next-event panel), which listen on user tags this fanout does not carry.
+      fanoutSessionListEntities(session.podId ?? null, session.id).catch(() => {});
 
       const response: ApiResponse = { success: true, data: session };
       res.status(201).json(response);
@@ -192,6 +197,8 @@ router.put(
       // Bug 30 (19 May Ali) — fan out so every member's session list
       // shows the updated title/time/status instantly.
       fanoutSessionEntities(session.podId ?? null, session.id).catch(() => {});
+      // 8 Oct 2026 — a rescheduled or renamed event reaches the member's own lists too.
+      fanoutSessionListEntities(session.podId ?? null, session.id).catch(() => {});
       const response: ApiResponse = { success: true, data: session };
       res.json(response);
     } catch (err) {
@@ -223,6 +230,9 @@ router.delete(
       await sessionService.deleteSession(req.params.id, req.user!.userId, req.user!.role);
 
       fanoutSessionEntities(podIdForNotify, req.params.id).catch(() => {});
+      // 8 Oct 2026 — deleting only marks the event cancelled, so its participants
+      // are still readable; the member's own lists drop it.
+      fanoutSessionListEntities(podIdForNotify, req.params.id).catch(() => {});
 
       const response: ApiResponse = { success: true, data: { message: 'Event deleted' } };
       res.json(response);
@@ -516,7 +526,13 @@ router.delete(
       } catch { /* non-fatal */ }
       fanoutSessionEntities(podIdForNotify, req.params.id).catch(() => {});
 
+      // 8 Oct 2026 — the member's own lists: read who they are BEFORE the delete
+      // (it takes the participants and the host with the event) and tell them
+      // AFTER it, so the refetch they trigger cannot still find the event. A read
+      // that fails is read again afterwards, and then reaches the pod's members only.
+      const listAudience = await resolveSessionListAudience(podIdForNotify, req.params.id).catch(() => undefined);
       await sessionService.hardDeleteSession(req.params.id);
+      fanoutSessionListEntities(podIdForNotify, req.params.id, listAudience).catch(() => {});
       const response: ApiResponse = { success: true, data: { message: 'Event permanently deleted' } };
       return res.json(response);
     } catch (err) {
