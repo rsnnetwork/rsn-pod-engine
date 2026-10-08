@@ -5,7 +5,8 @@
 // person in the wrong country or take a place away from a want, so its shape is pinned here.
 
 import {
-  CODES_OF_COUNTRIES, KNOWN_PLACES, OWN_REGION_CODES, PLACES, PLACE_BY_NAME, REGION_CODES, SUBREGIONS,
+  CODES_OF_COUNTRIES, KNOWN_PLACES, OWN_REGION_CODES, PLACES, PLACE_BY_CANON, PLACE_BY_NAME, REGION_CODES, STATE_OF_CITY,
+  SUBREGIONS, WRITTEN_FOR,
 } from '../../../services/matching/want-cities';
 import {
   COUNTRY_ALIASES, LOOK_ALIKES, checkConstraints, extractConstraints, fold, locationCountries,
@@ -175,6 +176,42 @@ describe('places that contain others', () => {
     }
     expect(bay).not.toContain('los angeles');
     expect(bay).not.toContain('sacramento');
+  });
+
+  it('give a county written "Greater X" to the city X, so a want that names the city takes it', () => {
+    expect(SUBREGIONS.get('manchester')).toEqual(['greater manchester']);
+    for (const [city, members] of SUBREGIONS) {
+      if (members.length === 1 && members[0].startsWith('greater ')) expect([city, members[0]]).toEqual([city, `greater ${city}`]);
+    }
+  });
+});
+
+// What the matcher builds from the table to settle a namesake town and to put a town in a state.
+describe('the lookups built from the table', () => {
+  it('put each US and Canadian city in one state or province of its own country, which lists it', () => {
+    expect(STATE_OF_CITY.size).toBeGreaterThan(50);
+    for (const [city, state] of STATE_OF_CITY) {
+      // Georgia is the one state with no country of its own (the country has the name too)
+      const stateCountry = PLACE_BY_CANON.get(state)?.country;
+      if (stateCountry !== null) expect([city, PLACE_BY_CANON.get(city)?.country]).toEqual([city, stateCountry]);
+      expect([city, SUBREGIONS.get(state)?.includes(city)]).toEqual([city, true]);
+    }
+    expect(STATE_OF_CITY.get('portland')).toBe('oregon');
+    expect(STATE_OF_CITY.get('manhattan')).toBe('new york');
+    expect(STATE_OF_CITY.get('vancouver')).toBe('british columbia');
+  });
+
+  it('have every place by its canonical name, location only ones too', () => {
+    expect(PLACE_BY_CANON.size).toBe(PLACES.length);
+    expect(PLACE_BY_CANON.get('palo alto')?.locationOnly).toBe(true);
+    expect(PLACE_BY_CANON.get('berlin')?.country).toBe('germany');
+  });
+
+  it('write only places the table has where a place stands for a city', () => {
+    for (const [place, city] of WRITTEN_FOR) {
+      expect([place, PLACE_BY_CANON.has(place)]).toEqual([place, true]);
+      expect([city, SUBREGIONS.get(place)?.includes(city)]).toEqual([city, true]);
+    }
   });
 });
 

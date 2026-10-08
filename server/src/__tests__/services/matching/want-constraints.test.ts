@@ -1046,6 +1046,13 @@ describe('a region name is a place only after a location preposition', () => {
     expect(read('founders in Europe building for Asia and Africa')).toEqual(['europe']);
   });
 
+  it('"across" and "throughout" name a city or a state the way "in" does', () => {
+    expect(read('founders across Texas')).toEqual(['texas']);
+    expect(read('sellers throughout Berlin')).toEqual(['berlin']);
+    expect(read('sellers throughout Berlin or Munich')).toEqual(['berlin', 'munich']);
+    expect(read('founders across Narnia')).toEqual([]);
+  });
+
   it('keeps a person in the region found, and a person outside it out', () => {
     expect(satisfies('founders building for Asia and Africa', 'Austin, Texas')).toBeNull();
     expect(satisfies('Middle East expansion partners', 'Austin, Texas')).toBeNull();
