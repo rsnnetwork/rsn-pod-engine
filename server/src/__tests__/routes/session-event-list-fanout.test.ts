@@ -31,8 +31,9 @@ jest.mock('../../config', () => ({
   },
   __esModule: true,
 }));
+const mockLoggerWarn = jest.fn();
 jest.mock('../../config/logger', () => ({
-  default: { error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() },
+  default: { error: jest.fn(), warn: (...args: unknown[]) => mockLoggerWarn(...args), info: jest.fn(), debug: jest.fn() },
   __esModule: true,
 }));
 
@@ -265,9 +266,10 @@ describe('deleting an event for good (DELETE /sessions/:id/permanent)', () => {
     expectToldWithOwnTags(AUDIENCE);
     expect(order[0]).toBe('deleted');
     expect(order.filter((step) => step === 'told the lists')).toHaveLength(AUDIENCE.length);
+    expect(mockLoggerWarn).not.toHaveBeenCalled();
   });
 
-  it('still tells the pod when the audience could not be read before the delete', async () => {
+  it('still tells the pod when the audience could not be read before the delete, and logs why', async () => {
     world.failFirstHostRead = true;
     const res = await request(app).delete(`/sessions/${SESSION_ID}/permanent`).set(actor('super_admin'));
     await settle();
@@ -275,6 +277,12 @@ describe('deleting an event for good (DELETE /sessions/:id/permanent)', () => {
     expect(res.status).toBe(200);
     // The participants and the host are gone by the second read; the pod's members are not.
     expectToldWithOwnTags([MEMBER_A, MEMBER_B]);
+    // The fallback is a decision, not a silent swallow: the event and the reason are in the log.
+    expect(mockLoggerWarn).toHaveBeenCalledTimes(1);
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: SESSION_ID, err: expect.objectContaining({ message: 'connection reset' }) }),
+      expect.any(String),
+    );
   });
 
   it('is refused to anyone but a super admin, and tells nobody', async () => {

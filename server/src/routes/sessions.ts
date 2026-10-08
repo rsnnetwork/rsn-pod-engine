@@ -529,8 +529,15 @@ router.delete(
       // 8 Oct 2026 — the member's own lists: read who they are BEFORE the delete
       // (it takes the participants and the host with the event) and tell them
       // AFTER it, so the refetch they trigger cannot still find the event. A read
-      // that fails is read again afterwards, and then reaches the pod's members only.
-      const listAudience = await resolveSessionListAudience(podIdForNotify, req.params.id).catch(() => undefined);
+      // that fails is logged and read again afterwards, and then reaches the pod's
+      // members only; it must not stop the delete.
+      const listAudience = await resolveSessionListAudience(podIdForNotify, req.params.id).catch((err: unknown) => {
+        logger.warn(
+          { err, sessionId: req.params.id },
+          'Permanent delete: could not read who to tell beforehand, so only the pod will be told (non-fatal)',
+        );
+        return undefined;
+      });
       await sessionService.hardDeleteSession(req.params.id);
       fanoutSessionListEntities(podIdForNotify, req.params.id, listAudience).catch(() => {});
       const response: ApiResponse = { success: true, data: { message: 'Event permanently deleted' } };
