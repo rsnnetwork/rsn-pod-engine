@@ -82,9 +82,12 @@ export default function MeetSheet({ person, onClose }: Props) {
   const length = note.trim().length;
   const over = length > MEET_NOTE_MAX;
   const invalid = length === 0 || over;
-  // The hint under the counter. While it shows it is also the Send button's description: the button is in the footer
-  // and the hint in the body, so a screen reader that lands on the dimmed button would otherwise hear no reason.
+  // Why Send is off, said where a screen reader that lands on the dimmed button will hear it: the hint under the counter
+  // while the note is empty, the counter itself (it turns red) while the note is too long. The button is in the footer
+  // and both are in the body, so it would otherwise hear no reason. An empty note and a long one cannot both be, so
+  // there is only ever one.
   const hintShown = length === 0;
+  const reasonId = hintShown ? hintId : over ? counterId : undefined;
   const submit = () => {
     if (!person || inFlight.current.has(person.userId) || invalid) return;
     inFlight.current.add(person.userId);
@@ -100,7 +103,7 @@ export default function MeetSheet({ person, onClose }: Props) {
       footer={(
         <>
           <button type="button" onClick={onClose} className={CANCEL}>Cancel</button>
-          <button type="button" onClick={submit} disabled={pending || invalid} aria-describedby={hintShown ? hintId : undefined} className={SEND}>
+          <button type="button" onClick={submit} disabled={pending || invalid} aria-describedby={reasonId} className={SEND}>
             {pending ? 'Sending…' : 'Send request'}
           </button>
         </>
