@@ -12,7 +12,9 @@ const Input = forwardRef<HTMLInputElement, InputProps>(({ label, error, classNam
     <input
       ref={ref}
       className={cn(
-        'w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] placeholder:text-gray-400',
+        // 16px (text-base) on a phone, or iPhone Safari zooms the page when the field is focused; the
+        // compact text-sm from the sm breakpoint up, where nothing zooms.
+        'w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-base sm:text-sm text-[#1a1a2e] placeholder:text-gray-400',
         'focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-colors',
         error && 'border-red-500', className,
       )}
