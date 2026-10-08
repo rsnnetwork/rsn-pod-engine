@@ -43,7 +43,7 @@ export interface Place {
   country: string | null;
   /** A state or province names the country more firmly than a city does ("Paris, Texas"). */
   level: PlaceLevel;
-  /** A person's location can be this place, but a want never names it (see LOCATION_ONLY). */
+  /** A person's location can be this place, but a want never names it (see LOCATION_ONLY and REGIONS_AFTER_A_CITY). */
   locationOnly: boolean;
 }
 

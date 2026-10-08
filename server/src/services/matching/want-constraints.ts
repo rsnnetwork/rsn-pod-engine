@@ -410,12 +410,14 @@ function placesNamedIn(location: string): NamedPlaces {
   // Canadian province's code last in the location does what its name would, but only when it settles
   // a namesake ("Vienna, VA"); a code on its own is none of these ("Omaha, NE" is not Niger).
   let countries: Set<string>;
-  const coded = found.countries.size ? null : regionCodeThatSettles(location, found);
-  if (found.countries.size) countries = found.countries;
-  else if (coded) {
-    found.places.add(coded.place);
-    countries = new Set([coded.country]);
-  } else countries = found.stateCountries.size ? found.stateCountries : found.cityCountries;
+  if (found.countries.size) {
+    countries = found.countries;
+  } else {
+    const coded = regionCodeThatSettles(location, found);
+    if (coded) found.places.add(coded.place);
+    countries = coded ? new Set([coded.country])
+      : found.stateCountries.size ? found.stateCountries : found.cityCountries;
+  }
   // Locations repeat across the people a want is scored against; the cache is bounded.
   if (NAMED_PLACES.size >= 5000) NAMED_PLACES.clear();
   const named = { countries, regions: found.regions, places: found.places };
