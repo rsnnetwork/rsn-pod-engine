@@ -354,6 +354,53 @@ describe('The bell panel\'s text reads at 4.5:1 on white and on the unread tint 
   });
 });
 
+describe('The bell\'s Accept buttons read at 4.5:1, resting and hovered (polish pass)', () => {
+  const bell = () => read('src/components/ui/NotificationBell.tsx');
+  // The colours the app is built with: `bg-reason-red` is the red the browser paints, not a name this test makes up.
+  const reasonToken = (name: string): string => {
+    const block = read('tailwind.config.js').match(/reason:\s*\{([^}]*)\}/)?.[1] ?? '';
+    const hex = block.match(new RegExp(`['"]?${name}['"]?:\\s*'(#[0-9a-fA-F]{6})'`))?.[1];
+    if (!hex) throw new Error(`no reason.${name} in tailwind.config.js`);
+    return hex;
+  };
+  const paint = (cls: string): string => {
+    if (cls === 'text-white' || cls === 'bg-white') return '#ffffff';
+    const token = cls.match(/^(?:bg|text)-reason-([a-z-]+)$/);
+    return token ? reasonToken(token[1]) : hexOf(cls);
+  };
+  // Both Accept buttons in the panel: the one on a pod or event invite, and the one on a meeting request.
+  const accepts = () => [...bell().matchAll(/onClick=\{\(\) => (handleAccept\w+)\(n\)\}\s*disabled=\{isActing\}\s*className="([^"]*)"/g)]
+    .map((m) => ({ handler: m[1], classes: m[2].split(/\s+/) }));
+
+  it('there are two Accept buttons, and both are checked below', () => {
+    expect(accepts().map((a) => a.handler)).toEqual(['handleAcceptInvite', 'handleAcceptPoke']);
+  });
+
+  it('the label is white on the brand red, and white on the darker red under the pointer', () => {
+    for (const { handler, classes } of accepts()) {
+      expect({ handler, classes: classes.filter((c) => /^(text-white|bg-reason-red|hover:bg-reason-red-hover)$/.test(c)).sort() })
+        .toEqual({ handler, classes: ['bg-reason-red', 'hover:bg-reason-red-hover', 'text-white'] });
+    }
+  });
+
+  it('the label reads at 4.5:1 or better on the resting fill and on the hover fill, and the hover fill is the darker of the two', () => {
+    for (const { handler, classes } of accepts()) {
+      const label = paint(classes.find((c) => /^text-(white|reason-[a-z-]+)$/.test(c))!);
+      const resting = paint(classes.find((c) => /^bg-[a-z]+(-[a-z0-9]+)*$/.test(c))!);
+      const hover = paint(classes.find((c) => c.startsWith('hover:bg-'))!.slice('hover:'.length));
+      expect({ handler, state: 'resting', ok: contrast(label, resting) >= 4.5 }).toEqual({ handler, state: 'resting', ok: true });
+      expect({ handler, state: 'hover', ok: contrast(label, hover) >= 4.5 }).toEqual({ handler, state: 'hover', ok: true });
+      expect(luminance(hover)).toBeLessThan(luminance(resting));
+    }
+  });
+
+  it('keeps the rest of each button: the 44px height on a meeting request, and the dimmed look while it is busy', () => {
+    const [invite, poke] = accepts();
+    expect(poke.classes).toContain('min-h-[44px]');
+    for (const { classes } of [invite, poke]) expect(classes).toContain('disabled:opacity-50');
+  });
+});
+
 describe('Admin status pills wrap instead of scrolling <main> sideways at phone widths (integration pass)', () => {
   // Five pills at px-4 are about 450px wide: more than a 360px phone leaves inside <main>, and their words cannot
   // be split, so an unwrapped row pushed <main> 88px (Moderation) and 82px (Support) sideways at 360.

@@ -450,13 +450,13 @@ export default function NotificationBell() {
                     </div>
                   </button>
 
-                  {/* Inline Accept / Decline for PENDING invite notifications only */}
+                  {/* Inline Accept / Decline for PENDING invite notifications only. Both Accept buttons in this panel are the brand red: white on the old emerald-500 was 2.54:1, on this red it is 4.56:1 (5.60:1 hovered). */}
                   {showActions && (
                     <div className="flex items-center gap-2 mt-2 ml-4">
                       <button
                         onClick={() => handleAcceptInvite(n)}
                         disabled={isActing}
-                        className="flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-full bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-50 transition-colors"
+                        className="flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-full bg-reason-red text-white hover:bg-reason-red-hover disabled:opacity-50 transition-colors"
                       >
                         {isActing ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle className="h-3 w-3" />}
                         Accept
@@ -477,7 +477,7 @@ export default function NotificationBell() {
                       <button
                         onClick={() => handleAcceptPoke(n)}
                         disabled={isActing}
-                        className="flex min-h-[44px] items-center gap-1 rounded-full bg-emerald-500 px-4 text-xs font-medium text-white transition-colors hover:bg-emerald-600 disabled:opacity-50"
+                        className="flex min-h-[44px] items-center gap-1 rounded-full bg-reason-red px-4 text-xs font-medium text-white transition-colors hover:bg-reason-red-hover disabled:opacity-50"
                       >
                         {isActing ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle className="h-3 w-3" />}
                         Accept
