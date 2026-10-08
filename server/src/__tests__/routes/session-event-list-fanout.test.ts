@@ -62,15 +62,23 @@ import { ForbiddenError } from '../../middleware/errors';
 
 const POD_ID = '8d5e0b64-1c1f-4c3f-9d1e-6a5d0f3b2a11';
 const SESSION_ID = '3a7c1f52-5b9e-4f0a-8e0d-2c4b6d8f1a22';
+const OTHER_POD_ID = '1f4a9c7e-3b2d-4e65-8a90-5d7c2b1e0f33';
+const OTHER_SESSION_ID = '9b3e6d21-7c4a-4f18-a2d5-0e8f1c6b4a77';
 
 // Five people, each in a different relation to the event.
 const ADMIN_HOST = 'user-admin-host'; // runs the event, has left it, and is not a member of the pod
 const GUEST = 'user-guest';           // registered for the event, not a member of the pod
 const MEMBER_A = 'user-member-a';     // member of the pod, and registered
 const MEMBER_B = 'user-member-b';     // member of the pod, not registered
-const OUTSIDER = 'user-outsider';     // has nothing to do with the event
+const OUTSIDER = 'user-outsider';     // member, participant and host of ANOTHER pod's event: nothing to do with this one
 
 const AUDIENCE = [ADMIN_HOST, GUEST, MEMBER_A, MEMBER_B];
+
+/** Another pod's event. The fake answers for it too, so a query not aimed at THIS event and pod finds the outsider. */
+const elsewhere = {
+  sessionId: OTHER_SESSION_ID, podId: OTHER_POD_ID,
+  participants: [OUTSIDER], podMembers: [OUTSIDER], hostId: OUTSIDER,
+};
 
 /** What the database holds about this event, as far as who could be looking at it. */
 const world = {
@@ -94,14 +102,37 @@ function resetWorld() {
 }
 
 /**
- * Answers the audience SQL by the groups it asks for, from the event's rows as they are at that moment.
+ * Answers the audience SQL by the groups it asks for, from the rows of TWO events as they are at that moment:
+ * the one under test and another pod's (whose people are the outsider).
+ *
+ * An arm is "scoped" when its WHERE names the parameter it has to be aimed with (participants by
+ * `session_id = $1`, pod members by `pod_id = ... $2`, the host by `id = $1`). A scoped arm returns only the
+ * event or pod it was asked about; an arm without its predicate returns everybody's. So the outsider comes back
+ * if the helper asks about the wrong event or pod, or if a predicate is ever dropped from the statement. (If the
+ * statement is rewritten so these patterns stop matching, the fake reads it as unscoped and the tests fail:
+ * update the patterns.)
+ *
  * A person in two groups comes back twice: whoever tells them must still tell them once.
  */
 function audienceRows(sql: string, params: unknown[]) {
+  const [sessionId, podId] = params;
+  const here = {
+    sessionId: SESSION_ID, podId: world.podId, participants: world.participants,
+    podMembers: world.podMembers, hostId: world.hostId, rowExists: world.eventRowExists,
+  };
+  const there = { ...elsewhere, rowExists: true };
   const ids: string[] = [];
-  if (/FROM session_participants/.test(sql) && world.eventRowExists) ids.push(...world.participants);
-  if (/FROM pod_members/.test(sql) && world.podId !== null && params.includes(world.podId)) ids.push(...world.podMembers);
-  if (/host_user_id/.test(sql) && world.eventRowExists) ids.push(world.hostId);
+  for (const e of [here, there]) {
+    if (/FROM session_participants/.test(sql) && e.rowExists && (!/session_id\s*=\s*\$1/.test(sql) || e.sessionId === sessionId)) {
+      ids.push(...e.participants);
+    }
+    if (/FROM pod_members/.test(sql) && e.podId !== null && (!/pod_id\s*=\s*(COALESCE\(\s*)?\$2/.test(sql) || e.podId === podId)) {
+      ids.push(...e.podMembers);
+    }
+    if (/host_user_id/.test(sql) && e.rowExists && (!/\bid\s*=\s*\$1/.test(sql) || e.sessionId === sessionId)) {
+      ids.push(e.hostId);
+    }
+  }
   return ids.map((user_id) => ({ user_id }));
 }
 
@@ -155,9 +186,10 @@ function listEmits() {
     .map((call) => ({ io: call[0], recipients: call[1] as string[], tags: [...(call[2] as string[])].sort() }));
 }
 
-/** Each of these people was told once, with their own two tags and nobody else's. */
+/** Each of these people was told once, with their own two tags and nobody else's, and nobody from another event or pod was. */
 function expectToldWithOwnTags(people: string[]) {
   const sent = listEmits();
+  expect(sent.map((e) => e.recipients).flat()).not.toContain(OUTSIDER);
   expect(sent.map((e) => e.recipients).flat().sort()).toEqual([...people].sort());
   for (const id of people) {
     expect(sent).toContainEqual({ io: mockIo, recipients: [id], tags: [`user:${id}:pods`, `user:${id}:sessions`] });
@@ -174,8 +206,11 @@ beforeEach(() => {
   });
   (sessionService.createSession as jest.Mock).mockImplementation(async () => session());
   (sessionService.updateSession as jest.Mock).mockImplementation(async () => session());
-  (sessionService.deleteSession as jest.Mock).mockImplementation(async () => { order.push('cancelled'); });
+  // A delete takes a moment, so anything that tells the lists without waiting for it lands first in `order`.
+  const aMoment = () => new Promise((resolve) => setImmediate(resolve));
+  (sessionService.deleteSession as jest.Mock).mockImplementation(async () => { await aMoment(); order.push('cancelled'); });
   (sessionService.hardDeleteSession as jest.Mock).mockImplementation(async () => {
+    await aMoment();
     order.push('deleted');
     // The rows that name the participants and the host go with the event.
     world.eventRowExists = false;
@@ -191,7 +226,17 @@ describe('creating an event', () => {
 
     expect(res.status).toBe(201);
     expectToldWithOwnTags(AUDIENCE);
-    expect(listEmits().map((e) => e.recipients).flat()).not.toContain(OUTSIDER);
+  });
+
+  it('tells nobody when the change is refused', async () => {
+    (sessionService.createSession as jest.Mock).mockRejectedValueOnce(new ForbiddenError('Only pod directors and hosts can create sessions'));
+    const res = await request(app).post('/sessions').set(actor()).send({
+      podId: POD_ID, title: 'Friday founders', scheduledAt: '2026-10-16T17:00:00.000Z',
+    });
+    await settle();
+
+    expect(res.status).toBe(403);
+    expect(mockEmitEntities).not.toHaveBeenCalled();
   });
 
   it('keeps telling the event and the pod their lists changed', async () => {
@@ -230,7 +275,7 @@ describe('changing an event (renaming, rescheduling)', () => {
     await settle();
 
     expect(res.status).toBe(403);
-    expect(listEmits()).toEqual([]);
+    expect(mockEmitEntities).not.toHaveBeenCalled();
   });
 
   it('still answers when the audience cannot be read, and tells nobody', async () => {
@@ -252,6 +297,15 @@ describe('cancelling an event (DELETE /sessions/:id keeps the row and marks it c
     expectToldWithOwnTags(AUDIENCE);
     expect(order[0]).toBe('cancelled');
     expect(order.filter((step) => step === 'told the lists')).toHaveLength(AUDIENCE.length);
+  });
+
+  it('tells nobody when the change is refused', async () => {
+    (sessionService.deleteSession as jest.Mock).mockRejectedValueOnce(new ForbiddenError('Only the session host can delete the session'));
+    const res = await request(app).delete(`/sessions/${SESSION_ID}`).set(actor());
+    await settle();
+
+    expect(res.status).toBe(403);
+    expect(mockEmitEntities).not.toHaveBeenCalled();
   });
 });
 
@@ -291,6 +345,17 @@ describe('deleting an event for good (DELETE /sessions/:id/permanent)', () => {
 
     expect(res.status).toBe(403);
     expect(sessionService.hardDeleteSession).not.toHaveBeenCalled();
+    expect(mockEmitEntities).not.toHaveBeenCalled();
+  });
+
+  it('tells nobody when the delete itself fails', async () => {
+    (sessionService.hardDeleteSession as jest.Mock).mockRejectedValueOnce(new Error('database is down'));
+    const res = await request(app).delete(`/sessions/${SESSION_ID}/permanent`).set(actor('super_admin'));
+    await settle();
+
+    expect(res.status).toBe(500);
+    // Nothing was deleted, so no list changes: the lists are not told (the event/pod tags of the early,
+    // unawaited fanoutSessionEntities call are not the member's lists).
     expect(listEmits()).toEqual([]);
   });
 });
