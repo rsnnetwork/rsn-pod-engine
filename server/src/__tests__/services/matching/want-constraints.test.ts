@@ -3,7 +3,7 @@
 // "Manufacturer in US with 20 years experience": place + experience are strict.
 
 import {
-  locationTerms, parseYears, extractConstraints, checkConstraints, profileYears,
+  locationTerms, parseYears, extractConstraints, checkConstraints, profileYears, matchedPlace,
 } from '../../../services/matching/want-constraints';
 
 describe('locationTerms', () => {
@@ -473,6 +473,80 @@ describe('a place is matched as a whole place, never as letters inside another n
   it('a city written with accents or punctuation is still that city', () => {
     expect(satisfies('founders in Sao Paulo', 'São Paulo, Brazil')).toBe(true);
     expect(satisfies('founders in Bogota', 'Bogotá, Colombia')).toBe(true);
+  });
+});
+
+// A state or a province in a want takes the people in its cities, as well as the people who write the state
+// ("in Oklahoma" misses "Oklahoma City, OK", and "in Indiana" misses "Indianapolis", when only the word counts).
+// Every city the table puts in a state is in it for this; the table is the one source of which city is where.
+describe('a state or province in a want takes the cities in it', () => {
+  it.each([
+    ['Oklahoma', 'Oklahoma City, OK'], ['Oklahoma', 'Tulsa'], ['Indiana', 'Indianapolis'], ['Texas', 'Houston'],
+    ['Texas', 'Austin'], ['Texas', 'Austin, TX'], ['California', 'Palo Alto'], ['California', 'Los Angeles, CA'],
+    ['California', 'San Francisco Bay Area'], ['California', 'Silicon Valley'], ['California', 'Bay Area'],
+    ['New York', 'Brooklyn'], ['New York', 'Buffalo, NY'], ['New York', 'Albany'], ['New York', 'NYC'],
+    ['Georgia', 'Atlanta'], ['Illinois', 'Chicago'], ['Massachusetts', 'Boston'], ['Florida', 'Miami, FL'],
+    ['New Jersey', 'Jersey City'], ['Colorado', 'Boulder'], ['Missouri', 'St. Louis'],
+    ['Washington', 'Seattle'], ['Washington', 'Bellevue, WA'], ['Washington', 'Washington, DC'],
+    ['Washington', 'Washington D.C.'], ['Washington', 'Washington DC'],
+    ['Ontario', 'Toronto'], ['British Columbia', 'Vancouver'], ['Quebec', 'Montreal'], ['Alberta', 'Calgary'],
+    ['Nova Scotia', 'Halifax'], ['Saskatchewan', 'Regina'],
+  ])('"in %s" takes %s', (state, location) => {
+    expect(satisfies(`founders in ${state}`, location)).toBe(true);
+  });
+
+  it.each([
+    ['Texas', 'Oklahoma City'], ['Oklahoma', 'Austin, Texas'], ['Indiana', 'Chicago'], ['California', 'Las Vegas'],
+    ['Nevada', 'San Francisco'], ['New York', 'Newark'],
+    ['Washington', 'Portland, Oregon'], ['Ontario', 'Vancouver'], ['Quebec', 'Toronto'], ['Georgia', 'Miami'],
+  ])('"in %s" does not take %s', (state, location) => {
+    expect(satisfies(`founders in ${state}`, location)).toBe(false);
+  });
+
+  it('"Washington" in a want is the state or the capital, and "Washington DC" is only the capital', () => {
+    expect(satisfies('founders in Washington', 'Seattle, Washington')).toBe(true);
+    expect(satisfies('founders in Washington', 'Washington, DC')).toBe(true);
+    expect(satisfies('founders in Washington DC', 'Washington, DC')).toBe(true);
+    expect(satisfies('founders in Washington DC', 'Seattle, Washington')).toBe(false);
+    expect(satisfies('founders in Washington DC', 'Seattle')).toBe(false);
+  });
+
+  it('leaves Kansas City alone: the table puts it in Missouri, so "in Kansas" does not take it and "in Missouri" does', () => {
+    expect(satisfies('founders in Kansas', 'Kansas City, MO')).toBe(false);
+    expect(satisfies('founders in Kansas', 'Kansas City, KS')).toBe(false); // the same name, read as Missouri's
+    expect(satisfies('founders in Kansas', 'Wichita, Kansas')).toBe(true);
+    expect(satisfies('founders in Missouri', 'Kansas City, MO')).toBe(true);
+  });
+
+  it('names the state the member wrote on the card, not the city', () => {
+    expect(matchedPlace(extractConstraints(['founders in Oklahoma']), { location: 'Oklahoma City, OK' })).toBe('oklahoma');
+    expect(matchedPlace(extractConstraints(['founders in Washington']), { location: 'Washington, DC' })).toBe('washington');
+  });
+});
+
+// The capture stopped at a hyphen, so "founders in Guinea-Bissau" was read as Guinea. A word that goes on
+// after a hyphen with a capital letter is part of the name; "-based" and the like are not.
+describe('a hyphenated name in a want', () => {
+  it('stays whole', () => {
+    expect(extractConstraints(['founders in Guinea-Bissau']).location).toEqual(['guinea-bissau']);
+    expect(extractConstraints(['founders in Timor-Leste']).location).toEqual(['timor-leste']);
+    expect(extractConstraints(['founders in Clermont-Ferrand']).location).toEqual(['clermont ferrand']);
+    expect(satisfies('founders in Guinea-Bissau', 'Bissau, Guinea-Bissau')).toBe(true);
+    expect(satisfies('founders in Guinea-Bissau', 'Conakry, Guinea')).toBe(false);
+    expect(satisfies('founders in Guinea', 'Bissau, Guinea-Bissau')).toBe(false);
+    expect(satisfies('founders in Guinea', 'Conakry, Guinea')).toBe(true);
+  });
+
+  it('does not take a lowercase suffix after the hyphen into the name', () => {
+    expect(extractConstraints(['founders from Berlin-based startups']).location).toEqual(['berlin']);
+    expect(extractConstraints(['founders in London-based firms']).location).toEqual(['london']);
+    expect(extractConstraints(['founders in Austin-area startups']).location).toEqual(['austin']);
+  });
+
+  it('tries the first word of an unknown pair after "in", as for two words', () => {
+    expect(extractConstraints(['founders in Berlin-Mitte']).location).toEqual(['berlin']);
+    expect(extractConstraints(['founders from Coca-Cola']).location).toBeNull();
+    expect(extractConstraints(['founders in Baden-Wurttemberg']).location).toBeNull();
   });
 });
 

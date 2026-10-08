@@ -245,6 +245,16 @@ const nameOf = (key: string): string | undefined =>
 const placeNamed = (word: string): string | undefined =>
   ALIAS_NODOT.get(word) ?? EXTRA_BY_NAME.get(word) ?? PLACE_BY_NAME.get(word)?.canon;
 
+// One or two capitalised words after a location preposition. Letters, not only A-Z: "in Düsseldorf",
+// "in Zürich" and "in Österreich" are the launch audience's wants. A hyphen followed by a capital letter
+// goes on with the name ("Guinea-Bissau", "Clermont-Ferrand"); "-based" and the like do not. A word that
+// ends in a full stop after four letters ends the sentence ("from Berlin. Raise a seed round"), so the
+// next capital letter starts a new one; "St. Louis" and "U.K." are shorter and stay one name.
+const NAME_WORD = String.raw`\p{Lu}[\p{L}.]+(?:-\p{Lu}[\p{L}.]+)*`;
+const PLACE_AFTER_A_PREPOSITION = new RegExp(
+  String.raw`\b(in|based in|located in|from|within|near)\s+(?:the\s+)?(${NAME_WORD}(?:(?<!\p{L}{4}\.)\s+${NAME_WORD})?)`, 'gu',
+);
+
 /**
  * Canonical place terms mentioned in free text: country aliases and region
  * names (whole-word), plus capitalised words after "in / based in / located
@@ -263,10 +273,8 @@ export function locationTerms(written: string | null | undefined): string[] {
   const { countries, regions, places, rest } = scan(text, WANT_SCAN);
   const out = new Set<string>(countries);
   if (mentionsUS(text)) out.add('united states');
-  // Letters, not only A-Z: "in Düsseldorf", "in Zürich" and "in Österreich" are the launch audience's wants.
-  // A word that ends in a full stop after four letters ends the sentence ("from Berlin. Raise a seed round"),
-  // so the next capital letter starts a new one; "St. Louis" and "U.K." are shorter and stay one name.
-  const prepRe = /\b(in|based in|located in|from|within|near)\s+(?:the\s+)?(\p{Lu}[\p{L}.]+(?:(?<!\p{L}{4}\.)\s+\p{Lu}[\p{L}.]+)?)/gu;
+  const prepRe = PLACE_AFTER_A_PREPOSITION;
+  prepRe.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = prepRe.exec(rest)) !== null) {
     const after = rest.slice(prepRe.lastIndex);

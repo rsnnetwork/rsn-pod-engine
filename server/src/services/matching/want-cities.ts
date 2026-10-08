@@ -68,6 +68,63 @@ const NORTHERN_IRELAND_TOWNS: readonly string[] = [
   'newtownabbey', 'craigavon', 'carrickfergus', 'portadown', 'larne', 'strabane',
 ];
 
+// The cities of the United States by the state they are in, and of Canada by province. This is the one
+// place that says which city is where: it makes the cities (with their country), and it makes a state in
+// a want take the people in its cities ("in Oklahoma" takes Oklahoma City and Tulsa, "in Indiana"
+// Indianapolis). Kansas City is listed under Missouri, where the one of that name in the table is, so
+// "in Kansas" does not take it. Washington DC is not in a state; "Washington" in a want is the state or DC.
+const US_CITIES_BY_STATE: Readonly<Record<string, readonly string[]>> = {
+  alaska: ['anchorage'],
+  arizona: ['phoenix', 'tucson', 'scottsdale'],
+  california: [
+    'san francisco', 'los angeles', 'san diego', 'san jose', 'oakland', 'sacramento', 'palo alto', 'mountain view',
+    'menlo park', 'cupertino', 'sunnyvale', 'santa clara', 'san mateo', 'redwood city', 'santa monica', 'irvine',
+    'berkeley', 'fremont', 'silicon valley',
+  ],
+  colorado: ['denver', 'boulder'],
+  connecticut: ['hartford', 'new haven', 'stamford'],
+  florida: ['miami', 'orlando', 'tampa', 'jacksonville'],
+  georgia: ['atlanta'],
+  hawaii: ['honolulu'],
+  idaho: ['boise'],
+  illinois: ['chicago'],
+  indiana: ['indianapolis'],
+  iowa: ['des moines'],
+  kentucky: ['louisville'],
+  louisiana: ['new orleans'],
+  maryland: ['baltimore'],
+  massachusetts: ['boston'],
+  michigan: ['detroit', 'ann arbor'],
+  minnesota: ['minneapolis'],
+  missouri: ['st louis|saint louis', 'kansas city'],
+  nebraska: ['omaha'],
+  nevada: ['las vegas'],
+  'new jersey': ['jersey city', 'newark', 'princeton'],
+  'new mexico': ['albuquerque'],
+  'new york': ['brooklyn', 'manhattan', 'albany', 'buffalo'],
+  'north carolina': ['charlotte', 'raleigh', 'chapel hill'],
+  ohio: ['columbus', 'cleveland', 'cincinnati'],
+  oklahoma: ['oklahoma city', 'tulsa'],
+  oregon: ['portland'],
+  pennsylvania: ['philadelphia', 'pittsburgh'],
+  'rhode island': ['providence'],
+  tennessee: ['nashville', 'memphis'],
+  texas: ['austin', 'houston', 'dallas', 'san antonio', 'el paso', 'fort worth', 'plano'],
+  utah: ['salt lake city'],
+  washington: ['seattle', 'bellevue', 'redmond'],
+  wisconsin: ['milwaukee'],
+};
+
+const CANADIAN_CITIES_BY_PROVINCE: Readonly<Record<string, readonly string[]>> = {
+  alberta: ['calgary', 'edmonton'],
+  'british columbia': ['vancouver'],
+  manitoba: ['winnipeg'],
+  'nova scotia': ['halifax'],
+  ontario: ['toronto', 'ottawa', 'mississauga', 'brampton', 'kitchener', 'markham'],
+  quebec: ['montreal'],
+  saskatchewan: ['saskatoon', 'regina'],
+};
+
 const CITIES: Readonly<Record<string, readonly string[]>> = {
   // ── Germany, Austria, Switzerland ──────────────────────────────────────────
   germany: [
@@ -247,23 +304,9 @@ const CITIES: Readonly<Record<string, readonly string[]>> = {
   australia: ['sydney', 'melbourne', 'brisbane', 'perth', 'adelaide', 'canberra', 'gold coast', 'hobart', 'darwin'],
   'new zealand': ['auckland', 'wellington', 'christchurch'],
   // ── North America ──────────────────────────────────────────────────────────
-  'united states': [
-    'san francisco', 'los angeles', 'chicago', 'boston', 'seattle', 'austin', 'denver', 'atlanta', 'miami',
-    'houston', 'dallas', 'san diego', 'san jose', 'portland', 'philadelphia', 'washington dc|washington d c|district of columbia',
-    'detroit', 'omaha', 'jersey city', 'brooklyn', 'manhattan', 'las vegas', 'phoenix', 'san antonio', 'minneapolis',
-    'st louis|saint louis', 'pittsburgh', 'cleveland', 'columbus', 'cincinnati', 'indianapolis', 'nashville',
-    'charlotte', 'raleigh', 'orlando', 'tampa', 'salt lake city', 'kansas city', 'new orleans', 'baltimore',
-    'boulder', 'palo alto', 'mountain view', 'menlo park', 'cupertino', 'sunnyvale', 'santa clara', 'oakland',
-    'sacramento', 'honolulu', 'milwaukee', 'san mateo', 'redwood city', 'santa monica', 'irvine', 'providence',
-    'hartford', 'albany', 'buffalo', 'louisville', 'memphis', 'oklahoma city', 'tulsa', 'albuquerque', 'tucson',
-    'el paso', 'fort worth', 'jacksonville', 'des moines', 'boise', 'anchorage', 'ann arbor', 'chapel hill',
-    'princeton', 'new haven', 'stamford', 'newark', 'scottsdale', 'plano', 'bellevue', 'redmond', 'silicon valley',
-    'berkeley', 'fremont',
-  ],
-  canada: [
-    'toronto', 'vancouver', 'montreal', 'ottawa', 'calgary', 'edmonton', 'winnipeg', 'halifax', 'kitchener',
-    'mississauga', 'brampton', 'saskatoon', 'regina', 'markham',
-  ],
+  // The cities of the United States and Canada are listed under their state or province just below.
+  'united states': [...Object.values(US_CITIES_BY_STATE).flat(), 'washington dc|washington d c|district of columbia'],
+  canada: Object.values(CANADIAN_CITIES_BY_PROVINCE).flat(),
   mexico: ['mexico city', 'guadalajara', 'monterrey', 'tijuana', 'puebla', 'queretaro', 'cancun'],
   // ── Latin America and the Caribbean ────────────────────────────────────────
   brazil: [
@@ -336,13 +379,24 @@ const BAY_AREA_CITIES: readonly string[] = [
   'santa clara', 'redwood city', 'san mateo', 'berkeley', 'fremont', 'silicon valley',
 ];
 
+const canonicals = (entries: readonly string[]): string[] => entries.map((entry) => entry.split('|')[0]);
+
+/** A place that holds more than the cities listed under it: California holds the Bay Area, "Washington" holds DC. */
+const ALSO_HOLDS: Readonly<Record<string, readonly string[]>> = {
+  california: ['bay area'],
+  washington: ['washington dc'],
+};
+
 /**
  * Places that contain others a person may name instead: a want "in Northern Ireland" is satisfied
- * by a location that names the province or any town in it, by the town's canonical name.
+ * by a location that names the province or any town in it, by the town's canonical name. The same
+ * for a state or a province and its cities: "in Oklahoma" takes Oklahoma City.
  */
-export const SUBREGIONS: ReadonlyMap<string, readonly string[]> = new Map([
-  ['northern ireland', NORTHERN_IRELAND_TOWNS.map((entry) => entry.split('|')[0])],
+export const SUBREGIONS: ReadonlyMap<string, readonly string[]> = new Map<string, readonly string[]>([
+  ['northern ireland', canonicals(NORTHERN_IRELAND_TOWNS)],
   ['bay area', BAY_AREA_CITIES],
+  ...Object.entries({ ...US_CITIES_BY_STATE, ...CANADIAN_CITIES_BY_PROVINCE })
+    .map(([place, cities]): [string, readonly string[]] => [place, [...canonicals(cities), ...(ALSO_HOLDS[place] ?? [])]]),
 ]);
 
 /** The places a want can name, by canonical name. A location-only place is not one of them. */
