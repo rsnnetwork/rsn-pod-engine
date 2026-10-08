@@ -480,7 +480,10 @@ const NAMED_PLACES = new Map<string, NamedPlaces>();
  * The US state or Canadian province whose two-letter code is the last part of a location after a
  * comma ("Vienna, VA"), when it settles a namesake: a city or a state of another country, or a name
  * several countries have ("Cambridge, MA"), is beside it. Not when the code is that country's own:
- * "Berlin, DE" (Germany's code), "Toronto, CA", "Perth, WA" (Western Australia) keep their city.
+ * "Berlin, DE" (Germany's code), "Toronto, CA", "Perth, WA" (Western Australia), "Neuchâtel, NE" (a Swiss
+ * canton) keep their city. Not either when a city of the code's own country is named too ("Berlin / San
+ * Francisco, CA"): that city already says where the person is, so the code settles nothing and Berlin
+ * keeps its country.
  */
 function regionCodeThatSettles(location: string, found: Found): RegionCode | null {
   const parts = location.split(',');
@@ -490,7 +493,8 @@ function regionCodeThatSettles(location: string, found: Found): RegionCode | nul
   if (!code || !region) return null;
   const beside = [...found.cityCountries, ...found.stateCountries];
   if (beside.some((k) => CODES_OF_COUNTRIES.get(code) === k || OWN_REGION_CODES[k]?.includes(code))) return null;
-  return found.sharedName || beside.some((k) => k !== region.country) ? region : null;
+  if (beside.includes(region.country)) return null;
+  return found.sharedName || beside.length ? region : null;
 }
 
 /** The countries, regions and cities, states and provinces a person's location names, accents and punctuation ignored. */

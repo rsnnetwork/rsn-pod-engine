@@ -127,6 +127,37 @@ describe('a US or Canadian town named after a foreign city', () => {
     ]) expect([location, countriesOf(location)]).toEqual([location, [country]]);
   });
 
+  // S4-b fix round 1: the Swiss cantons, the Dutch and Spanish provinces and the Pakistani and Nigerian states
+  // write their own codes after a city too, and eleven of them are also a US state's or a Canadian province's.
+  it('keeps the city when the code is a Swiss canton\'s, a Dutch or Spanish province\'s, or another country\'s own', () => {
+    for (const [location, country] of [
+      ['Neuchâtel, NE', 'switzerland'], ['Amsterdam, NH', 'netherlands'], ['Utrecht, UT', 'netherlands'],
+      ['Almere, FL', 'netherlands'], ['Eindhoven, NB', 'netherlands'], ['Malaga, MA', 'spain'], ['Málaga, MA', 'spain'],
+      ['Valladolid, VA', 'spain'], ['Barcelona, CT', 'spain'], ['Madrid, MD', 'spain'], ['Karachi, SD', 'pakistan'],
+      ['Lagos, LA', 'nigeria'],
+    ]) expect([location, countriesOf(location)]).toEqual([location, [country]]);
+  });
+
+  it('puts those people in their own region, not in North America', () => {
+    expect(satisfies('investors in DACH', 'Neuchâtel, NE')).toBe(true);
+    expect(satisfies('investors in Europe', 'Neuchâtel, NE')).toBe(true);
+    expect(satisfies('investors in the EU', 'Utrecht, UT')).toBe(true);
+    expect(satisfies('investors in Europe', 'Amsterdam, NH')).toBe(true);
+    expect(satisfies('investors in Europe', 'Barcelona, CT')).toBe(true);
+    expect(satisfies('investors in Asia', 'Karachi, SD')).toBe(true);
+    expect(satisfies('investors in Africa', 'Lagos, LA')).toBe(true);
+    for (const location of ['Neuchâtel, NE', 'Utrecht, UT', 'Eindhoven, NB', 'Madrid, MD', 'Karachi, SD']) {
+      expect([location, satisfies('investors in North America', location)]).toEqual([location, false]);
+    }
+  });
+
+  it('still reads the code as the US state or Canadian province when the town really is one', () => {
+    expect(countriesOf('Valencia, CA')).toEqual(['united states']); // California: Spain\'s codes do not include CA
+    expect(countriesOf('Amsterdam, NY')).toEqual(['united states']);
+    expect(countriesOf('Madrid, NM')).toEqual(['united states']);
+    expect(countriesOf('Lagos, TX')).toEqual(['united states']);
+  });
+
   it('reads a state or province spelled out, or a country written out, as before', () => {
     expect(countriesOf('Newcastle, New South Wales')).toEqual(['australia']);
     expect(countriesOf('Newcastle, NSW')).toEqual(['australia']);
@@ -168,6 +199,40 @@ describe('a US or Canadian town named after a foreign city', () => {
     for (const code of ['VA', 'FL', 'ON', 'MI', 'TX', 'NE', 'IN', 'CA', 'DE']) {
       expect([code, countriesOf(`Somewhere, ${code}`)]).toEqual([code, []]);
     }
+  });
+});
+
+// A location can name cities in two countries ("Berlin / San Francisco, CA"). The code last in it belongs to the
+// city before it: it settles that city when it is a namesake ("Vienna, VA" is Virginia's), and says nothing when the
+// city is already the code's country's. A city of another country named earlier keeps its own country.
+describe('a location that names cities in two countries', () => {
+  it.each([
+    ['Berlin / San Francisco, CA', ['germany', 'united states']],
+    ['Zurich & Palo Alto, CA', ['switzerland', 'united states']],
+    ['Munich and Boston, MA', ['germany', 'united states']],
+    ['Düsseldorf / Austin, TX', ['germany', 'united states']],
+    ['London and Boston, MA', ['united kingdom', 'united states']],
+    ['Toronto / Berlin', ['canada', 'germany']],
+  ])('"%s" is in %j', (location, expected) => {
+    expect(countriesOf(location)).toEqual(expected);
+  });
+
+  it('a namesake is still the US town when no city in the location is the code\'s country', () => {
+    expect(countriesOf('Vienna, VA')).toEqual(['united states']);
+    expect(countriesOf('Paris, TX')).toEqual(['united states']);
+    expect(countriesOf('Dublin, CA')).toEqual(['united states']);
+  });
+
+  it('puts the person in the places of both countries, and in neither of the others', () => {
+    expect(satisfies('investors in Europe', 'Berlin / San Francisco, CA')).toBe(true);
+    expect(satisfies('investors in DACH', 'Zurich & Palo Alto, CA')).toBe(true);
+    expect(satisfies('investors in the EU', 'Munich and Boston, MA')).toBe(true);
+    expect(satisfies('investors in North America', 'Berlin / San Francisco, CA')).toBe(true);
+    expect(satisfies('investors in the Bay Area', 'Berlin / San Francisco, CA')).toBe(true);
+    expect(satisfies('investors in Germany', 'Berlin / San Francisco, CA')).toBe(true);
+    expect(satisfies('investors in the US', 'Munich and Boston, MA')).toBe(true);
+    expect(satisfies('investors in Asia', 'Berlin / San Francisco, CA')).toBe(false);
+    expect(satisfies('investors in Austria', 'Munich and Boston, MA')).toBe(false);
   });
 });
 

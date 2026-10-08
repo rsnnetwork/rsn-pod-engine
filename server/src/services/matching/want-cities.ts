@@ -423,8 +423,11 @@ export const CODES_OF_COUNTRIES: ReadonlyMap<string, string> = new Map([
 /**
  * Codes a country writes for its own regions after a city, that are also a US state's or a Canadian
  * province's: "Perth, WA" is Western Australia, "Monterrey, NL" is Nuevo Leon, "Milano, MI" is the
- * province of Milan. Listed for the countries whose cities the table has and that write their regions
- * this way (Australia, Brazil, India, Italy, Mexico), and only the codes that collide.
+ * province of Milan, "Neuchâtel, NE" the canton of Neuchâtel, "Utrecht, UT" the province of Utrecht.
+ * Listed for the countries whose cities the table has and that write their regions this way (Australia,
+ * Brazil, India, Italy, Mexico, the Netherlands, Nigeria, Pakistan, Spain, Switzerland), and only the codes
+ * that collide, and for Spain only the ones ("Barcelona, CT") that no US town of a Spanish city's name
+ * is written with ("Valencia, CA" is Valencia, California).
  */
 export const OWN_REGION_CODES: Readonly<Record<string, readonly string[]>> = {
   australia: ['nt', 'wa'],
@@ -432,6 +435,11 @@ export const OWN_REGION_CODES: Readonly<Record<string, readonly string[]>> = {
   india: ['tn'],
   italy: ['ca', 'ct', 'me', 'mi', 'mo', 'pa', 'pe', 'tn'],
   mexico: ['bc', 'nl'],
+  netherlands: ['fl', 'nb', 'nh', 'ut'],
+  nigeria: ['la'],
+  pakistan: ['sd'],
+  spain: ['ct', 'ma', 'md', 'va'],
+  switzerland: ['ar', 'ne'],
 };
 
 /** Places a want can name that do not say where a person is: another country has the name too. */
