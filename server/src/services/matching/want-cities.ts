@@ -493,6 +493,15 @@ export const SUBREGIONS: ReadonlyMap<string, readonly string[]> = new Map<string
     .map(([place, cities]): [string, readonly string[]] => [place, [...canonicals(cities), ...(ALSO_HOLDS[place] ?? [])]]),
 ]);
 
+/** The state or province the table puts each US and Canadian city in, by the city's canonical name. */
+export const STATE_OF_CITY: ReadonlyMap<string, string> = new Map(
+  Object.entries({ ...US_CITIES_BY_STATE, ...CANADIAN_CITIES_BY_PROVINCE })
+    .flatMap(([state, cities]) => canonicals(cities).map((city): [string, string] => [city, state])),
+);
+
+/** Every place, a location-only one too, by canonical name. */
+export const PLACE_BY_CANON: ReadonlyMap<string, Place> = new Map(PLACES.map((p) => [p.canon, p] as const));
+
 /** The places a want can name, by canonical name. A location-only place is not one of them. */
 export const KNOWN_PLACES: ReadonlySet<string> = new Set(PLACES.filter((p) => !p.locationOnly).map((p) => p.canon));
 

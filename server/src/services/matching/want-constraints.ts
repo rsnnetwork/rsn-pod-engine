@@ -28,7 +28,8 @@ import {
   COUNTRY_NAMES, ENDONYMS, REGIONS, regionByKey, regionCovers,
 } from './want-regions';
 import {
-  CODES_OF_COUNTRIES, KNOWN_PLACES, OWN_REGION_CODES, PLACES, PLACE_BY_NAME, REGION_CODES, SUBREGIONS,
+  CODES_OF_COUNTRIES, KNOWN_PLACES, OWN_REGION_CODES, PLACES, PLACE_BY_CANON, PLACE_BY_NAME, REGION_CODES, STATE_OF_CITY,
+  SUBREGIONS,
 } from './want-cities';
 import type { RegionCode } from './want-cities';
 
@@ -476,16 +477,20 @@ export interface ConstraintCheck {
 interface NamedPlaces { countries: Set<string>; regions: Set<string>; places: Set<string> }
 const NAMED_PLACES = new Map<string, NamedPlaces>();
 
+/** The US state or Canadian province a location's last part names by its code, and whether that decides the country. */
+interface CodedRegion { region: RegionCode; settles: boolean }
+
 /**
- * The US state or Canadian province whose two-letter code is the last part of a location after a
- * comma ("Vienna, VA"), when it settles a namesake: a city or a state of another country, or a name
- * several countries have ("Cambridge, MA"), is beside it. Not when the code is that country's own:
- * "Berlin, DE" (Germany's code), "Toronto, CA", "Perth, WA" (Western Australia), "Neuchâtel, NE" (a Swiss
- * canton) keep their city. Not either when a city of the code's own country is named too ("Berlin / San
- * Francisco, CA"): that city already says where the person is, so the code settles nothing and Berlin
- * keeps its country.
+ * The US state or Canadian province whose two-letter code is the last part of a location after a comma
+ * ("Vienna, VA", "Portland, ME"), when a place the table knows is beside it. Not when the code is that
+ * country's own: "Berlin, DE" (Germany's code), "Toronto, CA", "Perth, WA" (Western Australia), "Neuchâtel,
+ * NE" (a Swiss canton) keep their city, and a code with nothing beside it says nothing ("Omaha, NE" is not
+ * Niger). It settles the country when the town beside it is a namesake: a city or a state of another country,
+ * or a name several countries have ("Cambridge, MA"). When a city of the code's own country is named ("Berlin
+ * / San Francisco, CA", "Portland, ME"), that city already says where the person is and the code settles
+ * nothing, so Berlin keeps its country; the code still names the state the person is in.
  */
-function regionCodeThatSettles(location: string, found: Found): RegionCode | null {
+function codedRegionIn(location: string, found: Found): CodedRegion | null {
   const parts = location.split(',');
   if (parts.length < 2) return null;
   const code = /^([A-Za-z]{2})\.?$/.exec(parts[parts.length - 1].trim())?.[1].toLowerCase();
@@ -493,8 +498,22 @@ function regionCodeThatSettles(location: string, found: Found): RegionCode | nul
   if (!code || !region) return null;
   const beside = [...found.cityCountries, ...found.stateCountries];
   if (beside.some((k) => CODES_OF_COUNTRIES.get(code) === k || OWN_REGION_CODES[k]?.includes(code))) return null;
-  if (beside.includes(region.country)) return null;
-  return found.sharedName || beside.length ? region : null;
+  if (!found.sharedName && !beside.length) return null;
+  return { region, settles: !beside.includes(region.country) };
+}
+
+/**
+ * Take out of `places` the towns a code shows to be namesakes of the town the person is in: those the table
+ * puts in another state or province ("Portland, ME" is Maine's, not Oregon's Portland), and, when the code
+ * settled the country, those of another country ("Vienna, VA" is not Vienna, Austria).
+ */
+function dropNamesakes(places: Set<string>, coded: CodedRegion): void {
+  for (const town of places) {
+    const state = STATE_OF_CITY.get(town);
+    const country = PLACE_BY_CANON.get(town)?.country;
+    const elsewhere = state ? state !== coded.region.place : coded.settles && !!country && country !== coded.region.country;
+    if (elsewhere) places.delete(town);
+  }
 }
 
 /** The countries, regions and cities, states and provinces a person's location names, accents and punctuation ignored. */
@@ -505,15 +524,18 @@ function placesNamedIn(location: string): NamedPlaces {
   if (mentionsUS(location)) found.countries.add('united states');
   // A country written out says where the person is. Without one a state or province does ("Paris,
   // Texas" is the US), and without that a city ("Greater Düsseldorf Area" is Germany). A US state's or
-  // Canadian province's code last in the location does what its name would, but only when it settles
-  // a namesake ("Vienna, VA"); a code on its own is none of these ("Omaha, NE" is not Niger).
+  // Canadian province's code last in the location does what its name would, but only beside a town the
+  // table knows ("Vienna, VA", "Portland, ME"); a code on its own is none of these ("Omaha, NE" is not Niger).
   let countries: Set<string>;
   if (found.countries.size) {
     countries = found.countries;
   } else {
-    const coded = regionCodeThatSettles(location, found);
-    if (coded) found.places.add(coded.place);
-    countries = coded ? new Set([coded.country])
+    const coded = codedRegionIn(location, found);
+    if (coded) {
+      found.places.add(coded.region.place);
+      dropNamesakes(found.places, coded);
+    }
+    countries = coded?.settles ? new Set([coded.region.country])
       : found.stateCountries.size ? found.stateCountries : found.cityCountries;
   }
   // Locations repeat across the people a want is scored against; the cache is bounded.
@@ -551,7 +573,16 @@ function inRegion(key: string, named: NamedPlaces): boolean {
 function placeSatisfied(req: string, named: NamedPlaces): boolean {
   if (regionByKey(req)) return inRegion(req, named);
   if (ALIAS_COUNTRIES.has(req) || EXTRA_COUNTRIES.has(req)) return named.countries.has(req);
-  return named.places.has(req) || !!SUBREGIONS.get(req)?.some((town) => named.places.has(town));
+  if (named.places.has(req)) return true;
+  // A state, a province or the Bay Area takes the towns in it, but only the ones that are in the country the
+  // person is in: "Halifax, West Yorkshire" is not in Nova Scotia, nor "San Jose, Costa Rica" in California.
+  return !!SUBREGIONS.get(req)?.some((town) => named.places.has(town) && inACountryOfTheirs(town, named));
+}
+
+/** Is this town, as the table has it, in a country the person's location names? A town that several countries have is. */
+function inACountryOfTheirs(town: string, named: NamedPlaces): boolean {
+  const country = PLACE_BY_CANON.get(town)?.country;
+  return !country || named.countries.has(country);
 }
 
 /** The first place the want requires that this person satisfies, or null. */

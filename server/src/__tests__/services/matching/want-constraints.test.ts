@@ -515,11 +515,15 @@ describe('a state or province in a want takes the cities in it', () => {
     expect(satisfies('founders in Washington DC', 'Seattle')).toBe(false);
   });
 
-  it('leaves Kansas City alone: the table puts it in Missouri, so "in Kansas" does not take it and "in Missouri" does', () => {
+  it('puts Kansas City in Missouri, where the table has it, unless the person writes Kansas', () => {
     expect(satisfies('founders in Kansas', 'Kansas City, MO')).toBe(false);
-    expect(satisfies('founders in Kansas', 'Kansas City, KS')).toBe(false); // the same name, read as Missouri's
+    expect(satisfies('founders in Kansas', 'Kansas City')).toBe(false);
     expect(satisfies('founders in Kansas', 'Wichita, Kansas')).toBe(true);
     expect(satisfies('founders in Missouri', 'Kansas City, MO')).toBe(true);
+    expect(satisfies('founders in Missouri', 'Kansas City')).toBe(true);
+    // the code names the state the person is in, so the Kansas one is Kansas's and no longer Missouri's
+    expect(satisfies('founders in Kansas', 'Kansas City, KS')).toBe(true);
+    expect(satisfies('founders in Missouri', 'Kansas City, KS')).toBe(false);
   });
 
   it('names the state the member wrote on the card, not the city', () => {

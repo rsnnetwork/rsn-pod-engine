@@ -9,7 +9,7 @@
 // code is never a country: "Omaha, NE" is not Niger and "Detroit Metro, MI" is nothing foreign.
 
 import {
-  locationCountries, extractConstraints, checkConstraints,
+  locationCountries, extractConstraints, checkConstraints, matchedPlace,
 } from '../../../services/matching/want-constraints';
 
 const countriesOf = (location: string) => [...locationCountries(location)].sort();
@@ -429,5 +429,75 @@ describe('cities the matcher did not know before', () => {
     ['Tel Aviv', 'israel'], ['Riyadh', 'saudi arabia'], ['Sydney', 'australia'], ['Toronto', 'canada'], ['Tokyo', 'japan'],
   ])('%s is in %s', (city, country) => {
     expect(countriesOf(city)).toEqual([country]);
+  });
+});
+
+// ─── A state, a province or the Bay Area takes only the towns that are in it (8 Oct 2026, S4-b fix round 1) ───
+//
+// A want "in California" takes the people in San Francisco, Palo Alto and the other towns the table puts in the
+// state. It took them by the town's name alone, so "San Jose, Costa Rica" satisfied it and the card said "(in
+// California)": a place the person is not in. A town counts for the state, the province or the Bay Area only
+// for a person who is in that country, and a trailing state or province code settles which of two towns of one
+// name the person is in ("Portland, ME" is Maine's, not Oregon's).
+describe('a state, a province or the Bay Area takes only the towns that are in it', () => {
+  it.each([
+    ['Nova Scotia', 'Halifax, West Yorkshire'], ['British Columbia', 'Vancouver, WA'],
+    ['California', 'San Jose, Costa Rica'], ['the Bay Area', 'San Jose, Costa Rica'],
+    ['Texas', 'San Antonio, Chile'], ['Massachusetts', 'Boston, Lincolnshire'],
+    ['Oregon', 'Portland, ME'], ['New York', 'Manhattan, KS'],
+    ['Ontario', 'London, UK'], ['Ontario', 'Hamilton, New Zealand'], ['Georgia', 'Atlanta, Australia'],
+  ])('"in %s" does not take %s, and the card does not claim it', (place, location) => {
+    expect([place, location, satisfies(`founders in ${place}`, location)]).toEqual([place, location, false]);
+    expect(matchedPlace(extractConstraints([`founders in ${place}`]), { location })).toBeNull();
+  });
+
+  it.each([
+    ['Nova Scotia', 'Halifax'], ['Nova Scotia', 'Halifax, NS'], ['Nova Scotia', 'Halifax, Canada'],
+    ['British Columbia', 'Vancouver'], ['British Columbia', 'Vancouver, BC'],
+    ['California', 'San Jose'], ['California', 'San Jose, CA'], ['California', 'San Jose, USA'],
+    ['the Bay Area', 'San Jose, California'], ['the Bay Area', 'Palo Alto, CA'],
+    ['Texas', 'San Antonio'], ['Texas', 'San Antonio, TX'], ['Massachusetts', 'Boston, MA'], ['Massachusetts', 'Boston'],
+    ['Oregon', 'Portland'], ['Oregon', 'Portland, OR'], ['Maine', 'Portland, ME'],
+    ['New York', 'Manhattan'], ['New York', 'Manhattan, NY'], ['Kansas', 'Manhattan, KS'],
+    ['Kansas', 'Kansas City, KS'], ['Missouri', 'Kansas City, MO'],
+    ['Ontario', 'London, ON'], ['Ontario', 'Toronto, Canada'], ['Georgia', 'Atlanta, GA'],
+  ])('"in %s" still takes %s', (place, location) => {
+    expect([place, location, satisfies(`founders in ${place}`, location)]).toEqual([place, location, true]);
+  });
+
+  it('says the state the person is in, not the one of the town of the same name', () => {
+    expect(matchedPlace(extractConstraints(['founders in Maine']), { location: 'Portland, ME' })).toBe('maine');
+    expect(matchedPlace(extractConstraints(['founders in Oregon or Maine']), { location: 'Portland, ME' })).toBe('maine');
+    expect(matchedPlace(extractConstraints(['founders in California']), { location: 'San Jose, CA' })).toBe('california');
+  });
+
+  it('a town of the same name as another is that other town only where the code says so', () => {
+    expect(satisfies('founders in Portland', 'Portland, OR')).toBe(true);
+    expect(satisfies('founders in Portland', 'Portland, ME')).toBe(false);
+    expect(satisfies('founders in Vienna', 'Vienna, Austria')).toBe(true);
+    expect(satisfies('founders in Vienna', 'Vienna, VA')).toBe(false);
+    expect(satisfies('founders in London', 'London, ON')).toBe(false);
+    expect(satisfies('founders in London', 'London, UK')).toBe(true);
+    expect(satisfies('founders in Dublin', 'Dublin, CA')).toBe(false);
+  });
+
+  it('the state of the code still takes the person, and the country is still the code\'s', () => {
+    expect(satisfies('founders in Virginia', 'Vienna, VA')).toBe(true);
+    expect(satisfies('founders in Maine', 'Portland, ME')).toBe(true);
+    expect(satisfies('founders in the US', 'Portland, ME')).toBe(true);
+    expect(satisfies('founders in North America', 'Manhattan, KS')).toBe(true);
+    expect(satisfies('founders in Europe', 'Portland, ME')).toBe(false);
+    expect(countriesOf('Portland, ME')).toEqual(['united states']);
+    expect(countriesOf('Manhattan, KS')).toEqual(['united states']);
+  });
+
+  it('the Bay Area is still the people around the Bay, and Northern Ireland the towns of the province', () => {
+    for (const location of ['Oakland, CA', 'Palo Alto', 'San Francisco Bay Area', 'Bay Area', 'San Mateo, California']) {
+      expect([location, satisfies('founders in the Bay Area', location)]).toEqual([location, true]);
+    }
+    for (const location of ['Belfast', 'Derry, UK', 'Lisburn, Northern Ireland']) {
+      expect([location, satisfies('founders in Northern Ireland', location)]).toEqual([location, true]);
+    }
+    expect(satisfies('founders in Northern Ireland', 'Belfast, Maine')).toBe(false);
   });
 });
