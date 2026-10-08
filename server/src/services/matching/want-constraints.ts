@@ -145,8 +145,9 @@ function compile(names: PlaceName[], normalise: (s: string) => string): Scanners
  * Names read anywhere in a want, before the shorter names inside them. "New Mexico" is not Mexico,
  * "British Columbia" is not British and "Northern Ireland" is not Ireland: three places of their own.
  * "The Bay Area" however written ("San Francisco Bay Area", "SF Bay Area") is one region, not San
- * Francisco. Two more are only set aside, so that "New England" is not England and "New South Wales"
- * is not Wales. In a person's location the places are the entries of want-cities.ts.
+ * Francisco. Three more are only set aside, so that "New England" is not England, "New South Wales"
+ * is not Wales and "Port of Spain" is not Spain. In a person's location the places are the entries
+ * of want-cities.ts.
  */
 export const LOOK_ALIKES: readonly PlaceName[] = [
   { name: 'new mexico', kind: 'place', canon: 'new mexico' },
@@ -157,6 +158,7 @@ export const LOOK_ALIKES: readonly PlaceName[] = [
   { name: 'bay area', kind: 'place', canon: 'bay area' },
   { name: 'new england', kind: 'decoy', canon: '' },
   { name: 'new south wales', kind: 'decoy', canon: '' },
+  { name: 'port of spain', kind: 'decoy', canon: '' },
 ];
 const countryNames: PlaceName[] = Object.entries(COUNTRY_ALIASES)
   .flatMap(([canon, aliases]) => aliases.map((name) => ({ name, kind: 'country' as const, canon })));

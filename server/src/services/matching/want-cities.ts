@@ -3,11 +3,17 @@
 // A place in a want is only a place when the matcher can tell it is one ("in Narnia" and "from
 // Google" are capitalised words after a preposition too), and a person's location resolves to a
 // country through a city it names ("Greater Düsseldorf Area", "Bangkok, TH", "Utrecht"). This table
-// is both: every city, state and province here is a place a want can name (in the one or two words
-// a want captures after a preposition), and says which country it is in. It is hand-kept data. A
-// city that is not here is treated like any other unknown place: a want that names it filters
-// nothing, and a location that names only it resolves to no country. Add one by adding it to its
-// country below.
+// is both: an entry says which country a place is in, so a location that names it resolves, and
+// (unless it is location only, below) it is a place a want can name. It is hand-kept data. A city
+// that is not here is treated like any other unknown place: a want that names it filters nothing,
+// and a location that names only it resolves to no country. Add one by adding it to its country below.
+//
+// NOT EVERY ENTRY CAN BE NAMED IN A WANT. A want names a place with one or two capitalised words after
+// a preposition (a hyphenated name is one word), so an entry is nameable only by a spelling of that
+// shape. Aix-en-Provence, Dar es Salaam, Port of Spain, Ras Al Khaimah and Salt Lake City are not (a
+// lowercase joiner, or more than two words): a location that names them resolves, a want that names
+// them filters nothing. Ho Chi Minh City is nameable as Saigon only, and "Mexico City" in a want is
+// the country Mexico. want-cities.test.ts pins the list.
 //
 // WHERE THE LIST COMES FROM
 //   The cities members name, plus the largest cities of each European country (the launch audience

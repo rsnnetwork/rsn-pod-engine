@@ -8,12 +8,15 @@ import {
   CODES_OF_COUNTRIES, KNOWN_PLACES, OWN_REGION_CODES, PLACES, PLACE_BY_NAME, REGION_CODES, SUBREGIONS,
 } from '../../../services/matching/want-cities';
 import {
-  COUNTRY_ALIASES, LOOK_ALIKES, extractConstraints, fold, locationCountries,
+  COUNTRY_ALIASES, LOOK_ALIKES, checkConstraints, extractConstraints, fold, locationCountries,
 } from '../../../services/matching/want-constraints';
 import { REGIONS, COUNTRY_NAMES, ENDONYMS } from '../../../services/matching/want-regions';
 
 const knownCountries = new Set([...Object.keys(COUNTRY_ALIASES), ...Object.keys(COUNTRY_NAMES)]);
 const countryOf = (name: string) => PLACE_BY_NAME.get(name)?.country;
+/** Does a person at this location satisfy the place this want names? */
+const satisfies = (want: string, location: string | null) =>
+  checkConstraints(extractConstraints([want]), { location }).locationOk;
 
 // Some entries are also a university, a company or a bank ("from Princeton", "from Redmond", "from
 // Santander"), more often than the place a person lives. They still resolve a person's location, but a
@@ -111,6 +114,50 @@ describe('the two-letter codes of US states and Canadian provinces', () => {
   });
 });
 
+// A want names a place with one or two capitalised words after a preposition (a hyphenated name is one word), so
+// a table entry can be named in a want only by a spelling of that shape. The others resolve a person's location
+// and filter nothing when a want names them. This pins exactly which, so a change to the capture or to the table
+// that makes one nameable (or another not) is seen.
+describe('which places a want can name', () => {
+  const written = (name: string) => name.split(' ').map((word) => word[0].toUpperCase() + word.slice(1)).join(' ');
+  const namesIt = (name: string, canon: string) => extractConstraints([`founders in ${written(name)}`]).location?.includes(canon) ?? false;
+  const nameable = PLACES.filter((p) => !p.locationOnly);
+  const cannot = nameable.filter((p) => !p.names.some((name) => namesIt(name, p.canon)));
+
+  it('are all but the few whose every spelling is more than two capitalised words, or has a lowercase joiner, or is a country', () => {
+    expect(cannot.map((p) => p.canon).sort()).toEqual([
+      'aix en provence', 'dar es salaam', 'mexico city', 'port of spain', 'ras al khaimah', 'salt lake city',
+    ]);
+  });
+
+  it('still resolve a person\'s location to their country', () => {
+    for (const place of cannot) {
+      for (const name of place.names) {
+        expect([name, locationCountries(`Greater ${written(name)} Area`)]).toEqual([name, [place.country]]);
+      }
+    }
+    expect(locationCountries('Aix-en-Provence')).toEqual(['france']);
+    expect(locationCountries('Dar es Salaam')).toEqual(['tanzania']);
+    expect(locationCountries('Port of Spain')).toEqual(['trinidad and tobago']);
+    expect(locationCountries('Salt Lake City, UT')).toEqual(['united states']);
+    expect(locationCountries('Ras Al Khaimah')).toEqual(['united arab emirates']);
+  });
+
+  it('are named by a shorter spelling where there is one (Ho Chi Minh City is Saigon in a want), and not otherwise', () => {
+    expect(extractConstraints(['founders in Saigon']).location).toEqual(['ho chi minh city']);
+    expect(extractConstraints(['founders in Ho Chi Minh City']).location).toBeNull();
+    for (const want of ['founders in Aix-en-Provence', 'founders in Ras Al Khaimah', 'founders in Dar es Salaam',
+      'founders in Salt Lake City', 'founders in Port of Spain']) {
+      expect([want, extractConstraints([want]).location]).toEqual([want, null]);
+    }
+  });
+
+  it('and "Mexico City" in a want is the country Mexico, which takes a person anywhere in it', () => {
+    expect(extractConstraints(['founders in Mexico City']).location).toEqual(['mexico']);
+    expect(satisfies('founders in Mexico City', 'Guadalajara')).toBe(true);
+  });
+});
+
 describe('places that contain others', () => {
   it('list only places the table has, under a place the table has', () => {
     const canons = new Set(PLACES.map((p) => p.canon));
@@ -149,7 +196,8 @@ describe('the look-alike places', () => {
   it('are set apart from the countries they contain, and the decoys are no place at all', () => {
     expect(extractConstraints(['founders in New England']).location).toBeNull();
     expect(extractConstraints(['founders in New South Wales']).location).toBeNull();
-    expect(LOOK_ALIKES.filter((n) => n.kind === 'decoy').map((n) => n.name).sort()).toEqual(['new england', 'new south wales']);
+    expect(LOOK_ALIKES.filter((n) => n.kind === 'decoy').map((n) => n.name).sort())
+      .toEqual(['new england', 'new south wales', 'port of spain']);
   });
 });
 
