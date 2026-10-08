@@ -15,10 +15,16 @@ import { contextOptions, engineLabel } from './engine';
 //   1. untilSized: a measurement waits for the window to have a size, applies the context's own viewport once if it still
 //      reads 0, and waits some more. That is for a size that is missing for a moment.
 //   2. inNewWindows: a test that fails while one of its windows has no size has not judged the app, so it is run again in a
-//      new window, three windows at most, and every re-run is logged with the failure that caused it.
+//      new window, three windows at most. A window counts as having no size only when two reads about a second apart both
+//      say so: right after a navigation a window can read 0 for a moment, and a failure in a window that has its size back
+//      a second later is the app's, so it is not run again. Every re-run is logged with every line of what failed in the
+//      window it leaves, not only the first.
 
 /** How many windows one test body may use in all: the first and two more. */
 const WINDOW_ATTEMPTS = 3;
+
+/** How far apart the two reads are that decide a window has no size. */
+const RECHECK_MS = 1_000;
 
 /** How long a measurement waits for a window to have a size. It waits this long twice when the viewport has to be applied again. */
 const WAIT_MS = 5_000;
@@ -92,13 +98,25 @@ export async function untilSized<T extends { sized: boolean }>(page: Page, ask: 
   return second;
 }
 
-/** The pages of a browser context whose window has no size right now, each as "WxH". */
+/**
+ * The pages of a browser context whose window has no size, each as "WxH". A page counts only if it reads no size twice,
+ * about a second apart (RECHECK_MS): the second read is of the same page, after the first, and one that has its size
+ * back by then is not lost. A page that cannot say (null) is not counted either time.
+ */
 async function windowsWithoutSize(ctx: BrowserContext): Promise<string[]> {
-  const lost: string[] = [];
+  const readZero: Page[] = [];
   for (const page of ctx.pages()) {
     if (page.isClosed()) continue;
     const read = await readWindow(page);
-    if (read && hasNoSize(read)) lost.push(`${read.w}x${read.h}`);
+    if (read && hasNoSize(read)) readZero.push(page);
+  }
+  if (readZero.length === 0) return [];
+  await sleep(RECHECK_MS);
+  const lost: string[] = [];
+  for (const page of readZero) {
+    if (page.isClosed()) continue;
+    const again = await readWindow(page);
+    if (again && hasNoSize(again)) lost.push(`${again.w}x${again.h}`);
   }
   return lost;
 }
@@ -120,9 +138,10 @@ interface NewWindows<O extends { ctx: BrowserContext }> {
 
 /**
  * Runs a test body in a new window. A body that fails (throws, or adds a line to `problems`) while one of the pages of its
- * window has no size is run again in another new window, up to WINDOW_ATTEMPTS windows in all, and the run says so, with
- * the failure that caused it. A body that fails in a window that has a size is never run again: nothing is retried on the
- * app's account, and the last window's failure is the test's failure, in its own words. Every window is closed.
+ * window has no size (on two reads about a second apart, see windowsWithoutSize) is run again in another new window, up to
+ * WINDOW_ATTEMPTS windows in all, and the run says so, with every line of what failed in the window it leaves. A body that
+ * fails in a window that has a size is never run again: nothing is retried on the app's account, and the last window's
+ * failure is the test's failure, in its own words. Every window is closed.
  */
 export async function inNewWindows<O extends { ctx: BrowserContext }>(run: NewWindows<O>): Promise<void> {
   for (let attempt = 1; ; attempt += 1) {
@@ -144,7 +163,11 @@ export async function inNewWindows<O extends { ctx: BrowserContext }>(run: NewWi
         return;
       }
       run.problems?.splice(before);
-      log(`the window had no size (${lost.join(', ')}) when this failed: "${firstLine(thrown ? thrown.error : recorded[0])}". That is the emulation, not the page: a new window, attempt ${attempt + 1} of ${WINDOW_ATTEMPTS}`);
+      // What the window leaves behind is thrown away, so all of it is said here: the failure that was thrown (its first
+      // line) and every line the body had recorded, one by one.
+      const discarded = [...(thrown ? [firstLine(thrown.error)] : []), ...recorded];
+      log(`the window had no size (${lost.join(', ')}) when this failed. That is the emulation, not the page: a new window, attempt ${attempt + 1} of ${WINDOW_ATTEMPTS}. Set aside from the window it leaves (${discarded.length}):`);
+      for (const line of discarded) log(`  - ${line}`);
     } finally {
       await o.ctx.close().catch(() => undefined);
     }
