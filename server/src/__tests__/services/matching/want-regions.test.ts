@@ -5,7 +5,7 @@
 // in it would silently take people out of a region or put them in the wrong one.
 
 import {
-  REGIONS, COUNTRY_NAMES, KNOWN_PLACES, regionByKey, regionLabel, placeLabel,
+  REGIONS, COUNTRY_NAMES, COUNTRIES_IN_NO_REGION, KNOWN_PLACES, regionByKey, regionLabel, placeLabel,
 } from '../../../services/matching/want-regions';
 import { locationCountries } from '../../../services/matching/want-constraints';
 
@@ -60,9 +60,12 @@ describe('the region table', () => {
     expect(lost).toEqual([]);
   });
 
-  it('has no row of country names that no region uses', () => {
+  it('has no row of country names that no region uses, except the ones that say they are in no region', () => {
     const used = new Set(REGIONS.flatMap((r) => [...r.countries]));
-    expect(Object.keys(COUNTRY_NAMES).filter((canon) => !used.has(canon))).toEqual([]);
+    expect(Object.keys(COUNTRY_NAMES).filter((canon) => !used.has(canon) && !COUNTRIES_IN_NO_REGION.includes(canon))).toEqual([]);
+    // ...and a country that says so is in no region (if a region takes it in, it moves to the regions' rows).
+    expect(COUNTRIES_IN_NO_REGION.filter((canon) => used.has(canon))).toEqual([]);
+    expect(COUNTRIES_IN_NO_REGION.length).toBeGreaterThan(0);
   });
 
   it('reads the names a member writes: spellings, old names, the names the app itself writes', () => {
@@ -190,6 +193,46 @@ describe('the country names the app itself writes into a location', () => {
     }
     const listed = [...new Set(REGIONS.flatMap((r) => [...r.countries]))];
     expect(listed.filter((c) => !reached.has(c))).toEqual([]);
+  });
+});
+
+// A person's location resolves to a country for every sovereign state, not only the ones a region lists:
+// Jamaica, Armenia and the Bahamas are in no region, and are still where somebody lives.
+describe('every sovereign state resolves from the name Intl gives it', () => {
+  // The 193 UN member states, the Holy See and the three territories and states the tables also read.
+  const CODES = (
+    'AD AE AF AG AL AM AO AR AT AU AZ BA BB BD BE BF BG BH BI BJ BN BO BR BS BT BW BY BZ CA CD CF CG CH CI CL CM CN CO CR CU CV CY CZ ' +
+    'DE DJ DK DM DO DZ EC EE EG ER ES ET FI FJ FM FR GA GB GD GE GH GM GN GQ GR GT GW GY HN HR HT HU ID IE IL IN IQ IR IS IT JM JO JP ' +
+    'KE KG KH KI KM KN KP KR KW KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MG MH MK ML MM MN MR MT MU MV MW MX MY MZ NA NE NG NI ' +
+    'NL NO NP NR NZ OM PA PE PG PH PK PL PT PW PY QA RO RS RU RW SA SB SC SD SE SG SI SK SL SM SN SO SR SS ST SV SY SZ TD TG TH TJ TL ' +
+    'TM TN TO TR TT TV TZ UA UG US UY UZ VA VC VE VN VU WS YE ZA ZM ZW PS XK TW HK MO PR'
+  ).split(' ');
+  // Georgia is the US state as often as the country, so it is left out on purpose (see the header of want-regions.ts).
+  const LEFT_OUT = new Set(['GE']);
+  const display = new Intl.DisplayNames(['en'], { type: 'region' });
+  const hasNames = display.of('DE') === 'Germany'; // a Node built without full ICU has no names to check
+
+  (hasNames ? it : it.skip)('reaches all of them', () => {
+    expect(CODES).toHaveLength(200);
+    const unresolved = CODES.filter((code) => !LEFT_OUT.has(code) && locationCountries(display.of(code) ?? '').length === 0);
+    expect(unresolved.map((code) => `${code} ${display.of(code)}`)).toEqual([]);
+  });
+
+  it('puts a person in Jamaica or Armenia in that country, and in no region', () => {
+    expect(locationCountries('Kingston, Jamaica')).toEqual(['jamaica']);
+    expect(locationCountries('Yerevan, Armenia')).toEqual(['armenia']);
+    expect(locationCountries('Nassau, The Bahamas')).toEqual(['bahamas']);
+    expect(locationCountries('Trinidad & Tobago')).toEqual(['trinidad and tobago']);
+    expect(locationCountries('Basseterre, St. Kitts & Nevis')).toEqual(['saint kitts and nevis']);
+    expect(locationCountries('Castries, St. Lucia')).toEqual(['saint lucia']);
+    expect(locationCountries('Kingstown, St. Vincent & Grenadines')).toEqual(['saint vincent and the grenadines']);
+    expect(locationCountries('Baku, Azerbaijan')).toEqual(['azerbaijan']);
+    expect(REGIONS.filter((r) => ['jamaica', 'armenia', 'bahamas'].some((c) => r.countries.includes(c)))).toEqual([]);
+  });
+
+  it('does not take Dominica for the Dominican Republic or Grenada for a Spanish city', () => {
+    expect(locationCountries('Roseau, Dominica')).toEqual(['dominica']);
+    expect(locationCountries('Santo Domingo, Dominican Republic')).toEqual(['dominican republic']);
   });
 });
 

@@ -17,9 +17,11 @@
 //     written next to each list.
 // A country can be in several regions (Turkey is in Europe and the Middle East; Mexico is in
 // North and Latin America), and a region lists the countries as they are named in
-// want-constraints.ts (the older alias table) or in COUNTRY_NAMES below. Armenia, Azerbaijan and
-// Georgia are in no region: which of Europe or the Middle East claims them depends on who is
-// asked, and Georgia is also a US state.
+// want-constraints.ts (the older alias table) or in COUNTRY_NAMES below. Armenia and Azerbaijan
+// (which of Europe or the Middle East claims them depends on who is asked) and the English-speaking
+// Caribbean are in no region, but are still countries a person lives in and a want can name:
+// they are the COUNTRIES_IN_NO_REGION rows. Georgia is left out altogether, because it is also
+// a US state.
 //
 // Strictness is the rule for a place in a want (Stefan, 9 Sep 2026): a region is satisfied
 // only by a country that is in it, and "Scandinavia" is not "the Nordics" (Finland and Iceland
@@ -217,7 +219,7 @@ export function regionCovers(outer: string, inner: string): boolean {
 // country as Intl.DisplayNames gives it: "Türkiye", "Czechia", "Bosnia & Herzegovina",
 // "Congo - Kinshasa", "Hong Kong SAR China") plus the old and common names. Georgia is left
 // out on purpose: it is the US state as often as the country.
-export const COUNTRY_NAMES: Readonly<Record<string, readonly string[]>> = {
+const COUNTRY_NAMES_IN_REGIONS: Readonly<Record<string, readonly string[]>> = {
   // Europe
   luxembourg: [], greece: [], czechia: ['czech republic'], hungary: [], romania: [], bulgaria: [],
   croatia: [], slovenia: [], slovakia: ['slovak republic'], estonia: [], latvia: [], lithuania: [],
@@ -255,6 +257,27 @@ export const COUNTRY_NAMES: Readonly<Record<string, readonly string[]>> = {
   argentina: [], bolivia: [], chile: [], colombia: [], ecuador: [], guyana: [], paraguay: [], peru: [],
   suriname: [], uruguay: [], venezuela: [], cuba: [], 'dominican republic': [], haiti: [], 'puerto rico': [],
 };
+
+// Countries no region lists, written the same way. Every sovereign state is one of the alias table,
+// COUNTRY_NAMES_IN_REGIONS above or these, which the Intl test in want-regions.test.ts checks (Georgia
+// aside). The short forms ("trinidad", "st kitts") are what a want captures before "and".
+const COUNTRY_NAMES_IN_NO_REGION: Readonly<Record<string, readonly string[]>> = {
+  armenia: [], azerbaijan: [],
+  'antigua and barbuda': ['antigua'], bahamas: ['the bahamas'], barbados: [], dominica: [], grenada: [], jamaica: [],
+  'saint kitts and nevis': ['st kitts and nevis', 'st kitts', 'saint kitts', 'st christopher and nevis'],
+  'saint lucia': ['st lucia'],
+  'saint vincent and the grenadines': [
+    'st vincent and the grenadines', 'st vincent and grenadines', 'saint vincent and grenadines', 'st vincent', 'saint vincent',
+  ],
+  'trinidad and tobago': ['trinidad', 'tobago'],
+};
+
+export const COUNTRY_NAMES: Readonly<Record<string, readonly string[]>> = {
+  ...COUNTRY_NAMES_IN_REGIONS, ...COUNTRY_NAMES_IN_NO_REGION,
+};
+
+/** The countries of COUNTRY_NAMES that no region lists. */
+export const COUNTRIES_IN_NO_REGION: readonly string[] = Object.keys(COUNTRY_NAMES_IN_NO_REGION);
 
 // ── Cities, states and provinces the matcher knows are places ──────────────────
 //

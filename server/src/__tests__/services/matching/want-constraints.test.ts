@@ -320,6 +320,62 @@ describe('a region is satisfied by a country inside it', () => {
   });
 });
 
+describe('a country that is in no region', () => {
+  it('can be named in a want, and is satisfied by a person who lives there', () => {
+    expect(extractConstraints(['founders in Jamaica or Canada']).location).toEqual(['canada', 'jamaica']);
+    expect(satisfies('founders in Jamaica or Canada', 'Kingston, Jamaica')).toBe(true);
+    expect(satisfies('founders in Jamaica or Canada', 'Toronto, Canada')).toBe(true);
+    expect(satisfies('founders in Jamaica or Canada', 'London, UK')).toBe(false);
+    expect(extractConstraints(['partners in Armenia']).location).toEqual(['armenia']);
+    expect(extractConstraints(['partners in the Bahamas']).location).toEqual(['bahamas']);
+    expect(extractConstraints(['partners in The Bahamas']).location).toEqual(['bahamas']);
+    expect(extractConstraints(['partners in Trinidad and Tobago']).location).toEqual(['trinidad and tobago']);
+    expect(extractConstraints(['partners in St. Lucia']).location).toEqual(['saint lucia']);
+    expect(satisfies('partners in Trinidad and Tobago', 'Port of Spain, Trinidad & Tobago')).toBe(true);
+  });
+
+  it('is in no region, so a region want does not take it', () => {
+    for (const region of ['Europe', 'Latin America', 'North America', 'Asia', 'Africa', 'the Middle East']) {
+      expect(satisfies(`investors in ${region}`, 'Kingston, Jamaica')).toBe(false);
+      expect(satisfies(`investors in ${region}`, 'Yerevan, Armenia')).toBe(false);
+    }
+  });
+});
+
+// "in Berlin Mitte" and "in Austin Texas" capture two capitalised words, and the pair is not a place the
+// code knows; its first word is. After "in" (and "based in", "located in", "within", "near") the want is
+// naming a place, so the first word is tried. After "from" it is as often a company or a school
+// ("Boston Consulting Group", "Oxford University", "Georgia Tech"), which must not become a place.
+describe('a two-word capture that is not a place', () => {
+  it('falls back to its first word after "in"', () => {
+    expect(extractConstraints(['investors in Berlin Mitte']).location).toEqual(['berlin']);
+    expect(extractConstraints(['founders in Austin Texas']).location).toEqual(['austin']);
+    expect(extractConstraints(['founders within Dallas Fort']).location).toEqual(['dallas']);
+    // A country written beside the city is a place as well (any one satisfies), as it always was.
+    expect(extractConstraints(['founders based in Zurich Switzerland']).location).toEqual(['switzerland', 'zurich']);
+    expect(extractConstraints(['founders located in London England']).location).toEqual(['united kingdom', 'london']);
+    expect(satisfies('investors in Berlin Mitte', 'Berlin, Germany')).toBe(true);
+    expect(satisfies('investors in Berlin Mitte', 'Hamburg, Germany')).toBe(false);
+  });
+
+  it('does not after "from", where a company or a school is as likely as a place', () => {
+    expect(extractConstraints(['alumni from Boston Consulting Group']).location).toBeNull();
+    expect(extractConstraints(['people from Oxford University']).location).toBeNull();
+    expect(extractConstraints(['engineers from Georgia Tech']).location).toBeNull();
+  });
+
+  it('never reads a region from the first word (a name that is also a company stays a company)', () => {
+    expect(extractConstraints(['engineers in Nordic Semiconductor']).location).toBeNull();
+    expect(extractConstraints(['engineers in Dach Holdings']).location).toBeNull();
+    expect(extractConstraints(['compiler people in GCC Steering']).location).toBeNull();
+  });
+
+  it('stays unknown when the first word is no place either', () => {
+    expect(extractConstraints(['founders in Narnia Springs']).location).toBeNull();
+    expect(extractConstraints(['founders in Acme Corp']).location).toBeNull();
+  });
+});
+
 // "Narnia" is a place the code cannot resolve to anything. Reading it as a location every
 // candidate must match would empty the list, exactly as "in Europe" did, so it is not a
 // constraint at all. So with "in SaaS" or "from Google": capitalised words after a

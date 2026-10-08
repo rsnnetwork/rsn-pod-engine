@@ -173,6 +173,14 @@ const REGION_BY_NAME = new Map<string, string>(
   regionNames.map((n) => [fold(n.name.replace(/\./g, '')), n.canon] as [string, string]),
 );
 
+/** The country or region a phrase captured after a preposition is the name of, or undefined. */
+const nameOf = (key: string): string | undefined =>
+  ALIAS_NODOT.get(key) ?? EXTRA_BY_NAME.get(key) ?? REGION_BY_NAME.get(key);
+
+/** The country or city a single word is the name of, or undefined. Never a region. */
+const placeNamed = (word: string): string | undefined =>
+  ALIAS_NODOT.get(word) ?? EXTRA_BY_NAME.get(word) ?? (KNOWN_PLACES.has(word) ? word : undefined);
+
 /**
  * Canonical place terms mentioned in free text: country aliases and region
  * names (whole-word), plus capitalised words after "in / based in / located
@@ -189,18 +197,23 @@ export function locationTerms(text: string | null | undefined): string[] {
   const { countries, regions, places, rest } = scan(text, WANT_SCAN);
   const out = new Set<string>(countries);
   if (mentionsUS(text)) out.add('united states');
-  const prepRe = /\b(?:in|based in|located in|from|within|near)\s+(?:the\s+)?([A-Z][A-Za-z.]+(?:\s+[A-Z][A-Za-z.]+)?)/g;
+  const prepRe = /\b(in|based in|located in|from|within|near)\s+(?:the\s+)?([A-Z][A-Za-z.]+(?:\s+[A-Z][A-Za-z.]+)?)/g;
   let m: RegExpExecArray | null;
   while ((m = prepRe.exec(rest)) !== null) {
     // Compare without dots so "U.K." and "U.S." resolve to their country, not
     // to a phantom city called "u.k".
-    const key = m[1].toLowerCase().replace(/\./g, '').trim();
-    const first = key.split(' ')[0];
-    if (!key || NOT_PLACES.has(first)) continue;
+    const key = m[2].toLowerCase().replace(/\./g, '').trim();
+    const words = key.split(' ');
+    // "The Bahamas" starts with a word that is no place, and is one.
+    if (!key || (NOT_PLACES.has(words[0]) && !nameOf(key))) continue;
     if (key === 'us' || key === 'usa') { out.add('united states'); continue; }
     if (key.length < 3) continue;
-    const canon = ALIAS_NODOT.get(key) ?? EXTRA_BY_NAME.get(key) ?? REGION_BY_NAME.get(key);
-    out.add(canon ?? key); // known alias → country or region; anything else is a city or an unknown place
+    let canon = nameOf(key);
+    // "in Berlin Mitte", "in Austin Texas": two capitalised words that are not a place together but
+    // start with one. After "from" the pair is as often a company or a school ("from Boston Consulting
+    // Group"), so there only a place that stands alone counts.
+    if (!canon && words.length > 1 && m[1] !== 'from') canon = placeNamed(words[0]);
+    out.add(canon ?? key); // known country or region; anything else is a city or an unknown place
   }
   for (const p of places) out.add(p);
   for (const r of regions) out.add(r);
