@@ -27,8 +27,9 @@
 //   the first is what a want's place is called ("cologne"), the others are the same place written
 //   another way ("koln", "koeln"), so a want in "Köln" and a profile in "Cologne" agree.
 //
-// A name that is several countries' ("Cambridge", "Georgia") is listed with no country: it is still
-// a place a want can name, but it does not decide where a person is. A city that is several
+// A name that is several countries' ("Cambridge", "Georgia", "San Juan") is listed with no country: it
+// does not decide where a person is, and a want can name it unless it is location only (Georgia and
+// San Juan can be named, Cambridge is also a university and cannot). A city that is several
 // countries' but has one dominant meaning (Paris, London, Vienna, Dublin) is listed in that country,
 // and a state, a province or a country written beside it wins ("Paris, Texas" is the US).
 
@@ -442,7 +443,7 @@ export const OWN_REGION_CODES: Readonly<Record<string, readonly string[]>> = {
   switzerland: ['ar', 'ne'],
 };
 
-/** Places a want can name that do not say where a person is: another country has the name too. */
+/** Places that do not say where a person is: another country has the name too. Cambridge is location only (see above). */
 const SHARED_NAMES: ReadonlyArray<readonly [string, PlaceLevel]> = [
   ['cambridge', 'city'], // England, Massachusetts and Ontario
   // The US state, and the country: "Atlanta, Georgia" is the US because of Atlanta, "Tbilisi, Georgia" is not.

@@ -16,13 +16,19 @@
 // Canadian province the matcher knows (want-cities.ts). Anything else after
 // "in", "from"… ("Narnia", "SaaS", "Google") is not a place the code can
 // resolve, and filters nothing: reading it as a location every candidate must
-// match empties the list, which is what "in Europe" did.
+// match empties the list, which is what "in Europe" did. A region name is a
+// place only after a location preposition ("investors in Europe"; "European
+// founders" and "building for Asia and Africa" name none), and one preposition
+// may govern a list ("Gründer in Köln oder Düsseldorf").
 //
 // A person's location is read the other way (8 Oct 2026): it resolves to the
 // countries it names, through a country name ("Deutschland", "Österreich") or,
 // when it names none, through a state or province and then a city it knows
-// ("Greater Düsseldorf Area"). A two-letter code ("NE", "TH") is never read: a
-// city beside it says the country.
+// ("Greater Düsseldorf Area"). A two-letter code ("NE", "TH") is never a
+// country: a city beside it says the country. A US state's or Canadian
+// province's code last after a comma ("Vienna, VA", "Portland, ME") is read
+// beside a town the table knows, to say which state the person is in and to
+// settle a namesake town.
 
 import {
   COUNTRY_NAMES, ENDONYMS, REGIONS, regionByKey, regionCovers,
