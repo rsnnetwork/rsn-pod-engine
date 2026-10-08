@@ -36,6 +36,9 @@ export default {
         reason: {
           ink: '#11131a', muted: '#6d7380', line: '#e8e9ec', soft: '#f7f7f8', warm: '#fbfaf7',
           red: '#DE322E', 'red-hover': '#C52B28', pink: '#fff1ef', green: '#18a86b', amber: '#c77a14',
+          // The same green, darkened for a fill that carries a white label: green itself is 3.07:1 under white,
+          // green-fill 4.60:1 and its hover 5.80:1.
+          'green-fill': '#138655', 'green-fill-hover': '#11744a',
         },
       },
       animation: {

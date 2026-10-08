@@ -413,11 +413,33 @@ describe('The bell\'s Accept buttons read at 4.5:1, resting and hovered (polish 
     expect(accepts().map((a) => a.handler)).toEqual(['handleAcceptInvite', 'handleAcceptPoke']);
   });
 
-  it('the label is white on the brand red, and white on the darker red under the pointer', () => {
+  // Red reads as the opposite of accepting, so Accept stays in the green family: the palette's green, darkened until a
+  // white label reads on it (the palette's own #18a86b is 3.07:1 under white).
+  it('the label is white on the green fill, and white on the darker green fill under the pointer, and nothing on either button is red', () => {
     for (const { handler, classes } of accepts()) {
-      expect({ handler, classes: classes.filter((c) => /^(text-white|bg-reason-red|hover:bg-reason-red-hover)$/.test(c)).sort() })
-        .toEqual({ handler, classes: ['bg-reason-red', 'hover:bg-reason-red-hover', 'text-white'] });
+      expect({ handler, classes: classes.filter((c) => /^(text-white|bg-reason-green-fill|hover:bg-reason-green-fill-hover)$/.test(c)).sort() })
+        .toEqual({ handler, classes: ['bg-reason-green-fill', 'hover:bg-reason-green-fill-hover', 'text-white'] });
+      expect({ handler, red: classes.filter((c) => /red/.test(c)) }).toEqual({ handler, red: [] });
     }
+  });
+
+  // Hue in degrees and lightness in percent, to say "the same green, darker" in numbers.
+  const hsl = (hex: string) => {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+    const hi = Math.max(r, g, b), lo = Math.min(r, g, b), d = hi - lo;
+    const h = d === 0 ? 0 : hi === r ? ((g - b) / d + (g < b ? 6 : 0)) * 60 : hi === g ? ((b - r) / d + 2) * 60 : ((r - g) / d + 4) * 60;
+    return { h, l: ((hi + lo) / 2) * 100 };
+  };
+
+  it('both fills are the palette\'s green darkened: its hue to within 6 degrees, each darker than the green, the hover the darker of the two', () => {
+    const green = hsl(reasonToken('green'));
+    const fill = hsl(reasonToken('green-fill'));
+    const hover = hsl(reasonToken('green-fill-hover'));
+    for (const [name, c] of [['green-fill', fill], ['green-fill-hover', hover]] as const) {
+      expect({ name, hueApart: Math.abs(c.h - green.h) <= 6 }).toEqual({ name, hueApart: true });
+      expect({ name, darker: c.l < green.l }).toEqual({ name, darker: true });
+    }
+    expect(hover.l).toBeLessThan(fill.l);
   });
 
   it('the label reads at 4.5:1 or better on the resting fill and on the hover fill, and the hover fill is the darker of the two', () => {
