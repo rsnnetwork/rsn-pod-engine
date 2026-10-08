@@ -54,11 +54,13 @@ export default function MatchesPage() {
   // Until 5 Oct 2026 this query declared no entities, so it never refreshed from
   // realtime: a request sent from another tab, or answered by the other member, left
   // the card as it was until a reload. Sending a request (sendPoke), accepting it and
-  // declining it each tell both members' user and invites entities.
+  // declining it each tell both members' user and invites entities. The result also names the
+  // next event, so it follows the member's sessions too: the server announces them whenever an
+  // event is created, renamed, rescheduled, cancelled or deleted.
   const { data, isLoading } = useQuery<PlatformMatchesResult>({
     queryKey: ['platformMatches', browse],
     queryFn: () => api.get(`/matches/platform${browse ? '?browse=1' : ''}`).then(r => r.data.data),
-    meta: { entities: myUserId ? [E.user(myUserId), E.userInvites(myUserId)] : [] },
+    meta: { entities: myUserId ? [E.user(myUserId), E.userInvites(myUserId), E.userSessions(myUserId)] : [] },
   });
 
   const expressInterest = async (m: PlatformMatch) => {
