@@ -49,7 +49,10 @@ function requestIs(status: 'pending' | 'accepted' | 'declined' | 'missing') {
   });
 }
 
-/** The attempt must be refused; the refusal must read as the product does, and carry the status and code it always had. */
+/**
+ * The attempt must be refused; the refusal must read as the product does, and carry the status and code it always had.
+ * It is shown to the member as a toast, so none of the ids in play may be in it.
+ */
 async function expectRefusal(
   attempt: Promise<unknown>,
   want: { statusCode: number; code: string; message: string },
@@ -60,7 +63,7 @@ async function expectRefusal(
   );
   expect(err).toMatchObject(want);
   expect(err.message).not.toMatch(/poke/i);
-  expect(err.message).not.toContain(POKE_ID);
+  for (const id of [POKE_ID, SENDER, RECIPIENT]) expect(err.message).not.toContain(id);
 }
 
 beforeEach(() => {
@@ -86,6 +89,16 @@ describe('sendPoke refusals', () => {
       message: "You can't send a meeting request to this person.",
     });
     expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it('says a member who is not there any more is no longer available, with no id in it', async () => {
+    // No earlier meeting, no earlier "no", and no such member: every lookup comes back empty.
+    mockQuery.mockResolvedValue({ rows: [] });
+    await expectRefusal(sendPoke(SENDER, RECIPIENT), {
+      statusCode: 404,
+      code: 'USER_NOT_FOUND',
+      message: 'That member is no longer available.',
+    });
   });
 });
 

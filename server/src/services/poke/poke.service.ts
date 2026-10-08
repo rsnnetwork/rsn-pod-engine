@@ -206,7 +206,7 @@ export async function sendPoke(
     `SELECT id FROM users WHERE id = $1`, [recipientId],
   );
   if (recipientExists.rows.length === 0) {
-    throw new NotFoundError('User', recipientId);
+    throw new NotFoundError('User', undefined, 'That member is no longer available.');
   }
 
   const trimmedMessage = cleanRequestMessage(message);
