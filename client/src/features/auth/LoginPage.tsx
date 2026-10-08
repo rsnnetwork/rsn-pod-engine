@@ -100,6 +100,17 @@ export default function LoginPage() {
 
   const [googleLoading, setGoogleLoading] = useState(false);
 
+  // Back from Google, the browser may put this page back from its back-forward cache exactly as it was
+  // left, the button still reading "Redirecting...". No code runs again then, but a pageshow event with
+  // `persisted` set does, and it is the cue to let the member try again.
+  useEffect(() => {
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) setGoogleLoading(false);
+    };
+    window.addEventListener('pageshow', onPageShow);
+    return () => window.removeEventListener('pageshow', onPageShow);
+  }, []);
+
   const handleGoogleLogin = () => {
     if (googleLoading) return;
     setGoogleLoading(true);
