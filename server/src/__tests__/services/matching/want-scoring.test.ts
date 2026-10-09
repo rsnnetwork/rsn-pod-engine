@@ -576,6 +576,26 @@ describe('a region in the want finds the people who are there', () => {
       }
     });
 
+    // "im" (fix round 3) is "in dem": "Fintech-Gründer in Berlin oder im DACH-Raum" read Berlin only, and the founders in
+    // Vienna and Zurich scored 0.
+    it('reads "im DACH-Raum": the founders in the rest of DACH are matches', () => {
+      for (const wants of [
+        ['Fintech-Gründer in Berlin oder im DACH-Raum'],
+        ['Fintech-Gründer in Berlin oder im DACH-Raum', 'Raise a seed round for my payments startup'],
+        ['Raise a seed round for my payments startup', 'Fintech-Gründer in Berlin oder im DACH-Raum'],
+      ]) {
+        for (const [c, shown] of [
+          [founderAt('Willi', 'Wien, Österreich'), 'DACH'], [founderAt('Zoe', 'Zürich, Schweiz'), 'DACH'], [dieter, 'DACH'],
+          [founderAt('Bea', 'Berlin, Germany'), 'Berlin'],
+        ] as const) {
+          const r = scoreWants(wants, c);
+          expect([wants, c.displayName, r.score >= MATCH_THRESHOLD]).toEqual([wants, c.displayName, true]);
+          expect(r.reason).toMatch(new RegExp(`\\(in ${shown}\\)$`));
+        }
+        expect(scoreWants(wants, founderAt('Pia', 'Paris, France')).score).toBe(0);
+      }
+    });
+
     // I1: the second place of a list, in lowercase or after a modifier, was dropped and the first alone became the
     // strict filter: "... in the UK or continental Europe" shut out every European candidate.
     it('keeps every place of "in the UK or continental Europe": the people in Europe are not shut out', () => {

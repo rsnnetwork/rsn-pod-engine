@@ -1399,6 +1399,42 @@ describe('a German article: "in die" says where to, and only a country or a regi
   });
 });
 
+// "im" (S4-b fix round 3) is the German "in dem": "Investoren in Berlin oder im DACH-Raum" read Berlin only, and the
+// strict filter shut out the members in the rest of DACH. "im" is read like "in" with a German article after it: a
+// country or a region, never a town ("Netzwerken im Zug" is a train) and never an ordinary word ("im Allgemeinen").
+describe('"im" (in dem)', () => {
+  const read = (...fields: string[]) => [...(extractConstraints(fields).location ?? [])].sort();
+  const inEveryField = (want: string) => [[want], [want, NEXT_FIELD], [NEXT_FIELD, want], [NEXT_FIELD, want, 'Eine Runde aufsetzen']];
+
+  it.each([
+    ['Investoren in Berlin oder im DACH-Raum', ['berlin', 'dach']],
+    ['Investoren im DACH-Raum', ['dach']],
+    ['Im DACH-Raum', ['dach']],
+    ['Gründer im EU-Raum', ['eu']],
+    ['Investoren im Benelux-Raum oder in Köln', ['benelux', 'cologne']],
+    ['Investoren im DACH-Raum und in den Nordics', ['dach', 'nordics']],
+    ['Gründer im Iran', ['iran']],
+    ['Partner im Oman oder in den USA', ['oman', 'united states']],
+  ])('reads every place in "%s"', (want, expected) => {
+    for (const fields of inEveryField(want)) expect([fields, read(...fields)]).toEqual([fields, expected]);
+  });
+
+  it.each([
+    'Erfahrung im Allgemeinen', 'Gründer im Team', 'Erfahrung im Vertrieb', 'Netzwerken im Zug', 'Gründer im Kanton Zug',
+    'Gründer im Silicon Valley', 'Hilfe im Marketing',
+  ])('reads no place in "%s"', (want) => {
+    for (const fields of inEveryField(want)) expect([fields, extractConstraints(fields).location]).toEqual([fields, null]);
+  });
+
+  it('is satisfied by the people in any of the places, and by nobody else', () => {
+    const want = 'Investoren in Berlin oder im DACH-Raum';
+    for (const location of ['Berlin, Germany', 'Wien, Österreich', 'Zürich, Schweiz', 'Greater Düsseldorf Area']) {
+      expect([location, satisfies(want, location)]).toEqual([location, true]);
+    }
+    for (const location of ['Paris, France', 'Austin, Texas']) expect([location, satisfies(want, location)]).toEqual([location, false]);
+  });
+});
+
 
 // I1: "Fintech founders and seed investors in the UK or continental Europe" read the UK only. The region is the second
 // place of a list, in lowercase or after a modifier, and was dropped; the other place alone became the strict filter
