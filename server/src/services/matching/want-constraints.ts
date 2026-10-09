@@ -237,8 +237,10 @@ const regionNames: PlaceName[] = REGIONS
 const LOCATION_PREPOSITION_WORDS = ['based in', 'located in', 'in', 'im', 'from', 'within', 'across', 'throughout', 'near', 'aus', 'bei'];
 const LOCATION_PREPOSITIONS = LOCATION_PREPOSITION_WORDS.join('|');
 const ARTICLES_AFTER_A_PREPOSITION = 'the|der|dem|den';
+// "im" has its article in it, and German never puts another after it: "Hi, im the APAC lead" is "I'm", no place.
+const NOT_AFTER_IM = String.raw`(?<!\b[iI]m\s+)`;
 const AFTER_A_LOCATION_PREPOSITION = new RegExp(
-  String.raw`\b(?:${LOCATION_PREPOSITIONS})\s+(?:(?:${ARTICLES_AFTER_A_PREPOSITION})\s+)?$`, 'i',
+  String.raw`\b(?:${LOCATION_PREPOSITIONS})\s+(?:${NOT_AFTER_IM}(?:${ARTICLES_AFTER_A_PREPOSITION})\s+)?$`, 'i',
 );
 // Nor a name of the alias table, which is read anywhere else in a want: "Startups, die in die USA expandieren wollen".
 const INTO = /\bin\s+(?:die|das)\s+$/i;
@@ -400,9 +402,9 @@ const PLACE_ITEM = String.raw`(?:${READ}+|${NAME_WORD}(?:${NAME_GOES_ON}${NAME_W
 // same as "in Düsseldorf" (so does "Based In" in a title). "in" becomes [iI]n, "based in" [bB]ased [iI]n.
 const eitherCase = (phrase: string): string => phrase.replace(/\b([a-z])/g, (_, letter: string) => `[${letter}${letter.toUpperCase()}]`);
 const LOCATION_PREPOSITIONS_EITHER_CASE = LOCATION_PREPOSITION_WORDS.map(eitherCase).join('|');
-// The preposition, the article after it if there is one, and the name.
+// The preposition, the article after it if there is one (never after "im"), and the name.
 const PLACE_AFTER_A_PREPOSITION = new RegExp(
-  String.raw`\b(${LOCATION_PREPOSITIONS_EITHER_CASE})\s+(?:(${ARTICLES_AFTER_A_PREPOSITION})\s+)?(${PLACE_ITEM})`, 'gu',
+  String.raw`\b(${LOCATION_PREPOSITIONS_EITHER_CASE})\s+(?:${NOT_AFTER_IM}(${ARTICLES_AFTER_A_PREPOSITION})\s+)?(${PLACE_ITEM})`, 'gu',
 );
 // A list goes on after a place: "Köln oder Düsseldorf", "Berlin, Munich and Hamburg", "Deutschland und der Schweiz".
 // What joins the items is a comma, "&", "/" or "and", "or", "und", "oder" (after a comma too), and an article may

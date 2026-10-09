@@ -1426,6 +1426,9 @@ describe('"im" (in dem)', () => {
     'Gründer im Silicon Valley', 'Hilfe im Marketing',
     // "I'm" typed without its apostrophe, before a first name that is also a country
     'Hi im Jordan, looking for fintech founders', 'im Chad', 'im Chad and I want to meet investors', 'Hi, im Mali',
+    // or before an article, which German never puts after "im"
+    'Hi, im the APAC lead at Stripe', 'Im the EMEA head of sales', 'Hi im the Nordics country manager',
+    'im der DACH-Region',
     // a country after "im" is not read either: accepted, it only widens the list
     'im Iran', 'Gründer im Iran',
   ])('reads no place in "%s"', (want) => {
