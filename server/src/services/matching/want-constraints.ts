@@ -414,6 +414,8 @@ const LIST_JOINER = new RegExp(
   String.raw`(\s*[,&/]\s*(?:(?:and|or|und|oder)\s+)?|\s+(?:and/or|und/oder|and|or|und|oder)\s+)(?:(the|der|die|das|dem|den)\s+)?`, 'uy',
 );
 const LIST_PLACE = new RegExp(`(${PLACE_ITEM})`, 'uy');
+/** What is left of a compound after the scan has read the region at its start: "-Raum", "-Region", or "-" alone. */
+const REST_OF_A_COMPOUND = /-\p{L}*/uy;
 const ORDINARY_REGION_WORDS: ReadonlySet<string> = new Set(REGIONS.flatMap((r) => r.ordinaryWords ?? []));
 const LIST_NAMED = new RegExp(
   `(${[...new Set([...regionNames, ...extraCountryNames].map((n) => n.name).filter((name) => !ORDINARY_REGION_WORDS.has(name)))]
@@ -571,6 +573,12 @@ export function locationTerms(written: string | null | undefined): string[] {
     const alreadyRead = name.startsWith(READ);
     const first = alreadyRead ? undefined : readName(preposition, article, name, rest.slice(prepRe.lastIndex), out);
     if (!alreadyRead && !first) continue;
+    // The scan reads a region at the start of a compound and leaves the rest of the word ("-Raum" of "im DACH-Raum",
+    // "-" of "im DACH- und Benelux-Raum"): the list goes on after the whole word ("im DACH-Raum und Benelux").
+    if (alreadyRead) {
+      REST_OF_A_COMPOUND.lastIndex = prepRe.lastIndex;
+      if (REST_OF_A_COMPOUND.test(rest)) prepRe.lastIndex = REST_OF_A_COMPOUND.lastIndex;
+    }
     const listed = first ? [first] : [];
     prepRe.lastIndex = readTheRestOfTheList(rest, prepRe.lastIndex, listed);
     for (const place of listed) out.add(place);
