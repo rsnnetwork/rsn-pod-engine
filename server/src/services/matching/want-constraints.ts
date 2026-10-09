@@ -24,7 +24,9 @@
 // ("Gründer in Köln oder Düsseldorf", "in the UK or continental Europe", "in asia
 // and europe"). A state after a city never takes the city away: one the city is not
 // in ("Paris, Texas", "Dublin, OH") is read beside it, so the want names both. "in der
-// Schweiz" and a capital "In" are read like "in the" and "in".
+// Schweiz" and a capital "In" are read like "in the" and "in"; "in die" and "in das"
+// say where to and name no place, and after a German article only a country or a
+// region is read ("in den Bergen" is the mountains).
 //
 // A person's location is read the other way (8 Oct 2026): it resolves to the
 // countries it names, through a country name ("Deutschland", "Österreich") or,
@@ -228,11 +230,19 @@ const regionNames: PlaceName[] = REGIONS
 
 // The words that make a name a place a person is in or comes from. "based in" and "located in" end in "in". The
 // German "aus" and "bei" are the same words for the DACH members. An article may stand between the preposition and
-// the name: "in the Nordics", "in der Schweiz", "aus den USA".
+// the name: "in the Nordics", "in der Schweiz", "aus den USA". Not "die" or "das": after "in" they say where to, not
+// where ("Startups, die in die DACH-Region expandieren wollen" are not there yet), so nothing after them is a place.
 const LOCATION_PREPOSITION_WORDS = ['based in', 'located in', 'in', 'from', 'within', 'across', 'throughout', 'near', 'aus', 'bei'];
 const LOCATION_PREPOSITIONS = LOCATION_PREPOSITION_WORDS.join('|');
-const ARTICLE = String.raw`(?:(?:the|der|die|das|dem|den)\s+)?`;
-const AFTER_A_LOCATION_PREPOSITION = new RegExp(String.raw`\b(?:${LOCATION_PREPOSITIONS})\s+${ARTICLE}$`, 'i');
+const ARTICLES_AFTER_A_PREPOSITION = 'the|der|dem|den';
+const AFTER_A_LOCATION_PREPOSITION = new RegExp(
+  String.raw`\b(?:${LOCATION_PREPOSITIONS})\s+(?:(?:${ARTICLES_AFTER_A_PREPOSITION})\s+)?$`, 'i',
+);
+// Nor a name of the alias table, which is read anywhere else in a want: "Startups, die in die USA expandieren wollen".
+const INTO = /\bin\s+(?:die|das)\s+$/i;
+// After a German article German writes a country ("in der Schweiz", "in den USA") or a region ("in der DACH-Region",
+// "in der Bay Area"), never a town: "in den Bergen" is the mountains, not Bergen, and "in dem Zug" a train, not Zug.
+const GERMAN_ARTICLES: ReadonlySet<string> = new Set(['der', 'die', 'das', 'dem', 'den']);
 
 // A region name in a want is a place only after a location preposition ("investors in Europe", "founders across
 // the Nordics"). Anywhere else it describes the work, not where the person must be: "founders building for Asia
@@ -264,8 +274,12 @@ const MODIFIED_REGION = new RegExp(
 );
 
 // In a want: the alias table, the regions after a preposition, and the look-alikes, read as the member wrote
-// them. A want's other countries are only places after "in", "from"… (see locationTerms).
-const WANT_SCAN = compile([...countryNames, ...wantRegionNames, ...LOOK_ALIKES], (s) => s.toLowerCase());
+// them, and never right after "in die" or "in das". A want's other countries are only places after "in",
+// "from"… (see locationTerms).
+const notAfterInto = (n: PlaceName): PlaceName => (n.kind === 'decoy' ? n : {
+  ...n, where: (before, after, written) => !INTO.test(before) && (!n.where || n.where(before, after, written)),
+});
+const WANT_SCAN = compile([...countryNames, ...wantRegionNames, ...LOOK_ALIKES].map(notAfterInto), (s) => s.toLowerCase());
 // In a person's location: every country there is a name for, and every city, state and province
 // the matcher knows, each with the country it is in (the two look-alike places are states here),
 // accents and punctuation ignored.
@@ -336,9 +350,12 @@ function scan(text: string, scanners: Scanners): Found {
   return found;
 }
 
-/** "US" is a country only in capitals or after a preposition: lowercase "us" is a pronoun ("help us"). */
+/**
+ * "US" is a country only in capitals or after a preposition: lowercase "us" is a pronoun ("help us"). Not right
+ * after "in die" or "in das", which say where to (INTO): "Expansion in die US".
+ */
 const mentionsUS = (text: string) =>
-  /\bU\.?S\.?\b/.test(text) || /\b(?:in|from|within|near|based in|located in)\s+(?:the\s+)?us\b/i.test(text);
+  /(?<!\b[iI]n\s+(?:die|das)\s+)\bU\.?S\.?\b/.test(text) || /\b(?:in|from|within|near|based in|located in)\s+(?:the\s+)?us\b/i.test(text);
 
 /** Words that follow a location preposition but are not places. */
 const NOT_PLACES = new Set(['the', 'a', 'an', 'my', 'our', 'their', 'this', 'that', 'need', 'order', 'general', 'particular', 'tech', 'software', 'business', 'sales', 'marketing', 'finance', 'healthcare', 'manufacturing', 'ai']);
@@ -381,16 +398,19 @@ const PLACE_ITEM = String.raw`(?:${READ}+|${NAME_WORD}(?:${NAME_GOES_ON}${NAME_W
 // same as "in Düsseldorf" (so does "Based In" in a title). "in" becomes [iI]n, "based in" [bB]ased [iI]n.
 const eitherCase = (phrase: string): string => phrase.replace(/\b([a-z])/g, (_, letter: string) => `[${letter}${letter.toUpperCase()}]`);
 const LOCATION_PREPOSITIONS_EITHER_CASE = LOCATION_PREPOSITION_WORDS.map(eitherCase).join('|');
+// The preposition, the article after it if there is one, and the name.
 const PLACE_AFTER_A_PREPOSITION = new RegExp(
-  String.raw`\b(${LOCATION_PREPOSITIONS_EITHER_CASE})\s+${ARTICLE}(${PLACE_ITEM})`, 'gu',
+  String.raw`\b(${LOCATION_PREPOSITIONS_EITHER_CASE})\s+(?:(${ARTICLES_AFTER_A_PREPOSITION})\s+)?(${PLACE_ITEM})`, 'gu',
 );
 // A list goes on after a place: "Köln oder Düsseldorf", "Berlin, Munich and Hamburg", "Deutschland und der Schweiz".
 // What joins the items is a comma, "&", "/" or "and", "or", "und", "oder" (after a comma too), and an article may
-// come before an item. The item is a place the scan has read or a capitalised name (LIST_PLACE), or, when it starts
-// with a lowercase letter, the name of a region or of a country the alias table does not hold, in any case
-// (LIST_NAMED: "asia and europe", "germany and the nordics"). Not the ordinary words (eu, dach, gcc ...), which a
-// capital letter makes a region and nothing else does.
-const LIST_JOINER = new RegExp(String.raw`(\s*[,&/]\s*(?:(?:and|or|und|oder)\s+)?|\s+(?:and/or|und/oder|and|or|und|oder)\s+)${ARTICLE}`, 'uy');
+// come before an item ("und die Schweiz" too: the list already says where). The item is a place the scan has read or
+// a capitalised name (LIST_PLACE), or, when it starts with a lowercase letter, the name of a region or of a country
+// the alias table does not hold, in any case (LIST_NAMED: "asia and europe", "germany and the nordics"). Not the
+// ordinary words (eu, dach, gcc ...), which a capital letter makes a region and nothing else does.
+const LIST_JOINER = new RegExp(
+  String.raw`(\s*[,&/]\s*(?:(?:and|or|und|oder)\s+)?|\s+(?:and/or|und/oder|and|or|und|oder)\s+)(?:(the|der|die|das|dem|den)\s+)?`, 'uy',
+);
 const LIST_PLACE = new RegExp(`(${PLACE_ITEM})`, 'uy');
 const ORDINARY_REGION_WORDS: ReadonlySet<string> = new Set(REGIONS.flatMap((r) => r.ordinaryWords ?? []));
 const LIST_NAMED = new RegExp(
@@ -413,12 +433,20 @@ const isPossessive = (after: string): boolean => /^['’]s\b/.test(after);
 /** "from" and the German "aus" and "bei" say where someone comes from or works: a name that goes on may be a company. */
 const FROM_LIKE = /^(?:from|aus|bei)$/i;
 
+/** A place German writes after an article: a country, a region, or the Bay Area (a region of towns). Not a town. */
+const followsAnArticle = (canon: string): boolean =>
+  !!regionByKey(canon) || ALIAS_COUNTRIES.has(canon) || EXTRA_COUNTRIES.has(canon) || canon === 'bay area';
+
+/** Is the place after this article one German writes with an article (see GERMAN_ARTICLES)? "the" is not German. */
+const fitsTheArticle = (article: string | undefined, canon: string): boolean =>
+  !article || !GERMAN_ARTICLES.has(article) || followsAnArticle(canon);
+
 /**
- * Read the name captured after a preposition. Returns the place when the name is one the code knows, so that a
- * list ("Köln oder Düsseldorf") may go on after it and the caller can set it down. A name the code does not know
- * goes into `out` as a candidate that extractConstraints will throw away.
+ * Read the name captured after a preposition (and the article between them, if any). Returns the place when the
+ * name is one the code knows, so that a list ("Köln oder Düsseldorf") may go on after it and the caller can set it
+ * down. A name the code does not know goes into `out` as a candidate that extractConstraints will throw away.
  */
-function readName(preposition: string, name: string, after: string, out: Set<string>): string | undefined {
+function readName(preposition: string, article: string | undefined, name: string, after: string, out: Set<string>): string | undefined {
   if (isPossessive(after)) return undefined;
   // Compare without dots so "U.K." and "U.S." resolve to their country, not
   // to a phantom city called "u.k". Folded, so "Köln" is the "koln" the table knows.
@@ -439,6 +467,8 @@ function readName(preposition: string, name: string, after: string, out: Set<str
   // start with one. After "from" the pair is as often a company or a school ("from Boston Consulting
   // Group"), so there only a place that stands alone counts, or one name joined by a hyphen ("from Berlin-Mitte").
   if (!canon && words.length > 1 && (!fromLike || !/[ \t]/.test(name))) canon = placeNamed(words[0]);
+  // "in den Bergen" is the mountains and "in dem Zug" a train: after a German article a town's name is a word
+  if (canon && !fitsTheArticle(article, canon)) return undefined;
   if (!canon) out.add(key); // a city or a place the code does not know
   return canon;
 }
@@ -472,9 +502,10 @@ function placeAfterACity(city: string, key: string, canon: string | undefined, w
  * Read the places a list goes on with after the first, from `start`, set them down in `places` (which holds the
  * first, when the code knows it) and return where the list ends. An item is taken as the whole name it is and
  * nothing else: not by its first word, as the first place after a preposition is ("in Berlin and Jordan Smith" is
- * not Jordan), and an item the code does not know is dropped. The item after a city and a comma is read beside that
- * city (see placeAfterACity), and only beside the item directly before it: in "Berlin, SF, NYC" the item before NYC
- * is SF, no place, so NYC is a place of its own and has nothing to do with Berlin.
+ * not Jordan), and an item the code does not know is dropped, as is a town after a German article ("in Köln und
+ * den Bergen" is Köln). The item after a city and a comma is read beside that city (see placeAfterACity), and only
+ * beside the item directly before it: in "Berlin, SF, NYC" the item before NYC is SF, no place, so NYC is a place of
+ * its own and has nothing to do with Berlin.
  */
 function readTheRestOfTheList(rest: string, start: number, places: string[]): number {
   let end = start;
@@ -495,7 +526,8 @@ function readTheRestOfTheList(rest: string, start: number, places: string[]): nu
     if (next[1].startsWith(READ) || isPossessive(rest.slice(end))) continue;
     const written = next[1].replace(/\./g, '');
     const key = fold(written);
-    const canon = key === 'us' || key === 'usa' ? 'united states' : nameOf(key);
+    let canon = key === 'us' || key === 'usa' ? 'united states' : nameOf(key);
+    if (canon && !fitsTheArticle(joiner[2], canon)) canon = undefined;
     before = canon;
     const added = city === undefined ? canon : placeAfterACity(city, key, canon, written);
     if (added) places.push(added);
@@ -527,8 +559,9 @@ export function locationTerms(written: string | null | undefined): string[] {
   prepRe.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = prepRe.exec(rest)) !== null) {
-    const alreadyRead = m[2].startsWith(READ);
-    const first = alreadyRead ? undefined : readName(m[1], m[2], rest.slice(prepRe.lastIndex), out);
+    const [, preposition, article, name] = m;
+    const alreadyRead = name.startsWith(READ);
+    const first = alreadyRead ? undefined : readName(preposition, article, name, rest.slice(prepRe.lastIndex), out);
     if (!alreadyRead && !first) continue;
     const listed = first ? [first] : [];
     prepRe.lastIndex = readTheRestOfTheList(rest, prepRe.lastIndex, listed);

@@ -1337,6 +1337,68 @@ describe('a qualifier after a city never removes the city', () => {
   });
 });
 
+// M1 (S4-b fix round 3): after "in", the German "die" and "das" say where to, not where. "Startups, die in die
+// DACH-Region expandieren wollen" are startups that are not there yet, and reading DACH shut out exactly them. And a
+// town's name after a German article is a word: "Workation in den Bergen" is the mountains, not Bergen in Norway, and
+// "in dem Zug" a train, not Zug. After a preposition only der, dem and den (and "the") are articles now, and after a
+// German article only a country or a region is read.
+describe('a German article: "in die" says where to, and only a country or a region follows an article', () => {
+  const read = (...fields: string[]) => [...(extractConstraints(fields).location ?? [])].sort();
+  const inEveryField = (want: string) => [[want], [want, NEXT_FIELD], [NEXT_FIELD, want], [NEXT_FIELD, want, 'Eine Runde aufsetzen']];
+
+  it.each([
+    'Startups, die in die DACH-Region expandieren wollen',
+    'Startups, die in die Schweiz expandieren wollen',
+    'Startups, die in die USA expandieren wollen',
+    'Startups für die Expansion in die US',
+    'Startups, die in das UK expandieren wollen',
+    'Firmen, die in die EU expandieren',
+    'Firmen, die in die Nordics expandieren',
+    'Unternehmen, die in das Vereinigte Königreich gehen',
+    'Workation in den Bergen',
+    'Ideen austauschen in dem Zug nach München',
+    'Gründer aus dem Zug',
+  ])('reads no place in "%s"', (want) => {
+    for (const fields of inEveryField(want)) expect([fields, extractConstraints(fields).location]).toEqual([fields, null]);
+  });
+
+  it.each([
+    ['Investoren in den USA', ['united states']],
+    ['Gründer in der Schweiz', ['switzerland']],
+    ['Investoren in der DACH-Region', ['dach']],
+    ['Investoren in der EU', ['eu']],
+    ['Gründer in der Türkei', ['turkey']],
+    ['Gründer aus der Schweiz', ['switzerland']],
+    ['Gründer aus den USA', ['united states']],
+    ['Gründer in der Schweiz oder in Österreich', ['austria', 'switzerland']],
+    ['investors in the Netherlands', ['netherlands']],
+    // the Bay Area is a region of towns, and German writes it with an article
+    ['Startups in der Bay Area', ['bay area']],
+  ])('still reads "%s"', (want, expected) => {
+    for (const fields of inEveryField(want)) expect([fields, read(...fields)]).toEqual([fields, expected]);
+  });
+
+  it('reads no town after a German article in a list either, and still the countries', () => {
+    for (const fields of inEveryField('Workation in Köln und den Bergen')) expect([fields, read(...fields)]).toEqual([fields, ['cologne']]);
+    for (const fields of inEveryField('Startups in Berlin, die Zug fahren')) expect([fields, read(...fields)]).toEqual([fields, ['berlin']]);
+    expect(read('Investoren in Deutschland, Österreich und der Schweiz')).toEqual(['austria', 'germany', 'switzerland']);
+    expect(read('Investoren in Deutschland und die Schweiz')).toEqual(['germany', 'switzerland']);
+  });
+
+  it('still reads the places the same want names elsewhere', () => {
+    expect(read('Startups in Berlin, die in die USA expandieren wollen')).toEqual(['berlin']);
+    expect(read('Gründer in Köln, die in die DACH-Region expandieren', 'Investoren in der Schweiz')).toEqual(['cologne', 'switzerland']);
+  });
+
+  it('keeps nobody out for a direction or a word', () => {
+    for (const want of ['Startups, die in die DACH-Region expandieren wollen', 'Workation in den Bergen', 'Startups, die in die USA expandieren wollen']) {
+      for (const location of ['Paris, France', 'Austin, Texas', 'Bergen, Norway', 'Zug, Switzerland']) {
+        expect([want, location, satisfies(want, location)]).toEqual([want, location, null]);
+      }
+    }
+  });
+});
+
 
 // I1: "Fintech founders and seed investors in the UK or continental Europe" read the UK only. The region is the second
 // place of a list, in lowercase or after a modifier, and was dropped; the other place alone became the strict filter

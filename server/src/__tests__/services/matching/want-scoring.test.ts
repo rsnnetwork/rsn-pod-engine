@@ -556,6 +556,26 @@ describe('a region in the want finds the people who are there', () => {
       }
     });
 
+    // M1 (fix round 3): after "in", "die" and "das" say where to. "Fintech-Gründer, die in die DACH-Region expandieren
+    // wollen" read DACH and shut out exactly the founders the member wants, the ones not there yet; "in den Bergen" read
+    // Bergen, Norway.
+    it('reads no place in "in die DACH-Region", "in die USA" or "in den Bergen"', () => {
+      const pia = founderAt('Pia', 'Paris, France');
+      const alex = founderAt('Alex', 'Austin, Texas');
+      for (const wants of [
+        ['Fintech-Gründer, die in die DACH-Region expandieren wollen'],
+        ['Fintech-Gründer, die in die DACH-Region expandieren wollen', 'Raise a seed round for my payments startup'],
+        ['Raise a seed round for my payments startup', 'Fintech-Gründer, die in die USA expandieren wollen'],
+        ['Fintech-Gründer für eine Workation in den Bergen', 'Raise a seed round for my payments startup'],
+      ]) {
+        for (const c of [pia, alex, dieter]) {
+          const r = scoreWants(wants, c);
+          expect([wants, c.displayName, r.score >= MATCH_THRESHOLD]).toEqual([wants, c.displayName, true]);
+          expect(r.reason).not.toMatch(/\(in /);
+        }
+      }
+    });
+
     // I1: the second place of a list, in lowercase or after a modifier, was dropped and the first alone became the
     // strict filter: "... in the UK or continental Europe" shut out every European candidate.
     it('keeps every place of "in the UK or continental Europe": the people in Europe are not shut out', () => {
