@@ -929,8 +929,8 @@ describe('a list of places after one preposition', () => {
   });
 
   // "Austin, Texas" is the way a city is written, not two places: the state after the city and a comma says which
-  // city, and reading it as a second place would take everyone in Texas. (A city qualified by a state it is NOT in,
-  // "Paris, Texas", is the state's: see "a city qualified by a state or province it is not in".)
+  // city, and reading it as a second place would take everyone in Texas. (A city followed by a state it is NOT in,
+  // "Paris, Texas", keeps the city and adds the state: see "a city qualified by a state or province it is not in".)
   it('does not take the state or country that follows a city and a comma for a second place', () => {
     for (const [want, place] of [
       ['founders in Austin, Texas', 'austin'], ['founders in San Francisco, California', 'san francisco'],
@@ -1176,28 +1176,31 @@ describe('a German article after the first preposition, and a capital prepositio
   });
 });
 
-// I2: a city qualified by a state or province it is not in ("Vienna, VA", "Dublin, OH", "Paris, Texas") is the state's.
-// It was read as the foreign city, so the want named Dublin, Ireland and the person who wrote "Dublin, OH" (whose
-// namesake the matcher had dropped) no longer matched the very place they wrote.
+// I2: a city qualified by a state or province it is not in ("Vienna, VA", "Dublin, OH", "Paris, Texas") names that
+// state too. It was read as the foreign city alone, so the want named Dublin, Ireland and the person who wrote "Dublin,
+// OH" (whose namesake the matcher had dropped) no longer matched the very place they wrote. (N1, fix round 3: the
+// state is ADDED to the city, never put in its place: places are alternatives, so this can only widen.)
 describe('a city qualified by a state or province it is not in', () => {
   const read = (...fields: string[]) => [...(extractConstraints(fields).location ?? [])].sort();
 
   it.each([
-    ['founders in Dublin, OH', 'ohio'], ['founders in Vienna, VA', 'virginia'], ['founders in Kansas City, KS', 'kansas'],
-    ['founders in Portland, ME', 'maine'], ['founders in Paris, TX', 'texas'], ['founders in Columbus, GA', 'georgia'],
-    ['founders in Manhattan, KS', 'kansas'], ['founders in London, ON', 'ontario'], ['founders in Dublin, CA', 'california'],
-    ['founders in Vienna, Virginia', 'virginia'], ['founders in Birmingham, Alabama', 'alabama'],
-    ['founders in Paris, Texas', 'texas'], ['founders in London, Ontario', 'ontario'], ['founders in Dublin, Ohio', 'ohio'],
-    ['founders from Vienna, VA', 'virginia'], ['founders based in Paris, TX', 'texas'],
-  ])('reads "%s" as %s: the state or province, never the foreign city', (want, state) => {
-    expect([want, read(want)]).toEqual([want, [state]]);
-    expect([want, read(want, NEXT_FIELD)]).toEqual([want, [state]]);
-    expect([want, read(NEXT_FIELD, want)]).toEqual([want, [state]]);
-    expect([want, read(NEXT_FIELD, want, 'Eine Runde aufsetzen')]).toEqual([want, [state]]);
+    ['founders in Dublin, OH', ['dublin', 'ohio']], ['founders in Vienna, VA', ['vienna', 'virginia']],
+    ['founders in Kansas City, KS', ['kansas', 'kansas city']], ['founders in Portland, ME', ['maine', 'portland']],
+    ['founders in Paris, TX', ['paris', 'texas']], ['founders in Columbus, GA', ['columbus', 'georgia']],
+    ['founders in Manhattan, KS', ['kansas', 'manhattan']], ['founders in London, ON', ['london', 'ontario']],
+    ['founders in Dublin, CA', ['california', 'dublin']], ['founders in Vienna, Virginia', ['vienna', 'virginia']],
+    ['founders in Birmingham, Alabama', ['alabama', 'birmingham']], ['founders in Paris, Texas', ['paris', 'texas']],
+    ['founders in London, Ontario', ['london', 'ontario']], ['founders in Dublin, Ohio', ['dublin', 'ohio']],
+    ['founders from Vienna, VA', ['vienna', 'virginia']], ['founders based in Paris, TX', ['paris', 'texas']],
+  ])('reads "%s" as the city and the state or province it names', (want, expected) => {
+    expect([want, read(want)]).toEqual([want, expected]);
+    expect([want, read(want, NEXT_FIELD)]).toEqual([want, expected]);
+    expect([want, read(NEXT_FIELD, want)]).toEqual([want, expected]);
+    expect([want, read(NEXT_FIELD, want, 'Eine Runde aufsetzen')]).toEqual([want, expected]);
   });
 
-  it('finds the people who wrote the same place, and not the foreign city', () => {
-    for (const [want, same, foreign] of [
+  it('finds the people who wrote the same place, and the town of the same name elsewhere too (wider, never narrower)', () => {
+    for (const [want, same, elsewhere] of [
       ['founders in Dublin, OH', 'Dublin, OH', 'Dublin, Ireland'], ['founders in Vienna, VA', 'Vienna, VA', 'Vienna, Austria'],
       ['founders in Kansas City, KS', 'Kansas City, KS', 'Kansas City, MO'], ['founders in Portland, ME', 'Portland, ME', 'Portland, OR'],
       ['founders in Paris, TX', 'Paris, TX', 'Paris, France'], ['founders in Columbus, GA', 'Columbus, GA', 'Columbus, OH'],
@@ -1207,7 +1210,8 @@ describe('a city qualified by a state or province it is not in', () => {
     ]) {
       for (const field of [[want], [want, NEXT_FIELD], [NEXT_FIELD, want]]) {
         expect([want, same, checkConstraints(extractConstraints(field), { location: same }).locationOk]).toEqual([want, same, true]);
-        expect([want, foreign, checkConstraints(extractConstraints(field), { location: foreign }).locationOk]).toEqual([want, foreign, false]);
+        expect([want, elsewhere, checkConstraints(extractConstraints(field), { location: elsewhere }).locationOk]).toEqual([want, elsewhere, true]);
+        expect([want, 'Reykjavik, Iceland', checkConstraints(extractConstraints(field), { location: 'Reykjavik, Iceland' }).locationOk]).toEqual([want, 'Reykjavik, Iceland', false]);
       }
     }
   });
@@ -1230,10 +1234,10 @@ describe('a city qualified by a state or province it is not in', () => {
   });
 
   it('is one item of a longer list', () => {
-    expect(read('founders in Dublin, OH or Boston')).toEqual(['boston', 'ohio']);
-    expect(read('founders in Boston and Vienna, VA')).toEqual(['boston', 'virginia']);
-    expect(read('founders in Dublin, OH, Dallas and Paris, Texas')).toEqual(['dallas', 'ohio', 'texas']);
-    expect(read('founders in Germany, Dublin, OH')).toEqual(['germany', 'ohio']);
+    expect(read('founders in Dublin, OH or Boston')).toEqual(['boston', 'dublin', 'ohio']);
+    expect(read('founders in Boston and Vienna, VA')).toEqual(['boston', 'vienna', 'virginia']);
+    expect(read('founders in Dublin, OH, Dallas and Paris, Texas')).toEqual(['dallas', 'dublin', 'ohio', 'paris', 'texas']);
+    expect(read('founders in Germany, Dublin, OH')).toEqual(['dublin', 'germany', 'ohio']);
   });
 
   it('leaves two cities and a state a list, and a lowercase code alone', () => {
@@ -1256,6 +1260,80 @@ describe('a city qualified by a state or province it is not in', () => {
     expect(satisfies('founders in Missouri', 'Kansas City, KS')).toBe(false);
     expect(satisfies('founders in Oregon', 'Portland, ME')).toBe(false);
     expect(satisfies('founders in New York', 'Manhattan, KS')).toBe(false);
+  });
+});
+
+// N1 (S4-b fix round 3): the item after "City, " took the city's place whenever it named a state or province the city
+// is not in, and it was compared with the last place kept, not with the item next to it. So an everyday abbreviation
+// read as a state's code ("Investors in London, PE and VC" became Prince Edward Island), or a second city whose usual
+// name is a state's ("Business Angels aus Düsseldorf, New York oder London" lost Düsseldorf), removed a city the member
+// named, and every candidate there scored 0. A qualifier after a city never removes the city now: a state or province
+// it is not in is ADDED beside it (places are alternatives, so this can only widen), and an item is compared only with
+// the item directly before it. Every test hands the matcher the want alone, first, last and in the middle of three.
+describe('a qualifier after a city never removes the city', () => {
+  const read = (...fields: string[]) => [...(extractConstraints(fields).location ?? [])].sort();
+  const inEveryField = (want: string) => [[want], [want, NEXT_FIELD], [NEXT_FIELD, want], [NEXT_FIELD, want, 'Eine Runde aufsetzen']];
+
+  it.each([
+    // an everyday abbreviation that is also a state's or province's code: the state is added, and the city stays
+    ['Investors in London, PE and VC', ['london', 'prince edward']],
+    ['Gründer in Düsseldorf, AR und VR', ['arkansas', 'dusseldorf']],
+    ['Senior bankers in London, MD or Director level', ['london', 'maryland']],
+    ['Founders in Zurich, CO-founders welcome', ['colorado', 'zurich']],
+    ['Accountants in Mumbai, CA qualified', ['california', 'mumbai']],
+    ['Investors in London, OK with remote', ['london', 'oklahoma']],
+    // a second city whose usual name or abbreviation is a state's: both are places
+    ['Business Angels aus Düsseldorf, New York oder London', ['dusseldorf', 'london', 'new york']],
+    ['Seed investors in Berlin, New York', ['berlin', 'new york']],
+    ['Investoren in Berlin, New York und London', ['berlin', 'london', 'new york']],
+    ['Investors in Berlin, LA, NYC', ['berlin', 'louisiana', 'new york']],
+    ['Policy experts in Brussels, DC and London', ['brussels', 'london', 'washington dc']],
+    // the item is compared with the one directly before it ("SF", no place), not with the last place kept: NYC is not
+    // read beside Berlin, and Texas is a place of its own, not a word on where Dallas is
+    ['VCs in Berlin, SF, NYC', ['berlin', 'new york']],
+    ['VCs in Dallas, SF, Texas', ['dallas', 'texas']],
+  ])('keeps the city in "%s"', (want, expected) => {
+    for (const fields of inEveryField(want)) expect([fields, read(...fields)]).toEqual([fields, expected]);
+  });
+
+  it('finds the people in the city the member named, and in the other places', () => {
+    for (const [want, location] of [
+      ['Business Angels aus Düsseldorf, New York oder London', 'Düsseldorf, Germany'],
+      ['Business Angels aus Düsseldorf, New York oder London', 'Greater Düsseldorf Area'],
+      ['Business Angels aus Düsseldorf, New York oder London', 'New York, NY'],
+      ['Business Angels aus Düsseldorf, New York oder London', 'London, UK'],
+      ['Investors in London, PE and VC', 'London, United Kingdom'],
+      ['Gründer in Düsseldorf, AR und VR', 'Düsseldorf'],
+      ['Senior bankers in London, MD or Director level', 'London, UK'],
+      ['Founders in Zurich, CO-founders welcome', 'Zürich, Schweiz'],
+      ['Accountants in Mumbai, CA qualified', 'Mumbai, India'],
+      ['Investors in London, OK with remote', 'London, UK'],
+      ['Seed investors in Berlin, New York', 'Berlin, Germany'],
+      ['Investoren in Berlin, New York und London', 'Berlin'],
+      ['Investors in Berlin, LA, NYC', 'Berlin, Germany'],
+      ['Policy experts in Brussels, DC and London', 'Brussels, Belgium'],
+      ['VCs in Berlin, SF, NYC', 'Berlin, Germany'],
+      ['VCs in Berlin, SF, NYC', 'New York, NY'],
+    ]) {
+      for (const fields of inEveryField(want)) {
+        expect([fields, location, checkConstraints(extractConstraints(fields), { location }).locationOk]).toEqual([fields, location, true]);
+      }
+    }
+    expect(matchedPlace(extractConstraints(['Business Angels aus Düsseldorf, New York oder London', NEXT_FIELD]), { location: 'Düsseldorf, Germany' })).toBe('dusseldorf');
+  });
+
+  it('still keeps out a person in none of the places', () => {
+    for (const [want, location] of [
+      ['Business Angels aus Düsseldorf, New York oder London', 'Essen, Germany'],
+      ['Business Angels aus Düsseldorf, New York oder London', 'Paris, France'],
+      ['Gründer in Düsseldorf, AR und VR', 'Köln, Germany'],
+      ['VCs in Berlin, SF, NYC', 'Munich, Germany'],
+      ['Policy experts in Brussels, DC and London', 'Paris, France'],
+    ]) {
+      for (const fields of inEveryField(want)) {
+        expect([fields, location, checkConstraints(extractConstraints(fields), { location }).locationOk]).toEqual([fields, location, false]);
+      }
+    }
   });
 });
 

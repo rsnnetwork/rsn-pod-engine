@@ -22,9 +22,9 @@
 // it ("Western", "continental", "the rest of") does not change which, and one
 // preposition may govern a list, whose items may be regions in any case
 // ("Gründer in Köln oder Düsseldorf", "in the UK or continental Europe", "in asia
-// and europe"). A city qualified by a state it is not in ("Paris, Texas", "Dublin,
-// OH") is that state's; "in der Schweiz" and a capital "In" are read like "in the"
-// and "in".
+// and europe"). A state after a city never takes the city away: one the city is not
+// in ("Paris, Texas", "Dublin, OH") is read beside it, so the want names both. "in der
+// Schweiz" and a capital "In" are read like "in the" and "in".
 //
 // A person's location is read the other way (8 Oct 2026): it resolves to the
 // countries it names, through a country name ("Deutschland", "Österreich") or,
@@ -444,39 +444,42 @@ function readName(preposition: string, name: string, after: string, out: Set<str
 }
 
 /**
- * What the item after a city and a comma says about the city. It may only say where the city is, and then the city
- * stays and the item is no second place: "Austin, Texas", "Albany, New York", "Zürich, Schweiz", "Austin, TX" and
- * "Berlin, DE" (Germany's own code). It may name a state or province the city is NOT in, and then the member means
- * the one there, never the foreign city: "Paris, Texas", "Vienna, Virginia", "Dublin, OH", "Portland, ME" are Texas,
- * Virginia, Ohio and Maine. Or it is no qualifier and a second place: "Boston, New York", "Austin, Ohio". Returns
- * the place the city becomes (itself, or the state), or undefined.
+ * The place the item after a city and a comma adds to the want, or undefined. It never takes the city away. It may
+ * only say where the city is, and then it adds nothing: "Austin, Texas", "Albany, New York", "Zürich, Schweiz",
+ * "Austin, TX" and "Berlin, DE" (Germany's own code). It may name a state or province the city is NOT in, and then it
+ * adds that state and the city stays: "Dublin, OH" is Dublin and Ohio, "Paris, Texas" Paris and Texas. The member may
+ * mean the town in that state, or be naming two places ("aus Düsseldorf, New York oder London"), or have written an
+ * abbreviation that is also a code ("in London, PE and VC"); places are alternatives, so keeping both can only widen.
+ * Or the item is a place of its own ("Boston, New York", "Berlin, Munich"), or nothing the code knows.
  */
-function qualifiedCity(city: string, key: string, canon: string | undefined, written: string): string | undefined {
+function placeAfterACity(city: string, key: string, canon: string | undefined, written: string): string | undefined {
   const here = PLACE_BY_CANON.get(city);
-  if (here?.level !== 'city') return undefined;
+  if (here?.level !== 'city') return canon;
   if (canon) {
     const there = PLACE_BY_CANON.get(canon);
-    if (!there) return here.country === canon ? city : undefined; // a country ("Zürich, Schweiz"): the city's own
-    if (there.level !== 'state') return undefined;
-    if (SUBREGIONS.get(canon)?.includes(city)) return city;
-    return here.country && there.country && here.country !== there.country ? canon : undefined;
+    // a country or a region: the city's own country only says where it is ("Zürich, Schweiz"), any other is a place
+    if (!there) return here.country === canon ? undefined : canon;
+    return there.level === 'state' && SUBREGIONS.get(canon)?.includes(city) ? undefined : canon;
   }
   // a two-letter code in capitals: a state's or province's, unless it is the country's own or its regions' ("Berlin, DE")
   const code = key.length === 2 && written === written.toUpperCase() ? REGION_CODES.get(key) : undefined;
   if (!code) return undefined;
-  if (CODES_OF_COUNTRIES.get(key) === here.country || (here.country && OWN_REGION_CODES[here.country]?.includes(key))) return city;
-  return STATE_OF_CITY.get(city) === code.place ? city : code.place;
+  if (CODES_OF_COUNTRIES.get(key) === here.country || (here.country && OWN_REGION_CODES[here.country]?.includes(key))) return undefined;
+  return STATE_OF_CITY.get(city) === code.place ? undefined : code.place;
 }
 
 /**
  * Read the places a list goes on with after the first, from `start`, set them down in `places` (which holds the
  * first, when the code knows it) and return where the list ends. An item is taken as the whole name it is and
  * nothing else: not by its first word, as the first place after a preposition is ("in Berlin and Jordan Smith" is
- * not Jordan), and an item the code does not know is dropped. The state or country after a city and a comma may
- * only qualify the city, or turn it into the state (see qualifiedCity).
+ * not Jordan), and an item the code does not know is dropped. The item after a city and a comma is read beside that
+ * city (see placeAfterACity), and only beside the item directly before it: in "Berlin, SF, NYC" the item before NYC
+ * is SF, no place, so NYC is a place of its own and has nothing to do with Berlin.
  */
 function readTheRestOfTheList(rest: string, start: number, places: string[]): number {
   let end = start;
+  // what the item directly before names, when the code knows it
+  let before: string | undefined = places[places.length - 1];
   for (;;) {
     LIST_JOINER.lastIndex = end;
     const joiner = LIST_JOINER.exec(rest);
@@ -487,14 +490,15 @@ function readTheRestOfTheList(rest: string, start: number, places: string[]): nu
     const next = sticky.exec(rest);
     if (!next) return end;
     end = sticky.lastIndex;
+    const city = /^\s*,\s*$/.test(joiner[1]) ? before : undefined;
+    before = undefined;
     if (next[1].startsWith(READ) || isPossessive(rest.slice(end))) continue;
     const written = next[1].replace(/\./g, '');
     const key = fold(written);
     const canon = key === 'us' || key === 'usa' ? 'united states' : nameOf(key);
-    const city = places[places.length - 1];
-    const qualified = city !== undefined && /^\s*,\s*$/.test(joiner[1]) ? qualifiedCity(city, key, canon, written) : undefined;
-    if (qualified !== undefined) places[places.length - 1] = qualified;
-    else if (canon) places.push(canon);
+    before = canon;
+    const added = city === undefined ? canon : placeAfterACity(city, key, canon, written);
+    if (added) places.push(added);
   }
 }
 

@@ -519,19 +519,41 @@ describe('a region in the want finds the people who are there', () => {
       expect(scoreWants(fields, austin).score).toBe(0);
     });
 
-    // I2: "Dublin, OH" is the state's; the want named Dublin, Ireland and the person who wrote "Dublin, OH" was shut out.
-    it('finds the person who wrote the same town and state, and not the town of the same name abroad', () => {
+    // I2: the person who wrote "Dublin, OH" was shut out by a want that named Dublin, OH. N1 (fix round 3): the state is
+    // added to the city, never put in its place, so the town of the same name abroad is not shut out either.
+    it('finds the person who wrote the same town and state, and keeps the town of the same name abroad', () => {
       const wants = [`${STACK} in Dublin, OH`, 'Raise a seed round'];
       const ohio = scoreWants(wants, fintech('Ola', 'Dublin, OH'));
       expect(ohio.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
       expect(ohio.reason).toMatch(/\(in Ohio\)$/);
-      expect(scoreWants(wants, fintech('Cian', 'Dublin, Ireland')).score).toBe(0);
+      const ireland = scoreWants(wants, fintech('Cian', 'Dublin, Ireland'));
+      expect(ireland.score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+      expect(ireland.reason).toMatch(/\(in Dublin\)$/);
+      expect(scoreWants(wants, berlin).score).toBe(0);
       const vienna_ = scoreWants([`${STACK} in Vienna, Virginia`, 'Raise a seed round'], fintech('Val', 'Vienna, VA'));
       expect(vienna_.reason).toMatch(/\(in Virginia\)$/);
-      expect(scoreWants([`${STACK} in Vienna, Virginia`], vienna).score).toBe(0);
+      expect(scoreWants([`${STACK} in Vienna, Virginia`], vienna).reason).toMatch(/\(in Vienna\)$/);
+      expect(scoreWants([`${STACK} in Vienna, Virginia`], berlin).score).toBe(0);
       const kc = [`${STACK} in Kansas City`, 'Raise a seed round'];
       expect(scoreWants(kc, fintech('Kay', 'Kansas City, KS')).score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
       expect(scoreWants(kc, fintech('Moe', 'Kansas City, MO')).score).toBeGreaterThanOrEqual(MATCH_THRESHOLD);
+    });
+
+    // N1: "Business Angels aus Düsseldorf, New York oder London" read New York and London, and every angel in Düsseldorf
+    // scored 0. A qualifier after a city never removes the city.
+    it('keeps the city a hub list starts with: the angel in Düsseldorf is a match', () => {
+      const angel = (name: string, location: string) => fintech(name, location, { professionalRole: ['Investor'], jobTitle: 'Business Angel' });
+      const want = 'Business Angels aus Düsseldorf, New York oder London';
+      for (const wants of [[want], [want, 'Raise a seed round for my payments startup'], ['Raise a seed round for my payments startup', want]]) {
+        for (const [c, shown] of [
+          [angel('Dieter', 'Düsseldorf, Germany'), 'Dusseldorf'], [angel('Nora', 'New York, NY'), 'New York'], [angel('Liv', 'London, UK'), 'London'],
+        ] as const) {
+          const r = scoreWants(wants, c);
+          expect([wants, c.displayName, r.score >= MATCH_THRESHOLD]).toEqual([wants, c.displayName, true]);
+          expect(r.reason).toMatch(new RegExp(`\\(in ${shown}\\)$`));
+        }
+        expect(scoreWants(wants, angel('Elke', 'Essen, Germany')).score).toBe(0);
+      }
     });
 
     // I1: the second place of a list, in lowercase or after a modifier, was dropped and the first alone became the
