@@ -24,9 +24,10 @@
 // ("Gründer in Köln oder Düsseldorf", "in the UK or continental Europe", "in asia
 // and europe"). A state after a city never takes the city away: one the city is not
 // in ("Paris, Texas", "Dublin, OH") is read beside it, so the want names both. "in der
-// Schweiz" and a capital "In" are read like "in the" and "in", and "im" like "in dem";
-// "in die" and "in das" say where to and name no place, and after a German article
-// only a country or a region is read ("in den Bergen" is the mountains).
+// Schweiz" and a capital "In" are read like "in the" and "in", and after "im" only a
+// region is read ("im DACH-Raum"; "Hi im Jordan" is "I'm Jordan"); "in die" and "in
+// das" say where to and name no place, and after a German article only a country or
+// a region is read ("in den Bergen" is the mountains).
 //
 // A person's location is read the other way (8 Oct 2026): it resolves to the
 // countries it names, through a country name ("Deutschland", "Österreich") or,
@@ -229,8 +230,8 @@ const regionNames: PlaceName[] = REGIONS
   .flatMap((r) => r.names.map((name) => ({ name, kind: 'region' as const, canon: r.key })));
 
 // The words that make a name a place a person is in or comes from. "based in" and "located in" end in "in". The
-// German "aus" and "bei" are the same words for the DACH members, and "im" is "in dem" (its article is read with it:
-// see GERMAN_ARTICLES). An article may stand between the preposition and the name: "in the Nordics", "in der
+// German "aus" and "bei" are the same words for the DACH members, and "im" is "in dem", after which only a region is
+// read (see readName). An article may stand between the preposition and the name: "in the Nordics", "in der
 // Schweiz", "aus den USA". Not "die" or "das": after "in" they say where to, not where ("Startups, die in die
 // DACH-Region expandieren wollen" are not there yet), so nothing after them is a place.
 const LOCATION_PREPOSITION_WORDS = ['based in', 'located in', 'in', 'im', 'from', 'within', 'across', 'throughout', 'near', 'aus', 'bei'];
@@ -468,9 +469,10 @@ function readName(preposition: string, article: string | undefined, name: string
   // start with one. After "from" the pair is as often a company or a school ("from Boston Consulting
   // Group"), so there only a place that stands alone counts, or one name joined by a hyphen ("from Berlin-Mitte").
   if (!canon && words.length > 1 && (!fromLike || !/[ \t]/.test(name))) canon = placeNamed(words[0]);
-  // "in den Bergen" is the mountains and "in dem Zug" a train: after a German article a town's name is a word. "im"
-  // is "in dem": "im DACH-Raum" is a region, "im Zug" a train.
-  if (canon && !fitsTheArticle(/^im$/i.test(preposition) ? 'dem' : article, canon)) return undefined;
+  // "in den Bergen" is the mountains and "in dem Zug" a train: after a German article a town's name is a word. After
+  // "im" ("in dem") only a region: "im DACH-Raum". Not a country: "Hi im Jordan" is "I'm Jordan" typed fast, and a
+  // country read there would be a hard filter the member never meant ("im Iran" reads nothing, which only widens).
+  if (canon && (/^im$/i.test(preposition) ? !regionByKey(canon) : !fitsTheArticle(article, canon))) return undefined;
   if (!canon) out.add(key); // a city or a place the code does not know
   return canon;
 }

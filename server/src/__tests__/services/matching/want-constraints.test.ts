@@ -1400,8 +1400,10 @@ describe('a German article: "in die" says where to, and only a country or a regi
 });
 
 // "im" (S4-b fix round 3) is the German "in dem": "Investoren in Berlin oder im DACH-Raum" read Berlin only, and the
-// strict filter shut out the members in the rest of DACH. "im" is read like "in" with a German article after it: a
-// country or a region, never a town ("Netzwerken im Zug" is a train) and never an ordinary word ("im Allgemeinen").
+// strict filter shut out the members in the rest of DACH. After "im" only a region is read: never a town ("Netzwerken
+// im Zug" is a train), never an ordinary word ("im Allgemeinen"), and never a country, because "Hi im Jordan" is "I'm
+// Jordan" typed fast, and a country read there would be a hard filter the member never meant. "im Iran" reads
+// nothing: the price, and a missed place only widens the list.
 describe('"im" (in dem)', () => {
   const read = (...fields: string[]) => [...(extractConstraints(fields).location ?? [])].sort();
   const inEveryField = (want: string) => [[want], [want, NEXT_FIELD], [NEXT_FIELD, want], [NEXT_FIELD, want, 'Eine Runde aufsetzen']];
@@ -1409,12 +1411,12 @@ describe('"im" (in dem)', () => {
   it.each([
     ['Investoren in Berlin oder im DACH-Raum', ['berlin', 'dach']],
     ['Investoren im DACH-Raum', ['dach']],
+    ['im DACH-Raum', ['dach']],
     ['Im DACH-Raum', ['dach']],
     ['Gründer im EU-Raum', ['eu']],
     ['Investoren im Benelux-Raum oder in Köln', ['benelux', 'cologne']],
     ['Investoren im DACH-Raum und in den Nordics', ['dach', 'nordics']],
-    ['Gründer im Iran', ['iran']],
-    ['Partner im Oman oder in den USA', ['oman', 'united states']],
+    ['Partner im Oman oder in den USA', ['united states']],
   ])('reads every place in "%s"', (want, expected) => {
     for (const fields of inEveryField(want)) expect([fields, read(...fields)]).toEqual([fields, expected]);
   });
@@ -1422,6 +1424,10 @@ describe('"im" (in dem)', () => {
   it.each([
     'Erfahrung im Allgemeinen', 'Gründer im Team', 'Erfahrung im Vertrieb', 'Netzwerken im Zug', 'Gründer im Kanton Zug',
     'Gründer im Silicon Valley', 'Hilfe im Marketing',
+    // "I'm" typed without its apostrophe, before a first name that is also a country
+    'Hi im Jordan, looking for fintech founders', 'im Chad', 'im Chad and I want to meet investors', 'Hi, im Mali',
+    // a country after "im" is not read either: accepted, it only widens the list
+    'im Iran', 'Gründer im Iran',
   ])('reads no place in "%s"', (want) => {
     for (const fields of inEveryField(want)) expect([fields, extractConstraints(fields).location]).toEqual([fields, null]);
   });
