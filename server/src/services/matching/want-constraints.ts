@@ -507,7 +507,8 @@ function placeAfterACity(city: string, key: string, canon: string | undefined, w
  * first, when the code knows it) and return where the list ends. An item is taken as the whole name it is and
  * nothing else: not by its first word, as the first place after a preposition is ("in Berlin and Jordan Smith" is
  * not Jordan), and an item the code does not know is dropped, as is a town after a German article ("in Köln und
- * den Bergen" is Köln). The item after a city and a comma is read beside that city (see placeAfterACity), and only
+ * den Bergen" is Köln); a compound that starts with a region's name is the region ("in Berlin oder der
+ * DACH-Region"). The item after a city and a comma is read beside that city (see placeAfterACity), and only
  * beside the item directly before it: in "Berlin, SF, NYC" the item before NYC is SF, no place, so NYC is a place of
  * its own and has nothing to do with Berlin.
  */
@@ -531,6 +532,9 @@ function readTheRestOfTheList(rest: string, start: number, places: string[]): nu
     const written = next[1].replace(/\./g, '');
     const key = fold(written);
     let canon = key === 'us' || key === 'usa' ? 'united states' : nameOf(key);
+    // A compound that starts with a region's name is that region ("oder der DACH-Region", "und dem DACH-Raum",
+    // "EU-Raum"), as it is after a preposition, where the scan reads the region and leaves the rest of the word.
+    if (!canon && written.includes('-')) canon = REGION_BY_NAME.get(fold(written.slice(0, written.indexOf('-'))));
     if (canon && !fitsTheArticle(joiner[2], canon)) canon = undefined;
     before = canon;
     const added = city === undefined ? canon : placeAfterACity(city, key, canon, written);

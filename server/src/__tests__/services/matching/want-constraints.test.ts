@@ -1441,6 +1441,42 @@ describe('"im" (in dem)', () => {
   });
 });
 
+// S4-b fix round 3: a region written as the first part of a compound ("DACH-Region", "DACH-Raum", "EU-Raum") was read
+// after a preposition ("in der DACH-Region": the scan reads the region and leaves the rest of the word), but not as a
+// later item of a list. "Investoren in Berlin oder der DACH-Region" read Berlin only, and the strict filter shut out
+// the members in the rest of DACH. A list item that is such a compound reads its region now, after an article or not.
+describe('a compound that starts with a region, as a later item of a list', () => {
+  const read = (...fields: string[]) => [...(extractConstraints(fields).location ?? [])].sort();
+  const inEveryField = (want: string) => [[want], [want, NEXT_FIELD], [NEXT_FIELD, want], [NEXT_FIELD, want, 'Eine Runde aufsetzen']];
+
+  it.each([
+    ['Investoren in Berlin oder der DACH-Region', ['berlin', 'dach']],
+    ['Gründer in Wien und dem DACH-Raum', ['dach', 'vienna']],
+    ['Investoren in Köln oder dem EU-Raum', ['cologne', 'eu']],
+    ['Gründer in Oslo und den Nordics-Ländern', ['nordics', 'oslo']],
+    ['Investoren in Deutschland und der Benelux-Region', ['benelux', 'germany']],
+    ['Investoren in Berlin, DACH-Region und London', ['berlin', 'dach', 'london']],
+  ])('reads every place in "%s"', (want, expected) => {
+    for (const fields of inEveryField(want)) expect([fields, read(...fields)]).toEqual([fields, expected]);
+  });
+
+  it.each([
+    'Investoren in Berlin oder der Start-up-Szene',
+    'Investoren in Berlin oder der Start-Up-Szene',
+    'Investoren in Berlin oder der Fintech-Szene',
+  ])('adds nothing for a compound that does not start with a region: "%s"', (want) => {
+    for (const fields of inEveryField(want)) expect([fields, read(...fields)]).toEqual([fields, ['berlin']]);
+  });
+
+  it('is satisfied by the people in the region, and by nobody else', () => {
+    const want = 'Investoren in Berlin oder der DACH-Region';
+    for (const location of ['Berlin, Germany', 'Wien, Österreich', 'Zürich, Schweiz', 'Greater Düsseldorf Area']) {
+      expect([location, satisfies(want, location)]).toEqual([location, true]);
+    }
+    for (const location of ['Paris, France', 'Austin, Texas']) expect([location, satisfies(want, location)]).toEqual([location, false]);
+  });
+});
+
 
 // I1: "Fintech founders and seed investors in the UK or continental Europe" read the UK only. The region is the second
 // place of a list, in lowercase or after a modifier, and was dropped; the other place alone became the strict filter
