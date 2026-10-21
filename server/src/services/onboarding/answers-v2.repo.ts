@@ -78,8 +78,8 @@ function confirmedLayer(row: StateRow): Layer {
   return out;
 }
 
-const ARRAYS = ['lookingToMeet', 'hopingToFind', 'canOffer', 'selfKinds'] as const;
-const TEXTS = ['meetOther', 'findOther', 'findSpecific', 'offerOther', 'selfOther'] as const;
+type ArrayField = 'lookingToMeet' | 'hopingToFind' | 'canOffer' | 'selfKinds';
+type TextField = 'meetOther' | 'findOther' | 'findSpecific' | 'offerOther' | 'selfOther';
 
 /**
  * What the screens show. Field by field, the first layer that says anything
@@ -99,19 +99,27 @@ function resolveAnswers(row: StateRow): { answers: OnboardingV2Answers; prefille
   const layers: Layer[] = row.onboarding_status === 'completed' ? [confirmed, draft] : [draft, confirmed];
 
   let prefilledFromV1 = false;
-  const pickArray = <K extends typeof ARRAYS[number]>(field: K): OnboardingV2Answers[K] => {
+  const pickArray = <K extends ArrayField>(field: K): OnboardingV2Answers[K] => {
     for (const layer of layers) if (layer[field] !== undefined) return layer[field] as OnboardingV2Answers[K];
     if (v1[field].length) prefilledFromV1 = true;
     return v1[field] as OnboardingV2Answers[K];
   };
-  const pickText = (field: typeof TEXTS[number]): string | null => {
+  const pickText = (field: TextField): string | null => {
     for (const layer of layers) if (layer[field] !== undefined) return layer[field] ?? null;
     return null;
   };
 
-  const a = {} as OnboardingV2Answers;
-  for (const f of ARRAYS) (a as unknown as Record<string, unknown>)[f] = pickArray(f);
-  for (const f of TEXTS) a[f] = pickText(f);
+  const a: OnboardingV2Answers = {
+    lookingToMeet: pickArray('lookingToMeet'),
+    meetOther: pickText('meetOther'),
+    hopingToFind: pickArray('hopingToFind'),
+    findOther: pickText('findOther'),
+    findSpecific: pickText('findSpecific'),
+    canOffer: pickArray('canOffer'),
+    offerOther: pickText('offerOther'),
+    selfKinds: pickArray('selfKinds'),
+    selfOther: pickText('selfOther'),
+  };
   // A box's words belong to its option: shown only while it is chosen.
   if (!a.lookingToMeet.includes('meet_other')) a.meetOther = null;
   if (!a.hopingToFind.includes('find_other')) a.findOther = null;
