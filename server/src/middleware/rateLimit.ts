@@ -241,7 +241,10 @@ export const peopleWriteLimiter = rateLimit({
 
 // Entities (21 Oct 2026). Reads are limited like the person brief, because any entity, and any member's
 // entities, can be asked for by id. Edits, joins and leaves share a write allowance. Creating has a small
-// hourly one of its own, because every new entity claims a name that nobody else can then take.
+// hourly one of its own, because every new entity claims a name that nobody else can then take. Only an
+// entity that was made uses it: a refusal (a name already taken, a name too short) claims no name, and
+// counting it told a member trying the name-clash flow they had added a lot of entities when they had
+// added none. The API limiter in front of every route still counts every request.
 export const entityReadLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
@@ -265,6 +268,7 @@ export const entityWriteLimiter = rateLimit({
 export const entityCreateLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 10,
+  skipFailedRequests: true,
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: userOrIpKey,
