@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { test, expect, Browser, BrowserContext, Locator, Page, WebSocketRoute } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
 import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/live-ui';
@@ -23,6 +24,8 @@ const ZONE = 'Europe/Berlin';
 // Anywhere else (a preview, production) a lookup is a paid request: a test that presses "Continue with LinkedIn" seeds
 // the outcome for its address first, and the server reuses it instead of starting one (final review, 21 Oct 2026).
 const LOCAL_API = /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(?:\/|$)/.test(SERVER);
+// Where the screens worth looking at are saved: E2E_SHOTS_DIR when it is set, as reason-m1.spec.ts does.
+const SHOTS = process.env.E2E_SHOTS_DIR ? path.resolve(process.env.E2E_SHOTS_DIR) : path.resolve(__dirname, '..', 'test-results');
 
 let browser: Browser;
 const ctxs: BrowserContext[] = [];
@@ -318,7 +321,12 @@ test('continue with LinkedIn: the link from the join form is in the box, the loo
   await throughWelcome(page);
 
   const sent: number[] = [];
-  page.on('response', r => { if (r.request().method() === 'POST' && /\/onboarding\/v2\/linkedin$/.test(new URL(r.url()).pathname)) sent.push(r.status()); });
+  const answered: Array<Promise<unknown>> = [];
+  page.on('response', r => {
+    if (r.request().method() !== 'POST' || !/\/onboarding\/v2\/linkedin$/.test(new URL(r.url()).pathname)) return;
+    sent.push(r.status());
+    if (r.ok()) answered.push(r.json().catch(() => null));
+  });
   await press(page, 'Continue with LinkedIn');
   const box = page.getByLabel('Your LinkedIn profile link');
   await expect(box).toHaveValue(`linkedin.com/in/${slug}`);
@@ -360,7 +368,20 @@ test('continue with LinkedIn: the link from the join form is in the box, the loo
   )).rows.map(r => r.stage);
   expect(stages).toContain('linkedin_connected');
   expect(stages).not.toContain('linkedin_skipped');
-  console.log(`  ✓ LinkedIn lookup ended as ${stages.filter(s => s.startsWith('enrich_')).join(', ') || '(none recorded)'}; finished by hand`);
+
+  // What the server did with the one address it accepted: its answer, and what it recorded.
+  expect(answered).toHaveLength(1);
+  const answer = (await answered[0]) as { data?: { status?: string } } | null;
+  const connected = (await pool.query<{ detail: { lookup?: string; status?: string } }>(
+    `SELECT detail FROM onboarding_stage_events WHERE user_id = $1 AND stage::text = 'linkedin_connected' ORDER BY created_at DESC LIMIT 1`, [me.id],
+  )).rows[0];
+  if (!LOCAL_API) {
+    // Money proof (fix round 1, T-1): the seeded outcome was reused and no lookup started. A lookup that had started
+    // answers 'searching' and records the decision 'start'.
+    expect(answer?.data?.status, 'the address was answered from the seeded outcome').toBe('not_found');
+    expect(connected?.detail, 'the server recorded that it looked nothing up').toMatchObject({ lookup: 'done', status: 'not_found' });
+  }
+  console.log(`  ✓ LinkedIn ${LOCAL_API ? 'looked up for real (local)' : 'answered without a lookup'}: answered ${answer?.data?.status}, recorded lookup=${connected?.detail?.lookup}; enrich stages ${stages.filter(s => s.startsWith('enrich_')).join(', ') || '(none)'}; finished by hand`);
 });
 
 test('LinkedIn found: details filled in and marked, Q4 picked from the role, and the photo used only when they keep it', async () => {
@@ -755,7 +776,9 @@ test('after the first confirm, the page a member followed a link to is honoured;
   await expect(tour).toBeVisible({ timeout: 30_000 });
   await page.evaluate(() => document.fonts.ready.then(() => true));
   await tapInView(page, page.getByRole('button', { name: /^Go to card 4/ }), 'the fourth dot');
-  await press(page, 'See my matches');
+  // It leaves them here, so its last button says Done, not "See my matches" (fix round 1, M-1).
+  await expect(button(page, 'See my matches')).toHaveCount(0);
+  await press(page, 'Done');
   await expect(tour).toHaveCount(0, { timeout: 20_000 });
   await page.waitForTimeout(1500);
   expect(pathOf(page), 'finishing the tour leaves them on the page they followed').toBe('/support');
@@ -787,47 +810,88 @@ test('after the first confirm, the page a member followed a link to is honoured;
   await press(fourth, 'Show me my matches');
   await expect.poll(() => pathOf(fourth), { timeout: 30_000 }).toBe('/');
   await expect(fourth.getByTestId('how-rsn-works')).toBeVisible({ timeout: 30_000 });
+  // On For You itself, where most members land, the last button is the deck's "See my matches".
+  await fourth.evaluate(() => document.fonts.ready.then(() => true));
+  await tapInView(fourth, fourth.getByRole('button', { name: /^Go to card 4/ }), 'the fourth dot on For You');
+  await expect(button(fourth, 'See my matches')).toBeVisible();
+  await expect(button(fourth, 'Done')).toHaveCount(0);
 });
 
-test('a finished member whose first edit makes the tour due stays on the page they changed it from when the tour closes', async () => {
-  test.setTimeout(240_000);
-  // Exactly how a member who finished before the tour existed looks: completed, version 2 answers, no tour stamp.
-  const me = await createTestUser('ob2firstedit');
-  made.push(me.id);
-  await pool.query(
-    `UPDATE users SET onboarding_version = 2, looking_to_meet = ARRAY['meet_investors']::text[], hoping_to_find = ARRAY['find_funding']::text[],
-       can_offer = ARRAY['offer_advice_mentoring']::text[], self_kinds = ARRAY['self_founder_owner']::text[], timezone = $2,
-       tour_due_at = NULL, tour_seen_at = NULL, tour_outcome = NULL
-     WHERE id = $1`,
-    [me.id, ZONE],
-  );
-  const page = await openAs(me, '/profile');
-  await expect(page.getByRole('heading', { name: 'Only you see this' })).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId('how-rsn-works')).toHaveCount(0);
-
-  // Your profile's Edit answers opens every answer on screen 7 (C2), and Save goes back.
-  const edit = page.getByRole('link', { name: 'Edit answers' });
-  await expect(edit).toHaveAttribute('href', '/onboarding?edit=profile');
-  await tapInView(page, edit, 'Edit answers');
-  await expect(heading(page, "Here's how others will see you")).toBeVisible({ timeout: 30_000 });
-  for (const q of ['Who would you like to meet?', 'What are you hoping to find?', 'What can you offer others?', 'How would you describe yourself?']) {
-    await expect(page.getByRole('button', { name: `Edit: ${q}` })).toBeVisible();
+/**
+ * The control is whole on screen and nothing lies over it: no toast's box touches it, and five points across it (the
+ * middle, and in from each side) are the control itself when the browser is asked what is there.
+ */
+async function expectWhole(page: Page, target: Locator, label: string) {
+  const box = (await target.boundingBox())!;
+  expect(box, `${label}: not drawn`).not.toBeNull();
+  const viewport = page.viewportSize()!;
+  expect(box.x >= 0 && box.y >= 0 && box.x + box.width <= viewport.width && box.y + box.height <= viewport.height, `${label}: not all inside the window`).toBe(true);
+  const toasts = await page.getByRole('button', { name: 'Dismiss notification' }).evaluateAll((list) =>
+    list.map((b) => { const r = (b.parentElement ?? b).getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; }));
+  for (const t of toasts) {
+    const overlaps = t.x < box.x + box.width && box.x < t.x + t.width && t.y < box.y + box.height && box.y < t.y + t.height;
+    expect(overlaps, `${label}: a toast lies over it`).toBe(false);
   }
-  await press(page, 'Save');
-  await expect.poll(() => pathOf(page), { timeout: 30_000 }).toBe('/profile');
+  const points = [[0.5, 0.5], [0.2, 0.5], [0.8, 0.5], [0.5, 0.25], [0.5, 0.75]].map(([fx, fy]) => ({ x: box.x + box.width * fx, y: box.y + box.height * fy }));
+  const covered = await target.evaluate((el, pts) => pts.filter((p) => { const hit = document.elementFromPoint(p.x, p.y); return !hit || !el.contains(hit); }).length, points);
+  expect(covered, `${label}: part of it is covered`).toBe(0);
+}
 
-  // The save made the tour due, and it opens here. Skipping it leaves them on Your profile. The save's toast sits over
-  // the top of the tour on a phone until it goes (2.5 seconds), as a person sees it: then Skip is pressed.
-  const tour = page.getByTestId('how-rsn-works');
-  await expect(tour).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText('Your changes are saved.')).toBeVisible();
-  await expect(page.getByText('Your changes are saved.')).toHaveCount(0, { timeout: 15_000 });
-  await press(page, 'Skip');
-  await expect(tour).toHaveCount(0, { timeout: 20_000 });
-  await page.waitForTimeout(1500);
-  expect(pathOf(page), 'the tour leaves them where edit mode brought them back').toBe('/profile');
-  expect((await pool.query(`SELECT tour_outcome FROM users WHERE id = $1`, [me.id])).rows[0].tour_outcome).toBe('skipped');
-});
+// Fix round 1 (M-1, M-7): at a small and a large phone. An existing member's first Edit answers save makes the tour due,
+// and its success toast sat over the tour's Skip for 2.5 seconds; and staying on the page, its last button said "See
+// my matches".
+for (const size of [{ width: 360, height: 740 }, { width: 390, height: 844 }]) {
+  test(`a finished member whose first edit makes the tour due (${size.width}x${size.height}): nothing covers the tour, it says Done, and it leaves them on the page they changed it from`, async () => {
+    test.setTimeout(240_000);
+    // Exactly how a member who finished before the tour existed looks: completed, version 2 answers, no tour stamp.
+    const me = await createTestUser(`ob2firstedit${size.width}`);
+    made.push(me.id);
+    await pool.query(
+      `UPDATE users SET onboarding_version = 2, looking_to_meet = ARRAY['meet_investors']::text[], hoping_to_find = ARRAY['find_funding']::text[],
+         can_offer = ARRAY['offer_advice_mentoring']::text[], self_kinds = ARRAY['self_founder_owner']::text[], timezone = $2,
+         tour_due_at = NULL, tour_seen_at = NULL, tour_outcome = NULL
+       WHERE id = $1`,
+      [me.id, ZONE],
+    );
+    const page = await openAs(me, '/profile', size);
+    await expect(page.getByRole('heading', { name: 'Only you see this' })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId('how-rsn-works')).toHaveCount(0);
+
+    // Your profile's Edit answers opens every answer on screen 7 (C2), and Save goes back.
+    const edit = page.getByRole('link', { name: 'Edit answers' });
+    await expect(edit).toHaveAttribute('href', '/onboarding?edit=profile');
+    await tapInView(page, edit, 'Edit answers');
+    await expect(heading(page, "Here's how others will see you")).toBeVisible({ timeout: 30_000 });
+    for (const q of ['Who would you like to meet?', 'What are you hoping to find?', 'What can you offer others?', 'How would you describe yourself?']) {
+      await expect(page.getByRole('button', { name: `Edit: ${q}` })).toBeVisible();
+    }
+    await press(page, 'Save');
+    await expect.poll(() => pathOf(page), { timeout: 30_000 }).toBe('/profile');
+
+    // The save made the tour due, and it opens here, at once with nothing over it: no saved toast (the tour, over the
+    // page they changed, says so), and Skip and the main button are whole and can be pressed.
+    const tour = page.getByTestId('how-rsn-works');
+    await expect(tour).toBeVisible({ timeout: 30_000 });
+    await expect(button(page, 'Next')).toBeFocused();
+    for (let look = 0; look < 3; look += 1) {
+      await expect(page.getByText('Your changes are saved.')).toHaveCount(0);
+      await expectWhole(page, button(page, 'Skip'), `look ${look + 1}: Skip`);
+      await expectWhole(page, button(page, 'Next'), `look ${look + 1}: Next`);
+      await page.waitForTimeout(400);
+    }
+    await page.screenshot({ path: `${SHOTS}/${engineLabel().replace(/[^a-z0-9]+/gi, '-')}-${size.width}x${size.height}-tour-after-first-edit.png` });
+
+    // It leaves them here, so its last button says Done, and Done leaves them on Your profile.
+    await tapInView(page, page.getByRole('button', { name: /^Go to card 4/ }), 'the fourth dot');
+    await expect(button(page, 'See my matches')).toHaveCount(0);
+    await expectWhole(page, button(page, 'Done'), 'Done');
+    await press(page, 'Done');
+    await expect(tour).toHaveCount(0, { timeout: 20_000 });
+    await page.waitForTimeout(1500);
+    expect(pathOf(page), 'the tour leaves them where edit mode brought them back').toBe('/profile');
+    expect((await pool.query(`SELECT tour_outcome FROM users WHERE id = $1`, [me.id])).rows[0].tour_outcome).toBe('completed');
+  });
+}
 
 test('screen 7: emptying a stored company sends "" so it is cleared, and a field never filled and left empty sends nothing', async () => {
   test.setTimeout(180_000);
@@ -843,7 +907,12 @@ test('screen 7: emptying a stored company sends "" so it is cleared, and a field
   await expect.poll(() => confirms.length, { timeout: 20_000 }).toBe(1);
   // The server's contract (the other half of this fix): missing or null keeps a value, "" clears it.
   expect(confirms[0].profile).toEqual({ displayName: 'Ana ob2clear', company: '', timezone: ZONE });
+  // This member has seen the tour, so the save says so; and "saved" is true: the company is gone (fix round 1, T-2).
   await expect(page.getByText('Your changes are saved.')).toBeVisible({ timeout: 20_000 });
+  await expect.poll(async () => (await pool.query<{ company: string | null; job_title: string | null; display_name: string }>(
+    `SELECT company, job_title, display_name FROM users WHERE id = $1`, [me.id],
+  )).rows[0], { message: 'the stored company is cleared, and nothing else is', timeout: 20_000 })
+    .toEqual({ company: null, job_title: null, display_name: 'Ana ob2clear' });
 });
 
 test('a refusal from the server is said inline, on the thing it is about, in the server\'s words', async () => {
