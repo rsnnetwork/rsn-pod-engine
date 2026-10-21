@@ -32,6 +32,7 @@ import { runMigrations } from './db/migrate';
 // Middleware
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { apiLimiter } from './middleware/rateLimit';
+import { noStore } from './middleware/no-store';
 import { authenticateSocketToken } from './middleware/auth';
 
 // Services
@@ -195,6 +196,7 @@ app.use('/api/webhooks', webhooksRouter);
 // single NAT gateway would trip the 100/min quota and cause false lockouts.
 // Since we now pin transports to WebSocket by default (see above), this
 // exemption is belt-and-braces for edge cases where polling is re-enabled.
+app.use('/api', noStore);
 app.use('/api', apiLimiter);
 
 // Request logging
