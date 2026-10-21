@@ -2,7 +2,7 @@
 // Everything the REASON pages read and write. Pages import all of it from here.
 import api from '@/lib/api';
 import type {
-  MatchStrength, MeetingFormat, OutcomeKey, PersonBrief, PersonResponse,
+  ConnectionList, MatchStrength, MeetingFormat, OutcomeKey, PersonBrief, PersonResponse,
   RecentConnection, WorthContinuing,
 } from '@rsn/shared';
 import type { PokeStatus } from './person';
@@ -39,6 +39,7 @@ export const reasonKeys = {
   forYou: ['reason', 'for-you'] as const,
   brief: (userId: string) => ['reason', 'brief', userId] as const,
   recent: ['reason', 'recent-connections'] as const,
+  connections: ['reason', 'connections'] as const,
 };
 
 // A member id is one encoded segment of an address. A route parameter arrives decoded, so a crafted
@@ -48,6 +49,9 @@ const memberSegment = (userId: string) => encodeURIComponent(userId);
 export const fetchForYou = () => api.get('/matches/platform').then((r) => r.data.data as ForYouPayload);
 export const fetchBrief = (userId: string) => api.get(`/people/${memberSegment(userId)}/brief`).then((r) => r.data.data as PersonBrief);
 export const fetchRecentConnections = () => api.get('/people/connections/recent').then((r) => r.data.data as RecentConnection[]);
+// One page of Your connections; `before` is the page already shown's nextBefore (none for the first page).
+export const fetchConnections = (before: string | null) =>
+  api.get('/people/connections', { params: before ? { before } : {} }).then((r) => r.data.data as ConnectionList);
 
 export const setPersonResponse = (userId: string, response: PersonResponse | null) =>
   response

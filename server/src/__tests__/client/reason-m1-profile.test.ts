@@ -321,7 +321,7 @@ describe('REASON api: a member id is data, never part of the path', () => {
 
   it('still exports every name the pages import', () => {
     expect(loadApi().exported).toEqual([
-      'errorMessage', 'fetchBrief', 'fetchForYou', 'fetchRecentConnections', 'personName', 'reasonKeys',
+      'errorMessage', 'fetchBrief', 'fetchConnections', 'fetchForYou', 'fetchRecentConnections', 'personName', 'reasonKeys',
       'recordOutcomeRequest', 'sendMeetRequest', 'setPersonResponse', 'stateFromPoke',
     ]);
   });
