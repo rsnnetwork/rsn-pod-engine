@@ -3,6 +3,7 @@ import { io, Socket } from 'socket.io-client';
 import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers/auth';
 import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
 import { profileLinkSelector } from '../helpers/profile-link';
+import { skipEventCheckIn } from '../helpers/event-check-in';
 
 // HEADED mobile-event smoke vs PRODUCTION — every surface a phone user
 // touches, INCLUDING the host running the event from a phone:
@@ -110,6 +111,8 @@ test.beforeAll(async () => {
     args: [
       '--use-fake-device-for-media-stream',
       '--use-fake-ui-for-media-stream',
+      // Chromium 147+ on Windows loses the fake camera through Media Foundation capture, and every tile stays empty.
+      '--disable-features=MediaFoundationD3D11VideoCapture',
       '--autoplay-policy=no-user-gesture-required',
       '--disable-background-timer-throttling',
       '--disable-renderer-backgrounding',
@@ -136,13 +139,15 @@ test('mobile event: main room, buttons, chat, host-on-phone, breakout, rating �
   const bobS = await openUserPage(bob);
   const alicePage = aliceS.page, hostPage = hostS.page, bobPage = bobS.page;
   await alicePage.waitForTimeout(10_000); // lobby mounts + cameras publish
+  // The check-in question covers the top bar until it is skipped.
+  await Promise.all([skipEventCheckIn(alicePage), skipEventCheckIn(hostPage), skipEventCheckIn(bobPage)]);
 
   // ── 1. MAIN ROOM on phones ──
   await assertNoHorizontalOverflow(alicePage, 'alice main room @360');
   await assertNoHorizontalOverflow(hostPage, 'HOST main room @390');
-  const aliceVideos = await alicePage.locator('video').count();
-  console.log(`  alice videos in main room: ${aliceVideos}`);
-  expect(aliceVideos, 'video tiles render on the phone').toBeGreaterThan(0);
+  // Three cameras join one after another, so the tiles are waited for rather than counted at one moment.
+  await expect.poll(() => alicePage.locator('video').count(), { timeout: 45_000, message: 'video tiles render on the phone' }).toBeGreaterThan(0);
+  console.log(`  alice videos in main room: ${await alicePage.locator('video').count()}`);
   await alicePage.screenshot({ path: 'test-results/wsm-01-alice-mainroom-360.png' }).catch(() => {});
   await hostPage.screenshot({ path: 'test-results/wsm-02-host-mainroom-390.png' }).catch(() => {});
 
