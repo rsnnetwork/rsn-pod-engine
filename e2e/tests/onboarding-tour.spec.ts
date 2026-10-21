@@ -119,6 +119,8 @@ test('it explains the product once, then never again', async () => {
   const page = await openAs(me, '/agents');
 
   await expect(tour(page)).toBeVisible({ timeout: 30_000 });
+  // Opening on its own, it takes the keyboard's focus, on its main button (final review C7).
+  await expect(page.getByRole('button', { name: /^Next$/ })).toBeFocused();
   // It is called what the product is called, on screen and to a screen reader.
   await expect(tour(page)).toHaveAttribute('aria-label', 'How REASON works');
   await expect(tour(page).getByText('How REASON works', { exact: true })).toBeVisible();
@@ -265,6 +267,62 @@ test('it can be opened again from Support, without changing how it was left, and
   )).rows[0];
   expect(row.tour_outcome).toBe('skipped');
   console.log('  ✓ replayable from Support, it stayed on Support and left the record alone');
+});
+
+// Final review, 21 Oct 2026 (C7): the tour never took the keyboard's focus, and every card change handed it back to the
+// page behind the dialog.
+test('the keyboard: focus goes into the tour as it opens, stays in it through every card, and comes back once to what opened it', async () => {
+  test.setTimeout(180_000);
+  const me = await justOnboarded('tourkeys');
+  expect((await apiAs(me, 'POST', '/onboarding/tour', { outcome: 'skipped' })).status).toBe(200);
+  const page = await openAs(me, '/support', { width: 1280, height: 800 });
+  const open = page.getByRole('button', { name: /Open the tour/i });
+  await expect(open).toBeVisible({ timeout: 30_000 });
+  // Count every time focus lands on the button that opened it.
+  await open.evaluate((el) => {
+    (window as unknown as { openerFocus: number }).openerFocus = 0;
+    el.addEventListener('focus', () => { (window as unknown as { openerFocus: number }).openerFocus += 1; });
+  });
+  const openerFocus = () => page.evaluate(() => (window as unknown as { openerFocus: number }).openerFocus);
+  const focusInTour = () => page.evaluate(() => {
+    const dialog = document.querySelector('[data-testid="how-rsn-works"]');
+    const at = document.activeElement;
+    return { inside: !!dialog && !!at && dialog.contains(at), text: (at?.textContent ?? '').trim() };
+  });
+
+  await open.focus();
+  // Counted from here: the focus the test just gave it is not one the tour handed back.
+  await page.evaluate(() => { (window as unknown as { openerFocus: number }).openerFocus = 0; });
+  await page.keyboard.press('Enter');
+  await expect(tour(page)).toBeVisible();
+  // It opens with focus on its main button, so Enter moves on at once.
+  await expect.poll(focusInTour).toEqual({ inside: true, text: 'Next' });
+
+  const seen = [TITLES[0]];
+  for (const title of TITLES.slice(1)) {
+    await page.keyboard.press('Enter');
+    await expect(tour(page).getByRole('heading', { name: title })).toBeVisible();
+    seen.push(title);
+    expect((await focusInTour()).inside, `${title}: focus is still in the tour`).toBe(true);
+  }
+  expect(seen).toEqual(TITLES);
+  await expect.poll(focusInTour).toEqual({ inside: true, text: 'Done' });
+  // The arrows move too, and Tab goes round inside the dialog without leaving it.
+  await page.keyboard.press('ArrowLeft');
+  await expect(tour(page).getByRole('heading', { name: 'Meetings' })).toBeVisible();
+  for (let i = 0; i < 12; i += 1) {
+    await page.keyboard.press(i % 3 === 2 ? 'Shift+Tab' : 'Tab');
+    expect((await focusInTour()).inside, `Tab ${i + 1}: focus stays in the tour`).toBe(true);
+  }
+  expect(await openerFocus(), 'focus never went back to the page behind while the tour was open').toBe(0);
+
+  // Closing hands it back, once, to the button that opened it.
+  await page.keyboard.press('Escape');
+  await expect(tour(page)).toHaveCount(0);
+  await expect(open).toBeFocused();
+  await page.waitForTimeout(500);
+  expect(await openerFocus()).toBe(1);
+  console.log('  ✓ focus: into the tour on open, kept through four cards, the arrows and Tab, and back once on close');
 });
 
 test('when saving it fails, it says so inside the dialog and can be tried again', async () => {
