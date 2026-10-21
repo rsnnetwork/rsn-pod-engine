@@ -8,19 +8,25 @@
 //                     company), stores exactly what was typed, and Back returns to /entities with the sheet closed and
 //                     the entity under "Your entities" with the member's role
 //   2 the name taken  the same name in other case and spacing: "There is already an entity called X." Open it opens it;
-//                     Join it joins with the role and title chosen in the form, and no second entity is made
+//                     Join it waits until the lookup says you are not linked, then joins with the role and title chosen
+//                     in the form, and no second entity is made; once linked, only Open it is offered
 //   3 join, change, leave
 //                     a member who is not linked joins with a role, changes role and title, and leaves; the admin's page,
 //                     open in another window the whole time, follows each step without a reload
 //   4 Human Profile   a person's entities with role and title, each opening the entity; with none, the company, or
 //                     "No organisation shared yet"
-//   5 edit, archive   only an admin sees Edit and Archive; an edit sends only what changed; Archive asks first, returns
-//                     to the list without "not available" ever showing on the way, and the entity's page then says it
-//                     is not available
+//   4b Your profile   your own entities with role and title, each opening the entity, and "Add your company" (to the
+//                     create sheet); with none, "Show where you work."
+//   5 edit, archive   only an admin sees Edit and Archive; an edit sends only what changed; Archive asks first, its
+//                     sheet waits for the answer (Escape, Close and the backdrop do nothing while "Archiving…"),
+//                     returns to the list without "not available" ever showing on the way, and the entity's page then
+//                     says it is not available; a member's Human Profile open elsewhere drops it without a reload
 //   6 last one out    leaving an entity you are alone in warns first, archives it and returns you to the list, the
 //                     same way
 //   7 widths          /entities and an entity page at 360, 390, 768, 1024 and 1440: no sideways scroll, and two cards a
 //                     row only from 1024px
+//   8 a failed search is said under the search box, which keeps what was typed (and the focus); your entities stay;
+//                     Try again asks again
 //
 // Every page is watched: a script error fails the test (the browser's own console line for the 409 a test asks for
 // is not a script error).
@@ -226,26 +232,41 @@ test('1 create: the sheet from the address, a refused name, then your company on
   expect(errors).toEqual([]);
 });
 
-test('2 the name taken: Open it opens it, Join it joins it with the role from the form', async () => {
+test('2 the name taken: Open it opens it, Join it joins it with the role from the form, and only once it is known you are not linked', async () => {
   test.setTimeout(240_000);
   const { page, errors } = await openAs(ben, DESKTOP);
   const taken = `  ${NAME.toUpperCase().replace(/ /g, '   ')} `;
-  const tryToCreate = async () => {
+  const tryToCreate = async (title: string) => {
     await page.getByRole('button', { name: 'Create your company' }).click();
     const sheet = createSheet(page);
     await expect(sheet).toBeVisible();
     await field(sheet, 'Name').fill(taken);
     await field(sheet, 'Your role').selectOption('employee');
-    await field(sheet, 'Your title').fill('Engineer');
+    await field(sheet, 'Your title').fill(title);
     await sheet.getByRole('button', { name: 'Create', exact: true }).click();
+    // In the entity's own spelling once it is looked up, and as typed until then (getByText ignores case).
     await expect(sheet.getByText(`There is already an entity called ${NAME}.`)).toBeVisible({ timeout: SLOW });
-    await expect(sheet.getByText('You can join it instead, as Employee.')).toBeVisible();
     return sheet;
   };
 
   await gotoRetry(page, `${APP}/entities`);
   await expect(page.getByRole('heading', { name: 'Entities', exact: true, level: 1 })).toBeVisible({ timeout: SLOW });
-  let sheet = await tryToCreate();
+  // The lookup of the entity that has the name is held back: until it answers nobody knows whether Ben is linked, and
+  // a Join it pressed for someone who is would change their role instead (review, fix round 1).
+  let releaseLookup = () => undefined as void;
+  const lookupHeld = new Promise<void>((resolve) => { releaseLookup = resolve; });
+  const lookup = (url: URL) => url.pathname.endsWith(`/api/entities/${entityId}`);
+  await page.route(lookup, async (route) => {
+    if (route.request().method() === 'GET') await lookupHeld;
+    await route.continue();
+  });
+  let sheet = await tryToCreate('Engineer');
+  await expect(sheet.getByText('Checking it…')).toBeVisible();
+  await expect(sheet.getByRole('button', { name: 'Join it' }), 'no Join it before the lookup answers').toHaveCount(0);
+  releaseLookup();
+  await expect(sheet.getByText('You can join it instead, as Employee.')).toBeVisible({ timeout: SLOW });
+  await expect(sheet.getByRole('button', { name: 'Join it' })).toBeVisible();
+  await page.unroute(lookup);
   await sheet.getByRole('link', { name: 'Open it' }).click();
   await expect(page).toHaveURL(new RegExp(`/entities/${entityId}$`));
   await expect(page.getByRole('heading', { name: `Are you part of ${NAME}?` })).toBeVisible({ timeout: SLOW });
@@ -254,12 +275,23 @@ test('2 the name taken: Open it opens it, Join it joins it with the role from th
   await expect(page).toHaveURL(/\/entities$/);
   await expect(page.getByRole('dialog')).toHaveCount(0);
 
-  sheet = await tryToCreate();
+  sheet = await tryToCreate('Engineer');
+  await expect(sheet.getByText('You can join it instead, as Employee.')).toBeVisible();
   await sheet.getByRole('button', { name: 'Join it' }).click();
   await expect(page).toHaveURL(new RegExp(`/entities/${entityId}$`), { timeout: SLOW });
   await expect(page.getByText(`You joined ${NAME}.`)).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Employee', level: 2 })).toBeVisible();
   await expect(page.getByText('Your title here: Engineer.')).toBeVisible();
+
+  // Linked now: the same name again offers only Open it, and nothing about Ben's link changes.
+  await page.getByRole('button', { name: '← Back' }).click();
+  await expect(page).toHaveURL(/\/entities$/);
+  sheet = await tryToCreate('');
+  await expect(sheet.getByText('You are already linked to it, as Employee.')).toBeVisible({ timeout: SLOW });
+  await expect(sheet.getByRole('button', { name: 'Join it' })).toHaveCount(0);
+  await expect(sheet.getByRole('link', { name: 'Open it' })).toBeVisible();
+  await sheet.getByRole('button', { name: 'Cancel' }).click();
+  await expect(sheet).toBeHidden();
 
   const same = await pool.query(`SELECT count(*)::int AS n FROM entities WHERE lower(name) = lower($1) AND archived_at IS NULL`, [NAME]);
   expect(same.rows[0].n, 'no second entity with the same name').toBe(1);
@@ -341,8 +373,41 @@ test('4 the Human Profile lists a person\'s entities, each opening its page; wit
   expect([...errors, ...viewer.errors]).toEqual([]);
 });
 
-test('5 edit and archive: admins only, the edit sends what changed, the archive asks first', async () => {
+test('4b Your profile lists your own entities with role and title, and always offers Add your company', async () => {
   test.setTimeout(240_000);
+  const { page, errors } = await openAs(ana, PHONE);
+  await gotoRetry(page, `${APP}/profile`);
+  await expect(page.getByRole('heading', { name: 'The entities around you.' })).toBeVisible({ timeout: SLOW });
+  const row = page.getByRole('link', { name: new RegExp(`${NAME}.*Founder · CEO`) });
+  await expect(row).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Add your company' })).toHaveAttribute('href', '/entities?create=1');
+  await page.getByRole('heading', { name: 'The entities around you.' }).scrollIntoViewIfNeeded();
+  await shot(page, 'profile-with-entities');
+  await row.click();
+  await expect(page).toHaveURL(new RegExp(`/entities/${entityId}$`));
+  await expect(page.getByRole('heading', { name: NAME, level: 1 })).toBeVisible({ timeout: SLOW });
+
+  // None (Cleo left the one she joined): the old words, and the way to add one.
+  const none = await openAs(cleo, PHONE);
+  await gotoRetry(none.page, `${APP}/profile`);
+  await expect(none.page.getByRole('heading', { name: 'Show where you work.' })).toBeVisible({ timeout: SLOW });
+  await expect(none.page.getByText('Add your company and your role in it. Members see it on your profile.')).toBeVisible();
+  await none.page.getByRole('heading', { name: 'Show where you work.' }).scrollIntoViewIfNeeded();
+  await shot(none.page, 'profile-without-entities');
+  await none.page.getByRole('link', { name: 'Add your company' }).click();
+  await expect(createSheet(none.page), 'Add your company opens the create sheet').toBeVisible({ timeout: SLOW });
+  expect([...errors, ...none.errors]).toEqual([]);
+});
+
+test('5 edit and archive: admins only, the edit sends what changed, the archive asks first and its sheet waits for the answer', async () => {
+  test.setTimeout(240_000);
+  // Ben is linked to the entity and has Ana's Human Profile open the whole time: its "Entities & roles" must drop the
+  // entity the moment it is archived, without a reload (review, fix round 1: it stayed as a link to a closed page).
+  const watcher = await openAs(ben, PHONE);
+  await gotoRetry(watcher.page, `${APP}/people/${ana.id}`);
+  const onAnasProfile = watcher.page.getByRole('link', { name: new RegExp(NAME) });
+  await expect(onAnasProfile).toBeVisible({ timeout: SLOW });
+
   const { page, errors } = await openAs(ana, DESKTOP);
   const goneSeen = await watchForGone(page);
   await gotoRetry(page, `${APP}/entities/${entityId}`);
@@ -368,13 +433,33 @@ test('5 edit and archive: admins only, the edit sends what changed, the archive 
   await confirm.getByRole('button', { name: 'Cancel' }).click();
   await expect(confirm, 'Cancel leaves it as it was').toBeHidden();
   expect((await pool.query(`SELECT archived_at FROM entities WHERE id = $1`, [entityId])).rows[0].archived_at).toBeNull();
+
+  // The archive is held a moment: while it says "Archiving…", Escape, Close and the backdrop leave the sheet open, and
+  // Cancel is off, so the answer (a failure too) is said where the member is looking (review, fix round 1).
+  let releaseArchive = () => undefined as void;
+  const archiveHeld = new Promise<void>((resolve) => { releaseArchive = resolve; });
+  const theEntity = (url: URL) => url.pathname.endsWith(`/api/entities/${entityId}`);
+  await page.route(theEntity, async (route) => {
+    if (route.request().method() === 'DELETE') await archiveHeld;
+    await route.continue();
+  });
   await page.getByRole('button', { name: 'Archive', exact: true }).click();
   await confirm.getByRole('button', { name: 'Archive', exact: true }).click();
+  await expect(confirm.getByRole('button', { name: 'Archiving…' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await confirm.getByRole('button', { name: 'Close' }).click();
+  await page.mouse.click(8, 8);
+  await expect(confirm, 'the sheet waits for the answer').toBeVisible();
+  await expect(confirm.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+  releaseArchive();
   await expect(page).toHaveURL(/\/entities$/, { timeout: SLOW });
+  await page.unroute(theEntity);
   await expect(page.getByText(`${NAME} is archived.`)).toBeVisible();
   await expect(page.locator(`a[data-entity-id="${entityId}"]`)).toHaveCount(0);
   expect(await goneSeen(), 'never "not available" on the way to the list').toEqual([]);
   expect((await pool.query(`SELECT archived_at FROM entities WHERE id = $1`, [entityId])).rows[0].archived_at).not.toBeNull();
+  await expect(onAnasProfile, 'the Human Profile drops the archived entity without a reload').toHaveCount(0, { timeout: 20_000 });
+  expect(watcher.errors).toEqual([]);
 
   await gotoRetry(page, `${APP}/entities/${entityId}`);
   await expect(page.getByRole('heading', { name: 'This entity is not available.' })).toBeVisible({ timeout: SLOW });
@@ -423,4 +508,34 @@ test('7 widths: no sideways scroll, and two cards a row only from 1024px', async
     await shot(page, `${size.width}-entity`);
     expect(errors, `${where}: script errors`).toEqual([]);
   }
+});
+
+test('8 a search that fails is said under the box, which keeps what was typed, and Try again asks again', async () => {
+  test.setTimeout(240_000);
+  const { page, errors } = await openAs(ana, DESKTOP);
+  await gotoRetry(page, `${APP}/entities`);
+  const mine = page.locator('section[aria-labelledby="your-entities-title"] a[data-entity-id]');
+  await expect(mine).toHaveCount(2, { timeout: SLOW });
+  // Every search (a list request with q=) fails until it is let through; the page's own list is not touched.
+  let failing = true;
+  const searches = (url: URL) => url.pathname.endsWith('/api/entities') && url.searchParams.has('q');
+  await page.route(searches, (route) => (failing
+    ? route.fulfill({ status: 500, contentType: 'application/json', body: '{"success":false,"error":{"code":"INTERNAL_ERROR","message":"x"}}' })
+    : route.continue()));
+  const box = page.getByRole('searchbox', { name: 'Search entities' });
+  await box.fill('wide');
+  const failed = page.getByRole('heading', { name: 'We could not search just now.' });
+  await expect(failed).toBeVisible({ timeout: SLOW });
+  await expect(box, 'the box stays, with what was typed').toHaveValue('wide');
+  await expect(box, 'and keeps the focus').toBeFocused();
+  await expect(mine, 'your entities stay').toHaveCount(2);
+  await expect(page.getByRole('heading', { name: 'We could not load entities just now.' }), 'the page itself did not fail').toHaveCount(0);
+  await shot(page, 'search-failed');
+  failing = false;
+  await page.getByRole('button', { name: 'Try again' }).click();
+  await expect(failed).toHaveCount(0, { timeout: SLOW });
+  // Both "Wide" entities are Ana's own, so the others hold none, and the page says so.
+  await expect(page.getByText('Only your own entities have “wide” in their name.')).toBeVisible();
+  await page.unroute(searches);
+  expect(errors).toEqual([]);
 });
