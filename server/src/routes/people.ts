@@ -1,4 +1,5 @@
 // ─── People (REASON milestone 1, 29 Sep 2026) ────────────────────────────────
+// GET    /people/connections        ?limit=30&before=<ISO>  (21 Oct 2026)
 // GET    /people/connections/recent
 // GET    /people/me/card            (21 Oct 2026) your own public card, exactly what others see
 // GET    /people/:userId/brief
@@ -16,8 +17,20 @@ import { fanoutUserEntity } from '../realtime/fanout';
 import * as responses from '../services/people/person-response.service';
 import * as outcomes from '../services/people/meeting-outcome.service';
 import * as brief from '../services/people/person-brief.service';
+import * as connections from '../services/people/connections.service';
 
 const router = Router();
+
+// Your connections, a page at a time: 30 people unless fewer are asked for, and never more than 50. `before` is
+// the nextBefore of the page already shown, an ISO time.
+const CONNECTIONS_PAGE = 30;
+const CONNECTIONS_PAGE_MAX = 50;
+const connectionsQuery = z.object({
+  limit: z.coerce.number().int().min(1).optional()
+    .transform((n) => Math.min(n ?? CONNECTIONS_PAGE, CONNECTIONS_PAGE_MAX)),
+  before: z.string().datetime({ offset: true }).optional(),
+});
+type ConnectionsQuery = z.infer<typeof connectionsQuery>;
 
 // Postgres reads an upper-case uuid as the same member, but the services compare
 // ids as plain strings (yourself, the ordered pair), so the id is lower-cased here.
@@ -32,9 +45,26 @@ const outcomeBody = z.object({
 type ResponseBody = z.infer<typeof responseBody>;
 type OutcomeBody = z.infer<typeof outcomeBody>;
 
-// The two reads change nothing, so they emit nothing. They are limited per member all the
-// same: the brief can be aimed at any member by id. /connections/recent comes first so it
-// is never taken for a member id.
+// The reads change nothing, so they emit nothing. They are limited per member all the
+// same, and share one allowance: the brief can be aimed at any member by id. The two
+// /connections routes come first so neither is ever taken for a member id.
+
+router.get(
+  '/connections',
+  authenticate,
+  peopleReadLimiter,
+  validate(connectionsQuery, 'query'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      // validate() has replaced req.query with the parsed value; Express still types it as raw strings.
+      const { limit, before }: ConnectionsQuery = req.query as unknown as ConnectionsQuery;
+      const data = await connections.listConnections(req.user!.userId, { limit, before: before ?? null });
+      res.json({ success: true, data } as ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 router.get('/connections/recent', authenticate, peopleReadLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {

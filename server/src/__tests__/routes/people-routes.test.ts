@@ -36,6 +36,11 @@ jest.mock('../../services/people/person-brief.service', () => ({
   getOwnCard: (...a: unknown[]) => mockCard(...a),
   __esModule: true,
 }));
+const mockConnections = jest.fn().mockResolvedValue({ items: [], nextBefore: null });
+jest.mock('../../services/people/connections.service', () => ({
+  listConnections: (...a: unknown[]) => mockConnections(...a),
+  __esModule: true,
+}));
 const mockFanout = jest.fn().mockResolvedValue(undefined);
 jest.mock('../../realtime/fanout', () => ({ fanoutUserEntity: (...a: unknown[]) => mockFanout(...a), __esModule: true }));
 
@@ -268,6 +273,7 @@ describe('the routes are rate limited', () => {
   // The brief can be aimed at any member by id, so it is limited like the writes are: per member, and
   // only once the member is known.
   it.each([
+    ['get', '/connections'],
     ['get', '/connections/recent'],
     ['get', '/me/card'],
     ['get', '/:userId/brief'],
@@ -297,8 +303,11 @@ describe('the read limiter', () => {
     expect(refused.status).toBe(429);
     expect(refused.body).toEqual({ success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } });
     expect((await request(app).get('/people/connections/recent').set(heavy)).status).toBe(429);
+    // Your connections draws on the same allowance.
+    expect((await request(app).get('/people/connections').set(heavy)).status).toBe(429);
     expect(mockBrief).not.toHaveBeenCalled();
     expect(mockRecent).not.toHaveBeenCalled();
+    expect(mockConnections).not.toHaveBeenCalled();
 
     // Someone else is not held up, and neither are this member's own Save and Pass.
     expect((await request(app).get(`/people/${TARGET}/brief`).set({ Authorization: `Bearer ${token('u-other')}` })).status).toBe(200);
@@ -314,6 +323,76 @@ describe('the read limiter', () => {
     expect((await request(app).put(`/people/${TARGET}/response`).set(saver).send({ response: 'saved' })).status).toBe(429);
     expect((await request(app).get(`/people/${TARGET}/brief`).set(saver)).status).toBe(200);
     expect((await request(app).get('/people/connections/recent').set(saver)).status).toBe(200);
+    expect((await request(app).get('/people/connections').set(saver)).status).toBe(200);
+  });
+});
+
+// Your connections (21 Oct 2026): the People screen's first tab, a page at a time.
+describe('GET /people/connections', () => {
+  const auth = { Authorization: `Bearer ${token()}` };
+  const BEFORE = '2026-10-01T09:30:00.000Z';
+
+  it('answers with the service\'s page under data, for the member who is asking, 30 people unless asked for fewer', async () => {
+    const page = {
+      items: [{ userId: TARGET, displayName: 'Sarah Chen', avatarUrl: null, jobTitle: 'Founder', company: 'Harbor', how: 'met', since: BEFORE }],
+      nextBefore: BEFORE,
+    };
+    mockConnections.mockResolvedValueOnce(page);
+    const res = await request(app).get('/people/connections').set(auth);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, data: page });
+    expect(mockConnections).toHaveBeenCalledWith('u-viewer', { limit: 30, before: null });
+    // A read changes nothing, so it tells no screens.
+    expect(mockFanout).not.toHaveBeenCalled();
+  });
+
+  it('passes the cursor and the page size on as asked', async () => {
+    const res = await request(app).get(`/people/connections?limit=10&before=${encodeURIComponent(BEFORE)}`).set(auth);
+    expect(res.status).toBe(200);
+    expect(mockConnections).toHaveBeenCalledWith('u-viewer', { limit: 10, before: BEFORE });
+  });
+
+  it('takes a cursor with an offset as well as one in UTC', async () => {
+    const res = await request(app).get(`/people/connections?before=${encodeURIComponent('2026-10-01T11:30:00.000+02:00')}`).set(auth);
+    expect(res.status).toBe(200);
+    expect(mockConnections).toHaveBeenCalledWith('u-viewer', { limit: 30, before: '2026-10-01T11:30:00.000+02:00' });
+  });
+
+  it('never gives more than 50 at a time: a bigger page is cut to 50', async () => {
+    const res = await request(app).get('/people/connections?limit=500').set(auth);
+    expect(res.status).toBe(200);
+    expect(mockConnections).toHaveBeenCalledWith('u-viewer', { limit: 50, before: null });
+  });
+
+  it.each([
+    ['a page of none', 'limit=0'],
+    ['a negative page', 'limit=-3'],
+    ['a page that is not a number', 'limit=lots'],
+    ['part of a person', 'limit=2.5'],
+    ['two page sizes', 'limit=2&limit=3'],
+    ['a cursor that is not a time', 'before=yesterday'],
+    ['an empty cursor', 'before='],
+    ['a date with no time', 'before=2026-10-01'],
+  ])('refuses %s with a 400, before the service is asked', async (_what, qs) => {
+    const res = await request(app).get(`/people/connections?${qs}`).set(auth);
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(mockConnections).not.toHaveBeenCalled();
+  });
+
+  it('refuses a member who is not signed in', async () => {
+    expect((await request(app).get('/people/connections')).status).toBe(401);
+    expect(mockConnections).not.toHaveBeenCalled();
+  });
+
+  it('is never taken for a member id: it is registered before the brief, and connections/recent still answers on its own', async () => {
+    const paths = (peopleRoutes as unknown as { stack: Array<{ route?: { path: string } }> }).stack
+      .flatMap((layer) => (layer.route ? [layer.route.path] : []));
+    expect(paths.indexOf('/connections')).toBeGreaterThanOrEqual(0);
+    expect(paths.indexOf('/connections')).toBeLessThan(paths.indexOf('/:userId/brief'));
+    expect((await request(app).get('/people/connections/recent').set(auth)).status).toBe(200);
+    expect(mockRecent).toHaveBeenCalledWith('u-viewer');
+    expect(mockConnections).not.toHaveBeenCalled();
   });
 });
 

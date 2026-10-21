@@ -99,3 +99,27 @@ export interface RecentConnection {
   avatarUrl: string | null;
   connectedAt: string;
 }
+
+// ─── Your connections (21 Oct 2026) ──────────────────────────────────────────
+// GET /people/connections: everyone the member is connected to or has met, one row per person,
+// newest first (client feedback, 19 Oct: "On the People page, show the user's own connections first").
+
+/** Met (at an event, or in a 1:1 meeting both joined) wins over connected (an accepted request, or a conversation). */
+export type ConnectionHow = 'connected' | 'met';
+
+export interface PersonConnection {
+  userId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  jobTitle: string | null;
+  company: string | null;
+  how: ConnectionHow;
+  /** The latest date of anything between the two (a request accepted, a conversation started, a meeting), ISO. */
+  since: string;
+}
+
+export interface ConnectionList {
+  items: PersonConnection[];
+  /** Ask again with ?before= this for the next people; null when there are no more. */
+  nextBefore: string | null;
+}
