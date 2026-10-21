@@ -17,9 +17,8 @@ import type {
   OnboardingStatus, OnboardingV2Answers, OnboardingV2State, OnboardingV2Step, TourOutcome,
 } from '@rsn/shared';
 import { v2FromV1, isMeetV2Key, isFindV2Key, isOfferV2Key, isSelfV2Key } from './answers-v2.map';
-import { linkedinBlock, asResult } from './linkedin-v2';
-import { getCachedEnrichment, sameTitle, type EnrichmentStatus } from './enrichment.repo';
-import type { EnrichResult } from './enrichment.service';
+import { linkedinBlock, sourcesFromRow, type LinkedinRow } from './linkedin-v2';
+import { getCachedEnrichment, sameTitle } from './enrichment.repo';
 import {
   wantTextV2, intentTextV2, offerTextV2, roleTitlesV2, reasonsV2, desiredDesignationsV2,
 } from '../matching/option-signals';
@@ -28,7 +27,8 @@ import type { DraftInputV2, ConfirmInputV2 } from './answers-v2.schema';
 
 type Draft = Partial<OnboardingV2Answers> & { step?: OnboardingV2Step };
 
-interface StateRow {
+/** The member's row, their intent profile and their approval-time lookup, as getState selects them. */
+interface StateRow extends LinkedinRow {
   onboarding_status: OnboardingStatus;
   onboarding_version: number | null;
   display_name: string | null;
@@ -37,7 +37,6 @@ interface StateRow {
   company: string | null;
   industry: string | null;
   timezone: string | null;
-  linkedin_url: string | null;
   tour_due_at: Date | null;
   tour_seen_at: Date | null;
   tour_outcome: TourOutcome | null;
@@ -52,11 +51,6 @@ interface StateRow {
   offer_other: string | null;
   self_other: string | null;
   draft: Draft | null;
-  enriched: unknown;
-  enrichment_status: EnrichmentStatus | null;
-  enrichment_started_at: Date | string | null;
-  enrichment_completed_at: Date | string | null;
-  preload: unknown;
 }
 
 const iso = (v: Date | string | null): string | null => (v == null ? null : new Date(v).toISOString());
@@ -142,6 +136,7 @@ export async function getState(userId: string): Promise<OnboardingV2State> {
             p.onboarding_draft->'v2' AS draft,
             p.inferred_profile->'enriched' AS enriched,
             p.enrichment_status, p.enrichment_started_at, p.enrichment_completed_at,
+            p.inferred_profile->'lastLookup'->>'linkedinUrl' AS lookup_url,
             jr.enriched AS preload
        FROM users u
        LEFT JOIN user_intent_profiles p ON p.user_id = u.id
@@ -174,17 +169,7 @@ export async function getState(userId: string): Promise<OnboardingV2State> {
       timezone: row.timezone,
       linkedinUrl: row.linkedin_url,
     },
-    linkedin: linkedinBlock({
-      currentUrl: row.linkedin_url,
-      state: {
-        status: row.enrichment_status ?? 'none',
-        startedAt: iso(row.enrichment_started_at),
-        completedAt: iso(row.enrichment_completed_at),
-      },
-      ownCache: asResult<EnrichResult>(row.enriched),
-      preload: asResult<EnrichResult & { provider?: string | null }>(row.preload),
-      now: Date.now(),
-    }),
+    linkedin: linkedinBlock(sourcesFromRow(row)),
     tour: {
       // Only someone who just finished is shown the tour.
       pending: !!row.tour_due_at && !row.tour_seen_at,

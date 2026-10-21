@@ -6,23 +6,22 @@
 // is involved. This replaces the 23 Sep "photo only" rule for v2.
 //
 // The lookup costs money, so asking twice never pays twice. A lookup only
-// starts when nothing is running and no result exists for that address. The
-// enrichment state does not record which address it ran for; lookups always
-// run for the address on the member's row, so "for that address" is read as
-// "the address on the row before this request was the same one".
+// starts when nothing is running and no result exists for that address.
+//
+// Fix round 1 (21 Oct 2026): "for that address" is the address the lookup
+// RECORDED it ran for (inferred_profile.lastLookup, written with every state
+// by enrichment.repo setEnrichmentState), never the address on the member's
+// row, which their own profile edit writes without any lookup.
 //
 // The address is normalised here with the same rules Task 2 uses for join
 // requests (that code lives in the join-request route; the two are kept apart
 // for now and should share one helper later).
 
-import { query, transaction } from '../../db';
+import { query } from '../../db';
 import logger from '../../config/logger';
 import { NotFoundError, ValidationError } from '../../middleware/errors';
 import { linkedinSlug, type EnrichResult } from './enrichment.service';
-import {
-  getCachedEnrichment, getEnrichmentState, saveEnrichedCandidate, setEnrichmentState,
-  type EnrichmentDbState,
-} from './enrichment.repo';
+import { saveEnrichedCandidate, setEnrichmentState, type EnrichmentStatus } from './enrichment.repo';
 import { runEnrichment, isFreshCacheHit, SEARCHING_LOCK_MS } from './enrichment.orchestrator';
 import { statusFromResult } from './providers/registry';
 import { selfGuessFromRole } from '../matching/option-signals';
@@ -82,21 +81,30 @@ export type LookupDecision =
   /** This address was looked up recently and that is the answer. */
   | 'done';
 
-type StateTimes = Pick<EnrichmentDbState, 'status' | 'startedAt' | 'completedAt'>;
+/** The member's enrichment state, and the address the lookup it describes ran for. */
+export interface LookupState {
+  status: EnrichmentStatus;
+  startedAt: string | null;
+  completedAt: string | null;
+  /** inferred_profile.lastLookup.linkedinUrl; null when not recorded or a lookup for no address. */
+  lookupUrl: string | null;
+}
+
+type StateTimes = Pick<LookupState, 'status' | 'startedAt' | 'completedAt'>;
 
 const runningNow = (s: StateTimes, now: number) =>
   s.status === 'searching' && !!s.startedAt && now - Date.parse(s.startedAt) < SEARCHING_LOCK_MS;
 
 export function planLinkedinLookup(input: {
   requestedSlug: string;
-  /** The slug of the address on the member's row before this request. */
-  previousSlug: string | null;
+  /** The slug of the address the state's lookup ran for, as recorded; null when not recorded. */
+  lookupSlug: string | null;
   state: StateTimes;
   /** A fresh result for the requested address exists (their own, or the approval-time one). */
   usable: boolean;
   now: number;
 }): LookupDecision {
-  const sameAddress = input.previousSlug === input.requestedSlug;
+  const sameAddress = input.lookupSlug !== null && input.lookupSlug === input.requestedSlug;
   if (runningNow(input.state, input.now)) return sameAddress ? 'running' : 'queue';
   if (input.usable) return 'reuse';
   if (sameAddress && input.state.completedAt) {
@@ -145,45 +153,107 @@ function blockFrom(result: EnrichResult): OnboardingV2Linkedin {
 export interface LinkedinSources {
   /** users.linkedin_url */
   currentUrl: string | null;
-  state: StateTimes;
+  state: LookupState;
   ownCache: EnrichResult | null;
   preload: Preload | null;
   now: number;
 }
 
-/** The linkedin block of the onboarding state. A prefill only ever comes from a result for the current address. */
+/**
+ * The linkedin block of the onboarding state. A prefill only ever comes from a
+ * result for the current address, and "not found" or "failed" only ever from
+ * a lookup recorded as having been for it: an address the member changed on
+ * their profile page, never looked up, is 'none'.
+ */
 export function linkedinBlock(s: LinkedinSources): OnboardingV2Linkedin {
   if (!s.currentUrl) return { status: 'none' };
+  // A lookup is running. It may be the one before this address's own, which is queued behind it.
   if (runningNow(s.state, s.now)) return { status: 'searching' };
   const usable = usableResult(s.currentUrl, s.ownCache, s.preload);
   if (usable) return blockFrom(usable.result);
+  const lookupSlug = linkedinSlug(s.state.lookupUrl);
+  if (!lookupSlug || lookupSlug !== linkedinSlug(s.currentUrl)) return { status: 'none' };
   // A lookup that never reached an end (the server restarted under it) failed.
   if (s.state.status === 'searching') return { status: 'failed' };
   if (s.state.status === 'not_found' || s.state.status === 'failed') return { status: s.state.status };
   return { status: 'none' };
 }
 
-/** The lookup made when the member was approved, read by email, as the photo and first sign-in do. */
-async function approvalPreload(userId: string): Promise<Preload | null> {
-  const r = await query<{ enriched: Preload | null }>(
-    `SELECT jr.enriched
-       FROM join_requests jr
-       JOIN users u ON lower(u.email) = lower(jr.email)
-      WHERE u.id = $1
-        AND jr.status = 'approved'
-        AND COALESCE((jr.enriched->>'confidence')::numeric, 0) > 0
-      ORDER BY jr.reviewed_at DESC NULLS LAST
-      LIMIT 1`,
-    [userId],
-  );
-  return asResult(r.rows[0]?.enriched);
-}
-
 export function asResult<T extends EnrichResult>(v: unknown): T | null {
   return v && typeof v === 'object' && typeof (v as { confidence?: unknown }).confidence === 'number' ? (v as T) : null;
 }
 
-/** Copy the approval-time result onto the member, exactly as first sign-in does when it has landed. */
+/** The columns a LinkedIn decision reads, as linkedinSources() and the onboarding state select them. */
+export interface LinkedinRow {
+  linkedin_url: string | null;
+  enrichment_status: EnrichmentStatus | null;
+  enrichment_started_at: Date | string | null;
+  enrichment_completed_at: Date | string | null;
+  /** inferred_profile->'lastLookup'->>'linkedinUrl' */
+  lookup_url: string | null;
+  /** inferred_profile->'enriched' */
+  enriched: unknown;
+  /** The approved join request's enriched blob. */
+  preload: unknown;
+}
+
+const iso = (v: Date | string | null): string | null => (v == null ? null : new Date(v).toISOString());
+
+export function sourcesFromRow(row: LinkedinRow, now = Date.now()): LinkedinSources {
+  return {
+    currentUrl: row.linkedin_url,
+    state: {
+      status: row.enrichment_status ?? 'none',
+      startedAt: iso(row.enrichment_started_at),
+      completedAt: iso(row.enrichment_completed_at),
+      lookupUrl: row.lookup_url,
+    },
+    ownCache: asResult<EnrichResult>(row.enriched),
+    preload: asResult<Preload>(row.preload),
+    now,
+  };
+}
+
+/**
+ * Everything a LinkedIn decision reads, in one query: the address on the
+ * profile, the state and the address its lookup ran for, the member's own
+ * result, and the lookup made when they were approved (read by email, as the
+ * photo and first sign-in do).
+ */
+async function linkedinSources(userId: string): Promise<{ sources: LinkedinSources; displayName: string | null } | null> {
+  const r = await query<LinkedinRow & { display_name: string | null }>(
+    `SELECT u.linkedin_url, u.display_name,
+            p.enrichment_status, p.enrichment_started_at, p.enrichment_completed_at,
+            p.inferred_profile->'lastLookup'->>'linkedinUrl' AS lookup_url,
+            p.inferred_profile->'enriched' AS enriched,
+            jr.enriched AS preload
+       FROM users u
+       LEFT JOIN user_intent_profiles p ON p.user_id = u.id
+       LEFT JOIN LATERAL (
+         SELECT j.enriched FROM join_requests j
+          WHERE lower(j.email) = lower(u.email) AND j.status = 'approved'
+          ORDER BY j.reviewed_at DESC NULLS LAST
+          LIMIT 1
+       ) jr ON TRUE
+      WHERE u.id = $1`,
+    [userId],
+  );
+  const row = r.rows[0];
+  return row ? { sources: sourcesFromRow(row), displayName: row.display_name } : null;
+}
+
+/**
+ * The prefill the onboarding state shows the member right now, or null. The
+ * confirm takes the photo ("Keep this photo") and decides whether a title was
+ * kept as LinkedIn had it from this, so neither can come from a result the
+ * member was never shown.
+ */
+export async function shownPrefill(userId: string): Promise<OnboardingV2LinkedinPrefill | null> {
+  const loaded = await linkedinSources(userId);
+  return loaded ? linkedinBlock(loaded.sources).prefill ?? null : null;
+}
+
+/** Copy the approval-time result onto the member, as first sign-in does when it has landed, recorded as for its address. */
 async function adoptPreload(userId: string, preload: Preload): Promise<void> {
   await saveEnrichedCandidate(userId, preload);
   await setEnrichmentState(userId, {
@@ -191,6 +261,7 @@ async function adoptPreload(userId: string, preload: Preload): Promise<void> {
     source: preload.provider ?? null,
     startedAt: preload.enrichedAt,
     completedAt: preload.enrichedAt,
+    linkedinUrl: preload.requestedLinkedinUrl,
   });
 }
 
@@ -236,30 +307,23 @@ export async function connectLinkedin(userId: string, rawUrl: string): Promise<C
   const linkedinUrl = normaliseLinkedinProfileUrl(rawUrl);
   if (!linkedinUrl) throw new ValidationError(LINKEDIN_URL_MESSAGE, { url: [LINKEDIN_URL_MESSAGE] });
 
-  // The row lock makes a double press read the address the first press saved.
-  const before = await transaction(async (client) => {
-    const cur = await client.query<{ linkedin_url: string | null; display_name: string | null }>(
-      `SELECT linkedin_url, display_name FROM users WHERE id = $1 FOR UPDATE`,
-      [userId],
-    );
-    const row = cur.rows[0];
-    if (!row) throw new NotFoundError('User', userId);
-    await client.query(`UPDATE users SET linkedin_url = $2, updated_at = NOW() WHERE id = $1`, [userId, linkedinUrl]);
-    return row;
-  });
+  const saved = await query<{ display_name: string | null }>(
+    `UPDATE users SET linkedin_url = $2, updated_at = NOW() WHERE id = $1 RETURNING display_name`,
+    [userId, linkedinUrl],
+  );
+  if (!saved.rows[0]) throw new NotFoundError('User', userId);
+  const displayName = saved.rows[0].display_name;
 
-  const [state, ownCache, preload] = await Promise.all([
-    getEnrichmentState(userId),
-    getCachedEnrichment(userId).catch(() => null),
-    approvalPreload(userId).catch(() => null),
-  ]);
-  const usable = usableResult(linkedinUrl, ownCache, preload);
+  const loaded = await linkedinSources(userId);
+  if (!loaded) throw new NotFoundError('User', userId);
+  const { sources } = loaded;
+  const usable = usableResult(linkedinUrl, sources.ownCache, sources.preload);
   const decision = planLinkedinLookup({
     requestedSlug: linkedinSlug(linkedinUrl)!,
-    previousSlug: linkedinSlug(before.linkedin_url),
-    state,
+    lookupSlug: linkedinSlug(sources.state.lookupUrl),
+    state: sources.state,
     usable: !!usable,
-    now: Date.now(),
+    now: sources.now,
   });
 
   if (decision === 'reuse' && usable) {
@@ -267,10 +331,12 @@ export async function connectLinkedin(userId: string, rawUrl: string): Promise<C
     return { linkedin: blockFrom(usable.result), linkedinUrl, decision };
   }
   if (decision === 'done') {
-    return { linkedin: { status: state.status as 'not_found' | 'failed' }, linkedinUrl, decision };
+    return { linkedin: { status: sources.state.status as 'not_found' | 'failed' }, linkedinUrl, decision };
   }
   if (decision === 'start' || decision === 'queue') {
-    startLookup(userId, linkedinUrl, before.display_name, decision === 'queue');
+    // A double press runs this twice before the first lookup has written its
+    // state: runEnrichment hands the second call the first one's lookup.
+    startLookup(userId, linkedinUrl, displayName, decision === 'queue');
   }
   return { linkedin: { status: 'searching' }, linkedinUrl, decision };
 }
