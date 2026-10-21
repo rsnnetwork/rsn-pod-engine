@@ -29,6 +29,7 @@ jest.mock('../../../index', () => ({
 }));
 
 import logger from '../../../config/logger';
+import { canBring } from '@rsn/shared';
 import { REQUEST_MESSAGE_MAX } from '../../../services/poke/request-message';
 import {
   scoreFit, scoreWants, scoreWantsForRecipient, wantedDesignations, getPlatformMatches, expressInterest,
@@ -279,6 +280,23 @@ describe('getPlatformMatches', () => {
     expect(offer('u-none')).toBeNull();
     expect(offer('u-long')).toHaveLength(160);
     expect(offer('u-long')!.endsWith('…')).toBe(true);
+  });
+
+  // 21 Oct 2026 (final review): "They can bring" reads the offer by the Human Profile's own rule (canBring,
+  // in @rsn/shared), so a card and the profile it opens never show one offer two ways. An answer with no
+  // letter or digit in it ('.', '…', '!!!') is no answer: the card goes on to their expertise, or shows none.
+  it.each([
+    ['an offer of only punctuation falls through to their expertise', { whatICanHelpWith: '...', expertiseText: 'early stage SaaS investing' }, 'early stage SaaS investing'],
+    ['an offer of an ellipsis, with no expertise, is no offer', { whatICanHelpWith: '…', expertiseText: null }, null],
+    ['an offer of exclamation marks and expertise of dashes is no offer', { whatICanHelpWith: '!!!', expertiseText: '- - -' }, null],
+    ['an offer of an emoji alone is no offer', { whatICanHelpWith: '🙂', expertiseText: null }, null],
+    ['a real offer is the offer', { whatICanHelpWith: 'Seed cheques and intros', expertiseText: 'early stage SaaS investing' }, 'Seed cheques and intros'],
+  ])('%s, as the Human Profile shows it', async (_what, offer, expected) => {
+    armQueries({ me: { ...FOUNDER_SEEKING_INVESTORS, onboardingCompleted: true }, candidates: [{ ...INVESTOR, ...offer }] });
+    const res = await getPlatformMatches('u-founder');
+    expect(res.matches.map(m => m.userId)).toEqual(['u-investor']); // the premise: they are on the list
+    expect(res.matches[0].theyCanBring).toBe(expected);
+    expect(res.matches[0].theyCanBring).toBe(canBring({ ...INVESTOR, ...offer }));
   });
 
   it('no card carries another member\'s wants: only their public offer, role and industry', async () => {

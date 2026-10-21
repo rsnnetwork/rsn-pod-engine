@@ -34,7 +34,7 @@ import * as pokeService from '../poke/poke.service';
 import { UserPoke } from '../poke/poke.service';
 import { clip, clipAtWord } from '../people/text';
 import { REQUEST_MESSAGE_MAX } from '../poke/request-message';
-import type { MatchStrength, MeetingFormat } from '@rsn/shared';
+import { canBring, type MatchStrength, type MeetingFormat } from '@rsn/shared';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -625,9 +625,10 @@ export async function getPlatformMatches(
       company: x.c.company,
       industry: x.c.industry ?? null,
       // Only what the person chose to offer. Their wants (who they want to meet, their
-      // intent, their goals) stay private: Stefan's approved point 1. A blank offer
-      // falls through to their expertise, and clip() turns blank text into null.
-      theyCanBring: clip(x.c.whatICanHelpWith) ?? clip(x.c.expertiseText),
+      // intent, their goals) stay private: Stefan's approved point 1. Read by the Human
+      // Profile's own rule (canBring), so a card and the profile it opens agree: an offer
+      // with no letter or digit in it falls through to their expertise, or to null.
+      theyCanBring: canBring(x.c),
       saved: x.c.saved === true,
       strength: strengthOf(x.fit.score),
       reason: x.fit.reason,
