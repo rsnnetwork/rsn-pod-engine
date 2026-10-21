@@ -12,7 +12,8 @@ import { X, User, Briefcase, MapPin, Globe, Languages, Sparkles, Camera, Info, T
 import api from '@/lib/api';
 import OnboardingWelcomeModal from '@/features/onboarding/OnboardingWelcomeModal';
 import { EDIT_ANSWERS_TO } from '@/features/reason/profile/your-profile-text';
-import { LINKEDIN_LINK_HELP, normalizeLinkedinInput } from '@/features/auth/linkedin-link';
+import { LINKEDIN_LINK_HELP } from '@/features/auth/linkedin-link';
+import { linkedinBoxValue, linkedinSave } from './linkedin-box';
 import { visibleText } from '@/features/reason/person';
 
 interface ProfileForm {
@@ -194,7 +195,7 @@ export default function ProfilePage() {
     }
   }, [hash, userId]);
 
-  const { register, handleSubmit, reset, setError, formState: { isSubmitting, isDirty, errors } } = useForm<ProfileForm>();
+  const { register, handleSubmit, reset, setError, formState: { isSubmitting, isDirty, errors, dirtyFields } } = useForm<ProfileForm>();
   const [tagsChanged, setTagsChanged] = useState(false);
 
   useEffect(() => {
@@ -208,7 +209,7 @@ export default function ProfilePage() {
         jobTitle: user.jobTitle || '',
         industry: user.industry || '',
         location: user.location || '',
-        linkedinUrl: (user.linkedinUrl || '').replace(/^https?:\/\/(www\.)?linkedin\.com\/in\//i, ''),
+        linkedinUrl: linkedinBoxValue(user.linkedinUrl),
         timezone: user.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || '',
         phone: (user as any).phone || '',
         expertiseText: (user as any).expertiseText || '',
@@ -260,17 +261,19 @@ export default function ProfilePage() {
   const handleSetLanguages = (t: string[]) => { setLanguages(t); setTagsChanged(true); };
 
   const onSubmit = async (data: ProfileForm) => {
-    // The request form's clean-up (final review, 21 Oct 2026): a name, or any form of a profile link, becomes
-    // https://www.linkedin.com/in/<name>, with no share query; an empty box sends ''; anything else is said under the field.
-    const linkedinUrl = normalizeLinkedinInput(data.linkedinUrl);
-    if (linkedinUrl === null) {
+    // LinkedIn is checked and sent only when the member changed the box (linkedin-box.ts): then the request form's
+    // clean-up makes it https://www.linkedin.com/in/<name>, an emptied box sends '', and anything else is said under the
+    // field. An address they did not touch never blocks a save and is never rewritten.
+    const { linkedinUrl: typedLinkedin, ...fields } = data;
+    const linkedin = linkedinSave(typedLinkedin, !!dirtyFields.linkedinUrl);
+    if (linkedin.kind === 'refuse') {
       setError('linkedinUrl', { message: LINKEDIN_LINK_HELP }, { shouldFocus: true });
       return;
     }
     try {
       await api.put('/users/me', {
-        ...data,
-        linkedinUrl,
+        ...fields,
+        ...(linkedin.kind === 'send' ? { linkedinUrl: linkedin.url } : {}),
         interests,
         reasonsToConnect: reasons,
         languages,
