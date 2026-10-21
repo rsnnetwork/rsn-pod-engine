@@ -34,6 +34,7 @@ import * as pokeService from '../poke/poke.service';
 import { UserPoke } from '../poke/poke.service';
 import { clip, clipAtWord } from '../people/text';
 import { REQUEST_MESSAGE_MAX } from '../poke/request-message';
+import { isReservedTestAddress } from '../identity/reserved-address';
 import { canBring, type MatchStrength, type MeetingFormat } from '@rsn/shared';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -765,11 +766,16 @@ export async function notifyMatchesOfNewUser(newUserId: string): Promise<number>
 
     // 29 Sep 2026: a member who chose not to appear in suggestions must not be
     // announced to others as "someone new matches" either.
-    const visibility = await query<{ profile_visible: boolean }>(
-      `SELECT profile_visible FROM users WHERE id = $1`,
+    const visibility = await query<{ profile_visible: boolean; email: string | null }>(
+      `SELECT profile_visible, email FROM users WHERE id = $1`,
       [newUserId],
     );
     if (visibility.rows[0]?.profile_visible === false) return 0;
+    // 21 Oct 2026: nor is an account on an address no person can have. Production
+    // end-to-end runs finish onboarding as throwaway members on reserved domains,
+    // and real members were belled about accounts deleted minutes later. Agents
+    // are not run for them either, so no one's search holds them.
+    if (isReservedTestAddress(visibility.rows[0]?.email)) return 0;
 
     const notifiedByAgent = await notifyAgentsOfNewUser(newUserId);
 

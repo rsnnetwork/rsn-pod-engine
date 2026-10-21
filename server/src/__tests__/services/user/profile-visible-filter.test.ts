@@ -64,7 +64,7 @@ describe('profile visibility is honoured', () => {
     };
     mockQuery.mockImplementation((sql: string) => {
       if (/WHERE u\.id = \$1/.test(sql)) return Promise.resolve({ rows: [newcomer] });
-      if (/SELECT profile_visible FROM users/.test(sql)) return Promise.resolve({ rows: [{ profile_visible: false }] });
+      if (/SELECT profile_visible\b[\s\S]*?FROM users WHERE id = \$1/.test(sql)) return Promise.resolve({ rows: [{ profile_visible: false }] });
       if (/WHERE u\.id <> \$1/.test(sql)) return Promise.resolve({ rows: [member] });
       if (/INSERT INTO notifications/.test(sql)) return Promise.resolve({ rows: [{ id: 'n1', created_at: new Date() }] });
       return Promise.resolve({ rows: [] });
