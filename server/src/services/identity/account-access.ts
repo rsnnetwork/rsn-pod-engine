@@ -24,7 +24,7 @@ import { fanoutAdminEntities, fanoutUserEntity } from '../../realtime/fanout';
 const CLOSED_MESSAGE =
   'This account was closed. Ask to join again, and you can sign in as soon as you are approved.';
 const SUSPENDED_MESSAGE =
-  'This account is suspended. Please contact the RSN team if you think this is a mistake.';
+  'This account is suspended. Please contact the REASON team if you think this is a mistake.';
 
 /** The member-facing refusal for an account that cannot sign in, or null when it can. */
 export function signInRefusal(status: string | null | undefined): { code: ErrorCode; message: string } | null {

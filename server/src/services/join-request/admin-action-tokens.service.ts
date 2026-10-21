@@ -313,7 +313,7 @@ export async function confirmActionToken(rawToken: string): Promise<ConfirmResul
 
     query(
       `INSERT INTO notifications (user_id, type, title, body, link, created_at)
-         SELECT id, 'approval', 'Welcome to RSN!',
+         SELECT id, 'approval', 'Welcome to REASON!',
                 'Your request to join has been approved. Start exploring!', '/pods', NOW()
            FROM users WHERE LOWER(email) = LOWER($1)
           LIMIT 1`,

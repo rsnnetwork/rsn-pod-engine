@@ -340,7 +340,7 @@ router.post(
           const calendarEvent = await buildSessionCalendarEvent(req.params.id);
           await emailService.sendSessionRegistrationConfirmationEmail(u.email, {
             recipientName: u.display_name || undefined,
-            sessionTitle: calendarEvent?.title ?? 'your RSN event',
+            sessionTitle: calendarEvent?.title ?? 'your REASON event',
             sessionUrl: `${config.clientUrl}/sessions/${req.params.id}`,
             calendarEvent,
           });

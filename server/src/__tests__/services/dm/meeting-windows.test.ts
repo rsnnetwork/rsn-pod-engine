@@ -49,9 +49,12 @@ jest.mock('../../../services/orchestration/handlers/dm-handlers', () => ({
 // calendar + email services so we can assert the invite is sent without hitting
 // Resend.
 const mockSendMtgEmail = jest.fn().mockResolvedValue(undefined);
+// What the calendar entry is asked to say, kept so a test can read the words (21 Oct 2026: REASON).
+const mockIcsInputs: Array<Record<string, unknown>> = [];
+const mockGoogleInputs: Array<Record<string, unknown>> = [];
 jest.mock('../../../services/calendar/calendar.service', () => ({
-  generateIcsContent: () => 'ICSCONTENT',
-  buildGoogleCalendarUrl: () => 'https://calendar.google.com/x',
+  generateIcsContent: (input: Record<string, unknown>) => { mockIcsInputs.push(input); return 'ICSCONTENT'; },
+  buildGoogleCalendarUrl: (input: Record<string, unknown>) => { mockGoogleInputs.push(input); return 'https://calendar.google.com/x'; },
   __esModule: true,
 }));
 jest.mock('../../../services/email/email.service', () => ({
@@ -453,6 +456,52 @@ describe('confirmWindow', () => {
     expect(mockSendMtgEmail).toHaveBeenCalledTimes(2);
     const recipients = mockSendMtgEmail.mock.calls.map(c => c[0]).sort();
     expect(recipients).toEqual(['ana@example.com', 'bo@example.com']);
+  });
+
+  // 21 Oct 2026 (the client, 19 Oct): "Call it REASON everywhere". The entry that lands in each
+  // person's calendar is a "REASON meeting", arranged on REASON, organised by the person who confirmed it.
+  describe('the calendar entry the two people get says REASON', () => {
+    async function confirmWithEmails(confirmerName: string | null) {
+      const windowKey = futureKey(3, 'afternoon');
+      const day = windowKey.split(':')[0];
+      const startAt = new Date(`${day}T14:00:00Z`).toISOString();
+      mockQuery.mockImplementation((sql: string) => {
+        if (/FROM dm_conversations WHERE id/.test(sql)) return Promise.resolve({ rows: [CONV] });
+        if (/FROM meeting_availability/.test(sql)) return Promise.resolve({ rows: [
+          { user_id: 'u-a', window_key: windowKey }, { user_id: 'u-b', window_key: windowKey },
+        ] });
+        if (/FROM users WHERE id = ANY/.test(sql)) return Promise.resolve({ rows: [
+          { id: 'u-a', display_name: confirmerName, email: 'ana@example.com', timezone: 'Europe/Berlin' },
+          { id: 'u-b', display_name: 'Bo', email: 'bo@example.com', timezone: 'America/New_York' },
+        ] });
+        return Promise.resolve({ rows: [{ id: 'n1', created_at: NOW }] });
+      });
+      mockIcsInputs.length = 0;
+      mockGoogleInputs.length = 0;
+      await confirmWindow('conv-1', 'u-a', windowKey, { startAt, durationMin: 45 });
+    }
+
+    it('is titled "REASON meeting" and says it was arranged on REASON, in the file and in the Google link', async () => {
+      await confirmWithEmails('Ana');
+
+      expect(mockIcsInputs.map(i => i.title)).toEqual(['REASON meeting', 'REASON meeting']);
+      expect(mockIcsInputs.map(i => i.description)).toEqual([
+        'A 1:1 meeting arranged on REASON with Bo.',
+        'A 1:1 meeting arranged on REASON with Ana.',
+      ]);
+      expect(mockGoogleInputs).toHaveLength(1);
+      expect(mockGoogleInputs[0]).toMatchObject({ title: 'REASON meeting', description: 'A 1:1 meeting arranged on REASON.' });
+    });
+
+    it('is organised by the person who confirmed it', async () => {
+      await confirmWithEmails('Ana');
+      expect(mockIcsInputs.map(i => i.organizerName)).toEqual(['Ana', 'Ana']);
+    });
+
+    it('is organised by REASON when the person who confirmed it has no name on file', async () => {
+      await confirmWithEmails(null);
+      expect(mockIcsInputs.map(i => i.organizerName)).toEqual(['REASON', 'REASON']);
+    });
   });
 
   it('rejects an exact time in the past', async () => {
