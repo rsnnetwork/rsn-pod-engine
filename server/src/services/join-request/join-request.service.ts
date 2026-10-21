@@ -19,7 +19,8 @@ export interface JoinRequest {
   id: string;
   fullName: string;
   email: string;
-  linkedinUrl: string;
+  /** NULL when the applicant gave none (optional since 21 Oct 2026); older rows may hold an empty string. */
+  linkedinUrl: string | null;
   reason: string;
   status: 'pending' | 'approved' | 'declined';
   reviewedBy: string | null;
@@ -41,7 +42,7 @@ export interface JoinRequest {
 interface CreateJoinRequestInput {
   fullName: string;
   email: string;
-  linkedinUrl: string;
+  linkedinUrl: string | null;
   reason: string;
 }
 
@@ -294,6 +295,8 @@ export async function reviewJoinRequest(
     (async (): Promise<void> => {
       const provider = resolveEnrichProvider();
       if (provider === 'none') return;
+      // LinkedIn is optional on the form: with no address (NULL, or an empty string in older rows) there
+      // is nothing to look up, and no paid lookup is run. Approval itself never depends on it.
       const linkedinUrl = normalizeLinkedinUrl(reviewed.linkedinUrl);
       if (!linkedinUrl) return;
       const outcome = await runProvider(provider, {
