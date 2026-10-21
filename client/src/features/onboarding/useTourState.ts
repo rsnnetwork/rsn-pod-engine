@@ -31,6 +31,8 @@ export function useTourState() {
 
   return {
     pending: !!data?.tour.pending,
+    /** The last save did not go through. The tour stays open until the server says it was seen, so it has to say why. */
+    failed: markSeen.isError,
     markSeen: (outcome: 'completed' | 'skipped') => markSeen.mutate(outcome),
   };
 }

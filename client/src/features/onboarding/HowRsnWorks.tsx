@@ -1,22 +1,28 @@
-// ─── How RSN works ───────────────────────────────────────────────────────────
+// ─── How REASON works ────────────────────────────────────────────────────────
 //
 // Shradha's deck, task 2: "A guided tour of the platform's value and core
-// features, ending in a clear next step." The complaint it answers is
-// "Users are never told what RSN is or how it works" and "after onboarding,
-// users are left with no guidance on next steps."
+// features, ending in a clear next step." The complaint it answers is that
+// members were never told what the product is or how it works, and that after
+// onboarding they were left with no guidance on next steps.
 //
 // Four cards, swiped or clicked, skippable, and re-openable later from Support.
 // Each one explains a thing the member will actually see, in the deck's own
 // words. The pictures are small mock-ups built from the real interface rather
 // than screenshots, because everything they show is being redesigned this same
 // week and a screenshot taken today would be wrong by Friday.
+//
+// 19 Oct 2026, the client's feedback on the preview: the pictures showed made-up
+// people ("They confuse people"), so nobody is in them any more: where a person
+// would be there is the sheep, and where their words would be there is a grey
+// bar. The heading and the description now come first and the picture under
+// them, and finishing the tour (OnboardingTour) lands on For You.
 
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
-import { Check, CalendarClock, Users, Sparkles } from 'lucide-react';
+import { CalendarClock } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
-import SheepAvatar from '@/components/brand/SheepAvatar';
+import ReasonSheep, { type ReasonSheepPose } from '@/features/reason/brand/ReasonSheep';
 
 export interface TourCard {
   title: string;
@@ -52,10 +58,23 @@ interface Props {
   open: boolean;
   /** 'onboarding' records how it was left; 'replay' from Support does not. */
   mode: 'onboarding' | 'replay';
+  /** The server did not record the last press of Skip or the last button. */
+  failed?: boolean;
   onFinish: (outcome: 'completed' | 'skipped') => void;
 }
 
-export default function HowRsnWorks({ open, mode, onFinish }: Props) {
+/** One card: what it is called, what it does, and then the picture of it. */
+export function TourSlide({ card }: { card: TourCard }) {
+  return (
+    <>
+      <h2 className="text-center font-display text-xl font-bold text-[#1a1a2e]">{card.title}</h2>
+      <p className="mt-2 text-balance text-center text-sm leading-relaxed text-gray-600">{card.body}</p>
+      <div className="mt-5 flex justify-center">{card.visual}</div>
+    </>
+  );
+}
+
+export default function HowRsnWorks({ open, mode, failed = false, onFinish }: Props) {
   const [index, setIndex] = useState(0);
   const [direction, setDirection] = useState(1);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -108,12 +127,13 @@ export default function HowRsnWorks({ open, mode, onFinish }: Props) {
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label="How RSN works"
+        aria-label="How REASON works"
         data-testid="how-rsn-works"
         className="flex h-[100dvh] w-full flex-col bg-white sm:h-auto sm:max-h-[90dvh] sm:max-w-lg sm:rounded-2xl"
       >
-        <div className="flex shrink-0 items-center justify-between px-4 pt-[max(env(safe-area-inset-top),0.75rem)] sm:pt-4">
-          <p className="text-sm font-semibold text-[#1a1a2e]">How RSN works</p>
+        {/* A row as tall as Skip, so the card does not jump up when the last one has none. */}
+        <div className="box-content flex min-h-[44px] shrink-0 items-center justify-between px-4 pt-[max(env(safe-area-inset-top),0.75rem)] sm:pt-4">
+          <p className="text-sm font-semibold text-[#1a1a2e]">How REASON works</p>
           {!last && (
             <button
               type="button"
@@ -127,7 +147,6 @@ export default function HowRsnWorks({ open, mode, onFinish }: Props) {
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           <div className="mx-auto flex max-w-sm flex-col items-center">
-            <SheepAvatar pose={last ? 'matched' : 'welcome'} size={72} className="mb-3" />
             <AnimatePresence mode="wait" custom={direction}>
               <motion.div
                 key={index}
@@ -150,13 +169,7 @@ export default function HowRsnWorks({ open, mode, onFinish }: Props) {
                 aria-roledescription="slide"
                 aria-label={`${index + 1} of ${TOUR_CARDS.length}: ${TOUR_CARDS[index].title}`}
               >
-                <div className="mb-4 flex justify-center">{TOUR_CARDS[index].visual}</div>
-                <h2 className="text-center font-display text-xl font-bold text-[#1a1a2e]">
-                  {TOUR_CARDS[index].title}
-                </h2>
-                <p className="mt-2 text-center text-sm leading-relaxed text-gray-600">
-                  {TOUR_CARDS[index].body}
-                </p>
+                <TourSlide card={TOUR_CARDS[index]} />
               </motion.div>
             </AnimatePresence>
             <span className="sr-only" aria-live="polite">
@@ -166,6 +179,12 @@ export default function HowRsnWorks({ open, mode, onFinish }: Props) {
         </div>
 
         <div className="shrink-0 border-t border-gray-100 px-4 py-3 pb-[max(env(safe-area-inset-bottom),0.75rem)]">
+          {/* Inside the dialog: a toast would sit over Skip on a phone, and a screen reader in a modal does not read what is outside it. */}
+          {failed && (
+            <p role="alert" className="mb-2 text-center text-sm font-medium text-red-700">
+              {"We couldn't save that. Please try again."}
+            </p>
+          )}
           <div className="mb-3 flex justify-center gap-1">
             {TOUR_CARDS.map((c, i) => (
               <button
@@ -193,7 +212,7 @@ export default function HowRsnWorks({ open, mode, onFinish }: Props) {
               onClick={() => (last ? onFinish('completed') : go(index + 1))}
               className="min-h-[48px] flex-1"
             >
-              {last ? (mode === 'replay' ? 'Done' : 'See my suggestions') : 'Next'}
+              {last ? (mode === 'replay' ? 'Done' : 'See my matches') : 'Next'}
             </Button>
           </div>
         </div>
@@ -203,49 +222,84 @@ export default function HowRsnWorks({ open, mode, onFinish }: Props) {
   );
 }
 
-// ── The pictures. Fictional people, never real members: this is shown to
-//    everyone, and a member's profile is theirs. aria-hidden, because the card
-//    text already says what they show.
+// ── The pictures. Nobody is in them: this is shown to everyone, a member's
+//    profile is theirs, and the client found made-up people confusing. Where a
+//    person would be there is the sheep; where their words would be, a grey
+//    bar. The only words are the labels the product itself shows. aria-hidden,
+//    because the card text already says what they show.
+
+/** Where a person's photo would be: a soft tile, with the sheep standing in it. */
+function Tile({ children, round = false }: { children: React.ReactNode; round?: boolean }) {
+  return (
+    <span className={`flex h-10 w-10 shrink-0 items-center justify-center bg-gray-100 ${round ? 'rounded-full' : 'rounded-lg'}`}>
+      {children}
+    </span>
+  );
+}
 
 function Frame({ children }: { children: React.ReactNode }) {
   return (
-    <div aria-hidden className="pointer-events-none w-full max-w-[280px] rounded-xl border border-gray-200 bg-gray-50 p-3">
+    <div
+      aria-hidden
+      data-testid="tour-picture"
+      // One height for every card, so on a desktop the dialog does not grow and shrink under the pointer that is
+      // pressing Next. A minimum: a larger text size makes it taller and never clips it.
+      className="pointer-events-none flex min-h-[240px] w-full max-w-[320px] flex-col justify-center rounded-2xl border border-gray-200 bg-gray-50 p-3"
+    >
       {children}
     </div>
   );
 }
 
+/** Where a line of someone's words would be. */
+function Bar({ className, strong = false }: { className: string; strong?: boolean }) {
+  return <span className={`block h-2 rounded-full ${strong ? 'bg-gray-300' : 'bg-gray-200'} ${className}`} />;
+}
+
 function SuggestionsMock() {
   return (
     <Frame>
-      <div className="rounded-lg border-2 border-rsn-red bg-white p-2.5">
-        <p className="text-xs font-semibold text-[#1a1a2e]">Amara Okafor</p>
-        <p className="text-[10px] text-gray-500">Founder · Northwind</p>
-        <div className="mt-2 rounded-md bg-rsn-red py-1.5 text-center text-[10px] font-medium text-white">
-          Meet
+      <div className="rounded-xl border-2 border-rsn-red bg-white p-3">
+        <div className="flex items-center gap-3">
+          <Tile><ReasonSheep pose="curious" className="h-9 w-9" /></Tile>
+          <div className="min-w-0 flex-1 space-y-2">
+            <Bar strong className="w-3/4" />
+            <Bar className="w-1/2" />
+          </div>
         </div>
+        <div className="mt-2.5 space-y-1.5">
+          <Bar className="w-full" />
+          <Bar className="w-4/5" />
+        </div>
+        <div className="mt-2.5 rounded-lg bg-rsn-red py-2 text-center text-xs font-bold text-white">Meet</div>
       </div>
-      <div className="mt-2 rounded-lg border border-gray-200 bg-white p-2.5 opacity-60">
-        <p className="text-xs font-semibold text-[#1a1a2e]">Tomas Lind</p>
-        <p className="text-[10px] text-gray-500">Investor · Baltic Seed</p>
+      <div className="mt-2 flex items-center gap-3 rounded-xl border border-gray-200 bg-white p-2.5 opacity-60">
+        <Tile><ReasonSheep pose="thinking" className="h-9 w-9" /></Tile>
+        <div className="min-w-0 flex-1 space-y-2">
+          <Bar strong className="w-2/3" />
+          <Bar className="w-2/5" />
+        </div>
       </div>
     </Frame>
   );
 }
 
 function MatchesMock() {
-  const rows = [
-    { name: 'Amara Okafor', state: 'Matched', tone: 'bg-emerald-100 text-emerald-700' },
-    { name: 'Tomas Lind', state: 'Asked, waiting', tone: 'bg-gray-100 text-gray-600' },
-    { name: 'Priya Raman', state: 'Wants to meet you', tone: 'bg-rsn-red-light text-rsn-red' },
+  const rows: Array<{ pose: ReasonSheepPose; name: string; state: string; tone: string }> = [
+    { pose: 'match', name: 'w-4/5', state: 'Matched', tone: 'bg-emerald-100 text-emerald-800' },
+    { pose: 'curious', name: 'w-3/5', state: 'Wants to meet you', tone: 'bg-rsn-red-light text-rsn-red-hover' },
+    { pose: 'thinking', name: 'w-2/3', state: 'Request sent', tone: 'bg-gray-100 text-gray-600' },
   ];
   return (
     <Frame>
-      <div className="space-y-1.5">
-        {rows.map(r => (
-          <div key={r.name} className="flex items-center justify-between rounded-lg bg-white px-2.5 py-2">
-            <span className="text-[11px] font-medium text-[#1a1a2e]">{r.name}</span>
-            <span className={`rounded-full px-2 py-0.5 text-[9px] font-medium ${r.tone}`}>{r.state}</span>
+      <div className="space-y-2">
+        {rows.map((r) => (
+          <div key={r.state} className="flex items-center gap-2.5 rounded-xl bg-white p-2.5">
+            <Tile><ReasonSheep pose={r.pose} className="h-9 w-9" /></Tile>
+            <div className="min-w-0 flex-1">
+              <Bar strong className={r.name} />
+            </div>
+            <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${r.tone}`}>{r.state}</span>
           </div>
         ))}
       </div>
@@ -256,44 +310,56 @@ function MatchesMock() {
 function MeetingsMock() {
   return (
     <Frame>
-      <div className="grid grid-cols-3 gap-1.5">
-        {['9:00', '9:30', '10:00', '10:30', '11:00', '11:30'].map((t, i) => (
+      <div className="grid grid-cols-3 gap-2">
+        {/* The one in the middle is the green slot, the time both of them can do. */}
+        {['9:00', '9:30', '10:00', '10:30', '11:00', '11:30', '12:00', '12:30', '1:00'].map((t, i) => (
           <div
             key={t}
-            className={`rounded-md py-1.5 text-center text-[9px] font-medium ${
-              i === 4 ? 'border border-emerald-400 bg-emerald-100 text-emerald-700' : 'border border-gray-200 bg-white text-gray-500'
+            className={`flex flex-col items-center justify-center rounded-lg py-2 text-center text-[11px] font-medium ${
+              i === 4 ? 'border border-emerald-400 bg-emerald-100 text-emerald-800' : 'border border-gray-200 bg-white text-gray-500'
             }`}
           >
             {t}
-            {i === 4 && <span className="block text-[8px]">Both can</span>}
+            {i === 4 && <span className="block text-[10px] font-semibold">Both can</span>}
           </div>
         ))}
       </div>
-      <div className="mt-2 flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-2">
-        <CalendarClock className="h-3 w-3 shrink-0 text-emerald-600" />
-        <span className="text-[10px] font-medium text-emerald-800">Meeting confirmed · Join</span>
+      <div className="mt-2 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-2">
+        <ReasonSheep pose="hopeful" className="h-8 w-8 shrink-0" />
+        <span className="text-[11px] font-semibold text-emerald-800">Meeting confirmed · Join</span>
       </div>
     </Frame>
   );
 }
 
 function CirclesMock() {
+  const circles: Array<{ pose: ReasonSheepPose; name: string }> = [
+    { pose: 'hopeful', name: 'Founders' },
+    { pose: 'match', name: 'Investors' },
+  ];
+  const join = <span className="shrink-0 rounded-full bg-rsn-red-light px-3 py-1 text-[11px] font-semibold text-rsn-red-hover">Join</span>;
   return (
     <Frame>
-      <div className="space-y-1.5">
-        {[
-          { icon: <Users className="h-3 w-3" />, name: 'Founders', meta: '8 members' },
-          { icon: <Sparkles className="h-3 w-3" />, name: 'AI Developers', meta: '2 members' },
-        ].map(c => (
-          <div key={c.name} className="flex items-center gap-2 rounded-lg bg-white px-2.5 py-2">
-            <span className="text-gray-400">{c.icon}</span>
-            <span className="flex-1 text-[11px] font-medium text-[#1a1a2e]">{c.name}</span>
-            <span className="rounded-full bg-rsn-red-light px-2 py-0.5 text-[9px] font-medium text-rsn-red">Join</span>
+      <div className="space-y-2">
+        {circles.map((c) => (
+          <div key={c.name} className="flex items-center gap-2.5 rounded-xl bg-white p-2.5">
+            <Tile round><ReasonSheep pose={c.pose} className="h-9 w-9" /></Tile>
+            <div className="min-w-0 flex-1">
+              <span className="block text-xs font-semibold text-[#1a1a2e]">{c.name}</span>
+              <Bar className="mt-1.5 w-2/3" />
+            </div>
+            {join}
           </div>
         ))}
-        <div className="flex items-center gap-2 rounded-lg bg-white px-2.5 py-2">
-          <Check className="h-3 w-3 text-emerald-500" />
-          <span className="flex-1 text-[11px] font-medium text-[#1a1a2e]">Thursday networking</span>
+        <div className="flex items-center gap-2.5 rounded-xl bg-white p-2.5">
+          <Tile round>
+            <CalendarClock className="h-5 w-5 text-gray-500" />
+          </Tile>
+          <div className="min-w-0 flex-1">
+            <span className="block text-xs font-semibold text-[#1a1a2e]">Networking event</span>
+            <Bar className="mt-1.5 w-1/2" />
+          </div>
+          {join}
         </div>
       </div>
     </Frame>

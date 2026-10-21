@@ -6,20 +6,28 @@ import { launchBrowser, engineLabel } from '../helpers/engine';
 import { expectReachable, tapReachable } from '../helpers/viewport-fit';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// "How RSN works" (Shradha's deck, task 2).
+// "How REASON works" (Shradha's deck, task 2; the client's feedback of 19 Oct).
 //
-// The complaint: "Users are never told what RSN is or how it works" and
-// "after onboarding, users are left with no guidance on next steps."
+// The complaint: members were never told what the product is or how it works,
+// and "after onboarding, users are left with no guidance on next steps."
 //
 // It plays once, over their own suggestions, for someone who has just
 // finished. Nobody who onboarded before it existed is interrupted, and it
 // stays re-openable from Support afterwards.
+//
+// 19 Oct: no made-up people in the pictures, the heading and the description
+// above the picture, and finishing or skipping it lands on For You, except
+// when it is replayed from Support, which stays where it is.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const PHONE = { width: 390, height: 844 };
 let browser: Browser;
 const ctxs: BrowserContext[] = [];
 const made: string[] = [];
+
+// The people the pictures used to show. None of them, or anyone like them, belongs in the tour.
+const MADE_UP_PEOPLE = /Amara|Okafor|Tomas|Lind\b|Priya|Raman|Northwind|Baltic/;
+const TITLES = ['For You', 'Matches', 'Meetings', 'Circles & events'];
 
 async function apiAs(u: TestUser, method: string, path: string, body?: unknown) {
   const res = await fetch(`${SERVER}/api${path}`, {
@@ -61,6 +69,36 @@ async function openAs(u: TestUser, path: string, viewport = PHONE): Promise<Page
 }
 
 const tour = (page: Page) => page.getByTestId('how-rsn-works');
+const slide = (page: Page) => tour(page).locator('[aria-roledescription="slide"]');
+const pathOf = (page: Page) => new URL(page.url()).pathname;
+
+/** The heading and the description both end above the picture's top edge. */
+async function expectWordsAboveThePicture(page: Page, title: string) {
+  const card = slide(page);
+  const heading = await card.getByRole('heading', { name: title }).boundingBox();
+  const description = await card.locator('p').first().boundingBox();
+  const picture = await card.getByTestId('tour-picture').boundingBox();
+  expect(heading, `${title}: heading not drawn`).not.toBeNull();
+  expect(description, `${title}: description not drawn`).not.toBeNull();
+  expect(picture, `${title}: picture not drawn`).not.toBeNull();
+  expect(heading!.y + heading!.height, `${title}: the heading is not above the picture`).toBeLessThanOrEqual(picture!.y);
+  expect(description!.y + description!.height, `${title}: the description is not above the picture`).toBeLessThanOrEqual(picture!.y);
+  expect(heading!.y, `${title}: the heading is not above the description`).toBeLessThan(description!.y);
+}
+
+/** Nobody in the picture: no made-up name, and the only images are the sheep, loaded. */
+async function expectNobodyInThePicture(page: Page, title: string) {
+  await expect(tour(page), `${title}: a made-up person is on the card`).not.toContainText(MADE_UP_PEOPLE);
+  const pictures = slide(page).getByTestId('tour-picture').locator('img');
+  const sources = await pictures.evaluateAll((list) => list.map((i) => i.getAttribute('src') ?? ''));
+  expect(sources.length, `${title}: no sheep in the picture`).toBeGreaterThan(0);
+  for (const src of sources) expect(src, `${title}: an image that is not the sheep`).toMatch(/^\/sheep\//);
+  // They load lazily, so give them a moment before calling one broken.
+  await expect.poll(
+    () => pictures.evaluateAll((list) => list.filter((i) => !(i as HTMLImageElement).complete || (i as HTMLImageElement).naturalWidth === 0).length),
+    { message: `${title}: a sheep did not load`, timeout: 15_000 },
+  ).toBe(0);
+}
 
 test.beforeAll(async () => {
   console.log(`[onboarding-tour] engine=${engineLabel()} app=${APP}`);
@@ -81,17 +119,25 @@ test('it explains the product once, then never again', async () => {
   const page = await openAs(me, '/agents');
 
   await expect(tour(page)).toBeVisible({ timeout: 30_000 });
-  // All four cards, in the deck's words, each reachable on a phone.
-  for (const [i, title] of ['For You', 'Matches', 'Meetings', 'Circles & events'].entries()) {
+  // It is called what the product is called, on screen and to a screen reader.
+  await expect(tour(page)).toHaveAttribute('aria-label', 'How REASON works');
+  await expect(tour(page).getByText('How REASON works', { exact: true })).toBeVisible();
+  // All four cards, in the deck's words, each reachable on a phone, each with its words above its picture and nobody in it.
+  for (const [i, title] of TITLES.entries()) {
     await expect(tour(page).getByRole('heading', { name: title })).toBeVisible();
+    await expectWordsAboveThePicture(page, title);
+    await expectNobodyInThePicture(page, title);
     if (i < 3) await tapReachable(page, page.getByRole('button', { name: /^Next$/ }), `Next from ${title}`);
   }
+  console.log('  ✓ four cards: words above the picture, nobody in it');
   // The last card is the clear next step the deck asks for.
-  const cta = page.getByRole('button', { name: /See my suggestions/i });
-  await expectReachable(page, cta, '"See my suggestions"');
-  await tapReachable(page, cta, '"See my suggestions"');
+  const cta = page.getByRole('button', { name: 'See my matches' });
+  await expectReachable(page, cta, '"See my matches"');
+  await tapReachable(page, cta, '"See my matches"');
   await expect(tour(page)).toHaveCount(0);
-  console.log('  ✓ walked all four cards and finished');
+  // They opened it over Your searches; it ends on For You.
+  await expect.poll(() => pathOf(page), { message: 'finishing the tour lands on For You' }).toBe('/');
+  console.log('  ✓ walked all four cards and finished on For You');
 
   // It is done: reloading, or coming back on another device, does not replay it.
   await page.reload({ waitUntil: 'domcontentloaded' });
@@ -109,13 +155,14 @@ test('it explains the product once, then never again', async () => {
   expect(row.tour_outcome).toBe('completed');
 });
 
-test('skipping it counts as seen, and it does not come back', async () => {
+test('skipping it counts as seen, lands on For You, and it does not come back', async () => {
   test.setTimeout(180_000);
   const me = await justOnboarded('tourskip');
   const page = await openAs(me, '/agents');
   await expect(tour(page)).toBeVisible({ timeout: 30_000 });
   await tapReachable(page, page.getByRole('button', { name: /^Skip$/ }), 'Skip');
   await expect(tour(page)).toHaveCount(0);
+  await expect.poll(() => pathOf(page), { message: 'skipping the tour lands on For You' }).toBe('/');
 
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(2500);
@@ -125,6 +172,37 @@ test('skipping it counts as seen, and it does not come back', async () => {
     `SELECT tour_outcome FROM users WHERE id = $1`, [me.id],
   )).rows[0];
   expect(row.tour_outcome).toBe('skipped');
+});
+
+test('Escape skips it from any page and lands on For You', async () => {
+  test.setTimeout(180_000);
+  const me = await justOnboarded('tourescape');
+  const page = await openAs(me, '/agents');
+  await expect(tour(page)).toBeVisible({ timeout: 30_000 });
+  await page.keyboard.press('Escape');
+  await expect(tour(page)).toHaveCount(0);
+  await expect.poll(() => pathOf(page), { message: 'Escape lands on For You' }).toBe('/');
+
+  const row = (await pool.query<{ tour_outcome: string | null }>(
+    `SELECT tour_outcome FROM users WHERE id = $1`, [me.id],
+  )).rows[0];
+  expect(row.tour_outcome).toBe('skipped');
+});
+
+test('finishing it on For You stays on For You', async () => {
+  test.setTimeout(180_000);
+  const me = await justOnboarded('tourhome');
+  const page = await openAs(me, '/');
+  await expect(tour(page)).toBeVisible({ timeout: 30_000 });
+  const entries = await page.evaluate(() => history.length);
+
+  await tapReachable(page, page.getByRole('button', { name: /Go to card 4/ }), 'the fourth dot');
+  await tapReachable(page, page.getByRole('button', { name: 'See my matches' }), '"See my matches"');
+  await expect(tour(page)).toHaveCount(0);
+
+  // Already there: nothing was opened on top of the page they were on.
+  expect(pathOf(page)).toBe('/');
+  expect(await page.evaluate(() => history.length)).toBe(entries);
 });
 
 test('closing the tab in the middle brings it back', async () => {
@@ -153,28 +231,64 @@ test('someone who onboarded before it existed is never interrupted', async () =>
   console.log('  ✓ existing members carry on undisturbed');
 });
 
-test('it can be opened again from Support, without changing how it was left', async () => {
+test('it can be opened again from Support, without changing how it was left, and it stays on Support', async () => {
   test.setTimeout(180_000);
   const me = await justOnboarded('tourreplay');
   // They skipped it the first time.
   expect((await apiAs(me, 'POST', '/onboarding/tour', { outcome: 'skipped' })).status).toBe(200);
 
   const page = await openAs(me, '/support');
-  await expect(page.getByRole('heading', { name: /How RSN works/i })).toBeVisible({ timeout: 30_000 });
-  await tapReachable(page, page.getByRole('button', { name: /Open the tour/i }), '"Open the tour"');
+  const open = page.getByRole('button', { name: /Open the tour/i });
+  await expect(open).toBeVisible({ timeout: 30_000 });
+  await tapReachable(page, open, '"Open the tour"');
   await expect(tour(page)).toBeVisible();
+  await expect(tour(page)).toHaveAttribute('aria-label', 'How REASON works');
   await expect(tour(page).getByRole('heading', { name: 'For You' })).toBeVisible();
 
   // Escape is a way out of anything that covers the screen.
   await page.keyboard.press('Escape');
   await expect(tour(page)).toHaveCount(0);
+  expect(pathOf(page), 'replaying and leaving it stays on Support').toBe('/support');
+
+  // Walked to the end, the last button is "Done", and it too leaves them where they were.
+  await tapReachable(page, open, '"Open the tour" again');
+  await tapReachable(page, page.getByRole('button', { name: /Go to card 4/ }), 'the fourth dot');
+  await expect(page.getByRole('button', { name: 'See my matches' })).toHaveCount(0);
+  await tapReachable(page, page.getByRole('button', { name: 'Done' }), '"Done"');
+  await expect(tour(page)).toHaveCount(0);
+  expect(pathOf(page), 'finishing a replay stays on Support').toBe('/support');
 
   // Replaying does not rewrite how they left it the first time.
   const row = (await pool.query<{ tour_outcome: string | null }>(
     `SELECT tour_outcome FROM users WHERE id = $1`, [me.id],
   )).rows[0];
   expect(row.tour_outcome).toBe('skipped');
-  console.log('  ✓ replayable from Support, and it left the record alone');
+  console.log('  ✓ replayable from Support, it stayed on Support and left the record alone');
+});
+
+test('when saving it fails, it says so inside the dialog and can be tried again', async () => {
+  test.setTimeout(180_000);
+  const me = await justOnboarded('tourfail');
+  const page = await openAs(me, '/agents');
+  await expect(tour(page)).toBeVisible({ timeout: 30_000 });
+
+  await page.route('**/onboarding/tour', (route) => (route.request().method() === 'POST'
+    ? route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ success: false, error: { message: 'Something went wrong' } }) })
+    : route.continue()));
+  await tapReachable(page, page.getByRole('button', { name: /^Skip$/ }), 'Skip');
+  // Said inside the dialog, where it cannot cover Skip and a screen reader in a modal still hears it.
+  await expect(tour(page).getByRole('alert')).toHaveText("We couldn't save that. Please try again.");
+  // Nothing was recorded, so it is still there and still owed.
+  await expect(tour(page)).toBeVisible();
+  const before = (await pool.query<{ tour_outcome: string | null }>(`SELECT tour_outcome FROM users WHERE id = $1`, [me.id])).rows[0];
+  expect(before.tour_outcome).toBeNull();
+
+  await page.unroute('**/onboarding/tour');
+  await tapReachable(page, page.getByRole('button', { name: /^Skip$/ }), 'Skip again');
+  await expect(tour(page)).toHaveCount(0);
+  const after = (await pool.query<{ tour_outcome: string | null }>(`SELECT tour_outcome FROM users WHERE id = $1`, [me.id])).rows[0];
+  expect(after.tour_outcome).toBe('skipped');
+  console.log('  ✓ a failed save says so, and trying again works');
 });
 
 test('every control can be pressed on a small phone', async () => {
@@ -192,6 +306,16 @@ test('every control can be pressed on a small phone', async () => {
   expect(box!.height).toBeGreaterThanOrEqual(44);
   await tapReachable(page, dot, 'the third dot');
   await expect(tour(page).getByRole('heading', { name: 'Meetings' })).toBeVisible();
+
+  // The words are above the picture here too, and the whole picture is inside the window.
+  await expectWordsAboveThePicture(page, 'Meetings');
+  const picture = (await slide(page).getByTestId('tour-picture').boundingBox())!;
+  expect(picture.x).toBeGreaterThanOrEqual(0);
+  expect(picture.x + picture.width).toBeLessThanOrEqual(360);
+
+  // The last card's button is reachable too.
+  await tapReachable(page, page.getByRole('button', { name: /Go to card 4/ }), 'the fourth dot');
+  await expectReachable(page, page.getByRole('button', { name: 'See my matches' }), '"See my matches"');
 
   // And nothing is pushed off the side.
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
