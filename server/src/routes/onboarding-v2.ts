@@ -99,7 +99,9 @@ router.post(
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const userId = req.user!.userId;
-      recordStageEvent(userId, 'linkedin_skipped');
+      // Recording it is this endpoint's whole job, so it answers once it is recorded.
+      // record() never throws.
+      await recordStageEvent(userId, 'linkedin_skipped');
       await fanoutUserEntity(userId);
       const response: ApiResponse = { success: true, data: { skipped: true } };
       res.json(response);
