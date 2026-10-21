@@ -2,11 +2,15 @@
 import { Link } from 'react-router-dom';
 import ReasonSheep from '../brand/ReasonSheep';
 
-interface Props { profileIncomplete: boolean; nextEvent: { id: string; title: string } | null }
-// An event title can be long or one unbroken word: it wraps inside its own box.
-const ACTION = 'flex min-h-[48px] items-center rounded-xl border border-reason-line px-3.5 py-2 text-[14px] font-bold [overflow-wrap:anywhere]';
+interface Props { profileIncomplete: boolean }
+// Long enough words wrap inside their own box, so a narrow phone never pushes a button out of the card.
+const ACTION = 'inline-flex min-h-[44px] items-center justify-center rounded-[11px] px-4 py-2 text-center text-[13px] font-bold [overflow-wrap:anywhere]';
 
-export default function ForYouEmpty({ profileIncomplete, nextEvent }: Props) {
+// The onboarding brief's screen 8 (Shradha, 19 Oct 2026), "If there are no matches yet", word for word.
+const NO_MATCHES_TITLE = "Your people aren't here yet.";
+const NO_MATCHES_TEXT = "We're still finding people who match what you're looking for. Check back soon.";
+
+export default function ForYouEmpty({ profileIncomplete }: Props) {
   if (profileIncomplete) {
     return (
       <div className="flex items-start gap-3 rounded-2xl bg-reason-warm p-3.5">
@@ -20,17 +24,17 @@ export default function ForYouEmpty({ profileIncomplete, nextEvent }: Props) {
     );
   }
   return (
-    <div className="grid gap-3">
-      <div className="flex items-start gap-3 rounded-2xl bg-reason-warm p-3.5">
-        <ReasonSheep pose="hopeful" className="h-[58px] w-[58px] shrink-0" />
-        <div>
-          <h2 id="foryou-title" tabIndex={-1} className="text-[16px] font-bold outline-none">No one new to suggest right now.</h2>
-          <p className="mt-1 text-[13px] text-reason-muted">New people join all the time. Here is what you can do meanwhile.</p>
+    <div className="flex items-start gap-3 rounded-2xl bg-reason-warm p-3.5">
+      <ReasonSheep pose="hopeful" className="h-[58px] w-[58px] shrink-0" />
+      <div className="min-w-0">
+        <h2 id="foryou-title" tabIndex={-1} className="text-[16px] font-bold outline-none">{NO_MATCHES_TITLE}</h2>
+        <p className="mt-1 text-[13px] text-reason-muted">{NO_MATCHES_TEXT}</p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Link to="/search" className={`${ACTION} bg-reason-red text-white hover:bg-reason-red-hover`}>Explore people</Link>
+          {/* Opens onboarding on its first question, to change who the member wants to meet. */}
+          <Link to="/onboarding?edit=q1" className={`${ACTION} border border-reason-line bg-white text-[#2d3440] hover:bg-reason-soft`}>Edit who I want to meet</Link>
         </div>
       </div>
-      <Link to={nextEvent ? `/sessions/${nextEvent.id}` : '/sessions'} className={ACTION}>{nextEvent ? `Join ${nextEvent.title}` : 'See upcoming events'}</Link>
-      <Link to="/invites" className={ACTION}>Invite people you would like here</Link>
-      <Link to="/matches" className={ACTION}>Browse a wider circle of people</Link>
     </div>
   );
 }

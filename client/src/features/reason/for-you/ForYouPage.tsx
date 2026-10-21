@@ -117,14 +117,15 @@ export default function ForYouPage() {
     select: (m) => (m.state.variables as HumanCardPerson).userId,
   });
 
-  const firstName = String(user?.firstName || user?.displayName || '').split(' ')[0];
   const cards = (data?.matches ?? []).slice(0, SHORTLIST).map((m) => toCard(m, data?.youAreLookingFor ?? null));
 
   return (
     <>
       <OnboardingWelcomeModal />
-      <PageHead eyebrow="GOOD TO SEE YOU" title={firstName ? `Welcome, ${firstName}.` : 'Welcome.'} subtitle="Here are people you have a reason to meet." pose="match" />
-      <div className="grid items-start gap-3 min-[981px]:grid-cols-[minmax(0,1fr)_minmax(280px,320px)] min-[981px]:gap-[18px]">
+      {/* The onboarding brief's screen 8, "Your matches" (Shradha, 19 Oct 2026), word for word. */}
+      <PageHead eyebrow="GOOD TO SEE YOU" title="People worth meeting" subtitle="Based on your answers, here are people you might want to meet." pose="match" />
+      {/* The rail is 260px wide until 1280px, so the two cards to a row beside it from 1024px have room. */}
+      <div className="grid items-start gap-3 min-[981px]:grid-cols-[minmax(0,1fr)_260px] min-[981px]:gap-[18px] min-[1280px]:grid-cols-[minmax(0,1fr)_minmax(280px,320px)]">
         <section ref={section} aria-labelledby="foryou-title" className="min-w-0 rounded-[15px] border border-reason-line bg-white p-[13px] shadow-[0_6px_24px_rgba(16,18,24,.025)] min-[721px]:rounded-[18px] min-[721px]:p-[18px]">
           {cannotLoad ? (
             <div role="alert" className="flex flex-col items-start gap-3 py-4">
@@ -140,24 +141,20 @@ export default function ForYouPage() {
               {[0, 1, 2].map((i) => <Skeleton key={i} className="h-[150px]" />)}
             </div>
           ) : cards.length === 0 ? (
-            <ForYouEmpty profileIncomplete={!!data?.profileIncomplete} nextEvent={data?.nextEvent ?? null} />
+            <ForYouEmpty profileIncomplete={!!data?.profileIncomplete} />
           ) : (
             <>
-              <div className="mb-3 flex items-start justify-between gap-2 min-[721px]:mb-3.5">
-                <div className="flex min-w-0 items-start gap-2 min-[721px]:items-center min-[721px]:gap-2.5">
+              <div className="mb-3 flex items-center justify-between gap-2 min-[721px]:mb-3.5">
+                <div className="flex min-w-0 items-center gap-2 min-[721px]:gap-2.5">
                   <ReasonSheep pose="match" className="h-9 w-9 shrink-0 min-[721px]:h-[42px] min-[721px]:w-[42px]" />
-                  <div className="min-w-0">
-                    <h2 id="foryou-title" tabIndex={-1} className="text-[18px] font-bold leading-[1.12] tracking-[-0.025em] outline-none min-[721px]:text-[22px]">
-                      {cards.length === 1 ? '1 person you have a reason to meet' : `${cards.length} people you have a reason to meet`}
-                    </h2>
-                    <small className="mt-[3px] block text-[11px] leading-[1.35] text-reason-muted min-[721px]:mt-1 min-[721px]:text-[13px]">
-                      Based on your current reasons, network and upcoming contexts.
-                    </small>
-                  </div>
+                  <h2 id="foryou-title" tabIndex={-1} className="min-w-0 text-[18px] font-bold leading-[1.12] tracking-[-0.025em] outline-none min-[721px]:text-[22px]">
+                    {cards.length === 1 ? '1 person you have a reason to meet' : `${cards.length} people you have a reason to meet`}
+                  </h2>
                 </div>
                 <Link to="/matches" aria-label="View all people" className="flex min-h-[44px] shrink-0 items-center px-1 text-[12px] text-[#575f6f] hover:text-reason-red">View all</Link>
               </div>
-              <div className="grid gap-3.5">
+              {/* Two to a row from 1024px, beside the rail; one list below. Each card fits the half it is given. */}
+              <div className="grid gap-3.5 min-[1024px]:grid-cols-2">
                 {cards.map((p) => (
                   <HumanCard
                     key={p.userId}
@@ -169,6 +166,9 @@ export default function ForYouPage() {
                   />
                 ))}
               </div>
+              <p className="mt-3.5 text-[12px] leading-[1.45] text-reason-muted min-[721px]:text-[13px]">
+                When someone wants to meet you too, it becomes a match and you can book a time together.
+              </p>
             </>
           )}
         </section>

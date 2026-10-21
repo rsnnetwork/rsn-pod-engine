@@ -1,7 +1,13 @@
 // client/src/features/reason/human/HumanCard.tsx
 // The one person card used everywhere (Stefan's v4: "Human cards are the
-// universal person object"). Four columns only from 1420px, where they fit;
-// below that it stacks, so the reason and the buttons never clip.
+// universal person object"). It sizes itself to the room it is given, not to
+// the window (a container query on the card): For You is one list on a phone
+// and a tablet, and two to a row beside the rail from 1024px, where a card can
+// be narrower than on any phone. Under 16rem the photo sits above the name, so
+// the name has the card's whole width; from 16rem the phone layout, a 70px
+// photo beside the name with the reason under both; from 34rem a 90px photo
+// with everything beside it. The buttons sit at the foot, three to a row from
+// 24rem, two from 15rem, and one under the other below that, so none clips.
 import { useId, type MouseEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { primaryActionFor, type RelationshipState } from '@rsn/shared';
@@ -74,57 +80,69 @@ export default function HumanCard({ person, source, onMeet, onToggleSave, busy }
       aria-labelledby={headingId}
       aria-busy={busy || undefined}
       onClick={openProfile}
-      className="grid cursor-pointer grid-cols-[70px_minmax(0,1fr)] items-start gap-2.5 overflow-hidden rounded-[15px] border border-reason-line bg-white p-[11px] transition hover:shadow-[0_10px_28px_rgba(16,18,24,.06)] min-[721px]:grid-cols-[90px_minmax(0,1fr)] min-[721px]:gap-3.5 min-[721px]:p-3 min-[1420px]:grid-cols-[110px_minmax(160px,210px)_minmax(0,1fr)_150px] min-[1420px]:items-center"
+      className="flex cursor-pointer flex-col overflow-hidden rounded-[15px] border border-reason-line bg-white p-[11px] transition [container-type:inline-size] hover:shadow-[0_10px_28px_rgba(16,18,24,.06)] min-[721px]:p-3"
     >
-      <Link to={profileUrl} aria-hidden="true" tabIndex={-1} className="block">
-        {/* The photo is a tap target only: the name link goes to the same page, so a keyboard and a screen
-            reader meet one link, not two. Avatar shows the initials when there is no photo and when the
-            photo fails to load, including one that fails at once. */}
-        <Avatar
-          src={person.avatarUrl}
-          name={name}
-          size="xl"
-          className="h-[70px] w-[70px] rounded-xl min-[721px]:h-[88px] min-[721px]:w-[90px] min-[1420px]:h-[96px] min-[1420px]:w-[110px] min-[1420px]:rounded-[13px]"
-        />
-      </Link>
+      <div className="grid grid-cols-1 items-start gap-2.5 [@container(min-width:16rem)]:grid-cols-[70px_minmax(0,1fr)] [@container(min-width:34rem)]:grid-cols-[90px_minmax(0,1fr)] [@container(min-width:34rem)]:gap-3.5">
+        <Link to={profileUrl} aria-hidden="true" tabIndex={-1} className="block">
+          {/* The photo is a tap target only: the name link and View profile go to the same page, so a keyboard
+              and a screen reader do not meet a third link. Avatar shows the initials when there is no photo and
+              when the photo fails to load, including one that fails at once. */}
+          <Avatar
+            src={person.avatarUrl}
+            name={name}
+            size="xl"
+            className="h-14 w-14 rounded-xl [@container(min-width:16rem)]:h-[70px] [@container(min-width:16rem)]:w-[70px] [@container(min-width:34rem)]:h-[88px] [@container(min-width:34rem)]:w-[90px]"
+          />
+        </Link>
 
-      <div className="min-w-0">
-        <h3 id={headingId} className="text-[16px] font-bold leading-tight [overflow-wrap:anywhere] min-[721px]:text-[17px]">
-          <Link to={profileUrl} className="hover:underline">{name}</Link>
-        </h3>
-        {role && <p className="mt-0.5 text-[12px] text-[#677080] [overflow-wrap:anywhere] min-[721px]:text-[13px]">{role}</p>}
-        {company && <p className="mt-1.5 text-[12px] font-bold [overflow-wrap:anywhere] min-[721px]:text-[13px]">{company}</p>}
-        {tags.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1">
-            {tags.map((t, i) => (
-              <span key={`${i}-${t}`} className="max-w-full rounded-full bg-[#f3f4f6] px-2 py-1 text-[10px] text-[#68707e] [overflow-wrap:anywhere]">{t}</span>
-            ))}
+        <div className="min-w-0">
+          <h3 id={headingId} className="text-[16px] font-bold leading-tight [overflow-wrap:anywhere] min-[721px]:text-[17px]">
+            <Link to={profileUrl} className="hover:underline">{name}</Link>
+          </h3>
+          {role && <p className="mt-0.5 text-[12px] text-[#677080] [overflow-wrap:anywhere] min-[721px]:text-[13px]">{role}</p>}
+          {company && <p className="mt-1.5 text-[12px] font-bold [overflow-wrap:anywhere] min-[721px]:text-[13px]">{company}</p>}
+          {tags.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {tags.map((t, i) => (
+                <span key={`${i}-${t}`} className="max-w-full rounded-full bg-[#f3f4f6] px-2 py-1 text-[10px] text-[#68707e] [overflow-wrap:anywhere]">{t}</span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {(reason || bring || looking) && (
+          <div className="min-w-0 border-t border-[#f0f1f3] pt-2.5 [@container(min-width:16rem)]:col-span-2 [@container(min-width:34rem)]:col-span-1 [@container(min-width:34rem)]:col-start-2 [@container(min-width:34rem)]:border-0 [@container(min-width:34rem)]:pt-0">
+            {reason && (
+              <>
+                <strong className="block text-[12px]">Why you should meet</strong>
+                <p className="mt-1 text-[12px] leading-snug text-[#626a78] [overflow-wrap:anywhere]">{reason}</p>
+              </>
+            )}
+            {(bring || looking) && (
+              <div className={cn('grid grid-cols-1 gap-2.5 [@container(min-width:20rem)]:grid-cols-2', reason && 'mt-2.5')}>
+                {bring && (
+                  <div className="min-w-0 text-[11px] text-[#697180] [overflow-wrap:anywhere]"><b className="block text-[#282c34]">They can bring</b>{bring}</div>
+                )}
+                {looking && (
+                  <div className="min-w-0 text-[11px] text-[#697180] [overflow-wrap:anywhere]"><b className="block text-[#282c34]">You are looking for</b>{looking}</div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {(reason || bring || looking) && (
-        <div className="col-span-2 min-w-0 border-t border-[#f0f1f3] pt-2.5 min-[721px]:col-span-1 min-[721px]:col-start-2 min-[721px]:border-0 min-[721px]:pt-0 min-[1420px]:col-start-3">
-          {reason && (
-            <>
-              <strong className="block text-[12px]">Why you should meet</strong>
-              <p className="mt-1 text-[12px] leading-snug text-[#626a78] [overflow-wrap:anywhere]">{reason}</p>
-            </>
-          )}
-          {(bring || looking) && (
-            <div className={cn('grid grid-cols-1 gap-2.5 min-[391px]:grid-cols-2', reason && 'mt-2.5')}>
-              {bring && (
-                <div className="min-w-0 text-[11px] text-[#697180] [overflow-wrap:anywhere]"><b className="block text-[#282c34]">They can bring</b>{bring}</div>
-              )}
-              {looking && (
-                <div className="min-w-0 text-[11px] text-[#697180] [overflow-wrap:anywhere]"><b className="block text-[#282c34]">You are looking for</b>{looking}</div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="col-span-2 grid grid-cols-2 gap-2 min-[721px]:col-span-1 min-[721px]:col-start-2 min-[1420px]:col-start-4 min-[1420px]:grid-cols-1">
+      {/* At the foot of the card, so two cards side by side have their buttons on one line. From 34rem they sit
+          under the text, beside the photo, as the reason does. */}
+      <div className="mt-auto grid grid-cols-1 gap-2 pt-2.5 [@container(min-width:15rem)]:grid-cols-2 [@container(min-width:24rem)]:grid-cols-3 [@container(min-width:34rem)]:pl-[104px] [@container(min-width:34rem)]:pt-3.5">
+        {/* A link: it goes somewhere. The name says whose profile, for anyone who hears the links one by one. */}
+        <Link
+          to={profileUrl}
+          aria-label={`View profile of ${name}`}
+          className="flex min-h-[44px] items-center justify-center rounded-[11px] bg-[#f5f6f7] px-3 text-center text-[13px] font-bold text-[#2d3440] hover:bg-[#eceef1]"
+        >
+          View profile
+        </Link>
         <button
           type="button"
           onClick={press(onPrimary)}
@@ -140,7 +158,7 @@ export default function HumanCard({ person, source, onMeet, onToggleSave, busy }
           type="button"
           onClick={press(() => onToggleSave(person))}
           aria-disabled={busy || undefined}
-          className={cn('min-h-[44px] rounded-[11px] bg-[#f5f6f7] px-3 text-[13px] font-bold text-[#2d3440]', busy && BUSY)}
+          className={cn('min-h-[44px] rounded-[11px] bg-[#f5f6f7] px-3 text-[13px] font-bold text-[#2d3440] [@container(min-width:15rem)]:col-span-2 [@container(min-width:24rem)]:col-span-1', busy && BUSY)}
         >
           {person.saved ? 'Saved' : 'Save'}
         </button>

@@ -290,10 +290,12 @@ const contrast = (a: string, b: string) => {
 describe('the Human Card: faults found by looking at it', () => {
   const card = () => readReason('human/HumanCard.tsx');
 
-  it('every button on it is at least 44px tall', () => {
+  it('every button on it, and the View profile link beside them (21 Oct), is at least 44px tall', () => {
     const buttons = card().match(/<button\b/g)?.length ?? 0;
     expect(buttons).toBe(2);
-    expect(card().match(/min-h-\[44px\]/g)?.length).toBe(buttons);
+    const viewProfile = card().match(/>\s*View profile\s*<\/Link>/g)?.length ?? 0;
+    expect(viewProfile).toBe(1);
+    expect(card().match(/min-h-\[44px\]/g)?.length).toBe(buttons + viewProfile);
   });
   it('a busy card looks busy, not only inert: progress cursor, a pulse (still, but dimmed, for reduced motion) and aria-busy', () => {
     // The look itself lives in busy.ts, shared with the profile's bar (see "the busy look is shared" below).
@@ -331,7 +333,7 @@ describe('the Human Card: faults found by looking at it', () => {
     expect(card()).not.toMatch(/\{person\.displayName\}/);
     expect(card()).not.toMatch(/name=\{person\.displayName\}/);
   });
-  it('the photo is a pointer-only target, so the name is the one link a keyboard or a screen reader meets', () => {
+  it('the photo is a pointer-only target, so a keyboard or a screen reader meets the name and View profile, not a third link', () => {
     expect(card()).toMatch(/<Link to=\{profileUrl\} aria-hidden="true" tabIndex=\{-1\} className="block">/);
     expect(card()).not.toMatch(/aria-label=\{`Open /);
   });
