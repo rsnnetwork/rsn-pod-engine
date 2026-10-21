@@ -24,16 +24,25 @@ const offerKey = z.enum(keysOf(ONBOARDING_V2_OFFER), NOT_ON_THE_LIST);
 const selfKey = z.enum(keysOf(ONBOARDING_V2_SELF), NOT_ON_THE_LIST);
 
 /**
- * Typed text, capped; empty becomes null. A control character (a line break, a
- * tab) becomes a space and runs of spaces become one, so "Vienna\nor Graz"
- * keeps both places for the place parser instead of becoming "Viennaor Graz".
+ * Typed text, tidied and capped. A control character (a line break, a tab)
+ * becomes a space and runs of spaces become one, so "Vienna\nor Graz" keeps
+ * both places for the place parser instead of becoming "Viennaor Graz".
  */
-const line = (max: number) =>
+const tidied = (max: number) =>
   z.string({ invalid_type_error: 'Type your answer as words.' })
     .transform(s => s.replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim())
-    .refine(s => s.length <= max, { message: `Keep this under ${max} characters.` })
-    .transform(s => (s.length ? s : null))
-    .nullable();
+    .refine(s => s.length <= max, { message: `Keep this under ${max} characters.` });
+
+/** Typed text where empty means nothing given: it becomes null. */
+const line = (max: number) => tidied(max).transform(s => (s.length ? s : null)).nullable();
+
+/**
+ * A profile field the member can empty (the shared contract, final review of
+ * 21 Oct 2026): null or left out keeps what is stored, and empty ("" once
+ * tidied) is passed on as '' and clears it. The screen sends "" only when the
+ * member emptied a field that had a value.
+ */
+const clearableLine = (max: number) => tidied(max).nullable();
 
 /** A set, not a list: a tick twice is one answer. */
 const uniqueKeys = <T extends z.ZodTypeAny>(item: T) =>
@@ -76,11 +85,12 @@ export const draftSchemaV2 = z.object({
 
 export type DraftInputV2 = z.infer<typeof draftSchemaV2>;
 
+/** A name can never be cleared, so a blank one keeps the stored one; the role, company and industry can. */
 const profileSchema = z.object({
   displayName: line(L.displayNameMaxLen).optional(),
-  jobTitle: line(L.jobTitleMaxLen).optional(),
-  company: line(L.companyMaxLen).optional(),
-  industry: line(L.industryMaxLen).optional(),
+  jobTitle: clearableLine(L.jobTitleMaxLen).optional(),
+  company: clearableLine(L.companyMaxLen).optional(),
+  industry: clearableLine(L.industryMaxLen).optional(),
   timezone,
   useLinkedinPhoto: z.boolean().optional(),
 }).strict();
