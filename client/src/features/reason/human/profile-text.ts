@@ -11,13 +11,18 @@ export interface Row { title: string; text: string }
 // ---- the address -----------------------------------------------------------------------------
 
 // ?from= is part of the address, so anyone can write anything into it. Only the places the app itself sends a
-// member from are ever shown on the page.
-export const KNOWN_SOURCES = ['For You', 'People', 'Messages', 'Introductions', 'Your path'] as const;
+// member from are ever shown on the page. Circles, pods and events open the Human Profile too (final review, 21 Oct
+// 2026); before, they opened the old /profile/:id page, which the admin links still use.
+export const KNOWN_SOURCES = ['For You', 'People', 'Messages', 'Introductions', 'Your path', 'Circles', 'Pods', 'Events'] as const;
 export type KnownSource = (typeof KNOWN_SOURCES)[number];
 
 export function knownSource(from: string | null): KnownSource | null {
   return KNOWN_SOURCES.find((s) => s === from) ?? null;
 }
+
+/** A member's Human Profile, saying where it was opened from. */
+export const personHref = (userId: string, from: KnownSource): string =>
+  `/people/${encodeURIComponent(userId)}?from=${encodeURIComponent(from)}`;
 
 const MEMBER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -160,6 +165,10 @@ export function foundThrough(source: KnownSource | null, first: string): { title
       return { title: `You found ${first} through Introductions`, line: 'This relationship arrived through an introduction. REASON keeps the introducer, reason and outcome as part of the relationship memory.' };
     case 'Your path':
       return { title: `You found ${first} on your path`, line: GENERIC_LINE };
+    case 'Circles':
+    case 'Pods':
+    case 'Events':
+      return { title: `You found ${first} through ${source}`, line: GENERIC_LINE };
     default:
       return { title: `About ${first}`, line: GENERIC_LINE };
   }

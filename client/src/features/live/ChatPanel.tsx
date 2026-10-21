@@ -273,7 +273,7 @@ function MessageBubble({ msg, isOwn, sessionId }: { msg: ChatMessage; isOwn: boo
           <div className="flex items-center gap-1.5 mb-0.5">
             {/* Phase 0 (a0070bd) fixed this surface ad-hoc; WS2/S3 moved the
                 new-tab guarantee into the shared ProfileLink. */}
-            <ProfileLink userId={msg.userId} className={`text-xs font-semibold hover:underline ${msg.isHost ? 'text-amber-600' : 'text-gray-500'}`}>
+            <ProfileLink from="Events" userId={msg.userId} className={`text-xs font-semibold hover:underline ${msg.isHost ? 'text-amber-600' : 'text-gray-500'}`}>
               {msg.displayName}
               {msg.isHost && <span className="ml-1 text-[10px] font-medium text-amber-600">HOST</span>}
             </ProfileLink>

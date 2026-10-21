@@ -187,10 +187,11 @@ export function FocusedMeetingRequest({ pokeId, myUserId }: { pokeId: string; my
     <div className="flex-1 flex items-center justify-center p-6">
       <div className="w-full max-w-sm rounded-2xl border border-rsn-red/30 bg-white p-6 shadow-sm text-center" data-testid="focused-meeting-request" data-poke-id={req.id}>
         <p className="text-xs font-semibold uppercase tracking-wider text-rsn-red">Meeting request</p>
-        <ProfileLink userId={req.senderId} className="mt-4 inline-block" title={`View ${req.senderDisplayName || 'this member'}'s profile`}>
+        <ProfileLink from="Messages" userId={req.senderId} className="mt-4 inline-block" title={`View ${req.senderDisplayName || 'this member'}'s profile`}>
           <Avatar src={req.senderAvatarUrl || undefined} name={req.senderDisplayName || 'Member'} size="xl" />
         </ProfileLink>
         <ProfileLink
+          from="Messages"
           userId={req.senderId}
           className="mt-3 block text-lg font-bold text-[#1a1a2e] hover:text-rsn-red hover:underline"
           title={`View ${req.senderDisplayName || 'this member'}'s profile`}
@@ -206,7 +207,7 @@ export function FocusedMeetingRequest({ pokeId, myUserId }: { pokeId: string; my
         {formatLabel(req.preferredFormat) && (
           <p className="mt-1 text-xs text-gray-500">Prefers {formatLabel(req.preferredFormat)?.toLowerCase()}</p>
         )}
-        <ProfileLink userId={req.senderId} className="mt-3 inline-block text-xs font-medium text-rsn-red underline">
+        <ProfileLink from="Messages" userId={req.senderId} className="mt-3 inline-block text-xs font-medium text-rsn-red underline">
           View full profile
         </ProfileLink>
         <div className="mt-5 flex gap-2">
@@ -388,11 +389,12 @@ export default function MeetingRequests({ myUserId, focusPokeId }: { myUserId: s
               {/* 7 Sep 2026 (Ali): the request is a profile card — avatar and
                   name open the sender's profile (new tab) so the recipient can
                   check who is asking before accepting. */}
-              <ProfileLink userId={r.senderId} title={`View ${r.senderDisplayName || 'this member'}'s profile`} className="shrink-0">
+              <ProfileLink from="Messages" userId={r.senderId} title={`View ${r.senderDisplayName || 'this member'}'s profile`} className="shrink-0">
                 <Avatar src={r.senderAvatarUrl || undefined} name={r.senderDisplayName || 'Member'} size="md" />
               </ProfileLink>
               <div className="min-w-0 flex-1">
                 <ProfileLink
+                  from="Messages"
                   userId={r.senderId}
                   className="block truncate text-sm font-semibold text-[#1a1a2e] hover:text-rsn-red hover:underline"
                   title={`View ${r.senderDisplayName || 'this member'}'s profile`}

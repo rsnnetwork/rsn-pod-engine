@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import Card from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -10,6 +10,7 @@ import api from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { useToastStore } from '@/stores/toastStore';
 import { E } from '@/realtime/entities';
+import { personHref } from '@/features/reason/human/profile-text';
 
 interface Connection {
   userId: string;
@@ -440,7 +441,7 @@ export default function RecapPage() {
           <div className="space-y-3">
             {data.mutualConnections.map(c => (
               <div key={c.userId} className="flex items-center gap-3 p-3 rounded-lg bg-indigo-500/5 border border-indigo-500/20 hover:bg-indigo-500/10 transition-colors">
-                <a href={`/profile/${c.userId}`} className="flex items-center gap-3 flex-1 min-w-0">
+                <Link to={personHref(c.userId, 'Events')} className="flex items-center gap-3 flex-1 min-w-0">
                   <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="md" />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -460,7 +461,7 @@ export default function RecapPage() {
                       </p>
                     )}
                   </div>
-                </a>
+                </Link>
                 <div className="flex items-center gap-2 shrink-0">
                   <div className="flex items-center gap-1 text-xs text-amber-400">
                     <Star className="h-3 w-3 fill-amber-400" />{c.qualityScore}
@@ -488,7 +489,7 @@ export default function RecapPage() {
         const isBonus = (r: number) => bonusAdded > 0 && data.totalRounds > 0 && r > data.totalRounds - bonusAdded;
         const row = (c: typeof data.connections[number]) => (
           <div key={`${c.userId}-${c.roundNumber}`} className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-100/40 transition-colors">
-            <a href={`/profile/${c.userId}`} className="flex items-center gap-3 flex-1 min-w-0">
+            <Link to={personHref(c.userId, 'Events')} className="flex items-center gap-3 flex-1 min-w-0">
               <Avatar src={c.avatarUrl} name={c.displayName || 'User'} size="sm" />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -500,7 +501,7 @@ export default function RecapPage() {
                   {c.company && ` @ ${c.company}`}
                 </p>
               </div>
-            </a>
+            </Link>
             <div className="flex items-center gap-3 shrink-0">
               {c.qualityScore > 0 && (
                 <div className="flex items-center gap-1 text-xs text-amber-400">

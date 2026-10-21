@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Calendar, Users, Play, Clock, UserPlus, UserMinus, Settings, CheckCircle, Pencil, Trash2, Mail, Copy, Check, AlertTriangle, CopyPlus, Search, Send, Shield, ShieldCheck } from 'lucide-react';
 import Card from '@/components/ui/Card';
@@ -15,6 +15,7 @@ import api from '@/lib/api';
 import { formatDateTime, LOCAL_TIME_LABEL, toLocalDatetimeInput, localTimezoneLabel } from '@/lib/utils';
 import { useAuthStore } from '@/stores/authStore';
 import { E } from '@/realtime/entities';
+import { personHref } from '@/features/reason/human/profile-text';
 import { sessionStatusLabel, sessionStatusColor, sessionStatusPhase } from './statusConfig';
 import MessageParticipantsButton from './MessageParticipantsButton';
 
@@ -758,13 +759,13 @@ export default function SessionDetailPage() {
               return (
                 <Card key={`host-${hostRow.userId}`} className="!p-4 border-rsn-red/30 bg-rsn-red/5">
                   <div className="flex items-center justify-between">
-                    <a href={`/profile/${hostRow.userId}`} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+                    <Link to={personHref(hostRow.userId, 'Events')} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
                       <Avatar src={hostRow.avatarUrl} name={hostRow.displayName || hostRow.email || 'Host'} size="sm" />
                       <div>
                         <p className="text-sm font-medium text-gray-800">{hostRow.displayName || hostRow.email || 'Host'}</p>
                         <p className="text-xs text-gray-400">Host / Director</p>
                       </div>
-                    </a>
+                    </Link>
                     <Badge variant="brand" className="text-xs">Host</Badge>
                   </div>
                 </Card>
@@ -784,13 +785,13 @@ export default function SessionDetailPage() {
               return (
                 <Card key={p.userId || p.id} className="!p-4">
                   <div className="flex items-center justify-between">
-                    <a href={`/profile/${p.userId || p.id}`} className="flex items-center gap-3 hover:opacity-80 transition-opacity min-w-0">
+                    <Link to={personHref(p.userId || p.id, 'Events')} className="flex items-center gap-3 hover:opacity-80 transition-opacity min-w-0">
                       <Avatar src={p.avatarUrl} name={p.displayName || p.email || 'User'} size="sm" />
                       <div className="min-w-0">
                         <p className="text-sm font-medium text-gray-800 truncate">{p.displayName || p.email || 'Participant'}</p>
                         <p className="text-xs text-gray-400">{p.isCohost ? 'Co-Host' : statusLabel}</p>
                       </div>
-                    </a>
+                    </Link>
                     {/* S16 — pre-event co-host management on the event page.
                         Same semantics as the live drawer's shield toggle. */}
                     <div className="flex items-center gap-2 shrink-0">

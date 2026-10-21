@@ -32,20 +32,26 @@ describe('WS2/S3 — ProfileLink is the only way to a profile from the live even
     const src = readClient('components/ui/ProfileLink.tsx');
     expect(src).toMatch(/target="_blank"/);
     expect(src).toMatch(/rel="noopener noreferrer"/);
-    expect(src).toMatch(/\/profile\/\$\{userId\}/);
+    // The Human Profile (final review, 21 Oct 2026), saying where it was opened from; never the old /profile/ page.
+    expect(src).toMatch(/href=\{personHref\(userId, from\)\}/);
+    expect(src).toMatch(/from: KnownSource;/);
+    expect(src).not.toMatch(/\/profile\/\$\{userId\}/);
   });
 
   it('NO live-event component hand-rolls a raw profile link or profile navigate()', () => {
     // Every file in features/live — the entire live-event surface. A raw
-    // <a href="/profile/..."> (same-tab) or navigate('/profile/...') here
-    // is exactly the eject bug. ProfileLink is the only sanctioned path.
+    // <a href="/profile/..."> or "/people/..." (same-tab), a navigate() to
+    // either, or a personHref outside ProfileLink here is exactly the eject
+    // bug. ProfileLink is the only sanctioned path.
     const offenders: string[] = [];
     for (const rel of listFiles('features/live')) {
       const src = readClient(rel);
-      // Strip the sanctioned component's own name so usage lines don't trip.
-      if (/<a[^>]*href=\{?[`'"]\/profile\//.test(src)) offenders.push(`${rel}: raw <a href="/profile/...">`);
-      if (/navigate\(\s*[`'"]\/profile\//.test(src)) offenders.push(`${rel}: navigate('/profile/...')`);
-      if (/<Link[^>]*to=\{?[`'"]\/profile\//.test(src)) offenders.push(`${rel}: <Link to="/profile/...">`);
+      for (const page of ['profile', 'people']) {
+        if (new RegExp(`<a[^>]*href=\\{?[\`'"]\\/${page}\\/`).test(src)) offenders.push(`${rel}: raw <a href="/${page}/...">`);
+        if (new RegExp(`navigate\\(\\s*[\`'"]\\/${page}\\/`).test(src)) offenders.push(`${rel}: navigate('/${page}/...')`);
+        if (new RegExp(`<Link[^>]*to=\\{?[\`'"]\\/${page}\\/`).test(src)) offenders.push(`${rel}: <Link to="/${page}/...">`);
+      }
+      if (/personHref\(/.test(src)) offenders.push(`${rel}: personHref outside ProfileLink`);
     }
     expect(offenders).toEqual([]);
   });
