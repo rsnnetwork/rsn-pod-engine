@@ -1,266 +1,282 @@
-// ─── The five steps ──────────────────────────────────────────────────────────
+// ─── Onboarding, version 2 ───────────────────────────────────────────────────
 //
-// Welcome → the questions → Confirm (Shradha's deck, 21 Sep 2026). Replaces the
-// open-ended chat, which produced free text nothing could compare, and the
-// confirm card that showed guessed country, company and about as if the member
-// had said them.
+// Shradha's brief, 19 Oct 2026: Welcome, "Let's get you started", the four
+// questions, "Here's how others will see you", then For You (screen 8), where
+// the short tour opens on its own. The live app keeps version 1 until go-live.
 //
-// Nothing here is guessed. The only things shown that they did not choose are
-// their name and photo, which the deck explicitly allows.
+// The step lives in the URL and the answers on the server (a draft as each
+// question is left), so a refresh or a second device comes back to the same
+// place. Once loaded, the member owns the answers: a refetch never overwrites
+// what they are ticking.
 //
-// The step lives in the URL and the answers live on the server, so a refresh,
-// a second device, or the round trip out to Google for a photo all come back
-// to the same place.
+// Edit mode, /onboarding?edit=q1|q2|q3|q4|profile, is for someone who has
+// finished: one part, saved through confirm, then back to where they came
+// from. It saves no drafts, so Cancel leaves nothing behind.
 
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import {
-  ONBOARDING_INTENTS, ONBOARDING_MEET, ONBOARDING_OFFERS, ONBOARDING_INDUSTRIES,
-  ONBOARDING_SELF_KINDS, ONBOARDING_LIMITS,
-  type OnboardingState, type OnboardingStep,
-} from '@rsn/shared';
-import api from '@/lib/api';
-import { E } from '@/realtime/entities';
-import { useAuthStore } from '@/stores/authStore';
-import { useToastStore } from '@/stores/toastStore';
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import type { OnboardingV2Answers, OnboardingV2State, OnboardingV2Step } from '@rsn/shared';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
+import { useToastStore } from '@/stores/toastStore';
 import OnboardingShell from './OnboardingShell';
-import QuestionStep from './QuestionStep';
-import ConfirmStep from './ConfirmStep';
-import type { SheepPose } from '@/components/brand/SheepAvatar';
+import FooterButtons, { type FooterProps } from './FooterButtons';
+import WelcomeScreen from './WelcomeScreen';
+import SignupScreen from './SignupScreen';
+import QuestionScreen from './QuestionScreen';
+import ProfileScreen from './ProfileScreen';
+import { useFlowSteps, useOnePress } from './useFlowSteps';
+import { useSignupChoice } from './useSignupChoice';
+import { useLeaveEdit } from './useLeaveEdit';
+import { useProfileForm } from './useProfileForm';
+import { useConfirm, useConnectLinkedin, useOnboardingV2State, useSaveDraft, useSkipLinkedin } from './useOnboardingV2';
+import {
+  PROFILE, confirmBody, confirmProblem, draftPatch, editAction, firstIncomplete, guessedSelf, problemMessage,
+  questionFor, questionProblem, stepAfter, stepBefore, withKeys,
+  type ConfirmProblem, type DraftPatch, type Question, type QuestionStepKey,
+} from './flow';
 
-type Answers = Partial<OnboardingState['answers']>;
-
-/** The questions, in order. Adding one is a line here and a line in shared. */
-const QUESTIONS = [
-  {
-    step: 'q1' as const, field: 'intent' as const, multiple: false,
-    title: 'What brings you to RSN?', options: ONBOARDING_INTENTS,
-  },
-  {
-    step: 'q2' as const, field: 'lookingToMeet' as const, multiple: true, max: ONBOARDING_LIMITS.meetMax,
-    title: 'Who do you want to meet?', subtitle: `Pick up to ${ONBOARDING_LIMITS.meetMax}.`,
-    limitHint: `That is ${ONBOARDING_LIMITS.meetMax}. Untick one to choose another.`,
-    options: ONBOARDING_MEET,
-  },
-  {
-    step: 'q3' as const, field: 'canOffer' as const, multiple: true,
-    title: 'What can you offer?', subtitle: 'Pick as many as fit.', options: ONBOARDING_OFFERS,
-  },
-  {
-    step: 'q4' as const, field: 'industries' as const, multiple: true,
-    title: 'Which industries are you in?', options: ONBOARDING_INDUSTRIES,
-  },
-  {
-    // Not in the deck, and the flow does not work without it: matching compares
-    // what you want against what the other person IS, so a member who never
-    // says which they are cannot be found by anybody.
-    step: 'q5' as const, field: 'selfKinds' as const, multiple: true, max: ONBOARDING_LIMITS.selfMax,
-    title: 'And which best describes you?', subtitle: `Pick up to ${ONBOARDING_LIMITS.selfMax}. This is how others find you.`,
-    limitHint: `That is ${ONBOARDING_LIMITS.selfMax}. Untick one to choose another.`,
-    options: ONBOARDING_SELF_KINDS,
-  },
-];
-
-const ORDER: OnboardingStep[] = ['welcome', 'q1', 'q2', 'q3', 'q4', 'q5', 'confirm'];
-const POSE: Record<OnboardingStep, SheepPose> = {
-  welcome: 'wave', q1: 'listening', q2: 'listening', q3: 'listening',
-  q4: 'listening', q5: 'listening', confirm: 'thinking',
-};
+const SAVE_FAILED = "We couldn't save your answers. Please try again.";
+const PHOTO_NOT_ADDED = "We couldn't add your LinkedIn photo. You can add a photo from your profile.";
 
 export default function OnboardingFlow() {
-  const [params, setParams] = useSearchParams();
-  const navigate = useNavigate();
-  const qc = useQueryClient();
-  const { addToast } = useToastStore();
-  const user = useAuthStore(s => s.user);
-  const checkSession = useAuthStore(s => s.checkSession);
+  const { data: state, isError, refetch } = useOnboardingV2State();
 
-  const [answers, setAnswers] = useState<Answers>({});
-  const [seeded, setSeeded] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [otherError, setOtherError] = useState<string | null>(null);
-
-  const { data: state, isLoading, isError, refetch } = useQuery({
-    queryKey: ['onboarding-state'],
-    queryFn: () => api.get('/onboarding/state').then(r => r.data.data as OnboardingState),
-    meta: { entities: user?.id ? [E.user(user.id)] : [] },
-  });
-
-  // Seed from the server ONCE, then the member owns the form. Re-seeding on
-  // every refetch would fight whatever they are typing.
-  useEffect(() => {
-    if (!state || seeded) return;
-    setAnswers(state.answers ?? {});
-    setSeeded(true);
-  }, [state, seeded]);
-
-  const redirect = params.get('redirect') || '/';
-  const urlStep = params.get('step') as OnboardingStep | null;
-
-  // The furthest step their answers can justify: deep-linking to Confirm with
-  // an empty draft lands on the first thing still unanswered instead.
-  const furthest = useMemo<OnboardingStep>(() => {
-    if (!seeded) return 'welcome';
-    for (const q of QUESTIONS) {
-      const v = answers[q.field];
-      const empty = q.multiple ? !(v as string[] | undefined)?.length : !v;
-      if (empty) return q.step;
-    }
-    return 'confirm';
-  }, [answers, seeded]);
-
-  const step: OnboardingStep = (() => {
-    if (!urlStep || !ORDER.includes(urlStep)) return state?.step && ORDER.includes(state.step) ? state.step : 'welcome';
-    return ORDER.indexOf(urlStep) > ORDER.indexOf(furthest) ? furthest : urlStep;
-  })();
-
-  const goTo = (next: OnboardingStep) => {
-    const p = new URLSearchParams(params);
-    p.set('step', next);
-    setParams(p); // a push, so the browser's own Back works through the flow
-  };
-
-  const saveDraft = async (patch: Record<string, unknown>) => {
-    try {
-      await api.put('/onboarding/answers', patch);
-    } catch {
-      // Losing a draft save is not worth stopping them: the answers are still
-      // in the form, and confirm sends the whole set anyway.
-    }
-  };
-
-  const confirmMutation = useMutation({
-    mutationFn: () => api.post('/onboarding/answers/confirm', {
-      intent: answers.intent,
-      lookingToMeet: answers.lookingToMeet ?? [],
-      canOffer: answers.canOffer ?? [],
-      industries: answers.industries ?? [],
-      industryOther: answers.industryOther ?? null,
-      selfKinds: answers.selfKinds ?? [],
-      jobTitle: answers.jobTitle ?? null,
-      company: answers.company ?? null,
-      about: answers.about ?? null,
-    }).then(r => r.data.data as { primaryAgentId: string | null }),
-    onSuccess: async (data) => {
-      // The gate lives in the auth store, so it has to be refreshed here or
-      // the next route bounces straight back into onboarding.
-      await checkSession();
-      await qc.invalidateQueries({ queryKey: ['onboarding-state'] });
-      navigate(data.primaryAgentId ? `/agents/${data.primaryAgentId}` : (redirect !== '/' ? redirect : '/agents'), { replace: true });
-    },
-    onError: (err: any) => {
-      addToast(err?.response?.data?.error?.message || 'Could not save your answers — try again.', 'error');
-    },
-  });
-
-  if (isLoading || !seeded) {
-    return (
-      <OnboardingShell pose="thinking" footer={null}>
-        <div className="flex justify-center py-8"><Spinner /></div>
-      </OnboardingShell>
-    );
-  }
-
-  if (isError) {
+  if (!state && isError) {
     return (
       <OnboardingShell
         pose="idle"
-        title="We could not load this"
+        title="We couldn't load this"
         subtitle="Check your connection and try again."
-        footer={<Button onClick={() => refetch()}>Try again</Button>}
+        footer={<Button onClick={() => refetch()} className="min-h-[48px] w-full sm:w-auto">Try again</Button>}
       >
         <span />
       </OnboardingShell>
     );
   }
-
-  // ── Welcome. One button, exactly as the deck draws it: no skip, no side
-  //    panel, and nothing pre-filled beyond the name and photo.
-  if (step === 'welcome') {
+  if (!state) {
     return (
-      <OnboardingShell
-        pose="wave"
-        title="Hey - welcome to RSN."
-        subtitle="We connect you with the people you actually want to meet."
-        footer={<Button onClick={() => goTo('q1')} className="min-h-[48px] w-full sm:w-auto">Let's go</Button>}
-      >
-        <p className="text-center text-sm text-gray-600">
-          Answer {QUESTIONS.length} quick questions so we know who that is.
-        </p>
+      <OnboardingShell pose="thinking">
+        <div className="flex justify-center py-8" role="status" aria-label="Loading"><Spinner /></div>
       </OnboardingShell>
     );
   }
+  return <Flow state={state} />;
+}
 
-  if (step === 'confirm') {
+function Flow({ state }: { state: OnboardingV2State }) {
+  const navigate = useNavigate();
+  const { addToast } = useToastStore();
+  const leave = useLeaveEdit();
+  // Only a LinkedIn choice made in this visit lets LinkedIn suggest anything (useSignupChoice).
+  const [via, choose] = useSignupChoice();
+  const linkedinOn = via === 'linkedin';
+  const form = useProfileForm(state, linkedinOn);
+  const { busy, once } = useOnePress();
+  const [sending, setSending] = useState<'linkedin' | 'email' | null>(null);
+  const saveDraft = useSaveDraft();
+  const connect = useConnectLinkedin();
+  const skip = useSkipLinkedin();
+  const confirm = useConfirm();
+
+  const [answers, setAnswers] = useState<OnboardingV2Answers>(() => state.answers);
+  const [ownWordsError, setOwnWordsError] = useState<string | null>(null);
+  // A refusal about a question itself, or a failed save, said under its options.
+  const [listError, setListError] = useState<string | null>(null);
+  const [selfTouched, setSelfTouched] = useState(false);
+  const [guessApplied, setGuessApplied] = useState<string | null>(null);
+  const ownWordsRef = useRef<HTMLInputElement>(null);
+  const steps = useFlowSteps(state, answers);
+  const { edit, screen } = steps;
+
+  // Screen 6: LinkedIn's most likely answer, ticked for them to confirm or change, when they chose LinkedIn.
+  const guess = linkedinOn ? state.linkedin.prefill?.selfGuess ?? null : null;
+  useEffect(() => {
+    if (screen !== 'q4') return;
+    const picked = guessedSelf(answers, guess, selfTouched);
+    if (!picked) return;
+    setAnswers(a => withKeys(a, questionFor('q4')!, picked));
+    setGuessApplied(picked[0]);
+  }, [screen, guess, selfTouched, answers]);
+
+  const go = (step: OnboardingV2Step, from?: 'profile') => {
+    setOwnWordsError(null);
+    setListError(null);
+    steps.go(step, from);
+  };
+
+  /** To a question that still needs something: when it is the missing words, the screen says so as it opens. */
+  const goToOpen = (step: QuestionStepKey, from?: 'profile') => {
+    go(step, from);
+    const question = questionFor(step)!;
+    if (questionProblem(question, answers) === 'own-words') setOwnWordsError(question.ownWordsMissing);
+  };
+
+  // A draft that does not land costs the member nothing: the answers are still on screen, and confirm
+  // sends the whole set. So a failed save never stops them moving on.
+  const keepDraft = (patch: DraftPatch) => saveDraft.mutateAsync(patch).catch(() => undefined);
+
+  /** One of screen 2's two choices, sent while the other waits. A refusal reaches the LinkedIn box, which says it. */
+  const sendChoice = (choice: 'linkedin' | 'email', work: () => Promise<void>) => once(async () => {
+    setSending(choice);
+    try {
+      await work();
+    } finally {
+      setSending(null);
+    }
+  });
+
+  const submit = (withProfile: boolean) => {
+    const profile = withProfile ? form.input() : undefined;
+    if (profile === null) return;
+    void once(async () => {
+      try {
+        const res = await confirm.mutateAsync(confirmBody(answers, profile));
+        if (res.photo === 'failed' || res.photo === 'none') addToast(PHOTO_NOT_ADDED, 'info');
+        if (edit) {
+          addToast('Your changes are saved.', 'success');
+          leave(edit);
+        } else {
+          // Where the gate sent them from, when that is a page of this app; else For You. The tour opens either way.
+          navigate(steps.redirect, { replace: true });
+        }
+      } catch (err) {
+        showRefusal(confirmProblem(err, SAVE_FAILED));
+      }
+    });
+  };
+
+  /** A refusal from confirm, said on the thing it is about, in the server's words when they are for members. */
+  const showRefusal = (problem: ConfirmProblem) => {
+    if (problem.question) {
+      if (problem.question !== screen) go(problem.question, screen === 'profile' ? 'profile' : undefined);
+      if (problem.ownWords) setOwnWordsError(problem.message); else setListError(problem.message);
+    } else if (screen === 'profile') {
+      form.refuse(problem.field, problem.message);
+    } else {
+      setListError(problem.message);
+    }
+  };
+
+  /** Whether a question can be left. When it cannot, it says why: missing words by their box, the rest under the options. */
+  const canLeave = (question: Question): boolean => {
+    const problem = questionProblem(question, answers);
+    if (problem === 'own-words') {
+      setOwnWordsError(problemMessage(question, problem));
+      ownWordsRef.current?.focus();
+    } else if (problem) {
+      setListError(problemMessage(question, problem));
+    }
+    return problem === null;
+  };
+
+  const questionFooter = (question: Question): FooterProps => {
+    const problem = questionProblem(question, answers);
+    const blocked = problem === 'empty' || problem === 'too-many';
+    /** Leave this question for `next`, keeping the draft in step (never in edit mode, where Cancel must leave nothing). */
+    const leaveFor = (next: OnboardingV2Step, arrive: () => void) => () => {
+      if (!canLeave(question)) return;
+      void once(async () => {
+        if (!edit) await keepDraft(draftPatch(question, answers, next));
+        arrive();
+      });
+    };
+    // Opened from screen 7, in the flow or in edit mode: both buttons go back there.
+    if (steps.backToProfile) {
+      const back = () => { setOwnWordsError(null); setListError(null); steps.backToProfileFrom(question.step); };
+      return { back: { label: 'Back', onClick: back }, primary: { label: 'Continue', unready: blocked, busy, onClick: leaveFor('profile', back) } };
+    }
+    if (edit) {
+      const action = editAction(answers, question.step);
+      return {
+        back: { label: 'Cancel', onClick: () => leave(edit) },
+        primary: action.kind === 'save'
+          ? { label: 'Save', unready: blocked, busy, onClick: () => { if (canLeave(question)) submit(false); } }
+          : { label: 'Continue', unready: blocked, busy, onClick: leaveFor(action.step, () => goToOpen(action.step)) },
+      };
+    }
+    const next = stepAfter(question.step);
+    return {
+      back: { label: 'Back', onClick: () => go(stepBefore(question.step)) },
+      primary: { label: 'Continue', unready: blocked, busy, onClick: leaveFor(next, () => go(next)) },
+    };
+  };
+
+  const finishProfile = () => {
+    const missing = firstIncomplete(answers);
+    if (missing) goToOpen(missing, 'profile');
+    else submit(true);
+  };
+
+  if (screen === 'welcome') {
+    return <WelcomeScreen key="welcome" busy={busy} onStart={() => once(async () => { await keepDraft({ step: 'signup' }); go('signup'); })} />;
+  }
+
+  if (screen === 'signup') {
     return (
-      <ConfirmStep
-        answers={answers}
-        onChange={setAnswers}
-        onEditStep={goTo}
-        onBack={() => goTo('q5')}
-        onConfirm={() => confirmMutation.mutate()}
-        submitting={confirmMutation.isPending}
+      <SignupScreen
+        key="signup"
+        linkedinUrl={state.profile.linkedinUrl}
+        sending={sending}
+        onLinkedin={(url) => sendChoice('linkedin', async () => {
+          await connect.mutateAsync(url);
+          choose('linkedin');
+          await keepDraft({ step: 'q1' });
+          go('q1');
+        })}
+        onEmail={() => void sendChoice('email', async () => {
+          choose('email');
+          // "Continue with email" is only recorded on the member's stage trail; losing that costs them nothing.
+          await skip.mutateAsync().catch(() => undefined);
+          await keepDraft({ step: 'q1' });
+          go('q1');
+        })}
       />
     );
   }
 
-  // ── One of the questions.
-  const q = QUESTIONS.find(x => x.step === step)!;
-  const index = QUESTIONS.indexOf(q);
-  const selected: string[] = q.multiple
-    ? ((answers[q.field] as string[] | undefined) ?? [])
-    : (answers[q.field] ? [answers[q.field] as string] : []);
-  const needsOther = q.field === 'industries' && selected.includes('other');
-  const canContinue = selected.length > 0 && (!needsOther || !!(answers.industryOther ?? '').trim());
-
-  const next = async () => {
-    if (!canContinue || saving) return;
-    if (needsOther && !(answers.industryOther ?? '').trim()) {
-      setOtherError('Tell us which industry, so people can find you in it.');
-      return;
-    }
-    setSaving(true);
-    const nextStep = ORDER[ORDER.indexOf(step) + 1];
-    await saveDraft({
-      [q.field]: q.multiple ? selected : selected[0],
-      ...(q.field === 'industries' ? { industryOther: answers.industryOther ?? null } : {}),
-      step: nextStep,
-    });
-    setSaving(false);
-    goTo(nextStep);
-  };
-
-  return (
-    <OnboardingShell
-      pose={POSE[step]}
-      progress={{ current: index + 1, total: QUESTIONS.length }}
-      title={q.title}
-      subtitle={q.subtitle}
-      onBack={() => goTo(ORDER[ORDER.indexOf(step) - 1])}
-      footer={
-        <Button onClick={next} disabled={!canContinue || saving} className="min-h-[48px] w-full sm:w-auto">
-          {saving ? 'Saving…' : index === QUESTIONS.length - 1 ? 'See my profile' : 'Continue'}
-        </Button>
-      }
-    >
-      <QuestionStep
-        options={q.options}
-        selected={selected}
-        multiple={q.multiple}
-        max={'max' in q ? q.max : undefined}
-        limitHint={'limitHint' in q ? q.limitHint : undefined}
-        onChange={v => setAnswers(a => ({ ...a, [q.field]: q.multiple ? v : v[0] }))}
-        other={q.field === 'industries' ? {
-          value: answers.industryOther ?? '',
-          onChange: v => { setOtherError(null); setAnswers(a => ({ ...a, industryOther: v })); },
-          placeholder: 'Manufacturing, education, property…',
-          maxLength: ONBOARDING_LIMITS.otherMaxLen,
-          error: otherError,
-        } : undefined}
+  if (screen === 'profile') {
+    return (
+      <ProfileScreen
+        key="profile"
+        state={state}
+        answers={answers}
+        fields={form.shown}
+        onField={form.setField}
+        fieldError={form.fieldError}
+        formError={form.formError}
+        nameRef={form.nameRef}
+        zone={form.zone}
+        onZone={form.setZone}
+        keptLinkedinPhoto={form.keptPhoto}
+        onKeepLinkedinPhoto={form.setKeptPhoto}
+        onEditAnswer={step => go(step, 'profile')}
+        returnedFrom={steps.returnedFrom}
+        onLinkedin={async (url) => { await connect.mutateAsync(url); choose('linkedin'); }}
+        linkedinOn={linkedinOn}
+        // An email sign-up is asked; so is a finished member with no LinkedIn. Not after "Later".
+        askForLinkedin={!linkedinOn && !form.linkedinLater && (!edit || !state.profile.linkedinUrl)}
+        onLinkedinLater={() => form.setLinkedinLater(true)}
+        footer={edit
+          ? <FooterButtons back={{ label: 'Cancel', onClick: () => leave(edit) }} primary={{ label: 'Save', onClick: finishProfile, busy }} />
+          : <FooterButtons primary={{ label: PROFILE.finish, onClick: finishProfile, busy }} />}
       />
-    </OnboardingShell>
+    );
+  }
+
+  const q = questionFor(screen)!;
+  return (
+    <QuestionScreen
+      key={screen}
+      question={q}
+      answers={answers}
+      onChange={next => { if (q.step === 'q4') setSelfTouched(true); setOwnWordsError(null); setListError(null); setAnswers(next); }}
+      ownWordsError={ownWordsError}
+      listError={listError}
+      ownWordsRef={ownWordsRef}
+      guessed={q.step === 'q4' && !selfTouched && !!guessApplied && answers.selfKinds.length === 1 && answers.selfKinds[0] === guessApplied}
+      showProgress={!edit}
+      footer={<FooterButtons {...questionFooter(q)} />}
+    />
   );
 }

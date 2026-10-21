@@ -1,55 +1,33 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowRight, Linkedin } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 import Modal from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { useAuthStore } from '@/stores/authStore';
-import api from '@/lib/api';
 import SheepAvatar from '@/components/brand/SheepAvatar';
 
-// Beautiful first-nudge popup that INVITES (never forces) a new member into the
-// host chat. It pops once per SESSION on the dashboard / profile until onboarding
-// is done, so it re-reminds on each new login but never re-pops as the member
-// clicks around. The persistent AppLayout banner is the always-on fallback.
-// Start is the prominent action; "Maybe later" is a quiet, smaller link.
+// A first nudge that INVITES (never forces) a member who has not finished
+// onboarding into it. It pops once per browser session on the pages that
+// mount it, so it re-reminds on each new sign-in but never re-pops as the
+// member clicks around; the shell's "Complete your profile" banner is the
+// always-on fallback. Start is the prominent action; "Maybe later" is quiet.
 //
-// For members who don't have a LinkedIn on file yet (invite signups — join-request
-// signups always do), the modal also offers an optional LinkedIn field. Adding it
-// here lets the profile lookup run the fast, high-confidence LinkedIn path the
-// moment they enter onboarding. It's fully skippable — leaving it blank falls back
-// to the basic name + email + country search.
+// 21 Oct 2026: it no longer asks for a LinkedIn link. Screen 2 of the
+// onboarding ("Let's get you started") does, with the link they gave when they
+// asked to join already in the box.
 export default function OnboardingWelcomeModal() {
   const navigate = useNavigate();
   const { user } = useAuthStore();
   const [open, setOpen] = useState(false);
-  const [needsLinkedin, setNeedsLinkedin] = useState(false);
-  const [linkedin, setLinkedin] = useState('');
-  const [starting, setStarting] = useState(false);
 
-  const userId = user?.id;
-  const done = (user as any)?.onboardingCompleted === true;
+  const userId: string | undefined = user?.id;
+  const done = user?.onboardingCompleted === true;
   const seenKey = userId ? `rsn_onb_welcome_seen_${userId}` : '';
-
-  // The field shows a fixed "linkedin.com/in/" prefix, so the member only types
-  // their profile name. Pasting a full URL still works — the slug is extracted.
-  function onLinkedinChange(raw: string) {
-    const m = raw.match(/\/in\/([^/?#\s]+)/i);
-    const slug = (m ? m[1] : raw).replace(/^@/, '').replace(/\/+$/, '').trim();
-    setLinkedin(slug);
-  }
 
   useEffect(() => {
     if (!userId || done || !seenKey) return;
-    // Per-session: re-reminds each new login until onboarding is complete.
     if (sessionStorage.getItem(seenKey)) return;
     setOpen(true);
-    // Do we already have a LinkedIn? If not, offer the optional field.
-    api
-      .get('/onboarding/known')
-      .then((res) => {
-        if (!res.data?.data?.linkedin) setNeedsLinkedin(true);
-      })
-      .catch(() => {});
   }, [userId, done, seenKey]);
 
   function dismiss() {
@@ -57,24 +35,15 @@ export default function OnboardingWelcomeModal() {
     setOpen(false);
   }
 
-  async function start() {
-    if (starting) return;
-    setStarting(true);
-    // Persist the LinkedIn (if they added one) BEFORE onboarding, so the lookup runs
-    // the fast LinkedIn path the instant they land. Best-effort — never block "start".
-    // The field holds a bare slug (the prefix is shown in the UI) — send the full URL.
-    const slug = linkedin.trim();
-    if (needsLinkedin && slug) {
-      await api.post('/onboarding/enrich/apply', { linkedin: `https://www.linkedin.com/in/${slug}` }).catch(() => {});
-    }
+  function start() {
     dismiss();
     navigate('/onboarding');
   }
 
   if (!userId || done) return null;
 
-  const firstName =
-    user?.firstName || (user?.displayName ? user.displayName.split(/\s+/)[0] : '') || 'there';
+  const firstName: string =
+    user?.firstName || (user?.displayName ? String(user.displayName).split(/\s+/)[0] : '') || 'there';
 
   return (
     <Modal open={open} onClose={dismiss} className="max-w-md">
@@ -82,47 +51,21 @@ export default function OnboardingWelcomeModal() {
         <SheepAvatar pose="wave" size={96} />
         <div>
           <h2 className="font-display text-2xl font-semibold leading-snug text-[#1a1a2e]">
-            Welcome to Reason, {firstName}.
+            Welcome to REASON, {firstName}.
           </h2>
           <p className="mx-auto mt-2 max-w-xs text-sm leading-relaxed text-gray-500">
-            Five quick questions set up your matching profile so we can connect you with the right
-            people. It takes about a minute.
+            Four quick questions, and REASON can suggest the people you want to meet. It takes about a minute.
           </p>
         </div>
 
-        {needsLinkedin && (
-          <div className="w-full text-left">
-            <label htmlFor="onb-linkedin" className="text-sm font-medium text-[#1a1a2e]">
-              Add your LinkedIn{' '}
-              <span className="font-normal text-gray-400">(optional — we'll build your profile faster)</span>
-            </label>
-            <div className="mt-1.5 flex items-center gap-1.5 rounded-xl border border-gray-300 bg-white px-3 focus-within:border-rsn-red/50 focus-within:ring-2 focus-within:ring-rsn-red/20">
-              <Linkedin className="h-4 w-4 shrink-0 text-gray-400" />
-              <span className="shrink-0 select-none text-[15px] text-gray-400">linkedin.com/in/</span>
-              <input
-                id="onb-linkedin"
-                type="text"
-                value={linkedin}
-                onChange={(e) => onLinkedinChange(e.target.value)}
-                placeholder="your-name"
-                className="min-h-[44px] w-full min-w-0 truncate bg-transparent text-[15px] text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none"
-              />
-            </div>
-          </div>
-        )}
-
         <div className="flex w-full flex-col items-center gap-3">
-          <Button
-            onClick={start}
-            isLoading={starting}
-            className="min-h-[54px] w-full justify-center text-base font-semibold"
-          >
+          <Button onClick={start} className="min-h-[54px] w-full justify-center text-base font-semibold">
             Get started <ArrowRight className="ml-2 h-5 w-5" />
           </Button>
           <button
             type="button"
             onClick={dismiss}
-            className="min-h-[40px] px-4 text-sm font-medium text-gray-400 transition-colors hover:text-gray-600"
+            className="min-h-[44px] px-4 text-sm font-medium text-gray-500 transition-colors hover:text-gray-700"
           >
             Maybe later
           </button>
