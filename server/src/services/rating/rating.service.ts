@@ -532,6 +532,8 @@ export async function getEncounterHistory(
 }
 
 // ─── Get All Encounters for a User ──────────────────────────────────────────
+// "People you have met" links every row to that person's profile, so anyone blocked in either direction, and
+// every account that is not active (closed, suspended, banned), is left out, as everywhere else (21 Oct 2026).
 
 export async function getUserEncounters(
   userId: string,
@@ -557,7 +559,11 @@ export async function getUserEncounters(
     FROM encounter_history eh
     JOIN users u ON u.id = CASE WHEN eh.user_a_id = $1 THEN eh.user_b_id ELSE eh.user_a_id END
     LEFT JOIN sessions s ON s.id = eh.last_session_id
-    WHERE (eh.user_a_id = $1 OR eh.user_b_id = $1)`;
+    WHERE (eh.user_a_id = $1 OR eh.user_b_id = $1)
+      AND u.status = 'active'
+      AND NOT EXISTS (SELECT 1 FROM user_blocks b
+                       WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
+                          OR (b.blocker_id = u.id AND b.blocked_id = $1))`;
 
   if (mutualOnly) {
     sql += ' AND eh.mutual_meet_again = TRUE';

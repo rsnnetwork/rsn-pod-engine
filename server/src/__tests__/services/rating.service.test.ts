@@ -347,6 +347,21 @@ describe('Rating Service', () => {
       expect(result).toHaveLength(1);
       expect(mockQuery.mock.calls[0][0]).toContain('mutual_meet_again = TRUE');
     });
+
+    // 21 Oct 2026: "People you have met" listed a member the viewer had blocked (or who had blocked them), and
+    // closed, suspended and banned accounts, with a link to their profile.
+    it.each([false, true])('leaves out anyone blocked in either direction and every account that is not active (mutual only: %s)', async (mutualOnly) => {
+      mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+      await ratingService.getUserEncounters('user-a', mutualOnly);
+      const sql = String(mockQuery.mock.calls[0][0]).replace(/\s+/g, ' ');
+      expect(sql).toMatch(/AND u\.status = 'active'/);
+      expect(sql).toMatch(/AND NOT EXISTS \(SELECT 1 FROM user_blocks b WHERE \(b\.blocker_id = \$1 AND b\.blocked_id = u\.id\) OR \(b\.blocker_id = u\.id AND b\.blocked_id = \$1\)\)/);
+      // Both apply before the order, and the member is the only parameter.
+      expect(sql.indexOf("u.status = 'active'")).toBeLessThan(sql.indexOf('ORDER BY'));
+      expect(sql.indexOf('user_blocks')).toBeLessThan(sql.indexOf('ORDER BY'));
+      expect(mockQuery.mock.calls[0][1]).toEqual(['user-a']);
+    });
   });
 
   describe('getSessionRatingStats', () => {
