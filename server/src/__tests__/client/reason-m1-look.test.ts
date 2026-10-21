@@ -712,9 +712,10 @@ describe('The short tour shows no made-up people, puts its words above the pictu
     expect(src).not.toMatch(/\bRSN\b/);
   });
 
-  it('the last button says "See my matches" for someone who has just onboarded, and "Done" when the tour is replayed', () => {
+  it('the last button says "See my matches" for someone who has just onboarded, and "Done" when the tour is replayed or closes where they are', () => {
     const src = source();
-    expect(src).toMatch(/\(mode === 'replay' \? 'Done' : 'See my matches'\)/);
+    expect(src).toMatch(/\(mode === 'replay' \|\| closesHere \? 'Done' : 'See my matches'\)/);
+    expect(src).toMatch(/closesHere = false/);
     expect(src).not.toMatch(/See my suggestions/);
   });
 
@@ -737,21 +738,23 @@ describe('The short tour hands the member to For You when it is finished or skip
   const run = (pathname: string, failed = false, { state = null as unknown, returned = false } = {}) => {
     const navigate = jest.fn();
     const markSeen = jest.fn();
-    const takeReturned = jest.fn((memberId: string | undefined) => returned && memberId === 'u1');
-    const handed: { onFinish?: (outcome: Outcome) => void; mode?: string; open?: boolean; failed?: boolean } = {};
+    let marked = returned;
+    const hasReturned = jest.fn((memberId: string | undefined) => marked && memberId === 'u1');
+    const forgetReturned = jest.fn(() => { marked = false; });
+    const handed: { onFinish?: (outcome: Outcome) => void; mode?: string; open?: boolean; failed?: boolean; closesHere?: boolean } = {};
     const mod = loadModule('src/features/onboarding/OnboardingTour.tsx', {
       'react-router-dom': { useLocation: () => ({ pathname, state }), useNavigate: () => navigate },
       '@/stores/authStore': { useAuthStore: (select: (s: unknown) => unknown) => select({ user: { id: 'u1' } }) },
       './useTourState': { useTourState: () => ({ pending: true, failed, markSeen }) },
       './flow': flow,
-      './tour-landing': { takeReturned },
+      './tour-landing': { hasReturned, forgetReturned },
       './HowRsnWorks': {
         __esModule: true,
         default: (props: typeof handed) => { Object.assign(handed, props); return null; },
       },
     });
     renderToStaticMarkup(createElement(mod.default as never));
-    return { navigate, markSeen, handed, takeReturned };
+    return { navigate, markSeen, handed, hasReturned, forgetReturned };
   };
 
   // Final review, 21 Oct 2026 (C1): an invited member followed a link to an event, confirm put them there, the tour
@@ -759,28 +762,42 @@ describe('The short tour hands the member to For You when it is finished or skip
   // member whose edit made the tour due, on the page they came back to.
   for (const outcome of ['completed', 'skipped'] as const) {
     it(`${outcome}: on a page the flow put them on (its history entry says LANDED), they stay there`, () => {
-      const { navigate, markSeen, handed, takeReturned } = run('/sessions/e1', false, { state: flow.LANDED });
+      const { navigate, markSeen, handed } = run('/sessions/e1', false, { state: flow.LANDED });
       handed.onFinish!(outcome);
       expect(markSeen).toHaveBeenCalledWith(outcome);
       expect(navigate).not.toHaveBeenCalled();
-      // The page says it all: edit mode's mark is not used up for it.
-      expect(takeReturned).not.toHaveBeenCalled();
     });
 
     it(`${outcome}: back on the page they changed an answer from (edit mode's mark, for this member), they stay there`, () => {
-      const { navigate, handed, takeReturned } = run('/profile', false, { returned: true });
+      const { navigate, handed, hasReturned } = run('/profile', false, { returned: true });
       handed.onFinish!(outcome);
-      expect(takeReturned).toHaveBeenCalledWith('u1');
+      expect(hasReturned).toHaveBeenCalledWith('u1');
       expect(navigate).not.toHaveBeenCalled();
     });
   }
 
-  it('a second press, after a save that did not go through, decides as the first did: the mark is used once and the answer kept', () => {
-    const { navigate, handed, takeReturned } = run('/profile', true, { returned: true });
+  it('a second press, after a save that did not go through, decides as the first did: the mark is forgotten once and the answer kept', () => {
+    const { navigate, handed, forgetReturned } = run('/profile', true, { returned: true });
     handed.onFinish!('skipped');
     handed.onFinish!('skipped');
-    expect(takeReturned).toHaveBeenCalledTimes(1);
+    expect(forgetReturned).toHaveBeenCalledTimes(1);
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  // Fix round 1 (M-1): staying on the page they followed, the last button said "See my matches". There it says Done.
+  it('drawing it reads the mark and uses nothing up; only the first press forgets it', () => {
+    const { handed, forgetReturned } = run('/profile', false, { returned: true });
+    expect(handed.closesHere).toBe(true);
+    expect(forgetReturned).not.toHaveBeenCalled();
+  });
+
+  it('its last button says Done where it leaves them on the page they are on, and See my matches where it takes them to For You or they are on it', () => {
+    expect(run('/sessions/e1', false, { state: flow.LANDED }).handed.closesHere).toBe(true);
+    expect(run('/profile', false, { returned: true }).handed.closesHere).toBe(true);
+    // On For You itself, where the flow lands most members, the deck's "See my matches" is right.
+    expect(run('/', false, { state: flow.LANDED }).handed.closesHere).toBe(false);
+    expect(run('/', false, { returned: true }).handed.closesHere).toBe(false);
+    expect(run('/agents').handed.closesHere).toBe(false);
   });
 
   it('a history entry that says anything else, or nothing, is not a landing: the member goes to For You', () => {

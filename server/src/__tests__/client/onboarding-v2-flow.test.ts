@@ -13,9 +13,9 @@ import {
   toggleKey, confirmBody, draftPatch, profileValue, profileInput, linkedinForInput, linkedinInputProblem,
   zoneLabel, searchZones, onboardingError, answerSummary, linkedinNote, editAction, editFallback, guessedSelf,
   withKeys, withOwnWords, isRealZone, zoneList, currentZoneName, confirmProblem,
-  safeRedirect, problemMessage, ANSWER_NEEDED, signupChoiceKey, parseSignupChoice, LANDED, isLanded, returnedKey,
+  safeRedirect, problemMessage, ANSWER_NEEDED, signupChoiceKey, parseSignupChoice, LANDED, isLanded, returnedKey, tourOpensAfterConfirm,
 } from '../../../../client/src/features/onboarding/flow';
-import { markReturned, takeReturned } from '../../../../client/src/features/onboarding/tour-landing';
+import { forgetReturned, hasReturned, markReturned } from '../../../../client/src/features/onboarding/tour-landing';
 
 const NONE: OnboardingV2Answers = {
   lookingToMeet: [], meetOther: null,
@@ -392,26 +392,44 @@ describe('where the tour leaves a member: where the flow put them', () => {
     beforeEach(() => { store = new Map(); (global as { sessionStorage?: unknown }).sessionStorage = fake(); });
     afterAll(() => { (global as { sessionStorage?: unknown }).sessionStorage = real; });
 
-    it('is there once it is marked, and gone once it is taken', () => {
-      expect(takeReturned('a1')).toBe(false);
+    // Fix round 1 (M-1): the tour reads it as it draws (its last button says Done on such a page), so reading it uses
+    // nothing up; the first press forgets it.
+    it('is there once it is marked, reading it changes nothing, and it is gone once it is forgotten', () => {
+      expect(hasReturned('a1')).toBe(false);
       markReturned('a1');
       expect(store.get('rsn_onb_v2_returned_a1')).toBe('1');
-      expect(takeReturned('b2')).toBe(false);
-      expect(takeReturned('a1')).toBe(true);
-      expect(takeReturned('a1')).toBe(false);
+      expect(hasReturned('b2')).toBe(false);
+      expect(hasReturned('a1')).toBe(true);
+      expect(hasReturned('a1')).toBe(true);
+      forgetReturned('a1');
+      expect(hasReturned('a1')).toBe(false);
+      expect(store.size).toBe(0);
     });
 
-    it('with nobody signed in, nothing is marked or taken', () => {
+    it('with nobody signed in, nothing is marked, read or forgotten', () => {
       markReturned(undefined);
       expect(store.size).toBe(0);
-      expect(takeReturned(undefined)).toBe(false);
+      expect(hasReturned(undefined)).toBe(false);
+      expect(() => forgetReturned(undefined)).not.toThrow();
     });
 
     it('with the browser\'s storage switched off, nothing breaks: the tour then goes to For You, as before', () => {
       (global as { sessionStorage?: unknown }).sessionStorage = fake(true);
       expect(() => markReturned('a1')).not.toThrow();
-      expect(takeReturned('a1')).toBe(false);
+      expect(hasReturned('a1')).toBe(false);
+      expect(() => forgetReturned('a1')).not.toThrow();
     });
+  });
+});
+
+// Fix round 1 (M-7): an existing member's first edit makes the tour due (confirm stamps it whenever it was never seen),
+// and its success toast sat over the tour's Skip on a phone for 2.5 seconds.
+describe('whether a confirm opens the tour: whenever the member has never seen it', () => {
+  it('a member who has never seen it gets it, due or not yet due; one who has seen it never again', () => {
+    expect(tourOpensAfterConfirm({ pending: false, seenAt: null, outcome: null })).toBe(true);
+    expect(tourOpensAfterConfirm({ pending: true, seenAt: null, outcome: null })).toBe(true);
+    expect(tourOpensAfterConfirm({ pending: false, seenAt: '2026-10-20T09:00:00.000Z', outcome: 'skipped' })).toBe(false);
+    expect(tourOpensAfterConfirm({ pending: false, seenAt: '2026-10-20T09:00:00.000Z', outcome: 'completed' })).toBe(false);
   });
 });
 

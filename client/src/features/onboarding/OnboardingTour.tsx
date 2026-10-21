@@ -7,9 +7,9 @@
 // client's 19 Oct feedback, "take people straight to a full page of their
 // suggested matches"), unless the flow itself put them where they are: the page
 // they followed a link to before they finished, or the one they came from to
-// change an answer (final review, 21 Oct). Replaying it from Support is a
-// different mount (it has no saved outcome and no destination) and stays on
-// Support.
+// change an answer (final review, 21 Oct). There its last button says Done, not
+// "See my matches" (fix round 1). Replaying it from Support is a different mount
+// (it has no saved outcome and no destination) and stays on Support.
 
 import { useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -17,7 +17,7 @@ import { useAuthStore } from '@/stores/authStore';
 import HowRsnWorks from './HowRsnWorks';
 import { useTourState } from './useTourState';
 import { isLanded } from './flow';
-import { takeReturned } from './tour-landing';
+import { forgetReturned, hasReturned } from './tour-landing';
 
 export default function OnboardingTour() {
   const { pending, failed, markSeen } = useTourState();
@@ -25,16 +25,25 @@ export default function OnboardingTour() {
   const navigate = useNavigate();
   const memberId = useAuthStore(s => s.user?.id as string | undefined);
   // Decided at the first press and kept: a press after a save that did not go through decides the same way.
-  const stays = useRef(false);
+  const decided = useRef<boolean | null>(null);
 
   // Not over the flow itself: they are still answering.
   if (pathname.startsWith('/onboarding')) return null;
 
+  // Where the flow put them, read without using anything up until the first press.
+  const stays = decided.current ?? (isLanded(state) || hasReturned(memberId));
+
   const finish = (outcome: 'completed' | 'skipped') => {
     markSeen(outcome);
-    stays.current = stays.current || isLanded(state) || takeReturned(memberId);
-    if (!stays.current && pathname !== '/') navigate('/');
+    if (decided.current === null) {
+      decided.current = stays;
+      forgetReturned(memberId);
+    }
+    if (!decided.current && pathname !== '/') navigate('/');
   };
 
-  return <HowRsnWorks open={pending} mode="onboarding" failed={failed} onFinish={finish} />;
+  // On For You itself "See my matches" is what closing it does; anywhere it leaves them, it says Done.
+  return (
+    <HowRsnWorks open={pending} mode="onboarding" closesHere={stays && pathname !== '/'} failed={failed} onFinish={finish} />
+  );
 }

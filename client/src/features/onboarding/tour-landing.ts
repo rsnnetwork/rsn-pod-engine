@@ -5,8 +5,8 @@
 //
 // A page the flow opens itself carries LANDED in its history entry (flow.ts). Edit mode goes back through the
 // browser's history, which can carry nothing, so that is remembered here instead: per member, for the visit (this
-// tab, through a refresh), and used up by the tour that reads it. Run by
-// server/src/__tests__/client/onboarding-v2-flow.test.ts.
+// tab, through a refresh). The tour reads it as it draws (its last button then says Done) and forgets it at the first
+// press. Run by server/src/__tests__/client/onboarding-v2-flow.test.ts.
 
 import { returnedKey } from './flow';
 
@@ -29,16 +29,22 @@ export function markReturned(memberId: string | undefined): void {
   }
 }
 
-/** Whether edit mode sent this member back, forgetting it: it counts for one tour. */
-export function takeReturned(memberId: string | undefined): boolean {
+/** Whether edit mode sent this member back. Reading it changes nothing. */
+export function hasReturned(memberId: string | undefined): boolean {
   if (!memberId) return false;
   try {
-    const storage = tab();
-    const key = returnedKey(memberId);
-    const returned = storage?.getItem(key) === '1';
-    storage?.removeItem(key);
-    return returned;
+    return tab()?.getItem(returnedKey(memberId)) === '1';
   } catch {
     return false;
+  }
+}
+
+/** It counts for one tour: forgotten at that tour's first press. */
+export function forgetReturned(memberId: string | undefined): void {
+  if (!memberId) return;
+  try {
+    tab()?.removeItem(returnedKey(memberId));
+  } catch {
+    // Storage switched off: there is nothing to forget.
   }
 }

@@ -14,9 +14,10 @@ import {
   BANNER_HEIGHT, BANNER_INPUT_MAX_BYTES, BANNER_QUALITY, BANNER_TYPES, BANNER_WIDTH, bannerCrop, bannerFileProblem,
 } from '../../../../client/src/features/reason/profile/banner-image';
 import {
-  ADD_COMPANY_TO, CONNECT_LINKEDIN_TO, EDIT_ANSWERS_TO, EDIT_PROFILE_TO, needsLinkedin, privateRows, youCanBring,
+  ADD_COMPANY_TO, CONNECT_LINKEDIN_TO, EDIT_ANSWERS_TO, EDIT_PROFILE_TO, answerLines, needsLinkedin, privateRows, youCanBring,
 } from '../../../../client/src/features/reason/profile/your-profile-text';
 import { personFacts } from '../../../../client/src/features/reason/human/profile-text';
+import { linkedinBoxValue, linkedinSave } from '../../../../client/src/features/profile/linkedin-box';
 
 const CLIENT = path.join(__dirname, '../../../../client/src');
 // Working-tree files are CRLF on Windows; normalise so patterns match either way.
@@ -138,6 +139,20 @@ describe('Your profile: what it says', () => {
     expect(JSON.stringify(privateRows(state({ lookingToMeet: ['meet_students_early_career'] })))).not.toMatch(/interns|recent graduates/);
   });
 
+  // Fix round 1 (M-2): the profile form shows the same answers, by the same rule, for what you can offer too.
+  it('answerLines: a question\'s answers as you gave them, the specific wish on its own line, and nothing for none', () => {
+    expect(answerLines('q1', ANSWERS)).toEqual(['Investors · “bakers who sell abroad”']);
+    expect(answerLines('q2', ANSWERS)).toEqual(['Raising funding', '“A lead investor for a seed round”']);
+    expect(answerLines('q3', { ...ANSWERS, canOffer: ['offer_advice_mentoring', 'offer_other'], offerOther: ' bread classes ' }))
+      .toEqual([answerSummary(questionFor('q3')!, { ...ANSWERS, canOffer: ['offer_advice_mentoring', 'offer_other'], offerOther: ' bread classes ' })]);
+    expect(answerLines('q3', ANSWERS)[0]).not.toMatch(/as an advisor and mentor/);
+    expect(answerLines('q3', { ...ANSWERS, canOffer: [] })).toEqual([]);
+    expect(answerLines('q2', { ...ANSWERS, hopingToFind: [], findSpecific: '  ' })).toEqual([]);
+    // Your profile's private rows are made from it.
+    const [meet, find] = privateRows(state({}));
+    expect([meet.lines, find.lines]).toEqual([answerLines('q1', ANSWERS), answerLines('q2', ANSWERS)]);
+  });
+
   it('says so when a question is not answered, or there is no time zone, and never falls back to anything else', () => {
     expect(privateRows(state({ lookingToMeet: [], meetOther: null, hopingToFind: [], findSpecific: '   ' }, null)).map((r) => r.lines))
       .toEqual([[], [], []]);
@@ -149,6 +164,21 @@ describe('Your profile: what it says', () => {
     expect(needsLinkedin({ linkedinUrl: null })).toBe(true);
     expect(needsLinkedin({ linkedinUrl: '   ' })).toBe(true);
     expect(needsLinkedin({ linkedinUrl: 'https://linkedin.com/in/nora' })).toBe(false);
+  });
+
+  // Fix round 1 (M-3): any stored text hid the card, while the hero links only an https address on LinkedIn, so a junk or
+  // http address left the member with neither a link nor the way to add one. The card follows the hero's own parse.
+  it('the LinkedIn card shows whenever the hero has no LinkedIn link to show: an http address or text that is no link too', () => {
+    for (const linkedinUrl of ['http://www.linkedin.com/in/nora', 'not a link', 'linkedin.com/in/nora', 'https://evil.example/in/nora', 'javascript:alert(1)']) {
+      expect({ linkedinUrl, card: needsLinkedin({ linkedinUrl }) }).toEqual({ linkedinUrl, card: true });
+    }
+    for (const linkedinUrl of ['https://www.linkedin.com/in/nora', 'https://www.linkedin.com/in/jane?utm_source=share&utm_medium=ios_app', 'https://uk.linkedin.com/in/nora/']) {
+      expect({ linkedinUrl, card: needsLinkedin({ linkedinUrl }) }).toEqual({ linkedinUrl, card: false });
+    }
+    // The very parse the hero links with.
+    for (const linkedinUrl of [null, 'http://www.linkedin.com/in/nora', 'https://www.linkedin.com/in/nora', 'junk']) {
+      expect(needsLinkedin({ linkedinUrl })).toBe(personFacts(person({ linkedinUrl })).linkedin === null);
+    }
   });
 
   // Final review (C2): "Edit answers" opened the first question alone, a dead end. It opens screen 7, with every
@@ -364,6 +394,12 @@ describe('the old form at /profile/edit', () => {
     expect(form()).toMatch(/scrollIntoView\(/);
   });
 
+  // Fix round 1: at 360px a long name or e-mail squeezed the photo into a thin oval and could push the card sideways.
+  it('the form\'s header keeps the photo round at any width, and a long name or e-mail wraps beside it', () => {
+    expect(form()).toMatch(/<div className="relative group shrink-0">\s*\{user\.avatarUrl \?/);
+    expect(form()).toMatch(/<div className="min-w-0 \[overflow-wrap:anywhere\]">\s*<p className="text-lg font-semibold text-\[#1a1a2e\]">\{user\.displayName \|\| 'Set your name'\}<\/p>/);
+  });
+
   it('the Google photo comes back to the form, where its outcome is read', () => {
     expect(form()).toMatch(/api\.post\('\/auth\/google\/photo-state', \{ redirect: '\/profile\/edit' \}\)/);
   });
@@ -374,12 +410,23 @@ describe('the old form at /profile/edit', () => {
   it('"What I can help with", "Who I want to meet" and "My intent" are shown, not edited, with Edit answers beside them', () => {
     for (const field of ANSWER_FIELDS) {
       expect(form()).not.toMatch(new RegExp(`register\\('${field}'\\)`));
-      expect(form()).toMatch(new RegExp(`value: visibleText\\(user\\.${field}\\) \\}`));
+      // Fix round 1 (M-2): never the stored text, which is the matcher's wording for them.
+      expect(form()).not.toMatch(new RegExp(`user\\.${field}\\b`));
     }
-    for (const label of ['What I can help with', 'Who I want to meet', 'My intent']) expect(form()).toContain(`label: '${label}'`);
-    expect(form()).toMatch(/import \{ EDIT_ANSWERS_TO \} from '@\/features\/reason\/profile\/your-profile-text';/);
+    // The member's own answers, by the rule Your profile uses: Q3, Q1 and Q2, from the onboarding's own state.
+    for (const [label, step] of [['What I can help with', 'q3'], ['Who I want to meet', 'q1'], ['My intent', 'q2']]) {
+      expect(form()).toContain(`{ label: '${label}', icon: `);
+      expect(form()).toMatch(new RegExp(`label: '${label}', icon: \\w+, step: '${step}' \\}`));
+    }
+    expect(form()).toMatch(/import \{ EDIT_ANSWERS_TO, answerLines \} from '@\/features\/reason\/profile\/your-profile-text';/);
+    expect(form()).toMatch(/import \{ useOnboardingV2State \} from '@\/features\/onboarding\/useOnboardingV2';/);
+    expect(form()).toMatch(/const lines = answerLines\(step, state\.data\.answers\);/);
     expect(form()).toMatch(/<Link to=\{EDIT_ANSWERS_TO\} className="[^"]*\bmin-h-\[44px\][^"]*">Edit answers<\/Link>/);
-    expect(form()).toMatch(/\{value \?\? 'Not answered yet\.'\}/);
+    expect(form()).toMatch(/\(lines\.length \? lines : \['Not answered yet\.'\]\)/);
+    // Loading and a failed load each say so; a failed one can be tried again.
+    expect(form()).toMatch(/aria-busy="true"/);
+    expect(form()).toMatch(/We could not load your answers just now\./);
+    expect(form()).toMatch(/onClick=\{\(\) => void state\.refetch\(\)\}/);
     // The two that only this form writes stay editable.
     for (const field of ['whatICareAbout', 'whyIWantToMeet']) expect(form()).toMatch(new RegExp(`register\\('${field}'\\)`));
   });
@@ -389,15 +436,55 @@ describe('the old form at /profile/edit', () => {
   // members here, so it uses the request form's clean-up (normalizeLinkedinInput, run in join-form-linkedin.test.ts).
   it('the LinkedIn field is cleaned up by the request form\'s own rule, and a link that is not a profile is said next to the field', () => {
     const submit = form().slice(form().indexOf('const onSubmit = async'), form().indexOf('if (!user) return null;'));
-    expect(form()).toMatch(/import \{ LINKEDIN_LINK_HELP, normalizeLinkedinInput \} from '@\/features\/auth\/linkedin-link';/);
+    expect(form()).toMatch(/import \{ LINKEDIN_LINK_HELP \} from '@\/features\/auth\/linkedin-link';/);
     expect(form()).not.toMatch(/normalizeLinkedInUrl|isValidLinkedInUrl|https:\/\/linkedin\.com\/in\/\$\{/);
-    expect(submit).toMatch(/const linkedinUrl = normalizeLinkedinInput\(data\.linkedinUrl\);\s*if \(linkedinUrl === null\) \{\s*setError\('linkedinUrl', \{ message: LINKEDIN_LINK_HELP \}, \{ shouldFocus: true \}\);\s*return;\s*\}/);
-    expect(submit).toMatch(/api\.put\('\/users\/me', \{\s*\.\.\.data,\s*linkedinUrl,/);
+    expect(read('features/profile/linkedin-box.ts')).toMatch(/import \{ normalizeLinkedinInput \} from '\.\.\/auth\/linkedin-link';/);
+    expect(submit).toMatch(/if \(linkedin\.kind === 'refuse'\) \{\s*setError\('linkedinUrl', \{ message: LINKEDIN_LINK_HELP \}, \{ shouldFocus: true \}\);\s*return;\s*\}/);
     // Said under the field, never as a toast, and the field says it is the one that is wrong.
     expect(submit).not.toMatch(/addToast\([^)]*LinkedIn/);
     expect(form()).toMatch(/aria-invalid=\{errors\.linkedinUrl \? true : undefined\}/);
     expect(form()).toMatch(/aria-describedby=\{errors\.linkedinUrl \? 'linkedin-error' : undefined\}/);
     expect(form()).toMatch(/<p id="linkedin-error" role="alert"[^>]*>\{errors\.linkedinUrl\.message\}<\/p>/);
+  });
+
+  // Fix round 1 (I-1): the box showed a stored address with only its prefix taken off, and every save checked it, so a
+  // stored share link (or ?originalSubdomain=, a #section, a page under the profile) refused every save until the member
+  // edited a field they never touched.
+  const SHARE = 'https://www.linkedin.com/in/jane?utm_source=share&utm_medium=ios_app';
+  const STORED_FORMS = [
+    [SHARE, 'jane'],
+    ['https://www.linkedin.com/in/stefan/?originalSubdomain=de', 'stefan'],
+    ['https://www.linkedin.com/in/jane#about', 'jane'],
+    ['https://www.linkedin.com/in/jane/details/experience', 'jane'],
+  ] as const;
+  it.each(STORED_FORMS)('a stored %s shows its name, %s, in the box', (stored, name) => {
+    expect(linkedinBoxValue(stored)).toBe(name);
+  });
+  it('the box shows the plain stored name as it is, nothing for none, and anything that does not open as a LinkedIn link as it is stored, to be put right', () => {
+    expect(linkedinBoxValue('https://www.linkedin.com/in/Jane-Doe')).toBe('Jane-Doe');
+    expect(linkedinBoxValue('https://uk.linkedin.com/in/jane/')).toBe('jane');
+    for (const none of [null, undefined, '', '   ']) expect(linkedinBoxValue(none)).toBe('');
+    for (const odd of ['http://www.linkedin.com/in/jane', 'not a link', 'linkedin.com/in/jane', 'https://evil.example/in/jane', 'https://www.linkedin.com/company/acme']) {
+      expect({ odd, shown: linkedinBoxValue(odd) }).toEqual({ odd, shown: odd });
+    }
+  });
+  it('a save checks and sends the box only when the member changed it: an untouched stored address never blocks a save and is never rewritten', () => {
+    for (const [stored] of STORED_FORMS) expect(linkedinSave(linkedinBoxValue(stored), false)).toEqual({ kind: 'keep' });
+    // Even text that is no link at all, left as it was, never stops another field being saved.
+    expect(linkedinSave('not a link', false)).toEqual({ kind: 'keep' });
+    expect(linkedinSave('ada-lovelace', true)).toEqual({ kind: 'send', url: 'https://www.linkedin.com/in/ada-lovelace' });
+    expect(linkedinSave(`linkedin.com/in/jane?utm_source=share`, true)).toEqual({ kind: 'send', url: 'https://www.linkedin.com/in/jane' });
+    expect(linkedinSave('   ', true)).toEqual({ kind: 'send', url: '' });
+    expect(linkedinSave('facebook.com/jane', true)).toEqual({ kind: 'refuse' });
+  });
+  it('the form fills the box with that rule, and a save sends LinkedIn only when react-hook-form has the field as changed', () => {
+    const submit = form().slice(form().indexOf('const onSubmit = async'), form().indexOf('if (!user) return null;'));
+    expect(form()).toMatch(/linkedinUrl: linkedinBoxValue\(user\.linkedinUrl\),/);
+    expect(form()).toMatch(/formState: \{ isSubmitting, isDirty, errors, dirtyFields \}/);
+    expect(submit).toMatch(/const \{ linkedinUrl: typedLinkedin, \.\.\.fields \} = data;/);
+    expect(submit).toMatch(/const linkedin = linkedinSave\(typedLinkedin, !!dirtyFields\.linkedinUrl\);/);
+    expect(submit).toMatch(/api\.put\('\/users\/me', \{\s*\.\.\.fields,\s*\.\.\.\(linkedin\.kind === 'send' \? \{ linkedinUrl: linkedin\.url \} : \{\}\),/);
+    expect(submit).not.toMatch(/\.\.\.data\b/);
   });
 
   it('a save on the form never sends those three, so it never writes over the answers', () => {

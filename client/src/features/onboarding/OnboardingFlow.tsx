@@ -32,7 +32,7 @@ import { useProfileForm } from './useProfileForm';
 import { useConfirm, useConnectLinkedin, useOnboardingV2State, useSaveDraft, useSkipLinkedin } from './useOnboardingV2';
 import {
   LANDED, PROFILE, confirmBody, confirmProblem, draftPatch, editAction, firstIncomplete, guessedSelf, problemMessage,
-  questionFor, questionProblem, stepAfter, stepBefore, withKeys,
+  questionFor, questionProblem, stepAfter, stepBefore, tourOpensAfterConfirm, withKeys,
   type ConfirmProblem, type DraftPatch, type Question, type QuestionStepKey,
 } from './flow';
 
@@ -134,7 +134,9 @@ function Flow({ state }: { state: OnboardingV2State }) {
         const res = await confirm.mutateAsync(confirmBody(answers, profile));
         if (res.photo === 'failed' || res.photo === 'none') addToast(PHOTO_NOT_ADDED, 'info');
         if (edit) {
-          addToast('Your changes are saved.', 'success');
+          // A save that opens the tour (a member who has never seen it) says nothing: on a phone the toast sat over the
+          // tour's Skip, and the tour, over the changed page they come back to, says it was saved (fix round 1).
+          if (!tourOpensAfterConfirm(state.tour)) addToast('Your changes are saved.', 'success');
           leave(edit);
         } else {
           // Where the gate sent them from, when that is a page of this app; else For You. The tour opens either way,

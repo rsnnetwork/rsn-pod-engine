@@ -11,9 +11,11 @@ import Avatar from '@/components/ui/Avatar';
 import { X, User, Briefcase, MapPin, Globe, Languages, Sparkles, Camera, Info, Target, Heart, HelpCircle, Users, MessageSquare, ArrowLeft } from 'lucide-react';
 import api from '@/lib/api';
 import OnboardingWelcomeModal from '@/features/onboarding/OnboardingWelcomeModal';
-import { EDIT_ANSWERS_TO } from '@/features/reason/profile/your-profile-text';
-import { LINKEDIN_LINK_HELP, normalizeLinkedinInput } from '@/features/auth/linkedin-link';
-import { visibleText } from '@/features/reason/person';
+import { Skeleton } from '@/components/ui/Spinner';
+import { useOnboardingV2State } from '@/features/onboarding/useOnboardingV2';
+import { EDIT_ANSWERS_TO, answerLines } from '@/features/reason/profile/your-profile-text';
+import { LINKEDIN_LINK_HELP } from '@/features/auth/linkedin-link';
+import { linkedinBoxValue, linkedinSave } from './linkedin-box';
 
 interface ProfileForm {
   displayName: string;
@@ -34,8 +36,17 @@ interface ProfileForm {
 
 // What the member can offer, would like to meet and is hoping to find come from their answers to the onboarding
 // questions, and the next save of those answers writes over them (final review, 21 Oct 2026): a change made here was
-// lost, and no search reads them. So they are shown here as they are, with the way to the answers.
-function FromYourAnswers({ rows }: { rows: Array<{ label: string; icon: typeof Users; value: string | null }> }) {
+// lost, and no search reads them. So the answers themselves are shown, as Your profile shows them (the short labels,
+// their own words in quotes), never the wording the matcher keeps for them, with the way to change them.
+const ANSWER_ROWS = [
+  { label: 'What I can help with', icon: HelpCircle, step: 'q3' },
+  { label: 'Who I want to meet', icon: Users, step: 'q1' },
+  { label: 'My intent', icon: Target, step: 'q2' },
+] as const;
+
+function FromYourAnswers() {
+  // The onboarding's own state (user:<you>), which a changed answer on any of your devices refreshes.
+  const state = useOnboardingV2State();
   return (
     <section aria-labelledby="from-your-answers" className="rounded-xl border border-gray-200 bg-gray-50 p-4">
       <div className="flex flex-wrap items-center justify-between gap-x-4">
@@ -43,16 +54,33 @@ function FromYourAnswers({ rows }: { rows: Array<{ label: string; icon: typeof U
         <Link to={EDIT_ANSWERS_TO} className="inline-flex min-h-[44px] items-center text-sm font-semibold text-rsn-red hover:text-rsn-red-hover">Edit answers</Link>
       </div>
       <p className="text-xs text-gray-600">These come from your answers to the questions. Change them there.</p>
-      <dl className="mt-3 space-y-3">
-        {rows.map(({ label, icon: Icon, value }) => (
-          <div key={label}>
-            <dt className="flex items-center gap-2 text-sm font-medium text-gray-600">
-              <Icon className="h-4 w-4 text-gray-400" aria-hidden /> {label}
-            </dt>
-            <dd className="mt-1 text-sm leading-relaxed text-[#1a1a2e] [overflow-wrap:anywhere]">{value ?? 'Not answered yet.'}</dd>
-          </div>
-        ))}
-      </dl>
+      {state.data ? (
+        <dl className="mt-3 space-y-3">
+          {ANSWER_ROWS.map(({ label, icon: Icon, step }) => {
+            const lines = answerLines(step, state.data.answers);
+            return (
+              <div key={label}>
+                <dt className="flex items-center gap-2 text-sm font-medium text-gray-600">
+                  <Icon className="h-4 w-4 text-gray-400" aria-hidden /> {label}
+                </dt>
+                {(lines.length ? lines : ['Not answered yet.']).map((line, i) => (
+                  <dd key={`${i}-${line}`} className="mt-1 text-sm leading-relaxed text-[#1a1a2e] [overflow-wrap:anywhere]">{line}</dd>
+                ))}
+              </div>
+            );
+          })}
+        </dl>
+      ) : state.isError ? (
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <p className="text-sm text-gray-700">We could not load your answers just now.</p>
+          <Button type="button" variant="secondary" size="sm" onClick={() => void state.refetch()} className="min-h-[44px]">Try again</Button>
+        </div>
+      ) : (
+        <div className="mt-3 space-y-3" aria-busy="true">
+          <span className="sr-only" role="status">Loading your answers</span>
+          {ANSWER_ROWS.map(({ label }) => <Skeleton key={label} className="h-[44px] rounded-lg" />)}
+        </div>
+      )}
     </section>
   );
 }
@@ -194,7 +222,7 @@ export default function ProfilePage() {
     }
   }, [hash, userId]);
 
-  const { register, handleSubmit, reset, setError, formState: { isSubmitting, isDirty, errors } } = useForm<ProfileForm>();
+  const { register, handleSubmit, reset, setError, formState: { isSubmitting, isDirty, errors, dirtyFields } } = useForm<ProfileForm>();
   const [tagsChanged, setTagsChanged] = useState(false);
 
   useEffect(() => {
@@ -208,7 +236,7 @@ export default function ProfilePage() {
         jobTitle: user.jobTitle || '',
         industry: user.industry || '',
         location: user.location || '',
-        linkedinUrl: (user.linkedinUrl || '').replace(/^https?:\/\/(www\.)?linkedin\.com\/in\//i, ''),
+        linkedinUrl: linkedinBoxValue(user.linkedinUrl),
         timezone: user.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || '',
         phone: (user as any).phone || '',
         expertiseText: (user as any).expertiseText || '',
@@ -260,17 +288,19 @@ export default function ProfilePage() {
   const handleSetLanguages = (t: string[]) => { setLanguages(t); setTagsChanged(true); };
 
   const onSubmit = async (data: ProfileForm) => {
-    // The request form's clean-up (final review, 21 Oct 2026): a name, or any form of a profile link, becomes
-    // https://www.linkedin.com/in/<name>, with no share query; an empty box sends ''; anything else is said under the field.
-    const linkedinUrl = normalizeLinkedinInput(data.linkedinUrl);
-    if (linkedinUrl === null) {
+    // LinkedIn is checked and sent only when the member changed the box (linkedin-box.ts): then the request form's
+    // clean-up makes it https://www.linkedin.com/in/<name>, an emptied box sends '', and anything else is said under the
+    // field. An address they did not touch never blocks a save and is never rewritten.
+    const { linkedinUrl: typedLinkedin, ...fields } = data;
+    const linkedin = linkedinSave(typedLinkedin, !!dirtyFields.linkedinUrl);
+    if (linkedin.kind === 'refuse') {
       setError('linkedinUrl', { message: LINKEDIN_LINK_HELP }, { shouldFocus: true });
       return;
     }
     try {
       await api.put('/users/me', {
-        ...data,
-        linkedinUrl,
+        ...fields,
+        ...(linkedin.kind === 'send' ? { linkedinUrl: linkedin.url } : {}),
         interests,
         reasonsToConnect: reasons,
         languages,
@@ -300,7 +330,7 @@ export default function ProfilePage() {
       {/* Profile Header Card */}
       <Card className="animate-fade-in-up">
         <div className="flex items-center gap-4 mb-2">
-          <div className="relative group">
+          <div className="relative group shrink-0">
             {user.avatarUrl ? (
               <img src={user.avatarUrl} alt={user.displayName || 'Avatar'} className="h-16 w-16 rounded-full object-cover" />
             ) : (
@@ -322,7 +352,7 @@ export default function ProfilePage() {
               className="hidden"
             />
           </div>
-          <div>
+          <div className="min-w-0 [overflow-wrap:anywhere]">
             <p className="text-lg font-semibold text-[#1a1a2e]">{user.displayName || 'Set your name'}</p>
             <p className="text-sm text-gray-500">{user.email}</p>
             {user.jobTitle && user.company && (
@@ -549,13 +579,7 @@ export default function ProfilePage() {
                 className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200 resize-none"
               />
             </div>
-            <FromYourAnswers
-              rows={[
-                { label: 'What I can help with', icon: HelpCircle, value: visibleText(user.whatICanHelpWith) },
-                { label: 'Who I want to meet', icon: Users, value: visibleText(user.whoIWantToMeet) },
-                { label: 'My intent', icon: Target, value: visibleText(user.myIntent) },
-              ]}
-            />
+            <FromYourAnswers />
           </div>
         </Card>
 

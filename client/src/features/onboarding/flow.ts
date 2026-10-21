@@ -14,7 +14,7 @@ import {
   ONBOARDING_V2_MEET, ONBOARDING_V2_FIND, ONBOARDING_V2_OFFER, ONBOARDING_V2_SELF,
   ONBOARDING_V2_COPY, ONBOARDING_V2_LIMITS, ONBOARDING_V2_OTHER_KEYS, ONBOARDING_V2_STEPS, shortLabelFor,
   type OnboardingOption, type OnboardingV2Answers, type OnboardingV2ConfirmRequest,
-  type OnboardingV2LinkedinStatus, type OnboardingV2ProfileInput, type OnboardingV2Step,
+  type OnboardingV2LinkedinStatus, type OnboardingV2ProfileInput, type OnboardingV2State, type OnboardingV2Step,
 } from '@rsn/shared';
 import { CONNECTION_LOST } from '../reason/errors';
 
@@ -225,6 +225,14 @@ export const LANDED = { landed: true } as const;
 /** Whether a history entry's state is LANDED. */
 export function isLanded(state: unknown): boolean {
   return typeof state === 'object' && state !== null && (state as { landed?: unknown }).landed === true;
+}
+
+/**
+ * Whether confirming opens the tour: confirm makes it due whenever the member has never seen it (an existing member's
+ * first edit included), and it opens over the page they land on.
+ */
+export function tourOpensAfterConfirm(tour: OnboardingV2State['tour']): boolean {
+  return tour.seenAt === null;
 }
 
 /** Per member: edit mode has just sent them back through their history, where no state can be carried. */

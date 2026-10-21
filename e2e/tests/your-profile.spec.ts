@@ -65,14 +65,38 @@ async function signedIn(u: TestUser, viewport = { width: 1280, height: 900 }): P
   await primePreview(ctx);
   const page = await ctx.newPage();
   const errors: string[] = [];
+  const cancelled = new Set<string>();
+  cancelledFor.set(errors, cancelled);
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
   page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
+  // Remembered, not judged here: the error line can come before or after the failure it is about.
+  page.on('requestfailed', (r) => { if (/cancel|abort/i.test(r.failure()?.errorText ?? '')) cancelled.add(withoutScheme(r.url())); });
   return { ctx, page, errors };
+}
+
+// The requests each page itself cancelled (by leaving the page, or by asking again), keyed by that page's error list.
+const cancelledFor = new WeakMap<string[], Set<string>>();
+const withoutScheme = (url: string) => url.replace(/^(?:https?:)?\/+/, '');
+
+/**
+ * WebKit (on Windows, as a page error) says "<address> due to access control checks." for a request it dropped, for
+ * one the page cancelled and for one still on its way when the test opened another page, as reason-m1.spec.ts notes;
+ * for the last it reports no failed request at all. A request to the app's own address (its /api goes through the same
+ * host) is never subject to an access control check, so there the line can only be that. Anywhere else (the API's own
+ * host, a picture) it is a real failure unless the request was seen cancelled.
+ */
+const APP_HOST = withoutScheme(APP).replace(/\/.*$/, '');
+function isCancelledNoise(line: string, cancelled: ReadonlySet<string>): boolean {
+  const address = line.match(/(\S+) due to access control checks\.?$/)?.[1];
+  if (!address) return false;
+  const bare = withoutScheme(address);
+  return bare.startsWith(`${APP_HOST}/`) || cancelled.has(bare);
 }
 
 /** Console errors a test did not make on purpose (a 404 is the answer for a blocked profile or a missing banner). */
 const unexpected = (errors: string[]) =>
-  errors.filter((e) => !/404|Not Found|Failed to load resource|Download the React DevTools|WebSocket|socket/i.test(e));
+  errors.filter((e) => !/404|Not Found|Failed to load resource|Download the React DevTools|WebSocket|socket/i.test(e)
+    && !isCancelledNoise(e, cancelledFor.get(errors) ?? new Set()));
 
 /** A JPEG made in the page: red top, green middle 3:1 band, blue bottom, so the banner's crop can be read back. */
 async function stripedPicture(page: Page, width: number, height: number): Promise<Buffer> {
@@ -115,13 +139,18 @@ function brokenWords(heading: Locator): Promise<string[]> {
   });
 }
 
+/**
+ * Measured once the layout has settled: just after a page opens, WebKit on Windows can briefly lay it out at another
+ * width (the sidebar's logo measured 488px across a 360px window, and 0px over a moment later). An overflow that stays
+ * still fails.
+ */
 async function noSidewaysScroll(page: Page, label: string) {
-  const s = await page.evaluate(() => {
+  const measure = () => page.evaluate(() => {
     const main = document.querySelector('main');
     return { doc: document.documentElement.scrollWidth - window.innerWidth, main: main ? main.scrollWidth - main.clientWidth : 0 };
   });
-  expect(s.doc, `${label}: the page is wider than the window`).toBeLessThanOrEqual(0);
-  expect(s.main, `${label}: the page area scrolls sideways`).toBeLessThanOrEqual(1);
+  await expect.poll(async () => (await measure()).doc, { message: `${label}: the page is wider than the window`, timeout: 5_000 }).toBeLessThanOrEqual(0);
+  await expect.poll(async () => (await measure()).main, { message: `${label}: the page area scrolls sideways`, timeout: 5_000 }).toBeLessThanOrEqual(1);
 }
 
 test.beforeAll(async () => {
@@ -259,7 +288,9 @@ test(`your profile is the way others see it, with what only you see apart, and e
   // What they can help with, who they want to meet and their intent come from their answers: shown, not edited, with
   // the way to the answers.
   const fromAnswers = page.getByRole('region', { name: 'From your answers' });
-  for (const text of [OWNER.offer, OWNER.want, OWNER.intent]) await expect(fromAnswers.getByText(text, { exact: true })).toBeVisible();
+  // Their own answers, as Your profile shows them, never the matcher's wording kept in those fields (fix round 1, M-2).
+  for (const line of ['Advice and mentoring', ...OWNER_ANSWERS]) await expect(fromAnswers.getByText(line, { exact: true })).toBeVisible({ timeout: SLOW });
+  for (const text of [OWNER.offer, OWNER.want, OWNER.intent]) await expect(fromAnswers.getByText(text)).toHaveCount(0);
   await expect(fromAnswers.getByRole('textbox')).toHaveCount(0);
   await expect(fromAnswers.getByRole('link', { name: 'Edit answers' })).toHaveAttribute('href', '/onboarding?edit=profile');
   // Settled and rounded: WebKit can report a 44px box as 43.99997px while the card's entrance animation runs.
@@ -273,6 +304,8 @@ test(`your profile is the way others see it, with what only you see apart, and e
   const linkedin = page.locator('#linkedin');
   await expect(linkedin).toBeFocused({ timeout: 15_000 });
   await expectReachable(page, linkedin, 'the LinkedIn field');
+  // Settled before typing, as a person would be: the form fills itself again whenever the session is read.
+  await page.waitForLoadState('networkidle');
   // Something that is not a profile link is said under the field, the cursor goes back to it, and nothing is sent.
   let saves = 0;
   page.on('request', (r) => { if (r.method() === 'PUT' && /\/api\/users\/me$/.test(new URL(r.url()).pathname)) saves += 1; });
@@ -324,6 +357,56 @@ test(`your profile is the way others see it, with what only you see apart, and e
   expect(unexpected(errors)).toEqual([]);
   await ctx.close();
   await pool.query('UPDATE users SET linkedin_url = NULL WHERE id = $1', [owner.id]);
+});
+
+// Fix round 1 (I-1, M-3): a stored share link from LinkedIn's phone app filled the form's box with something that is
+// not a name, and every save was refused until the member edited a field they never touched. And any stored text hid
+// "connect LinkedIn", while the hero links only an https address on LinkedIn.
+test(`a stored LinkedIn share link never blocks a save and is left as it was; an address the hero cannot link asks to connect LinkedIn (${ENGINE})`, async () => {
+  test.setTimeout(240_000);
+  const share = `https://www.linkedin.com/in/ada-share-${run}?utm_source=share&utm_medium=ios_app`;
+  await pool.query('UPDATE users SET linkedin_url = $2 WHERE id = $1', [owner.id, share]);
+  const { ctx, page, errors } = await signedIn(owner, { width: 390, height: 844 });
+  await gotoRetry(page, `${APP}/profile/edit`);
+  // The box shows the name.
+  await expect(page.locator('#linkedin')).toHaveValue(`ada-share-${run}`, { timeout: SLOW });
+  // Settled before typing, as a person would be: the form is filled again each time the session answers, and in
+  // development React checks the session twice as the app starts.
+  await page.waitForLoadState('networkidle');
+  let sent: Record<string, unknown> | null = null;
+  page.on('request', (r) => { if (r.method() === 'PUT' && /\/api\/users\/me$/.test(new URL(r.url()).pathname)) sent = r.postDataJSON(); });
+  // Another field changed and saved: it saves, nothing is said about LinkedIn, and LinkedIn is not even sent.
+  const title = page.getByPlaceholder('Product Manager');
+  await title.fill(`Founder ${run}`);
+  await expect(page.getByRole('button', { name: 'Save Changes' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Save Changes' }).click();
+  await expect(page.getByText('Profile updated!')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText('Enter your LinkedIn profile link, for example linkedin.com/in/your-name')).toHaveCount(0);
+  expect(sent, 'the save was sent').not.toBeNull();
+  expect(sent!).toMatchObject({ jobTitle: `Founder ${run}` });
+  expect(sent!).not.toHaveProperty('linkedinUrl');
+  expect((await pool.query('SELECT linkedin_url, job_title FROM users WHERE id = $1', [owner.id])).rows[0])
+    .toEqual({ linkedin_url: share, job_title: `Founder ${run}` });
+  // The share link is an https address on LinkedIn: the hero links it, and there is no card asking for LinkedIn.
+  await gotoRetry(page, `${APP}/profile`);
+  await expect(page.getByRole('heading', { name: 'Only you see this' })).toBeVisible({ timeout: SLOW });
+  await expect(page.getByRole('link', { name: /^LinkedIn/ })).toHaveAttribute('href', share);
+  await expect(page.getByText('Optimize your profile: connect LinkedIn')).toHaveCount(0);
+
+  // An http address: the hero links nothing, so the card asks to connect LinkedIn, and the form shows the address as it
+  // is stored, for the member to put right.
+  const old = `http://www.linkedin.com/in/ada-old-${run}`;
+  await pool.query('UPDATE users SET linkedin_url = $2 WHERE id = $1', [owner.id, old]);
+  await gotoRetry(page, `${APP}/profile`);
+  await expect(page.getByText('Optimize your profile: connect LinkedIn')).toBeVisible({ timeout: SLOW });
+  await expect(page.getByRole('link', { name: /^LinkedIn/ })).toHaveCount(0);
+  await page.getByRole('link', { name: 'Add LinkedIn' }).click();
+  await expect(page).toHaveURL(/\/profile\/edit#linkedin$/);
+  await expect(page.locator('#linkedin')).toHaveValue(old, { timeout: SLOW });
+  await expect(page.locator('#linkedin')).toBeFocused({ timeout: 15_000 });
+  expect(unexpected(errors)).toEqual([]);
+  await ctx.close();
+  await pool.query('UPDATE users SET linkedin_url = NULL, job_title = $2 WHERE id = $1', [owner.id, OWNER.title]);
 });
 
 test(`More on the Human Profile: Report this member, and Block, which asks first and leaves; the notice then offers Unblock, which brings the profile back (${ENGINE})`, async () => {
@@ -428,6 +511,9 @@ test(`every size: nothing scrolls sideways, no name is cut mid-word, and every c
     const own = await signedIn(owner, size);
     await gotoRetry(own.page, `${APP}/profile`);
     await expect(own.page.getByRole('heading', { name: 'Only you see this' })).toBeVisible({ timeout: SLOW });
+    // The answers are in (they replace the section's placeholders and move what is under it) before anything is measured.
+    await expect(own.page.locator('section', { has: own.page.getByRole('heading', { name: 'Only you see this' }) }).getByText(OWNER.tz, { exact: true }))
+      .toBeVisible({ timeout: SLOW });
     await noSidewaysScroll(own.page, `your profile at ${at}`);
     expect(await brokenWords(own.page.getByRole('heading', { level: 1 })), `your name at ${at}`).toEqual([]);
     await expectReachable(own.page, own.page.getByRole('button', { name: 'Change banner' }), `Change banner at ${at}`);
