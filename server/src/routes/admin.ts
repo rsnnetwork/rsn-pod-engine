@@ -1240,7 +1240,7 @@ router.get(
       }
       const csv = toCsv(data, columns);
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-      res.setHeader('Content-Disposition', `attachment; filename="rsn-analytics-${type}.csv"`);
+      res.setHeader('Content-Disposition', `attachment; filename="reason-analytics-${type}.csv"`);
       res.send(csv);
     } catch (err) {
       next(err);

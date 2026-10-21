@@ -213,20 +213,30 @@ describe('Email Service', () => {
 // strip, a bordered card, the footer linking to the app.
 //
 // 22 Sep 2026 (Shradha): the mark in that band was a WHITE sheep. The brand
-// mark is the black one, and it is unreadable on navy, so the band is light and
-// carries the same black lockup the app header uses.
+// mark is the black one, and it is unreadable on navy, so the band went light
+// and carried the black lockup.
+//
+// 21 Oct 2026 (the client, 19 Oct): "the whole email header should be white" and
+// "call it REASON everywhere". The band is white and the lockup is the REASON one
+// (reason-logo.png). email-reason-brand.test.ts renders every email against this;
+// this block pins the shell itself.
 describe('the shared email shell', () => {
-  it('opens on the brand band with the black sheep lockup and a red strip, in a bordered card', () => {
+  it('opens on a white band with the REASON lockup and a red strip, in a bordered card', () => {
     const { html } = emailService.buildInviteEmail({
       inviterName: 'Stefan', inviteeName: 'Ali', type: 'platform', inviteUrl: 'http://localhost:5173/invite/ABC123',
     } as any);
-    expect(html).toContain('/rsn-logo.png');                    // the black sheep + RSN lockup
-    expect(html).toMatch(/background:#f4f5f8/);                 // a light band, so the black mark reads
-    expect(html).toMatch(/height:4px;background:#DE322E/);      // the accent strip
-    expect(html).toMatch(/border:1px solid #dfe3ea/);           // the card border
+    expect(html).toContain('http://localhost:5173/reason-logo.png');   // the black sheep + REASON lockup
+    expect(html).toContain('alt="REASON"');
+    expect(html).toMatch(/width="160" height="35"/);                  // 1056 by 228, scaled to 160 wide
+    expect(html).toMatch(/background:#ffffff;padding:28px/);          // a white band, the whole header
+    expect(html).toMatch(/height:4px;background:#DE322E/);            // the accent strip
+    expect(html).toMatch(/border:1px solid #dfe3ea/);                 // the card border
     expect(html).toMatch(/Connect with Reason/);
-    expect(html).toContain('href="http://localhost:5173"');     // footer link to the app
-    // No white silhouette anywhere, and no navy band behind the mark.
+    expect(html).toContain('href="http://localhost:5173"');           // footer link to the app
+    // The old grey band and the old lockup are gone, and so are the white silhouette and the navy band.
+    expect(html).not.toContain('#f4f5f8');
+    expect(html).not.toContain('/rsn-logo.png');
+    expect(html).not.toContain('height="auto"');
     expect(html).not.toContain('rsn-sheep-white-email.png');
     expect(html).not.toMatch(/background:#1a1a2e;padding:28px/);
   });
@@ -238,7 +248,8 @@ describe('the shared email shell', () => {
       require('path').join(__dirname, '../../services/email/email.service.ts'), 'utf8',
     ) as string;
     expect(src).not.toContain('rsn-sheep-white-email');
-    // And the band the mark sits on is declared once.
-    expect(src.match(/background:#f4f5f8;padding:28px/g) ?? []).toHaveLength(1);
+    // And the band the mark sits on is declared once, white.
+    expect(src.match(/background:#ffffff;padding:28px/g) ?? []).toHaveLength(1);
+    expect(src).not.toContain('background:#f4f5f8');
   });
 });

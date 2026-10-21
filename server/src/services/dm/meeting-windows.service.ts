@@ -606,16 +606,16 @@ export async function confirmWindow(
       const confirmer = byId.get(userId);
       const { generateIcsContent, buildGoogleCalendarUrl } = await import('../calendar/calendar.service');
       const { sendMeetingConfirmedEmail } = await import('../email/email.service');
-      const title = 'RSN meeting';
+      const title = 'REASON meeting';
       const threadUrl = `${config.clientUrl}/messages/${conversationId}`;
-      const googleUrl = buildGoogleCalendarUrl({ title, startTime: startAt, durationMinutes: durationMin, description: 'A 1:1 meeting arranged on RSN.' });
+      const googleUrl = buildGoogleCalendarUrl({ title, startTime: startAt, durationMinutes: durationMin, description: 'A 1:1 meeting arranged on REASON.' });
       for (const uid of [userId, partnerId]) {
         const me = byId.get(uid);
         const other = byId.get(uid === userId ? partnerId : userId);
         if (!me?.email) continue;
         const ics = generateIcsContent({
           title,
-          description: `A 1:1 meeting arranged on RSN with ${other?.display_name || 'your match'}.`,
+          description: `A 1:1 meeting arranged on REASON with ${other?.display_name || 'your match'}.`,
           startTime: startAt,
           durationMinutes: durationMin,
           location: `${config.clientUrl}${joinPath}`,
@@ -623,7 +623,7 @@ export async function confirmWindow(
           // in-app download. Otherwise accepting the invite and then pressing
           // "Add to calendar" leaves two entries in the same calendar.
           uid: meetingUid(conversationId, startAt),
-          organizerName: confirmer?.display_name || 'RSN',
+          organizerName: confirmer?.display_name || 'REASON',
           organizerEmail: confirmer?.email || undefined,
           attendees: people.rows.filter(p => p.email).map(p => ({ name: p.display_name || undefined, email: p.email! })),
         });

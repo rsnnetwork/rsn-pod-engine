@@ -25,18 +25,21 @@ function getResendClient(): Resend {
 // inside a bordered card, and closes on a link back to the app. The words of
 // each email are untouched; only the shell is shared.
 //
-// 22 Sep 2026 (Shradha): "RSN logo is wrong - white sheep. The brand mark is
-// the BLACK sheep. Use the black sheep asset in all emails + app header." The
-// app header already carries the black lockup (rsn-logo.png); only the email
-// still wore a white silhouette. A black mark cannot be read on the navy band,
-// so the band is light and the lockup is the one the app already uses - one
-// image rather than an image plus a text wordmark, which also stops the two
-// drifting apart. The red strip and the bordered card are unchanged.
+// 22 Sep 2026 (Shradha): the mark was a white silhouette on a navy band. The
+// brand mark is the BLACK sheep, which cannot be read on navy, so the band went
+// light and carried one lockup image rather than an image plus a text wordmark,
+// which also stops the two drifting apart.
+//
+// 21 Oct 2026 (the client, 19 Oct: "the whole email header should be white" and
+// "call it REASON everywhere"): the band is white and the lockup is the REASON
+// one, reason-logo.png (1056 by 228, so 160 by 35 here). The old rsn-logo.png
+// stays on the client's site because emails already delivered still point at it.
+// The red strip and the bordered card are unchanged.
 export function emailCardOpen(): string {
   return [
     `<div style="background:#ffffff;border-radius:16px;border:1px solid #dfe3ea;overflow:hidden;box-shadow:0 10px 30px rgba(26,26,46,0.08);">`,
-    `<div style="background:#f4f5f8;padding:28px 32px 22px 32px;text-align:center;">`,
-    `<img src="${config.clientUrl}/rsn-logo.png" alt="RSN" width="132" height="auto" style="display:block;margin:0 auto;" />`,
+    `<div style="background:#ffffff;padding:28px 32px 22px 32px;text-align:center;">`,
+    `<img src="${config.clientUrl}/reason-logo.png" alt="REASON" width="160" height="35" style="display:block;margin:0 auto;" />`,
     `<p style="color:#6b7280;font-size:12px;letter-spacing:2px;text-transform:uppercase;margin:14px 0 0 0;">Connect with Reason</p>`,
     `</div>`,
     `<div style="height:4px;background:#DE322E;font-size:0;line-height:0;">&nbsp;</div>`,
@@ -70,7 +73,7 @@ async function sendEmail(opts: {
     return { sent: false };
   }
 
-  const senderName = 'RSN';
+  const senderName = 'REASON';
   const fromRaw = config.emailFrom; // e.g. noreply@rsn.network
   const from = fromRaw.includes('<') ? fromRaw : `${senderName} <${fromRaw}>`;
 
@@ -125,7 +128,7 @@ export async function sendMagicLinkEmail(
   to: string,
   magicLinkUrl: string
 ): Promise<void> {
-  const subject = 'Sign in to RSN';
+  const subject = 'Sign in to REASON';
   const html = `
     <!DOCTYPE html>
     <html>
@@ -165,7 +168,7 @@ export async function sendMagicLinkEmail(
 
   // Use Resend if API key is configured
   if (config.resendApiKey) {
-    const text = `Sign in to RSN\n\nClick the link below to sign in to your account. This link expires in ${config.magicLinkExpiryMinutes} minutes.\n\n${magicLinkUrl}\n\nIf you didn't request this email, you can safely ignore it.`;
+    const text = `Sign in to REASON\n\nClick the link below to sign in to your account. This link expires in ${config.magicLinkExpiryMinutes} minutes.\n\n${magicLinkUrl}\n\nIf you didn't request this email, you can safely ignore it.`;
     const result = await sendEmail({ to, subject, html, text });
     if (!result.sent) {
       throw new Error('Email send failed');
@@ -192,7 +195,7 @@ export async function sendSessionRecapEmail(
   displayName: string,
   data: RecapEmailData
 ): Promise<void> {
-  const subject = `Your RSN Recap — ${data.sessionTitle}`;
+  const subject = `Your REASON Recap — ${data.sessionTitle}`;
   const html = `
     <!DOCTYPE html>
     <html>
@@ -240,7 +243,7 @@ export async function sendSessionRecapEmail(
           </div>
         ${emailCardClose()}
         <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
-          RSN — Connect with Reason
+          REASON — Meet people you have a reason to know.
         </p>
       </div>
     </body>
@@ -248,7 +251,7 @@ export async function sendSessionRecapEmail(
   `;
 
   if (config.resendApiKey) {
-    const text = `Hey ${displayName},\n\nThanks for joining ${data.sessionTitle}! Here's your event recap:\n\nMutual Matches: ${data.peopleMet}\nWant to Meet Again: ${data.mutualConnections}\nAvg Rating: ${data.avgRating.toFixed(1)}\n\nView Full Recap: ${data.recapUrl}\n\nRSN — Connect with Reason`;
+    const text = `Hey ${displayName},\n\nThanks for joining ${data.sessionTitle}! Here's your event recap:\n\nMutual Matches: ${data.peopleMet}\nWant to Meet Again: ${data.mutualConnections}\nAvg Rating: ${data.avgRating.toFixed(1)}\n\nView Full Recap: ${data.recapUrl}\n\nREASON — Meet people you have a reason to know.`;
     await sendEmail({ to, subject, html, text });
     return;
   }
@@ -273,7 +276,7 @@ export async function sendDmNotificationEmail(
   recipientDisplayName: string,
   data: DmNotificationEmailData,
 ): Promise<void> {
-  const subject = `${data.senderName} sent you a message on RSN`;
+  const subject = `${data.senderName} sent you a message on REASON`;
   const html = `
     <!DOCTYPE html><html><head><meta charset="utf-8"></head>
     <body style="margin:0;padding:0;background-color:#eef0f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
@@ -282,24 +285,24 @@ export async function sendDmNotificationEmail(
           <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">New message</p>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">Hey ${recipientDisplayName},</p>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
-            <strong>${data.senderName}</strong> sent you a message on RSN.
+            <strong>${data.senderName}</strong> sent you a message on REASON.
           </p>
           <div style="background:#f8f9fa;border-left:3px solid #DE322E;border-radius:6px;padding:12px 16px;margin:0 0 24px 0;">
             <p style="color:#374151;font-size:14px;line-height:1.5;margin:0;">${data.snippet}</p>
           </div>
           <div style="text-align:center;margin:24px 0;">
             <a href="${data.threadUrl}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 32px;border-radius:8px;">View Message</a>
-          ${emailCardClose()}
-        <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
-            You're receiving this because someone messaged you on RSN.
-            You can change your notification preferences in Settings.
-          </p>
+          </div>
         ${emailCardClose()}
+        <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
+          You're receiving this because someone messaged you on REASON.
+          You can change your notification preferences in Settings.
+        </p>
       </div>
     </body></html>`;
 
   if (config.resendApiKey) {
-    const text = `Hey ${recipientDisplayName},\n\n${data.senderName} sent you a message on RSN:\n\n"${data.snippet}"\n\nView the conversation: ${data.threadUrl}\n\nRSN — Connect with Reason`;
+    const text = `Hey ${recipientDisplayName},\n\n${data.senderName} sent you a message on REASON:\n\n"${data.snippet}"\n\nView the conversation: ${data.threadUrl}\n\nREASON — Meet people you have a reason to know.`;
     await sendEmail({ to, subject, html, text });
     return;
   }
@@ -394,7 +397,7 @@ export async function sendHostRecapEmail(
           </div>
         ${emailCardClose()}
         <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
-          RSN — Connect with Reason
+          REASON — Meet people you have a reason to know.
         </p>
       </div>
     </body>
@@ -405,7 +408,7 @@ export async function sendHostRecapEmail(
     const matchesLine = data.matchesCreated != null
       ? `Matches Created / Successful: ${data.matchesCreated} / ${data.totalMatches}`
       : `Matches: ${data.totalMatches}`;
-    const text = `Hey ${displayName},\n\nHere's the full recap for ${data.sessionTitle}:\n\nParticipants: ${data.totalParticipants}\nRounds: ${data.totalRounds}\n${matchesLine}\nAvg Rating: ${data.avgEventRating > 0 ? data.avgEventRating.toFixed(1) : 'N/A'}\nMutual Connections: ${data.mutualConnectionsCount}\n\nView Full Recap: ${data.recapUrl}\n\nRSN — Connect with Reason`;
+    const text = `Hey ${displayName},\n\nHere's the full recap for ${data.sessionTitle}:\n\nParticipants: ${data.totalParticipants}\nRounds: ${data.totalRounds}\n${matchesLine}\nAvg Rating: ${data.avgEventRating > 0 ? data.avgEventRating.toFixed(1) : 'N/A'}\nMutual Connections: ${data.mutualConnectionsCount}\n\nView Full Recap: ${data.recapUrl}\n\nREASON — Meet people you have a reason to know.`;
     await sendEmail({ to, subject, html, text });
     return;
   }
@@ -495,14 +498,14 @@ export function buildInviteEmail(data: InviteEmailData): { subject: string; html
           </p>
         ${emailCardClose()}
         <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
-          RSN — Connect with Reason
+          REASON — Meet people you have a reason to know.
         </p>
       </div>
     </body>
     </html>
   `;
 
-  const text = [openingText, '', whatItIs, whatHappensNext, '', `Accept Invite: ${data.inviteUrl}`, '', 'RSN — Connect with Reason']
+  const text = [openingText, '', whatItIs, whatHappensNext, '', `Accept Invite: ${data.inviteUrl}`, '', 'REASON — Meet people you have a reason to know.']
     .filter((line, i, all) => !(line === '' && all[i - 1] === ''))
     .join('\n');
 
@@ -522,7 +525,7 @@ export async function sendInviteEmail(
     if (data.calendarEvent) {
       const icsContent = generateIcsContent({
         title: data.calendarEvent.title,
-        description: data.calendarEvent.description || `RSN Event — ${data.calendarEvent.title}`,
+        description: data.calendarEvent.description || `REASON event — ${data.calendarEvent.title}`,
         startTime: data.calendarEvent.startTime,
         durationMinutes: data.calendarEvent.durationMinutes,
         organizerName: data.calendarEvent.organizerName,
@@ -597,7 +600,7 @@ export async function sendSessionRegistrationConfirmationEmail(
           ${calendarNote}
         ${emailCardClose()}
         <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
-          RSN — Connect with Reason
+          REASON — Meet people you have a reason to know.
         </p>
       </div>
     </body>
@@ -605,13 +608,13 @@ export async function sendSessionRegistrationConfirmationEmail(
   `;
 
   if (config.resendApiKey) {
-    const text = `You're registered for ${data.sessionTitle}.${data.calendarEvent ? ' A calendar invite is attached.' : ''}\n\nView event: ${data.sessionUrl}\n\nRSN — Connect with Reason`;
+    const text = `You're registered for ${data.sessionTitle}.${data.calendarEvent ? ' A calendar invite is attached.' : ''}\n\nView event: ${data.sessionUrl}\n\nREASON — Meet people you have a reason to know.`;
     const attachments: { filename: string; content: string }[] = [];
 
     if (data.calendarEvent) {
       const icsContent = generateIcsContent({
         title: data.calendarEvent.title,
-        description: data.calendarEvent.description || `RSN Event — ${data.calendarEvent.title}`,
+        description: data.calendarEvent.description || `REASON event — ${data.calendarEvent.title}`,
         startTime: data.calendarEvent.startTime,
         durationMinutes: data.calendarEvent.durationMinutes,
         organizerName: data.calendarEvent.organizerName,
@@ -636,7 +639,7 @@ export async function sendJoinRequestConfirmationEmail(
   to: string,
   fullName: string
 ): Promise<void> {
-  const subject = 'RSN — We received your request';
+  const subject = 'REASON — We received your request';
   const html = `
     <!DOCTYPE html>
     <html>
@@ -652,17 +655,17 @@ export async function sendJoinRequestConfirmationEmail(
             Hi ${fullName},
           </p>
           <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
-            Thank you for requesting to join RSN. We've received your application and our team will review it shortly.
+            Thank you for requesting to join REASON. We've received your application and our team will review it shortly.
           </p>
           <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
-            RSN is an invite-only community for founders, leaders, and company owners who value honesty over hype. We review every application carefully to maintain the quality of our community.
+            REASON is an invite-only community for founders, leaders, and company owners who value honesty over hype. We review every application carefully to maintain the quality of our community.
           </p>
           <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 0 0;">
             You'll hear from us within 1-3 business days.
           </p>
         ${emailCardClose()}
         <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
-          RSN — Fast, focused, and human.
+          REASON — Fast, focused, and human.
         </p>
       </div>
     </body>
@@ -670,7 +673,7 @@ export async function sendJoinRequestConfirmationEmail(
   `;
 
   if (config.resendApiKey) {
-    const text = `Hi ${fullName},\n\nThank you for requesting to join RSN. We've received your application and our team will review it shortly.\n\nRSN is an invite-only community for founders, leaders, and company owners who value honesty over hype. We review every application carefully to maintain the quality of our community.\n\nYou'll hear from us within 1-3 business days.\n\nRSN — Fast, focused, and human.`;
+    const text = `Hi ${fullName},\n\nThank you for requesting to join REASON. We've received your application and our team will review it shortly.\n\nREASON is an invite-only community for founders, leaders, and company owners who value honesty over hype. We review every application carefully to maintain the quality of our community.\n\nYou'll hear from us within 1-3 business days.\n\nREASON — Fast, focused, and human.`;
     await sendEmail({ to, subject, html, text });
     return;
   }
@@ -685,7 +688,7 @@ export async function sendJoinRequestWelcomeEmail(
   fullName: string,
   loginUrl: string
 ): Promise<void> {
-  const subject = 'Welcome to RSN — You\'re in!';
+  const subject = 'Welcome to REASON — You\'re in!';
   const html = `
     <!DOCTYPE html>
     <html>
@@ -701,7 +704,7 @@ export async function sendJoinRequestWelcomeEmail(
             Hi ${fullName},
           </p>
           <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
-            Great news — your request to join RSN has been <strong style="color:#1a1a2e;">approved</strong>!
+            Great news — your request to join REASON has been <strong style="color:#1a1a2e;">approved</strong>!
           </p>
           <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
             You're now part of a community of founders, leaders, and company owners who connect with honesty and purpose. No pitching. No selling. Just real conversations.
@@ -710,7 +713,7 @@ export async function sendJoinRequestWelcomeEmail(
           <div style="text-align:center;margin:32px 0;">
             <a href="${loginUrl}"
                style="display:inline-block;background:#DE322E;border:1px solid #c22a26;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
-              Sign In to RSN
+              Sign In to REASON
             </a>
           </div>
 
@@ -719,7 +722,7 @@ export async function sendJoinRequestWelcomeEmail(
           </p>
         ${emailCardClose()}
         <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
-          RSN — Fast, focused, and human.
+          REASON — Fast, focused, and human.
         </p>
       </div>
     </body>
@@ -727,7 +730,7 @@ export async function sendJoinRequestWelcomeEmail(
   `;
 
   if (config.resendApiKey) {
-    const text = `Hi ${fullName},\n\nGreat news — your request to join RSN has been approved!\n\nYou're now part of a community of founders, leaders, and company owners who connect with honesty and purpose. No pitching. No selling. Just real conversations.\n\nSign In to RSN: ${loginUrl}\n\nYour first step: sign up for an event and meet five people in focused 8-minute conversations.\n\nRSN — Fast, focused, and human.`;
+    const text = `Hi ${fullName},\n\nGreat news — your request to join REASON has been approved!\n\nYou're now part of a community of founders, leaders, and company owners who connect with honesty and purpose. No pitching. No selling. Just real conversations.\n\nSign In to REASON: ${loginUrl}\n\nYour first step: sign up for an event and meet five people in focused 8-minute conversations.\n\nREASON — Fast, focused, and human.`;
     await sendEmail({ to, subject, html, text });
     return;
   }
@@ -741,7 +744,7 @@ export async function sendJoinRequestDeclineEmail(
   to: string,
   fullName: string
 ): Promise<void> {
-  const subject = 'RSN — Update on your request';
+  const subject = 'REASON — Update on your request';
   const html = `
     <!DOCTYPE html>
     <html>
@@ -757,17 +760,17 @@ export async function sendJoinRequestDeclineEmail(
             Hi ${fullName},
           </p>
           <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
-            Thank you for your interest in RSN. After reviewing your application, we're unable to offer access at this time.
+            Thank you for your interest in REASON. After reviewing your application, we're unable to offer access at this time.
           </p>
           <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
-            RSN is a curated community, and we carefully consider each application. This decision is based on our current community composition and needs.
+            REASON is a curated community, and we carefully consider each application. This decision is based on our current community composition and needs.
           </p>
           <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 0 0;">
             If your circumstances change or you receive an invite from a current member, you're welcome to reapply.
           </p>
         ${emailCardClose()}
         <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
-          RSN — Fast, focused, and human.
+          REASON — Fast, focused, and human.
         </p>
       </div>
     </body>
@@ -775,7 +778,7 @@ export async function sendJoinRequestDeclineEmail(
   `;
 
   if (config.resendApiKey) {
-    const text = `Hi ${fullName},\n\nThank you for your interest in RSN. After reviewing your application, we're unable to offer access at this time.\n\nRSN is a curated community, and we carefully consider each application. This decision is based on our current community composition and needs.\n\nIf your circumstances change or you receive an invite from a current member, you're welcome to reapply.\n\nRSN — Fast, focused, and human.`;
+    const text = `Hi ${fullName},\n\nThank you for your interest in REASON. After reviewing your application, we're unable to offer access at this time.\n\nREASON is a curated community, and we carefully consider each application. This decision is based on our current community composition and needs.\n\nIf your circumstances change or you receive an invite from a current member, you're welcome to reapply.\n\nREASON — Fast, focused, and human.`;
     await sendEmail({ to, subject, html, text });
     return;
   }
@@ -793,12 +796,12 @@ export async function sendJoinRequestReminderEmail(
 ): Promise<void> {
   const isSecondReminder = reminderCount >= 2;
   const subject = isSecondReminder
-    ? 'RSN — Your spot is still waiting'
-    : 'RSN — Don\'t forget to complete your signup!';
+    ? 'REASON — Your spot is still waiting'
+    : 'REASON — Don\'t forget to complete your signup!';
 
   const mainMessage = isSecondReminder
-    ? 'We noticed you haven\'t completed your signup yet. Your approved spot at RSN is still reserved — but it won\'t last forever.'
-    : 'You were approved to join RSN! We\'d love to see you at our next event. Complete your signup in under a minute.';
+    ? 'We noticed you haven\'t completed your signup yet. Your approved spot at REASON is still reserved — but it won\'t last forever.'
+    : 'You were approved to join REASON! We\'d love to see you at our next event. Complete your signup in under a minute.';
 
   const html = `
     <!DOCTYPE html>
@@ -830,7 +833,7 @@ export async function sendJoinRequestReminderEmail(
           </p>
         ${emailCardClose()}
         <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
-          RSN — Fast, focused, and human.
+          REASON — Fast, focused, and human.
         </p>
       </div>
     </body>
@@ -838,7 +841,7 @@ export async function sendJoinRequestReminderEmail(
   `;
 
   if (config.resendApiKey) {
-    const text = `Hi ${fullName},\n\n${mainMessage}\n\nComplete Your Signup: ${loginUrl}\n\nOnce you're in, join an event and meet five people in focused 8-minute conversations. No pitching. No selling. Just real talk.\n\nRSN — Fast, focused, and human.`;
+    const text = `Hi ${fullName},\n\n${mainMessage}\n\nComplete Your Signup: ${loginUrl}\n\nOnce you're in, join an event and meet five people in focused 8-minute conversations. No pitching. No selling. Just real talk.\n\nREASON — Fast, focused, and human.`;
     await sendEmail({ to, subject, html, text });
     return;
   }
@@ -870,7 +873,7 @@ export async function sendGenericEmail(
           <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 0 0;white-space:pre-wrap;">${data.body}</p>
         ${emailCardClose()}
         <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
-          RSN — Fast, focused, and human.
+          REASON — Fast, focused, and human.
         </p>
       </div>
     </body>
@@ -878,7 +881,7 @@ export async function sendGenericEmail(
   `;
 
   if (config.resendApiKey) {
-    const text = `Hi ${recipientName},\n\n${data.body}\n\nRSN — Fast, focused, and human.`;
+    const text = `Hi ${recipientName},\n\n${data.body}\n\nREASON — Fast, focused, and human.`;
     await sendEmail({ to, subject, html, text });
     return;
   }
@@ -904,15 +907,19 @@ export async function sendJoinRequestAdminReviewEmail(
   to: string,
   data: JoinRequestAdminReviewData,
 ): Promise<void> {
-  const subject = `New RSN join request — ${data.applicantName}`;
+  const subject = `New REASON join request — ${data.applicantName}`;
   const reasonBlock = data.applicantReason
-    ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px;width:90px;">Why RSN</td>
+    ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px;width:90px;">Why REASON</td>
          <td style="padding:8px 0;color:#374151;font-size:14px;line-height:1.5;">${escapeHtml(data.applicantReason)}</td></tr>`
     : '';
-  const linkedinBlock = data.applicantLinkedinUrl
+  // LinkedIn is optional on the join form. With no address the row stays and says so,
+  // plainly and without a link, so the admin can tell "not given" from "not shown".
+  const linkedinUrl = data.applicantLinkedinUrl?.trim();
+  const linkedinBlock = linkedinUrl
     ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px;width:90px;">LinkedIn</td>
-         <td style="padding:8px 0;font-size:14px;"><a href="${escapeAttr(data.applicantLinkedinUrl)}" style="color:#DE322E;text-decoration:none;">${escapeHtml(data.applicantLinkedinUrl)}</a></td></tr>`
-    : '';
+         <td style="padding:8px 0;font-size:14px;word-break:break-all;"><a href="${escapeAttr(linkedinUrl)}" style="color:#DE322E;text-decoration:none;">${escapeHtml(linkedinUrl)}</a></td></tr>`
+    : `<tr><td style="padding:8px 0;color:#6b7280;font-size:13px;width:90px;">LinkedIn</td>
+         <td style="padding:8px 0;color:#6b7280;font-size:14px;">Not given</td></tr>`;
   const html = `
     <!DOCTYPE html>
     <html>
@@ -929,7 +936,7 @@ export async function sendJoinRequestAdminReviewEmail(
             Hi ${escapeHtml(data.adminDisplayName)},
           </p>
           <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
-            A new request to join RSN just came in. You can approve or decline below — no need to open the dashboard.
+            A new request to join REASON just came in. You can approve or decline below — no need to open the dashboard.
           </p>
 
           <div style="background:#f8f9fa;border:1px solid #e5e7eb;border-radius:12px;padding:16px 20px;margin:0 0 28px 0;">
@@ -937,7 +944,7 @@ export async function sendJoinRequestAdminReviewEmail(
               <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;width:90px;">Name</td>
                   <td style="padding:8px 0;color:#1a1a2e;font-size:15px;font-weight:600;">${escapeHtml(data.applicantName)}</td></tr>
               <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;">Email</td>
-                  <td style="padding:8px 0;color:#374151;font-size:14px;">${escapeHtml(data.applicantEmail)}</td></tr>
+                  <td style="padding:8px 0;color:#374151;font-size:14px;word-break:break-all;">${escapeHtml(data.applicantEmail)}</td></tr>
               ${linkedinBlock}
               ${reasonBlock}
             </table>
@@ -968,7 +975,7 @@ export async function sendJoinRequestAdminReviewEmail(
           </p>
         ${emailCardClose()}
         <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
-          RSN — Fast, focused, and human.
+          REASON — Fast, focused, and human.
         </p>
       </div>
     </body>
@@ -976,15 +983,15 @@ export async function sendJoinRequestAdminReviewEmail(
   `;
 
   if (config.resendApiKey) {
-    const linkedin = data.applicantLinkedinUrl ? `\nLinkedIn: ${data.applicantLinkedinUrl}` : '';
-    const reason = data.applicantReason ? `\nWhy RSN: ${data.applicantReason}` : '';
+    const linkedin = `\nLinkedIn: ${linkedinUrl || 'Not given'}`;
+    const reason = data.applicantReason ? `\nWhy REASON: ${data.applicantReason}` : '';
     const text =
       `Hi ${data.adminDisplayName},\n\n` +
-      `A new request to join RSN just came in.\n\n` +
+      `A new request to join REASON just came in.\n\n` +
       `Name: ${data.applicantName}\nEmail: ${data.applicantEmail}${linkedin}${reason}\n\n` +
       `Approve: ${data.approveUrl}\nDecline: ${data.rejectUrl}\n\n` +
       `Each link opens a confirmation page so nothing happens until you click again. Links expire in ${data.expiresInHours} hours.\n\n` +
-      `Prefer the dashboard: ${data.dashboardUrl}\n\nRSN — Fast, focused, and human.`;
+      `Prefer the dashboard: ${data.dashboardUrl}\n\nREASON — Fast, focused, and human.`;
     await sendEmail({ to, subject, html, text });
     return;
   }
@@ -1011,7 +1018,7 @@ export async function sendPokeReceivedEmail(
   recipientDisplayName: string,
   data: PokeReceivedEmailData,
 ): Promise<void> {
-  const subject = `${data.senderName} wants to meet you on RSN`;
+  const subject = `${data.senderName} wants to meet you on REASON`;
   // The message is a note, a blank line and "Why REASON suggested this: ...". HTML collapses
   // a raw line break to a space, so the breaks become <br>, and only AFTER escaping: a <br>
   // the sender typed is then shown as text instead of being run.
@@ -1028,22 +1035,22 @@ export async function sendPokeReceivedEmail(
           <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">Meeting request</p>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">Hey ${recipientDisplayName},</p>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
-            <strong>${escapeHtml(data.senderName)}</strong> wants to meet you on RSN.
+            <strong>${escapeHtml(data.senderName)}</strong> wants to meet you on REASON.
           </p>
           ${introBlock}
           <div style="text-align:center;margin:24px 0;">
             <a href="${data.messagesUrl}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 32px;border-radius:8px;">View Request</a>
-          ${emailCardClose()}
+          </div>
+        ${emailCardClose()}
         <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
-            You're receiving this because someone wants to meet you on RSN.
-            You can change your notification preferences in Settings.
-          </p>
-        </div>
+          You're receiving this because someone wants to meet you on REASON.
+          You can change your notification preferences in Settings.
+        </p>
       </div>
     </body></html>`;
 
   if (config.resendApiKey) {
-    const text = `Hey ${recipientDisplayName},\n\n${data.senderName} wants to meet you on RSN.${data.introMessage ? `\n\n"${data.introMessage}"` : ''}\n\nView it: ${data.messagesUrl}\n\nRSN — Connect with Reason`;
+    const text = `Hey ${recipientDisplayName},\n\n${data.senderName} wants to meet you on REASON.${data.introMessage ? `\n\n"${data.introMessage}"` : ''}\n\nView it: ${data.messagesUrl}\n\nREASON — Meet people you have a reason to know.`;
     await sendEmail({ to, subject, html, text });
     return;
   }
@@ -1078,17 +1085,17 @@ export async function sendPokeAcceptedEmail(
           </p>
           <div style="text-align:center;margin:24px 0;">
             <a href="${data.messagesUrl}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 32px;border-radius:8px;">Open Conversation</a>
-          ${emailCardClose()}
+          </div>
+        ${emailCardClose()}
         <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
-            You're receiving this because your meeting request was accepted on RSN.
-            You can change your notification preferences in Settings.
-          </p>
-        </div>
+          You're receiving this because your meeting request was accepted on REASON.
+          You can change your notification preferences in Settings.
+        </p>
       </div>
     </body></html>`;
 
   if (config.resendApiKey) {
-    const text = `Hey ${recipientDisplayName},\n\n${data.accepterName} accepted your meeting request on RSN. You're connected — start the conversation.\n\nOpen conversation: ${data.messagesUrl}\n\nRSN — Connect with Reason`;
+    const text = `Hey ${recipientDisplayName},\n\n${data.accepterName} accepted your meeting request on REASON. You're connected — start the conversation.\n\nOpen conversation: ${data.messagesUrl}\n\nREASON — Meet people you have a reason to know.`;
     await sendEmail({ to, subject, html, text });
     return;
   }
@@ -1122,7 +1129,7 @@ export async function isEmailTypeEnabled(emailType: string): Promise<boolean> {
  * llm-balance-alert.ts at most once an hour while Anthropic keeps refusing.
  */
 export async function sendLlmBalanceAlertEmail(opts: { to: string; where: string; at: string }): Promise<{ sent: boolean }> {
-  const subject = 'RSN: Anthropic balance is empty, onboarding chat and LinkedIn fill are down';
+  const subject = 'REASON: Anthropic balance is empty, onboarding chat and LinkedIn fill are down';
   const text = [
     `At ${opts.at} the Anthropic API refused a call (${opts.where}) with "Your credit balance is too low".`,
     'Until the balance is topped up, the onboarding chat falls back to the plain form, the LinkedIn gap fill and the extras pass return nothing, and every LLM-backed test fails.',
@@ -1148,7 +1155,7 @@ export interface MeetingConfirmedEmailData {
   threadUrl: string;
   googleCalendarUrl: string;
   icsContent: string;
-  /** W-meet: the RSN call link + kind, so they can join from the email. */
+  /** W-meet: the REASON call link + kind, so they can join from the email. */
   joinUrl?: string;
   kind?: 'audio' | 'video';
 }
@@ -1182,7 +1189,7 @@ export async function sendMeetingConfirmedEmail(
           ${data.joinUrl ? `<div style="text-align:center;margin:20px 0 8px 0;">
             <a href="${data.joinUrl}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 28px;border-radius:8px;">Join the call</a>
           </div>
-          <p style="color:#9ca3af;font-size:12px;text-align:center;margin:0 0 16px 0;">The Join link opens the call on RSN at meeting time.</p>` : ''}
+          <p style="color:#9ca3af;font-size:12px;text-align:center;margin:0 0 16px 0;">The Join link opens the call on REASON at meeting time.</p>` : ''}
           <div style="text-align:center;margin:12px 0;">
             <a href="${data.googleCalendarUrl}" style="display:inline-block;color:#DE322E;font-size:14px;font-weight:600;text-decoration:none;">Add to Google Calendar</a>
           </div>
@@ -1190,10 +1197,10 @@ export async function sendMeetingConfirmedEmail(
           <div style="text-align:center;margin:8px 0;">
             <a href="${data.threadUrl}" style="color:#DE322E;font-size:14px;">Open the conversation</a>
           </div>
-        </div>
+        ${emailCardClose()}
       </div>
     </body></html>`;
-  const text = `Hey ${recipientDisplayName},\n\nYour meeting with ${data.partnerName} is confirmed.\n\n${when}\nDuration: ${data.durationMin} minutes\n\nAdd to Google Calendar: ${data.googleCalendarUrl}\nOpen the conversation: ${data.threadUrl}\n\n(The .ics invite is attached.)\n\nRSN — Connect with Reason`;
+  const text = `Hey ${recipientDisplayName},\n\nYour meeting with ${data.partnerName} is confirmed.\n\n${when}\nDuration: ${data.durationMin} minutes\n\nAdd to Google Calendar: ${data.googleCalendarUrl}\nOpen the conversation: ${data.threadUrl}\n\n(The .ics invite is attached.)\n\nREASON — Meet people you have a reason to know.`;
 
   if (config.resendApiKey) {
     await sendEmail({ to, subject, html, text, attachments: [{ filename: 'meeting.ics', content: data.icsContent, contentType: 'text/calendar; charset=utf-8; method=REQUEST' }] });

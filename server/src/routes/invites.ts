@@ -253,10 +253,10 @@ router.post(
             const host = hostResult.rows[0];
             calendarEvent = {
               title: session.title,
-              description: `RSN Event — ${session.title}`,
+              description: `REASON event — ${session.title}`,
               startTime: new Date(session.scheduled_at),
               durationMinutes: totalMinutes,
-              organizerName: host?.display_name || 'RSN Host',
+              organizerName: host?.display_name || 'REASON',
               organizerEmail: host?.email,
               sessionId: inv.session_id,
             };
@@ -333,10 +333,10 @@ router.post(
         const host = hostResult.rows[0];
         calendarEvent = {
           title: session.title,
-          description: `RSN Event — ${session.title}`,
+          description: `REASON event — ${session.title}`,
           startTime: new Date(session.scheduled_at),
           durationMinutes: totalMinutes,
-          organizerName: host?.display_name || 'RSN Host',
+          organizerName: host?.display_name || 'REASON',
           organizerEmail: host?.email,
           sessionId,
         };

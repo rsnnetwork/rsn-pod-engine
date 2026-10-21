@@ -40,14 +40,14 @@ router.get(
       const other = people.rows.find((p) => p.id === s.partnerId);
       const kind = s.confirmed.type ?? 'video';
       const ics = generateIcsContent({
-        title: 'RSN meeting',
-        description: `A 1:1 ${kind} call on RSN with ${other?.display_name || 'your match'}. Join: ${config.clientUrl}/meet/${req.params.id}?scheduled=1&kind=${kind}`,
+        title: 'REASON meeting',
+        description: `A 1:1 ${kind} call on REASON with ${other?.display_name || 'your match'}. Join: ${config.clientUrl}/meet/${req.params.id}?scheduled=1&kind=${kind}`,
         startTime: new Date(s.confirmed.startAt),
         durationMinutes: s.confirmed.durationMin ?? 30,
         attendees: people.rows.filter((p) => p.email).map((p) => ({ name: p.display_name || undefined, email: p.email! })),
       });
       res.setHeader('Content-Type', 'text/calendar; charset=utf-8; method=REQUEST');
-      res.setHeader('Content-Disposition', 'attachment; filename="rsn-meeting.ics"');
+      res.setHeader('Content-Disposition', 'attachment; filename="reason-meeting.ics"');
       res.send(ics);
     } catch (err) {
       next(err);

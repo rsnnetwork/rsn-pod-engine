@@ -715,11 +715,11 @@ describe('email.service.ts — F2 poke email templates + kill-switch', () => {
     pathMod.join(__dirname, '../../../services/email/email.service.ts'), 'utf8',
   );
 
-  it('sendPokeReceivedEmail subject is "{senderName} wants to meet you on RSN" (plain, matching the house style)', () => {
+  it('sendPokeReceivedEmail subject is "{senderName} wants to meet you on REASON" (plain, matching the house style)', () => {
     const i = src.indexOf('export async function sendPokeReceivedEmail(');
     expect(i).toBeGreaterThan(-1);
     const fn = src.slice(i, src.indexOf('\nexport async function ', i + 1));
-    expect(fn).toMatch(/subject = `\$\{data\.senderName\} wants to meet you on RSN`/);
+    expect(fn).toMatch(/subject = `\$\{data\.senderName\} wants to meet you on REASON`/);
     expect(fn).toMatch(/data\.messagesUrl/);
     expect(fn).toMatch(/escapeHtml\(data\.introMessage\)/);
   });
