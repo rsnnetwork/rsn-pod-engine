@@ -102,7 +102,8 @@ export function personFacts(p: PersonBrief['person']): PersonFacts {
     role: roles.join(', ') || visibleText(p.jobTitle),
     company: visibleText(p.company),
     bio: visibleText(p.bio),
-    tags: [visibleText(p.industry), ...roles].filter((t): t is string => t !== null).slice(0, 4),
+    // The location is on the public card, and your own profile shows it (21 Oct 2026), so everyone else's does too.
+    tags: [visibleText(p.industry), visibleText(p.location), ...roles].filter((t): t is string => t !== null).slice(0, 4),
   };
 }
 

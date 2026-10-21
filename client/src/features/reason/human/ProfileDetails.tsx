@@ -14,7 +14,8 @@ const KEEP_CLEAR = 'scroll-mt-[calc(90px+env(safe-area-inset-top))] scroll-mb-[c
 const BODY = 'text-[14px] leading-relaxed text-[#505762] [overflow-wrap:anywhere]';
 const CHIP = cn('flex min-h-[44px] max-w-full items-center rounded-full bg-[#f3f4f6] px-3 py-1 text-[12px] [overflow-wrap:anywhere]', KEEP_CLEAR);
 
-function Section({ kicker, title, children, className }: { kicker: string; title: string; children: ReactNode; className?: string }) {
+// Also the sections of your own profile (21 Oct 2026), so the two pages are built of the same parts.
+export function Section({ kicker, title, children, className }: { kicker: string; title: string; children: ReactNode; className?: string }) {
   return (
     <section className={cn('min-w-0 rounded-[19px] border border-reason-line bg-white p-[17px] md:rounded-[24px] md:p-6', className)}>
       <p className="text-[11px] font-extrabold uppercase tracking-[0.11em]">{kicker}</p>

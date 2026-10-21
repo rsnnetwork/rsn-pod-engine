@@ -2,8 +2,8 @@
 // Everything the REASON pages read and write. Pages import all of it from here.
 import api from '@/lib/api';
 import type {
-  MatchStrength, MeetingFormat, OutcomeKey, PersonBrief, PersonResponse,
-  RecentConnection, WorthContinuing,
+  MatchStrength, MeetingFormat, OutcomeKey, PersonBrief, PersonResponse, PublicMember,
+  RecentConnection, User, WorthContinuing,
 } from '@rsn/shared';
 import type { PokeStatus } from './person';
 
@@ -39,6 +39,11 @@ export const reasonKeys = {
   forYou: ['reason', 'for-you'] as const,
   brief: (userId: string) => ['reason', 'brief', userId] as const,
   recent: ['reason', 'recent-connections'] as const,
+  // Your own profile (21 Oct 2026): your card as others see it, and your whole profile. One prefix, so a banner
+  // change refreshes both.
+  mine: ['reason', 'mine'] as const,
+  myCard: ['reason', 'mine', 'card'] as const,
+  myProfile: ['reason', 'mine', 'profile'] as const,
 };
 
 // A member id is one encoded segment of an address. A route parameter arrives decoded, so a crafted
@@ -48,6 +53,9 @@ const memberSegment = (userId: string) => encodeURIComponent(userId);
 export const fetchForYou = () => api.get('/matches/platform').then((r) => r.data.data as ForYouPayload);
 export const fetchBrief = (userId: string) => api.get(`/people/${memberSegment(userId)}/brief`).then((r) => r.data.data as PersonBrief);
 export const fetchRecentConnections = () => api.get('/people/connections/recent').then((r) => r.data.data as RecentConnection[]);
+// Your own card, exactly as other members are shown it, and your whole profile, which only you are shown.
+export const fetchMyCard = () => api.get('/people/me/card').then((r) => r.data.data as PublicMember);
+export const fetchMyProfile = () => api.get('/users/me').then((r) => r.data.data as User);
 
 export const setPersonResponse = (userId: string, response: PersonResponse | null) =>
   response
@@ -59,3 +67,10 @@ export const sendMeetRequest = (userId: string, note: string, format: MeetingFor
 
 export const recordOutcomeRequest = (userId: string, worthContinuing: WorthContinuing, outcomes: OutcomeKey[]) =>
   api.post(`/people/${memberSegment(userId)}/outcome`, { worthContinuing, outcomes });
+
+// Your banner: a data URL the page has already cropped to 1500x500, or none.
+export const uploadBanner = (image: string) => api.put('/users/me/banner', { image });
+export const removeBannerRequest = () => api.delete('/users/me/banner');
+
+// The old public profile's block call, with the id as one encoded segment like every call here.
+export const blockMember = (userId: string) => api.post(`/users/${memberSegment(userId)}/block`);
