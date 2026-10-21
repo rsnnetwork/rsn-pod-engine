@@ -223,6 +223,39 @@ export const peopleWriteLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
 
+// Entities (21 Oct 2026). Reads are limited like the person brief, because any entity, and any member's
+// entities, can be asked for by id. Edits, joins and leaves share a write allowance. Creating has a small
+// hourly one of its own, because every new entity claims a name that nobody else can then take.
+export const entityReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('entity-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+export const entityWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('entity-write'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+export const entityCreateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('entity-create'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'You have added a lot of entities this hour. Try again later.' } },
+});
+
 // REASON milestone 1 (7 Oct 2026): opening a person's brief and listing recent connections. The brief can
 // be aimed at any member by id, so without a limit one member could read it for the whole member list as
 // fast as the server answers. Reads have their own bucket: reading never uses up a member's Saves.

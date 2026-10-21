@@ -262,6 +262,65 @@ export async function fanoutUserEntity(
   }
 }
 
+// ─── Entity fanout (21 Oct 2026) ────────────────────────────────────────────
+//
+// An entity (an organisation members create, such as a company or a fund; not the realtime "entities"
+// these tags are) was created, edited or archived, or a member joined it, changed their role in it or
+// left it. Audience: its people as they are after the write (an archive keeps them), the member who
+// acted, and each member whose link changed (one who has just left is no longer among its people).
+// Each recipient is sent, in an emit of their own:
+//   entity:<id>                its page;
+//   user:<recipient>:entities  their own list, whose names and people counts may have moved;
+//   user:<changed>:entities    for each member whose link changed, so a profile that lists that
+//                              member's entities redraws for the people who share the entity.
+// Someone outside the entity with its page, or a member's profile, open is not told, and catches up
+// on focus, as with an event in a pod they are not in.
+
+export async function fanoutEntityChange(
+  entityId: string,
+  actorId: string,
+  changedUserIds: string[] = [],
+): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io) return;
+  try {
+    const { query } = await import('../db');
+    const people = await query<{ user_id: string }>(
+      `SELECT user_id FROM entity_members WHERE entity_id = $1`,
+      [entityId],
+    );
+    const recipients = new Set([...people.rows.map(r => r.user_id), actorId, ...changedUserIds].filter(Boolean));
+    const told = [E.entity(entityId), ...changedUserIds.map(E.userEntities)];
+    await Promise.all([...recipients].map(userId =>
+      emitEntities(io, [userId], [...new Set([...told, E.userEntities(userId)])]),
+    ));
+  } catch (err) {
+    logger.warn({ err, entityId }, 'fanoutEntityChange: failed to fan out');
+  }
+}
+
+// ─── Profile-change fanout ──────────────────────────────────────────────────
+//
+// A member's public card changed without the profile form: creating or joining their company as its
+// founder or an employee fills an empty profile company (21 Oct 2026). Same audience as a saved
+// profile (PUT /users/me): the member's own user:<id>, and each pod they are an active member of,
+// whose member lists show the card.
+
+export async function fanoutProfileChange(userId: string): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io) return;
+  try {
+    const { query } = await import('../db');
+    const pods = await query<{ pod_id: string }>(
+      `SELECT pod_id FROM pod_members WHERE user_id = $1 AND status = 'active'`,
+      [userId],
+    );
+    await Promise.all([fanoutUserEntity(userId), ...pods.rows.map(r => fanoutPodEntities(r.pod_id))]);
+  } catch (err) {
+    logger.warn({ err, userId }, 'fanoutProfileChange: failed to fan out');
+  }
+}
+
 // ─── DM-conversation fanout ─────────────────────────────────────────────────
 //
 // Emits the dm-conversation entity to BOTH participants in the conversation.

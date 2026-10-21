@@ -10,7 +10,9 @@ import { searchConnectedUsers } from '../services/invite/connected-users';
 import { toPublicMember } from '../services/user/public-card';
 import { searchMembers } from '../services/user/user-search.service';
 import * as blockService from '../services/block/block.service';
+import { listUserEntities } from '../services/entity/entity.service';
 import { getAvatarBlob } from '../services/onboarding/avatar.service';
+import { entityReadLimiter } from '../middleware/rateLimit';
 import {
   fanoutAdminEntities,
   fanoutPodEntities,
@@ -462,6 +464,29 @@ router.get(
       const hasBlocked = await blockService.hasBlocked(req.user!.userId, req.params.id);
       const response: ApiResponse = { success: true, data: { hasBlocked } };
       res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── GET /users/:id/entities ────────────────────────────────────────────────
+// That person's entities (21 Oct 2026): [{ id, name, kind, role, title }]. Blocked (either way), closed
+// and unknown people are a 404 in the same words, as the person brief is. Two segments, so it never
+// collides with /:id. Limited like the brief, since it can be aimed at any member by id.
+
+// Postgres reads an upper-case uuid as the same member, but the service compares ids as plain strings.
+const memberParams = z.object({ id: z.string().uuid('Not a member id').transform((s) => s.toLowerCase()) });
+
+router.get(
+  '/:id/entities',
+  authenticate,
+  entityReadLimiter,
+  validate(memberParams, 'params'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await listUserEntities(req.user!.userId, req.params.id);
+      res.json({ success: true, data } as ApiResponse);
     } catch (err) {
       next(err);
     }

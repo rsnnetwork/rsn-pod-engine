@@ -8,7 +8,7 @@
 // member. Every such read path goes through here, so a new private column
 // added to `users` cannot leak by accident on some other screen.
 
-import type { PublicMember, User } from '@rsn/shared';
+import type { PublicCardBasics, PublicMember, User } from '@rsn/shared';
 import type { IntentProfile } from '../matching/platform-match.service';
 
 /** Keys of `User` that must never reach another member. */
@@ -42,6 +42,24 @@ export function toPublicMember(u: Partial<User> & { id: string }): PublicMember 
     professionalRole: u.professionalRole ?? [],
     expertiseText: u.expertiseText ?? null,
     whatICanHelpWith: u.whatICanHelpWith ?? null,
+  };
+}
+
+/**
+ * The thinnest public card, for a list of many people (an entity's people, 21 Oct 2026): who they
+ * are and nothing more. It is cut from the public card, so it can only ever hold less.
+ */
+export function toPublicCardBasics(u: Partial<User> & { id: string }): PublicCardBasics {
+  const card = toPublicMember(u);
+  return {
+    id: card.id,
+    displayName: card.displayName,
+    firstName: card.firstName,
+    lastName: card.lastName,
+    avatarUrl: card.avatarUrl,
+    jobTitle: card.jobTitle,
+    company: card.company,
+    location: card.location,
   };
 }
 

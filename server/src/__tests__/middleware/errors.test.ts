@@ -102,6 +102,15 @@ describe('ConflictError', () => {
     expect(err.statusCode).toBe(409);
     expect(err.code).toBe('USER_ALREADY_EXISTS');
     expect(err.message).toBe('Email taken');
+    expect(err.details).toBeUndefined();
+  });
+
+  // 21 Oct 2026: a clash can say what it clashed with, so the client can offer it ("Open it", "Join it").
+  it('carries details when given, in the same shape as validation details', () => {
+    const err = new ConflictError(ErrorCodes.ENTITY_NAME_TAKEN, 'Acme is already on REASON.', { existingId: ['e-1'] });
+    expect(err.statusCode).toBe(409);
+    expect(err.code).toBe('ENTITY_NAME_TAKEN');
+    expect(err.details).toEqual({ existingId: ['e-1'] });
   });
 });
 

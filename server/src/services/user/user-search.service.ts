@@ -25,8 +25,8 @@ const DEFAULT_LIMIT = 20;
 // One character matches most of the network — that is a scrape, not a search.
 const MIN_QUERY = 2;
 
-/** `%` and `_` are wildcards inside ILIKE; a member typing them must not widen the search. */
-const escapeLike = (s: string) => s.replace(/[\\%_]/g, (m) => `\\${m}`);
+/** `%` and `_` are wildcards inside ILIKE; a member typing them must not widen the search. Entity search uses it too. */
+export const escapeLike = (s: string) => s.replace(/[\\%_]/g, (m) => `\\${m}`);
 
 export async function searchMembers(
   viewerId: string,
