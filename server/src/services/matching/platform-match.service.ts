@@ -15,7 +15,10 @@
 // 21 Oct 2026: the one-way rule still decides WHO is shown and how many. Among
 // them, people who would also want to meet the member come first (the onboarding
 // brief's "people you want to meet, who also want to meet you"). Their wants
-// stay private, so that changes the order and nothing else.
+// stay private, so that changes the order and nothing else. The order must not
+// be readable either: a card's score is its band (1 strong, 0.5 close), never
+// the fit, because a fit that fell down the list, or a run of equal fits out of
+// their id order, would mark the lifted card as someone whose wants fit you.
 //
 // Deliberately no AI (June 19 doc: "No AI required initially. Just
 // matching."): designation buckets + token overlap over the intent columns
@@ -74,7 +77,7 @@ export interface PlatformMatch {
   /** strong clears MATCH_THRESHOLD; close is a near fit, shown labelled so a page is never empty. */
   strength: MatchStrength;
   reason: string;
-  /** Never rises down the list, so it cannot show who was lifted (see scoresShown). */
+  /** The band, never the fit: 1 for strong, 0.5 for close (see SCORE_SHOWN). */
   score: number;
   /** Where a meeting request between the two stands; null when there is none. */
   pokeStatus?: 'pending' | 'accepted' | null;
@@ -451,17 +454,15 @@ function mutualFitsFirst<T extends { c: IntentProfile & { passedOnMember?: boole
 }
 
 /**
- * The score each card shows, in list order. A lifted card can score lower than the card below
- * it, and a number that rose down the list would mark every card above it as someone whose
- * private wants fit the member (ruling R8). So each card shows the highest score among itself
- * and the cards below it: the numbers never rise, and only a lifted card can show more than its
- * own. Strength is still read from the card's own score.
+ * The score a card carries: its band, never its fit (final review, 21 Oct 2026). A lifted card can
+ * fit less than the card below it, and inside a run of equal fits the order is by id, so any number
+ * that follows the fit (even one masked to never rise down the list) marks a lifted card as someone
+ * whose private wants fit the member (ruling R8). No screen reads the number; the band keeps the field.
  */
-function scoresShown(ordered: ReadonlyArray<{ fit: { score: number } }>): number[] {
-  const scores = ordered.map(x => x.fit.score);
-  for (let i = scores.length - 2; i >= 0; i--) scores[i] = Math.max(scores[i], scores[i + 1]);
-  return scores;
-}
+const SCORE_SHOWN: Record<MatchStrength, number> = { strong: 1, close: 0.5 };
+
+/** Strong clears MATCH_THRESHOLD; anything shown below it is a close match. */
+const strengthOf = (score: number): MatchStrength => (score >= MATCH_THRESHOLD ? 'strong' : 'close');
 
 // ── Data access ──────────────────────────────────────────────────────────────
 
@@ -615,9 +616,8 @@ export async function getPlatformMatches(
     .slice(0, limit);
   // Only then the other direction: it moves people up the list, never onto it or off it.
   const ordered = mutualFitsFirst(chosen, me, generic);
-  const scores = scoresShown(ordered);
   const matches = ordered
-    .map((x, i): PlatformMatch => ({
+    .map((x): PlatformMatch => ({
       userId: x.c.id,
       displayName: x.c.displayName,
       avatarUrl: x.c.avatarUrl,
@@ -629,9 +629,9 @@ export async function getPlatformMatches(
       // falls through to their expertise, and clip() turns blank text into null.
       theyCanBring: clip(x.c.whatICanHelpWith) ?? clip(x.c.expertiseText),
       saved: x.c.saved === true,
-      strength: x.fit.score >= MATCH_THRESHOLD ? 'strong' : 'close',
+      strength: strengthOf(x.fit.score),
       reason: x.fit.reason,
-      score: Number(scores[i].toFixed(3)),
+      score: SCORE_SHOWN[strengthOf(x.fit.score)],
       // Where a request between the two of you got to, so the card can show it
       // rather than offering a button that would be refused.
       pokeStatus: (x.c as { pokeStatus?: 'pending' | 'accepted' | null }).pokeStatus ?? null,

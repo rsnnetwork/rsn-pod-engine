@@ -845,7 +845,8 @@ describe('a reason names only words from the other member\'s public card', () =>
       const { matches } = await getPlatformMatches('u-viewer');
       expect(matches).toHaveLength(1);
       expect(matches[0]).toMatchObject({ userId: 'u-consultant', strength: 'strong', reason: GENERIC });
-      expect(matches[0].score).toBeCloseTo(0.467, 3);
+      // The fit is about 0.467; a card carries only its band (21 Oct 2026, see platform-match-mutual.test.ts).
+      expect(matches[0].score).toBe(1);
     });
 
     it('the "someone new matches" bell: the member is still told, and the body names no private word', async () => {
