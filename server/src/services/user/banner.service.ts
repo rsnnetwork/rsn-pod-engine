@@ -27,8 +27,31 @@ const TOO_BIG = 'Your banner must be 3 MB or smaller.';
 const NOT_A_PICTURE = 'That file is not a picture we can use. Choose a JPG, PNG or WebP picture.';
 const TOO_MANY_PIXELS = 'Your banner can be at most 4096 by 4096 pixels.';
 
-const DATA_URL = /^data:([^;,]*);base64,(.*)$/s;
-const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+// A banner's data URL holds up to 4 MB of base64, and Node 20's pattern engine has run out of stack reading one
+// that long (CI, 21 Oct 2026), so its text is read with plain string steps, never a pattern.
+const DATA_URL_START = 'data:';
+const BASE64_MARK = ';base64,';
+
+/** The type and the base64 text of a data URL, or null when it is not one; the type holds no ";" or ",". */
+function splitDataUrl(image: string): { mime: string; base64: string } | null {
+  if (!image.startsWith(DATA_URL_START)) return null;
+  const mark = image.indexOf(BASE64_MARK);
+  if (mark < 0) return null;
+  const mime = image.slice(DATA_URL_START.length, mark);
+  if (mime.includes(';') || mime.includes(',')) return null;
+  return { mime, base64: image.slice(mark + BASE64_MARK.length) };
+}
+
+const isBase64Letter = (c: number) =>
+  (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a) || (c >= 0x30 && c <= 0x39) || c === 0x2b || c === 0x2f;
+
+/** True for base64 as browsers write it: groups of four, A-Z a-z 0-9 + and /, then at most two "=" at the end. */
+function isBase64Text(text: string): boolean {
+  if (text.length === 0 || text.length % 4 !== 0) return false;
+  const end = text.endsWith('==') ? text.length - 2 : text.endsWith('=') ? text.length - 1 : text.length;
+  for (let i = 0; i < end; i += 1) if (!isBase64Letter(text.charCodeAt(i))) return false;
+  return true;
+}
 
 // How each kind of file begins. A WebP is a RIFF file whose form type, at byte 8, is WEBP.
 const startsWith = (bytes: Buffer, head: number[], at = 0) => head.every((b, i) => bytes[at + i] === b);
@@ -102,11 +125,11 @@ export function pictureSize(bytes: Buffer, mime: BannerType): Size | null {
 
 /** The picture in a data URL, or a 400 that says in a sentence what is wrong with it. */
 export function parseBannerImage(image: string): { bytes: Buffer; mime: BannerType } {
-  const parts = DATA_URL.exec(image);
+  const parts = splitDataUrl(image);
   if (!parts) throw new ValidationError(NOT_A_PICTURE);
-  const [, mime, base64] = parts;
+  const { mime, base64 } = parts;
   if (!isBannerType(mime)) throw new ValidationError(WRONG_TYPE);
-  if (base64.length % 4 !== 0 || !BASE64.test(base64)) throw new ValidationError(NOT_A_PICTURE);
+  if (!isBase64Text(base64)) throw new ValidationError(NOT_A_PICTURE);
   // The decoded size, worked out from the text before anything is decoded.
   const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
   if ((base64.length / 4) * 3 - padding > BANNER_MAX_BYTES) throw new ValidationError(TOO_BIG);

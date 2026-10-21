@@ -247,11 +247,14 @@ describe('saveDraft', () => {
 });
 
 describe('confirm', () => {
-  const FULL = confirmSchemaV2.parse({
+  const FULL_ANSWERS = {
     lookingToMeet: ['meet_investors', 'meet_other'], meetOther: 'bakers in Vienna',
     hopingToFind: ['find_funding', 'find_friends_conversations'], findSpecific: 'a lead for my seed round',
     canOffer: ['offer_advice_mentoring', 'offer_friends_conversations'],
     selfKinds: ['self_founder_owner'],
+  };
+  const FULL = confirmSchemaV2.parse({
+    ...FULL_ANSWERS,
     profile: { jobTitle: 'Founder & CEO', company: 'Vokt', timezone: 'Asia/Kathmandu' },
   });
   let before: Record<string, unknown>;
@@ -281,7 +284,7 @@ describe('confirm', () => {
     const params = call[1] as unknown[];
     const value = (column: string) => {
       const m = new RegExp(`\\b${column} = (?:COALESCE\\(|NULLIF\\()?\\$(\\d+)`).exec(sql)
-        ?? new RegExp(`\\b${column} = CASE[\\s\\S]*?ELSE \\$(\\d+) END`).exec(sql);
+        ?? new RegExp(`\\b${column} = CASE[\\s\\S]*?ELSE (?:NULLIF\\()?\\$(\\d+)`).exec(sql);
       if (!m) throw new Error(`${column} is not written from a parameter`);
       return params[Number(m[1]) - 1];
     };
@@ -338,14 +341,65 @@ describe('confirm', () => {
   it('a missing industry never blanks the stored one; profile fields are written only when given', async () => {
     await confirm('u-1', { ...FULL, profile: {} });
     const { sql, value } = update();
-    expect(sql).toMatch(/industry = COALESCE\(\$\d+, industry\)/);
+    // Not given (null) keeps the column; given empty ('') clears it; anything else is written.
+    for (const column of ['industry', 'job_title', 'company']) {
+      expect(sql).toMatch(new RegExp(`\\b${column} = CASE WHEN \\$(\\d+)::text IS NULL THEN ${column} ELSE NULLIF\\(\\$\\1, ''\\) END`));
+    }
     expect(sql).toMatch(/timezone = COALESCE\(\$\d+, timezone\)/);
-    expect(sql).toMatch(/job_title = COALESCE\(\$\d+, job_title\)/);
-    expect(sql).toMatch(/company = COALESCE\(\$\d+, company\)/);
     expect(sql).toMatch(/display_name = COALESCE\(\$\d+, display_name\)/);
     expect(value('industry')).toBeNull();
     expect(value('timezone')).toBeNull();
     expect(value('job_title')).toBeNull();
+    expect(value('company')).toBeNull();
+    expect(value('display_name')).toBeNull();
+  });
+
+  // The shared contract (final review, 21 Oct 2026): a member who empties their role, company or industry
+  // on screen 7 sends "", and it is cleared. Left out or null keeps it. The name can never be cleared.
+  describe('emptying a field on the profile screen', () => {
+    const confirmWith = (profile: Record<string, unknown>) =>
+      confirm('u-1', confirmSchemaV2.parse({ ...FULL_ANSWERS, profile }));
+
+    it('an emptied role, company and industry are cleared: "" is sent, and NULLIF stores NULL', async () => {
+      await confirmWith({ jobTitle: '', company: '  ', industry: '' });
+      const { value } = update();
+      expect(value('job_title')).toBe('');
+      expect(value('company')).toBe('');
+      expect(value('industry')).toBe('');
+    });
+
+    it('left out or null, they are kept: null is sent, and the column keeps its value', async () => {
+      await confirmWith({ jobTitle: null, industry: null });
+      const { value } = update();
+      expect(value('job_title')).toBeNull();
+      expect(value('company')).toBeNull();
+      expect(value('industry')).toBeNull();
+    });
+
+    it('a blank name is kept, never cleared', async () => {
+      await confirmWith({ displayName: '   ' });
+      const { sql, value } = update();
+      expect(value('display_name')).toBeNull();
+      expect(sql).toMatch(/display_name = COALESCE\(\$\d+, display_name\)/);
+    });
+
+    it('a cleared title keeps where the old one came from, as a profile save does', async () => {
+      await confirmWith({ jobTitle: '' });
+      expect(update().sql).toMatch(/job_title_source = CASE WHEN \$(\d+)::text IS NULL OR \$\1 = '' THEN job_title_source ELSE \$\d+ END/);
+      expect(mockShownPrefill).not.toHaveBeenCalled();
+    });
+
+    it('a specialist who cleared their title is no longer known by the stored one', async () => {
+      before.job_title = 'Data Engineer';
+      await confirm('u-1', confirmSchemaV2.parse({ ...FULL_ANSWERS, selfKinds: ['self_specialist'], profile: { jobTitle: '' } }));
+      expect(update().value('professional_role')).not.toContain('Data Engineer');
+    });
+
+    it('a cleared industry is cleared for the live-event matcher too', async () => {
+      await confirmWith({ industry: '' });
+      const call = mockTx.mock.calls.find(c => /INSERT INTO user_intent_profiles/.test(c[0] as string))!;
+      expect(JSON.parse((call[1] as string[])[1]).userIndustry).toBeNull();
+    });
   });
 
   it('writes the profile fields that were given', async () => {

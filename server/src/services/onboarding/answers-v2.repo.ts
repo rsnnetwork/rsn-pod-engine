@@ -279,6 +279,9 @@ export async function confirm(userId: string, input: ConfirmInputV2): Promise<Co
   };
   const profile = input.profile ?? {};
   const given = <T>(v: T | null | undefined): T | null => v ?? null;
+  /** What a field holds once this confirm is written: emptied ('') is nothing, not given keeps the stored value. */
+  const afterThis = (sent: string | null | undefined, stored: string | null): string | null =>
+    (sent === '' ? null : sent ?? stored);
 
   // The title is a matching input: kept unchanged from the LinkedIn prefill the
   // member was shown it is 'inferred', typed it is 'stated' (13 Aug, B1). Only
@@ -303,7 +306,7 @@ export async function confirm(userId: string, input: ConfirmInputV2): Promise<Co
     const firstCompletion = before.onboarding_status !== 'completed';
 
     // What the matcher and the public card read: canonical text, never a label.
-    const roleTitles = roleTitlesV2(answers.selfKinds, answers.selfOther, given(profile.jobTitle) ?? before.job_title);
+    const roleTitles = roleTitlesV2(answers.selfKinds, answers.selfOther, afterThis(profile.jobTitle, before.job_title));
     const wantText = wantTextV2(answers.lookingToMeet, answers.meetOther);
     const intentText = intentTextV2(answers.hopingToFind, answers.findOther, answers.findSpecific);
     const offerText = offerTextV2(answers.canOffer, answers.offerOther);
@@ -322,14 +325,16 @@ export async function confirm(userId: string, input: ConfirmInputV2): Promise<Co
          my_intent = $13,
          what_i_can_help_with = $14,
          reasons_to_connect = $15,
-         -- the profile: only what was given, so silence never blanks a field
+         -- the profile: what was not given (null) is kept, so silence never blanks a
+         -- field. The role, company and industry sent empty ('') are cleared; a name
+         -- is never cleared, and an emptied title keeps where the old one came from.
          display_name = COALESCE($16, display_name),
          first_name = CASE WHEN $16::text IS NULL OR $16 = display_name THEN first_name ELSE $22 END,
          last_name = CASE WHEN $16::text IS NULL OR $16 = display_name THEN last_name ELSE $23 END,
-         job_title = COALESCE($17, job_title),
-         job_title_source = CASE WHEN $17::text IS NULL THEN job_title_source ELSE $18 END,
-         company = COALESCE($19, company),
-         industry = COALESCE($20, industry),
+         job_title = CASE WHEN $17::text IS NULL THEN job_title ELSE NULLIF($17, '') END,
+         job_title_source = CASE WHEN $17::text IS NULL OR $17 = '' THEN job_title_source ELSE $18 END,
+         company = CASE WHEN $19::text IS NULL THEN company ELSE NULLIF($19, '') END,
+         industry = CASE WHEN $20::text IS NULL THEN industry ELSE NULLIF($20, '') END,
          timezone = COALESCE($21, timezone),
          -- "can this person be matched": for a v2 member, exactly their answers
          profile_complete = true,
@@ -365,7 +370,7 @@ export async function confirm(userId: string, input: ConfirmInputV2): Promise<Co
       ],
       desiredDesignations: desiredDesignationsV2(answers.lookingToMeet, answers.hopingToFind),
       userCanOffer: offerText,
-      userIndustry: given(profile.industry) ?? before.industry,
+      userIndustry: afterThis(profile.industry, before.industry),
       reasonForMeeting: intentText,
     };
     await client.query(

@@ -183,12 +183,35 @@ describe('POST /entities', () => {
     ['a website that is not an address', { ...body, website: 'not a site' }, 'website'],
     ['a website of 501 characters', { ...body, website: `https://acme.com/${'p'.repeat(484)}` }, 'website'],
   ])('refuses %s, naming the field, without calling the service', async (what, sent, field) => {
-    // One member per case: creating has a small hourly allowance, and a refused request uses it too.
+    // One member per case: creating has a small hourly allowance. A refused request no longer uses it
+    // (see "uses none of the hourly allowance" below), but no case leans on another's.
     const res = await request(app).post('/entities').set(as(`u-refused-${what}`)).send(sent);
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
     expect(Object.keys(res.body.error.details)).toContain(field);
     nothingCalled();
+  });
+
+  // Final review, 21 Oct 2026: the database counts characters, and the check counted UTF-16 units, so a
+  // name of one emoji or one rare Chinese character got past it and the database answered with a 500.
+  it.each([
+    ['an emoji', '😀'],
+    ['one character from CJK Extension B', '𠀀'],
+  ])('refuses a name of one character beyond the basic plane (%s) in words, before the service', async (_what, name) => {
+    const res = await request(app).post('/entities').set(as(`u-astral-${name.codePointAt(0)}`)).send({ ...body, name });
+    expect(res.status).toBe(400);
+    expect(res.body.error.details).toEqual({ name: ['Give the entity a name of at least 2 characters.'] });
+    nothingCalled();
+  });
+
+  it('takes two such characters, and 200 of them, and refuses 201', async () => {
+    const who = as('u-astral-lengths');
+    expect((await request(app).post('/entities').set(who).send({ ...body, name: '😀😀' })).status).toBe(201);
+    expect(mockCreate).toHaveBeenLastCalledWith('u-astral-lengths', expect.objectContaining({ name: '😀😀' }));
+    expect((await request(app).post('/entities').set(who).send({ ...body, name: '𠀀'.repeat(200) })).status).toBe(201);
+    const tooLong = await request(app).post('/entities').set(who).send({ ...body, name: '𠀀'.repeat(201) });
+    expect(tooLong.status).toBe(400);
+    expect(tooLong.body.error.details).toEqual({ name: ['Keep the name to 200 characters.'] });
   });
 
   it('answers 409 with the id of the entity that already has the name, and tells no screens', async () => {
@@ -277,6 +300,7 @@ describe('PATCH /entities/:id', () => {
     ['nothing to change', {}],
     ['a name of null', { name: null }],
     ['a one-letter name', { name: 'A' }],
+    ['a name of one emoji', { name: '🚀' }],
     ['a kind of null', { kind: null }],
     ['an unknown kind', { kind: 'empire' }],
     ['a javascript: website', { website: 'javascript:alert(1)' }],
@@ -448,5 +472,25 @@ describe('the routes are rate limited', () => {
     expect((await request(app).post('/entities').set(as('u-calm')).send({ name: 'Calm', kind: 'company', role: 'founder' })).status).toBe(201);
     expect((await request(app).get('/entities').set(busy)).status).toBe(200);
     expect((await request(app).post(`/entities/${ID}/members`).set(busy).send({ role: 'member' })).status).toBe(200);
+  });
+
+  // Final review, 21 Oct 2026: the allowance counted refusals, so trying the name-clash flow a few times
+  // ("Acme is already on REASON", then a typo) soon said "You have added a lot of entities this hour"
+  // to someone who had added none. Only an entity that was made counts now.
+  it('a create that is refused (a name taken, a name too short) uses none of the hourly allowance', async () => {
+    const tester = as('u-clash-tester');
+    for (let i = 0; i < 12; i += 1) {
+      mockCreate.mockRejectedValueOnce(
+        new ConflictError(ErrorCodes.ENTITY_NAME_TAKEN, 'Acme Ltd is already on REASON.', { existingId: [OLD] }),
+      );
+      expect((await request(app).post('/entities').set(tester).send({ name: 'Acme Ltd', kind: 'company', role: 'founder' })).status).toBe(409);
+      expect((await request(app).post('/entities').set(tester).send({ name: 'A', kind: 'company', role: 'founder' })).status).toBe(400);
+    }
+    for (let i = 0; i < 10; i += 1) {
+      expect((await request(app).post('/entities').set(tester).send({ name: `Tested ${i}`, kind: 'company', role: 'founder' })).status).toBe(201);
+    }
+    const refused = await request(app).post('/entities').set(tester).send({ name: 'Tested 10', kind: 'company', role: 'founder' });
+    expect(refused.status).toBe(429);
+    expect(refused.body.error.message).toBe('You have added a lot of entities this hour. Try again later.');
   });
 });

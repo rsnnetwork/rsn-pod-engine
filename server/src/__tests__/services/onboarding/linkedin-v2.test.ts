@@ -48,8 +48,9 @@ jest.mock('../../../realtime/fanout', () => ({
   __esModule: true, fanoutUserEntity: (...a: unknown[]) => mockFanout(...a),
 }));
 
+import { LINKEDIN_PROFILE_HELP, linkedinProfileUrl } from '@rsn/shared';
 import {
-  normaliseLinkedinProfileUrl, planLinkedinLookup, linkedinBlock, connectLinkedin, shownPrefill, LINKEDIN_URL_MESSAGE,
+  planLinkedinLookup, linkedinBlock, connectLinkedin, shownPrefill,
 } from '../../../services/onboarding/linkedin-v2';
 import type { EnrichResult } from '../../../services/onboarding/enrichment.service';
 import type { EnrichmentStatus } from '../../../services/onboarding/enrichment.repo';
@@ -76,26 +77,37 @@ const state = (status: EnrichmentStatus, over: { startedAt?: string; completedAt
   lookupUrl: null as string | null, ...over,
 });
 
-describe('normaliseLinkedinProfileUrl: any profile form, one address', () => {
+// The address is read by the one helper the request to join uses too (@rsn/shared, tested in full in
+// linkedin-profile-url-shared.test.ts). Since 21 Oct 2026 the name keeps its capitals and its letters outside
+// A to Z are stored encoded, as a browser copies them. Lookups compare addresses through linkedinSlug(),
+// which ignores both, so this changes no lookup.
+describe('linkedinProfileUrl, as onboarding v2 saves it: any profile form, one address', () => {
   it.each([
     'https://www.linkedin.com/in/jane-doe',
     'http://linkedin.com/in/jane-doe',
     'linkedin.com/in/jane-doe',
     'www.linkedin.com/in/jane-doe/',
     'https://uk.linkedin.com/in/jane-doe?trk=public_profile',
-    'https://de.linkedin.com/in/Jane-Doe/',
-    'LINKEDIN.COM/IN/JANE-DOE',
     'https://www.linkedin.com/in/jane-doe#experience',
     'https://m.linkedin.com/in/jane-doe',
     'https://www.linkedin.com/in/jane-doe/details/experience/',
     '  linkedin.com/in/jane-doe  ',
+    // What the live join form saved for someone who typed linkedin.com/in/jane-doe, carried onto their profile.
+    'https://linkedin.com/in/linkedin.com/in/jane-doe',
   ])('%s', (input) => {
-    expect(normaliseLinkedinProfileUrl(input)).toBe(URL);
+    expect(linkedinProfileUrl(input)).toBe(URL);
   });
 
-  it('keeps a slug with letters beyond English', () => {
-    expect(normaliseLinkedinProfileUrl('https://www.linkedin.com/in/j%C3%B6rg-m%C3%BCller-123/'))
-      .toBe('https://www.linkedin.com/in/jörg-müller-123');
+  it('keeps the capitals the name was written with', () => {
+    expect(linkedinProfileUrl('https://de.linkedin.com/in/Jane-Doe/')).toBe('https://www.linkedin.com/in/Jane-Doe');
+    expect(linkedinProfileUrl('LINKEDIN.COM/IN/JANE-DOE')).toBe('https://www.linkedin.com/in/JANE-DOE');
+  });
+
+  it('keeps a slug with letters beyond English, encoded as a browser copies it', () => {
+    expect(linkedinProfileUrl('https://www.linkedin.com/in/j%C3%B6rg-m%C3%BCller-123/'))
+      .toBe('https://www.linkedin.com/in/j%C3%B6rg-m%C3%BCller-123');
+    expect(linkedinProfileUrl('https://www.linkedin.com/in/jörg-müller-123'))
+      .toBe('https://www.linkedin.com/in/j%C3%B6rg-m%C3%BCller-123');
   });
 
   it.each([
@@ -111,8 +123,11 @@ describe('normaliseLinkedinProfileUrl: any profile form, one address', () => {
     'javascript:alert(1)//linkedin.com/in/jane-doe',
     'https://www.linkedin.com/in/jane doe',
     'https://www.linkedin.com/in/<script>',
+    'linkedin.com/in/x',
+    'https://www.linkedin.com:8080/in/jane-doe',
+    'https://jane@www.linkedin.com/in/jane-doe',
   ])('refuses %j', (input) => {
-    expect(normaliseLinkedinProfileUrl(input)).toBeNull();
+    expect(linkedinProfileUrl(input)).toBeNull();
   });
 });
 
@@ -268,7 +283,7 @@ describe('connectLinkedin', () => {
   it('refuses an address that is not a LinkedIn profile, and saves nothing', async () => {
     // AppError resets the prototype, so the class is checked by what it carries.
     await expect(connectLinkedin('u-1', 'https://example.com/jane')).rejects.toMatchObject({
-      statusCode: 400, code: 'VALIDATION_ERROR', message: LINKEDIN_URL_MESSAGE, details: { url: [LINKEDIN_URL_MESSAGE] },
+      statusCode: 400, code: 'VALIDATION_ERROR', message: LINKEDIN_PROFILE_HELP, details: { url: [LINKEDIN_PROFILE_HELP] },
     });
     expect(mockQuery).not.toHaveBeenCalled();
     expect(mockRun).not.toHaveBeenCalled();
@@ -280,7 +295,7 @@ describe('connectLinkedin', () => {
   });
 
   it('saves the address as one form and starts one lookup', async () => {
-    const out = await connectLinkedin('u-1', 'uk.linkedin.com/in/Jane-Doe/?trk=x');
+    const out = await connectLinkedin('u-1', 'uk.linkedin.com/in/jane-doe/?trk=x');
     expect(out.linkedinUrl).toBe(URL);
     expect(out.linkedin).toEqual({ status: 'searching' });
     expect(out.decision).toBe('start');
@@ -288,6 +303,23 @@ describe('connectLinkedin', () => {
     expect(update[1]).toEqual(['u-1', URL]);
     expect(mockRun).toHaveBeenCalledTimes(1);
     expect(mockRun).toHaveBeenCalledWith('u-1', { linkedinUrl: URL, fullName: 'Jane Doe' });
+  });
+
+  it('the address the live join form saved, with a LinkedIn address inside it, is saved as the member\'s own', async () => {
+    const out = await connectLinkedin('u-1', 'https://linkedin.com/in/linkedin.com/in/jane-doe');
+    expect(out.linkedinUrl).toBe(URL);
+    const update = mockQuery.mock.calls.find(c => /UPDATE users SET linkedin_url/.test(c[0] as string))!;
+    expect(update[1]).toEqual(['u-1', URL]);
+    expect(mockRun).toHaveBeenCalledWith('u-1', { linkedinUrl: URL, fullName: 'Jane Doe' });
+  });
+
+  it('keeps the name\'s capitals, and the same name in other capitals is the same address: no second lookup', async () => {
+    const out = await connectLinkedin('u-1', 'uk.linkedin.com/in/Jane-Doe/?trk=x');
+    expect(out.linkedinUrl).toBe('https://www.linkedin.com/in/Jane-Doe');
+    mockRun.mockClear();
+    lookedUp('searching', 'https://www.linkedin.com/in/Jane-Doe', ago(MIN));
+    expect((await connectLinkedin('u-1', URL)).decision).toBe('running');
+    expect(mockRun).not.toHaveBeenCalled();
   });
 
   it('tells the member\'s screens when the lookup finishes', async () => {

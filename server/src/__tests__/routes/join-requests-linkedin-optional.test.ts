@@ -136,6 +136,26 @@ describe('POST /join-requests: a LinkedIn address is stored in one shape', () =>
     expect(storedLinkedin()).toBe('https://www.linkedin.com/in/Ali-Hamza-b0650a281');
   });
 
+  // The live form puts "https://linkedin.com/in/" in front of anything typed without http, so a person who
+  // typed linkedin.com/in/jane-doe sends this. Their name is read after the LinkedIn address inside it.
+  it.each([
+    ['linkedin.com/in/jane-doe', 'https://linkedin.com/in/linkedin.com/in/jane-doe'],
+    ['www.linkedin.com/in/jane-doe/', 'https://linkedin.com/in/www.linkedin.com/in/jane-doe'],
+    ['uk.linkedin.com/in/jane-doe?trk=x', 'https://linkedin.com/in/uk.linkedin.com/in/jane-doe?trk=x'],
+  ])('what the live form sends for "%s" is stored as that person\'s address', async (_typed, sent) => {
+    const res = await submit({ ...PERSON, linkedinUrl: sent });
+    expect(res.status).toBe(201);
+    expect(storedLinkedin()).toBe(STORED);
+    expect(res.body.data.linkedinUrl).toBe(STORED);
+  });
+
+  it('what the live form sends for "linkedin.com" alone is refused, not stored as a profile called linkedin.com', async () => {
+    const res = await submit({ ...PERSON, linkedinUrl: 'https://linkedin.com/in/linkedin.com' });
+    expect(res.status).toBe(400);
+    expect(res.body.error.details).toEqual({ linkedinUrl: [HELP] });
+    expect(insert()).toBeUndefined();
+  });
+
   it('is exactly the live form: its payload still gets a 201 and the same answer, with the address in the clean shape', async () => {
     const res = await submit({ fullName: 'Ali Live', email: 'ali.live@example.com', linkedinUrl: 'https://linkedin.com/in/ali-live', reason: 'I saw it on the live site' });
     expect(res.status).toBe(201);
@@ -170,9 +190,12 @@ describe('POST /join-requests: an address that is not a LinkedIn profile is refu
   });
 
   it('is not a way round the length limit: 500 characters at most', async () => {
-    const atTheLimit = `https://linkedin.com/in/${'a'.repeat(500 - 'https://linkedin.com/in/'.length)}`;
+    // A name is at most 100 characters (LinkedIn's own limit), so the rest is a query, which is not kept.
+    const start = 'https://linkedin.com/in/jane-doe?x=';
+    const atTheLimit = `${start}${'a'.repeat(500 - start.length)}`;
     expect(atTheLimit).toHaveLength(500);
     expect((await submit({ ...PERSON, linkedinUrl: atTheLimit })).status).toBe(201);
+    expect(storedLinkedin()).toBe(STORED);
 
     mockQuery.mockClear();
     const res = await submit({ ...PERSON, linkedinUrl: `${atTheLimit}a` });

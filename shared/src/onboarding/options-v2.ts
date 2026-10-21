@@ -171,7 +171,11 @@ export interface OnboardingV2State {
   tour: { pending: boolean; seenAt: string | null; outcome: TourOutcome | null };
 }
 
-/** The profile half of POST /api/onboarding/v2/confirm. A field left out is never blanked. */
+/**
+ * The profile half of POST /api/onboarding/v2/confirm. A field left out, or sent as null, keeps what is
+ * stored. jobTitle, company and industry sent as "" (empty once trimmed) are cleared: send "" only when the
+ * member emptied a field that had a value. displayName can never be cleared: a blank name keeps the stored one.
+ */
 export interface OnboardingV2ProfileInput {
   displayName?: string | null;
   jobTitle?: string | null;

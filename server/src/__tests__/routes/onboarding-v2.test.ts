@@ -63,8 +63,10 @@ jest.mock('../../services/matching/platform-match.service', () => ({
   __esModule: true,
 }));
 const mockFanout = jest.fn().mockResolvedValue(undefined);
+const mockProfileFanout = jest.fn().mockResolvedValue(undefined);
 jest.mock('../../realtime/fanout', () => ({
   fanoutUserEntity: (...a: unknown[]) => mockFanout(...a),
+  fanoutProfileChange: (...a: unknown[]) => mockProfileFanout(...a),
   fanoutAdminEntities: jest.fn().mockResolvedValue(undefined),
   __esModule: true,
 }));
@@ -252,7 +254,7 @@ describe('POST /onboarding/v2/confirm', () => {
     expect(mockSync).toHaveBeenCalledWith('u-1', ['meet_investors'], null);
     expect(mockStage).toHaveBeenCalledWith('u-1', 'confirmed', { version: 'onboarding_v2', kinds: ['meet_investors'] });
     expect(mockNotify).toHaveBeenCalledWith('u-1');
-    expect(mockFanout).toHaveBeenCalledWith('u-1');
+    expect(mockProfileFanout).toHaveBeenCalledWith('u-1');
   });
 
   it('confirming the same answers again changes no search and tells nobody new', async () => {
@@ -262,7 +264,29 @@ describe('POST /onboarding/v2/confirm', () => {
     expect(res.body.data).toEqual({ changed: false, agents: [], primaryAgentId: null, photo: null });
     expect(mockSync).not.toHaveBeenCalled();
     expect(mockNotify).not.toHaveBeenCalled();
-    expect(mockFanout).toHaveBeenCalledWith('u-1');
+    // The answers are the same, but the name, title or company on the card may not be.
+    expect(mockProfileFanout).toHaveBeenCalledWith('u-1');
+  });
+
+  // Final review, 21 Oct 2026: confirm can change the name, title and company a member's card shows in
+  // their pods, so it tells those screens as well as the member's own, exactly as a profile save
+  // (PUT /users/me) does, through fanoutProfileChange. It is told once the answers are saved.
+  it('tells the member\'s screens and the screens of their pods, once the answers are saved', async () => {
+    const order: string[] = [];
+    mockConfirm.mockImplementation(async () => { order.push('saved'); return { changed: true, firstCompletion: false, answers: ANSWERS }; });
+    mockProfileFanout.mockImplementation(async () => { order.push('told'); });
+    const res = await auth(request(app).post('/onboarding/v2/confirm').send({ ...ANSWERS, profile: { displayName: 'Ana Baker', jobTitle: 'Chef', company: 'Crumb' } }));
+    expect(res.status).toBe(200);
+    expect(mockProfileFanout).toHaveBeenCalledTimes(1);
+    expect(mockProfileFanout).toHaveBeenCalledWith('u-1');
+    expect(order).toEqual(['saved', 'told']);
+  });
+
+  it('tells nobody when the confirm is refused', async () => {
+    const res = await authAs('u-refused-fanout')(request(app).post('/onboarding/v2/confirm').send({ ...ANSWERS, selfKinds: [] }));
+    expect(res.status).toBe(400);
+    expect(mockProfileFanout).not.toHaveBeenCalled();
+    expect(mockFanout).not.toHaveBeenCalled();
   });
 
   it('changed answers of a member who finished before: searches synced, the network not told again', async () => {

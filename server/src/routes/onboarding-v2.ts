@@ -25,7 +25,7 @@ import { syncSearchesFromV2Answers, type V2SearchResult } from '../services/matc
 import { notifyMatchesOfNewUser } from '../services/matching/platform-match.service';
 import { record as recordStageEvent } from '../services/onboarding/stage-events.repo';
 import { tryGravatar } from '../services/onboarding/avatar.service';
-import { fanoutUserEntity } from '../realtime/fanout';
+import { fanoutProfileChange, fanoutUserEntity } from '../realtime/fanout';
 import logger from '../config/logger';
 import type { ApiResponse, OnboardingV2ConfirmResponse, OnboardingV2LinkedinResponse } from '@rsn/shared';
 
@@ -154,8 +154,10 @@ router.post(
       }
 
       // The gate is held in the client's auth store, which re-checks itself;
-      // their other tabs only learn from this.
-      await fanoutUserEntity(userId);
+      // their other tabs only learn from this. The confirm can change the
+      // name, title and company on their card, so the screens of their pods
+      // are told too, as a profile save (PUT /users/me) tells them.
+      await fanoutProfileChange(userId);
       const agents = searchesForResponse(searches);
       const data: OnboardingV2ConfirmResponse = {
         changed: result.changed,
