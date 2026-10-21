@@ -224,7 +224,10 @@ describe('connectLinkedin', () => {
         ? Promise.resolve({ rows: [{ linkedin_url: previousUrl, display_name: 'Jane Doe' }] })
         : Promise.resolve({ rows: [] })
     ));
-    mockQuery.mockResolvedValue({ rows: [] }); // no approval-time lookup
+    // No approval-time lookup; the profile holds the address this request saved.
+    mockQuery.mockImplementation((sql: string) => Promise.resolve(
+      /SELECT linkedin_url, display_name FROM users/.test(sql) ? { rows: [{ linkedin_url: URL, display_name: 'Jane Doe' }] } : { rows: [] },
+    ));
     mockGetState.mockResolvedValue(state('none'));
     mockGetCached.mockResolvedValue(null);
     mockRun.mockResolvedValue(undefined);
@@ -297,6 +300,29 @@ describe('connectLinkedin', () => {
     await flush();
     expect(order).toEqual(['run', 'run']);
     expect(mockRun).toHaveBeenLastCalledWith('u-1', { linkedinUrl: URL, fullName: 'Jane Doe' });
+  });
+
+  it('changed twice while one runs: the follow-up looks up the address on the profile then', async () => {
+    previousUrl = 'https://www.linkedin.com/in/old-me';
+    mockGetState.mockResolvedValue(state('searching', { startedAt: ago(MIN) }));
+    const latest = 'https://www.linkedin.com/in/jane-doe-2';
+    mockQuery.mockImplementation((sql: string) => Promise.resolve(
+      /SELECT linkedin_url, display_name FROM users/.test(sql) ? { rows: [{ linkedin_url: latest, display_name: 'Jane Doe' }] } : { rows: [] },
+    ));
+    await connectLinkedin('u-1', URL);
+    await flush();
+    expect(mockRun).toHaveBeenLastCalledWith('u-1', { linkedinUrl: latest, fullName: 'Jane Doe' });
+  });
+
+  it('removed while one ran: the follow-up looks nothing up', async () => {
+    previousUrl = 'https://www.linkedin.com/in/old-me';
+    mockGetState.mockResolvedValue(state('searching', { startedAt: ago(MIN) }));
+    mockQuery.mockImplementation((sql: string) => Promise.resolve(
+      /SELECT linkedin_url, display_name FROM users/.test(sql) ? { rows: [{ linkedin_url: null, display_name: 'Jane Doe' }] } : { rows: [] },
+    ));
+    await connectLinkedin('u-1', URL);
+    await flush();
+    expect(mockRun).toHaveBeenCalledTimes(1);
   });
 
   it('the approval-time lookup for that address is used instead of paying again', async () => {
