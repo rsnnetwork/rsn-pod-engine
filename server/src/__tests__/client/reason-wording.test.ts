@@ -15,13 +15,11 @@ import * as ts from 'typescript';
 const SRC = path.join(__dirname, '../../../../client/src');
 const RSN = /\bRSN\b/;
 
-// TEMPORARY. Files that still say RSN to a person because another task of the 19 Oct batch is rewriting them:
-// Task 9 (the onboarding screens). It removes its entry as it lands. An entry whose files no longer say RSN fails the
-// test below, so none can outlive its reason and quietly excuse a file that has since been cleaned.
-// A name ending in "/" is a folder, anything else is one file; both are relative to client/src.
-const ALLOWED = [
-  'features/onboarding/',
-];
+// Files excused from the rule while another task rewrote them. The 19 Oct batch has landed, so none is excused now.
+// An entry whose files no longer say RSN fails the test below, so none can outlive its reason and quietly excuse a
+// file that has since been cleaned. A name ending in "/" is a folder, anything else is one file; both are relative
+// to client/src.
+const ALLOWED: string[] = [];
 
 /** Where `source` writes RSN as text a person could read, as "line N: the words". Comments are not part of the tree. */
 function rsnInReadableText(file: string, source: string): string[] {
