@@ -3,7 +3,7 @@
 import api from '@/lib/api';
 import type {
   ConnectionList, MatchStrength, MeetingFormat, OutcomeKey, PersonBrief, PersonResponse, PublicMember,
-  RecentConnection, User, WorthContinuing,
+  RecentConnection, WorthContinuing,
 } from '@rsn/shared';
 import type { PokeStatus } from './person';
 
@@ -39,11 +39,9 @@ export const reasonKeys = {
   forYou: ['reason', 'for-you'] as const,
   brief: (userId: string) => ['reason', 'brief', userId] as const,
   recent: ['reason', 'recent-connections'] as const,
-  // Your own profile (21 Oct 2026): your card as others see it, and your whole profile. One prefix, so a banner
-  // change refreshes both.
+  // Your own profile (21 Oct 2026): your card as others see it. Under one prefix, which a banner change refreshes.
   mine: ['reason', 'mine'] as const,
   myCard: ['reason', 'mine', 'card'] as const,
-  myProfile: ['reason', 'mine', 'profile'] as const,
   blockStatus: (userId: string) => ['reason', 'block-status', userId] as const,
   connections: ['reason', 'connections'] as const,
 };
@@ -55,9 +53,8 @@ const memberSegment = (userId: string) => encodeURIComponent(userId);
 export const fetchForYou = () => api.get('/matches/platform').then((r) => r.data.data as ForYouPayload);
 export const fetchBrief = (userId: string) => api.get(`/people/${memberSegment(userId)}/brief`).then((r) => r.data.data as PersonBrief);
 export const fetchRecentConnections = () => api.get('/people/connections/recent').then((r) => r.data.data as RecentConnection[]);
-// Your own card, exactly as other members are shown it, and your whole profile, which only you are shown.
+// Your own card, exactly as other members are shown it.
 export const fetchMyCard = () => api.get('/people/me/card').then((r) => r.data.data as PublicMember);
-export const fetchMyProfile = () => api.get('/users/me').then((r) => r.data.data as User);
 // One page of Your connections; `before` is the page already shown's nextBefore (none for the first page).
 export const fetchConnections = (before: string | null) =>
   api.get('/people/connections', { params: before ? { before } : {} }).then((r) => r.data.data as ConnectionList);
