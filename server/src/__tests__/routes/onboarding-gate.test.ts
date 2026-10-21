@@ -106,3 +106,43 @@ describe('the client cannot reach the old flow either', () => {
     expect(hits).toEqual([]);
   });
 });
+
+// 21 Oct 2026: onboarding v2 (Shradha's brief) is a second way to finish, by
+// design: the live app keeps v1 until go-live. It is held to the same rule as
+// v1, so it can never grow back into the half-finished path described above.
+describe('the v2 confirm does the whole job too', () => {
+  const routes = read('routes/onboarding-v2.ts');
+  const repo = read('services/onboarding/answers-v2.repo.ts');
+  const index = read('index.ts');
+
+  it('marks them done AND writes what the matcher reads', () => {
+    expect(repo).toMatch(/onboarding_status = 'completed'/);
+    expect(repo).toMatch(/onboarding_completed = true/);
+    expect(repo).toMatch(/professional_role = \$/);
+    expect(repo).toMatch(/who_i_want_to_meet = /);
+    expect(repo).toMatch(/what_i_can_help_with = /);
+    expect(repo).toMatch(/matching_intent/);
+  });
+
+  it('syncs the searches, tells the network on a first completion, and emits the member\'s tag', () => {
+    expect(routes).toMatch(/syncSearchesFromV2Answers/);
+    expect(routes).toMatch(/notifyMatchesOfNewUser/);
+    expect(routes).toMatch(/fanoutUserEntity/);
+  });
+
+  it('every v2 route is signed-in and rate limited', () => {
+    const declared = [...routes.matchAll(/router\.(get|put|post|patch|delete)\(\s*'([^']+)',([\s\S]*?)async/g)];
+    expect(declared.map(m => m[2])).toEqual(['/state', '/answers', '/linkedin', '/linkedin/skip', '/confirm']);
+    for (const [, , , middleware] of declared) {
+      expect(middleware).toMatch(/authenticate/);
+      expect(middleware).toMatch(/Limiter/);
+    }
+  });
+
+  it('is mounted in front of v1, so neither shadows the other', () => {
+    const v2 = index.indexOf("app.use('/api/onboarding/v2', onboardingV2Routes)");
+    const v1 = index.indexOf("app.use('/api/onboarding', onboardingRoutes)");
+    expect(v2).toBeGreaterThan(-1);
+    expect(v1).toBeGreaterThan(v2);
+  });
+});
