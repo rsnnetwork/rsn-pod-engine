@@ -101,9 +101,9 @@ test("Ali's account: live LinkedIn card, Claus's chat, agents, record", async ()
   await form.getByPlaceholder('Your full name').fill(FULL_NAME);
   await form.getByPlaceholder('you@example.com').fill(EMAIL);
   await form.getByPlaceholder('your-username').fill(LINKEDIN);
-  await form.getByPlaceholder(/Tell us about yourself/i).fill('I build AWS backends and want to move into building software for manufacturing companies.');
+  await form.getByLabel('Why do you want to join REASON?').fill('I build AWS backends and want to move into building software for manufacturing companies.');
   await form.locator('button[type="submit"]').click();
-  await expect(form.getByText(/Thank you for your interest in RSN/i)).toBeVisible({ timeout: 30_000 });
+  await expect(form.getByText(/Thank you for your interest in REASON/i)).toBeVisible({ timeout: 30_000 });
   await shot(form, 'join-submitted');
   const jr = await pool.query(`SELECT id FROM join_requests WHERE lower(email) = $1`, [EMAIL]);
   const requestId = jr.rows[0].id;
