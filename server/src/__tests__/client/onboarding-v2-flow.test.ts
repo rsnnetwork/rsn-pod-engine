@@ -15,7 +15,7 @@ import {
   withKeys, withOwnWords, isRealZone, zoneList, currentZoneName, confirmProblem,
   safeRedirect, problemMessage, ANSWER_NEEDED, signupChoiceKey, parseSignupChoice, LANDED, isLanded, returnedKey,
 } from '../../../../client/src/features/onboarding/flow';
-import { markReturned, takeReturned } from '../../../../client/src/features/onboarding/tour-landing';
+import { forgetReturned, hasReturned, markReturned } from '../../../../client/src/features/onboarding/tour-landing';
 
 const NONE: OnboardingV2Answers = {
   lookingToMeet: [], meetOther: null,
@@ -392,25 +392,32 @@ describe('where the tour leaves a member: where the flow put them', () => {
     beforeEach(() => { store = new Map(); (global as { sessionStorage?: unknown }).sessionStorage = fake(); });
     afterAll(() => { (global as { sessionStorage?: unknown }).sessionStorage = real; });
 
-    it('is there once it is marked, and gone once it is taken', () => {
-      expect(takeReturned('a1')).toBe(false);
+    // Fix round 1 (M-1): the tour reads it as it draws (its last button says Done on such a page), so reading it uses
+    // nothing up; the first press forgets it.
+    it('is there once it is marked, reading it changes nothing, and it is gone once it is forgotten', () => {
+      expect(hasReturned('a1')).toBe(false);
       markReturned('a1');
       expect(store.get('rsn_onb_v2_returned_a1')).toBe('1');
-      expect(takeReturned('b2')).toBe(false);
-      expect(takeReturned('a1')).toBe(true);
-      expect(takeReturned('a1')).toBe(false);
+      expect(hasReturned('b2')).toBe(false);
+      expect(hasReturned('a1')).toBe(true);
+      expect(hasReturned('a1')).toBe(true);
+      forgetReturned('a1');
+      expect(hasReturned('a1')).toBe(false);
+      expect(store.size).toBe(0);
     });
 
-    it('with nobody signed in, nothing is marked or taken', () => {
+    it('with nobody signed in, nothing is marked, read or forgotten', () => {
       markReturned(undefined);
       expect(store.size).toBe(0);
-      expect(takeReturned(undefined)).toBe(false);
+      expect(hasReturned(undefined)).toBe(false);
+      expect(() => forgetReturned(undefined)).not.toThrow();
     });
 
     it('with the browser\'s storage switched off, nothing breaks: the tour then goes to For You, as before', () => {
       (global as { sessionStorage?: unknown }).sessionStorage = fake(true);
       expect(() => markReturned('a1')).not.toThrow();
-      expect(takeReturned('a1')).toBe(false);
+      expect(hasReturned('a1')).toBe(false);
+      expect(() => forgetReturned('a1')).not.toThrow();
     });
   });
 });

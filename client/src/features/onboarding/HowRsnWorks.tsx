@@ -61,6 +61,8 @@ interface Props {
   mode: 'onboarding' | 'replay';
   /** The server did not record the last press of Skip or the last button. */
   failed?: boolean;
+  /** Closing it leaves the member on the page they are on (one the flow put them on): its last button says Done. */
+  closesHere?: boolean;
   onFinish: (outcome: 'completed' | 'skipped') => void;
 }
 
@@ -75,7 +77,7 @@ export function TourSlide({ card }: { card: TourCard }) {
   );
 }
 
-export default function HowRsnWorks({ open, mode, failed = false, onFinish }: Props) {
+export default function HowRsnWorks({ open, mode, failed = false, closesHere = false, onFinish }: Props) {
   const [index, setIndex] = useState(0);
   const [direction, setDirection] = useState(1);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -229,7 +231,7 @@ export default function HowRsnWorks({ open, mode, failed = false, onFinish }: Pr
               onClick={() => (last ? onFinish('completed') : go(index + 1))}
               className="min-h-[48px] flex-1"
             >
-              {last ? (mode === 'replay' ? 'Done' : 'See my matches') : 'Next'}
+              {last ? (mode === 'replay' || closesHere ? 'Done' : 'See my matches') : 'Next'}
             </Button>
           </div>
         </div>
