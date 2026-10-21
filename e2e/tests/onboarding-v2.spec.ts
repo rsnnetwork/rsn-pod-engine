@@ -1,4 +1,4 @@
-import { test, expect, Browser, BrowserContext, Locator, Page } from '@playwright/test';
+import { test, expect, Browser, BrowserContext, Locator, Page, WebSocketRoute } from '@playwright/test';
 import { createTestUser, TestUser, pool } from '../helpers/auth';
 import { gotoRetry, cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/live-ui';
 import { primePreview } from '../helpers/preview-bypass';
@@ -60,7 +60,35 @@ async function finishedMember(suffix: string): Promise<TestUser> {
   return u;
 }
 
-async function openAs(u: TestUser, path = '/onboarding', viewport = PHONE): Promise<Page> {
+/** A finished LinkedIn lookup for `url`, exactly as one leaves it: the result, the state, and the address it ran for. */
+async function seedFoundLookup(u: TestUser, url: string, photoUrl = `${APP}/sheep/wave.png`) {
+  await pool.query(
+    `INSERT INTO user_intent_profiles (user_id, inferred_profile, enrichment_status, enrichment_started_at, enrichment_completed_at)
+     VALUES ($1, jsonb_build_object('enriched', $2::jsonb, 'lastLookup', jsonb_build_object('linkedinUrl', $3::text, 'at', NOW())),
+             'found', NOW(), NOW())
+     ON CONFLICT (user_id) DO UPDATE SET inferred_profile = EXCLUDED.inferred_profile, enrichment_status = 'found',
+       enrichment_started_at = NOW(), enrichment_completed_at = NOW()`,
+    [u.id, JSON.stringify({
+      confidence: 0.9, sources: ['e2e'], foundLinkedinUrl: url, requestedLinkedinUrl: url, enrichedAt: new Date().toISOString(),
+      profile: {
+        fullName: 'Ana Found', headline: 'Founder at Crumb Bakery', currentRole: 'Founder & CEO', currentCompany: 'Crumb Bakery',
+        industry: 'Food and drink', location: 'Vienna, Austria', summary: null, pastRoles: [], education: [], skills: [],
+        likelyWantsToMeet: [], likelyOffers: [], conversationStarters: [], questionsToVerify: [], linkedinUrl: url, photoUrl,
+      },
+    }), url],
+  );
+}
+
+/** The four answers, saved as a draft that has reached screen 7. */
+async function answeredUpToProfile(u: TestUser) {
+  expect((await apiAs(u, 'PUT', '/onboarding/v2/answers', {
+    lookingToMeet: ['meet_investors'], hopingToFind: ['find_funding'], canOffer: ['offer_investment'], selfKinds: ['self_investor'], step: 'profile',
+  })).status).toBe(200);
+}
+
+async function openAs(
+  u: TestUser, path = '/onboarding', viewport = PHONE, prepare?: (page: Page) => Promise<void>,
+): Promise<Page> {
   const ctx = await browser.newContext({ viewport, timezoneId: ZONE });
   await ctx.addInitScript((t: { a: string; r: string }) => {
     localStorage.setItem('rsn_access', t.a);
@@ -71,6 +99,7 @@ async function openAs(u: TestUser, path = '/onboarding', viewport = PHONE): Prom
   await primePreview(ctx);
   const page = await ctx.newPage();
   page.on('pageerror', () => {});
+  if (prepare) await prepare(page);
   await gotoRetry(page, `${APP}${path}`);
   // The web font swaps in when it arrives and every line of text reflows: a tap measured before that can land
   // on the option next to the one meant.
@@ -167,8 +196,16 @@ test('continue with email: the brief\'s words, own words for Q1, a specific wish
   await expect(heading(page, 'Who would you like to meet?')).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText('1 of 4', { exact: true })).toBeVisible();
   await expect(page.getByText('Select up to three answers.', { exact: true })).toBeVisible();
-  await expect(button(page, 'Continue')).toBeDisabled();
+  // The options are described by that line, so a screen reader says it with them.
+  const describedBy = (await page.getByRole('group', { name: 'Who would you like to meet?' }).getAttribute('aria-describedby')) ?? '';
+  await expect(page.locator(`[id="${describedBy.split(' ')[0]}"]`)).toHaveText('Select up to three answers.');
+  // Nothing ticked: Continue reads as unavailable, and pressing it says why rather than doing nothing.
+  await expect(button(page, 'Continue')).toHaveAttribute('aria-disabled', 'true');
+  await press(page, 'Continue');
+  await expect(page.getByText('Select at least one answer.', { exact: true })).toBeVisible();
+  await expect(heading(page, 'Who would you like to meet?')).toBeVisible();
   await tick(page, 'I would like to meet investors.', "Something else. I'd like to say it in my own words.");
+  await expect(page.getByText('Select at least one answer.', { exact: true })).toHaveCount(0);
   const own = page.getByLabel('In your own words');
   await expect(own).toBeVisible();
   await expect(own).toHaveAttribute('maxlength', '120');
@@ -278,9 +315,13 @@ test('continue with LinkedIn: the link from the join form is in the box, the loo
   expect(sent).toEqual([400]);
 
   await box.fill(`uk.linkedin.com/in/${slug}/?trk=x`);
+  // While the link is on its way, "Continue with email" waits: the two choices are never both sent.
+  await page.route('**/api/onboarding/v2/linkedin', async (route) => { await new Promise(r => setTimeout(r, 1500)); await route.continue(); });
   await press(page, 'Continue');
+  await expect(button(page, 'Continue with email')).toBeDisabled();
   // It moves on while the lookup runs.
   await expect(heading(page, 'Who would you like to meet?')).toBeVisible({ timeout: 20_000 });
+  await page.unroute('**/api/onboarding/v2/linkedin');
   await throughQuestions(page);
 
   // Nothing found here (no ScrapingDog key locally): a calm line, and the member types it in.
@@ -304,23 +345,7 @@ test('LinkedIn found: details filled in and marked, Q4 picked from the role, and
   test.setTimeout(240_000);
   const url = `https://www.linkedin.com/in/ob2-found-${Date.now()}`;
   const me = await freshMember('ob2found', url);
-  const now = new Date().toISOString();
-  const photo = `${APP}/sheep/wave.png`;
-  // Exactly what a finished lookup leaves: the result under inferred_profile.enriched, and the state.
-  await pool.query(
-    `INSERT INTO user_intent_profiles (user_id, inferred_profile, enrichment_status, enrichment_started_at, enrichment_completed_at)
-     VALUES ($1, jsonb_build_object('enriched', $2::jsonb), 'found', NOW(), NOW())
-     ON CONFLICT (user_id) DO UPDATE SET inferred_profile = EXCLUDED.inferred_profile, enrichment_status = 'found',
-       enrichment_started_at = NOW(), enrichment_completed_at = NOW()`,
-    [me.id, JSON.stringify({
-      confidence: 0.9, sources: ['e2e'], foundLinkedinUrl: url, requestedLinkedinUrl: url, enrichedAt: now,
-      profile: {
-        fullName: 'Ana Found', headline: 'Founder at Crumb Bakery', currentRole: 'Founder & CEO', currentCompany: 'Crumb Bakery',
-        industry: 'Food and drink', location: 'Vienna, Austria', summary: null, pastRoles: [], education: [], skills: [],
-        likelyWantsToMeet: [], likelyOffers: [], conversationStarters: [], questionsToVerify: [], linkedinUrl: url, photoUrl: photo,
-      },
-    })],
-  );
+  await seedFoundLookup(me, url);
   const page = await openAs(me);
   const confirms: Array<{ profile?: Record<string, unknown> }> = [];
   page.on('request', r => { if (r.method() === 'POST' && r.url().includes('/onboarding/v2/confirm')) confirms.push(r.postDataJSON()); });
@@ -367,6 +392,67 @@ test('LinkedIn found: details filled in and marked, Q4 picked from the role, and
   expect(row).toEqual({
     job_title: 'Founder & CEO', job_title_source: 'inferred', company: 'Crumb Bakery', industry: 'Food and drink', self_kinds: ['self_founder_owner'],
   });
+});
+
+test('continue with email means no LinkedIn, even for a member LinkedIn already found: no guess, no prefill, no photo, until [Add LinkedIn]', async () => {
+  test.setTimeout(240_000);
+  // Most members look like this: the link from their join form, looked up when they were approved, "found".
+  const slug = `ob2-emailfound-${Date.now()}`;
+  const url = `https://www.linkedin.com/in/${slug}`;
+  const me = await freshMember('ob2emailli', url);
+  await seedFoundLookup(me, url);
+  const page = await openAs(me);
+  const confirms: Array<{ profile?: Record<string, unknown> }> = [];
+  page.on('request', r => { if (r.method() === 'POST' && r.url().includes('/onboarding/v2/confirm')) confirms.push(r.postDataJSON()); });
+
+  await throughWelcome(page);
+  await press(page, 'Continue with email');
+  await expect(heading(page, 'Who would you like to meet?')).toBeVisible({ timeout: 20_000 });
+  await tick(page, 'I would like to meet investors.');
+  await press(page, 'Continue');
+  await tick(page, 'I am looking to raise funding.');
+  await press(page, 'Continue');
+  await tick(page, 'I can give advice and mentoring.');
+  await press(page, 'Continue');
+
+  // Q4: nothing picked for them, and nothing said about LinkedIn.
+  await expect(heading(page, 'How would you describe yourself?')).toBeVisible();
+  await expect(page.getByText("We picked this from your LinkedIn. Change it if it's wrong.")).toHaveCount(0);
+  await expect(page.locator('[role="checkbox"][aria-checked="true"]')).toHaveCount(0);
+  await tick(page, 'I am an investor.');
+  await press(page, 'Continue');
+
+  // Screen 7: the fields are theirs to fill, and LinkedIn offers nothing.
+  const noLinkedin = async (where: string) => {
+    await expect(heading(page, "Here's how others will see you")).toBeVisible({ timeout: 20_000 });
+    for (const field of ['Role', 'Company', 'Industry']) await expect(page.getByLabel(field, { exact: true }), `${where}: ${field}`).toHaveValue('');
+    await expect(page.getByText('From your LinkedIn')).toHaveCount(0);
+    await expect(page.getByAltText('The photo on your LinkedIn')).toHaveCount(0);
+    await expect(page.getByTestId('linkedin-note')).toHaveCount(0);
+    await expect(page.locator('body')).not.toContainText(/We found this photo on your LinkedIn|We picked this from your LinkedIn/);
+    // The email sign-up's own line, as the brief has it.
+    await expect(page.getByText('Add your LinkedIn profile so people can learn more about you. You can do this later.', { exact: true })).toBeVisible();
+  };
+  await noLinkedin('after the questions');
+  // A refresh keeps the choice: it is remembered for the visit.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await noLinkedin('after a refresh');
+
+  // [Add LinkedIn] turns it on, with their join-form link already in the box.
+  await press(page, 'Add LinkedIn');
+  await expect(page.getByLabel('Your LinkedIn profile link')).toHaveValue(`linkedin.com/in/${slug}`);
+  await press(page, 'Add');
+  await expect(page.getByLabel('Role', { exact: true })).toHaveValue('Founder & CEO', { timeout: 20_000 });
+  await expect(page.getByLabel('Company', { exact: true })).toHaveValue('Crumb Bakery');
+  await expect(page.getByText('From your LinkedIn')).toHaveCount(3);
+  await expect(page.getByAltText('The photo on your LinkedIn')).toBeVisible({ timeout: 15_000 });
+  await expect(button(page, 'Add LinkedIn')).toHaveCount(0);
+
+  await press(page, 'Show me my matches');
+  await expect.poll(() => pathOf(page), { timeout: 30_000 }).toBe('/');
+  // The photo was offered but not kept, so it is not asked for.
+  expect(confirms[0].profile).toMatchObject({ jobTitle: 'Founder & CEO', company: 'Crumb Bakery' });
+  expect(confirms[0].profile).not.toHaveProperty('useLinkedinPhoto');
 });
 
 test('the limits: a fourth person to meet and a third description are refused with a gentle line, and they can still swap', async () => {
@@ -562,31 +648,80 @@ test('Upload a new one: a photo from the phone is made small, becomes their phot
   await expect(page.getByText('Choose a JPG, PNG or WebP photo.')).toBeVisible();
 });
 
-test('while the LinkedIn lookup is still running the screen reads the state again by itself, and shows how it ended', async () => {
+test('how a LinkedIn lookup ended reaches the screen through the member\'s own update, or on reconnecting, and never by a timer', async () => {
   test.setTimeout(180_000);
   const url = `https://www.linkedin.com/in/ob2-wait-${Date.now()}`;
   const me = await freshMember('ob2wait', url);
-  expect((await apiAs(me, 'PUT', '/onboarding/v2/answers', {
-    lookingToMeet: ['meet_investors'], hopingToFind: ['find_funding'], canOffer: ['offer_investment'], selfKinds: ['self_investor'], step: 'profile',
-  })).status).toBe(200);
-  // A lookup that started a moment ago and has not ended.
-  await pool.query(
-    `INSERT INTO user_intent_profiles (user_id, enrichment_status, enrichment_started_at) VALUES ($1, 'searching', NOW())
-     ON CONFLICT (user_id) DO UPDATE SET enrichment_status = 'searching', enrichment_started_at = NOW(), enrichment_completed_at = NULL`,
-    [me.id],
+  await answeredUpToProfile(me);
+  /** The lookup's state as the server records it, for the address on the profile. */
+  const lookup = (status: 'searching' | 'not_found') => pool.query(
+    `INSERT INTO user_intent_profiles (user_id, inferred_profile, enrichment_status, enrichment_started_at, enrichment_completed_at)
+     VALUES ($1, jsonb_build_object('lastLookup', jsonb_build_object('linkedinUrl', $2::text, 'at', NOW())), $3::enrichment_status, NOW(),
+             CASE WHEN $3::text = 'searching' THEN NULL ELSE NOW() END)
+     ON CONFLICT (user_id) DO UPDATE SET inferred_profile = EXCLUDED.inferred_profile, enrichment_status = EXCLUDED.enrichment_status,
+       enrichment_started_at = EXCLUDED.enrichment_started_at, enrichment_completed_at = EXCLUDED.enrichment_completed_at`,
+    [me.id, url, status],
   );
-  const page = await openAs(me, '/onboarding?step=profile');
-  await expect(page.getByTestId('linkedin-note')).toContainText("We're still reading your LinkedIn profile.", { timeout: 30_000 });
+  /** What the end of a lookup sends: the member's own user tag (any write of theirs sends the same). */
+  const theirUpdate = async () => expect((await apiAs(me, 'PUT', '/onboarding/v2/answers', {})).status).toBe(200);
 
-  // It ends with no push to this page at all: the screen still finds out. A lookup records the address it ran for.
-  await pool.query(
-    `UPDATE user_intent_profiles SET enrichment_status = 'not_found', enrichment_completed_at = NOW(),
-       inferred_profile = COALESCE(inferred_profile, '{}'::jsonb)
-         || jsonb_build_object('lastLookup', jsonb_build_object('linkedinUrl', $2::text, 'at', NOW()))
-     WHERE user_id = $1`, [me.id, url],
-  );
-  await expect(page.getByTestId('linkedin-note')).toContainText("We couldn't find your details on LinkedIn.", { timeout: 20_000 });
+  await lookup('searching');
+  const sockets: WebSocketRoute[] = [];
+  let connects = 0;
+  const page = await openAs(me, '/onboarding?step=profile', PHONE, async (p) => {
+    // This tab chose LinkedIn on screen 2 (remembered for the visit).
+    await p.addInitScript((key: string) => sessionStorage.setItem(key, 'linkedin'), `rsn_onb_v2_via_${me.id}`);
+    // The app's socket, passed through message by message, so the test sees it connect and can drop it like a
+    // phone losing signal. "40" is Socket.IO's "connected".
+    await p.routeWebSocket(/\/socket\.io\//, (ws) => {
+      const server = ws.connectToServer();
+      server.onMessage((m) => { if (String(m).startsWith('40')) connects += 1; ws.send(m); });
+      ws.onMessage((m) => server.send(m));
+      sockets.push(ws);
+    });
+  });
+  const note = page.getByTestId('linkedin-note');
+  await expect(note).toContainText("We're still reading your LinkedIn profile.", { timeout: 30_000 });
+  // Connecting reads the state once (anything sent before the socket was there is otherwise lost): let it land.
+  await expect.poll(() => connects, { message: 'the app connected its socket' }).toBeGreaterThan(0);
+  await page.waitForLoadState('networkidle');
+
+  // It ends, and nothing is sent: the screen does not go and look for itself.
+  await lookup('not_found');
+  await page.waitForTimeout(8000);
+  await expect(note).toContainText("We're still reading your LinkedIn profile.");
+  // Their update arrives: the screen reads the state and says how it ended.
+  await theirUpdate();
+  await expect(note).toContainText("We couldn't find your details on LinkedIn.", { timeout: 15_000 });
   await expect(button(page, 'Check your LinkedIn link')).toBeVisible();
+
+  // Another lookup runs, and ends while the connection is down, so its update is lost.
+  await lookup('searching');
+  await theirUpdate();
+  await expect(note).toContainText("We're still reading your LinkedIn profile.", { timeout: 15_000 });
+  const connectedBefore = connects;
+  await lookup('not_found');
+  await sockets[sockets.length - 1].close();
+  // The socket comes back on its own, and the screen reads the state again on reconnecting.
+  await expect.poll(() => connects, { message: 'the socket reconnected', timeout: 20_000 }).toBeGreaterThan(connectedBefore);
+  await expect(note).toContainText("We couldn't find your details on LinkedIn.", { timeout: 15_000 });
+});
+
+test('after the first confirm, the page a member followed a link to is honoured; anything else is For You', async () => {
+  test.setTimeout(180_000);
+  // As the gate sends a member who followed a link before finishing: /onboarding?redirect=<that page>.
+  const followed = await freshMember('ob2redir');
+  await answeredUpToProfile(followed);
+  const page = await openAs(followed, '/onboarding?step=profile&redirect=%2Fsupport');
+  await press(page, 'Show me my matches');
+  await expect.poll(() => pathOf(page), { timeout: 30_000 }).toBe('/support');
+
+  const sent = await freshMember('ob2redirbad');
+  await answeredUpToProfile(sent);
+  const other = await openAs(sent, '/onboarding?step=profile&redirect=%2F%2Fevil.example%2Fx');
+  await press(other, 'Show me my matches');
+  await expect.poll(() => pathOf(other), { timeout: 30_000 }).toBe('/');
+  expect(other.url().startsWith(APP)).toBe(true);
 });
 
 test('a refusal from the server is said inline, on the thing it is about, in the server\'s words', async () => {
