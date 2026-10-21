@@ -12,7 +12,8 @@
 //                      /introductions address lands on For You
 //   3  breakpoints     720 / 721 and 980 / 981: where the bar, the icon rail (seven named icons,
 //                      no words) and the full sidebar (labels) start and stop
-//   4  People          the four people pages sit under one row of four tabs
+//   4  People          Your connections first, then the four people pages, under one row of
+//                      five tabs; the People entry opens Your connections (21 Oct)
 //   5  top search      opens Find people with the words already typed
 //   6  profile nudge   a member who has not finished onboarding is asked to, on every page but
 //                      For You and Messages; one who has finished is not asked anywhere
@@ -68,6 +69,7 @@ const SUB = ['Profile', 'Settings', 'Support'];
 const BAR = ['For You', 'People', 'Events', 'Messages', 'More'];
 const MORE = ['Entities', 'Circles', 'Pods', 'Settings', 'Support'];
 const PEOPLE_TABS = [
+  { to: '/connections', label: 'Your connections' },
   { to: '/search', label: 'Find people' },
   { to: '/agents', label: 'Your searches' },
   { to: '/matches', label: 'Everyone who fits' },
@@ -362,7 +364,7 @@ test.afterAll(async () => {
 
 test('1 every width: no sideways scroll, the right navigation, the official logo, 44px targets', async () => {
   test.setTimeout(1_500_000);
-  const routes = ['/', '/entities', '/search', '/circles', '/sessions', '/messages', '/settings'];
+  const routes = ['/', '/entities', '/connections', '/search', '/circles', '/sessions', '/messages', '/settings'];
   const problems: string[] = [];
   const label = engineLabel().replace(/[^a-z0-9]+/gi, '-');
 
@@ -490,7 +492,7 @@ test('2 phone bar and More sheet: five tabs, the rest in More, each entry naviga
       await expect(sheet).toBeHidden();
 
       // The tabs on the bar go where they say, and mark the current one.
-      for (const tab of [{ name: 'People', url: /\/search$/ }, { name: 'Events', url: /\/sessions$/ }, { name: 'Messages', url: /\/messages$/ }, { name: 'For You', url: /\/$/ }]) {
+      for (const tab of [{ name: 'People', url: /\/connections$/ }, { name: 'Events', url: /\/sessions$/ }, { name: 'Messages', url: /\/messages$/ }, { name: 'For You', url: /\/$/ }]) {
         await bar.getByRole('link', { name: tab.name }).click();
         await expect(page, `${where}: tab ${tab.name}`).toHaveURL(tab.url);
         await expect(bar.getByRole('link', { name: tab.name }), `${where}: ${tab.name} is marked as the current page`).toHaveAttribute('aria-current', 'page');
@@ -575,10 +577,10 @@ test('3 breakpoints: bar to 720px, named icons 721 to 980px, labels from 981px',
 });
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
-// 4. People: four pages, four tabs
+// 4. People: five pages, five tabs, Your connections first
 // ═════════════════════════════════════════════════════════════════════════════════════════════
 
-test('4 People: Find people, Your searches, Everyone who fits and People you have met sit under four tabs', async () => {
+test('4 People: Your connections, Find people, Your searches, Everyone who fits and People you have met sit under five tabs', async () => {
   test.setTimeout(600_000);
   for (const size of sizes([{ width: 360, height: 780 }, { width: 390, height: 844 }, { width: 1280, height: 800 }])) {
     const phone = modeOf(size.width) === 'phone';
@@ -589,19 +591,19 @@ test('4 People: Find people, Your searches, Everyone who fits and People you hav
         const tabs = page.getByRole('navigation', { name: 'People' });
         await expect(tabs, `${where}: the People tabs`).toBeVisible();
         const links = tabs.getByRole('link');
-        await expect(links, `${where}: four tabs`).toHaveCount(4);
+        await expect(links, `${where}: five tabs`).toHaveCount(PEOPLE_TABS.length);
         expect((await links.allInnerTexts()).map((t) => t.trim()), `${where}: tab names and order`).toEqual(PEOPLE_TABS.map((t) => t.label));
         await expect(tabs.getByRole('link', { name: tab.label }), `${where}: this page's tab is marked`).toHaveAttribute('aria-current', 'page');
         await expectTapSize(PEOPLE_TABS.map((t, i) => ({ name: `tab ${t.label}`, loc: links.nth(i) })), where);
-        // On a phone the strip scrolls. The page's own tab is in view as soon as the page opens,
-        // with nothing scrolled by hand, and the last tab can be reached.
+        // On a phone the strip scrolls (from 721px the tabs wrap). The page's own tab is in view as soon as the page
+        // opens, with nothing scrolled by hand, and the last tab can be reached.
         const mine = await tabs.getByRole('link', { name: tab.label }).boundingBox();
         expect(mine && mine.x >= 0 && Math.round(mine.x + mine.width) <= size.width + 1, `${where}: this page's own tab is in view without scrolling (${mine && Math.round(mine.x)} to ${mine && Math.round(mine.x + mine.width)} of ${size.width})`).toBe(true);
-        const last = links.nth(3);
+        const last = links.nth(PEOPLE_TABS.length - 1);
         await last.scrollIntoViewIfNeeded();
         const box = await last.boundingBox();
         expect(box && Math.round(box.x + box.width), `${where}: the last tab can be reached`).toBeLessThanOrEqual(size.width + 1);
-        // The main navigation marks People as current on every one of the four pages.
+        // The main navigation marks People as current on every one of the five pages.
         const people = phone
           ? page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'People' })
           : sidebar(page).getByRole('link', { name: 'People', exact: true });
@@ -611,7 +613,7 @@ test('4 People: Find people, Your searches, Everyone who fits and People you hav
       // And the tabs belong to People only.
       await visit(page, '/circles', size.width);
       await expect(page.getByRole('navigation', { name: 'People' }), `${size.width}px: People tabs on Circles`).toHaveCount(0);
-      console.log(`  ✓ ${size.width}px: four people pages, four tabs, the right one marked, the last reachable.`);
+      console.log(`  ✓ ${size.width}px: five people pages, five tabs, the right one marked, the last reachable.`);
       expect(errors, `${size.width}px: script errors`).toEqual([]);
     });
   }

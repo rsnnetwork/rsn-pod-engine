@@ -85,7 +85,7 @@ export default function MatchesPage() {
   const nextEvent = data?.nextEvent ?? null;
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    <div className="max-w-6xl mx-auto space-y-6">
       <div className="flex items-center justify-between animate-fade-in">
         <div>
           <h1 className="text-2xl font-bold text-[#1a1a2e]">Matches</h1>
@@ -120,15 +120,17 @@ export default function MatchesPage() {
           </div>
         </Card>
       ) : matches.length > 0 ? (
-        <div className="grid gap-3 animate-fade-in-up">
+        <div className="grid gap-3 animate-fade-in-up min-[1024px]:grid-cols-2">
           {matches.map(m => (
             <Card key={m.userId} className="card-hover">
-              <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
-                <Link to={`/profile/${m.userId}`} className="flex items-center gap-3 hover:opacity-80 transition-opacity min-w-0">
-                  <Avatar src={m.avatarUrl} name={m.displayName || 'User'} size="md" />
+              {/* The button sits beside the name only while a card has the row to itself (640px to 1023px). From
+                  1024px the cards are two to a row, and it goes under the name, as on a phone. */}
+              <div className="flex flex-col gap-3 sm:max-[1023px]:flex-row sm:max-[1023px]:items-center sm:max-[1023px]:justify-between">
+                <Link to={`/people/${m.userId}?from=People`} className="flex items-center gap-3 hover:opacity-80 transition-opacity min-w-0">
+                  <Avatar src={m.avatarUrl} name={m.displayName || 'User'} size="md" className="shrink-0" />
                   <div className="min-w-0">
-                    <p className="font-semibold text-gray-900 truncate">{m.displayName || 'Member'}</p>
-                    <p className="text-xs text-gray-500 truncate">
+                    <p className="font-semibold text-gray-900 [overflow-wrap:anywhere]">{m.displayName || 'Member'}</p>
+                    <p className="text-xs text-gray-500 [overflow-wrap:anywhere]">
                       {[m.professionalRole, m.company].filter(Boolean).join(' · ')}
                     </p>
                   </div>
@@ -162,7 +164,7 @@ export default function MatchesPage() {
               <p className="text-sm text-gray-600 mt-3 border-t border-gray-100 pt-3">{m.reason}</p>
             </Card>
           ))}
-          <p className="flex items-center gap-2 text-xs text-gray-400 px-1">
+          <p className="col-span-full flex items-center gap-2 text-xs text-gray-400 px-1">
             <Bell className="h-3.5 w-3.5 shrink-0" />
             When you both say yes, we introduce you and a chat opens.
           </p>

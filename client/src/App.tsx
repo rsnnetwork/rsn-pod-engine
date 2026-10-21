@@ -40,6 +40,7 @@ import EncounterHistoryPage from '@/features/sessions/EncounterHistoryPage';
 import MatchesPage from '@/features/matches/MatchesPage';
 import AgentsPage from '@/features/agents/AgentsPage';
 import SearchPage from '@/features/search/SearchPage';
+import ConnectionsPage from '@/features/reason/people/ConnectionsPage';
 import AgentDetailPage from '@/features/agents/AgentDetailPage';
 import CirclesPage from '@/features/circles/CirclesPage';
 import CircleDetailPage from '@/features/circles/CircleDetailPage';
@@ -228,6 +229,7 @@ export default function App() {
             stays as the browse-everyone fallback. */}
         <Route path="/agents" element={<AgentsPage />} />
         <Route path="/search" element={<SearchPage />} />
+        <Route path="/connections" element={<ConnectionsPage />} />
         <Route path="/agents/:id" element={<AgentDetailPage />} />
         <Route path="/circles" element={<CirclesPage />} />
         <Route path="/circles/:circleId" element={<CircleDetailPage />} />

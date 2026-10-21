@@ -837,8 +837,10 @@ test.describe('REASON milestone 1', () => {
 
         await test.step('For You', async () => {
           await visit(page, '/');
-          await expect(page.getByRole('heading', { level: 1 }), `${where}: the page's title`).toHaveText('Welcome, Vera.', { timeout: SLOW });
+          // The onboarding brief's screen 8 (21 Oct): its title, and its line under the list.
+          await expect(page.getByRole('heading', { level: 1 }), `${where}: the page's title`).toHaveText('People worth meeting', { timeout: SLOW });
           await expectPeople(page, [giver, longName, secretive], where);
+          await expect(page.getByText('When someone wants to meet you too, it becomes a match and you can book a time together.'), `${where}: the line under the list`).toBeVisible();
           expect(await page.locator('[data-person-id]').count(), `${where}: at most five cards`).toBeLessThanOrEqual(5);
           await expectNoSecret(page, `${where} For You`);
           await expect(page.locator('body'), `${where}: a card shows their offer and your want, never "They need"`).not.toContainText(/They need|You can bring/);
@@ -867,6 +869,10 @@ test.describe('REASON milestone 1', () => {
             // The name link is how a card is opened by keyboard and by screen reader (the photo's link is hidden from
             // both): on screen and on top, whatever its length.
             await linkOnTop(page, c.getByRole('link', { name, exact: true }), `${where} ${whose}'s name link`);
+            // View profile sits beside Meet (screen 8) and opens the same profile as the name.
+            const view = c.getByRole('link', { name: `View profile of ${name}`, exact: true });
+            await inReach(page, view, `${where} View profile on ${whose}'s card`);
+            await expect(view, `${where} View profile on ${whose}'s card goes to the profile`).toHaveAttribute('href', `/people/${person.id}?from=For%20You`);
             await inReach(page, c.getByRole('button', { name: /^(Meet|Request sent|Continue)$/ }), `${where} the main button on ${whose}'s card`);
             await inReach(page, c.getByRole('button', { name: /^(Save|Saved)$/ }), `${where} Save on ${whose}'s card`);
           }
@@ -1282,7 +1288,7 @@ test.describe('REASON milestone 1', () => {
       await expect(tab.getByText('Strong reason').first(), 'the match is shown whatever the source').toBeVisible();
       await tap(tab, backButton(tab), 'Back (direct link)', { centre: false });
       await expect(tab, 'Back from a direct link goes to For You').toHaveURL(`${APP}/`);
-      await expect(tab.getByRole('heading', { level: 1 }), 'and For You is what it shows').toHaveText('Welcome, Vera.', { timeout: SLOW });
+      await expect(tab.getByRole('heading', { level: 1 }), 'and For You is what it shows').toHaveText('People worth meeting', { timeout: SLOW });
 
       // ?from= is read from the address, so only the places the app itself writes are ever named.
       const madeUpSource = 'Totally Made Up Source';
@@ -1328,7 +1334,7 @@ test.describe('REASON milestone 1', () => {
       // The page's own alert: the toast stack has an (empty) alert region of its own, outside <main>.
       await expect(page.getByRole('main').getByRole('alert')).toContainText('We could not load your people just now.');
       await expect(page.locator('[data-person-id]'), 'no card is drawn').toHaveCount(0);
-      await expect(page.getByText('No one new to suggest right now.'), 'a failure is not "no one to suggest"').toHaveCount(0);
+      await expect(page.getByText("Your people aren't here yet."), 'a failure is not "no one to suggest"').toHaveCount(0);
       await expectNoSideways(page, 'For You error');
 
       failing = false;
@@ -1400,7 +1406,7 @@ test.describe('REASON milestone 1', () => {
       await tap(page, page.getByRole('link', { name: 'For You', exact: true }), 'For You, offline', { centre: false });
       await expect(page.getByRole('heading', { name: 'We could not load your people just now.' }), 'offline, nothing loaded: the error state').toBeVisible({ timeout: 15_000 });
       await inReach(page, page.getByRole('button', { name: 'Try again' }), 'Try again (offline For You)', { centre: false });
-      await expect(page.getByText('No one new to suggest right now.'), 'being offline is not "no one to suggest"').toHaveCount(0);
+      await expect(page.getByText("Your people aren't here yet."), 'being offline is not "no one to suggest"').toHaveCount(0);
       await o.ctx.setOffline(false);
       await expectPeople(page, [giver, longName, secretive], 'For You fills in when the connection returns');
       await settle(page);

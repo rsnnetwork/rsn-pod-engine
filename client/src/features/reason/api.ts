@@ -2,7 +2,7 @@
 // Everything the REASON pages read and write. Pages import all of it from here.
 import api from '@/lib/api';
 import type {
-  MatchStrength, MeetingFormat, OutcomeKey, PersonBrief, PersonResponse, PublicMember,
+  ConnectionList, MatchStrength, MeetingFormat, OutcomeKey, PersonBrief, PersonResponse, PublicMember,
   RecentConnection, User, WorthContinuing,
 } from '@rsn/shared';
 import type { PokeStatus } from './person';
@@ -45,6 +45,7 @@ export const reasonKeys = {
   myCard: ['reason', 'mine', 'card'] as const,
   myProfile: ['reason', 'mine', 'profile'] as const,
   blockStatus: (userId: string) => ['reason', 'block-status', userId] as const,
+  connections: ['reason', 'connections'] as const,
 };
 
 // A member id is one encoded segment of an address. A route parameter arrives decoded, so a crafted
@@ -57,6 +58,9 @@ export const fetchRecentConnections = () => api.get('/people/connections/recent'
 // Your own card, exactly as other members are shown it, and your whole profile, which only you are shown.
 export const fetchMyCard = () => api.get('/people/me/card').then((r) => r.data.data as PublicMember);
 export const fetchMyProfile = () => api.get('/users/me').then((r) => r.data.data as User);
+// One page of Your connections; `before` is the page already shown's nextBefore (none for the first page).
+export const fetchConnections = (before: string | null) =>
+  api.get('/people/connections', { params: before ? { before } : {} }).then((r) => r.data.data as ConnectionList);
 
 export const setPersonResponse = (userId: string, response: PersonResponse | null) =>
   response

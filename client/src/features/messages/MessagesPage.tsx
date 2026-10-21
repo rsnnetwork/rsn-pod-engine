@@ -1075,7 +1075,7 @@ export default function MessagesPage() {
                   company / bio give the recipient a sense of who this is
                   before they even open the thread. truncate + line-clamp-2
                   keep this from overflowing at 360px. */}
-              <Link to={`/profile/${headerContext.otherUserId}`} className="min-w-0 flex-1 hover:opacity-80">
+              <Link to={`/people/${headerContext.otherUserId}?from=Messages`} className="min-w-0 flex-1 hover:opacity-80">
                 <p className="truncate text-sm font-bold text-[#1a1a2e] hover:underline">
                   {headerContext.otherDisplayName || 'User'}
                 </p>

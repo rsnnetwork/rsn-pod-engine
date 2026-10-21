@@ -89,7 +89,7 @@ export default function AgentDetailPage() {
   if (isLoading) return <PageLoader />;
   if (!data) {
     return (
-      <div className="mx-auto w-full max-w-3xl">
+      <div className="mx-auto w-full max-w-6xl">
         <Card className="!p-8 text-center text-sm text-gray-500">That agent no longer exists.</Card>
       </div>
     );
@@ -107,10 +107,10 @@ export default function AgentDetailPage() {
     return (
       <Card key={m.candidateUserId} className="!p-4" data-testid={`agent-match-${m.candidateUserId}`}>
         <div className="flex items-start gap-3">
-          <Avatar src={m.avatarUrl || undefined} name={m.displayName || 'Member'} size="md" />
+          <Avatar src={m.avatarUrl || undefined} name={m.displayName || 'Member'} size="md" className="shrink-0" />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <Link to={`/profile/${m.candidateUserId}`} className="inline-flex min-h-[44px] items-center truncate text-sm font-semibold text-[#1a1a2e] hover:underline">
+              <Link to={`/people/${m.candidateUserId}?from=People`} className="inline-flex min-h-[44px] items-center text-sm font-semibold text-[#1a1a2e] [overflow-wrap:anywhere] hover:underline">
                 {m.displayName || 'A member'}
               </Link>
               {state && (
@@ -124,7 +124,7 @@ export default function AgentDetailPage() {
                 </span>
               )}
             </div>
-            <p className="truncate text-xs text-gray-500">{roleLine(m)}</p>
+            <p className="text-xs text-gray-500 [overflow-wrap:anywhere]">{roleLine(m)}</p>
             <p className="mt-1 text-xs text-gray-600">{m.reason}</p>
           </div>
         </div>
@@ -153,7 +153,7 @@ export default function AgentDetailPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-3xl">
+    <div className="mx-auto w-full max-w-6xl">
       <button
         onClick={() => navigate('/agents')}
         className="mb-3 flex min-h-[44px] items-center gap-1.5 text-sm text-gray-500 hover:text-[#1a1a2e]"
@@ -218,7 +218,7 @@ export default function AgentDetailPage() {
           </p>
         </Card>
       ) : (
-        <div className="flex flex-col gap-3">
+        <div className="grid gap-3 min-[1024px]:grid-cols-2">
           {outstanding.map(m => renderMatch(m))}
         </div>
       )}
@@ -230,7 +230,7 @@ export default function AgentDetailPage() {
           <p className="mb-2 mt-6 text-xs font-semibold uppercase tracking-wider text-gray-400">
             Already asked ({inProgress.length})
           </p>
-          <div className="flex flex-col gap-3">
+          <div className="grid gap-3 min-[1024px]:grid-cols-2">
             {inProgress.map(m => renderMatch(m))}
           </div>
         </>

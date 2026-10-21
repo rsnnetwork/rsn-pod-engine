@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Handshake, Users, Calendar, ThumbsUp, MessageSquare } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
@@ -23,13 +23,14 @@ export default function EncounterHistoryPage() {
   const { data: encounters, isLoading } = useQuery({
     queryKey: ['encounters', mutualOnly],
     queryFn: () => api.get(`/ratings/encounters?mutualOnly=${mutualOnly}`).then(r => r.data.data ?? []),
-    meta: { entities: currentUserId ? [E.user(currentUserId)] : [] },
+    // A block either way takes the person off this list (21 Oct 2026), and the server tells both members.
+    meta: { entities: currentUserId ? [E.user(currentUserId), E.userBlocks(currentUserId)] : [] },
   });
 
   if (isLoading) return <PageLoader />;
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    <div className="max-w-6xl mx-auto space-y-6">
       <div className="flex items-center justify-between animate-fade-in">
         <div>
           <h1 className="text-2xl font-bold text-[#1a1a2e]">People</h1>
@@ -44,6 +45,7 @@ export default function EncounterHistoryPage() {
           variant={!mutualOnly ? 'primary' : 'ghost'}
           size="sm"
           onClick={() => setMutualOnly(false)}
+          className="min-h-[44px]"
         >
           <Users className="h-4 w-4 mr-1" /> All Encounters
         </Button>
@@ -51,6 +53,7 @@ export default function EncounterHistoryPage() {
           variant={mutualOnly ? 'primary' : 'ghost'}
           size="sm"
           onClick={() => setMutualOnly(true)}
+          className="min-h-[44px]"
         >
           <Handshake className="h-4 w-4 mr-1" /> Mutual Matches
         </Button>
@@ -64,15 +67,16 @@ export default function EncounterHistoryPage() {
           icon={<Users className="h-12 w-12" />}
         />
       ) : (
-        <div className="grid gap-3 animate-fade-in-up stagger-1">
+        <div className="grid gap-3 animate-fade-in-up stagger-1 min-[1024px]:grid-cols-2">
           {(encounters || []).map((e: any, i: number) => (
             <Card key={e.id || i} className="card-hover">
-              {/* On a phone (the shell's bar range, up to 720px) the badges and the Message button wrap under
-                  the name instead of holding the card, and the page, wider than the screen. From 721px up this
-                  is the old one-line row, where the text shrinks: a wrap there put the button on a second line
-                  at 768px. */}
-              <div className="flex items-center justify-between max-[720px]:flex-wrap max-[720px]:gap-x-3 max-[720px]:gap-y-2">
-                <a href={`/profile/${e.otherUserId}`} className="flex items-center gap-3 hover:opacity-80 transition-opacity max-[720px]:[overflow-wrap:anywhere]">
+              {/* On a phone (the shell's bar range, up to 720px), and from 1024px, where the cards sit two to a row
+                  and each is about as narrow as a phone's, the badges and the Message button wrap under the name
+                  instead of holding the card, and the page, wider than the screen. From 721px to 1023px this is
+                  the old one-line row, where the text shrinks: a wrap there put the button on a second line at
+                  768px. The link is a page link, so Back on the profile comes here. */}
+              <div className="flex items-center justify-between max-[720px]:flex-wrap max-[720px]:gap-x-3 max-[720px]:gap-y-2 min-[1024px]:flex-wrap min-[1024px]:gap-x-3 min-[1024px]:gap-y-2">
+                <Link to={`/people/${e.otherUserId}?from=People`} className="flex items-center gap-3 hover:opacity-80 transition-opacity max-[720px]:[overflow-wrap:anywhere] min-[1024px]:[overflow-wrap:anywhere]">
                   <div className="relative">
                     <Avatar src={e.avatarUrl} name={e.displayName || e.otherUserName || e.email || 'User'} size="md" />
                     {e.mutual && (
@@ -91,7 +95,7 @@ export default function EncounterHistoryPage() {
                       </p>
                     )}
                   </div>
-                </a>
+                </Link>
                 <div className="flex items-center gap-2">
                   {e.rating && (
                     <div className="flex items-center gap-1 text-emerald-500">
@@ -106,7 +110,7 @@ export default function EncounterHistoryPage() {
                     <button
                       onClick={(evt) => { evt.preventDefault(); evt.stopPropagation(); navigate(`/messages/new/${e.otherUserId}`); }}
                       title="Message this person"
-                      className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded-md border border-indigo-200 hover:bg-indigo-50 transition-colors"
+                      className="inline-flex min-h-[44px] items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 px-3 rounded-md border border-indigo-200 hover:bg-indigo-50 transition-colors"
                     >
                       <MessageSquare className="h-3.5 w-3.5" /> Message
                     </button>

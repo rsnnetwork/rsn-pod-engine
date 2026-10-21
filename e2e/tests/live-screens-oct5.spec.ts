@@ -1036,8 +1036,10 @@ test('4. Matches: an open page changes on its own when a request is sent from an
   }
   await gotoRetry(viewerPage, `${APP}/matches`);
   await gotoRetry(personPage, `${APP}/matches`);
-  const viewerCard = viewerPage.locator(`div.card-hover:has(a[href="/profile/${person.id}"])`);
-  const personCard = personPage.locator(`div.card-hover:has(a[href="/profile/${viewer.id}"])`);
+  // The card is found by its link to the person: /profile/:id on the live client, /people/:id?from=People on the
+  // preview (21 Oct). Ids are unique, so the one card is the one whose link names them.
+  const viewerCard = viewerPage.locator(`div.card-hover:has(a[href*="/${person.id}"])`);
+  const personCard = personPage.locator(`div.card-hover:has(a[href*="/${viewer.id}"])`);
   await expect(viewerCard.getByRole('button', { name: /I want to meet/i }), 'the viewer sees the person with the button').toBeVisible({ timeout: 30_000 });
   await expect(personCard.getByRole('button', { name: /I want to meet/i }), 'the person sees the viewer with the button').toBeVisible({ timeout: 30_000 });
   await settle(viewerPage);

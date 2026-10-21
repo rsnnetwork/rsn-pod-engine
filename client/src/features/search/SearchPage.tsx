@@ -71,7 +71,7 @@ export default function SearchPage() {
   const empty = active && !isFetching && (results ?? []).length === 0;
 
   return (
-    <div className="mx-auto w-full max-w-3xl">
+    <div className="mx-auto w-full max-w-6xl">
       <h1 className="font-display text-2xl font-bold text-[#1a1a2e]">Find people</h1>
       <p className="mt-1 text-sm text-gray-500">Search by name, job title or company.</p>
 
@@ -98,24 +98,24 @@ export default function SearchPage() {
         </Card>
       )}
 
-      <div className="mt-4 flex flex-col gap-3">
+      <div className="mt-4 grid gap-3 min-[1024px]:grid-cols-2">
         {(results ?? []).map((r) => (
           <Card key={r.userId} className="!p-4" data-testid={`search-result-${r.userId}`}>
             <div className="flex items-start gap-3">
-              <Avatar src={r.avatarUrl} name={r.displayName || 'Member'} size="md" />
+              <Avatar src={r.avatarUrl} name={r.displayName || 'Member'} size="md" className="shrink-0" />
               <div className="min-w-0 flex-1">
                 <Link
-                  to={`/profile/${r.userId}`}
-                  className="block truncate text-sm font-semibold text-[#1a1a2e] hover:underline"
+                  to={`/people/${r.userId}?from=People`}
+                  className="block text-sm font-semibold text-[#1a1a2e] [overflow-wrap:anywhere] hover:underline"
                 >
                   {r.displayName || 'A member'}
                 </Link>
                 {(r.jobTitle || r.company) && (
-                  <p className="truncate text-xs text-gray-500">
+                  <p className="text-xs text-gray-500 [overflow-wrap:anywhere]">
                     {[r.jobTitle, r.company].filter(Boolean).join(' · ')}
                   </p>
                 )}
-                {r.location && <p className="truncate text-xs text-gray-400">{r.location}</p>}
+                {r.location && <p className="text-xs text-gray-400 [overflow-wrap:anywhere]">{r.location}</p>}
               </div>
             </div>
             <Button

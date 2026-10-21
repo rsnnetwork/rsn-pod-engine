@@ -290,7 +290,7 @@ describe('For You: links, words and the buttons the end-to-end spec presses', ()
 
   it('every link on the page goes to a route that exists', () => {
     const targets = [page(), rail(), empty()].flatMap(pathsLinkedFrom);
-    for (const wanted of ['/matches', '/sessions', '/sessions/:param', '/pods', '/pods/:param', '/invites', '/messages', '/onboarding', '/people/:param']) {
+    for (const wanted of ['/matches', '/sessions', '/sessions/:param', '/pods', '/pods/:param', '/search', '/messages', '/onboarding', '/people/:param']) {
       expect(targets).toContain(wanted);
     }
     for (const target of new Set(targets)) {
@@ -314,14 +314,78 @@ describe('For You: links, words and the buttons the end-to-end spec presses', ()
     expect(page().match(/<button\b/g)).toHaveLength(1);
   });
 
-  it('an empty list says what to do next: finish the profile, or an event, an invite, a wider circle', () => {
-    expect(empty()).toContain('Finish my profile');
-    for (const text of ['See upcoming events', 'Invite people you would like here', 'Browse a wider circle of people']) {
-      expect(empty()).toContain(text);
-    }
-    // A long event title in "Join <title>" wraps instead of running out of its box.
-    const action = empty().match(/const ACTION = ([^;]+);/)?.[1];
+  it('an empty list with the profile complete is the onboarding brief\'s screen 8, word for word: Explore people, and Edit who I want to meet (onboarding\'s first question)', () => {
+    expect(empty()).toContain('const NO_MATCHES_TITLE = "Your people aren\'t here yet.";');
+    expect(empty()).toContain('const NO_MATCHES_TEXT = "We\'re still finding people who match what you\'re looking for. Check back soon.";');
+    expect(empty()).toMatch(/<h2 id="foryou-title" tabIndex=\{-1\} [^>]*>\{NO_MATCHES_TITLE\}<\/h2>/);
+    expect(empty()).toMatch(/<Link to="\/search" className=\{`\$\{ACTION\} [^`]*`\}>Explore people<\/Link>/);
+    expect(empty()).toMatch(/<Link to="\/onboarding\?edit=q1" className=\{`\$\{ACTION\} [^`]*`\}>Edit who I want to meet<\/Link>/);
+    // The events, invites and wider-circle links the old empty state offered are gone.
+    expect(empty()).not.toMatch(/See upcoming events|Invite people you would like here|Browse a wider circle of people/);
+    // Both buttons are 44px, and a long word wraps inside its own box.
+    const action = empty().match(/const ACTION = '([^']+)';/)?.[1];
+    expect(action).toContain('min-h-[44px]');
     expect(action).toContain('[overflow-wrap:anywhere]');
+    // A profile that is not finished keeps its own state.
+    expect(empty()).toContain('Finish my profile');
+    expect(page()).toContain('<ForYouEmpty profileIncomplete={!!data?.profileIncomplete} />');
+  });
+});
+
+// The onboarding brief's screen 8, "Your matches" (Shradha, 19 Oct 2026), and the client's 19 Oct feedback: "On desktop,
+// cards are too long. Show them side by side (two in a row). On mobile, keep a single list."
+describe('For You: screen 8, two to a row', () => {
+  const card = () => read('features/reason/human/HumanCard.tsx');
+
+  it('the title and the line under it are screen 8\'s, word for word, under the page\'s own name rather than a greeting', () => {
+    expect(page()).toMatch(/<PageHead eyebrow="FOR YOU" title="People worth meeting" subtitle="Based on your answers, here are people you might want to meet\." [^>]*\/>/);
+    expect(withoutComments(page())).not.toMatch(/Welcome, |GOOD TO SEE YOU|Here are people you have a reason to meet\.|Based on your current reasons/);
+  });
+
+  it('one line under the list, outside the grid of cards, so it spans both columns', () => {
+    const src = withoutComments(page());
+    const grid = src.indexOf('<div className="grid gap-3.5 min-[1280px]:grid-cols-2">');
+    const closeGrid = src.indexOf('</div>', src.indexOf('))}', grid));
+    const line = src.indexOf('When someone wants to meet you too, it becomes a match and you can book a time together.');
+    expect(grid).toBeGreaterThan(-1);
+    expect(line).toBeGreaterThan(closeGrid);
+  });
+
+  // Ruling R22 (21 Oct review): at 1024px, an iPad on its side, half the list beside the rail is about 183px of card,
+  // where the photo goes above the name and View profile, Meet and Save stack three high. For You goes two to a row
+  // only from 1280px, where each half still has the photo beside the name and View profile beside Meet.
+  it('two cards to a row from 1280px, where the list beside the rail has room; one list below, 1024px included', () => {
+    expect(page()).toMatch(/<div className="grid gap-3\.5 min-\[1280px\]:grid-cols-2">\s*\{cards\.map/);
+    expect(withoutComments(page())).not.toMatch(/min-\[1024px\]:grid-cols-2/);
+  });
+
+  it('the rail is 280px to 320px wide from 981px, with no narrower step', () => {
+    expect(page()).toContain('<div className="grid items-start gap-3 min-[981px]:grid-cols-[minmax(0,1fr)_minmax(280px,320px)] min-[981px]:gap-[18px]">');
+    expect(page()).not.toMatch(/_260px\]/);
+  });
+
+  it('the card sizes itself to the room it is given: no four-column layout at 1420px, a container query on the card instead', () => {
+    expect(card()).not.toMatch(/min-\[1420px\]/);
+    expect(card()).toMatch(/<article[\s\S]*?className="[^"]*\[container-type:inline-size\][^"]*"/);
+    for (const step of ['16rem', '24rem', '34rem', '15rem', '20rem']) expect(card()).toContain(`[@container(min-width:${step})]`);
+    // Nothing under the card's own width decides by the window: the photo, the reason and the buttons follow the card.
+    expect(card()).not.toMatch(/min-\[391px\]|min-\[721px\]:grid-cols|min-\[721px\]:col-/);
+  });
+
+  it('each card has View profile beside Meet, a 44px link to the same profile the name opens, and keeps Save', () => {
+    const src = card();
+    const view = src.indexOf('View profile\n');
+    const meet = src.indexOf('{PRIMARY_LABEL[action]}');
+    const save = src.indexOf("{person.saved ? 'Saved' : 'Save'}");
+    expect(view).toBeGreaterThan(-1);
+    expect(meet).toBeGreaterThan(view);
+    expect(save).toBeGreaterThan(meet);
+    expect(src).toMatch(/<Link\s+to=\{profileUrl\}\s+aria-label=\{`View profile of \$\{name\}`\}\s+className="[^"]*min-h-\[44px\][^"]*"\s*>\s*View profile\s*<\/Link>/);
+  });
+
+  it('the buttons sit at the foot of the card, so two cards side by side have them on one line', () => {
+    expect(card()).toMatch(/<article[\s\S]*?className="flex cursor-pointer flex-col /);
+    expect(card()).toMatch(/<div className="mt-auto grid grid-cols-1 gap-2 pt-2\.5 /);
   });
 });
 

@@ -1,4 +1,4 @@
-// Stefan's v4 navigation. People points at today's "Find people" until the
+// Stefan's v4 navigation. People opens Your connections, its first tab, until the
 // People screen is rebuilt (next milestone); Entities shows an honest "coming
 // next" page until then. The prototype's Introductions tab was dropped on 19 Oct
 // at the client's request: its icon stays in the icon set, but it is not a
@@ -12,7 +12,7 @@ const under = (...prefixes: string[]) => (p: string) => prefixes.some(x => p ===
 
 export const MAIN_NAV: NavItem[] = [
   { key: 'foryou', label: 'For You', to: '/', match: (p) => p === '/' },
-  { key: 'people', label: 'People', to: '/search', match: under('/search', '/agents', '/matches', '/encounters', '/people') },
+  { key: 'people', label: 'People', to: '/connections', match: under('/connections', '/search', '/agents', '/matches', '/encounters', '/people') },
   { key: 'entities', label: 'Entities', to: '/entities', match: under('/entities') },
   { key: 'circles', label: 'Circles', to: '/circles', match: under('/circles') },
   { key: 'pods', label: 'Pods', to: '/pods', match: under('/pods') },

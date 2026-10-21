@@ -66,9 +66,16 @@ describe('REASON shell (milestone 1)', () => {
     expect(read('features/reason/shell/MobileNav.tsx')).toMatch(/min-h-\[56px\]/);
     expect(read('features/reason/shell/ShellTopbar.tsx')).toMatch(/env\(safe-area-inset-top\)/);
   });
-  it('People keeps every existing people page one tap away', () => {
+  it('People opens on Your connections, then keeps every existing people page one tap away (19 Oct: "show the user\'s own connections first")', () => {
     const tabs = read('features/reason/shell/PeopleTabs.tsx');
-    for (const to of ['/search', '/agents', '/matches', '/encounters']) expect(tabs).toContain(`to: '${to}'`);
+    const order = [...tabs.matchAll(/\{ to: '([^']+)', label: '([^']+)' \}/g)].map((m) => [m[1], m[2]]);
+    expect(order).toEqual([
+      ['/connections', 'Your connections'],
+      ['/search', 'Find people'],
+      ['/agents', 'Your searches'],
+      ['/matches', 'Everyone who fits'],
+      ['/encounters', 'People you have met'],
+    ]);
     expect(read('features/reason/shell/ReasonShell.tsx')).toMatch(/\{inPeople && <PeopleTabs \/>\}/);
   });
   it('the shell keeps the old layout\'s "Complete your profile" nudge', () => {
@@ -287,15 +294,17 @@ describe('REASON shell and Messages: fixes before a client reviews it (P2)', () 
     // Event page: the participant list (8px at 360 in WebKit).
     expect(read('features/sessions/SessionDetailPage.tsx')).toMatch(/<div className="grid grid-cols-1 gap-2">\s*\{\/\* Host\/Director card/);
   });
-  it('People you have met wraps the badges and the Message button under the name on a phone only, and lets a long name break there; from 721px up it is the old one-line row', () => {
+  it('People you have met wraps the badges and the Message button under the name on a phone and from 1024px (two cards to a row, each as narrow as a phone\'s), and lets a long name break there; from 721px to 1023px it is the old one-line row', () => {
     // +43px at a 360px window: the avatar, the name, the badges and the button could not fit one line and held the card (and the page) wider.
     // The phone range is the shell's own: its bar is min-[721px]:hidden, so max-[720px] is exactly where the bar shows.
     expect(read('features/reason/shell/MobileNav.tsx')).toMatch(/min-\[721px\]:hidden/);
     // Exactly these classes. An unscoped flex-wrap or gap moved the Message button to a second line at 768px, where the
-    // old row shrank the text instead.
+    // old row shrank the text instead. The name is a page link to the Human Profile (21 Oct), so Back returns here.
     expect(read('features/sessions/EncounterHistoryPage.tsx')).toMatch(
-      /<div className="flex items-center justify-between max-\[720px\]:flex-wrap max-\[720px\]:gap-x-3 max-\[720px\]:gap-y-2">\s*<a href=\{`\/profile\/\$\{e\.otherUserId\}`\} className="flex items-center gap-3 hover:opacity-80 transition-opacity max-\[720px\]:\[overflow-wrap:anywhere\]"/,
+      /<div className="flex items-center justify-between max-\[720px\]:flex-wrap max-\[720px\]:gap-x-3 max-\[720px\]:gap-y-2 min-\[1024px\]:flex-wrap min-\[1024px\]:gap-x-3 min-\[1024px\]:gap-y-2">\s*<Link to=\{`\/people\/\$\{e\.otherUserId\}\?from=People`\} className="flex items-center gap-3 hover:opacity-80 transition-opacity max-\[720px\]:\[overflow-wrap:anywhere\] min-\[1024px\]:\[overflow-wrap:anywhere\]"/,
     );
+    // Two to a row from 1024px, one list below.
+    expect(read('features/sessions/EncounterHistoryPage.tsx')).toMatch(/<div className="grid gap-3 animate-fade-in-up stagger-1 min-\[1024px\]:grid-cols-2">/);
   });
   it('the top search says it searches people, and its accessible name matches: it opens Find people, and nothing else is searched yet', () => {
     const top = read('features/reason/shell/ShellTopbar.tsx');
@@ -311,5 +320,47 @@ describe('REASON shell and Messages: fixes before a client reviews it (P2)', () 
     const wall = read('features/circles/CircleWall.tsx');
     expect(wall).toMatch(/<p className="min-w-0 break-words text-sm font-semibold text-gray-900">\{p\.authorName \|\| 'Member'\}<\/p>/);
     expect(wall).toMatch(/<p className="break-words text-xs font-semibold text-gray-700">\s*\{c\.authorName \|\| 'Member'\}/);
+  });
+});
+
+// Your connections (21 Oct 2026): the People entry opens the member's own connections, its first tab, and stays
+// marked on every People page. nav.ts is run, as the sidebar, the rail and the phone bar read it.
+describe('REASON shell: People opens Your connections', () => {
+  const loadNav = () => {
+    const source = fs.readFileSync(path.join(__dirname, '../../../../client/src/features/reason/shell/nav.ts'), 'utf8');
+    const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2019 } });
+    const mod: { exports: Record<string, unknown> } = { exports: {} };
+    new Function('module', 'exports', 'require', outputText)(mod, mod.exports, require);
+    return mod.exports as { MAIN_NAV: Array<{ key: string; to: string; match: (p: string) => boolean }> };
+  };
+
+  it('the People entry goes to /connections', () => {
+    expect(loadNav().MAIN_NAV.find((i) => i.key === 'people')?.to).toBe('/connections');
+  });
+
+  it('People is the current entry on all five tabs, a page under them and a Human Profile, and on nothing else', () => {
+    const people = loadNav().MAIN_NAV.find((i) => i.key === 'people')!;
+    for (const url of ['/connections', '/search', '/agents', '/agents/a1', '/matches', '/encounters', '/people/u1']) {
+      expect({ url, current: people.match(url) }).toEqual({ url, current: true });
+    }
+    for (const url of ['/', '/circles', '/messages', '/connectionsx', '/searching']) {
+      expect({ url, current: people.match(url) }).toEqual({ url, current: false });
+    }
+    // Every People tab is an address the People entry is current on.
+    const tabs = [...read('features/reason/shell/PeopleTabs.tsx').matchAll(/\{ to: '([^']+)'/g)].map((m) => m[1]);
+    expect(tabs).toHaveLength(5);
+    for (const to of tabs) expect({ to, current: people.match(to) }).toEqual({ to, current: true });
+  });
+
+  it('App routes /connections to Your connections inside the shell, so the tabs and the navigation are there', () => {
+    const app = read('App.tsx');
+    expect(app).toMatch(/^import ConnectionsPage from '@\/features\/reason\/people\/ConnectionsPage';$/m);
+    const shellRoutes = app.slice(app.indexOf('<ReasonShell />'), app.indexOf('{/* Protected without layout'));
+    expect(shellRoutes).toContain('<Route path="/connections" element={<ConnectionsPage />} />');
+  });
+
+  it('on a tablet and up the five tabs wrap instead of running off the side; on a phone the row scrolls', () => {
+    const tabs = read('features/reason/shell/PeopleTabs.tsx');
+    expect(tabs).toMatch(/aria-label="People" className="[^"]*\boverflow-x-auto\b[^"]*\bmin-\[721px\]:flex-wrap\b/);
   });
 });
