@@ -257,6 +257,13 @@ describe('the data contract', () => {
     expect(read(`${dir}/useLeaveEdit.ts`)).toMatch(/navigate\(-keys\.current\.length\)/);
   });
 
+  // Fix round 1 (M-7): when the save opens the tour, its success toast sat over the tour's Skip on a phone. The tour, and
+  // the changed page under it, say it was saved; every other edit-mode save still says so.
+  it('edit mode says "Your changes are saved." only when the save does not open the tour', () => {
+    expect(flowSource).toMatch(/if \(!tourOpensAfterConfirm\(state\.tour\)\) addToast\('Your changes are saved\.', 'success'\);\s*leave\(edit\);/);
+    expect(flowSource.match(/Your changes are saved\./g)).toHaveLength(1);
+  });
+
   // Final review (C1): the tour opens over the page the flow put them on, and must leave them there.
   it('every way the flow leaves says where it put the member: LANDED on a page it opens, a mark before it goes back through the history', () => {
     const leave = read(`${dir}/useLeaveEdit.ts`);

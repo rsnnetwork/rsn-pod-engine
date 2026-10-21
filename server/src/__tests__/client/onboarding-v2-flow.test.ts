@@ -13,7 +13,7 @@ import {
   toggleKey, confirmBody, draftPatch, profileValue, profileInput, linkedinForInput, linkedinInputProblem,
   zoneLabel, searchZones, onboardingError, answerSummary, linkedinNote, editAction, editFallback, guessedSelf,
   withKeys, withOwnWords, isRealZone, zoneList, currentZoneName, confirmProblem,
-  safeRedirect, problemMessage, ANSWER_NEEDED, signupChoiceKey, parseSignupChoice, LANDED, isLanded, returnedKey,
+  safeRedirect, problemMessage, ANSWER_NEEDED, signupChoiceKey, parseSignupChoice, LANDED, isLanded, returnedKey, tourOpensAfterConfirm,
 } from '../../../../client/src/features/onboarding/flow';
 import { forgetReturned, hasReturned, markReturned } from '../../../../client/src/features/onboarding/tour-landing';
 
@@ -419,6 +419,17 @@ describe('where the tour leaves a member: where the flow put them', () => {
       expect(hasReturned('a1')).toBe(false);
       expect(() => forgetReturned('a1')).not.toThrow();
     });
+  });
+});
+
+// Fix round 1 (M-7): an existing member's first edit makes the tour due (confirm stamps it whenever it was never seen),
+// and its success toast sat over the tour's Skip on a phone for 2.5 seconds.
+describe('whether a confirm opens the tour: whenever the member has never seen it', () => {
+  it('a member who has never seen it gets it, due or not yet due; one who has seen it never again', () => {
+    expect(tourOpensAfterConfirm({ pending: false, seenAt: null, outcome: null })).toBe(true);
+    expect(tourOpensAfterConfirm({ pending: true, seenAt: null, outcome: null })).toBe(true);
+    expect(tourOpensAfterConfirm({ pending: false, seenAt: '2026-10-20T09:00:00.000Z', outcome: 'skipped' })).toBe(false);
+    expect(tourOpensAfterConfirm({ pending: false, seenAt: '2026-10-20T09:00:00.000Z', outcome: 'completed' })).toBe(false);
   });
 });
 
