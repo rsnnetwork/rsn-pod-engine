@@ -313,7 +313,7 @@ export default function MeetPage() {
         </button>
         <div className="min-w-0">
           <p className="text-sm font-semibold">{kind === 'audio' ? 'Audio call' : 'Video call'}</p>
-          <p className="text-[11px] text-white/50">Connected on RSN</p>
+          <p className="text-[11px] text-white/50">Connected on REASON</p>
         </div>
       </div>
 

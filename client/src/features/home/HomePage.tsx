@@ -127,7 +127,7 @@ export default function HomePage() {
         <h1 className="text-2xl font-bold text-[#1a1a2e]">
           Welcome, {user?.displayName || user?.firstName || 'there'}
         </h1>
-        <p className="text-gray-500 mt-1">Here&apos;s what&apos;s happening with your RSN account.</p>
+        <p className="text-gray-500 mt-1">Here&apos;s what&apos;s happening with your REASON account.</p>
       </div>
 
       {/* Pending received invites banner */}
@@ -219,7 +219,7 @@ export default function HomePage() {
       {/* Getting Started checklist */}
       <Card className="animate-fade-in-up">
         <h2 className="font-semibold text-[#1a1a2e] mb-1">Getting Started</h2>
-        <p className="text-sm text-gray-500 mb-5">Complete these steps to get the most out of RSN</p>
+        <p className="text-sm text-gray-500 mb-5">Complete these steps to get the most out of REASON</p>
 
         <div className="divide-y divide-gray-100">
           <button

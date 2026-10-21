@@ -51,7 +51,7 @@ const POSES: Record<SheepPose, { animate: TargetAndTransition; transition: Trans
   idle: {
     animate: { y: [0, -3, 0] },
     transition: { duration: 4, repeat: Infinity, ease: 'easeInOut' },
-    label: 'RSN',
+    label: 'REASON',
   },
   wave: {
     // The arm is already up in the art, so this is only the body behind it.

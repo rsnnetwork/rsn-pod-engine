@@ -8,14 +8,14 @@ const plans = [
   {
     name: 'Starter',
     price: 'Free',
-    description: 'Get started with RSN basics',
+    description: 'Get started with REASON basics',
     features: ['1 Pod membership', 'Join events', 'Basic profile', 'Invite friends'],
     current: true,
   },
   {
     name: 'Pro',
     price: '$19/mo',
-    description: 'Unlock the full RSN experience',
+    description: 'Unlock the full REASON experience',
     features: ['Unlimited Pods', 'Priority matching', 'Advanced analytics', 'Early event access', 'Custom invite links'],
     current: false,
   },

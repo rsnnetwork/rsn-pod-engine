@@ -184,7 +184,7 @@ export default function MatchesPage() {
                 <Calendar className="h-5 w-5 text-rsn-red" />
               </div>
               <div className="min-w-0">
-                <p className="font-medium text-gray-900">Join the next RSN</p>
+                <p className="font-medium text-gray-900">Join the next event</p>
                 <p className="text-xs text-gray-500 truncate">
                   {nextEvent
                     ? `${nextEvent.title} · ${new Date(nextEvent.scheduledAt).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`
