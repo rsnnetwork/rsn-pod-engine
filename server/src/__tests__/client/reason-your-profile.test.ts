@@ -274,7 +274,7 @@ describe('Human Profile: More, with Block and Report this member', () => {
   });
 
   it('the brief also listens for blocks, so a block in either direction takes the profile away without a refresh', () => {
-    expect(human()).toMatch(/entities: me && userId \? \[E\.user\(me\), E\.user\(userId\), E\.userInvites\(me\), E\.userDms\(me\), E\.userBlocks\(me\)\] : \[\]/);
+    expect(human()).toMatch(/entities: me && userId \? \[E\.user\(me\), E\.user\(userId\), E\.userInvites\(me\), E\.userDms\(me\), E\.userBlocks\(me\), E\.userEntities\(userId\), E\.userEntities\(me\)\] : \[\]/);
   });
 
   // Fix round 1: a profile you blocked is a 404, so Unblock cannot live on the profile or in More. Without it on the

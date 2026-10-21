@@ -160,8 +160,10 @@ export default function HumanProfilePage() {
     enabled: validId && !!me && userId !== me,
     // A 4xx is an answer, so asking again changes nothing; a lost connection or a 5xx gets one more try.
     retry: shouldRetry,
-    // A block in either direction takes the profile away (the brief is a 404 then), so a block answers it too.
-    meta: { entities: me && userId ? [E.user(me), E.user(userId), E.userInvites(me), E.userDms(me), E.userBlocks(me)] : [] },
+    // A block in either direction takes the profile away (the brief is a 404 then), so a block answers it too. The
+    // brief lists the person's entities: their own entities tag (they join, leave or change role in one you share) and
+    // yours (an entity you share is edited or archived), so an archived one never stays on screen as a link.
+    meta: { entities: me && userId ? [E.user(me), E.user(userId), E.userInvites(me), E.userDms(me), E.userBlocks(me), E.userEntities(userId), E.userEntities(me)] : [] },
   });
 
   // The first screen of the app in this tab (a link opened from an email, say): going back would leave
