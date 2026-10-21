@@ -73,10 +73,12 @@ describe('profile photo: however the upload ends', () => {
     expect(handler()).toMatch(/input\.value = '';/);
   });
 
-  it('keeps what it said before for a wrong type or a file over 5 MB, before anything is read', () => {
+  it('refuses a wrong type, or a file over 20 MB, before anything is read', () => {
     expect(handler()).toMatch(/addToast\('Please upload a JPG, PNG, or WebP image', 'error'\);\s*return;/);
-    expect(handler()).toMatch(/file\.size > 5 \* 1024 \* 1024/);
-    expect(handler()).toMatch(/addToast\('Image must be under 5MB', 'error'\);\s*return;/);
+    // 20 MB, as the banner allows: the photo is made smaller before it is sent, so a phone photo of 5 to 20 MB is fine.
+    expect(handler()).toMatch(/file\.size > 20 \* 1024 \* 1024/);
+    expect(handler()).toMatch(/addToast\('Image must be under 20MB', 'error'\);\s*return;/);
+    expect(handler()).not.toMatch(/5 \* 1024 \* 1024|under 5MB/);
   });
 });
 

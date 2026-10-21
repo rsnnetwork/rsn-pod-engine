@@ -213,8 +213,8 @@ export default function ProfilePage() {
       addToast('Please upload a JPG, PNG, or WebP image', 'error');
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      addToast('Image must be under 5MB', 'error');
+    if (file.size > 20 * 1024 * 1024) {
+      addToast('Image must be under 20MB', 'error');
       return;
     }
 
