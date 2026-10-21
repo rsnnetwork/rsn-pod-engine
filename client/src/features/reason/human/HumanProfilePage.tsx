@@ -18,6 +18,8 @@ import ProfileHero from './ProfileHero';
 import ProfileDetails from './ProfileDetails';
 import MoveBar from './MoveBar';
 import ProfileMoreMenu from './ProfileMoreMenu';
+import { useBlockedByYou } from './useBlockedByYou';
+import { BUSY } from './busy';
 import MeetSheet from './MeetSheet';
 import OutcomeSheet from './OutcomeSheet';
 import { STATE_LABEL } from './labels';
@@ -200,11 +202,13 @@ export default function HumanProfilePage() {
     if (blockedInReport) leaveBlocked();
   };
 
-  if (me && userId === me) return <Navigate to="/profile" replace />;
-
   // Which screen: see viewFor. In short, a profile already on screen stays through a failed or held-back
   // refetch, and only "this person is gone" replaces it.
   const view = viewFor({ hasBrief: !!brief, validId, isPending, isError, error, fetchStatus });
+  // A profile that is not available may be one you blocked: then the notice says so and offers Unblock.
+  const blocked = useBlockedByYou(userId, me, view === 'unavailable' && validId);
+
+  if (me && userId === me) return <Navigate to="/profile" replace />;
 
   return (
     <div className="min-h-[100dvh] bg-[#f6f5f3] font-reason text-reason-ink antialiased">
@@ -227,8 +231,15 @@ export default function HumanProfilePage() {
 
       {view === 'profile' && brief ? (
         <Profile key={userId} brief={brief} userId={userId} source={source} hideBar={reportOpen} />
-      ) : view === 'loading' ? (
+      ) : view === 'loading' || (view === 'unavailable' && blocked.checking) ? (
         <Loading />
+      ) : view === 'unavailable' && blocked.blockedByYou ? (
+        <Notice title="You blocked this member." text="They cannot message you, and you are not matched together. Unblock them to see their profile again.">
+          <button type="button" onClick={blocked.askToUnblock} aria-disabled={blocked.unblocking || undefined} className={cn(PRIMARY_BUTTON, blocked.unblocking && BUSY)}>
+            {blocked.unblocking ? 'Unblocking...' : 'Unblock'}
+          </button>
+          <button type="button" onClick={back} className={QUIET_BUTTON}>Go back</button>
+        </Notice>
       ) : view === 'unavailable' ? (
         <Notice title="This profile is not available." text="It may have been closed, or it is not open to you.">
           <button type="button" onClick={back} className={PRIMARY_BUTTON}>Go back</button>

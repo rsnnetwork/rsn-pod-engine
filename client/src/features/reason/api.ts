@@ -44,6 +44,7 @@ export const reasonKeys = {
   mine: ['reason', 'mine'] as const,
   myCard: ['reason', 'mine', 'card'] as const,
   myProfile: ['reason', 'mine', 'profile'] as const,
+  blockStatus: (userId: string) => ['reason', 'block-status', userId] as const,
 };
 
 // A member id is one encoded segment of an address. A route parameter arrives decoded, so a crafted
@@ -72,5 +73,9 @@ export const recordOutcomeRequest = (userId: string, worthContinuing: WorthConti
 export const uploadBanner = (image: string) => api.put('/users/me/banner', { image });
 export const removeBannerRequest = () => api.delete('/users/me/banner');
 
-// The old public profile's block call, with the id as one encoded segment like every call here.
+// The old public profile's block calls, with the id as one encoded segment like every call here. A profile you blocked
+// is closed to you (the brief is a 404), so whether you are the one who blocked is asked on its own.
 export const blockMember = (userId: string) => api.post(`/users/${memberSegment(userId)}/block`);
+export const unblockMember = (userId: string) => api.delete(`/users/${memberSegment(userId)}/block`);
+export const fetchBlockStatus = (userId: string) =>
+  api.get(`/users/${memberSegment(userId)}/block-status`).then((r) => r.data.data as { hasBlocked: boolean });

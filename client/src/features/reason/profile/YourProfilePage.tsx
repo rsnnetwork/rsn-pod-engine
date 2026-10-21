@@ -96,7 +96,8 @@ export default function YourProfilePage() {
         )}
       />
 
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-[11px] min-[981px]:grid-cols-2 min-[981px]:gap-[18px]">
+      {/* Side by side, each card keeps its own height: stretched, the short company card was a blank box beside the answers. */}
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-[11px] min-[981px]:grid-cols-2 min-[981px]:items-start min-[981px]:gap-[18px]">
         <Section kicker="Entities & roles" title="Show where you work.">
           <p className={BODY}>Add your company and your role in it. Members see it on your profile.</p>
           <Link to={ADD_COMPANY_TO} className={cn(QUIET, 'mt-3.5 w-fit')}>Add your company</Link>

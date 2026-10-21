@@ -268,6 +268,8 @@ interface ReasonApi {
   sendMeetRequest: (userId: string, note: string, format: 'video_20' | 'coffee' | 'message_first') => Promise<unknown>;
   recordOutcomeRequest: (userId: string, worth: 'yes' | 'maybe' | 'no', outcomes: string[]) => Promise<unknown>;
   blockMember: (userId: string) => Promise<unknown>;
+  unblockMember: (userId: string) => Promise<unknown>;
+  fetchBlockStatus: (userId: string) => Promise<unknown>;
 }
 
 function loadApi(): { api: ReasonApi; exported: string[]; calls: RecordedCall[] } {
@@ -304,6 +306,8 @@ describe('REASON api: a member id is data, never part of the path', () => {
     await api.sendMeetRequest(crafted, 'Hello', 'coffee');
     await api.recordOutcomeRequest(crafted, 'yes', ['advice']);
     await api.blockMember(crafted);
+    await api.unblockMember(crafted);
+    await api.fetchBlockStatus(crafted);
     expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
       `GET /people/${encoded}/brief`,
       `PUT /people/${encoded}/response`,
@@ -311,6 +315,8 @@ describe('REASON api: a member id is data, never part of the path', () => {
       `POST /matches/platform/${encoded}/interest`,
       `POST /people/${encoded}/outcome`,
       `POST /users/${encoded}/block`,
+      `DELETE /users/${encoded}/block`,
+      `GET /users/${encoded}/block-status`,
     ]);
   });
 
@@ -330,9 +336,9 @@ describe('REASON api: a member id is data, never part of the path', () => {
 
   it('still exports every name the pages import', () => {
     expect(loadApi().exported).toEqual([
-      'blockMember', 'errorMessage', 'fetchBrief', 'fetchForYou', 'fetchMyCard', 'fetchMyProfile', 'fetchRecentConnections',
-      'personName', 'reasonKeys', 'recordOutcomeRequest', 'removeBannerRequest', 'sendMeetRequest', 'setPersonResponse',
-      'stateFromPoke', 'uploadBanner',
+      'blockMember', 'errorMessage', 'fetchBlockStatus', 'fetchBrief', 'fetchForYou', 'fetchMyCard', 'fetchMyProfile',
+      'fetchRecentConnections', 'personName', 'reasonKeys', 'recordOutcomeRequest', 'removeBannerRequest', 'sendMeetRequest',
+      'setPersonResponse', 'stateFromPoke', 'unblockMember', 'uploadBanner',
     ]);
   });
 });

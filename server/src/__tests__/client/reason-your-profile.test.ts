@@ -8,7 +8,7 @@
 // like the other client tests; the local e2e spec presses everything for real.
 import * as fs from 'fs';
 import * as path from 'path';
-import type { PersonBrief } from '@rsn/shared';
+import { canBring, type PersonBrief } from '@rsn/shared';
 import {
   BANNER_HEIGHT, BANNER_INPUT_MAX_BYTES, BANNER_QUALITY, BANNER_TYPES, BANNER_WIDTH, bannerCrop, bannerFileProblem,
 } from '../../../../client/src/features/reason/profile/banner-image';
@@ -86,6 +86,27 @@ describe('Your profile: what it says', () => {
     expect(youCanBring({ whatICanHelpWith: ' Intros to retail buyers ', expertiseText: 'pricing' })).toBe('Intros to retail buyers');
     expect(youCanBring({ whatICanHelpWith: '   ', expertiseText: ' pricing ' })).toBe('pricing');
     expect(youCanBring({ whatICanHelpWith: null, expertiseText: null })).toBeNull();
+  });
+
+  // Fix round 1: the box says "this is what members read", so it must be what the brief gives them, not the raw text.
+  it('is cut at 160 characters, as the brief cuts it: 161 become 159 and an ellipsis', () => {
+    expect(youCanBring({ whatICanHelpWith: 'a'.repeat(161), expertiseText: 'pricing' })).toBe(`${'a'.repeat(159)}…`);
+    expect(youCanBring({ whatICanHelpWith: 'a'.repeat(160), expertiseText: null })).toBe('a'.repeat(160));
+  });
+
+  it('treats an offer with no letter or digit as none, as the brief does, and shows the expertise instead', () => {
+    expect(youCanBring({ whatICanHelpWith: '.', expertiseText: ' pricing ' })).toBe('pricing');
+    expect(youCanBring({ whatICanHelpWith: '…', expertiseText: '!!' })).toBeNull();
+    expect(youCanBring({ whatICanHelpWith: '.', expertiseText: null })).toBeNull();
+  });
+
+  it('is the very rule the brief uses (canBring, in @rsn/shared), not a copy of it', () => {
+    expect(read('features/reason/profile/your-profile-text.ts')).toMatch(/import \{ canBring, type PublicMember, type User \} from '@rsn\/shared';/);
+    expect(read('features/reason/profile/your-profile-text.ts')).toMatch(/return canBring\(card\);/);
+    for (const card of [
+      { whatICanHelpWith: 'Intros', expertiseText: 'x' }, { whatICanHelpWith: ' . ', expertiseText: 'b'.repeat(200) },
+      { whatICanHelpWith: '🙂', expertiseText: '42' }, { whatICanHelpWith: null, expertiseText: '   ' },
+    ]) expect(youCanBring(card)).toBe(canBring(card));
   });
 
   it('"Only you see this": who you want to meet, what you are hoping to find, and your time zone, each saying when it is empty', () => {
@@ -171,6 +192,10 @@ describe('Your profile: the page', () => {
     expect(page()).toMatch(/to=\{CONNECT_LINKEDIN_TO\}/);
   });
 
+  it('side by side, the company card and "Only you see this" keep their own heights: no blank card beside the answers', () => {
+    expect(page()).toMatch(/min-\[981px\]:grid-cols-2 min-\[981px\]:items-start/);
+  });
+
   it('has a loading, an error and an empty state', () => {
     expect(page()).toMatch(/aria-busy="true"/);
     expect(page()).toMatch(/We could not load your profile just now\./);
@@ -179,7 +204,7 @@ describe('Your profile: the page', () => {
   });
 
   it('says "event", never "session", and uses neither a failing grey nor red text', () => {
-    for (const src of [page(), editor(), banner(), more()]) {
+    for (const src of [page(), editor(), banner(), more(), read('features/reason/human/useBlockedByYou.ts')]) {
       expect(src).not.toMatch(/\bsessions?\b/i);
       expect(src).not.toMatch(/#7b8190|#8b8f96/i);
       expect(src).not.toMatch(/(?<![\w-])text-reason-red(?!-hover)/);
@@ -250,6 +275,37 @@ describe('Human Profile: More, with Block and Report this member', () => {
 
   it('the brief also listens for blocks, so a block in either direction takes the profile away without a refresh', () => {
     expect(human()).toMatch(/entities: me && userId \? \[E\.user\(me\), E\.user\(userId\), E\.userInvites\(me\), E\.userDms\(me\), E\.userBlocks\(me\)\] : \[\]/);
+  });
+
+  // Fix round 1: a profile you blocked is a 404, so Unblock cannot live on the profile or in More. Without it on the
+  // notice, a block could not be undone once every people link opens the Human Profile.
+  it('a profile YOU blocked says so on its notice and offers Unblock, asking first; the plain notice stays for anyone else', () => {
+    const hook = read('features/reason/human/useBlockedByYou.ts');
+    expect(human()).toMatch(/const blocked = useBlockedByYou\(userId, me, view === 'unavailable' && validId\);/);
+    expect(human()).toMatch(/view === 'unavailable' && blocked\.blockedByYou \? \(\s*<Notice title="You blocked this member\."/);
+    expect(human()).toMatch(/onClick=\{blocked\.askToUnblock\}/);
+    expect(human()).toMatch(/\{blocked\.unblocking \? 'Unblocking\.\.\.' : 'Unblock'\}/);
+    expect(count(human(), /This profile is not available\./g)).toBe(1);
+    // The skeleton stays while the answer is on its way, so the plain notice never flashes first.
+    expect(human()).toMatch(/view === 'loading' \|\| \(view === 'unavailable' && blocked\.checking\)/);
+    // Asked only about a member id, only while "not available" is on screen, and refreshed by any block or unblock.
+    expect(hook).toMatch(/queryFn: \(\) => fetchBlockStatus\(userId\),\s*enabled: asking && !!me,/);
+    expect(hook).toMatch(/meta: \{ entities: me \? \[E\.userBlocks\(me\)\] : \[\] \}/);
+    expect(hook).toMatch(/blockedByYou: status\.data\?\.hasBlocked === true/);
+    // The old profile unblocked at once; now a question comes first, in the dialog Block uses.
+    expect(hook).toMatch(/UNBLOCK_QUESTION = 'Unblock this member\? They will be able to message you again, and you may be matched together in future events\.';/);
+    expect(hook).toMatch(/if \(confirm\(UNBLOCK_QUESTION\)\) unblock\.mutate\(\);/);
+    expect(hook).toMatch(/mutationFn: \(\) => unblockMember\(userId\)/);
+    // The refresh is returned, so Unblock stays busy until the brief is back and the profile is on screen.
+    expect(hook).toMatch(/return qc\.invalidateQueries\(\{ queryKey: reasonKeys\.all \}\);/);
+    expect(hook).toMatch(/onError: \(err\) => addToast\(errorMessage\(err, /);
+    expect(api()).toMatch(/export const unblockMember = \(userId: string\) => api\.delete\(`\/users\/\$\{memberSegment\(userId\)\}\/block`\);/);
+    expect(api()).toMatch(/api\.get\(`\/users\/\$\{memberSegment\(userId\)\}\/block-status`\)/);
+  });
+
+  it('keeps the promise Messages makes when you block someone ("You can unblock them from their profile.")', () => {
+    expect(read('features/messages/MessagesPage.tsx')).toMatch(/You can unblock them from their profile\./);
+    expect(human()).toMatch(/<Notice title="You blocked this member\."[\s\S]*?'Unblock'/);
   });
 
   it('closes on Escape or a tap outside it, like the account menu', () => {

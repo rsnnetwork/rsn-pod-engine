@@ -1,7 +1,7 @@
 // client/src/features/reason/profile/your-profile-text.ts
 // What "Your profile" says, and where it links (21 Oct 2026). Pure on purpose (no React, axios, store or router),
 // so a test can run it: server/src/__tests__/client/reason-your-profile.test.ts.
-import type { PublicMember, User } from '@rsn/shared';
+import { canBring, type PublicMember, type User } from '@rsn/shared';
 import { visibleText } from '../person';
 
 export const EDIT_PROFILE_TO = '/profile/edit';
@@ -11,9 +11,12 @@ export const EDIT_ANSWERS_TO = '/onboarding?edit=q1';
 export const ADD_COMPANY_TO = '/entities?create=1';
 export const CONNECT_LINKEDIN_TO = '/profile/edit#linkedin';
 
-/** What you can bring, as other members are shown it: your offer, or your expertise when you have not written one. */
+/**
+ * What you can bring, exactly as other members are shown it: canBring (@rsn/shared) is the rule their brief uses, so
+ * a long offer is cut at 160 characters here too, and one with no letter or digit in it gives way to your expertise.
+ */
 export function youCanBring(card: Pick<PublicMember, 'whatICanHelpWith' | 'expertiseText'>): string | null {
-  return visibleText(card.whatICanHelpWith) ?? visibleText(card.expertiseText);
+  return canBring(card);
 }
 
 export interface PrivateRow { label: string; value: string | null; empty: string }
