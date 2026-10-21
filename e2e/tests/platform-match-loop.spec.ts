@@ -11,7 +11,7 @@ import { gotoRetry, cleanup, wait, APP, SERVER } from '../helpers/live-ui';
 //   (Until 22 Sep the pair DISAPPEARED here, which is how pressing the button
 //   came to look like it had done nothing.)
 //   A user nobody fits (the baker) gets the NO-MATCH screen with the three
-//   options: join the next RSN, invite people, browse people.
+//   options: join the next event, invite people, browse people.
 //
 // REST drives the flow; a headed browser then verifies both screens for real.
 
@@ -111,7 +111,7 @@ test('standing match loop: suggest → I want to meet → accept → chat unlock
   await expect(investorCard.getByRole('button', { name: /I want to meet/i })).toBeVisible();
   await fPage.screenshot({ path: 'test-results/pm-founder-match.png' }).catch(() => {});
   const bPage = await openAs(baker);
-  await expect(bPage.getByText(/Join the next RSN/i)).toBeVisible({ timeout: 20_000 });
+  await expect(bPage.getByText(/Join the next event/i)).toBeVisible({ timeout: 20_000 });
   await expect(bPage.getByText(/Invite people/i)).toBeVisible();
   await expect(bPage.getByText(/Browse people/i)).toBeVisible();
   await expect(bPage.getByText(/we'll notify you/i)).toBeVisible();

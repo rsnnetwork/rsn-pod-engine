@@ -160,7 +160,7 @@ test('it can be opened again from Support, without changing how it was left', as
   expect((await apiAs(me, 'POST', '/onboarding/tour', { outcome: 'skipped' })).status).toBe(200);
 
   const page = await openAs(me, '/support');
-  await expect(page.getByRole('heading', { name: /How RSN works/i })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole('heading', { name: /How REASON works/i })).toBeVisible({ timeout: 30_000 });
   await tapReachable(page, page.getByRole('button', { name: /Open the tour/i }), '"Open the tour"');
   await expect(tour(page)).toBeVisible();
   await expect(tour(page).getByRole('heading', { name: 'For You' })).toBeVisible();
