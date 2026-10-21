@@ -337,7 +337,7 @@ router.get(
       const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
         headers: { Authorization: `Bearer ${tokenData.access_token}` },
       });
-      const profile = await userInfoRes.json() as { email: string; name?: string; given_name?: string; family_name?: string; picture?: string };
+      const profile = await userInfoRes.json() as { email: string; verified_email?: boolean; name?: string; given_name?: string; family_name?: string; picture?: string };
 
       if (!profile.email) {
         fail('google_auth_failed');
@@ -349,6 +349,17 @@ router.get(
       if (oauthState.photoLinkUserId && photoReturn) {
         const outcome = await applyGooglePhoto(oauthState.photoLinkUserId, profile.picture);
         res.redirect(`${photoReturn}?photo=${outcome}`);
+        return;
+      }
+
+      // 21 Oct 2026: Google says in verified_email whether it has checked that the account really owns this
+      // address. When it says it has not (exactly false) the address is only a claim: anyone can make a Google
+      // account that names someone else's, and signing it in by that address would hand over the owner's account.
+      // Only a sign-in finds an account by the address, so only a sign-in is refused here (the photo link above
+      // never looks one up). A field Google leaves out is not a "no" and goes on as before.
+      if (profile.verified_email === false) {
+        logger.warn({ email: profile.email }, 'Google sign-in refused: Google has not verified this email address');
+        fail('google_auth_failed');
         return;
       }
 
