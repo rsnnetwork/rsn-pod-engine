@@ -12,6 +12,11 @@
 // unlocks the DM + conversation), so this service only computes suggestions
 // and composes the introduction.
 //
+// 21 Oct 2026: the one-way rule still decides WHO is shown and how many. Among
+// them, people who would also want to meet the member come first (the onboarding
+// brief's "people you want to meet, who also want to meet you"). Their wants
+// stay private, so that changes the order and nothing else.
+//
 // Deliberately no AI (June 19 doc: "No AI required initially. Just
 // matching."): designation buckets + token overlap over the intent columns
 // the chatbot onboarding already fills.
@@ -406,6 +411,35 @@ function analyzeWants(
   };
 }
 
+/**
+ * A strong fit both ways. One way is the score the candidate was chosen by: what the member
+ * wants, against who the candidate is and offers. The other way is the same scorer turned round:
+ * what the candidate wants, read off the row already loaded, against who the member is and
+ * offers. The candidate's wants are private (9 Sep 2026), so the answer only orders the list:
+ * it is never worded and never put on a card.
+ */
+function isMutualFit(member: IntentProfile, candidate: IntentProfile, oneWayScore: number, generic: Set<string>): boolean {
+  return oneWayScore >= MATCH_THRESHOLD && scoreFit(candidate, member, generic).score >= MATCH_THRESHOLD;
+}
+
+/**
+ * The people already chosen, mutual fits first. Nobody is added or dropped, and within each
+ * group the order is the one they came in, best one-way score first.
+ */
+function mutualFitsFirst<T extends { c: IntentProfile; fit: { score: number } }>(
+  shown: T[],
+  member: IntentProfile,
+  generic: Set<string>,
+): T[] {
+  const mutual: T[] = [];
+  const oneWay: T[] = [];
+  for (const x of shown) {
+    if (isMutualFit(member, x.c, x.fit.score, generic)) mutual.push(x);
+    else oneWay.push(x);
+  }
+  return [...mutual, ...oneWay];
+}
+
 // ── Data access ──────────────────────────────────────────────────────────────
 
 const PROFILE_COLUMNS = `
@@ -543,9 +577,12 @@ export async function getPlatformMatches(
       .map(x => ({ ...x, fit: { ...x.fit, reason: `Close match — ${x.fit.reason}` } }));
     picked = [...picked, ...close];
   }
-  const matches = picked
+  // Who is shown, and how many, is settled here by what the member wants, as before.
+  const shown = picked
     .sort((a, b) => b.fit.score - a.fit.score)
-    .slice(0, limit)
+    .slice(0, limit);
+  // Only then the other direction: it moves people up the list, never onto it or off it.
+  const matches = mutualFitsFirst(shown, me, generic)
     .map((x): PlatformMatch => ({
       userId: x.c.id,
       displayName: x.c.displayName,
