@@ -262,7 +262,8 @@ test(`your profile is the way others see it, with what only you see apart, and e
   for (const text of [OWNER.offer, OWNER.want, OWNER.intent]) await expect(fromAnswers.getByText(text, { exact: true })).toBeVisible();
   await expect(fromAnswers.getByRole('textbox')).toHaveCount(0);
   await expect(fromAnswers.getByRole('link', { name: 'Edit answers' })).toHaveAttribute('href', '/onboarding?edit=profile');
-  expect((await fromAnswers.getByRole('link', { name: 'Edit answers' }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  // Settled and rounded: WebKit can report a 44px box as 43.99997px while the card's entrance animation runs.
+  await expect.poll(async () => Math.round((await fromAnswers.getByRole('link', { name: 'Edit answers' }).boundingBox())!.height)).toBeGreaterThanOrEqual(44);
   await page.getByRole('link', { name: 'Back to your profile' }).click();
   await expect(page).toHaveURL(/\/profile$/);
 
@@ -306,7 +307,7 @@ test(`your profile is the way others see it, with what only you see apart, and e
     await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
     await expect(link).toHaveText('LinkedIn ↗ (opens in a new tab)');
     await link.scrollIntoViewIfNeeded();
-    expect((await link.boundingBox())!.height, `${who}: the link is a 44px target`).toBeGreaterThanOrEqual(44);
+    await expect.poll(async () => Math.round((await link.boundingBox())!.height), { message: `${who}: the link is a 44px target` }).toBeGreaterThanOrEqual(44);
     await expectReachable(p, link, `${who}: the LinkedIn link`);
     const role = (await p.getByText(`${OWNER.title} · ${OWNER.company}`).boundingBox())!;
     expect((await link.boundingBox())!.y, `${who}: the link is under the role line`).toBeGreaterThanOrEqual(role.y + role.height - 1);
