@@ -4,7 +4,9 @@
 // public card — a strict subset. This is THE projection every "another
 // member" read path must go through, so pin its exact shape.
 
-import { toPublicMember, toPublicIntentProfile, withoutEmail, PRIVATE_MEMBER_KEYS } from '../../../services/user/public-card';
+import {
+  toPublicMember, toPublicIntentProfile, toPublicCardBasics, withoutEmail, PRIVATE_MEMBER_KEYS,
+} from '../../../services/user/public-card';
 import type { IntentProfile } from '../../../services/matching/platform-match.service';
 
 const full = {
@@ -163,6 +165,35 @@ describe('toPublicIntentProfile', () => {
     const out = asRecord(toPublicIntentProfile({ id: 'u-2' } as IntentProfile));
     expect(out.id).toBe('u-2');
     for (const [key, value] of Object.entries(out)) if (key !== 'id') expect({ key, value }).toEqual({ key, value: null });
+  });
+});
+
+// 21 Oct 2026: the people on an entity's page. A list of many people carries only who each one is.
+describe('toPublicCardBasics', () => {
+  it('keeps exactly who they are: name, photo, title, company and place', () => {
+    expect(toPublicCardBasics(full)).toEqual({
+      id: 'u-1',
+      displayName: 'Dana Sender',
+      firstName: 'Dana',
+      lastName: 'Sender',
+      avatarUrl: 'https://a/x.png',
+      jobTitle: 'Senior React Developer',
+      company: 'Acme Robotics',
+      location: 'Berlin',
+    });
+  });
+
+  it('carries nothing private, and nothing the public card itself does not have', () => {
+    const basics = toPublicCardBasics(full) as unknown as Record<string, unknown>;
+    for (const k of PRIVATE_MEMBER_KEYS) expect(basics).not.toHaveProperty(k);
+    const card = toPublicMember(full);
+    for (const key of Object.keys(basics)) expect(Object.keys(card)).toContain(key);
+  });
+
+  it('tolerates a sparse row: names become empty strings and the rest null', () => {
+    expect(toPublicCardBasics({ id: 'u-2' } as any)).toEqual({
+      id: 'u-2', displayName: '', firstName: '', lastName: '', avatarUrl: null, jobTitle: null, company: null, location: null,
+    });
   });
 });
 

@@ -57,3 +57,16 @@ export const OUTCOME_LABELS = _OUTCOME_LABELS;
 export const PERSON_RESPONSES = _PERSON_RESPONSES;
 export const WORTH_CONTINUING = _WORTH_CONTINUING;
 export const primaryActionFor = _primaryActionFor;
+export * from './types/entity';
+// Real VALUES the client renders (the Entities pages), so each needs its own statically analysable
+// named export, same as OPENINGS above.
+import {
+  COMPANY_ROLES as _COMPANY_ROLES, ENTITY_KINDS as _ENTITY_KINDS, ENTITY_KIND_LABELS as _ENTITY_KIND_LABELS,
+  ENTITY_LIMITS as _ENTITY_LIMITS, ENTITY_ROLES as _ENTITY_ROLES, ENTITY_ROLE_LABELS as _ENTITY_ROLE_LABELS,
+} from './types/entity';
+export const COMPANY_ROLES = _COMPANY_ROLES;
+export const ENTITY_KINDS = _ENTITY_KINDS;
+export const ENTITY_KIND_LABELS = _ENTITY_KIND_LABELS;
+export const ENTITY_LIMITS = _ENTITY_LIMITS;
+export const ENTITY_ROLES = _ENTITY_ROLES;
+export const ENTITY_ROLE_LABELS = _ENTITY_ROLE_LABELS;

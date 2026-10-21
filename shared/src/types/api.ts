@@ -86,6 +86,10 @@ export const ErrorCodes = {
   JOIN_REQUEST_ALREADY_REVIEWED: 'JOIN_REQUEST_ALREADY_REVIEWED',  // approve/decline of a request someone already reviewed the other way
   IDENTITY_MISMATCH: 'IDENTITY_MISMATCH',  // T1-1 — invite issued to a different email than the authenticated user
 
+  // Entity errors (an organisation members create: a company, a fund…)
+  ENTITY_NOT_FOUND: 'ENTITY_NOT_FOUND',    // missing or archived; the two read the same
+  ENTITY_NAME_TAKEN: 'ENTITY_NAME_TAKEN',  // 409; details.existingId[0] is the active entity with that name
+
   // Match errors
   MATCH_NOT_FOUND: 'MATCH_NOT_FOUND',
   MATCH_ALREADY_RATED: 'MATCH_ALREADY_RATED',

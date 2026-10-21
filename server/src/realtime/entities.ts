@@ -24,6 +24,11 @@ export const E = {
   userBlocks: (userId: string) => `user:${userId}:blocks`,
   userDms: (userId: string) => `user:${userId}:dms`,
   userNotifications: (userId: string) => `user:${userId}:notifications`,
+  /** The entities (companies, funds…) a member is linked to. */
+  userEntities: (userId: string) => `user:${userId}:entities`,
+
+  // Entity: an organisation members create (a company, a fund…), not this file's realtime "entities"
+  entity: (entityId: string) => `entity:${entityId}`,
 
   // Session
   session: (sessionId: string) => `session:${sessionId}`,
