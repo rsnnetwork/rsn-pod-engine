@@ -1,13 +1,13 @@
 // client/src/features/reason/human/HumanCard.tsx
 // The one person card used everywhere (Stefan's v4: "Human cards are the
 // universal person object"). It sizes itself to the room it is given, not to
-// the window (a container query on the card): For You is one list on a phone
-// and a tablet, and two to a row beside the rail from 1024px, where a card can
-// be narrower than on any phone. Under 16rem the photo sits above the name, so
-// the name has the card's whole width; from 16rem the phone layout, a 70px
-// photo beside the name with the reason under both; from 34rem a 90px photo
-// with everything beside it. The buttons sit at the foot, three to a row from
-// 24rem, two from 15rem, and one under the other below that, so none clips.
+// the window (a container query on the card): For You is one list up to
+// 1279px and two to a row beside the rail from 1280px. Under 16rem (narrower
+// than any place For You gives it today) the photo sits above the name, so the
+// name has the card's whole width; from 16rem the phone layout, a 70px photo
+// beside the name with the reason under both; from 34rem a 90px photo with
+// everything beside it. The buttons sit at the foot, three to a row from 24rem,
+// two from 15rem, and one under the other below that, so none clips.
 import { useId, type MouseEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { primaryActionFor, type RelationshipState } from '@rsn/shared';

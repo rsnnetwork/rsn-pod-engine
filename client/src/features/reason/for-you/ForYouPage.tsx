@@ -123,9 +123,8 @@ export default function ForYouPage() {
     <>
       <OnboardingWelcomeModal />
       {/* The onboarding brief's screen 8, "Your matches" (Shradha, 19 Oct 2026), word for word. */}
-      <PageHead eyebrow="GOOD TO SEE YOU" title="People worth meeting" subtitle="Based on your answers, here are people you might want to meet." pose="match" />
-      {/* The rail is 260px wide until 1280px, so the two cards to a row beside it from 1024px have room. */}
-      <div className="grid items-start gap-3 min-[981px]:grid-cols-[minmax(0,1fr)_260px] min-[981px]:gap-[18px] min-[1280px]:grid-cols-[minmax(0,1fr)_minmax(280px,320px)]">
+      <PageHead eyebrow="FOR YOU" title="People worth meeting" subtitle="Based on your answers, here are people you might want to meet." pose="match" />
+      <div className="grid items-start gap-3 min-[981px]:grid-cols-[minmax(0,1fr)_minmax(280px,320px)] min-[981px]:gap-[18px]">
         <section ref={section} aria-labelledby="foryou-title" className="min-w-0 rounded-[15px] border border-reason-line bg-white p-[13px] shadow-[0_6px_24px_rgba(16,18,24,.025)] min-[721px]:rounded-[18px] min-[721px]:p-[18px]">
           {cannotLoad ? (
             <div role="alert" className="flex flex-col items-start gap-3 py-4">
@@ -153,8 +152,10 @@ export default function ForYouPage() {
                 </div>
                 <Link to="/matches" aria-label="View all people" className="flex min-h-[44px] shrink-0 items-center px-1 text-[12px] text-[#575f6f] hover:text-reason-red">View all</Link>
               </div>
-              {/* Two to a row from 1024px, beside the rail; one list below. Each card fits the half it is given. */}
-              <div className="grid gap-3.5 min-[1024px]:grid-cols-2">
+              {/* Two to a row from 1280px, where the list beside the rail has room for two cards with the photo beside
+                  the name and View profile beside Meet; one list below (at 1024px, an iPad on its side, a half would be
+                  too narrow for either). */}
+              <div className="grid gap-3.5 min-[1280px]:grid-cols-2">
                 {cards.map((p) => (
                   <HumanCard
                     key={p.userId}

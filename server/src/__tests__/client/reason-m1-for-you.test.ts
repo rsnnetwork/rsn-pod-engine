@@ -337,24 +337,31 @@ describe('For You: links, words and the buttons the end-to-end spec presses', ()
 describe('For You: screen 8, two to a row', () => {
   const card = () => read('features/reason/human/HumanCard.tsx');
 
-  it('the title and the line under it are screen 8\'s, word for word', () => {
-    expect(page()).toMatch(/<PageHead [^>]*title="People worth meeting" subtitle="Based on your answers, here are people you might want to meet\." [^>]*\/>/);
-    expect(withoutComments(page())).not.toMatch(/Welcome, |Here are people you have a reason to meet\.|Based on your current reasons/);
+  it('the title and the line under it are screen 8\'s, word for word, under the page\'s own name rather than a greeting', () => {
+    expect(page()).toMatch(/<PageHead eyebrow="FOR YOU" title="People worth meeting" subtitle="Based on your answers, here are people you might want to meet\." [^>]*\/>/);
+    expect(withoutComments(page())).not.toMatch(/Welcome, |GOOD TO SEE YOU|Here are people you have a reason to meet\.|Based on your current reasons/);
   });
 
   it('one line under the list, outside the grid of cards, so it spans both columns', () => {
     const src = withoutComments(page());
-    const grid = src.indexOf('<div className="grid gap-3.5 min-[1024px]:grid-cols-2">');
+    const grid = src.indexOf('<div className="grid gap-3.5 min-[1280px]:grid-cols-2">');
     const closeGrid = src.indexOf('</div>', src.indexOf('))}', grid));
     const line = src.indexOf('When someone wants to meet you too, it becomes a match and you can book a time together.');
     expect(grid).toBeGreaterThan(-1);
     expect(line).toBeGreaterThan(closeGrid);
   });
 
-  it('two cards to a row from 1024px, one list below; the rail is 260px until 1280px so the two have room beside it', () => {
-    expect(page()).toMatch(/<div className="grid gap-3\.5 min-\[1024px\]:grid-cols-2">\s*\{cards\.map/);
-    expect(page()).toContain('min-[981px]:grid-cols-[minmax(0,1fr)_260px]');
-    expect(page()).toContain('min-[1280px]:grid-cols-[minmax(0,1fr)_minmax(280px,320px)]');
+  // Ruling R22 (21 Oct review): at 1024px, an iPad on its side, half the list beside the rail is about 183px of card,
+  // where the photo goes above the name and View profile, Meet and Save stack three high. For You goes two to a row
+  // only from 1280px, where each half still has the photo beside the name and View profile beside Meet.
+  it('two cards to a row from 1280px, where the list beside the rail has room; one list below, 1024px included', () => {
+    expect(page()).toMatch(/<div className="grid gap-3\.5 min-\[1280px\]:grid-cols-2">\s*\{cards\.map/);
+    expect(withoutComments(page())).not.toMatch(/min-\[1024px\]:grid-cols-2/);
+  });
+
+  it('the rail is 280px to 320px wide from 981px, with no narrower step', () => {
+    expect(page()).toContain('<div className="grid items-start gap-3 min-[981px]:grid-cols-[minmax(0,1fr)_minmax(280px,320px)] min-[981px]:gap-[18px]">');
+    expect(page()).not.toMatch(/_260px\]/);
   });
 
   it('the card sizes itself to the room it is given: no four-column layout at 1420px, a container query on the card instead', () => {
