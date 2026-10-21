@@ -154,10 +154,10 @@ export async function buildSessionCalendarEvent(sessionId: string): Promise<Sess
 
   return {
     title: session.title,
-    description: `RSN Event — ${session.title}`,
+    description: `REASON event — ${session.title}`,
     startTime: new Date(session.scheduled_at),
     durationMinutes: computeSessionDurationMinutes(session.config || {}),
-    organizerName: host?.display_name || 'RSN Host',
+    organizerName: host?.display_name || 'REASON',
     organizerEmail: host?.email,
     sessionId,
   };

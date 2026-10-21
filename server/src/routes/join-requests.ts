@@ -231,7 +231,7 @@ router.post(
       // Send email to the applicant
       const { sendGenericEmail } = await import('../services/email/email.service');
       await sendGenericEmail(joinRequest.email, joinRequest.fullName, {
-        subject: 'Message from RSN',
+        subject: 'Message from REASON',
         body: req.body.message,
       });
 

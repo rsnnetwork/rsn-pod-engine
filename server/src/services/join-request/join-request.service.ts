@@ -96,7 +96,7 @@ export async function createJoinRequest(input: CreateJoinRequestInput, requestOr
     await query(
       `INSERT INTO notifications (user_id, type, title, body, link, created_at)
        SELECT id, 'join_request', 'New Join Request',
-         $1 || ' wants to join RSN', '/admin/join-requests', NOW()
+         $1 || ' wants to join REASON', '/admin/join-requests', NOW()
        FROM users WHERE role IN ('admin', 'super_admin')`,
       [input.fullName || input.email]
     );
@@ -321,7 +321,7 @@ export async function reviewJoinRequest(
     try {
       await query(
         `INSERT INTO notifications (user_id, type, title, body, link, created_at)
-         SELECT id, 'approval', 'Welcome to RSN!',
+         SELECT id, 'approval', 'Welcome to REASON!',
            'Your request to join has been approved. Start exploring!', '/pods', NOW()
          FROM users WHERE LOWER(email) = LOWER($1)
          LIMIT 1`,
