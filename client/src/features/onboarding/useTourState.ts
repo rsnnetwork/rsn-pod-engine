@@ -21,6 +21,9 @@ export function useTourState() {
     queryFn: () => api.get('/onboarding/state').then(r => r.data.data as OnboardingState),
     enabled: !!user?.id,
     meta: { entities: user?.id ? [E.user(user.id)] : [] },
+    // Read again whenever the app's shell comes back: the flow (which has no shell) may just have made the tour due,
+    // and what was read before it is not to be trusted.
+    refetchOnMount: 'always',
   });
 
   const markSeen = useMutation({

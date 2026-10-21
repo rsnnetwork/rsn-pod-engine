@@ -200,7 +200,24 @@ const firstLine = (e: unknown): string => String((e as Error)?.message ?? e).spl
 // page area scroll sideways, which is what a too-wide screen would push on instead. On a phone,
 // once the page area is scrolled to its end, nothing of the page may sit under the bottom bar.
 async function expectContained(page: Page, where: string): Promise<void> {
-  const m = await untilSized(page, () => page.evaluate(() => {
+  // Measured until it holds, for up to 2.5 seconds: what must hold is the page at rest. WebKit on a phone reports
+  // the document 14px taller than the window for about half a second after an in-app navigation, with no box past
+  // the window's edge and the window not scrolled (21 Oct, More > Entities on an iPhone 14).
+  const until = Date.now() + 2_500;
+  let m = await measureContainment(page);
+  while (Date.now() < until && !(m?.sized && m.docW <= m.innerW && m.docH <= m.innerH + 1 && m.mainOver <= 1 && (m.clearance === null || m.clearance >= 0))) {
+    await wait(150);
+    m = await measureContainment(page);
+  }
+  expect(m?.sized, `${where}: there is no window to measure (${m ? m.window : 'the page was between two documents'})`).toBe(true);
+  expect(m!.docW, `${where}: the window scrolls sideways (scrollWidth ${m!.docW} over ${m!.innerW})`).toBeLessThanOrEqual(m!.innerW);
+  expect(m!.docH, `${where}: the window scrolls up and down (height ${m!.docH} over ${m!.innerH}); only the page area should`).toBeLessThanOrEqual(m!.innerH + 1);
+  expect(m!.mainOver, `${where}: the page area scrolls sideways by ${m!.mainOver}px`).toBeLessThanOrEqual(1);
+  if (m!.clearance !== null) expect(m!.clearance, `${where}: the end of the page sits ${-m!.clearance}px under the bottom bar`).toBeGreaterThanOrEqual(0);
+}
+
+function measureContainment(page: Page) {
+  return untilSized(page, () => page.evaluate(() => {
     const sized = document.readyState === 'complete' && window.innerWidth > 0 && window.innerHeight > 0;
     const main = document.querySelector('main');
     const bar = document.querySelector('nav[aria-label="Main"].fixed') as HTMLElement | null;
@@ -222,11 +239,6 @@ async function expectContained(page: Page, where: string): Promise<void> {
       clearance,
     };
   }));
-  expect(m?.sized, `${where}: there is no window to measure (${m ? m.window : 'the page was between two documents'})`).toBe(true);
-  expect(m!.docW, `${where}: the window scrolls sideways (scrollWidth ${m!.docW} over ${m!.innerW})`).toBeLessThanOrEqual(m!.innerW);
-  expect(m!.docH, `${where}: the window scrolls up and down (height ${m!.docH} over ${m!.innerH}); only the page area should`).toBeLessThanOrEqual(m!.innerH + 1);
-  expect(m!.mainOver, `${where}: the page area scrolls sideways by ${m!.mainOver}px`).toBeLessThanOrEqual(1);
-  if (m!.clearance !== null) expect(m!.clearance, `${where}: the end of the page sits ${-m!.clearance}px under the bottom bar`).toBeGreaterThanOrEqual(0);
 }
 
 // Every target at least 44px each way, measured the way a finger meets it.

@@ -1,7 +1,7 @@
 // Shared helpers for user-driven headed live-event specs (4 Jul edge-case
 // matrix). Participants drive the REAL UI (rating forms, navigation); the host
 // orchestrates via socket. Everything runs against prod.
-import { Browser, BrowserContext, Page } from '@playwright/test';
+import { Browser, BrowserContext, Page, Request } from '@playwright/test';
 import { io, Socket } from 'socket.io-client';
 import { Pool } from 'pg';
 import { TestUser } from './auth';
@@ -19,7 +19,31 @@ export function connectSocket(u: TestUser): Promise<Socket> {
   });
 }
 
+// What each page still has on its way. WebKit (on Windows) reports a request cut off by a navigation as a page error,
+// "<address> due to access control checks.", and fires no requestfailed for it; a spec that collects page errors then
+// reads a real-looking failure. So a page is only left once nothing is in flight (bounded: a page that never goes
+// quiet, say on socket.io's polling fallback, is left after five seconds).
+const inFlight = new WeakMap<Page, Set<Request>>();
+function trafficOf(page: Page): Set<Request> {
+  let open = inFlight.get(page);
+  if (open) return open;
+  const set = new Set<Request>();
+  inFlight.set(page, set);
+  page.on('request', (r) => { set.add(r); });
+  page.on('requestfinished', (r) => { set.delete(r); });
+  page.on('requestfailed', (r) => { set.delete(r); });
+  return set;
+}
+
+export async function settle(page: Page, limitMs = 5_000): Promise<void> {
+  const open = trafficOf(page);
+  const until = Date.now() + limitMs;
+  while (Date.now() < until && open.size > 0) await wait(100);
+}
+
 export async function gotoRetry(page: Page, url: string): Promise<void> {
+  if (page.url().startsWith('http')) await settle(page);
+  else trafficOf(page);
   for (let i = 0; i < 3; i++) {
     try { await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 }); break; }
     catch (e) { if (i === 2) throw e; await wait(3000); }
