@@ -2,23 +2,28 @@
 // layout rather than the flow, because the deck sends them "straight into
 // Suggestions" and the tour plays over it — so what they see behind the cards
 // is their own suggestions, not a fifth onboarding screen.
+//
+// However it ends, finished or skipped, the member lands on For You: the
+// client's 19 Oct feedback, "take people straight to a full page of their
+// suggested matches". Replaying it from Support is a different mount (it has
+// no saved outcome and no destination) and stays on Support.
 
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import HowRsnWorks from './HowRsnWorks';
 import { useTourState } from './useTourState';
 
 export default function OnboardingTour() {
-  const { pending, markSeen } = useTourState();
-  const location = useLocation();
+  const { pending, failed, markSeen } = useTourState();
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
 
   // Not over the flow itself: they are still answering.
-  if (location.pathname.startsWith('/onboarding')) return null;
+  if (pathname.startsWith('/onboarding')) return null;
 
-  return (
-    <HowRsnWorks
-      open={pending}
-      mode="onboarding"
-      onFinish={(outcome) => markSeen(outcome)}
-    />
-  );
+  const finish = (outcome: 'completed' | 'skipped') => {
+    markSeen(outcome);
+    if (pathname !== '/') navigate('/');
+  };
+
+  return <HowRsnWorks open={pending} mode="onboarding" failed={failed} onFinish={finish} />;
 }

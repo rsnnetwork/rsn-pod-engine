@@ -559,47 +559,181 @@ describe('Admin users does not scroll <main> sideways at phone widths (fix wave 
   });
 });
 
-describe('The tour\'s first card names what the preview shows (polish pass)', () => {
-  // HowRsnWorks.tsx, run: the cards are read from its own export, and each card's picture is drawn to markup.
-  const cards = () => {
-    const tour = loadModule('src/features/onboarding/HowRsnWorks.tsx', {
-      '@/components/ui/Button': { Button: () => null },
-      '@/components/brand/SheepAvatar': { default: () => null },
-    });
-    return (tour.TOUR_CARDS as Array<{ title: string; body: string; visual: ReactElement }>).map((card) => ({
+describe('The short tour shows no made-up people, puts its words above the picture, and ends on For You (19 Oct feedback)', () => {
+  interface Card { title: string; body: string; visual: ReactElement }
+  // HowRsnWorks.tsx, run: the cards are read from its own export, and each card's picture is drawn to markup. The sheep is
+  // a stand-in that draws the file it would show, so the pictures can be read as well as the words.
+  const tour = () => loadModule('src/features/onboarding/HowRsnWorks.tsx', {
+    '@/components/ui/Button': { Button: () => null },
+    '@/features/reason/brand/ReasonSheep': {
+      __esModule: true,
+      default: ({ pose }: { pose: string }) => createElement('img', { src: `/sheep/v4/${pose}.png`, alt: '' }),
+    },
+  });
+  const cards = () => (tour().TOUR_CARDS as Card[]).map((card) => {
+    const markup = renderToStaticMarkup(card.visual);
+    return {
       title: card.title,
       body: card.body,
       // The words in the picture, one text node each.
-      words: renderToStaticMarkup(card.visual).replace(/<[^>]*>/g, '\n').split('\n').map((s) => s.trim()).filter(Boolean),
-    }));
-  };
+      words: markup.replace(/<[^>]*>/g, '\n').split('\n').map((s) => s.trim()).filter(Boolean),
+      images: [...markup.matchAll(/<img[^>]*\bsrc="([^"]*)"/g)].map((m) => m[1]),
+    };
+  });
+  const source = () => read('src/features/onboarding/HowRsnWorks.tsx');
 
-  it('card 1 is "For You" and tells the member to tap Meet, and its picture shows a Meet button', () => {
+  it('card 1 is "For You" and tells the member to tap Meet, and its picture is a Meet button and nothing else to read', () => {
     const [first] = cards();
     expect(first.title).toBe('For You');
     expect(first.body).toBe("We suggest people who match your intent. Tap 'Meet' to ask.");
-    expect(first.words).toEqual(['Amara Okafor', 'Founder · Northwind', 'Meet', 'Tomas Lind', 'Investor · Baltic Seed']);
+    expect(first.words).toEqual(['Meet']);
   });
 
-  it('there are still four cards, and the other three are the client\'s deck copy, word for word', () => {
+  it('there are still four cards, with the client\'s deck copy word for word, and the pictures say only what the product says', () => {
     const all = cards();
     expect(all).toHaveLength(4);
-    expect(all.slice(1)).toEqual([
+    expect(all.map(({ title, body, words }) => ({ title, body, words }))).toEqual([
+      { title: 'For You', body: "We suggest people who match your intent. Tap 'Meet' to ask.", words: ['Meet'] },
       {
         title: 'Matches',
         body: "When they want to meet you too, it's a match - you'll see it here and in chat.",
-        words: ['Amara Okafor', 'Matched', 'Tomas Lind', 'Asked, waiting', 'Priya Raman', 'Wants to meet you'],
+        words: ['Matched', 'Wants to meet you', 'Request sent'],
       },
       {
         title: 'Meetings',
         body: 'Share your availability, pick a green slot - we create the meeting with a link.',
-        words: ['9:00', '9:30', '10:00', '10:30', '11:00', 'Both can', '11:30', 'Meeting confirmed · Join'],
+        words: ['9:00', '9:30', '10:00', '10:30', '11:00', 'Both can', '11:30', '12:00', '12:30', '1:00', 'Meeting confirmed · Join'],
       },
       {
         title: 'Circles & events',
         body: 'Join circles of people who share your intent, and networking events.',
-        words: ['Founders', 'Join', 'AI Developers', 'Join', 'Thursday networking'],
+        words: ['Founders', 'Join', 'Investors', 'Join', 'Networking event', 'Join'],
       },
     ]);
+  });
+
+  it('no picture shows a person: no name, no company, no initials and no photo, and the only images are the sheep', () => {
+    const src = source();
+    for (const made of ['Amara', 'Okafor', 'Tomas', 'Priya', 'Raman', 'Northwind', 'Baltic']) expect(src).not.toContain(made);
+    // A person's photo or initials come from Avatar. SheepAvatar was the mascot over the heading, and nothing is over it now.
+    expect(src).not.toMatch(/ui\/Avatar|SheepAvatar/);
+    for (const card of cards()) {
+      expect(card.images.length).toBeGreaterThan(0);
+      for (const image of card.images) expect(image).toMatch(/^\/sheep\/(v4\/)?[a-z]+\.png$/);
+    }
+  });
+
+  it('on every card the heading and the description come above the picture', () => {
+    const { TOUR_CARDS, TourSlide } = tour();
+    for (const card of TOUR_CARDS as Card[]) {
+      const html = renderToStaticMarkup(createElement(TourSlide as never, { card }));
+      const at = { heading: html.search(/<h2[ >]/), description: html.search(/<p[ >]/), picture: html.indexOf('data-testid="tour-picture"') };
+      expect(Object.values(at).every((i) => i >= 0)).toBe(true);
+      expect(at.heading).toBeLessThan(at.description);
+      expect(at.description).toBeLessThan(at.picture);
+      // The words are all there, as markup writes them.
+      const asMarkup = (text: string) => text.replace(/&/g, '&amp;').replace(/'/g, '&#x27;');
+      expect(html).toContain(asMarkup(card.title));
+      expect(html).toContain(asMarkup(card.body));
+    }
+    // And the dialog itself draws no picture of its own, above the card or anywhere else: the pictures are the cards'.
+    const dialog = source().slice(source().indexOf('return createPortal('), source().indexOf('// ── The pictures.'));
+    expect(dialog).toContain('<TourSlide card={TOUR_CARDS[index]} />');
+    expect(dialog).not.toMatch(/<ReasonSheep|<img|<picture/);
+  });
+
+  it('the header says "How REASON works", on screen and as the dialog\'s name, and no word in the file says RSN', () => {
+    const src = source();
+    expect(src).toMatch(/aria-label="How REASON works"/);
+    expect(src).toMatch(/<p className="[^"]*">How REASON works<\/p>/);
+    expect(src).not.toMatch(/\bRSN\b/);
+  });
+
+  it('the last button says "See my matches" for someone who has just onboarded, and "Done" when the tour is replayed', () => {
+    const src = source();
+    expect(src).toMatch(/\(mode === 'replay' \? 'Done' : 'See my matches'\)/);
+    expect(src).not.toMatch(/See my suggestions/);
+  });
+
+  it('the dialog cannot move the member anywhere: replaying it from Support stays on Support', () => {
+    expect(source()).not.toMatch(/react-router/);
+  });
+
+  it('a save that failed is told inside the dialog, as an alert: a toast would sit over Skip on a phone, and a modal hides what is outside it from a screen reader', () => {
+    expect(source()).toMatch(/\{failed && \(\s*<p role="alert"[^>]*>\s*\{"We couldn't save that\. Please try again\."\}\s*<\/p>\s*\)\}/);
+    expect(read('src/features/onboarding/useTourState.ts')).not.toMatch(/toastStore|addToast/);
+  });
+});
+
+describe('The short tour hands the member to For You when it is finished or skipped (19 Oct feedback)', () => {
+  type Outcome = 'completed' | 'skipped';
+  // OnboardingTour.tsx, run, with the router, the saved state and the dialog standing in: what is asserted is what its own
+  // finish handler does when the dialog calls it.
+  const run = (pathname: string, failed = false) => {
+    const navigate = jest.fn();
+    const markSeen = jest.fn();
+    const handed: { onFinish?: (outcome: Outcome) => void; mode?: string; open?: boolean; failed?: boolean } = {};
+    const mod = loadModule('src/features/onboarding/OnboardingTour.tsx', {
+      'react-router-dom': { useLocation: () => ({ pathname }), useNavigate: () => navigate },
+      './useTourState': { useTourState: () => ({ pending: true, failed, markSeen }) },
+      './HowRsnWorks': {
+        __esModule: true,
+        default: (props: typeof handed) => { Object.assign(handed, props); return null; },
+      },
+    });
+    renderToStaticMarkup(createElement(mod.default as never));
+    return { navigate, markSeen, handed };
+  };
+
+  for (const outcome of ['completed', 'skipped'] as const) {
+    it(`${outcome}: the member is saved as having seen it and taken to For You from any other page`, () => {
+      const { navigate, markSeen, handed } = run('/agents');
+      expect(handed.mode).toBe('onboarding');
+      expect(handed.open).toBe(true);
+      handed.onFinish!(outcome);
+      expect(markSeen).toHaveBeenCalledWith(outcome);
+      expect(navigate).toHaveBeenCalledTimes(1);
+      expect(navigate).toHaveBeenCalledWith('/');
+    });
+
+    it(`${outcome}: a member who is already on For You stays there`, () => {
+      const { navigate, markSeen, handed } = run('/');
+      handed.onFinish!(outcome);
+      expect(markSeen).toHaveBeenCalledWith(outcome);
+      expect(navigate).not.toHaveBeenCalled();
+    });
+  }
+
+  it('it is not drawn over the onboarding itself, where the member is still answering', () => {
+    const { handed } = run('/onboarding');
+    expect(handed.onFinish).toBeUndefined();
+  });
+
+  it('a save that did not go through is passed on to the dialog, so it can say so', () => {
+    expect(run('/agents', true).handed.failed).toBe(true);
+    expect(run('/agents', false).handed.failed).toBe(false);
+  });
+
+  it('the hook reports a save that failed, and reads the saved state again whatever the answer', () => {
+    const invalidated: unknown[] = [];
+    let saveFailed = false;
+    let options: { onSettled: () => void } | undefined;
+    const mod = loadModule('src/features/onboarding/useTourState.ts', {
+      '@tanstack/react-query': {
+        useQuery: () => ({ data: { tour: { pending: true } } }),
+        useMutation: (o: typeof options) => { options = o; return { mutate: () => undefined, isError: saveFailed }; },
+        useQueryClient: () => ({ invalidateQueries: (q: unknown) => invalidated.push(q) }),
+      },
+      '@/lib/api': { __esModule: true, default: {} },
+      '@/realtime/entities': { E: { user: (id: string) => `user:${id}` } },
+      '@/stores/authStore': { useAuthStore: (select: (state: unknown) => unknown) => select({ user: { id: 'u1' } }) },
+    });
+    // With the hooks standing in, the hook is a plain function.
+    const useTourState = mod.useTourState as () => { pending: boolean; failed: boolean };
+    expect(useTourState()).toMatchObject({ pending: true, failed: false });
+    saveFailed = true;
+    expect(useTourState().failed).toBe(true);
+    options!.onSettled();
+    expect(invalidated).toEqual([{ queryKey: ['onboarding-state'] }]);
   });
 });
