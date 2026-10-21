@@ -2,7 +2,7 @@
 // they are going through. A single question opened from edit mode has no
 // progress to show.
 
-import type { ReactNode, Ref } from 'react';
+import { useId, type ReactNode, type Ref } from 'react';
 import type { OnboardingV2Answers } from '@rsn/shared';
 import OnboardingShell from './OnboardingShell';
 import QuestionStep from './QuestionStep';
@@ -21,6 +21,8 @@ interface Props {
 }
 
 export default function QuestionScreen({ question, showProgress, footer, ...body }: Props) {
+  // The helper line ("Select up to three answers.") describes the options, so they point at it.
+  const hintId = useId();
   return (
     <OnboardingShell
       pose="listening"
@@ -28,9 +30,10 @@ export default function QuestionScreen({ question, showProgress, footer, ...body
       progress={showProgress ? { current: question.number, total: QUESTIONS.length } : undefined}
       title={question.title}
       subtitle={question.hint}
+      subtitleId={hintId}
       footer={footer}
     >
-      <QuestionStep question={question} {...body} />
+      <QuestionStep question={question} hintId={hintId} {...body} />
     </OnboardingShell>
   );
 }

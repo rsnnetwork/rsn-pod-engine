@@ -17,9 +17,11 @@ interface Props {
   submitLabel: string;
   /** Resolves when the link is saved; a rejection is shown under the box. */
   onSubmit: (url: string) => Promise<void>;
+  /** Another choice is being sent (screen 2's "Continue with email"): this one waits. */
+  disabled?: boolean;
 }
 
-export default function LinkedinField({ initial, submitLabel, onSubmit }: Props) {
+export default function LinkedinField({ initial, submitLabel, onSubmit, disabled = false }: Props) {
   const id = useId();
   const input = useRef<HTMLInputElement>(null);
   const [value, setValue] = useState(initial);
@@ -34,7 +36,7 @@ export default function LinkedinField({ initial, submitLabel, onSubmit }: Props)
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (sending.current) return;
+    if (sending.current || disabled) return;
     const problem = linkedinInputProblem(value);
     if (problem) {
       setError(problem);
@@ -79,7 +81,7 @@ export default function LinkedinField({ initial, submitLabel, onSubmit }: Props)
         }`}
       />
       {error && <p id={`${id}-error`} className="mt-1.5 text-sm text-rsn-red" role="alert">{error}</p>}
-      <Button type="submit" isLoading={busy} className="mt-3 min-h-[48px] w-full">
+      <Button type="submit" isLoading={busy} disabled={disabled} className="mt-3 min-h-[48px] w-full">
         {submitLabel}
       </Button>
     </form>

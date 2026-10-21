@@ -22,6 +22,8 @@ interface Props {
   progress?: { current: number; total: number };
   title?: string;
   subtitle?: string;
+  /** An id for the subtitle, so what it explains can point at it (a question's "Select up to three answers."). */
+  subtitleId?: string;
   children: ReactNode;
   /** Always in reach at the bottom, whatever the body does. Screen 2 has none: its choices are the body. */
   footer?: ReactNode;
@@ -29,7 +31,7 @@ interface Props {
 
 const SIDES = 'pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))]';
 
-export default function OnboardingShell({ pose, sheepSize = 112, progress, title, subtitle, children, footer }: Props) {
+export default function OnboardingShell({ pose, sheepSize = 112, progress, title, subtitle, subtitleId, children, footer }: Props) {
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, []);
 
@@ -74,7 +76,7 @@ export default function OnboardingShell({ pose, sheepSize = 112, progress, title
               {title}
             </h1>
           )}
-          {subtitle && <p className="mt-2 text-center text-sm text-gray-600">{subtitle}</p>}
+          {subtitle && <p id={subtitleId} className="mt-2 text-center text-sm text-gray-600">{subtitle}</p>}
           <div className="mt-6 w-full">{children}</div>
         </div>
       </div>

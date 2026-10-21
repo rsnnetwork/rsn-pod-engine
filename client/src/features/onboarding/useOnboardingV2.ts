@@ -4,37 +4,44 @@
 // user:<id> tag, which refetches it here and wherever else the member is
 // signed in. The endpoints are Task 8's (server/src/routes/onboarding-v2.ts).
 
+import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   OnboardingV2ConfirmRequest, OnboardingV2ConfirmResponse, OnboardingV2LinkedinResponse, OnboardingV2State,
 } from '@rsn/shared';
 import api from '@/lib/api';
+import { getSocket } from '@/lib/socket';
 import { E } from '@/realtime/entities';
 import { useAuthStore } from '@/stores/authStore';
 import type { DraftPatch } from './flow';
 
 const onboardingV2Key = (userId: string | undefined) => ['onboarding-v2-state', userId] as const;
 
-/**
- * While a LinkedIn lookup runs, the state is also read again every few seconds.
- * Its end is pushed through the member's user tag, but a lookup can restart for
- * a corrected address, and a socket that is reconnecting misses the push; the
- * server reads a lookup older than three minutes as failed, so this always stops.
- */
-const LOOKUP_REREAD_MS = 5000;
-
 function useMemberId(): string | undefined {
   return useAuthStore(s => (s.user?.id as string | undefined) ?? undefined);
 }
 
+/**
+ * The onboarding state. It changes under the member's user tag: every write
+ * here, and the end of a LinkedIn lookup, which the server sends when it ends.
+ * A socket that dropped and came back has missed whatever was sent meanwhile,
+ * so while this state is on screen it is read again each time the socket
+ * connects. Only this query: nothing else on the page is re-read for it.
+ */
 export function useOnboardingV2State() {
   const userId = useMemberId();
+  const qc = useQueryClient();
+  useEffect(() => {
+    const socket = getSocket();
+    const resync = () => { void qc.invalidateQueries({ queryKey: ['onboarding-v2-state'] }); };
+    socket.on('connect', resync);
+    return () => { socket.off('connect', resync); };
+  }, [qc]);
   return useQuery({
     queryKey: onboardingV2Key(userId),
     queryFn: () => api.get('/onboarding/v2/state').then(r => r.data.data as OnboardingV2State),
     enabled: !!userId,
     meta: { entities: userId ? [E.user(userId)] : [] },
-    refetchInterval: (query) => (query.state.data?.linkedin.status === 'searching' ? LOOKUP_REREAD_MS : false),
   });
 }
 

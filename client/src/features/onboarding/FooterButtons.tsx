@@ -11,12 +11,17 @@ interface Action {
 
 export interface FooterProps {
   back?: Action;
-  primary: Action & { disabled?: boolean; busy?: boolean };
+  primary: Action & {
+    /**
+     * Not ready yet (a question with nothing ticked): it looks and reads as unavailable, but a press still
+     * reaches onClick, which says why. A truly disabled button does nothing on a phone, and says nothing.
+     */
+    unready?: boolean;
+    busy?: boolean;
+  };
 }
 
-type Props = FooterProps;
-
-export default function FooterButtons({ back, primary }: Props) {
+export default function FooterButtons({ back, primary }: FooterProps) {
   return (
     <>
       {back && (
@@ -26,9 +31,9 @@ export default function FooterButtons({ back, primary }: Props) {
       )}
       <Button
         onClick={primary.onClick}
-        disabled={primary.disabled}
+        aria-disabled={primary.unready || undefined}
         isLoading={primary.busy}
-        className="min-h-[48px] flex-1 px-6 sm:flex-none sm:min-w-[180px]"
+        className={`min-h-[48px] flex-1 px-6 sm:flex-none sm:min-w-[180px] ${primary.unready ? 'opacity-50' : ''}`}
       >
         {primary.label}
       </Button>

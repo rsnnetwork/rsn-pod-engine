@@ -20,11 +20,13 @@ interface Props {
   guessed: boolean;
   /** The "Something else" box, for the flow to focus when it asks for the words. */
   ownWordsRef?: Ref<HTMLInputElement>;
+  /** The id of the helper line above ("Select up to three answers."), which describes the options. */
+  hintId?: string;
 }
 
 const FIELD = 'w-full rounded-xl border bg-white px-3 text-base text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-rsn-red sm:text-sm';
 
-export default function QuestionStep({ question: q, answers, onChange, ownWordsError, listError = null, guessed, ownWordsRef }: Props) {
+export default function QuestionStep({ question: q, answers, onChange, ownWordsError, listError = null, guessed, ownWordsRef, hintId }: Props) {
   const id = useId();
   const errorLine = useRef<HTMLDivElement>(null);
   const listErrorLine = useRef<HTMLParagraphElement>(null);
@@ -48,7 +50,13 @@ export default function QuestionStep({ question: q, answers, onChange, ownWordsE
         <p className="mb-3 rounded-xl bg-amber-50 px-3 py-2 text-center text-sm text-amber-900" role="status">{SELF_GUESS_LINE}</p>
       )}
 
-      <div role="group" aria-label={q.title} className="flex flex-col gap-2.5">
+      <div
+        role="group"
+        aria-label={q.title}
+        // The helper line, and the limit line and the error when they show, are what a screen reader says next.
+        aria-describedby={[hintId, atLimit && q.limitHint ? `${id}-limit` : null, listError ? `${id}-list-error` : null].filter(Boolean).join(' ') || undefined}
+        className="flex flex-col gap-2.5"
+      >
         {q.options.map(o => (
           <OptionTile
             key={o.key}
@@ -87,11 +95,11 @@ export default function QuestionStep({ question: q, answers, onChange, ownWordsE
       )}
 
       {atLimit && q.limitHint && (
-        <p className="mt-3 text-center text-sm text-gray-600" role="status">{q.limitHint}</p>
+        <p id={`${id}-limit`} className="mt-3 text-center text-sm text-gray-600" role="status">{q.limitHint}</p>
       )}
 
       {listError && (
-        <p ref={listErrorLine} className="mt-3 text-center text-sm text-rsn-red" role="alert">{listError}</p>
+        <p ref={listErrorLine} id={`${id}-list-error`} className="mt-3 text-center text-sm text-rsn-red" role="alert">{listError}</p>
       )}
 
       {q.step === 'q2' && (

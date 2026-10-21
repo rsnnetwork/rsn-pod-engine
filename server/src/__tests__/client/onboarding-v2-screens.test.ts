@@ -67,9 +67,26 @@ describe('screen 1, Welcome', () => {
 });
 
 describe('screen 2, "Let\'s get you started"', () => {
-  const html = () => draw(loadModule(`${dir}/SignupScreen.tsx`, {
-    ...ui, './OnboardingShell': { __esModule: true, default: Shell }, './LinkedinField': { __esModule: true, default: () => createElement('form', null, 'link box') }, './flow': flow,
-  }).default, { linkedinUrl: 'https://www.linkedin.com/in/ana', onLinkedin: async () => undefined, onEmail: () => undefined, emailBusy: false });
+  // A button that shows whether it can be pressed, so the markup says which choice is waiting.
+  const StateButton = ({ children, disabled, isLoading, ...rest }: { children: ReactNode; disabled?: boolean; isLoading?: boolean; [k: string]: unknown }) =>
+    createElement('button', { type: 'button', disabled: disabled || isLoading, 'aria-expanded': rest['aria-expanded'] }, children);
+  const screen = loadModule(`${dir}/SignupScreen.tsx`, {
+    '@/components/ui/Button': { Button: StateButton }, './OnboardingShell': { __esModule: true, default: Shell },
+    './LinkedinField': { __esModule: true, default: () => createElement('form', null, 'link box') }, './flow': flow,
+  }).default;
+  const html = (sending: 'linkedin' | 'email' | null = null) => draw(screen, {
+    linkedinUrl: 'https://www.linkedin.com/in/ana', onLinkedin: async () => undefined, onEmail: () => undefined, sending,
+  });
+  const buttonOf = (markup: string, label: string) => markup.split('<button').find(b => b.includes(label)) ?? '';
+
+  it('one choice at a time: while either is being sent, the other cannot be pressed', () => {
+    expect(buttonOf(html(), 'Continue with LinkedIn')).not.toContain('disabled');
+    expect(buttonOf(html(), 'Continue with email')).not.toContain('disabled');
+    expect(buttonOf(html('linkedin'), 'Continue with email')).toContain('disabled');
+    expect(buttonOf(html('email'), 'Continue with LinkedIn')).toContain('disabled');
+    // The link box waits for "Continue with email" too.
+    expect(read(`${dir}/SignupScreen.tsx`)).toMatch(/disabled=\{sending === 'email'\}/);
+  });
 
   it('LinkedIn first with its line under it, then email; the link box opens only when asked', () => {
     expect(words(html())).toEqual([
@@ -82,7 +99,7 @@ describe('screen 2, "Let\'s get you started"', () => {
   });
 
   it('prefills the box with the link they gave when they asked to join, as they would type it', () => {
-    expect(read(`${dir}/SignupScreen.tsx`)).toMatch(/<LinkedinField initial=\{linkedinForInput\(linkedinUrl\)\}/);
+    expect(read(`${dir}/SignupScreen.tsx`)).toMatch(/<LinkedinField\s+initial=\{linkedinForInput\(linkedinUrl\)\}/);
   });
 });
 
@@ -105,6 +122,26 @@ describe('screens 3 to 6, the questions', () => {
     expect(markup.match(/disabled=""/g)).toHaveLength(4);
     expect(words(markup)).toContain("You've chosen three. Untick one to choose another.");
     expect(html('q1', { ...NONE, lookingToMeet: ['meet_investors'] })).not.toContain("You've chosen");
+  });
+
+  it('the options are described by the helper line, and by the limit line and the error when they show', () => {
+    const described = (markup: string) => markup.match(/role="group"[^>]*aria-describedby="([^"]*)"/)?.[1].split(' ') ?? [];
+    expect(described(html('q1', NONE, { hintId: 'hint' }))).toEqual(['hint']);
+    const full = html('q1', { ...NONE, lookingToMeet: ['meet_investors', 'meet_founders_owners', 'meet_specialists'] }, { hintId: 'hint', listError: 'Select up to three answers.' });
+    const ids = described(full);
+    expect(ids[0]).toBe('hint');
+    expect(ids).toHaveLength(3);
+    for (const id of ids.slice(1)) expect(full).toContain(`id="${id}"`);
+    expect(full).toMatch(/role="status">You&#x27;ve chosen three/);
+    expect(full).toMatch(/role="alert">Select up to three answers\./);
+  });
+
+  it('an empty question\'s Continue can still be pressed and says why: "Select at least one answer."', () => {
+    const footer = loadModule(`${dir}/FooterButtons.tsx`, { '@/components/ui/Button': { Button: ({ children, ...rest }: { children: ReactNode; [k: string]: unknown }) => createElement('button', rest as Record<string, unknown>, children) } }).default;
+    const markup = draw(footer, { primary: { label: 'Continue', onClick: () => undefined, unready: true } });
+    expect(markup).toContain('aria-disabled="true"');
+    expect(markup).not.toMatch(/ disabled=""/);
+    expect(read(`${dir}/OnboardingFlow.tsx`)).toMatch(/setListError\(problemMessage\(question, problem\)\)/);
   });
 
   it('Q4 stops at two; Q3 has no limit at all', () => {
@@ -197,9 +234,15 @@ describe('the data contract', () => {
     expect(all).not.toMatch(/'\/onboarding\/(state|answers|answers\/confirm|known|enrich|enrich\/apply|linkedin-photo)'/);
   });
 
-  it('the state refreshes on the member\'s own tag, and is read again only while a LinkedIn lookup runs', () => {
+  it('the state changes on the member\'s own tag, with no timer, and is read again when the socket comes back, that query only', () => {
     expect(hooks).toMatch(/meta: \{ entities: userId \? \[E\.user\(userId\)\] : \[\] \}/);
-    expect(hooks).toMatch(/refetchInterval: \(query\) => \(query\.state\.data\?\.linkedin\.status === 'searching' \? LOOKUP_REREAD_MS : false\)/);
+    // No polling anywhere in the flow (CLAUDE.md section 14): the lookup's end arrives as the member's tag.
+    expect(all).not.toMatch(/refetchInterval|setInterval|setTimeout/);
+    // A dropped socket missed what was sent meanwhile: on connect, this one query is read again, nothing else.
+    expect(hooks).toMatch(/socket\.on\('connect', resync\);/);
+    expect(hooks).toMatch(/socket\.off\('connect', resync\);/);
+    expect(hooks).toMatch(/const resync = \(\) => \{ void qc\.invalidateQueries\(\{ queryKey: \['onboarding-v2-state'\] \}\); \};/);
+    expect(hooks).not.toMatch(/invalidateQueries\(\)/);
     expect(hooks).not.toMatch(/setQueryData/);
   });
 
@@ -207,10 +250,27 @@ describe('the data contract', () => {
     expect(hooks).toMatch(/onSuccess: async \(\) => \{\s*await checkSession\(\);\s*await refresh\(\);/);
   });
 
-  it('finishing goes to For You (where the tour opens), and edit mode goes back where it came from', () => {
-    expect(flowSource).toMatch(/navigate\('\/', \{ replace: true \}\)/);
+  it('finishing goes where the gate sent them from when that is a page of this app, else For You (where the tour opens); edit mode goes back where it came from', () => {
+    expect(flowSource).toMatch(/navigate\(steps\.redirect, \{ replace: true \}\)/);
+    expect(read(`${dir}/useFlowSteps.ts`)).toMatch(/const redirect = safeRedirect\(params\.get\('redirect'\)\);/);
     expect(flowSource).not.toMatch(/\/agents/);
     expect(read(`${dir}/useLeaveEdit.ts`)).toMatch(/navigate\(-keys\.current\.length\)/);
+  });
+
+  it('LinkedIn suggests nothing unless they chose it in this visit: not the Q4 guess, not the fields, not the photo, not its notes', () => {
+    expect(flowSource).toMatch(/const linkedinOn = via === 'linkedin';/);
+    expect(flowSource).toMatch(/const guess = linkedinOn \? state\.linkedin\.prefill\?\.selfGuess \?\? null : null;/);
+    expect(flowSource).toMatch(/useProfileForm\(state, linkedinOn\)/);
+    expect(read(`${dir}/useProfileForm.ts`)).toMatch(/const prefill = linkedinOn \? state\.linkedin\.prefill : undefined;/);
+    const profile = read(`${dir}/ProfileScreen.tsx`);
+    expect(profile).toMatch(/linkedinPhotoUrl=\{linkedinOn \? state\.linkedin\.prefill\?\.photoUrl \?\? null : null\}/);
+    expect(profile).toMatch(/const lookingUp = linkedinOn && !!state\.profile\.linkedinUrl;/);
+    // Choosing it turns it on: screen 2's LinkedIn, and screen 7's [Add LinkedIn] or corrected link.
+    expect(flowSource.match(/choose\('linkedin'\)/g)).toHaveLength(2);
+    expect(flowSource).toMatch(/choose\('email'\)/);
+    // Remembered per member for the visit.
+    expect(read(`${dir}/useSignupChoice.ts`)).toMatch(/sessionStorage\.setItem\(key, next\)/);
+    expect(read(`${dir}/useSignupChoice.ts`)).toMatch(/signupChoiceKey\(memberId\)/);
   });
 
   it('the LinkedIn photo is asked for only when it is exactly the one shown and kept, and they have none of their own', () => {

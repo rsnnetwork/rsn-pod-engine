@@ -14,7 +14,8 @@ const NAME_MISSING = 'Enter your name, as people should see it.';
 
 type FieldKey = keyof ProfileFields | 'timezone';
 
-export function useProfileForm(state: OnboardingV2State) {
+/** `linkedinOn`: they chose LinkedIn in this visit; otherwise LinkedIn suggests nothing here (useSignupChoice). */
+export function useProfileForm(state: OnboardingV2State, linkedinOn: boolean) {
   const [edits, setEdits] = useState<Partial<ProfileFields>>({});
   const [zoneEdit, setZoneEdit] = useState<string | null>(null);
   const [keptPhoto, setKeptPhoto] = useState<string | null>(null);
@@ -26,7 +27,7 @@ export function useProfileForm(state: OnboardingV2State) {
   const nameRef = useRef<HTMLInputElement>(null);
 
   const { profile } = state;
-  const prefill = state.linkedin.prefill;
+  const prefill = linkedinOn ? state.linkedin.prefill : undefined;
   const shown = {
     displayName: profileValue(edits.displayName, profile.displayName, prefill?.displayName),
     jobTitle: profileValue(edits.jobTitle, profile.jobTitle, prefill?.jobTitle),

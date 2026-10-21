@@ -1,6 +1,7 @@
 // Screen 7, for email sign-ups: "Add your LinkedIn profile so people can learn
 // more about you. You can do this later." [Add LinkedIn] opens the same link
-// box as screen 2, and the lookup fills in whatever they have not typed yet.
+// box as screen 2, with the link from their join form in it when there is one.
+// Adding it turns LinkedIn on: the lookup fills in whatever they have not typed.
 
 import { useState } from 'react';
 import { Linkedin } from 'lucide-react';
@@ -9,11 +10,13 @@ import LinkedinField from './LinkedinField';
 import { PROFILE } from './flow';
 
 interface Props {
+  /** The link they gave when they asked to join, as they would type it; empty when there is none. */
+  initial: string;
   onAdd: (url: string) => Promise<void>;
   onLater: () => void;
 }
 
-export default function AddLinkedinCard({ onAdd, onLater }: Props) {
+export default function AddLinkedinCard({ initial, onAdd, onLater }: Props) {
   const [open, setOpen] = useState(false);
   return (
     <section className="rounded-xl border border-gray-200 bg-white p-4" aria-label="Add your LinkedIn profile">
@@ -23,7 +26,7 @@ export default function AddLinkedinCard({ onAdd, onLater }: Props) {
       </div>
       {open ? (
         <div className="mt-3">
-          <LinkedinField initial="" submitLabel="Add" onSubmit={onAdd} />
+          <LinkedinField initial={initial} submitLabel="Add" onSubmit={onAdd} />
         </div>
       ) : (
         <div className="mt-3 grid grid-cols-2 gap-2">

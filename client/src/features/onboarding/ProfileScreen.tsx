@@ -41,8 +41,10 @@ interface Props {
   /** The answer they have just come back from editing: it is scrolled into view, not the top of the page. */
   returnedFrom: QuestionStepKey | null;
   onLinkedin: (url: string) => Promise<void>;
-  /** "Later" on the LinkedIn card. */
-  linkedinLater: boolean;
+  /** They chose LinkedIn in this visit: only then does LinkedIn offer its photo, or say how the lookup went. */
+  linkedinOn: boolean;
+  /** "Add your LinkedIn profile…": an email sign-up, or a member with no LinkedIn, who has not pressed Later. */
+  askForLinkedin: boolean;
   onLinkedinLater: () => void;
   footer: ReactNode;
 }
@@ -83,7 +85,7 @@ function Field({ label, field, shown, onField, max, placeholder, error, inputRef
 export default function ProfileScreen(props: Props) {
   const {
     state, answers, fields, onField, fieldError, formError, nameRef, zone, onZone, keptLinkedinPhoto, onKeepLinkedinPhoto,
-    onEditAnswer, returnedFrom, onLinkedin, linkedinLater, onLinkedinLater, footer,
+    onEditAnswer, returnedFrom, onLinkedin, linkedinOn, askForLinkedin, onLinkedinLater, footer,
   } = props;
   const [changingLink, setChangingLink] = useState(false);
   const formErrorLine = useRef<HTMLParagraphElement>(null);
@@ -94,10 +96,10 @@ export default function ProfileScreen(props: Props) {
   useEffect(() => {
     if (formError) formErrorLine.current?.scrollIntoView({ block: 'center' });
   }, [formError]);
-  const hasLinkedin = !!state.profile.linkedinUrl;
+  const lookingUp = linkedinOn && !!state.profile.linkedinUrl;
   const status = state.linkedin.status;
-  const note = hasLinkedin ? linkedinNote(status) : null;
-  const canRetry = hasLinkedin && (status === 'not_found' || status === 'failed');
+  const note = lookingUp ? linkedinNote(status) : null;
+  const canRetry = lookingUp && (status === 'not_found' || status === 'failed');
 
   return (
     <OnboardingShell pose="thinking" sheepSize={72} title={PROFILE.title} subtitle={PROFILE.subtitle} footer={footer}>
@@ -138,7 +140,7 @@ export default function ProfileScreen(props: Props) {
           <PhotoField
             name={fields.displayName.value}
             avatarUrl={state.profile.avatarUrl}
-            linkedinPhotoUrl={state.linkedin.prefill?.photoUrl ?? null}
+            linkedinPhotoUrl={linkedinOn ? state.linkedin.prefill?.photoUrl ?? null : null}
             keptLinkedinPhoto={keptLinkedinPhoto}
             onKeepLinkedinPhoto={onKeepLinkedinPhoto}
           />
@@ -168,7 +170,10 @@ export default function ProfileScreen(props: Props) {
 
         <YourAnswers answers={answers} onEdit={onEditAnswer} />
 
-        {!hasLinkedin && !linkedinLater && <AddLinkedinCard onAdd={onLinkedin} onLater={onLinkedinLater} />}
+        {askForLinkedin && (
+          // The link they gave when they asked to join, if any, is already in the box.
+          <AddLinkedinCard initial={linkedinForInput(state.profile.linkedinUrl)} onAdd={onLinkedin} onLater={onLinkedinLater} />
+        )}
       </div>
     </OnboardingShell>
   );

@@ -13,6 +13,7 @@ import {
   toggleKey, confirmBody, draftPatch, profileValue, profileInput, linkedinForInput, linkedinInputProblem,
   zoneLabel, searchZones, onboardingError, answerSummary, linkedinNote, editAction, editFallback, guessedSelf,
   withKeys, withOwnWords, isRealZone, zoneList, currentZoneName, confirmProblem,
+  safeRedirect, problemMessage, ANSWER_NEEDED, signupChoiceKey, parseSignupChoice,
 } from '../../../../client/src/features/onboarding/flow';
 
 const NONE: OnboardingV2Answers = {
@@ -147,6 +148,14 @@ describe('whether a question can be left', () => {
     expect(questionProblem(q('q1'), four)).toBe('too-many');
   });
 
+  it('says why a question cannot be left, in the server\'s own sentences: none ticked, too many, or no words', () => {
+    expect(ANSWER_NEEDED).toBe('Select at least one answer.');
+    expect(problemMessage(q('q1'), 'empty')).toBe('Select at least one answer.');
+    expect(problemMessage(q('q1'), 'too-many')).toBe('Select up to three answers.');
+    expect(problemMessage(q('q4'), 'too-many')).toBe('Select up to two answers.');
+    expect(problemMessage(q('q2'), 'own-words')).toBe('Tell us what you are hoping to find.');
+  });
+
   it('Q2\'s "anything specific" is optional', () => {
     expect(questionProblem(q('q2'), { ...DONE, findSpecific: null })).toBeNull();
   });
@@ -203,6 +212,17 @@ describe('which screen to show', () => {
     expect(editAction(DONE, 'q1')).toEqual({ kind: 'save' });
     expect(editAction({ ...DONE, lookingToMeet: [] }, 'q1')).toEqual({ kind: 'save' });
     expect(editAction({ ...DONE, hopingToFind: [] }, 'q1')).toEqual({ kind: 'next', step: 'q2' });
+  });
+
+  it('after the first confirm, a page they were sent here from is honoured only when it is a page of this app', () => {
+    expect(safeRedirect('/people/3f2b8a4e')).toBe('/people/3f2b8a4e');
+    expect(safeRedirect('/support')).toBe('/support');
+    expect(safeRedirect('/')).toBe('/');
+    // Another site, a protocol-relative or backslashed address, onboarding itself, or nothing: For You.
+    for (const bad of [null, undefined, '', 'people/1', '//evil.example', '/\\evil.example', 'https://evil.example', '/onboarding', '/onboarding?step=q1', '/onboarding/x', ' /support', '/sup\nport']) {
+      expect(safeRedirect(bad)).toBe('/');
+    }
+    expect(safeRedirect('/onboardingish')).toBe('/onboardingish');
   });
 
   it('a page opened straight onto edit mode returns to the profile, or to For You', () => {
@@ -306,6 +326,19 @@ describe('screen 7\'s fields', () => {
     expect(linkedinNote('found')).toBeNull();
     expect(linkedinNote('none')).toBeNull();
     for (const s of ['searching', 'partial', 'not_found', 'failed'] as const) expect(linkedinNote(s)).not.toMatch(/\bRSN\b|ScrapingDog|error/i);
+  });
+});
+
+describe('the choice on screen 2, remembered for the visit', () => {
+  it('is kept per member, so two people on one browser never share it', () => {
+    expect(signupChoiceKey('a1')).toBe('rsn_onb_v2_via_a1');
+    expect(signupChoiceKey('a1')).not.toBe(signupChoiceKey('b2'));
+  });
+
+  it('reads back only the two choices; anything else is no choice', () => {
+    expect(parseSignupChoice('linkedin')).toBe('linkedin');
+    expect(parseSignupChoice('email')).toBe('email');
+    for (const junk of [null, '', 'LinkedIn', 'yes', '1']) expect(parseSignupChoice(junk)).toBeNull();
   });
 });
 

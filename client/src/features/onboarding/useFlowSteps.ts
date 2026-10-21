@@ -9,7 +9,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import type { OnboardingV2Answers, OnboardingV2State, OnboardingV2Step } from '@rsn/shared';
-import { parseEdit, questionFor, stepToShow, type EditTarget, type QuestionStepKey } from './flow';
+import { parseEdit, questionFor, safeRedirect, stepToShow, type EditTarget, type QuestionStepKey } from './flow';
 
 /** Carried in the history entry of every step the flow's own buttons open (it survives a refresh). */
 const OPENED = { openedByFlow: true } as const;
@@ -52,7 +52,10 @@ export function useFlowSteps(state: OnboardingV2State, answers: OnboardingV2Answ
     setReturnedFrom(step);
   };
 
-  return { edit, backToProfile, screen, returnedFrom, go, backToProfileFrom };
+  // The gate sends a member who followed a link before finishing here with ?redirect=<that page>.
+  const redirect = safeRedirect(params.get('redirect'));
+
+  return { edit, backToProfile, screen, returnedFrom, redirect, go, backToProfileFrom };
 }
 
 /** One press at a time: a double tap lands before React re-renders the button as disabled. */

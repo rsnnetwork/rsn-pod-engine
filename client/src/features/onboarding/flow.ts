@@ -142,6 +142,16 @@ export function questionProblem(q: Question, a: OnboardingV2Answers): 'empty' | 
   return null;
 }
 
+/** The server's sentence for a question left with nothing ticked. */
+export const ANSWER_NEEDED = 'Select at least one answer.';
+
+/** Why a question cannot be left, as the member is told it: the server's own sentences. */
+export function problemMessage(q: Question, problem: 'empty' | 'own-words' | 'too-many'): string {
+  if (problem === 'empty') return ANSWER_NEEDED;
+  if (problem === 'too-many') return q.hint;
+  return q.ownWordsMissing;
+}
+
 /** The first question still open, in order, leaving out `skip`; null when every answer is there. */
 export function firstIncomplete(a: OnboardingV2Answers, skip?: QuestionStepKey): QuestionStepKey | null {
   return QUESTIONS.find(x => x.step !== skip && questionProblem(x, a) !== null)?.step ?? null;
@@ -193,6 +203,26 @@ export function editAction(a: OnboardingV2Answers, current: QuestionStepKey): { 
   const missing = firstIncomplete(a, current);
   return missing ? { kind: 'next', step: missing } : { kind: 'save' };
 }
+
+/**
+ * After the first confirm: the page they were sent here from (the gate's ?redirect=, for a member who followed a
+ * link before finishing), only when it is a page of this app. Anything else, onboarding itself included, is For You.
+ */
+export function safeRedirect(param: string | null | undefined): string {
+  const path = param ?? '';
+  // One leading slash, not two and not a backslash (both leave the site), and no spaces or control characters.
+  if (!/^\/(?![/\\])/.test(path) || /[\\\s\u0000-\u001F\u007F]/.test(path)) return '/';
+  return /^\/onboarding(?:[/?#]|$)/.test(path) ? '/' : path;
+}
+
+/** How the member chose on screen 2. Only a LinkedIn choice lets LinkedIn suggest anything. */
+export type SignupChoice = 'linkedin' | 'email';
+
+/** Remembered for the visit, per member, so two people on one browser never share it. */
+export const signupChoiceKey = (memberId: string): string => `rsn_onb_v2_via_${memberId}`;
+
+export const parseSignupChoice = (value: string | null | undefined): SignupChoice | null =>
+  (value === 'linkedin' || value === 'email' ? value : null);
 
 /** Where edit mode returns to when the page was opened straight onto it, with nothing in the app before it. */
 export function editFallback(target: EditTarget): string {

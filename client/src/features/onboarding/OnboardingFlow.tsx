@@ -26,11 +26,12 @@ import SignupScreen from './SignupScreen';
 import QuestionScreen from './QuestionScreen';
 import ProfileScreen from './ProfileScreen';
 import { useFlowSteps, useOnePress } from './useFlowSteps';
+import { useSignupChoice } from './useSignupChoice';
 import { useLeaveEdit } from './useLeaveEdit';
 import { useProfileForm } from './useProfileForm';
 import { useConfirm, useConnectLinkedin, useOnboardingV2State, useSaveDraft, useSkipLinkedin } from './useOnboardingV2';
 import {
-  PROFILE, confirmBody, confirmProblem, draftPatch, editAction, firstIncomplete, guessedSelf,
+  PROFILE, confirmBody, confirmProblem, draftPatch, editAction, firstIncomplete, guessedSelf, problemMessage,
   questionFor, questionProblem, stepAfter, stepBefore, withKeys,
   type ConfirmProblem, type DraftPatch, type Question, type QuestionStepKey,
 } from './flow';
@@ -67,8 +68,12 @@ function Flow({ state }: { state: OnboardingV2State }) {
   const navigate = useNavigate();
   const { addToast } = useToastStore();
   const leave = useLeaveEdit();
-  const form = useProfileForm(state);
+  // Only a LinkedIn choice made in this visit lets LinkedIn suggest anything (useSignupChoice).
+  const [via, choose] = useSignupChoice();
+  const linkedinOn = via === 'linkedin';
+  const form = useProfileForm(state, linkedinOn);
   const { busy, once } = useOnePress();
+  const [sending, setSending] = useState<'linkedin' | 'email' | null>(null);
   const saveDraft = useSaveDraft();
   const connect = useConnectLinkedin();
   const skip = useSkipLinkedin();
@@ -84,8 +89,8 @@ function Flow({ state }: { state: OnboardingV2State }) {
   const steps = useFlowSteps(state, answers);
   const { edit, screen } = steps;
 
-  // Screen 6: LinkedIn's most likely answer, ticked for them to confirm or change.
-  const guess = state.linkedin.prefill?.selfGuess ?? null;
+  // Screen 6: LinkedIn's most likely answer, ticked for them to confirm or change, when they chose LinkedIn.
+  const guess = linkedinOn ? state.linkedin.prefill?.selfGuess ?? null : null;
   useEffect(() => {
     if (screen !== 'q4') return;
     const picked = guessedSelf(answers, guess, selfTouched);
@@ -111,6 +116,16 @@ function Flow({ state }: { state: OnboardingV2State }) {
   // sends the whole set. So a failed save never stops them moving on.
   const keepDraft = (patch: DraftPatch) => saveDraft.mutateAsync(patch).catch(() => undefined);
 
+  /** One of screen 2's two choices, sent while the other waits. A refusal reaches the LinkedIn box, which says it. */
+  const sendChoice = (choice: 'linkedin' | 'email', work: () => Promise<void>) => once(async () => {
+    setSending(choice);
+    try {
+      await work();
+    } finally {
+      setSending(null);
+    }
+  });
+
   const submit = (withProfile: boolean) => {
     const profile = withProfile ? form.input() : undefined;
     if (profile === null) return;
@@ -122,7 +137,8 @@ function Flow({ state }: { state: OnboardingV2State }) {
           addToast('Your changes are saved.', 'success');
           leave(edit);
         } else {
-          navigate('/', { replace: true });
+          // Where the gate sent them from, when that is a page of this app; else For You. The tour opens either way.
+          navigate(steps.redirect, { replace: true });
         }
       } catch (err) {
         showRefusal(confirmProblem(err, SAVE_FAILED));
@@ -142,12 +158,14 @@ function Flow({ state }: { state: OnboardingV2State }) {
     }
   };
 
-  /** Whether a question can be left. When it is the missing words, says so and puts the cursor there. */
+  /** Whether a question can be left. When it cannot, it says why: missing words by their box, the rest under the options. */
   const canLeave = (question: Question): boolean => {
     const problem = questionProblem(question, answers);
     if (problem === 'own-words') {
-      setOwnWordsError(question.ownWordsMissing);
+      setOwnWordsError(problemMessage(question, problem));
       ownWordsRef.current?.focus();
+    } else if (problem) {
+      setListError(problemMessage(question, problem));
     }
     return problem === null;
   };
@@ -166,21 +184,21 @@ function Flow({ state }: { state: OnboardingV2State }) {
     // Opened from screen 7, in the flow or in edit mode: both buttons go back there.
     if (steps.backToProfile) {
       const back = () => { setOwnWordsError(null); setListError(null); steps.backToProfileFrom(question.step); };
-      return { back: { label: 'Back', onClick: back }, primary: { label: 'Continue', disabled: blocked, busy, onClick: leaveFor('profile', back) } };
+      return { back: { label: 'Back', onClick: back }, primary: { label: 'Continue', unready: blocked, busy, onClick: leaveFor('profile', back) } };
     }
     if (edit) {
       const action = editAction(answers, question.step);
       return {
         back: { label: 'Cancel', onClick: () => leave(edit) },
         primary: action.kind === 'save'
-          ? { label: 'Save', disabled: blocked, busy, onClick: () => { if (canLeave(question)) submit(false); } }
-          : { label: 'Continue', disabled: blocked, busy, onClick: leaveFor(action.step, () => goToOpen(action.step)) },
+          ? { label: 'Save', unready: blocked, busy, onClick: () => { if (canLeave(question)) submit(false); } }
+          : { label: 'Continue', unready: blocked, busy, onClick: leaveFor(action.step, () => goToOpen(action.step)) },
       };
     }
     const next = stepAfter(question.step);
     return {
       back: { label: 'Back', onClick: () => go(stepBefore(question.step)) },
-      primary: { label: 'Continue', disabled: blocked, busy, onClick: leaveFor(next, () => go(next)) },
+      primary: { label: 'Continue', unready: blocked, busy, onClick: leaveFor(next, () => go(next)) },
     };
   };
 
@@ -199,9 +217,15 @@ function Flow({ state }: { state: OnboardingV2State }) {
       <SignupScreen
         key="signup"
         linkedinUrl={state.profile.linkedinUrl}
-        emailBusy={busy}
-        onLinkedin={async (url) => { await connect.mutateAsync(url); await keepDraft({ step: 'q1' }); go('q1'); }}
-        onEmail={() => once(async () => {
+        sending={sending}
+        onLinkedin={(url) => sendChoice('linkedin', async () => {
+          await connect.mutateAsync(url);
+          choose('linkedin');
+          await keepDraft({ step: 'q1' });
+          go('q1');
+        })}
+        onEmail={() => void sendChoice('email', async () => {
+          choose('email');
           // "Continue with email" is only recorded on the member's stage trail; losing that costs them nothing.
           await skip.mutateAsync().catch(() => undefined);
           await keepDraft({ step: 'q1' });
@@ -228,8 +252,10 @@ function Flow({ state }: { state: OnboardingV2State }) {
         onKeepLinkedinPhoto={form.setKeptPhoto}
         onEditAnswer={step => go(step, 'profile')}
         returnedFrom={steps.returnedFrom}
-        onLinkedin={async (url) => { await connect.mutateAsync(url); }}
-        linkedinLater={form.linkedinLater}
+        onLinkedin={async (url) => { await connect.mutateAsync(url); choose('linkedin'); }}
+        linkedinOn={linkedinOn}
+        // An email sign-up is asked; so is a finished member with no LinkedIn. Not after "Later".
+        askForLinkedin={!linkedinOn && !form.linkedinLater && (!edit || !state.profile.linkedinUrl)}
         onLinkedinLater={() => form.setLinkedinLater(true)}
         footer={edit
           ? <FooterButtons back={{ label: 'Cancel', onClick: () => leave(edit) }} primary={{ label: 'Save', onClick: finishProfile, busy }} />
