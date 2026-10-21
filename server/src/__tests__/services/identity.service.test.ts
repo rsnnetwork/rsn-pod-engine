@@ -104,11 +104,29 @@ describe('Identity Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 });
 
       const user = await identityService.getUserById('user-123');
-      expect(user).toEqual(mockUser);
+      expect(user).toEqual({ ...mockUser, bannerUrl: null });
       expect(mockQuery).toHaveBeenCalledWith(
         expect.stringContaining('FROM users WHERE id ='),
         ['user-123']
       );
+    });
+
+    // 21 Oct 2026: the banner is an address, built from when it last changed, and only when a picture is kept.
+    it('gives the banner\'s address when there is a picture, and null when there is none', async () => {
+      const at = new Date('2026-10-21T09:00:00.000Z');
+      mockQuery.mockResolvedValueOnce({ rows: [{ ...mockUser, bannerUpdatedAt: at }], rowCount: 1 });
+      const withOne = await identityService.getUserById('user-123');
+      expect(withOne.bannerUrl).toBe(`http://localhost:3001/api/users/user-123/banner?v=${at.getTime()}`);
+      // The time is read only to build the address; it is not a field of the member.
+      expect(withOne).not.toHaveProperty('bannerUpdatedAt');
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ ...mockUser, bannerUpdatedAt: null }], rowCount: 1 });
+      expect((await identityService.getUserById('user-123')).bannerUrl).toBeNull();
+
+      // The time only counts while the picture is there, and the picture itself is never read here.
+      const sql = mockQuery.mock.calls[0][0] as string;
+      expect(sql).toMatch(/CASE WHEN banner_blob IS NOT NULL THEN banner_updated_at END AS "bannerUpdatedAt"/);
+      expect(sql).not.toMatch(/\bbanner_blob AS\b|,\s*banner_blob\s*,/);
     });
 
     it('should throw NotFoundError when user not found', async () => {
@@ -175,7 +193,8 @@ describe('Identity Service', () => {
         lastName: 'User',
       });
 
-      expect(user).toEqual(mockUser);
+      // A new member has no banner yet.
+      expect(user).toEqual({ ...mockUser, bannerUrl: null });
       // Should have called query at least 5 times
       expect(mockQuery).toHaveBeenCalledTimes(5);
     });
@@ -935,7 +954,7 @@ describe('Identity Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 });
 
       const result = await identityService.updateUser('user-123', {});
-      expect(result).toEqual(mockUser);
+      expect(result).toEqual({ ...mockUser, bannerUrl: null });
     });
   });
 

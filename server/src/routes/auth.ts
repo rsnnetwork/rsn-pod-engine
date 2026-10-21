@@ -138,6 +138,7 @@ router.get(
             firstName: user.firstName,
             lastName: user.lastName,
             avatarUrl: user.avatarUrl,
+            bannerUrl: user.bannerUrl,
             bio: user.bio,
             company: user.company,
             jobTitle: user.jobTitle,
