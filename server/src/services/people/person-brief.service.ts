@@ -8,7 +8,7 @@
 
 import { query } from '../../db';
 import {
-  ErrorCodes, type OutcomeKey, type PersonBrief, type PublicMember, type RecentConnection,
+  ErrorCodes, canBring, usableAnswer, type OutcomeKey, type PersonBrief, type PublicMember, type RecentConnection,
   type RelationshipState, type WorthContinuing,
 } from '@rsn/shared';
 import { AppError, NotFoundError } from '../../middleware/errors';
@@ -18,16 +18,11 @@ import { toPublicIntentProfile, toPublicMember } from '../user/public-card';
 import { loadProfile, scoreFit, MATCH_THRESHOLD, BROWSE_THRESHOLD } from '../matching/platform-match.service';
 import { getPokeWith } from '../poke/poke.service';
 import { getResponse } from './person-response.service';
-import { clip } from './text';
 
-// An answer is worth showing when it has a letter or digit in it. A member who types ".", "…" or "!!!"
-// to get past a box has given no answer, and after a colon it reads as a mistake. It is judged on the
-// text the page would show (clip cuts a long answer short), and it counts as blank, so the reading goes
-// on to the member's next field.
-const usableAnswer = (text: string | null | undefined): string | null => {
-  const shown = clip(text);
-  return shown && /[\p{L}\p{N}]/u.test(shown) ? shown : null;
-};
+// An answer is shown by usableAnswer (@rsn/shared): clipped to 160 characters, and blank when no letter or digit is
+// left (a member who types ".", "…" or "!!!" to get past a box has given no answer), so the reading goes on to the
+// member's next field. It is shared since 21 Oct 2026, so your own profile shows your offer exactly as this brief
+// shows it to other members.
 
 // A member's words are set after a colon exactly as they wrote them: their own first letter, capital or
 // not, reads naturally there ("european market entry", "Mentorship for founders", "I can help with
@@ -176,7 +171,7 @@ export async function getPersonBrief(viewerId: string, targetId: string): Promis
   const first = person.firstName || person.displayName.split(' ')[0] || 'they';
   // A blank answer ('' or only spaces) and one with nothing in it ('.', '…') are null, which is what falls
   // through to the next field.
-  const theyCanBring = usableAnswer(them?.whatICanHelpWith) ?? usableAnswer(them?.expertiseText);
+  const theyCanBring = canBring(them);
   const youAreLookingFor = usableAnswer(me?.whoIWantToMeet) ?? usableAnswer(me?.myIntent);
   const upcomingEvents = events.rows.map(r => ({ id: r.id, title: r.title, scheduledAt: r.scheduled_at.toISOString() }));
   const match: PersonBrief['match'] = fit && strength ? { reason: fit.reason, strength } : null;
