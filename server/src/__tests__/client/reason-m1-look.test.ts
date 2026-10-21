@@ -730,23 +730,66 @@ describe('The short tour shows no made-up people, puts its words above the pictu
 
 describe('The short tour hands the member to For You when it is finished or skipped (19 Oct feedback)', () => {
   type Outcome = 'completed' | 'skipped';
-  // OnboardingTour.tsx, run, with the router, the saved state and the dialog standing in: what is asserted is what its own
-  // finish handler does when the dialog calls it.
-  const run = (pathname: string, failed = false) => {
+  // OnboardingTour.tsx, run, with the router, the saved state, the signed-in member, the mark edit mode leaves and the
+  // dialog standing in (flow.ts is the real one): what is asserted is what its own finish handler does when the dialog
+  // calls it.
+  const flow = require('../../../../client/src/features/onboarding/flow');
+  const run = (pathname: string, failed = false, { state = null as unknown, returned = false } = {}) => {
     const navigate = jest.fn();
     const markSeen = jest.fn();
+    const takeReturned = jest.fn((memberId: string | undefined) => returned && memberId === 'u1');
     const handed: { onFinish?: (outcome: Outcome) => void; mode?: string; open?: boolean; failed?: boolean } = {};
     const mod = loadModule('src/features/onboarding/OnboardingTour.tsx', {
-      'react-router-dom': { useLocation: () => ({ pathname }), useNavigate: () => navigate },
+      'react-router-dom': { useLocation: () => ({ pathname, state }), useNavigate: () => navigate },
+      '@/stores/authStore': { useAuthStore: (select: (s: unknown) => unknown) => select({ user: { id: 'u1' } }) },
       './useTourState': { useTourState: () => ({ pending: true, failed, markSeen }) },
+      './flow': flow,
+      './tour-landing': { takeReturned },
       './HowRsnWorks': {
         __esModule: true,
         default: (props: typeof handed) => { Object.assign(handed, props); return null; },
       },
     });
     renderToStaticMarkup(createElement(mod.default as never));
-    return { navigate, markSeen, handed };
+    return { navigate, markSeen, handed, takeReturned };
   };
+
+  // Final review, 21 Oct 2026 (C1): an invited member followed a link to an event, confirm put them there, the tour
+  // opened over it, and finishing it took them to For You: on a phone they never saw the event. The same for a finished
+  // member whose edit made the tour due, on the page they came back to.
+  for (const outcome of ['completed', 'skipped'] as const) {
+    it(`${outcome}: on a page the flow put them on (its history entry says LANDED), they stay there`, () => {
+      const { navigate, markSeen, handed, takeReturned } = run('/sessions/e1', false, { state: flow.LANDED });
+      handed.onFinish!(outcome);
+      expect(markSeen).toHaveBeenCalledWith(outcome);
+      expect(navigate).not.toHaveBeenCalled();
+      // The page says it all: edit mode's mark is not used up for it.
+      expect(takeReturned).not.toHaveBeenCalled();
+    });
+
+    it(`${outcome}: back on the page they changed an answer from (edit mode's mark, for this member), they stay there`, () => {
+      const { navigate, handed, takeReturned } = run('/profile', false, { returned: true });
+      handed.onFinish!(outcome);
+      expect(takeReturned).toHaveBeenCalledWith('u1');
+      expect(navigate).not.toHaveBeenCalled();
+    });
+  }
+
+  it('a second press, after a save that did not go through, decides as the first did: the mark is used once and the answer kept', () => {
+    const { navigate, handed, takeReturned } = run('/profile', true, { returned: true });
+    handed.onFinish!('skipped');
+    handed.onFinish!('skipped');
+    expect(takeReturned).toHaveBeenCalledTimes(1);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('a history entry that says anything else, or nothing, is not a landing: the member goes to For You', () => {
+    for (const state of [null, {}, { landed: 'true' }, { openedByFlow: true }]) {
+      const { navigate, handed } = run('/agents', false, { state });
+      handed.onFinish!('completed');
+      expect(navigate).toHaveBeenCalledWith('/');
+    }
+  });
 
   for (const outcome of ['completed', 'skipped'] as const) {
     it(`${outcome}: the member is saved as having seen it and taken to For You from any other page`, () => {

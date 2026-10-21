@@ -216,6 +216,20 @@ export function safeRedirect(param: string | null | undefined): string {
   return /^\/onboarding(?:[/?#]|$)/i.test(path) ? '/' : path;
 }
 
+/**
+ * In the history entry of a page the flow opens itself (the page after the first confirm, or edit mode's fallback):
+ * the tour, which opens over it, leaves the member there instead of taking them to For You. A refresh keeps it.
+ */
+export const LANDED = { landed: true } as const;
+
+/** Whether a history entry's state is LANDED. */
+export function isLanded(state: unknown): boolean {
+  return typeof state === 'object' && state !== null && (state as { landed?: unknown }).landed === true;
+}
+
+/** Per member: edit mode has just sent them back through their history, where no state can be carried. */
+export const returnedKey = (memberId: string): string => `rsn_onb_v2_returned_${memberId}`;
+
 /** How the member chose on screen 2. Only a LinkedIn choice lets LinkedIn suggest anything. */
 export type SignupChoice = 'linkedin' | 'email';
 

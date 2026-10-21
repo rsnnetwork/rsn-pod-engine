@@ -13,8 +13,9 @@ import {
   toggleKey, confirmBody, draftPatch, profileValue, profileInput, linkedinForInput, linkedinInputProblem,
   zoneLabel, searchZones, onboardingError, answerSummary, linkedinNote, editAction, editFallback, guessedSelf,
   withKeys, withOwnWords, isRealZone, zoneList, currentZoneName, confirmProblem,
-  safeRedirect, problemMessage, ANSWER_NEEDED, signupChoiceKey, parseSignupChoice,
+  safeRedirect, problemMessage, ANSWER_NEEDED, signupChoiceKey, parseSignupChoice, LANDED, isLanded, returnedKey,
 } from '../../../../client/src/features/onboarding/flow';
+import { markReturned, takeReturned } from '../../../../client/src/features/onboarding/tour-landing';
 
 const NONE: OnboardingV2Answers = {
   lookingToMeet: [], meetOther: null,
@@ -335,6 +336,58 @@ describe('screen 7\'s fields', () => {
     expect(linkedinNote('found')).toBeNull();
     expect(linkedinNote('none')).toBeNull();
     for (const s of ['searching', 'partial', 'not_found', 'failed'] as const) expect(linkedinNote(s)).not.toMatch(/\bRSN\b|ScrapingDog|error/i);
+  });
+});
+
+// Final review, 21 Oct 2026 (C1): confirm lands an invited member on the page they followed, the tour opens there, and
+// finishing it took them to For You, so on a phone they never saw the event. The flow now says where it put them.
+describe('where the tour leaves a member: where the flow put them', () => {
+  it('a page the flow opens itself carries LANDED in its history entry, and nothing else counts as landed', () => {
+    expect(LANDED).toEqual({ landed: true });
+    expect(isLanded(LANDED)).toBe(true);
+    expect(isLanded({ ...LANDED, usr: 1 })).toBe(true);
+    for (const state of [null, undefined, {}, { landed: 'true' }, { landed: 1 }, { openedByFlow: true }, 'landed', true]) {
+      expect({ state, landed: isLanded(state) }).toEqual({ state, landed: false });
+    }
+  });
+
+  it('going back through the history after an edit is remembered per member, so two people on one browser never share it', () => {
+    expect(returnedKey('a1')).toBe('rsn_onb_v2_returned_a1');
+    expect(returnedKey('a1')).not.toBe(returnedKey('b2'));
+    expect(returnedKey('a1')).not.toBe(signupChoiceKey('a1'));
+  });
+
+  describe('the visit remembers it (this tab, through a refresh), and one tour uses it up', () => {
+    const real = (global as { sessionStorage?: unknown }).sessionStorage;
+    let store: Map<string, string>;
+    const fake = (fail = false) => ({
+      getItem: (k: string) => { if (fail) throw new Error('blocked'); return store.get(k) ?? null; },
+      setItem: (k: string, v: string) => { if (fail) throw new Error('blocked'); store.set(k, v); },
+      removeItem: (k: string) => { if (fail) throw new Error('blocked'); store.delete(k); },
+    });
+    beforeEach(() => { store = new Map(); (global as { sessionStorage?: unknown }).sessionStorage = fake(); });
+    afterAll(() => { (global as { sessionStorage?: unknown }).sessionStorage = real; });
+
+    it('is there once it is marked, and gone once it is taken', () => {
+      expect(takeReturned('a1')).toBe(false);
+      markReturned('a1');
+      expect(store.get('rsn_onb_v2_returned_a1')).toBe('1');
+      expect(takeReturned('b2')).toBe(false);
+      expect(takeReturned('a1')).toBe(true);
+      expect(takeReturned('a1')).toBe(false);
+    });
+
+    it('with nobody signed in, nothing is marked or taken', () => {
+      markReturned(undefined);
+      expect(store.size).toBe(0);
+      expect(takeReturned(undefined)).toBe(false);
+    });
+
+    it('with the browser\'s storage switched off, nothing breaks: the tour then goes to For You, as before', () => {
+      (global as { sessionStorage?: unknown }).sessionStorage = fake(true);
+      expect(() => markReturned('a1')).not.toThrow();
+      expect(takeReturned('a1')).toBe(false);
+    });
   });
 });
 

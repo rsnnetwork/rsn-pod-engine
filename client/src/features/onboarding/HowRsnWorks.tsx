@@ -15,7 +15,8 @@
 // people ("They confuse people"), so nobody is in them any more: where a person
 // would be there is the sheep, and where their words would be there is a grey
 // bar. The heading and the description now come first and the picture under
-// them, and finishing the tour (OnboardingTour) lands on For You.
+// them, and finishing the tour lands on For You, unless the flow put the member
+// on the page it opened over (OnboardingTour).
 
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
