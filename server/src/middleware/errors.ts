@@ -51,8 +51,12 @@ export class ValidationError extends AppError {
 }
 
 export class ConflictError extends AppError {
-  constructor(code: ErrorCode, message: string) {
-    super(409, code, message);
+  /**
+   * `details` says what the request clashed with, so the client can offer it: the entity name
+   * clash sends `{ existingId: [id] }`. Same shape as validation details (a list per key).
+   */
+  constructor(code: ErrorCode, message: string, details?: Record<string, string[]>) {
+    super(409, code, message, details);
   }
 }
 

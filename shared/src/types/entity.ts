@@ -9,6 +9,8 @@
 // out, and migration-107.test.ts fails if the two ever differ. The VALUES here are rendered by the
 // client, so index.ts also gives each its own named re-export (Rollup CJS interop; see OPENINGS there).
 
+import type { PublicMember } from './user';
+
 export const ENTITY_KINDS = [
   'company', 'startup', 'fund', 'university', 'community', 'charity', 'project',
   'investment_vehicle', 'association', 'other',
@@ -70,3 +72,95 @@ export const ENTITY_LIMITS = {
   /** The most entities `others` holds, searched or not. */
   othersMax: 30,
 } as const;
+
+// ─── What the API answers (GET /api/entities and the routes under it) ────────
+
+/** One entity in a list. `peopleCount` counts the people the viewer can see on its page. */
+export interface EntitySummary {
+  id: string;
+  name: string;
+  kind: EntityKind;
+  location: string | null;
+  peopleCount: number;
+  /** The viewer's own role, or null when they are not linked to it. */
+  myRole: EntityRole | null;
+}
+
+/** GET /api/entities: the viewer's own entities, and others (a name search, or the most recently active). */
+export interface EntityList {
+  mine: EntitySummary[];
+  others: EntitySummary[];
+}
+
+/** The entity itself, as its page shows it. */
+export interface EntityInfo {
+  id: string;
+  name: string;
+  kind: EntityKind;
+  about: string | null;
+  location: string | null;
+  size: string | null;
+  website: string | null;
+  peopleCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** The thinnest public card: who someone is, and nothing of why they are here. */
+export type PublicCardBasics = Pick<
+  PublicMember,
+  'id' | 'displayName' | 'firstName' | 'lastName' | 'avatarUrl' | 'jobTitle' | 'company' | 'location'
+>;
+
+/** A person on an entity's page. */
+export interface EntityPerson extends PublicCardBasics {
+  role: EntityRole;
+  /** Their title at this entity ("CTO"), which can differ from the job title on their profile. */
+  title: string | null;
+  /** Can edit and archive the entity. */
+  isAdmin: boolean;
+}
+
+/** GET /api/entities/:id */
+export interface EntityPage {
+  entity: EntityInfo;
+  people: EntityPerson[];
+  myRole: EntityRole | null;
+  /** The viewer may edit and archive it: one of its admins, or a platform admin. */
+  canEdit: boolean;
+}
+
+/** One of a person's entities: GET /api/users/:id/entities, and the person brief's `entities`. */
+export interface PersonEntity {
+  id: string;
+  name: string;
+  kind: EntityKind;
+  role: EntityRole;
+  title: string | null;
+}
+
+/** POST /api/entities */
+export interface CreateEntityResult {
+  id: string;
+  /** The creator's empty profile company was set to the entity's name. */
+  companyUpdated: boolean;
+}
+
+/** POST /api/entities/:id/members: join, or change your own role. */
+export interface EntityMembershipResult {
+  /** true when this made a new link, false when it changed an existing one. */
+  joined: boolean;
+  role: EntityRole;
+  title: string | null;
+  isAdmin: boolean;
+  /** The member's empty profile company was set to the entity's name. */
+  companyUpdated: boolean;
+}
+
+/** DELETE /api/entities/:id/members/me */
+export interface LeaveEntityResult {
+  /** false when the member was not linked to it: nothing changed. */
+  left: boolean;
+  /** The member was the last person linked to it, so it was archived with them. */
+  archived: boolean;
+}
