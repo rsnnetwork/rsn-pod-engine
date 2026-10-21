@@ -19,6 +19,8 @@ import {
 } from '../realtime/fanout';
 import { query } from '../db';
 import { ApiResponse, UserRole, hasRoleAtLeast } from '@rsn/shared';
+import * as bannerService from '../services/user/banner.service';
+import { bannerReadLimiter, bannerWriteLimiter } from '../middleware/rateLimit';
 
 const router = Router();
 
@@ -58,6 +60,15 @@ const updateUserSchema = z.object({
   profileVisible: z.boolean().optional(),
   inviteOptOutPublicEvents: z.boolean().optional(),
 });
+
+// The member banner (21 Oct 2026). The page sends a data URL; the service checks the type, the bytes and the
+// decoded size. This cap is only the longest text that can hold the largest picture allowed, with the same words.
+const bannerBodySchema = z.object({
+  image: z.string().min(1, 'Choose a picture for your banner.')
+    .max(bannerService.BANNER_MAX_DATA_URL_CHARS, 'Your banner must be 3 MB or smaller.'),
+});
+type BannerBody = z.infer<typeof bannerBodySchema>;
+const memberIdParams = z.object({ id: z.string().uuid('Not a member id') });
 
 const listUsersQuerySchema = z.object({
   page: z.coerce.number().int().positive().optional(),
@@ -113,6 +124,43 @@ router.put(
 
       const response: ApiResponse = { success: true, data: user };
       res.json(response);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── PUT / DELETE /users/me/banner (21 Oct 2026) ────────────────────────────
+// The member's own banner, changed from their profile. It is shown only on profile pages, so the one screen
+// to tell is the member's own (their profile, in other tabs and on other devices). Other members see the new
+// banner the next time they open the profile: its address changes with every change.
+
+router.put(
+  '/me/banner',
+  authenticate,
+  bannerWriteLimiter,
+  validate(bannerBodySchema),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { image }: BannerBody = req.body;
+      const data = await bannerService.saveBanner(req.user!.userId, image);
+      fanoutUserEntity(req.user!.userId).catch(() => {});
+      res.json({ success: true, data } as ApiResponse);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+router.delete(
+  '/me/banner',
+  authenticate,
+  bannerWriteLimiter,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await bannerService.removeBanner(req.user!.userId);
+      fanoutUserEntity(req.user!.userId).catch(() => {});
+      res.json({ success: true, data: { bannerUrl: null } } as ApiResponse);
     } catch (err) {
       next(err);
     }
@@ -494,6 +542,30 @@ router.get(
       res.setHeader('Content-Type', avatar.contentType);
       res.setHeader('Cache-Control', 'public, max-age=86400');
       res.send(avatar.blob);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// ─── GET /users/:id/banner (public — no auth) (21 Oct 2026) ─────────────────
+// The banner across the top of a profile, public for the same reason the photo above is: an <img> sends no
+// token. The address members are given carries ?v=<when it changed>, so a day-long cache never shows an old
+// banner after a new one. 404 with nothing in it when the member has no banner (the page draws the default).
+router.get(
+  '/:id/banner',
+  bannerReadLimiter,
+  validate(memberIdParams, 'params'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const banner = await bannerService.getBannerBlob(req.params.id);
+      if (!banner) {
+        res.status(404).end();
+        return;
+      }
+      res.setHeader('Content-Type', banner.contentType);
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.send(banner.blob);
     } catch (err) {
       next(err);
     }

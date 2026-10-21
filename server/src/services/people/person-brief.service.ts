@@ -8,7 +8,7 @@
 
 import { query } from '../../db';
 import {
-  ErrorCodes, type OutcomeKey, type PersonBrief, type RecentConnection,
+  ErrorCodes, type OutcomeKey, type PersonBrief, type PublicMember, type RecentConnection,
   type RelationshipState, type WorthContinuing,
 } from '@rsn/shared';
 import { AppError, NotFoundError } from '../../middleware/errors';
@@ -203,6 +203,15 @@ export async function getPersonBrief(viewerId: string, targetId: string): Promis
     shared: { circles: circles.rows, pods: pods.rows, upcomingEvents },
     path,
   };
+}
+
+/**
+ * The member's own public card: exactly what every other member is shown of them (21 Oct 2026, Stefan: "when
+ * I look at my profile, I should see my profile, how other people see it"). getPersonBrief refuses your own
+ * id, and keeps refusing it; this is the one read of yourself, and it goes through the same projection.
+ */
+export async function getOwnCard(userId: string): Promise<PublicMember> {
+  return toPublicMember(await getUserById(userId));
 }
 
 export async function listRecentConnections(userId: string): Promise<RecentConnection[]> {

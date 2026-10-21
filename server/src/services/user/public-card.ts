@@ -32,6 +32,7 @@ export function toPublicMember(u: Partial<User> & { id: string }): PublicMember 
     firstName: u.firstName ?? '',
     lastName: u.lastName ?? '',
     avatarUrl: u.avatarUrl ?? null,
+    bannerUrl: u.bannerUrl ?? null,
     bio: u.bio ?? null,
     company: u.company ?? null,
     jobTitle: u.jobTitle ?? null,
