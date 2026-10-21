@@ -234,13 +234,15 @@ test('the card offers a Google photo and an upload; the upload lands at once; th
     expect(box!.height, `${name} is a 44px target`).toBeGreaterThanOrEqual(44);
   }
 
-  // Change photo, from a file: it is the avatar at once, in the card and in the account.
+  // Change photo, from a file: it is the avatar at once, in the card and in the account. Since 21 Oct 2026 the page
+  // redraws every photo as a JPEG of at most 800x800 before it is sent (a phone photo of 1.5 to 5 MB went over the
+  // server's cap and left "Uploading..." on screen for good), so the PNG chosen here is kept as a JPEG.
   await page.locator('input[type="file"]').setInputFiles({ name: 'me.png', mimeType: 'image/png', buffer: PNG });
   // The success toast is brief; the durable outcomes below are what matter. (The small avatar in the
   // page header is hidden on a phone, so look for the picture that is on screen.)
-  await expect(page.locator('img[src^="data:image/png"]:visible').first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('img[src^="data:image/jpeg"]:visible').first()).toBeVisible({ timeout: 20_000 });
   const row = await pool.query(`SELECT avatar_url FROM users WHERE id = $1`, [member.id]);
-  expect(String(row.rows[0].avatar_url)).toMatch(/^data:image\/png;base64,/);
+  expect(String(row.rows[0].avatar_url)).toMatch(/^data:image\/jpeg;base64,/);
   console.log('  ✓ uploaded photo is the avatar immediately.');
 
   // Coming back from Google with no photo says so, and the URL is cleaned.
