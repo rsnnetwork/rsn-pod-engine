@@ -1489,16 +1489,16 @@ test.describe('REASON milestone 1', () => {
       await expectPeople(page, [giver, longName, secretive], 'the rail');
       const rail = page.getByRole('complementary', { name: 'Your context' });
       await expect(rail, 'the rail is beside the list').toBeVisible();
-      for (const title of ['Your next event', 'Your pods', 'Recent introductions']) {
+      for (const title of ['Your next event', 'Your pods', 'Recent connections']) {
         await expect(rail.getByRole('heading', { name: title }), `the rail's ${title}`).toBeVisible();
       }
       await expect(rail.getByText('You are not in a pod yet.'), 'a member in no pod is told so').toBeVisible();
-      await expect(rail.getByText('When someone accepts a meeting request, they show up here.'), 'no introductions yet').toBeVisible();
+      await expect(rail.getByText('When someone accepts a meeting request, they show up here.'), 'no connections yet').toBeVisible();
       // The next event is whatever the network has next, or the sentence that there is none: never "could not load".
       const next = rail.locator('section', { has: page.getByRole('heading', { name: 'Your next event' }) });
       await expect(next.locator('a[href^="/sessions/"]').or(next.getByText('No upcoming event yet. New ones appear here.')), 'the next event has answered').toBeVisible();
       await expect(rail.getByText('We could not load this just now.'), 'nothing in the rail failed').toHaveCount(0);
-      for (const [name, href] of [['View all events', '/sessions'], ['View all pods', '/pods'], ['View all introductions', '/messages']]) {
+      for (const [name, href] of [['View all events', '/sessions'], ['View all pods', '/pods'], ['View all connections', '/connections']]) {
         const link = rail.getByRole('link', { name });
         await expect(link, `${name} goes where it says`).toHaveAttribute('href', href);
         await inReach(page, link, name, { centre: false });
@@ -1513,7 +1513,7 @@ test.describe('REASON milestone 1', () => {
       await expect(rail, 'no rail at 980px').toBeHidden();
       await expectNoSideways(page, '980px');
       await expectQuiet(o, 'rail');
-      console.log('  ✓ The context rail: next event, pods and recent introductions with 44px "View all" links, from 981px and not at 980px.');
+      console.log('  ✓ The context rail: next event, pods and recent connections with 44px "View all" links, from 981px and not at 980px.');
     });
   });
 });
