@@ -20,7 +20,7 @@ import { validate } from '../middleware/validate';
 import { entityCreateLimiter, entityReadLimiter, entityWriteLimiter } from '../middleware/rateLimit';
 import { fanoutEntityChange, fanoutProfileChange } from '../realtime/fanout';
 import * as entities from '../services/entity/entity.service';
-import { blankToNull, normaliseName, normaliseWebsite } from '../services/entity/entity-fields';
+import { blankToNull, characterCount, normaliseName, normaliseWebsite } from '../services/entity/entity-fields';
 
 const router = Router();
 
@@ -38,11 +38,12 @@ const listQuery = z.object({
     .transform((n) => (n === undefined ? undefined : Math.min(n, ENTITY_LIMITS.othersMax))),
 });
 
+// Counted in characters, as the database counts them (see characterCount): one emoji is one character.
 const name = z.string({ required_error: 'Give the entity a name.', invalid_type_error: 'Give the entity a name.' })
   .transform(normaliseName)
   .pipe(z.string()
-    .min(ENTITY_LIMITS.nameMin, `Give the entity a name of at least ${ENTITY_LIMITS.nameMin} characters.`)
-    .max(ENTITY_LIMITS.nameMax, `Keep the name to ${ENTITY_LIMITS.nameMax} characters.`));
+    .refine((s) => characterCount(s) >= ENTITY_LIMITS.nameMin, `Give the entity a name of at least ${ENTITY_LIMITS.nameMin} characters.`)
+    .refine((s) => characterCount(s) <= ENTITY_LIMITS.nameMax, `Keep the name to ${ENTITY_LIMITS.nameMax} characters.`));
 const kind = z.enum(ENTITY_KINDS, { errorMap: () => ({ message: 'Choose what kind of entity this is.' }) });
 const role = z.enum(ENTITY_ROLES, { errorMap: () => ({ message: 'Choose how you are linked to it.' }) });
 

@@ -3,7 +3,7 @@
 // is always a web address: the client renders it as a link, so a `javascript:` address must never
 // reach the database.
 
-import { blankToNull, normaliseName, normaliseWebsite } from '../../../services/entity/entity-fields';
+import { blankToNull, characterCount, normaliseName, normaliseWebsite } from '../../../services/entity/entity-fields';
 
 describe('normaliseName', () => {
   it.each([
@@ -14,6 +14,25 @@ describe('normaliseName', () => {
     ['Ærø Fonden', 'Ærø Fonden'],
   ])('stores %j as %j', (typed, stored) => {
     expect(normaliseName(typed)).toBe(stored);
+  });
+});
+
+// Final review, 21 Oct 2026: the name limits are counted as the database counts them.
+describe('characterCount', () => {
+  it.each([
+    ['Acme', 4],
+    ['Ærø', 3],
+    ['😀', 1],
+    ['𠀀', 1],
+    ['😀😀', 2],
+    ['Acme 🚀', 6],
+  ])('%j has %i characters', (text, count) => {
+    expect(characterCount(text)).toBe(count);
+  });
+
+  it('is not a string\'s length, which counts an emoji or a CJK Extension B character twice', () => {
+    expect('😀'.length).toBe(2);
+    expect('𠀀'.length).toBe(2);
   });
 });
 

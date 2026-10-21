@@ -25,7 +25,7 @@ import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '.
 import * as blockService from '../block/block.service';
 import { toPublicCardBasics } from '../user/public-card';
 import { escapeLike } from '../user/user-search.service';
-import { normaliseName } from './entity-fields';
+import { characterCount, normaliseName } from './entity-fields';
 
 /** The most of their own entities a member's list holds. */
 const MINE_MAX = 100;
@@ -67,14 +67,14 @@ const personNotAvailable = (userId: string) => new NotFoundError('User', userId,
 const nameTaken = (existing: { id: string; name: string }) =>
   new ConflictError(ErrorCodes.ENTITY_NAME_TAKEN, `${existing.name} is already on REASON.`, { existingId: [existing.id] });
 
-/** A name as stored, or a 400 when it is too short or too long once its spaces are tidied. */
+/** A name as stored, or a 400 when it is too short or too long once its spaces are tidied (in characters). */
 function checkedName(typed: string): string {
   const name = normaliseName(typed);
-  if (name.length < ENTITY_LIMITS.nameMin) {
+  if (characterCount(name) < ENTITY_LIMITS.nameMin) {
     const message = `Give the entity a name of at least ${ENTITY_LIMITS.nameMin} characters.`;
     throw new ValidationError(message, { name: [message] });
   }
-  if (name.length > ENTITY_LIMITS.nameMax) {
+  if (characterCount(name) > ENTITY_LIMITS.nameMax) {
     const message = `Keep the name to ${ENTITY_LIMITS.nameMax} characters.`;
     throw new ValidationError(message, { name: [message] });
   }
