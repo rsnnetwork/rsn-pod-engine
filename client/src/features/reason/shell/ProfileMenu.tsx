@@ -6,7 +6,7 @@ import Avatar from '@/components/ui/Avatar';
 import { useAuthStore } from '@/stores/authStore';
 import { cn, isAdmin } from '@/lib/utils';
 import LogoutSheet from './LogoutSheet';
-import { isAccountPage, onAdmin, onInvites } from './nav';
+import { NAV_BY_KEY, isAccountPage, onAdmin, onInvites } from './nav';
 
 function MenuLink({ to, label, current, onDone }: { to: string; label: string; current: boolean; onDone: () => void }) {
   return (
@@ -74,7 +74,7 @@ export default function ProfileMenu() {
       </button>
       {open && (
         <div className="absolute bottom-[calc(100%+6px)] left-0 z-30 w-[220px] rounded-2xl border border-reason-line bg-white p-1.5 shadow-[0_14px_40px_rgba(16,18,24,.12)]">
-          <MenuLink to="/profile" label="View profile" current={pathname === '/profile'} onDone={close} />
+          <MenuLink to="/profile" label="View profile" current={NAV_BY_KEY.profile.match(pathname)} onDone={close} />
           <MenuLink to="/invites" label="Invite someone" current={onInvites(pathname)} onDone={close} />
           {isAdmin(user.role) && <MenuLink to="/admin" label="Admin" current={onAdmin(pathname)} onDone={close} />}
           <button

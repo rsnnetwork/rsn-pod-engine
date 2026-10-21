@@ -17,7 +17,7 @@ export default function MobileNav({ unreadCount }: { unreadCount: number }) {
   const user = useAuthStore((s) => s.user);
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirm, setConfirm] = useState(false);
-  const moreActive = MOBILE_MORE.some((k) => NAV_BY_KEY[k].match(pathname)) || pathname === '/profile' || isAccountPage(pathname);
+  const moreActive = MOBILE_MORE.some((k) => NAV_BY_KEY[k].match(pathname)) || NAV_BY_KEY.profile.match(pathname) || isAccountPage(pathname);
   const done = () => setMoreOpen(false);
 
   return (
@@ -75,7 +75,7 @@ export default function MobileNav({ unreadCount }: { unreadCount: number }) {
         </div>
         {user && (
           <div className="mt-2 grid gap-1 border-t border-reason-line pb-1 pt-3">
-            <Link to="/profile" onClick={done} aria-current={pathname === '/profile' ? 'page' : undefined} className="flex min-h-[48px] items-center gap-2.5 rounded-xl px-1">
+            <Link to="/profile" onClick={done} aria-current={NAV_BY_KEY.profile.match(pathname) ? 'page' : undefined} className="flex min-h-[48px] items-center gap-2.5 rounded-xl px-1">
               <Avatar src={user.avatarUrl} name={user.displayName || 'You'} size="sm" />
               <span>
                 <strong className="block text-[13px]">{user.displayName || 'You'}</strong>

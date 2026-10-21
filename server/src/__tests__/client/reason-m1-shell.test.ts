@@ -47,6 +47,14 @@ describe('REASON shell (milestone 1)', () => {
       for (const url of ['/profile', '/profile/edit']) expect({ url, current: profile.match(url) }).toEqual({ url, current: true });
       for (const url of ['/', '/profiles', '/profile-edit', '/people/u1', '/settings']) expect({ url, current: profile.match(url) }).toEqual({ url, current: false });
     });
+    it('the phone bar\'s More, the More sheet\'s profile link and the account menu\'s View profile follow the same rule', () => {
+      const bar = read('features/reason/shell/MobileNav.tsx');
+      const menu = read('features/reason/shell/ProfileMenu.tsx');
+      expect(bar).toMatch(/const moreActive = [^;]*NAV_BY_KEY\.profile\.match\(pathname\)[^;]*;/);
+      expect(bar).toMatch(/<Link to="\/profile" onClick=\{done\} aria-current=\{NAV_BY_KEY\.profile\.match\(pathname\) \? 'page' : undefined\}/);
+      expect(menu).toMatch(/<MenuLink to="\/profile" label="View profile" current=\{NAV_BY_KEY\.profile\.match\(pathname\)\}/);
+      for (const src of [bar, menu]) expect(src).not.toMatch(/pathname === '\/profile'/);
+    });
     it('every key the phone bar and the More sheet draw has an entry to draw it from (a key with none crashes the phone bar)', () => {
       const nav = loadNav();
       for (const key of [...nav.MOBILE_PRIMARY, ...nav.MOBILE_MORE]) expect({ key, entry: typeof nav.NAV_BY_KEY[key]?.match }).toEqual({ key, entry: 'function' });
