@@ -1,26 +1,23 @@
-// One choice on a question. Full width, comfortably tappable, and says what it
-// is to a screen reader: radio when only one answer is allowed, checkbox when
-// several are. Disabled only when the member is already at the limit and this
-// is not one of the ones they picked, so the limit is visible rather than a
-// silent refusal to respond.
+// One choice on a question. Full width, comfortably tappable, and a checkbox to
+// a screen reader: every question of the brief takes several answers. Disabled
+// only when the member is already at the limit and this is not one they
+// picked, so the limit is visible rather than a silent refusal to respond.
 
 import { Check } from 'lucide-react';
 
 interface Props {
   label: string;
   selected: boolean;
-  multiple: boolean;
   disabled?: boolean;
   onToggle: () => void;
 }
 
-export default function OptionTile({ label, selected, multiple, disabled, onToggle }: Props) {
+export default function OptionTile({ label, selected, disabled, onToggle }: Props) {
   return (
     <button
       type="button"
-      role={multiple ? 'checkbox' : 'radio'}
+      role="checkbox"
       aria-checked={selected}
-      aria-disabled={disabled || undefined}
       disabled={disabled}
       onClick={onToggle}
       className={`flex min-h-[52px] w-full items-center gap-3 rounded-xl border px-4 py-3 text-left transition-colors ${
@@ -33,13 +30,13 @@ export default function OptionTile({ label, selected, multiple, disabled, onTogg
     >
       <span
         aria-hidden
-        className={`flex h-5 w-5 shrink-0 items-center justify-center border-2 ${multiple ? 'rounded' : 'rounded-full'} ${
+        className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border-2 ${
           selected ? 'border-rsn-red bg-rsn-red text-white' : 'border-gray-300 bg-white'
         }`}
       >
         {selected && <Check className="h-3.5 w-3.5" strokeWidth={3} />}
       </span>
-      <span className="text-sm font-medium leading-snug">{label}</span>
+      <span className="text-[15px] font-medium leading-snug">{label}</span>
     </button>
   );
 }
