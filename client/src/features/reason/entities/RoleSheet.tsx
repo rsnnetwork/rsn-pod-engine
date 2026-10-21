@@ -11,7 +11,7 @@ import { statusOf } from '../human/profile-text';
 import { SelectField, TextField } from './EntityFields';
 import { entityKeys, setMyEntityRole } from './entity-api';
 import { formResolver, roleBody, roleDefaults, roleSchema, type RoleFormValues } from './entity-form';
-import { entityError, fieldErrors } from './entity-text';
+import { entityError, fieldErrors, membershipToast } from './entity-text';
 import { PRIMARY_BUTTON, QUIET_BUTTON } from './look';
 
 /** `title` is null when you have none, or when the page does not list you (it holds at most 200 people). */
@@ -34,8 +34,8 @@ export default function RoleSheet({ entityId, entityName, role, title, onClose }
     networkMode: 'always',
     mutationFn: (body: ReturnType<typeof roleBody>) => setMyEntityRole(entityId, body.role, body.title),
     // The sheet closes once the fresh page is in, so it closes onto the new role, not the old one for a moment.
-    onSuccess: async () => {
-      addToast(`Your role at ${entityName} is saved.`, 'success');
+    onSuccess: async (result) => {
+      addToast(membershipToast(entityName, result), 'success');
       await qc.invalidateQueries({ queryKey: entityKeys.all });
       onClose();
     },
@@ -56,14 +56,18 @@ export default function RoleSheet({ entityId, entityName, role, title, onClose }
     save.mutate(roleBody(values, !!dirtyFields.title));
   });
 
+  // While the save is on its way the sheet stays open (Cancel, X, Escape and the backdrop wait), so what it answers,
+  // a failure included, is said where the member is looking.
+  const close = () => { if (!save.isPending) onClose(); };
+
   return (
     <Sheet
       open
-      onClose={onClose}
+      onClose={close}
       title="Your role"
       footer={(
         <>
-          <button type="button" onClick={onClose} className={QUIET_BUTTON}>Cancel</button>
+          <button type="button" onClick={close} disabled={save.isPending} className={QUIET_BUTTON}>Cancel</button>
           <button type="submit" form={formId} disabled={save.isPending} className={PRIMARY_BUTTON}>{save.isPending ? 'Saving…' : 'Save'}</button>
         </>
       )}

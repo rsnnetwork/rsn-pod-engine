@@ -77,14 +77,18 @@ export default function CreateEntitySheet({ startName, onClose }: Props) {
     create.mutate(createBody(values));
   });
 
+  // While the create is on its way the sheet stays open (Cancel, X, Escape and the backdrop wait), so what it answers,
+  // a taken name or a failure, is said where the member is looking.
+  const close = () => { if (!create.isPending) onClose(); };
+
   return (
     <Sheet
       open
-      onClose={onClose}
+      onClose={close}
       title="Create your company"
       footer={(
         <>
-          <button type="button" onClick={onClose} className={QUIET_BUTTON}>Cancel</button>
+          <button type="button" onClick={close} disabled={create.isPending} className={QUIET_BUTTON}>Cancel</button>
           {/* In the footer, outside the form, and still its submit button: Enter in a field sends the form. */}
           <button type="submit" form={formId} disabled={create.isPending} className={PRIMARY_BUTTON}>
             {create.isPending ? 'Creating…' : 'Create'}

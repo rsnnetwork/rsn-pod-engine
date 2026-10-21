@@ -14,11 +14,13 @@ const page = (name: string) => read(`${dir}/${name}`);
 const count = (s: string, re: RegExp) => s.match(re)?.length ?? 0;
 
 describe('Entities: every query is told by the contract\'s realtime tags', () => {
-  it('the list (and the create form\'s "already on REASON", which shares its cache) listens for the member\'s own entities', () => {
-    for (const f of ['EntitiesPage.tsx', 'AlreadyOnReason.tsx']) {
-      expect(page(f)).toMatch(/queryKey: entityKeys\.list\(term\),/);
-      expect(page(f)).toMatch(/meta: \{ entities: me \? \[E\.userEntities\(me\)\] : \[\] \},/);
-    }
+  it('the list, the search and the create form\'s "already on REASON" (which shares the search\'s cache) listen for the member\'s own entities', () => {
+    // The page's own list (your entities, the recent others) and the search are two queries, so a search that fails
+    // never takes the page, the search box or your entities away.
+    expect(page('EntitiesPage.tsx')).toMatch(/queryKey: entityKeys\.list\(''\),/);
+    for (const f of ['EntitiesPage.tsx', 'AlreadyOnReason.tsx']) expect(page(f)).toMatch(/queryKey: entityKeys\.list\(term\),/);
+    expect(count(page('EntitiesPage.tsx'), /meta: \{ entities: me \? \[E\.userEntities\(me\)\] : \[\] \},/g)).toBe(2);
+    expect(page('AlreadyOnReason.tsx')).toMatch(/meta: \{ entities: me \? \[E\.userEntities\(me\)\] : \[\] \},/);
   });
   it('an entity\'s page listens for the entity and for the member\'s own entities', () => {
     expect(page('EntityProfilePage.tsx')).toMatch(/meta: \{ entities: me && validId \? \[E\.entity\(entityId\), E\.userEntities\(me\)\] : \[\] \},/);
@@ -28,8 +30,8 @@ describe('Entities: every query is told by the contract\'s realtime tags', () =>
     expect(page('ProfileEntities.tsx')).toMatch(/queryKey: entityKeys\.person\(me \?\? ''\),/);
     expect(page('ProfileEntities.tsx')).toMatch(/meta: \{ entities: me \? \[E\.userEntities\(me\)\] : \[\] \},/);
   });
-  it('there are exactly those five queries', () => {
-    expect(files().reduce((n, { s }) => n + count(s, /\buseQuery\(/g), 0)).toBe(5);
+  it('there are exactly those six queries', () => {
+    expect(files().reduce((n, { s }) => n + count(s, /\buseQuery\(/g), 0)).toBe(6);
   });
   it('a write never edits the cache by hand: it refreshes every entity screen (and the tags tell the other tabs and people)', () => {
     for (const { f, s } of files()) {
@@ -92,7 +94,19 @@ describe('Entities: the list page', () => {
     expect(page('YourEntities.tsx')).toMatch(/You are not linked to an entity yet\./);
     expect(page('OtherEntities.tsx')).toMatch(/No other entities yet\./);
     expect(page('EntitiesPage.tsx')).toMatch(/We could not load entities just now\./);
-    expect(page('EntitiesPage.tsx')).toMatch(/onClick=\{\(\) => void list\.refetch\(\)\}/);
+    expect(page('EntitiesPage.tsx')).toMatch(/onClick=\{\(\) => void base\.refetch\(\)\}/);
+  });
+  it('the page-level failure is the first load\'s only; a failed search is said inside "Other entities", under its box, with Try again', () => {
+    const p = page('EntitiesPage.tsx');
+    expect(p).toMatch(/const cannotLoad = base\.data === undefined && \(base\.isError \|\| waiting\);/);
+    expect(p).toMatch(/enabled: !!me && term !== '',/);
+    expect(p).toMatch(/onRetrySearch=\{\(\) => void search\.refetch\(\)\}/);
+    const others = page('OtherEntities.tsx');
+    const heading = '>We could not search just now.</h3>';
+    expect(others).toContain(heading);
+    // The box is drawn before, and whatever the list's state: the failure replaces the cards only.
+    expect(others.indexOf('aria-label="Search entities"')).toBeLessThan(others.indexOf(heading));
+    expect(others).toMatch(/onClick=\{onRetrySearch\}/);
   });
 });
 
@@ -116,6 +130,17 @@ describe('Entities: the create sheet', () => {
     expect(box).toMatch(/>Open it<\/Link>/);
     expect(box).toMatch(/'Join it'/);
     expect(page('CreateEntitySheet.tsx')).toMatch(/const existingId = nameTakenId\(err\);/);
+  });
+  // Review, fix round 1: pressed before the lookup answered (or after it failed), Join it was a role change for a member
+  // already linked: it replaced their role with the form's, cleared their title, and said "You joined".
+  it('Join it is offered only once the lookup says you are not linked; a blank title is left out; the toast follows the answer', () => {
+    const box = page('NameTaken.tsx');
+    expect(box).toMatch(/\{existing\.isSuccess && !linkedAs && \(/);
+    expect(count(box, /'Join it'/g)).toBe(1);
+    expect(box).toMatch(/setMyEntityRole\(taken\.id, role, title\.trim\(\) \|\| undefined\)/);
+    expect(box).not.toMatch(/title\.trim\(\) \|\| null/);
+    for (const f of ['NameTaken.tsx', 'RelationshipPanel.tsx', 'RoleSheet.tsx']) expect(page(f)).toMatch(/membershipToast\(/);
+    for (const f of ['NameTaken.tsx', 'RelationshipPanel.tsx']) expect(page(f)).not.toMatch(/joinedToast\(/);
   });
   it('a refused field says why next to itself, and the submit button sits in the footer as the form\'s own (Enter sends it)', () => {
     const sheet = page('CreateEntitySheet.tsx');
@@ -157,6 +182,24 @@ describe('Entities: the entity profile', () => {
     expect(rel).toMatch(/>Leave<\/button>/);
     expect(rel).toMatch(/'Join'/);
     expect(rel).toMatch(/<option value="">Choose your role<\/option>/);
+  });
+  // Review, fix round 1: Cancel, X, Escape and the backdrop closed a sheet while "Archiving…" or "Leaving…", and a
+  // failure that came after was written into a closed sheet nobody could see.
+  it('a sheet whose request is on its way cannot be closed until it is answered, and its Cancel says so', () => {
+    const confirm = page('ConfirmSheet.tsx');
+    expect(confirm).toMatch(/const close = \(\) => \{ if \(!busy\) onClose\(\); \};/);
+    expect(confirm).toMatch(/onClose=\{close\}/);
+    expect(confirm).toMatch(/<button type="button" onClick=\{close\} disabled=\{busy\}/);
+    for (const [f, pending] of [['CreateEntitySheet.tsx', 'create'], ['EditEntitySheet.tsx', 'save'], ['RoleSheet.tsx', 'save']] as const) {
+      const s = page(f);
+      expect({ f, guard: s.includes(`const close = () => { if (!${pending}.isPending) onClose(); };`) }).toEqual({ f, guard: true });
+      expect({ f, sheet: /<Sheet\s+open\s+onClose=\{close\}/.test(s) }).toEqual({ f, sheet: true });
+      expect({ f, cancel: s.includes(`<button type="button" onClick={close} disabled={${pending}.isPending}`) }).toEqual({ f, cancel: true });
+    }
+  });
+  it('a Join it still on its way when the sheet is closed says how it went in a toast', () => {
+    const box = page('NameTaken.tsx');
+    expect(box).toMatch(/if \(shown\.current\) setError\(message\);\s*else addToast\(message, 'error'\);/);
   });
   it('leaving and archiving ask first; Edit and Archive are for those who may (canEdit)', () => {
     expect(page('RelationshipPanel.tsx')).toMatch(/<ConfirmSheet\s+open=\{leaving\}/);

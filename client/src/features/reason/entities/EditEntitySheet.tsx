@@ -65,14 +65,18 @@ export default function EditEntitySheet({ entity, onClose }: Props) {
     save.mutate(changes);
   });
 
+  // While the save is on its way the sheet stays open (Cancel, X, Escape and the backdrop wait), so what it answers,
+  // a failure included, is said where the member is looking.
+  const close = () => { if (!save.isPending) onClose(); };
+
   return (
     <Sheet
       open
-      onClose={onClose}
+      onClose={close}
       title={`Edit ${entity.name}`}
       footer={(
         <>
-          <button type="button" onClick={onClose} className={QUIET_BUTTON}>Cancel</button>
+          <button type="button" onClick={close} disabled={save.isPending} className={QUIET_BUTTON}>Cancel</button>
           <button type="submit" form={formId} disabled={save.isPending} className={PRIMARY_BUTTON}>{save.isPending ? 'Saving…' : 'Save changes'}</button>
         </>
       )}

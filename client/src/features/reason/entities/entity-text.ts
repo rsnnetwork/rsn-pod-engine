@@ -167,5 +167,12 @@ const COMPANY_FILLED = ' Your profile now shows it as your company.';
 
 export const createdToast = (name: string, companyUpdated: boolean) => `${name} is on REASON.${companyUpdated ? COMPANY_FILLED : ''}`;
 export const joinedToast = (name: string, companyUpdated: boolean) => `You joined ${name}.${companyUpdated ? COMPANY_FILLED : ''}`;
+
+/**
+ * A join and a role change are the same request; the answer says which it was. "You joined" only for a new link: a
+ * member already linked (another tab joined first) had their role changed, and is told that.
+ */
+export const membershipToast = (name: string, r: { joined: boolean; companyUpdated: boolean }) =>
+  (r.joined ? joinedToast(name, r.companyUpdated) : `Your role at ${name} is saved.${r.companyUpdated ? COMPANY_FILLED : ''}`);
 export const leftToast = (name: string, archived: boolean) =>
   (archived ? `You left ${name}. No one else was linked to it, so it is archived.` : `You left ${name}.`);

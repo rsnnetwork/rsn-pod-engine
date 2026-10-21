@@ -12,7 +12,7 @@ import { statusOf } from '../human/profile-text';
 import ConfirmSheet from './ConfirmSheet';
 import RoleSheet from './RoleSheet';
 import { entityKeys, leaveEntity, setMyEntityRole } from './entity-api';
-import { entityError, joinedToast, leftToast, roleLabel } from './entity-text';
+import { entityError, leftToast, membershipToast, roleLabel } from './entity-text';
 import { PRIMARY_BUTTON, QUIET_BUTTON } from './look';
 
 const KICKER = 'text-[10px] font-extrabold uppercase tracking-[0.14em] text-reason-red-hover md:text-[11px]';
@@ -47,7 +47,7 @@ export default function RelationshipPanel({ page, me, onClosing }: Props) {
     networkMode: 'always',
     mutationFn: (role: EntityRole) => setMyEntityRole(entity.id, role),
     onSuccess: (result) => {
-      addToast(joinedToast(entity.name, result.companyUpdated), 'success');
+      addToast(membershipToast(entity.name, result), 'success');
       setJoinAs('');
       return qc.invalidateQueries({ queryKey: entityKeys.all });
     },

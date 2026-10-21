@@ -12,7 +12,7 @@ import { ENTITY_KINDS, ENTITY_KIND_LABELS, ENTITY_LIMITS, ENTITY_ROLES, ENTITY_R
 import { CONNECTION_LOST } from '../../../../client/src/features/reason/errors';
 import {
   ENTITY_GONE, SIZE_OPTIONS, createdToast, entitiesOf, entityError, entityLetter, entityMeta, fieldErrors, isEntityId,
-  joinedToast, kindLabel, leftToast, loadFailedLine, nameTakenId, peopleCount, roleLabel, roleLine, searchTerm, sizeChoices,
+  joinedToast, kindLabel, leftToast, loadFailedLine, membershipToast, nameTakenId, peopleCount, roleLabel, roleLine, searchTerm, sizeChoices,
   sizeText, tidyName, websiteLink,
 } from '../../../../client/src/features/reason/entities/entity-text';
 import {
@@ -182,6 +182,13 @@ describe('a refused form puts each reason next to its own field', () => {
 });
 
 describe('the toasts', () => {
+  it('a membership write is worded from the answer: "joined" only when it made a new link, else the role is saved', () => {
+    expect(membershipToast('Acme', { joined: true, companyUpdated: false })).toBe('You joined Acme.');
+    expect(membershipToast('Acme', { joined: true, companyUpdated: true })).toBe('You joined Acme. Your profile now shows it as your company.');
+    // Already linked (another tab joined first): the same request changed the role, and says so.
+    expect(membershipToast('Acme', { joined: false, companyUpdated: false })).toBe('Your role at Acme is saved.');
+    expect(membershipToast('Acme', { joined: false, companyUpdated: true })).toBe('Your role at Acme is saved. Your profile now shows it as your company.');
+  });
   it('say what happened, and when the profile company was filled in, that too', () => {
     expect(createdToast('Acme', false)).toBe('Acme is on REASON.');
     expect(createdToast('Acme', true)).toBe('Acme is on REASON. Your profile now shows it as your company.');

@@ -20,10 +20,13 @@ interface Props {
   mine: EntitySummary[];
   /** The list on screen is for an earlier search while the new one is on its way. */
   stale: boolean;
+  /** The line under "We could not search just now." when the search has no answer at all; null otherwise. */
+  searchFailure: string | null;
+  onRetrySearch: () => void;
   onCreate: (name: string) => void;
 }
 
-export default function OtherEntities({ typed, onType, term, others, mine, stale, onCreate }: Props) {
+export default function OtherEntities({ typed, onType, term, others, mine, stale, searchFailure, onRetrySearch, onCreate }: Props) {
   const oneCharacter = tidyName(typed).length === 1;
   const needle = term.toLowerCase();
   const onlyMine = term !== '' && mine.some((e) => e.name.toLowerCase().includes(needle));
@@ -54,8 +57,17 @@ export default function OtherEntities({ typed, onType, term, others, mine, stale
       {oneCharacter && <p className="mt-2 text-[12px] text-[#646a77]">Type at least 2 characters to search.</p>}
 
       <div className="mt-3.5">
-        {/* An empty answer for the last search is not one for this search: wait for this one before saying "none". */}
-        {others === null || (stale && others.length === 0) ? (
+        {/* A failed search replaces the cards only: the box stays, with what was typed, and Try again asks again. */}
+        {searchFailure ? (
+          <div role="alert" className="flex flex-col items-start gap-3 rounded-2xl bg-reason-soft p-3.5">
+            <div>
+              <h3 className="text-[15px] font-bold">We could not search just now.</h3>
+              <p className="mt-1 text-[13px] text-[#646a77]">{searchFailure}</p>
+            </div>
+            <button type="button" onClick={onRetrySearch} className={QUIET_BUTTON}>Try again</button>
+          </div>
+        ) : others === null || (stale && others.length === 0) ? (
+          /* An empty answer for the last search is not one for this search: wait for this one before saying "none". */
           <div className={CARD_GRID} aria-busy="true">
             <span className="sr-only" role="status">Loading entities</span>
             {[0, 1].map((i) => <Skeleton key={i} className="h-[118px]" />)}
