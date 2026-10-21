@@ -22,6 +22,14 @@ jest.mock('../../../db', () => ({
   transaction: (cb: (c: { query: typeof mockTx }) => unknown) => mockTransaction(cb),
 }));
 
+// The prefill the onboarding state shows is the one source for "kept as LinkedIn had it".
+const mockShownPrefill = jest.fn();
+jest.mock('../../../services/onboarding/linkedin-v2', () => ({
+  __esModule: true,
+  ...jest.requireActual('../../../services/onboarding/linkedin-v2'),
+  shownPrefill: (...a: unknown[]) => mockShownPrefill(...a),
+}));
+
 import { getState, saveDraft, confirm } from '../../../services/onboarding/answers-v2.repo';
 import { confirmSchemaV2 } from '../../../services/onboarding/answers-v2.schema';
 import { designationsWanted, normalizeDesignation } from '../../../services/matching/intent-signals';
@@ -37,7 +45,7 @@ const stateRow = (over: Record<string, unknown> = {}) => ({
   onboarding_intent: null, looking_to_meet: [], can_offer: [], self_kinds: [], hoping_to_find: [],
   meet_other: null, find_other: null, find_specific: null, offer_other: null, self_other: null,
   draft: null, enriched: null, enrichment_status: null, enrichment_started_at: null, enrichment_completed_at: null,
-  preload: null,
+  lookup_url: null, preload: null, last_onboarded_at: null,
   ...over,
 });
 
@@ -111,6 +119,37 @@ describe('getState', () => {
     expect(s.answers.lookingToMeet).toEqual(['meet_investors']);
   });
 
+  // Fix round 1 (M4): an edit-mode screen saves a draft and redraws from the
+  // state. A draft saved after the member's last confirm is the newest thing
+  // they said, so it is what they see; an older one, or one with no time, is not.
+  const finished = {
+    onboarding_status: 'completed', onboarding_version: 2, last_onboarded_at: new Date(NOW - 60_000),
+    looking_to_meet: ['meet_investors'], hoping_to_find: ['find_funding'], can_offer: ['offer_investment'], self_kinds: ['self_investor'],
+  };
+
+  it('a completed member\'s draft saved after their last confirm is what the screens show', async () => {
+    const s = await answer({ ...finished, draft: { canOffer: ['offer_introductions'], step: 'q3', savedAt: new Date(NOW).toISOString() } });
+    expect(s.answers.canOffer).toEqual(['offer_introductions']);
+    // Every question the draft did not touch is what they have.
+    expect(s.answers.lookingToMeet).toEqual(['meet_investors']);
+    expect(s.step).toBe('q3');
+  });
+
+  it('a draft from before their last confirm does not override what they have', async () => {
+    const s = await answer({ ...finished, draft: { canOffer: ['offer_introductions'], savedAt: new Date(NOW - 120_000).toISOString() } });
+    expect(s.answers.canOffer).toEqual(['offer_investment']);
+  });
+
+  it('the database clock\'s own format is read (microseconds and an offset)', async () => {
+    const s = await answer({ ...finished, last_onboarded_at: new Date('2026-10-21T05:40:12.100Z'), draft: { canOffer: ['offer_introductions'], savedAt: '2026-10-21T10:40:12.123456+05:00' } });
+    expect(s.answers.canOffer).toEqual(['offer_introductions']);
+  });
+
+  it('the time stamp never shows up as an answer', async () => {
+    const s = await answer({ ...finished, draft: { canOffer: ['offer_introductions'], savedAt: new Date(NOW).toISOString() } });
+    expect(JSON.stringify(s.answers)).not.toMatch(/savedAt/);
+  });
+
   it('words are only shown with the option they belong to', async () => {
     const s = await answer({
       onboarding_status: 'completed', onboarding_version: 2,
@@ -142,6 +181,26 @@ describe('getState', () => {
     });
   });
 
+  // Fix round 1 (Important 2): "not found" belongs to the address it was for.
+  it('a not-found for an earlier address is never reported for the address on the profile now', async () => {
+    const s = await answer({
+      linkedin_url: 'https://www.linkedin.com/in/jane-new', enrichment_status: 'not_found',
+      enrichment_completed_at: new Date(NOW), lookup_url: 'https://www.linkedin.com/in/jane-old',
+    });
+    expect(s.linkedin).toEqual({ status: 'none' });
+    const same = await answer({
+      linkedin_url: 'https://www.linkedin.com/in/jane-old', enrichment_status: 'not_found',
+      enrichment_completed_at: new Date(NOW), lookup_url: 'https://www.linkedin.com/in/jane-old',
+    });
+    expect(same.linkedin).toEqual({ status: 'not_found' });
+  });
+
+  it('reads the address the last lookup ran for', async () => {
+    mockQuery.mockResolvedValue({ rows: [stateRow()] });
+    await getState('u-1');
+    expect(mockQuery.mock.calls[0][0]).toMatch(/inferred_profile->'lastLookup'->>'linkedinUrl' AS lookup_url/);
+  });
+
   it('the tour is due only for someone who has just finished', async () => {
     const s = await answer({ onboarding_status: 'completed', tour_due_at: new Date(NOW) });
     expect(s.tour.pending).toBe(true);
@@ -158,6 +217,12 @@ describe('saveDraft', () => {
     mockQuery.mockReset();
     mockTx.mockReset();
     mockTx.mockResolvedValue({ rows: [] });
+  });
+
+  it('stamps the draft with when it was saved, by the database clock', async () => {
+    await saveDraft('u-1', { canOffer: ['offer_introductions'] });
+    const call = mockTx.mock.calls.find(c => /INSERT INTO user_intent_profiles/.test(c[0] as string))!;
+    expect((call[0] as string).match(/jsonb_build_object\('savedAt', NOW\(\)\)/g)).toHaveLength(2);
   });
 
   it('merges into the v2 draft, leaving anything else in the draft alone', async () => {
@@ -190,7 +255,6 @@ describe('confirm', () => {
     profile: { jobTitle: 'Founder & CEO', company: 'Vokt', timezone: 'Asia/Kathmandu' },
   });
   let before: Record<string, unknown>;
-  let cachedEnrichment: unknown;
 
   beforeEach(() => {
     mockQuery.mockReset();
@@ -201,12 +265,9 @@ describe('confirm', () => {
       hoping_to_find: [], find_other: null, find_specific: null, can_offer: [], offer_other: null,
       self_kinds: [], self_other: null, job_title: null, industry: 'Software',
     };
-    cachedEnrichment = null;
-    mockQuery.mockImplementation((sql: string) => (
-      /inferred_profile->'enriched'/.test(sql)
-        ? Promise.resolve({ rows: [{ enriched: cachedEnrichment }] })
-        : Promise.resolve({ rows: [] })
-    ));
+    mockShownPrefill.mockReset();
+    mockShownPrefill.mockResolvedValue(null);
+    mockQuery.mockImplementation(() => Promise.resolve({ rows: [] }));
     mockTx.mockImplementation((sql: string) => (
       /FOR UPDATE/.test(sql) ? Promise.resolve({ rows: [before] }) : Promise.resolve({ rows: [] })
     ));
@@ -302,13 +363,32 @@ describe('confirm', () => {
     expect(call[1]).toEqual(expect.arrayContaining(['Jane', 'Q. Doe']));
   });
 
-  it('a title the member kept from LinkedIn is inferred; one they typed is stated', async () => {
-    cachedEnrichment = { profile: { currentRole: 'founder & ceo' }, confidence: 0.95 };
+  const shown = (jobTitle: string | null) => ({
+    displayName: 'Jane', photoUrl: null, jobTitle, company: null, industry: null, location: null, selfGuess: null,
+  });
+
+  it('a title kept as the LinkedIn prefill showed it is inferred; one they typed is stated', async () => {
+    mockShownPrefill.mockResolvedValue(shown('founder & ceo'));
     await confirm('u-1', FULL);
+    expect(mockShownPrefill).toHaveBeenCalledWith('u-1');
     expect(update().value('job_title_source')).toBe('inferred');
     mockTx.mockClear();
-    cachedEnrichment = { profile: { currentRole: 'Chief Baker' }, confidence: 0.95 };
+    mockShownPrefill.mockResolvedValue(shown('Chief Baker'));
     await confirm('u-1', FULL);
+    expect(update().value('job_title_source')).toBe('stated');
+  });
+
+  // Fix round 1 (M3): only the prefill the state shows counts, so a result the
+  // member never saw (another address, a stale one) never makes it inferred.
+  it('with no prefill shown, a title is stated whatever an old result said', async () => {
+    mockShownPrefill.mockResolvedValue(null);
+    await confirm('u-1', FULL);
+    expect(update().value('job_title_source')).toBe('stated');
+  });
+
+  it('a prefill that could not be read leaves the title stated, and the confirm goes through', async () => {
+    mockShownPrefill.mockRejectedValue(new Error('db hiccup'));
+    await expect(confirm('u-1', FULL)).resolves.toMatchObject({ changed: true });
     expect(update().value('job_title_source')).toBe('stated');
   });
 

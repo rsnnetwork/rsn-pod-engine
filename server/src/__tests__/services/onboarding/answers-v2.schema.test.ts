@@ -130,6 +130,30 @@ describe('confirm: the finished answers', () => {
     expect(r.meetOther).toBe('bakers in Vienna');
   });
 
+  // Fix round 1 (M2): a line break between two words is a space, never nothing,
+  // or "Vienna\nor Graz" became "Viennaor Graz" and the place parser lost both.
+  it('a line break or a tab between words becomes one space', () => {
+    const r = confirmSchemaV2.parse({ ...GOOD, lookingToMeet: ['meet_other'], meetOther: 'bakers in Vienna\nor Graz', findSpecific: 'someone\twho\r\nexports' });
+    expect(r.meetOther).toBe('bakers in Vienna or Graz');
+    expect(r.findSpecific).toBe('someone who exports');
+  });
+
+  it('runs of spaces collapse to one', () => {
+    expect(confirmSchemaV2.parse({ ...GOOD, findSpecific: 'a   lead    investor' }).findSpecific).toBe('a lead investor');
+  });
+
+  // Fix round 1 (M3): every refusal a member can cause says what to do, in words.
+  it('a missing answer list says to choose an answer, not "Required"', () => {
+    const { lookingToMeet: _omit, ...rest } = GOOD;
+    const r = confirmSchemaV2.safeParse(rest);
+    expect(issues(r)).toContain('lookingToMeet: Select at least one answer.');
+  });
+
+  it('a key that is not on the list says to choose one of the answers shown', () => {
+    const r = confirmSchemaV2.safeParse({ ...GOOD, canOffer: ['astronauts'] });
+    expect(issues(r).join('|')).toMatch(/canOffer\.0: Choose one of the answers shown\./);
+  });
+
   it('the profile is optional, and a field left out stays out', () => {
     expect(confirmSchemaV2.parse(GOOD).profile).toEqual({});
     const r = confirmSchemaV2.parse({ ...GOOD, profile: { company: 'Vokt' } });
@@ -171,6 +195,12 @@ describe('LinkedIn bodies', () => {
     expect(linkedinSchemaV2.safeParse({}).success).toBe(false);
     expect(linkedinSchemaV2.safeParse({ url: '' }).success).toBe(false);
     expect(linkedinSchemaV2.safeParse({ url: 'x'.repeat(501) }).success).toBe(false);
+  });
+
+  it('a missing or empty address says what to enter, not "Required"', () => {
+    expect(issues(linkedinSchemaV2.safeParse({}))).toEqual(['url: Enter your LinkedIn profile link.']);
+    expect(issues(linkedinSchemaV2.safeParse({ url: '   ' }))).toEqual(['url: Enter your LinkedIn profile link.']);
+    expect(issues(linkedinSchemaV2.safeParse({ url: 42 }))).toEqual(['url: Enter your LinkedIn profile link.']);
   });
 
   it('skip takes nothing', () => {

@@ -20,7 +20,7 @@ import {
   draftSchemaV2, confirmSchemaV2, linkedinSchemaV2, skipSchemaV2, type ConfirmInputV2, type DraftInputV2,
 } from '../services/onboarding/answers-v2.schema';
 import { connectLinkedin } from '../services/onboarding/linkedin-v2';
-import { useLinkedinPhoto } from '../services/onboarding/linkedin-photo';
+import { useShownLinkedinPhoto } from '../services/onboarding/linkedin-photo';
 import { syncSearchesFromV2Answers, type V2SearchResult } from '../services/matching/first-agent.service';
 import { notifyMatchesOfNewUser } from '../services/matching/platform-match.service';
 import { record as recordStageEvent } from '../services/onboarding/stage-events.repo';
@@ -139,10 +139,11 @@ router.post(
         recordStageEvent(userId, 'confirmed', { version: 'onboarding_v2', kinds: result.answers.lookingToMeet });
       }
 
-      // "Keep this photo": their own LinkedIn photo, never a URL the client names.
+      // "Keep this photo": the photo the member was shown (the state's LinkedIn
+      // prefill), never another one we hold and never a URL the client names.
       let photo: OnboardingV2ConfirmResponse['photo'] = null;
       if (input.profile?.useLinkedinPhoto) {
-        const outcome = await useLinkedinPhoto(userId);
+        const outcome = await useShownLinkedinPhoto(userId);
         photo = outcome === 'done' ? 'used' : outcome;
       }
 

@@ -62,10 +62,17 @@ const TERMINAL_ENRICHMENT_STATUSES = new Set<EnrichmentStatus>(['found', 'partia
  * callers): status 'searching' always resets enrichment_error to null and
  * stamps enrichment_started_at (a fresh attempt); any terminal status always
  * stamps enrichment_completed_at.
+ *
+ * 21 Oct 2026: `linkedinUrl` is the address the lookup this state describes
+ * ran for (null: a lookup for no address). It is kept beside the state, in
+ * inferred_profile.lastLookup = { linkedinUrl, at }, written in the same
+ * statement, so onboarding v2 can tell "this address was looked up" from "an
+ * earlier address was". A state written WITHOUT one removes the old record,
+ * so a record can never describe a different lookup than the state beside it.
  */
 export async function setEnrichmentState(
   userId: string,
-  state: Partial<EnrichmentDbState> & { status: EnrichmentStatus },
+  state: Partial<EnrichmentDbState> & { status: EnrichmentStatus; linkedinUrl?: string | null },
 ): Promise<void> {
   const { status } = state;
   const isSearching = status === 'searching';
@@ -76,24 +83,34 @@ export async function setEnrichmentState(
   const errorProvided = isSearching || 'error' in state;
   const startedAtProvided = isSearching || 'startedAt' in state;
   const completedAtProvided = isTerminal || 'completedAt' in state;
+  const lookupProvided = 'linkedinUrl' in state;
 
   const source = sourceProvided ? state.source ?? null : null;
   const error = isSearching ? null : errorProvided ? state.error ?? null : null;
   const startedAt = isSearching ? nowIso : startedAtProvided ? state.startedAt ?? null : null;
   const completedAt = isTerminal ? nowIso : completedAtProvided ? state.completedAt ?? null : null;
+  const lookup = lookupProvided
+    ? JSON.stringify({ linkedinUrl: state.linkedinUrl ?? null, at: isSearching ? startedAt : isTerminal ? completedAt : nowIso })
+    : null;
 
   await query(
     `INSERT INTO user_intent_profiles
-       (user_id, enrichment_status, enrichment_source, enrichment_error, enrichment_started_at, enrichment_completed_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5::timestamptz, $6::timestamptz, NOW())
+       (user_id, enrichment_status, enrichment_source, enrichment_error, enrichment_started_at, enrichment_completed_at,
+        inferred_profile, updated_at)
+       VALUES ($1, $2, $3, $4, $5::timestamptz, $6::timestamptz,
+               CASE WHEN $11 THEN jsonb_build_object('lastLookup', $12::jsonb) ELSE '{}'::jsonb END, NOW())
      ON CONFLICT (user_id) DO UPDATE SET
        enrichment_status = $2,
        enrichment_source = CASE WHEN $7 THEN $3 ELSE user_intent_profiles.enrichment_source END,
        enrichment_error = CASE WHEN $8 THEN $4 ELSE user_intent_profiles.enrichment_error END,
        enrichment_started_at = CASE WHEN $9 THEN $5::timestamptz ELSE user_intent_profiles.enrichment_started_at END,
        enrichment_completed_at = CASE WHEN $10 THEN $6::timestamptz ELSE user_intent_profiles.enrichment_completed_at END,
+       inferred_profile = CASE WHEN $11
+         THEN COALESCE(user_intent_profiles.inferred_profile, '{}'::jsonb) || jsonb_build_object('lastLookup', $12::jsonb)
+         ELSE COALESCE(user_intent_profiles.inferred_profile, '{}'::jsonb) - 'lastLookup' END,
        updated_at = NOW()`,
-    [userId, status, source, error, startedAt, completedAt, sourceProvided, errorProvided, startedAtProvided, completedAtProvided],
+    [userId, status, source, error, startedAt, completedAt, sourceProvided, errorProvided, startedAtProvided, completedAtProvided,
+     lookupProvided, lookup],
   );
 }
 

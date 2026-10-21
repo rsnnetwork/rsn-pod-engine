@@ -17,18 +17,19 @@ import type {
   OnboardingStatus, OnboardingV2Answers, OnboardingV2State, OnboardingV2Step, TourOutcome,
 } from '@rsn/shared';
 import { v2FromV1, isMeetV2Key, isFindV2Key, isOfferV2Key, isSelfV2Key } from './answers-v2.map';
-import { linkedinBlock, asResult } from './linkedin-v2';
-import { getCachedEnrichment, sameTitle, type EnrichmentStatus } from './enrichment.repo';
-import type { EnrichResult } from './enrichment.service';
+import { linkedinBlock, sourcesFromRow, shownPrefill, type LinkedinRow } from './linkedin-v2';
+import { sameTitle } from './enrichment.repo';
 import {
   wantTextV2, intentTextV2, offerTextV2, roleTitlesV2, reasonsV2, desiredDesignationsV2,
 } from '../matching/option-signals';
 import { normalizeDesignation } from '../matching/intent-signals';
 import type { DraftInputV2, ConfirmInputV2 } from './answers-v2.schema';
 
-type Draft = Partial<OnboardingV2Answers> & { step?: OnboardingV2Step };
+/** onboarding_draft->'v2': what was saved, the step, and when (stamped by saveDraft). */
+type Draft = Partial<OnboardingV2Answers> & { step?: OnboardingV2Step; savedAt?: string };
 
-interface StateRow {
+/** The member's row, their intent profile and their approval-time lookup, as getState selects them. */
+interface StateRow extends LinkedinRow {
   onboarding_status: OnboardingStatus;
   onboarding_version: number | null;
   display_name: string | null;
@@ -37,10 +38,10 @@ interface StateRow {
   company: string | null;
   industry: string | null;
   timezone: string | null;
-  linkedin_url: string | null;
   tour_due_at: Date | null;
   tour_seen_at: Date | null;
   tour_outcome: TourOutcome | null;
+  last_onboarded_at: Date | null;
   onboarding_intent: string | null;
   looking_to_meet: string[] | null;
   can_offer: string[] | null;
@@ -52,11 +53,6 @@ interface StateRow {
   offer_other: string | null;
   self_other: string | null;
   draft: Draft | null;
-  enriched: unknown;
-  enrichment_status: EnrichmentStatus | null;
-  enrichment_started_at: Date | string | null;
-  enrichment_completed_at: Date | string | null;
-  preload: unknown;
 }
 
 const iso = (v: Date | string | null): string | null => (v == null ? null : new Date(v).toISOString());
@@ -81,11 +77,20 @@ function confirmedLayer(row: StateRow): Layer {
 type ArrayField = 'lookingToMeet' | 'hopingToFind' | 'canOffer' | 'selfKinds';
 type TextField = 'meetOther' | 'findOther' | 'findSpecific' | 'offerOther' | 'selfOther';
 
+/** The draft was saved after the member's last confirm (saveDraft stamps savedAt by the database clock). */
+function draftIsNewest(row: StateRow): boolean {
+  const savedAt = typeof row.draft?.savedAt === 'string' ? Date.parse(row.draft.savedAt) : Number.NaN;
+  if (!Number.isFinite(savedAt)) return false;
+  return !row.last_onboarded_at || savedAt > new Date(row.last_onboarded_at).getTime();
+}
+
 /**
  * What the screens show. Field by field, the first layer that says anything
- * wins: for a member who finished v2, what they have, then a draft they left;
- * for anyone else, their draft (the newest thing they said), then confirmed v2
- * answers. Version 1 answers, through the mapping table, come last.
+ * wins. For a member who finished, what they have, then a draft they left,
+ * UNLESS that draft was saved after their last confirm (fix round 1, M4: an
+ * edit-mode screen that autosaves and redraws from this must see the tick it
+ * just made). For anyone else, their draft (the newest thing they said), then
+ * confirmed v2 answers. Version 1 answers, through the mapping table, come last.
  */
 function resolveAnswers(row: StateRow): { answers: OnboardingV2Answers; prefilledFromV1: boolean } {
   const confirmed = confirmedLayer(row);
@@ -96,7 +101,8 @@ function resolveAnswers(row: StateRow): { answers: OnboardingV2Answers; prefille
     canOffer: row.can_offer,
     selfKinds: row.self_kinds,
   });
-  const layers: Layer[] = row.onboarding_status === 'completed' ? [confirmed, draft] : [draft, confirmed];
+  const confirmedFirst = row.onboarding_status === 'completed' && !draftIsNewest(row);
+  const layers: Layer[] = confirmedFirst ? [confirmed, draft] : [draft, confirmed];
 
   let prefilledFromV1 = false;
   const pickArray = <K extends ArrayField>(field: K): OnboardingV2Answers[K] => {
@@ -136,12 +142,13 @@ export async function getState(userId: string): Promise<OnboardingV2State> {
   const r = await query<StateRow>(
     `SELECT u.onboarding_status, u.onboarding_version, u.display_name, u.avatar_url,
             u.job_title, u.company, u.industry, u.timezone, u.linkedin_url,
-            u.tour_due_at, u.tour_seen_at, u.tour_outcome,
+            u.tour_due_at, u.tour_seen_at, u.tour_outcome, u.last_onboarded_at,
             u.onboarding_intent, u.looking_to_meet, u.can_offer, u.self_kinds, u.hoping_to_find,
             u.meet_other, u.find_other, u.find_specific, u.offer_other, u.self_other,
             p.onboarding_draft->'v2' AS draft,
             p.inferred_profile->'enriched' AS enriched,
             p.enrichment_status, p.enrichment_started_at, p.enrichment_completed_at,
+            p.inferred_profile->'lastLookup'->>'linkedinUrl' AS lookup_url,
             jr.enriched AS preload
        FROM users u
        LEFT JOIN user_intent_profiles p ON p.user_id = u.id
@@ -174,17 +181,7 @@ export async function getState(userId: string): Promise<OnboardingV2State> {
       timezone: row.timezone,
       linkedinUrl: row.linkedin_url,
     },
-    linkedin: linkedinBlock({
-      currentUrl: row.linkedin_url,
-      state: {
-        status: row.enrichment_status ?? 'none',
-        startedAt: iso(row.enrichment_started_at),
-        completedAt: iso(row.enrichment_completed_at),
-      },
-      ownCache: asResult<EnrichResult>(row.enriched),
-      preload: asResult<EnrichResult & { provider?: string | null }>(row.preload),
-      now: Date.now(),
-    }),
+    linkedin: linkedinBlock(sourcesFromRow(row)),
     tour: {
       // Only someone who just finished is shown the tour.
       pending: !!row.tour_due_at && !row.tour_seen_at,
@@ -203,12 +200,14 @@ export async function saveDraft(userId: string, patch: DraftInputV2): Promise<vo
   await transaction(async (client) => {
     await client.query(
       `INSERT INTO user_intent_profiles (user_id, onboarding_draft)
-       VALUES ($1, jsonb_build_object('v2', $2::jsonb))
+       VALUES ($1, jsonb_build_object('v2', $2::jsonb || jsonb_build_object('savedAt', NOW())))
        ON CONFLICT (user_id) DO UPDATE
          SET onboarding_draft = jsonb_set(
                user_intent_profiles.onboarding_draft,
                '{v2}',
-               COALESCE(user_intent_profiles.onboarding_draft->'v2', '{}'::jsonb) || $2::jsonb),
+               COALESCE(user_intent_profiles.onboarding_draft->'v2', '{}'::jsonb) || $2::jsonb
+                 -- when, by the database clock: the state compares it with last_onboarded_at
+                 || jsonb_build_object('savedAt', NOW())),
              updated_at = NOW()`,
       [userId, JSON.stringify(patch)],
     );
@@ -281,10 +280,12 @@ export async function confirm(userId: string, input: ConfirmInputV2): Promise<Co
   const profile = input.profile ?? {};
   const given = <T>(v: T | null | undefined): T | null => v ?? null;
 
-  // The title is a matching input: kept unchanged from their LinkedIn page it
-  // is 'inferred', typed it is 'stated' (13 Aug, B1).
-  const cached = profile.jobTitle ? await getCachedEnrichment(userId).catch(() => null) : null;
-  const titleSource = sameTitle(profile.jobTitle, cached?.profile?.currentRole) ? 'inferred' : 'stated';
+  // The title is a matching input: kept unchanged from the LinkedIn prefill the
+  // member was shown it is 'inferred', typed it is 'stated' (13 Aug, B1). Only
+  // the prefill the onboarding state shows counts, so a result they never saw
+  // (another address, a stale one) never makes a title inferred.
+  const shown = profile.jobTitle ? await shownPrefill(userId).catch(() => null) : null;
+  const titleSource = sameTitle(profile.jobTitle, shown?.jobTitle) ? 'inferred' : 'stated';
 
   return transaction(async (client) => {
     const cur = await client.query<BeforeRow>(

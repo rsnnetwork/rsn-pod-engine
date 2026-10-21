@@ -307,3 +307,37 @@ describe('the searches onboarding made (onboarding v2, 21 Oct 2026)', () => {
     expect(await repo.rewordAgent('a-1', 'u-2', { label: 'x', wantText: 'x', intent: {} })).toBeNull();
   });
 });
+
+describe('who paused a search (fix round 1, 21 Oct 2026)', () => {
+  it('onboarding pausing a search marks it as paused by onboarding, and only pauses one that is searching', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [row({ status: 'paused' })] });
+    const a = await repo.pauseForOnboarding('a-1', 'u-1');
+    expect(a?.status).toBe('paused');
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/SET status = 'paused'/);
+    expect(sql).toMatch(/intent = COALESCE\(intent, '\{\}'::jsonb\) \|\| '\{"pausedBy":"onboarding"\}'::jsonb/);
+    expect(sql).toMatch(/WHERE id = \$1 AND user_id = \$2 AND status = 'active'/);
+    expect(params).toEqual(['a-1', 'u-1']);
+  });
+
+  it('a search that was not searching is not paused by onboarding', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    expect(await repo.pauseForOnboarding('a-1', 'u-1')).toBeNull();
+  });
+
+  it('any other status change, the member\'s own included, clears that mark', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [row({ status: 'paused' })] });
+    await repo.setStatus('a-1', 'u-1', 'paused');
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/intent = COALESCE\(intent, '\{\}'::jsonb\) - 'pausedBy'/);
+  });
+});
+
+describe('rewording keeps who paused it', () => {
+  it('the pausedBy mark survives new words', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [row()] });
+    await repo.rewordAgent('a-1', 'u-1', { label: 'x', wantText: 'x', intent: { source: 'onboarding_v2', meetKey: 'meet_other', text: 'x' } });
+    const [sql] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/CASE WHEN intent \? 'pausedBy'/);
+  });
+});

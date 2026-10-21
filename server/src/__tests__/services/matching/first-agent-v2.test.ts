@@ -5,11 +5,16 @@
 // (intent.meetKey), never by its label, which a member may reword. When the
 // answers change, a search onboarding made whose key is gone is paused, never
 // deleted, and comes back when the key does.
+//
+// Fix round 1 (21 Oct 2026): only a search onboarding itself paused comes back.
+// Members pause searches themselves (the agents page, For You), and a confirm
+// that changed nothing about them must leave their pause alone.
 
 const mockList = jest.fn();
 const mockCreate = jest.fn();
 const mockSetStatus = jest.fn();
 const mockReword = jest.fn();
+const mockPause = jest.fn();
 const mockRecompute = jest.fn();
 jest.mock('../../../services/matching/agent.repo', () => ({
   __esModule: true,
@@ -17,6 +22,7 @@ jest.mock('../../../services/matching/agent.repo', () => ({
   createAgent: (...a: unknown[]) => mockCreate(...a),
   setStatus: (...a: unknown[]) => mockSetStatus(...a),
   rewordAgent: (...a: unknown[]) => mockReword(...a),
+  pauseForOnboarding: (...a: unknown[]) => mockPause(...a),
   listAgents: jest.fn().mockResolvedValue([]),
 }));
 jest.mock('../../../services/matching/agent-matching.service', () => ({
@@ -104,12 +110,36 @@ describe('planSearchesFromV2Answers', () => {
     expect(plan.pause.sort()).toEqual(['a-stu', 'v1-com']);
   });
 
-  it('brings a paused search back when its kind is ticked again, instead of making another', () => {
+  it('brings back a search onboarding paused when its kind is ticked again, instead of making another', () => {
     const plan = planSearchesFromV2Answers(['meet_students_early_career'], null, [
-      agent({ id: 'a-stu', status: 'paused', intent: { source: 'onboarding_v2', meetKey: 'meet_students_early_career' } }),
+      agent({ id: 'a-stu', status: 'paused', intent: { source: 'onboarding_v2', meetKey: 'meet_students_early_career', pausedBy: 'onboarding' } }),
     ]);
     expect(plan.resume).toEqual(['a-stu']);
     expect(plan.create).toEqual([]);
+  });
+
+  it('a search the member paused, whose kind stayed ticked, stays paused', () => {
+    const plan = planSearchesFromV2Answers(['meet_investors', 'meet_students_early_career'], null, [
+      agent({ id: 'a-inv', status: 'paused', intent: { source: 'onboarding_v2', meetKey: 'meet_investors' } }),
+    ]);
+    expect(plan.resume).toEqual([]);
+    // And it still stands for its kind: no second search is made.
+    expect(plan.create.map(p => p.intent?.meetKey)).toEqual(['meet_students_early_career']);
+  });
+
+  it("a v1 member's first v2 confirm leaves the v1 searches they paused paused", () => {
+    const plan = planSearchesFromV2Answers(['meet_investors'], null, [
+      agent({ id: 'v1-inv', status: 'paused', intent: { source: 'tickbox_v1', meetKey: 'investors' } }),
+    ]);
+    expect(plan).toMatchObject({ create: [], resume: [], pause: [] });
+  });
+
+  it('new words for an own-words search the member paused: reworded, still paused', () => {
+    const plan = planSearchesFromV2Answers(['meet_other'], 'potters in Graz', [
+      agent({ id: 'a-own', status: 'paused', intent: { source: 'onboarding_v2', meetKey: 'meet_other', text: 'bakers in Vienna' } }),
+    ]);
+    expect(plan.reword.map(r => r.id)).toEqual(['a-own']);
+    expect(plan.resume).toEqual([]);
   });
 
   it('leaves an archived search archived: the member put it away themselves', () => {
@@ -161,6 +191,9 @@ describe('syncSearchesFromV2Answers', () => {
     mockReword.mockImplementation(async (id: string, userId: string, r: { label: string; wantText: string }) => ({
       id, userId, label: r.label, wantText: r.wantText, matchingTags: [], status: 'active',
     }));
+    mockPause.mockImplementation(async (id: string, userId: string) => ({
+      id, userId, label: `L-${id}`, wantText: 'w', matchingTags: [], status: 'paused',
+    }));
     mockRecompute.mockResolvedValue(3);
   });
 
@@ -171,16 +204,17 @@ describe('syncSearchesFromV2Answers', () => {
     expect(mockRecompute).toHaveBeenCalledTimes(2);
   });
 
-  it('pauses without deleting, and does not score what it paused', async () => {
+  it('pauses without deleting, marks it as paused by onboarding, and does not score it', async () => {
     mockList.mockResolvedValue([agent({ id: 'a-stu', intent: { source: 'onboarding_v2', meetKey: 'meet_students_early_career' } })]);
     const out = await syncSearchesFromV2Answers('u-1', ['meet_investors'], null);
-    expect(mockSetStatus).toHaveBeenCalledWith('a-stu', 'u-1', 'paused');
+    expect(mockPause).toHaveBeenCalledWith('a-stu', 'u-1');
+    expect(mockSetStatus).not.toHaveBeenCalledWith('a-stu', 'u-1', 'paused');
     expect(out.find(c => c.agent.id === 'a-stu')?.change).toBe('paused');
     expect(mockRecompute).toHaveBeenCalledTimes(1);
   });
 
   it('resumes and rescores a search whose kind came back', async () => {
-    mockList.mockResolvedValue([agent({ id: 'a-inv', status: 'paused', intent: { source: 'onboarding_v2', meetKey: 'meet_investors' } })]);
+    mockList.mockResolvedValue([agent({ id: 'a-inv', status: 'paused', intent: { source: 'onboarding_v2', meetKey: 'meet_investors', pausedBy: 'onboarding' } })]);
     const out = await syncSearchesFromV2Answers('u-1', ['meet_investors'], null);
     expect(mockSetStatus).toHaveBeenCalledWith('a-inv', 'u-1', 'active');
     expect(out).toEqual([expect.objectContaining({ change: 'resumed' })]);
@@ -189,11 +223,31 @@ describe('syncSearchesFromV2Answers', () => {
 
   it('a search both reworded and brought back is reported once', async () => {
     mockList.mockResolvedValue([agent({
-      id: 'a-own', status: 'paused', intent: { source: 'onboarding_v2', meetKey: 'meet_other', text: 'bakers' },
+      id: 'a-own', status: 'paused', intent: { source: 'onboarding_v2', meetKey: 'meet_other', text: 'bakers', pausedBy: 'onboarding' },
     })]);
     const out = await syncSearchesFromV2Answers('u-1', ['meet_other'], 'potters');
     expect(out).toHaveLength(1);
     expect(out[0]).toMatchObject({ change: 'updated', agent: { id: 'a-own', status: 'active' } });
+  });
+
+  it('a search the member paused is left alone: no status change, nothing reported', async () => {
+    mockList.mockResolvedValue([agent({ id: 'a-inv', status: 'paused', intent: { source: 'onboarding_v2', meetKey: 'meet_investors' } })]);
+    const out = await syncSearchesFromV2Answers('u-1', ['meet_investors'], null);
+    expect(mockSetStatus).not.toHaveBeenCalled();
+    expect(mockPause).not.toHaveBeenCalled();
+    expect(out).toEqual([]);
+    expect(mockRecompute).not.toHaveBeenCalled();
+  });
+
+  it('new words for a search the member paused: reworded, reported, still paused and not scored', async () => {
+    mockList.mockResolvedValue([agent({ id: 'a-own', status: 'paused', intent: { source: 'onboarding_v2', meetKey: 'meet_other', text: 'bakers' } })]);
+    mockReword.mockImplementation(async (id: string, userId: string, r: { label: string; wantText: string }) => ({
+      id, userId, label: r.label, wantText: r.wantText, matchingTags: [], status: 'paused',
+    }));
+    const out = await syncSearchesFromV2Answers('u-1', ['meet_other'], 'potters');
+    expect(out).toEqual([expect.objectContaining({ change: 'updated', agent: expect.objectContaining({ status: 'paused' }) })]);
+    expect(mockSetStatus).not.toHaveBeenCalled();
+    expect(mockRecompute).not.toHaveBeenCalled();
   });
 
   it('never throws: the member keeps the onboarding they just finished', async () => {

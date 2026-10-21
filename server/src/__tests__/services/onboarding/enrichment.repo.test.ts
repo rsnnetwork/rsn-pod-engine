@@ -108,3 +108,50 @@ describe('getEnrichmentState', () => {
     expect(state.completedAt).toBe('2026-01-01T00:01:00.000Z');
   });
 });
+
+// Fix round 1 (21 Oct 2026): the state never said WHICH address its lookup ran
+// for, so onboarding v2 guessed it from the member's row, and an address the
+// member changed on their profile page was read as one already looked up. The
+// address now travels with the state it describes, in inferred_profile.lastLookup.
+describe('setEnrichmentState: the address the lookup ran for', () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+  });
+
+  it('records it beside the state, with the time of the write', async () => {
+    await setEnrichmentState('u1', { status: 'searching', linkedinUrl: 'https://www.linkedin.com/in/ana' });
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(sql).toMatch(/jsonb_build_object\('lastLookup', \$12::jsonb\)/);
+    expect(params[10]).toBe(true);
+    const lookup = JSON.parse(params[11] as string);
+    expect(lookup.linkedinUrl).toBe('https://www.linkedin.com/in/ana');
+    expect(lookup.at).toBe(params[4]); // the same instant the state was stamped with
+  });
+
+  it('a terminal state carries its address and its completion time', async () => {
+    await setEnrichmentState('u1', { status: 'not_found', linkedinUrl: 'https://www.linkedin.com/in/ana' });
+    const [, params] = mockQuery.mock.calls[0];
+    expect(JSON.parse(params[11] as string)).toEqual({ linkedinUrl: 'https://www.linkedin.com/in/ana', at: params[5] });
+  });
+
+  it('a lookup for no address records that as null', async () => {
+    await setEnrichmentState('u1', { status: 'not_found', linkedinUrl: null });
+    const [, params] = mockQuery.mock.calls[0];
+    expect(params[10]).toBe(true);
+    expect(JSON.parse(params[11] as string).linkedinUrl).toBeNull();
+  });
+
+  it('a state written without an address removes the old one, so it can never describe another lookup', async () => {
+    await setEnrichmentState('u1', { status: 'found', source: 'scrapingdog' });
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(params[10]).toBe(false);
+    expect(sql).toMatch(/inferred_profile, '\{\}'::jsonb\) - 'lastLookup'/);
+  });
+
+  it('keeps the existing parameters where they were', async () => {
+    await setEnrichmentState('u1', { status: 'failed', source: 'scrapingdog', error: 'timeout', linkedinUrl: 'https://www.linkedin.com/in/ana' });
+    const [, params] = mockQuery.mock.calls[0];
+    expect(params.slice(0, 4)).toEqual(['u1', 'failed', 'scrapingdog', 'timeout']);
+  });
+});

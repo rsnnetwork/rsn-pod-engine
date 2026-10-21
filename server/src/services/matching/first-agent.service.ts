@@ -326,8 +326,10 @@ export async function createAgentsFromAnswers(
 // (intent.meetKey), never by label, which the member may reword. A search v1
 // made counts for the v2 kind it maps to, so moving to v2 with the same
 // answers makes no duplicates. When the answers change, a search onboarding
-// made whose key is gone is paused, never deleted, and is resumed if the key
-// comes back. An archived one is left archived: the member put it away.
+// made whose key is gone is paused, never deleted, and marked as paused by
+// onboarding (intent.pausedBy); only a search carrying that mark is resumed
+// when its key comes back. A search the member paused or archived themselves
+// stays as they left it, whatever a confirm says.
 
 const V2_SOURCE = 'onboarding_v2';
 /** matching_agents.label is VARCHAR(80). */
@@ -377,7 +379,8 @@ export function planSearchesFromV2Answers(
         intent: { source: V2_SOURCE, meetKey: 'meet_other', text: own },
       });
     }
-    if (a.status === 'paused') plan.resume.push(a.id);
+    // Only what onboarding itself paused: never undo the member's own pause.
+    if (a.status === 'paused' && a.intent.pausedBy === 'onboarding') plan.resume.push(a.id);
   }
 
   for (const key of wanted) {
@@ -433,7 +436,7 @@ export async function syncSearchesFromV2Answers(
       results.set(agent.id, { agent, change: prior === 'updated' ? 'updated' : change });
     };
 
-    for (const id of plan.pause) note(await agentRepo.setStatus(id, userId, 'paused'), 'paused');
+    for (const id of plan.pause) note(await agentRepo.pauseForOnboarding(id, userId), 'paused');
     for (const r of plan.reword) note(await agentRepo.rewordAgent(r.id, userId, r), 'updated');
     for (const id of plan.resume) note(await agentRepo.setStatus(id, userId, 'active'), 'resumed');
     for (const p of plan.create) note(await agentRepo.createAgent(userId, p), 'created');

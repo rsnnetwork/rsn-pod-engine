@@ -16,21 +16,17 @@ jest.mock('../../../config/logger', () => ({
 }));
 
 const mockQuery = jest.fn();
-const mockClientQuery = jest.fn();
 jest.mock('../../../db', () => ({
   __esModule: true,
   query: (...a: unknown[]) => mockQuery(...a),
-  transaction: (cb: (c: { query: typeof mockClientQuery }) => unknown) => cb({ query: mockClientQuery }),
 }));
 
-const mockGetState = jest.fn();
-const mockGetCached = jest.fn();
 const mockSaveCandidate = jest.fn();
 const mockSetState = jest.fn();
 jest.mock('../../../services/onboarding/enrichment.repo', () => ({
   __esModule: true,
-  getEnrichmentState: (...a: unknown[]) => mockGetState(...a),
-  getCachedEnrichment: (...a: unknown[]) => mockGetCached(...a),
+  getEnrichmentState: jest.fn(),
+  getCachedEnrichment: jest.fn(),
   saveEnrichedCandidate: (...a: unknown[]) => mockSaveCandidate(...a),
   setEnrichmentState: (...a: unknown[]) => mockSetState(...a),
 }));
@@ -53,7 +49,7 @@ jest.mock('../../../realtime/fanout', () => ({
 }));
 
 import {
-  normaliseLinkedinProfileUrl, planLinkedinLookup, linkedinBlock, connectLinkedin, LINKEDIN_URL_MESSAGE,
+  normaliseLinkedinProfileUrl, planLinkedinLookup, linkedinBlock, connectLinkedin, shownPrefill, LINKEDIN_URL_MESSAGE,
 } from '../../../services/onboarding/linkedin-v2';
 import type { EnrichResult } from '../../../services/onboarding/enrichment.service';
 import type { EnrichmentStatus } from '../../../services/onboarding/enrichment.repo';
@@ -75,8 +71,9 @@ const found = (over: Partial<EnrichResult> = {}): EnrichResult => ({
   enrichedAt: ago(DAY),
   ...over,
 });
-const state = (status: EnrichmentStatus, over: { startedAt?: string; completedAt?: string } = {}) => ({
-  status, source: null, error: null, startedAt: null as string | null, completedAt: null as string | null, ...over,
+const state = (status: EnrichmentStatus, over: { startedAt?: string; completedAt?: string; lookupUrl?: string | null } = {}) => ({
+  status, source: null, error: null, startedAt: null as string | null, completedAt: null as string | null,
+  lookupUrl: null as string | null, ...over,
 });
 
 describe('normaliseLinkedinProfileUrl: any profile form, one address', () => {
@@ -119,16 +116,20 @@ describe('normaliseLinkedinProfileUrl: any profile form, one address', () => {
   });
 });
 
+
+// Fix round 1 (21 Oct 2026): which address a lookup ran for is RECORDED beside
+// its state (lookupSlug, from inferred_profile.lastLookup), never guessed from
+// the address on the member's row, which their own profile edit also writes.
 describe('planLinkedinLookup: never a second paid lookup', () => {
-  const base = { requestedSlug: 'jane-doe', previousSlug: 'jane-doe', usable: false, now: NOW };
+  const base = { requestedSlug: 'jane-doe', lookupSlug: 'jane-doe' as string | null, usable: false, now: NOW };
 
   it('a lookup already running for that address: wait for it', () => {
     expect(planLinkedinLookup({ ...base, state: state('searching', { startedAt: ago(MIN) }) })).toBe('running');
   });
 
-  it('a lookup running for another address: this one goes after it', () => {
-    expect(planLinkedinLookup({ ...base, previousSlug: 'someone-else', state: state('searching', { startedAt: ago(MIN) }) })).toBe('queue');
-    expect(planLinkedinLookup({ ...base, previousSlug: null, state: state('searching', { startedAt: ago(MIN) }) })).toBe('queue');
+  it('a lookup running for another address, or one not recorded: this one goes after it', () => {
+    expect(planLinkedinLookup({ ...base, lookupSlug: 'someone-else', state: state('searching', { startedAt: ago(MIN) }) })).toBe('queue');
+    expect(planLinkedinLookup({ ...base, lookupSlug: null, state: state('searching', { startedAt: ago(MIN) }) })).toBe('queue');
   });
 
   it('a result for that address already: use it', () => {
@@ -148,9 +149,19 @@ describe('planLinkedinLookup: never a second paid lookup', () => {
     expect(planLinkedinLookup({ ...base, state: state('searching', { startedAt: ago(4 * MIN) }) })).toBe('start');
   });
 
-  it('a new address, or nothing ever looked up: start', () => {
-    expect(planLinkedinLookup({ ...base, previousSlug: 'someone-else', state: state('not_found', { completedAt: ago(DAY) }) })).toBe('start');
-    expect(planLinkedinLookup({ ...base, previousSlug: null, state: state('none') })).toBe('start');
+  it('not found for an EARLIER address: the address now asked for is looked up', () => {
+    // The review's path: A not found, B typed on the profile page (the row says B
+    // before v2 ever sees it), then B posted in v2. B was never looked up.
+    expect(planLinkedinLookup({ ...base, lookupSlug: 'jane-old', state: state('not_found', { completedAt: ago(MIN) }) })).toBe('start');
+    expect(planLinkedinLookup({ ...base, lookupSlug: 'jane-old', state: state('failed', { completedAt: ago(MIN) }) })).toBe('start');
+  });
+
+  it('a state that does not say which address it was for answers for none', () => {
+    expect(planLinkedinLookup({ ...base, lookupSlug: null, state: state('not_found', { completedAt: ago(MIN) }) })).toBe('start');
+  });
+
+  it('nothing ever looked up: start', () => {
+    expect(planLinkedinLookup({ ...base, lookupSlug: null, state: state('none') })).toBe('start');
   });
 
   it('a not-found result older than 90 days may be looked up again', () => {
@@ -168,11 +179,11 @@ describe('linkedinBlock: what the screens are told', () => {
   });
 
   it('searching while a lookup runs', () => {
-    expect(linkedinBlock(sources({ state: state('searching', { startedAt: ago(MIN) }) }))).toEqual({ status: 'searching' });
+    expect(linkedinBlock(sources({ state: state('searching', { startedAt: ago(MIN), lookupUrl: URL }) }))).toEqual({ status: 'searching' });
   });
 
   it('found: the prefill, with Q4\'s likeliest answer', () => {
-    expect(linkedinBlock(sources({ state: state('found'), ownCache: found() }))).toEqual({
+    expect(linkedinBlock(sources({ state: state('found', { lookupUrl: URL }), ownCache: found() }))).toEqual({
       status: 'found',
       prefill: {
         displayName: 'Jane Doe', photoUrl: 'https://media.licdn.com/jane.jpg', jobTitle: 'Founder & CEO',
@@ -199,50 +210,73 @@ describe('linkedinBlock: what the screens are told', () => {
     expect(linkedinBlock(sources({ preload: { ...found(), provider: 'scrapingdog' } })).status).toBe('found');
   });
 
-  it('not found and failed are said as they are, and a lookup that never finished is failed', () => {
-    expect(linkedinBlock(sources({ state: state('not_found') }))).toEqual({ status: 'not_found' });
-    expect(linkedinBlock(sources({ state: state('failed') }))).toEqual({ status: 'failed' });
-    expect(linkedinBlock(sources({ state: state('searching', { startedAt: ago(10 * MIN) }) }))).toEqual({ status: 'failed' });
+  it('not found and failed are said for the address they were for', () => {
+    expect(linkedinBlock(sources({ state: state('not_found', { lookupUrl: URL }) }))).toEqual({ status: 'not_found' });
+    expect(linkedinBlock(sources({ state: state('failed', { lookupUrl: URL }) }))).toEqual({ status: 'failed' });
+    expect(linkedinBlock(sources({ state: state('searching', { startedAt: ago(10 * MIN), lookupUrl: URL }) }))).toEqual({ status: 'failed' });
+  });
+
+  it('and never about an address that was not looked up', () => {
+    const earlier = 'https://www.linkedin.com/in/jane-old';
+    expect(linkedinBlock(sources({ state: state('not_found', { lookupUrl: earlier }) }))).toEqual({ status: 'none' });
+    expect(linkedinBlock(sources({ state: state('failed', { lookupUrl: earlier }) }))).toEqual({ status: 'none' });
+    expect(linkedinBlock(sources({ state: state('searching', { startedAt: ago(10 * MIN), lookupUrl: earlier }) }))).toEqual({ status: 'none' });
+    expect(linkedinBlock(sources({ state: state('not_found') }))).toEqual({ status: 'none' });
   });
 
   it('a result older than 90 days is not used', () => {
-    expect(linkedinBlock(sources({ state: state('found'), ownCache: found({ enrichedAt: ago(100 * DAY) }) }))).toEqual({ status: 'none' });
+    expect(linkedinBlock(sources({ state: state('found', { lookupUrl: URL }), ownCache: found({ enrichedAt: ago(100 * DAY) }) }))).toEqual({ status: 'none' });
   });
 
   it('never carries a prefill without a usable result', () => {
-    expect(linkedinBlock(sources({ state: state('found') }))).toEqual({ status: 'none' });
+    expect(linkedinBlock(sources({ state: state('found', { lookupUrl: URL }) }))).toEqual({ status: 'none' });
   });
 });
 
 describe('connectLinkedin', () => {
-  let previousUrl: string | null;
+  /** What the member's row and their lookup look like right after this request saved the address. */
+  let row: Record<string, unknown>;
+  let current: { linkedin_url: string | null; display_name: string } | null;
+  let updated: unknown[];
   beforeEach(() => {
     jest.clearAllMocks();
-    previousUrl = null;
-    mockClientQuery.mockImplementation((sql: string) => (
-      /FOR UPDATE/.test(sql)
-        ? Promise.resolve({ rows: [{ linkedin_url: previousUrl, display_name: 'Jane Doe' }] })
-        : Promise.resolve({ rows: [] })
-    ));
-    // No approval-time lookup; the profile holds the address this request saved.
-    mockQuery.mockImplementation((sql: string) => Promise.resolve(
-      /SELECT linkedin_url, display_name FROM users/.test(sql) ? { rows: [{ linkedin_url: URL, display_name: 'Jane Doe' }] } : { rows: [] },
-    ));
-    mockGetState.mockResolvedValue(state('none'));
-    mockGetCached.mockResolvedValue(null);
+    row = {
+      linkedin_url: URL, display_name: 'Jane Doe',
+      enrichment_status: null, enrichment_started_at: null, enrichment_completed_at: null,
+      lookup_url: null, enriched: null, preload: null,
+    };
+    current = { linkedin_url: URL, display_name: 'Jane Doe' };
+    updated = [{ display_name: 'Jane Doe' }];
+    mockQuery.mockImplementation((sql: string) => {
+      if (/UPDATE users SET linkedin_url/.test(sql)) return Promise.resolve({ rows: updated });
+      if (/lastLookup/.test(sql)) return Promise.resolve({ rows: [row] });
+      if (/SELECT linkedin_url, display_name FROM users/.test(sql)) return Promise.resolve({ rows: current ? [current] : [] });
+      return Promise.resolve({ rows: [] });
+    });
     mockRun.mockResolvedValue(undefined);
     mockSaveCandidate.mockResolvedValue(undefined);
     mockSetState.mockResolvedValue(undefined);
   });
   const flush = () => new Promise(r => setImmediate(r));
+  const lookedUp = (status: EnrichmentStatus, lookupUrl: string | null, at: string) => Object.assign(row, {
+    enrichment_status: status,
+    enrichment_started_at: status === 'searching' ? at : null,
+    enrichment_completed_at: status === 'searching' ? null : at,
+    lookup_url: lookupUrl,
+  });
 
   it('refuses an address that is not a LinkedIn profile, and saves nothing', async () => {
     // AppError resets the prototype, so the class is checked by what it carries.
     await expect(connectLinkedin('u-1', 'https://example.com/jane')).rejects.toMatchObject({
       statusCode: 400, code: 'VALIDATION_ERROR', message: LINKEDIN_URL_MESSAGE, details: { url: [LINKEDIN_URL_MESSAGE] },
     });
-    expect(mockClientQuery).not.toHaveBeenCalled();
+    expect(mockQuery).not.toHaveBeenCalled();
     expect(mockRun).not.toHaveBeenCalled();
+  });
+
+  it('a member that does not exist is a 404', async () => {
+    updated = [];
+    await expect(connectLinkedin('nope', URL)).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it('saves the address as one form and starts one lookup', async () => {
@@ -250,7 +284,7 @@ describe('connectLinkedin', () => {
     expect(out.linkedinUrl).toBe(URL);
     expect(out.linkedin).toEqual({ status: 'searching' });
     expect(out.decision).toBe('start');
-    const update = mockClientQuery.mock.calls.find(c => /UPDATE users SET linkedin_url/.test(c[0] as string))!;
+    const update = mockQuery.mock.calls.find(c => /UPDATE users SET linkedin_url/.test(c[0] as string))!;
     expect(update[1]).toEqual(['u-1', URL]);
     expect(mockRun).toHaveBeenCalledTimes(1);
     expect(mockRun).toHaveBeenCalledWith('u-1', { linkedinUrl: URL, fullName: 'Jane Doe' });
@@ -263,8 +297,7 @@ describe('connectLinkedin', () => {
   });
 
   it('the same address again while it runs: no second lookup', async () => {
-    previousUrl = URL;
-    mockGetState.mockResolvedValue(state('searching', { startedAt: ago(MIN) }));
+    lookedUp('searching', URL, ago(MIN));
     const out = await connectLinkedin('u-1', URL);
     expect(out.decision).toBe('running');
     expect(out.linkedin).toEqual({ status: 'searching' });
@@ -272,9 +305,8 @@ describe('connectLinkedin', () => {
   });
 
   it('the same address after it was found: no second lookup, and the prefill comes back', async () => {
-    previousUrl = URL;
-    mockGetState.mockResolvedValue(state('found', { completedAt: ago(MIN) }));
-    mockGetCached.mockResolvedValue(found());
+    lookedUp('found', URL, ago(MIN));
+    row.enriched = found();
     const out = await connectLinkedin('u-1', 'linkedin.com/in/jane-doe');
     expect(out.decision).toBe('reuse');
     expect(out.linkedin.status).toBe('found');
@@ -283,16 +315,23 @@ describe('connectLinkedin', () => {
   });
 
   it('the same address after it was not found: no second lookup', async () => {
-    previousUrl = URL;
-    mockGetState.mockResolvedValue(state('not_found', { completedAt: ago(MIN) }));
+    lookedUp('not_found', URL, ago(MIN));
     const out = await connectLinkedin('u-1', URL);
     expect(out).toMatchObject({ decision: 'done', linkedin: { status: 'not_found' } });
     expect(mockRun).not.toHaveBeenCalled();
   });
 
+  it('not found for an earlier address, and the new one already typed on the profile page: it is looked up', async () => {
+    // The row already says the new address (the profile edit wrote it, with no
+    // lookup); the last lookup was for the old one.
+    lookedUp('not_found', 'https://www.linkedin.com/in/jane-old', ago(MIN));
+    const out = await connectLinkedin('u-1', URL);
+    expect(out).toMatchObject({ decision: 'start', linkedin: { status: 'searching' } });
+    expect(mockRun).toHaveBeenCalledWith('u-1', { linkedinUrl: URL, fullName: 'Jane Doe' });
+  });
+
   it('a new address while another runs: looked up after it, not instead of it', async () => {
-    previousUrl = 'https://www.linkedin.com/in/old-me';
-    mockGetState.mockResolvedValue(state('searching', { startedAt: ago(MIN) }));
+    lookedUp('searching', 'https://www.linkedin.com/in/old-me', ago(MIN));
     const order: string[] = [];
     mockRun.mockImplementation(async () => { order.push('run'); });
     const out = await connectLinkedin('u-1', URL);
@@ -303,42 +342,62 @@ describe('connectLinkedin', () => {
   });
 
   it('changed twice while one runs: the follow-up looks up the address on the profile then', async () => {
-    previousUrl = 'https://www.linkedin.com/in/old-me';
-    mockGetState.mockResolvedValue(state('searching', { startedAt: ago(MIN) }));
+    lookedUp('searching', 'https://www.linkedin.com/in/old-me', ago(MIN));
     const latest = 'https://www.linkedin.com/in/jane-doe-2';
-    mockQuery.mockImplementation((sql: string) => Promise.resolve(
-      /SELECT linkedin_url, display_name FROM users/.test(sql) ? { rows: [{ linkedin_url: latest, display_name: 'Jane Doe' }] } : { rows: [] },
-    ));
+    current = { linkedin_url: latest, display_name: 'Jane Doe' };
     await connectLinkedin('u-1', URL);
     await flush();
     expect(mockRun).toHaveBeenLastCalledWith('u-1', { linkedinUrl: latest, fullName: 'Jane Doe' });
   });
 
   it('removed while one ran: the follow-up looks nothing up', async () => {
-    previousUrl = 'https://www.linkedin.com/in/old-me';
-    mockGetState.mockResolvedValue(state('searching', { startedAt: ago(MIN) }));
-    mockQuery.mockImplementation((sql: string) => Promise.resolve(
-      /SELECT linkedin_url, display_name FROM users/.test(sql) ? { rows: [{ linkedin_url: null, display_name: 'Jane Doe' }] } : { rows: [] },
-    ));
+    lookedUp('searching', 'https://www.linkedin.com/in/old-me', ago(MIN));
+    current = { linkedin_url: null, display_name: 'Jane Doe' };
     await connectLinkedin('u-1', URL);
     await flush();
     expect(mockRun).toHaveBeenCalledTimes(1);
   });
 
-  it('the approval-time lookup for that address is used instead of paying again', async () => {
-    previousUrl = URL;
-    mockQuery.mockResolvedValue({ rows: [{ enriched: { ...found(), provider: 'scrapingdog' } }] });
+  it('the approval-time lookup for that address is used instead of paying again, and recorded as for it', async () => {
+    row.preload = { ...found(), provider: 'scrapingdog' };
     const out = await connectLinkedin('u-1', URL);
     expect(out.decision).toBe('reuse');
     expect(out.linkedin.status).toBe('found');
     expect(mockRun).not.toHaveBeenCalled();
     expect(mockSaveCandidate).toHaveBeenCalledWith('u-1', expect.objectContaining({ requestedLinkedinUrl: URL }));
-    expect(mockSetState).toHaveBeenCalledWith('u-1', expect.objectContaining({ status: 'found', source: 'scrapingdog' }));
+    expect(mockSetState).toHaveBeenCalledWith('u-1', expect.objectContaining({ status: 'found', source: 'scrapingdog', linkedinUrl: URL }));
   });
 
   it('a lookup that fails unexpectedly never surfaces as an error', async () => {
     mockRun.mockRejectedValue(new Error('boom'));
     await expect(connectLinkedin('u-1', URL)).resolves.toMatchObject({ decision: 'start' });
     await flush();
+  });
+});
+
+describe('shownPrefill: the prefill the state shows, for the photo and the title', () => {
+  beforeEach(() => jest.clearAllMocks());
+  const answer = (r: Record<string, unknown>) => mockQuery.mockImplementation(() => Promise.resolve({ rows: [{
+    linkedin_url: URL, display_name: 'Jane Doe', enrichment_status: 'found', enrichment_started_at: null,
+    enrichment_completed_at: ago(MIN), lookup_url: URL, enriched: null, preload: null, ...r,
+  }] }));
+
+  it('the member\'s own fresh result for the address on the profile', async () => {
+    answer({ enriched: found() });
+    expect((await shownPrefill('u-1'))?.photoUrl).toBe('https://media.licdn.com/jane.jpg');
+  });
+
+  it('the approval-time result for that address', async () => {
+    answer({ preload: { ...found(), provider: 'scrapingdog' } });
+    expect((await shownPrefill('u-1'))?.jobTitle).toBe('Founder & CEO');
+  });
+
+  it('nothing for an earlier address, a stale result, or no address at all', async () => {
+    answer({ enriched: found({ requestedLinkedinUrl: 'https://www.linkedin.com/in/someone-else' }) });
+    expect(await shownPrefill('u-1')).toBeNull();
+    answer({ enriched: found({ enrichedAt: ago(100 * DAY) }) });
+    expect(await shownPrefill('u-1')).toBeNull();
+    answer({ linkedin_url: null, enriched: found() });
+    expect(await shownPrefill('u-1')).toBeNull();
   });
 });

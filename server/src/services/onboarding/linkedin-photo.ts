@@ -23,6 +23,7 @@ import { query } from '../../db';
 import logger from '../../config/logger';
 import { captureAvatar } from './avatar.service';
 import { record as recordStageEvent } from './stage-events.repo';
+import { shownPrefill } from './linkedin-v2';
 
 /**
  * The member's own scraped LinkedIn photo, or null.
@@ -66,6 +67,24 @@ export type UseLinkedinPhotoResult = 'done' | 'none' | 'failed';
 export async function useLinkedinPhoto(userId: string): Promise<UseLinkedinPhotoResult> {
   const url = await findLinkedinPhoto(userId);
   if (!url) return 'none';
+  return capture(userId, url);
+}
+
+/**
+ * Onboarding v2's "Keep this photo" (21 Oct 2026): the photo the member was
+ * shown, which is the one in the onboarding state's LinkedIn prefill for the
+ * address on their profile, and no other. findLinkedinPhoto above takes their
+ * own cached photo for any address and any age, which may be one this screen
+ * never showed them. Like useLinkedinPhoto, it takes no URL.
+ */
+export async function useShownLinkedinPhoto(userId: string): Promise<UseLinkedinPhotoResult> {
+  const url = (await shownPrefill(userId))?.photoUrl ?? null;
+  if (!url) return 'none';
+  return capture(userId, url);
+}
+
+/** Make a photo WE resolved for the member theirs, recorded on the stage trail. */
+async function capture(userId: string, url: string): Promise<'done' | 'failed'> {
   const startedAt = Date.now();
   const captured = await captureAvatar(userId, url);
   recordStageEvent(
