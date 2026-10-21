@@ -13,9 +13,9 @@
 // by enrichment.repo setEnrichmentState), never the address on the member's
 // row, which their own profile edit writes without any lookup.
 //
-// The address is normalised here with the same rules Task 2 uses for join
-// requests (that code lives in the join-request route; the two are kept apart
-// for now and should share one helper later).
+// The address is read by the one helper the request to join uses too
+// (linkedinProfileUrl in @rsn/shared, since the final review of 21 Oct), so a
+// profile is stored the same way whichever form it came through.
 
 import { query } from '../../db';
 import logger from '../../config/logger';
@@ -26,48 +26,13 @@ import { runEnrichment, isFreshCacheHit, SEARCHING_LOCK_MS } from './enrichment.
 import { statusFromResult } from './providers/registry';
 import { selfGuessFromRole } from '../matching/option-signals';
 import { fanoutUserEntity } from '../../realtime/fanout';
-import type { OnboardingV2Linkedin, OnboardingV2LinkedinPrefill } from '@rsn/shared';
-
-export const LINKEDIN_URL_MESSAGE = 'Enter your LinkedIn profile link, for example linkedin.com/in/your-name';
+import { LINKEDIN_PROFILE_HELP, linkedinProfileUrl, type OnboardingV2Linkedin, type OnboardingV2LinkedinPrefill } from '@rsn/shared';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** "Not found" is an answer about that address; it stands as long as a found result would. */
 const NOT_FOUND_STANDS_MS = 90 * DAY_MS;
 /** A failure (timeout, provider error) is not an answer. Retried, but never straight away. */
 const FAILED_RETRY_AFTER_MS = 10 * 60 * 1000;
-
-const SLUG_SHAPE = /^[\p{L}\p{N}][\p{L}\p{N}_.-]{1,99}$/u;
-const isLinkedinHost = (host: string) => host === 'linkedin.com' || host.endsWith('.linkedin.com');
-
-/**
- * Any linkedin.com/in/<slug> form, with or without a protocol, www, a country
- * subdomain, a trailing slash, a query, a fragment or a sub-page, becomes
- * https://www.linkedin.com/in/<slug>. Anything else is null: another site, a
- * company page, a bare name, a script.
- */
-export function normaliseLinkedinProfileUrl(input: string | null | undefined): string | null {
-  const raw = (input ?? '').trim();
-  if (!raw || raw.length > 500 || /\s/.test(raw)) return null;
-  const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `https://${raw}`;
-  let url: URL;
-  try {
-    url = new URL(withScheme);
-  } catch {
-    return null;
-  }
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
-  if (url.username || url.password || url.port) return null;
-  if (!isLinkedinHost(url.hostname.toLowerCase())) return null;
-  const path = url.pathname.match(/^\/in\/([^/]+)\/?/i);
-  if (!path) return null;
-  let slug: string;
-  try {
-    slug = decodeURIComponent(path[1]).toLowerCase();
-  } catch {
-    return null;
-  }
-  return SLUG_SHAPE.test(slug) ? `https://www.linkedin.com/in/${slug}` : null;
-}
 
 export type LookupDecision =
   /** Nothing usable and nothing running: start a lookup. */
@@ -304,8 +269,8 @@ export interface ConnectResult {
  * running or already done. Returns the linkedin block as it stands now.
  */
 export async function connectLinkedin(userId: string, rawUrl: string): Promise<ConnectResult> {
-  const linkedinUrl = normaliseLinkedinProfileUrl(rawUrl);
-  if (!linkedinUrl) throw new ValidationError(LINKEDIN_URL_MESSAGE, { url: [LINKEDIN_URL_MESSAGE] });
+  const linkedinUrl = linkedinProfileUrl(rawUrl);
+  if (!linkedinUrl) throw new ValidationError(LINKEDIN_PROFILE_HELP, { url: [LINKEDIN_PROFILE_HELP] });
 
   const saved = await query<{ display_name: string | null }>(
     `UPDATE users SET linkedin_url = $2, updated_at = NOW() WHERE id = $1 RETURNING display_name`,

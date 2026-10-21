@@ -28,6 +28,7 @@ describe('canonicalLinkedinProfileUrl: what is accepted, and the one shape it is
     ['spaces around it', '   https://www.linkedin.com/in/jane-doe  ', SLUG],
     ['a newline after it (a pasted line)', 'https://www.linkedin.com/in/jane-doe\n', SLUG],
     ['capitals in the scheme, host and path word', 'HTTPS://WWW.LINKEDIN.COM/IN/jane-doe', SLUG],
+    ['what the live form sends for linkedin.com/in/jane-doe (21 Oct 2026)', 'https://linkedin.com/in/linkedin.com/in/jane-doe', SLUG],
   ])('%s', (_what, typed, stored) => {
     expect(canonicalLinkedinProfileUrl(typed)).toBe(stored);
   });
