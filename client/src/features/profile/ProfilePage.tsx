@@ -31,6 +31,53 @@ interface ProfileForm {
   myIntent: string;
 }
 
+// 21 Oct 2026: a phone photo of 1.5 to 5 MB, sent as it was, went over the server's cap on avatarUrl. The
+// upload was awaited inside reader.onload, outside the try, so the refusal was never caught, nothing was said
+// and "Uploading..." stayed on screen for good. The photo is now made smaller here first (it is never shown
+// larger than 800x800), and every way the upload can end is caught, said, and puts the button back.
+const PHOTO_MAX_SIDE = 800;
+const PHOTO_QUALITY = 0.85;
+
+function loadImage(file: File): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('This picture could not be read')); };
+    img.src = url;
+  });
+}
+
+/** The photo as a JPEG data URL, scaled down (never up) to fit 800 by 800. */
+async function shrinkPhoto(file: File): Promise<string> {
+  const img = await loadImage(file);
+  const scale = Math.min(1, PHOTO_MAX_SIDE / img.naturalWidth, PHOTO_MAX_SIDE / img.naturalHeight);
+  const width = Math.max(1, Math.round(img.naturalWidth * scale));
+  const height = Math.max(1, Math.round(img.naturalHeight * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('This picture could not be read');
+  // A JPEG has no transparency: a see-through PNG would turn black without a white ground under it.
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(img, 0, 0, width, height);
+  return canvas.toDataURL('image/jpeg', PHOTO_QUALITY);
+}
+
+/** What a failed photo upload says: the server's own sentence when it sent one, plain words otherwise. */
+function photoUploadError(err: unknown): string {
+  const failed = (err ?? {}) as { response?: { data?: { error?: { message?: unknown } } }; request?: unknown };
+  const message = failed.response?.data?.error?.message;
+  // The form check's label is not a sentence, and the only check on a photo is its size.
+  if (message === 'Validation failed') return 'That photo is too large. Please choose a smaller one.';
+  if (typeof message === 'string' && message.trim()) return message;
+  if (failed.response) return 'Could not update your photo. Please try again.';
+  if (failed.request) return 'Could not update your photo. Check your connection and try again.';
+  return 'We could not read that photo. Please choose another one.';
+}
+
 function TagInput({ label, tags, setTags, placeholder, icon: Icon }: {
   label: string; tags: string[]; setTags: (t: string[]) => void; placeholder: string; icon?: any;
 }) {
@@ -140,7 +187,10 @@ export default function ProfilePage() {
   }, [user]);
 
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const input = e.target;
+    const file = input.files?.[0];
+    // Cleared at once, so the same photo can be chosen again after a failure.
+    input.value = '';
     if (!file) return;
 
     // Validate file type and size
@@ -156,22 +206,13 @@ export default function ProfilePage() {
 
     setAvatarUploading(true);
     try {
-      // Convert to base64 and upload as data URL for now
-      const reader = new FileReader();
-      reader.onload = async () => {
-        const dataUrl = reader.result as string;
-        await api.put('/users/me', { avatarUrl: dataUrl });
-        await checkSession();
-        addToast('Avatar updated!', 'success');
-        setAvatarUploading(false);
-      };
-      reader.onerror = () => {
-        addToast('Failed to read image', 'error');
-        setAvatarUploading(false);
-      };
-      reader.readAsDataURL(file);
-    } catch {
-      addToast('Failed to upload avatar', 'error');
+      const avatarUrl = await shrinkPhoto(file);
+      await api.put('/users/me', { avatarUrl });
+      await checkSession();
+      addToast('Avatar updated!', 'success');
+    } catch (err) {
+      addToast(photoUploadError(err), 'error');
+    } finally {
       setAvatarUploading(false);
     }
   };
