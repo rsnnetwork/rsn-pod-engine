@@ -1,8 +1,8 @@
 // Stefan's v4 navigation. People opens Your connections, its first tab, until the
-// People screen is rebuilt (next milestone); Entities shows an honest "coming
-// next" page until then. The prototype's Introductions tab was dropped on 19 Oct
-// at the client's request: its icon stays in the icon set, but it is not a
-// navigation key, so no list can name it (a key with no entry crashes the bar).
+// People screen is rebuilt (next milestone); Entities is a page of its own (21 Oct).
+// The prototype's Introductions tab was dropped on 19 Oct at the client's request:
+// its icon stays in the icon set, but it is not a navigation key, so no list can
+// name it (a key with no entry crashes the bar).
 import type { ReasonIconName } from '../ui/icons';
 
 export type NavKey = Exclude<ReasonIconName, 'more' | 'introductions'>;

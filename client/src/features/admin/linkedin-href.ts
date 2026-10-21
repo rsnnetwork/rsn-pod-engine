@@ -5,7 +5,7 @@
 // is ever handed to an <a href>: the request form used to accept any text that parsed as a URL, so whatever an
 // old row holds, it can never be a "javascript:" link in an admin's browser.
 //
-// Pure on purpose, so a test can run it: server/src/__tests__/client/join-form-linkedin.test.ts.
+// Pure on purpose, so a test can run it: server/src/__tests__/client/admin-join-request-linkedin.test.ts.
 
 export function linkedinHref(stored: string | null | undefined): string | null {
   const address = stored?.trim();
