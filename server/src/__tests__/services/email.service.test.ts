@@ -86,13 +86,18 @@ describe('Email Service', () => {
 
   // 13 Aug 2026: "New user has no idea what RSN is when landing after clicking
   // an invite link." Claus wanted it fixed in the email, not the UI.
-  describe('buildInviteEmail says what Reason is', () => {
-    it('a platform invite explains Reason and what happens next, in the html AND the plain text', () => {
+  // 21 Oct 2026 (the client, 19 Oct: "call it REASON everywhere"): the subject, the opening and the
+  // description name REASON in capitals. The tagline under the logo, "Connect with Reason", stays as it is.
+  describe('buildInviteEmail says what REASON is', () => {
+    it('a platform invite explains REASON and what happens next, in the html AND the plain text', () => {
       const { subject, html, text } = emailService.buildInviteEmail({
         inviterName: 'Stefan', type: 'platform', inviteUrl: 'http://localhost:5173/invite/ABC123',
       });
-      expect(subject).toBe('Stefan invited you to Reason');
-      expect(html).toMatch(/Stefan<\/strong> invited you to Reason/);
+      expect(subject).toBe('Stefan invited you to REASON');
+      expect(html).toMatch(/Stefan<\/strong> invited you to REASON\./);
+      expect(text).toMatch(/^Stefan invited you to REASON\./);
+      expect(html).toContain('REASON is a private network where people meet for a stated reason');
+      expect(text).toContain('REASON is a private network where people meet for a stated reason');
       expect(html).toMatch(/private network where people meet for a stated reason/i);
       expect(html).toMatch(/who you are looking for/i);
       expect(html).toMatch(/takes a few minutes/i);
@@ -110,7 +115,7 @@ describe('Email Service', () => {
       expect(text).toMatch(/invited you to join a circle — Nordic Founders/);
     });
 
-    it('a pod invite says what Reason is but does not promise a sign-up conversation to someone who may already be in', () => {
+    it('a pod invite says what REASON is but does not promise a sign-up conversation to someone who may already be in', () => {
       const { subject, html, text } = emailService.buildInviteEmail({
         inviterName: 'Stefan', type: 'pod', targetName: 'Founding Circle', inviteUrl: 'http://localhost:5173/invite/ABC123',
       });
@@ -127,7 +132,16 @@ describe('Email Service', () => {
       const { html } = emailService.buildInviteEmail({
         inviterName: 'Stefan', type: 'session', targetName: 'Raw Speed Networking', inviteUrl: 'http://x/invite/1',
       });
-      expect(html).toMatch(/<strong>Stefan<\/strong> has invited you to join an event — <strong>Raw Speed Networking<\/strong> on Reason\./);
+      expect(html).toMatch(/<strong>Stefan<\/strong> has invited you to join an event — <strong>Raw Speed Networking<\/strong> on REASON\./);
+    });
+
+    it.each(['platform', 'pod', 'session', 'circle'] as const)('a %s invite names the product REASON, and "Reason" only in the tagline', (type) => {
+      const { subject, html, text } = emailService.buildInviteEmail({
+        inviterName: 'Stefan', type, ...(type === 'platform' ? {} : { targetName: 'Founding Circle' }), inviteUrl: 'http://x/invite/1',
+      });
+      const withoutTagline = html.replace('Connect with Reason', '');
+      for (const words of [subject, withoutTagline, text]) expect(words).not.toMatch(/\bReason\b/);
+      expect(html).toContain('Connect with Reason');
     });
   });
 
