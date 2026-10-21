@@ -41,7 +41,11 @@ export type StageEventStage =
   | 'answers_saved'
   | 'tour_shown'
   | 'tour_completed'
-  | 'tour_skipped';
+  | 'tour_skipped'
+  // Onboarding v2, screen 2 (migration 106, 21 Oct 2026): the member connected
+  // their LinkedIn profile, or chose to continue with email.
+  | 'linkedin_connected'
+  | 'linkedin_skipped';
 
 export interface StageEvent {
   id: string;

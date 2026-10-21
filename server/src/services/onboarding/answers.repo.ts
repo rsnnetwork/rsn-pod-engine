@@ -22,6 +22,7 @@ import {
   MEET_SIGNALS, INTENT_SIGNALS, industrySummary, offerSummary, roleTitlesFor,
 } from '../matching/option-signals';
 import type { DraftInput, ConfirmInput } from './answers.schema';
+import { isMeetV1Key, isOfferV1Key } from './answers-v2.map';
 
 interface StateRow {
   onboarding_status: string;
@@ -62,20 +63,28 @@ export async function getState(userId: string): Promise<OnboardingState> {
   const row = r.rows[0];
   if (!row) throw new NotFoundError('User', userId);
 
+  // Onboarding v2 (21 Oct 2026) keeps its own keys in these columns and its
+  // draft under 'v2'. This flow sends the arrays back on confirm, where a v2
+  // key is refused, so it is shown only its own keys and its own draft.
+  const meet = (row.looking_to_meet ?? []).filter(isMeetV1Key);
+  const offers = (row.can_offer ?? []).filter(isOfferV1Key);
+  const self = (row.self_kinds ?? []).filter(isMeetV1Key);
+
   // Confirmed answers win over the draft: someone who finished and came back
   // to change one thing should see what they actually have.
   const confirmed: Partial<OnboardingAnswers> = {};
   if (row.onboarding_intent) confirmed.intent = row.onboarding_intent;
-  if (row.looking_to_meet?.length) confirmed.lookingToMeet = row.looking_to_meet;
-  if (row.can_offer?.length) confirmed.canOffer = row.can_offer;
+  if (meet.length) confirmed.lookingToMeet = meet;
+  if (offers.length) confirmed.canOffer = offers;
   if (row.industries?.length) confirmed.industries = row.industries;
   if (row.industry_other) confirmed.industryOther = row.industry_other;
-  if (row.self_kinds?.length) confirmed.selfKinds = row.self_kinds;
+  if (self.length) confirmed.selfKinds = self;
   if (row.job_title) confirmed.jobTitle = row.job_title;
   if (row.company) confirmed.company = row.company;
   if (row.bio) confirmed.about = row.bio;
 
   const { step, ...draftAnswers } = row.draft ?? {};
+  delete (draftAnswers as { v2?: unknown }).v2;
   return {
     status: row.onboarding_status as OnboardingState['status'],
     answers: { ...draftAnswers, ...confirmed },

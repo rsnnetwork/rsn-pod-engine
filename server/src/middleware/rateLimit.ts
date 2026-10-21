@@ -193,6 +193,22 @@ export const onboardingConfirmLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
 
+/**
+ * Onboarding v2, "Continue with LinkedIn" (21 Oct 2026). Each new address can
+ * start a paid ScrapingDog lookup, so this is the tightest onboarding bucket: a
+ * member types their address once or twice, and ten in ten minutes is far more
+ * than anyone needs. The service never pays twice for the same address anyway.
+ */
+export const onboardingLinkedinLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('onboarding-linkedin'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Please wait a few minutes before trying another LinkedIn link.' } },
+});
+
 export const onboardingChatLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   max: 30,

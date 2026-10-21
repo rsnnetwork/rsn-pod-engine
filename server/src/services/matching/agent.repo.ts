@@ -339,6 +339,54 @@ export async function listActiveAgentsForMatching(): Promise<MatchingAgent[]> {
   return r.rows.map(mapAgent);
 }
 
+/** A search onboarding made, with the record of which answer made it. */
+export interface OnboardingAgentRef {
+  id: string;
+  label: string;
+  wantText: string;
+  status: AgentStatus;
+  /** { source: 'tickbox_v1' | 'onboarding_v2', meetKey, text? } */
+  intent: Record<string, unknown>;
+}
+
+/**
+ * The searches onboarding made for a member, whatever their status: the v1
+ * tick boxes (intent.source 'tickbox_v1') and v2 ('onboarding_v2'). Hand-made
+ * searches and the ones seeded from the chat era are never listed, so nothing
+ * onboarding does can pause or reword them.
+ */
+export async function listOnboardingAgents(userId: string): Promise<OnboardingAgentRef[]> {
+  const r = await query<{ id: string; label: string; want_text: string | null; status: AgentStatus; intent: Record<string, unknown> | null }>(
+    `SELECT id, label, want_text, status, intent
+       FROM matching_agents
+      WHERE user_id = $1
+        AND intent->>'source' IN ('tickbox_v1', 'onboarding_v2')
+      ORDER BY created_at`,
+    [userId],
+  );
+  return r.rows.map(a => ({
+    id: a.id, label: a.label, wantText: a.want_text ?? '', status: a.status, intent: a.intent ?? {},
+  }));
+}
+
+/** New words for a search, and the record of which words they were. Ownership is in the WHERE clause. */
+export async function rewordAgent(
+  agentId: string,
+  userId: string,
+  input: { label: string; wantText: string; intent: Record<string, unknown> },
+): Promise<MatchingAgent | null> {
+  const r = await query<AgentRow>(
+    `UPDATE matching_agents
+        SET label = $3, want_text = $4, intent = $5::jsonb, updated_at = NOW()
+      WHERE id = $1 AND user_id = $2
+      RETURNING id, user_id, label, want_text, matching_tags, status,
+                last_matched_at, created_at, updated_at,
+                ${counts('matching_agents')}`,
+    [agentId, userId, input.label.trim(), input.wantText.trim(), JSON.stringify(input.intent)],
+  );
+  return r.rows[0] ? mapAgent(r.rows[0]) : null;
+}
+
 /** Drop one candidate from one agent's results (per-agent exclusion, D3). */
 export async function removeMatch(agentId: string, candidateUserId: string): Promise<void> {
   await query(
