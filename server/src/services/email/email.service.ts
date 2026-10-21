@@ -145,7 +145,7 @@ export async function sendMagicLinkEmail(
           </p>
           
           <div style="text-align:center;margin:32px 0;">
-            <a href="${magicLinkUrl}" 
+            <a href="${escapeAttr(magicLinkUrl)}"
                style="display:inline-block;background:#DE322E;border:1px solid #c22a26;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
               Sign In
             </a>
@@ -155,7 +155,7 @@ export async function sendMagicLinkEmail(
             If the button doesn't work, copy and paste this link into your browser:
           </p>
           <p style="color:#DE322E;font-size:12px;word-break:break-all;margin:8px 0 0 0;">
-            ${magicLinkUrl}
+            ${escapeHtml(magicLinkUrl)}
           </p>
         ${emailCardClose()}
         <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
@@ -209,10 +209,10 @@ export async function sendSessionRecapEmail(
           <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Event Recap</p>
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">
-            Hey ${displayName},
+            Hey ${escapeHtml(displayName)},
           </p>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
-            Thanks for joining <strong>${data.sessionTitle}</strong>! Here's your event recap:
+            Thanks for joining <strong>${escapeHtml(data.sessionTitle)}</strong>! Here's your event recap:
           </p>
 
           <!-- Phase 6 (29 April 2026 spec) — labels aligned with Stefan's
@@ -236,7 +236,7 @@ export async function sendSessionRecapEmail(
           </div>
 
           <div style="text-align:center;margin:32px 0;">
-            <a href="${data.recapUrl}"
+            <a href="${escapeAttr(data.recapUrl)}"
                style="display:inline-block;background:#DE322E;border:1px solid #c22a26;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
               View Full Recap
             </a>
@@ -283,15 +283,15 @@ export async function sendDmNotificationEmail(
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
         ${emailCardOpen()}
           <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">New message</p>
-          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">Hey ${recipientDisplayName},</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">Hey ${escapeHtml(recipientDisplayName)},</p>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
-            <strong>${data.senderName}</strong> sent you a message on REASON.
+            <strong>${escapeHtml(data.senderName)}</strong> sent you a message on REASON.
           </p>
           <div style="background:#f8f9fa;border-left:3px solid #DE322E;border-radius:6px;padding:12px 16px;margin:0 0 24px 0;">
-            <p style="color:#374151;font-size:14px;line-height:1.5;margin:0;">${data.snippet}</p>
+            <p style="color:#374151;font-size:14px;line-height:1.5;margin:0;">${escapeHtml(data.snippet)}</p>
           </div>
           <div style="text-align:center;margin:24px 0;">
-            <a href="${data.threadUrl}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 32px;border-radius:8px;">View Message</a>
+            <a href="${escapeAttr(data.threadUrl)}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 32px;border-radius:8px;">View Message</a>
           </div>
         ${emailCardClose()}
         <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
@@ -350,10 +350,10 @@ export async function sendHostRecapEmail(
           <p style="color:#6b7280;font-size:14px;margin:0 0 32px 0;text-align:center;">Host Event Recap</p>
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">
-            Hey ${displayName},
+            Hey ${escapeHtml(displayName)},
           </p>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
-            Here's the full recap for <strong>${data.sessionTitle}</strong>:
+            Here's the full recap for <strong>${escapeHtml(data.sessionTitle)}</strong>:
           </p>
 
           <table style="width:100%;border-collapse:collapse;margin:0 0 24px 0;">
@@ -390,7 +390,7 @@ export async function sendHostRecapEmail(
           </table>
 
           <div style="text-align:center;margin:32px 0;">
-            <a href="${data.recapUrl}"
+            <a href="${escapeAttr(data.recapUrl)}"
                style="display:inline-block;background:#DE322E;border:1px solid #c22a26;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
               View Full Recap
             </a>
@@ -443,14 +443,14 @@ interface InviteEmailData {
  */
 export function buildInviteEmail(data: InviteEmailData): { subject: string; html: string; text: string } {
   const typeLabel = data.type === 'pod' ? 'a pod' : data.type === 'session' ? 'an event' : data.type === 'circle' ? 'a circle' : 'the platform';
-  const targetLine = data.targetName ? ` — <strong>${data.targetName}</strong>` : '';
+  const targetLine = data.targetName ? ` — <strong>${escapeHtml(data.targetName)}</strong>` : '';
   const targetText = data.targetName ? ` — ${data.targetName}` : '';
 
   const subject = `${data.inviterName} invited you to ${data.targetName || 'Reason'}`;
 
   const openingHtml = data.type === 'platform'
-    ? `<strong>${data.inviterName}</strong> invited you to Reason.`
-    : `<strong>${data.inviterName}</strong> has invited you to join ${typeLabel}${targetLine} on Reason.`;
+    ? `<strong>${escapeHtml(data.inviterName)}</strong> invited you to Reason.`
+    : `<strong>${escapeHtml(data.inviterName)}</strong> has invited you to join ${typeLabel}${targetLine} on Reason.`;
   const openingText = data.type === 'platform'
     ? `${data.inviterName} invited you to Reason.`
     : `${data.inviterName} has invited you to join ${typeLabel}${targetText} on Reason.`;
@@ -484,7 +484,7 @@ export function buildInviteEmail(data: InviteEmailData): { subject: string; html
           ${whatHappensNext ? `<p style="color:#1a1a2e;font-size:15px;line-height:1.6;margin:0 0 24px 0;">${whatHappensNext}</p>` : ''}
 
           <div style="text-align:center;margin:32px 0;">
-            <a href="${data.inviteUrl}"
+            <a href="${escapeAttr(data.inviteUrl)}"
                style="display:inline-block;background:#DE322E;border:1px solid #c22a26;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
               Accept Invite
             </a>
@@ -494,7 +494,7 @@ export function buildInviteEmail(data: InviteEmailData): { subject: string; html
             If the button doesn't work, copy and paste this link into your browser:
           </p>
           <p style="color:#DE322E;font-size:12px;word-break:break-all;margin:8px 0 0 0;">
-            ${data.inviteUrl}
+            ${escapeHtml(data.inviteUrl)}
           </p>
         ${emailCardClose()}
         <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
@@ -568,9 +568,9 @@ export async function sendSessionRegistrationConfirmationEmail(
   to: string,
   data: RegistrationConfirmationData,
 ): Promise<void> {
-  const greetingName = data.recipientName ? ` ${data.recipientName}` : '';
+  const greetingName = data.recipientName ? ` ${escapeHtml(data.recipientName)}` : '';
   const whenLine = data.calendarEvent
-    ? `<p style="color:#475569;font-size:14px;line-height:1.6;margin:0 0 8px 0;text-align:center;">${data.calendarEvent.startTime.toUTCString()}</p>`
+    ? `<p style="color:#475569;font-size:14px;line-height:1.6;margin:0 0 8px 0;text-align:center;">${escapeHtml(data.calendarEvent.startTime.toUTCString())}</p>`
     : '';
   const calendarNote = data.calendarEvent
     ? `<p style="color:#64748b;font-size:13px;line-height:1.5;margin:20px 0 0 0;text-align:center;">A calendar invite is attached — add it to get a reminder 15 minutes before.</p>`
@@ -588,11 +588,11 @@ export async function sendSessionRegistrationConfirmationEmail(
         ${emailCardOpen()}
           <h1 style="color:#1a1a2e;font-size:22px;font-weight:700;margin:0 0 16px 0;text-align:center;">You're registered${greetingName}!</h1>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;text-align:center;">
-            You're all set for <strong>${data.sessionTitle}</strong>.
+            You're all set for <strong>${escapeHtml(data.sessionTitle)}</strong>.
           </p>
           ${whenLine}
           <div style="text-align:center;margin:32px 0;">
-            <a href="${data.sessionUrl}"
+            <a href="${escapeAttr(data.sessionUrl)}"
                style="display:inline-block;background:#DE322E;border:1px solid #c22a26;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
               View Event
             </a>
@@ -652,7 +652,7 @@ export async function sendJoinRequestConfirmationEmail(
         ${emailCardOpen()}
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
-            Hi ${fullName},
+            Hi ${escapeHtml(fullName)},
           </p>
           <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
             Thank you for requesting to join REASON. We've received your application and our team will review it shortly.
@@ -701,7 +701,7 @@ export async function sendJoinRequestWelcomeEmail(
         ${emailCardOpen()}
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
-            Hi ${fullName},
+            Hi ${escapeHtml(fullName)},
           </p>
           <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
             Great news — your request to join REASON has been <strong style="color:#1a1a2e;">approved</strong>!
@@ -711,7 +711,7 @@ export async function sendJoinRequestWelcomeEmail(
           </p>
 
           <div style="text-align:center;margin:32px 0;">
-            <a href="${loginUrl}"
+            <a href="${escapeAttr(loginUrl)}"
                style="display:inline-block;background:#DE322E;border:1px solid #c22a26;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
               Sign In to REASON
             </a>
@@ -757,7 +757,7 @@ export async function sendJoinRequestDeclineEmail(
         ${emailCardOpen()}
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
-            Hi ${fullName},
+            Hi ${escapeHtml(fullName)},
           </p>
           <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
             Thank you for your interest in REASON. After reviewing your application, we're unable to offer access at this time.
@@ -815,14 +815,14 @@ export async function sendJoinRequestReminderEmail(
         ${emailCardOpen()}
 
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
-            Hi ${fullName},
+            Hi ${escapeHtml(fullName)},
           </p>
           <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 24px 0;">
             ${mainMessage}
           </p>
 
           <div style="text-align:center;margin:32px 0;">
-            <a href="${loginUrl}"
+            <a href="${escapeAttr(loginUrl)}"
                style="display:inline-block;background:#DE322E;border:1px solid #c22a26;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;padding:14px 40px;border-radius:10px;">
               Complete Your Signup
             </a>
@@ -868,9 +868,9 @@ export async function sendGenericEmail(
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
         ${emailCardOpen()}
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
-            Hi ${recipientName},
+            Hi ${escapeHtml(recipientName)},
           </p>
-          <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 0 0;white-space:pre-wrap;">${data.body}</p>
+          <p style="color:#374151;font-size:16px;line-height:1.6;margin:0 0 0 0;white-space:pre-wrap;">${escapeHtml(data.body)}</p>
         ${emailCardClose()}
         <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
           REASON — Fast, focused, and human.
@@ -1033,13 +1033,13 @@ export async function sendPokeReceivedEmail(
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
         ${emailCardOpen()}
           <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">Meeting request</p>
-          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">Hey ${recipientDisplayName},</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">Hey ${escapeHtml(recipientDisplayName)},</p>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
             <strong>${escapeHtml(data.senderName)}</strong> wants to meet you on REASON.
           </p>
           ${introBlock}
           <div style="text-align:center;margin:24px 0;">
-            <a href="${data.messagesUrl}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 32px;border-radius:8px;">View Request</a>
+            <a href="${escapeAttr(data.messagesUrl)}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 32px;border-radius:8px;">View Request</a>
           </div>
         ${emailCardClose()}
         <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
@@ -1079,12 +1079,12 @@ export async function sendPokeAcceptedEmail(
       <div style="max-width:480px;margin:0 auto;padding:40px 24px;">
         ${emailCardOpen()}
           <p style="color:#6b7280;font-size:14px;margin:0 0 24px 0;text-align:center;">Meeting request accepted</p>
-          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">Hey ${recipientDisplayName},</p>
+          <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 8px 0;">Hey ${escapeHtml(recipientDisplayName)},</p>
           <p style="color:#1a1a2e;font-size:16px;line-height:1.6;margin:0 0 16px 0;">
             <strong>${escapeHtml(data.accepterName)}</strong> accepted your meeting request. You're connected — start the conversation.
           </p>
           <div style="text-align:center;margin:24px 0;">
-            <a href="${data.messagesUrl}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 32px;border-radius:8px;">Open Conversation</a>
+            <a href="${escapeAttr(data.messagesUrl)}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 32px;border-radius:8px;">Open Conversation</a>
           </div>
         ${emailCardClose()}
         <p style="color:#6b7280;font-size:12px;line-height:1.7;text-align:center;margin:20px 0 0 0;">
@@ -1183,19 +1183,19 @@ export async function sendMeetingConfirmedEmail(
             Your meeting with <strong>${escapeHtml(data.partnerName)}</strong> is confirmed.
           </p>
           <div style="background:#f0fdf4;border-left:3px solid #16a34a;border-radius:6px;padding:12px 16px;margin:0 0 20px 0;">
-            <p style="color:#166534;font-size:15px;line-height:1.5;margin:0;"><strong>${when}</strong></p>
+            <p style="color:#166534;font-size:15px;line-height:1.5;margin:0;"><strong>${escapeHtml(when)}</strong></p>
             <p style="color:#374151;font-size:13px;line-height:1.5;margin:6px 0 0 0;">${data.kind === 'audio' ? 'Audio call' : 'Video call'} · ${data.durationMin} minutes</p>
           </div>
           ${data.joinUrl ? `<div style="text-align:center;margin:20px 0 8px 0;">
-            <a href="${data.joinUrl}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 28px;border-radius:8px;">Join the call</a>
+            <a href="${escapeAttr(data.joinUrl)}" style="display:inline-block;background:#DE322E;color:#fff;font-size:15px;font-weight:600;text-decoration:none;padding:12px 28px;border-radius:8px;">Join the call</a>
           </div>
           <p style="color:#9ca3af;font-size:12px;text-align:center;margin:0 0 16px 0;">The Join link opens the call on REASON at meeting time.</p>` : ''}
           <div style="text-align:center;margin:12px 0;">
-            <a href="${data.googleCalendarUrl}" style="display:inline-block;color:#DE322E;font-size:14px;font-weight:600;text-decoration:none;">Add to Google Calendar</a>
+            <a href="${escapeAttr(data.googleCalendarUrl)}" style="display:inline-block;color:#DE322E;font-size:14px;font-weight:600;text-decoration:none;">Add to Google Calendar</a>
           </div>
           <p style="color:#9ca3af;font-size:13px;text-align:center;margin:0 0 16px 0;">The calendar invite is attached (.ics) — open it to add the meeting to any calendar.</p>
           <div style="text-align:center;margin:8px 0;">
-            <a href="${data.threadUrl}" style="color:#DE322E;font-size:14px;">Open the conversation</a>
+            <a href="${escapeAttr(data.threadUrl)}" style="color:#DE322E;font-size:14px;">Open the conversation</a>
           </div>
         ${emailCardClose()}
       </div>
@@ -1209,11 +1209,14 @@ export async function sendMeetingConfirmedEmail(
   logger.warn({ to, partnerName: data.partnerName }, 'No email provider — meeting-confirmed email skipped');
 }
 
-// HTML-escape helpers for the admin review email. Other templates render
-// trusted internal copy; this one renders applicant-supplied free-text
-// (name + reason + linkedin URL) into HTML, so we escape every interpolation.
+// Every value an email puts into its HTML goes through one of these (21 Oct 2026). Names, event, pod and
+// circle names, messages and notes are typed by people, and the request to join needs no account at all,
+// so anything left as it was typed would let a stranger put their own link or picture into an email sent
+// from REASON. The links the server builds go through escapeAttr too: its & is written &amp;, which every
+// mail client reads back as &. Subjects and plain-text copies are not HTML and are never escaped.
+// String() so a value a caller typed loosely shows as it always did instead of throwing.
 function escapeHtml(s: string): string {
-  return s
+  return String(s)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
