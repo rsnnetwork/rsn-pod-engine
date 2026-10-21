@@ -15,22 +15,31 @@ import { canonicalTimeZone } from './time-zone';
 const keysOf = <T extends readonly { key: string }[]>(list: T) =>
   list.map(o => o.key) as [T[number]['key'], ...T[number]['key'][]];
 
-const meetKey = z.enum(keysOf(ONBOARDING_V2_MEET));
-const findKey = z.enum(keysOf(ONBOARDING_V2_FIND));
-const offerKey = z.enum(keysOf(ONBOARDING_V2_OFFER));
-const selfKey = z.enum(keysOf(ONBOARDING_V2_SELF));
+// Every refusal a member can cause says what to do, in words (never "Required"
+// or "Invalid enum value").
+const NOT_ON_THE_LIST = { errorMap: () => ({ message: 'Choose one of the answers shown.' }) };
+const meetKey = z.enum(keysOf(ONBOARDING_V2_MEET), NOT_ON_THE_LIST);
+const findKey = z.enum(keysOf(ONBOARDING_V2_FIND), NOT_ON_THE_LIST);
+const offerKey = z.enum(keysOf(ONBOARDING_V2_OFFER), NOT_ON_THE_LIST);
+const selfKey = z.enum(keysOf(ONBOARDING_V2_SELF), NOT_ON_THE_LIST);
 
-/** Typed text: control characters stripped, trimmed, capped. Empty becomes null. */
+/**
+ * Typed text, capped; empty becomes null. A control character (a line break, a
+ * tab) becomes a space and runs of spaces become one, so "Vienna\nor Graz"
+ * keeps both places for the place parser instead of becoming "Viennaor Graz".
+ */
 const line = (max: number) =>
-  z.string()
-    .transform(s => s.replace(/[\u0000-\u001F\u007F]/g, '').trim())
+  z.string({ invalid_type_error: 'Type your answer as words.' })
+    .transform(s => s.replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim())
     .refine(s => s.length <= max, { message: `Keep this under ${max} characters.` })
     .transform(s => (s.length ? s : null))
     .nullable();
 
 /** A set, not a list: a tick twice is one answer. */
 const uniqueKeys = <T extends z.ZodTypeAny>(item: T) =>
-  z.array(item).max(20).transform(v => [...new Set(v)] as z.infer<T>[]);
+  z.array(item, { required_error: 'Select at least one answer.', invalid_type_error: 'Choose from the answers shown.' })
+    .max(20)
+    .transform(v => [...new Set(v)] as z.infer<T>[]);
 
 /** The brief's own helper line is the message: "Select up to three answers." */
 const atMost = <T extends z.ZodTypeAny>(item: T, max: number, words: string) =>
@@ -116,8 +125,12 @@ export const confirmSchemaV2 = z.object({
 export type ConfirmInputV2 = z.infer<typeof confirmSchemaV2>;
 
 /** POST linkedin: the address is checked and normalised by the service, which can say why it is refused. */
+const ENTER_LINKEDIN = 'Enter your LinkedIn profile link.';
 export const linkedinSchemaV2 = z.object({
-  url: z.string().trim().min(1, 'Enter your LinkedIn profile link.').max(L.linkedinUrlMaxLen),
+  url: z.string({ required_error: ENTER_LINKEDIN, invalid_type_error: ENTER_LINKEDIN })
+    .trim()
+    .min(1, ENTER_LINKEDIN)
+    .max(L.linkedinUrlMaxLen, `Keep this under ${L.linkedinUrlMaxLen} characters.`),
 }).strict();
 
 export const skipSchemaV2 = z.object({}).strict();
