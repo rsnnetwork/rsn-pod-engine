@@ -103,7 +103,7 @@ export function HeroFrame({ photo, who, kicker, badge, note, panel, fit = 'scree
             LinkedIn <span aria-hidden="true">↗</span><span className="sr-only"> (opens in a new tab)</span>
           </a>
         )}
-        {who.bio &&<p className="mt-[17px] max-w-[620px] text-[18px] leading-[1.38] tracking-[-0.024em] [overflow-wrap:anywhere] md:mt-6 md:text-[21px]">{who.bio}</p>}
+        {who.bio && <p className="mt-[17px] max-w-[620px] text-[18px] leading-[1.38] tracking-[-0.024em] [overflow-wrap:anywhere] md:mt-6 md:text-[21px]">{who.bio}</p>}
         <div className="mt-auto flex flex-col gap-4 pt-4 md:pt-6">
           {who.tags.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
