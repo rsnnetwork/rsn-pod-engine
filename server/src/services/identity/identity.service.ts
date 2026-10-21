@@ -19,7 +19,7 @@ import type { EnrichResult } from '../onboarding/enrichment.service';
 import { statusFromResult } from '../onboarding/providers/registry';
 import { hasAvatar, tryGravatar } from '../onboarding/avatar.service';
 import { assertCanSignIn, signInRefusal } from './account-access';
-import { resolveClientBaseUrl } from './client-origin';
+import { clientOriginConfig, resolveClientBaseUrl } from './client-origin';
 
 /**
  * A photo for a member signing in for the first time — but never their
@@ -342,10 +342,7 @@ export async function sendMagicLink(email: string, requestedClientUrl?: string, 
 
   // Build the magic link URL. It opens the asking page's origin only when that
   // is one of our own sites (client-origin.ts); anything else gets the main app.
-  const clientBaseUrl = resolveClientBaseUrl(requestedClientUrl, {
-    clientUrl: config.clientUrl,
-    isDev: config.isDev,
-  });
+  const clientBaseUrl = resolveClientBaseUrl(requestedClientUrl, clientOriginConfig());
   // Carry the invite code IN THE LINK (Stefan, 9 Jun): a new user invited to an
   // event clicks the magic link from their email — usually a different tab /
   // browser / phone where the login tab's sessionStorage `rsn_redirect` does NOT

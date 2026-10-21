@@ -16,9 +16,11 @@ import logger from '../../config/logger';
 import { query } from '../../db';
 import { captureAvatar } from '../onboarding/avatar.service';
 import { record as recordStageEvent } from '../onboarding/stage-events.repo';
+import { OAUTH_STATE_LIFETIME_SECONDS } from './oauth-browser-binding';
 
 const PHOTO_LINK_TTL = '15m';
 const PHOTO_LINK_PURPOSE = 'google-photo';
+const OAUTH_STATE_PURPOSE = 'google-oauth-state';
 
 export interface GoogleOauthState {
   inviteCode?: string;
@@ -26,6 +28,18 @@ export interface GoogleOauthState {
   photoLinkUserId?: string;
   /** Client path to return to after a photo link (validated: same-site path only). */
   redirect?: string;
+  /**
+   * The site the member started on (7 Oct 2026), so Google brings them back there and not always to the
+   * main app. The start resolves it against the exact allow-list in client-origin.ts; the callback resolves
+   * it AGAIN before using it, because the redirect it feeds carries live tokens.
+   */
+  origin?: string;
+  /**
+   * SHA-256, as hex, of the one-time value the start put in the browser's rsn_oauth_nonce cookie (7 Oct 2026).
+   * The callback goes on only when the browser's cookie hashes to this, so a sign-in only finishes in the
+   * browser that started it (oauth-browser-binding.ts). A state without one can never finish.
+   */
+  nonceHash?: string;
 }
 
 /** A token the client carries into GET /auth/google?photo=..., minted for the signed-in member. */
@@ -50,20 +64,61 @@ export function safeRedirectPath(redirect: string | undefined): string {
   return redirect.slice(0, 200);
 }
 
+/**
+ * The OAuth state, signed (7 Oct 2026). It used to be plain base64 JSON, and the callback trusted the
+ * member id in it, so anyone could write a state naming ANOTHER member's photo link, finish Google with
+ * their own account, and replace that member's photo. It is now a token signed with the server's secret
+ * (the same pattern as the photo-link token), so only the start can write one, and it expires.
+ *
+ * The `purpose` claim keeps it apart from the other tokens that secret signs. GET /auth/google hands a
+ * state to anyone who asks, so no reader of an access or refresh token may take one for the other
+ * (middleware/auth.ts and the refresh both require what a state lacks).
+ *
+ * A signature proves the server wrote the state, not which browser carries it back. The `nonceHash` claim
+ * is what ties it to the browser that started the sign-in (oauth-browser-binding.ts).
+ */
 export function buildOauthState(state: GoogleOauthState): string {
-  return Buffer.from(JSON.stringify(state)).toString('base64url');
+  return jwt.sign({ ...state, purpose: OAUTH_STATE_PURPOSE }, config.jwtSecret, { expiresIn: OAUTH_STATE_LIFETIME_SECONDS });
 }
 
+/** Why a state was refused: one of four classes of reason, never anything the state held. */
+type StateRefusal = 'expired' | 'bad signature' | 'wrong purpose' | 'malformed';
+
+function refusalOf(err: unknown): StateRefusal {
+  if (err instanceof jwt.TokenExpiredError) return 'expired';
+  if (err instanceof jwt.JsonWebTokenError && /signature|algorithm/.test(err.message)) return 'bad signature';
+  return 'malformed';
+}
+
+/**
+ * What a state we signed carries. Anything else (unsigned, edited, signed by another secret or algorithm,
+ * expired, of another purpose, not a token at all) reads as no state, and the callback then refuses it
+ * (a sign-in goes on only with a state that carries a nonce its browser can answer).
+ *
+ * A refusal is logged, as a warning naming the class of reason (expired, bad signature, wrong purpose,
+ * malformed) and nothing else: never the token, which a forger writes and a member's own carries their id.
+ * So a probe, or a change that made every real state fail, shows in the logs. A missing state is not a
+ * refusal and logs nothing.
+ */
 export function parseOauthState(raw: string | undefined): GoogleOauthState {
+  if (!raw) return {};
+  const refuse = (reason: StateRefusal): GoogleOauthState => {
+    logger.warn({ reason }, 'Google sign-in state refused');
+    return {};
+  };
   try {
-    const decoded = JSON.parse(Buffer.from(raw || '', 'base64url').toString()) as GoogleOauthState;
+    const decoded = jwt.verify(raw, config.jwtSecret, { algorithms: ['HS256'] });
+    if (typeof decoded === 'string') return refuse('malformed');
+    if (decoded.purpose !== OAUTH_STATE_PURPOSE) return refuse('wrong purpose');
     return {
       inviteCode: typeof decoded.inviteCode === 'string' ? decoded.inviteCode : undefined,
       photoLinkUserId: typeof decoded.photoLinkUserId === 'string' ? decoded.photoLinkUserId : undefined,
       redirect: typeof decoded.redirect === 'string' ? decoded.redirect : undefined,
+      origin: typeof decoded.origin === 'string' ? decoded.origin : undefined,
+      nonceHash: typeof decoded.nonceHash === 'string' ? decoded.nonceHash : undefined,
     };
-  } catch {
-    return {};
+  } catch (err) {
+    return refuse(refusalOf(err));
   }
 }
 

@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { ApiResponse, OUTCOME_KEYS, PERSON_RESPONSES, WORTH_CONTINUING } from '@rsn/shared';
 import { authenticate } from '../middleware/auth';
 import { validate } from '../middleware/validate';
-import { peopleWriteLimiter } from '../middleware/rateLimit';
+import { peopleReadLimiter, peopleWriteLimiter } from '../middleware/rateLimit';
 import { fanoutUserEntity } from '../realtime/fanout';
 import * as responses from '../services/people/person-response.service';
 import * as outcomes from '../services/people/meeting-outcome.service';
@@ -31,10 +31,11 @@ const outcomeBody = z.object({
 type ResponseBody = z.infer<typeof responseBody>;
 type OutcomeBody = z.infer<typeof outcomeBody>;
 
-// The two reads change nothing, so they emit nothing. /connections/recent comes
-// first so it is never taken for a member id.
+// The two reads change nothing, so they emit nothing. They are limited per member all the
+// same: the brief can be aimed at any member by id. /connections/recent comes first so it
+// is never taken for a member id.
 
-router.get('/connections/recent', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.get('/connections/recent', authenticate, peopleReadLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = await brief.listRecentConnections(req.user!.userId);
     res.json({ success: true, data } as ApiResponse);
@@ -46,6 +47,7 @@ router.get('/connections/recent', authenticate, async (req: Request, res: Respon
 router.get(
   '/:userId/brief',
   authenticate,
+  peopleReadLimiter,
   validate(userParams, 'params'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {

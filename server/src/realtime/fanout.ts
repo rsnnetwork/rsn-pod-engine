@@ -120,6 +120,64 @@ export async function fanoutSessionEntities(
   }
 }
 
+// ─── Event-list fanout ──────────────────────────────────────────────────────
+//
+// An event (the sessions table) was created, renamed, rescheduled, cancelled
+// or deleted. The lists that show it belong to the member: Home and Sessions
+// (`user:<id>:sessions`), and the pods list that counts each pod's events and
+// the For You "next event" panel that follows the member's pods
+// (`user:<id>:pods`). A tag that names a member is only ever matched by that
+// member's own client, so each recipient is sent their own two tags and not
+// everyone's: the payload stays two tags long however big the pod is, and no
+// client is told another member's id.
+//
+// Audience: the event's participants, its pod's members and its host. The host
+// is read on its own because a host who has left their own event, or an admin
+// who runs one in a pod they do not belong to, is in neither of the others.
+
+/**
+ * Everyone who could be looking at this event in a list. A permanent delete
+ * takes the participants and the host with the event, so a caller that deletes
+ * reads this first and passes it to fanoutSessionListEntities afterwards.
+ */
+export async function resolveSessionListAudience(
+  podId: string | null,
+  sessionId: string,
+): Promise<string[]> {
+  const { query } = await import('../db');
+  const result = await query<{ user_id: string }>(
+    `SELECT user_id FROM session_participants
+       WHERE session_id = $1 AND status NOT IN ('removed', 'left', 'no_show')
+     UNION
+     SELECT user_id FROM pod_members
+       WHERE pod_id = COALESCE($2, '00000000-0000-0000-0000-000000000000'::uuid)
+         AND status NOT IN ('removed', 'declined')
+     UNION
+     SELECT host_user_id FROM sessions
+       WHERE id = $1 AND host_user_id IS NOT NULL`,
+    [sessionId, podId],
+  );
+  return result.rows.map(r => r.user_id);
+}
+
+export async function fanoutSessionListEntities(
+  podId: string | null,
+  sessionId: string,
+  /** Read earlier by a caller whose delete takes the rows that name the audience. */
+  audience?: string[],
+): Promise<void> {
+  const io = getRealtimeIo();
+  if (!io) return;
+  try {
+    const recipients = new Set(audience ?? await resolveSessionListAudience(podId, sessionId));
+    await Promise.all([...recipients].filter(Boolean).map(userId =>
+      emitEntities(io, [userId], [E.userSessions(userId), E.userPods(userId)]),
+    ));
+  } catch (err) {
+    logger.warn({ err, sessionId, podId }, 'fanoutSessionListEntities: failed to fan out');
+  }
+}
+
 // ─── Admin-list fanout ──────────────────────────────────────────────────────
 //
 // Targets every admin / super_admin user's room. `scope` plugs into the

@@ -18,18 +18,47 @@ import * as ts from 'typescript';
 const STORE = fs.readFileSync(path.join(__dirname, '../../../../client/src/stores/authStore.ts'), 'utf8')
   .replace(/\r\n/g, '\n');
 
-function loadGetTokenExpiryMs(): (token: string) => number | null {
-  const start = STORE.indexOf('function getTokenExpiryMs(');
-  expect(start).toBeGreaterThanOrEqual(0);
-  const end = STORE.indexOf('\n}\n', start);
-  expect(end).toBeGreaterThan(start);
-  const { outputText } = ts.transpileModule(STORE.slice(start, end + 2), {
+/**
+ * The function, lifted out of `source` (the store's text) and compiled to plain JavaScript. If it cannot be
+ * found the error says what to do about it, rather than a bare "expected -1 to be >= 0" from the lookup.
+ */
+function loadGetTokenExpiryMs(source: string = STORE): (token: string) => number | null {
+  const start = source.indexOf('function getTokenExpiryMs(');
+  if (start < 0) {
+    throw new Error(
+      'auth-token-expiry.test: could not find "function getTokenExpiryMs(" in client/src/stores/authStore.ts. '
+      + 'This test lifts that function out of the store\'s source and runs it, so if it was renamed, moved or '
+      + 'rewritten (an arrow function, say), update the lookup here and keep a test for base64url tokens.',
+    );
+  }
+  const end = source.indexOf('\n}\n', start);
+  if (end < 0) {
+    throw new Error(
+      'auth-token-expiry.test: found getTokenExpiryMs in client/src/stores/authStore.ts but not where it ends '
+      + '(a "}" in column 0 on a line of its own). Update the lookup here.',
+    );
+  }
+  const { outputText } = ts.transpileModule(source.slice(start, end + 2), {
     compilerOptions: { target: ts.ScriptTarget.ES2019 },
   });
   return new Function('atob', `${outputText}\nreturn getTokenExpiryMs;`)(atob);
 }
 
 const getTokenExpiryMs = loadGetTokenExpiryMs();
+
+describe('finding the function to test', () => {
+  it('says plainly when the store no longer has getTokenExpiryMs', () => {
+    expect(() => loadGetTokenExpiryMs('const x = 1;\n')).toThrow(
+      /could not find "function getTokenExpiryMs\(" in client\/src\/stores\/authStore\.ts/,
+    );
+  });
+
+  it('says plainly when it cannot tell where the function ends', () => {
+    expect(() => loadGetTokenExpiryMs('function getTokenExpiryMs(token: string) { return null;\n')).toThrow(
+      /not where it ends/,
+    );
+  });
+});
 
 const EXPIRES = 1893456000; // 1 Jan 2030, in seconds, as a JWT carries it
 

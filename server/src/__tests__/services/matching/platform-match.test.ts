@@ -877,3 +877,68 @@ describe('a reason names only words from the other member\'s public card', () =>
     });
   });
 });
+
+// 7 Oct 2026: a want that names a region used to empty For You. The demo that showed it: a member
+// who wanted "fintech founders, seed investors and payments partners in Europe" got no suggestions
+// although every other member lived in a European city; the same want without "in Europe" gave
+// six strong matches.
+describe('For You with a place in the want', () => {
+  beforeEach(() => mockQuery.mockReset());
+
+  const STACK = 'fintech founders, seed investors and payments partners';
+  const founder = (id: string, name: string, location: string | null) => profile({
+    id, displayName: name, professionalRole: ['Founder'], jobTitle: 'Co-founder & CEO', company: `${name} Pay`,
+    industry: 'Fintech', expertiseText: 'payments infrastructure and seed fundraising', location,
+    // A private interest, to show the region never drags one into the reason.
+    interests: ['sailing'],
+  });
+  const people = [
+    founder('u-berlin', 'Anna', 'Berlin, Germany'),
+    founder('u-amsterdam', 'Bram', 'Amsterdam, Netherlands'),
+    founder('u-milan', 'Chiara', 'Milan, Italy'),
+    founder('u-austin', 'Alex', 'Austin, Texas'),
+  ];
+  const viewer = (want: string) => ({
+    ...profile({ id: 'u-viewer', displayName: 'Vic', whoIWantToMeet: want }), onboardingCompleted: true,
+  });
+  const forYou = async (want: string) => {
+    mockQuery.mockImplementation((sql: string) => {
+      if (/FROM sessions/.test(sql)) return Promise.resolve({ rows: [] });
+      if (/WHERE u\.id = \$1/.test(sql)) return Promise.resolve({ rows: [viewer(want)] });
+      return Promise.resolve({ rows: people });
+    });
+    return (await getPlatformMatches('u-viewer')).matches;
+  };
+
+  it('control: without a place, all four are suggested', async () => {
+    const matches = await forYou(STACK);
+    expect(matches.map(m => m.userId).sort()).toEqual(['u-amsterdam', 'u-austin', 'u-berlin', 'u-milan']);
+    expect(matches.every(m => m.strength === 'strong')).toBe(true);
+  });
+
+  it('"in Europe" suggests the three in Europe, strong, saying Europe, and not the one in Texas', async () => {
+    const matches = await forYou(`${STACK} in Europe`);
+    expect(matches.map(m => m.userId).sort()).toEqual(['u-amsterdam', 'u-berlin', 'u-milan']);
+    for (const m of matches) {
+      expect(m.strength).toBe('strong');
+      expect(m.reason).toMatch(/\(in Europe\)$/);
+      expect(m.reason).not.toMatch(/sailing|Berlin|Amsterdam|Milan|Germany|Netherlands|Italy/);
+    }
+  });
+
+  it('"in DACH" suggests only the person in Germany', async () => {
+    expect((await forYou(`${STACK} in DACH`)).map(m => m.userId)).toEqual(['u-berlin']);
+  });
+
+  it('an unknown place does not empty the list: "in Narnia" suggests all four, and says nothing about it', async () => {
+    const matches = await forYou(`${STACK} in Narnia`);
+    expect(matches.map(m => m.userId).sort()).toEqual(['u-amsterdam', 'u-austin', 'u-berlin', 'u-milan']);
+    for (const m of matches) expect(m.reason).not.toMatch(/Narnia|\(in /);
+  });
+
+  it('a country the member names is still strict', async () => {
+    const matches = await forYou(`${STACK} in the Netherlands`);
+    expect(matches.map(m => m.userId)).toEqual(['u-amsterdam']);
+    expect(matches[0].reason).toMatch(/\(in Netherlands\)$/);
+  });
+});

@@ -21,9 +21,14 @@ export class AppError extends Error {
 }
 
 export class NotFoundError extends AppError {
-  constructor(entity: string, id?: string) {
-    const message = id ? `${entity} with id ${id} not found` : `${entity} not found`;
-    super(404, `${entity.toUpperCase()}_NOT_FOUND` as ErrorCode, message);
+  /**
+   * `message` replaces the generated "<entity> with id <id> not found" where a member
+   * reads it and the id or the entity's internal name would mean nothing to them.
+   * The 404 and the `<ENTITY>_NOT_FOUND` code stay as they are.
+   */
+  constructor(entity: string, id?: string, message?: string) {
+    const generated = id ? `${entity} with id ${id} not found` : `${entity} not found`;
+    super(404, `${entity.toUpperCase()}_NOT_FOUND` as ErrorCode, message ?? generated);
   }
 }
 

@@ -20,23 +20,46 @@ import { getPokeWith } from '../poke/poke.service';
 import { getResponse } from './person-response.service';
 import { clip } from './text';
 
-// A member's answer is set inside a sentence, so a plain first word drops its capital
-// ("Introductions to…" reads "introductions to…"). An acronym, a brand name or "I" keeps
-// it: "aWS", "uX" and "i'd" look like typing mistakes on a page a member reads.
-const lowerFirst = (s: string) => (/^(?:A(?=\s)|[A-Z][a-z]+(?![A-Za-z]))/.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s);
-const endSentence = (s: string) => s.replace(/[.!?]+$/, '');
-// clip ends an answer it had to cut with "…". That already ends the clause, and a full
-// stop after it would make a cut word look finished.
-const closeClause = (s: string) => (s.endsWith('…') ? s : `${s}.`);
+// An answer is worth showing when it has a letter or digit in it. A member who types ".", "…" or "!!!"
+// to get past a box has given no answer, and after a colon it reads as a mistake. It is judged on the
+// text the page would show (clip cuts a long answer short), and it counts as blank, so the reading goes
+// on to the member's next field.
+const usableAnswer = (text: string | null | undefined): string | null => {
+  const shown = clip(text);
+  return shown && /[\p{L}\p{N}]/u.test(shown) ? shown : null;
+};
 
-/** "The first 20 minutes": fixed wording from the two members' own answers (approved point 3). */
-function openerFor(first: string, theyCanBring: string | null, youAreLookingFor: string | null, sharedEvent: string | null): string {
+// A member's words are set after a colon exactly as they wrote them: their own first letter, capital or
+// not, reads naturally there ("european market entry", "Mentorship for founders", "I can help with
+// pricing"). Only the end changes: whatever sentence-ending marks and spaces it ends in, in any script
+// ("!", " ?", ". . .", "。"), become one full stop. An answer clip had to cut already ends in "…", which is
+// not a sentence-ending mark and ends the clause, and a full stop after it would make a cut word look finished.
+function asClause(answer: string): string {
+  const bare = answer.replace(/[\s\p{Sentence_Terminal}]+$/u, '');
+  return bare.endsWith('…') ? bare : `${bare}.`;
+}
+
+// A host's event title is shown exactly as written, so unlike an answer it keeps its own "!" or "?". It
+// gets a full stop only when it does not already end its sentence: "Founders Night!", "Coffee & Co." and
+// "Back again…" stay as they are.
+const endTitle = (title: string): string => (/[\p{Sentence_Terminal}…]$/u.test(title) ? title : `${title}.`);
+
+/**
+ * "The first 20 minutes": fixed words around the two members' own answers (approved point 3).
+ * With no usable offer the line says why REASON put the two together when it has a reason, and
+ * otherwise asks each of them what they are working on.
+ */
+function openerFor(o: {
+  first: string; theyCanBring: string | null; youAreLookingFor: string | null; hasMatch: boolean; sharedEvent: string | null;
+}): string {
   const parts: string[] = [];
-  parts.push(theyCanBring
-    ? `Ask ${first} about ${closeClause(lowerFirst(endSentence(theyCanBring)))}`
-    : `Start with why REASON put you two together.`);
-  if (youAreLookingFor) parts.push(`Then say what you are looking for: ${closeClause(lowerFirst(endSentence(youAreLookingFor)))}`);
-  if (sharedEvent) parts.push(`You will both be at ${sharedEvent}.`);
+  if (o.theyCanBring) parts.push(`Start with what ${o.first} can bring: ${asClause(o.theyCanBring)}`);
+  else if (o.hasMatch) parts.push('Start with why REASON put you two together.');
+  else parts.push('Start with what each of you is working on right now.');
+  if (o.youAreLookingFor) parts.push(`Then say what you are looking for: ${asClause(o.youAreLookingFor)}`);
+  // Titles are only checked for length, so one can end in spaces, or be nothing else.
+  const event = o.sharedEvent?.trimEnd();
+  if (event) parts.push(`You will both be at ${endTitle(event)}`);
   return parts.join(' ');
 }
 
@@ -82,9 +105,12 @@ export async function getPersonBrief(viewerId: string, targetId: string): Promis
   if (target.status !== 'active') throw new NotFoundError('User', targetId);
 
   const [a, b] = viewerId < targetId ? [viewerId, targetId] : [targetId, viewerId];
-  const [me, them, poke, response, enc, conv, outcomeRows, circles, pods, events, path] = await Promise.all([
-    loadProfile(viewerId),
-    loadProfile(targetId),
+
+  // The eleven reads used to start together in one Promise.all, so a single profile open could hold eleven
+  // of the pool's connections (25 by default) and crowd everyone else out. They run in three groups of at
+  // most four: where the relationship stands, then the two profiles and what the viewer has recorded, then
+  // what the two share. A failure in the first group ends the brief before the rest are asked.
+  const [poke, response, enc, conv] = await Promise.all([
     getPokeWith(viewerId, targetId),
     getResponse(viewerId, targetId),
     query<{ times_met: number; last_met_at: Date; last_session_id: string | null }>(
@@ -93,10 +119,16 @@ export async function getPersonBrief(viewerId: string, targetId: string): Promis
     query<{ id: string; joined_a: Date | null; joined_b: Date | null }>(
       `SELECT id, meeting_joined_a_at AS joined_a, meeting_joined_b_at AS joined_b FROM dm_conversations WHERE user_a_id = $1 AND user_b_id = $2`,
       [a, b]),
+  ]);
+  const [me, them, outcomeRows] = await Promise.all([
+    loadProfile(viewerId),
+    loadProfile(targetId),
     query<{ worth_continuing: WorthContinuing; outcome_keys: OutcomeKey[]; created_at: Date }>(
       `SELECT worth_continuing, outcome_keys, created_at FROM meeting_outcomes
         WHERE user_id = $1 AND target_user_id = $2 ORDER BY created_at DESC LIMIT 5`,
       [viewerId, targetId]),
+  ]);
+  const [circles, pods, events, path] = await Promise.all([
     query<{ id: string; name: string }>(
       `SELECT c.id, c.name FROM circle_members x
          JOIN circle_members y ON y.circle_id = x.circle_id
@@ -140,18 +172,23 @@ export async function getPersonBrief(viewerId: string, targetId: string): Promis
             : 'none';
 
   const person = toPublicMember(target);
-  const first = person.firstName || person.displayName.split(' ')[0] || 'them';
-  // clip turns a blank answer ('' or only spaces) into null, which is what falls through to the next field.
-  const theyCanBring = clip(them?.whatICanHelpWith) ?? clip(them?.expertiseText);
-  const youAreLookingFor = clip(me?.whoIWantToMeet) ?? clip(me?.myIntent);
+  // The opener says "what {first} can bring", so a member with no name at all is "they".
+  const first = person.firstName || person.displayName.split(' ')[0] || 'they';
+  // A blank answer ('' or only spaces) and one with nothing in it ('.', '…') are null, which is what falls
+  // through to the next field.
+  const theyCanBring = usableAnswer(them?.whatICanHelpWith) ?? usableAnswer(them?.expertiseText);
+  const youAreLookingFor = usableAnswer(me?.whoIWantToMeet) ?? usableAnswer(me?.myIntent);
   const upcomingEvents = events.rows.map(r => ({ id: r.id, title: r.title, scheduledAt: r.scheduled_at.toISOString() }));
+  const match: PersonBrief['match'] = fit && strength ? { reason: fit.reason, strength } : null;
 
   return {
     person,
-    match: fit && strength ? { reason: fit.reason, strength } : null,
+    match,
     theyCanBring,
     youAreLookingFor,
-    opener: openerFor(first, theyCanBring, youAreLookingFor, upcomingEvents[0]?.title ?? null),
+    opener: openerFor({
+      first, theyCanBring, youAreLookingFor, hasMatch: match !== null, sharedEvent: upcomingEvents[0]?.title ?? null,
+    }),
     relationship: {
       state,
       pokeId: poke?.status === 'pending' && !poke.sentByMe ? poke.id : null,

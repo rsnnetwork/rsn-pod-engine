@@ -61,6 +61,71 @@ export async function isUserActive(userId: string): Promise<boolean> {
 }
 
 /**
+ * Whether a token we signed is an ACCESS token, the only kind that signs a request in (7 Oct 2026).
+ *
+ * The secret also signs tokens that are not: the refresh token (`type: 'refresh'`), the photo link and the
+ * Google sign-in state (they have a `purpose`). GET /auth/google hands a state to anyone who asks, so a
+ * valid signature alone proves nothing about who is calling. An access token names its member (`sub`),
+ * has no `purpose`, and does not declare itself some other kind of token: its `type` is absent (as the
+ * server issues them) or 'access', so tagging access tokens one day cannot lock everyone out.
+ *
+ * Without this check a token with no `sub` was turned away only because the user lookup found nobody, and
+ * isUserActive says yes to everyone when the database errors.
+ */
+export function isAccessToken(payload: unknown): boolean {
+  if (typeof payload !== 'object' || payload === null) return false;
+  const claims = payload as Record<string, unknown>;
+  return typeof claims.sub === 'string' && claims.sub !== ''
+    && claims.purpose === undefined
+    && (claims.type === undefined || claims.type === 'access');
+}
+
+/** Who a socket handshake lets in, as the handshake records it on the socket. */
+export interface SocketMember {
+  userId: string;
+  email: string;
+  role: string;
+  displayName: string;
+}
+
+/**
+ * The socket handshake's check of a token: the member it lets in, or an Error whose message is exactly
+ * what the handshake sends ('Invalid token', or 'Account is deactivated'). It lives here, not written out
+ * inside index.ts, so that it is tested by what it does: a source pin passes an inverted condition.
+ *
+ * Only an access token opens a socket (isAccessToken); the Google sign-in state, the photo link and the
+ * refresh token share the secret and are refused, whether or not the user lookup fails open.
+ */
+export async function authenticateSocketToken(token: string): Promise<SocketMember> {
+  let payload: JwtPayload;
+  try {
+    payload = jwt.verify(token, config.jwtSecret) as JwtPayload;
+  } catch {
+    throw new Error('Invalid token');
+  }
+  if (!isAccessToken(payload)) {
+    throw new Error('Invalid token');
+  }
+
+  // Block deactivated users from socket connections. Tier-1 A4: share the
+  // 60-second cache with the HTTP auth middleware. Previously this ran a
+  // fresh DB SELECT on every handshake — during a lobby surge (200 users
+  // reconnecting after a deploy) the pool would saturate and legitimate
+  // sockets would see "Invalid token" errors that were actually timeouts.
+  const active = await isUserActive(payload.sub);
+  if (!active) {
+    throw new Error('Account is deactivated');
+  }
+
+  return {
+    userId: payload.sub,
+    email: payload.email,
+    role: payload.role,
+    displayName: payload.displayName || payload.email,
+  };
+}
+
+/**
  * Extracts and verifies JWT from Authorization header.
  * Sets req.user on success. Blocks deactivated users.
  */
@@ -74,6 +139,9 @@ export function authenticate(req: Request, _res: Response, next: NextFunction): 
 
       const token = authHeader.substring(7);
       const payload = jwt.verify(token, config.jwtSecret) as JwtPayload;
+      if (!isAccessToken(payload)) {
+        throw new UnauthorizedError('Invalid token');
+      }
 
       // Check user is still active (cached, <1ms for repeat calls)
       const active = await isUserActive(payload.sub);
@@ -125,12 +193,15 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction): 
     const token = authHeader.substring(7);
     const payload = jwt.verify(token, config.jwtSecret) as JwtPayload;
 
-    req.user = {
-      userId: payload.sub,
-      email: payload.email,
-      role: payload.role as UserRole,
-      sessionId: payload.sessionId,
-    };
+    // A token that is not an access token (isAccessToken) signs nobody in, however it was signed.
+    if (isAccessToken(payload)) {
+      req.user = {
+        userId: payload.sub,
+        email: payload.email,
+        role: payload.role as UserRole,
+        sessionId: payload.sessionId,
+      };
+    }
   } catch {
     // Token invalid — proceed without user
   }

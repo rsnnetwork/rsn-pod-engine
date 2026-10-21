@@ -1,7 +1,7 @@
 // ─── JWT Auth Middleware Tests ───────────────────────────────────────────────
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { authenticate, optionalAuth, invalidateUserStatusCache } from '../../middleware/auth';
+import { authenticate, optionalAuth, invalidateUserStatusCache, __test__ } from '../../middleware/auth';
 
 // Mock config
 jest.mock('../../config', () => ({
@@ -185,5 +185,69 @@ describe('optionalAuth middleware', () => {
 
     expect(next).toHaveBeenCalledWith();
     expect(req.user).toBeUndefined();
+  });
+});
+
+// ─── Only an access token signs a request in (7 Oct 2026) ────────────────────
+//
+// The secret also signs tokens that are not access tokens: the refresh token (a `type`), the photo
+// link and the Google sign-in state (a `purpose`). The state is handed to ANYONE who starts a Google
+// sign-in, so "signed by us" proves nothing about who is calling. An access token names its member
+// (`sub`) and carries neither claim. Every case runs with the user lookup active, and again with it
+// failing open (the database down: isUserActive then says yes to everyone), so it is the claims alone
+// that decide.
+
+const ACCESS = { sub: 'user-123', email: 'test@example.com', role: 'member', sessionId: 'sess-abc' };
+const GOOGLE_STATE = { inviteCode: 'ABC', origin: 'https://preview.rsn.network', purpose: 'google-oauth-state' };
+const SHAPES: Array<[string, Record<string, unknown>, boolean]> = [
+  ['an access token', ACCESS, true],
+  ['an access token that carries only its member', { sub: 'user-123' }, true],
+  ['a Google sign-in state: no member, a purpose', GOOGLE_STATE, false],
+  ['a Google sign-in state that names a member (a photo link state)', { ...GOOGLE_STATE, photoLinkUserId: 'user-123' }, false],
+  ['a photo link: a member and a purpose', { sub: 'user-123', purpose: 'google-photo' }, false],
+  ['a refresh token: a member and a type', { sub: 'user-123', sessionId: 'sess-abc', type: 'refresh' }, false],
+  // An access token may be tagged as one (a type of 'access'); a token that says it is anything else is not.
+  ['an access token tagged type access', { ...ACCESS, type: 'access' }, true],
+  ['an access token with a purpose added', { ...ACCESS, purpose: 'anything' }, false],
+  ['an access token with the type refresh added', { ...ACCESS, type: 'refresh' }, false],
+  ['an access token with another type added', { ...ACCESS, type: 'something-else' }, false],
+  ['a token with no member', { email: 'test@example.com', role: 'member', sessionId: 'sess-abc' }, false],
+  ['a token with an empty member', { ...ACCESS, sub: '' }, false],
+  ['a token whose member is not text', { ...ACCESS, sub: 42 }, false],
+];
+
+describe('only an access token signs a request in', () => {
+  const { query: mockQuery } = require('../../db');
+  const sign = (claims: Record<string, unknown>) => jwt.sign(claims, 'test-secret-key', { expiresIn: '15m' });
+
+  afterEach(() => { mockQuery.mockResolvedValue({ rows: [{ status: 'active' }] }); });
+
+  describe.each([
+    ['the user lookup says the member is active', () => mockQuery.mockResolvedValue({ rows: [{ status: 'active' }] })],
+    ['the user lookup fails open (the database is down)', () => mockQuery.mockRejectedValue(new Error('db down'))],
+  ])('when %s', (_when, arm) => {
+    beforeEach(() => { arm(); __test__.clearAll(); });
+
+    it.each(SHAPES)('authenticate: %s', async (_name, claims, accepted) => {
+      const req = createRequest(`Bearer ${sign(claims)}`);
+      const nextArgs = await waitForNext(authenticate, req);
+      if (accepted) {
+        expect(nextArgs[0]).toBeUndefined();
+        expect(req.user?.userId).toBe(claims.sub);
+      } else {
+        expect(nextArgs[0]).toBeDefined();
+        expect(nextArgs[0].statusCode).toBe(401);
+        expect(req.user).toBeUndefined();
+      }
+    });
+
+    it.each(SHAPES)('optionalAuth: %s', (_name, claims, accepted) => {
+      const next = jest.fn();
+      const req = createRequest(`Bearer ${sign(claims)}`);
+      optionalAuth(req, {} as Response, next);
+      expect(next).toHaveBeenCalledWith();
+      if (accepted) expect(req.user?.userId).toBe(claims.sub);
+      else expect(req.user).toBeUndefined();
+    });
   });
 });

@@ -11,6 +11,10 @@ import logger from '../config/logger';
 import {
   mintPhotoLinkToken, readPhotoLinkToken, safeRedirectPath, buildOauthState, parseOauthState, applyGooglePhoto,
 } from '../services/identity/google-photo-link';
+import { clientOriginConfig, resolveClientBaseUrl } from '../services/identity/client-origin';
+import {
+  oauthNonceCookieName, newOauthNonce, oauthNonceCookieOptions, readCookieValues, browserBindingRefusal, canonicalStartLocation,
+} from '../services/identity/oauth-browser-binding';
 
 const router = Router();
 
@@ -183,9 +187,37 @@ router.get(
 
 // ─── Google OAuth ───────────────────────────────────────────────────────────
 
+/** Take the nonce cookie out of the browser: same name, path and flags it was set with, Max-Age=0. */
+function clearOauthNonceCookie(res: Response): void {
+  res.cookie(oauthNonceCookieName(config.isDev), '', { ...oauthNonceCookieOptions(config.isDev), maxAge: 0 });
+}
+
 router.get(
   '/google',
   (req: Request, res: Response) => {
+    // 7 Oct 2026: Google brings the member back to the site they started on (the app or the preview), not
+    // always to the main app. The page says so in ?origin=; a plain navigation from a page carries it in
+    // Referer (the sign-in page that predates ?origin= still works). Either way it is resolved against our
+    // exact allow-list (client-origin.ts: CLIENT_URL, the app, the preview, localhost in development only), so
+    // a site that is not ours becomes the main app, and only the RESOLVED origin is kept.
+    const namedOrigin = typeof req.query.origin === 'string' && req.query.origin ? req.query.origin : undefined;
+    const origin = resolveClientBaseUrl(namedOrigin ?? req.get('referer'), clientOriginConfig());
+
+    // 7 Oct 2026: the start has to run on the host Google will return to, because the cookie below belongs to the host
+    // that sets it (canonicalStartLocation says why, and which header names the host). Anywhere else it is sent on, once,
+    // before anything is minted or set. The site resolved above rides along when the request named none, because the
+    // second request may carry no Referer.
+    const onTheApiHost = canonicalStartLocation({
+      hostname: req.hostname,
+      originalUrl: req.originalUrl,
+      apiBaseUrl: config.apiBaseUrl,
+      carryOrigin: namedOrigin === undefined ? origin : undefined,
+    });
+    if (onTheApiHost) {
+      res.redirect(onTheApiHost);
+      return;
+    }
+
     if (!config.googleClientId) {
       res.status(501).json({ success: false, error: { message: 'Google login is not configured' } });
       return;
@@ -195,10 +227,18 @@ router.get(
     // 7 Sep 2026: "Use my Google photo" from the onboarding card. The signed
     // token names the member; the callback attaches the picture to them.
     const photoLinkUserId = readPhotoLinkToken(req.query.photo as string | undefined) ?? undefined;
+    // 7 Oct 2026: a sign-in only finishes in the browser that started it. A one-time nonce goes into a cookie on
+    // this host (the start and the callback are both top-level navigations to it, so a Lax first-party cookie comes
+    // back), and its hash goes into the signed state; the callback goes on only when the two agree. The last start
+    // in a browser wins: another tab that started earlier is refused and starts again.
+    const { nonce, nonceHash } = newOauthNonce();
     const state = buildOauthState({
       inviteCode,
+      origin,
+      nonceHash,
       ...(photoLinkUserId ? { photoLinkUserId, redirect: safeRedirectPath(req.query.redirect as string | undefined) } : {}),
     });
+    res.cookie(oauthNonceCookieName(config.isDev), nonce, oauthNonceCookieOptions(config.isDev));
 
     const params = new URLSearchParams({
       client_id: config.googleClientId,
@@ -235,17 +275,40 @@ router.get(
   '/google/callback',
   async (req: Request, res: Response) => {
     const { code, state } = req.query as Record<string, string>;
+    // 7 Oct 2026: a sign-in only finishes in the browser that started it, so this callback needs the cookie the
+    // start put in that browser. Whatever happens next, that cookie has done its job: it is cleared on every
+    // outcome (which also makes a callback address good once per browser).
+    const browserNonces = readCookieValues(req.headers.cookie, oauthNonceCookieName(config.isDev));
+    clearOauthNonceCookie(res);
+
     const oauthState = parseOauthState(state);
     const inviteCode = oauthState.inviteCode || '';
+    // The state is signed (parseOauthState reads nothing from one that is not ours). Even so, the success redirect
+    // carries live tokens in its query string, so the site it names is resolved AGAIN here: only one of our own
+    // sites is ever a destination, anything else (or nothing) is the main app.
+    const clientBase = resolveClientBaseUrl(oauthState.origin, clientOriginConfig());
     // Photo link: the member is already signed in; every exit goes back to
     // where they were, with the outcome in the query string.
-    const photoReturn = oauthState.photoLinkUserId ? `${config.clientUrl}${safeRedirectPath(oauthState.redirect)}` : null;
+    const photoReturn = oauthState.photoLinkUserId ? `${clientBase}${safeRedirectPath(oauthState.redirect)}` : null;
     const fail = (errorCode: string) =>
-      res.redirect(photoReturn ? `${photoReturn}?photo=failed` : `${config.clientUrl}/login?error=${errorCode}`);
+      res.redirect(photoReturn ? `${photoReturn}?photo=failed` : `${clientBase}/login?error=${errorCode}`);
 
+    // Google sent no code: the person cancelled (error=access_denied). No sign-in, photo link or invite code goes
+    // on, so there is nothing to bind to a browser, and a cancel keeps the handling it always had.
     if (!code) {
       if (photoReturn) { res.redirect(`${photoReturn}?photo=cancelled`); return; }
       fail('google_auth_failed');
+      return;
+    }
+
+    // Nothing below (the code exchange, the sign-in, the photo link, the invite code) happens unless the state
+    // verified AND the browser's cookie is the nonce the state carries. The refusal goes back to the site the state
+    // names when it verified (resolved above), else the main app, and says why only as a reason: never the nonce,
+    // the cookie or the state.
+    const refusal = browserBindingRefusal({ rawState: state, nonceHash: oauthState.nonceHash, cookieNonces: browserNonces });
+    if (refusal) {
+      logger.warn({ reason: refusal }, 'Google sign-in refused: it did not start in this browser');
+      res.redirect(`${clientBase}/login?error=google_try_again`);
       return;
     }
 
@@ -304,7 +367,7 @@ router.get(
       if (inviteCode) {
         params.set('inviteCode', inviteCode);
       }
-      res.redirect(`${config.clientUrl}/auth/verify?${params}`);
+      res.redirect(`${clientBase}/auth/verify?${params}`);
     } catch (err: any) {
       // Codes the login page explains in words are expected refusals, not faults.
       const explained = GOOGLE_EXPLAINED_CODES.has(err?.code);

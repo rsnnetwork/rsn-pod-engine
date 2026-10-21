@@ -42,6 +42,14 @@ describe('NotFoundError', () => {
     expect(err.message).toBe('Pod with id 123 not found');
     expect(err.code).toBe('POD_NOT_FOUND');
   });
+
+  it('should use a given message in place of the generated one, keeping the 404 and the code', () => {
+    const err = new NotFoundError('Poke', undefined, "We couldn't find that meeting request.");
+    expect(err).toBeInstanceOf(AppError);
+    expect(err.statusCode).toBe(404);
+    expect(err.code).toBe('POKE_NOT_FOUND');
+    expect(err.message).toBe("We couldn't find that meeting request.");
+  });
 });
 
 describe('UnauthorizedError', () => {
