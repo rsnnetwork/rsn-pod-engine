@@ -2,6 +2,7 @@ import { test, expect, chromium, Browser, Page, BrowserContext } from '@playwrig
 import { io, Socket } from 'socket.io-client';
 import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers/auth';
 import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
+import { profileLinkSelector } from '../helpers/profile-link';
 
 // HEADED smoke for WS2/S3 (name-click safety) against PRODUCTION:
 //   Alice + Bob in a live event lobby. Alice opens the participant list and
@@ -95,7 +96,7 @@ test('clicking a participant name opens the profile in a NEW tab; the event tab 
   await alicePage.locator('button:has(svg.lucide-users)').first().click();
   // Target the drawer's ProfileLink by href — bob's name ALSO renders on his
   // lobby tile (display-only), so a bare text locator clicks the wrong node.
-  const bobLink = alicePage.locator(`a[href="/profile/${bob.id}"]`).first();
+  const bobLink = alicePage.locator(profileLinkSelector(bob.id, 'Events')).first();
   await expect(bobLink, "bob's profile link appears in the participant list").toBeVisible({ timeout: 20_000 });
   await alicePage.screenshot({ path: 'test-results/ws2p-01-participant-list.png' }).catch(() => {});
 

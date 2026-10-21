@@ -30,7 +30,7 @@ export function useBlockedByYou(userId: string, me: string | undefined, asking: 
     networkMode: 'always',
     mutationFn: () => unblockMember(userId),
     onSuccess: () => {
-      addToast('Unblocked. Their profile is open to you again.', 'success');
+      addToast('Unblocked.', 'success');
       return qc.invalidateQueries({ queryKey: reasonKeys.all });
     },
     onError: (err) => addToast(errorMessage(err, 'Could not unblock right now. Try again in a moment.'), 'error'),

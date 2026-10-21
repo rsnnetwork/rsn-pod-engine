@@ -251,10 +251,20 @@ describe('the data contract', () => {
   });
 
   it('finishing goes where the gate sent them from when that is a page of this app, else For You (where the tour opens); edit mode goes back where it came from', () => {
-    expect(flowSource).toMatch(/navigate\(steps\.redirect, \{ replace: true \}\)/);
+    expect(flowSource).toMatch(/navigate\(steps\.redirect, \{ replace: true, state: LANDED \}\)/);
     expect(read(`${dir}/useFlowSteps.ts`)).toMatch(/const redirect = safeRedirect\(params\.get\('redirect'\)\);/);
     expect(flowSource).not.toMatch(/\/agents/);
     expect(read(`${dir}/useLeaveEdit.ts`)).toMatch(/navigate\(-keys\.current\.length\)/);
+  });
+
+  // Final review (C1): the tour opens over the page the flow put them on, and must leave them there.
+  it('every way the flow leaves says where it put the member: LANDED on a page it opens, a mark before it goes back through the history', () => {
+    const leave = read(`${dir}/useLeaveEdit.ts`);
+    expect(leave).toMatch(/markReturned\(memberId\);\s*navigate\(-keys\.current\.length\);/);
+    expect(leave).toMatch(/navigate\(editFallback\(target\), \{ replace: true, state: LANDED \}\);/);
+    // Every navigate in the flow and in edit mode's way out is one of those.
+    expect(flowSource.match(/\bnavigate\(/g)).toHaveLength(1);
+    expect(leave.match(/\bnavigate\(/g)).toHaveLength(2);
   });
 
   it('LinkedIn suggests nothing unless they chose it in this visit: not the Q4 guess, not the fields, not the photo, not its notes', () => {
@@ -271,6 +281,11 @@ describe('the data contract', () => {
     // Remembered per member for the visit.
     expect(read(`${dir}/useSignupChoice.ts`)).toMatch(/sessionStorage\.setItem\(key, next\)/);
     expect(read(`${dir}/useSignupChoice.ts`)).toMatch(/signupChoiceKey\(memberId\)/);
+  });
+
+  // Final review (C2): emptying a stored role, company or industry clears it, so what is stored is what decides.
+  it('screen 7 sends its fields against what the profile holds, so a stored field they emptied is cleared', () => {
+    expect(read(`${dir}/useProfileForm.ts`)).toMatch(/return profileInput\(fields, profile, isRealZone\(zone\) \? zone : null, keepsLinkedinPhoto\);/);
   });
 
   it('the LinkedIn photo is asked for only when it is exactly the one shown and kept, and they have none of their own', () => {

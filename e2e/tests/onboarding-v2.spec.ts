@@ -19,6 +19,10 @@ import { expectReachable, tapReachable } from '../helpers/viewport-fit';
 
 const PHONE = { width: 390, height: 844 };
 const ZONE = 'Europe/Berlin';
+// On the local stack there is no ScrapingDog key, so a LinkedIn lookup costs nothing and ends with nothing found.
+// Anywhere else (a preview, production) a lookup is a paid request: a test that presses "Continue with LinkedIn" seeds
+// the outcome for its address first, and the server reuses it instead of starting one (final review, 21 Oct 2026).
+const LOCAL_API = /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(?:\/|$)/.test(SERVER);
 
 let browser: Browser;
 const ctxs: BrowserContext[] = [];
@@ -78,6 +82,21 @@ async function seedFoundLookup(u: TestUser, url: string, photoUrl = `${APP}/shee
     }), url],
   );
 }
+
+/** A lookup's state for `url` as the server records it: running, or ended with nothing found. */
+function seedLookupState(u: TestUser, url: string, status: 'searching' | 'not_found') {
+  return pool.query(
+    `INSERT INTO user_intent_profiles (user_id, inferred_profile, enrichment_status, enrichment_started_at, enrichment_completed_at)
+     VALUES ($1, jsonb_build_object('lastLookup', jsonb_build_object('linkedinUrl', $2::text, 'at', NOW())), $3::enrichment_status, NOW(),
+             CASE WHEN $3::text = 'searching' THEN NULL ELSE NOW() END)
+     ON CONFLICT (user_id) DO UPDATE SET inferred_profile = EXCLUDED.inferred_profile, enrichment_status = EXCLUDED.enrichment_status,
+       enrichment_started_at = EXCLUDED.enrichment_started_at, enrichment_completed_at = EXCLUDED.enrichment_completed_at`,
+    [u.id, url, status],
+  );
+}
+
+/** The choice screen 2 remembered for this visit, as the app keeps it (useSignupChoice). */
+const storedChoice = (page: Page, u: TestUser) => page.evaluate((key) => sessionStorage.getItem(key), `rsn_onb_v2_via_${u.id}`);
 
 /** The four answers, saved as a draft that has reached screen 7. */
 async function answeredUpToProfile(u: TestUser) {
@@ -292,6 +311,9 @@ test('continue with LinkedIn: the link from the join form is in the box, the loo
   test.setTimeout(240_000);
   const slug = `ob2-nobody-${Date.now()}`;
   const me = await freshMember('ob2li', `https://www.linkedin.com/in/${slug}`);
+  // Not the local stack: the address was looked up already and nothing was found, so the server reuses that and
+  // starts no paid lookup. Locally the lookup runs for real and costs nothing.
+  if (!LOCAL_API) await seedLookupState(me, `https://www.linkedin.com/in/${slug}`, 'not_found');
   const page = await openAs(me);
   await throughWelcome(page);
 
@@ -375,6 +397,16 @@ test('LinkedIn found: details filled in and marked, Q4 picked from the role, and
   await expect(page.getByText('From your LinkedIn')).toHaveCount(3);
   await expect(page.getByTestId('linkedin-note')).toHaveCount(0);
 
+  // A refresh keeps the choice, so LinkedIn stays on: the choice is stored for the visit (an unknown choice would
+  // count as not chosen, and the fields would be empty, as on the email path).
+  expect(await storedChoice(page, me)).toBe('linkedin');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(heading(page, "Here's how others will see you")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByLabel('Role', { exact: true })).toHaveValue('Founder & CEO');
+  await expect(page.getByLabel('Company', { exact: true })).toHaveValue('Crumb Bakery');
+  await expect(page.getByText('From your LinkedIn')).toHaveCount(3);
+  await page.evaluate(() => document.fonts.ready.then(() => true));
+
   // The photo on their LinkedIn is offered, not used, until they keep it.
   const keep = button(page, 'Keep this photo');
   await expect(page.getByAltText('The photo on your LinkedIn')).toBeVisible({ timeout: 15_000 });
@@ -434,9 +466,14 @@ test('continue with email means no LinkedIn, even for a member LinkedIn already 
     await expect(page.getByText('Add your LinkedIn profile so people can learn more about you. You can do this later.', { exact: true })).toBeVisible();
   };
   await noLinkedin('after the questions');
-  // A refresh keeps the choice: it is remembered for the visit.
+  // A refresh keeps the choice: it is remembered for the visit. Here that looks the same as no choice at all, so the
+  // stored choice is read too (the LinkedIn path's refresh, above, shows it kept on screen).
+  expect(await storedChoice(page, me)).toBe('email');
   await page.reload({ waitUntil: 'domcontentloaded' });
   await noLinkedin('after a refresh');
+  expect(await storedChoice(page, me)).toBe('email');
+  // As after the first load (openAs): a tap measured before the web font swaps in can land on the button beside it.
+  await page.evaluate(() => document.fonts.ready.then(() => true));
 
   // [Add LinkedIn] turns it on, with their join-form link already in the box.
   await press(page, 'Add LinkedIn');
@@ -654,14 +691,7 @@ test('how a LinkedIn lookup ended reaches the screen through the member\'s own u
   const me = await freshMember('ob2wait', url);
   await answeredUpToProfile(me);
   /** The lookup's state as the server records it, for the address on the profile. */
-  const lookup = (status: 'searching' | 'not_found') => pool.query(
-    `INSERT INTO user_intent_profiles (user_id, inferred_profile, enrichment_status, enrichment_started_at, enrichment_completed_at)
-     VALUES ($1, jsonb_build_object('lastLookup', jsonb_build_object('linkedinUrl', $2::text, 'at', NOW())), $3::enrichment_status, NOW(),
-             CASE WHEN $3::text = 'searching' THEN NULL ELSE NOW() END)
-     ON CONFLICT (user_id) DO UPDATE SET inferred_profile = EXCLUDED.inferred_profile, enrichment_status = EXCLUDED.enrichment_status,
-       enrichment_started_at = EXCLUDED.enrichment_started_at, enrichment_completed_at = EXCLUDED.enrichment_completed_at`,
-    [me.id, url, status],
-  );
+  const lookup = (status: 'searching' | 'not_found') => seedLookupState(me, url, status);
   /** What the end of a lookup sends: the member's own user tag (any write of theirs sends the same). */
   const theirUpdate = async () => expect((await apiAs(me, 'PUT', '/onboarding/v2/answers', {})).status).toBe(200);
 
@@ -708,7 +738,7 @@ test('how a LinkedIn lookup ended reaches the screen through the member\'s own u
 });
 
 test('after the first confirm, the page a member followed a link to is honoured; anything else is For You', async () => {
-  test.setTimeout(180_000);
+  test.setTimeout(240_000);
   // As the gate sends a member who followed a link before finishing: /onboarding?redirect=<that page>.
   const followed = await freshMember('ob2redir');
   await answeredUpToProfile(followed);
@@ -716,12 +746,104 @@ test('after the first confirm, the page a member followed a link to is honoured;
   await press(page, 'Show me my matches');
   await expect.poll(() => pathOf(page), { timeout: 30_000 }).toBe('/support');
 
+  // Final review, 21 Oct 2026 (C1): the tour opens over the page they followed, and finishing it no longer takes them
+  // to For You, so on a phone they see the page they came for. A refresh in the middle keeps that.
+  const tour = page.getByTestId('how-rsn-works');
+  await expect(tour).toBeVisible({ timeout: 30_000 });
+  await press(page, 'Next');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(tour).toBeVisible({ timeout: 30_000 });
+  await page.evaluate(() => document.fonts.ready.then(() => true));
+  await tapInView(page, page.getByRole('button', { name: /^Go to card 4/ }), 'the fourth dot');
+  await press(page, 'See my matches');
+  await expect(tour).toHaveCount(0, { timeout: 20_000 });
+  await page.waitForTimeout(1500);
+  expect(pathOf(page), 'finishing the tour leaves them on the page they followed').toBe('/support');
+  expect((await pool.query(`SELECT tour_outcome FROM users WHERE id = $1`, [followed.id])).rows[0].tour_outcome).toBe('completed');
+
+  // Skipped instead, on another page they followed: the same.
+  const skipper = await freshMember('ob2redirskip');
+  await answeredUpToProfile(skipper);
+  const third = await openAs(skipper, '/onboarding?step=profile&redirect=%2Fsessions');
+  await press(third, 'Show me my matches');
+  await expect.poll(() => pathOf(third), { timeout: 30_000 }).toBe('/sessions');
+  await expect(third.getByTestId('how-rsn-works')).toBeVisible({ timeout: 30_000 });
+  await press(third, 'Skip');
+  await expect(third.getByTestId('how-rsn-works')).toHaveCount(0, { timeout: 20_000 });
+  await third.waitForTimeout(1500);
+  expect(pathOf(third), 'skipping the tour leaves them on the page they followed').toBe('/sessions');
+
   const sent = await freshMember('ob2redirbad');
   await answeredUpToProfile(sent);
   const other = await openAs(sent, '/onboarding?step=profile&redirect=%2F%2Fevil.example%2Fx');
   await press(other, 'Show me my matches');
   await expect.poll(() => pathOf(other), { timeout: 30_000 }).toBe('/');
   expect(other.url().startsWith(APP)).toBe(true);
+
+  // Onboarding itself, in any case (C11): the router opens /ONBOARDING as onboarding, so it is For You instead.
+  const cased = await freshMember('ob2redircase');
+  await answeredUpToProfile(cased);
+  const fourth = await openAs(cased, '/onboarding?step=profile&redirect=%2FONBOARDING%3Fstep%3Dq1');
+  await press(fourth, 'Show me my matches');
+  await expect.poll(() => pathOf(fourth), { timeout: 30_000 }).toBe('/');
+  await expect(fourth.getByTestId('how-rsn-works')).toBeVisible({ timeout: 30_000 });
+});
+
+test('a finished member whose first edit makes the tour due stays on the page they changed it from when the tour closes', async () => {
+  test.setTimeout(240_000);
+  // Exactly how a member who finished before the tour existed looks: completed, version 2 answers, no tour stamp.
+  const me = await createTestUser('ob2firstedit');
+  made.push(me.id);
+  await pool.query(
+    `UPDATE users SET onboarding_version = 2, looking_to_meet = ARRAY['meet_investors']::text[], hoping_to_find = ARRAY['find_funding']::text[],
+       can_offer = ARRAY['offer_advice_mentoring']::text[], self_kinds = ARRAY['self_founder_owner']::text[], timezone = $2,
+       tour_due_at = NULL, tour_seen_at = NULL, tour_outcome = NULL
+     WHERE id = $1`,
+    [me.id, ZONE],
+  );
+  const page = await openAs(me, '/profile');
+  await expect(page.getByRole('heading', { name: 'Only you see this' })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('how-rsn-works')).toHaveCount(0);
+
+  // Your profile's Edit answers opens every answer on screen 7 (C2), and Save goes back.
+  const edit = page.getByRole('link', { name: 'Edit answers' });
+  await expect(edit).toHaveAttribute('href', '/onboarding?edit=profile');
+  await tapInView(page, edit, 'Edit answers');
+  await expect(heading(page, "Here's how others will see you")).toBeVisible({ timeout: 30_000 });
+  for (const q of ['Who would you like to meet?', 'What are you hoping to find?', 'What can you offer others?', 'How would you describe yourself?']) {
+    await expect(page.getByRole('button', { name: `Edit: ${q}` })).toBeVisible();
+  }
+  await press(page, 'Save');
+  await expect.poll(() => pathOf(page), { timeout: 30_000 }).toBe('/profile');
+
+  // The save made the tour due, and it opens here. Skipping it leaves them on Your profile. The save's toast sits over
+  // the top of the tour on a phone until it goes (2.5 seconds), as a person sees it: then Skip is pressed.
+  const tour = page.getByTestId('how-rsn-works');
+  await expect(tour).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText('Your changes are saved.')).toBeVisible();
+  await expect(page.getByText('Your changes are saved.')).toHaveCount(0, { timeout: 15_000 });
+  await press(page, 'Skip');
+  await expect(tour).toHaveCount(0, { timeout: 20_000 });
+  await page.waitForTimeout(1500);
+  expect(pathOf(page), 'the tour leaves them where edit mode brought them back').toBe('/profile');
+  expect((await pool.query(`SELECT tour_outcome FROM users WHERE id = $1`, [me.id])).rows[0].tour_outcome).toBe('skipped');
+});
+
+test('screen 7: emptying a stored company sends "" so it is cleared, and a field never filled and left empty sends nothing', async () => {
+  test.setTimeout(180_000);
+  const me = await finishedMember('ob2clear');
+  const page = await openAs(me, '/onboarding?edit=profile');
+  await expect(heading(page, "Here's how others will see you")).toBeVisible({ timeout: 30_000 });
+  const confirms: Array<{ profile?: Record<string, unknown> }> = [];
+  page.on('request', r => { if (r.method() === 'POST' && r.url().includes('/onboarding/v2/confirm')) confirms.push(r.postDataJSON()); });
+  await expect(page.getByLabel('Company', { exact: true })).toHaveValue('Crumb');
+  await expect(page.getByLabel('Role', { exact: true })).toHaveValue('');
+  await page.getByLabel('Company', { exact: true }).fill('');
+  await press(page, 'Save');
+  await expect.poll(() => confirms.length, { timeout: 20_000 }).toBe(1);
+  // The server's contract (the other half of this fix): missing or null keeps a value, "" clears it.
+  expect(confirms[0].profile).toEqual({ displayName: 'Ana ob2clear', company: '', timezone: ZONE });
+  await expect(page.getByText('Your changes are saved.')).toBeVisible({ timeout: 20_000 });
 });
 
 test('a refusal from the server is said inline, on the thing it is about, in the server\'s words', async () => {

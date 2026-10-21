@@ -730,23 +730,66 @@ describe('The short tour shows no made-up people, puts its words above the pictu
 
 describe('The short tour hands the member to For You when it is finished or skipped (19 Oct feedback)', () => {
   type Outcome = 'completed' | 'skipped';
-  // OnboardingTour.tsx, run, with the router, the saved state and the dialog standing in: what is asserted is what its own
-  // finish handler does when the dialog calls it.
-  const run = (pathname: string, failed = false) => {
+  // OnboardingTour.tsx, run, with the router, the saved state, the signed-in member, the mark edit mode leaves and the
+  // dialog standing in (flow.ts is the real one): what is asserted is what its own finish handler does when the dialog
+  // calls it.
+  const flow = require('../../../../client/src/features/onboarding/flow');
+  const run = (pathname: string, failed = false, { state = null as unknown, returned = false } = {}) => {
     const navigate = jest.fn();
     const markSeen = jest.fn();
+    const takeReturned = jest.fn((memberId: string | undefined) => returned && memberId === 'u1');
     const handed: { onFinish?: (outcome: Outcome) => void; mode?: string; open?: boolean; failed?: boolean } = {};
     const mod = loadModule('src/features/onboarding/OnboardingTour.tsx', {
-      'react-router-dom': { useLocation: () => ({ pathname }), useNavigate: () => navigate },
+      'react-router-dom': { useLocation: () => ({ pathname, state }), useNavigate: () => navigate },
+      '@/stores/authStore': { useAuthStore: (select: (s: unknown) => unknown) => select({ user: { id: 'u1' } }) },
       './useTourState': { useTourState: () => ({ pending: true, failed, markSeen }) },
+      './flow': flow,
+      './tour-landing': { takeReturned },
       './HowRsnWorks': {
         __esModule: true,
         default: (props: typeof handed) => { Object.assign(handed, props); return null; },
       },
     });
     renderToStaticMarkup(createElement(mod.default as never));
-    return { navigate, markSeen, handed };
+    return { navigate, markSeen, handed, takeReturned };
   };
+
+  // Final review, 21 Oct 2026 (C1): an invited member followed a link to an event, confirm put them there, the tour
+  // opened over it, and finishing it took them to For You: on a phone they never saw the event. The same for a finished
+  // member whose edit made the tour due, on the page they came back to.
+  for (const outcome of ['completed', 'skipped'] as const) {
+    it(`${outcome}: on a page the flow put them on (its history entry says LANDED), they stay there`, () => {
+      const { navigate, markSeen, handed, takeReturned } = run('/sessions/e1', false, { state: flow.LANDED });
+      handed.onFinish!(outcome);
+      expect(markSeen).toHaveBeenCalledWith(outcome);
+      expect(navigate).not.toHaveBeenCalled();
+      // The page says it all: edit mode's mark is not used up for it.
+      expect(takeReturned).not.toHaveBeenCalled();
+    });
+
+    it(`${outcome}: back on the page they changed an answer from (edit mode's mark, for this member), they stay there`, () => {
+      const { navigate, handed, takeReturned } = run('/profile', false, { returned: true });
+      handed.onFinish!(outcome);
+      expect(takeReturned).toHaveBeenCalledWith('u1');
+      expect(navigate).not.toHaveBeenCalled();
+    });
+  }
+
+  it('a second press, after a save that did not go through, decides as the first did: the mark is used once and the answer kept', () => {
+    const { navigate, handed, takeReturned } = run('/profile', true, { returned: true });
+    handed.onFinish!('skipped');
+    handed.onFinish!('skipped');
+    expect(takeReturned).toHaveBeenCalledTimes(1);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('a history entry that says anything else, or nothing, is not a landing: the member goes to For You', () => {
+    for (const state of [null, {}, { landed: 'true' }, { openedByFlow: true }]) {
+      const { navigate, handed } = run('/agents', false, { state });
+      handed.onFinish!('completed');
+      expect(navigate).toHaveBeenCalledWith('/');
+    }
+  });
 
   for (const outcome of ['completed', 'skipped'] as const) {
     it(`${outcome}: the member is saved as having seen it and taken to For You from any other page`, () => {
@@ -798,5 +841,209 @@ describe('The short tour hands the member to For You when it is finished or skip
     expect(useTourState().failed).toBe(true);
     options!.onSettled();
     expect(invalidated).toEqual([{ queryKey: ['onboarding-state'] }]);
+  });
+});
+
+// Final review, 21 Oct 2026 (C4): nobody could see anyone's LinkedIn. The hero's frame (the Human Profile's and Your
+// profile's) links to it, drawn here to markup with its pictures standing in and its rules (profile-text) real.
+describe('The hero links to the member\'s LinkedIn, on the Human Profile and on Your profile', () => {
+  const text = require('../../../../client/src/features/reason/human/profile-text');
+  const frameOf = () => loadModule('src/features/reason/human/ProfileHero.tsx', {
+    '@/components/ui/Avatar': { __esModule: true, default: () => null },
+    '@/lib/utils': joinClasses,
+    '../brand/ReasonSheep': { __esModule: true, default: () => null },
+    '../person': require('../../../../client/src/features/reason/person'),
+    './profile-text': text,
+  }).HeroFrame as (props: Record<string, unknown>) => ReactElement;
+  const person = (over: Record<string, unknown>) => ({
+    id: '3f2b8a4e-1c9d-4e7a-b6f0-2a5c8d1e9f03', displayName: 'Nora None', firstName: 'Nora', lastName: 'None', avatarUrl: null,
+    bannerUrl: null, bio: 'Backs founders.', company: 'Northwind', jobTitle: 'Partner', industry: null, location: null,
+    linkedinUrl: null, languages: [], professionalRole: [], expertiseText: null, whatICanHelpWith: null, ...over,
+  });
+  const draw = (over: Record<string, unknown>) => renderToStaticMarkup(createElement(frameOf() as never, {
+    photo: null, who: text.personFacts(person(over)), kicker: 'The human', note: null, panel: null,
+  }));
+
+  it('an https LinkedIn is one link, under the role line and above the bio, opening a new tab with no opener, 44px tall', () => {
+    const html = draw({ linkedinUrl: 'https://www.linkedin.com/in/nora-none' });
+    const links = html.match(/<a [^>]*>[\s\S]*?<\/a>/g) ?? [];
+    expect(links).toHaveLength(1);
+    const link = links[0] ?? '';
+    expect(link).toContain('href="https://www.linkedin.com/in/nora-none"');
+    expect(link).toContain('target="_blank"');
+    expect(link).toContain('rel="noopener noreferrer"');
+    expect(link).toMatch(/class="[^"]*\bmin-h-\[44px\][^"]*"/);
+    // "LinkedIn ↗" on screen; a screen reader hears that it opens a new tab, and not the arrow.
+    expect(link.replace(/<[^>]*>/g, '')).toBe('LinkedIn ↗ (opens in a new tab)');
+    expect(link).toContain('<span aria-hidden="true">↗</span>');
+    expect(link).toContain('<span class="sr-only"> (opens in a new tab)</span>');
+    const at = { role: html.indexOf('Partner · Northwind'), link: html.indexOf('<a '), bio: html.indexOf('Backs founders.') };
+    expect(at.role).toBeGreaterThan(-1);
+    expect(at.role).toBeLessThan(at.link);
+    expect(at.link).toBeLessThan(at.bio);
+  });
+
+  it('with no LinkedIn, or one that is not an https address on LinkedIn, there is no link at all', () => {
+    for (const linkedinUrl of [null, '', 'http://www.linkedin.com/in/nora', 'javascript:alert(1)', 'https://evil.example/in/nora']) {
+      expect({ linkedinUrl, links: (draw({ linkedinUrl }).match(/<a /g) ?? []).length }).toEqual({ linkedinUrl, links: 0 });
+    }
+  });
+
+  it('Your profile and the Human Profile are both drawn by this frame, so both show it', () => {
+    expect(read('src/features/reason/profile/YourProfilePage.tsx')).toMatch(/<HeroFrame\b[\s\S]*?who=\{who\}/);
+    expect(read('src/features/reason/human/ProfileHero.tsx')).toMatch(/<HeroFrame\b[\s\S]*?who=\{who\}/);
+  });
+});
+
+// Final review, 21 Oct 2026 (C7): the tour never took the keyboard's focus, and its keyboard effect depended on the card
+// and on the finish handler (a new one on every render of OnboardingTour), so every Next ran its clean-up, which handed
+// focus back to the page behind the dialog. HowRsnWorks.tsx is run here with React's hooks standing in: the effects run
+// as React runs them (after a render, again only when a dependency changed, the clean-up first), against a stand-in
+// document, so what is asserted is what its own effect does.
+describe('The tour takes the keyboard\'s focus as it opens, keeps it through the cards, and hands it back once, as it closes', () => {
+  type Props = { open: boolean; mode: 'onboarding' | 'replay'; failed?: boolean; onFinish: (o: 'completed' | 'skipped') => void };
+  interface Fake { focus: jest.Mock; isConnected: boolean }
+  interface Element { type?: unknown; ref?: { current: unknown } | null; props?: Record<string, unknown> }
+
+  function harness() {
+    const slots: unknown[] = [];
+    const effects: Array<{ deps?: unknown[]; cleanup?: unknown } | undefined> = [];
+    let queue: Array<() => void> = [];
+    let at = 0;
+    const same = (a: unknown[] | undefined, b: unknown[] | undefined) => !!a && !!b && a.length === b.length && a.every((x, i) => Object.is(x, b[i]));
+    const react = {
+      useState: (init: unknown) => {
+        const i = at++;
+        if (!(i in slots)) slots[i] = typeof init === 'function' ? (init as () => unknown)() : init;
+        return [slots[i], (v: unknown) => { slots[i] = typeof v === 'function' ? (v as (p: unknown) => unknown)(slots[i]) : v; }];
+      },
+      useRef: (init: unknown) => { const i = at++; if (!(i in slots)) slots[i] = { current: init }; return slots[i]; },
+      useCallback: (fn: unknown, deps: unknown[]) => {
+        const i = at++;
+        const prev = slots[i] as { fn: unknown; deps: unknown[] } | undefined;
+        if (prev && same(prev.deps, deps)) return prev.fn;
+        slots[i] = { fn, deps };
+        return fn;
+      },
+      useEffect: (fn: () => unknown, deps?: unknown[]) => {
+        const i = at++;
+        const prev = effects[i];
+        if (prev && same(prev.deps, deps)) return;
+        queue.push(() => {
+          if (typeof prev?.cleanup === 'function') (prev.cleanup as () => void)();
+          effects[i] = { deps, cleanup: fn() };
+        });
+      },
+    };
+    const dialog = { contains: () => true, querySelectorAll: () => [] };
+    const primary: Fake = { focus: jest.fn(), isConnected: true };
+    // React sets a ref when it commits: here, the dialog's and the primary button's.
+    const attach = (node: unknown): void => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) { node.forEach(attach); return; }
+      const el = node as Element;
+      if (el.ref && typeof el.ref === 'object') el.ref.current = el.props?.role === 'dialog' ? dialog : primary;
+      attach(el.props?.children);
+    };
+    const find = (node: unknown, test: (el: Element) => boolean): Element | null => {
+      if (!node || typeof node !== 'object') return null;
+      if (Array.isArray(node)) { for (const n of node) { const hit = find(n, test); if (hit) return hit; } return null; }
+      const el = node as Element;
+      return test(el) ? el : find(el.props?.children, test);
+    };
+    const mod = loadModule('src/features/onboarding/HowRsnWorks.tsx', {
+      react,
+      'react-dom': { createPortal: (el: unknown) => el },
+      'framer-motion': { motion: { div: 'div' }, AnimatePresence: 'div', useReducedMotion: () => true },
+      '@/components/ui/Button': { Button: 'button' },
+      '@/features/reason/brand/ReasonSheep': { __esModule: true, default: () => null },
+    });
+    let tree: unknown = null;
+    const render = (props: Props) => {
+      at = 0;
+      tree = (mod.default as (p: Props) => unknown)(props);
+      attach(tree);
+      const run = queue;
+      queue = [];
+      run.forEach((f) => f());
+    };
+    const unmount = () => effects.forEach((e) => { if (typeof e?.cleanup === 'function') (e.cleanup as () => void)(); });
+    const card = () => String(find(tree, (el) => el.props?.['aria-roledescription'] === 'slide')?.props?.['aria-label'] ?? '');
+    return { render, unmount, card, primary };
+  }
+
+  const real = (global as { document?: unknown }).document;
+  let listeners: Set<(e: unknown) => void>;
+  let opener: Fake;
+  let body: { style: { overflow: string } };
+  beforeEach(() => {
+    listeners = new Set();
+    opener = { focus: jest.fn(), isConnected: true };
+    body = { style: { overflow: 'auto' } };
+    (global as { document?: unknown }).document = {
+      activeElement: opener,
+      body,
+      addEventListener: (_t: string, fn: (e: unknown) => void) => listeners.add(fn),
+      removeEventListener: (_t: string, fn: (e: unknown) => void) => listeners.delete(fn),
+    };
+  });
+  afterAll(() => { (global as { document?: unknown }).document = real; });
+  const press = (key: string) => listeners.forEach((fn) => fn({ key, shiftKey: false, preventDefault: () => undefined }));
+
+  it('focus goes to its main button as it opens, and the page behind keeps none of it', () => {
+    const t = harness();
+    t.render({ open: false, mode: 'replay', onFinish: jest.fn() });
+    expect(t.primary.focus).not.toHaveBeenCalled();
+    expect(listeners.size).toBe(0);
+    t.render({ open: true, mode: 'replay', onFinish: jest.fn() });
+    expect(t.primary.focus).toHaveBeenCalledTimes(1);
+    expect(body.style.overflow).toBe('hidden');
+    expect(listeners.size).toBe(1);
+    expect(opener.focus).not.toHaveBeenCalled();
+  });
+
+  it('moving through the cards, with a new finish handler on every render, never sets it up again or hands focus back', () => {
+    const t = harness();
+    t.render({ open: true, mode: 'onboarding', onFinish: jest.fn() });
+    const listener = [...listeners][0];
+    const titles = [t.card()];
+    for (let i = 0; i < 3; i += 1) {
+      press('ArrowRight');
+      t.render({ open: true, mode: 'onboarding', onFinish: jest.fn() });
+      titles.push(t.card());
+    }
+    expect(titles).toEqual(['1 of 4: For You', '2 of 4: Matches', '3 of 4: Meetings', '4 of 4: Circles & events']);
+    press('ArrowLeft');
+    t.render({ open: true, mode: 'onboarding', onFinish: jest.fn() });
+    expect(t.card()).toBe('3 of 4: Meetings');
+    expect([...listeners]).toEqual([listener]);
+    expect(t.primary.focus).toHaveBeenCalledTimes(1);
+    expect(opener.focus).not.toHaveBeenCalled();
+    expect(body.style.overflow).toBe('hidden');
+  });
+
+  it('Escape calls the finish handler of the latest render, not the one it opened with', () => {
+    const t = harness();
+    const first = jest.fn();
+    const latest = jest.fn();
+    t.render({ open: true, mode: 'onboarding', onFinish: first });
+    t.render({ open: true, mode: 'onboarding', onFinish: latest });
+    press('Escape');
+    expect(first).not.toHaveBeenCalled();
+    expect(latest).toHaveBeenCalledWith('skipped');
+  });
+
+  it('closing hands focus back to what had it before, exactly once, and puts the page back as it was', () => {
+    const t = harness();
+    t.render({ open: true, mode: 'replay', onFinish: jest.fn() });
+    press('ArrowRight');
+    t.render({ open: true, mode: 'replay', onFinish: jest.fn() });
+    t.render({ open: false, mode: 'replay', onFinish: jest.fn() });
+    expect(opener.focus).toHaveBeenCalledTimes(1);
+    expect(listeners.size).toBe(0);
+    expect(body.style.overflow).toBe('auto');
+    t.render({ open: false, mode: 'replay', onFinish: jest.fn() });
+    t.unmount();
+    expect(opener.focus).toHaveBeenCalledTimes(1);
   });
 });

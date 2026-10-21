@@ -2,6 +2,7 @@ import { test, expect, chromium, Browser, Page, BrowserContext } from '@playwrig
 import { io, Socket } from 'socket.io-client';
 import { createTestUser, cleanupTestData, TestUser, closePool } from '../helpers/auth';
 import { createPod, addPodMember, createSession, registerForSession, endSession } from '../helpers/api';
+import { profileLinkSelector } from '../helpers/profile-link';
 
 // HEADED mobile-event smoke vs PRODUCTION â€” every surface a phone user
 // touches, INCLUDING the host running the event from a phone:
@@ -152,7 +153,7 @@ test('mobile event: main room, buttons, chat, host-on-phone, breakout, rating â€
 
   // Participant drawer usable on the phone (and names are safe links).
   await alicePage.locator('button[aria-label="Participants"]').first().click();
-  await expect(alicePage.locator(`a[href="/profile/${bob.id}"]`).first(), 'drawer entry on phone').toBeVisible({ timeout: 15_000 });
+  await expect(alicePage.locator(profileLinkSelector(bob.id, 'Events')).first(), 'drawer entry on phone').toBeVisible({ timeout: 15_000 });
   await assertNoHorizontalOverflow(alicePage, 'alice with drawer open @360');
   await alicePage.locator('button[aria-label="Participants"]').first().click(); // close
 

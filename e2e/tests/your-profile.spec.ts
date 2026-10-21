@@ -39,9 +39,13 @@ const run = Date.now().toString(36);
 const OWNER = {
   name: `Ada Bannerlove ${run}`, company: 'Northwind Labs', title: 'Founder', industry: 'Fintech', location: 'Berlin, DE',
   bio: 'Building calm money tools for small teams.', offer: `Intros to retail buyers ${run}`,
-  // What only the member may see. It must never reach another member's page.
+  // What only the member may see. It must never reach another member's page. want and intent are the texts the matcher
+  // keeps; meetWords and findWords are the member's own words in their answers.
   want: `private-want-${run}`, intent: `private-intent-${run}`, tz: 'Europe/Berlin',
+  meetWords: `private-meet-${run}`, findWords: `private-find-${run}`,
 };
+// "Only you see this" reads the answers by their short labels, as screen 7 does (final review, 21 Oct 2026).
+const OWNER_ANSWERS = [`Investors · “${OWNER.meetWords}”`, 'Raising funding', `“${OWNER.findWords}”`];
 const VIEWER_NAME = `Vic Viewer ${run}`;
 const REPORTED_NAME = `Rex Reported ${run}`;
 
@@ -129,9 +133,13 @@ test.beforeAll(async () => {
   await pool.query(
     `UPDATE users SET display_name = $2, first_name = 'Ada', company = $3, job_title = $4, industry = $5, location = $6, bio = $7,
             what_i_can_help_with = $8, who_i_want_to_meet = $9, my_intent = $10, timezone = $11, linkedin_url = NULL,
-            professional_role = ARRAY['Founder']::text[]
+            professional_role = ARRAY['Founder']::text[],
+            onboarding_version = 2, looking_to_meet = ARRAY['meet_investors', 'meet_other']::text[], meet_other = $12,
+            hoping_to_find = ARRAY['find_funding']::text[], find_specific = $13,
+            can_offer = ARRAY['offer_advice_mentoring']::text[], self_kinds = ARRAY['self_founder_owner']::text[]
       WHERE id = $1`,
-    [owner.id, OWNER.name, OWNER.company, OWNER.title, OWNER.industry, OWNER.location, OWNER.bio, OWNER.offer, OWNER.want, OWNER.intent, OWNER.tz],
+    [owner.id, OWNER.name, OWNER.company, OWNER.title, OWNER.industry, OWNER.location, OWNER.bio, OWNER.offer, OWNER.want, OWNER.intent, OWNER.tz,
+      OWNER.meetWords, OWNER.findWords],
   );
   await pool.query(`UPDATE users SET display_name = $2, first_name = 'Vic' WHERE id = $1`, [viewer.id, VIEWER_NAME]);
   await pool.query(`UPDATE users SET display_name = $2, first_name = 'Rex' WHERE id = $1`, [reported.id, REPORTED_NAME]);
@@ -226,13 +234,36 @@ test(`your profile is the way others see it, with what only you see apart, and e
   await expect(page.getByText(OWNER.bio)).toBeVisible();
   await expect(page.getByText(OWNER.offer)).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Only you see this' })).toBeVisible();
-  for (const text of [OWNER.want, OWNER.intent, OWNER.tz]) await expect(page.getByText(text)).toBeVisible();
+  // Their own answers, by the short labels screen 7 shows, with their words in quotes: never the matcher's wording
+  // for them (final review, 21 Oct 2026).
+  const onlyYou = page.locator('section', { has: page.getByRole('heading', { name: 'Only you see this' }) });
+  for (const line of [...OWNER_ANSWERS, OWNER.tz]) await expect(onlyYou.getByText(line, { exact: true })).toBeVisible();
+  for (const text of [OWNER.want, OWNER.intent]) await expect(page.getByText(text)).toHaveCount(0);
 
-  await expect(page.getByRole('link', { name: 'Edit answers' })).toHaveAttribute('href', '/onboarding?edit=q1');
+  // Edit answers opens every answer, on screen 7, and Cancel comes back here.
+  const editAnswers = page.getByRole('link', { name: 'Edit answers' });
+  await expect(editAnswers).toHaveAttribute('href', '/onboarding?edit=profile');
+  await editAnswers.click();
+  await expect(page.getByRole('heading', { name: "Here's how others will see you" })).toBeVisible({ timeout: SLOW });
+  await expect(page.getByRole('button', { name: 'Edit: Who would you like to meet?' })).toBeVisible();
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(page).toHaveURL(/\/profile$/);
+  await expect(page.getByRole('heading', { name: 'Only you see this' })).toBeVisible({ timeout: SLOW });
+
   await expect(page.getByRole('link', { name: 'Add your company' })).toHaveAttribute('href', '/entities?create=1');
   await page.getByRole('link', { name: 'Edit profile' }).click();
   await expect(page).toHaveURL(/\/profile\/edit$/);
   await expect(page.getByRole('button', { name: 'Change photo' })).toBeVisible({ timeout: SLOW });
+  // Profile is still the current entry on the form under it.
+  await expect(page.getByRole('complementary').getByRole('link', { name: 'Profile', exact: true })).toHaveAttribute('aria-current', 'page');
+  // What they can help with, who they want to meet and their intent come from their answers: shown, not edited, with
+  // the way to the answers.
+  const fromAnswers = page.getByRole('region', { name: 'From your answers' });
+  for (const text of [OWNER.offer, OWNER.want, OWNER.intent]) await expect(fromAnswers.getByText(text, { exact: true })).toBeVisible();
+  await expect(fromAnswers.getByRole('textbox')).toHaveCount(0);
+  await expect(fromAnswers.getByRole('link', { name: 'Edit answers' })).toHaveAttribute('href', '/onboarding?edit=profile');
+  // Settled and rounded: WebKit can report a 44px box as 43.99997px while the card's entrance animation runs.
+  await expect.poll(async () => Math.round((await fromAnswers.getByRole('link', { name: 'Edit answers' }).boundingBox())!.height)).toBeGreaterThanOrEqual(44);
   await page.getByRole('link', { name: 'Back to your profile' }).click();
   await expect(page).toHaveURL(/\/profile$/);
 
@@ -242,12 +273,46 @@ test(`your profile is the way others see it, with what only you see apart, and e
   const linkedin = page.locator('#linkedin');
   await expect(linkedin).toBeFocused({ timeout: 15_000 });
   await expectReachable(page, linkedin, 'the LinkedIn field');
-  await linkedin.fill(`ada-bannerlove-${run}`);
+  // Something that is not a profile link is said under the field, the cursor goes back to it, and nothing is sent.
+  let saves = 0;
+  page.on('request', (r) => { if (r.method() === 'PUT' && /\/api\/users\/me$/.test(new URL(r.url()).pathname)) saves += 1; });
+  const help = page.getByRole('alert').filter({ hasText: 'Enter your LinkedIn profile link, for example linkedin.com/in/your-name' });
+  await linkedin.fill('facebook.com/ada');
+  await page.getByRole('button', { name: 'Save Changes' }).click();
+  await expect(help).toBeVisible();
+  await expect(linkedin).toHaveAttribute('aria-invalid', 'true');
+  await expect(linkedin).toBeFocused();
+  expect(saves).toBe(0);
+  // Half an address, with the phone app's share query on it, is saved as the one clean address (it used to become
+  // https://linkedin.com/in/linkedin.com/in/..., query and all).
+  await linkedin.fill(`linkedin.com/in/ada-bannerlove-${run}?utm_source=share&utm_medium=ios_app`);
+  await expect(help).toHaveCount(0);
   await page.getByRole('button', { name: 'Save Changes' }).click();
   await expect(page.getByText('Profile updated!')).toBeVisible({ timeout: 30_000 });
+  const clean = `https://www.linkedin.com/in/ada-bannerlove-${run}`;
+  expect((await pool.query<{ linkedin_url: string }>('SELECT linkedin_url FROM users WHERE id = $1', [owner.id])).rows[0].linkedin_url).toBe(clean);
   await page.getByRole('link', { name: 'Back to your profile' }).click();
   await expect(page.getByRole('heading', { name: 'Only you see this' })).toBeVisible({ timeout: SLOW });
   await expect(page.getByText('Optimize your profile: connect LinkedIn')).toHaveCount(0);
+
+  // The hero links to it, under the role line, in a new tab: on Your profile and on the Human Profile another member sees.
+  for (const [who, p] of [['your profile', page], ['their Human Profile', (await signedIn(viewer, { width: 390, height: 844 })).page]] as const) {
+    if (who !== 'your profile') {
+      await gotoRetry(p, `${APP}/people/${owner.id}`);
+      await expect(p.getByRole('heading', { level: 1, name: OWNER.name })).toBeVisible({ timeout: SLOW });
+    }
+    const link = p.getByRole('link', { name: /^LinkedIn/ });
+    await expect(link, `${who}: the LinkedIn link`).toHaveAttribute('href', clean);
+    await expect(link).toHaveAttribute('target', '_blank');
+    await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    await expect(link).toHaveText('LinkedIn ↗ (opens in a new tab)');
+    await link.scrollIntoViewIfNeeded();
+    await expect.poll(async () => Math.round((await link.boundingBox())!.height), { message: `${who}: the link is a 44px target` }).toBeGreaterThanOrEqual(44);
+    await expectReachable(p, link, `${who}: the LinkedIn link`);
+    const role = (await p.getByText(`${OWNER.title} · ${OWNER.company}`).boundingBox())!;
+    expect((await link.boundingBox())!.y, `${who}: the link is under the role line`).toBeGreaterThanOrEqual(role.y + role.height - 1);
+    if (who !== 'your profile') await p.context().close();
+  }
 
   // The Google photo comes back to the form, and its outcome is said there.
   await gotoRetry(page, `${APP}/profile/edit?photo=none`);
@@ -312,7 +377,7 @@ test(`More on the Human Profile: Report this member, and Block, which asks first
   // Accepted: unblocked, said, and the profile is back on the same page, with no refresh.
   page.once('dialog', (d) => void d.accept());
   await unblock.click();
-  await expect(page.getByText('Unblocked. Their profile is open to you again.')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText('Unblocked.', { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole('heading', { level: 1, name: OWNER.name })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole('button', { name: 'More' })).toBeVisible();
   expect((await pool.query('SELECT 1 FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2', [viewer.id, owner.id])).rowCount).toBe(0);

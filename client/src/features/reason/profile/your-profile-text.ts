@@ -1,13 +1,15 @@
 // client/src/features/reason/profile/your-profile-text.ts
 // What "Your profile" says, and where it links (21 Oct 2026). Pure on purpose (no React, axios, store or router),
 // so a test can run it: server/src/__tests__/client/reason-your-profile.test.ts.
-import { canBring, type PublicMember, type User } from '@rsn/shared';
+import { canBring, type OnboardingV2Answers, type PublicMember } from '@rsn/shared';
+import { answerSummary, questionFor, zoneLabel } from '../../onboarding/flow';
 import { visibleText } from '../person';
 
 export const EDIT_PROFILE_TO = '/profile/edit';
-// Task 9 opens the first question for editing; until then the address opens onboarding.
-export const EDIT_ANSWERS_TO = '/onboarding?edit=q1';
-// Task 11 wires creating your company; until then the address opens the Entities page.
+// Screen 7 in edit mode: every answer with its own [Edit], then back here (final review, 21 Oct 2026). The first
+// question alone was a dead end. The old form's "Edit answers" opens it too.
+export const EDIT_ANSWERS_TO = '/onboarding?edit=profile';
+// The Entities page with "Create an entity" open, for your company.
 export const ADD_COMPANY_TO = '/entities?create=1';
 export const CONNECT_LINKEDIN_TO = '/profile/edit#linkedin';
 
@@ -19,15 +21,28 @@ export function youCanBring(card: Pick<PublicMember, 'whatICanHelpWith' | 'exper
   return canBring(card);
 }
 
-export interface PrivateRow { label: string; value: string | null; empty: string }
+/** One part of "Only you see this": its lines, or what it says when there are none. */
+export interface PrivateRow { label: string; lines: string[]; empty: string }
 
-/** "Only you see this": what you want, which no other member is ever shown. */
-export function privateRows(me: Pick<User, 'whoIWantToMeet' | 'myIntent' | 'whyIWantToMeet' | 'timezone'>): PrivateRow[] {
+const some = (text: string | null): string[] => (text ? [text] : []);
+
+/**
+ * "Only you see this": what you want, which no other member is ever shown, as you answered it. The short labels and
+ * your own words in quotes, exactly as screen 7 shows them (answerSummary), never the wording the matcher keeps for
+ * them and never the reason given on the request form (final review, 21 Oct 2026). Then your time zone.
+ */
+export function privateRows(state: { answers: OnboardingV2Answers; profile: { timezone: string | null } }): PrivateRow[] {
+  const { answers } = state;
+  const specific = visibleText(answers.findSpecific);
+  const zone = visibleText(state.profile.timezone);
   return [
-    { label: 'Who you want to meet', value: visibleText(me.whoIWantToMeet), empty: 'Not answered yet.' },
-    // An older profile may say why they want to meet people and nothing as an intent.
-    { label: "What you're hoping to find", value: visibleText(me.myIntent) ?? visibleText(me.whyIWantToMeet), empty: 'Not answered yet.' },
-    { label: 'Time zone', value: visibleText(me.timezone), empty: 'Not set yet.' },
+    { label: 'Who you want to meet', lines: some(visibleText(answerSummary(questionFor('q1')!, answers))), empty: 'Not answered yet.' },
+    {
+      label: "What you're hoping to find",
+      lines: [...some(visibleText(answerSummary(questionFor('q2')!, answers))), ...(specific ? [`“${specific}”`] : [])],
+      empty: 'Not answered yet.',
+    },
+    { label: 'Time zone', lines: some(zone && zoneLabel(zone)), empty: 'Not set yet.' },
   ];
 }
 

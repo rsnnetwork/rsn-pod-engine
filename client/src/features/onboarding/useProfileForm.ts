@@ -71,7 +71,7 @@ export function useProfileForm(state: OnboardingV2State, linkedinOn: boolean) {
         company: shown.company.value,
         industry: shown.industry.value,
       };
-      return profileInput(fields, isRealZone(zone) ? zone : null, keepsLinkedinPhoto);
+      return profileInput(fields, profile, isRealZone(zone) ? zone : null, keepsLinkedinPhoto);
     },
   };
 }

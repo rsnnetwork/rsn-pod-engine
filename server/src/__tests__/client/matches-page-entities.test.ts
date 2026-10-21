@@ -38,8 +38,15 @@ describe('the Matches page query', () => {
     expect(entries).toContain('E.userInvites(myUserId)');
   });
 
-  it('names nothing else', () => {
-    expect([...entries].sort()).toEqual(['E.user(myUserId)', 'E.userInvites(myUserId)', 'E.userSessions(myUserId)']);
+  it('names nothing else but the member\'s blocks, so a block either way takes the person off the list', () => {
+    // A block either way takes the person off the list at once (final review, 21 Oct 2026).
+    expect([...entries].sort()).toEqual(['E.user(myUserId)', 'E.userBlocks(myUserId)', 'E.userInvites(myUserId)', 'E.userSessions(myUserId)']);
+  });
+
+  // Final review, 21 Oct 2026 (C8): there is no onboarding chat any more; it is four quick questions.
+  it('asks a member with nothing to match on to answer the questions, in words that are true of the onboarding there is', () => {
+    expect(SOURCE).not.toMatch(/onboarding chat/i);
+    expect(SOURCE).toMatch(/Answer a few quick questions so we know who you are and who you would like to meet\. Then we can start suggesting people\./);
   });
 
   it('still names nothing for a member who is not signed in yet', () => {

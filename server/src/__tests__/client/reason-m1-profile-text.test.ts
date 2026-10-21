@@ -8,7 +8,7 @@ import type { PersonBrief } from '@rsn/shared';
 import { CONNECTION_LOST } from '../../../../client/src/features/reason/errors';
 import {
   KNOWN_SOURCES, MOVE_RESPONSE, SIGNAL, foundThrough, isClientError, isGone, isMemberId, knownSource, lastMetText,
-  loadFailedText, memoryRows, metTitle, moveToast, personFacts, reasonText, shouldRetry, statusOf, viewFor, whyNowRows,
+  loadFailedText, memoryRows, metTitle, moveToast, personFacts, personHref, reasonText, shouldRetry, statusOf, viewFor, whyNowRows,
   type LoadState, type Move,
 } from '../../../../client/src/features/reason/human/profile-text';
 import { BUSY } from '../../../../client/src/features/reason/human/busy';
@@ -32,8 +32,17 @@ const noAnswer = Object.assign(new Error('Network Error'), { isAxiosError: true,
 const GENERIC_LINE = 'REASON explains why this person may matter to you right now.';
 
 describe('?from= and the member id', () => {
-  it('knows exactly the five places the app itself sends a member from', () => {
-    expect([...KNOWN_SOURCES]).toEqual(['For You', 'People', 'Messages', 'Introductions', 'Your path']);
+  // Final review, 21 Oct 2026 (C3): circles, pods and events open the Human Profile too, and say so.
+  it('knows exactly the places the app itself sends a member from', () => {
+    // Final review (C10): Introductions went on 19 Oct; the For You rail's recent connections say Connections.
+    expect([...KNOWN_SOURCES]).toEqual(['For You', 'People', 'Messages', 'Connections', 'Your path', 'Circles', 'Pods', 'Events']);
+    expect(knownSource('Introductions')).toBeNull();
+  });
+  it('a people link is the Human Profile with where it was opened from, each part encoded', () => {
+    expect(personHref('3f2b8a4e-1c9d-4e7a-b6f0-2a5c8d1e9f03', 'Pods')).toBe('/people/3f2b8a4e-1c9d-4e7a-b6f0-2a5c8d1e9f03?from=Pods');
+    expect(personHref('a1', 'For You')).toBe('/people/a1?from=For%20You');
+    expect(personHref('../x?y', 'Events')).toBe('/people/..%2Fx%3Fy?from=Events');
+    for (const s of KNOWN_SOURCES) expect(knownSource(new URLSearchParams(personHref('a1', s).split('?')[1]).get('from'))).toBe(s);
   });
   it('gives back a known source as it is', () => {
     for (const s of KNOWN_SOURCES) expect(knownSource(s)).toBe(s);
@@ -67,7 +76,7 @@ describe('every ?from= the app writes is one the profile accepts', () => {
     .flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [path.join(dir, e.name)] : []));
 
   it('the scan reads literals, plain and encoded, and skips what is not one', () => {
-    expect(fromLiterals('to={`/people/${id}?from=Introductions`}')).toEqual(['Introductions']);
+    expect(fromLiterals('to={`/people/${id}?from=Connections`}')).toEqual(['Connections']);
     expect(fromLiterals('<Link to="/people/x?from=Directory">')).toEqual(['Directory']);
     expect(fromLiterals("to={`/people/${id}?from=${encodeURIComponent('Your path')}`}")).toEqual(['Your path']);
     expect(fromLiterals('const url = `/people/${id}?from=${encodeURIComponent("For You")}&x=1`;')).toEqual(['For You']);
@@ -77,13 +86,39 @@ describe('every ?from= the app writes is one the profile accepts', () => {
     expect(fromLiterals('// ?from=Directory in a comment\n/* ?from=Elsewhere */')).toEqual([]);
   });
 
-  it('every literal under features/reason is in KNOWN_SOURCES, so a plain link cannot write a source the profile rejects', () => {
-    const files = walk(path.join(__dirname, '../../../../client/src/features/reason'));
-    expect(files.length).toBeGreaterThan(20);
+  it('every literal in the client is in KNOWN_SOURCES, so a plain link cannot write a source the profile rejects', () => {
+    const files = walk(path.join(__dirname, '../../../../client/src'));
+    expect(files.length).toBeGreaterThan(200);
     const written = files.flatMap((file) => fromLiterals(fs.readFileSync(file, 'utf8')).map((source) => ({ file: path.basename(file), source })));
-    // The scan is not blind: the rail's introductions link and the profile's "Your path" link are there.
-    expect(written.map((w) => w.source)).toEqual(expect.arrayContaining(['Introductions', 'Your path']));
+    // The scan is not blind: the People pages' links, the conversation header's and the profile's "Your path" link are there.
+    expect(written.map((w) => w.source)).toEqual(expect.arrayContaining(['People', 'Messages', 'Your path']));
     for (const w of written) expect({ ...w, known: knownSource(w.source) !== null }).toEqual({ ...w, known: true });
+  });
+
+  // Final review (C3): these opened the old /profile/:id page (a hard-coded gradient banner, none of the new one). The
+  // old page stays for the admin links only.
+  const SURFACES = {
+    'features/circles/CircleDetailPage.tsx': ["personHref(m.userId, 'Circles')"],
+    'features/pods/PodDetailPage.tsx': ["personHref(m.userId || m.id, 'Pods')", "personHref(m.userId || m.id, 'Pods')", "personHref(m.userId || m.id, 'Pods')", "personHref(m.userId || m.id, 'Pods')"],
+    'features/sessions/RecapPage.tsx': ["personHref(c.userId, 'Events')", "personHref(c.userId, 'Events')"],
+    'features/sessions/SessionDetailPage.tsx': ["personHref(hostRow.userId, 'Events')", "personHref(p.userId || p.id, 'Events')"],
+  } as const;
+  const clientFile = (rel: string) => fs.readFileSync(path.join(__dirname, '../../../../client/src', rel), 'utf8').replace(/\r\n/g, '\n');
+  it.each(Object.entries(SURFACES))('%s opens each person\'s Human Profile in the page, saying where from, and no /profile/ page', (file, links) => {
+    const src = clientFile(file);
+    expect(src).not.toMatch(/\/profile\//);
+    expect([...src.matchAll(/<Link to=\{(personHref\([^)]*\))\}/g)].map((m) => m[1])).toEqual(links);
+    expect(src).toMatch(/import \{ personHref \} from '@\/features\/reason\/human\/profile-text';/);
+  });
+  it('a meeting request in Messages and the live event\'s chat, participant list and end screen open it through ProfileLink, in a new tab', () => {
+    expect(clientFile('features/messages/MeetingRequests.tsx').match(/<ProfileLink\b[^>]*\bfrom="Messages"/g)).toHaveLength(5);
+    expect(clientFile('features/messages/MeetingRequests.tsx')).not.toMatch(/<ProfileLink\b(?![^>]*\bfrom=)/);
+    for (const file of ['features/live/ChatPanel.tsx', 'features/live/ParticipantList.tsx', 'features/live/SessionComplete.tsx']) {
+      const src = clientFile(file);
+      expect({ file, all: /<ProfileLink\b/.test(src) && !/<ProfileLink\b(?![^>]*\bfrom="Events")/.test(src) }).toEqual({ file, all: true });
+    }
+    // Admin links keep the old page.
+    expect(clientFile('features/admin/AdminAnalyticsPage.tsx')).toMatch(/navigate\(`\/profile\/\$\{r\.userId\}`\)/);
   });
 });
 
@@ -191,8 +226,25 @@ describe('personFacts: who the page is about', () => {
       industry: 'Fintech', professionalRole: ['Investor', ' Advisor ', '  ', ''],
     }))).toEqual({
       name: 'Nora None', first: 'Nora', role: 'Investor, Advisor', company: 'Northwind Capital', bio: 'Backs founders.',
-      tags: ['Fintech', 'Investor', 'Advisor'],
+      tags: ['Fintech', 'Investor', 'Advisor'], linkedin: null,
     });
+  });
+
+  // Final review, 21 Oct 2026 (C4): nobody could see anyone's LinkedIn. The hero links to it, on the Human Profile and
+  // on Your profile, and only ever to an https address on LinkedIn: the old form once took any text as a link.
+  it('the LinkedIn the hero links to: an https address on linkedin.com, and nothing else', () => {
+    const linked = (linkedinUrl: string | null) => personFacts(person({ linkedinUrl })).linkedin;
+    expect(linked('https://www.linkedin.com/in/nora-none')).toBe('https://www.linkedin.com/in/nora-none');
+    expect(linked('  https://uk.linkedin.com/in/nora  ')).toBe('https://uk.linkedin.com/in/nora');
+    expect(linked('https://linkedin.com/in/nora')).toBe('https://linkedin.com/in/nora');
+    expect(linked('HTTPS://WWW.LINKEDIN.COM/in/Nora')).toBe('https://www.linkedin.com/in/Nora');
+    for (const bad of [
+      null, '', '   ', 'http://www.linkedin.com/in/nora', 'javascript:alert(1)', 'linkedin.com/in/nora', 'www.linkedin.com/in/nora',
+      'https://evil.example/in/nora', 'https://linkedin.com.evil.example/in/nora', 'https://notlinkedin.com/in/nora',
+      'https://user:pass@www.linkedin.com/in/nora', 'data:text/html,<a>', 'https://', 'not a link',
+    ]) {
+      expect({ bad, linked: linked(bad) }).toEqual({ bad, linked: null });
+    }
   });
   it('turns a blank text into nothing, so nothing blank is drawn', () => {
     expect(personFacts(person({ company: '   ', bio: '\n', jobTitle: ' ', industry: ' ', professionalRole: ['  ', ''] })))
@@ -257,10 +309,17 @@ describe('foundThrough: the small box under the name', () => {
       title: 'You found Nora through Messages',
       line: 'This profile is the relationship layer behind your conversation. The history, reason and next useful move travel with the message thread.',
     });
-    expect(foundThrough('Introductions', 'Nora')).toEqual({
-      title: 'You found Nora through Introductions',
-      line: 'This relationship arrived through an introduction. REASON keeps the introducer, reason and outcome as part of the relationship memory.',
+    // Final review (C10): it named the removed feature and an introducer nobody records. A recent connection is someone
+    // one of you asked to meet and the other said yes to; the profile keeps your meetings and what you note after them.
+    expect(foundThrough('Connections', 'Nora')).toEqual({
+      title: 'You and Nora are connected',
+      line: 'One of you asked to meet and the other said yes. Your meetings, and what you note after them, stay on this page.',
     });
+  });
+  it('names a circle, a pod or an event as the place they were found, and says only what is always true', () => {
+    for (const source of ['Circles', 'Pods', 'Events'] as const) {
+      expect(foundThrough(source, 'Nora')).toEqual({ title: `You found Nora through ${source}`, line: GENERIC_LINE });
+    }
   });
   it('says "on your path", not "through Your path", for the one source that is a section of this page', () => {
     expect(foundThrough('Your path', 'Marta')).toEqual({ title: 'You found Marta on your path', line: GENERIC_LINE });
@@ -271,7 +330,8 @@ describe('foundThrough: the small box under the name', () => {
   it('never says "Profile", and always has something to say', () => {
     for (const s of [...KNOWN_SOURCES, null]) {
       const { title, line } = foundThrough(s, 'Nora');
-      expect(title).toMatch(/^(You found Nora (through|on) |About Nora)/);
+      expect(title).toMatch(/^(You found Nora (through|on) |About Nora|You and Nora are connected$)/);
+      expect(`${title} ${line}`).not.toMatch(/[Ii]ntroduc/);
       expect(title).not.toMatch(/Profile/);
       expect(line.length).toBeGreaterThan(20);
     }

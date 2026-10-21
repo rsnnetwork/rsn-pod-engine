@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, Users, Calendar, LogOut, Shield, UserMinus, Eye, Radio,
@@ -21,6 +21,7 @@ import { useToastStore } from '@/stores/toastStore';
 import api from '@/lib/api';
 import { formatDateTime } from '@/lib/utils';
 import { E } from '@/realtime/entities';
+import { personHref } from '@/features/reason/human/profile-text';
 import CreatePodModal from './CreatePodModal';
 
 /** Map invite API error codes to user-friendly messages */
@@ -867,13 +868,13 @@ export default function PodDetailPage() {
             {pendingMembers.map((m: any) => (
               <Card key={m.userId || m.id} className="!p-4 border-amber-500/20">
                 <div className="flex items-center justify-between">
-                  <a href={`/profile/${m.userId || m.id}`} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+                  <Link to={personHref(m.userId || m.id, 'Pods')} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
                     <Avatar src={m.avatarUrl} name={m.displayName || m.email || 'User'} size="sm" />
                     <div>
                       <p className="text-sm font-medium text-gray-800">{m.displayName || m.email || 'User'}</p>
                       <p className="text-xs text-amber-400">Pending approval</p>
                     </div>
-                  </a>
+                  </Link>
                   <div className="flex items-center gap-2">
                     <button onClick={() => approveMutation.mutate(m.userId)} className="p-1.5 rounded-lg text-emerald-400 hover:bg-emerald-500/10 transition-all" title="Approve">
                       <UserCheck className="h-4 w-4" />
@@ -898,24 +899,24 @@ export default function PodDetailPage() {
           <div className="grid gap-2">
             {declinedMembers.map((m: any) => (
               <Card key={m.userId || m.id} className="!p-3 bg-gray-50 border-gray-200">
-                <a href={`/profile/${m.userId || m.id}`} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+                <Link to={personHref(m.userId || m.id, 'Pods')} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
                   <Avatar src={m.avatarUrl} name={m.displayName || m.email || 'User'} size="sm" />
                   <div className="flex-1">
                     <p className="text-sm font-medium text-gray-700">{m.displayName || m.email || 'User'}</p>
                     <p className="text-xs text-gray-400">Declined</p>
                   </div>
-                </a>
+                </Link>
               </Card>
             ))}
             {noResponseMembers.map((m: any) => (
               <Card key={m.userId || m.id} className="!p-3 bg-gray-50 border-gray-200">
-                <a href={`/profile/${m.userId || m.id}`} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+                <Link to={personHref(m.userId || m.id, 'Pods')} className="flex items-center gap-3 hover:opacity-80 transition-opacity">
                   <Avatar src={m.avatarUrl} name={m.displayName || m.email || 'User'} size="sm" />
                   <div className="flex-1">
                     <p className="text-sm font-medium text-gray-700">{m.displayName || m.email || 'User'}</p>
                     <p className="text-xs text-gray-400">No response</p>
                   </div>
-                </a>
+                </Link>
               </Card>
             ))}
           </div>
@@ -1044,7 +1045,7 @@ export default function PodDetailPage() {
           {(memberStatusFilter === null ? activeMembers : membersList.filter((m: any) => m.status === memberStatusFilter)).map((m: any) => (
             <Card key={m.userId || m.id} className="!p-3">
               <div className="flex items-center justify-between">
-                <a href={`/profile/${m.userId || m.id}`} className="flex-1 min-w-0 hover:opacity-80 transition-opacity">
+                <Link to={personHref(m.userId || m.id, 'Pods')} className="flex-1 min-w-0 hover:opacity-80 transition-opacity">
                   <ProfileCard
                     compact
                     user={{
@@ -1057,7 +1058,7 @@ export default function PodDetailPage() {
                     badge={m.role === 'director' ? 'director' : m.role === 'host' ? 'host' : undefined}
                     badgeVariant={m.role === 'director' ? 'brand' : 'info'}
                   />
-                </a>
+                </Link>
                 <div className="flex items-center gap-2 shrink-0">
                   {isDirector && m.userId !== user?.id && m.role !== 'director' && (
                     <button

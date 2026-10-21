@@ -11,13 +11,19 @@ export interface Row { title: string; text: string }
 // ---- the address -----------------------------------------------------------------------------
 
 // ?from= is part of the address, so anyone can write anything into it. Only the places the app itself sends a
-// member from are ever shown on the page.
-export const KNOWN_SOURCES = ['For You', 'People', 'Messages', 'Introductions', 'Your path'] as const;
+// member from are ever shown on the page. Circles, pods and events open the Human Profile too (final review, 21 Oct
+// 2026); before, they opened the old /profile/:id page, which the admin links still use. Connections is For You's
+// "Recent connections" card: the Introductions it was named after went on 19 Oct.
+export const KNOWN_SOURCES = ['For You', 'People', 'Messages', 'Connections', 'Your path', 'Circles', 'Pods', 'Events'] as const;
 export type KnownSource = (typeof KNOWN_SOURCES)[number];
 
 export function knownSource(from: string | null): KnownSource | null {
   return KNOWN_SOURCES.find((s) => s === from) ?? null;
 }
+
+/** A member's Human Profile, saying where it was opened from. */
+export const personHref = (userId: string, from: KnownSource): string =>
+  `/people/${encodeURIComponent(userId)}?from=${encodeURIComponent(from)}`;
 
 const MEMBER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -91,6 +97,26 @@ export interface PersonFacts {
   company: string | null;
   bio: string | null;
   tags: string[];
+  /** Their LinkedIn, for the hero to link to: only ever an https address on LinkedIn. */
+  linkedin: string | null;
+}
+
+/**
+ * A stored LinkedIn as a link that is safe to open: an https address on linkedin.com or one of its country sites, with
+ * no user name in it. Anything else is no link at all (the old profile form once took any text as one).
+ */
+export function linkedinLink(stored: string | null | undefined): string | null {
+  const text = visibleText(stored);
+  if (!text || !/^https:\/\//i.test(text)) return null;
+  let address: URL;
+  try {
+    address = new URL(text);
+  } catch {
+    return null;
+  }
+  const host = address.hostname.toLowerCase();
+  const onLinkedin = host === 'linkedin.com' || host.endsWith('.linkedin.com');
+  return address.protocol === 'https:' && onLinkedin && !address.username && !address.password ? address.href : null;
 }
 
 export function personFacts(p: PersonBrief['person']): PersonFacts {
@@ -104,6 +130,7 @@ export function personFacts(p: PersonBrief['person']): PersonFacts {
     bio: visibleText(p.bio),
     // The location is on the public card, and your own profile shows it (21 Oct 2026), so everyone else's does too.
     tags: [visibleText(p.industry), visibleText(p.location), ...roles].filter((t): t is string => t !== null).slice(0, 4),
+    linkedin: linkedinLink(p.linkedinUrl),
   };
 }
 
@@ -135,10 +162,15 @@ export function foundThrough(source: KnownSource | null, first: string): { title
       return { title: `You found ${first} through People`, line: `You found ${first} while exploring the wider network. REASON still explains why this person may matter, rather than leaving you with a directory result.` };
     case 'Messages':
       return { title: `You found ${first} through Messages`, line: 'This profile is the relationship layer behind your conversation. The history, reason and next useful move travel with the message thread.' };
-    case 'Introductions':
-      return { title: `You found ${first} through Introductions`, line: 'This relationship arrived through an introduction. REASON keeps the introducer, reason and outcome as part of the relationship memory.' };
+    // A recent connection: a meeting request one of them sent and the other accepted.
+    case 'Connections':
+      return { title: `You and ${first} are connected`, line: 'One of you asked to meet and the other said yes. Your meetings, and what you note after them, stay on this page.' };
     case 'Your path':
       return { title: `You found ${first} on your path`, line: GENERIC_LINE };
+    case 'Circles':
+    case 'Pods':
+    case 'Events':
+      return { title: `You found ${first} through ${source}`, line: GENERIC_LINE };
     default:
       return { title: `About ${first}`, line: GENERIC_LINE };
   }

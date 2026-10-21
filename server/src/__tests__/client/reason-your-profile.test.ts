@@ -8,7 +8,8 @@
 // like the other client tests; the local e2e spec presses everything for real.
 import * as fs from 'fs';
 import * as path from 'path';
-import { canBring, type PersonBrief } from '@rsn/shared';
+import { ONBOARDING_V2_MEET, canBring, shortLabelFor, type OnboardingV2Answers, type PersonBrief } from '@rsn/shared';
+import { answerSummary, questionFor } from '../../../../client/src/features/onboarding/flow';
 import {
   BANNER_HEIGHT, BANNER_INPUT_MAX_BYTES, BANNER_QUALITY, BANNER_TYPES, BANNER_WIDTH, bannerCrop, bannerFileProblem,
 } from '../../../../client/src/features/reason/profile/banner-image';
@@ -101,7 +102,7 @@ describe('Your profile: what it says', () => {
   });
 
   it('is the very rule the brief uses (canBring, in @rsn/shared), not a copy of it', () => {
-    expect(read('features/reason/profile/your-profile-text.ts')).toMatch(/import \{ canBring, type PublicMember, type User \} from '@rsn\/shared';/);
+    expect(read('features/reason/profile/your-profile-text.ts')).toMatch(/import \{ canBring, type OnboardingV2Answers, type PublicMember \} from '@rsn\/shared';/);
     expect(read('features/reason/profile/your-profile-text.ts')).toMatch(/return canBring\(card\);/);
     for (const card of [
       { whatICanHelpWith: 'Intros', expertiseText: 'x' }, { whatICanHelpWith: ' . ', expertiseText: 'b'.repeat(200) },
@@ -109,16 +110,39 @@ describe('Your profile: what it says', () => {
     ]) expect(youCanBring(card)).toBe(canBring(card));
   });
 
-  it('"Only you see this": who you want to meet, what you are hoping to find, and your time zone, each saying when it is empty', () => {
-    expect(privateRows({ whoIWantToMeet: ' Founders in fintech ', myIntent: 'to raise funding', whyIWantToMeet: 'ignored', timezone: 'Europe/Berlin' }))
-      .toEqual([
-        { label: 'Who you want to meet', value: 'Founders in fintech', empty: 'Not answered yet.' },
-        { label: "What you're hoping to find", value: 'to raise funding', empty: 'Not answered yet.' },
-        { label: 'Time zone', value: 'Europe/Berlin', empty: 'Not set yet.' },
-      ]);
-    // An older profile may have said why they want to meet people and nothing as an intent.
-    expect(privateRows({ whoIWantToMeet: null, myIntent: ' ', whyIWantToMeet: 'Find a cofounder', timezone: null }).map((r) => r.value))
-      .toEqual([null, 'Find a cofounder', null]);
+  // Final review (C9): it showed the wording the matcher keeps ("students, interns and recent graduates"), and fell
+  // back to the reason given on the request form. It shows the member's own answers, by their short labels, as screen 7
+  // does, with their own words in quotes.
+  const ANSWERS: OnboardingV2Answers = {
+    lookingToMeet: ['meet_investors', 'meet_other'], meetOther: ' bakers who sell abroad ',
+    hopingToFind: ['find_funding'], findOther: null, findSpecific: ' A lead investor for a seed round ',
+    canOffer: ['offer_advice_mentoring'], offerOther: null, selfKinds: ['self_founder_owner'], selfOther: null,
+  };
+  const state = (answers: Partial<OnboardingV2Answers>, timezone: string | null = 'America/New_York') => ({
+    answers: { ...ANSWERS, ...answers }, profile: { timezone },
+  });
+
+  it('"Only you see this": who you want to meet and what you are hoping to find as you answered them, and your time zone', () => {
+    expect(privateRows(state({}))).toEqual([
+      { label: 'Who you want to meet', lines: ['Investors · “bakers who sell abroad”'], empty: 'Not answered yet.' },
+      { label: "What you're hoping to find", lines: ['Raising funding', '“A lead investor for a seed round”'], empty: 'Not answered yet.' },
+      { label: 'Time zone', lines: ['America/New York'], empty: 'Not set yet.' },
+    ]);
+  });
+
+  it('reads exactly as screen 7 does: the same summary, from the same catalogue', () => {
+    const [meet, find] = privateRows(state({ lookingToMeet: ['meet_students_early_career', 'meet_founders_owners'], hopingToFind: ['find_customers', 'find_cofounder'], findSpecific: null }));
+    expect(meet.lines).toEqual([answerSummary(questionFor('q1')!, { ...ANSWERS, lookingToMeet: ['meet_students_early_career', 'meet_founders_owners'] })]);
+    expect(find.lines).toEqual([answerSummary(questionFor('q2')!, { ...ANSWERS, hopingToFind: ['find_customers', 'find_cofounder'] })]);
+    // Never the matcher's wording for them.
+    expect(JSON.stringify(privateRows(state({ lookingToMeet: ['meet_students_early_career'] })))).not.toMatch(/interns|recent graduates/);
+  });
+
+  it('says so when a question is not answered, or there is no time zone, and never falls back to anything else', () => {
+    expect(privateRows(state({ lookingToMeet: [], meetOther: null, hopingToFind: [], findSpecific: '   ' }, null)).map((r) => r.lines))
+      .toEqual([[], [], []]);
+    // "Something else" with no words says nothing more than the label.
+    expect(privateRows(state({ lookingToMeet: ['meet_other'], meetOther: '  ' }))[0].lines).toEqual([shortLabelFor(ONBOARDING_V2_MEET, 'meet_other')]);
   });
 
   it('the LinkedIn card shows only while there is no LinkedIn on the card', () => {
@@ -127,9 +151,11 @@ describe('Your profile: what it says', () => {
     expect(needsLinkedin({ linkedinUrl: 'https://linkedin.com/in/nora' })).toBe(false);
   });
 
-  it('every link goes where the brief says', () => {
+  // Final review (C2): "Edit answers" opened the first question alone, a dead end. It opens screen 7, with every
+  // answer's [Edit].
+  it('every link goes where the brief says, and Edit answers opens every answer, on screen 7', () => {
     expect([EDIT_PROFILE_TO, EDIT_ANSWERS_TO, ADD_COMPANY_TO, CONNECT_LINKEDIN_TO])
-      .toEqual(['/profile/edit', '/onboarding?edit=q1', '/entities?create=1', '/profile/edit#linkedin']);
+      .toEqual(['/profile/edit', '/onboarding?edit=profile', '/entities?create=1', '/profile/edit#linkedin']);
   });
 
   it('the hero lists the industry, then the location, then the roles, at most four, on your page and on everyone else\'s', () => {
@@ -151,13 +177,17 @@ describe('Your profile: the page', () => {
     expect(app().indexOf('path="/profile/edit"')).toBeLessThan(app().indexOf('path="/profile/:userId"'));
   });
 
-  it('the hero is your card from GET /people/me/card, and the private part is your own profile, both refreshed by user:<you>', () => {
+  it('the hero is your card from GET /people/me/card, and the private part is your answers (GET /onboarding/v2/state), both refreshed by user:<you>', () => {
     expect(api()).toMatch(/export const fetchMyCard = \(\) => api\.get\('\/people\/me\/card'\)/);
-    expect(api()).toMatch(/export const fetchMyProfile = \(\) => api\.get\('\/users\/me'\)/);
-    expect(count(page(), /\buseQuery\(/g)).toBe(2);
-    expect(count(page(), /meta: \{ entities: me \? \[E\.user\(me\)\] : \[\] \}/g)).toBe(2);
+    expect(count(page(), /\buseQuery\(/g)).toBe(1);
+    expect(count(page(), /meta: \{ entities: me \? \[E\.user\(me\)\] : \[\] \}/g)).toBe(1);
     expect(page()).toMatch(/queryFn: fetchMyCard,/);
-    expect(page()).toMatch(/queryFn: fetchMyProfile,/);
+    // The onboarding's own state, the one screen 7 reads: its query is pinned to user:<you> in onboarding-v2-screens.
+    expect(page()).toMatch(/import \{ useOnboardingV2State \} from '@\/features\/onboarding\/useOnboardingV2';/);
+    expect(page()).toMatch(/const answers = useOnboardingV2State\(\);/);
+    expect(page()).toMatch(/privateRows\(answers\.data\)/);
+    // Nothing reads GET /users/me for this page any more, so its key and its call are gone.
+    expect(api()).not.toMatch(/fetchMyProfile|myProfile:/);
     for (const src of [page(), editor()]) expect(src).not.toMatch(/setQueryData|refetchInterval|setInterval/);
   });
 
@@ -203,7 +233,9 @@ describe('Your profile: the page', () => {
     expect(page()).toMatch(/aria-busy="true"/);
     expect(page()).toMatch(/We could not load your profile just now\./);
     expect(page()).toMatch(/onClick=\{\(\) => void card\.refetch\(\)\}/);
-    expect(page()).toMatch(/row\.value \?\? row\.empty/);
+    expect(page()).toMatch(/row\.lines\.length \? row\.lines\.map\(/);
+    expect(page()).toMatch(/: <dd className="[^"]*">\{row\.empty\}<\/dd>/);
+    expect(page()).toMatch(/onClick=\{\(\) => void answers\.refetch\(\)\}/);
   });
 
   it('says "event", never "session", and uses neither a failing grey nor red text', () => {
@@ -299,6 +331,8 @@ describe('Human Profile: More, with Block and Report this member', () => {
     expect(hook).toMatch(/UNBLOCK_QUESTION = 'Unblock this member\? They will be able to message you again, and you may be matched together in future events\.';/);
     expect(hook).toMatch(/if \(confirm\(UNBLOCK_QUESTION\)\) unblock\.mutate\(\);/);
     expect(hook).toMatch(/mutationFn: \(\) => unblockMember\(userId\)/);
+    // Final review (C8): said plainly, as the profile comes back on screen.
+    expect(hook).toMatch(/addToast\('Unblocked\.', 'success'\);/);
     // The refresh is returned, so Unblock stays busy until the brief is back and the profile is on screen.
     expect(hook).toMatch(/return qc\.invalidateQueries\(\{ queryKey: reasonKeys\.all \}\);/);
     expect(hook).toMatch(/onError: \(err\) => addToast\(errorMessage\(err, /);
@@ -332,5 +366,45 @@ describe('the old form at /profile/edit', () => {
 
   it('the Google photo comes back to the form, where its outcome is read', () => {
     expect(form()).toMatch(/api\.post\('\/auth\/google\/photo-state', \{ redirect: '\/profile\/edit' \}\)/);
+  });
+
+  // Final review (C2): the next save of the answers writes over these three, and no search ever reads them, so a change
+  // made here was lost. They are shown as they are, with the way to the answers.
+  const ANSWER_FIELDS = ['whatICanHelpWith', 'whoIWantToMeet', 'myIntent'];
+  it('"What I can help with", "Who I want to meet" and "My intent" are shown, not edited, with Edit answers beside them', () => {
+    for (const field of ANSWER_FIELDS) {
+      expect(form()).not.toMatch(new RegExp(`register\\('${field}'\\)`));
+      expect(form()).toMatch(new RegExp(`value: visibleText\\(user\\.${field}\\) \\}`));
+    }
+    for (const label of ['What I can help with', 'Who I want to meet', 'My intent']) expect(form()).toContain(`label: '${label}'`);
+    expect(form()).toMatch(/import \{ EDIT_ANSWERS_TO \} from '@\/features\/reason\/profile\/your-profile-text';/);
+    expect(form()).toMatch(/<Link to=\{EDIT_ANSWERS_TO\} className="[^"]*\bmin-h-\[44px\][^"]*">Edit answers<\/Link>/);
+    expect(form()).toMatch(/\{value \?\? 'Not answered yet\.'\}/);
+    // The two that only this form writes stay editable.
+    for (const field of ['whatICareAbout', 'whyIWantToMeet']) expect(form()).toMatch(new RegExp(`register\\('${field}'\\)`));
+  });
+
+  // Final review (C5): the form's own clean-up turned "linkedin.com/in/jane" into
+  // "https://linkedin.com/in/linkedin.com/in/jane" and kept share queries. Your profile's "connect LinkedIn" card sends
+  // members here, so it uses the request form's clean-up (normalizeLinkedinInput, run in join-form-linkedin.test.ts).
+  it('the LinkedIn field is cleaned up by the request form\'s own rule, and a link that is not a profile is said next to the field', () => {
+    const submit = form().slice(form().indexOf('const onSubmit = async'), form().indexOf('if (!user) return null;'));
+    expect(form()).toMatch(/import \{ LINKEDIN_LINK_HELP, normalizeLinkedinInput \} from '@\/features\/auth\/linkedin-link';/);
+    expect(form()).not.toMatch(/normalizeLinkedInUrl|isValidLinkedInUrl|https:\/\/linkedin\.com\/in\/\$\{/);
+    expect(submit).toMatch(/const linkedinUrl = normalizeLinkedinInput\(data\.linkedinUrl\);\s*if \(linkedinUrl === null\) \{\s*setError\('linkedinUrl', \{ message: LINKEDIN_LINK_HELP \}, \{ shouldFocus: true \}\);\s*return;\s*\}/);
+    expect(submit).toMatch(/api\.put\('\/users\/me', \{\s*\.\.\.data,\s*linkedinUrl,/);
+    // Said under the field, never as a toast, and the field says it is the one that is wrong.
+    expect(submit).not.toMatch(/addToast\([^)]*LinkedIn/);
+    expect(form()).toMatch(/aria-invalid=\{errors\.linkedinUrl \? true : undefined\}/);
+    expect(form()).toMatch(/aria-describedby=\{errors\.linkedinUrl \? 'linkedin-error' : undefined\}/);
+    expect(form()).toMatch(/<p id="linkedin-error" role="alert"[^>]*>\{errors\.linkedinUrl\.message\}<\/p>/);
+  });
+
+  it('a save on the form never sends those three, so it never writes over the answers', () => {
+    const submit = form().slice(form().indexOf('const onSubmit = async'), form().indexOf('if (!user) return null;'));
+    expect(submit).toMatch(/api\.put\('\/users\/me', \{/);
+    for (const field of ANSWER_FIELDS) expect(submit).not.toContain(field);
+    const fields = form().slice(form().indexOf('interface ProfileForm {'), form().indexOf('}', form().indexOf('interface ProfileForm {')));
+    for (const field of ANSWER_FIELDS) expect(fields).not.toContain(field);
   });
 });

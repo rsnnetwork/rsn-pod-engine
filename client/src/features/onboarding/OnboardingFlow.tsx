@@ -31,7 +31,7 @@ import { useLeaveEdit } from './useLeaveEdit';
 import { useProfileForm } from './useProfileForm';
 import { useConfirm, useConnectLinkedin, useOnboardingV2State, useSaveDraft, useSkipLinkedin } from './useOnboardingV2';
 import {
-  PROFILE, confirmBody, confirmProblem, draftPatch, editAction, firstIncomplete, guessedSelf, problemMessage,
+  LANDED, PROFILE, confirmBody, confirmProblem, draftPatch, editAction, firstIncomplete, guessedSelf, problemMessage,
   questionFor, questionProblem, stepAfter, stepBefore, withKeys,
   type ConfirmProblem, type DraftPatch, type Question, type QuestionStepKey,
 } from './flow';
@@ -137,8 +137,9 @@ function Flow({ state }: { state: OnboardingV2State }) {
           addToast('Your changes are saved.', 'success');
           leave(edit);
         } else {
-          // Where the gate sent them from, when that is a page of this app; else For You. The tour opens either way.
-          navigate(steps.redirect, { replace: true });
+          // Where the gate sent them from, when that is a page of this app; else For You. The tour opens either way,
+          // and LANDED tells it to leave them on that page when it closes.
+          navigate(steps.redirect, { replace: true, state: LANDED });
         }
       } catch (err) {
         showRefusal(confirmProblem(err, SAVE_FAILED));
