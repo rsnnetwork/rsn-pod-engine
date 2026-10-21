@@ -54,10 +54,9 @@ describe('Entities: the routes and the coming-soon page', () => {
     expect(app).toMatch(/<Route path="\/entities" element=\{<EntitiesPage \/>\} \/>/);
     expect(app).toMatch(/<Route path="\/entities\/:entityId" element=\{<ProtectedRoute><><EntityProfilePage \/><ToastContainer \/><\/><\/ProtectedRoute>\} \/>/);
   });
-  it('the coming-soon page no longer has an entities kind', () => {
-    const soon = read('features/reason/shell/ComingSoonPage.tsx');
-    expect(soon).not.toMatch(/entities:|Entities matter\.|Organisations come next\./);
-    expect(soon).toMatch(/introductions: \{/);
+  it('the coming-soon page is gone (Entities is real, Introductions went), so nothing can route to it', () => {
+    expect(fs.existsSync(path.join(src, 'features/reason/shell/ComingSoonPage.tsx'))).toBe(false);
+    expect(read('App.tsx')).not.toMatch(/ComingSoonPage|Entities matter\./);
   });
 });
 

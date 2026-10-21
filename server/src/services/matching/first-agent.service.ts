@@ -25,10 +25,12 @@ import * as agentRepo from './agent.repo';
 import { recomputeAgent } from './agent-matching.service';
 import { designationsWanted, ROLE_TAXONOMY } from './intent-signals';
 import { expandWantTags } from './want-synonyms';
-import { MEET_SIGNALS, INTENT_SIGNALS } from './option-signals';
+import { MEET_SIGNALS, INTENT_SIGNALS, MEET_V2_SIGNALS } from './option-signals';
+import { MEET_V1_TO_V2, isMeetV1Key, isMeetV2Key } from '../onboarding/answers-v2.map';
+import { clipAtWord } from '../people/text';
 import logger from '../../config/logger';
-import type { MatchingAgent } from './agent.repo';
-import type { MeetKey, IntentKey } from '@rsn/shared';
+import type { MatchingAgent, OnboardingAgentRef } from './agent.repo';
+import type { MeetKey, IntentKey, MeetV2Key, OnboardingV2SearchChange } from '@rsn/shared';
 
 /** One standing search to create. */
 export interface AgentPlan {
@@ -312,6 +314,143 @@ export async function createAgentsFromAnswers(
     return made;
   } catch (err) {
     logger.error({ err, userId }, 'could not create searches from answers');
+    return [];
+  }
+}
+
+// ─── Onboarding v2 (Shradha's brief, 19 Oct 2026) ───────────────────────────
+//
+// One search per kind of person ticked, all searching (the member chose at
+// most three on purpose, as in v1), plus one for "in my own words" in their
+// own words. Searches are matched to answers by the KEY recorded on them
+// (intent.meetKey), never by label, which the member may reword. A search v1
+// made counts for the v2 kind it maps to, so moving to v2 with the same
+// answers makes no duplicates. When the answers change, a search onboarding
+// made whose key is gone is paused, never deleted, and marked as paused by
+// onboarding (intent.pausedBy); only a search carrying that mark is resumed
+// when its key comes back. A search the member paused or archived themselves
+// stays as they left it, whatever a confirm says.
+
+const V2_SOURCE = 'onboarding_v2';
+/** matching_agents.label is VARCHAR(80). */
+const LABEL_MAX = 80;
+
+/** Which v2 kind a search onboarding made stands for, or null when none. */
+function v2KeyOf(a: OnboardingAgentRef): MeetV2Key | null {
+  const key = typeof a.intent.meetKey === 'string' ? a.intent.meetKey : '';
+  if (a.intent.source === V2_SOURCE) return isMeetV2Key(key) ? key : null;
+  if (a.intent.source === 'tickbox_v1') return isMeetV1Key(key) ? MEET_V1_TO_V2[key] : null;
+  return null;
+}
+
+const ownWordsLabel = (words: string) => title(clipAtWord(words, LABEL_MAX) ?? words);
+
+export interface V2SearchPlan {
+  create: AgentPlan[];
+  resume: string[];
+  reword: Array<{ id: string; label: string; wantText: string; intent: Record<string, unknown> }>;
+  pause: string[];
+}
+
+/** Pure: what a member's v2 meet answers do to the searches onboarding already made for them. */
+export function planSearchesFromV2Answers(
+  meetKeys: MeetV2Key[],
+  meetOther: string | null,
+  existing: OnboardingAgentRef[],
+): V2SearchPlan {
+  const own = (meetOther ?? '').trim();
+  const wanted = new Set<MeetV2Key>(meetKeys.filter(k => k !== 'meet_other' || own.length > 0));
+  const covered = new Set<MeetV2Key>();
+  const plan: V2SearchPlan = { create: [], resume: [], reword: [], pause: [] };
+
+  for (const a of existing) {
+    // Only searches onboarding made are its to pause or reword.
+    if (a.intent.source !== V2_SOURCE && a.intent.source !== 'tickbox_v1') continue;
+    const key = v2KeyOf(a);
+    if (!key || !wanted.has(key)) {
+      if (a.status === 'active') plan.pause.push(a.id);
+      continue;
+    }
+    covered.add(key);
+    if (a.status === 'archived') continue;
+    if (key === 'meet_other' && a.intent.text !== own) {
+      plan.reword.push({
+        id: a.id, label: ownWordsLabel(own), wantText: own,
+        intent: { source: V2_SOURCE, meetKey: 'meet_other', text: own },
+      });
+    }
+    // Only what onboarding itself paused: never undo the member's own pause.
+    if (a.status === 'paused' && a.intent.pausedBy === 'onboarding') plan.resume.push(a.id);
+  }
+
+  for (const key of wanted) {
+    if (covered.has(key)) continue;
+    if (key === 'meet_other') {
+      plan.create.push({
+        label: ownWordsLabel(own), wantText: own,
+        // The scorer expands their words itself; nothing structured to store.
+        matchingTags: [],
+        status: 'active',
+        intent: { source: V2_SOURCE, meetKey: 'meet_other', text: own },
+      });
+      continue;
+    }
+    const sig = MEET_V2_SIGNALS[key];
+    plan.create.push({
+      label: sig.agentLabel,
+      wantText: sig.wantText,
+      matchingTags: expandWantTags([...sig.tags]),
+      status: 'active',
+      intent: { source: V2_SOURCE, meetKey: key },
+    });
+  }
+  return plan;
+}
+
+export interface V2SearchResult {
+  agent: MatchingAgent;
+  change: OnboardingV2SearchChange;
+}
+
+/**
+ * Apply a member's v2 answers to their searches: pause, reword, resume and
+ * create as planned, then score every search that is now searching with new
+ * words or after a pause. Inserting a row runs no search, which is why the
+ * migration-seeded ones all read "0 potential matches" on 3 Aug.
+ *
+ * Never throws: a member must not lose the onboarding they just finished
+ * because a search could not be made or scored.
+ */
+export async function syncSearchesFromV2Answers(
+  userId: string,
+  meetKeys: MeetV2Key[],
+  meetOther: string | null,
+): Promise<V2SearchResult[]> {
+  try {
+    const plan = planSearchesFromV2Answers(meetKeys, meetOther, await agentRepo.listOnboardingAgents(userId));
+    // One entry per search: its final state, and the change that matters most.
+    const results = new Map<string, V2SearchResult>();
+    const note = (agent: MatchingAgent | null, change: OnboardingV2SearchChange) => {
+      if (!agent) return;
+      const prior = results.get(agent.id)?.change;
+      results.set(agent.id, { agent, change: prior === 'updated' ? 'updated' : change });
+    };
+
+    for (const id of plan.pause) note(await agentRepo.pauseForOnboarding(id, userId), 'paused');
+    for (const r of plan.reword) note(await agentRepo.rewordAgent(r.id, userId, r), 'updated');
+    for (const id of plan.resume) note(await agentRepo.setStatus(id, userId, 'active'), 'resumed');
+    for (const p of plan.create) note(await agentRepo.createAgent(userId, p), 'created');
+
+    const out = [...results.values()];
+    for (const r of out) {
+      if (r.change === 'paused' || r.agent.status !== 'active') continue;
+      await recomputeAgent(r.agent).catch(err =>
+        logger.warn({ err, agentId: r.agent.id }, 'search will be scored on next open'));
+    }
+    if (out.length) logger.info({ userId, changes: out.map(r => `${r.change}:${r.agent.label}`) }, 'searches synced from onboarding v2 answers');
+    return out;
+  } catch (err) {
+    logger.error({ err, userId }, 'could not sync searches from onboarding v2 answers');
     return [];
   }
 }

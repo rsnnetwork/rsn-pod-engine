@@ -1,4 +1,5 @@
 import { clip, clipAtWord } from '../../../services/people/text';
+import { canBring, clip as sharedClip, usableAnswer } from '@rsn/shared';
 
 // A lone surrogate is half of an emoji. It is not valid text and shows as a replacement mark.
 // Encoding to UTF-8 and back turns each one into U+FFFD, so a well-formed string survives it unchanged.
@@ -127,5 +128,36 @@ describe('clipAtWord', () => {
     expect(clipAtWord('alpha beta', Number.NaN)).toBeNull();
     expect(clipAtWord('alpha beta', 1)).toBe('…');
     expect(clipAtWord('a', 1)).toBe('a');
+  });
+});
+
+// 21 Oct 2026: a member's answer is shown by one rule, kept in @rsn/shared, on the brief another member reads and on
+// the member's own profile. clip lives there too; this module hands it on to the server code that imports it here.
+describe('one rule for a shown answer, shared with the pages', () => {
+  it('is the very clip the server has always used', () => {
+    expect(clip).toBe(sharedClip);
+  });
+
+  it('usableAnswer: clipped to 160 characters, and nothing when no letter or digit is left', () => {
+    const long = 'a'.repeat(161);
+    expect(usableAnswer(long)).toBe(`${'a'.repeat(159)}…`);
+    expect(characters(usableAnswer(long)!)).toBe(160);
+    expect(usableAnswer('a'.repeat(160))).toBe('a'.repeat(160));
+    for (const blank of ['.', '…', '!!!', ' . . . ', '-', '🙂', '   ', '', null, undefined]) {
+      expect({ blank, shown: usableAnswer(blank) }).toEqual({ blank, shown: null });
+    }
+    expect(usableAnswer(' Intros to buyers. ')).toBe('Intros to buyers.');
+    expect(usableAnswer('42')).toBe('42');
+    expect(usableAnswer('Ölçek')).toBe('Ölçek');
+  });
+
+  it('canBring: the offer, or the expertise when the offer is blank or has nothing in it', () => {
+    expect(canBring({ whatICanHelpWith: 'Intros to buyers', expertiseText: 'pricing' })).toBe('Intros to buyers');
+    expect(canBring({ whatICanHelpWith: '.', expertiseText: ' pricing ' })).toBe('pricing');
+    expect(canBring({ whatICanHelpWith: '   ', expertiseText: 'b'.repeat(161) })).toBe(`${'b'.repeat(159)}…`);
+    expect(canBring({ whatICanHelpWith: '…', expertiseText: '!!' })).toBeNull();
+    expect(canBring({ whatICanHelpWith: null, expertiseText: null })).toBeNull();
+    expect(canBring(null)).toBeNull();
+    expect(canBring(undefined)).toBeNull();
   });
 });

@@ -12,12 +12,14 @@ import { useNavigate } from 'react-router-dom';
 import api from '@/lib/api';
 import { isAdmin } from '@/lib/utils';
 import { E } from '@/realtime/entities';
+import { linkedinHref } from './linkedin-href';
 
 interface JoinRequest {
   id: string;
   fullName: string;
   email: string;
-  linkedinUrl: string;
+  /** NULL when the applicant gave none (LinkedIn is optional on the form); older rows may hold an empty string. */
+  linkedinUrl: string | null;
   reason: string;
   status: 'pending' | 'approved' | 'declined';
   reviewedAt: string | null;
@@ -294,6 +296,7 @@ export default function AdminJoinRequestsPage() {
           {requests.map((r) => {
             const tier = r.status === 'approved' && !r.hasActivated ? getActivationTier(r.daysSinceApproval) : null;
             const note = accountNote(r);
+            const linkedin = linkedinHref(r.linkedinUrl);
             // Locked while this row is being reviewed, so a double click is one approval.
             const reviewing = reviewMutation.isPending && reviewMutation.variables?.id === r.id;
             const isSelectable = (statusFilter === 'pending' && r.status === 'pending')
@@ -339,9 +342,13 @@ export default function AdminJoinRequestsPage() {
                       )}
                       <p className="text-sm text-gray-600 line-clamp-2 mb-2">{r.reason}</p>
                       <div className="flex items-center gap-4 text-xs text-gray-400 flex-wrap">
-                        <a href={r.linkedinUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-blue-500 hover:text-blue-600">
-                          <ExternalLink className="h-3 w-3" /> LinkedIn
-                        </a>
+                        {linkedin ? (
+                          <a href={linkedin} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-blue-500 hover:text-blue-600">
+                            <ExternalLink className="h-3 w-3" /> LinkedIn
+                          </a>
+                        ) : (
+                          <span className="inline-flex items-center gap-1">No LinkedIn</span>
+                        )}
                         <span className="inline-flex items-center gap-1">
                           <Clock className="h-3 w-3" /> {new Date(r.createdAt).toLocaleDateString()}
                         </span>
@@ -508,7 +515,7 @@ export default function AdminJoinRequestsPage() {
           <div className="space-y-4">
             <p className="text-sm text-gray-600">
               {reviewModal.decision === 'approved'
-                ? `Approve ${reviewModal.request.fullName}'s request to join RSN?`
+                ? `Approve ${reviewModal.request.fullName}'s request to join REASON?`
                 : `Decline ${reviewModal.request.fullName}'s request?`
               }
             </p>

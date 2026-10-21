@@ -9,8 +9,8 @@ import { cleanup, cleanupByPrefix, APP, SERVER } from '../helpers/live-ui';
 // quietly killed the first's, so the first email said "already used". The
 // approval now claims only a pending request, and the button locks.
 //
-// The profile link is deliberately not a LinkedIn /in/ URL, so nothing here
-// spends a paid ScrapingDog lookup.
+// No LinkedIn address is given (it is optional since 21 Oct 2026), so nothing
+// here spends a paid ScrapingDog lookup.
 
 let admin: TestUser;
 const emails: string[] = [];
@@ -27,7 +27,7 @@ async function api(method: string, path: string, body?: unknown, token?: string)
 async function apply(tag: string): Promise<{ id: string; email: string }> {
   const email = `e2etest-dblapprove-${tag}-${Date.now()}@example.com`;
   emails.push(email);
-  const jr = await api('POST', '/join-requests', { fullName: 'Double Approve Test', email, linkedinUrl: 'https://example.com/not-linkedin', reason: 'double click test' });
+  const jr = await api('POST', '/join-requests', { fullName: 'Double Approve Test', email, reason: 'double click test' });
   expect(jr.status, JSON.stringify(jr.json)).toBe(201);
   return { id: jr.json.data.id, email };
 }

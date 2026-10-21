@@ -1,19 +1,59 @@
 // server/src/__tests__/client/reason-m1-shell.test.ts
 import * as fs from 'fs';
 import * as path from 'path';
+import * as ts from 'typescript';
 
 // Working-tree files are CRLF on Windows; normalise so patterns match either way.
 const read = (rel: string) => fs.readFileSync(path.join(__dirname, '../../../../client/src', rel), 'utf8').replace(/\r\n/g, '\n');
 
 describe('REASON shell (milestone 1)', () => {
-  it('desktop navigation follows the prototype order', () => {
+  it('desktop navigation follows the prototype order, less the Introductions tab the client asked to drop (19 Oct)', () => {
     const labels = [...read('features/reason/shell/nav.ts').matchAll(/label: '([^']+)'/g)].map(m => m[1]);
-    expect(labels).toEqual(['For You', 'People', 'Entities', 'Circles', 'Pods', 'Events', 'Messages', 'Introductions', 'Profile', 'Settings', 'Support']);
+    expect(labels).toEqual(['For You', 'People', 'Entities', 'Circles', 'Pods', 'Events', 'Messages', 'Profile', 'Settings', 'Support']);
   });
   it('the phone bar is For You, People, Events, Messages and More; More holds the rest', () => {
     const nav = read('features/reason/shell/nav.ts');
     expect(nav).toMatch(/MOBILE_PRIMARY[^=]*=\s*\['foryou', 'people', 'events', 'messages'\]/);
-    expect(nav).toMatch(/MOBILE_MORE[^=]*=\s*\['entities', 'circles', 'pods', 'introductions', 'settings', 'support'\]/);
+    expect(nav).toMatch(/MOBILE_MORE[^=]*=\s*\['entities', 'circles', 'pods', 'settings', 'support'\]/);
+  });
+  // nav.ts, run: the lists and the lookup as the sidebar, the rail, the phone bar and the More sheet read them.
+  describe('without the Introductions tab (19 Oct)', () => {
+    const loadNav = () => {
+      const source = fs.readFileSync(path.join(__dirname, '../../../../client/src/features/reason/shell/nav.ts'), 'utf8');
+      const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2019 } });
+      const mod: { exports: Record<string, unknown> } = { exports: {} };
+      new Function('module', 'exports', 'require', outputText)(mod, mod.exports, require);
+      return mod.exports as {
+        MAIN_NAV: Array<{ key: string; match: (p: string) => boolean }>;
+        SUB_NAV: Array<{ key: string; match: (p: string) => boolean }>;
+        NAV_BY_KEY: Record<string, { match: (p: string) => boolean } | undefined>;
+        MOBILE_PRIMARY: string[];
+        MOBILE_MORE: string[];
+      };
+    };
+
+    it('is in neither list, has no entry in the lookup, and no path marks anything as current', () => {
+      const nav = loadNav();
+      expect(nav.MAIN_NAV.map((i) => i.key)).toEqual(['foryou', 'people', 'entities', 'circles', 'pods', 'events', 'messages']);
+      expect(nav.MOBILE_MORE).toEqual(['entities', 'circles', 'pods', 'settings', 'support']);
+      expect(nav.NAV_BY_KEY.introductions).toBeUndefined();
+      for (const url of ['/introductions', '/introductions/anything']) {
+        expect({ url, current: [...nav.MAIN_NAV, ...nav.SUB_NAV].filter((i) => i.match(url)).map((i) => i.key) }).toEqual({ url, current: [] });
+      }
+    });
+    it('every key the phone bar and the More sheet draw has an entry to draw it from (a key with none crashes the phone bar)', () => {
+      const nav = loadNav();
+      for (const key of [...nav.MOBILE_PRIMARY, ...nav.MOBILE_MORE]) expect({ key, entry: typeof nav.NAV_BY_KEY[key]?.match }).toEqual({ key, entry: 'function' });
+    });
+    it('is not a navigation key either, so the compiler refuses any list that names it (its icon may stay in the icon set)', () => {
+      expect(read('features/reason/shell/nav.ts')).toMatch(/export type NavKey = Exclude<ReasonIconName, 'more' \| 'introductions'>;/);
+    });
+    // Introductions went (Task 4) and Entities became a real page (Task 11), so the coming-soon page had nothing left
+    // to show and is gone, with every route and import of it.
+    it('the coming-soon page is gone: nothing in the app imports or routes to it', () => {
+      expect(fs.existsSync(path.join(__dirname, '../../../../client/src/features/reason/shell/ComingSoonPage.tsx'))).toBe(false);
+      expect(read('App.tsx')).not.toMatch(/ComingSoonPage/);
+    });
   });
   it('the tablet rail keeps its icons (the prototype hid them) and names each one', () => {
     const side = read('features/reason/shell/ShellSidebar.tsx');
@@ -38,7 +78,7 @@ describe('REASON shell (milestone 1)', () => {
     expect(shell).toMatch(/Complete your profile/);
     expect(shell).toMatch(/to="\/onboarding"/);
   });
-  it('App uses the new shell, For You at /, a full-screen Human Profile, and the coming-soon pages', () => {
+  it('App uses the new shell, For You at /, a full-screen Human Profile, and the Entities pages', () => {
     const app = read('App.tsx');
     expect(app).toMatch(/<ProtectedRoute><ReasonShell \/><\/ProtectedRoute>/);
     expect(app).toMatch(/<Route path="\/" element=\{<ForYouPage \/>\} \/>/);
@@ -47,7 +87,14 @@ describe('REASON shell (milestone 1)', () => {
     expect(app).toMatch(/<Route path="\/entities" element=\{<EntitiesPage \/>\} \/>/);
     expect(app).toMatch(/<Route path="\/entities\/:entityId" element=\{<ProtectedRoute><><EntityProfilePage \/><ToastContainer \/><\/><\/ProtectedRoute>\} \/>/);
     expect(app).not.toMatch(/kind="entities"/);
-    expect(app).toMatch(/<ComingSoonPage kind="introductions" \/>/);
+  });
+  it('the old /introductions address sends a member to For You, with no page left behind it (a bookmark or an old link must not land on a 404)', () => {
+    const app = read('App.tsx');
+    expect(app).toMatch(/<Route path="\/introductions" element=\{<Navigate to="\/" replace \/>\} \/>/);
+    expect(app).not.toMatch(/kind="introductions"/);
+    // The route stays inside the signed-in group: someone who is signed out is asked to sign in, and then lands on For You.
+    const shellRoutes = app.slice(app.indexOf('<ReasonShell />'), app.indexOf('{/* Protected without layout'));
+    expect(shellRoutes).toContain('path="/introductions"');
   });
 });
 

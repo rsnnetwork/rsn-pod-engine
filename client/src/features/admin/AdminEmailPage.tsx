@@ -14,7 +14,7 @@ const EMAIL_TYPE_LABELS: Record<string, { label: string; description: string }> 
   magic_link:             { label: 'Magic Link Login', description: 'Sent when a user requests a login link' },
   invite_pod:             { label: 'Pod Invite', description: 'Sent when a user is invited to a pod' },
   invite_session:         { label: 'Event Invite', description: 'Sent when a user is invited to an event' },
-  invite_platform:        { label: 'Platform Invite', description: 'Sent when a new user is invited to RSN' },
+  invite_platform:        { label: 'Platform Invite', description: 'Sent when a new user is invited to REASON' },
   recap:                  { label: 'Event Recap', description: 'Sent after an event is completed with match results' },
   join_request_approved:  { label: 'Join Request Approved', description: 'Sent when a join request is approved by admin' },
   join_request_declined:  { label: 'Join Request Declined', description: 'Sent when a join request is declined' },

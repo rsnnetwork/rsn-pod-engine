@@ -30,7 +30,13 @@ jest.mock('../../../services/onboarding/stage-events.repo', () => ({
   __esModule: true,
 }));
 
-import { findLinkedinPhoto, useLinkedinPhoto } from '../../../services/onboarding/linkedin-photo';
+const mockShownPrefill = jest.fn();
+jest.mock('../../../services/onboarding/linkedin-v2', () => ({
+  shownPrefill: (...a: unknown[]) => mockShownPrefill(...a),
+  __esModule: true,
+}));
+
+import { findLinkedinPhoto, useLinkedinPhoto, useShownLinkedinPhoto } from '../../../services/onboarding/linkedin-photo';
 
 const OWN = 'https://media.licdn.com/dms/image/own.jpg';
 const PRELOAD = 'https://media.licdn.com/dms/image/preload.jpg';
@@ -99,5 +105,44 @@ describe('useLinkedinPhoto — "that\'s me"', () => {
     mockCapture.mockResolvedValue(false);
     await expect(useLinkedinPhoto('u1')).resolves.toBe('failed');
     expect(mockRecord).toHaveBeenCalledWith('u1', 'photo_failed', { source: 'linkedin_confirmed' }, expect.any(Number));
+  });
+});
+
+// Fix round 1 (M1, 21 Oct 2026): onboarding v2's "Keep this photo" makes the
+// photo the member was SHOWN theirs: the one in the onboarding state's prefill
+// for the address on their profile. findLinkedinPhoto above takes their own
+// cached photo for any address and any age, which could be a photo they never
+// saw on that screen.
+describe('useShownLinkedinPhoto — the photo the member was shown', () => {
+  const prefill = (photoUrl: string | null) => ({
+    displayName: 'Ana', photoUrl, jobTitle: null, company: null, industry: null, location: null, selfGuess: null,
+  });
+
+  it("captures exactly the prefill's photo", async () => {
+    mockShownPrefill.mockResolvedValue(prefill(OWN));
+    mockCapture.mockResolvedValue(true);
+    await expect(useShownLinkedinPhoto('u1')).resolves.toBe('done');
+    expect(mockShownPrefill).toHaveBeenCalledWith('u1');
+    expect(mockCapture).toHaveBeenCalledWith('u1', OWN);
+    expect(mockRecord).toHaveBeenCalledWith('u1', 'photo_captured', { source: 'linkedin_confirmed' }, expect.any(Number));
+  });
+
+  it('nothing shown, nothing applied: no fallback to any other photo', async () => {
+    mockShownPrefill.mockResolvedValue(null);
+    await expect(useShownLinkedinPhoto('u1')).resolves.toBe('none');
+    mockShownPrefill.mockResolvedValue(prefill(null));
+    await expect(useShownLinkedinPhoto('u1')).resolves.toBe('none');
+    expect(mockCapture).not.toHaveBeenCalled();
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it("'failed' when the download does not work", async () => {
+    mockShownPrefill.mockResolvedValue(prefill(OWN));
+    mockCapture.mockResolvedValue(false);
+    await expect(useShownLinkedinPhoto('u1')).resolves.toBe('failed');
+  });
+
+  it('takes no URL either', () => {
+    expect(useShownLinkedinPhoto.length).toBe(1);
   });
 });

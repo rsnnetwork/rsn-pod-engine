@@ -40,8 +40,30 @@ export const ONBOARDING_LIMITS = _LIMITS;
 export const ONBOARDING_STEPS = _STEPS;
 export const labelFor = _labelFor;
 export const shortLabelFor = _shortLabelFor;
+// Onboarding v2 (Shradha's brief, 19 Oct 2026), beside version 1, which is
+// untouched. Values get their own named exports for the same Rollup reason.
+export * from './onboarding/options-v2';
+import {
+  ONBOARDING_V2_MEET as _V2_MEET, ONBOARDING_V2_FIND as _V2_FIND, ONBOARDING_V2_OFFER as _V2_OFFER,
+  ONBOARDING_V2_SELF as _V2_SELF, ONBOARDING_V2_COPY as _V2_COPY, ONBOARDING_V2_OTHER_KEYS as _V2_OTHER_KEYS,
+  ONBOARDING_V2_LIMITS as _V2_LIMITS, ONBOARDING_V2_STEPS as _V2_STEPS,
+} from './onboarding/options-v2';
+export const ONBOARDING_V2_MEET = _V2_MEET;
+export const ONBOARDING_V2_FIND = _V2_FIND;
+export const ONBOARDING_V2_OFFER = _V2_OFFER;
+export const ONBOARDING_V2_SELF = _V2_SELF;
+export const ONBOARDING_V2_COPY = _V2_COPY;
+export const ONBOARDING_V2_OTHER_KEYS = _V2_OTHER_KEYS;
+export const ONBOARDING_V2_LIMITS = _V2_LIMITS;
+export const ONBOARDING_V2_STEPS = _V2_STEPS;
 export * from './types/post-event-message';
 export * from './identity/displayName';
+// A member's own words, as a page shows them (21 Oct 2026): one rule for the brief another member reads and for your
+// own profile. Real VALUES (functions) the client calls, so each has its own named export, same as OPENINGS above.
+import { canBring as _canBring, clip as _clip, usableAnswer as _usableAnswer } from './people/text';
+export const clip = _clip;
+export const usableAnswer = _usableAnswer;
+export const canBring = _canBring;
 export * from './types/reason';
 // Real VALUES the client renders (For You, the Human Profile), so each needs
 // its own statically analysable named export, same as OPENINGS above.

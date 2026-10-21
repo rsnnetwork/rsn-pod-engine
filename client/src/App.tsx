@@ -14,7 +14,6 @@ function LiveRedirectCompat() {
 }
 import { useAuthStore } from '@/stores/authStore';
 import ReasonShell from '@/features/reason/shell/ReasonShell';
-import ComingSoonPage from '@/features/reason/shell/ComingSoonPage';
 import ForYouPage from '@/features/reason/for-you/ForYouPage';
 import HumanProfilePage from '@/features/reason/human/HumanProfilePage';
 import EntitiesPage from '@/features/reason/entities/EntitiesPage';
@@ -24,6 +23,7 @@ import LoginPage from '@/features/auth/LoginPage';
 import VerifyPage from '@/features/auth/VerifyPage';
 import ProfilePage from '@/features/profile/ProfilePage';
 import PublicProfilePage from '@/features/profile/PublicProfilePage';
+import YourProfilePage from '@/features/reason/profile/YourProfilePage';
 import PodsPage from '@/features/pods/PodsPage';
 import PodDetailPage from '@/features/pods/PodDetailPage';
 import SessionsPage from '@/features/sessions/SessionsPage';
@@ -211,8 +211,11 @@ export default function App() {
       <Route element={<ProtectedRoute><ReasonShell /></ProtectedRoute>}>
         <Route path="/" element={<ForYouPage />} />
         <Route path="/entities" element={<EntitiesPage />} />
-        <Route path="/introductions" element={<ComingSoonPage kind="introductions" />} />
-        <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/introductions" element={<Navigate to="/" replace />} />
+        {/* 21 Oct 2026: your profile the way others see it; the form it used to be is one tap away at /profile/edit,
+            which a fixed path ranks ahead of /profile/:userId. */}
+        <Route path="/profile" element={<YourProfilePage />} />
+        <Route path="/profile/edit" element={<ProfilePage />} />
         <Route path="/profile/:userId" element={<PublicProfilePage />} />
         <Route path="/pods" element={<PodsPage />} />
         <Route path="/pods/:podId" element={<PodDetailPage />} />

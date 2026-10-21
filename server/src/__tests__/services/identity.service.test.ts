@@ -104,11 +104,29 @@ describe('Identity Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 });
 
       const user = await identityService.getUserById('user-123');
-      expect(user).toEqual(mockUser);
+      expect(user).toEqual({ ...mockUser, bannerUrl: null });
       expect(mockQuery).toHaveBeenCalledWith(
         expect.stringContaining('FROM users WHERE id ='),
         ['user-123']
       );
+    });
+
+    // 21 Oct 2026: the banner is an address, built from when it last changed, and only when a picture is kept.
+    it('gives the banner\'s address when there is a picture, and null when there is none', async () => {
+      const at = new Date('2026-10-21T09:00:00.000Z');
+      mockQuery.mockResolvedValueOnce({ rows: [{ ...mockUser, bannerUpdatedAt: at }], rowCount: 1 });
+      const withOne = await identityService.getUserById('user-123');
+      expect(withOne.bannerUrl).toBe(`http://localhost:3001/api/users/user-123/banner?v=${at.getTime()}`);
+      // The time is read only to build the address; it is not a field of the member.
+      expect(withOne).not.toHaveProperty('bannerUpdatedAt');
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ ...mockUser, bannerUpdatedAt: null }], rowCount: 1 });
+      expect((await identityService.getUserById('user-123')).bannerUrl).toBeNull();
+
+      // The time only counts while the picture is there, and the picture itself is never read here.
+      const sql = mockQuery.mock.calls[0][0] as string;
+      expect(sql).toMatch(/CASE WHEN banner_blob IS NOT NULL THEN banner_updated_at END AS "bannerUpdatedAt"/);
+      expect(sql).not.toMatch(/\bbanner_blob AS\b|,\s*banner_blob\s*,/);
     });
 
     it('should throw NotFoundError when user not found', async () => {
@@ -175,7 +193,8 @@ describe('Identity Service', () => {
         lastName: 'User',
       });
 
-      expect(user).toEqual(mockUser);
+      // A new member has no banner yet.
+      expect(user).toEqual({ ...mockUser, bannerUrl: null });
       // Should have called query at least 5 times
       expect(mockQuery).toHaveBeenCalledTimes(5);
     });
@@ -588,6 +607,78 @@ describe('Identity Service', () => {
     });
   });
 
+  // 21 Oct 2026: LinkedIn is optional on the request form, so an approved request can have NO address
+  // (NULL, or an empty string in older rows). First sign-in seeds the new account from the request, and
+  // must still create it, with no LinkedIn on it and no lookup result to copy.
+  describe('first sign-in of an applicant who gave no LinkedIn address', () => {
+    const insertUsers = () => mockQuery.mock.calls.find((c) => /INSERT INTO users/.test(String(c[0])));
+
+    function mockNoLinkedinChain(linkedinUrl: string | null): void {
+      mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{ id: 'ml-1', email: 'nolink@example.com', expires_at: new Date(Date.now() + 60 * 60 * 1000), used_at: null }],
+          rowCount: 1,
+        }) // 1 SELECT magic_links
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 2 UPDATE used_at
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 3 getUserByEmail (verify) → null
+        .mockResolvedValueOnce({
+          rows: [{ full_name: 'No Link Person', linkedin_url: linkedinUrl, enriched: null, reason: 'I run a studio' }],
+          rowCount: 1,
+        }) // 4 getApprovedJoinRequestSeed → approved request with no address
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 5 getUserByEmail (createUser) → null
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 6 INSERT users
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 7 INSERT subscription
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 8 INSERT entitlements
+        .mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 }); // 9 getUserById → created user
+    }
+
+    it.each([
+      ['NULL', null],
+      ['an empty string', ''],
+      ['only spaces', '   '],
+    ])('verifyMagicLink creates the account with no LinkedIn when the request holds %s', async (_what, stored) => {
+      mockNoLinkedinChain(stored);
+
+      const result = await identityService.verifyMagicLink('some-token');
+
+      expect(result.accessToken).toBeDefined();
+      const [, params] = insertUsers()!;
+      // id, email, display_name, first_name, last_name, linkedin_url
+      expect(params.slice(1)).toEqual(['nolink@example.com', 'No Link Person', 'No', 'Link Person', null]);
+      expect(enrichRepo.saveEnrichedCandidate).not.toHaveBeenCalled();
+      expect(enrichRepo.setEnrichmentState).not.toHaveBeenCalled();
+    });
+
+    it('still seeds the reason they gave as the first "why I want to meet"', async () => {
+      mockNoLinkedinChain(null);
+      await identityService.verifyMagicLink('some-token');
+      expect(mockQuery).toHaveBeenCalledWith('UPDATE users SET why_i_want_to_meet = $1 WHERE id = $2', ['I run a studio', expect.any(String)]);
+    });
+
+    it('findOrCreateGoogleUser creates the account with no LinkedIn too', async () => {
+      mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+      mockQuery
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 1 getUserByEmail → null (new user)
+        .mockResolvedValueOnce({ rows: [{ id: 'jr-1' }], rowCount: 1 }) // 2 isEmailApproved → approved
+        .mockResolvedValueOnce({
+          rows: [{ full_name: 'No Link Person', linkedin_url: null, enriched: null, reason: null }],
+          rowCount: 1,
+        }) // 3 getApprovedJoinRequestSeed
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 4 INSERT users
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 5 INSERT subscription
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // 6 INSERT entitlements
+        .mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 }); // 7 getUserById
+
+      const result = await identityService.findOrCreateGoogleUser({ email: 'nolink-google@example.com', name: 'No Link Person' });
+
+      expect(result.accessToken).toBeDefined();
+      const [, params] = insertUsers()!;
+      expect(params[params.length - 1]).toBeNull(); // linkedin_url
+      expect(enrichRepo.saveEnrichedCandidate).not.toHaveBeenCalled();
+    });
+  });
+
   describe('findOrCreateGoogleUser (preload copy-forward parity with verifyMagicLink)', () => {
     const enrichedAt = '2026-07-21T09:00:00.000Z';
 
@@ -863,7 +954,7 @@ describe('Identity Service', () => {
       mockQuery.mockResolvedValueOnce({ rows: [mockUser], rowCount: 1 });
 
       const result = await identityService.updateUser('user-123', {});
-      expect(result).toEqual(mockUser);
+      expect(result).toEqual({ ...mockUser, bannerUrl: null });
     });
   });
 

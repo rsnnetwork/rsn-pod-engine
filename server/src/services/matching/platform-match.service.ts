@@ -12,6 +12,11 @@
 // unlocks the DM + conversation), so this service only computes suggestions
 // and composes the introduction.
 //
+// 21 Oct 2026: the one-way rule still decides WHO is shown and how many. Among
+// them, people who would also want to meet the member come first (the onboarding
+// brief's "people you want to meet, who also want to meet you"). Their wants
+// stay private, so that changes the order and nothing else.
+//
 // Deliberately no AI (June 19 doc: "No AI required initially. Just
 // matching."): designation buckets + token overlap over the intent columns
 // the chatbot onboarding already fills.
@@ -69,6 +74,7 @@ export interface PlatformMatch {
   /** strong clears MATCH_THRESHOLD; close is a near fit, shown labelled so a page is never empty. */
   strength: MatchStrength;
   reason: string;
+  /** Never rises down the list, so it cannot show who was lifted (see scoresShown). */
   score: number;
   /** Where a meeting request between the two stands; null when there is none. */
   pokeStatus?: 'pending' | 'accepted' | null;
@@ -406,6 +412,57 @@ function analyzeWants(
   };
 }
 
+/**
+ * A strong fit both ways. One way is the score the candidate was chosen by: what the member
+ * wants, against who the candidate is and offers. The other way is the same scorer turned round:
+ * what the candidate wants, read off the row already loaded, against who the member is and
+ * offers. The candidate's wants are private (9 Sep 2026), so the answer only orders the list:
+ * it is never worded and never put on a card.
+ *
+ * Someone who passed on the member ("not relevant") is not a mutual fit, whatever their wants
+ * say: they are not lifted, and they keep the place today's order gives them.
+ */
+function isMutualFit(
+  member: IntentProfile,
+  candidate: IntentProfile & { passedOnMember?: boolean | null },
+  oneWayScore: number,
+  generic: Set<string>,
+): boolean {
+  if (candidate.passedOnMember === true) return false;
+  return oneWayScore >= MATCH_THRESHOLD && scoreFit(candidate, member, generic).score >= MATCH_THRESHOLD;
+}
+
+/**
+ * The people already chosen, mutual fits first. Nobody is added or dropped, and within each
+ * group the order is the one they came in, best one-way score first.
+ */
+function mutualFitsFirst<T extends { c: IntentProfile & { passedOnMember?: boolean | null }; fit: { score: number } }>(
+  chosen: T[],
+  member: IntentProfile,
+  generic: Set<string>,
+): T[] {
+  const mutual: T[] = [];
+  const oneWay: T[] = [];
+  for (const x of chosen) {
+    if (isMutualFit(member, x.c, x.fit.score, generic)) mutual.push(x);
+    else oneWay.push(x);
+  }
+  return [...mutual, ...oneWay];
+}
+
+/**
+ * The score each card shows, in list order. A lifted card can score lower than the card below
+ * it, and a number that rose down the list would mark every card above it as someone whose
+ * private wants fit the member (ruling R8). So each card shows the highest score among itself
+ * and the cards below it: the numbers never rise, and only a lifted card can show more than its
+ * own. Strength is still read from the card's own score.
+ */
+function scoresShown(ordered: ReadonlyArray<{ fit: { score: number } }>): number[] {
+  const scores = ordered.map(x => x.fit.score);
+  for (let i = scores.length - 2; i >= 0; i--) scores[i] = Math.max(scores[i], scores[i + 1]);
+  return scores;
+}
+
 // ── Data access ──────────────────────────────────────────────────────────────
 
 const PROFILE_COLUMNS = `
@@ -429,6 +486,15 @@ export async function loadProfile(userId: string): Promise<(IntentProfile & { on
   return r.rows[0] ?? null;
 }
 
+/** A candidate as loadCandidates reads them. */
+type CandidateRow = IntentProfile & {
+  pokeStatus: 'pending' | 'accepted' | null;
+  pokeSentByOwner: boolean | null;
+  saved: boolean | null;
+  /** They passed on the member. Only keeps them from being lifted as a mutual fit; never on a card. */
+  passedOnMember: boolean | null;
+};
+
 /**
  * Candidates someone can be matched with: active, onboarded, not blocked, not
  * already met, not turned down, and not passed on. Someone they have ASKED
@@ -436,18 +502,13 @@ export async function loadProfile(userId: string): Promise<(IntentProfile & { on
  * the person quietly disappearing (22 Sep 2026). Someone they SAVED stays too,
  * carrying that, so the card can show it (5 Oct 2026).
  */
-async function loadCandidates(userId: string): Promise<(IntentProfile & {
-  pokeStatus: 'pending' | 'accepted' | null;
-  pokeSentByOwner: boolean | null;
-  saved: boolean | null;
-})[]> {
-  const r = await query<IntentProfile & {
-    pokeStatus: 'pending' | 'accepted' | null; pokeSentByOwner: boolean | null; saved: boolean | null;
-  }>(
+async function loadCandidates(userId: string): Promise<CandidateRow[]> {
+  const r = await query<CandidateRow>(
     `SELECT ${PROFILE_COLUMNS},
             pk.status AS "pokeStatus",
             (pk.sender_id = $1) AS "pokeSentByOwner",
-            (pr.response = 'saved') AS "saved"
+            (pr.response = 'saved') AS "saved",
+            (prb.response = 'passed') AS "passedOnMember"
      FROM users u
      LEFT JOIN LATERAL (
        SELECT p2.status, p2.sender_id
@@ -459,6 +520,9 @@ async function loadCandidates(userId: string): Promise<(IntentProfile & {
         LIMIT 1
      ) pk ON TRUE
      LEFT JOIN person_responses pr ON pr.user_id = $1 AND pr.target_user_id = u.id
+     -- 21 Oct 2026: their own response to the member. A Pass there only stops them from
+     -- being lifted as someone who would also want to meet the member; it hides nobody.
+     LEFT JOIN person_responses prb ON prb.user_id = u.id AND prb.target_user_id = $1
      WHERE u.id <> $1
        AND u.status = 'active'
        AND u.onboarding_completed = true
@@ -495,7 +559,9 @@ async function loadCandidates(userId: string): Promise<(IntentProfile & {
        AND NOT EXISTS (
          SELECT 1 FROM user_blocks b
          WHERE (b.blocker_id = $1 AND b.blocked_id = u.id)
-            OR (b.blocker_id = u.id AND b.blocked_id = $1))`,
+            OR (b.blocker_id = u.id AND b.blocked_id = $1))
+     -- People with the same score keep this order, so the list is the same on every load.
+     ORDER BY u.id`,
     [userId],
   );
   return r.rows;
@@ -543,10 +609,15 @@ export async function getPlatformMatches(
       .map(x => ({ ...x, fit: { ...x.fit, reason: `Close match — ${x.fit.reason}` } }));
     picked = [...picked, ...close];
   }
-  const matches = picked
+  // Who is shown, and how many, is settled here by what the member wants, as before.
+  const chosen = picked
     .sort((a, b) => b.fit.score - a.fit.score)
-    .slice(0, limit)
-    .map((x): PlatformMatch => ({
+    .slice(0, limit);
+  // Only then the other direction: it moves people up the list, never onto it or off it.
+  const ordered = mutualFitsFirst(chosen, me, generic);
+  const scores = scoresShown(ordered);
+  const matches = ordered
+    .map((x, i): PlatformMatch => ({
       userId: x.c.id,
       displayName: x.c.displayName,
       avatarUrl: x.c.avatarUrl,
@@ -560,7 +631,7 @@ export async function getPlatformMatches(
       saved: x.c.saved === true,
       strength: x.fit.score >= MATCH_THRESHOLD ? 'strong' : 'close',
       reason: x.fit.reason,
-      score: Number(x.fit.score.toFixed(3)),
+      score: Number(scores[i].toFixed(3)),
       // Where a request between the two of you got to, so the card can show it
       // rather than offering a button that would be refused.
       pokeStatus: (x.c as { pokeStatus?: 'pending' | 'accepted' | null }).pokeStatus ?? null,

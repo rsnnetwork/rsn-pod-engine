@@ -17,6 +17,7 @@ const full = {
   firstName: 'Dana',
   lastName: 'Sender',
   avatarUrl: 'https://a/x.png',
+  bannerUrl: 'https://api.example.test/api/users/u-1/banner?v=1761040000000',
   bio: 'I build robots.',
   company: 'Acme Robotics',
   jobTitle: 'Senior React Developer',
@@ -66,6 +67,8 @@ describe('toPublicMember', () => {
       firstName: 'Dana',
       lastName: 'Sender',
       avatarUrl: 'https://a/x.png',
+      // The banner is public (21 Oct 2026): it is the top of the profile every member sees.
+      bannerUrl: 'https://api.example.test/api/users/u-1/banner?v=1761040000000',
       bio: 'I build robots.',
       company: 'Acme Robotics',
       jobTitle: 'Senior React Developer',
@@ -101,6 +104,8 @@ describe('toPublicMember', () => {
     expect(pub.languages).toEqual([]);
     expect(pub.professionalRole).toEqual([]);
     expect(pub.bio).toBeNull();
+    // No banner is null, never missing: the page draws the default banner for it.
+    expect(pub).toHaveProperty('bannerUrl', null);
     expect(pub).not.toHaveProperty('email');
   });
 });

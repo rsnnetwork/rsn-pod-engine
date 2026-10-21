@@ -74,10 +74,10 @@ test('join request → approval → LinkedIn card → chat → confirm → agent
   await form.getByPlaceholder('Your full name').fill(FULL_NAME);
   await form.getByPlaceholder('you@example.com').fill(email);
   await form.getByPlaceholder('your-username').fill(LINKEDIN);
-  await form.getByPlaceholder(/Tell us about yourself/i).fill('I want to meet founders working on global health and climate, and I can help with strategy and funding.');
+  await form.getByLabel('Why do you want to join REASON?').fill('I want to meet founders working on global health and climate, and I can help with strategy and funding.');
   await shot(form, 'join-form-filled');
   await form.locator('button[type="submit"]').click();
-  await expect(form.getByText(/Thank you for your interest in RSN/i)).toBeVisible({ timeout: 30_000 });
+  await expect(form.getByText(/Thank you for your interest in REASON/i)).toBeVisible({ timeout: 30_000 });
   await shot(form, 'join-submitted');
   const jr = await pool.query(`SELECT id, status::text, linkedin_url FROM join_requests WHERE lower(email) = $1`, [email.toLowerCase()]);
   expect(jr.rows.length, 'the request is stored').toBe(1);

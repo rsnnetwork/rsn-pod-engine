@@ -22,9 +22,10 @@ describe('REASON look (milestone 1)', () => {
       expect(size).toBeLessThanOrEqual(200 * 1024);
     }
   });
-  it('the logo is the official sheep mark, not a prototype crop', () => {
+  it('the logo is the official sheep mark with its outline grown so the face reads when small (reason-mark-small.png), not the thin-outlined original or a prototype crop', () => {
     const mark = read('src/features/reason/brand/ReasonMark.tsx');
-    expect(mark).toMatch(/\/rsn-sheep\.png/);
+    expect(mark).toMatch(/\/reason-mark-small\.png/);
+    expect(mark).not.toMatch(/\/rsn-sheep\.png/);
     expect(mark).not.toMatch(/logo_mark|logo_crop/);
   });
   it('sheets portal to body, are real dialogs, and respect the iPhone home bar', () => {
@@ -34,6 +35,68 @@ describe('REASON look (milestone 1)', () => {
     expect(sheet).toMatch(/aria-modal="true"/);
     expect(sheet).toMatch(/env\(safe-area-inset-bottom\)/);
     expect(sheet).toMatch(/h-11 w-11/);
+  });
+});
+
+// The top-left mark, drawn to markup (19 Oct feedback: no small "RSN" beside the name, and a sheep whose face
+// still reads at 26 to 40px). What it looks like in a browser is measured in e2e/tests/reason-m1-shell.spec.ts.
+describe('The top-left mark: the sheep and REASON on one line (19 Oct feedback)', () => {
+  const mark = (variant: string) => renderComponent('src/features/reason/brand/ReasonMark.tsx', { '@/lib/utils': joinClasses }, { variant });
+  // What a person reads in the markup: its tags taken out.
+  const words = (html: string) => html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  const VARIANTS = ['full', 'rail', 'mobile'];
+
+  it('is one picture with the accessible name REASON: the image is decoration and the word is written once, with nothing beside it', () => {
+    for (const variant of VARIANTS) {
+      const html = mark(variant);
+      expect(html).toMatch(/^<span /);
+      expect(html).toContain('role="img"');
+      expect(html).toContain('aria-label="REASON"');
+      expect(html.match(/<img /g)).toHaveLength(1);
+      expect(html).toMatch(/<img [^>]*src="\/reason-mark-small\.png"[^>]*alt=""/);
+      expect(words(html)).toBe('REASON');
+      expect(html).not.toMatch(/<small\b/);
+    }
+  });
+
+  it('keeps its boxes (40x30 on the sidebar and the rail, 34x26 on a phone) and the image fills its box', () => {
+    for (const variant of ['full', 'rail']) expect(mark(variant)).toMatch(/<img [^>]*class="[^"]*\bh-\[30px\] w-\[40px\] shrink-0 object-contain\b/);
+    expect(mark('mobile')).toMatch(/<img [^>]*class="[^"]*\bh-\[26px\] w-\[34px\] shrink-0 object-contain\b/);
+  });
+
+  it('is a picture of the shape of those boxes (480x365 against 40x30 and 34x26), so the face is as big as the box allows', () => {
+    const file = fs.readFileSync(path.join(root, 'public/reason-mark-small.png'));
+    // A PNG's width and height are the two big-endian numbers that follow its 8-byte signature and the IHDR tag.
+    const size = { width: file.readUInt32BE(16), height: file.readUInt32BE(20) };
+    expect(size).toEqual({ width: 480, height: 365 });
+    for (const [w, h] of [[40, 30], [34, 26]]) expect(Math.abs(size.width / size.height / (w / h) - 1)).toBeLessThan(0.03);
+  });
+
+  it('puts the sheep and the word on one line, centred on each other (the word is one line box of its own height, not stretched or pushed to an edge)', () => {
+    for (const variant of VARIANTS) {
+      const html = mark(variant);
+      expect(html).toMatch(/^<span class="[^"]*\bflex\b[^"]*\bitems-center\b/);
+      expect(html).not.toMatch(/\bitems-(end|start|baseline|stretch)\b/);
+      expect(html).toMatch(/<strong class="[^"]*\bleading-none\b/);
+    }
+  });
+
+  it('on the rail the word waits for the wide sidebar (981px); on a phone and in the sidebar it is always there', () => {
+    expect(mark('rail')).toMatch(/<strong class="[^"]*\bhidden min-\[981px\]:block\b/);
+    expect(mark('full')).not.toMatch(/\bhidden\b/);
+    expect(mark('mobile')).not.toMatch(/\bhidden\b/);
+  });
+
+  // Measured in a browser at 768px: with px-2 the rail's logo link shrank to the 53px of room the rail has (82px, less its 1px
+  // border and 14px of padding a side), its content box was 37px, and the 40px sheep was squeezed to 37px by max-width: 100%.
+  it('the rail\'s logo link leaves the 40px sheep room: 4px of padding a side up to 980px (40 + 8 = 48px, inside the rail\'s 53px), the wider 8px only in the sidebar', () => {
+    const side = read('src/features/reason/shell/ShellSidebar.tsx');
+    expect(side).toMatch(/<Link to="\/" aria-label="REASON home" className="[^"]*\bpx-1 min-\[981px\]:px-2\b[^"]*">/);
+    const rail = Number(side.match(/w-\[calc\((\d+)px\+env\(safe-area-inset-left\)\)\] flex-col/)?.[1]);
+    const left = Number(side.match(/\bpl-\[calc\((\d+)px\+env\(safe-area-inset-left\)\)\]/)?.[1]);
+    const right = Number(side.match(/\bpr-(\d+(?:\.\d+)?)\b/)?.[1]) * 4;
+    for (const n of [rail, left, right]) expect(Number.isFinite(n)).toBe(true);
+    expect(40 + 2 * 4).toBeLessThanOrEqual(rail - 1 - left - right);
   });
 });
 
@@ -323,8 +386,8 @@ describe('A sheep that cannot load keeps its place, empty (integration pass, pol
   it('every call site gives the sheep both a width and a height of its own, and wherever it changes one at a wider window it changes the other', () => {
     const sites = sourcesUnder('src').flatMap((file) => [...read(file).matchAll(/<ReasonSheep\b([^>]*)>/g)]
       .map((m) => ({ file: file.split('/').pop()!, classes: m[1].match(/\bclassName="([^"]*)"/)?.[1].split(/\s+/) })));
-    // The page head, the two For You empty states, the profile's hero and its notice, the For You list and the coming-soon note:
-    // a count that drops to nothing would make the loop below pass for nothing.
+    // The page head, the two For You empty states, the profile's hero and its notice, the For You list, the entity page's
+    // notice and the empty "Your entities" note: a count that drops to nothing would make the loop below pass for nothing.
     expect(sites.length).toBeGreaterThanOrEqual(7);
     for (const { file, classes } of sites) {
       expect({ file, hasClasses: !!classes }).toEqual({ file, hasClasses: true });

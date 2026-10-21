@@ -449,7 +449,7 @@ export default function MeetingScheduler({ conversationId, onClose }: { conversa
       const url = URL.createObjectURL(new Blob([res.data], { type: 'text/calendar' }));
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'rsn-meeting.ics';
+      a.download = 'reason-meeting.ics';
       document.body.appendChild(a);
       a.click();
       a.remove();

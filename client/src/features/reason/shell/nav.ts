@@ -1,9 +1,11 @@
 // Stefan's v4 navigation. People points at today's "Find people" until the
-// People screen is rebuilt (next milestone); Entities and Introductions show an
-// honest "coming next" page until then.
+// People screen is rebuilt (next milestone); Entities shows an honest "coming
+// next" page until then. The prototype's Introductions tab was dropped on 19 Oct
+// at the client's request: its icon stays in the icon set, but it is not a
+// navigation key, so no list can name it (a key with no entry crashes the bar).
 import type { ReasonIconName } from '../ui/icons';
 
-export type NavKey = Exclude<ReasonIconName, 'more'>;
+export type NavKey = Exclude<ReasonIconName, 'more' | 'introductions'>;
 export interface NavItem { key: NavKey; label: string; to: string; match: (path: string) => boolean }
 
 const under = (...prefixes: string[]) => (p: string) => prefixes.some(x => p === x || p.startsWith(`${x}/`));
@@ -16,7 +18,6 @@ export const MAIN_NAV: NavItem[] = [
   { key: 'pods', label: 'Pods', to: '/pods', match: under('/pods') },
   { key: 'events', label: 'Events', to: '/sessions', match: under('/sessions') },
   { key: 'messages', label: 'Messages', to: '/messages', match: under('/messages') },
-  { key: 'introductions', label: 'Introductions', to: '/introductions', match: under('/introductions') },
 ];
 
 export const SUB_NAV: NavItem[] = [
@@ -27,7 +28,7 @@ export const SUB_NAV: NavItem[] = [
 
 export const NAV_BY_KEY = Object.fromEntries([...MAIN_NAV, ...SUB_NAV].map(i => [i.key, i])) as Record<NavKey, NavItem>;
 export const MOBILE_PRIMARY: NavKey[] = ['foryou', 'people', 'events', 'messages'];
-export const MOBILE_MORE: NavKey[] = ['entities', 'circles', 'pods', 'introductions', 'settings', 'support'];
+export const MOBILE_MORE: NavKey[] = ['entities', 'circles', 'pods', 'settings', 'support'];
 
 // Invite and Admin are not in either list: they live in the account menu (in More on a
 // phone), and that is what is marked current while a member is on one of them.

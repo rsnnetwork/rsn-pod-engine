@@ -29,9 +29,11 @@ const mockRecord = jest.fn().mockResolvedValue({ id: 'o1', worthContinuing: 'yes
 jest.mock('../../services/people/meeting-outcome.service', () => ({ recordOutcome: (...a: unknown[]) => mockRecord(...a), __esModule: true }));
 const mockBrief = jest.fn().mockResolvedValue({ person: { id: 'x' } });
 const mockRecent = jest.fn().mockResolvedValue([]);
+const mockCard = jest.fn().mockResolvedValue({ id: 'u-viewer', displayName: 'Vera Viewer', bannerUrl: null });
 jest.mock('../../services/people/person-brief.service', () => ({
   getPersonBrief: (...a: unknown[]) => mockBrief(...a),
   listRecentConnections: (...a: unknown[]) => mockRecent(...a),
+  getOwnCard: (...a: unknown[]) => mockCard(...a),
   __esModule: true,
 }));
 const mockFanout = jest.fn().mockResolvedValue(undefined);
@@ -267,6 +269,7 @@ describe('the routes are rate limited', () => {
   // only once the member is known.
   it.each([
     ['get', '/connections/recent'],
+    ['get', '/me/card'],
     ['get', '/:userId/brief'],
   ])('%s %s carries peopleReadLimiter, after authenticate and ahead of its handler', (method, path) => {
     const handlers = handlersOf(method, path);
@@ -384,5 +387,50 @@ describe('the two reads', () => {
     expect(at('/connections/recent')).toBeLessThan(at('/:userId/brief'));
     expect(at('/:userId/brief')).toBeLessThan(at('/:userId/response'));
     expect(at('/:userId/brief')).toBeLessThan(at('/:userId/outcome'));
+  });
+});
+
+// 21 Oct 2026 (Stefan): "when I look at my profile, I should see my profile, how other people see it". The brief
+// refuses your own id and keeps refusing it; your own card is its own read.
+describe('GET /people/me/card', () => {
+  const auth = { Authorization: `Bearer ${token()}` };
+  type Layer = { route?: { path: string } };
+  const routePaths = () => (peopleRoutes as unknown as { stack: Layer[] }).stack
+    .flatMap((layer) => (layer.route ? [layer.route.path] : []));
+  beforeEach(() => { mockCard.mockClear(); mockBrief.mockClear(); mockFanout.mockClear(); });
+
+  it('answers with the signed-in member\'s own public card under data, and tells no screens', async () => {
+    const res = await request(app).get('/people/me/card').set(auth);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, data: { id: 'u-viewer', displayName: 'Vera Viewer', bannerUrl: null } });
+    expect(mockCard).toHaveBeenCalledWith('u-viewer');
+    expect(mockBrief).not.toHaveBeenCalled();
+    expect(mockFanout).not.toHaveBeenCalled();
+  });
+
+  it('is always your own card: there is no id to aim it at anyone else', async () => {
+    await request(app).get(`/people/me/card?userId=${TARGET}`).set(auth);
+    expect(mockCard).toHaveBeenCalledWith('u-viewer');
+    expect(mockCard).not.toHaveBeenCalledWith(TARGET);
+  });
+
+  it('refuses a missing token without calling the service', async () => {
+    expect((await request(app).get('/people/me/card')).status).toBe(401);
+    expect(mockCard).not.toHaveBeenCalled();
+  });
+
+  it('passes on "not found" for an account that is gone', async () => {
+    mockCard.mockRejectedValueOnce(new NotFoundError('User', 'u-viewer'));
+    const res = await request(app).get('/people/me/card').set(auth);
+    expect(res.status).toBe(404);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('is registered before the brief, and "me" is still no member id to the brief', async () => {
+    const paths = routePaths();
+    expect(paths.indexOf('/me/card')).toBeGreaterThanOrEqual(0);
+    expect(paths.indexOf('/me/card')).toBeLessThan(paths.indexOf('/:userId/brief'));
+    expect((await request(app).get('/people/me/brief').set(auth)).status).toBe(400);
+    expect(mockBrief).not.toHaveBeenCalled();
   });
 });

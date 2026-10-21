@@ -6,6 +6,7 @@ import { authenticate } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import { authLimiter } from '../middleware/rateLimit';
 import * as joinRequestService from '../services/join-request/join-request.service';
+import { canonicalLinkedinProfileUrl, LINKEDIN_PROFILE_HELP } from '../services/join-request/linkedin-profile-url';
 import { fanoutAdminEntities, fanoutUserEntity } from '../realtime/fanout';
 import { query } from '../db';
 import { ApiResponse, UserRole } from '@rsn/shared';
@@ -14,10 +15,25 @@ const router = Router();
 
 // ─── Validation Schemas ─────────────────────────────────────────────────────
 
+// LinkedIn is optional (21 Oct 2026). Left out, null, empty or only spaces, it is stored as NULL. When given it
+// must be a LinkedIn profile address (anything else is refused), and what is stored is always
+// https://www.linkedin.com/in/<name>. The live form always sends https://linkedin.com/in/<name>, so it is unchanged.
+const linkedinUrlSchema = z
+  .string()
+  .max(500, 'That link is too long')
+  .nullish()
+  .transform((value, ctx): string | null => {
+    if (value == null || value.trim() === '') return null;
+    const address = canonicalLinkedinProfileUrl(value);
+    if (address) return address;
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: LINKEDIN_PROFILE_HELP });
+    return z.NEVER;
+  });
+
 const createRequestSchema = z.object({
   fullName: z.string().min(1).max(100),
   email: z.string().email().max(255),
-  linkedinUrl: z.string().url().max(500),
+  linkedinUrl: linkedinUrlSchema,
   reason: z.string().min(1).max(1000),
 });
 

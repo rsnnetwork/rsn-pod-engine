@@ -4,7 +4,7 @@
 // Stefan's flow, verbatim: after onboarding the app checks if there are any
 // matches. If there are, "we matched you with this profile" + I want to meet
 // (the other side accepts or declines — nobody is introduced until both say
-// yes). If there are none, three choices: join the next RSN, invite more, or
+// yes). If there are none, three choices: join the next REASON event, invite more, or
 // find other people based on profiling — with a side note that new arrivals
 // who fit will trigger a notification.
 
@@ -184,7 +184,7 @@ export default function MatchesPage() {
                 <Calendar className="h-5 w-5 text-rsn-red" />
               </div>
               <div className="min-w-0">
-                <p className="font-medium text-gray-900">Join the next RSN</p>
+                <p className="font-medium text-gray-900">Join the next event</p>
                 <p className="text-xs text-gray-500 truncate">
                   {nextEvent
                     ? `${nextEvent.title} · ${new Date(nextEvent.scheduledAt).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`

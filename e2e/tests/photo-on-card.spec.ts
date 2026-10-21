@@ -23,6 +23,10 @@ import { primePreview } from '../helpers/preview-bypass';
 // page, in the card at its top, as "Use my Google photo" and "Change photo",
 // so this reaches them there as a member who has finished onboarding.
 //
+// 21 Oct 2026, on the preview: that form moved to /profile/edit, and /profile
+// is now your profile the way others see it. The form's Google tap asks to come
+// back to /profile/edit, where the outcome is read, so this goes there.
+//
 // What Google carries through its consent screen (the OAuth "state") is a token
 // the server signs (7 Oct 2026; it used to be base64 JSON anyone could write, and
 // the callback trusted the member id in it). The spec reads it with the key the
@@ -219,8 +223,8 @@ test('the card offers a Google photo and an upload; the upload lands at once; th
   expect(backTo).not.toMatch(/photo=/);
   console.log('  ✓ a foreign site is never kept, and a state nobody signed changes nothing.');
 
-  // The card, with no photo yet: the profile page's top card, opened as a member who has finished onboarding.
-  const page = await openAs(member, '/profile');
+  // The card, with no photo yet: the profile form's top card, opened as a member who has finished onboarding.
+  const page = await openAs(member, '/profile/edit');
   const google = page.getByTestId('use-google-photo');
   const change = page.getByRole('button', { name: 'Change photo' });
   await expect(google).toBeVisible({ timeout: 30_000 });
@@ -234,17 +238,19 @@ test('the card offers a Google photo and an upload; the upload lands at once; th
     expect(box!.height, `${name} is a 44px target`).toBeGreaterThanOrEqual(44);
   }
 
-  // Change photo, from a file: it is the avatar at once, in the card and in the account.
+  // Change photo, from a file: it is the avatar at once, in the card and in the account. Since 21 Oct 2026 the page
+  // redraws every photo as a JPEG of at most 800x800 before it is sent (a phone photo of 1.5 to 5 MB went over the
+  // server's cap and left "Uploading..." on screen for good), so the PNG chosen here is kept as a JPEG.
   await page.locator('input[type="file"]').setInputFiles({ name: 'me.png', mimeType: 'image/png', buffer: PNG });
   // The success toast is brief; the durable outcomes below are what matter. (The small avatar in the
   // page header is hidden on a phone, so look for the picture that is on screen.)
-  await expect(page.locator('img[src^="data:image/png"]:visible').first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('img[src^="data:image/jpeg"]:visible').first()).toBeVisible({ timeout: 20_000 });
   const row = await pool.query(`SELECT avatar_url FROM users WHERE id = $1`, [member.id]);
-  expect(String(row.rows[0].avatar_url)).toMatch(/^data:image\/png;base64,/);
+  expect(String(row.rows[0].avatar_url)).toMatch(/^data:image\/jpeg;base64,/);
   console.log('  ✓ uploaded photo is the avatar immediately.');
 
   // Coming back from Google with no photo says so, and the URL is cleaned.
-  await gotoRetry(page, `${APP}/profile?photo=none`);
+  await gotoRetry(page, `${APP}/profile/edit?photo=none`);
   await expect(page.getByText(/That Google account has no photo/)).toBeVisible({ timeout: 30_000 });
   await expect(page).not.toHaveURL(/photo=/);
   console.log('  ✓ the return trip from Google is handled.');
@@ -252,12 +258,12 @@ test('the card offers a Google photo and an upload; the upload lands at once; th
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow, 'no sideways scroll at 390px').toBeLessThanOrEqual(0);
 
-  // Google's "cancelled" outcome is handled too, and the link the profile's own tap asks for comes back to the profile.
-  await gotoRetry(page, `${APP}/profile?photo=cancelled`);
+  // Google's "cancelled" outcome is handled too, and the link the form's own tap asks for comes back to the form.
+  await gotoRetry(page, `${APP}/profile/edit?photo=cancelled`);
   await expect(google).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText(/No problem, nothing changed/)).toBeVisible({ timeout: 30_000 });
   await expect(page).not.toHaveURL(/photo=/);
-  const profileState = await apiAs(member, 'POST', '/auth/google/photo-state', { redirect: '/profile' });
-  expect(profileState.json.data.url).toMatch(/redirect=%2Fprofile$/);
+  const profileState = await apiAs(member, 'POST', '/auth/google/photo-state', { redirect: '/profile/edit' });
+  expect(profileState.json.data.url).toMatch(/redirect=%2Fprofile%2Fedit$/);
   console.log('  ✓ the profile page has the Google photo tap and handles the return trip.');
 });

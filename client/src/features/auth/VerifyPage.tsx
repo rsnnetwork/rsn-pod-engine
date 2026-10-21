@@ -30,7 +30,7 @@ function failureForVerifyError(err: any): VerifyFailure {
       };
     case 'USER_SUSPENDED':
       return {
-        message: 'This account is suspended. Please contact the RSN team if you think this is a mistake.',
+        message: 'This account is suspended. Please contact the REASON team if you think this is a mistake.',
         nextLabel: 'Back to sign in',
         nextHref: '/login',
       };

@@ -193,6 +193,22 @@ export const onboardingConfirmLimiter = rateLimit({
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });
 
+/**
+ * Onboarding v2, "Continue with LinkedIn" (21 Oct 2026). Each new address can
+ * start a paid ScrapingDog lookup, so this is the tightest onboarding bucket: a
+ * member types their address once or twice, and ten in ten minutes is far more
+ * than anyone needs. The service never pays twice for the same address anyway.
+ */
+export const onboardingLinkedinLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('onboarding-linkedin'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Please wait a few minutes before trying another LinkedIn link.' } },
+});
+
 export const onboardingChatLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   max: 30,
@@ -266,5 +282,30 @@ export const peopleReadLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: userOrIpKey,
   store: buildStore('people-read'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+// The member banner (21 Oct 2026). Changing or removing it is a few presses at most; each change stores a
+// picture of up to 3 MB, so a runaway client is stopped early. Keyed per member: the routes sign in first.
+export const bannerWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('banner-write'),
+  message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
+});
+
+// The banner picture itself. It is public (an <img> sends no token), so it is counted per network address.
+// Each banner's URL is versioned and cached for a day, so one person opening profiles asks for each only once,
+// and a refused picture only means the page draws the default banner in its place.
+export const bannerReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: userOrIpKey,
+  store: buildStore('banner-read'),
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Slow down a moment, then try again.' } },
 });

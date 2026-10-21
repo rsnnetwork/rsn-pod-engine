@@ -18,6 +18,7 @@ import { saveEnrichedCandidate, setEnrichmentState } from '../onboarding/enrichm
 import type { EnrichResult } from '../onboarding/enrichment.service';
 import { statusFromResult } from '../onboarding/providers/registry';
 import { hasAvatar, tryGravatar } from '../onboarding/avatar.service';
+import { bannerUrlFor } from '../user/banner.service';
 import { assertCanSignIn, signInRefusal } from './account-access';
 import { clientOriginConfig, resolveClientBaseUrl } from './client-origin';
 
@@ -89,10 +90,17 @@ async function assertRegistrationAllowed(email: string, hasValidInvite: boolean)
 
 // ─── User Operations ────────────────────────────────────────────────────────
 
+/** A users row as getUserById reads it: the member, plus when their banner last changed while they have one. */
+type UserRow = Omit<User, 'bannerUrl'> & { bannerUpdatedAt?: Date | null };
+
 export async function getUserById(id: string): Promise<User> {
-  const result = await query<User>(
+  // The banner's time is read only while a picture is kept (21 Oct 2026), and turned into its address
+  // below. The picture itself is never read here: it is served on its own by GET /users/:id/banner.
+  const result = await query<UserRow>(
     `SELECT id, email, display_name AS "displayName", first_name AS "firstName", last_name AS "lastName",
-            avatar_url AS "avatarUrl", bio, company, job_title AS "jobTitle", industry, location,
+            avatar_url AS "avatarUrl",
+            CASE WHEN banner_blob IS NOT NULL THEN banner_updated_at END AS "bannerUpdatedAt",
+            bio, company, job_title AS "jobTitle", industry, location,
             linkedin_url AS "linkedinUrl", interests, reasons_to_connect AS "reasonsToConnect",
             languages, timezone, phone,
             expertise_text AS "expertiseText", what_i_care_about AS "whatICareAbout",
@@ -119,7 +127,8 @@ export async function getUserById(id: string): Promise<User> {
   if (result.rows.length === 0) {
     throw new NotFoundError('User', id);
   }
-  return result.rows[0];
+  const { bannerUpdatedAt, ...user } = result.rows[0];
+  return { ...user, bannerUrl: bannerUrlFor(user.id, bannerUpdatedAt ?? null) };
 }
 
 export async function getUserByEmail(email: string): Promise<User | null> {

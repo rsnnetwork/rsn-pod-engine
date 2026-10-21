@@ -45,7 +45,7 @@ describe('the sign-in page\'s ?error= sentences', () => {
       INVALID_INVITE: 'The invite code is invalid or expired.',
       REGISTRATION_BLOCKED: 'You need an approved join request to sign up. Please request to join first.',
       ACCOUNT_CLOSED: 'This account was closed. Ask to join again, and you can sign in as soon as you are approved.',
-      USER_SUSPENDED: 'This account is suspended. Please contact the RSN team if you think this is a mistake.',
+      USER_SUSPENDED: 'This account is suspended. Please contact the REASON team if you think this is a mistake.',
     });
   });
 

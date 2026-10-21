@@ -113,7 +113,7 @@ test("Ali's script, steps 1 to 8, on production", async () => {
   await joinPage.getByPlaceholder('Your full name').fill('Ali Hamza');
   await joinPage.getByPlaceholder('you@example.com').fill(ALI_EMAIL);
   await joinPage.getByPlaceholder('your-username').fill(ALI_SLUG);
-  await joinPage.getByPlaceholder(/Tell us about yourself/i).fill(REASON);
+  await joinPage.getByLabel('Why do you want to join REASON?').fill(REASON);
   await shot(joinPage, 'request-to-join-form');
   await joinPage.getByRole('button', { name: 'Submit Request' }).click();
   await expect(joinPage.getByText('Request Submitted')).toBeVisible({ timeout: 30_000 });

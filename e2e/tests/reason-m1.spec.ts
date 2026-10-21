@@ -655,7 +655,7 @@ async function expectImagesLoaded(page: Page, where: string): Promise<void> {
 }
 
 // The navigation that belongs to this width: the bottom bar up to 720px, otherwise the rail (icons) or the
-// sidebar (icons and words), eight entries either way.
+// sidebar (icons and words), seven entries either way (the Introductions tab went on 19 Oct).
 async function expectChrome(page: Page, width: number, where: string): Promise<void> {
   const bar = page.locator('nav[aria-label="Main"].fixed');
   const icons = page.locator('aside nav a svg');
@@ -665,12 +665,12 @@ async function expectChrome(page: Page, width: number, where: string): Promise<v
     return;
   }
   await expect(bar, `${where}: the phone bar above 720px`).toBeHidden();
-  expect(await icons.count(), `${where}: eight navigation icons`).toBe(8);
+  expect(await icons.count(), `${where}: seven navigation icons`).toBe(7);
   const box = await icons.first().boundingBox();
   expect(box && box.width > 0 && box.height > 0, `${where}: the icons are drawn`).toBeTruthy();
   const words = await page.locator('aside nav a').evaluateAll((els) => els.map((e) => (e as HTMLElement).innerText.trim()));
-  if (width >= 981) expect(words, `${where}: the sidebar shows its words`).toEqual(['For You', 'People', 'Entities', 'Circles', 'Pods', 'Events', 'Messages', 'Introductions']);
-  else expect(words, `${where}: the rail shows icons, not words`).toEqual(Array(8).fill(''));
+  if (width >= 981) expect(words, `${where}: the sidebar shows its words`).toEqual(['For You', 'People', 'Entities', 'Circles', 'Pods', 'Events', 'Messages']);
+  else expect(words, `${where}: the rail shows icons, not words`).toEqual(Array(7).fill(''));
 }
 
 // The context rail beside the list: from 981px, not below.
@@ -1463,14 +1463,14 @@ test.describe('REASON milestone 1', () => {
       const sheet = page.getByRole('dialog', { name: 'More' });
       await tap(page, page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'More' }), 'More', { centre: false });
       await expect(sheet, 'More opens').toBeVisible();
-      for (const label of ['Entities', 'Circles', 'Pods', 'Introductions', 'Settings', 'Support']) {
+      for (const label of ['Entities', 'Circles', 'Pods', 'Settings', 'Support']) {
         await inReach(page, sheet.getByRole('link', { name: label, exact: true }), `More: ${label}`, { centre: false });
       }
       await tap(page, sheet.getByRole('link', { name: 'Circles', exact: true }), 'More: Circles', { centre: false });
       await expect(page, 'Circles opens').toHaveURL(/\/circles$/);
       await expect(sheet, 'and the sheet closes').toBeHidden();
       await expectQuiet(o, 'More');
-      console.log('  ✓ More lists Entities, Circles, Pods, Introductions, Settings and Support, each 44px and reachable; Circles opens and closes the sheet.');
+      console.log('  ✓ More lists Entities, Circles, Pods, Settings and Support, each 44px and reachable; Circles opens and closes the sheet.');
     });
   });
 

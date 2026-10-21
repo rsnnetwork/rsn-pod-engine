@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { useAuthStore } from '@/stores/authStore';
 import LinkedinPhotoOffer, { useLinkedinPhoto } from '@/features/onboarding/LinkedinPhotoOffer';
@@ -7,7 +8,7 @@ import { Button } from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import Card from '@/components/ui/Card';
 import Avatar from '@/components/ui/Avatar';
-import { X, User, Briefcase, MapPin, Globe, Languages, Sparkles, Camera, Info, Target, Heart, HelpCircle, Users, MessageSquare } from 'lucide-react';
+import { X, User, Briefcase, MapPin, Globe, Languages, Sparkles, Camera, Info, Target, Heart, HelpCircle, Users, MessageSquare, ArrowLeft } from 'lucide-react';
 import api from '@/lib/api';
 import OnboardingWelcomeModal from '@/features/onboarding/OnboardingWelcomeModal';
 
@@ -29,6 +30,53 @@ interface ProfileForm {
   whoIWantToMeet: string;
   whyIWantToMeet: string;
   myIntent: string;
+}
+
+// 21 Oct 2026: a phone photo of 1.5 to 5 MB, sent as it was, went over the server's cap on avatarUrl. The
+// upload was awaited inside reader.onload, outside the try, so the refusal was never caught, nothing was said
+// and "Uploading..." stayed on screen for good. The photo is now made smaller here first (it is never shown
+// larger than 800x800), and every way the upload can end is caught, said, and puts the button back.
+const PHOTO_MAX_SIDE = 800;
+const PHOTO_QUALITY = 0.85;
+
+function loadImage(file: File): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('This picture could not be read')); };
+    img.src = url;
+  });
+}
+
+/** The photo as a JPEG data URL, scaled down (never up) to fit 800 by 800. */
+async function shrinkPhoto(file: File): Promise<string> {
+  const img = await loadImage(file);
+  const scale = Math.min(1, PHOTO_MAX_SIDE / img.naturalWidth, PHOTO_MAX_SIDE / img.naturalHeight);
+  const width = Math.max(1, Math.round(img.naturalWidth * scale));
+  const height = Math.max(1, Math.round(img.naturalHeight * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('This picture could not be read');
+  // A JPEG has no transparency: a see-through PNG would turn black without a white ground under it.
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(img, 0, 0, width, height);
+  return canvas.toDataURL('image/jpeg', PHOTO_QUALITY);
+}
+
+/** What a failed photo upload says: the server's own sentence when it sent one, plain words otherwise. */
+function photoUploadError(err: unknown): string {
+  const failed = (err ?? {}) as { response?: { data?: { error?: { message?: unknown } } }; request?: unknown };
+  const message = failed.response?.data?.error?.message;
+  // The form check's label is not a sentence, and the only check on a photo is its size.
+  if (message === 'Validation failed') return 'That photo is too large. Please choose a smaller one.';
+  if (typeof message === 'string' && message.trim()) return message;
+  if (failed.response) return 'Could not update your photo. Please try again.';
+  if (failed.request) return 'Could not update your photo. Check your connection and try again.';
+  return 'We could not read that photo. Please choose another one.';
 }
 
 function TagInput({ label, tags, setTags, placeholder, icon: Icon }: {
@@ -95,7 +143,8 @@ export default function ProfilePage() {
     if (googlePhotoBusy) return;
     setGooglePhotoBusy(true);
     try {
-      const res = await api.post('/auth/google/photo-state', { redirect: '/profile' });
+      // The form lives at /profile/edit (21 Oct 2026), and the outcome is read here, so Google brings you back here.
+      const res = await api.post('/auth/google/photo-state', { redirect: '/profile/edit' });
       window.location.href = res.data?.data?.url;
     } catch {
       setGooglePhotoBusy(false);
@@ -107,6 +156,18 @@ export default function ProfilePage() {
   const [languages, setLanguages] = useState<string[]>([]);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Your profile's "connect LinkedIn" card links to /profile/edit#linkedin: bring the field into view and put the
+  // cursor in it (21 Oct 2026). The page area scrolls, not the window, so the field is scrolled into view itself.
+  const { hash } = useLocation();
+  const userId = user?.id;
+  useEffect(() => {
+    if (hash === '#linkedin' && userId) {
+      const field = document.getElementById('linkedin');
+      field?.scrollIntoView({ block: 'center' });
+      field?.focus({ preventScroll: true });
+    }
+  }, [hash, userId]);
 
   const { register, handleSubmit, reset, formState: { isSubmitting, isDirty } } = useForm<ProfileForm>();
   const [tagsChanged, setTagsChanged] = useState(false);
@@ -140,7 +201,10 @@ export default function ProfilePage() {
   }, [user]);
 
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const input = e.target;
+    const file = input.files?.[0];
+    // Cleared at once, so the same photo can be chosen again after a failure.
+    input.value = '';
     if (!file) return;
 
     // Validate file type and size
@@ -156,22 +220,13 @@ export default function ProfilePage() {
 
     setAvatarUploading(true);
     try {
-      // Convert to base64 and upload as data URL for now
-      const reader = new FileReader();
-      reader.onload = async () => {
-        const dataUrl = reader.result as string;
-        await api.put('/users/me', { avatarUrl: dataUrl });
-        await checkSession();
-        addToast('Avatar updated!', 'success');
-        setAvatarUploading(false);
-      };
-      reader.onerror = () => {
-        addToast('Failed to read image', 'error');
-        setAvatarUploading(false);
-      };
-      reader.readAsDataURL(file);
-    } catch {
-      addToast('Failed to upload avatar', 'error');
+      const avatarUrl = await shrinkPhoto(file);
+      await api.put('/users/me', { avatarUrl });
+      await checkSession();
+      addToast('Avatar updated!', 'success');
+    } catch (err) {
+      addToast(photoUploadError(err), 'error');
+    } finally {
       setAvatarUploading(false);
     }
   };
@@ -231,7 +286,12 @@ export default function ProfilePage() {
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <OnboardingWelcomeModal />
-      <h1 className="text-2xl font-bold text-[#1a1a2e] animate-fade-in">Profile</h1>
+      <div>
+        <Link to="/profile" className="inline-flex min-h-[44px] items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700">
+          <ArrowLeft className="h-4 w-4" /> Back to your profile
+        </Link>
+        <h1 className="text-2xl font-bold text-[#1a1a2e] animate-fade-in">Profile</h1>
+      </div>
 
       {/* Profile Header Card */}
       <Card className="animate-fade-in-up">
@@ -370,10 +430,11 @@ export default function ProfilePage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
             <Input label="Industry" {...register('industry')} placeholder="Technology" />
             <div>
-              <label className="flex items-center gap-2 text-sm font-medium text-gray-600 mb-1.5">LinkedIn</label>
+              <label htmlFor="linkedin" className="flex items-center gap-2 text-sm font-medium text-gray-600 mb-1.5">LinkedIn</label>
               <div className="flex items-center rounded-xl border border-gray-200 bg-gray-50 overflow-hidden focus-within:ring-2 focus-within:ring-[#1a1a2e] transition-all duration-200">
                 <span className="pl-4 pr-1 text-sm text-gray-400 whitespace-nowrap select-none">linkedin.com/in/</span>
                 <input
+                  id="linkedin"
                   {...register('linkedinUrl')}
                   placeholder="your-username"
                   className="flex-1 bg-transparent px-2 py-2.5 text-sm text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none"

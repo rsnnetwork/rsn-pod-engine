@@ -94,7 +94,7 @@ export default function SearchPage() {
 
       {empty && (
         <Card className="mt-4 !p-8 text-center text-sm text-gray-500" data-testid="search-empty">
-          Nobody on Reason matches “{term}”.
+          Nobody on REASON matches “{term}”.
         </Card>
       )}
 
