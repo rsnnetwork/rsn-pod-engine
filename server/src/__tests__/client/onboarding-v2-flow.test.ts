@@ -225,6 +225,15 @@ describe('which screen to show', () => {
     expect(safeRedirect('/onboardingish')).toBe('/onboardingish');
   });
 
+  // The router matches paths without regard to case, so /Onboarding opens onboarding too: it must never be where a
+  // finished member is sent back to.
+  it('onboarding itself is For You in any case: /Onboarding, /ONBOARDING?step=q1, /onBoarding/x', () => {
+    for (const bad of ['/Onboarding', '/ONBOARDING', '/ONBOARDING?step=q1', '/onBoarding/x', '/OnBoarding#top']) {
+      expect({ bad, to: safeRedirect(bad) }).toEqual({ bad, to: '/' });
+    }
+    expect(safeRedirect('/Onboardingish')).toBe('/Onboardingish');
+  });
+
   it('a page opened straight onto edit mode returns to the profile, or to For You', () => {
     expect(editFallback('profile')).toBe('/profile');
     for (const s of ['q1', 'q2', 'q3', 'q4'] as const) expect(editFallback(s)).toBe('/');

@@ -212,7 +212,8 @@ export function safeRedirect(param: string | null | undefined): string {
   const path = param ?? '';
   // One leading slash, not two and not a backslash (both leave the site), and no spaces or control characters.
   if (!/^\/(?![/\\])/.test(path) || /[\\\s\u0000-\u001F\u007F]/.test(path)) return '/';
-  return /^\/onboarding(?:[/?#]|$)/.test(path) ? '/' : path;
+  // In any case: the router matches paths without regard to case, so /Onboarding opens onboarding too.
+  return /^\/onboarding(?:[/?#]|$)/i.test(path) ? '/' : path;
 }
 
 /** How the member chose on screen 2. Only a LinkedIn choice lets LinkedIn suggest anything. */
