@@ -78,6 +78,11 @@ export const OUTCOME_LABELS = _OUTCOME_LABELS;
 export const PERSON_RESPONSES = _PERSON_RESPONSES;
 export const WORTH_CONTINUING = _WORTH_CONTINUING;
 export const primaryActionFor = _primaryActionFor;
+// A LinkedIn profile address in the one form REASON stores (21 Oct 2026): the request to join and onboarding
+// v2 both read an address with it. Real VALUES, so each has its own named export, same as OPENINGS above.
+import { LINKEDIN_PROFILE_HELP as _LINKEDIN_PROFILE_HELP, linkedinProfileUrl as _linkedinProfileUrl } from './linkedin/profile-url';
+export const LINKEDIN_PROFILE_HELP = _LINKEDIN_PROFILE_HELP;
+export const linkedinProfileUrl = _linkedinProfileUrl;
 export * from './types/entity';
 // Real VALUES the client renders (the Entities pages), so each needs its own statically analysable
 // named export, same as OPENINGS above.
