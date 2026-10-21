@@ -127,9 +127,11 @@ describe('Your profile: what it says', () => {
     expect(needsLinkedin({ linkedinUrl: 'https://linkedin.com/in/nora' })).toBe(false);
   });
 
-  it('every link goes where the brief says', () => {
+  // Final review (C2): "Edit answers" opened the first question alone, a dead end. It opens screen 7, with every
+  // answer's [Edit].
+  it('every link goes where the brief says, and Edit answers opens every answer, on screen 7', () => {
     expect([EDIT_PROFILE_TO, EDIT_ANSWERS_TO, ADD_COMPANY_TO, CONNECT_LINKEDIN_TO])
-      .toEqual(['/profile/edit', '/onboarding?edit=q1', '/entities?create=1', '/profile/edit#linkedin']);
+      .toEqual(['/profile/edit', '/onboarding?edit=profile', '/entities?create=1', '/profile/edit#linkedin']);
   });
 
   it('the hero lists the industry, then the location, then the roles, at most four, on your page and on everyone else\'s', () => {
@@ -332,5 +334,29 @@ describe('the old form at /profile/edit', () => {
 
   it('the Google photo comes back to the form, where its outcome is read', () => {
     expect(form()).toMatch(/api\.post\('\/auth\/google\/photo-state', \{ redirect: '\/profile\/edit' \}\)/);
+  });
+
+  // Final review (C2): the next save of the answers writes over these three, and no search ever reads them, so a change
+  // made here was lost. They are shown as they are, with the way to the answers.
+  const ANSWER_FIELDS = ['whatICanHelpWith', 'whoIWantToMeet', 'myIntent'];
+  it('"What I can help with", "Who I want to meet" and "My intent" are shown, not edited, with Edit answers beside them', () => {
+    for (const field of ANSWER_FIELDS) {
+      expect(form()).not.toMatch(new RegExp(`register\\('${field}'\\)`));
+      expect(form()).toMatch(new RegExp(`value: visibleText\\(user\\.${field}\\) \\}`));
+    }
+    for (const label of ['What I can help with', 'Who I want to meet', 'My intent']) expect(form()).toContain(`label: '${label}'`);
+    expect(form()).toMatch(/import \{ EDIT_ANSWERS_TO \} from '@\/features\/reason\/profile\/your-profile-text';/);
+    expect(form()).toMatch(/<Link to=\{EDIT_ANSWERS_TO\} className="[^"]*\bmin-h-\[44px\][^"]*">Edit answers<\/Link>/);
+    expect(form()).toMatch(/\{value \?\? 'Not answered yet\.'\}/);
+    // The two that only this form writes stay editable.
+    for (const field of ['whatICareAbout', 'whyIWantToMeet']) expect(form()).toMatch(new RegExp(`register\\('${field}'\\)`));
+  });
+
+  it('a save on the form never sends those three, so it never writes over the answers', () => {
+    const submit = form().slice(form().indexOf('const onSubmit = async'), form().indexOf('if (!user) return null;'));
+    expect(submit).toMatch(/api\.put\('\/users\/me', \{/);
+    for (const field of ANSWER_FIELDS) expect(submit).not.toContain(field);
+    const fields = form().slice(form().indexOf('interface ProfileForm {'), form().indexOf('}', form().indexOf('interface ProfileForm {')));
+    for (const field of ANSWER_FIELDS) expect(fields).not.toContain(field);
   });
 });

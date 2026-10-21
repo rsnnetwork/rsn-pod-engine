@@ -293,13 +293,37 @@ describe('what goes to the server', () => {
     expect(confirmBody(DONE, { timezone: 'Asia/Kathmandu' }).profile).toEqual({ timezone: 'Asia/Kathmandu' });
   });
 
-  it('the profile half: blanks are "not given" (null) and the LinkedIn photo is only asked for when kept', () => {
-    expect(profileInput({ displayName: ' Ana Baker ', jobTitle: '', company: 'Crumb', industry: '  ' }, 'Asia/Kathmandu', false)).toEqual({
-      displayName: 'Ana Baker', jobTitle: null, company: 'Crumb', industry: null, timezone: 'Asia/Kathmandu',
+  // Final review, 21 Oct 2026 (C2), with the server's contract: a role, company or industry that is missing or null is
+  // kept, "" clears it, and the name is never cleared. Emptying a stored field used to send null, which kept it, and the
+  // member was told "Your changes are saved." for a change that was not made.
+  const NOTHING_STORED = { jobTitle: null, company: null, industry: null };
+  it('the profile half: what they typed, trimmed; a field never filled and left empty sends nothing; the LinkedIn photo only when kept', () => {
+    expect(profileInput({ displayName: ' Ana Baker ', jobTitle: '', company: ' Crumb ', industry: '  ' }, NOTHING_STORED, 'Asia/Kathmandu', false)).toEqual({
+      displayName: 'Ana Baker', company: 'Crumb', timezone: 'Asia/Kathmandu',
     });
-    expect(profileInput({ displayName: 'Ana', jobTitle: '', company: '', industry: '' }, null, true)).toEqual({
-      displayName: 'Ana', jobTitle: null, company: null, industry: null, timezone: null, useLinkedinPhoto: true,
+    expect(profileInput({ displayName: 'Ana', jobTitle: '', company: '', industry: '' }, NOTHING_STORED, null, true)).toEqual({
+      displayName: 'Ana', timezone: null, useLinkedinPhoto: true,
     });
+  });
+
+  it('a stored role, company or industry they emptied is sent as "", which clears it; one they left as it was is sent as it is', () => {
+    const stored = { jobTitle: 'Head chef', company: 'Crumb', industry: 'Food and drink' };
+    expect(profileInput({ displayName: 'Ana', jobTitle: '', company: '   ', industry: 'Food and drink' }, stored, 'Europe/Berlin', false)).toEqual({
+      displayName: 'Ana', jobTitle: '', company: '', industry: 'Food and drink', timezone: 'Europe/Berlin',
+    });
+    // A stored value that is only spaces is no value: leaving it empty sends nothing.
+    expect(profileInput({ displayName: 'Ana', jobTitle: '', company: '', industry: '' }, { jobTitle: '  ', company: null, industry: undefined }, null, false))
+      .toEqual({ displayName: 'Ana', timezone: null });
+    // A new value over a stored one is just the new value.
+    expect(profileInput({ displayName: 'Ana', jobTitle: 'Pastry chef', company: 'Crumb', industry: '' }, stored, null, false))
+      .toEqual({ displayName: 'Ana', jobTitle: 'Pastry chef', company: 'Crumb', industry: '', timezone: null });
+  });
+
+  it('never sends "" for the name: it is never cleared', () => {
+    for (const displayName of ['', '   ']) {
+      const sent = profileInput({ displayName, jobTitle: '', company: '', industry: '' }, { jobTitle: 'CEO', company: null, industry: null }, null, false);
+      expect(sent.displayName).toBeNull();
+    }
   });
 
   it('a draft save carries one question, its words (null when not ticked) and the next step; Q2 also its specific box', () => {

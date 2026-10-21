@@ -11,6 +11,8 @@ import Avatar from '@/components/ui/Avatar';
 import { X, User, Briefcase, MapPin, Globe, Languages, Sparkles, Camera, Info, Target, Heart, HelpCircle, Users, MessageSquare, ArrowLeft } from 'lucide-react';
 import api from '@/lib/api';
 import OnboardingWelcomeModal from '@/features/onboarding/OnboardingWelcomeModal';
+import { EDIT_ANSWERS_TO } from '@/features/reason/profile/your-profile-text';
+import { visibleText } from '@/features/reason/person';
 
 interface ProfileForm {
   displayName: string;
@@ -26,10 +28,32 @@ interface ProfileForm {
   phone: string;
   expertiseText: string;
   whatICareAbout: string;
-  whatICanHelpWith: string;
-  whoIWantToMeet: string;
   whyIWantToMeet: string;
-  myIntent: string;
+}
+
+// What the member can offer, would like to meet and is hoping to find come from their answers to the onboarding
+// questions, and the next save of those answers writes over them (final review, 21 Oct 2026): a change made here was
+// lost, and no search reads them. So they are shown here as they are, with the way to the answers.
+function FromYourAnswers({ rows }: { rows: Array<{ label: string; icon: typeof Users; value: string | null }> }) {
+  return (
+    <section aria-labelledby="from-your-answers" className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-x-4">
+        <h3 id="from-your-answers" className="text-sm font-semibold text-gray-800">From your answers</h3>
+        <Link to={EDIT_ANSWERS_TO} className="inline-flex min-h-[44px] items-center text-sm font-semibold text-rsn-red hover:text-rsn-red-hover">Edit answers</Link>
+      </div>
+      <p className="text-xs text-gray-600">These come from your answers to the questions. Change them there.</p>
+      <dl className="mt-3 space-y-3">
+        {rows.map(({ label, icon: Icon, value }) => (
+          <div key={label}>
+            <dt className="flex items-center gap-2 text-sm font-medium text-gray-600">
+              <Icon className="h-4 w-4 text-gray-400" aria-hidden /> {label}
+            </dt>
+            <dd className="mt-1 text-sm leading-relaxed text-[#1a1a2e] [overflow-wrap:anywhere]">{value ?? 'Not answered yet.'}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
 }
 
 // 21 Oct 2026: a phone photo of 1.5 to 5 MB, sent as it was, went over the server's cap on avatarUrl. The
@@ -188,10 +212,7 @@ export default function ProfilePage() {
         phone: (user as any).phone || '',
         expertiseText: (user as any).expertiseText || '',
         whatICareAbout: (user as any).whatICareAbout || '',
-        whatICanHelpWith: (user as any).whatICanHelpWith || '',
-        whoIWantToMeet: (user as any).whoIWantToMeet || '',
         whyIWantToMeet: (user as any).whyIWantToMeet || '',
-        myIntent: (user as any).myIntent || '',
       });
       setInterests(user.interests || []);
       setReasons(user.reasonsToConnect || []);
@@ -269,10 +290,7 @@ export default function ProfilePage() {
         languages,
         expertiseText: data.expertiseText || null,
         whatICareAbout: data.whatICareAbout || null,
-        whatICanHelpWith: data.whatICanHelpWith || null,
-        whoIWantToMeet: data.whoIWantToMeet || null,
         whyIWantToMeet: data.whyIWantToMeet || null,
-        myIntent: data.myIntent || null,
       });
       await checkSession();
       addToast('Profile updated!', 'success');
@@ -531,28 +549,6 @@ export default function ProfilePage() {
             </div>
             <div>
               <label className="flex items-center gap-2 text-sm font-medium text-gray-600 mb-1.5">
-                <HelpCircle className="h-4 w-4 text-gray-400" /> What I can help with
-              </label>
-              <textarea
-                {...register('whatICanHelpWith')}
-                rows={2}
-                placeholder="What knowledge, skills, or connections can you offer?"
-                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200 resize-none"
-              />
-            </div>
-            <div>
-              <label className="flex items-center gap-2 text-sm font-medium text-gray-600 mb-1.5">
-                <Users className="h-4 w-4 text-gray-400" /> Who I want to meet
-              </label>
-              <textarea
-                {...register('whoIWantToMeet')}
-                rows={2}
-                placeholder="What kind of people are you hoping to connect with?"
-                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200 resize-none"
-              />
-            </div>
-            <div>
-              <label className="flex items-center gap-2 text-sm font-medium text-gray-600 mb-1.5">
                 Why I want to meet them
               </label>
               <textarea
@@ -562,17 +558,13 @@ export default function ProfilePage() {
                 className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200 resize-none"
               />
             </div>
-            <div>
-              <label className="flex items-center gap-2 text-sm font-medium text-gray-600 mb-1.5">
-                My intent
-              </label>
-              <textarea
-                {...register('myIntent')}
-                rows={2}
-                placeholder="What's your main goal on the platform right now? (e.g. hiring, fundraising, learning, networking)"
-                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-[#1a1a2e] placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a1a2e] transition-all duration-200 resize-none"
-              />
-            </div>
+            <FromYourAnswers
+              rows={[
+                { label: 'What I can help with', icon: HelpCircle, value: visibleText(user.whatICanHelpWith) },
+                { label: 'Who I want to meet', icon: Users, value: visibleText(user.whoIWantToMeet) },
+                { label: 'My intent', icon: Target, value: visibleText(user.myIntent) },
+              ]}
+            />
           </div>
         </Card>
 

@@ -309,16 +309,28 @@ export const PROFILE_MAX: Record<keyof ProfileFields, number> = {
   industry: L.industryMaxLen,
 };
 
-/** The profile half of confirm. A blank is "not given" (null), which the server never writes over a stored value. */
-export function profileInput(fields: ProfileFields, timezone: string | null, useLinkedinPhoto: boolean): OnboardingV2ProfileInput {
-  return {
-    displayName: tidy(fields.displayName),
-    jobTitle: tidy(fields.jobTitle),
-    company: tidy(fields.company),
-    industry: tidy(fields.industry),
-    timezone,
-    ...(useLinkedinPhoto ? { useLinkedinPhoto: true } : {}),
-  };
+/** What the profile already holds for the fields screen 7 may leave empty. */
+export type StoredProfile = Partial<Record<'jobTitle' | 'company' | 'industry', string | null>>;
+
+const MAY_BE_EMPTY = ['jobTitle', 'company', 'industry'] as const;
+
+/**
+ * The profile half of confirm, on the server's contract: a role, company or industry that is missing (or null) is
+ * kept, and "" clears it. So what they typed is sent; a field they emptied that the profile holds is sent as "", and
+ * the server clears it; a field never filled and left empty is not sent at all. The name is never cleared: a blank
+ * one is "not given" (null), and the screen does not send one.
+ */
+export function profileInput(
+  fields: ProfileFields, stored: StoredProfile, timezone: string | null, useLinkedinPhoto: boolean,
+): OnboardingV2ProfileInput {
+  const input: OnboardingV2ProfileInput = { displayName: tidy(fields.displayName), timezone };
+  for (const key of MAY_BE_EMPTY) {
+    const typed = tidy(fields[key]);
+    if (typed) input[key] = typed;
+    else if (tidy(stored[key])) input[key] = '';
+  }
+  if (useLinkedinPhoto) input.useLinkedinPhoto = true;
+  return input;
 }
 
 export type DraftPatch = Partial<OnboardingV2Answers> & { step: OnboardingV2Step };

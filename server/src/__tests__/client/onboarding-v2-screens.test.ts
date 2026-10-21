@@ -283,6 +283,11 @@ describe('the data contract', () => {
     expect(read(`${dir}/useSignupChoice.ts`)).toMatch(/signupChoiceKey\(memberId\)/);
   });
 
+  // Final review (C2): emptying a stored role, company or industry clears it, so what is stored is what decides.
+  it('screen 7 sends its fields against what the profile holds, so a stored field they emptied is cleared', () => {
+    expect(read(`${dir}/useProfileForm.ts`)).toMatch(/return profileInput\(fields, profile, isRealZone\(zone\) \? zone : null, keepsLinkedinPhoto\);/);
+  });
+
   it('the LinkedIn photo is asked for only when it is exactly the one shown and kept, and they have none of their own', () => {
     expect(read(`${dir}/useProfileForm.ts`)).toMatch(/const keepsLinkedinPhoto = !!keptPhoto && !profile\.avatarUrl && keptPhoto === prefill\?\.photoUrl;/);
     // Offered only after it has loaded.

@@ -5,9 +5,10 @@ import { canBring, type PublicMember, type User } from '@rsn/shared';
 import { visibleText } from '../person';
 
 export const EDIT_PROFILE_TO = '/profile/edit';
-// Task 9 opens the first question for editing; until then the address opens onboarding.
-export const EDIT_ANSWERS_TO = '/onboarding?edit=q1';
-// Task 11 wires creating your company; until then the address opens the Entities page.
+// Screen 7 in edit mode: every answer with its own [Edit], then back here (final review, 21 Oct 2026). The first
+// question alone was a dead end. The old form's "Edit answers" opens it too.
+export const EDIT_ANSWERS_TO = '/onboarding?edit=profile';
+// The Entities page with "Create an entity" open, for your company.
 export const ADD_COMPANY_TO = '/entities?create=1';
 export const CONNECT_LINKEDIN_TO = '/profile/edit#linkedin';
 
