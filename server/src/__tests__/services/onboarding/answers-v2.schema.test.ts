@@ -160,10 +160,30 @@ describe('confirm: the finished answers', () => {
     expect(r.profile).toEqual({ company: 'Vokt' });
   });
 
-  it('a blank profile field means "not given", never "blank it"', () => {
-    const r = confirmSchemaV2.parse({ ...GOOD, profile: { industry: '  ', timezone: '' } });
-    expect(r.profile.industry).toBeNull();
+  // The shared contract (final review, 21 Oct 2026): for the role, the company and the industry, a field
+  // left out or sent as null keeps what is stored, and one sent empty ("" once trimmed) clears it. The
+  // screen sends "" only when the member emptied a field that had a value. The name can never be cleared,
+  // so a blank name keeps the stored one; a blank time zone keeps it too.
+  it('an emptied role, company or industry is passed on as "", which clears it', () => {
+    const r = confirmSchemaV2.parse({ ...GOOD, profile: { jobTitle: '', company: '   ', industry: '\n\t' } });
+    expect(r.profile).toEqual({ jobTitle: '', company: '', industry: '' });
+  });
+
+  it('a role, company or industry left out, or sent as null, is passed on as not given', () => {
+    expect(confirmSchemaV2.parse({ ...GOOD, profile: { jobTitle: null, company: null, industry: null } }).profile)
+      .toEqual({ jobTitle: null, company: null, industry: null });
+    expect(confirmSchemaV2.parse({ ...GOOD, profile: {} }).profile).toEqual({});
+  });
+
+  it('a role, company or industry is still tidied: a line break is a space, and the outer spaces go', () => {
+    expect(confirmSchemaV2.parse({ ...GOOD, profile: { jobTitle: '  Head\nPastry   Chef ' } }).profile.jobTitle).toBe('Head Pastry Chef');
+  });
+
+  it('a blank name or time zone means "not given": the name can never be cleared', () => {
+    const r = confirmSchemaV2.parse({ ...GOOD, profile: { displayName: '   ', timezone: '' } });
+    expect(r.profile.displayName).toBeNull();
     expect(r.profile.timezone).toBeNull();
+    expect(confirmSchemaV2.parse({ ...GOOD, profile: { displayName: '' } }).profile.displayName).toBeNull();
   });
 
   it('accepts a real time zone and refuses an invented one', () => {
