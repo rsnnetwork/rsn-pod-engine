@@ -17,8 +17,8 @@ import type {
   OnboardingStatus, OnboardingV2Answers, OnboardingV2State, OnboardingV2Step, TourOutcome,
 } from '@rsn/shared';
 import { v2FromV1, isMeetV2Key, isFindV2Key, isOfferV2Key, isSelfV2Key } from './answers-v2.map';
-import { linkedinBlock, sourcesFromRow, type LinkedinRow } from './linkedin-v2';
-import { getCachedEnrichment, sameTitle } from './enrichment.repo';
+import { linkedinBlock, sourcesFromRow, shownPrefill, type LinkedinRow } from './linkedin-v2';
+import { sameTitle } from './enrichment.repo';
 import {
   wantTextV2, intentTextV2, offerTextV2, roleTitlesV2, reasonsV2, desiredDesignationsV2,
 } from '../matching/option-signals';
@@ -266,10 +266,12 @@ export async function confirm(userId: string, input: ConfirmInputV2): Promise<Co
   const profile = input.profile ?? {};
   const given = <T>(v: T | null | undefined): T | null => v ?? null;
 
-  // The title is a matching input: kept unchanged from their LinkedIn page it
-  // is 'inferred', typed it is 'stated' (13 Aug, B1).
-  const cached = profile.jobTitle ? await getCachedEnrichment(userId).catch(() => null) : null;
-  const titleSource = sameTitle(profile.jobTitle, cached?.profile?.currentRole) ? 'inferred' : 'stated';
+  // The title is a matching input: kept unchanged from the LinkedIn prefill the
+  // member was shown it is 'inferred', typed it is 'stated' (13 Aug, B1). Only
+  // the prefill the onboarding state shows counts, so a result they never saw
+  // (another address, a stale one) never makes a title inferred.
+  const shown = profile.jobTitle ? await shownPrefill(userId).catch(() => null) : null;
+  const titleSource = sameTitle(profile.jobTitle, shown?.jobTitle) ? 'inferred' : 'stated';
 
   return transaction(async (client) => {
     const cur = await client.query<BeforeRow>(

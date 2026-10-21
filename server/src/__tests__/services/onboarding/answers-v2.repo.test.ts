@@ -22,6 +22,14 @@ jest.mock('../../../db', () => ({
   transaction: (cb: (c: { query: typeof mockTx }) => unknown) => mockTransaction(cb),
 }));
 
+// The prefill the onboarding state shows is the one source for "kept as LinkedIn had it".
+const mockShownPrefill = jest.fn();
+jest.mock('../../../services/onboarding/linkedin-v2', () => ({
+  __esModule: true,
+  ...jest.requireActual('../../../services/onboarding/linkedin-v2'),
+  shownPrefill: (...a: unknown[]) => mockShownPrefill(...a),
+}));
+
 import { getState, saveDraft, confirm } from '../../../services/onboarding/answers-v2.repo';
 import { confirmSchemaV2 } from '../../../services/onboarding/answers-v2.schema';
 import { designationsWanted, normalizeDesignation } from '../../../services/matching/intent-signals';
@@ -210,7 +218,6 @@ describe('confirm', () => {
     profile: { jobTitle: 'Founder & CEO', company: 'Vokt', timezone: 'Asia/Kathmandu' },
   });
   let before: Record<string, unknown>;
-  let cachedEnrichment: unknown;
 
   beforeEach(() => {
     mockQuery.mockReset();
@@ -221,12 +228,9 @@ describe('confirm', () => {
       hoping_to_find: [], find_other: null, find_specific: null, can_offer: [], offer_other: null,
       self_kinds: [], self_other: null, job_title: null, industry: 'Software',
     };
-    cachedEnrichment = null;
-    mockQuery.mockImplementation((sql: string) => (
-      /inferred_profile->'enriched'/.test(sql)
-        ? Promise.resolve({ rows: [{ enriched: cachedEnrichment }] })
-        : Promise.resolve({ rows: [] })
-    ));
+    mockShownPrefill.mockReset();
+    mockShownPrefill.mockResolvedValue(null);
+    mockQuery.mockImplementation(() => Promise.resolve({ rows: [] }));
     mockTx.mockImplementation((sql: string) => (
       /FOR UPDATE/.test(sql) ? Promise.resolve({ rows: [before] }) : Promise.resolve({ rows: [] })
     ));
@@ -322,13 +326,32 @@ describe('confirm', () => {
     expect(call[1]).toEqual(expect.arrayContaining(['Jane', 'Q. Doe']));
   });
 
-  it('a title the member kept from LinkedIn is inferred; one they typed is stated', async () => {
-    cachedEnrichment = { profile: { currentRole: 'founder & ceo' }, confidence: 0.95 };
+  const shown = (jobTitle: string | null) => ({
+    displayName: 'Jane', photoUrl: null, jobTitle, company: null, industry: null, location: null, selfGuess: null,
+  });
+
+  it('a title kept as the LinkedIn prefill showed it is inferred; one they typed is stated', async () => {
+    mockShownPrefill.mockResolvedValue(shown('founder & ceo'));
     await confirm('u-1', FULL);
+    expect(mockShownPrefill).toHaveBeenCalledWith('u-1');
     expect(update().value('job_title_source')).toBe('inferred');
     mockTx.mockClear();
-    cachedEnrichment = { profile: { currentRole: 'Chief Baker' }, confidence: 0.95 };
+    mockShownPrefill.mockResolvedValue(shown('Chief Baker'));
     await confirm('u-1', FULL);
+    expect(update().value('job_title_source')).toBe('stated');
+  });
+
+  // Fix round 1 (M3): only the prefill the state shows counts, so a result the
+  // member never saw (another address, a stale one) never makes it inferred.
+  it('with no prefill shown, a title is stated whatever an old result said', async () => {
+    mockShownPrefill.mockResolvedValue(null);
+    await confirm('u-1', FULL);
+    expect(update().value('job_title_source')).toBe('stated');
+  });
+
+  it('a prefill that could not be read leaves the title stated, and the confirm goes through', async () => {
+    mockShownPrefill.mockRejectedValue(new Error('db hiccup'));
+    await expect(confirm('u-1', FULL)).resolves.toMatchObject({ changed: true });
     expect(update().value('job_title_source')).toBe('stated');
   });
 
