@@ -843,3 +843,156 @@ describe('The short tour hands the member to For You when it is finished or skip
     expect(invalidated).toEqual([{ queryKey: ['onboarding-state'] }]);
   });
 });
+
+// Final review, 21 Oct 2026 (C7): the tour never took the keyboard's focus, and its keyboard effect depended on the card
+// and on the finish handler (a new one on every render of OnboardingTour), so every Next ran its clean-up, which handed
+// focus back to the page behind the dialog. HowRsnWorks.tsx is run here with React's hooks standing in: the effects run
+// as React runs them (after a render, again only when a dependency changed, the clean-up first), against a stand-in
+// document, so what is asserted is what its own effect does.
+describe('The tour takes the keyboard\'s focus as it opens, keeps it through the cards, and hands it back once, as it closes', () => {
+  type Props = { open: boolean; mode: 'onboarding' | 'replay'; failed?: boolean; onFinish: (o: 'completed' | 'skipped') => void };
+  interface Fake { focus: jest.Mock; isConnected: boolean }
+  interface Element { type?: unknown; ref?: { current: unknown } | null; props?: Record<string, unknown> }
+
+  function harness() {
+    const slots: unknown[] = [];
+    const effects: Array<{ deps?: unknown[]; cleanup?: unknown } | undefined> = [];
+    let queue: Array<() => void> = [];
+    let at = 0;
+    const same = (a: unknown[] | undefined, b: unknown[] | undefined) => !!a && !!b && a.length === b.length && a.every((x, i) => Object.is(x, b[i]));
+    const react = {
+      useState: (init: unknown) => {
+        const i = at++;
+        if (!(i in slots)) slots[i] = typeof init === 'function' ? (init as () => unknown)() : init;
+        return [slots[i], (v: unknown) => { slots[i] = typeof v === 'function' ? (v as (p: unknown) => unknown)(slots[i]) : v; }];
+      },
+      useRef: (init: unknown) => { const i = at++; if (!(i in slots)) slots[i] = { current: init }; return slots[i]; },
+      useCallback: (fn: unknown, deps: unknown[]) => {
+        const i = at++;
+        const prev = slots[i] as { fn: unknown; deps: unknown[] } | undefined;
+        if (prev && same(prev.deps, deps)) return prev.fn;
+        slots[i] = { fn, deps };
+        return fn;
+      },
+      useEffect: (fn: () => unknown, deps?: unknown[]) => {
+        const i = at++;
+        const prev = effects[i];
+        if (prev && same(prev.deps, deps)) return;
+        queue.push(() => {
+          if (typeof prev?.cleanup === 'function') (prev.cleanup as () => void)();
+          effects[i] = { deps, cleanup: fn() };
+        });
+      },
+    };
+    const dialog = { contains: () => true, querySelectorAll: () => [] };
+    const primary: Fake = { focus: jest.fn(), isConnected: true };
+    // React sets a ref when it commits: here, the dialog's and the primary button's.
+    const attach = (node: unknown): void => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) { node.forEach(attach); return; }
+      const el = node as Element;
+      if (el.ref && typeof el.ref === 'object') el.ref.current = el.props?.role === 'dialog' ? dialog : primary;
+      attach(el.props?.children);
+    };
+    const find = (node: unknown, test: (el: Element) => boolean): Element | null => {
+      if (!node || typeof node !== 'object') return null;
+      if (Array.isArray(node)) { for (const n of node) { const hit = find(n, test); if (hit) return hit; } return null; }
+      const el = node as Element;
+      return test(el) ? el : find(el.props?.children, test);
+    };
+    const mod = loadModule('src/features/onboarding/HowRsnWorks.tsx', {
+      react,
+      'react-dom': { createPortal: (el: unknown) => el },
+      'framer-motion': { motion: { div: 'div' }, AnimatePresence: 'div', useReducedMotion: () => true },
+      '@/components/ui/Button': { Button: 'button' },
+      '@/features/reason/brand/ReasonSheep': { __esModule: true, default: () => null },
+    });
+    let tree: unknown = null;
+    const render = (props: Props) => {
+      at = 0;
+      tree = (mod.default as (p: Props) => unknown)(props);
+      attach(tree);
+      const run = queue;
+      queue = [];
+      run.forEach((f) => f());
+    };
+    const unmount = () => effects.forEach((e) => { if (typeof e?.cleanup === 'function') (e.cleanup as () => void)(); });
+    const card = () => String(find(tree, (el) => el.props?.['aria-roledescription'] === 'slide')?.props?.['aria-label'] ?? '');
+    return { render, unmount, card, primary };
+  }
+
+  const real = (global as { document?: unknown }).document;
+  let listeners: Set<(e: unknown) => void>;
+  let opener: Fake;
+  let body: { style: { overflow: string } };
+  beforeEach(() => {
+    listeners = new Set();
+    opener = { focus: jest.fn(), isConnected: true };
+    body = { style: { overflow: 'auto' } };
+    (global as { document?: unknown }).document = {
+      activeElement: opener,
+      body,
+      addEventListener: (_t: string, fn: (e: unknown) => void) => listeners.add(fn),
+      removeEventListener: (_t: string, fn: (e: unknown) => void) => listeners.delete(fn),
+    };
+  });
+  afterAll(() => { (global as { document?: unknown }).document = real; });
+  const press = (key: string) => listeners.forEach((fn) => fn({ key, shiftKey: false, preventDefault: () => undefined }));
+
+  it('focus goes to its main button as it opens, and the page behind keeps none of it', () => {
+    const t = harness();
+    t.render({ open: false, mode: 'replay', onFinish: jest.fn() });
+    expect(t.primary.focus).not.toHaveBeenCalled();
+    expect(listeners.size).toBe(0);
+    t.render({ open: true, mode: 'replay', onFinish: jest.fn() });
+    expect(t.primary.focus).toHaveBeenCalledTimes(1);
+    expect(body.style.overflow).toBe('hidden');
+    expect(listeners.size).toBe(1);
+    expect(opener.focus).not.toHaveBeenCalled();
+  });
+
+  it('moving through the cards, with a new finish handler on every render, never sets it up again or hands focus back', () => {
+    const t = harness();
+    t.render({ open: true, mode: 'onboarding', onFinish: jest.fn() });
+    const listener = [...listeners][0];
+    const titles = [t.card()];
+    for (let i = 0; i < 3; i += 1) {
+      press('ArrowRight');
+      t.render({ open: true, mode: 'onboarding', onFinish: jest.fn() });
+      titles.push(t.card());
+    }
+    expect(titles).toEqual(['1 of 4: For You', '2 of 4: Matches', '3 of 4: Meetings', '4 of 4: Circles & events']);
+    press('ArrowLeft');
+    t.render({ open: true, mode: 'onboarding', onFinish: jest.fn() });
+    expect(t.card()).toBe('3 of 4: Meetings');
+    expect([...listeners]).toEqual([listener]);
+    expect(t.primary.focus).toHaveBeenCalledTimes(1);
+    expect(opener.focus).not.toHaveBeenCalled();
+    expect(body.style.overflow).toBe('hidden');
+  });
+
+  it('Escape calls the finish handler of the latest render, not the one it opened with', () => {
+    const t = harness();
+    const first = jest.fn();
+    const latest = jest.fn();
+    t.render({ open: true, mode: 'onboarding', onFinish: first });
+    t.render({ open: true, mode: 'onboarding', onFinish: latest });
+    press('Escape');
+    expect(first).not.toHaveBeenCalled();
+    expect(latest).toHaveBeenCalledWith('skipped');
+  });
+
+  it('closing hands focus back to what had it before, exactly once, and puts the page back as it was', () => {
+    const t = harness();
+    t.render({ open: true, mode: 'replay', onFinish: jest.fn() });
+    press('ArrowRight');
+    t.render({ open: true, mode: 'replay', onFinish: jest.fn() });
+    t.render({ open: false, mode: 'replay', onFinish: jest.fn() });
+    expect(opener.focus).toHaveBeenCalledTimes(1);
+    expect(listeners.size).toBe(0);
+    expect(body.style.overflow).toBe('auto');
+    t.render({ open: false, mode: 'replay', onFinish: jest.fn() });
+    t.unmount();
+    expect(opener.focus).toHaveBeenCalledTimes(1);
+  });
+});

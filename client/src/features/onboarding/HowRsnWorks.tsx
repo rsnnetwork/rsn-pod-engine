@@ -18,7 +18,7 @@
 // them, and finishing the tour lands on For You, unless the flow put the member
 // on the page it opened over (OnboardingTour).
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { CalendarClock } from 'lucide-react';
@@ -79,43 +79,58 @@ export default function HowRsnWorks({ open, mode, failed = false, onFinish }: Pr
   const [index, setIndex] = useState(0);
   const [direction, setDirection] = useState(1);
   const dialogRef = useRef<HTMLDivElement>(null);
-  const openerRef = useRef<Element | null>(null);
+  const primaryRef = useRef<HTMLButtonElement>(null);
+  // The keyboard is set up once per opening (final review, 21 Oct 2026): it reads the card and the finish handler
+  // through these, so a new card, or a parent's new finish handler, never sets it up again. Each time it was, its
+  // clean-up handed focus back to the page behind the dialog.
+  const indexRef = useRef(index);
+  const finishRef = useRef(onFinish);
   const still = useReducedMotion();
 
-  const last = index === TOUR_CARDS.length - 1;
-  const go = (next: number) => {
-    setDirection(next > index ? 1 : -1);
-    setIndex(Math.max(0, Math.min(TOUR_CARDS.length - 1, next)));
-  };
+  useEffect(() => { finishRef.current = onFinish; }, [onFinish]);
 
-  // Escape skips, arrows move, and focus is kept inside while it is open.
+  const last = index === TOUR_CARDS.length - 1;
+  const go = useCallback((next: number) => {
+    const to = Math.max(0, Math.min(TOUR_CARDS.length - 1, next));
+    setDirection(to > indexRef.current ? 1 : -1);
+    indexRef.current = to;
+    setIndex(to);
+  }, []);
+
+  // Escape skips, arrows move, and focus is kept inside while it is open: it moves to the main button as the tour
+  // opens, and back to whatever had it before, once, as it closes.
   useEffect(() => {
     if (!open) return;
-    openerRef.current = document.activeElement;
+    const opener = document.activeElement as HTMLElement | null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
+    primaryRef.current?.focus();
 
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { onFinish('skipped'); return; }
-      if (e.key === 'ArrowRight') { go(index + 1); return; }
-      if (e.key === 'ArrowLeft') { go(index - 1); return; }
+      if (e.key === 'Escape') { finishRef.current('skipped'); return; }
+      if (e.key === 'ArrowRight') { go(indexRef.current + 1); return; }
+      if (e.key === 'ArrowLeft') { go(indexRef.current - 1); return; }
       if (e.key !== 'Tab') return;
-      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+      const dialog = dialogRef.current;
+      const focusable = dialog?.querySelectorAll<HTMLElement>(
         'button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
       );
-      if (!focusable?.length) return;
+      if (!dialog || !focusable?.length) return;
       const first = focusable[0];
       const lastEl = focusable[focusable.length - 1];
-      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); lastEl.focus(); }
-      else if (!e.shiftKey && document.activeElement === lastEl) { e.preventDefault(); first.focus(); }
+      const at = document.activeElement;
+      // Focus that has slipped out (the button it was on went away with the last card) comes back in.
+      if (!at || !dialog.contains(at)) { e.preventDefault(); (e.shiftKey ? lastEl : first).focus(); }
+      else if (e.shiftKey && at === first) { e.preventDefault(); lastEl.focus(); }
+      else if (!e.shiftKey && at === lastEl) { e.preventDefault(); first.focus(); }
     };
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = previousOverflow;
-      (openerRef.current as HTMLElement | null)?.focus?.();
+      opener?.focus?.();
     };
-  }, [open, index, onFinish]);
+  }, [open, go]);
 
   if (!open) return null;
 
@@ -210,6 +225,7 @@ export default function HowRsnWorks({ open, mode, failed = false, onFinish }: Pr
               Back
             </button>
             <Button
+              ref={primaryRef}
               onClick={() => (last ? onFinish('completed') : go(index + 1))}
               className="min-h-[48px] flex-1"
             >
