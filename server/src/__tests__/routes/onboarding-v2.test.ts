@@ -43,8 +43,10 @@ jest.mock('../../services/onboarding/linkedin-v2', () => ({
   __esModule: true,
 }));
 const mockUsePhoto = jest.fn();
+const mockUseShownPhoto = jest.fn();
 jest.mock('../../services/onboarding/linkedin-photo', () => ({
   useLinkedinPhoto: (...a: unknown[]) => mockUsePhoto(...a),
+  useShownLinkedinPhoto: (...a: unknown[]) => mockUseShownPhoto(...a),
   findLinkedinPhoto: jest.fn().mockResolvedValue(null),
   __esModule: true,
 }));
@@ -128,6 +130,7 @@ beforeEach(() => {
   ]);
   mockConnect.mockResolvedValue({ linkedin: { status: 'searching' }, linkedinUrl: 'https://www.linkedin.com/in/ana', decision: 'start' });
   mockUsePhoto.mockResolvedValue('done');
+  mockUseShownPhoto.mockResolvedValue('done');
 });
 
 describe('every v2 endpoint needs a signed-in member', () => {
@@ -203,9 +206,10 @@ describe('POST /onboarding/v2/linkedin', () => {
     expect(mockStage).not.toHaveBeenCalled();
   });
 
-  it('needs an address', async () => {
+  it('needs an address, and says so in words', async () => {
     const res = await auth(request(app).post('/onboarding/v2/linkedin').send({}));
     expect(res.status).toBe(400);
+    expect(res.body.error.details).toEqual({ url: ['Enter your LinkedIn profile link.'] });
     expect(mockConnect).not.toHaveBeenCalled();
   });
 
@@ -273,11 +277,13 @@ describe('POST /onboarding/v2/confirm', () => {
     ['none', 'none'],
     ['failed', 'failed'],
   ])('"Keep this photo": %s becomes %s', async (outcome, photo) => {
-    mockUsePhoto.mockResolvedValue(outcome);
+    mockUseShownPhoto.mockResolvedValue(outcome);
     const res = await auth(request(app).post('/onboarding/v2/confirm').send({ ...ANSWERS, profile: { useLinkedinPhoto: true } }));
     expect(res.status).toBe(200);
     expect(res.body.data.photo).toBe(photo);
-    expect(mockUsePhoto).toHaveBeenCalledWith('u-1');
+    // Fix round 1 (M1): the photo the prefill showed, never v1's "any photo we hold".
+    expect(mockUseShownPhoto).toHaveBeenCalledWith('u-1');
+    expect(mockUsePhoto).not.toHaveBeenCalled();
   });
 
   it('refuses an unfinished set, "Something else" without words, and a made-up time zone', async () => {
@@ -294,6 +300,10 @@ describe('POST /onboarding/v2/confirm', () => {
     }
     const res = await asRefused(request(app).post('/onboarding/v2/confirm').send({ ...ANSWERS, lookingToMeet: ['meet_other'] }));
     expect(res.body.error.details).toEqual({ meetOther: ['Tell us who you would like to meet.'] });
+    // Fix round 1 (M3): a missing question says to answer it, never "Required".
+    const { selfKinds: _omitted, ...withoutQ4 } = ANSWERS;
+    const missing = await asRefused(request(app).post('/onboarding/v2/confirm').send(withoutQ4));
+    expect(missing.body.error.details).toEqual({ selfKinds: ['Select at least one answer.'] });
     expect(mockConfirm).not.toHaveBeenCalled();
   });
 });
