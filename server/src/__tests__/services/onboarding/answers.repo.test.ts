@@ -200,6 +200,51 @@ describe('getState', () => {
   });
 });
 
+describe('getState beside onboarding v2 (21 Oct 2026)', () => {
+  // v2 keeps its draft under onboarding_draft->'v2' and its keys in the same
+  // columns as v1's. The live app reads this state and sends its arrays back
+  // on confirm, where a v2 key would be refused, so v1 must see neither.
+  const row = (over: Record<string, unknown>) => ({
+    onboarding_status: 'completed', display_name: 'Ana', avatar_url: null,
+    tour_due_at: null, tour_seen_at: null, tour_outcome: null,
+    onboarding_intent: null, looking_to_meet: null, can_offer: null, industries: null,
+    industry_other: null, self_kinds: null, job_title: null, company: null, bio: null,
+    draft: null, ...over,
+  });
+
+  it('does not report the v2 draft as a v1 answer', async () => {
+    mockQuery.mockImplementation(() => Promise.resolve({ rows: [row({
+      onboarding_status: 'in_progress',
+      draft: { lookingToMeet: ['founders'], step: 'q3', v2: { lookingToMeet: ['meet_investors'], step: 'q2' } },
+    })] }));
+    const s = await getState('u-1');
+    expect(s.answers).toEqual({ lookingToMeet: ['founders'] });
+    expect(s.step).toBe('q3');
+  });
+
+  it('leaves v2 keys in the shared columns out of the v1 answers', async () => {
+    mockQuery.mockImplementation(() => Promise.resolve({ rows: [row({
+      looking_to_meet: ['meet_investors', 'meet_other'], can_offer: ['offer_investment'], self_kinds: ['self_investor'],
+    })] }));
+    const s = await getState('u-1');
+    expect(s.answers.lookingToMeet).toBeUndefined();
+    expect(s.answers.canOffer).toBeUndefined();
+    expect(s.answers.selfKinds).toBeUndefined();
+  });
+
+  it('a v1 member\'s answers come back exactly as before', async () => {
+    mockQuery.mockImplementation(() => Promise.resolve({ rows: [row({
+      onboarding_intent: 'get_advice', looking_to_meet: ['advisors_mentors'], can_offer: ['investment'],
+      industries: ['software_ai'], self_kinds: ['founders'],
+    })] }));
+    const s = await getState('u-1');
+    expect(s.answers).toEqual({
+      intent: 'get_advice', lookingToMeet: ['advisors_mentors'], canOffer: ['investment'],
+      industries: ['software_ai'], selfKinds: ['founders'],
+    });
+  });
+});
+
 describe('the wizard', () => {
   it('records how it was left, and a second device cannot overwrite that', async () => {
     await markTourSeen('u-1', 'skipped');
