@@ -1,6 +1,6 @@
 // ─── 1:1 meeting call (W-meet, 8 Sep 2026) ──────────────────────────────────
 //
-// A full-page call on RSN for a scheduled meeting or a "Meet now". Reached from
+// A full-page call on REASON for a scheduled meeting or a "Meet now". Reached from
 // the chat meeting card, the Join button, the bell "X is calling", or the email
 // link. Uses the same LiveKit stack the events use. Leaving returns to the chat.
 

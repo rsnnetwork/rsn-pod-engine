@@ -109,8 +109,23 @@ describe('the words the client asked for, screen by screen (19 Oct feedback)', (
   it('invites: the platform is called REASON, in a pending invite, in the list of invite types and on the page that accepts one', () => {
     const invites = source('features/invites/InvitesPage.tsx');
     expect(invites).toContain("inv.podName || inv.sessionTitle || 'REASON';");
-    expect(invites).toContain('<option value="platform">Platform Invite (someone new to REASON)</option>');
+    expect(invites).toContain('<option value="platform">Platform Invite (new to REASON)</option>');
+    expect(invites).not.toContain('someone new to REASON');
     expect(source('features/invites/InviteAcceptPage.tsx')).toContain("invite?.type === 'circle' ? 'a circle' : 'REASON';");
+  });
+
+  // A closed <select> cuts what does not fit, and the product's name is the end of this label. Measured in a browser (Inter 14px) in
+  // the Invite Type select on a 360px phone: 242px of room for the text. "Platform Invite (new to REASON)" is 214.8px and shows whole
+  // in Chromium and in WebKit; the longer "Platform Invite (someone new to REASON)" is 279.8px and showed as "...new to RE" in
+  // Chromium and "...new to" in WebKit. Characters are a crude measure of width, but they stop the label growing back without a
+  // layout test: no option may be longer than the 31 characters that were measured to fit.
+  it('the invite type options are short enough to show whole on a 360px phone (none longer than the label measured to fit)', () => {
+    const select = source('features/invites/InvitesPage.tsx').match(/<label[^>]*>Invite Type<\/label>\s*<select[\s\S]*?<\/select>/)?.[0] ?? '';
+    const labels = [...select.matchAll(/<option value="[^"]+">([^<]+)<\/option>/g)].map((m) => m[1]);
+    // The scan found the select and its options, so an empty match cannot pass for nothing.
+    expect(labels.length).toBeGreaterThanOrEqual(4);
+    expect(labels).toContain('Platform Invite (new to REASON)');
+    for (const label of labels) expect({ label, fits: label.length <= 31 }).toEqual({ label, fits: true });
   });
 
   // The product is written REASON in capitals, never "Reason" (a pod of the type "Reason" and the Reason field of a report

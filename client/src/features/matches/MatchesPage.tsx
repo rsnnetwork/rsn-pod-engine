@@ -4,7 +4,7 @@
 // Stefan's flow, verbatim: after onboarding the app checks if there are any
 // matches. If there are, "we matched you with this profile" + I want to meet
 // (the other side accepts or declines — nobody is introduced until both say
-// yes). If there are none, three choices: join the next RSN, invite more, or
+// yes). If there are none, three choices: join the next REASON event, invite more, or
 // find other people based on profiling — with a side note that new arrivals
 // who fit will trigger a notification.
 
