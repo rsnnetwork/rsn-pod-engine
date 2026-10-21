@@ -105,8 +105,9 @@ test('standing match loop: suggest → I want to meet → accept → chat unlock
   // CRITICAL: the founder's list also contains REAL prod users who fit the
   // "investor" want. Scope every assertion + click to OUR investor's card
   // (the one whose profile link is our test user) — never .first(), which once
-  // sent an introduction to a real member.
-  const investorCard = fPage.locator(`div.card-hover:has(a[href="/profile/${investor.id}"])`);
+  // sent an introduction to a real member. The link is /profile/:id on the live client and /people/:id?from=People
+  // on the preview (21 Oct); the id alone names our investor in either.
+  const investorCard = fPage.locator(`div.card-hover:has(a[href*="/${investor.id}"])`);
   await expect(investorCard).toBeVisible({ timeout: 20_000 });
   await expect(investorCard.getByRole('button', { name: /I want to meet/i })).toBeVisible();
   await fPage.screenshot({ path: 'test-results/pm-founder-match.png' }).catch(() => {});

@@ -162,7 +162,8 @@ test('the whole truthful loop: match -> poke -> poke_accepted bell -> thread -> 
   // Scope to OUR investor's card — the founder's real list also contains
   // real prod members who happen to fit "investor" (platform-match-loop's
   // hard-won lesson: never .first() here, or an intro goes to a stranger).
-  const investorCard = fPage.locator(`div.card-hover:has(a[href="/profile/${investor.id}"])`);
+  // The link is /profile/:id on the live client and /people/:id?from=People on the preview (21 Oct).
+  const investorCard = fPage.locator(`div.card-hover:has(a[href*="/${investor.id}"])`);
   await expect(investorCard).toBeVisible({ timeout: 20_000 });
   await expect(investorCard.getByText(card.reason)).toBeVisible();
   const meetBtn = investorCard.getByRole('button', { name: /I want to meet/i });

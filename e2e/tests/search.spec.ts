@@ -137,7 +137,8 @@ test('a one-character or wildcard query returns nothing rather than the whole ne
 test('the page finds a stranger, offers a way to meet, leaks nothing, and fits a phone', async () => {
   test.setTimeout(240_000);
   const page = await openAs(seeker, '/search', { width: 360, height: 780 });
-  const box = page.getByPlaceholder(/Search people/i);
+  // The page's own box: on the preview the shell's top bar has a "Search people…" box of its own.
+  const box = page.getByRole('main').getByPlaceholder(/Search people/i);
   await expect(box).toBeVisible({ timeout: 30_000 });
   await box.fill('Quartermaine');
 
@@ -165,16 +166,17 @@ test('the page finds a stranger, offers a way to meet, leaks nothing, and fits a
     `SELECT id FROM user_pokes WHERE sender_id = $1 AND recipient_id = $2`, [seeker.id, stranger.id]);
   expect(poke.rows.length, 'a meeting request row exists').toBeGreaterThan(0);
 
-  // The name links to the profile, where the existing gates apply.
+  // The name links to the profile, where the existing gates apply: /profile/:id on the live client, the Human
+  // Profile (/people/:id) on the preview (21 Oct).
   await card.getByRole('link', { name: 'Zelda Quartermaine' }).click();
-  await expect(page).toHaveURL(new RegExp(`/profile/${stranger.id}`));
+  await expect(page).toHaveURL(new RegExp(`/(profile|people)/${stranger.id}`));
   console.log('  ✓ page: found, met, linked to profile, 360px clean.');
 });
 
 test('nobody found says so, and the nav carries Find people on desktop', async () => {
   test.setTimeout(120_000);
   const page = await openAs(seeker, '/search', { width: 1280, height: 900 });
-  await page.getByPlaceholder(/Search people/i).fill('xqzv-nobody-here');
+  await page.getByRole('main').getByPlaceholder(/Search people/i).fill('xqzv-nobody-here');
   await expect(page.getByTestId('search-empty')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole('link', { name: 'Find people' })).toBeVisible();
 });
