@@ -91,6 +91,26 @@ export interface PersonFacts {
   company: string | null;
   bio: string | null;
   tags: string[];
+  /** Their LinkedIn, for the hero to link to: only ever an https address on LinkedIn. */
+  linkedin: string | null;
+}
+
+/**
+ * A stored LinkedIn as a link that is safe to open: an https address on linkedin.com or one of its country sites, with
+ * no user name in it. Anything else is no link at all (the old profile form once took any text as one).
+ */
+export function linkedinLink(stored: string | null | undefined): string | null {
+  const text = visibleText(stored);
+  if (!text || !/^https:\/\//i.test(text)) return null;
+  let address: URL;
+  try {
+    address = new URL(text);
+  } catch {
+    return null;
+  }
+  const host = address.hostname.toLowerCase();
+  const onLinkedin = host === 'linkedin.com' || host.endsWith('.linkedin.com');
+  return address.protocol === 'https:' && onLinkedin && !address.username && !address.password ? address.href : null;
 }
 
 export function personFacts(p: PersonBrief['person']): PersonFacts {
@@ -104,6 +124,7 @@ export function personFacts(p: PersonBrief['person']): PersonFacts {
     bio: visibleText(p.bio),
     // The location is on the public card, and your own profile shows it (21 Oct 2026), so everyone else's does too.
     tags: [visibleText(p.industry), visibleText(p.location), ...roles].filter((t): t is string => t !== null).slice(0, 4),
+    linkedin: linkedinLink(p.linkedinUrl),
   };
 }
 

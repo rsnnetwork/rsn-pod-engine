@@ -844,6 +844,57 @@ describe('The short tour hands the member to For You when it is finished or skip
   });
 });
 
+// Final review, 21 Oct 2026 (C4): nobody could see anyone's LinkedIn. The hero's frame (the Human Profile's and Your
+// profile's) links to it, drawn here to markup with its pictures standing in and its rules (profile-text) real.
+describe('The hero links to the member\'s LinkedIn, on the Human Profile and on Your profile', () => {
+  const text = require('../../../../client/src/features/reason/human/profile-text');
+  const frameOf = () => loadModule('src/features/reason/human/ProfileHero.tsx', {
+    '@/components/ui/Avatar': { __esModule: true, default: () => null },
+    '@/lib/utils': joinClasses,
+    '../brand/ReasonSheep': { __esModule: true, default: () => null },
+    '../person': require('../../../../client/src/features/reason/person'),
+    './profile-text': text,
+  }).HeroFrame as (props: Record<string, unknown>) => ReactElement;
+  const person = (over: Record<string, unknown>) => ({
+    id: '3f2b8a4e-1c9d-4e7a-b6f0-2a5c8d1e9f03', displayName: 'Nora None', firstName: 'Nora', lastName: 'None', avatarUrl: null,
+    bannerUrl: null, bio: 'Backs founders.', company: 'Northwind', jobTitle: 'Partner', industry: null, location: null,
+    linkedinUrl: null, languages: [], professionalRole: [], expertiseText: null, whatICanHelpWith: null, ...over,
+  });
+  const draw = (over: Record<string, unknown>) => renderToStaticMarkup(createElement(frameOf() as never, {
+    photo: null, who: text.personFacts(person(over)), kicker: 'The human', note: null, panel: null,
+  }));
+
+  it('an https LinkedIn is one link, under the role line and above the bio, opening a new tab with no opener, 44px tall', () => {
+    const html = draw({ linkedinUrl: 'https://www.linkedin.com/in/nora-none' });
+    const links = html.match(/<a [^>]*>[\s\S]*?<\/a>/g) ?? [];
+    expect(links).toHaveLength(1);
+    const link = links[0] ?? '';
+    expect(link).toContain('href="https://www.linkedin.com/in/nora-none"');
+    expect(link).toContain('target="_blank"');
+    expect(link).toContain('rel="noopener noreferrer"');
+    expect(link).toMatch(/class="[^"]*\bmin-h-\[44px\][^"]*"/);
+    // "LinkedIn ↗" on screen; a screen reader hears that it opens a new tab, and not the arrow.
+    expect(link.replace(/<[^>]*>/g, '')).toBe('LinkedIn ↗ (opens in a new tab)');
+    expect(link).toContain('<span aria-hidden="true">↗</span>');
+    expect(link).toContain('<span class="sr-only"> (opens in a new tab)</span>');
+    const at = { role: html.indexOf('Partner · Northwind'), link: html.indexOf('<a '), bio: html.indexOf('Backs founders.') };
+    expect(at.role).toBeGreaterThan(-1);
+    expect(at.role).toBeLessThan(at.link);
+    expect(at.link).toBeLessThan(at.bio);
+  });
+
+  it('with no LinkedIn, or one that is not an https address on LinkedIn, there is no link at all', () => {
+    for (const linkedinUrl of [null, '', 'http://www.linkedin.com/in/nora', 'javascript:alert(1)', 'https://evil.example/in/nora']) {
+      expect({ linkedinUrl, links: (draw({ linkedinUrl }).match(/<a /g) ?? []).length }).toEqual({ linkedinUrl, links: 0 });
+    }
+  });
+
+  it('Your profile and the Human Profile are both drawn by this frame, so both show it', () => {
+    expect(read('src/features/reason/profile/YourProfilePage.tsx')).toMatch(/<HeroFrame\b[\s\S]*?who=\{who\}/);
+    expect(read('src/features/reason/human/ProfileHero.tsx')).toMatch(/<HeroFrame\b[\s\S]*?who=\{who\}/);
+  });
+});
+
 // Final review, 21 Oct 2026 (C7): the tour never took the keyboard's focus, and its keyboard effect depended on the card
 // and on the finish handler (a new one on every render of OnboardingTour), so every Next ran its clean-up, which handed
 // focus back to the page behind the dialog. HowRsnWorks.tsx is run here with React's hooks standing in: the effects run

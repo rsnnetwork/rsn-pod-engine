@@ -92,7 +92,18 @@ export function HeroFrame({ photo, who, kicker, badge, note, panel, fit = 'scree
         <p className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#646a77] md:text-[11px]">{kicker}</p>
         <h1 className={cn('mt-2 text-[40px] font-extrabold leading-[.94] tracking-[-0.055em] [overflow-wrap:anywhere] md:text-[52px]', FRAME[fit].name)}>{who.name}</h1>
         {roleLine && <p className="mt-3 text-[15px] text-reason-muted [overflow-wrap:anywhere]">{roleLine}</p>}
-        {who.bio && <p className="mt-[17px] max-w-[620px] text-[18px] leading-[1.38] tracking-[-0.024em] [overflow-wrap:anywhere] md:mt-6 md:text-[21px]">{who.bio}</p>}
+        {/* Final review, 21 Oct 2026: nobody could see anyone's LinkedIn. Only ever an https address on LinkedIn. */}
+        {who.linkedin && (
+          <a
+            href={who.linkedin}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="-ml-1 mt-1 inline-flex min-h-[44px] w-fit items-center gap-1 rounded-lg px-1 text-[14px] font-bold text-[#0a66c2] scroll-mt-[calc(90px+env(safe-area-inset-top))] scroll-mb-[calc(100px+env(safe-area-inset-bottom))] hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0a66c2]"
+          >
+            LinkedIn <span aria-hidden="true">↗</span><span className="sr-only"> (opens in a new tab)</span>
+          </a>
+        )}
+        {who.bio &&<p className="mt-[17px] max-w-[620px] text-[18px] leading-[1.38] tracking-[-0.024em] [overflow-wrap:anywhere] md:mt-6 md:text-[21px]">{who.bio}</p>}
         <div className="mt-auto flex flex-col gap-4 pt-4 md:pt-6">
           {who.tags.length > 0 && (
             <div className="flex flex-wrap gap-1.5">

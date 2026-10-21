@@ -191,8 +191,25 @@ describe('personFacts: who the page is about', () => {
       industry: 'Fintech', professionalRole: ['Investor', ' Advisor ', '  ', ''],
     }))).toEqual({
       name: 'Nora None', first: 'Nora', role: 'Investor, Advisor', company: 'Northwind Capital', bio: 'Backs founders.',
-      tags: ['Fintech', 'Investor', 'Advisor'],
+      tags: ['Fintech', 'Investor', 'Advisor'], linkedin: null,
     });
+  });
+
+  // Final review, 21 Oct 2026 (C4): nobody could see anyone's LinkedIn. The hero links to it, on the Human Profile and
+  // on Your profile, and only ever to an https address on LinkedIn: the old form once took any text as a link.
+  it('the LinkedIn the hero links to: an https address on linkedin.com, and nothing else', () => {
+    const linked = (linkedinUrl: string | null) => personFacts(person({ linkedinUrl })).linkedin;
+    expect(linked('https://www.linkedin.com/in/nora-none')).toBe('https://www.linkedin.com/in/nora-none');
+    expect(linked('  https://uk.linkedin.com/in/nora  ')).toBe('https://uk.linkedin.com/in/nora');
+    expect(linked('https://linkedin.com/in/nora')).toBe('https://linkedin.com/in/nora');
+    expect(linked('HTTPS://WWW.LINKEDIN.COM/in/Nora')).toBe('https://www.linkedin.com/in/Nora');
+    for (const bad of [
+      null, '', '   ', 'http://www.linkedin.com/in/nora', 'javascript:alert(1)', 'linkedin.com/in/nora', 'www.linkedin.com/in/nora',
+      'https://evil.example/in/nora', 'https://linkedin.com.evil.example/in/nora', 'https://notlinkedin.com/in/nora',
+      'https://user:pass@www.linkedin.com/in/nora', 'data:text/html,<a>', 'https://', 'not a link',
+    ]) {
+      expect({ bad, linked: linked(bad) }).toEqual({ bad, linked: null });
+    }
   });
   it('turns a blank text into nothing, so nothing blank is drawn', () => {
     expect(personFacts(person({ company: '   ', bio: '\n', jobTitle: ' ', industry: ' ', professionalRole: ['  ', ''] })))
