@@ -127,7 +127,7 @@ const cases: EmailCase[] = [
     }),
   },
   {
-    fn: 'sendInviteEmail', label: 'a platform invite', subject: 'Stefan invited you to Reason',
+    fn: 'sendInviteEmail', label: 'a platform invite', subject: 'Stefan invited you to REASON',
     brandLine: MEET, brandLineInHtml: true,
     run: () => emailService.sendInviteEmail('guest@example.com', { inviterName: 'Stefan', type: 'platform', inviteUrl: 'https://app.rsn.network/invite/ABC123' }),
   },
@@ -278,6 +278,18 @@ describe('every email says REASON, never RSN', () => {
       // The PRODID line names the program that wrote the file; no calendar shows it to a person.
       expect(rsnLines(file.split('\r\n').filter((line) => !line.startsWith('PRODID:')).join('\r\n'))).toEqual([]);
     }
+  });
+
+  // The tagline under the logo, "Connect with Reason", is the brand line and stays as it is. Everywhere
+  // else the product is REASON: a subject, a sentence, the plain text.
+  it.each(labelled)('%s: names the product REASON, and "Reason" only in the tagline', async (_label, c) => {
+    const sent = await sendAndCapture(c.run);
+    const sayingReason = (s: string) => s.split(/\r?\n/)
+      .filter((line) => /\bReason\b/.test(line.replace('Connect with Reason', '')))
+      .map((line) => line.trim());
+    expect(sayingReason(sent.subject)).toEqual([]);
+    expect(sayingReason(sent.html)).toEqual([]);
+    expect(sayingReason(sent.text)).toEqual([]);
   });
 
   it.each(labelled)('%s: comes from REASON, with the subject the brief gives', async (_label, c) => {

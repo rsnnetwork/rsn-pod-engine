@@ -437,26 +437,28 @@ interface InviteEmailData {
 /**
  * 13 Aug 2026: "New user has no idea what RSN is when landing after clicking
  * an invite link." Claus preferred fixing this in the email rather than
- * building an on-platform explainer, so the invite now says what Reason is
+ * building an on-platform explainer, so the invite now says what REASON is
  * and what happens next, in plain prose, before it asks anyone to join.
  * A pure builder, so the copy is testable without an email provider.
+ * 21 Oct 2026 (the client, 19 Oct: "call it REASON everywhere"): the subject,
+ * the opening and the description say REASON; the tagline stays as it is.
  */
 export function buildInviteEmail(data: InviteEmailData): { subject: string; html: string; text: string } {
   const typeLabel = data.type === 'pod' ? 'a pod' : data.type === 'session' ? 'an event' : data.type === 'circle' ? 'a circle' : 'the platform';
   const targetLine = data.targetName ? ` — <strong>${escapeHtml(data.targetName)}</strong>` : '';
   const targetText = data.targetName ? ` — ${data.targetName}` : '';
 
-  const subject = `${data.inviterName} invited you to ${data.targetName || 'Reason'}`;
+  const subject = `${data.inviterName} invited you to ${data.targetName || 'REASON'}`;
 
   const openingHtml = data.type === 'platform'
-    ? `<strong>${escapeHtml(data.inviterName)}</strong> invited you to Reason.`
-    : `<strong>${escapeHtml(data.inviterName)}</strong> has invited you to join ${typeLabel}${targetLine} on Reason.`;
+    ? `<strong>${escapeHtml(data.inviterName)}</strong> invited you to REASON.`
+    : `<strong>${escapeHtml(data.inviterName)}</strong> has invited you to join ${typeLabel}${targetLine} on REASON.`;
   const openingText = data.type === 'platform'
-    ? `${data.inviterName} invited you to Reason.`
-    : `${data.inviterName} has invited you to join ${typeLabel}${targetText} on Reason.`;
+    ? `${data.inviterName} invited you to REASON.`
+    : `${data.inviterName} has invited you to join ${typeLabel}${targetText} on REASON.`;
 
   const whatItIs =
-    'Reason is a private network where people meet for a stated reason rather than by browsing profiles. ' +
+    'REASON is a private network where people meet for a stated reason rather than by browsing profiles. ' +
     'You say who you are looking for, and it keeps looking, including as new people join.';
   // A pod or event invite may reach someone who is already a member, so only a
   // platform invite promises them the sign-up conversation.
