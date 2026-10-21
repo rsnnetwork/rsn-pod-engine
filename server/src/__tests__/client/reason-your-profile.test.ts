@@ -331,6 +331,8 @@ describe('Human Profile: More, with Block and Report this member', () => {
     expect(hook).toMatch(/UNBLOCK_QUESTION = 'Unblock this member\? They will be able to message you again, and you may be matched together in future events\.';/);
     expect(hook).toMatch(/if \(confirm\(UNBLOCK_QUESTION\)\) unblock\.mutate\(\);/);
     expect(hook).toMatch(/mutationFn: \(\) => unblockMember\(userId\)/);
+    // Final review (C8): said plainly, as the profile comes back on screen.
+    expect(hook).toMatch(/addToast\('Unblocked\.', 'success'\);/);
     // The refresh is returned, so Unblock stays busy until the brief is back and the profile is on screen.
     expect(hook).toMatch(/return qc\.invalidateQueries\(\{ queryKey: reasonKeys\.all \}\);/);
     expect(hook).toMatch(/onError: \(err\) => addToast\(errorMessage\(err, /);

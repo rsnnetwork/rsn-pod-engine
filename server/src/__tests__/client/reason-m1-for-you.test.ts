@@ -33,7 +33,8 @@ describe('For You: what the page asks for, and when it says what', () => {
     const entities = page().match(/meta: \{ entities: userId \? \[([^\]]*)\] : \[\] \}/);
     expect(entities).not.toBeNull();
     const tags = [...entities![1].matchAll(/E\.(\w+)\(userId\)/g)].map((m) => m[1]);
-    expect([...tags].sort()).toEqual(['user', 'userDms', 'userInvites', 'userPods', 'userSessions']);
+    // And the member's blocks (final review, 21 Oct 2026): a block either way takes the person off the list at once.
+    expect([...tags].sort()).toEqual(['user', 'userBlocks', 'userDms', 'userInvites', 'userPods', 'userSessions']);
     expect(page()).toMatch(/queryKey: reasonKeys\.forYou,\s*queryFn: fetchForYou,/);
   });
 
@@ -266,8 +267,8 @@ describe('For You: the rail', () => {
     expect(withoutComments(rail())).not.toMatch(/sessionCount|session_count/);
   });
 
-  it('refreshes recent connections when a request is answered (user and invite tags)', () => {
-    expect(rail()).toMatch(/queryKey: reasonKeys\.recent,[\s\S]*?E\.user\(userId\), E\.userInvites\(userId\)/);
+  it('refreshes recent connections when a request is answered (user and invite tags), and when either of you blocks the other', () => {
+    expect(rail()).toMatch(/queryKey: reasonKeys\.recent,[\s\S]*?meta: \{ entities: userId \? \[E\.user\(userId\), E\.userInvites\(userId\), E\.userBlocks\(userId\)\] : \[\] \}/);
   });
 
   it('is drawn only from 981px, like the prototype, and invents nothing: no organisations panel, no event photo', () => {

@@ -56,11 +56,12 @@ export default function MatchesPage() {
   // the card as it was until a reload. Sending a request (sendPoke), accepting it and
   // declining it each tell both members' user and invites entities. The result also names the
   // next event, so it follows the member's sessions too: the server announces them whenever an
-  // event is created, renamed, rescheduled, cancelled or deleted.
+  // event is created, renamed, rescheduled, cancelled or deleted. And a block either way takes the
+  // person off the list at once (final review, 21 Oct 2026).
   const { data, isLoading } = useQuery<PlatformMatchesResult>({
     queryKey: ['platformMatches', browse],
     queryFn: () => api.get(`/matches/platform${browse ? '?browse=1' : ''}`).then(r => r.data.data),
-    meta: { entities: myUserId ? [E.user(myUserId), E.userInvites(myUserId), E.userSessions(myUserId)] : [] },
+    meta: { entities: myUserId ? [E.user(myUserId), E.userInvites(myUserId), E.userSessions(myUserId), E.userBlocks(myUserId)] : [] },
   });
 
   const expressInterest = async (m: PlatformMatch) => {
@@ -111,8 +112,7 @@ export default function MatchesPage() {
             <Sparkles className="h-10 w-10 text-rsn-red" />
             <h2 className="font-semibold text-gray-900">Tell us who you'd like to meet</h2>
             <p className="text-sm text-gray-500 max-w-sm">
-              Finish your onboarding chat so we know who you are and who you're looking
-              for — then we can start matching you.
+              Answer a few quick questions so we know who you are and who you would like to meet. Then we can start suggesting people.
             </p>
             <Button onClick={() => navigate('/onboarding')} className="min-h-[44px]">
               Complete your profile

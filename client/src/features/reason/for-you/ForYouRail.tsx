@@ -67,7 +67,8 @@ export default function ForYouRail({ nextEvent, failed }: Props) {
     queryKey: reasonKeys.recent,
     queryFn: fetchRecentConnections,
     enabled: !!userId,
-    meta: { entities: userId ? [E.user(userId), E.userInvites(userId)] : [] },
+    // An accepted request is the member's user and invites tags; a block either way is their blocks tag.
+    meta: { entities: userId ? [E.user(userId), E.userInvites(userId), E.userBlocks(userId)] : [] },
   });
   const when = nextEvent ? new Date(nextEvent.scheduledAt) : null;
 

@@ -63,8 +63,8 @@ export default function ForYouPage() {
     // cancelled or deleted, refresh this page too. The production API announces an event change as user:<id>:sessions
     // (and user:<id>:pods) from release 6 on; before that the sessions tag came only from a member's own doing (registering
     // for an event, leaving one, answering an invite), so a change someone else made is not seen here until the page
-    // refreshes for another reason.
-    meta: { entities: userId ? [E.user(userId), E.userInvites(userId), E.userDms(userId), E.userPods(userId), E.userSessions(userId)] : [] },
+    // refreshes for another reason. A block either way takes the person off the list at once (final review, 21 Oct 2026).
+    meta: { entities: userId ? [E.user(userId), E.userInvites(userId), E.userDms(userId), E.userPods(userId), E.userSessions(userId), E.userBlocks(userId)] : [] },
   });
   // Offline with nothing to show yet: the request exists and waits for the connection. A skeleton would never
   // tell the member why, so the error says it; the request resumes by itself when the connection returns. The

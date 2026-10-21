@@ -41,6 +41,12 @@ describe('REASON shell (milestone 1)', () => {
         expect({ url, current: [...nav.MAIN_NAV, ...nav.SUB_NAV].filter((i) => i.match(url)).map((i) => i.key) }).toEqual({ url, current: [] });
       }
     });
+    // Final review, 21 Oct 2026 (C8): the profile form at /profile/edit left no entry current.
+    it('Profile is the current entry on Your profile and on the profile form under it, and on nothing else', () => {
+      const profile = loadNav().SUB_NAV.find((i) => i.key === 'profile')!;
+      for (const url of ['/profile', '/profile/edit']) expect({ url, current: profile.match(url) }).toEqual({ url, current: true });
+      for (const url of ['/', '/profiles', '/profile-edit', '/people/u1', '/settings']) expect({ url, current: profile.match(url) }).toEqual({ url, current: false });
+    });
     it('every key the phone bar and the More sheet draw has an entry to draw it from (a key with none crashes the phone bar)', () => {
       const nav = loadNav();
       for (const key of [...nav.MOBILE_PRIMARY, ...nav.MOBILE_MORE]) expect({ key, entry: typeof nav.NAV_BY_KEY[key]?.match }).toEqual({ key, entry: 'function' });

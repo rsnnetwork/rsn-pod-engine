@@ -21,7 +21,8 @@ export const MAIN_NAV: NavItem[] = [
 ];
 
 export const SUB_NAV: NavItem[] = [
-  { key: 'profile', label: 'Profile', to: '/profile', match: (p) => p === '/profile' },
+  // Your profile and the form under it (/profile/edit). Another member's profile is /people/:id.
+  { key: 'profile', label: 'Profile', to: '/profile', match: under('/profile') },
   { key: 'settings', label: 'Settings', to: '/settings', match: under('/settings') },
   { key: 'support', label: 'Support', to: '/support', match: under('/support') },
 ];
